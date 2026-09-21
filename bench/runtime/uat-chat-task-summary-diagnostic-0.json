@@ -1,0 +1,172 @@
+{
+  "scope": "Two-turn diagnostic through native chat; configured model chain, isolated minimal manifest/workspace, private goal data; not a performance cohort or full production configuration.",
+  "configured_primary": "openrouter/deepseek/deepseek-v4.1-flash",
+  "manual_acceptance": false,
+  "transcript": [
+    {
+      "user": "What's finished, and what's still left?",
+      "robothor": "Here's where things stand, operator \u2014 one goal on the board:\n\n**Goal: \"Finish the requested work\"** \u2014 status **waiting** (version 4)\n- Success criterion: *\"The requested work has been checked\"* \u2014 **not yet satisfied** (no evidence recorded)\n- Objective: Finish the requested work\n\n**Finished (1 of 2 tasks)**\n- \u2705 *Prepare the first item* \u2014 DONE\n\n**Still left (1 of 2 tasks)**\n- \u2b1c *Check the remaining item* \u2014 TODO (this is the open item in your task list)\n\n**Why it's waiting:** the goal is parked on that remaining task, with a scheduled review at **2026-09-22 04:36 UTC** (tomorrow). It will also wake if that task changes.\n\n**Two caveats worth flagging:**\n1. **Automatic pursuit is disabled** (`execution_enabled: false`) for this tenant \u2014 so nothing will advance on its own; the goal won't progress until it's actually worked.\n2. Task counts aren't proof of completion \u2014 the criterion has **no evidence attached yet**, so even the \"finished\" task hasn't been independently verified against the goal's success criterion.\n\nNet: **1 task done, 1 task left** \u2014 the goal is not complete. Want me to take on the remaining \"Check the remaining item\" task, or is there something specific you'd like checked?",
+      "run": {
+        "text": "Here's where things stand, operator \u2014 one goal on the board:\n\n**Goal: \"Finish the requested work\"** \u2014 status **waiting** (version 4)\n- Success criterion: *\"The requested work has been checked\"* \u2014 **not yet satisfied** (no evidence recorded)\n- Objective: Finish the requested work\n\n**Finished (1 of 2 tasks)**\n- \u2705 *Prepare the first item* \u2014 DONE\n\n**Still left (1 of 2 tasks)**\n- \u2b1c *Check the remaining item* \u2014 TODO (this is the open item in your task list)\n\n**Why it's waiting:** the goal is parked on that remaining task, with a scheduled review at **2026-09-22 04:36 UTC** (tomorrow). It will also wake if that task changes.\n\n**Two caveats worth flagging:**\n1. **Automatic pursuit is disabled** (`execution_enabled: false`) for this tenant \u2014 so nothing will advance on its own; the goal won't progress until it's actually worked.\n2. Task counts aren't proof of completion \u2014 the criterion has **no evidence attached yet**, so even the \"finished\" task hasn't been independently verified against the goal's success criterion.\n\nNet: **1 task done, 1 task left** \u2014 the goal is not complete. Want me to take on the remaining \"Check the remaining item\" task, or is there something specific you'd like checked?",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 14683,
+        "output_tokens": 623,
+        "duration_ms": 49198,
+        "total_cost_usd": 0.0014,
+        "run_id": "3366e872-50df-4ae8-be46-59e32e359f9d"
+      },
+      "elapsed_ms": 49245.146481996926,
+      "measurements": {
+        "run_id": "3366e872-50df-4ae8-be46-59e32e359f9d",
+        "duration_ms": 49198,
+        "model_calls": 3,
+        "tool_calls": 2,
+        "provider_ms": 49106,
+        "tool_wall_ms": 18,
+        "compaction_ms": 0,
+        "compactions": 0,
+        "input_tokens": 14683,
+        "time_to_first_action_ms": 11478,
+        "time_to_verified_completion_ms": null,
+        "post_completion_tool_calls": null,
+        "steps": [
+          {
+            "type": "llm_call",
+            "tool": null,
+            "model": "deepseek/deepseek-v4.1-flash",
+            "duration_ms": 11459,
+            "input_tokens": 3893,
+            "output_tokens": 81,
+            "failed": false
+          },
+          {
+            "type": "tool_call",
+            "tool": "list_pursuit_goals",
+            "model": null,
+            "duration_ms": 9,
+            "input_tokens": null,
+            "output_tokens": null,
+            "failed": false
+          },
+          {
+            "type": "llm_call",
+            "tool": null,
+            "model": "deepseek/deepseek-v4.1-flash",
+            "duration_ms": 13368,
+            "input_tokens": 4538,
+            "output_tokens": 152,
+            "failed": false
+          },
+          {
+            "type": "tool_call",
+            "tool": "get_pursuit_goal",
+            "model": null,
+            "duration_ms": 9,
+            "input_tokens": null,
+            "output_tokens": null,
+            "failed": false
+          },
+          {
+            "type": "llm_call",
+            "tool": null,
+            "model": "deepseek/deepseek-v4.1-flash",
+            "duration_ms": 24279,
+            "input_tokens": 6252,
+            "output_tokens": 390,
+            "failed": false
+          }
+        ]
+      }
+    },
+    {
+      "user": "Pause that work.",
+      "robothor": "Done, operator \u2014 the goal is paused.\n\n**Goal: \"Finish the requested work\"** \u2014 status **paused** (version 5, was 4)\n\n- The scheduled review at **2026-09-22 04:36 UTC** will no longer wake it, and a change to the linked task won't either \u2014 paused goals don't wake on their own.\n- Nothing was lost: the task list is unchanged (**1 done, 1 left**), and the success criterion still has no evidence attached.\n\nTo pick it back up, just say the word and I'll resume it \u2014 that's an operator action, so it needs your go-ahead.",
+      "run": {
+        "text": "Done, operator \u2014 the goal is paused.\n\n**Goal: \"Finish the requested work\"** \u2014 status **paused** (version 5, was 4)\n\n- The scheduled review at **2026-09-22 04:36 UTC** will no longer wake it, and a change to the linked task won't either \u2014 paused goals don't wake on their own.\n- Nothing was lost: the task list is unchanged (**1 done, 1 left**), and the success criterion still has no evidence attached.\n\nTo pick it back up, just say the word and I'll resume it \u2014 that's an operator action, so it needs your go-ahead.",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 15508,
+        "output_tokens": 394,
+        "duration_ms": 12332,
+        "total_cost_usd": 0.0012,
+        "run_id": "3ea5165e-b4dd-4f35-a938-fc2550b7f586"
+      },
+      "elapsed_ms": 12355.743221000012,
+      "measurements": {
+        "run_id": "3ea5165e-b4dd-4f35-a938-fc2550b7f586",
+        "duration_ms": 12332,
+        "model_calls": 3,
+        "tool_calls": 2,
+        "provider_ms": 12286,
+        "tool_wall_ms": 16,
+        "compaction_ms": 0,
+        "compactions": 0,
+        "input_tokens": 15508,
+        "time_to_first_action_ms": 3368,
+        "time_to_verified_completion_ms": null,
+        "post_completion_tool_calls": null,
+        "steps": [
+          {
+            "type": "llm_call",
+            "tool": null,
+            "model": "deepseek/deepseek-v4.1-flash",
+            "duration_ms": 3362,
+            "input_tokens": 4545,
+            "output_tokens": 77,
+            "failed": false
+          },
+          {
+            "type": "tool_call",
+            "tool": "list_pursuit_goals",
+            "model": null,
+            "duration_ms": 10,
+            "input_tokens": null,
+            "output_tokens": null,
+            "failed": false
+          },
+          {
+            "type": "llm_call",
+            "tool": null,
+            "model": "deepseek/deepseek-v4.1-flash",
+            "duration_ms": 4086,
+            "input_tokens": 5187,
+            "output_tokens": 178,
+            "failed": false
+          },
+          {
+            "type": "tool_call",
+            "tool": "update_pursuit_goal",
+            "model": null,
+            "duration_ms": 6,
+            "input_tokens": null,
+            "output_tokens": null,
+            "failed": false
+          },
+          {
+            "type": "llm_call",
+            "tool": null,
+            "model": "deepseek/deepseek-v4.1-flash",
+            "duration_ms": 4838,
+            "input_tokens": 5776,
+            "output_tokens": 139,
+            "failed": false
+          }
+        ]
+      }
+    }
+  ],
+  "tool_calls": [
+    "list_pursuit_goals",
+    "get_pursuit_goal",
+    "list_pursuit_goals",
+    "update_pursuit_goal"
+  ],
+  "provider_attempts": 6,
+  "goal_status": "paused",
+  "execution_enabled": false,
+  "task_statuses": [
+    "DONE",
+    "TODO"
+  ]
+}

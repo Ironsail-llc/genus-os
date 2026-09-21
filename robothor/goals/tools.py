@@ -44,13 +44,18 @@ def schemas() -> dict[str, Any]:
         ),
         "list_pursuit_goals": (
             "List the current tenant's operator goals, including paused and waiting goals. "
+            "Use this for progress questions: objectives, criteria, evidence, versions and task "
+            "summaries are included. Read an individual goal only when additional detail is needed "
+            "(full task list, history, child goals, runs or registered wake conditions). "
+            "Includes exact linked-task counts by status and up to three task titles per status; "
+            "truncated previews are not the full task list. Task counts do not prove goal completion. "
             "execution_enabled reports whether automatic pursuit is enabled; goal status "
             "and wake conditions still govern each goal.",
             {"type": "object", "properties": {}},
         ),
         "update_pursuit_goal": (
             "Record progress, criterion evidence, a wait, blocker, assessment or completion. "
-            "Use the current version from get_pursuit_goal. Evidence needs a reference and "
+            "Use the current version from get_pursuit_goal or list_pursuit_goals. Evidence needs a reference and "
             "a truthful satisfied assessment. Ongoing goals use assess. Pause/cancel only "
             "when asked; resume/steer/approve require an operator. Never weaken criteria.",
             GoalUpdate.model_json_schema(),
@@ -117,7 +122,7 @@ async def get_goal(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 async def list_goals(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     check_context(ctx)
     return {
-        "goals": await asyncio.to_thread(store.list_goals, ctx.tenant_id),
+        "goals": await asyncio.to_thread(store.list_goals, ctx.tenant_id, task_summary=True),
         "execution_enabled": await asyncio.to_thread(store.enabled, ctx.tenant_id),
     }
 

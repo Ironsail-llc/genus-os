@@ -349,7 +349,8 @@ async def test_unfinished_goal_review_and_pause_through_normal_chat(
         assert (
             sum(turn["measurements"]["model_calls"] for turn in transcript) == outbound.call_count
         )
-        assert "get_pursuit_goal" in calls and calls.count("update_pursuit_goal") == 1
+        assert {"get_pursuit_goal", "list_pursuit_goals"}.intersection(calls)
+        assert calls.count("update_pursuit_goal") == 1
         assert outbound.call_count > 0
     else:
         assert calls == ["get_pursuit_goal"] + (

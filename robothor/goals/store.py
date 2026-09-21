@@ -167,13 +167,18 @@ def get(tenant: str, goal_id: str) -> dict[str, Any]:
         return g
 
 
-def list_goals(tenant: str) -> list[dict[str, Any]]:
+def list_goals(tenant: str, *, task_summary: bool = False) -> list[dict[str, Any]]:
     with transaction() as cur:
         cur.execute(
             "SELECT data FROM pursuit_goals WHERE tenant_id=%s ORDER BY ready_at DESC LIMIT 200",
             (tenant,),
         )
-        return [r["data"] for r in cur.fetchall()]
+        goals = [r["data"] for r in cur.fetchall()]
+        if task_summary and goals:
+            from robothor.goals.task_summary import attach_task_summaries
+
+            attach_task_summaries(cur, tenant, goals)
+        return goals
 
 
 def update(

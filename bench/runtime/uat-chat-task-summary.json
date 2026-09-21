@@ -1,0 +1,73 @@
+{
+  "change": "Goal-list tool exposes exact linked-task counts and up to three task titles per status in one batched tenant-scoped query. Individual reads remain explicit; task counts do not satisfy goal criteria. Default store/API listing unchanged.",
+  "tests": {
+    "goal_and_size": {
+      "passed": 92,
+      "warnings": 2,
+      "seconds": 13.0
+    },
+    "focused_initial": {
+      "passed": 19,
+      "warnings": 1,
+      "seconds": 5.74
+    },
+    "canonical_native_browser": {
+      "passed": 35,
+      "skipped": 1,
+      "warnings": 1,
+      "seconds": 25.72
+    }
+  },
+  "diagnostics": [
+    {
+      "artifact": "uat-chat-task-summary-diagnostic-0.json",
+      "turns": [
+        {
+          "user": "What's finished, and what's still left?",
+          "elapsed_ms": 49245.146481996926,
+          "model_calls": 3,
+          "tools": [
+            "list_pursuit_goals",
+            "get_pursuit_goal"
+          ]
+        },
+        {
+          "user": "Pause that work.",
+          "elapsed_ms": 12355.743221000012,
+          "model_calls": 3,
+          "tools": [
+            "list_pursuit_goals",
+            "update_pursuit_goal"
+          ]
+        }
+      ]
+    },
+    {
+      "artifact": "uat-chat-task-summary-diagnostic-1.json",
+      "turns": [
+        {
+          "user": "What's finished, and what's still left?",
+          "elapsed_ms": 11843.330823001452,
+          "model_calls": 2,
+          "tools": [
+            "list_pursuit_goals"
+          ]
+        },
+        {
+          "user": "Pause that work.",
+          "elapsed_ms": 18259.746418996656,
+          "model_calls": 4,
+          "tools": [
+            "get_pursuit_goal",
+            "list_pursuit_goals",
+            "update_pursuit_goal"
+          ]
+        }
+      ]
+    }
+  ],
+  "full_acceptance_passed": false,
+  "manual_acceptance": false,
+  "production_deployed": false,
+  "limits": "Two sequential diagnostics, not a performance cohort or causal comparison. Initial variant still made list/get reads and took 49.2 seconds for status. Final variant documents which facts the list includes. Final pause used four model calls; general language quality and latency remain unqualified. Existing production models used with isolated synthetic goal/task data."
+}
