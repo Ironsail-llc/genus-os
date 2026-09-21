@@ -58,9 +58,16 @@ jobs:
         run: |
           python -m venv /tmp/runtime-candidates
           /tmp/runtime-candidates/bin/pip install -r bench/runtime/candidates.lock
-          ROBOTHOR_RUNTIME_NATIVE_WIRE_ARTIFACT=/tmp/runtime-native-request.json PYDANTIC_AI_NO_BANNER=1 /tmp/runtime-candidates/bin/python -m pytest -q bench/runtime/test_goal_lifecycle.py bench/runtime/test_native_profile.py bench/runtime/test_screening_configuration.py bench/runtime/test_store_host.py bench/runtime/test_adapter.py bench/runtime/test_candidate_boundaries.py bench/runtime/test_candidate_durable_budget.py
+          ROBOTHOR_RUNTIME_NATIVE_WIRE_ARTIFACT=/tmp/runtime-native-request.json PYDANTIC_AI_NO_BANNER=1 /tmp/runtime-candidates/bin/python -m pytest -q bench/runtime/test_screen_candidates.py bench/runtime/test_goal_lifecycle.py bench/runtime/test_native_profile.py bench/runtime/test_screening_configuration.py bench/runtime/test_store_host.py bench/runtime/test_adapter.py bench/runtime/test_candidate_boundaries.py bench/runtime/test_candidate_durable_budget.py
           PYDANTIC_AI_NO_BANNER=1 /tmp/runtime-candidates/bin/python -m bench.runtime.screen_candidates --output /tmp/screening.json
           python -c 'import json; r=json.load(open("/tmp/screening.json")); assert all(s["status"]=="completed" and s["verified"] and s["single_write"] for s in r["samples"])'
+      - name: Preserve candidate screening evidence, including failures
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: runtime-candidate-screening
+          path: /tmp/screening.json
+          if-no-files-found: warn
       - name: Candidate frameworks through native business controls
         run: |
           python -m venv /tmp/runtime-native-candidates

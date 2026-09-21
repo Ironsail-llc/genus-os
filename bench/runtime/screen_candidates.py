@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import importlib.metadata
 import json
+import time
 from pathlib import Path
 
 from bench.runtime.candidates import DeepAgentsCandidate, FixtureGateway, PydanticCandidate
@@ -50,24 +51,45 @@ def deep_model():
 
 
 async def screen(samples):
-    records = []
+    records, warmups = [], []
     for name, cls, factory in [
         ("pydantic-ai", PydanticCandidate, pydantic_model),
         ("deepagents", DeepAgentsCandidate, deep_model),
     ]:
         for repetition in range(samples + 1):
             gateway = FixtureGateway("fixture")
+            started = time.perf_counter()
             try:
                 result = await cls(factory()).run(gateway, tenant="fixture")
+                checks = {
+                    "adapter_verified": result.get("verified") is True,
+                    "fixture_verified": gateway.verified,
+                    "single_write": gateway.writes == 1,
+                    "single_dispatch": gateway.dispatches == 1,
+                }
                 result.update(
-                    status="completed",
-                    single_write=gateway.writes == 1,
-                    dispatches=gateway.dispatches,
+                    status="completed" if all(checks.values()) else "failed",
+                    checks=checks,
                 )
             except Exception as exc:
-                result = {"status": "failed", "error": f"{type(exc).__name__}: {exc}"}
-            if repetition:
-                records.append({"runtime": name, "repetition": repetition, **result})
+                result = {
+                    "status": "timeout" if isinstance(exc, TimeoutError) else "failed",
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                }
+            result.update(
+                runtime=name,
+                repetition=repetition,
+                warmup=repetition == 0,
+                single_write=gateway.writes == 1,
+                writes=gateway.writes,
+                dispatches=gateway.dispatches,
+                execution_ms=(time.perf_counter() - started) * 1000,
+                queue_ms=0,
+            )
+            for metric in ("model_calls", "input_tokens", "output_tokens", "cost_usd"):
+                result.setdefault(metric, None)
+            (records if repetition else warmups).append(result)
     return {
         "scope": "Synthetic gateway smoke screening; not a matched production workload or promotion result",
         "versions": {
@@ -75,6 +97,8 @@ async def screen(samples):
             for p in ["pydantic-ai-slim", "deepagents", "langchain", "langgraph"]
         },
         "samples": records,
+        "warmups": warmups,
+        "correctness_passed": all(row["status"] == "completed" for row in records + warmups),
     }
 
 
@@ -85,18 +109,26 @@ def main():
     args = parser.parse_args()
     if args.samples < 30:
         parser.error("at least 30 screening repetitions required")
+    if args.output.exists():
+        parser.error("Refusing to overwrite earlier screening evidence")
     result = asyncio.run(screen(args.samples))
-    args.output.write_text(json.dumps(result, indent=2) + "\n")
+    with args.output.open("x") as output:
+        output.write(json.dumps(result, indent=2) + "\n")
     print(
         json.dumps(
             {
                 name: sum(
-                    r["status"] != "completed" for r in result["samples"] if r["runtime"] == name
+                    r["status"] != "completed"
+                    for r in result["samples"] + result["warmups"]
+                    if r["runtime"] == name
                 )
                 for name in ("pydantic-ai", "deepagents")
             }
         )
     )
+
+    if not result["correctness_passed"]:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

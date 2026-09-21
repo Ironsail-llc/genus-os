@@ -1832,6 +1832,29 @@
       ],
       "checks": "Ruff lint/format, ESLint and diff checks pass.",
       "limits": "This improves stop visibility before a run is available. It does not establish terminal cancellation from missing evidence, recover a crashed pre-execution admission, or impose the outstanding general recovery deadline. Frontend branch is unit-tested, not separately browser-tested. No production deployment or full acceptance claim."
+    },
+    "candidate_screening_evidence": {
+      "artifact": "bench/runtime/uat-screening-evidence.json",
+      "initial_failure": "Four injected failure cases exposed missing warm-up evidence. Inspection also found unconditional completed classification when adapters returned unverified or invalid fixture outcomes.",
+      "before_log": "/tmp/runtime-screen-evidence-before.log",
+      "fix": "Require adapter verification plus independently verified fixture state, exactly one write and one dispatch. Preserve timeouts and failed attempts with observed write/dispatch counts, wall duration and unknown usage as null. Keep warm-ups separate from measured samples but include them in correctness. Refuse report overwrite and return nonzero after writing a failed report.",
+      "candidate_contracts": {
+        "passed": 111,
+        "seconds": 14.55,
+        "log": "/tmp/runtime-screen-evidence-candidates.log"
+      },
+      "screen": {
+        "artifact": "bench/runtime/uat-candidate-screen-preserved.json",
+        "measured_samples": 60,
+        "warmups": 2,
+        "repetitions_per_candidate": 30,
+        "correctness_passed": true,
+        "provider_network_calls": 0,
+        "production_business_writes": 0
+      },
+      "ci": "Added screening failure-contract tests and always-run upload of /tmp/screening.json using the artifact action revision already pinned elsewhere in the repository. YAML/order inspected locally; hosted CI not run.",
+      "checks": "Ruff lint/format and diff checks pass.",
+      "limits": "Offline synthetic gateway screening only. Not an identical native/candidate workload, live-provider latency cohort, framework-default comparison, or promotion result. Process death before final report persistence is not covered by this report writer. No runtime selected or deployment performed."
     }
   },
   "calendar": {

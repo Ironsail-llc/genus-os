@@ -871,3 +871,12 @@ Four failing private-database cases showed that recovery returned accepted/not_f
 The combined recovery, admission, durable controls and size selection passes 165 tests (11.93s). Focused frontend checks pass 28 tests (1.98s). Canonical migrated native integrations pass 26 tests (7.66s), with one worker-only skip and one dependency warning. Tests cover stops with/without approval, tenant/principal/session/request scope and late execution outcomes; frontend recovery uses GETs only. Ruff, formatting, ESLint and diff checks pass. Evidence: `bench/runtime/uat-stop-before-run-audit.json`.
 
 This closes visibility of a pre-run stop, not safe recovery of an orphaned admission or a general deadline for unresolved recovery. The frontend branch is unit-tested, not separately browser-tested this turn. No production deployment or full acceptance is claimed.
+
+
+## Candidate screening preserves negative evidence
+
+Review of the offline screening harness found unconditional completed status for any returned adapter result and discarded warm-up failures. The harness now requires adapter verification and independent fixture verification, exactly one write and one dispatch. It retains failed/timeout samples with observed effect counts and wall duration; unknown usage/cost remain null. Warm-ups are separate from measured samples but count toward correctness. The CLI refuses to overwrite existing evidence and exits unsuccessfully after preserving any failed report.
+
+The pinned candidate contract selection passes 111 tests (14.55s), including injected unverified, missing-write, extra-dispatch and timeout cases, successful sample accounting, failed-report exit and overwrite protection. The actual offline screen completes 30 measured repetitions per candidate plus two retained warm-ups: all 62 samples pass. This uses Pydantic AI 2.46.0 and Deep Agents 0.7.15 with synthetic models/tools and no provider network calls. Raw results: `bench/runtime/uat-candidate-screen-preserved.json`; verification: `bench/runtime/uat-screening-evidence.json`.
+
+CI now includes these failure-contract checks and an always-run artifact upload for the screening report. YAML and step wiring were checked locally; hosted CI was not run. This is correctness evidence only, not matched native/candidate performance evidence. Process death before final report persistence is still outside this writer's coverage. Candidate qualification, the unresolved admission recovery work and all other acceptance gates remain open. No runtime selection or deployment occurred.
