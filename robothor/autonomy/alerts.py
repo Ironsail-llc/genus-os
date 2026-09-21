@@ -12,19 +12,23 @@ issuer references live only in the encrypted journal.
 from __future__ import annotations
 
 import logging
-import os
+
+# Never page the operator from a test session: the autonomy suite drives real
+# overcharges against a disposable database, and every one of them would
+# otherwise land in the operator's real inbox.
+#
+# Imported rather than written again. The copy that stood here read only
+# ``PYTEST_CURRENT_TEST``, which pytest sets during a test's setup/call/
+# teardown and NOT during collection, session-scoped fixture setup, or a
+# thread that outlives a test -- so a money alert raised from a module-scoped
+# fixture would have paged the operator anyway. ``db.connection.in_pytest``
+# is the broad form (it also probes ``PYTEST_VERSION`` and ``sys.modules``),
+# it is already this package's dependency via ``store.assert_test_database``,
+# and the alias keeps ``alerts._in_pytest`` patchable where tests want the
+# production branch.
+from robothor.db.connection import in_pytest as _in_pytest
 
 logger = logging.getLogger(__name__)
-
-
-def _in_pytest() -> bool:
-    """Never page the operator from a test session.
-
-    Mirrors ``provider_alerts._in_pytest``: the autonomy suite drives real
-    overcharges against a disposable database, and every one of them would
-    otherwise land in the operator's real inbox.
-    """
-    return "PYTEST_CURRENT_TEST" in os.environ
 
 
 def notify_owner(*, tenant_id: str, subject: str, body: str) -> str | None:
