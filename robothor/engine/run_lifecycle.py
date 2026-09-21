@@ -419,15 +419,19 @@ class RunLifecycleMixin:
         try:
             from robothor.engine.planner import generate_plan
             from robothor.engine.provider_routing import provider_order_scope
+            from robothor.engine.runtime.automatic_planning import run as automatic_plan
 
             plan_model = agent_config.planning_model or models[0]
             with provider_order_scope(getattr(agent_config, "provider_order", {})):
-                return await generate_plan(
-                    message,
-                    tool_names,
-                    plan_model,
-                    # Retain the entire configured fallback chain.
-                    fallback_models=models[1:],
+                return await automatic_plan(
+                    agent_config,
+                    lambda: generate_plan(
+                        message,
+                        tool_names,
+                        plan_model,
+                        # Retain the entire configured fallback chain.
+                        fallback_models=models[1:],
+                    ),
                 )
         except Exception as e:
             logger.debug("Planning phase failed: %s", _sanitize(e))

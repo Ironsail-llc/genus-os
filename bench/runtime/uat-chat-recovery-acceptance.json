@@ -1,0 +1,12 @@
+{
+  "date": "2026-09-21",
+  "channel": "normal chat",
+  "manual_acceptance": true,
+  "user_response": "Yes, that matches",
+  "reviewed_behavior": "After a lost connection, check the stored task and recover its confirmed result without creating another. If an external action cannot be verified, explain the recorded evidence and what remains unresolved.",
+  "evidence": [
+    "bench/runtime/uat-runtime-native-task-live-recovered.json",
+    "bench/runtime/uat-runtime-chat-delivery-canonical-verified.log"
+  ],
+  "limits": "Acceptance of the described recovery behavior, not overall performance, all goal controls, production rollout, or resumption of stopped work."
+}

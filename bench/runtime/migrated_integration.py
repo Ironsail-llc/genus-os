@@ -129,6 +129,7 @@ def main():
                     "robothor/engine/tests/test_native_admission_rollback.py",
                     "robothor/engine/tests/test_native_deadline_recovery.py",
                     "robothor/engine/tests/test_native_classification_timeout.py",
+                    "robothor/engine/tests/test_native_automatic_planning.py",
                     *(
                         ["robothor/engine/tests/test_native_task_live.py"]
                         if "--live-task" in sys.argv

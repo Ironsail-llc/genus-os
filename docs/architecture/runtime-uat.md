@@ -1633,3 +1633,13 @@ The task tool now returns the stored body/status with its verified snapshot, and
 ## Avoid duplicate verification; investigate planning delay
 
 The task tool now explains when its stored snapshot already supplies verification. Two local live diagnostics used it without another task read, but took 51.297 and 30.042 seconds, so speed remains unqualified. Per-call timing in the latter found 22.753 seconds in automatic planning and 7.214 seconds in execution/answering. That is the next latency issue to investigate; it does not authorize skipping explicit plans or unfinished goal work. No deployment or manual acceptance occurred.
+
+## Manual acceptance recorded on 2026-09-21
+
+The user explicitly accepted the repeated-calendar-confirmation case: “Yes, that matches.” The reviewed synthetic transcript returns prior completion on the second confirmation, with one calendar write total and zero model calls. `bench/runtime/uat-chat-confirmation.json` now records that acceptance.
+
+The user also explicitly accepted recovery in normal chat: check the stored task, recover its confirmed result without creating another, and explain recorded evidence and unresolved effects when an external action cannot be verified. This is recorded in `bench/runtime/uat-chat-recovery-acceptance.json`. These acceptances join the earlier accepted unfinished-work/pause case. They do not grant deployment or goal-resumption authority and do not satisfy remaining performance or goal-control checks. Historical entries saying these two reviews were pending describe their earlier state.
+
+## Automatic planning budget
+
+Automatically selected auxiliary planning for ordinary interactive requests now has a five-second budget. Explicit plans and long-running goal/delegated/resumed work retain their prior policy. Native tests prove a stalled or cancellation-suppressing optional planner cannot supply a late plan or dispatch a later fallback, and execution can still create one verified task. All 11,344 selected engine regression tests pass. One live diagnostic completed correctly in 22.153 seconds; a complete 30-request screen remains required before any latency qualification. The parent/child pause case has been presented for normal-chat review and remains pending until the user answers.

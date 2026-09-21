@@ -11,6 +11,11 @@ from robothor.db.connection import get_connection
 _admission = ContextVar("classified_action_admission", default=None)
 
 
+def admitted_request():
+    scope = _admission.get()
+    return scope[0] if scope else None
+
+
 @contextmanager
 def admission(request, admitted_at=None):
     token = _admission.set((request, admitted_at or datetime.now(UTC)))
