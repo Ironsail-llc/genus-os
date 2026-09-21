@@ -18,6 +18,7 @@ from robothor.goals.report_channel import publish_report
 
 def setup_turn():
     session = AgentSession("main", TriggerType.WEBCHAT, tenant_id="tenant")
+    session.run.task_text = "What's finished, and what's still left?"
     req = SimpleNamespace(session=session, readonly_mode=False)
     ctx = ToolContext(agent_id="main", tenant_id="tenant", run_id=session.run.id)
     return session, req, ctx

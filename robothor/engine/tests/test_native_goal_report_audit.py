@@ -28,9 +28,10 @@ from robothor.identity import IdentityContext
 pytestmark = pytest.mark.integration
 
 
+@pytest.mark.parametrize("compound", [False, True])
 @pytest.mark.asyncio
 async def test_native_goal_report_is_audited_and_recovered_without_reexecution(
-    engine_config, sample_agent_config, monkeypatch
+    engine_config, sample_agent_config, monkeypatch, compound
 ):
     dsn = os.environ.get("ROBOTHOR_TEST_DB_DSN", "")
     if "host=/tmp/runtime-migrated-" not in dsn:
@@ -71,7 +72,35 @@ async def test_native_goal_report_is_audited_and_recovered_without_reexecution(
         ],
         usage={"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
     )
-    provider = AsyncMock(return_value=response)
+
+    async def produce(**kwargs):
+        if provider.await_count == 1:
+            return response
+        assert compound and provider.await_count == 2
+        facts = json.loads(
+            next(m["content"] for m in reversed(kwargs["messages"]) if m["role"] == "tool")
+        )
+        assert facts["report_prepared"] is False
+        from robothor.goals.presentation import render_goal_progress
+
+        factual_text = render_goal_progress(
+            facts["goal"], execution_enabled=facts["execution_enabled"]
+        )
+        return ModelResponse(
+            model=config.model_primary,
+            choices=[
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": factual_text + "\nSeparately, 17 × 19 = 323.",
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
+            usage={"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+        )
+
+    provider = AsyncMock(side_effect=produce)
     monkeypatch.setattr("litellm.acompletion", provider)
     context = ExecutionContext(
         tenant,
@@ -83,7 +112,8 @@ async def test_native_goal_report_is_audited_and_recovered_without_reexecution(
         RunRequest(
             context,
             "main",
-            f"Report progress for goal {goal['id']}.",
+            f"Report progress for goal {goal['id']}."
+            + (" Also calculate 17 times 19 separately." if compound else ""),
             options={
                 "agent_config": config,
                 "trigger_type": TriggerType.WEBCHAT,
@@ -97,7 +127,7 @@ async def test_native_goal_report_is_audited_and_recovered_without_reexecution(
     assert str(result.run.status) == "completed"
     text = result.run.output_text
     assert "The goal is not complete" in text and "scheduled reviews will not run" in text
-    assert provider.await_count == 1
+    assert provider.await_count == (2 if compound else 1)
     with psycopg2.connect(dsn) as conn, conn.cursor() as cur:
         cur.execute(
             "SELECT status,output_text FROM agent_runs WHERE tenant_id=%s AND id=%s",
@@ -110,10 +140,12 @@ async def test_native_goal_report_is_audited_and_recovered_without_reexecution(
         )
         rows = cur.fetchall()
     tool = next(output for kind, output in rows if kind == "tool_call")
-    checkpoint = next(output for kind, output in rows if kind == "checkpoint")
+    checkpoints = [output for kind, output in rows if kind == "checkpoint"]
     assert tool["goal"]["id"] == goal["id"] and tool["goal"]["status"] == "waiting"
     assert sorted(task["status"] for task in tool["goal"]["tasks"]) == ["DONE", "TODO"]
-    assert checkpoint == {"origin": "trusted_goal_report", "output": text}
+    assert checkpoints == ([] if compound else [{"origin": "trusted_goal_report", "output": text}])
+    if compound:
+        assert "323" in text
     # Later state must not replace the historical report or cause its action to repeat.
     store.update(
         tenant,
@@ -144,5 +176,5 @@ async def test_native_goal_report_is_audited_and_recovered_without_reexecution(
             "/chat/outcome", params={"request_id": client_id, "session_key": session_key}
         )
         assert foreign.json()["state"] == "not_found"
-    assert provider.await_count == 1
+    assert provider.await_count == (2 if compound else 1)
     assert store.get(tenant, goal["id"])["status"] == "paused"

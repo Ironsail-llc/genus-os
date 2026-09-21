@@ -10,6 +10,9 @@ REPORT_TOOL = "report_pursuit_goal"
 
 
 def report_scope(req, names):
+    from robothor.engine.goal_report_intent import admission
+
+    finalizes, statuses = admission(req) if names == [REPORT_TOOL] else (False, None)
     run = req.session.run
     enabled = (
         names == [REPORT_TOOL]
@@ -21,12 +24,19 @@ def report_scope(req, names):
         and binding.get() is None
         and not getattr(req.session, "routine_operation_id", None)
     )
-    return report_turn(run.tenant_id, run.agent_id, run.id, enabled=enabled)
+    return report_turn(
+        run.tenant_id,
+        run.agent_id,
+        run.id,
+        enabled=enabled,
+        finalizes=finalizes,
+        allowed_goal_statuses=statuses,
+    )
 
 
 def record_report_turn(state, session, errors):
     message = consume_report(state, session.run)
-    session.pending_goal_report = message if not errors else None
+    session.pending_goal_report = message if not errors and state.finalizes else None
 
 
 def finish_goal_report(session):

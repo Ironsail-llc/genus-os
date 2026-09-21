@@ -67,7 +67,9 @@ def schemas() -> dict[str, Any]:
             "Use only when that report answers the user's entire request; finish other requested "
             "work first. This reads current goal, task and child state; it does not execute work "
             "or pause/resume anything. Call alone, after any requested controls. The host publishes "
-            "the final report without another model reply. Use ordinary reads and conversation "
+            "the final report without another model reply only for a recognized standalone request. "
+            "Otherwise report_prepared is false and the returned goal data supplies facts for your complete reply. "
+            "Use ordinary reads and conversation "
             "for additional questions, multiple goals or requests this report cannot answer.",
             {
                 "type": "object",
@@ -157,14 +159,18 @@ async def report_goal(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.goals.report_channel import publish_report, require_report_context
 
     check_context(ctx)
-    require_report_context(ctx)
+    channel = require_report_context(ctx)
     if set(args) != {"goal_id"} or not isinstance(args["goal_id"], str):
         raise ValueError("An explicit goal_id is required for the final report")
     goal_id = str(UUID(args["goal_id"]))
     goal = await asyncio.to_thread(store.get, ctx.tenant_id, goal_id)
     enabled = await asyncio.to_thread(store.enabled, ctx.tenant_id)
-    publish_report(ctx, render_goal_progress(goal, execution_enabled=enabled))
-    return {"goal": goal, "execution_enabled": enabled, "report_prepared": True}
+    report = render_goal_progress(goal, execution_enabled=enabled)
+    if channel.allowed_goal_statuses and goal["status"] not in channel.allowed_goal_statuses:
+        channel.finalizes = False
+    publish_report(ctx, report)
+    result = {"goal": goal, "execution_enabled": enabled, "report_prepared": channel.finalizes}
+    return result
 
 
 async def update_goal(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
