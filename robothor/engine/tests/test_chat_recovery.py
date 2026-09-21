@@ -32,6 +32,8 @@ def records(private_database, monkeypatch):  # noqa: F811
     with connect() as conn, conn.cursor() as cur:
         cur.execute("""CREATE TABLE IF NOT EXISTS agent_run_steps (
             run_id UUID,step_number INTEGER,tool_name TEXT,tool_input JSONB,tool_output JSONB)""")
+        cur.execute("""CREATE TABLE IF NOT EXISTS agent_runtime_request_stops (
+            tenant_id TEXT, request_id TEXT, note TEXT, PRIMARY KEY(tenant_id,request_id))""")
         cur.execute("""CREATE TABLE IF NOT EXISTS chat_sessions (
             tenant_id TEXT, session_key TEXT, plan_state JSONB, last_active_at TIMESTAMPTZ,
             PRIMARY KEY(tenant_id,session_key))""")
@@ -653,3 +655,46 @@ async def test_http_recovers_approval_then_original_run_without_replay(
             assert completed.json()["run_id"] == run and completed.json()["terminal"]
     mock_runner.execute.assert_not_called()
     assert not _sessions
+
+
+@pytest.mark.parametrize("approved", [False, True])
+@pytest.mark.parametrize("final_status", ["cancelled", "completed"])
+def test_stop_remains_visible_before_run_and_late_run_evidence_takes_precedence(
+    records, monkeypatch, approved, final_status
+):
+    from dataclasses import replace
+
+    from robothor.engine.runtime import controls
+
+    auth, client = identity(), str(uuid4())
+    identifier = request_key(auth, "web:main", client)
+    if approved:
+        with records() as conn, conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO chat_sessions(tenant_id,session_key,plan_state) VALUES (%s,%s,%s)",
+                (
+                    auth.tenant_id,
+                    "web:main",
+                    Json({"status": "approved", "approval_request_id": identifier}),
+                ),
+            )
+    monkeypatch.setattr(controls, "get_connection", records)
+    monkeypatch.setattr(controls, "signal_stopped", lambda *args: None)
+    controls.issue_request(auth.tenant_id, identifier, "Operator stopped chat")
+    result = chat_recovery.read_outcome(auth, "web:main", client)
+    assert result["state"] == "stopping" and result["stop_requested"]
+    assert result["source"] == "request_stop_record"
+    assert not result["terminal"] and not result["verified"]
+    assert "Stop is recorded" in result["text"]
+    for caller, session, request in [
+        (auth, "other", client),
+        (replace(auth, user_id="other"), "web:main", client),
+        (identity(), "web:main", client),
+        (auth, "web:main", str(uuid4())),
+    ]:
+        assert chat_recovery.read_outcome(caller, session, request)["state"] == "not_found"
+    run = insert(records, auth, client, status=final_status)
+    completed = chat_recovery.read_outcome(auth, "web:main", client)
+    assert completed["run_id"] == run and completed["terminal"]
+    assert completed["state"] == final_status
+    assert completed["source"] == "run_record"

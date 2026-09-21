@@ -542,3 +542,12 @@ A private-database test reproduced outcome lookup returning not_found even thoug
 The combined private database/HTTP/recovery/admission/size selection passes 151 checks (8.01s). The 27 focused frontend checks pass (1.22s), and the canonical migrated native suite passes 26 integrations (7.49s), with one worker-only skip and one dependency warning. SQL checks enforce tenant/principal/session/request scope. The HTTP test loses all session cache, observes the approved claim, then reads the original completed run with zero runner calls. The frontend branch is unit-tested, not separately browser-tested this turn. Ruff, formatting, ESLint and diff checks pass. Evidence: `bench/runtime/uat-approval-audit.json`.
 
 This closes audit visibility in the claim-before-run gap, not recovery of execution after process death there. Recorded approval is not evidence of execution or completion. Claim lifetime and safe crash recovery still require work, alongside the remaining acceptance gates. No deployment or full acceptance is claimed.
+
+
+## Durable stop remains visible before a run is available
+
+Four failing private-database cases showed that recovery returned accepted/not_found even after a durable request stop was committed. Pending outcome lookup now prioritizes that scoped stop and returns stopping with stop_requested=true, nonterminal and unverified. Chat keeps the stop visible while reading the original request for late results. Missing run evidence is not proof that no effects occurred; a later cancelled or completed execution record retains its actual recorded outcome.
+
+The combined recovery, admission, durable controls and size selection passes 165 tests (11.93s). Focused frontend checks pass 28 tests (1.98s). Canonical migrated native integrations pass 26 tests (7.66s), with one worker-only skip and one dependency warning. Tests cover stops with/without approval, tenant/principal/session/request scope and late execution outcomes; frontend recovery uses GETs only. Ruff, formatting, ESLint and diff checks pass. Evidence: `bench/runtime/uat-stop-before-run-audit.json`.
+
+This closes visibility of a pre-run stop, not safe recovery of an orphaned admission or a general deadline for unresolved recovery. The frontend branch is unit-tested, not separately browser-tested this turn. No production deployment or full acceptance is claimed.

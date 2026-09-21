@@ -24,21 +24,9 @@ def read_outcome(auth, session_key: str, client_id: str) -> dict:
         )
         rows = cur.fetchall()
         if not rows:
-            cur.execute(
-                """SELECT 1 FROM chat_sessions WHERE tenant_id=%s AND session_key=%s
-                   AND plan_state->>'status'='approved'
-                   AND plan_state->>'approval_request_id'=%s""",
-                (auth.tenant_id, session_key, identifier),
-            )
-            if cur.fetchone():
-                return {
-                    "state": "accepted",
-                    "terminal": False,
-                    "verified": False,
-                    "source": "approval_record",
-                    "waiting_reason": "execution_admission",
-                    "text": "Your approval is recorded. Checking whether execution has started…",
-                }
+            from robothor.engine.chat_pending_outcome import pending_outcome
+
+            return pending_outcome(cur, auth, session_key, identifier)
         receipts = []
         if len(rows) == 1:
             root = rows[0]
@@ -47,8 +35,6 @@ def read_outcome(auth, session_key: str, client_id: str) -> dict:
                 return {"state": "ambiguous", "terminal": False}
             rows = [latest]
             receipts = family_calendar_receipts(cur, root, auth)
-    if not rows:
-        return {"state": "not_found", "terminal": False}
     if len(rows) != 1:
         return {"state": "ambiguous", "terminal": False}
     row = rows[0]

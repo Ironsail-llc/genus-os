@@ -111,4 +111,24 @@ describe("audit recovery under interruption", () => {
     }
   });
 
+  it("keeps a durable stop visible while checking for late execution evidence", async () => {
+    vi.useFakeTimers();
+    const recovered = vi.fn();
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(answer({ terminal: false, state: "stopping", source: "request_stop_record" }))
+      .mockResolvedValueOnce(answer({ terminal: true, state: "cancelled", text: "Stopped. Recorded action was verified." }));
+    vi.stubGlobal("fetch", fetch);
+    render(<ChatRecovery request={request} messageId="message" onRecovered={recovered} />);
+    await advance();
+    expect(screen.getByText(/Stop is recorded/)).toBeTruthy();
+    expect(recovered).not.toHaveBeenCalled();
+    await advance(1000);
+    expect(recovered).toHaveBeenCalledExactlyOnceWith("message", "Stopped. Recorded action was verified.");
+    expect(fetch).toHaveBeenCalledTimes(2);
+    for (const [url, options] of fetch.mock.calls) {
+      expect(new URL(url, "http://test").searchParams.get("request_id")).toBe(request.requestId);
+      expect(options.method ?? "GET").toBe("GET");
+    }
+  });
+
 });

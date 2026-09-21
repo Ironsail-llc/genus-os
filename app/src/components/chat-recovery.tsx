@@ -52,6 +52,8 @@ export function ChatRecovery({ request, messageId, onRecovered }: {
         }
         setStatus(record.reconciliation_pending === true
           ? `${typeof record.text === "string" ? record.text : ""}\n\nChecking for updated action evidence…`
+          : record.state === "stopping"
+            ? "Stop is recorded. Checking the original request for any actions already dispatched…"
           : record.state === "running"
             ? "The original run is still working. Waiting for its recorded result…"
             : record.state === "accepted"

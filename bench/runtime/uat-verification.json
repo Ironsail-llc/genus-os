@@ -1799,6 +1799,39 @@
       "scope": "Private SQL tenant/principal/session/request isolation; cache-free HTTP transition from claim to original result with zero runner calls; frontend read-only polling of same request. Canonical migrated native suite passes. Frontend branch not separately browser-tested this turn.",
       "checks": "Ruff lint/format, ESLint and diff checks pass.",
       "limits": "This closes audit visibility before run creation, not automatic resumption after process death in that gap. A durable approval must not be treated as evidence execution started or completed. Claim lifetime, crash recovery, broader provider reconciliation and full acceptance remain open. No production deployment."
+    },
+    "stop_before_run_audit": {
+      "artifact": "bench/runtime/uat-stop-before-run-audit.json",
+      "initial_failure": "Four private-database cases returned accepted/not_found despite a durable stop before the execution record was visible.",
+      "before_log": "/tmp/runtime-stop-audit-before.log",
+      "fix": "Pending outcome lookup prioritizes the scoped durable stop over approval and missing-request states. Return nonterminal stopping with stop_requested=true; retain original-request polling and let late execution evidence take precedence.",
+      "focused": {
+        "passed": 165,
+        "seconds": 11.93,
+        "log": "/tmp/runtime-stop-audit-after.log"
+      },
+      "frontend": {
+        "passed": 28,
+        "files": 3,
+        "seconds": 1.98,
+        "log": "/tmp/runtime-stop-audit-frontend.log"
+      },
+      "canonical_native": {
+        "passed": 26,
+        "skipped": 1,
+        "warnings": 1,
+        "seconds": 7.66,
+        "log": "/tmp/runtime-stop-audit-native.log"
+      },
+      "coverage": [
+        "real durable stop with and without recorded approval",
+        "tenant/principal/session/request isolation",
+        "late cancelled/completed execution records retain their actual outcome",
+        "frontend continues GET recovery without replay",
+        "existing durable dispatch controls and descendant contracts"
+      ],
+      "checks": "Ruff lint/format, ESLint and diff checks pass.",
+      "limits": "This improves stop visibility before a run is available. It does not establish terminal cancellation from missing evidence, recover a crashed pre-execution admission, or impose the outstanding general recovery deadline. Frontend branch is unit-tested, not separately browser-tested. No production deployment or full acceptance claim."
     }
   },
   "calendar": {
