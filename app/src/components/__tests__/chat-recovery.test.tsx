@@ -131,4 +131,26 @@ describe("audit recovery under interruption", () => {
     }
   });
 
+  it("reports delayed execution evidence and continues the original request lookup", async () => {
+    vi.useFakeTimers();
+    const recovered = vi.fn();
+    const explanation = "Your approval is recorded, but no execution record is available yet. I'm continuing to check the original request's audit.";
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(answer({ terminal: false, state: "accepted", waiting_reason: "execution_evidence_delayed", text: explanation }))
+      .mockResolvedValueOnce(answer({ terminal: true, state: "completed", text: "Recorded result arrived." }));
+    vi.stubGlobal("fetch", fetch);
+    render(<ChatRecovery request={request} messageId="message" onRecovered={recovered} />);
+    await advance();
+    expect(screen.getByText(explanation)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Stop this request" })).toBeTruthy();
+    expect(recovered).not.toHaveBeenCalled();
+    await advance(1000);
+    expect(recovered).toHaveBeenCalledExactlyOnceWith("message", "Recorded result arrived.");
+    expect(fetch).toHaveBeenCalledTimes(2);
+    for (const [url, options] of fetch.mock.calls) {
+      expect(new URL(url, "http://test").searchParams.get("request_id")).toBe(request.requestId);
+      expect(options.method ?? "GET").toBe("GET");
+    }
+  });
+
 });

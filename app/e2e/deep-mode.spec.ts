@@ -756,7 +756,7 @@ for (const approved of [false, true]) {
 
 
 for (const reload of [false, true]) {
-  test(`recovering approval can be stopped ${reload ? "after reload" : "after connection loss"}`, async ({ page }) => {
+  test(`delayed approval can be stopped ${reload ? "after reload" : "after connection loss"}`, async ({ page }) => {
     await setupMocks(page);
     const scope = "30000000-0000-4000-8000-000000000005";
     let requestId = "", approvals = 0, stops = 0, phase = "accepted";
@@ -773,7 +773,8 @@ for (const reload of [false, true]) {
       expect(new URL(route.request().url()).searchParams.get("request_id")).toBe(requestId);
       return route.fulfill({ json: phase === "cancelled"
         ? { state: phase, terminal: true, text: "Stopped as requested." }
-        : { state: phase, terminal: false, stop_requested: phase === "stopping" } });
+        : { state: phase, terminal: false, stop_requested: phase === "stopping",
+          text: phase === "accepted" ? "Your approval is recorded, but no execution record is available yet. I'm continuing to check the original request's audit." : "" } });
     });
     await page.route("**/api/chat/abort", route => {
       expect(route.request().postDataJSON().request_id).toBe(requestId);
@@ -788,6 +789,7 @@ for (const reload of [false, true]) {
     await page.getByTestId("plan-approve").click();
     await expect(page.getByTestId("message-assistant").last()).toContainText("Your approval is recorded");
     if (reload) await page.reload({ waitUntil: "networkidle" });
+    await expect(page.getByTestId("message-assistant").last()).toContainText("no execution record is available yet");
     await page.getByTestId("recovery-stop").click();
     await expect(page.getByText("Stop recorded.", { exact: true })).toBeVisible();
     await expect(page.getByTestId("message-assistant").last()).toContainText("Stop is recorded");

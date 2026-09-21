@@ -738,3 +738,94 @@ def test_durable_approval_recovery_survives_session_deletion(records, monkeypatc
     assert chat_recovery.read_outcome(auth, "other", client)["state"] == "not_found"
     run = insert(records, auth, client)
     assert chat_recovery.read_outcome(auth, "web:main", client)["run_id"] == run
+
+
+def test_delayed_approval_reports_missing_execution_evidence(records):
+    auth, client = identity(), str(uuid4())
+    identifier = request_key(auth, "web:main", client)
+    with records() as conn, conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO chat_approval_receipts(tenant_id,request_id,session_key,plan_id,plan_state,recorded_at) VALUES (%s,%s,'web:main',%s,'{}',now()-interval '2 minutes')",
+            (auth.tenant_id, identifier, str(uuid4())),
+        )
+    result = chat_recovery.read_outcome(auth, "web:main", client)
+    assert result["waiting_reason"] == "execution_evidence_delayed"
+    assert result["state"] == "accepted" and not result["terminal"] and not result["verified"]
+    assert "no execution record" in result["text"]
+    assert "continuing to check" in result["text"]
+    # Late execution evidence takes precedence; the earlier notice is not a
+    # terminal failure or permission to restart the approved operation.
+    run = insert(records, auth, client)
+    result = chat_recovery.read_outcome(auth, "web:main", client)
+    assert result["run_id"] == run and result["terminal"]
+
+
+def test_approval_recovery_after_worker_process_exits(records):
+    import json
+    import os
+    import subprocess
+    import sys
+    from dataclasses import asdict
+    from pathlib import Path
+
+    from robothor.engine.models import PlanState
+
+    auth, client = identity(), str(uuid4())
+    identifier = request_key(auth, "web:main", client)
+    plan = PlanState(
+        plan_id=str(uuid4()),
+        plan_text="Synthetic approved work",
+        original_message="Do it",
+        created_at="fixture",
+    )
+    with records() as conn, conn.cursor() as cur:
+        dsn = conn.dsn
+        cur.execute(
+            "INSERT INTO chat_sessions(tenant_id,session_key,plan_state) VALUES (%s,'web:main',%s)",
+            (auth.tenant_id, Json(asdict(plan))),
+        )
+    # The real claim is committed by a separate process which exits abruptly
+    # before any runner starts. No business tools or provider are available.
+    worker = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            """
+import json, os, sys
+from contextlib import contextmanager
+import psycopg2
+from robothor.engine import chat_plan_claim
+from robothor.engine.models import PlanState
+@contextmanager
+def connect():
+    with psycopg2.connect(sys.argv[1]) as conn:
+        yield conn
+chat_plan_claim.get_connection = connect
+assert chat_plan_claim.claim(sys.argv[2], 'web:main', PlanState(**json.loads(sys.argv[3])), sys.argv[4])
+os._exit(23)
+""",
+            dsn,
+            auth.tenant_id,
+            json.dumps(asdict(plan)),
+            identifier,
+        ],
+        cwd=Path(__file__).resolve().parents[3],
+        env={key: os.environ[key] for key in ("PATH", "HOME")},
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert worker.returncode == 23, worker.stderr
+    with records() as conn, conn.cursor() as cur:
+        cur.execute("DELETE FROM chat_sessions WHERE tenant_id=%s", (auth.tenant_id,))
+    result = chat_recovery.read_outcome(auth, "web:main", client)
+    assert result["state"] == "accepted" and not result["terminal"]
+    assert "approval is recorded" in result["text"]
+    with records() as conn, conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM agent_runs WHERE tenant_id=%s", (auth.tenant_id,))
+        assert cur.fetchone()[0] == 0
+        cur.execute(
+            "SELECT count(*) FROM chat_approval_receipts WHERE tenant_id=%s AND request_id=%s",
+            (auth.tenant_id, identifier),
+        )
+        assert cur.fetchone()[0] == 1
