@@ -26,6 +26,8 @@ def drill(root, env):
             PYTHONNOUSERSITE="1",
             ROBOTHOR_TEST_DB_DSN=env["ROBOTHOR_TEST_DB_DSN"],
         )
+        if installation := os.environ.get("ROBOTHOR_RUNTIME_COMPARISON_INSTALLATION"):
+            worker_env["ROBOTHOR_RUNTIME_COMPARISON_INSTALLATION"] = installation
         try:
             process = subprocess.run(
                 [sys.executable, "-c", code],
@@ -65,6 +67,14 @@ def drill(root, env):
         reports[label] = {
             "exit_code": process.returncode,
             "samples": rows,
+            "configuration": next(
+                (
+                    json.loads(line.split(" ", 1)[1])
+                    for line in process.stdout.splitlines()
+                    if line.startswith("NATIVE_TASK_CONFIGURATION ")
+                ),
+                None,
+            ),
             "not_finished": max(0, 62 - len(rows)),
             "scenarios": {
                 name: summary(
@@ -85,7 +95,7 @@ def drill(root, env):
             and all(s["verified"] for s in r["samples"])
             for r in reports.values()
         ),
-        "scope": "Thirty warm requests plus retained warmup per scenario and revision. Full native runner with real private CRM, identical scripted two-turn provider and minimal task-protocol profile. Legacy finalReport-off behavior on both revisions; does not measure new host final-report speed. Network denied. Sequential revision blocks, not live-provider, HTTP ingress, full production prompt/memory, or framework qualification. Tool schemas and product prompts intentionally come from each revision.",
+        "scope": "Thirty warm requests plus retained warmup per scenario and revision. Full native runner with real private CRM and identical scripted two-turn provider; optional planner is also scripted and separately counted. Profile is recorded per revision: minimal by default or selected main settings when explicitly requested. Installation instructions/memory and outbound delivery are excluded. Legacy finalReport-off behavior on both revisions; does not measure new host final-report speed. Network denied. Sequential revision blocks, not live-provider, HTTP ingress, full production prompt/memory, or framework qualification. Tool schemas and product prompts intentionally come from each revision.",
     }
     print("NATIVE_TASK_COMPARISON " + json.dumps(report), flush=True)
     assert report["passed"], "See retained per-revision failures"

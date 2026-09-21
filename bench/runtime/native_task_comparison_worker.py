@@ -15,7 +15,7 @@ import psycopg2
 
 from robothor.crm import dal
 from robothor.engine import host_state, permissions
-from robothor.engine.config import EngineConfig
+from robothor.engine.config import EngineConfig, load_agent_config
 from robothor.engine.llm_client import LLMClient
 from robothor.engine.models import AgentConfig, DeliveryMode, TriggerType
 from robothor.engine.runner import AgentRunner
@@ -49,8 +49,34 @@ async def main():
     ollama.get_embeddings_batch_async = AsyncMock(return_value=[])
     host_state.host_state_section = lambda *a, **k: "Synthetic installation health unavailable."
     calls = 0
+    planning_calls = 0
     title = ""
     scenario = ""
+
+    async def planner(**kwargs):
+        nonlocal planning_calls
+        assert any(
+            isinstance(message.get("content"), str)
+            and message["content"].startswith(
+                "Analyze this task and produce a JSON execution plan."
+            )
+            for message in kwargs.get("messages", [])
+        ), "Unexpected provider entry outside scripted execution"
+        planning_calls += 1
+        return litellm.ModelResponse(
+            choices=[
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": json.dumps(
+                            {"difficulty": "simple", "plan": [], "estimated_steps": 2}
+                        ),
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
+            usage={"prompt_tokens": 10, "completion_tokens": 10, "total_tokens": 20},
+        )
 
     async def provider(self, messages, models, tools, on_content=None, **kwargs):
         nonlocal calls
@@ -88,6 +114,7 @@ async def main():
 
     LLMClient._call_llm = provider
     LLMClient._call_llm_streaming = provider
+    litellm.acompletion = planner
     with tempfile.TemporaryDirectory(prefix="native-task-comparison-") as workspace:
         root = Path(workspace)
         (root / "docs/agents").mkdir(parents=True)
@@ -111,11 +138,43 @@ async def main():
             task_protocol=True,
             difficulty_class="simple",
         )
+        installation = os.environ.get("ROBOTHOR_RUNTIME_COMPARISON_INSTALLATION")
+        if installation:
+            from dataclasses import replace
+
+            selected = load_agent_config(
+                "main",
+                Path(installation) / "docs/agents",
+                workspace=Path(installation),
+                trigger_type="webchat",
+            )
+            assert selected is not None and not selected.auto_task
+            # Compare selected execution settings without private installation
+            # instructions, memory or outbound delivery in either checkout.
+            agent = replace(
+                selected, instruction_file="", bootstrap_files=[], delivery_mode=DeliveryMode.NONE
+            )
+        print(
+            "NATIVE_TASK_CONFIGURATION "
+            + json.dumps(
+                {
+                    "profile": "selected_main" if installation else "minimal",
+                    "primary": agent.model_primary,
+                    "fallbacks": agent.model_fallbacks,
+                    "tools_allowed": len(agent.tools_allowed),
+                    "planning_enabled": agent.planning_enabled,
+                    "difficulty_class": agent.difficulty_class,
+                    "task_protocol": agent.task_protocol,
+                }
+            ),
+            flush=True,
+        )
         runner = AgentRunner(config)
         rows = []
         for scenario in ["standalone", "compound"]:
             for index in range(31):
                 calls = 0
+                planning_calls = 0
                 title = f"{scenario} {index} {uuid4().hex}"
                 prompt = f'Create one task titled "{title}" with body "Synthetic only".'
                 if scenario == "compound":
@@ -151,6 +210,7 @@ async def main():
                     row.update(
                         status=str(run.status),
                         model_calls=calls,
+                        planning_calls=planning_calls,
                         task_count=len(tasks),
                         reply=run.output_text,
                         post_return_model_calls=calls - returned_calls,
