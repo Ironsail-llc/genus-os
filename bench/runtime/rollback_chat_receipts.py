@@ -4,19 +4,29 @@ import json
 import os
 import subprocess
 import sys
+from types import SimpleNamespace
 from uuid import uuid4
 
 import psycopg2
+from psycopg2.extras import Json
 
 
 def probe(code, env, dsn):
     assert "host=/tmp/runtime-migrated-" in dsn
     run_id, effect_id, request_id = (str(uuid4()) for _ in range(3))
+    from robothor.engine.runtime.chat_control import request_key
+
+    goal_id = str(uuid4())
+    correlation = request_key(
+        SimpleNamespace(tenant_id="default", user_id="rollback-receipts"),
+        "rollback-goals",
+        request_id,
+    )
     with psycopg2.connect(dsn) as conn, conn.cursor() as cur:
         cur.execute(
-            """INSERT INTO agent_runs(id,tenant_id,user_id,agent_id,trigger_type,status)
-               VALUES (%s,'default','rollback-receipts','main','webchat','running')""",
-            (run_id,),
+            """INSERT INTO agent_runs(id,tenant_id,user_id,agent_id,trigger_type,status,correlation_id)
+               VALUES (%s,'default','rollback-receipts','main','webchat','running',%s)""",
+            (run_id, correlation),
         )
         cur.execute(
             """INSERT INTO agent_runtime_effects
@@ -24,6 +34,27 @@ def probe(code, env, dsn):
                VALUES (%s,'default','rollback-receipts',%s,%s,'main','create_note',%s,'confirmed',
                        '{"reference":"synthetic-note","result":{"id":"synthetic-note"}}')""",
             (effect_id, request_id, run_id, "c" * 64),
+        )
+        cur.execute(
+            "INSERT INTO pursuit_goals(tenant_id,id,data,status) VALUES ('default',%s,'{}','paused')",
+            (goal_id,),
+        )
+        cur.execute(
+            """INSERT INTO pursuit_goal_history(tenant_id,goal_id,action,actor,detail)
+               VALUES ('default',%s,'pause','rollback-receipts',%s)""",
+            (
+                goal_id,
+                Json(
+                    {
+                        "control_receipt": {
+                            "run_id": run_id,
+                            "principal_id": "rollback-receipts",
+                            "status": "paused",
+                            "version": 2,
+                        }
+                    }
+                ),
+            ),
         )
     script = """
 import asyncio,json,sys
@@ -45,7 +76,21 @@ else:
     recovered='CRM note was created' in result['text'] and result.get('status')=='failed'
     scoped='CRM note was created' not in foreign['text']
     honest='without doing the work' not in error
-    print(json.dumps({'compatible':recovered and scoped and honest,
+    goal_recovered='paused' in result['text'] and sys.argv[2] in result['text']
+    scoped=scoped and sys.argv[2] not in foreign['text']
+    from robothor.db.connection import get_connection
+    from robothor.engine.chat_recovery import read_outcome
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute("UPDATE agent_runs SET status='failed' WHERE id=%s", (sys.argv[1],))
+        conn.commit()
+    reconnect=read_outcome(auth,'rollback-goals',sys.argv[3])
+    reconnect_ok=sys.argv[2] in reconnect['text'] and 'paused' in reconnect['text'] and not reconnect['verified']
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute("UPDATE agent_runs SET status='running' WHERE id=%s", (sys.argv[1],))
+        conn.commit()
+    print(json.dumps({'compatible':recovered and scoped and honest and goal_recovered and reconnect_ok,
+                      'goal_control_reconnect_recovered':reconnect_ok,
+                      'goal_control_receipt_recovered':goal_recovered,
                       'receipt_recovered_before_terminal_write':recovered,
                       'foreign_principal_denied':scoped,'no_false_no_work_claim':honest}))
 """
@@ -53,7 +98,7 @@ else:
     worker_env.update(PATH=os.environ["PATH"], PYTHONPATH=str(code), PYTHONNOUSERSITE="1")
     try:
         result = subprocess.run(
-            [sys.executable, "-c", script, run_id],
+            [sys.executable, "-c", script, run_id, goal_id, request_id],
             cwd=code,
             env=worker_env,
             capture_output=True,
@@ -71,5 +116,10 @@ else:
         return report
     finally:
         with psycopg2.connect(dsn) as conn, conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM pursuit_goal_history WHERE tenant_id='default' AND goal_id=%s",
+                (goal_id,),
+            )
+            cur.execute("DELETE FROM pursuit_goals WHERE tenant_id='default' AND id=%s", (goal_id,))
             cur.execute("DELETE FROM agent_runtime_effects WHERE id=%s", (effect_id,))
             cur.execute("DELETE FROM agent_runs WHERE id=%s", (run_id,))

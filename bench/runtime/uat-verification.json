@@ -5749,13 +5749,25 @@
       "regression_passed": 203,
       "chat_unit_passed": 63,
       "reconnect_native_passed": 1,
-      "note": "Trusted dispatch attribution and committed parent/child history; initial and reconnect recovery, tenant/principal isolation, later resume leaves original receipt unchanged, rejected stale control adds no receipt, no additional model calls. Broad engine result predates this change. Rollback 7324c4d0313 needs goal-history receipt backport and requalification.",
+      "note": "Trusted dispatch attribution and committed parent/child history; initial and reconnect recovery, tenant/principal isolation, later resume leaves original receipt unchanged, rejected stale control adds no receipt, no additional model calls. Broad engine result predates this change. Rollback 7324c4d0313 rejected; backport 3dc1167c3e7 passes the application-code compatibility drill.",
       "logs": [
         "bench/runtime/uat-runtime-goal-control-before.log",
         "bench/runtime/uat-runtime-goal-control-canonical.log",
         "bench/runtime/uat-runtime-goal-control-reconnect.log",
         "bench/runtime/uat-runtime-goal-control-regressions.log"
       ]
+    },
+    "goal_control_rollback": {
+      "current_product_revision": "9163df1d1e6",
+      "rollback_revision": "3dc1167c3e76030b8c666e3acb0d5e0ab6cdb0e4",
+      "old_target_rejected": "7324c4d031336a9c7145983b77386cabcfe3d9e8",
+      "qualified": true,
+      "focused_tests_passed": 172,
+      "canonical_passed": 80,
+      "canonical_skipped": 2,
+      "report": "bench/runtime/uat-runtime-rollback-goal-history-final-report.json",
+      "patch": "bench/runtime/rollback-goal-history-compatibility.patch",
+      "scope": "Application-code current/rollback/current daemon drill, private PG/Redis and scripted provider. Initial and reconnect recovery from seeded committed goal history, foreign-principal denial, stopped/unresolved records preserved, actual HTTP admission. Not container/dependency rollback or live fleet."
     }
   },
   "calendar": {

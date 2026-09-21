@@ -22,7 +22,7 @@ from bench.runtime.restart_state import seed, verify
 # The accepted integration baseline predates those controls and is not a safe
 # rollback target for sessions admitted by the modernization implementation.
 TARGET_BASE = "b1671409892"
-TARGET = "7324c4d0313"
+TARGET = "3dc1167c3e7"
 
 
 def drill(root, env, dsn):
@@ -56,6 +56,11 @@ def drill(root, env, dsn):
         "robothor/engine/chat_result.py",
         "robothor/engine/last_resort.py",
         "robothor/engine/tests/test_chat_delivery.py",
+        "robothor/engine/tests/test_chat_recovery.py",
+        "robothor/engine/chat_goal_receipts.py",
+        "robothor/engine/chat_recovery.py",
+        "robothor/engine/chat_receipts.py",
+        "robothor/goals/store.py",
     }
     archive = root / "rollback-code.tar"
     subprocess.run(["git", "archive", "--output", str(archive), target], check=True)
