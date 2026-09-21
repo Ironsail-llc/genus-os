@@ -9,10 +9,12 @@ INTERVAL_SECONDS = 5
 
 
 async def read_with_progress(request, admitted_at, loader, directory):
+    from robothor.engine.runtime.profile_pool import read_profile
+
     callback = request.options.get("on_status")
     if callback is None:
-        return await asyncio.to_thread(loader, request.agent_id, directory)
-    worker = asyncio.create_task(asyncio.to_thread(loader, request.agent_id, directory))
+        return await read_profile(loader, request.agent_id, directory)
+    worker = asyncio.create_task(read_profile(loader, request.agent_id, directory))
     started = time.monotonic()
     elapsed_before = max(0, (datetime.now(UTC) - admitted_at).total_seconds())
     try:
