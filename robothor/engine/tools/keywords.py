@@ -104,7 +104,6 @@ _CHAT: tuple[str, ...] = ("chat", "space", "room", "hangout")
 
 TOOL_HINTS: dict[str, ToolHint] = {
     "exec": ToolHint(keywords=("run", "shell", "command", "terminal", "execute")),
-    "get_company": ToolHint(keywords=("lookup", "company", "name", "retrieve")),
     # ── Live Gmail ────────────────────────────────────────────────────
     "gws_gmail_search": ToolHint(
         keywords=(
