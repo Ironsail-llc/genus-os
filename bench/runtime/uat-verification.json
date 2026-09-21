@@ -9,16 +9,17 @@
   "replacement_selected": false,
   "checks": {
     "engine": {
-      "revision": "3581b1a9db5",
-      "passed": 11156,
+      "revision": "fd6c67f2b6c",
+      "product_revision": "49627a99058",
+      "passed": 11162,
       "failed": 0,
       "skipped": 29,
-      "deselected": 185,
+      "deselected": 187,
       "warnings": 393,
-      "seconds": 365.12,
+      "seconds": 370.91,
       "selection": "not slow and not integration and not llm and not e2e and not smoke",
-      "log": "/tmp/runtime-engine-profile-pool-regression.log",
-      "note": "Single clean invocation after bounded native profile admission, early acknowledgement, preparation progress and isolated profile-reader pool. Product source and collected engine tests remained unchanged during the run. Concurrent HTTP benchmark tests and documentation were added outside the collected engine scope; independent local load checks ran concurrently, so elapsed time is not a matched baseline performance comparison. Existing connect_tcp unawaited-coroutine warning remains; its collection site does not identify its initiating path."
+      "log": "/tmp/runtime-engine-deadline-reason-regression.log",
+      "note": "Product source and collected engine tests remained unchanged during the run. Later live-journal changes affect bench helpers and the opt-in slow native live test, excluded here. The two new canonical deadline recovery cases are integration-marked and verified separately. Live provider samples overlapped part of this run; elapsed time is not a matched baseline performance comparison. Existing unawaited connect_tcp warning remains; its collection location does not identify the initiator."
     },
     "frontend": {
       "revision": "2d5b4c2985d",
@@ -2367,6 +2368,64 @@
       },
       "checks": "Ruff lint/format and diff checks pass. Offline journal tests included in runtime-contract CI; no hosted run claimed.",
       "limits": "Process interruption evidence, not automatic retry or recovery of unknown provider usage. A live primary-model cohort is running separately; no performance result or full acceptance assumed. Broad engine run excludes this slow opt-in harness. No production deployment."
+    },
+    "engine_before_deadline_reason": {
+      "revision": "3581b1a9db5",
+      "passed": 11156,
+      "failed": 0,
+      "skipped": 29,
+      "deselected": 185,
+      "warnings": 393,
+      "seconds": 365.12,
+      "selection": "not slow and not integration and not llm and not e2e and not smoke",
+      "log": "/tmp/runtime-engine-profile-pool-regression.log",
+      "note": "Single clean invocation after bounded native profile admission, early acknowledgement, preparation progress and isolated profile-reader pool. Product source and collected engine tests remained unchanged during the run. Concurrent HTTP benchmark tests and documentation were added outside the collected engine scope; independent local load checks ran concurrently, so elapsed time is not a matched baseline performance comparison. Existing connect_tcp unawaited-coroutine warning remains; its collection site does not identify its initiating path."
+    },
+    "live_primary_refresh": {
+      "revision": "45a41d171d5",
+      "product_revision": "49627a99058",
+      "scope": "Live selected primary, native current runtime, synthetic record tool, trusted completion predicate and outcome validation, isolated minimal agent configuration. Each request has a 60-second host deadline. Not a complete production profile or representative multi-workflow comparison.",
+      "model": "openrouter/deepseek/deepseek-v4.1-flash",
+      "temperature": 0.5,
+      "samples": 30,
+      "verified_single_write_completed": 30,
+      "failures": [],
+      "duration_ms": {
+        "samples": 30,
+        "p50": 2131.4660320022085,
+        "p95": 5496.215089999168,
+        "p95_ci95": [
+          3562.7410219967715,
+          7297.705434000818
+        ]
+      },
+      "provider_attempts": {
+        "samples": 30,
+        "p50": 1,
+        "p95": 1,
+        "p95_ci95": [
+          1,
+          1
+        ]
+      },
+      "post_success_provider_calls": 0,
+      "post_success_tool_calls": 0,
+      "engine_estimated_cost_usd": 0.01362441,
+      "billing_reconciled": false,
+      "journal": {
+        "started": 30,
+        "finished": 30,
+        "unresolved": 0
+      },
+      "artifact": "bench/runtime/uat-live-primary-current.jsonl",
+      "journal_artifact": "bench/runtime/uat-live-primary-current.events.jsonl",
+      "test": {
+        "passed": 1,
+        "warnings": 1,
+        "seconds": 81.69,
+        "log": "/tmp/runtime-live-primary-current-v2.log"
+      },
+      "limits": "The measured p95 meets the 30-second reference only for this single-action cohort. No matched baseline/candidate latency claim, full chat/goal reliability, fallback-chain load or production deployment. Some samples overlapped the separate broad engine suite. Earlier failed cohorts remain preserved, including the unresolved MiMo deadline; this primary result does not erase or resolve them. Full acceptance and remaining manual UAT stay open."
     }
   },
   "calendar": {

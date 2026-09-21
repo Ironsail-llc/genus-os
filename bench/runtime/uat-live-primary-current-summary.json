@@ -1,0 +1,46 @@
+{
+  "revision": "45a41d171d5",
+  "product_revision": "49627a99058",
+  "scope": "Live selected primary, native current runtime, synthetic record tool, trusted completion predicate and outcome validation, isolated minimal agent configuration. Each request has a 60-second host deadline. Not a complete production profile or representative multi-workflow comparison.",
+  "model": "openrouter/deepseek/deepseek-v4.1-flash",
+  "temperature": 0.5,
+  "samples": 30,
+  "verified_single_write_completed": 30,
+  "failures": [],
+  "duration_ms": {
+    "samples": 30,
+    "p50": 2131.4660320022085,
+    "p95": 5496.215089999168,
+    "p95_ci95": [
+      3562.7410219967715,
+      7297.705434000818
+    ]
+  },
+  "provider_attempts": {
+    "samples": 30,
+    "p50": 1,
+    "p95": 1,
+    "p95_ci95": [
+      1,
+      1
+    ]
+  },
+  "post_success_provider_calls": 0,
+  "post_success_tool_calls": 0,
+  "engine_estimated_cost_usd": 0.01362441,
+  "billing_reconciled": false,
+  "journal": {
+    "started": 30,
+    "finished": 30,
+    "unresolved": 0
+  },
+  "artifact": "bench/runtime/uat-live-primary-current.jsonl",
+  "journal_artifact": "bench/runtime/uat-live-primary-current.events.jsonl",
+  "test": {
+    "passed": 1,
+    "warnings": 1,
+    "seconds": 81.69,
+    "log": "/tmp/runtime-live-primary-current-v2.log"
+  },
+  "limits": "The measured p95 meets the 30-second reference only for this single-action cohort. No matched baseline/candidate latency claim, full chat/goal reliability, fallback-chain load or production deployment. Some samples overlapped the separate broad engine suite. Earlier failed cohorts remain preserved, including the unresolved MiMo deadline; this primary result does not erase or resolve them. Full acceptance and remaining manual UAT stay open."
+}

@@ -1,0 +1,13 @@
+{
+  "revision": "fd6c67f2b6c",
+  "product_revision": "49627a99058",
+  "passed": 11162,
+  "failed": 0,
+  "skipped": 29,
+  "deselected": 187,
+  "warnings": 393,
+  "seconds": 370.91,
+  "selection": "not slow and not integration and not llm and not e2e and not smoke",
+  "log": "/tmp/runtime-engine-deadline-reason-regression.log",
+  "note": "Product source and collected engine tests remained unchanged during the run. Later live-journal changes affect bench helpers and the opt-in slow native live test, excluded here. The two new canonical deadline recovery cases are integration-marked and verified separately. Live provider samples overlapped part of this run; elapsed time is not a matched baseline performance comparison. Existing unawaited connect_tcp warning remains; its collection location does not identify the initiator."
+}
