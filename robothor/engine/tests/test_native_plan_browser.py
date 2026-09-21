@@ -27,8 +27,9 @@ pytestmark = pytest.mark.integration
 
 @pytest.mark.asyncio
 @pytest.mark.timeout(120)
+@pytest.mark.parametrize("approve_twice", [False, True])
 async def test_saved_plan_recovers_through_browser_and_native_engine(
-    engine_config, sample_agent_config
+    engine_config, sample_agent_config, approve_twice
 ):
     dsn = os.environ.get("ROBOTHOR_TEST_DB_DSN", "")
     if "host=/tmp/runtime-migrated-" not in dsn:
@@ -50,8 +51,12 @@ async def test_saved_plan_recovers_through_browser_and_native_engine(
             "Return exactly ALIGNED" in str(message.get("content", ""))
             for message in kwargs["messages"]
         )
-        calls.append("alignment" if alignment else "draft")
+        execution = len(calls) >= 3
+        calls.append("execution" if execution else "alignment" if alignment else "draft")
         content = "ALIGNED" if alignment else "Inspect the synthetic task record[PLAN_READY]"
+        if execution:
+            content = "Synthetic task review complete."
+            await asyncio.sleep(0.1)
         if not kwargs.get("stream"):
             return litellm.ModelResponse(
                 model=kwargs["model"],
@@ -113,6 +118,7 @@ async def test_saved_plan_recovers_through_browser_and_native_engine(
         "AUTH_OIDC_CLIENT_ID": "test",
         "AUTH_OIDC_CLIENT_SECRET": "test",
         "GENUS_BRIDGE_SSO_SECRET": "test",
+        "RUNTIME_APPROVAL_TEST": "1" if approve_twice else "0",
     }
     try:
         with (
@@ -153,20 +159,31 @@ async def test_saved_plan_recovers_through_browser_and_native_engine(
                 line for line in output.decode().splitlines() if line.startswith("PLAN_BROWSER ")
             )
             report = json.loads(marker.removeprefix("PLAN_BROWSER "))
-            assert report["restored"] and report["starts"] == 1 and report["approvals"] == 0
+            assert report["restored"] and report["starts"] == 1
+            assert report["approvals"] == (2 if approve_twice else 0)
             await get_task_registry().drain(timeout=5)
-            assert calls == ["draft", "draft", "alignment"]
+            assert calls == ["draft", "draft", "alignment"] + (
+                ["execution"] if approve_twice else []
+            )
             tools.assert_not_awaited()
             with psycopg2.connect(dsn) as conn, conn.cursor() as cur:
                 cur.execute("SELECT id,status FROM agent_runs WHERE tenant_id=%s", (tenant,))
-                ((run_id, status),) = cur.fetchall()
-                assert status == "completed"
+                runs = cur.fetchall()
+                assert len(runs) == (2 if approve_twice else 1)
+                assert all(status == "completed" for _, status in runs)
                 cur.execute(
                     "SELECT plan_state FROM chat_sessions WHERE tenant_id=%s AND plan_state IS NOT NULL",
                     (tenant,),
                 )
-                ((plan,),) = cur.fetchall()
-                assert plan["exploration_run_id"] == str(run_id) and plan["status"] == "pending"
+                plans = cur.fetchall()
+                if approve_twice:
+                    assert not plans or plans[0][0]["status"] == "approved"
+                else:
+                    ((plan,),) = plans
+                    assert (
+                        plan["exploration_run_id"] == str(runs[0][0])
+                        and plan["status"] == "pending"
+                    )
             print(marker, flush=True)
     finally:
         if browser is not None:

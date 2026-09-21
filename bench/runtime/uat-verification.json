@@ -1558,6 +1558,66 @@
       "prerequisites": "Existing app build/Chromium setup; added postgresql-16-pgvector package.",
       "package_source": "https://packages.ubuntu.com/noble/postgresql-16-pgvector",
       "verification": "YAML parsed and step order checked. Same combined command previously passed 27 tests locally. Hosted workflow has not been run."
+    },
+    "plan_approval_claim": {
+      "initial_failure": "A second approval of the same active plan returned 200 and started another execution. The new endpoint case failed before the fix.",
+      "implementation": [
+        "Claim the saved pending plan atomically before native or deep execution.",
+        "Match tenant, session, plan ID, text, original request, deep mode and creation time; persist the winning approval request ID.",
+        "Reject later claims even from stale worker snapshots.",
+        "Preserve upstream refusal status and request_admitted=false through the Next proxy."
+      ],
+      "database": {
+        "passed": 8,
+        "seconds": 0.86,
+        "log": "/tmp/runtime-plan-claim-store-fixed.log",
+        "checks": "Two concurrent connections yield one winner; later claim refused; changed execution intent or scope refused."
+      },
+      "focused": {
+        "passed": 150,
+        "seconds": 12.74,
+        "log": "/tmp/runtime-plan-claim-final-regression.log",
+        "scope": "Plan approval, deep-plan routing, per-user sessions, private claims, module/function ratchets."
+      },
+      "frontend": {
+        "files": 149,
+        "passed": 1655,
+        "seconds": 9.63,
+        "log": "/tmp/runtime-plan-claim-frontend.log"
+      },
+      "final_proxy_checks": {
+        "passed": 35,
+        "seconds": 0.868
+      },
+      "canonical_browser": {
+        "passed": 28,
+        "skipped": 1,
+        "warnings": 1,
+        "seconds": 13.12,
+        "log": "/tmp/runtime-plan-claim-native-browser-fixed.log",
+        "observed": {
+          "preparations": 1,
+          "recovery_reads": 1,
+          "approval_requests": 2,
+          "approval_statuses": [
+            409,
+            200
+          ],
+          "execution_runs": 1,
+          "business_tools": 0
+        }
+      },
+      "build_log": "/tmp/runtime-plan-claim-build.log",
+      "preserved_failures": [
+        "/tmp/runtime-plan-approval-before.log",
+        "/tmp/runtime-plan-approval-after.log",
+        "/tmp/runtime-plan-approval-final-focused.log",
+        "/tmp/runtime-plan-claim-store.log",
+        "/tmp/runtime-plan-claim-native-browser.log",
+        "/tmp/runtime-plan-claim-deep-before.log"
+      ],
+      "fixture_notes": "Private table setup made repeatable; unit apps that seed in-memory plans explicitly mock durable admission. Native browser test uses actual plan persistence and claims. Validation/admission extracted to respect unchanged size caps.",
+      "limits": "Browser duplicate approvals use distinct request IDs and scripted model transport. Reattachment for retries reusing the winning request ID, concurrent plan revisions and interruption after claim but before run admission remain open. No deployment or full acceptance claim."
     }
   },
   "calendar": {

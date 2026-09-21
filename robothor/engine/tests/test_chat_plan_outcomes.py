@@ -234,3 +234,54 @@ async def test_saved_plan_recovery_does_not_revive_ineligible_draft(refusal):
         await attach_plan(outcome, None, "request", _member_auth("bob"), "absent-session")
     assert "plan" not in outcome
     assert "absent-session" not in _sessions
+
+
+async def test_duplicate_approval_does_not_start_a_second_execution(
+    client,  # noqa: F811
+    mock_runner,  # noqa: F811
+    monkeypatch,
+):
+    import asyncio
+    from datetime import UTC, datetime
+
+    from robothor.engine.chat import _get_session
+    from robothor.engine.models import PlanState
+
+    monkeypatch.setenv("ROBOTHOR_PER_USER_SESSIONS", "enforce")
+    session = _get_session("agent:main:user:bob")
+    session.active_plan = PlanState(
+        plan_id="plan-once",
+        plan_text="Check the task",
+        original_message="Check the task",
+        status="pending",
+        created_at=datetime.now(UTC).isoformat(),
+    )
+    entered, release = asyncio.Event(), asyncio.Event()
+    calls = 0
+
+    async def execute(**kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            entered.set()
+            await release.wait()
+        return AgentRun(status=RunStatus.COMPLETED, output_text="Task checked")
+
+    mock_runner.execute = AsyncMock(side_effect=execute)
+    with (
+        patch("robothor.engine.chat._auth_context", return_value=_member_auth("bob")),
+        patch("robothor.engine.chat.save_exchange_async", new_callable=AsyncMock),
+        patch("robothor.engine.chat.clear_plan_state_async", new_callable=AsyncMock),
+    ):
+        first = asyncio.create_task(
+            client.post("/chat/plan/approve", json={"plan_id": "plan-once"})
+        )
+        try:
+            await asyncio.wait_for(entered.wait(), timeout=2)
+            second = await client.post("/chat/plan/approve", json={"plan_id": "plan-once"})
+        finally:
+            release.set()
+            response = await first
+    assert response.status_code == 200
+    assert second.status_code == 409
+    assert calls == 1

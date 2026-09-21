@@ -338,12 +338,15 @@ class TestPlanApproveDeepBranch:
         return runner
 
     @pytest.fixture
-    def app(self, mock_runner):
+    def app(self, mock_runner, monkeypatch):
         """Create a minimal FastAPI test app with chat endpoints."""
         from fastapi import FastAPI
 
         from robothor.engine import chat
 
+        monkeypatch.setattr(
+            "robothor.engine.chat_plan_claim.claim_plan", AsyncMock(return_value=True)
+        )
         app = FastAPI()
         app.include_router(chat.router)
 

@@ -49,6 +49,7 @@ from starlette.responses import StreamingResponse
 from robothor.constants import DEFAULT_TENANT
 from robothor.engine.chat_history import MAX_HISTORY as _MAX_HISTORY
 from robothor.engine.chat_history import ChatHistory, append_turn, as_history
+from robothor.engine.chat_plan_claim import admit_plan, approval_refusal
 from robothor.engine.chat_result import result_text
 from robothor.engine.chat_session_cache import SessionCache
 from robothor.engine.chat_store import (
@@ -909,24 +910,18 @@ async def plan_approve(request: Request) -> StreamingResponse | JSONResponse:
     session_key = _effective_session_key(auth, session_key)
     session = _get_session(session_key)
 
-    if not session.active_plan or session.active_plan.plan_id != plan_id:
-        return JSONResponse({"error": "No matching pending plan"}, status_code=404)
+    if refusal := approval_refusal(session, plan_id):
+        return refusal
 
-    if _plan_is_expired(session.active_plan):
-        session.active_plan.status = "expired"
-        session.active_plan = None
-        return JSONResponse({"error": "Plan expired"}, status_code=410)
-
-    # Verify plan integrity — ensure plan wasn't modified between proposal and approval
-    if session.active_plan.plan_hash:
-        import hashlib
-
-        current_hash = hashlib.sha256(session.active_plan.plan_text.encode()).hexdigest()[:16]
-        if current_hash != session.active_plan.plan_hash:
-            return JSONResponse({"error": "Plan integrity check failed"}, status_code=409)
-
-    plan = session.active_plan
-    plan.status = "approved"
+    plan, client_id = await admit_plan(session, auth, session_key, body.get("request_id"))
+    if plan is None:
+        return JSONResponse(
+            {
+                "error": "That plan was already approved or changed. No new execution was started.",
+                "request_admitted": False,
+            },
+            status_code=409,
+        )
 
     queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
 
@@ -1137,7 +1132,7 @@ async def plan_approve(request: Request) -> StreamingResponse | JSONResponse:
             if session.active_task is asyncio.current_task():
                 session.active_task = None
 
-    task = start(session, run_approved, auth, session_key, body.get("request_id"))
+    task = start(session, run_approved, auth, session_key, client_id)
 
     async def sse_generator() -> AsyncGenerator[str, None]:
         import json as _json

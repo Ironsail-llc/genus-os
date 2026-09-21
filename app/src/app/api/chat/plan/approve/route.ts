@@ -25,6 +25,13 @@ export async function POST(req: Request) {
   try {
     const engineRes = await (body.request_id === undefined ? client.planApprove(planId, sessionKey) : client.planApprove(planId, sessionKey, body.request_id));
 
+    if (engineRes.ok === false) {
+      return new Response(engineRes.body, {
+        status: engineRes.status,
+        headers: { "Content-Type": engineRes.headers.get("content-type") ?? "application/json", "Cache-Control": "no-store" },
+      });
+    }
+
     if (!engineRes.body) {
       return new Response(
         JSON.stringify({ error: "No response body from engine" }),

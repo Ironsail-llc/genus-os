@@ -224,9 +224,10 @@ def mock_runner(engine_config):
 
 
 @pytest.fixture
-def chat_app(engine_config, mock_runner):
+def chat_app(engine_config, mock_runner, monkeypatch):
     from fastapi import FastAPI
 
+    monkeypatch.setattr("robothor.engine.chat_plan_claim.claim_plan", AsyncMock(return_value=True))
     _sessions.clear()
     app = FastAPI()
     with patch("robothor.engine.chat.load_all_sessions", return_value={}):

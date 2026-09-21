@@ -191,9 +191,6 @@ class EngineClient {
       body: JSON.stringify({ plan_id: planId, ...keyed(sessionKey), ...(requestId ? { request_id: requestId } : {}) }),
       signal: AbortSignal.timeout(120_000),
     });
-    if (!res.ok) {
-      throw new Error(`Engine error: ${res.status} ${res.statusText}`);
-    }
     return res;
   }
 

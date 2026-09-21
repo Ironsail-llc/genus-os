@@ -479,3 +479,14 @@ At revision `9f83e49d0e6`, the broad engine selection passes 11,054 tests, with 
 The monthly/PR browser compatibility job now invokes the canonical browser/native saved-plan recovery command after its existing app build and Chromium setup. The job uses Ubuntu 24.04 and installs its [PostgreSQL 16 pgvector package](https://packages.ubuntu.com/noble/postgresql-16-pgvector), which the canonical schema needs. YAML parsing and prerequisite order checks pass, and the matching combined command already passed locally. Hosted CI has not been run; this change configures ongoing coverage without claiming a hosted result.
 
 The acceptance matrix now includes delivered execution-error recovery and saved-plan readiness explicitly. Full acceptance remains false: matched candidate qualification, broader external-service reconciliation, application rollback and remaining normal-chat acceptance are not established by these passing checks. No deployment occurred.
+
+
+## Consume a pending plan approval once
+
+A failing endpoint test reproduced two executions for overlapping approvals of the same pending plan. Approval now atomically claims the saved plan before admitting native or deep execution. The database update matches tenant/session and the exact execution-bearing plan fields, records the winning approval request ID and refuses subsequent stale claims. Validation/admission were extracted into `chat_plan_claim.py` without increasing module-size caps. Unit apps that only seed in-memory plans now explicitly mock persistence admission; separate private-database and native-browser tests exercise the real claim.
+
+The real browser test then exposed the Next proxy converting a durable 409 refusal into a generic 502. The client/proxy now preserve that response and its explicit admission refusal. After recovery of a saved draft, two distinct approval requests yield statuses 409 and 200, with one native execution run. The original recovery-only case still leaves its plan pending with zero approvals.
+
+Private claims pass 8 checks (0.86s); the final plan/deep/session/store/size selection passes 150 tests (12.74s). All 1,655 frontend tests pass (9.63s), and 35 focused proxy/client tests pass after the final wording change. A fresh standalone build and the canonical browser/native command pass 28 integrations (13.12s, one worker-only skip and one dependency warning). Ruff, ESLint, TypeScript, Node syntax and diff checks pass. Evidence and intermediate failures: `bench/runtime/uat-plan-approval-claim.json`.
+
+These duplicate browser requests have distinct request IDs. Reattaching a retry that reuses the winning request ID, concurrent revisions, and interruption after claim but before run admission remain open. The earlier broad engine result predates this change; no full-acceptance or deployment claim is made.

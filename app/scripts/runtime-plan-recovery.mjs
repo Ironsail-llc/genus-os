@@ -51,7 +51,22 @@ try {
   expect(reads).toBeGreaterThan(0);
   expect(approvals).toBe(0);
   await expect(page.getByText(/\[PLAN_READY\]/)).toHaveCount(0);
-  console.log("PLAN_BROWSER " + JSON.stringify({ starts, reads, approvals, request_id: original, restored: true }));
+  let approvalStatuses = [];
+  if (process.env.RUNTIME_APPROVAL_TEST === "1") {
+    const saved = await (await page.request.get(`${base}/api/chat/plan/status`)).json();
+    approvalStatuses = await page.evaluate(async planId => Promise.all([1, 2].map(async () => {
+      const response = await fetch("/api/chat/plan/approve", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ plan_id: planId, request_id: crypto.randomUUID() }),
+      });
+      const body = await response.text();
+      if (!response.ok && JSON.parse(body).request_admitted !== false) throw new Error("Duplicate approval was not reported as refused");
+      return response.status;
+    })), saved.plan.plan_id);
+    expect(approvalStatuses.filter(status => status === 200)).toHaveLength(1);
+    expect(approvalStatuses.filter(status => [404, 409].includes(status))).toHaveLength(1);
+  }
+  console.log("PLAN_BROWSER " + JSON.stringify({ starts, reads, approvals, request_id: original, restored: true, approval_statuses: approvalStatuses }));
 } finally {
   await browser?.close();
   server.kill("SIGTERM");

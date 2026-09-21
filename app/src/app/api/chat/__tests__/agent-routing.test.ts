@@ -356,3 +356,15 @@ describe("execution admission refusals", () => {
     });
   }
 });
+
+it("preserves the engine's durable duplicate-approval refusal", async () => {
+  resolveChatAgent.mockResolvedValue({ ok: true, key: KEY });
+  engine.planApprove.mockResolvedValueOnce(Response.json(
+    { error: "That plan was already approved or changed. No new execution was started.", request_admitted: false }, { status: 409 },
+  ));
+  const { planApprove } = await routes();
+  const response = await planApprove(post("http://helm.test/x", { plan_id: "consumed-plan", agent: "scheduler" }));
+  expect(response.status).toBe(409);
+  expect(response.headers.get("cache-control")).toBe("no-store");
+  expect(await response.json()).toEqual({ error: "That plan was already approved or changed. No new execution was started.", request_admitted: false });
+});
