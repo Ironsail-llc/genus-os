@@ -91,4 +91,24 @@ describe("audit recovery under interruption", () => {
     expect(fetch.mock.calls[0][0]).toBe(fetch.mock.calls[1][0]);
   });
 
+  it("shows durable approval while waiting for its original execution record", async () => {
+    vi.useFakeTimers();
+    const recovered = vi.fn();
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(answer({ terminal: false, state: "accepted", source: "approval_record" }))
+      .mockResolvedValueOnce(answer({ terminal: true, state: "completed", text: "Recorded execution completed." }));
+    vi.stubGlobal("fetch", fetch);
+    render(<ChatRecovery request={request} messageId="message" onRecovered={recovered} />);
+    await advance();
+    expect(screen.getByText(/Your approval is recorded/)).toBeTruthy();
+    expect(recovered).not.toHaveBeenCalled();
+    await advance(1000);
+    expect(recovered).toHaveBeenCalledExactlyOnceWith("message", "Recorded execution completed.");
+    expect(fetch).toHaveBeenCalledTimes(2);
+    for (const [url, options] of fetch.mock.calls) {
+      expect(new URL(url, "http://test").searchParams.get("request_id")).toBe(request.requestId);
+      expect(options.method ?? "GET").toBe("GET");
+    }
+  });
+
 });

@@ -32,6 +32,9 @@ def records(private_database, monkeypatch):  # noqa: F811
     with connect() as conn, conn.cursor() as cur:
         cur.execute("""CREATE TABLE IF NOT EXISTS agent_run_steps (
             run_id UUID,step_number INTEGER,tool_name TEXT,tool_input JSONB,tool_output JSONB)""")
+        cur.execute("""CREATE TABLE IF NOT EXISTS chat_sessions (
+            tenant_id TEXT, session_key TEXT, plan_state JSONB, last_active_at TIMESTAMPTZ,
+            PRIMARY KEY(tenant_id,session_key))""")
         cur.execute("""CREATE TABLE IF NOT EXISTS calendar_operations (
             id UUID PRIMARY KEY,tenant_id TEXT,user_id TEXT,agent_id TEXT,status TEXT,result JSONB,
             created_at TIMESTAMPTZ DEFAULT now())""")
@@ -585,3 +588,68 @@ def test_resumed_success_keeps_uncertain_prior_and_delegated_receipts(records):
     assert result["reconciliation_pending"] and not result["verified"]
     assert {item["operation_id"] for item in result["effects"]} == {operation, child_operation}
     assert "not fully verified" in result["text"]
+
+
+def test_approval_claim_is_visible_before_run_exists_and_scoped(records):
+    from dataclasses import replace
+
+    auth, client = identity(), str(uuid4())
+    claim = {"status": "approved", "approval_request_id": request_key(auth, "web:main", client)}
+    with records() as conn, conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO chat_sessions(tenant_id,session_key,plan_state) VALUES (%s,%s,%s)",
+            (auth.tenant_id, "web:main", Json(claim)),
+        )
+    result = chat_recovery.read_outcome(auth, "web:main", client)
+    assert result["state"] == "accepted"
+    assert result["source"] == "approval_record"
+    assert not result["terminal"] and not result["verified"]
+    assert "approval is recorded" in result["text"]
+    for caller, session, request in [
+        (auth, "other", client),
+        (replace(auth, user_id="other"), "web:main", client),
+        (identity(), "web:main", client),
+        (auth, "web:main", str(uuid4())),
+    ]:
+        assert chat_recovery.read_outcome(caller, session, request)["state"] == "not_found"
+    run = insert(records, auth, client)
+    completed = chat_recovery.read_outcome(auth, "web:main", client)
+    assert completed["run_id"] == run and completed["terminal"]
+    assert completed["source"] == "run_record"
+
+
+async def test_http_recovers_approval_then_original_run_without_replay(
+    records,
+    chat_app,  # noqa: F811
+    mock_runner,  # noqa: F811
+    monkeypatch,
+):
+    from unittest.mock import patch
+
+    from httpx import ASGITransport, AsyncClient
+
+    from robothor.engine.chat import _sessions
+
+    auth, client_id = identity(), str(uuid4())
+    claim = {"status": "approved", "approval_request_id": request_key(auth, "web:main", client_id)}
+    with records() as conn, conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO chat_sessions(tenant_id,session_key,plan_state) VALUES (%s,%s,%s)",
+            (auth.tenant_id, "web:main", Json(claim)),
+        )
+    _sessions.clear()
+    monkeypatch.setenv("ROBOTHOR_PER_USER_SESSIONS", "off")
+    with patch("robothor.engine.chat._auth_context", return_value=auth):
+        async with AsyncClient(
+            transport=ASGITransport(app=chat_app), base_url="http://test"
+        ) as http:
+            params = {"request_id": client_id, "session_key": "web:main"}
+            accepted = await http.get("/chat/outcome", params=params)
+            assert accepted.status_code == 200
+            assert accepted.json()["state"] == "accepted"
+            assert not accepted.json()["terminal"]
+            run = insert(records, auth, client_id)
+            completed = await http.get("/chat/outcome", params=params)
+            assert completed.json()["run_id"] == run and completed.json()["terminal"]
+    mock_runner.execute.assert_not_called()
+    assert not _sessions

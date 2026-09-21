@@ -54,6 +54,8 @@ export function ChatRecovery({ request, messageId, onRecovered }: {
           ? `${typeof record.text === "string" ? record.text : ""}\n\nChecking for updated action evidence…`
           : record.state === "running"
             ? "The original run is still working. Waiting for its recorded result…"
+            : record.state === "accepted"
+              ? "Your approval is recorded. Checking whether execution has started…"
             : record.state === "awaiting_approval"
               ? "The original run is waiting for approval. Checking for its result…"
               : "Checking the original request’s audit record…");

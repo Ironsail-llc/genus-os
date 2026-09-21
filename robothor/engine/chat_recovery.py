@@ -23,6 +23,22 @@ def read_outcome(auth, session_key: str, client_id: str) -> dict:
             (auth.tenant_id, auth.user_id, identifier, identifier),
         )
         rows = cur.fetchall()
+        if not rows:
+            cur.execute(
+                """SELECT 1 FROM chat_sessions WHERE tenant_id=%s AND session_key=%s
+                   AND plan_state->>'status'='approved'
+                   AND plan_state->>'approval_request_id'=%s""",
+                (auth.tenant_id, session_key, identifier),
+            )
+            if cur.fetchone():
+                return {
+                    "state": "accepted",
+                    "terminal": False,
+                    "verified": False,
+                    "source": "approval_record",
+                    "waiting_reason": "execution_admission",
+                    "text": "Your approval is recorded. Checking whether execution has started…",
+                }
         receipts = []
         if len(rows) == 1:
             root = rows[0]
@@ -60,5 +76,7 @@ def read_outcome(auth, session_key: str, client_id: str) -> dict:
         "reconciliation_pending": any(item["status"] == "executing" for item in receipts),
         "verified": row["verified_status"] == "verified" and not incomplete,
         "source": "run_record",
-        "plan_exploration": str(row.get("trigger_detail") or "").startswith(("plan:", "plan-revise:")),
+        "plan_exploration": str(row.get("trigger_detail") or "").startswith(
+            ("plan:", "plan-revise:")
+        ),
     }

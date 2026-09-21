@@ -1,0 +1,26 @@
+{
+  "initial_failure": "A saved approved plan without a run row returned not_found instead of exposing its durable admission.",
+  "before_log": "/tmp/runtime-approval-audit-before.log",
+  "fix": "When no execution exists, read the scoped approved claim and return accepted, terminal=false, verified=false, source=approval_record. Chat shows the recorded approval and continues reading the original request; execution records take precedence once present.",
+  "focused": {
+    "passed": 151,
+    "seconds": 8.01,
+    "log": "/tmp/runtime-approval-audit-final.log"
+  },
+  "frontend": {
+    "passed": 27,
+    "files": 3,
+    "seconds": 1.22,
+    "log": "/tmp/runtime-approval-audit-frontend-final.log"
+  },
+  "canonical_native": {
+    "passed": 26,
+    "skipped": 1,
+    "warnings": 1,
+    "seconds": 7.49,
+    "log": "/tmp/runtime-approval-audit-native.log"
+  },
+  "scope": "Private SQL tenant/principal/session/request isolation; cache-free HTTP transition from claim to original result with zero runner calls; frontend read-only polling of same request. Canonical migrated native suite passes. Frontend branch not separately browser-tested this turn.",
+  "checks": "Ruff lint/format, ESLint and diff checks pass.",
+  "limits": "This closes audit visibility before run creation, not automatic resumption after process death in that gap. A durable approval must not be treated as evidence execution started or completed. Claim lifetime, crash recovery, broader provider reconciliation and full acceptance remain open. No production deployment."
+}
