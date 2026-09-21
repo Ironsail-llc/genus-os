@@ -3652,6 +3652,19 @@
       "report": "bench/runtime/uat-runtime-task-browser.json",
       "fresh_build_log": "bench/runtime/uat-runtime-task-browser-build.log",
       "scope": "Actual Chromium/Next/native chat and runner/private CRM, scripted model, response discarded after creation. Audit and event publication stubbed. No production tools or manual acceptance."
+    },
+    "installation_configuration_parity": {
+      "baseline_revision": "eea3252b1577e3f51e6d6a6216d6f242fd7ac4a1",
+      "current_revision": "170bdd3140e2d8eb0c9b0d8a55417bd6c4455b79",
+      "report": "bench/runtime/uat-installation-configuration-parity.json",
+      "matches": true,
+      "triggers": [
+        "manual",
+        "telegram",
+        "cron"
+      ],
+      "fields_per_trigger": 97,
+      "note": "Read-only actual installation main/default manifests, parsed in separate baseline/current processes with equal scrubbed environments. No full native prompt/tool execution or process-environment parity claim."
     }
   },
   "calendar": {
