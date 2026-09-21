@@ -427,7 +427,7 @@ class BrowserBroker:
         spelling: it is that it matches exactly one element carrying a short,
         word-shaped message rather than a page.
         """
-        text = await (await cls._unique(locator)).inner_text()
+        text: str = await (await cls._unique(locator)).inner_text()
         tokens = text.split()
         normalized = " ".join(tokens)
         if len(normalized) > MAX_CONFIRMATION_TEXT or (

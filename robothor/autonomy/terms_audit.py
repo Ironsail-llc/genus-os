@@ -233,7 +233,7 @@ class TermsAudit:
                 "AND redacted_at IS NULL",
                 (scope.tenant_id, scope.owner_id, operation_id),
             )
-            erased = cur.rowcount
+            erased = int(cur.rowcount or 0)
             if erased:
                 self.store._event(cur, scope, operation_id, "terms_forgotten")
             return erased
