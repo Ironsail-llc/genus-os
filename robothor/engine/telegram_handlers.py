@@ -598,6 +598,24 @@ class TelegramHandlersMixin:
             return
 
         if action == "approve":
+            if session.active_plan.status != "pending":
+                await callback.answer("Plan is already being executed")
+                return
+            from robothor.engine.plan_integrity import plan_hash
+
+            if session.active_plan.plan_hash and session.active_plan.plan_hash != plan_hash(
+                session.active_plan.plan_text
+            ):
+                await callback.answer("Plan changed; request a new revision")
+                return
+            creator = session.active_plan.creator_sender_info or {}
+            sender_id = str(callback.from_user.id) if callback.from_user else ""
+            if sender_id != str(creator.get("telegram_user_id", "")) and not self._sender_is_owner(
+                sender_id
+            ):
+                await callback.answer("Only the plan author or instance owner can approve")
+                return
+            session.active_plan.status = "approved"
             await callback.answer("Executing plan...")
             # Remove inline keyboard
             try:
@@ -607,7 +625,9 @@ class TelegramHandlersMixin:
             except Exception:
                 pass
             # Fire-and-forget — execute in background so Telegram handler is freed
-            task = asyncio.create_task(self._execute_approved_plan(chat_id, session_key, session))
+            task = asyncio.create_task(
+                self._execute_approved_plan(chat_id, session_key, session, expected_plan_id=plan_id)
+            )
             self._active_tasks[chat_id] = task
         elif action == "revise":
             await callback.answer("Send your feedback and I'll revise the plan.")
