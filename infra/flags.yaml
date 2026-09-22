@@ -263,11 +263,15 @@ flags:
   - name: ROBOTHOR_RIP_13_MODE
     owner: ops
     mode: observe
-    planned_promotion: "2026-09-20"
     soak: |
       Symbolic short-term memory. Originally dated 2026-07-20 on the theory
       that it rode RIP 7's ladder. It does not, and the ladder was never the
       obstacle.
+
+      DECISION 2026-09-22: off-with-reason. There are no evidence rows and no
+      writer for this predicate, so leaving this in observe would create a
+      permanently overdue inert control. Re-open only with a concrete writer
+      and a measured soak plan.
 
       BLOCKER: decide off-with-reason vs wire evidence; cannot promote a blind
       control. There are ZERO evidence rows, ever: nothing in the codebase
@@ -308,8 +312,11 @@ flags:
   - name: ROBOTHOR_BENCHMARK_DECONTAMINATION_MODE
     owner: ops
     mode: observe
-    planned_promotion: "2026-09-20"
     soak: >
+      DEFERRED 2026-09-22: remains observe with no promotion date until a
+      deliberate probe produces a row. This is an explicit deferral, not an
+      overdue promotion commitment.
+
       BLOCKER: probe must produce a row first; then enforce (analytics-only).
       The observe reporter (robothor/engine/analytics.py) has written zero
       evidence rows since the flag shipped, so the contamination figure this
@@ -391,8 +398,11 @@ flags:
   - name: ROBOTHOR_TOOL_VERIFY_MODE
     owner: ops
     mode: observe
-    planned_promotion: "2026-09-20"
     soak: >
+      DEFERRED 2026-09-22: remains observe with no promotion date until the
+      evidence ledger has real read-back verdicts and the documented review is
+      complete.
+
       Tool post-condition checks: after a side-effectful tool reports success,
       read the write back out of the environment (Gmail message id, calendar
       event id, CRM row) and record the verdict in agent_run_evidence.

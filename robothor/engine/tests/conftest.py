@@ -316,6 +316,7 @@ def _mock_run_persistence():
     """
     with (
         patch("robothor.engine.runner.create_run"),
+        patch("robothor.engine.runtime.classified_deadline._persist"),
         patch("robothor.engine.tracking.create_steps_batch", return_value=0),
         patch("robothor.engine.runner.AgentRunner._persist_run"),
     ):
@@ -337,3 +338,43 @@ def voice_notes(*, enabled: bool):
 
     with patch.object(telegram_attachments, "_voice_notes_enabled", return_value=enabled) as flag:
         yield flag
+
+
+@pytest.fixture(autouse=True)
+def isolated_runtime_control_store(monkeypatch):
+    """Unit runs have no persisted run row. Durable-control integration tests replace this stub."""
+    monkeypatch.setattr("robothor.engine.runtime.controls.stopped", lambda tenant, run_id: False)
+    monkeypatch.setattr(
+        "robothor.engine.runtime.controls.issue", lambda *args, **kwargs: {"status": "stopping"}
+    )
+
+
+@pytest.fixture(autouse=True)
+def isolated_effect_store(monkeypatch):
+    """A native unit test must opt into a private effect database, never a shared default."""
+    import os
+
+    if "host=/tmp/runtime-migrated-" in os.environ.get("ROBOTHOR_TEST_DB_DSN", ""):
+        return  # Canonical integration harness supplies a disposable, fully migrated DB.
+
+    def unavailable():
+        raise AssertionError("Use an isolated effect_db fixture for durable effect tests")
+
+    monkeypatch.setattr("robothor.engine.runtime.effects.get_connection", unavailable)
+
+
+@pytest.fixture
+def isolated_plan_claims(monkeypatch):
+    """Endpoint unit tests use a fake runner and fake durable admission.
+
+    Atomic database claims are exercised in test_chat_plan_claim and the
+    fully migrated native integration suite.
+    """
+    from unittest.mock import AsyncMock
+
+    monkeypatch.setattr("robothor.engine.chat_plan_claim.claim_plan", AsyncMock(return_value=True))
+    monkeypatch.setattr("robothor.engine.chat_plan_claim.already_admitted", lambda *a: False)
+    monkeypatch.setattr("robothor.engine.chat_plan_claim.clear_claim", lambda *a: None)
+    monkeypatch.setattr(
+        "robothor.engine.chat_plan_changes.replace_pending_async", AsyncMock(return_value=True)
+    )

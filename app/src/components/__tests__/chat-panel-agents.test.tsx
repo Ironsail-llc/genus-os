@@ -160,7 +160,7 @@ describe("ChatPanel — choosing which agent to talk to", () => {
 
     await send("how's everything?");
 
-    expect(sentBodies("/api/chat/send")).toEqual([{ message: "how's everything?" }]);
+    expect(sentBodies("/api/chat/send")).toEqual([{ message: "how's everything?", request_id: expect.any(String) }]);
   });
 
   it("loads the default agent's history with no agent on the query", async () => {
@@ -178,7 +178,7 @@ describe("ChatPanel — choosing which agent to talk to", () => {
     await send("what's on today?");
 
     expect(sentBodies("/api/chat/send")).toEqual([
-      { message: "what's on today?", agent: "scheduler" },
+      { message: "what's on today?", agent: "scheduler", request_id: expect.any(String) },
     ]);
   });
 
@@ -213,7 +213,7 @@ describe("ChatPanel — choosing which agent to talk to", () => {
     await waitFor(() => expect(select.value).toBe(""));
     await send("back to you");
 
-    expect(sentBodies("/api/chat/send")).toEqual([{ message: "back to you" }]);
+    expect(sentBodies("/api/chat/send")).toEqual([{ message: "back to you", request_id: expect.any(String) }]);
   });
 
   it("remembers the choice in this browser, and nowhere else", async () => {
@@ -288,7 +288,7 @@ describe("ChatPanel — the header must never name an agent the message misses",
     expect(screen.getByTestId("agent-switcher-note").textContent).toContain("main");
 
     await send("hi");
-    expect(sentBodies("/api/chat/send")).toEqual([{ message: "hi" }]);
+    expect(sentBodies("/api/chat/send")).toEqual([{ message: "hi", request_id: expect.any(String) }]);
   });
 
   it("keeps a keyless default option when the listing names no default agent", async () => {
@@ -305,7 +305,7 @@ describe("ChatPanel — the header must never name an agent the message misses",
     expect(select.value).toBe("");
     expect([...select.options].map((option) => option.value)).toEqual(["", "main", "scheduler"]);
     await send("hi");
-    expect(sentBodies("/api/chat/send")).toEqual([{ message: "hi" }]);
+    expect(sentBodies("/api/chat/send")).toEqual([{ message: "hi", request_id: expect.any(String) }]);
   });
 
   it("offers an id the old client-side regex would have refused", async () => {
@@ -333,7 +333,7 @@ describe("ChatPanel — the header must never name an agent the message misses",
     await send("private note");
 
     expect(sentBodies("/api/chat/send")).toEqual([
-      { message: "private note", agent: "acme.bot" },
+      { message: "private note", agent: "acme.bot", request_id: expect.any(String) },
     ]);
   });
 
@@ -406,7 +406,7 @@ describe("ChatPanel — a remembered agent is never routed to unconfirmed", () =
     expect(urlsFor("/api/chat/history")).toEqual(["/api/chat/history"]);
     expect(urlsFor("/api/chat/plan/status")).toEqual(["/api/chat/plan/status"]);
     expect(urlsFor("/api/chat/deep/status")).toEqual(["/api/chat/deep/status"]);
-    expect(sentBodies("/api/chat/send")).toEqual([{ message: "hello" }]);
+    expect(sentBodies("/api/chat/send")).toEqual([{ message: "hello", request_id: expect.any(String) }]);
   });
 
   it("does the same when the bridge cannot be reached at all", async () => {
@@ -419,7 +419,7 @@ describe("ChatPanel — a remembered agent is never routed to unconfirmed", () =
 
     expect(screen.queryByTestId("agent-switcher")).toBeNull();
     expect(urlsFor("/api/chat/history")).toEqual(["/api/chat/history"]);
-    expect(sentBodies("/api/chat/send")).toEqual([{ message: "hello" }]);
+    expect(sentBodies("/api/chat/send")).toEqual([{ message: "hello", request_id: expect.any(String) }]);
   });
 
   it("shows no switcher when the main agent is the only one worth offering", async () => {

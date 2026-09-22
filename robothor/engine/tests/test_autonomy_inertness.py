@@ -33,7 +33,7 @@ class TestTheSystemPromptParagraphIsConditional:
         session = AgentSession("test-agent")
         session.start("System prompt", "hello", ["browser", "exec"])
         system = session.messages[0]["content"]
-        assert system == "System prompt"
+        assert system.startswith("System prompt")
         assert AUTONOMY_MARKER not in system
 
     def test_a_browser_agent_under_a_live_grant_gets_the_paragraph(self):
@@ -47,7 +47,8 @@ class TestTheSystemPromptParagraphIsConditional:
     def test_an_agent_without_the_browser_tool_never_gets_it(self):
         session = AgentSession("test-agent")
         session.start("System prompt", "hello", ["exec"], autonomy_active=True)
-        assert session.messages[0]["content"] == "System prompt"
+        assert session.messages[0]["content"].startswith("System prompt")
+        assert AUTONOMY_MARKER not in session.messages[0]["content"]
 
 
 class TestTheBrowserSchemaDoesNotGrowForEveryone:

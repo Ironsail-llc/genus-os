@@ -84,6 +84,7 @@ exclude_docs: |
   !/reference/cli.md
   !/reference/configuration.md
   !/features/goal-pursuit.md
+  !/features/runtime-recovery.md
   !/TOOLS.md
   !/AUTONOMOUS_EXECUTION.md
   !/SALES_INTELLIGENCE.md
@@ -140,6 +141,7 @@ nav:
       - Settings: reference/configuration.md
   - Operating:
       - Goals: features/goal-pursuit.md
+      - Engine recovery: features/runtime-recovery.md
       - Tools: TOOLS.md
       - Personal autonomy: AUTONOMOUS_EXECUTION.md
       - Sales intelligence: SALES_INTELLIGENCE.md

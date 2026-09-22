@@ -44,7 +44,13 @@ class TaskRegistry:
         The task reference is stored until completion. On failure, the
         exception is logged at ERROR level.
         """
-        task = asyncio.create_task(coro, name=name)
+        try:
+            task = asyncio.create_task(coro, name=name)
+        except BaseException:
+            # No task owns this coroutine when admission fails. Release it
+            # without executing work, and preserve the caller's exception.
+            coro.close()
+            raise
         self._tasks.add(task)
         task.add_done_callback(self._on_done)
         return task
@@ -77,7 +83,15 @@ class TaskRegistry:
         logger.info(
             "TaskRegistry: draining %d pending tasks (timeout=%.1fs)", len(self._tasks), timeout
         )
-        done, pending = await asyncio.wait(self._tasks, timeout=timeout)
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + max(0, timeout)
+        caller = asyncio.current_task()
+        pending = {task for task in self._tasks if not task.done() and task is not caller}
+        while pending and (remaining := deadline - loop.time()) > 0:
+            await asyncio.wait(pending, timeout=remaining)
+            # Finishing workers can enqueue persistence; include it without
+            # resetting the caller's overall drain deadline.
+            pending = {task for task in self._tasks if not task.done() and task is not caller}
         for task in pending:
             task.cancel()
         if pending:

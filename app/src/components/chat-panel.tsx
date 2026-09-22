@@ -15,6 +15,7 @@ import {
 import { useVisualState } from "@/hooks/use-visual-state";
 import { useThrottle } from "@/hooks/use-throttle";
 import { MarkerInterceptor, stripMarkers } from "@/lib/engine/marker-interceptor";
+import { ChatRecovery, type ChatRecoveryRequest } from "@/components/chat-recovery";
 import { ChatAskCard, type ApprovalKind } from "@/components/chat-ask-card";
 import {
   isKeyableAgentId,
@@ -23,11 +24,16 @@ import {
 } from "@/lib/chat/agent-session";
 import { Send, Square, Check, X, ClipboardList, MessageSquareText, Brain } from "lucide-react";
 
+import { forgetRequest, journalRequest, pendingRequests } from "@/lib/chat/request-journal";
+
+import { OUTCOME_UNKNOWN, requestFailure, terminalOutcome } from "@/lib/chat/terminal-outcome";
+
 interface ChatMessage {
   id: string;
   role: "user" | "assistant";
   content: string;
   timestamp: Date;
+  recovery?: ChatRecoveryRequest;
 }
 
 interface ActivePlan {
@@ -75,6 +81,16 @@ interface ChatPanelProps {
 
 export function ChatPanel({ mobile = false }: ChatPanelProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const recoveryScopes = useRef<Record<string, string>>({});
+  const requestScopes = useRef<Record<string, string>>({});
+  const recoverMessage = useCallback((id: string, text: string, plan?: ActivePlan) => {
+    if (plan) setActivePlan(current => current ?? plan);
+    setMessages((prev) => prev.map((item) => {
+      if (item.id !== id) return item;
+      if (item.recovery?.scope) forgetRequest(item.recovery.scope, item.recovery.requestId);
+      return { ...item, content: stripResidualMarkers(text), recovery: undefined };
+    }));
+  }, []);
   const [input, setInput] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamingText, setStreamingText] = useState("");
@@ -108,6 +124,10 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
   const [showFeedbackInput, setShowFeedbackInput] = useState(false);
   const [planFeedback, setPlanFeedback] = useState("");
   const [activeToolName, setActiveToolName] = useState<string | null>(null);
+  const [runtimeProgress, setRuntimeProgress] = useState<string | null>(null);
+  const [stopNotice, setStopNotice] = useState<string | null>(null);
+  const [isStopping, setIsStopping] = useState(false);
+  const requestIdRef = useRef<string | null>(null);
   const [currentIteration, setCurrentIteration] = useState(0);
   const [maxIterations, setMaxIterations] = useState(0);
   const [deepMode, setDeepMode] = useState(false);
@@ -210,6 +230,13 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
         handleApprovalRequired(parsed);
         return true;
       }
+      if (["accepted", "queued", "waiting", "progress", "stopping"].includes(eventType)) {
+        const activity = typeof parsed.text === "string" ? parsed.text : eventType;
+        const elapsed = typeof parsed.elapsed_s === "number" && !activity.includes("elapsed")
+          ? ` · ${parsed.elapsed_s}s elapsed` : "";
+        setRuntimeProgress(activity + elapsed);
+        return true;
+      }
       return false;
     },
     [handleApprovalRequired],
@@ -307,11 +334,16 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
     let cancelled = false;
     setMessages([]);
     fetch(`/api/chat/history${agentQuery}`)
-      .then((res) => res.json())
+      .then((res) => {
+        if (res.ok === false) throw new Error("History unavailable");
+        return res.json();
+      })
       .then((data) => {
         if (cancelled) return;
-        if (data.messages?.length) {
-          const loaded: ChatMessage[] = data.messages
+        const scope = typeof data.recoveryScope === "string" ? data.recoveryScope : undefined;
+        recoveryScopes.current[agent] = scope ?? "";
+        {
+          const loaded: ChatMessage[] = (Array.isArray(data.messages) ? data.messages : [])
             .filter(
               (m: { role: string }) =>
                 m.role === "user" || m.role === "assistant"
@@ -334,7 +366,13 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
                 timestamp: new Date(),
               })
             );
-          setMessages(loaded);
+          const restored: ChatMessage[] = scope ? pendingRequests(scope)
+            .filter((requestId) => requestId !== requestIdRef.current)
+            .map((requestId) => ({
+              id: `recovery-${requestId}`, role: "assistant", content: OUTCOME_UNKNOWN,
+              timestamp: new Date(), recovery: { requestId, agent, scope },
+            })) : [];
+          setMessages([...loaded, ...restored]);
         }
       })
       .catch(() => {
@@ -343,7 +381,7 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
     return () => {
       cancelled = true;
     };
-  }, [agentQuery]);
+  }, [agentQuery, agent]);
 
   // Recover pending plan on page refresh
   //
@@ -374,7 +412,7 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
     return () => {
       cancelled = true;
     };
-  }, [agentQuery]);
+  }, [agentQuery, agent]);
 
   // Keyboard shortcut: Ctrl/Cmd+Shift+P toggles plan mode, Ctrl/Cmd+Shift+D toggles deep+plan
   useEffect(() => {
@@ -421,7 +459,7 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
     return () => {
       cancelled = true;
     };
-  }, [agentQuery]);
+  }, [agentQuery, agent]);
 
   const sendPlanMessage = useCallback(async (overrideText?: string) => {
     const text = overrideText || input.trim();
@@ -452,24 +490,33 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
 
     const controller = new AbortController();
     abortRef.current = controller;
+    requestIdRef.current = crypto.randomUUID();
+    setStopNotice(null);
+    setIsStopping(false);
+    setRuntimeProgress("Submitting request…");
 
+    let submitted = false;
     try {
+      const requestId = requestIdRef.current!;
+      const scope = await journalRequest(agent, requestId, recoveryScopes.current[agent], controller.signal);
+      if (scope) requestScopes.current[requestId] = scope;
+      controller.signal.throwIfAborted();
+      submitted = true;
       const res = await fetch("/api/chat/plan/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: text, deep_plan: deepPlan, ...(agent ? { agent } : {}) }),
+        body: JSON.stringify({ message: text, request_id: requestIdRef.current, deep_plan: deepPlan, ...(agent ? { agent } : {}) }),
         signal: controller.signal,
       });
 
       if (!res.ok || !res.body) {
-        let errorText = `Server error (${res.status}). Please try again.`;
-        try {
-          const errBody = await res.json();
-          if (errBody.error) errorText = errBody.error;
-        } catch { /* ignore */ }
+        const failure = await requestFailure(res);
+        if (failure.rejected && scope) forgetRequest(scope, requestId);
         setMessages((prev) => [
           ...prev,
-          { id: `err-${Date.now()}`, role: "assistant", content: errorText, timestamp: new Date() },
+          { id: `err-${Date.now()}`, role: "assistant", content: failure.text, timestamp: new Date(),
+            ...(!failure.rejected ? { recovery: { requestId, agent, scope } } : {}),
+          },
         ]);
         setIsPlanning(false);
         setStreamingText("");
@@ -483,6 +530,7 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
       let sseData = "";
       let fullResponse = "";
       let gotPlanEvent = false;
+      let receivedTerminal = false;
 
       const handleSSEEvent = (eventType: string, data: string) => {
         try {
@@ -507,7 +555,8 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
           } else if (eventType === "tool_end") {
             setActiveToolName(null);
           } else if (eventType === "done") {
-            fullResponse = parsed.text || fullResponse;
+            const terminal = terminalOutcome(parsed, fullResponse);
+            if (terminal !== undefined) { receivedTerminal = true; fullResponse = terminal; }
           }
         } catch { /* skip */ }
       };
@@ -541,6 +590,10 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
       setIsPlanning(false);
       setStreamingText("");
 
+      if (!gotPlanEvent && !receivedTerminal) fullResponse = OUTCOME_UNKNOWN;
+      if (gotPlanEvent || fullResponse !== OUTCOME_UNKNOWN) {
+        if (scope) forgetRequest(scope, requestId);
+      }
       // If no plan event was received, show the response as a regular message
       if (!gotPlanEvent && fullResponse.trim()) {
         setMessages((prev) => [
@@ -549,17 +602,20 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
             id: `asst-${Date.now()}`,
             role: "assistant",
             content: stripResidualMarkers(fullResponse).trim(),
+        ...(fullResponse === OUTCOME_UNKNOWN ? { recovery: { requestId: requestIdRef.current!, agent, scope: requestScopes.current[requestIdRef.current!] } } : {}),
             timestamp: new Date(),
           },
         ]);
       }
-    } catch (err) {
-      if ((err as Error).name !== "AbortError") {
-        setMessages((prev) => [
-          ...prev,
-          { id: `err-${Date.now()}`, role: "assistant", content: `Connection error: ${(err as Error).message}. Please try again.`, timestamp: new Date() },
-        ]);
-      }
+    } catch {
+      const requestId = requestIdRef.current!;
+      const scope = requestScopes.current[requestId];
+      if (!submitted && scope) forgetRequest(scope, requestId);
+      setMessages((prev) => [...prev, {
+        id: `err-${Date.now()}`, role: "assistant", timestamp: new Date(),
+        content: submitted ? OUTCOME_UNKNOWN : "Plan preparation stopped before submission.",
+        ...(submitted ? { recovery: { requestId, agent, scope } } : {}),
+      }]);
     } finally {
       setIsPlanning(false);
       setStreamingText("");
@@ -593,24 +649,34 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
 
     const controller = new AbortController();
     abortRef.current = controller;
+    requestIdRef.current = crypto.randomUUID();
+    setStopNotice(null);
+    setIsStopping(false);
+    setRuntimeProgress("Submitting request…");
 
     try {
+      const requestId = requestIdRef.current!;
+      const scope = await journalRequest(agent, requestId, recoveryScopes.current[agent], controller.signal);
+      if (scope) requestScopes.current[requestId] = scope;
+      if (controller.signal.aborted) {
+        if (scope) forgetRequest(scope, requestId);
+        controller.signal.throwIfAborted();
+      }
       const res = await fetch("/api/chat/send", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: text, ...(agent ? { agent } : {}) }),
+        body: JSON.stringify({ message: text, request_id: requestIdRef.current, ...(agent ? { agent } : {}) }),
         signal: controller.signal,
       });
 
       if (!res.ok || !res.body) {
-        let errorText = `Server error (${res.status}). Please try again.`;
-        try {
-          const errBody = await res.json();
-          if (errBody.error) errorText = errBody.error;
-        } catch { /* ignore */ }
+        const failure = await requestFailure(res);
+        const scope = requestScopes.current[requestIdRef.current!];
+        if (failure.rejected && scope) forgetRequest(scope, requestIdRef.current!);
         const errorMsg: ChatMessage = {
           id: `err-${Date.now()}`, role: "assistant",
-          content: errorText, timestamp: new Date(),
+          content: failure.text, timestamp: new Date(),
+          ...(!failure.rejected ? { recovery: { requestId: requestIdRef.current!, agent, scope } } : {}),
         };
         setMessages((prev) => [...prev, errorMsg]);
         setIsStreaming(false);
@@ -627,6 +693,7 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
       let sseEventType = "";
       let sseData = "";
       let fullResponse = "";
+      let receivedTerminal = false;
       const collectedAgentData: Record<string, unknown> = {};
 
       const interceptor = new MarkerInterceptor();
@@ -695,7 +762,11 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
                 });
               }
             }
-            fullResponse = parsed.text || fullResponse;
+            const terminal = terminalOutcome(parsed, fullResponse);
+            if (terminal !== undefined) {
+              receivedTerminal = true;
+              fullResponse = terminal;
+            }
           }
         } catch {
           // Invalid JSON, skip
@@ -754,11 +825,18 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
       setCurrentIteration(0);
       setMaxIterations(0);
 
+      if (!receivedTerminal) fullResponse = OUTCOME_UNKNOWN;
+      else if (fullResponse !== OUTCOME_UNKNOWN) {
+        const scope = requestScopes.current[requestIdRef.current!];
+        if (scope) forgetRequest(scope, requestIdRef.current!);
+      }
+
       // Finalize the message
       const assistantMsg: ChatMessage = {
         id: `asst-${Date.now()}`,
         role: "assistant",
         content: stripResidualMarkers(fullResponse).trim(),
+        ...(fullResponse === OUTCOME_UNKNOWN ? { recovery: { requestId: requestIdRef.current!, agent, scope: requestScopes.current[requestIdRef.current!] } } : {}),
         timestamp: new Date(),
       };
       setMessages((prev) => [...prev, assistantMsg]);
@@ -768,7 +846,7 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
       // triage+generate pipeline entirely, saving 5-11s of LLM + fetch time.
       const hasAgentData = Object.keys(collectedAgentData).length > 0;
       const isSubstantive = assistantMsg.content.length >= 200;
-      if (hasAgentData || isSubstantive) {
+      if (receivedTerminal && (hasAgentData || isSubstantive)) {
         const recentMessages = [
           { role: userMsg.role, content: userMsg.content },
           { role: assistantMsg.role, content: assistantMsg.content },
@@ -784,7 +862,8 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
         const errorMsg: ChatMessage = {
           id: `err-${Date.now()}`,
           role: "assistant",
-          content: `Connection error: ${(err as Error).message}. Please try again.`,
+          content: OUTCOME_UNKNOWN,
+          recovery: { requestId: requestIdRef.current!, agent, scope: requestScopes.current[requestIdRef.current!] },
           timestamp: new Date(),
         };
         setMessages((prev) => [...prev, errorMsg]);
@@ -805,6 +884,13 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
     setIsPlanExecuting(true);
     setStreamingText("");
 
+    const controller = new AbortController();
+    abortRef.current = controller;
+    requestIdRef.current = crypto.randomUUID();
+    setStopNotice(null);
+    setIsStopping(false);
+    setRuntimeProgress("Submitting request…");
+
     // Show deep reasoning progress if this is a deep plan
     if (isDeepPlan) {
       setIsDeepReasoning(true);
@@ -813,17 +899,30 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
     }
 
     try {
+      const requestId = requestIdRef.current!;
+      const scope = await journalRequest(agent, requestId, recoveryScopes.current[agent], controller.signal);
+      if (scope) requestScopes.current[requestId] = scope;
+      if (controller.signal.aborted) {
+        if (scope) forgetRequest(scope, requestId);
+        controller.signal.throwIfAborted();
+      }
       const res = await fetch("/api/chat/plan/approve", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ plan_id: activePlan.plan_id, ...(agent ? { agent } : {}) }),
+        body: JSON.stringify({ plan_id: activePlan.plan_id, request_id: requestIdRef.current, ...(agent ? { agent } : {}) }),
+        signal: controller.signal,
       });
 
       setActivePlan(null);
 
       if (!res.ok || !res.body) {
-        setIsPlanExecuting(false);
-        setIsDeepReasoning(false);
+        const failure = await requestFailure(res);
+        const scope = requestScopes.current[requestIdRef.current!];
+        if (failure.rejected && scope) forgetRequest(scope, requestIdRef.current!);
+        setMessages((prev) => [...prev, {
+          id: `err-${Date.now()}`, role: "assistant", content: failure.text, timestamp: new Date(),
+          ...(!failure.rejected ? { recovery: { requestId: requestIdRef.current!, agent, scope } } : {}),
+        }]);
         return;
       }
 
@@ -834,6 +933,7 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
       let sseEventType = "";
       let sseData = "";
       let fullResponse = "";
+      let receivedTerminal = false;
       let costInfo: { time_s: number; cost: number } | null = null;
 
       const processLine = (line: string) => {
@@ -858,7 +958,11 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
                   cost: parsed.cost_usd || 0,
                 };
               } else if (sseEventType === "done") {
-                if (parsed.text) fullResponse = parsed.text;
+                const terminal = terminalOutcome(parsed, fullResponse);
+                if (terminal !== undefined) {
+                  receivedTerminal = true;
+                  fullResponse = terminal;
+                }
                 if (parsed.cost_usd && !costInfo) {
                   costInfo = {
                     time_s: parsed.execution_time_s || 0,
@@ -894,8 +998,20 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
       if (sseData) {
         try {
           const parsed = JSON.parse(sseData);
-          if (sseEventType === "done") fullResponse = parsed.text || fullResponse;
+          if (sseEventType === "done") {
+            const terminal = terminalOutcome(parsed, fullResponse);
+            if (terminal !== undefined) {
+              receivedTerminal = true;
+              fullResponse = terminal;
+            }
+          }
         } catch { /* skip */ }
+      }
+
+      if (!receivedTerminal) fullResponse = OUTCOME_UNKNOWN;
+      else if (fullResponse !== OUTCOME_UNKNOWN) {
+        const scope = requestScopes.current[requestIdRef.current!];
+        if (scope) forgetRequest(scope, requestIdRef.current!);
       }
 
       const finalCost = costInfo as { time_s: number; cost: number } | null;
@@ -912,13 +1028,24 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
             id: `asst-${Date.now()}`,
             role: "assistant",
             content: stripResidualMarkers(fullResponse).trim() + costSuffix,
+            ...(fullResponse === OUTCOME_UNKNOWN ? { recovery: { requestId: requestIdRef.current!, agent, scope: requestScopes.current[requestIdRef.current!] } } : {}),
             timestamp: new Date(),
           },
         ]);
       }
-    } catch {
-      // ignore
+    } catch (error) {
+      setActivePlan(null);
+      if ((error as Error).name !== "AbortError") {
+        setMessages((prev) => [...prev, {
+          id: `err-${Date.now()}`,
+          role: "assistant",
+          content: OUTCOME_UNKNOWN,
+          recovery: { requestId: requestIdRef.current!, agent, scope: requestScopes.current[requestIdRef.current!] },
+          timestamp: new Date(),
+        }]);
+      }
     } finally {
+      abortRef.current = null;
       setIsPlanExecuting(false);
       setIsDeepReasoning(false);
       setDeepElapsed(0);
@@ -961,8 +1088,31 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
     }
   };
 
-  const handleAbort = () => {
-    abortRef.current?.abort();
+  const handleAbort = async () => {
+    if (isStopping) return;
+    const stoppedRequest = requestIdRef.current;
+    const stoppedController = abortRef.current;
+    setIsStopping(true);
+    setStopNotice("Stopping…");
+    try {
+      const response = await fetch("/api/chat/abort", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...(agent ? { agent } : {}), request_id: stoppedRequest }),
+      });
+      if (!response.ok) throw new Error("stop unconfirmed");
+      const result = await response.json();
+      if (!result.ok || !result.durable_stopped) throw new Error("stop unconfirmed");
+      if (requestIdRef.current === stoppedRequest) {
+        setStopNotice("Stop acknowledged. Already dispatched requests may finish; checking their recorded results.");
+      }
+      stoppedController?.abort();
+    } catch {
+      if (requestIdRef.current === stoppedRequest) {
+        setStopNotice("Stop could not be confirmed. The request may still be running.");
+      }
+    } finally {
+      if (requestIdRef.current === stoppedRequest) setIsStopping(false);
+    }
   };
 
   const suggestedPrompts = [
@@ -1083,9 +1233,11 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
               >
                 {msg.role === "assistant" ? (
                   <div className="prose prose-sm prose-invert max-w-none">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                      {msg.content}
-                    </ReactMarkdown>
+                    {msg.recovery ? (
+                      <ChatRecovery request={msg.recovery} messageId={msg.id} onRecovered={recoverMessage} />
+                    ) : (
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
+                    )}
                   </div>
                 ) : (
                   <p>{msg.content}</p>
@@ -1187,6 +1339,7 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
           {(isStreaming || isPlanExecuting || isPlanning) && (
             <div className="flex justify-start" data-testid="streaming-message">
               <div className={`max-w-[85%] rounded-lg px-3 py-2 text-sm bg-muted ${isPlanning ? "border border-warning/30" : ""}`}>
+                {runtimeProgress && <p role="status" className="text-xs text-muted-foreground mb-2">{runtimeProgress}</p>}
                 {isPlanning ? (
                   <div className="space-y-2">
                     <div className="flex items-center gap-2 text-warning" data-testid="planning-indicator">
@@ -1362,11 +1515,14 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
             disabled={isStreaming || isPlanExecuting || isPlanning || isDeepReasoning}
             data-testid="chat-input"
           />
-          {isStreaming || isPlanning || isDeepReasoning ? (
+          {stopNotice && <p role="status" className="text-xs text-muted-foreground">{stopNotice}</p>}
+          {isStreaming || isPlanning || isDeepReasoning || isPlanExecuting ? (
             <Button
               size="icon"
               variant="ghost"
               onClick={handleAbort}
+              disabled={isStopping}
+              aria-label={isStopping ? "Stopping request" : "Stop request"}
               className="shrink-0"
               data-testid="abort-button"
             >

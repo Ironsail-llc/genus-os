@@ -28,6 +28,7 @@ def parse_provider_order(value: Any) -> dict[str, list[str]]:
 @dataclass
 class _Routes:
     order: dict[str, list[str]]
+    prefer_throughput: bool = False
     active: bool = True
 
 
@@ -35,8 +36,8 @@ _routes: ContextVar[_Routes | None] = ContextVar("agent_provider_order", default
 
 
 @contextmanager
-def provider_order_scope(order: Any) -> Iterator[None]:
-    routes = _Routes(parse_provider_order(order))
+def provider_order_scope(order: Any, *, prefer_throughput: bool = False) -> Iterator[None]:
+    routes = _Routes(parse_provider_order(order), prefer_throughput=prefer_throughput)
     token = _routes.set(routes)
     try:
         yield
@@ -49,6 +50,20 @@ def apply_provider_order(model: str, kwargs: dict[str, Any]) -> None:
     routes = _routes.get()
     providers = routes.order.get(model) if routes and routes.active else None
     if not providers:
+        if (
+            routes
+            and routes.active
+            and routes.prefer_throughput
+            and model.startswith("openrouter/")
+        ):
+            extra = deepcopy(kwargs.get("extra_body") or {})
+            existing = extra.get("provider") or {}
+            # An explicit or compatibility-required preference always wins.
+            # Keep privacy, pricing and eligibility constraints intact; budget
+            # quoting may subsequently pin a narrower eligible endpoint.
+            if not existing.get("order") and not existing.get("sort"):
+                extra["provider"] = {**existing, "sort": "throughput"}
+                kwargs["extra_body"] = extra
         return
     extra = deepcopy(kwargs.get("extra_body") or {})
     existing = extra.get("provider") or {}

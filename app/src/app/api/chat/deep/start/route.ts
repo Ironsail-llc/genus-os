@@ -23,7 +23,7 @@ export async function POST(req: Request) {
   const client = getEngineClient();
 
   try {
-    const engineRes = await client.deepStart(query, sessionKey);
+    const engineRes = await (body.request_id === undefined ? client.deepStart(query, sessionKey) : client.deepStart(query, sessionKey, body.request_id));
 
     if (!engineRes.body) {
       return new Response(

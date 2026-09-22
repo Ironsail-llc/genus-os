@@ -222,7 +222,7 @@ async def test_host_launch_passes_the_workspace_profile(monkeypatch, workspace):
     profile = Path(kwargs["env"]["XDG_CONFIG_HOME"])
     assert profile.is_relative_to(workspace)
     assert profile.is_dir(), "the redirect target must exist before launch"
-    assert profile.name == "default"
+    assert profile.name == "default"  # Profile is scoped by tenant, principal and agent.
 
     # The display must reach Chromium, or the host launch has no window.
     assert kwargs["env"]["DISPLAY"]

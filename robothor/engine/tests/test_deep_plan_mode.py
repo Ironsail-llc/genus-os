@@ -306,6 +306,7 @@ class TestExecuteDeepContextOverride:
 # ─── Chat Endpoint Tests — plan_approve branching ───────────────────
 
 
+@pytest.mark.usefixtures("isolated_plan_claims")
 class TestPlanApproveDeepBranch:
     """Tests for plan_approve routing to execute_deep for deep plans."""
 

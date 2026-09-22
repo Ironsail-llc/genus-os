@@ -62,6 +62,12 @@ async def _exec(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     if not command:
         return {"error": "No command provided"}
 
+    from robothor.engine.session_registry import lookup
+
+    active_session = lookup(getattr(ctx, "run_id", "") or "")
+    if active_session and getattr(active_session, "readonly_mode", False):
+        return {"error": "Exec is unavailable in plan-only mode", "error_type": "readonly_mode"}
+
     # Before the sandbox decision, so host and container paths refuse alike:
     # a command that PRINTS a secrets file (or the environment) never runs.
     # Sourcing the file to run an authenticated command is still allowed.
@@ -169,6 +175,20 @@ async def _exec(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         if child_env.note and isinstance(result, dict):
             result["secret_grant_note"] = child_env.note
         return result
+
+    from robothor.engine import host_execution
+
+    if host_execution.socket_path() and host_execution.eligible(ctx):
+        result = await host_execution.execute(ctx, command, timeout, child_env.env)
+        return _with_grant_note(
+            _with_note(
+                shape_exec_result(
+                    result,
+                    workspace=ctx.workspace,
+                    run_id=run_id,
+                )
+            )
+        )
 
     def _run() -> dict[str, Any]:
         try:

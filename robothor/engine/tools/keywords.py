@@ -103,6 +103,7 @@ _CALENDAR: tuple[str, ...] = (
 _CHAT: tuple[str, ...] = ("chat", "space", "room", "hangout")
 
 TOOL_HINTS: dict[str, ToolHint] = {
+    "exec": ToolHint(keywords=("run", "shell", "command", "terminal", "execute")),
     # ── Live Gmail ────────────────────────────────────────────────────
     "gws_gmail_search": ToolHint(
         keywords=(

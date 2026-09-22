@@ -12,7 +12,7 @@ god-object growing back; put it on the signature.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -22,7 +22,7 @@ if TYPE_CHECKING:
     from robothor.engine.session import AgentSession
 
 import logging
-from typing import Any, cast
+from typing import cast
 
 from robothor.engine.llm_attempts import is_attempt_step
 
@@ -377,15 +377,34 @@ class RunLifecycleMixin:
 
     # ─── v2 Enhancement Helpers ───────────────────────────────────────
 
+    def _attach_plan_context(self, session: AgentSession, plan_result: Any) -> str:
+        """Optional planner formatting must not abort native execution."""
+        try:
+            from robothor.engine.planner import format_plan_context
+            from robothor.engine.session import ENGINE_CONTEXT_ROLE
+
+            context = format_plan_context(plan_result)
+            if context:
+                session.messages.append({"role": ENGINE_CONTEXT_ROLE, "content": context})
+            return context
+        except Exception as exc:
+            logger.warning("Plan context formatting failed (non-fatal): %s", _sanitize(exc))
+            return ""
+
     def _apply_routing(self, agent_config: AgentConfig, message: str, tool_count: int) -> Any:
         """Apply difficulty-aware routing. Returns RouteConfig or None."""
         try:
             from robothor.engine.router import get_route_config
+            from robothor.engine.runtime.automatic_planning import context_for
 
             return get_route_config(
                 message,
                 tool_count,
                 manual_override=agent_config.difficulty_class,
+                # A large available catalogue does not mean an ordinary chat
+                # request needs an auxiliary planning call. Keep configured
+                # planning and long/delegated/resumed work on their old policy.
+                catalogue_implies_complexity=context_for(agent_config) is None,
             )
         except Exception as e:
             logger.debug("Routing failed: %s", _sanitize(e))
@@ -408,15 +427,19 @@ class RunLifecycleMixin:
         try:
             from robothor.engine.planner import generate_plan
             from robothor.engine.provider_routing import provider_order_scope
+            from robothor.engine.runtime.automatic_planning import run as automatic_plan
 
             plan_model = agent_config.planning_model or models[0]
             with provider_order_scope(getattr(agent_config, "provider_order", {})):
-                return await generate_plan(
-                    message,
-                    tool_names,
-                    plan_model,
-                    # Retain the entire configured fallback chain.
-                    fallback_models=models[1:],
+                return await automatic_plan(
+                    agent_config,
+                    lambda: generate_plan(
+                        message,
+                        tool_names,
+                        plan_model,
+                        # Retain the entire configured fallback chain.
+                        fallback_models=models[1:],
+                    ),
                 )
         except Exception as e:
             logger.debug("Planning phase failed: %s", _sanitize(e))
@@ -600,25 +623,49 @@ class RunLifecycleMixin:
             logger.debug("Verification failed: %s", _sanitize(e))
             return output_text
 
+    async def _resume_checkpoint(self, run_id: str, session: AgentSession) -> Any:
+        import asyncio
+
+        # Use the runner's persistence seam, also used when the run is created.
+        from robothor.engine.runner import update_run
+
+        scratchpad = self._resume_from_checkpoint(run_id, session)
+        if not await asyncio.to_thread(update_run, session.run.id, task_text=session.run.task_text):
+            raise RuntimeError("Failed to persist restored task before continuation")
+        return scratchpad
+
     def _resume_from_checkpoint(
         self,
         run_id: str,
         session: AgentSession,
     ) -> Any:
-        """Resume from a previous run's checkpoint. Returns restored scratchpad or None."""
+        """Restore a checkpoint or fail closed; only the scratchpad is optional."""
         try:
             from robothor.engine.checkpoint import CheckpointManager
             from robothor.engine.scratchpad import Scratchpad
 
-            checkpoint_data = CheckpointManager.load_latest(run_id)
+            checkpoint_data = CheckpointManager.load_latest(run_id, tenant_id=session.run.tenant_id)
             if not checkpoint_data:
-                logger.info("No checkpoint found for run %s", run_id)
-                return None
+                raise ValueError("checkpoint unavailable; refusing fresh execution")
 
             # Restore messages
             messages = checkpoint_data.get("messages")
+            if not isinstance(messages, list) or not messages:
+                raise ValueError("checkpoint conversation is missing or malformed")
             if messages and isinstance(messages, list):
                 session.messages = messages
+                from robothor.engine.task_context import install_context, make_context, read_context
+
+                record = read_context(messages)
+                if record is None:
+                    record = make_context(
+                        session.run.task_text or session.originating_message, [], run_id=run_id
+                    )
+                    install_context(session.messages, record)
+                session.originating_message = record["request"]
+                from robothor.engine.deliverable_contract import task_text_for_column
+
+                session.run.task_text = task_text_for_column(record["request"])
 
             # Restore scratchpad
             scratchpad_data = checkpoint_data.get("scratchpad")
@@ -656,6 +703,6 @@ class RunLifecycleMixin:
             return None
         except Exception as e:
             logger.warning("Failed to resume from checkpoint: %s", _sanitize(e))
-            return None
+            raise RuntimeError("Failed to restore checkpoint; reconcile before retrying") from e
 
     # ─── LLM Call Methods ────────────────────────────────────────────

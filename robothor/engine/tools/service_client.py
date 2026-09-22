@@ -29,6 +29,8 @@ from typing import Any
 
 import httpx
 
+from robothor.engine.tools.response_failure import response_failure
+
 logger = logging.getLogger(__name__)
 
 BREAKER_THRESHOLD = 3
@@ -95,6 +97,7 @@ async def call_service(
     ``service``, and ``retryable``; success returns the parsed JSON body
     (wrapped as ``{"result": ...}`` when the body is not a JSON object).
     """
+    read_only = method.upper() in {"GET", "HEAD", "OPTIONS"}
     state = _breakers.setdefault(service, _BreakerState())
     if (
         state.opened_at is not None
@@ -115,15 +118,21 @@ async def call_service(
     except httpx.TimeoutException as e:
         # The service is up but slow — do not count toward the offline breaker.
         logger.warning("%s service timed out (%s)", service, type(e).__name__)
-        return {"error": f"{service} service timed out", "service": service, "retryable": True}
+        return response_failure(
+            {"error": f"{service} service timed out", "service": service, "retryable": True},
+            read_only=read_only or isinstance(e, httpx.PoolTimeout),
+        )
     except httpx.HTTPError as e:
         _record_connect_failure(state)
         logger.warning("%s service request failed (%s)", service, type(e).__name__)
-        return {
-            "error": f"{service} service request failed ({type(e).__name__})",
-            "service": service,
-            "retryable": False,
-        }
+        return response_failure(
+            {
+                "error": f"{service} service request failed ({type(e).__name__})",
+                "service": service,
+                "retryable": False,
+            },
+            read_only=read_only,
+        )
 
     # Any received response proves the transport works.
     _reset_breaker(state)
@@ -138,11 +147,14 @@ async def call_service(
         }
     if code >= 500:
         logger.warning("%s service unavailable (HTTP %d)", service, code)
-        return {
-            "error": f"{service} service unavailable (HTTP {code})",
-            "service": service,
-            "retryable": True,
-        }
+        return response_failure(
+            {
+                "error": f"{service} service unavailable (HTTP {code})",
+                "service": service,
+                "retryable": True,
+            },
+            read_only=read_only,
+        )
     if code >= 400:
         logger.warning("%s service error (HTTP %d)", service, code)
         return {
@@ -155,11 +167,14 @@ async def call_service(
         data = resp.json()
     except ValueError:
         logger.warning("%s service returned a non-JSON body", service)
-        return {
-            "error": f"{service} service returned an unreadable response",
-            "service": service,
-            "retryable": True,
-        }
+        return response_failure(
+            {
+                "error": f"{service} service returned an unreadable response",
+                "service": service,
+                "retryable": True,
+            },
+            read_only=read_only,
+        )
     if isinstance(data, dict):
         return data
     return {"result": data}

@@ -51,6 +51,18 @@ describe("EngineClient — the session key, or the absence of one", () => {
     return getEngineClient();
   }
 
+  it.each(["", "agent:scheduler:primary"])("recovers the original request with authenticated read-only access: %s", async (key) => {
+    await (await client()).chatOutcome("original-request", key);
+    const { url, init } = lastCall();
+    const query = new URL(url).searchParams;
+    expect(query.get("request_id")).toBe("original-request");
+    expect(query.get("session_key")).toBe(key || null);
+    expect(init.body).toBeUndefined();
+    expect(init.method ?? "GET").toBe("GET");
+    expect(init.cache).toBe("no-store");
+    expect(init.headers).toEqual({ Authorization: "Bearer test-token" });
+  });
+
   it("omits session_key from /chat/send when no agent was chosen", async () => {
     await (await client()).chatSend("hello");
 

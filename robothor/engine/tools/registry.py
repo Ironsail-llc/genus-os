@@ -8,6 +8,7 @@ import math
 import re
 from typing import TYPE_CHECKING, Any, NamedTuple, TypedDict
 
+from robothor.engine.runtime.deadlines import RuntimeDeadlineError
 from robothor.engine.spawn_cancel import tool_deadline
 from robothor.engine.tools.constants import (
     CORE_TOOLS,
@@ -1040,6 +1041,11 @@ class ToolRegistry:
 
             names.extend(n for n in sorted(TOOL_NAMES) if n in self._schemas and n not in names)
 
+        if config.id == "main":
+            from robothor.goals.tools import TOOL_NAMES
+
+            names.extend(n for n in sorted(TOOL_NAMES) if n in self._schemas and n not in names)
+
         if config.tools_denied:
             # Support glob patterns (e.g. "mcp_*", "gws_*") in tools_denied
             has_globs = any(c in p for p in config.tools_denied for c in "*?[")
@@ -1182,7 +1188,7 @@ class ToolRegistry:
                     is_benchmark=is_benchmark,
                     identity=identity,
                 )
-        except WorkflowDeadlineError:
+        except (WorkflowDeadlineError, RuntimeDeadlineError):
             # NOT this tool's timeout. `spawn_agent` runs a child
             # `runner.execute` INLINE in the parent's task, so it inherits the
             # workflow's deadline scope and its chain walk can raise here.

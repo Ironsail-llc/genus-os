@@ -118,7 +118,9 @@ def propagates_to_caller(exc: BaseException) -> bool:
     """
     import asyncio
 
-    return isinstance(exc, asyncio.CancelledError | WorkflowDeadlineError)
+    from robothor.engine.runtime.deadlines import RuntimeDeadlineError
+
+    return isinstance(exc, asyncio.CancelledError | WorkflowDeadlineError | RuntimeDeadlineError)
 
 
 @dataclass(frozen=True)
