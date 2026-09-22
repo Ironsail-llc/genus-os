@@ -19,7 +19,11 @@ def request(**options):
         ExecutionContext("tenant", "operator", "request"),
         "main",
         "Create a task",
-        {"trigger_type": "webchat", **options},
+        {
+            "trigger_type": "webchat",
+            "agent_config": config("simple"),
+            **options,
+        },
     )
 
 
@@ -36,7 +40,7 @@ def test_planner_classification_respects_manifest_override(override):
     started = datetime.now(UTC) - timedelta(seconds=20)
     with policy.admission(request(), started):
         deadline = policy._deadline(config(override), ROUTE, PLAN)
-    assert deadline == (started + timedelta(seconds=60) if override in ("", "simple") else None)
+    assert deadline == (started + timedelta(seconds=60) if override == "simple" else None)
 
 
 @pytest.mark.parametrize(
@@ -65,7 +69,9 @@ async def test_classification_cancels_stalled_execution_and_keeps_shorter_native
     try:
         with policy.admission(req), pytest.raises(TimeoutError) as error:
             async with asyncio.timeout(1) as window:
-                await policy.apply(SimpleNamespace(run=object()), window, config(), ROUTE, PLAN)
+                await policy.apply(
+                    SimpleNamespace(run=object()), window, config("simple"), ROUTE, PLAN
+                )
                 assert window.when() - asyncio.get_running_loop().time() < 0.04
                 await asyncio.Event().wait()
         assert "Runtime deadline expired" in enclosing_deadline_reason(error.value)
@@ -74,7 +80,9 @@ async def test_classification_cancels_stalled_execution_and_keeps_shorter_native
         with policy.admission(req):
             async with asyncio.timeout(0.01) as window:
                 before = window.when()
-                await policy.apply(SimpleNamespace(run=object()), window, config(), ROUTE, PLAN)
+                await policy.apply(
+                    SimpleNamespace(run=object()), window, config("simple"), ROUTE, PLAN
+                )
                 assert window.when() == before
     finally:
         active_context.reset(token)
@@ -89,7 +97,9 @@ async def test_late_classification_does_not_start_a_fresh_sixty_seconds(monkeypa
         with policy.admission(req, datetime.now(UTC) - timedelta(seconds=61)):
             with pytest.raises(RuntimeDeadlineError):
                 async with asyncio.timeout(None) as window:
-                    await policy.apply(SimpleNamespace(run=object()), window, config(), ROUTE, PLAN)
+                    await policy.apply(
+                        SimpleNamespace(run=object()), window, config("simple"), ROUTE, PLAN
+                    )
         saved.assert_not_called()
     finally:
         active_context.reset(token)

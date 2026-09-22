@@ -71,10 +71,10 @@ async def guard(request: RunRequest, admitted_at: datetime | None = None) -> Asy
 
     config = request.options.get("agent_config")
     deadline = (admitted_at or datetime.now(UTC)) + timedelta(seconds=SIMPLE_ACTION_SECONDS)
-    enabled = eligible(request, config) and getattr(config, "difficulty_class", "") not in {
-        "moderate",
-        "complex",
-    }
+    # Automatic profiles must retain the normal run budget while the planner
+    # establishes complexity. The short classification window is for an
+    # explicit ``difficulty_class: simple`` declaration only.
+    enabled = eligible(request, config) and getattr(config, "difficulty_class", "") == "simple"
     if request.context.deadline is not None and request.context.deadline <= deadline:
         enabled = False  # The existing runtime owner already enforces this bound.
     window = (

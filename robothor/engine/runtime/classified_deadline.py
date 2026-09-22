@@ -61,10 +61,11 @@ def _deadline(config: Any, route: Any, plan: Any) -> datetime | None:
     context = request.context
     if not eligible(request, config):
         return None
-    difficulty = getattr(config, "difficulty_class", "")
-    if not difficulty:
-        difficulty = plan.difficulty if plan and plan.success else getattr(route, "difficulty", "")
-    if difficulty != "simple":
+    # An empty manifest value means automatic classification. Do not turn a
+    # planner's later guess into a retroactive 60-second deadline: the request
+    # has already spent that time establishing its complexity. Only an explicit
+    # simple profile opts into the short action ceiling.
+    if getattr(config, "difficulty_class", "") != "simple":
         return None
     from robothor.engine.runtime.action_policy import SIMPLE_ACTION_SECONDS
 
