@@ -193,10 +193,8 @@ def _effective_session_key(auth: Any, requested_key: str) -> str:
     if mode == "observe":
         if derived != requested_key:
             logger.info(
-                "per_user_sessions: would derive %s from %s for user=%s role=%s",
-                derived,
-                requested_key,
-                auth.user_id,
+                "per_user_sessions: observe mode would derive a different session "
+                "(role=%s)",
                 role,
             )
         return requested_key

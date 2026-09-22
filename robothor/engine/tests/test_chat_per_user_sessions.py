@@ -191,7 +191,7 @@ class TestEffectiveSessionKeyObserve:
         with caplog.at_level(logging.INFO, logger="robothor.engine.chat"):
             _effective_session_key(auth, "agent:main:primary")
         assert any("would derive" in r.message for r in caplog.records)
-        assert any("agent:main:user:bob" in r.message for r in caplog.records)
+        assert all("agent:main:user:bob" not in r.message for r in caplog.records)
 
     def test_does_not_log_for_owner(self, monkeypatch, caplog):
         monkeypatch.setenv("ROBOTHOR_PER_USER_SESSIONS", "observe")
