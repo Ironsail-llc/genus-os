@@ -520,6 +520,7 @@ class TestIsServiceCaller:
         assert _is_service_caller("member", "acct-1") is False
 
 
+@pytest.mark.usefixtures("_mock_run_persistence")
 class TestIdentityThreading:
     """Task 2 — IdentityContext threaded through execute().
 

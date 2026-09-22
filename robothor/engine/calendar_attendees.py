@@ -199,6 +199,8 @@ def add_attendees(
                 "delivery_verified": False,
                 "htmlLink": after.get("htmlLink") or before.get("htmlLink"),
             }
+            if "error" in after and ("error" not in written or written.get("outcome_unknown")):
+                result["reconciliation_pending"] = True
             if not preserved or "error" in written:
                 result["error"] = (
                     "Update outcome requires reconciliation; do not repeat the write. "

@@ -275,3 +275,10 @@ docs/install.sh
 .test-postgres/
 .test-browsers/
 .test-workspace/
+
+# Runtime drill output is local evidence, not platform source.
+bench/runtime/*.log
+bench/runtime/*.json
+bench/runtime/*.jsonl
+bench/runtime/**/*.log
+bench/runtime/**/*.jsonl

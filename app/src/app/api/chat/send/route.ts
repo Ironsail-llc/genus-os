@@ -7,7 +7,7 @@ export async function POST(req: Request) {
   const message = body.message;
 
   if (!message || typeof message !== "string") {
-    return new Response(JSON.stringify({ error: "message required" }), {
+    return new Response(JSON.stringify({ error: "message required", request_admitted: false }), {
       status: 400,
       headers: { "Content-Type": "application/json" },
     });
@@ -21,7 +21,7 @@ export async function POST(req: Request) {
   // the operator's shared conversation.
   const chosen = await resolveChatAgent(body.agent);
   if (!chosen.ok) {
-    return new Response(JSON.stringify({ error: chosen.error }), {
+    return new Response(JSON.stringify({ error: chosen.error, request_admitted: false }), {
       status: chosen.status,
       headers: { "Content-Type": "application/json" },
     });
@@ -40,7 +40,7 @@ export async function POST(req: Request) {
     // system message its instructions never mention.
     if (!sessionKey) ensureCanvasPromptInjected().catch(() => {});
 
-    const engineRes = await client.chatSend(message, sessionKey);
+    const engineRes = await (body.request_id === undefined ? client.chatSend(message, sessionKey) : client.chatSend(message, sessionKey, body.request_id));
 
     if (!engineRes.body) {
       return new Response(

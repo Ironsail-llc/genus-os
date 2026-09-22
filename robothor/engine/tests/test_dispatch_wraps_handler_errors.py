@@ -53,7 +53,8 @@ async def test_httpstatus_error_does_not_propagate() -> None:
     # Transport/HTTP failures from backing services are mapped to a short
     # structured error, not a tool crash, and never echo internal URLs.
     assert result.get("error") == "backing service error (HTTP 500)"
-    assert result.get("retryable") is True
+    assert result.get("retryable") is False
+    assert result.get("outcome_unknown") is True
     assert result.get("tool_crashed") is None
     assert "127.0.0.1" not in str(result)
 
@@ -88,7 +89,8 @@ async def test_embedding_timeout_maps_to_short_structured_error() -> None:
     ):
         result = await dispatch._execute_tool("store_memory", {}, user_role="service")
     assert result.get("error") == "backing service unreachable: ReadTimeout"
-    assert result.get("retryable") is True
+    assert result.get("retryable") is False
+    assert result.get("outcome_unknown") is True
     assert result.get("tool_crashed") is None
     assert "traceback" not in str(result).lower()
 

@@ -116,7 +116,11 @@ class TestRunner:
         from robothor.engine.models import RunStatus, TriggerType
         from robothor.engine.runner import AgentRunner
 
-        runner = AgentRunner(EngineConfig(manifest_dir=broken_fleet, workspace=broken_fleet.parent))
+        runner = AgentRunner(
+            EngineConfig(
+                manifest_dir=broken_fleet, workspace=broken_fleet.parent, tenant_id="test-tenant"
+            )
+        )
         with caplog.at_level(logging.ERROR):
             run = await runner.execute(
                 agent_id="bob", message="hi", trigger_type=TriggerType.MANUAL
@@ -136,7 +140,11 @@ class TestRunner:
         from robothor.engine.models import TriggerType
         from robothor.engine.runner import AgentRunner
 
-        runner = AgentRunner(EngineConfig(manifest_dir=broken_fleet, workspace=broken_fleet.parent))
+        runner = AgentRunner(
+            EngineConfig(
+                manifest_dir=broken_fleet, workspace=broken_fleet.parent, tenant_id="test-tenant"
+            )
+        )
         run = await runner.execute(agent_id="bob", message="hi", trigger_type=TriggerType.MANUAL)
 
         assert "manifest rejected by schema" in (run.error_message or "").lower()
@@ -147,7 +155,11 @@ class TestRunner:
         from robothor.engine.models import TriggerType
         from robothor.engine.runner import AgentRunner
 
-        runner = AgentRunner(EngineConfig(manifest_dir=broken_fleet, workspace=broken_fleet.parent))
+        runner = AgentRunner(
+            EngineConfig(
+                manifest_dir=broken_fleet, workspace=broken_fleet.parent, tenant_id="test-tenant"
+            )
+        )
         run = await runner.execute(agent_id="nobody", message="hi", trigger_type=TriggerType.MANUAL)
 
         assert "not found" in (run.error_message or "")
@@ -198,7 +210,10 @@ class TestWorkflowStep:
         from robothor.engine.workflow import WorkflowEngine
 
         engine = WorkflowEngine(
-            EngineConfig(manifest_dir=broken_fleet, workspace=broken_fleet.parent), MagicMock()
+            EngineConfig(
+                manifest_dir=broken_fleet, workspace=broken_fleet.parent, tenant_id="test-tenant"
+            ),
+            MagicMock(),
         )
         step = WorkflowStepDef(id="s1", agent_id="bob", message="go")
         result = WorkflowStepResult(step_id="s1")
@@ -216,7 +231,9 @@ class TestSpawn:
         from robothor.engine.tools.handlers import spawn as spawn_mod
 
         runner = MagicMock()
-        runner.config = EngineConfig(manifest_dir=broken_fleet, workspace=broken_fleet.parent)
+        runner.config = EngineConfig(
+            manifest_dir=broken_fleet, workspace=broken_fleet.parent, tenant_id="test-tenant"
+        )
         monkeypatch.setattr(spawn_mod, "get_runner", lambda: runner)
         ctx = SpawnContext(
             parent_run_id="r1",
@@ -384,7 +401,11 @@ class TestCli:
             EngineConfig,
             "from_env",
             classmethod(
-                lambda cls: EngineConfig(manifest_dir=broken_fleet, workspace=broken_fleet.parent)
+                lambda cls: EngineConfig(
+                    manifest_dir=broken_fleet,
+                    workspace=broken_fleet.parent,
+                    tenant_id="test-tenant",
+                )
             ),
         )
         args = Namespace(
@@ -410,7 +431,11 @@ class TestCli:
             EngineConfig,
             "from_env",
             classmethod(
-                lambda cls: EngineConfig(manifest_dir=broken_fleet, workspace=broken_fleet.parent)
+                lambda cls: EngineConfig(
+                    manifest_dir=broken_fleet,
+                    workspace=broken_fleet.parent,
+                    tenant_id="test-tenant",
+                )
             ),
         )
         args = Namespace(
@@ -432,7 +457,11 @@ class TestCli:
             EngineConfig,
             "from_env",
             classmethod(
-                lambda cls: EngineConfig(manifest_dir=broken_fleet, workspace=broken_fleet.parent)
+                lambda cls: EngineConfig(
+                    manifest_dir=broken_fleet,
+                    workspace=broken_fleet.parent,
+                    tenant_id="test-tenant",
+                )
             ),
         )
         args = Namespace(

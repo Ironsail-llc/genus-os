@@ -19,7 +19,9 @@ from psycopg2.extras import RealDictCursor
 from robothor.db.connection import (
     assert_test_database_write,
     connection_database_name,
-    get_connection,
+)
+from robothor.db.connection import (
+    get_connection as get_connection,
 )
 
 OPERATION_MARKER = "Calendar operation: "
@@ -91,6 +93,24 @@ def _reconcile(
     write for the meeting, with nothing able to clear it.
     """
     calendar = {"kind": kind, "id": calendar_id}
+    attendees = event.get("attendees", []) if isinstance(event, dict) else None
+    if (
+        not isinstance(event, dict)
+        or "error" in event
+        or event.get("id") != stored["event_id"]
+        or not isinstance(attendees, list)
+        or any(
+            not isinstance(a, dict) or not isinstance(a.get("email", ""), str) for a in attendees
+        )
+    ):
+        return {
+            "error": "Provider read unavailable or invalid; reconciliation remains pending",
+            "event_id": stored["event_id"],
+            "reconciliation_pending": True,
+            "invitations_requested": None,
+            "verification": "unverified",
+            "calendar": calendar,
+        }
     present = {a.get("email", "").casefold() for a in event.get("attendees", [])}
     touched = sorted(present & set(stored["attendees"]))
     unchanged = bool(pre_write_etag) and str(event.get("etag") or "") == str(pre_write_etag)
@@ -278,7 +298,18 @@ def _perform_locked(args: dict[str, Any], ctx: Any, *, cancelled: Any = None) ->
                 result = _handle_gws_tool(
                     "gws_calendar_add_attendees", stored, run_id=ctx.run_id, tenant_id=ctx.tenant_id
                 )
-            status = "blocked" if result.get("error") else "completed"
+            if (
+                result.get("reconciliation_pending")
+                or result.get("outcome_unknown")
+                or (
+                    result.get("verification") == "unverified"
+                    and result.get("invitations_requested") is True
+                )
+            ):
+                result["reconciliation_pending"] = True
+                status = "executing"
+            else:
+                status = "blocked" if result.get("error") else "completed"
             cur.execute(
                 "UPDATE calendar_operations SET status=%s,result=%s::jsonb,updated_at=now() WHERE id=%s",
                 (status, json.dumps(result), operation_id),
@@ -303,6 +334,7 @@ def perform(args: dict[str, Any], ctx: Any, *, cancelled: Any = None) -> dict[st
         or not result.get("operation_id")
         or result.get("replayed")
         or result.get("no_write_confirmed")
+        or result.get("reconciliation_pending")
     ):
         return result
     from robothor.engine.calendar_repair import attach_repair_task

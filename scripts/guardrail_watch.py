@@ -867,13 +867,16 @@ def db_slos() -> list[Slo]:
                 heartbeat_slo(delivered, beats, float(worst_lag) if worst_lag is not None else None)
             )
 
-            # S3 — every alert_fallback row is a page that was NOT delivered
-            # and had to be left for the next briefing instead.
+            # S3 — an unacknowledged alert_fallback is a page that was NOT
+            # delivered and still needs operator attention. Acknowledged rows
+            # remain in the ledger for audit but no longer represent an open
+            # pager loss.
             cur.execute(
                 """
                 SELECT count(*) FROM crm_agent_notifications
                 WHERE created_at >= now() - interval '7 days'
                   AND notification_type = 'alert_fallback'
+                  AND acknowledged_at IS NULL
                 """
             )
             (lost,) = cur.fetchone()

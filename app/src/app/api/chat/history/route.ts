@@ -28,7 +28,8 @@ export async function GET(req: Request) {
     return NextResponse.json({
       messages: result.messages || [],
       sessionKey: result.sessionKey,
-    });
+      recoveryScope: result.recoveryScope,
+    }, { headers: { "Cache-Control": "no-store" } });
   } catch (err) {
     return NextResponse.json(
       { error: `Engine error: ${String(err)}`, messages: [] },

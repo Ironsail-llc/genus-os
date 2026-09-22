@@ -43,7 +43,9 @@ def private_database(tmp_path_factory):
             [str(binary / name), *map(str, args)], check=True, capture_output=True, text=True
         )
 
-    command("initdb", "-D", data, "-U", "goaltest", "--auth=trust", "--no-locale")
+    command(
+        "initdb", "-D", data, "-U", "goaltest", "--auth=trust", "--no-locale", "--encoding=UTF8"
+    )
     command(
         "pg_ctl",
         "-D",
@@ -60,7 +62,7 @@ def private_database(tmp_path_factory):
         dsn = f"dbname=goal_pursuit_test user=goaltest host={socket}"
         with psycopg2.connect(dsn) as conn, conn.cursor() as cur:
             cur.execute("CREATE TABLE crm_tenants(id TEXT PRIMARY KEY,display_name TEXT)")
-            cur.execute("""CREATE TABLE crm_tasks(id UUID PRIMARY KEY,tenant_id TEXT NOT NULL,title TEXT,
+            cur.execute("""CREATE TABLE crm_tasks(id UUID PRIMARY KEY,tenant_id TEXT NOT NULL,title TEXT,body TEXT,
                 objective TEXT,status TEXT,resolution TEXT,deleted_at TIMESTAMPTZ,tags TEXT[],session_goal_meta JSONB)""")
             cur.execute("""CREATE TABLE crm_agent_notifications(id UUID,tenant_id TEXT,from_agent TEXT,
                 to_agent TEXT,notification_type TEXT,subject TEXT,body TEXT,metadata JSONB)""")
@@ -69,6 +71,8 @@ def private_database(tmp_path_factory):
                 "126_goal_pursuit.sql",
                 "127_goal_pursuit_cost.sql",
                 "128_goal_pursuit_task_release.sql",
+                "138_goal_provider_reservations.sql",
+                "139_goal_task_family_controls.sql",
             ):
                 sql = (migrations / name).read_text()
                 cur.execute(sql)
@@ -220,7 +224,9 @@ def test_parent_reassesses_and_pause_cascades(db):
     child = change(
         db, child, "evidence", criterion=0, reference="report:1", satisfied=True, note="Verified"
     )
-    change(db, child, "complete", note="Delivered")
+    child = change(db, child, "complete", note="Delivered")
+    assert child["status"] == "review"
+    change(db, child, "approve")
     assert store.get(db, parent["id"])["status"] == "queued"
     child2 = create(db, parent_goal_id=parent["id"], request_key="second-child")
     parent = store.get(db, parent["id"])
@@ -432,7 +438,10 @@ def test_a_finished_goal_releases_its_tasks_to_the_inbox(db):
         satisfied=True,
         note="Verified",
     )
-    assert change(db, goal, "complete", note="Delivered")["status"] == "complete"
+    goal = change(db, goal, "complete", note="Delivered")
+    assert goal["status"] == "review"
+    assert not task_runnable(task_id, db), "work remains held during review"
+    assert change(db, goal, "approve")["status"] == "complete"
     assert task_runnable(task_id, db), "a finished goal owns nothing"
 
 

@@ -88,8 +88,13 @@ class CheckpointManager:
         the scratchpad column is already JSONB and Scratchpad.from_dict
         tolerates unknown keys.
         """
+        from dataclasses import asdict
+
+        from robothor.engine.runtime.contracts import StateEnvelope
+
+        scratchpad = dict(scratchpad or {})
+        scratchpad["_runtime"] = asdict(StateEnvelope())
         if todo_list is not None:
-            scratchpad = dict(scratchpad or {})
             scratchpad["_todo_list"] = todo_list
         try:
             from robothor.db.connection import get_connection
@@ -125,7 +130,7 @@ class CheckpointManager:
             return False
 
     @staticmethod
-    def load_latest(run_id: str) -> dict[str, Any] | None:
+    def load_latest(run_id: str, *, tenant_id: str | None = None) -> dict[str, Any] | None:
         """Load the most recent checkpoint for a run. Returns None if not found."""
         try:
             from psycopg2.extras import RealDictCursor
@@ -149,6 +154,14 @@ class CheckpointManager:
                 if not row:
                     return None
                 result = dict(row)
+                if tenant_id is not None:
+                    cur.execute(
+                        "SELECT tenant_id,runtime_context FROM agent_runs WHERE id=%s", (run_id,)
+                    )
+                    owner = cur.fetchone()
+                    if not owner or owner["tenant_id"] != tenant_id:
+                        return None
+                    result["runtime_context"] = owner.get("runtime_context") or {}
                 # Skip resume if schema version doesn't match
                 saved_version = result.get("schema_version", 0)
                 if saved_version != CHECKPOINT_SCHEMA_VERSION:
@@ -161,6 +174,11 @@ class CheckpointManager:
                         CHECKPOINT_SCHEMA_VERSION,
                     )
                     return None
+                from robothor.engine.runtime.contracts import StateEnvelope
+
+                envelope = (result.get("scratchpad") or {}).get("_runtime")
+                if envelope is not None:
+                    StateEnvelope().require_compatible(StateEnvelope(**envelope))
                 return result
         except Exception as e:
             logger.warning("Failed to load checkpoint: %s", e)

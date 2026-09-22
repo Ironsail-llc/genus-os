@@ -88,10 +88,16 @@ async def _run_one_tool_call(runner, agent_config, tool_name="send_email", tool_
     calls = {"n": 0}
 
     async def completion(**kwargs):
+        if "Check whether the proposed plan" in str(kwargs.get("messages", [])):
+            return _response(content="ALIGNED")
         calls["n"] += 1
         if calls["n"] == 1:
             return _response(tool_calls=[_tool_call(tool_name, tool_args)])
-        return _response(content="done")
+        return _response(
+            content="Plan: review email permissions and read the requested email. [PLAN_READY]"
+            if kw.get("readonly_mode")
+            else "done"
+        )
 
     executed: list[str] = []
     seen_args: list[dict] = []
@@ -109,7 +115,12 @@ async def _run_one_tool_call(runner, agent_config, tool_name="send_email", tool_
         patch("robothor.engine.run_finalizer.create_step"),
         patch("litellm.acompletion", side_effect=completion),
     ):
-        run = await runner.execute("gate-agent", "go", agent_config=agent_config, **kw)
+        run = await runner.execute(
+            "gate-agent",
+            "review email permissions" if kw.get("readonly_mode") else "go",
+            agent_config=agent_config,
+            **kw,
+        )
     return run, executed, seen_args
 
 
@@ -150,7 +161,7 @@ class TestPlanModeGate:
             runner, agent_config, tool_name="send_email", readonly_mode=True
         )
         assert run.status == RunStatus.COMPLETED
-        assert run.output_text == "done"
+        assert "[PLAN_READY]" in run.output_text
 
 
 class TestToolsAllowedGate:

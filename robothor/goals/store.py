@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
@@ -14,7 +15,7 @@ from uuid import UUID, uuid4
 from psycopg2.extras import Json, RealDictCursor
 
 from robothor.crm.dal import benchmark_sandbox_active
-from robothor.db.connection import get_connection
+from robothor.db.connection import get_connection as get_connection
 from robothor.goals.compat import note_task_linked, pursuit_installed
 from robothor.goals.model import (
     INACTIVE,
@@ -24,7 +25,12 @@ from robothor.goals.model import (
     future,
     new_goal,
     now_iso,
+    token_budget_of,
     transition,
+)
+
+control_origin: ContextVar[tuple[str, str, str] | None] = ContextVar(
+    "goal_control_origin", default=None
 )
 
 logger = logging.getLogger(__name__)
@@ -60,6 +66,22 @@ def transaction() -> Iterator[Any]:
 def journal(
     cur: Any, tenant: str, goal: dict[str, Any], action: str, actor: str, detail: dict[str, Any]
 ) -> None:
+    origin = control_origin.get()
+    if (
+        origin
+        and origin[0] == tenant
+        and origin[2] == actor
+        and action in {"pause", "cancel", "resume"}
+    ):
+        detail = {
+            **detail,
+            "control_receipt": {
+                "run_id": origin[1],
+                "principal_id": origin[2],
+                "status": goal["status"],
+                "version": goal["version"],
+            },
+        }
     cur.execute(
         """INSERT INTO pursuit_goal_history(tenant_id,goal_id,action,actor,detail)
                    VALUES (%s,%s,%s,%s,%s)""",
@@ -187,16 +209,28 @@ def get(tenant: str, goal_id: str) -> dict[str, Any]:
             (tenant, goal_id),
         )
         g["children"] = [r["data"] for r in cur.fetchall()]
+        from robothor.goals.effect_summary import summary
+
+        g["action_evidence"] = summary(cur, tenant, goal_id)
         return g
 
 
-def list_goals(tenant: str) -> list[dict[str, Any]]:
+def list_goals(tenant: str, *, task_summary: bool = False) -> list[dict[str, Any]]:
     with transaction() as cur:
         cur.execute(
             "SELECT data FROM pursuit_goals WHERE tenant_id=%s ORDER BY ready_at DESC LIMIT 200",
             (tenant,),
         )
-        return [r["data"] for r in cur.fetchall()]
+        goals = [r["data"] for r in cur.fetchall()]
+        if goals:
+            from robothor.goals.effect_summary import attach
+
+            attach(cur, tenant, goals)
+        if task_summary and goals:
+            from robothor.goals.task_summary import attach_task_summaries
+
+            attach_task_summaries(cur, tenant, goals)
+        return goals
 
 
 def update(
@@ -215,7 +249,25 @@ def update(
                 raise ValueError(
                     "finish or cancel outstanding execution children before completing"
                 )
+        from robothor.goals.effect_summary import reconcile_family, require_settled
+
+        if change.action in {"complete", "approve", "assess"}:
+            require_settled(cur, tenant, goal_id)
+        if change.action == "reconciled":
+            reconcile_family(cur, tenant, goal_id, actor, change.note, operator=operator)
         g = transition(before, change, operator=operator)
+        if change.action == "resume" and g["parent_goal_id"]:
+            parent = locked(cur, tenant, g["parent_goal_id"])
+            if parent["status"] in INACTIVE:
+                raise ValueError("make the parent active before resuming this child goal")
+        if change.action == "evidence":
+            from robothor.goals.evidence import verify
+
+            g["evidence"][-1]["verification"] = (
+                verify(cur, tenant, before, change.reference, change.criterion)
+                if change.satisfied
+                else {"method": "negative_assessment", "independent": False}
+            )
         if change.action == "block":
             from robothor.goals.runtime import binding
 
@@ -258,7 +310,13 @@ def update(
         if before["kind"] != g["kind"]:
             notify(cur, tenant, g, "promoted to long-term", change.note)
             journal(cur, tenant, g, "promoted", "engine", {"reason": change.note})
-        if g["parent_goal_id"] and g["status"] in {"waiting", "complete", "blocked", "canceled"}:
+        if g["parent_goal_id"] and g["status"] in {
+            "waiting",
+            "complete",
+            "blocked",
+            "canceled",
+            "review",
+        }:
             parent = locked(cur, tenant, g["parent_goal_id"])
             if parent["status"] not in INACTIVE:
                 parent.update(status="queued", ready_at=now_iso(), version=parent["version"] + 1)
@@ -302,7 +360,11 @@ def update(
                     child.update(status=g["status"], version=child["version"] + 1)
                     save(cur, tenant, child)
                     journal(cur, tenant, child, change.action, actor, {"parent": goal_id})
-        return g
+    if change.action in {"pause", "cancel"}:
+        from robothor.engine.runtime.activity import stop_goal
+
+        stop_goal(tenant, goal_id)
+    return g
 
 
 def ingest_event(tenant: str, event_id: str, event_type: str, payload: dict[str, Any]) -> None:
@@ -665,3 +727,42 @@ def adopt(tenant: str, task_id: str, actor: str) -> dict[str, Any]:
             {"legacy_task_id": task_id, "evidence": goal["legacy_evidence"]},
         )
     return goal
+
+
+def reserve_provider_usage(tenant: str, goal_id: str, attempt: str, tokens: int) -> None:
+    """Durably retain worst-case attempt usage before a provider request can leave.
+
+    Written BEFORE the call, not after: a crash between dispatch and response
+    must not lose the charge. Ported from the runtime branch, but using this
+    module's `token_budget_of` rather than a bare `g["token_budget"]` truthiness
+    check -- the branch's form treated an unset budget as unlimited, which is
+    exactly the ceiling `token_budget_of` exists to supply.
+    """
+    with transaction() as cur:
+        cur.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", ("goals:" + tenant,))
+        cur.execute(
+            """SELECT g.data FROM pursuit_goals g JOIN goal_pursuit_settings s
+                    ON s.tenant_id=g.tenant_id WHERE g.tenant_id=%s AND g.id=%s AND g.lease_id=%s
+                    AND g.lease_until>now() AND s.enabled AND g.status IN ('running','queued')
+                    FOR UPDATE OF g""",
+            (tenant, goal_id, attempt),
+        )
+        row = cur.fetchone()
+        if not row:
+            raise ValueError("goal lease no longer authorizes provider spending")
+        goal = row["data"]
+        budgets = [goal]
+        if goal["parent_goal_id"]:
+            budgets.append(locked(cur, tenant, goal["parent_goal_id"]))
+        if any(
+            g["status"] in INACTIVE or g.get("tokens_used", 0) + tokens > token_budget_of(g)
+            for g in budgets
+        ):
+            raise ValueError("goal family budget or authority exhausted")
+        cur.execute(
+            """UPDATE pursuit_goal_attempts SET tokens=GREATEST(tokens,%s)
+                    WHERE tenant_id=%s AND id=%s AND status='running' RETURNING id""",
+            (tokens, tenant, attempt),
+        )
+        if not cur.fetchone():
+            raise ValueError("goal attempt no longer active")

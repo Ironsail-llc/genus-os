@@ -91,3 +91,13 @@ def _is_service_caller(user_role: str, user_id: str) -> bool:
     return (
         user_role == "service" or user_role.startswith("service:") or user_id.startswith("service:")
     )
+
+
+def attach_tenant_access(run: Any, tenant_id: str) -> None:
+    """Resolve hierarchical access, restricting failures to the run's own tenant."""
+    from robothor.engine.permissions import resolve_accessible_tenants
+
+    try:
+        run.accessible_tenant_ids = resolve_accessible_tenants(tenant_id, run.user_role)
+    except Exception:
+        run.accessible_tenant_ids = (tenant_id,)

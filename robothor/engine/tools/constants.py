@@ -286,6 +286,7 @@ READONLY_TOOLS: frozenset[str] = frozenset(
         "get_goal",
         "get_pursuit_goal",
         "list_pursuit_goals",
+        "report_pursuit_goal",
         # Buddy's per-run reviews and the fleet roll-up — SELECT-only.
         # Added 2026-08-21: agent-architect's instructions require citing a
         # review_id, and the benchmark harness (which derives its allow-list
@@ -408,6 +409,7 @@ CORE_TOOLS: frozenset[str] = frozenset(
         "create_pursuit_goal",
         "get_pursuit_goal",
         "list_pursuit_goals",
+        "report_pursuit_goal",
         "update_pursuit_goal",
         "gws_calendar_add_attendees",
         # File / shell

@@ -63,6 +63,7 @@ class ResumeCandidate:
     #: The terminal reason already written on the row. Read, not displayed:
     #: not every `cancelled` run is a restart casualty (see `resumable`).
     error_message: str = ""
+    tenant_id: str = ""
 
 
 def resume_enabled() -> bool:
