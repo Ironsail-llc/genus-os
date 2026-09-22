@@ -262,7 +262,7 @@ flags:
 
   - name: ROBOTHOR_RIP_13_MODE
     owner: ops
-    mode: observe
+    mode: "off"
     soak: |
       Symbolic short-term memory. Originally dated 2026-07-20 on the theory
       that it rode RIP 7's ladder. It does not, and the ladder was never the
