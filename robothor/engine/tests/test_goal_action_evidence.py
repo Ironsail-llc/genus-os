@@ -72,7 +72,14 @@ def test_goal_decisions_cannot_hide_unresolved_child_effects(family, action):
     ctx, parent, child = family
     row = begin(replace(ctx, goal_id=child["id"], attempt_id="synthetic-attempt"))
     effects.finish(ctx, row["id"], "worker", uncertain=True)
-    with pytest.raises(ValueError, match="actions still require audit readback"):
+    with pytest.raises(
+        ValueError,
+        match=(
+            "outstanding execution children"
+            if action == "complete"
+            else "actions still require audit readback"
+        ),
+    ):
         store.update(
             ctx.tenant_id,
             parent["id"],
