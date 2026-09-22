@@ -290,7 +290,7 @@ class TestTheRunnerWiring:
         body = Path(m.__file__).read_text(encoding="utf-8")
         start = body.index("_pacer.note_for(")
         block = body[start : body.index("if _safety_cap > 0", start)]
-        assert "task_text_for_run(session)" in block
+        assert "task_text_for_run(session.run, session)" in block
         assert "session.messages[0]" not in block, (
             "messages[0] is the SYSTEM prompt — the note would read the wrong text"
         )
