@@ -202,12 +202,13 @@ async def test_host_launch_passes_the_workspace_profile(monkeypatch, workspace):
 
     monkeypatch.setattr(browser_mod, "_get_playwright", AsyncMock(return_value=pw))
     monkeypatch.setattr(sandbox_mod, "get_current_sandbox", lambda: None)
-    browser_mod._sessions.pop("default", None)
+    ctx = SimpleNamespace(agent_id="default")
+    browser_mod._sessions.pop(browser_mod._session_key(ctx), None)
 
     try:
-        result = await browser_mod._action_start({}, SimpleNamespace(agent_id="default"))
+        result = await browser_mod._action_start({}, ctx)
     finally:
-        browser_mod._sessions.pop("default", None)
+        browser_mod._sessions.pop(browser_mod._session_key(ctx), None)
 
     assert result.get("status") == "started"
     chromium.launch.assert_awaited_once()
@@ -253,12 +254,13 @@ async def test_host_launch_env_has_no_credential_names_under_enforce(monkeypatch
         browser_mod, "_get_playwright", AsyncMock(return_value=SimpleNamespace(chromium=chromium))
     )
     monkeypatch.setattr(sandbox_mod, "get_current_sandbox", lambda: None)
-    browser_mod._sessions.pop("default", None)
+    ctx = SimpleNamespace(agent_id="default")
+    browser_mod._sessions.pop(browser_mod._session_key(ctx), None)
 
     try:
-        await browser_mod._action_start({}, SimpleNamespace(agent_id="default"))
+        await browser_mod._action_start({}, ctx)
     finally:
-        browser_mod._sessions.pop("default", None)
+        browser_mod._sessions.pop(browser_mod._session_key(ctx), None)
 
     env = chromium.launch.await_args.kwargs["env"]
     leaked = sorted(n for n in env if looks_like_a_credential_name(n))
