@@ -121,7 +121,7 @@ describe("ChatPanel streaming UX", () => {
             `event: iteration_start\ndata: ${JSON.stringify({ iteration: 2, max_iterations: 5 })}\n\n`
           )
         );
-        await new Promise((r) => setTimeout(r, 50));
+        await new Promise((r) => setTimeout(r, 250));
         controller.enqueue(
           encoder.encode(
             `event: done\ndata: ${JSON.stringify({ text: "done" })}\n\n`

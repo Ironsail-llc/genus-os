@@ -24,7 +24,7 @@ from fastapi import Request  # noqa: TC002 — FastAPI resolves this at runtime
 
 AUDIENCE = "genus-host-execution"
 DEFAULT_SOCKET = "/run/robothor-host/exec.sock"
-HOST_WORKSPACE = Path("/home/philip/robothor")
+HOST_WORKSPACE = Path(os.environ.get("ROBOTHOR_WORKSPACE", Path.cwd()))
 
 
 def socket_path() -> str:
