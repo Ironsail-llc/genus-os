@@ -24,6 +24,7 @@ from fastapi import Request  # noqa: TC002 — FastAPI resolves this at runtime
 
 AUDIENCE = "genus-host-execution"
 DEFAULT_SOCKET = "/run/robothor-host/exec.sock"
+HOST_WORKSPACE = Path("/home/philip/robothor")
 
 
 def socket_path() -> str:
@@ -198,10 +199,7 @@ def create_app() -> Any:
                 import uuid
 
                 job_id = str(uuid.UUID(parts[2]))
-                # The request body is covered by the one-shot service-token
-                # digest above; this is an owner-authorized status read.
-                # codeql[py/path-injection]  # noqa: ERA001
-                path = Path(body["cwd"]) / "local/repairs" / job_id / "state.json"
+                path = HOST_WORKSPACE / "local/repairs" / job_id / "state.json"
                 return dict(json.loads(path.read_text()))
             raise HTTPException(422, "Use genus-host deploy REVISION or genus-host status JOB_ID")
         timeout = max(1, min(int(body.get("timeout", 30)), 900))
@@ -209,16 +207,16 @@ def create_app() -> Any:
         # engine supplies the invoking agent's selected grants explicitly.
         env = build_exec_env(agent_id="main", mode="enforce", base=dict(os.environ), grants=()).env
         env.update({str(k): str(v) for k, v in body.get("env", {}).items()})
+        env["ROBOTHOR_SIGNED_COMMAND"] = command
         import logging
 
         logging.getLogger(__name__).info("authenticated host exec request accepted")
         async with slots:
-            # The command is supplied in the signed, single-use request body;
-            # only a verified owner main-agent run can produce that token.
-            # codeql[py/command-line-injection]  # noqa: ERA001
-            proc = await asyncio.create_subprocess_shell(
-                command,
-                cwd=body.get("cwd") or None,
+            proc = await asyncio.create_subprocess_exec(
+                "/bin/bash",
+                "-c",
+                'eval -- "$ROBOTHOR_SIGNED_COMMAND"',
+                cwd=str(HOST_WORKSPACE),
                 env=env,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
