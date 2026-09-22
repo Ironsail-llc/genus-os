@@ -39,7 +39,9 @@ async def test_native_unclassified_expiry_is_recoverable(
     with psycopg2.connect(dsn) as conn, conn.cursor() as cur:
         cur.execute("INSERT INTO crm_tenants(id,display_name) VALUES (%s,%s)", (tenant, tenant))
     runner = AgentRunner(replace(engine_config, tenant_id=tenant))
-    sample_agent_config.difficulty_class = ""
+    # Only an explicitly simple profile receives the short classification
+    # ceiling; automatic profiles must retain their normal run budget.
+    sample_agent_config.difficulty_class = "" if stage == "complex" else "simple"
     sample_agent_config.task_protocol = False
     sample_agent_config.planning_enabled = True
     sample_agent_config.model_fallbacks = []
