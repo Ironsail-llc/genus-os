@@ -2447,8 +2447,14 @@ class LLMClient:
                         note_outcome(model, attempt_started, error=ce)
                     raise
                 except RequestRouteUnavailableError as exc:
+                    # No provider request was admitted. Shared workers may have
+                    # excluded this model's last endpoint; do not blame its
+                    # breaker or bypass the next model's own quote/reservation.
+                    # `break` leaves the retry loop for THIS model — without it
+                    # the same excluded model is retried instead of advancing.
                     last_error = exc
                     logger.info("No eligible funded route for %s — advancing", _sanitize(model))
+                    break
                 except (DurableStopError, RuntimeDeadlineError):
                     # Neither is a funding refusal. `DurableStopError` subclasses
                     # `RequestBudgetError`, so main's handler below would otherwise turn an
@@ -2721,8 +2727,14 @@ class LLMClient:
                     _record_execution_mode(model)
                     return rebuilt
                 except RequestRouteUnavailableError as exc:
+                    # No provider request was admitted. Shared workers may have
+                    # excluded this model's last endpoint; do not blame its
+                    # breaker or bypass the next model's own quote/reservation.
+                    # `break` leaves the retry loop for THIS model — without it
+                    # the same excluded model is retried instead of advancing.
                     last_error = exc
                     logger.info("No eligible funded route for %s — advancing", _sanitize(model))
+                    break
                 except (DurableStopError, RuntimeDeadlineError):
                     # Neither is a funding refusal. `DurableStopError` subclasses
                     # `RequestBudgetError`, so main's handler below would otherwise turn an

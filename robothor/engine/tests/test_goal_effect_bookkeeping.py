@@ -22,10 +22,10 @@ from robothor.goals.tools import HANDLERS
 @pytest.mark.asyncio
 @pytest.mark.parametrize("action", ["progress", "wait", "block", "pause", "cancel"])
 async def test_bookkeeping_preserves_uncertainty_and_denies_more_business_writes(
-    effect_db,
+    effect_db,  # noqa: F811 - the fixture is imported above, not redefined
     monkeypatch,
     action,
-    recovering,  # noqa: F811
+    recovering,
 ):
     ctx = context()
     monkeypatch.setattr(store, "get_connection", effect_db)
