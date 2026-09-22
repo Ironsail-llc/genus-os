@@ -200,7 +200,7 @@ def create_app() -> Any:
                 job_id = str(uuid.UUID(parts[2]))
                 # The request body is covered by the one-shot service-token
                 # digest above; this is an owner-authorized status read.
-                # codeql[py/path-injection]
+                # codeql[py/path-injection]  # noqa: ERA001
                 path = Path(body["cwd"]) / "local/repairs" / job_id / "state.json"
                 return dict(json.loads(path.read_text()))
             raise HTTPException(422, "Use genus-host deploy REVISION or genus-host status JOB_ID")
@@ -215,7 +215,7 @@ def create_app() -> Any:
         async with slots:
             # The command is supplied in the signed, single-use request body;
             # only a verified owner main-agent run can produce that token.
-            # codeql[py/command-line-injection]
+            # codeql[py/command-line-injection]  # noqa: ERA001
             proc = await asyncio.create_subprocess_shell(
                 command,
                 cwd=body.get("cwd") or None,
