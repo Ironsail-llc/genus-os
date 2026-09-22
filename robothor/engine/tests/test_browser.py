@@ -202,12 +202,12 @@ async def test_host_launch_passes_the_workspace_profile(monkeypatch, workspace):
 
     monkeypatch.setattr(browser_mod, "_get_playwright", AsyncMock(return_value=pw))
     monkeypatch.setattr(sandbox_mod, "get_current_sandbox", lambda: None)
-    browser_mod._sessions.pop("default", None)
+    browser_mod._sessions.clear()
 
     try:
         result = await browser_mod._action_start({}, SimpleNamespace(agent_id="default"))
     finally:
-        browser_mod._sessions.pop("default", None)
+        browser_mod._sessions.clear()
 
     assert result.get("status") == "started"
     chromium.launch.assert_awaited_once()
@@ -221,7 +221,7 @@ async def test_host_launch_passes_the_workspace_profile(monkeypatch, workspace):
     profile = Path(kwargs["env"]["XDG_CONFIG_HOME"])
     assert profile.is_relative_to(workspace)
     assert profile.is_dir(), "the redirect target must exist before launch"
-    assert profile.name == "default"
+    assert "default" in profile.name  # Profile is scoped by tenant, principal and agent.
 
     # The display must reach Chromium, or the host launch has no window.
     assert kwargs["env"]["DISPLAY"]
@@ -253,12 +253,12 @@ async def test_host_launch_env_has_no_credential_names_under_enforce(monkeypatch
         browser_mod, "_get_playwright", AsyncMock(return_value=SimpleNamespace(chromium=chromium))
     )
     monkeypatch.setattr(sandbox_mod, "get_current_sandbox", lambda: None)
-    browser_mod._sessions.pop("default", None)
+    browser_mod._sessions.clear()
 
     try:
         await browser_mod._action_start({}, SimpleNamespace(agent_id="default"))
     finally:
-        browser_mod._sessions.pop("default", None)
+        browser_mod._sessions.clear()
 
     env = chromium.launch.await_args.kwargs["env"]
     leaked = sorted(n for n in env if looks_like_a_credential_name(n))

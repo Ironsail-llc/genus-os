@@ -220,6 +220,7 @@ def new_goal(spec: CreateGoal, actor: str) -> dict[str, Any]:
         "checkpoint": "",
         "next_action": "Start pursuing the objective",
         "evidence": [],
+        "independent_evidence_required": True,
         "wait": None,
         "blocker": "",
         "blocker_count": 0,
@@ -239,6 +240,19 @@ def completion_missing(goal: dict[str, Any]) -> list[str]:
         if not evidence or not evidence[-1]["satisfied"]:
             missing.append(criterion)
     return missing
+
+
+def requires_review(g: dict[str, Any]) -> bool:
+    if g["human_review"]:
+        return True
+    if not g.get("independent_evidence_required", False):
+        return False
+    for criterion in range(len(g["success_criteria"])):
+        evidence = [e for e in g["evidence"] if e["criterion"] == criterion]
+        check = evidence[-1].get("verification", {}) if evidence else {}
+        if not (check.get("independent") and check.get("criterion_verified")):
+            return True
+    return False
 
 
 def transition(
@@ -325,11 +339,15 @@ def transition(
         missing = completion_missing(g)
         if missing:
             raise ValueError("unsatisfied criteria: " + "; ".join(missing))
-        g.update(status="review" if g["human_review"] else "complete", completion_note=change.note)
+        g.update(status="review" if requires_review(g) else "complete", completion_note=change.note)
     elif action == "approve":
         if g["status"] != "review" or completion_missing(g):
             raise ValueError("goal is not ready for approval")
-        g["status"] = "complete"
+        if g["mode"] == "ongoing":
+            g.update(status="waiting", ready_at=future(g["review_seconds"]), evidence=[])
+            g["assessment"]["approved_by_operator"] = True
+        else:
+            g["status"] = "complete"
     elif action == "assess":
         if g["mode"] != "ongoing" or change.assessment is None:
             raise ValueError("ongoing assessments require meeting, missing, or insufficient")
@@ -341,8 +359,10 @@ def transition(
             ready_at=future(g["review_seconds"]),
             wait={"reason": "Next assessment"},
         )
-        # Evidence history remains in the journal; each period must be measured anew.
-        g["evidence"] = []
+        if change.assessment == "meeting" and requires_review(g):
+            g["status"] = "review"
+        else:
+            g["evidence"] = []
     elif action in {"pause", "cancel"}:
         g["status"] = "paused" if action == "pause" else "canceled"
     elif action == "resume":
@@ -372,13 +392,21 @@ def transition(
             objective=change.objective or g["objective"],
             success_criteria=change.success_criteria or g["success_criteria"],
         )
-        g.update(objective=spec.objective, success_criteria=spec.success_criteria, evidence=[])
+        g.update(
+            objective=spec.objective,
+            success_criteria=spec.success_criteria,
+            evidence=[],
+            criteria_revised_at=now_iso(),
+        )
         if g["status"] == "review":
             g["status"] = "paused"
     elif action == "reconciled":
         g.update(recovery_required=False, checkpoint=change.note)
     if action in {"steer", "revise"}:
         g["steer_version"] = g["version"] + 1
+    if action in {"pause", "cancel", "resume"}:
+        g.pop("paused_by_parent", None)
+        g.pop("before_parent_pause", None)
     g["version"] += 1
     g["updated_at"] = now_iso()
     return g

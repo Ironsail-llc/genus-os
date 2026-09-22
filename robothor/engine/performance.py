@@ -47,7 +47,7 @@ class ProgressReporter:
 async def periodic_progress(
     session: Any,
     callback: Any,
-    interval: float = 30.0,
+    interval: float = 10.0,
     reporter: ProgressReporter | None = None,
 ) -> None:
     if callback is None:

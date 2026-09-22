@@ -47,16 +47,20 @@ def record_tool_outcome(
     downstream by escalation, so it is part of the contract rather than a
     convenience.
     """
-    error_type = _classify(tool_name, error_msg)
+    error_type = _classify(tool_name, error_msg, result)
     _log(session, tool_name, elapsed_ms, error_msg, error_type, result)
     _record_on_scratchpad(scratchpad, tool_name, tool_args, result, error_msg)
     _count_failure(session, tool_name, error_msg, failures)
     return error_type
 
 
-def _classify(tool_name: str, error_msg: str | None) -> Any:
+def _classify(tool_name: str, error_msg: str | None, result: Any = None) -> Any:
     if not error_msg:
         return None
+    if isinstance(result, dict) and result.get("outcome_unknown") is True:
+        from robothor.engine.models import ErrorType
+
+        return ErrorType.UNCERTAIN_OUTCOME
     from robothor.engine.error_recovery import classify_error
 
     return classify_error(tool_name, error_msg)

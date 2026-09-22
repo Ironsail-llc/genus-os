@@ -23,6 +23,7 @@ import sys
 import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from functools import partial
 from typing import TYPE_CHECKING, Any
 
 from robothor.engine.config import EngineConfig
@@ -188,7 +189,7 @@ _RESUME_TASKS: set[asyncio.Task[Any]] = set()
 MAX_RESUME_ATTEMPTS_DISPLAY = 3
 
 
-def _charge_resume_attempt(run_id: str) -> bool:
+def _charge_resume_attempt(run_id: str, tenant_id: str) -> bool:
     """Charge one resume attempt. False means do not resume this run.
 
     Separated from the loop so the loop's real work — executing the run — can
@@ -201,23 +202,30 @@ def _charge_resume_attempt(run_id: str) -> bool:
             cur = conn.cursor()
             cur.execute(
                 "UPDATE agent_runs SET resume_attempts = COALESCE(resume_attempts, 0) + 1 "
-                "WHERE id = %s",
-                (run_id,),
+                "WHERE id = %s AND tenant_id = %s "
+                "AND NOT EXISTS (SELECT 1 FROM agent_runs resumed "
+                "WHERE resumed.tenant_id=agent_runs.tenant_id "
+                "AND resumed.runtime_context->>'resume_from_run_id'=agent_runs.id::text) ",
+                (run_id, tenant_id),
             )
+            charged = cur.rowcount == 1
             conn.commit()
-        return True
+        return bool(charged)
     except Exception as e:  # noqa: BLE001 - one uncharged run must not stop the rest
         logger.warning("Could not charge resume attempt for %s: %s", run_id, e)
         return False
 
 
-async def _execute_resume(runner: Any, candidate: Any) -> None:
+async def _execute_resume(runner: Any, candidate: Any, claim: Any = None) -> None:
     """Actually continue the run. The step this function exists to perform.
 
     Same call shape as the operator-facing resume endpoint (health.py), so
     there is one way to resume a run rather than two that can drift.
     """
     from robothor.engine.models import TriggerType
+    from robothor.engine.resume_claim import current
+
+    claim_token = current.set(claim)
 
     try:
         # TriggerType.EVENT, not MANUAL. MANUAL is INTERACTIVE: runner.py:583
@@ -233,13 +241,18 @@ async def _execute_resume(runner: Any, candidate: Any) -> None:
             trigger_type=TriggerType.EVENT,
             trigger_detail=f"resume:{candidate.run_id}",
             resume_from_run_id=candidate.run_id,
+            tenant_id=candidate.tenant_id,
         )
     except Exception:
         logger.exception("Resume of run %s failed", candidate.run_id)
+    finally:
+        current.reset(claim_token)
+        if claim is not None:
+            claim.close()
 
 
-def _resume_scan() -> list[ResumeCandidate]:
-    """Every interrupted run the database knows about. [] when the scan fails.
+def _resume_scan(tenant_id: str) -> list[ResumeCandidate]:
+    """Interrupted runs belonging to this daemon tenant. [] when the scan fails.
 
     A named seam, not just tidiness: this is the ONE step in resume that needs
     a database, and while it was inline the only way for a test to reach the
@@ -266,12 +279,34 @@ def _resume_scan() -> list[ResumeCandidate]:
             # restart casualty: a workflow-budget kill is a DECISION, and
             # `resumable` needs the reason to tell them apart.
             cur.execute(
+                # GoalController owns recovery for the entire delegated family,
+                # including legacy children without their own runtime metadata.
+                # UNION over IDs terminates even if parent links contain a cycle.
+                "WITH RECURSIVE goal_family AS ("
+                "SELECT id FROM agent_runs WHERE tenant_id=%s AND ("
+                "runtime_context->>'goal_id' IS NOT NULL "
+                "OR COALESCE(trigger_detail, '') LIKE 'goal:%%' "
+                "OR EXISTS (SELECT 1 FROM pursuit_goal_attempts a "
+                "WHERE a.tenant_id=agent_runs.tenant_id AND a.run_id=agent_runs.id)) "
+                "UNION SELECT child.id FROM agent_runs child "
+                "JOIN goal_family parent ON child.parent_run_id=parent.id "
+                "WHERE child.tenant_id=%s) "
                 "SELECT id, agent_id, COALESCE(resume_attempts, 0), "
-                "COALESCE(error_message, '') FROM agent_runs "
-                "WHERE status = ANY(%s) ORDER BY id",
-                (sorted(RESUMABLE_STATUSES),),
+                "COALESCE(error_message, ''), tenant_id FROM agent_runs "
+                "WHERE tenant_id = %s AND status = ANY(%s) "
+                "AND NOT EXISTS (SELECT 1 FROM goal_family g WHERE g.id=agent_runs.id) "
+                "AND NOT EXISTS (SELECT 1 FROM agent_runs resumed "
+                "WHERE resumed.tenant_id=agent_runs.tenant_id "
+                "AND resumed.runtime_context->>'resume_from_run_id'=agent_runs.id::text) "
+                "ORDER BY id",
+                (tenant_id, tenant_id, tenant_id, sorted(RESUMABLE_STATUSES)),
             )
             rows = cur.fetchall()
+        from robothor.engine.runtime.controls import stopped
+
+        # Durable operator controls override restart eligibility before any
+        # attempt is charged or a resume task is announced/scheduled.
+        rows = [r for r in rows if not stopped(str(r[4]), str(r[0]))]
     except Exception as e:
         logger.warning("Resume scan failed: %s", _sanitize(e))
         return []
@@ -281,11 +316,16 @@ def _resume_scan() -> list[ResumeCandidate]:
             run_id=str(r[0]),
             agent_id=str(r[1] or ""),
             resume_attempts=int(r[2] or 0),
-            has_checkpoint=bool(CheckpointManager.load_latest(str(r[0]))),
+            has_checkpoint=bool(CheckpointManager.load_latest(str(r[0]), tenant_id=str(r[4]))),
             error_message=str(r[3] or "") if len(r) > 3 else "",
+            tenant_id=str(r[4]),
         )
         for r in rows
     ]
+
+
+def _close_resume_claim(claim: Any, task: asyncio.Task[Any]) -> None:
+    claim.close()
 
 
 async def resume_interrupted_runs(runner: Any = None) -> int:
@@ -303,10 +343,6 @@ async def resume_interrupted_runs(runner: Any = None) -> int:
     if not resume_enabled():
         return 0
 
-    batch = resume_batch(_resume_scan())
-    if not batch:
-        return 0
-
     if runner is None:
         # Without a runner there is nothing to resume WITH. Returning 0 rather
         # than counting is the whole point: this function used to charge the
@@ -316,11 +352,23 @@ async def resume_interrupted_runs(runner: Any = None) -> int:
         logger.warning("Resume skipped: no runner available to execute with")
         return 0
 
+    tenant = getattr(getattr(runner, "config", None), "tenant_id", None)
+    if not isinstance(tenant, str) or not tenant:
+        logger.warning("Resume skipped: runner tenant is unavailable")
+        return 0
+    batch = resume_batch([c for c in _resume_scan(tenant) if c.tenant_id == tenant])
+
     started = 0
+    from robothor.engine.resume_claim import acquire
+
     for candidate in batch:
+        claim = acquire(candidate.tenant_id, candidate.run_id)
+        if claim is None:
+            continue
         # Charge the attempt BEFORE resuming: a run that dies during resume
         # must still have paid, or a crash loop resumes forever.
-        if not _charge_resume_attempt(candidate.run_id):
+        if not _charge_resume_attempt(candidate.run_id, candidate.tenant_id):
+            claim.close()
             continue
         logger.info(
             "Resuming run %s (agent %s, attempt %d/%d)",
@@ -332,8 +380,15 @@ async def resume_interrupted_runs(runner: Any = None) -> int:
         # Launched, not awaited: these are full agent runs and the daemon is
         # still coming up. Held in a module set because a bare create_task can
         # be garbage-collected mid-flight (this repo has been bitten before).
-        task = asyncio.create_task(_execute_resume(runner, candidate))
+        work = _execute_resume(runner, candidate, claim)
+        try:
+            task = asyncio.create_task(work)
+        except BaseException:
+            work.close()
+            claim.close()
+            raise
         _RESUME_TASKS.add(task)
+        task.add_done_callback(partial(_close_resume_claim, claim))
         task.add_done_callback(_RESUME_TASKS.discard)
         started += 1
     return started
@@ -420,7 +475,7 @@ def classify_reap_reason(
     )
 
 
-def _cleanup_stale_workflow_runs() -> int:
+def _cleanup_stale_workflow_runs(tenant_id: str | None = None) -> int:
     """Mark workflow_runs stuck 'running' for >2h as 'timeout'.
 
     Engine shutdown mid-run used to leave workflow_runs rows 'running'
@@ -429,6 +484,9 @@ def _cleanup_stale_workflow_runs() -> int:
     timeout is 900s, so anything 'running' for 2 hours is dead. Returns the
     number of rows reaped.
     """
+    from robothor.constants import DEFAULT_TENANT
+
+    tenant_id = tenant_id or DEFAULT_TENANT
     try:
         from robothor.db.connection import get_connection
 
@@ -439,7 +497,8 @@ def _cleanup_stale_workflow_runs() -> int:
                 "completed_at=NOW(), "
                 "duration_ms=EXTRACT(EPOCH FROM (NOW()-started_at))*1000, "
                 "error_message='Reaped: engine restarted mid-run' "
-                "WHERE status='running' AND started_at < NOW() - INTERVAL '2 hours'"
+                "WHERE tenant_id=%s AND status='running' AND started_at < NOW() - INTERVAL '2 hours'",
+                (tenant_id,),
             )
             reaped = cur.rowcount or 0
             conn.commit()
@@ -463,7 +522,7 @@ def _has_any_step(run_id: str) -> bool:
         return True
 
 
-def _cleanup_stale_runs() -> int:
+def _cleanup_stale_runs(tenant_id: str | None = None) -> int:
     """Mark stale 'running' agent_runs as 'timeout' with per-run classification.
 
     Called on startup and periodically by the watchdog. Instead of applying a
@@ -473,7 +532,10 @@ def _cleanup_stale_runs() -> int:
 
     Returns the number of runs cleaned up (agent + workflow).
     """
-    wf_reaped = _cleanup_stale_workflow_runs()
+    from robothor.constants import DEFAULT_TENANT
+
+    tenant_id = tenant_id or DEFAULT_TENANT
+    wf_reaped = _cleanup_stale_workflow_runs(tenant_id)
     try:
         from robothor.db.connection import get_connection
 
@@ -496,17 +558,18 @@ def _cleanup_stale_runs() -> int:
             cur.execute(
                 "SELECT id, agent_id, started_at "
                 "FROM agent_runs "
-                "WHERE status='running' AND ("
+                "WHERE tenant_id=%(tenant)s AND status='running' AND ("
                 "  (%(boot)s IS NOT NULL"
                 "   AND started_at < %(boot)s::timestamptz - INTERVAL '60 seconds')"
                 "  OR started_at < NOW() - make_interval(secs => %(cutoff)s)"
                 ")",
-                {"boot": daemon_start_ts, "cutoff": REAP_MIN_SCAN_SECONDS},
+                {"tenant": tenant_id, "boot": daemon_start_ts, "cutoff": REAP_MIN_SCAN_SECONDS},
             )
             stale = cur.fetchall()
             if not stale:
                 return wf_reaped
 
+            reaped_agents = []
             for run_id, agent_id, started_at in stale:
                 # The scan floor is deliberately cheap; this is the real gate.
                 # An orphan (predating this boot) is reaped whatever its age —
@@ -527,9 +590,12 @@ def _cleanup_stale_runs() -> int:
                     "duration_ms=EXTRACT(EPOCH FROM (NOW()-started_at))*1000, "
                     "error_message=%s, "
                     "reap_category=%s "
-                    "WHERE id=%s AND status='running'",
-                    (message, category, run_id),
+                    "WHERE id=%s AND tenant_id=%s AND status='running'",
+                    (message, category, run_id, tenant_id),
                 )
+                if cur.rowcount != 1:
+                    continue
+                reaped_agents.append(agent_id)
                 logger.warning(
                     "Cleaned up stale run %s (agent=%s, category=%s)",
                     run_id,
@@ -542,13 +608,17 @@ def _cleanup_stale_runs() -> int:
             # Release dedup locks for cleaned-up agents
             from robothor.engine.dedup import release_sync
 
-            for row in stale:
-                release_sync(row[1])
+            for agent_id in reaped_agents:
+                release_sync(agent_id)
 
-            return len(stale) + wf_reaped
+            return len(reaped_agents) + wf_reaped
     except Exception as e:
         logger.warning("Stale run cleanup failed: %s", e)
         return wf_reaped
+    finally:
+        from robothor.engine.runtime.effect_recovery import sweep_terminal
+
+        sweep_terminal(tenant_id)
 
 
 async def _start_federation(config: EngineConfig, runner: Any = None) -> Any:
@@ -1284,6 +1354,24 @@ def _attach_sales_runtime(scheduler: Any, config: Any, sales_runtime_assets: Any
     )
 
 
+async def _bootstrap_owner_links() -> None:
+    # Link the operator's CRM row to tenant_users.person_id (idempotent).
+    # Driven by ~/.robothor/owner.yaml; no-op if not configured.
+    try:
+        from robothor.crm.dal import bootstrap_owner_person_links
+
+        link_result = await asyncio.to_thread(bootstrap_owner_person_links)
+        if link_result.get("linked"):
+            logger.info(
+                "Operator identity: linked tenant=%s → person_id=%s%s",
+                link_result.get("tenant_id"),
+                link_result.get("person_id"),
+                " (created new person)" if link_result.get("created_person") else "",
+            )
+    except Exception:
+        logger.exception("bootstrap_owner_person_links failed (non-fatal)")
+
+
 async def main() -> int:
     """Start all engine subsystems. Returns the process exit code."""
     # Own SIGTERM/SIGINT before anything slow, so a stop during startup also
@@ -1318,21 +1406,7 @@ async def main() -> int:
     # can be classified as 'daemon_restart' rather than 'post_llm_crash'.
     _set_daemon_start_ts()
 
-    # Link the operator's CRM row to tenant_users.person_id (idempotent).
-    # Driven by ~/.robothor/owner.yaml; no-op if not configured.
-    try:
-        from robothor.crm.dal import bootstrap_owner_person_links
-
-        link_result = await asyncio.to_thread(bootstrap_owner_person_links)
-        if link_result.get("linked"):
-            logger.info(
-                "Operator identity: linked tenant=%s → person_id=%s%s",
-                link_result.get("tenant_id"),
-                link_result.get("person_id"),
-                " (created new person)" if link_result.get("created_person") else "",
-            )
-    except Exception:
-        logger.exception("bootstrap_owner_person_links failed (non-fatal)")
+    await _bootstrap_owner_links()
 
     # Vault-held provider keys into os.environ before any subsystem reads one.
     await load_provider_secrets_at_startup()
@@ -1358,9 +1432,13 @@ async def main() -> int:
     except Exception as e:
         logger.warning("Startup resume failed, continuing to reap: %s", _sanitize(e))
 
-    cleaned = await asyncio.to_thread(_cleanup_stale_runs)
+    cleaned = await asyncio.to_thread(_cleanup_stale_runs, config.tenant_id)
     if cleaned:
         logger.info("Startup: cleaned %d stale agent runs", cleaned)
+
+    from robothor.engine.repair_recovery import recover as recover_repairs
+
+    await recover_repairs(runner, config)
 
     _init_fleet_capacity(config)
 
@@ -1514,8 +1592,11 @@ async def main() -> int:
     # Federation — start NATS if connections exist (no-op otherwise)
     nats_mgr = await _start_federation(config, runner=runner)
 
+    from robothor.engine.calendar_recovery_worker import run as recover_calendar
+
     # Start all subsystems concurrently
     tasks = [
+        asyncio.create_task(recover_calendar(config.tenant_id), name="calendar-recovery"),
         asyncio.create_task(scheduler.start(), name="scheduler"),
         asyncio.create_task(hooks.start(), name="hooks"),
         asyncio.create_task(
@@ -1927,7 +2008,7 @@ async def _watchdog(
         if tick_count % 40 == 0:
             try:
                 loop = asyncio.get_running_loop()
-                reaped = await loop.run_in_executor(None, _cleanup_stale_runs)
+                reaped = await loop.run_in_executor(None, _cleanup_stale_runs, config.tenant_id)
                 if reaped:
                     logger.warning("Watchdog: reaped %d zombie agent runs", reaped)
             except Exception as e:

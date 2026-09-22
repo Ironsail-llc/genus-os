@@ -32,6 +32,14 @@ class _Completion:
 _completion: ContextVar[_Completion | None] = ContextVar("workflow_completion", default=None)
 
 
+def host_rendered_output(session: Any) -> bool:
+    """These responses bypass model rewriting, but retain final output validation."""
+    return bool(
+        getattr(session, "routine_operation_id", None)
+        or getattr(session, "goal_report_complete", False)
+    )
+
+
 @contextmanager
 def workflow_completion_scope(
     tenant_id: str, agent_id: str, resolve: Callable[[], WorkflowCompletion | None]

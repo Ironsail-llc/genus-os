@@ -202,6 +202,11 @@ AUTONOMY_BROWSER_PROMPT = (
 class AgentSession:
     """Per-run state manager for an agent execution."""
 
+    readonly_mode: bool = False
+    pending_goal_report: str | None = None
+    pending_goal_report_tool: str = "report_pursuit_goal"
+    goal_report_complete: bool = False
+
     def __init__(
         self,
         agent_id: str,
@@ -313,7 +318,16 @@ class AgentSession:
     def consume_pending_steer(self) -> str | None:
         """Pop and return any pending steer text, or ``None`` if none."""
         text, self._pending_steer = self._pending_steer, None
+        if text:
+            from robothor.engine.task_context import record_steering
+
+            record_steering(self.messages, text)
         return text
+
+    @property
+    def has_pending_control(self) -> bool:
+        """A final tool report must not discard steering or an interruption."""
+        return bool(self._pending_steer) or self._interrupt_requested
 
     def consume_interrupt(self) -> str | None:
         """Pop and return the pending interrupt message if requested.
@@ -423,6 +437,30 @@ class AgentSession:
             *([{"role": ENGINE_CONTEXT_ROLE, "content": engine_context}] if engine_context else []),
             {"role": "user", "content": user_message},
         ]
+        from robothor.engine.task_context import install_context, make_context
+
+        install_context(
+            self.messages,
+            make_context(
+                user_message,
+                conversation_history or [],
+                run_id=self.run.id,
+                mode="plan"
+                if str(self.run.trigger_detail or "").startswith("plan:")
+                else "execute",
+            ),
+        )
+        if self.identity is not None:
+            from dataclasses import asdict
+
+            from robothor.engine.task_context import read_context
+
+            record = read_context(self.messages)
+            if record is not None:
+                record["identity"] = asdict(self.identity)
+                record["agent_id"] = self.run.agent_id
+                install_context(self.messages, record)
+
         # Count this user turn for the memory-review nudge (Rip 1). Previously
         # never incremented, so the memory half of the background-review fork
         # could never reach its threshold. Accumulates across turns on a

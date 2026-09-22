@@ -408,6 +408,9 @@ class RunFinalizationMixin:
         agent_config is optional — when passed, post-run guardrails
         (e.g. requires_human_task_closure) will run against the finished run.
         """
+        from robothor.engine.task_completion import capture_pending_items
+
+        capture_pending_items(run, session)
         # ── [GUARDRAIL] Post-run checks (require finished run + config) ──
         if agent_config is not None:
             try:
@@ -869,8 +872,9 @@ class RunFinalizationMixin:
         happened".
 
         Ladder (``ROBOTHOR_RUN_VERIFICATION_ENABLED`` / ``_MODE``):
-          - ``off`` / ``observe``: byte-identical to the legacy behavior. The
-            merge posture is observe, so merging this changes nothing.
+          Known pending checklist items keep the task open in every mode.
+          Otherwise:
+          - ``off`` / ``observe``: retain legacy completion behavior.
           - ``alert``: the close still happens, but the resolution is labelled
             ``[verified]`` or ``[claimed]`` so the ledger distinguishes a shown
             completion from an asserted one. Task state is untouched.
@@ -895,18 +899,24 @@ class RunFinalizationMixin:
                     run.task_id,
                     status="TODO",
                     tags=[run.agent_id, "failed", run.status.value],
+                    tenant_id=run.tenant_id,
                 )
                 return
             if run.status != RunStatus.COMPLETED:
                 return
 
+            from robothor.engine.task_completion import keep_pending_task_open
+
+            if keep_pending_task_open(run):
+                return
             mode = run_verification_mode()
             if mode in ("off", "observe"):
-                # The pin: nothing below runs until the flag is promoted.
+                # Optional verification remains gated after the pending-work check.
                 dal_resolve_task(
                     run.task_id,
                     resolution=f"Run completed: {(run.output_text or '')[:200]}",
                     agent_id=run.agent_id,
+                    tenant_id=run.tenant_id,
                 )
                 return
 
@@ -953,6 +963,7 @@ class RunFinalizationMixin:
                 run.task_id,
                 resolution=f"{prefix} Run completed: {(run.output_text or '')[:200]}",
                 agent_id=run.agent_id,
+                tenant_id=run.tenant_id,
             )
         except Exception as e:
             logger.warning("Auto-task update failed: %s", _sanitize(e))

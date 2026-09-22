@@ -194,7 +194,9 @@ class TestNoDrift:
         from robothor.engine.tools.registry import ToolRegistry, builtin_schema_names
 
         assert loader.builtin_names("genus.schemas") == builtin_schema_names()
-        assert loader.builtin_names("genus.schemas") >= set(ToolRegistry()._schemas)
+        with patch("robothor.plugins.load_plugins") as plugins:
+            plugins.return_value.schemas = {}
+            assert loader.builtin_names("genus.schemas") >= set(ToolRegistry()._schemas)
 
     def test_hooks_match_what_the_hook_registry_reserves(self):
         """The group whose own docstring names the attack it was not stopping.

@@ -12,6 +12,14 @@ if TYPE_CHECKING:
     from robothor.engine.tools.dispatch import ToolContext
 
 
+# Commands that preserve uncertainty rather than dispatch a new business
+# action. The runtime effect ledger lets these through while an earlier
+# action is still unresolved; anything else has to wait for readback.
+RECOVERY_BOOKKEEPING_ACTIONS = frozenset(
+    {"progress", "wait", "block", "pause", "cancel", "reconciled"}
+)
+
+
 @dataclass
 class Binding:
     tenant: str
@@ -21,6 +29,13 @@ class Binding:
     run_id: str = ""
     yield_requested: bool = False
     runs: dict[str, AgentRun] = field(default_factory=dict)
+    provider_budget: Any = field(default=None, init=False)
+
+    def __post_init__(self) -> None:
+        if self.token_remaining is not None:
+            from robothor.engine.runtime.budget import SharedBudget
+
+            self.provider_budget = SharedBudget(self.token_remaining)
 
 
 binding: ContextVar[Binding | None] = ContextVar("pursuit_goal", default=None)
@@ -57,7 +72,10 @@ def budget_hit() -> bool:
     return bool(
         current
         and current.token_remaining is not None
-        and sum(r.input_tokens + r.output_tokens for r in current.runs.values())
+        and max(
+            sum(r.input_tokens + r.output_tokens for r in current.runs.values()),
+            current.provider_budget.charged if current.provider_budget else 0,
+        )
         >= current.token_remaining
     )
 
@@ -126,7 +144,9 @@ def admit_tool(name: str, args: dict[str, Any], ctx: ToolContext) -> None:
     if (
         row["data"]["recovery_required"]
         and name not in READONLY_TOOLS
-        and not (name == "update_pursuit_goal" and args.get("action") == "reconciled")
+        and not (
+            name == "update_pursuit_goal" and args.get("action") in RECOVERY_BOOKKEEPING_ACTIONS
+        )
     ):
         raise ValueError(
             "inspect previous run results, then record reconciled before taking more actions"
@@ -149,7 +169,12 @@ def prepare_task(
         (tenant, current.goal_id, title, body or "", assigned),
     )
     row = cur.fetchone()
-    return str(row["id"]) if row else None
+    if row:
+        from robothor.engine.runtime.task_receipts import remember_existing
+
+        remember_existing(tenant, str(row["id"]), cursor=cur)
+        return str(row["id"])
+    return None
 
 
 def link_created_task(cur: Any, tenant: str, task_id: str) -> None:

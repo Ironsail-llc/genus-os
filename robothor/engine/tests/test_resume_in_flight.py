@@ -117,5 +117,5 @@ class TestTheDaemonConsultsIt:
         body = self._source()
         assert "resume_interrupted_runs" in body, "nothing drives resume at startup"
         assert body.index("resume_interrupted_runs") < body.index(
-            "cleaned = await asyncio.to_thread(_cleanup_stale_runs)"
+            "cleaned = await asyncio.to_thread(_cleanup_stale_runs, config.tenant_id)"
         ), "reaping runs first would destroy the runs resume exists to save"
