@@ -659,7 +659,7 @@ async def _action_start(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
                 # --user-data-dir is deliberately NOT passed: Playwright rejects
                 # it as a launch arg (it manages its own temp profile), and it is
                 # not what fails. See _browser_profile_dir / _browser_env.
-                profile_dir = _browser_profile_dir(agent_id)
+                profile_dir = _browser_profile_dir(ctx.agent_id or "default")
                 browser = await pw.chromium.launch(
                     headless=False,
                     args=[
