@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import replace
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -14,7 +15,7 @@ if TYPE_CHECKING:
     from robothor.engine.runtime.contracts import RunRequest
 
 #: (agent_id, manifest_dir, config, refusal_reason) from a completed lookup.
-_Resolution = tuple[str, str, Any, Any]
+_Resolution = tuple[str, Path, Any, Any]
 
 _resolution: ContextVar[_Resolution | None] = ContextVar("native_profile_resolution", default=None)
 
@@ -63,7 +64,7 @@ def resolved_profile(resolution: _Resolution | None) -> Iterator[None]:
         _resolution.reset(token)
 
 
-def load_for_run(agent_id: str, directory: str) -> tuple[Any, ...]:
+def load_for_run(agent_id: str, directory: Path) -> tuple[Any, ...]:
     resolution = _resolution.get()
     if resolution is not None and resolution[:2] == (agent_id, directory):
         return resolution[2:]

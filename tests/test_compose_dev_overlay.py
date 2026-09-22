@@ -79,10 +79,11 @@ class TestTheDevOverlayRestoresTheSourceLoop:
         assert dev_services["dashboard"]["image"] == "genusos/dashboard:dev"
 
     def test_it_names_only_services_the_release_file_defines(self, dev_services):
-        release = set(_load(INFRA / "docker-compose.apps.yml").get("services") or {})
+        release = set((_load(INFRA / "docker-compose.apps.yml").get("services") or {}))
 
         assert set(dev_services) <= release, (
-            "an overlay that introduces a service of its own is a second stack, not an overlay"
+            "an overlay that introduces a service of its own is a second stack, "
+            "not an overlay"
         )
 
     def test_it_restores_no_credential_of_its_own(self):
@@ -94,7 +95,9 @@ class TestTheDevOverlayRestoresTheSourceLoop:
 
 class TestTheGpuOverlayIsTheOnlyPlaceGpusAreReserved:
     def test_it_reserves_the_nvidia_devices_for_ollama(self):
-        reservations = _load(GPU_FILE)["services"]["ollama"]["deploy"]["resources"]["reservations"]
+        reservations = _load(GPU_FILE)["services"]["ollama"]["deploy"]["resources"][
+            "reservations"
+        ]
         devices = reservations["devices"]
 
         assert devices[0]["driver"] == "nvidia"

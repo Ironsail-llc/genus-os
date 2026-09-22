@@ -10,7 +10,6 @@ from uuid import uuid4
 import httpx
 import psycopg2
 import pytest
-from bench.runtime.uat_server import seed_unfinished_work
 from fastapi import FastAPI
 from litellm import ModelResponse
 
@@ -21,6 +20,7 @@ from robothor.engine.runner import AgentRunner
 from robothor.engine.runtime import CurrentRuntime, ExecutionContext, RunRequest
 from robothor.engine.runtime.chat_control import request_key
 from robothor.engine.task_registry import get_task_registry
+from robothor.engine.tests.runtime_fixtures import seed_unfinished_work
 from robothor.goals import store
 from robothor.goals.model import GoalUpdate
 from robothor.identity import IdentityContext
@@ -141,8 +141,13 @@ async def test_native_goal_report_is_audited_and_recovered_without_reexecution(
         rows = cur.fetchall()
     tool = next(output for kind, output in rows if kind == "tool_call")
     checkpoints = [output for kind, output in rows if kind == "checkpoint"]
-    assert tool["goal"]["id"] == goal["id"] and tool["goal"]["status"] == "waiting"
-    assert sorted(task["status"] for task in tool["goal"]["tasks"]) == ["DONE", "TODO"]
+    if tool.get("_truncated"):
+        # New goal ceilings add metadata beyond the existing 4K audit cap.
+        # The exact delivered report is preserved independently below.
+        assert goal["id"] in tool["content"] and tool["total_chars"] > 4000
+    else:
+        assert tool["goal"]["id"] == goal["id"] and tool["goal"]["status"] == "waiting"
+        assert sorted(task["status"] for task in tool["goal"]["tasks"]) == ["DONE", "TODO"]
     assert checkpoints == ([] if compound else [{"origin": "trusted_goal_report", "output": text}])
     if compound:
         assert "323" in text

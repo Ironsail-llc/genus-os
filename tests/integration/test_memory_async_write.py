@@ -105,7 +105,9 @@ async def test_processing_stores_facts_and_marks_done(
     assert row["attempts"] == 1
     assert row["fact_ids"], "a completed job must record what it stored"
 
-    db_cursor.execute("SELECT tenant_id FROM memory_facts WHERE id = ANY(%s)", (row["fact_ids"],))
+    db_cursor.execute(
+        "SELECT tenant_id FROM memory_facts WHERE id = ANY(%s)", (row["fact_ids"],)
+    )
     assert {r["tenant_id"] for r in db_cursor.fetchall()} == {job_tenant}
 
 

@@ -1,5 +1,18 @@
 """Native final-report admission and delivery; ordinary tool data cannot finalize."""
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from contextlib import AbstractContextManager
+    from datetime import datetime
+
+    from robothor.engine.models import RunStep
+    from robothor.engine.session import AgentSession
+    from robothor.engine.tool_turn import ToolTurnRequest
+    from robothor.goals.report_channel import ReportTurn
+
 from datetime import UTC, datetime
 
 from robothor.engine.models import RunStep, StepType
@@ -9,7 +22,7 @@ from robothor.goals.runtime import binding
 REPORT_TOOL = "report_pursuit_goal"
 
 
-def report_scope(req, names):
+def report_scope(req: ToolTurnRequest, names: list[str]) -> AbstractContextManager[ReportTurn]:
     from robothor.engine.goal_report_intent import admission
     from robothor.engine.runtime.task_report import requested
 
@@ -37,13 +50,13 @@ def report_scope(req, names):
     )
 
 
-def record_report_turn(state, session, errors):
+def record_report_turn(state: ReportTurn, session: AgentSession, errors: list[Any]) -> None:
     message = consume_report(state, session.run)
     session.pending_goal_report = message if not errors and state.finalizes else None
     session.pending_goal_report_tool = state.tool_name
 
 
-def finish_goal_report(session):
+def finish_goal_report(session: AgentSession) -> bool:
     message = getattr(session, "pending_goal_report", None)
     session.pending_goal_report = None
     if message is None or session.has_pending_control:
@@ -67,5 +80,10 @@ def finish_goal_report(session):
         )
     )
     session.messages.append({"role": "assistant", "content": message})
+    from robothor.engine.output_validation import request_output_repair
+
+    if request_output_repair(session):
+        session.goal_report_complete = False
+        return False
     session.goal_report_complete = True
     return True

@@ -754,7 +754,8 @@ class TestTheRunbookMatchesTheCode:
         )
         window = text[text.index("ROBOTHOR_SLO_DB_CHECKS") - 400 :]
         assert "never" in window and "production" in window, (
-            "the runbook must say this is test-only and must never be set in production"
+            "the runbook must say this is test-only and must never be set in "
+            "production"
         )
 
 
@@ -895,7 +896,9 @@ class TestMainStampsTheS8Marker:
             "a report that found problems is still a report that ran"
         )
 
-    @pytest.mark.skipif(os.geteuid() == 0, reason="root ignores the mode bits this test relies on")
+    @pytest.mark.skipif(
+        os.geteuid() == 0, reason="root ignores the mode bits this test relies on"
+    )
     def test_a_marker_another_account_left_behind_is_still_refreshed(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:

@@ -1,9 +1,20 @@
 """Read durable request decisions while execution evidence is not yet available."""
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from datetime import datetime
+
+    from robothor.auth.deps import AuthContext
+
 from datetime import UTC, datetime, timedelta
 
 
-def pending_outcome(cur, auth, session_key, identifier):
+def pending_outcome(
+    cur: Any, auth: AuthContext, session_key: str, identifier: str
+) -> dict[str, Any]:
     cur.execute(
         """SELECT 1 FROM agent_runtime_request_stops
            WHERE tenant_id=%s AND request_id=%s""",

@@ -1,8 +1,11 @@
 """Read back interrupted calendar operations without entering the write dispatcher."""
 
+from __future__ import annotations
+
 import hashlib
 import json
 import logging
+from typing import Any
 from uuid import UUID
 
 from psycopg2.extras import RealDictCursor
@@ -13,7 +16,7 @@ from robothor.engine import calendar_operations as operations
 logger = logging.getLogger(__name__)
 
 
-def reconcile_record(operation_id, auth, agent_id):
+def reconcile_record(operation_id: str, auth: Any, agent_id: str) -> None:
     """Recheck scope and resource lock; rate-limit unsuccessful reads durably."""
     operation_id = str(UUID(operation_id))
     with operations.get_connection() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
@@ -26,7 +29,8 @@ def reconcile_record(operation_id, auth, agent_id):
         row = cur.fetchone()
         if not row:
             return
-        resource = f"{auth.tenant_id}\0{row['calendar_id']}\0{row['event_id']}"
+        series_id = row["event_id"].split("_", 1)[0]
+        resource = f"{auth.tenant_id}\0{row['calendar_id']}\0{series_id}"
         lock = int.from_bytes(hashlib.sha256(resource.encode()).digest()[:8], "big", signed=True)
         cur.execute("SELECT pg_try_advisory_lock(%s) AS acquired", (lock,))
         if not cur.fetchone()["acquired"]:
@@ -42,9 +46,19 @@ def reconcile_record(operation_id, auth, agent_id):
                 "UPDATE calendar_operations SET updated_at=now() WHERE id=%s", (operation_id,)
             )
             conn.commit()
-            result = operations._reconcile_interrupted(
-                row["calendar_id"], row["event_id"], row["arguments"], row.get("result")
+            from robothor.engine.calendar_transport import CalendarTransport
+
+            with CalendarTransport() as api:
+                event = api.request("GET", row["calendar_id"], row["event_id"])
+            result = operations._reconcile(
+                event,
+                row["arguments"],
+                row.get("pre_write_etag"),
+                row["calendar_id"],
+                (row.get("result") or {}).get("calendar", {}).get("kind", "personal"),
             )
+            if (row.get("result") or {}).get("invitations_requested") is True:
+                result["invitations_requested"] = True
             status = "executing" if result.get("reconciliation_pending") else "blocked"
             cur.execute(
                 "UPDATE calendar_operations SET status=%s,result=%s,updated_at=now() WHERE id=%s",
@@ -57,7 +71,7 @@ def reconcile_record(operation_id, auth, agent_id):
             conn.commit()
 
 
-def reconcile_outcome(auth, session_key, client_id):
+def reconcile_outcome(auth: Any, session_key: str, client_id: str) -> None:
     """Re-resolve the original scoped run before calendar or CRM readback."""
     from robothor.engine.chat_recovery import read_outcome
 

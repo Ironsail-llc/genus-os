@@ -23,6 +23,7 @@ import sys
 import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from functools import partial
 from typing import TYPE_CHECKING, Any
 
 from robothor.engine.config import EngineConfig
@@ -209,7 +210,7 @@ def _charge_resume_attempt(run_id: str, tenant_id: str) -> bool:
             )
             charged = cur.rowcount == 1
             conn.commit()
-        return charged
+        return bool(charged)
     except Exception as e:  # noqa: BLE001 - one uncharged run must not stop the rest
         logger.warning("Could not charge resume attempt for %s: %s", run_id, e)
         return False
@@ -323,6 +324,10 @@ def _resume_scan(tenant_id: str) -> list[ResumeCandidate]:
     ]
 
 
+def _close_resume_claim(claim: Any, task: asyncio.Task[Any]) -> None:
+    claim.close()
+
+
 async def resume_interrupted_runs(runner: Any = None) -> int:
     """Resume runs a restart interrupted, before the reaper reaches them.
 
@@ -383,7 +388,7 @@ async def resume_interrupted_runs(runner: Any = None) -> int:
             claim.close()
             raise
         _RESUME_TASKS.add(task)
-        task.add_done_callback(lambda _task, owned=claim: owned.close())
+        task.add_done_callback(partial(_close_resume_claim, claim))
         task.add_done_callback(_RESUME_TASKS.discard)
         started += 1
     return started

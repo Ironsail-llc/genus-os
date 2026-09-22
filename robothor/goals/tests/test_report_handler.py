@@ -13,7 +13,12 @@ from robothor.engine.goal_report_delivery import (
 from robothor.engine.models import TriggerType
 from robothor.engine.session import AgentSession
 from robothor.engine.tools.dispatch import ToolContext
-from robothor.goals.tests.test_store import create, db, private_database  # noqa: F401
+from robothor.goals.tests.test_store import (  # noqa: F401
+    create,
+    db,
+    private_database,
+    register_tenant,
+)
 from robothor.goals.tools import HANDLERS
 from robothor.identity import IdentityContext
 
@@ -34,7 +39,7 @@ from robothor.identity import IdentityContext
     ],
 )
 async def test_report_reads_authorized_goal_facts_only(db, case):  # noqa: F811
-    goal = create(str(uuid4()) if case == "foreign_goal" else db)
+    goal = create(register_tenant(str(uuid4())) if case == "foreign_goal" else db)
     role = "viewer" if case == "viewer" else "owner"
     session = AgentSession(
         "main", TriggerType.CRON if case == "noninteractive" else TriggerType.WEBCHAT, tenant_id=db

@@ -361,3 +361,20 @@ def isolated_effect_store(monkeypatch):
         raise AssertionError("Use an isolated effect_db fixture for durable effect tests")
 
     monkeypatch.setattr("robothor.engine.runtime.effects.get_connection", unavailable)
+
+
+@pytest.fixture
+def isolated_plan_claims(monkeypatch):
+    """Endpoint unit tests use a fake runner and fake durable admission.
+
+    Atomic database claims are exercised in test_chat_plan_claim and the
+    fully migrated native integration suite.
+    """
+    from unittest.mock import AsyncMock
+
+    monkeypatch.setattr("robothor.engine.chat_plan_claim.claim_plan", AsyncMock(return_value=True))
+    monkeypatch.setattr("robothor.engine.chat_plan_claim.already_admitted", lambda *a: False)
+    monkeypatch.setattr("robothor.engine.chat_plan_claim.clear_claim", lambda *a: None)
+    monkeypatch.setattr(
+        "robothor.engine.chat_plan_changes.replace_pending_async", AsyncMock(return_value=True)
+    )

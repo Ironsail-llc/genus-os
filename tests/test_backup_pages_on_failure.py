@@ -66,7 +66,6 @@ def _code_lines(body: str) -> list[str]:
     """
     return [line for line in body.splitlines() if not line.lstrip().startswith("#")]
 
-
 SERVICE = UNIT_DIR / "robothor-backup-local.service"
 TIMER = UNIT_DIR / "robothor-backup-local.timer"
 
@@ -157,7 +156,9 @@ class TestWalOffsiteSurvivesAnOffsiteFailure:
         path.write_text(f"#!/usr/bin/env bash\n{body}\n")
         path.chmod(path.stat().st_mode | stat.S_IEXEC)
 
-    def test_prune_runs_and_exit_is_nonzero_even_when_rclone_fails(self, tmp_path: Path) -> None:
+    def test_prune_runs_and_exit_is_nonzero_even_when_rclone_fails(
+        self, tmp_path: Path
+    ) -> None:
         archive_dir = tmp_path / "wal_archive"
         archive_dir.mkdir()
         basebackup_dir = tmp_path / "basebackup"
@@ -309,7 +310,9 @@ class TestWalOffsiteDegradesWhenTheBackupVolumeIsWedged:
             basebackup_dir.chmod(0o755)
         return result, rclone_log, prune_log, archive_dir
 
-    def test_it_exits_zero_so_the_unit_stops_paging_every_15_minutes(self, tmp_path: Path) -> None:
+    def test_it_exits_zero_so_the_unit_stops_paging_every_15_minutes(
+        self, tmp_path: Path
+    ) -> None:
         result, _, _, _ = self._run(tmp_path)
         assert result.returncode == 0, (
             "a wedged backup volume made this unit fail every 15 minutes — 96 "
@@ -351,7 +354,9 @@ class TestWalOffsiteDegradesWhenTheBackupVolumeIsWedged:
             f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         )
 
-    def test_a_degraded_run_still_records_that_the_wal_went_offsite(self, tmp_path: Path) -> None:
+    def test_a_degraded_run_still_records_that_the_wal_went_offsite(
+        self, tmp_path: Path
+    ) -> None:
         """Exiting 0 is only safe if something else carries the freshness
         signal. The marker lives on NVMe, not on the volume that broke."""
         self._run(tmp_path)
@@ -362,7 +367,8 @@ class TestWalOffsiteDegradesWhenTheBackupVolumeIsWedged:
         )
         assert "000000010000000000000003" in marker.read_text(), (
             "the marker must name the newest WAL segment that went offsite, "
-            "or a freshness page cannot say how far behind the archive is\n" + marker.read_text()
+            "or a freshness page cannot say how far behind the archive is\n"
+            + marker.read_text()
         )
 
 
@@ -408,7 +414,9 @@ class TestTheBaseBackupRecordsWhenItLastWorked:
             env=env,
         )
 
-    def test_a_successful_base_backup_records_last_basebackup(self, tmp_path: Path) -> None:
+    def test_a_successful_base_backup_records_last_basebackup(
+        self, tmp_path: Path
+    ) -> None:
         dest = tmp_path / "robothor" / "basebackup"
         dest.mkdir(parents=True)
         result = self._run(tmp_path, dest)
@@ -424,7 +432,9 @@ class TestTheBaseBackupRecordsWhenItLastWorked:
             f"freshness page can point at it\n{marker.read_text()}"
         )
 
-    def test_a_wedged_volume_records_nothing_and_does_not_run(self, tmp_path: Path) -> None:
+    def test_a_wedged_volume_records_nothing_and_does_not_run(
+        self, tmp_path: Path
+    ) -> None:
         """The volume probe refuses first, so there is no half-written base
         backup and no marker claiming one exists."""
         dest = tmp_path / "robothor" / "basebackup"
@@ -523,8 +533,12 @@ class TestTheWalMarkerOnlyMeansTheWalWentOffsite:
             "infinity healthy\n" + result.stdout + result.stderr
         )
 
-    def test_a_degraded_run_with_a_working_remote_still_records(self, tmp_path: Path):
-        result = self._run(tmp_path, volume_down=True, ROBOTHOR_OFFSITE_REMOTE="remote:bucket")
+    def test_a_degraded_run_with_a_working_remote_still_records(
+        self, tmp_path: Path
+    ):
+        result = self._run(
+            tmp_path, volume_down=True, ROBOTHOR_OFFSITE_REMOTE="remote:bucket"
+        )
         assert result.returncode == 0, result.stdout + result.stderr
         assert "skipping basebackup replication" in result.stdout, result.stdout
         assert (tmp_path / "state" / "last-wal-offsite-ok").exists(), (
@@ -609,7 +623,7 @@ class TestWalOffsiteRefusesToGuessWhenTheProbeIsBroken:
         )
 
     def test_a_missing_probe_fails_the_unit(self, tmp_path: Path):
-        """ "Not installed" is the same "I cannot answer" as exit 255.
+        """"Not installed" is the same "I cannot answer" as exit 255.
 
         The 255 branch degrades AND fails. The missing-probe branch only
         degraded: no basebackup replication, no WAL prune, exit 0 — a unit
@@ -633,7 +647,9 @@ class TestWalOffsiteRefusesToGuessWhenTheProbeIsBroken:
         result = self._run(tmp_path, 255)
         assert result.returncode != 0, (
             "a probe that cannot answer the question was read as 'the volume "
-            "is down', so the unit degraded quietly and forever\n" + result.stdout + result.stderr
+            "is down', so the unit degraded quietly and forever\n"
+            + result.stdout
+            + result.stderr
         )
         assert "refusing to guess" in result.stdout + result.stderr, (
             "the page must say the PROBE is broken, not the volume\n"
@@ -715,7 +731,9 @@ class TestTheVolumeProbeActuallyGatesTheLocalBackup:
 
         probe_log = tmp_path / "probe-args.txt"
         probe = tmp_path / "fake-volume-check.sh"
-        self._stub(probe, f'printf \'%s\\n\' "$@" >> "{probe_log}"\nexit {probe_exit}')
+        self._stub(
+            probe, f'printf \'%s\\n\' "$@" >> "{probe_log}"\nexit {probe_exit}'
+        )
 
         env = {
             **_pager_pins(tmp_path),
@@ -763,11 +781,14 @@ class TestTheVolumeProbeActuallyGatesTheLocalBackup:
             "a backup that never ran recorded itself as successful"
         )
 
-    def test_the_probe_is_asked_for_write_access_to_the_mount(self, tmp_path: Path) -> None:
+    def test_the_probe_is_asked_for_write_access_to_the_mount(
+        self, tmp_path: Path
+    ) -> None:
         _, mount, probe_log = self._run(tmp_path, probe_exit=1)
         args = probe_log.read_text().split()
         assert "--rw" in args, (
-            f"a read-only probe passes on an emergency_ro volume — this job WRITES\n{args}"
+            "a read-only probe passes on an emergency_ro volume — this job "
+            f"WRITES\n{args}"
         )
         assert str(mount) in args, args
 
@@ -784,8 +805,12 @@ class TestTheVolumeProbeActuallyGatesTheLocalBackup:
         assert marker.exists(), result.stdout + result.stderr
         assert dumps[-1].name in marker.read_text(), marker.read_text()
 
-    @pytest.mark.skipif(os.geteuid() == 0, reason="root ignores the directory mode this test sets")
-    def test_an_unwritable_log_directory_does_not_abort_the_backup(self, tmp_path: Path) -> None:
+    @pytest.mark.skipif(
+        os.geteuid() == 0, reason="root ignores the directory mode this test sets"
+    )
+    def test_an_unwritable_log_directory_does_not_abort_the_backup(
+        self, tmp_path: Path
+    ) -> None:
         """The log default moved to /var/log/robothor/backup.log, and it is
         used by a bare `>>` under `set -euo pipefail`. On an instance where
         that directory is absent or unwritable the FIRST log line kills the
@@ -820,7 +845,9 @@ class TestTheVolumeProbeActuallyGatesTheLocalBackup:
             locked.chmod(0o700)
 
         assert result.returncode == 0, (
-            "an unwritable log directory aborted the whole backup\n" + result.stdout + result.stderr
+            "an unwritable log directory aborted the whole backup\n"
+            + result.stdout
+            + result.stderr
         )
         assert sorted((mount / "robothor" / "db").glob("*.sql.gz")), (
             "the backup did not run\n" + result.stdout + result.stderr
@@ -848,7 +875,9 @@ def _env_dicts_with(key: str) -> list[ast.Dict]:
         if not isinstance(node, ast.Dict):
             continue
         names = {
-            k.value for k in node.keys if isinstance(k, ast.Constant) and isinstance(k.value, str)
+            k.value
+            for k in node.keys
+            if isinstance(k, ast.Constant) and isinstance(k.value, str)
         }
         if key in names:
             out.append(node)
@@ -874,7 +903,9 @@ def test_every_backup_run_here_pins_the_state_dir():
         for node in _env_dicts_with(key)
         if "ROBOTHOR_BACKUP_STATE_DIR"
         not in {
-            k.value for k in node.keys if isinstance(k, ast.Constant) and isinstance(k.value, str)
+            k.value
+            for k in node.keys
+            if isinstance(k, ast.Constant) and isinstance(k.value, str)
         }
     ]
     assert not offenders, (

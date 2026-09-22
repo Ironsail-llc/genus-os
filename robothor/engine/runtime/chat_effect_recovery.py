@@ -1,14 +1,22 @@
 """Reconcile one chat-owned CRM effect using stored evidence, never another write."""
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from robothor.auth.deps import AuthContext
+
 import logging
 from types import SimpleNamespace
 
+from robothor.db.connection import tenant_scope
 from robothor.engine.runtime import effects, note_recovery, task_recovery
 
 logger = logging.getLogger(__name__)
 
 
-def reconcile_record(effect_id, auth):
+def reconcile_record(effect_id: str, auth: AuthContext) -> None:
     """Caller must select the effect from the authenticated original run family."""
     context = SimpleNamespace(tenant_id=auth.tenant_id, principal_id=auth.user_id)
     try:
@@ -23,7 +31,11 @@ def reconcile_record(effect_id, auth):
         if record["state"] in {"prepared", "dispatching"}:
             # A terminal parent does not imply that its delegated worker stopped.
             # Recheck this effect's own durable owner before revoking admission.
-            with effects.get_connection() as conn, conn.cursor() as cur:
+            with (
+                tenant_scope(context.tenant_id),
+                effects.get_connection() as conn,
+                conn.cursor() as cur,
+            ):
                 cur.execute(
                     """UPDATE agent_runtime_effects e SET
                        state=CASE WHEN state='prepared' THEN 'not_applied' ELSE 'uncertain' END,

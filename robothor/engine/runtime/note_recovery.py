@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 
 from psycopg2.extras import RealDictCursor
 
+from robothor.db.connection import tenant_scope
 from robothor.engine.runtime import effects
 
 if TYPE_CHECKING:
@@ -17,7 +18,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def note_options(ctx: ToolContext, args: dict[str, Any]) -> dict[str, str]:
+def note_options(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
     record = effects.active_effect.get()
     if record is None:
         return {}
@@ -36,7 +37,7 @@ def note_options(ctx: ToolContext, args: dict[str, Any]) -> dict[str, str]:
 def verify(record: dict[str, Any]) -> effects.Verification:
     # The host reserved this UUID before the create handler ran. The model
     # cannot supply it as an argument or nominate a different existing note.
-    with effects.get_connection() as conn, conn.cursor() as cur:
+    with tenant_scope(record["tenant_id"]), effects.get_connection() as conn, conn.cursor() as cur:
         cur.execute(
             "SELECT title FROM crm_notes WHERE tenant_id=%s AND id=%s AND deleted_at IS NULL",
             (record["tenant_id"], str(record["id"])),
@@ -72,7 +73,11 @@ def recover(context: EffectScope, effect_id: Any) -> dict[str, Any] | None:
 
 
 def sweep(tenant_id: str) -> None:
-    with effects.get_connection() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+    with (
+        tenant_scope(tenant_id),
+        effects.get_connection() as conn,
+        conn.cursor(cursor_factory=RealDictCursor) as cur,
+    ):
         cur.execute(
             """SELECT id,principal_id FROM agent_runtime_effects WHERE tenant_id=%s
                AND tool_name='create_note' AND state='uncertain'
@@ -84,7 +89,7 @@ def sweep(tenant_id: str) -> None:
         recover(SimpleNamespace(tenant_id=tenant_id, principal_id=row["principal_id"]), row["id"])
         # Rotate unresolved readbacks so a missing/deleted note cannot starve
         # later records. This changes no verdict or compare-and-swap version.
-        with effects.get_connection() as conn, conn.cursor() as cur:
+        with tenant_scope(tenant_id), effects.get_connection() as conn, conn.cursor() as cur:
             cur.execute(
                 "UPDATE agent_runtime_effects SET updated_at=now() WHERE id=%s AND tenant_id=%s AND state='uncertain'",
                 (row["id"], tenant_id),

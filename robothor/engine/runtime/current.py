@@ -18,7 +18,7 @@ from robothor.engine.runtime.contracts import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
+    from collections.abc import Awaitable, Callable, Coroutine
     from datetime import datetime
 
     from robothor.engine.models import AgentRun
@@ -230,7 +230,7 @@ def run_identity(run: Any) -> dict[str, Any]:
 
 def runtime_entrypoint(
     execute: Callable[..., Awaitable[AgentRun]],
-) -> Callable[..., Awaitable[AgentRun]]:
+) -> Callable[..., Coroutine[Any, Any, AgentRun]]:
     """Keep the public runner signature while routing every admission through the adapter."""
     from functools import wraps
     from inspect import signature
@@ -248,17 +248,19 @@ def runtime_entrypoint(
         values = dict(parameters.bind(self, *args, **kwargs).arguments)
         values.pop("self")
         agent_id, message = values.pop("agent_id"), values.pop("message")
-        from robothor.constants import DEFAULT_TENANT
         from robothor.db.connection import current_tenant_scope
 
+        inherited = active_context.get()
         tenant = (
             values.get("tenant_id")
             or current_tenant_scope()
+            or (inherited.tenant_id if inherited else None)
             or self.config.tenant_id
-            or DEFAULT_TENANT
         )
+        if not tenant or (inherited and inherited.tenant_id != tenant):
+            raise ValueError("runtime tenant identity missing or inconsistent")
+        values["tenant_id"] = tenant
         spawn = values.get("spawn_context")
-        inherited = active_context.get()
         context = ExecutionContext(
             tenant,
             values.get("user_id") or "service:" + agent_id,

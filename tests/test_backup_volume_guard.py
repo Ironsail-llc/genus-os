@@ -187,7 +187,7 @@ class Box:
             "dmsetup",
             'for dm_name in "$@"; do :; done\n'
             'dm_deps="${FAKE_DM_DEPS:-8:16}"\n'
-            "for kv in ${FAKE_DM_DEPS_MAP:-}; do\n"
+            'for kv in ${FAKE_DM_DEPS_MAP:-}; do\n'
             '  [ "${kv%%=*}" = "$dm_name" ] && dm_deps="${kv#*=}"\n'
             "done\n"
             'case "$1" in\n'
@@ -222,7 +222,9 @@ class Box:
             'case "$1" in\n'
             '  isLuks) exit "${FAKE_ISLUKS_RC:-0}" ;;\n'
             '  luksUUID) rc="${FAKE_LUKSUUID_RC:-0}"\n'
-            '          [ "$rc" = 0 ] && printf "%s\\n" "${FAKE_LUKS_UUID:-' + UUID + '}"\n'
+            '          [ "$rc" = 0 ] && printf "%s\\n" "${FAKE_LUKS_UUID:-'
+            + UUID
+            + '}"\n'
             '          exit "$rc" ;;\n'
             '  open)   rc="${FAKE_OPEN_RC:-0}"\n'
             '          [ "$rc" = 0 ] && : > "$FAKE_MAPPER_DIR/$3"\n'
@@ -492,7 +494,7 @@ def test_a_missing_backup_state_library_fails_the_run_instead_of_paging_blanks(
 
 
 def test_the_page_says_which_HALF_of_wal_offsite_is_still_running(box: Box):
-    """ "Still running: WAL offsite" was not true, and the guard's own code says
+    """"Still running: WAL offsite" was not true, and the guard's own code says
     so: robothor-wal-offsite.service is in BACKUP_UNITS precisely because it
     writes to the volume. What survives a wedged volume is the archiving of NEW
     WAL segments to the remote; what stops with everything else is the
@@ -670,7 +672,8 @@ def test_a_busy_mapper_is_never_fsckd_even_when_it_is_the_right_device(box: Box)
     assert result.returncode == 0, result.stdout + result.stderr
 
     assert box.ran("fsck.ext4") == [], (
-        f"ran fsck on a mapping with an opener — this corrupts a degraded volume:\n{box.argv}"
+        f"ran fsck on a mapping with an opener — this corrupts a degraded "
+        f"volume:\n{box.argv}"
     )
     assert box.ran("cryptsetup close") == [], f"closed a referenced mapping:\n{box.argv}"
     assert box.ran("mount") == [], f"mounted a mapping it had not repaired:\n{box.argv}"
@@ -726,7 +729,9 @@ def test_without_a_usable_keyfile_the_guard_tears_nothing_down(box: Box, column3
     )
     assert result.returncode == 0, result.stdout + result.stderr
 
-    assert box.ran("umount") == [], f"unmounted a volume it could not put back:\n{box.argv}"
+    assert box.ran("umount") == [], (
+        f"unmounted a volume it could not put back:\n{box.argv}"
+    )
     assert box.ran("cryptsetup close") == [], (
         f"closed a container it has no key to reopen:\n{box.argv}"
     )
@@ -760,9 +765,7 @@ def test_a_live_mapping_is_remounted_rather_than_closed_and_reopened(box: Box):
     assert result.returncode == 0, result.stdout + result.stderr
     assert box.ran("cryptsetup open") == [], f"reopened a live mapping:\n{box.argv}"
     assert box.ran("cryptsetup close") == [], f"closed a live mapping:\n{box.argv}"
-    assert box.ran("fsck.ext4") == [], (
-        f"fsck'd a filesystem that only needed remounting:\n{box.argv}"
-    )
+    assert box.ran("fsck.ext4") == [], f"fsck'd a filesystem that only needed remounting:\n{box.argv}"
     assert box.ran(f"mount {box.mapper_dir / MAPPER} {box.mount}"), (
         f"never put the existing mapping back:\n{box.argv}"
     )
@@ -831,9 +834,7 @@ def test_a_device_that_is_not_a_luks_container_is_never_touched(box: Box):
     unrecoverable."""
     box.plug_in()
     box.stale_mapper()
-    result = box.run(
-        FAKE_CHECK_RCS="1", FAKE_ISLUKS_RC="1", FAKE_DM_DEPS="8:16", FAKE_MAJMIN="8:17"
-    )
+    result = box.run(FAKE_CHECK_RCS="1", FAKE_ISLUKS_RC="1", FAKE_DM_DEPS="8:16", FAKE_MAJMIN="8:17")
     assert result.returncode == 0, result.stdout + result.stderr
     assert box.ran("cryptsetup open") == []
     assert box.ran("fsck.ext4") == []
@@ -946,7 +947,7 @@ def test_a_foreign_filesystem_at_the_mountpoint_is_never_unmounted(box: Box):
 
 
 def test_a_findmnt_that_could_not_answer_does_not_read_as_nothing_mounted(box: Box):
-    """ "I could not ask" is not an answer of "nothing".
+    """"I could not ask" is not an answer of "nothing".
 
     findmnt exits non-zero for a mountpoint with nothing on it AND for a real
     failure — a missing binary, a hung /proc/self/mountinfo read. Folding both
@@ -1220,7 +1221,8 @@ def test_the_mapper_from_a_previous_heal_is_the_one_reused(box: Box, suffix: str
         f"did not put the live mapping back under its own name:\n{box.argv}"
     )
     assert box.ran("cryptsetup open") == [], (
-        f"opened a second mapping over a device that already had a live one:\n{box.argv}"
+        f"opened a second mapping over a device that already had a live one:"
+        f"\n{box.argv}"
     )
     assert box.ran("cryptsetup close") == [], f"closed a mapping it only borrowed:\n{box.argv}"
     assert len(box.pages) == 1
@@ -1384,7 +1386,9 @@ def test_a_reused_mapping_is_never_closed_when_the_repaired_mount_fails(box: Box
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert len(box.ran(f"mount {box.mapper_dir / MAPPER} {box.mount}")) == 2, box.argv
-    assert box.ran("cryptsetup close") == [], f"closed a mapping it had only borrowed:\n{box.argv}"
+    assert box.ran("cryptsetup close") == [], (
+        f"closed a mapping it had only borrowed:\n{box.argv}"
+    )
     assert len(box.pages) == 1
     assert "auto-recovered" not in box.pages[0]
     assert f"mount {box.mapper_dir / MAPPER} at {box.mount} failed" in box.pages[0]
@@ -1435,7 +1439,9 @@ def test_a_stranger_wearing_our_bare_name_is_never_closed(box: Box):
     )
     assert result.returncode == 0, result.stdout + result.stderr
 
-    assert box.ran("cryptsetup close") == [], f"closed a mapping that is not ours:\n{box.argv}"
+    assert box.ran("cryptsetup close") == [], (
+        f"closed a mapping that is not ours:\n{box.argv}"
+    )
     assert box.ran(f"cryptsetup open {box.device} {MAPPER}-1"), (
         f"did not step over the stranger onto the first free name:\n{box.argv}"
     )
@@ -1717,7 +1723,8 @@ def test_a_held_lock_is_skipped_without_a_page(box: Box):
         [
             "bash",
             "-c",
-            f'exec 9>"{lock_path}" && flock -n 9 || exit 1; touch "{holder_ready}"; sleep 30',
+            f'exec 9>"{lock_path}" && flock -n 9 || exit 1; '
+            f'touch "{holder_ready}"; sleep 30',
         ],
     )
     try:
@@ -1735,7 +1742,9 @@ def test_a_held_lock_is_skipped_without_a_page(box: Box):
         )
         assert box.pages == [], f"paged while another run held the lock: {box.pages}"
         assert box.ran("mount") == [], f"touched the mount while locked out:\n{box.argv}"
-        assert box.ran("cryptsetup") == [], f"touched cryptsetup while locked out:\n{box.argv}"
+        assert box.ran("cryptsetup") == [], (
+            f"touched cryptsetup while locked out:\n{box.argv}"
+        )
     finally:
         holder.terminate()
         holder.wait(timeout=5)

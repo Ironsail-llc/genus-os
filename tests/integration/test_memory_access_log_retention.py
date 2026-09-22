@@ -74,9 +74,7 @@ def _log_access(cur, *, tenant: str, fact_id: int, run: str, age_days: int) -> N
     )
 
 
-def test_retention_window_is_configurable(
-    monkeypatch, access_log_schema, mock_get_connection, db_cursor
-):
+def test_retention_window_is_configurable(monkeypatch, access_log_schema, mock_get_connection, db_cursor):
     """A 400-day window must retain a 90-day-old row that the 30-day default drops.
 
     This is the knob that stops the bleed while the durable roll-up lands.
@@ -90,9 +88,7 @@ def test_retention_window_is_configurable(
     outcomes.cleanup_old_access_logs(tenant_id=tenant)
 
     db_cursor.execute("SELECT count(*) AS n FROM fact_access_log WHERE tenant_id = %s", (tenant,))
-    assert db_cursor.fetchone()["n"] == 1, (
-        "90-day-old row deleted despite a 400-day retention window"
-    )
+    assert db_cursor.fetchone()["n"] == 1, "90-day-old row deleted despite a 400-day retention window"
 
 
 def test_gc_rolls_up_before_deleting(access_log_schema, mock_get_connection, db_cursor):

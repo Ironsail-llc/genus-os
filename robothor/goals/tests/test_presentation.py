@@ -1,8 +1,8 @@
 """Reports follow persisted goal facts without claiming tasks prove completion."""
 
 import pytest
-from bench.runtime.uat_server import seed_unfinished_work
 
+from robothor.engine.tests.runtime_fixtures import seed_unfinished_work
 from robothor.goals import store
 from robothor.goals.presentation import render_goal_progress
 from robothor.goals.tests.test_store import change, create, db, private_database  # noqa: F401

@@ -209,6 +209,7 @@ async def test_native_multiday_parent_child_and_everyday_requests(
                 work.cancel()
             await asyncio.gather(work, return_exceptions=True)
 
+    monkeypatch.setattr("robothor.goals.controller.MIN_RUN_INTERVAL_SECONDS", 0)
     runner = AgentRunner(config)
     controller = GoalController(runner, config)
     await overlap(controller, runner, 1)

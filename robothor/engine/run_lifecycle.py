@@ -12,7 +12,7 @@ god-object growing back; put it on the signature.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -22,7 +22,7 @@ if TYPE_CHECKING:
     from robothor.engine.session import AgentSession
 
 import logging
-from typing import Any, cast
+from typing import cast
 
 from robothor.engine.llm_attempts import is_attempt_step
 
@@ -377,7 +377,7 @@ class RunLifecycleMixin:
 
     # ─── v2 Enhancement Helpers ───────────────────────────────────────
 
-    def _attach_plan_context(self, session, plan_result):
+    def _attach_plan_context(self, session: AgentSession, plan_result: Any) -> str:
         """Optional planner formatting must not abort native execution."""
         try:
             from robothor.engine.planner import format_plan_context

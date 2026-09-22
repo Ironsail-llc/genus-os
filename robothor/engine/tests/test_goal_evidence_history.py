@@ -19,6 +19,9 @@ from robothor.goals.model import CreateGoal
 def test_goal_evidence_with_large_finished_history(effect_db, monkeypatch):  # noqa: F811
     ctx = context()
     monkeypatch.setattr(store, "get_connection", effect_db)
+    from robothor.goals.tests.test_store import register_tenant
+
+    register_tenant(ctx.tenant_id)
     goals = [
         store.create(
             ctx.tenant_id,

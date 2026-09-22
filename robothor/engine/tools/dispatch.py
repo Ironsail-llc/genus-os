@@ -508,7 +508,7 @@ async def _runtime_denial(
 
         if resume_claim.get() is not None:
             await asyncio.to_thread(require_owned)
-        if ctx.run_id and await asyncio.to_thread(stopped, ctx.tenant_id, ctx.run_id):
+        if bool(ctx.run_id) and await asyncio.to_thread(stopped, ctx.tenant_id, ctx.run_id):
             raise ValueError(
                 "durable stop denies further tool dispatch; reconcile in-flight effects"
             )

@@ -13,7 +13,6 @@ from uuid import uuid4
 import litellm
 import psycopg2
 import pytest
-from bench.runtime.test_profile_load import batch_summary
 
 from robothor.crm import dal
 from robothor.engine.config import load_agent_config
@@ -22,6 +21,7 @@ from robothor.engine.runner import AgentRunner
 from robothor.engine.runtime import effects
 from robothor.engine.runtime.current import active_context
 from robothor.engine.task_registry import get_task_registry
+from robothor.engine.tests.runtime_fixtures import batch_summary
 from robothor.goals import store
 from robothor.goals.controller import GoalController
 from robothor.goals.model import CreateGoal

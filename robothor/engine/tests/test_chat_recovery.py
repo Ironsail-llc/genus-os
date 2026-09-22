@@ -372,7 +372,12 @@ async def test_http_recovery_initiates_scoped_readback_without_replaying_action(
         }
     )
     monkeypatch.setattr(calendar_operations, "get_connection", records)
-    monkeypatch.setattr(calendar_operations, "_reconcile_interrupted", readback)
+    monkeypatch.setattr(calendar_operations, "_reconcile", readback)
+    from unittest.mock import MagicMock
+
+    transport = MagicMock()
+    transport.__enter__.return_value.request.return_value = {"id": "fixture-event"}
+    monkeypatch.setattr("robothor.engine.calendar_transport.CalendarTransport", lambda: transport)
     monkeypatch.setenv("ROBOTHOR_PER_USER_SESSIONS", "off")
     with patch("robothor.engine.chat._auth_context", return_value=auth):
         async with AsyncClient(
@@ -388,12 +393,13 @@ async def test_http_recovery_initiates_scoped_readback_without_replaying_action(
     assert not second.json()["reconciliation_pending"]
     assert second.json()["state"] == "cancelled"
     assert "Readback found these requested attendees: sam@example.com" in second.json()["text"]
-    assert "Whether notifications were sent remains unknown" in second.json()["text"]
+    assert second.json()["effects"][0]["invitations_requested"] is True
     readback.assert_called_once_with(
-        "fixture-calendar",
-        "fixture-event",
+        {"id": "fixture-event"},
         {"attendees": ["sam@example.com"]},
-        {"verification": "verified", "invitations_requested": True},
+        None,
+        "fixture-calendar",
+        "personal",
     )
     mock_runner.execute.assert_not_called()
 

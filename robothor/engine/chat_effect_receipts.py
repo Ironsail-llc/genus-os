@@ -1,7 +1,16 @@
 """Project durable native effects into chat recovery without executing tools."""
 
+from __future__ import annotations
 
-def family_effect_receipts(cur, run, auth):
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from robothor.auth.deps import AuthContext
+
+
+def family_effect_receipts(
+    cur: Any, run: dict[str, Any], auth: AuthContext
+) -> list[dict[str, Any]]:
     cur.execute(
         """WITH RECURSIVE family AS (
             SELECT id FROM agent_runs WHERE id=%s AND tenant_id=%s AND user_id=%s
@@ -15,7 +24,7 @@ def family_effect_receipts(cur, run, auth):
           FROM agent_runtime_effects e JOIN family f ON e.run_id=f.id::text
           WHERE e.tenant_id=%s AND e.principal_id=%s
             AND (e.state IN ('prepared','dispatching','uncertain','confirmed','not_applied')
-                 OR e.state='finished' AND e.resolution->>'source'='tool_response')
+                 OR e.state='finished' AND e.resolution->>'source' IN ('tool_response','reconciled'))
           ORDER BY e.created_at,e.id""",
         (
             run["id"],
@@ -46,14 +55,17 @@ def family_effect_receipts(cur, run, auth):
                 "tool_name": row["tool_name"],
                 "status": row["state"],
                 "verified": verified,
-                "deduplicated": verified and result.get("deduplicated") is True,
+                "deduplicated": verified
+                and isinstance(result, dict)
+                and result.get("deduplicated") is True,
+                "operator_reconciled": resolution.get("source") == "reconciled",
                 "reconciliation_pending": row["state"] in {"prepared", "dispatching", "uncertain"},
             }
         )
     # Match the journal's request/fingerprint identity within this already scoped
     # family. Preserve every attempt, but a later positive proof can satisfy the
     # same intent after definitive nonapplication. Never excuse uncertainty.
-    confirmed = {}
+    confirmed: dict[tuple[str, str], tuple[Any, str]] = {}
     for row, receipt in reversed(list(zip(rows, receipts, strict=True))):
         identity = (row["request_id"], row["fingerprint"])
         if receipt["verified"]:
@@ -65,7 +77,7 @@ def family_effect_receipts(cur, run, auth):
     return receipts
 
 
-def effect_summary(receipt):
+def effect_summary(receipt: dict[str, Any]) -> str:
     if receipt["verified"]:
         if receipt["tool_name"] == "create_note":
             text = "The CRM note was created. Robothor checked the stored note and recovered its result without creating another note."
@@ -87,6 +99,8 @@ def effect_summary(receipt):
             if receipt.get("superseded_by")
             else "The audit confirms that this action was not applied."
         )
+    elif receipt.get("operator_reconciled"):
+        text = "An operator recorded reconciliation of this action. Its outcome has not been independently verified."
     elif receipt["status"] == "finished":
         text = "The action returned a response, which is saved in the audit log. Its outcome has not been independently verified."
     else:

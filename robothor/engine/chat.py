@@ -1216,6 +1216,8 @@ async def plan_iterate(request: Request) -> StreamingResponse | JSONResponse:
     from copy import deepcopy
 
     original = session.active_plan
+    if original is None:
+        return JSONResponse({"error": "No matching pending plan"}, status_code=404)
     plan = deepcopy(original)
 
     queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
@@ -1552,3 +1554,10 @@ async def deep_status(request: Request, session_key: str = "") -> JSONResponse:
             }
         )
     return JSONResponse({"active": False, "deep": None})
+
+
+from robothor.engine.chat_effect_attestation import (  # noqa: E402
+    router as effect_attestation_router,
+)
+
+router.include_router(effect_attestation_router)

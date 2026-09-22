@@ -1,13 +1,26 @@
 """Consume a saved plan once before admitting its execution."""
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import asyncio
+
+    from fastapi.responses import JSONResponse
+
+    from robothor.auth.deps import AuthContext
+    from robothor.engine.chat import ChatSession
+    from robothor.engine.models import PlanState
+
 import asyncio
 
-from robothor.db.connection import get_connection
+from robothor.db.connection import get_connection, tenant_scope
 from robothor.engine.chat_approval_receipt import record_claim
 
 
-def claim(tenant_id, session_key, plan, request_id):
-    with get_connection() as conn, conn.cursor() as cur:
+def claim(tenant_id: str, session_key: str, plan: PlanState, request_id: str) -> bool:
+    with tenant_scope(tenant_id), get_connection() as conn, conn.cursor() as cur:
         cur.execute(
             """UPDATE chat_sessions SET
                 plan_state=jsonb_set(jsonb_set(plan_state,'{status}','"approved"'::jsonb),
@@ -33,14 +46,16 @@ def claim(tenant_id, session_key, plan, request_id):
         if claimed:
             claimed = record_claim(conn, cur, tenant_id, session_key, request_id)
         conn.commit()
-        return claimed
+        return bool(claimed)
 
 
-async def claim_plan(tenant_id, session_key, plan, request_id):
+async def claim_plan(tenant_id: str, session_key: str, plan: PlanState, request_id: str) -> bool:
     return await asyncio.to_thread(claim, tenant_id, session_key, plan, request_id)
 
 
-async def admit_plan(session, auth, session_key, client_id):
+async def admit_plan(
+    session: ChatSession, auth: AuthContext, session_key: str, client_id: str | None
+) -> tuple[PlanState | None, str]:
     from copy import copy
     from uuid import uuid4
 
@@ -49,8 +64,10 @@ async def admit_plan(session, auth, session_key, client_id):
     plan = copy(session.active_plan)
     client_id = client_id or str(uuid4())
     identifier = request_key(auth, session_key, client_id)
-    if plan.status != "pending" or not await claim_plan(
-        auth.tenant_id, session_key, plan, identifier
+    if (
+        plan is None
+        or plan.status != "pending"
+        or not await claim_plan(auth.tenant_id, session_key, plan, identifier)
     ):
         return None, client_id
     plan.status = "approved"
@@ -61,7 +78,7 @@ async def admit_plan(session, auth, session_key, client_id):
     return plan, client_id
 
 
-def approval_refusal(session, plan_id):
+def approval_refusal(session: ChatSession, plan_id: str) -> JSONResponse | None:
     from fastapi.responses import JSONResponse
 
     from robothor.engine.chat import _plan_is_expired
@@ -94,11 +111,11 @@ def approval_refusal(session, plan_id):
     return None
 
 
-def already_admitted(auth, session_key, client_id):
+def already_admitted(auth: AuthContext, session_key: str, client_id: str | None) -> bool:
     from robothor.engine.runtime.chat_control import request_key
 
     identifier = request_key(auth, session_key, client_id)
-    with get_connection() as conn, conn.cursor() as cur:
+    with tenant_scope(auth.tenant_id), get_connection() as conn, conn.cursor() as cur:
         cur.execute(
             """SELECT EXISTS(
                 SELECT 1 FROM agent_runs WHERE tenant_id=%s AND user_id=%s
@@ -127,10 +144,14 @@ def already_admitted(auth, session_key, client_id):
         return bool(cur.fetchone()[0])
 
 
-async def approval_retry(auth, session_key, client_id):
+async def approval_retry(
+    auth: AuthContext, session_key: str, client_id: str | None
+) -> JSONResponse | None:
     from fastapi.responses import JSONResponse
 
-    if client_id and await asyncio.to_thread(already_admitted, auth, session_key, client_id):
+    if client_id is not None and await asyncio.to_thread(
+        already_admitted, auth, session_key, client_id
+    ):
         return JSONResponse(
             {
                 "error": "That approval was already received. Checking its recorded result.",
@@ -141,8 +162,8 @@ async def approval_retry(auth, session_key, client_id):
     return None
 
 
-def clear_claim(tenant_id, session_key, plan_id, request_id):
-    with get_connection() as conn, conn.cursor() as cur:
+def clear_claim(tenant_id: str, session_key: str, plan_id: str, request_id: str) -> None:
+    with tenant_scope(tenant_id), get_connection() as conn, conn.cursor() as cur:
         cur.execute(
             """UPDATE chat_sessions SET plan_state=NULL,last_active_at=now()
                WHERE tenant_id=%s AND session_key=%s
@@ -153,7 +174,9 @@ def clear_claim(tenant_id, session_key, plan_id, request_id):
         conn.commit()
 
 
-async def finish_plan(session, plan, tenant_id, session_key):
+async def finish_plan(
+    session: ChatSession, plan: PlanState, tenant_id: str, session_key: str
+) -> None:
     import logging
 
     current = session.active_plan

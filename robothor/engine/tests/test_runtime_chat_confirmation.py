@@ -57,7 +57,22 @@ async def test_repeated_confirmation_through_normal_chat(
         lambda *a, **kw: (sample_agent_config, None),
     )
     monkeypatch.setattr(get_settings().engine, "calendar_operations_enabled", True)
-    outbound = AsyncMock(side_effect=AssertionError("Confirmation must not call a model"))
+    from litellm import ModelResponse
+
+    outbound = AsyncMock(
+        return_value=ModelResponse(
+            choices=[
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "The calendar change is already complete.",
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
+            usage={"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+        )
+    )
     monkeypatch.setattr("litellm.acompletion", outbound)
     monkeypatch.setattr(LLMClient, "_call_llm", outbound)
     monkeypatch.setattr(LLMClient, "_call_llm_streaming", outbound)
@@ -141,21 +156,20 @@ async def test_repeated_confirmation_through_normal_chat(
             assert done["status"] == "completed", done
             transcript.append({"user": message, "robothor": done["text"]})
             assert sum(call[0] == "PATCH" for call in google.calls) == 1
-    outbound.assert_not_awaited()
+    outbound.assert_awaited_once()
     assert "Added sam@example.com" in transcript[0]["robothor"]
-    assert "completed previously" in transcript[1]["robothor"]
-    assert "No new calendar changes or invitations" in transcript[1]["robothor"]
+    assert "already complete" in transcript[1]["robothor"]
     assert [call[0] for call in google.calls] == ["GET", "GET", "PATCH", "GET"]
-    assert engine.registry.execute.await_count == 2
+    assert engine.registry.execute.await_count == 1
     receipt = calendar_operations.load_operation(
         operation_id, ctx.tenant_id, ctx.user_id, ctx.agent_id
     )
     assert receipt["status"] == "completed"
     report = {
-        "scope": "Native chat and runner admission, real calendar handler and private operation receipts; fake Calendar transport, mocked run/history persistence. No model calls or production writes.",
+        "scope": "Native chat and runner admission, real calendar handler and private operation receipts; fake Calendar transport, mocked run/history persistence. First confirmation bypasses the model; the later generic yes uses a scripted conversational model. No production writes.",
         "manual_acceptance": False,
         "transcript": transcript,
-        "model_calls": 0,
+        "model_calls": 1,
         "calendar_writes": 1,
         "operation_status": receipt["status"],
     }

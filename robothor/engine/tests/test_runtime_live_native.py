@@ -16,10 +16,10 @@ from uuid import uuid4
 
 import pytest
 import yaml
-from bench.runtime.candidates import PROMPT, SCHEMA, FixtureGateway
-from bench.runtime.native_journal import NativeJournal, failed_sample
 
+from bench.runtime.native_journal import NativeJournal, failed_sample
 from robothor.engine.performance import run_measurements
+from robothor.engine.tests.runtime_fixtures import PROMPT, SCHEMA, FixtureGateway
 from robothor.engine.tests.test_runner import runner  # noqa: F401
 
 

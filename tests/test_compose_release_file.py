@@ -133,7 +133,8 @@ class TestNoSourceTreeIsMountedOverTheImage:
             workspace = [source for source in sources if "GENUS_WORKSPACE" in source]
 
             assert len(workspace) == 1, (
-                f"{name} should take the instance's workspace as exactly one mount, not {sources}"
+                f"{name} should take the instance's workspace as exactly one "
+                f"mount, not {sources}"
             )
 
 
@@ -146,7 +147,9 @@ class TestNothingStartsBeforeTheSchemaExists:
         # satisfies `service_completed_successfully`, so the three services
         # waiting on it wait forever.
         assert migrate.get("restart") == "no"
-        assert (migrate.get("depends_on") or {}).get("postgres") == {"condition": "service_healthy"}
+        assert (migrate.get("depends_on") or {}).get("postgres") == {
+            "condition": "service_healthy"
+        }
 
     @pytest.mark.parametrize("name", PYTHON_SERVICES)
     def test_the_python_services_wait_for_it_to_finish(self, services, name):

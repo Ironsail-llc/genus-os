@@ -273,7 +273,8 @@ def test_run_send_sources_only_the_explicit_fake_secrets_file(tmp_path: Path):
     args = log.read_text()
     assert f"{STUB_API_BASE}/bottok123/sendMessage" in args
     assert not _REAL_TOKEN_SHAPE.search(args), (
-        f"curl args must contain only the fake token, found a real-shaped one: {args!r}"
+        f"curl args must contain only the fake token, found a real-shaped "
+        f"one: {args!r}"
     )
 
 
@@ -307,7 +308,8 @@ def test_run_send_default_env_never_touches_the_shared_fallback_dir(tmp_path: Pa
 
     after = set(real_fallback.iterdir()) if real_fallback.exists() else set()
     assert after == before, (
-        f"a test run stamped the shared real fallback cooldown dir: {after - before}"
+        "a test run stamped the shared real fallback cooldown dir: "
+        f"{after - before}"
     )
 
 
@@ -589,7 +591,9 @@ class TestConsequenceLine:
         for unit in ("cloud-provision.service", "agent-supervision.service"):
             text = self.page_for(tmp_path, unit)
             assert "Vision capture is down" not in text, unit
-            assert "(no consequence mapped — add one in send_failure_alert.sh)" in text, unit
+            assert (
+                "(no consequence mapped — add one in send_failure_alert.sh)" in text
+            ), unit
 
     # ── the watchdogs' own OnFailure pages ───────────────────────────────────
     #
@@ -656,7 +660,9 @@ class TestConsequenceLine:
         """A wrong consequence is worse than an absent one — the default has
         to read as a gap in the map, and as a chore to close it."""
         text = self.page_for(tmp_path, "robothor-something-new.service")
-        assert "(no consequence mapped — add one in send_failure_alert.sh)" in text
+        assert (
+            "(no consequence mapped — add one in send_failure_alert.sh)" in text
+        )
 
     def test_the_consequence_is_the_second_line_of_the_page(self, tmp_path: Path):
         """Telegram truncates the preview; the consequence must be visible
@@ -758,7 +764,8 @@ class TestBodyOverride:
             "contradicting the message it was asked to send"
         )
         assert "no consequence mapped" not in text, (
-            "a note addressed to whoever maintains the pager was delivered to the operator instead"
+            "a note addressed to whoever maintains the pager was delivered to "
+            "the operator instead"
         )
 
     def test_the_body_page_is_stamped_with_the_time_and_host(self, tmp_path: Path):
@@ -766,7 +773,9 @@ class TestBodyOverride:
         log = fake_curl(tmp_path)
         run_send(tmp_path, "backup-volume-recovered", dict(self.ENV), body="✅ all good")
         text = page_text(log)
-        host = subprocess.run(["hostname", "-s"], capture_output=True, text=True).stdout.strip()
+        host = subprocess.run(
+            ["hostname", "-s"], capture_output=True, text=True
+        ).stdout.strip()
         assert re.search(
             r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2} on " + re.escape(host) + r"$",
             text.splitlines()[-1],
@@ -776,7 +785,9 @@ class TestBodyOverride:
         """The drain prefixes the STORED text; it must not re-compose a
         headline around a body-override page on the way out."""
         fake_curl_failing(tmp_path)
-        result = run_send(tmp_path, "backup-volume-recovered", dict(self.ENV), body="✅ all good")
+        result = run_send(
+            tmp_path, "backup-volume-recovered", dict(self.ENV), body="✅ all good"
+        )
         assert result.returncode != 0
         spooled = sorted((tmp_path / "alert-spool").glob("*.msg"))
         assert len(spooled) == 1, "nothing was spooled — this test proves nothing"

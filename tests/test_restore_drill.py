@@ -149,6 +149,7 @@ def write_fixture_dump(path: Path) -> Path:
     return path
 
 
+
 def _pinned_cooldown_dir(tmp_path: Path) -> Path:
     """Pre-create the pinned cooldown dir. If it does not exist when the sender
     runs, send_failure_alert.sh falls back to $XDG_RUNTIME_DIR/robothor-alert-cooldown
@@ -157,7 +158,6 @@ def _pinned_cooldown_dir(tmp_path: Path) -> Path:
     d = tmp_path / "alert-cooldown"
     d.mkdir(parents=True, exist_ok=True)
     return d
-
 
 def base_env(tmp_path: Path, **extra: str) -> dict[str, str]:
     env = {k: v for k, v in os.environ.items() if not k.startswith("ROBOTHOR_")}
@@ -300,7 +300,9 @@ class TestTheDefaultRunNeverTouchesTheOperatorsCluster:
         """Opting a cluster in must also AIM the drill at it — a gate that
         only decides whether to run, while the commands still connect wherever
         libpq defaults to, moves the hazard rather than removing it."""
-        monkeypatch.setenv(ADMIN_DSN_ENV, "host=127.0.0.1 port=59999 user=drill dbname=postgres")
+        monkeypatch.setenv(
+            ADMIN_DSN_ENV, "host=127.0.0.1 port=59999 user=drill dbname=postgres"
+        )
         pg = admin_pg_env()
         assert pg.get("PGHOST") == "127.0.0.1"
         assert pg.get("PGPORT") == "59999"
@@ -340,7 +342,9 @@ class TestADropdbThatHangsIsNotAHungUnit:
         notify_log = install_recording_notify(tmp_path)
         seams = install_fake_pg(tmp_path)
         seams["ROBOTHOR_RESTORE_DRILL_DROPDB"] = str(self._install_wedged_dropdb(tmp_path))
-        env = base_env(tmp_path, ROBOTHOR_RESTORE_DRILL_DROP_TIMEOUT="1", **seams)
+        env = base_env(
+            tmp_path, ROBOTHOR_RESTORE_DRILL_DROP_TIMEOUT="1", **seams
+        )
 
         result = run_drill(env)
 
@@ -364,7 +368,9 @@ class TestADropdbThatHangsIsNotAHungUnit:
         install_recording_notify(tmp_path)
         seams = install_fake_pg(tmp_path)
         seams["ROBOTHOR_RESTORE_DRILL_DROPDB"] = str(self._install_wedged_dropdb(tmp_path))
-        env = base_env(tmp_path, ROBOTHOR_RESTORE_DRILL_DROP_TIMEOUT="3", **seams)
+        env = base_env(
+            tmp_path, ROBOTHOR_RESTORE_DRILL_DROP_TIMEOUT="3", **seams
+        )
 
         start = time.monotonic()
         run_drill(env)
@@ -678,7 +684,9 @@ class TestTheToolsAreResolvedBeforeTheDrillStarts:
     def test_a_missing_tool_names_itself_and_aborts(self, tmp_path: Path):
         write_fixture_dump(tmp_path / "dumps" / "robothor_memory-fixture.sql.gz")
         notify_log = install_recording_notify(tmp_path)
-        env = base_env(tmp_path, ROBOTHOR_RESTORE_DRILL_PSQL="robothor-not-a-real-psql")
+        env = base_env(
+            tmp_path, ROBOTHOR_RESTORE_DRILL_PSQL="robothor-not-a-real-psql"
+        )
 
         result = run_drill(env)
 
@@ -724,7 +732,9 @@ class TestTheToolsAreResolvedBeforeTheDrillStarts:
         )
         assert "drill PASSED" not in result.stdout
 
-    def test_the_path_is_fixed_and_an_inherited_directory_is_not_consulted(self, tmp_path: Path):
+    def test_the_path_is_fixed_and_an_inherited_directory_is_not_consulted(
+        self, tmp_path: Path
+    ):
         """The drill runs as root out of a timer whose inherited PATH begins
         with a user-writable ``~/.local/bin``. It builds its own PATH instead,
         keeping ``/usr/local/bin`` because this instance's `rclone` is there.
@@ -736,9 +746,7 @@ class TestTheToolsAreResolvedBeforeTheDrillStarts:
         path_log = tmp_path / "notify-path.txt"
         recorder = tmp_path / "bin" / "record-path.sh"
         recorder.parent.mkdir(parents=True, exist_ok=True)
-        recorder.write_text(
-            f'#!/usr/bin/env bash\nprintf \'%s\\n\' "$PATH" >> "{path_log}"\nexit 0\n'
-        )
+        recorder.write_text(f'#!/usr/bin/env bash\nprintf \'%s\\n\' "$PATH" >> "{path_log}"\nexit 0\n')
         recorder.chmod(recorder.stat().st_mode | stat.S_IEXEC)
 
         # A `date` shim first on the inherited PATH: the drill times the
@@ -747,7 +755,11 @@ class TestTheToolsAreResolvedBeforeTheDrillStarts:
         planted.mkdir()
         sentinel = tmp_path / "planted-ran.txt"
         shim = planted / "date"
-        shim.write_text(f'#!/usr/bin/env bash\necho ran >> "{sentinel}"\nexec /usr/bin/date "$@"\n')
+        shim.write_text(
+            "#!/usr/bin/env bash\n"
+            f'echo ran >> "{sentinel}"\n'
+            'exec /usr/bin/date "$@"\n'
+        )
         shim.chmod(shim.stat().st_mode | stat.S_IEXEC)
 
         env = base_env(
@@ -768,5 +780,6 @@ class TestTheToolsAreResolvedBeforeTheDrillStarts:
             "a directory the drill merely inherited must not be searched at all"
         )
         assert not sentinel.exists(), (
-            "a binary planted on the inherited PATH was executed by a drill that runs as root"
+            "a binary planted on the inherited PATH was executed by a drill "
+            "that runs as root"
         )

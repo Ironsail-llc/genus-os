@@ -224,9 +224,7 @@ async def test_vault_leg_fails_closed_for_restricted_callers(
         "assertion below would pass vacuously"
     )
 
-    restricted = DataScope(
-        tenant_id=tenant, person_id=scoped_corpus["people"]["alice"], restricted=True
-    )
+    restricted = DataScope(tenant_id=tenant, person_id=scoped_corpus["people"]["alice"], restricted=True)
     out = await recall(query, tenant_id=tenant, scope=restricted)
     assert not any(r.get("source") == "vault" for r in out["results"]), (
         "a restricted caller received vault captions"

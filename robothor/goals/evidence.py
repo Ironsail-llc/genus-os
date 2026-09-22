@@ -8,7 +8,7 @@ from uuid import UUID
 
 
 def verify(
-    cur: Any, tenant: str, goal: dict, reference: str, criterion: int | None = None
+    cur: Any, tenant: str, goal: dict[str, Any], reference: str, criterion: int | None = None
 ) -> dict[str, Any]:
     kind, _, identifier = reference.partition(":")
     if kind != "calendar-operation":

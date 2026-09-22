@@ -15,6 +15,7 @@ from robothor.engine.tools import dispatch
 from robothor.goals import store
 from robothor.goals.model import CreateGoal
 from robothor.goals.runtime import Binding, binding
+from robothor.goals.tests.test_store import register_tenant
 from robothor.goals.tools import HANDLERS
 
 
@@ -30,6 +31,7 @@ async def test_bookkeeping_preserves_uncertainty_and_denies_more_business_writes
     ctx = context()
     monkeypatch.setattr(store, "get_connection", effect_db)
     monkeypatch.setattr(dispatch, "_audit_tool_call", lambda *a, **k: None)
+    register_tenant(ctx.tenant_id)
     store.set_enabled(ctx.tenant_id, True, ctx.principal_id)
     goal = store.create(
         ctx.tenant_id,

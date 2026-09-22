@@ -57,10 +57,12 @@ async def test_chat_poll_reads_back_original_effect_without_reexecution(
 ):
     auth, client = identity(), str(uuid4())
     run = insert(crm_records, auth, client, status="failed", verified_status=None)
-    ctx, row = record(crm_records, auth, run, tool, state)
+    ctx, row = record(crm_records, auth, run, tool, "dispatching")
     # Even another request by this same user must not be reconciled by this poll.
     unrelated_run = insert(crm_records, auth, str(uuid4()), status="failed")
     unrelated_ctx, unrelated = record(crm_records, auth, unrelated_run, tool, state)
+    if state == "uncertain":
+        effects.finish(ctx, row["id"], run, uncertain=True)
     monkeypatch.setattr(chat, "_auth_context", lambda _: auth)
     monkeypatch.setenv("ROBOTHOR_PER_USER_SESSIONS", "off")
     forbidden = AsyncMock(side_effect=AssertionError("Recovery cannot run a model or tool"))
@@ -176,3 +178,42 @@ def test_calendar_outage_does_not_prevent_independent_crm_readback(crm_records, 
     monkeypatch.setattr(calendar_reconciliation, "reconcile_record", calendar_unavailable)
     calendar_reconciliation.reconcile_outcome(auth, "web:main", client)
     assert effects.read(ctx, row["id"])["state"] == "confirmed"
+
+
+@pytest.mark.parametrize("case", ["owner", "member", "foreign-user", "active", "no-note"])
+async def test_operator_can_settle_only_own_terminal_unknown_action(
+    crm_records,
+    chat_app,  # noqa: F811
+    monkeypatch,
+    case,
+):
+    auth, client = identity(), str(uuid4())
+    run = insert(crm_records, auth, client, status="running" if case == "active" else "failed")
+    ctx, row = record(crm_records, auth, run, "send_email", "uncertain", stored=False)
+    caller = (
+        replace(auth, role="member")
+        if case == "member"
+        else (replace(auth, user_id="someone-else") if case == "foreign-user" else auth)
+    )
+    monkeypatch.setattr(chat, "_auth_context", lambda _: caller)
+    monkeypatch.setenv("ROBOTHOR_PER_USER_SESSIONS", "off")
+    async with AsyncClient(transport=ASGITransport(app=chat_app), base_url="http://test") as http:
+        result = await http.post(
+            "/chat/reconcile-effect",
+            json={
+                "request_id": client,
+                "session_key": "web:main",
+                "effect_id": str(row["id"]),
+                "note": ""
+                if case == "no-note"
+                else "Inspected the provider history; no automatic replay.",
+            },
+        )
+    assert result.status_code == (
+        200 if case == "owner" else 403 if case == "member" else 400 if case == "no-note" else 409
+    )
+    saved = effects.read(ctx, row["id"])
+    assert saved["state"] == ("finished" if case == "owner" else "uncertain")
+    if case == "owner":
+        assert result.json() == {"reconciled": True, "verified": False}
+        assert saved["resolution"]["actor"] == auth.user_id

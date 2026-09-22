@@ -1,16 +1,20 @@
 """Present terminal run failures honestly, including after streamed partial text."""
 
+from __future__ import annotations
+
+from typing import Any
+
 from robothor.engine.models import RunStatus
 
 
-def result_text(run):
+def result_text(run: Any) -> str:
     if run.status in {RunStatus.FAILED, RunStatus.TIMEOUT, RunStatus.CANCELLED}:
         reason = run.error_message or "Completion was not verified."
         return f"[Run {run.status.value}: {reason}]"
     return run.output_text or ""
 
 
-def receipt_result_text(run, receipts):
+def receipt_result_text(run: Any, receipts: list[dict[str, Any]]) -> str:
     """Present persisted action evidence without upgrading overall completion."""
     from robothor.engine.chat_receipts import receipt_summary
 

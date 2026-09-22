@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from robothor.db.connection import tenant_scope
+
 if TYPE_CHECKING:
     from robothor.engine.runtime.contracts import ExecutionContext
 
@@ -14,7 +16,7 @@ from robothor.engine.runtime import effects
 
 def record(context: ExecutionContext, effect_id: Any, run_id: str, result: Any) -> bool:
     """Only the dispatched owner can atomically store a returned response."""
-    with effects.get_connection() as conn, conn.cursor() as cur:
+    with tenant_scope(context.tenant_id), effects.get_connection() as conn, conn.cursor() as cur:
         cur.execute(
             """UPDATE agent_runtime_effects SET state='finished',resolution=%s,
                version=version+1,updated_at=now()

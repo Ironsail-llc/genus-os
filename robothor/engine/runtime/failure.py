@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from robothor.engine.models import AgentRun
+    from robothor.engine.session import AgentSession
 
 import logging
 
@@ -13,7 +14,9 @@ from robothor.engine.runtime.provider_budget import DurableStopError
 from robothor.engine.sanitize import sanitize_log
 
 
-def failed_or_stopped(session: Any, error: BaseException, traceback: str | None) -> AgentRun:
+def failed_or_stopped(
+    session: AgentSession, error: BaseException, traceback: str | None
+) -> AgentRun:
     logger = logging.getLogger("robothor.engine.runner")
     if isinstance(error, DurableStopError):
         logger.warning("Agent %s cancelled by durable stop", sanitize_log(session.run.agent_id))

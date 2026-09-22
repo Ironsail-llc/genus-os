@@ -129,18 +129,12 @@ class TestConflictDecisionsAreRecorded:
 
     async def test_contradiction_and_update_are_distinguishable(self, clean_tenant):
         record_conflict_decision(
-            tenant_id=TENANT,
-            classification="update",
-            action="superseded",
-            new_fact_id=None,
-            existing_fact_id=None,
+            tenant_id=TENANT, classification="update", action="superseded",
+            new_fact_id=None, existing_fact_id=None,
         )
         record_conflict_decision(
-            tenant_id=TENANT,
-            classification="contradiction",
-            action="superseded",
-            new_fact_id=None,
-            existing_fact_id=None,
+            tenant_id=TENANT, classification="contradiction", action="superseded",
+            new_fact_id=None, existing_fact_id=None,
         )
         from robothor.db.connection import get_connection
 

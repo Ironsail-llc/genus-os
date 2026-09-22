@@ -1,5 +1,16 @@
 """Read back an authorized standalone goal control before finishing its reply."""
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    import asyncio
+
+    from robothor.engine.models import RunStep
+    from robothor.engine.tool_turn import ToolTurnRequest
+    from robothor.engine.tools.dispatch import ToolContext
+
 import asyncio
 import json
 import logging
@@ -13,7 +24,9 @@ from robothor.goals.report_channel import publish_report
 logger = logging.getLogger(__name__)
 
 
-async def prepare_control_report(req, names, errors, recorded_steps):
+async def prepare_control_report(
+    req: ToolTurnRequest, names: list[str], errors: list[Any], recorded_steps: list[RunStep]
+) -> None:
     """No new business action: only the current committed control can admit this read."""
     session = req.session
     if names != ["update_pursuit_goal"] or errors or session.has_pending_control:

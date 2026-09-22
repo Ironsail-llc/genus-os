@@ -363,7 +363,7 @@ def _state_dir(tmp_path: Path) -> Path:
 
 
 class TestTheOffsiteRunRecordsWhenItLastWorked:
-    """ "When did this last actually work?" had no answer anywhere.
+    """"When did this last actually work?" had no answer anywhere.
 
     Every backup job's success was a line in a log file, so the only signal a
     wedged volume produced was a failing unit — and the fix for the paging
@@ -406,7 +406,8 @@ class TestTheOffsiteRunRecordsWhenItLastWorked:
         stamp = (_state_dir(tmp_path) / "last-offsite-ok").read_text().strip()
         newest = sorted(f.name for f in src.glob("*.sql.gz"))[-1]
         assert newest in stamp, (
-            f"the identifier must be the object that actually landed offsite\n{stamp}"
+            "the identifier must be the object that actually landed offsite\n"
+            f"{stamp}"
         )
 
     def test_a_failed_run_records_nothing(self, tmp_path: Path):
@@ -474,16 +475,17 @@ class TestTheMarkerHelper:
         )
 
     def test_reading_a_marker_that_was_never_written_says_so(self, tmp_path: Path):
-        result = self._sh(tmp_path, "backup_state_last last-basebackup || true")
+        result = self._sh(tmp_path, 'backup_state_last last-basebackup || true')
         assert UNKNOWN in result.stdout, (
             "an absent marker must read as unknown, never as an empty string a "
             "caller can mistake for a fresh timestamp\n" + result.stdout + result.stderr
         )
 
     def test_an_unknown_marker_reports_a_nonzero_status(self, tmp_path: Path):
-        result = self._sh(tmp_path, "backup_state_last last-basebackup")
+        result = self._sh(tmp_path, 'backup_state_last last-basebackup')
         assert result.returncode != 0, (
-            "a guard must be able to branch on 'no successful run recorded' without string-matching"
+            "a guard must be able to branch on 'no successful run recorded' "
+            "without string-matching"
         )
 
     def test_a_recorded_marker_reads_back(self, tmp_path: Path):
@@ -551,7 +553,7 @@ class TestTheMarkerHelper:
         try:
             result = self._sh(
                 tmp_path,
-                "backup_state_mark last-local-dump dump.sql.gz\necho survived",
+                'backup_state_mark last-local-dump dump.sql.gz\necho survived',
                 ROBOTHOR_BACKUP_STATE_DIR=str(blocked / "state"),
             )
             assert result.returncode == 0, result.stdout + result.stderr

@@ -75,7 +75,10 @@ def test_uncertainty_blocks_related_writes_but_not_other_work_or_identities(effe
     ]:
         with pytest.raises(effects.EffectPendingError):
             begin(other, args=args)
-    assert begin(replace(ctx, request_id="unrelated"), args={"body": "unrelated"})
+    # Rewording the same tool is not proof of an unrelated action.
+    with pytest.raises(effects.EffectPendingError):
+        begin(replace(ctx, request_id="unrelated"), args={"body": "unrelated"})
+    assert effects.begin(replace(ctx, request_id="unrelated"), "worker", "main", "other_tool", {})
     assert begin(replace(ctx, tenant_id=str(uuid4())))
     assert begin(replace(ctx, principal_id="other-operator"))
     assert effects.read(replace(ctx, principal_id="other-operator"), row["id"]) is None

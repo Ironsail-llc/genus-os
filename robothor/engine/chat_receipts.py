@@ -1,9 +1,16 @@
 """Read supported business receipts referenced by the authenticated run's tool audit."""
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from robothor.auth.deps import AuthContext
+
 from uuid import UUID
 
 
-def _reference(value):
+def _reference(value: Any) -> str | None:
     if value is None:
         return None
     try:
@@ -12,7 +19,7 @@ def _reference(value):
         return "invalid-reference"
 
 
-def calendar_receipts(cur, run, auth):
+def calendar_receipts(cur: Any, run: dict[str, Any], auth: AuthContext) -> list[dict[str, Any]]:
     cur.execute(
         """SELECT tool_name,tool_input,tool_output FROM agent_run_steps
            WHERE run_id=%s AND tool_name IN ('gws_calendar_add_attendees','tool_call')
@@ -89,7 +96,7 @@ def calendar_receipts(cur, run, auth):
     return receipts
 
 
-def receipt_summary(receipts):
+def receipt_summary(receipts: list[dict[str, Any]]) -> str:
     lines = []
     for receipt in receipts:
         if receipt["kind"] == "goal_control":
@@ -126,7 +133,9 @@ def receipt_summary(receipts):
     return "\n\n".join(lines)
 
 
-def family_calendar_receipts(cur, run, auth):
+def family_calendar_receipts(
+    cur: Any, run: dict[str, Any], auth: AuthContext
+) -> list[dict[str, Any]]:
     """Read delegated evidence without crossing tenant or principal boundaries."""
     cur.execute(
         """WITH RECURSIVE family AS (
@@ -141,7 +150,7 @@ def family_calendar_receipts(cur, run, auth):
         (run["id"], auth.tenant_id, auth.user_id, auth.tenant_id, auth.user_id),
     )
     members = cur.fetchall()
-    receipts = {}
+    receipts: dict[tuple[str, str], dict[str, Any]] = {}
     for member in members:
         for receipt in calendar_receipts(cur, member, auth):
             # Keep the recorded executor: a parent's identity cannot recover a

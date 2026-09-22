@@ -191,9 +191,7 @@ async def test_expansion_is_off_by_default(graph_fixture, mock_get_connection, _
 
 
 @pytest.mark.asyncio
-async def test_expansion_respects_person_scope(
-    db_cursor, test_prefix, mock_get_connection, _no_ollama
-):
+async def test_expansion_respects_person_scope(db_cursor, test_prefix, mock_get_connection, _no_ollama):
     """A restricted caller must not reach another person's row *through the graph*.
 
     The expansion query carries the same scope predicate as the main candidate

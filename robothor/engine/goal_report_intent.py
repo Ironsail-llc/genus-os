@@ -1,5 +1,12 @@
 """Recognize requests whose whole answer can be a single factual goal report."""
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from robothor.engine.tool_turn import ToolTurnRequest
+
 import json
 import re
 
@@ -38,7 +45,7 @@ _GOAL_TOOLS = {
 }
 
 
-def _parse(text, *, supplemental=False):
+def _parse(text: str | None, *, supplemental: bool = False) -> tuple[str, str | None] | None:
     if not isinstance(text, str) or len(text) > 1000:
         return None
     text = " ".join(text.strip().lower().replace("’", "'").split()).rstrip(".!?")
@@ -56,7 +63,7 @@ def _parse(text, *, supplemental=False):
     return None
 
 
-def admission(req):
+def admission(req: ToolTurnRequest) -> tuple[bool, tuple[str, ...] | None]:
     from robothor.engine.skill_contract import loaded_skill_text
     from robothor.engine.task_context import read_context
 

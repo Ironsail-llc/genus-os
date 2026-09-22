@@ -9,7 +9,7 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
-from robothor.db.connection import get_connection
+from robothor.db.connection import get_connection, tenant_scope
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -77,7 +77,7 @@ def _persist(run: AgentRun, context: ExecutionContext) -> None:
         # Every caller replaces the context with a deadline first; saying so
         # here beats an AttributeError inside the UPDATE's parameter tuple.
         raise RuntimeError("Unable to persist classified action deadline: none set")
-    with get_connection() as conn, conn.cursor() as cur:
+    with tenant_scope(context.tenant_id), get_connection() as conn, conn.cursor() as cur:
         cur.execute(
             """UPDATE agent_runs SET runtime_context=jsonb_set(runtime_context,
                '{deadline}',to_jsonb(%s::text)) WHERE id=%s AND tenant_id=%s

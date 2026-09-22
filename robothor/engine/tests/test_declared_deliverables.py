@@ -329,7 +329,7 @@ class TestItReadsTheTaskNotTheSystemPrompt:
         body = Path(m.__file__).read_text(encoding="utf-8")
         start = body.index("_pacer.note_for(")
         block = body[start : body.index("if _safety_cap > 0", start)]
-        assert "task_text_from(session.messages)" in block
+        assert "task_text_for_run(session)" in block
         # Scoped to this block: elsewhere `messages[0]` is a legitimate,
         # guarded append to the system prompt.
         assert "session.messages[0]" not in block, (

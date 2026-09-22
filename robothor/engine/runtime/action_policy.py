@@ -1,12 +1,23 @@
 """Assign a total deadline to supported simple actions without granting authority."""
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from datetime import datetime
+
+    from robothor.engine.runtime.contracts import RunRequest
+
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 SIMPLE_ACTION_SECONDS = 60
 
 
-def apply_action_deadline(request, *, admitted_at=None):
+def apply_action_deadline(
+    request: RunRequest, *, admitted_at: datetime | None = None
+) -> RunRequest:
     options = request.options
     if (
         request.resume_from
@@ -34,7 +45,7 @@ def apply_action_deadline(request, *, admitted_at=None):
     return replace(request, context=replace(request.context, deadline=deadline))
 
 
-def _confirmed_operation(request):
+def _confirmed_operation(request: RunRequest) -> bool:
     from robothor.engine.calendar_operations import confirmation_id
     from robothor.settings import get_settings
 

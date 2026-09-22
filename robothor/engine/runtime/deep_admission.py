@@ -1,7 +1,16 @@
 """Check durable controls on the worker thread before starting deep execution."""
 
+from __future__ import annotations
 
-def execute_deep_checked(*, run, workspace, **kwargs):
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from robothor.engine.models import AgentRun
+
+
+def execute_deep_checked(*, run: AgentRun, workspace: str, **kwargs: Any) -> dict[str, Any]:
     from robothor.engine.rlm_tool import DeepReasonConfig, execute_deep_reason
     from robothor.engine.runtime.controls import stopped
     from robothor.engine.runtime.provider_budget import DurableStopError
@@ -17,7 +26,7 @@ def execute_deep_checked(*, run, workspace, **kwargs):
         owner.reset(token)
 
 
-def record_deep(run, create_run):
+def record_deep(run: AgentRun, create_run: Callable[..., Any]) -> str | None:
     import logging
 
     try:

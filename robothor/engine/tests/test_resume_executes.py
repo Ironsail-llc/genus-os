@@ -21,7 +21,7 @@ from __future__ import annotations
 import ast
 import asyncio
 from pathlib import Path
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -40,6 +40,7 @@ class TestTheLoopActuallyExecutes:
             agent_id="devops-analyst",
             resume_attempts=0,
             has_checkpoint=True,
+            tenant_id="test-tenant",
         )
         # Patch the real seams the function uses, not invented ones: an
         # attribute that does not exist would monkeypatch nothing and let this
@@ -47,10 +48,12 @@ class TestTheLoopActuallyExecutes:
         import robothor.engine.resume as resume_mod
 
         monkeypatch.setattr(resume_mod, "resume_batch", lambda c: [candidate])
-        monkeypatch.setattr(daemon, "_resume_scan", lambda: [candidate])
-        monkeypatch.setattr(daemon, "_charge_resume_attempt", lambda rid: True)
+        monkeypatch.setattr(daemon, "_resume_scan", lambda tenant: [candidate])
+        monkeypatch.setattr(daemon, "_charge_resume_attempt", lambda rid, tenant: True)
 
+        monkeypatch.setattr("robothor.engine.resume_claim.acquire", lambda *args: MagicMock())
         runner = AsyncMock()
+        runner.config.tenant_id = "test-tenant"
         started = await daemon.resume_interrupted_runs(runner)
         # The run is LAUNCHED, not awaited inline — the daemon is still coming
         # up. Yield once so the task actually reaches the runner.
@@ -77,7 +80,7 @@ class TestTheLoopActuallyExecutes:
             raise OSError("no database")
 
         monkeypatch.setattr(conn_mod, "get_connection", _dead)
-        assert daemon._resume_scan() == []
+        assert daemon._resume_scan("test-tenant") == []
 
     @pytest.mark.asyncio
     async def test_nothing_is_counted_when_there_is_no_runner(self, monkeypatch):

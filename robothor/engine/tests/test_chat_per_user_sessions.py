@@ -219,7 +219,7 @@ def mock_runner(engine_config):
 
 
 @pytest.fixture
-def chat_app(engine_config, mock_runner):
+def chat_app(engine_config, mock_runner, isolated_plan_claims):
     from fastapi import FastAPI
 
     _sessions.clear()

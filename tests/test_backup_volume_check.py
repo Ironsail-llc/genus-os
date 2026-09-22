@@ -67,7 +67,11 @@ def _run(
         # infra/systemd/README.md). So a stub directory can no longer be handed
         # over by prepending it to PATH — it goes through the documented seam,
         # which is the FIRST entry of whatever `path` a test supplies.
-        **({"ROBOTHOR_EXTRA_PATH": path.split(":")[0]} if path is not None else {}),
+        **(
+            {"ROBOTHOR_EXTRA_PATH": path.split(":")[0]}
+            if path is not None
+            else {}
+        ),
         # This script never pages, but a test that grows one later must not
         # start doing so silently.
         "ROBOTHOR_ALERT_SUPPRESS": "1",
@@ -133,7 +137,9 @@ class TestHealthyVolume:
 
 
 class TestUnhealthyVolumeSkipsRatherThanFails:
-    def test_emergency_ro_in_the_mount_options_is_unhealthy_and_named(self, tmp_path: Path) -> None:
+    def test_emergency_ro_in_the_mount_options_is_unhealthy_and_named(
+        self, tmp_path: Path
+    ) -> None:
         """The exact state of the 2026-08-27 outage.
 
         ext4 flips to ``emergency_ro`` when the underlying device disappears.
@@ -144,12 +150,16 @@ class TestUnhealthyVolumeSkipsRatherThanFails:
         bin_dir = tmp_path / "bin"
         _stub(bin_dir / "findmnt", 'echo "rw,relatime,emergency_ro,errors=remount-ro"')
 
-        result = _run("--ro", str(vol), path=f"{bin_dir}:{os.environ['PATH']}")
+        result = _run(
+            "--ro", str(vol), path=f"{bin_dir}:{os.environ['PATH']}"
+        )
         assert result.returncode == SKIP, (
-            "a wedged volume must SKIP the unit (exit 1), never fail it\n" + _output(result)
+            "a wedged volume must SKIP the unit (exit 1), never fail it\n"
+            + _output(result)
         )
         assert "emergency_ro" in _output(result), (
-            "the operator gets one journal line — it has to name what is wrong\n" + _output(result)
+            "the operator gets one journal line — it has to name what is wrong\n"
+            + _output(result)
         )
 
     def test_missing_target_is_unhealthy(self, tmp_path: Path) -> None:
@@ -189,7 +199,9 @@ class TestUnhealthyVolumeSkipsRatherThanFails:
 
 
 class TestAHungProbeIsNotAHungUnit:
-    def test_a_readdir_that_never_returns_times_out_as_unhealthy(self, tmp_path: Path) -> None:
+    def test_a_readdir_that_never_returns_times_out_as_unhealthy(
+        self, tmp_path: Path
+    ) -> None:
         """A dropped USB device blocks readdir forever.
 
         Without a timeout the probe inherits the hang and the unit sits in
@@ -246,7 +258,8 @@ class TestABrokenProbeFailsLoudly:
         result = _run("--ro", str(vol), script=copy)
         assert result.returncode == BROKEN_PROBE, (
             "without `timeout` the probe cannot bound a hung readdir; that is a "
-            "broken guard and must page, not quietly skip every backup\n" + _output(result)
+            "broken guard and must page, not quietly skip every backup\n"
+            + _output(result)
         )
         assert "robothor-absent-timeout" in result.stderr, _output(result)
 
@@ -358,7 +371,7 @@ class TestAnUnmountedVolumeIsNotAHealthyOne:
 
 
 class TestEveryStepIsBounded:
-    """ "Each step under timeout" includes the cheap one.
+    """"Each step under timeout" includes the cheap one.
 
     A device that has dropped off the bus can block stat() too, not only
     readdir(). A bash `[[ -d ]]` cannot be interrupted, so the probe would hang
@@ -366,7 +379,9 @@ class TestEveryStepIsBounded:
     the nightly backup, which is worse than the failure being replaced.
     """
 
-    def test_a_stat_that_never_returns_times_out_as_unhealthy(self, tmp_path: Path) -> None:
+    def test_a_stat_that_never_returns_times_out_as_unhealthy(
+        self, tmp_path: Path
+    ) -> None:
         vol = tmp_path / "vol"
         vol.mkdir()
         bin_dir = tmp_path / "bin"
@@ -400,7 +415,9 @@ class TestTheSeparateMountGuardIsOnlyDisabledByExactlyZero:
     """
 
     @pytest.mark.parametrize("value", ["true", "yes", "on", "1 ", "", "00", "-0"])
-    def test_anything_but_zero_keeps_the_guard_armed(self, tmp_path: Path, value: str) -> None:
+    def test_anything_but_zero_keeps_the_guard_armed(
+        self, tmp_path: Path, value: str
+    ) -> None:
         vol = tmp_path / "vol"
         vol.mkdir()
         result = _run(
@@ -410,7 +427,8 @@ class TestTheSeparateMountGuardIsOnlyDisabledByExactlyZero:
         )
         assert result.returncode == SKIP, (
             f"ROBOTHOR_VOLUME_REQUIRE_SEPARATE_MOUNT={value!r} disarmed the "
-            "guard; a backup on the root filesystem then looks like success\n" + _output(result)
+            "guard; a backup on the root filesystem then looks like success\n"
+            + _output(result)
         )
         assert "root filesystem" in _output(result), _output(result)
 
@@ -440,18 +458,25 @@ class TestAMalformedTimeoutMustNotSkipEveryBackup:
     """
 
     @pytest.mark.parametrize("value", ["20s", "5m", "abc", "-1", "0", "2.5"])
-    def test_a_bad_value_falls_back_to_the_default(self, tmp_path: Path, value: str) -> None:
+    def test_a_bad_value_falls_back_to_the_default(
+        self, tmp_path: Path, value: str
+    ) -> None:
         vol = tmp_path / "vol"
         vol.mkdir()
-        result = _run("--rw", str(vol), env_extra={"ROBOTHOR_VOLUME_PROBE_TIMEOUT": value})
+        result = _run(
+            "--rw", str(vol), env_extra={"ROBOTHOR_VOLUME_PROBE_TIMEOUT": value}
+        )
         assert result.returncode == 0, (
-            "a typo in one environment variable skipped the backup\n" + _output(result)
+            "a typo in one environment variable skipped the backup\n"
+            + _output(result)
         )
         assert value in _output(result), (
             "the bad value must be named in the journal or nobody will ever "
             "find the typo\n" + _output(result)
         )
-        assert "20" in _output(result), "say which default was used instead\n" + _output(result)
+        assert "20" in _output(result), (
+            "say which default was used instead\n" + _output(result)
+        )
 
     def test_a_good_value_is_still_honoured(self, tmp_path: Path) -> None:
         """The fallback must not swallow a legitimate override — the hang
@@ -494,7 +519,9 @@ class TestAStackedMountCannotCollapseTheGuard:
             "esac",
         )
 
-    def test_two_root_rows_do_not_become_a_non_root_path(self, tmp_path: Path) -> None:
+    def test_two_root_rows_do_not_become_a_non_root_path(
+        self, tmp_path: Path
+    ) -> None:
         vol = tmp_path / "vol"
         vol.mkdir()
         bin_dir = tmp_path / "bin"
@@ -512,7 +539,9 @@ class TestAStackedMountCannotCollapseTheGuard:
         )
         assert "root filesystem" in _output(result), _output(result)
 
-    def test_a_second_options_row_does_not_decide_the_answer(self, tmp_path: Path) -> None:
+    def test_a_second_options_row_does_not_decide_the_answer(
+        self, tmp_path: Path
+    ) -> None:
         vol = tmp_path / "vol"
         vol.mkdir()
         bin_dir = tmp_path / "bin"
@@ -541,7 +570,9 @@ class TestTheWriteProbeSurvivesASignal:
     gets disabled.
     """
 
-    def test_a_signal_mid_write_leaves_nothing_on_the_volume(self, tmp_path: Path) -> None:
+    def test_a_signal_mid_write_leaves_nothing_on_the_volume(
+        self, tmp_path: Path
+    ) -> None:
         real_timeout = shutil.which("timeout")
         assert real_timeout, "coreutils timeout is required for this test"
 
@@ -588,5 +619,6 @@ class TestTheWriteProbeSurvivesASignal:
                 proc.wait(timeout=10)
 
         assert list(vol.iterdir()) == [], (
-            f"a signal during the write left {[p.name for p in vol.iterdir()]} on the backup volume"
+            "a signal during the write left "
+            f"{[p.name for p in vol.iterdir()]} on the backup volume"
         )

@@ -28,7 +28,9 @@ def test_unicode_goal_notes_round_trip_in_private_database(db):  # noqa: F811
 async def test_listing_has_bounded_fresh_task_facts_without_claiming_completion(db):  # noqa: F811
     goal = create(db)
     empty = create(db)
-    other = create(str(uuid4()))
+    from robothor.goals.tests.test_store import register_tenant
+
+    other = create(register_tenant(str(uuid4())))
     task_ids = []
     for index, status in enumerate(["DONE", "TODO", "TODO", "TODO", "TODO", "TODO"]):
         task_id = str(uuid4())

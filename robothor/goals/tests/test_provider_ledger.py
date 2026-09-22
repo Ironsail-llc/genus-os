@@ -3,9 +3,9 @@
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
-from robothor.goals.provider_ledger import DurableAttemptBudget
 
 from robothor.goals import store
+from robothor.goals.provider_ledger import DurableAttemptBudget
 from robothor.goals.tests import test_store
 
 create = test_store.create

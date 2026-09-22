@@ -8,10 +8,10 @@ from unittest.mock import AsyncMock
 
 import httpx
 import pytest
-from bench.runtime.candidates import PROMPT, FixtureGateway
-from bench.runtime.provider_capture import ProviderCapture
 
+from bench.runtime.provider_capture import ProviderCapture
 from robothor.engine.runtime import CurrentRuntime, ExecutionContext, RunRequest
+from robothor.engine.tests.runtime_fixtures import PROMPT, FixtureGateway
 from robothor.engine.tests.test_runner import runner  # noqa: F401
 from robothor.engine.workflow_completion import WorkflowCompletion, workflow_completion_scope
 

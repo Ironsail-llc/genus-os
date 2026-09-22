@@ -1,10 +1,17 @@
 """Recover a chat delivery from durable run records without executing the request."""
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from robothor.auth.deps import AuthContext
+
 from types import SimpleNamespace
 
 from psycopg2.extras import RealDictCursor
 
-from robothor.db.connection import get_connection
+from robothor.db.connection import get_connection, tenant_scope
 from robothor.engine.chat_continuation import continuation
 from robothor.engine.chat_effect_receipts import family_effect_receipts
 from robothor.engine.chat_goal_receipts import family_goal_receipts
@@ -14,9 +21,13 @@ from robothor.engine.models import RunStatus
 from robothor.engine.runtime.chat_control import request_key
 
 
-def read_outcome(auth, session_key: str, client_id: str) -> dict:
+def read_outcome(auth: AuthContext, session_key: str, client_id: str) -> dict[str, Any]:
     identifier = request_key(auth, session_key, client_id)
-    with get_connection() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+    with (
+        tenant_scope(auth.tenant_id),
+        get_connection() as conn,
+        conn.cursor(cursor_factory=RealDictCursor) as cur,
+    ):
         cur.execute(
             """SELECT id,agent_id,status,output_text,error_message,verified_status FROM agent_runs
                WHERE tenant_id=%s AND user_id=%s AND parent_run_id IS NULL

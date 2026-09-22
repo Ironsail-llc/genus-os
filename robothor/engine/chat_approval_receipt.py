@@ -1,9 +1,13 @@
 """Retain approval evidence in the same transaction that consumes a pending plan."""
 
+from __future__ import annotations
+
+from typing import Any
+
 from psycopg2.errors import UniqueViolation
 
 
-def record_claim(conn, cur, tenant_id, session_key, request_id):
+def record_claim(conn: Any, cur: Any, tenant_id: str, session_key: str, request_id: str) -> bool:
     try:
         cur.execute(
             """INSERT INTO chat_approval_receipts

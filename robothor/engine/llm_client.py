@@ -254,7 +254,9 @@ def _record_execution_mode(model: str) -> None:
         logger.debug("Execution-mode signal failed for %s", model, exc_info=True)
 
 
-async def _emit_buffered_completion(result, on_content, emit) -> None:
+async def _emit_buffered_completion(
+    result: Any, on_content: Callable[..., Any] | None, emit: Callable[..., Any]
+) -> None:
     content = str(result.choices[0].message.content or "")
     if on_content and content:
         await on_content(content)
@@ -807,6 +809,14 @@ def _streaming_skip_reason(model: str, pool: KeyPool | None) -> str | None:
     if pool is not None and pool.exhausted():
         return "every configured credential for it is retired"
     return None
+
+
+def _admission_refusal(exc: RequestBudgetError, model: str) -> RequestBudgetError:
+    """Separate an excluded route from a funding failure without blaming the model."""
+    if isinstance(exc, RequestRouteUnavailableError):
+        logger.info("No eligible funded route for %s — advancing", _sanitize(model))
+        return exc
+    return _funding_refusal(exc, model)
 
 
 def _funding_refusal(exc: RequestBudgetError, model: str) -> RequestBudgetError:
@@ -2446,24 +2456,10 @@ class LLMClient:
                     if not noted:
                         note_outcome(model, attempt_started, error=ce)
                     raise
-                except RequestRouteUnavailableError as exc:
-                    # No provider request was admitted. Shared workers may have
-                    # excluded this model's last endpoint; do not blame its
-                    # breaker or bypass the next model's own quote/reservation.
-                    # `break` leaves the retry loop for THIS model — without it
-                    # the same excluded model is retried instead of advancing.
-                    last_error = exc
-                    logger.info("No eligible funded route for %s — advancing", _sanitize(model))
-                    break
                 except (DurableStopError, RuntimeDeadlineError):
-                    # Neither is a funding refusal. `DurableStopError` subclasses
-                    # `RequestBudgetError`, so main's handler below would otherwise turn an
-                    # operator's committed stop -- and an expired runtime deadline -- into
-                    # "advance to the next model", which is exactly the control being
-                    # ignored. They propagate; funding refusals still advance.
-                    raise
+                    raise  # A committed stop or deadline never advances to another model.
                 except RequestBudgetError as exc:
-                    last_error = _funding_refusal(exc, model)
+                    last_error = _admission_refusal(exc, model)
                     break
                 except Exception as e:
                     last_error = e
@@ -2726,32 +2722,10 @@ class LLMClient:
                     get_model_breaker().record_success(model)
                     _record_execution_mode(model)
                     return rebuilt
-                except RequestRouteUnavailableError as exc:
-                    # No provider request was admitted. Shared workers may have
-                    # excluded this model's last endpoint; do not blame its
-                    # breaker or bypass the next model's own quote/reservation.
-                    # `break` leaves the retry loop for THIS model — without it
-                    # the same excluded model is retried instead of advancing.
-                    last_error = exc
-                    logger.info("No eligible funded route for %s — advancing", _sanitize(model))
-                    break
                 except (DurableStopError, RuntimeDeadlineError):
-                    # Neither is a funding refusal. `DurableStopError` subclasses
-                    # `RequestBudgetError`, so main's handler below would otherwise turn an
-                    # operator's committed stop -- and an expired runtime deadline -- into
-                    # "advance to the next model", which is exactly the control being
-                    # ignored. They propagate; funding refusals still advance.
-                    raise
+                    raise  # A committed stop or deadline never advances to another model.
                 except RequestBudgetError as exc:
-                    last_error = _funding_refusal(exc, model)
-                    break
-                except TimeoutError as te:
-                    note_outcome(model, attempt_started, error=te)
-                    self._handle_model_error(te, model, broken_models, streaming=True)
-                    last_error = te
-                    # Model rotation is activity — don't let watchdog kill us mid-fallback
-                    if self._active_watchdog:
-                        self._active_watchdog.touch(f"stream_timeout_fallback:{model}")
+                    last_error = _admission_refusal(exc, model)
                     break
                 except Exception as e:
                     note_outcome(model, attempt_started, error=e)

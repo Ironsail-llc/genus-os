@@ -6,7 +6,7 @@ from typing import Any
 
 from psycopg2.extras import RealDictCursor
 
-from robothor.db.connection import get_connection
+from robothor.db.connection import get_connection, tenant_scope
 
 
 def issue(tenant: str, run_id: str, action: str, note: str = "") -> dict[str, Any]:
@@ -14,7 +14,11 @@ def issue(tenant: str, run_id: str, action: str, note: str = "") -> dict[str, An
         raise ValueError(
             "runtime control must be pause or cancel; goal steering uses its lifecycle"
         )
-    with get_connection() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+    with (
+        tenant_scope(tenant),
+        get_connection() as conn,
+        conn.cursor(cursor_factory=RealDictCursor) as cur,
+    ):
         cur.execute(
             "SELECT id FROM agent_runs WHERE tenant_id=%s AND id=%s FOR UPDATE", (tenant, run_id)
         )
@@ -41,7 +45,7 @@ def issue_request(tenant: str, request_id: str, note: str = "") -> None:
     """Trusted host identity binds this stop, including pre-admission requests."""
     if not tenant or not request_id:
         raise ValueError("tenant and request identity required")
-    with get_connection() as conn, conn.cursor() as cur:
+    with tenant_scope(tenant), get_connection() as conn, conn.cursor() as cur:
         cur.execute(
             """INSERT INTO agent_runtime_request_stops(tenant_id,request_id,note)
                VALUES (%s,%s,%s) ON CONFLICT (tenant_id,request_id) DO NOTHING""",
@@ -71,7 +75,7 @@ def stopped(tenant: str, run_id: str) -> bool:
     context, activity = active_context.get(), current.get()
     own_run = not run_id or (activity is not None and run_id in activity.sessions)
     request_id = context.request_id if own_run and context and context.tenant_id == tenant else None
-    with get_connection() as conn, conn.cursor() as cur:
+    with tenant_scope(tenant), get_connection() as conn, conn.cursor() as cur:
         cur.execute(
             """WITH RECURSIVE family AS (
             SELECT id,parent_run_id,runtime_context FROM agent_runs WHERE tenant_id=%s AND id=%s

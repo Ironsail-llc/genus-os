@@ -1,7 +1,14 @@
 """Find one unambiguous native continuation without crossing audit ownership."""
 
+from __future__ import annotations
 
-def continuation(cur, root, auth):
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from robothor.auth.deps import AuthContext
+
+
+def continuation(cur: Any, root: dict[str, Any], auth: AuthContext) -> dict[str, Any] | None:
     cur.execute(
         """WITH RECURSIVE chain AS (
             SELECT id FROM agent_runs WHERE id=%s AND tenant_id=%s AND user_id=%s

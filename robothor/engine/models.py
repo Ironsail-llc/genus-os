@@ -742,6 +742,7 @@ class PlanState:
     created_at: str = ""  # ISO timestamp
     exploration_run_id: str = ""  # Run ID of the read-only phase
     rejection_feedback: str = ""  # Why the operator rejected (fed back to agent on re-plan)
+    task_context: dict[str, Any] = field(default_factory=dict)
     plan_hash: str = ""  # SHA-256 of plan_text for integrity verification on approval
 
     # Deep plan mode — when True, approval routes to execute_deep() instead of execute()
@@ -755,6 +756,7 @@ class PlanState:
 
     # Execution tracking
     execution_run_id: str = ""  # Run ID of the execution phase (after approval)
+    approval_request_id: str = ""  # Durable webchat approval identity
 
     # Creator identity (Task 4 Finding 1 fix) — the per-message resolved
     # sender dict (same shape as TelegramBot._resolve_user()'s return value)

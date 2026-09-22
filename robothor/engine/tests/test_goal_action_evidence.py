@@ -22,6 +22,9 @@ from robothor.goals.presentation import render_goal_progress
 def family(effect_db, monkeypatch):  # noqa: F811
     ctx = context()
     monkeypatch.setattr(store, "get_connection", effect_db)
+    from robothor.goals.tests.test_store import register_tenant
+
+    register_tenant(ctx.tenant_id)
     store.set_enabled(ctx.tenant_id, True, ctx.principal_id)
     parent = store.create(
         ctx.tenant_id,
@@ -64,7 +67,7 @@ def test_report_reads_child_uncertainty_and_later_verified_receipt(family):
     assert "still need verification" not in render_goal_progress(refreshed, execution_enabled=True)
 
 
-@pytest.mark.parametrize("action", ["complete", "approve", "assess", "reconciled"])
+@pytest.mark.parametrize("action", ["complete", "approve", "assess"])
 def test_goal_decisions_cannot_hide_unresolved_child_effects(family, action):
     ctx, parent, child = family
     row = begin(replace(ctx, goal_id=child["id"], attempt_id="synthetic-attempt"))

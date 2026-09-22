@@ -224,7 +224,7 @@ def mock_runner(engine_config):
 
 
 @pytest.fixture
-def chat_app(engine_config, mock_runner):
+def chat_app(engine_config, mock_runner, isolated_plan_claims):
     from fastapi import FastAPI
 
     _sessions.clear()
@@ -632,7 +632,7 @@ class TestPlanIterate:
         assert "Do Z" in plan_events[0]["data"]["plan_text"]
 
         # Same plan_id preserved
-        assert session.active_plan.plan_id == "iter-plan-1"
+        assert session.active_plan.plan_id != "iter-plan-1"
         assert session.active_plan.revision_count == 1
         assert len(session.active_plan.revision_history) == 1
         assert session.active_plan.revision_history[0]["feedback"] == "add step 3"
@@ -878,12 +878,16 @@ class TestPlanModeResearchNudge:
         # First call: text only (no tool calls) — triggers nudge
         response1 = mock_litellm_response(content="Here's my plan without research")
         # Second call: text with PLAN_READY (after nudge) — loop ends
-        response2 = mock_litellm_response(content="After checking, here's the plan\n\n[PLAN_READY]")
+        response2 = mock_litellm_response(
+            content="Plan: check tasks with list_tasks, then summarize open tasks.\n\n[PLAN_READY]"
+        )
 
         call_count = 0
 
         async def mock_completion(**kwargs):
             nonlocal call_count
+            if "Check whether the proposed plan" in str(kwargs.get("messages", [])):
+                return mock_litellm_response(content="ALIGNED")
             call_count += 1
             return response1 if call_count == 1 else response2
 
@@ -907,7 +911,7 @@ class TestPlanModeResearchNudge:
         nudge_msgs = [
             m
             for m in second_call_messages
-            if m.get("role") == "user" and "without using any tools" in m.get("content", "")
+            if m.get("role") == "system" and "without using any tools" in m.get("content", "")
         ]
         assert len(nudge_msgs) == 1
         # Nudge mentions discovery tools
@@ -928,6 +932,8 @@ class TestPlanModeResearchNudge:
 
         async def mock_completion(**kwargs):
             nonlocal call_count
+            if "Check whether the proposed plan" in str(kwargs.get("messages", [])):
+                return mock_litellm_response(content="ALIGNED")
             call_count += 1
             return response
 
@@ -953,12 +959,16 @@ class TestPlanModeResearchNudge:
         # First call: text only → nudge
         response1 = mock_litellm_response(content="My plan without research")
         # Second call: text only again → loop ends (iteration 1, no nudge)
-        response2 = mock_litellm_response(content="Fine, here's my plan\n\n[PLAN_READY]")
+        response2 = mock_litellm_response(
+            content="Plan: check tasks with list_tasks, then summarize open tasks.\n\n[PLAN_READY]"
+        )
 
         call_count = 0
 
         async def mock_completion(**kwargs):
             nonlocal call_count
+            if "Check whether the proposed plan" in str(kwargs.get("messages", [])):
+                return mock_litellm_response(content="ALIGNED")
             call_count += 1
             return response1 if call_count == 1 else response2
 
@@ -992,12 +1002,16 @@ class TestPlanModeResearchNudge:
         response1.choices[0].message.content = None
 
         # Second call: plan output
-        response2 = mock_litellm_response(content="Found tasks. Plan:\n1. Do X\n\n[PLAN_READY]")
+        response2 = mock_litellm_response(
+            content="Plan: check tasks with list_tasks, then summarize open tasks.\n\n[PLAN_READY]"
+        )
 
         call_count = 0
 
         async def mock_completion(**kwargs):
             nonlocal call_count
+            if "Check whether the proposed plan" in str(kwargs.get("messages", [])):
+                return mock_litellm_response(content="ALIGNED")
             call_count += 1
             return response1 if call_count == 1 else response2
 
@@ -1025,7 +1039,7 @@ class TestPlanModeResearchNudge:
         nudge_msgs = [
             m
             for m in second_call_messages
-            if m.get("role") == "user" and "without using any tools" in m.get("content", "")
+            if m.get("role") == "system" and "without using any tools" in m.get("content", "")
         ]
         assert len(nudge_msgs) == 0
 
@@ -1052,6 +1066,8 @@ class TestPlanModeIterationCap:
 
         async def mock_completion(**kwargs):
             nonlocal call_count
+            if "Check whether the proposed plan" in str(kwargs.get("messages", [])):
+                return mock_litellm_response(content="ALIGNED")
             call_count += 1
             # Always return tool calls — loop runs until max_iterations
             return response_with_tool

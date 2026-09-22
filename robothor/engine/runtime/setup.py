@@ -32,7 +32,7 @@ def watchdog_scope() -> Iterator[None]:
 
 
 async def restored_context(
-    run_id: str,
+    run_id: str | None,
     agent_id: str,
     tenant: str,
     trigger: Any,

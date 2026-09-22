@@ -23,6 +23,7 @@ from psycopg2.extras import Json, RealDictCursor
 # `robothor.db.connection.get_connection` directly in those modules type-checks
 # and silently bypasses the patch — it broke 33 tests when I tried it.
 from robothor.db.connection import get_connection as get_connection
+from robothor.db.connection import tenant_scope
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -39,8 +40,11 @@ class EffectScope(Protocol):
     signature; `ExecutionContext` satisfies it structurally.
     """
 
-    tenant_id: str
-    principal_id: str
+    @property
+    def tenant_id(self) -> str: ...
+
+    @property
+    def principal_id(self) -> str: ...
 
 
 active_effect: ContextVar[dict[str, Any] | None] = ContextVar("active_effect", default=None)
@@ -90,7 +94,11 @@ def begin(
 ) -> dict[str, Any]:
     """Reserve one dispatch or return an already reconciled result for this request."""
     digest = fingerprint(tool_name, arguments)
-    with get_connection() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+    with (
+        tenant_scope(context.tenant_id),
+        get_connection() as conn,
+        conn.cursor(cursor_factory=RealDictCursor) as cur,
+    ):
         _lock(cur, context)
         cur.execute(
             """SELECT * FROM agent_runtime_effects WHERE tenant_id=%s AND principal_id=%s
@@ -105,7 +113,8 @@ def begin(
         cur.execute(
             """SELECT id FROM agent_runtime_effects WHERE tenant_id=%s AND principal_id=%s
                AND (state IN ('prepared','dispatching','uncertain') AND fingerprint=%s
-                 OR state='uncertain' AND (request_id=%s OR goal_id=%s OR budget_id=%s))
+                 OR state='uncertain' AND (request_id=%s OR goal_id=%s OR budget_id=%s
+                   OR (goal_id IS NULL AND budget_id IS NULL AND tool_name=%s)))
                ORDER BY created_at LIMIT 1""",
             (
                 context.tenant_id,
@@ -114,6 +123,7 @@ def begin(
                 context.request_id,
                 context.goal_id,
                 context.budget_id,
+                tool_name,
             ),
         )
         pending = cur.fetchone()
@@ -143,7 +153,7 @@ def begin(
 
 def mark_dispatched(context: ExecutionContext, effect_id: Any, run_id: str) -> bool:
     """Only the owner of a still-prepared record may cross the dispatch boundary."""
-    with get_connection() as conn, conn.cursor() as cur:
+    with tenant_scope(context.tenant_id), get_connection() as conn, conn.cursor() as cur:
         cur.execute(
             """UPDATE agent_runtime_effects SET state='dispatching',version=version+1,updated_at=now()
                WHERE id=%s AND tenant_id=%s AND principal_id=%s AND request_id=%s
@@ -155,7 +165,7 @@ def mark_dispatched(context: ExecutionContext, effect_id: Any, run_id: str) -> b
 
 def finish(context: ExecutionContext, effect_id: Any, run_id: str, *, uncertain: bool) -> bool:
     """A late worker cannot overwrite a recovery verdict or another worker's record."""
-    with get_connection() as conn, conn.cursor() as cur:
+    with tenant_scope(context.tenant_id), get_connection() as conn, conn.cursor() as cur:
         cur.execute(
             """UPDATE agent_runtime_effects SET state=%s,version=version+1,updated_at=now()
                WHERE id=%s AND tenant_id=%s AND principal_id=%s AND request_id=%s
@@ -174,7 +184,7 @@ def finish(context: ExecutionContext, effect_id: Any, run_id: str, *, uncertain:
 
 def abandon_run(context: ExecutionContext, run_id: str) -> int:
     """The host observed worker loss: surviving dispatch intents now require readback."""
-    with get_connection() as conn, conn.cursor() as cur:
+    with tenant_scope(context.tenant_id), get_connection() as conn, conn.cursor() as cur:
         cur.execute(
             """UPDATE agent_runtime_effects SET state=CASE WHEN state='prepared' THEN 'not_applied' ELSE 'uncertain' END,
                version=version+1,updated_at=now()
@@ -185,7 +195,11 @@ def abandon_run(context: ExecutionContext, run_id: str) -> int:
 
 
 def read(context: EffectScope, effect_id: Any) -> dict[str, Any] | None:
-    with get_connection() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+    with (
+        tenant_scope(context.tenant_id),
+        get_connection() as conn,
+        conn.cursor(cursor_factory=RealDictCursor) as cur,
+    ):
         cur.execute(
             "SELECT * FROM agent_runtime_effects WHERE id=%s AND tenant_id=%s AND principal_id=%s",
             (effect_id, context.tenant_id, context.principal_id),
@@ -221,7 +235,7 @@ def resolve(
         not isinstance(verdict.result, dict) or verdict.result.get("error")
     ):
         raise ValueError("verified result required")
-    with get_connection() as conn, conn.cursor() as cur:
+    with tenant_scope(context.tenant_id), get_connection() as conn, conn.cursor() as cur:
         cur.execute(
             """UPDATE agent_runtime_effects SET state=%s,resolution=%s,version=version+1,updated_at=now()
                WHERE id=%s AND tenant_id=%s AND principal_id=%s AND version=%s AND state='uncertain'""",
@@ -232,6 +246,29 @@ def resolve(
                 context.tenant_id,
                 context.principal_id,
                 record["version"],
+            ),
+        )
+        return bool(cur.rowcount == 1)
+
+
+def attest(context: EffectScope, effect_id: Any, *, actor: str, note: str) -> bool:
+    """Record an authorized reconciliation without manufacturing provider evidence.
+
+    Callers must establish operator authority. Active dispatches cannot be
+    attested: their workers must first stop and leave an uncertain receipt.
+    """
+    if not actor.strip() or not note.strip():
+        raise ValueError("reconciliation requires an actor and an audit note")
+    with tenant_scope(context.tenant_id), get_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            """UPDATE agent_runtime_effects SET state='finished', resolution=%s,
+               version=version+1,updated_at=now()
+               WHERE id=%s AND tenant_id=%s AND principal_id=%s AND goal_id IS NULL AND state='uncertain'""",
+            (
+                Json({"source": "reconciled", "verified": False, "actor": actor, "note": note}),
+                effect_id,
+                context.tenant_id,
+                context.principal_id,
             ),
         )
         return bool(cur.rowcount == 1)

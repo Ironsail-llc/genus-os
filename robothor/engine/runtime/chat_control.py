@@ -72,6 +72,6 @@ async def stop(session: Any, auth: Any, session_key: str, client_id: Any = None)
         # stop still denies provider/tool dispatch if admission finishes later.
         await asyncio.to_thread(issue_request, auth.tenant_id, identifier, "Operator stopped chat")
     active = target is not None and not target.done()
-    if active:
+    if target is not None and active:
         target.cancel()
     return {"ok": True, "aborted": active, "durable_stopped": bool(identifier)}

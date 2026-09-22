@@ -1,5 +1,19 @@
 """Change only the pending draft that the operator actually reviewed."""
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import asyncio
+    from datetime import datetime
+
+    from fastapi.responses import JSONResponse
+
+    from robothor.auth.deps import AuthContext
+    from robothor.engine.chat import ChatSession
+    from robothor.engine.models import AgentRun, PlanState
+
 import asyncio
 from copy import deepcopy
 from dataclasses import asdict
@@ -10,14 +24,16 @@ from uuid import uuid4
 from fastapi.responses import JSONResponse
 from psycopg2.extras import Json
 
-from robothor.db.connection import get_connection
+from robothor.db.connection import get_connection, tenant_scope
 from robothor.engine.chat_plan_claim import approval_refusal
 from robothor.engine.chat_result import result_text
 from robothor.engine.models import RunStatus
 
 
-def replace_pending(tenant_id, session_key, expected, replacement):
-    with get_connection() as conn, conn.cursor() as cur:
+def replace_pending(
+    tenant_id: str, session_key: str, expected: PlanState, replacement: PlanState | None
+) -> bool:
+    with tenant_scope(tenant_id), get_connection() as conn, conn.cursor() as cur:
         cur.execute(
             """UPDATE chat_sessions SET plan_state=%s,last_active_at=now()
                WHERE tenant_id=%s AND session_key=%s
@@ -38,19 +54,25 @@ def replace_pending(tenant_id, session_key, expected, replacement):
         )
         changed = cur.rowcount == 1
         conn.commit()
-        return changed
+        return bool(changed)
 
 
-async def replace_pending_async(tenant_id, session_key, expected, replacement):
+async def replace_pending_async(
+    tenant_id: str, session_key: str, expected: PlanState, replacement: PlanState | None
+) -> bool:
     return await asyncio.to_thread(replace_pending, tenant_id, session_key, expected, replacement)
 
 
-async def reject_plan(session, auth, session_key, plan_id, feedback):
+async def reject_plan(
+    session: ChatSession, auth: AuthContext, session_key: str, plan_id: str, feedback: str
+) -> JSONResponse:
     from robothor.secrets.redaction import redact
 
     if refusal := approval_refusal(session, plan_id):
         return refusal
     original = session.active_plan
+    if original is None:
+        return JSONResponse({"error": "No matching pending plan"}, status_code=404)
     expected = deepcopy(original)
     if not await replace_pending_async(auth.tenant_id, session_key, expected, None):
         return JSONResponse(
@@ -71,7 +93,15 @@ async def reject_plan(session, auth, session_key, plan_id, feedback):
     return JSONResponse({"ok": True})
 
 
-async def revise_plan(session, original, expected, run, feedback, tenant_id, session_key):
+async def revise_plan(
+    session: ChatSession,
+    original: PlanState,
+    expected: PlanState,
+    run: AgentRun,
+    feedback: str,
+    tenant_id: str,
+    session_key: str,
+) -> tuple[PlanState | None, str]:
     from robothor.engine.chat import _extract_plan_text, _plan_is_expired
     from robothor.secrets.redaction import redact
 

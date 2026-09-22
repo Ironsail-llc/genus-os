@@ -17,7 +17,7 @@ from robothor.goals.tests.test_store import db, private_database  # noqa: F401
 
 
 @pytest.mark.asyncio
-async def test_restored_multiday_family_waits_without_models_and_wakes_once(db):  # noqa: F811
+async def test_restored_multiday_family_waits_without_models_and_wakes_once(db, monkeypatch):  # noqa: F811
     receipt = str(uuid4())
     parent = store.create(
         db,
@@ -110,6 +110,7 @@ async def test_restored_multiday_family_waits_without_models_and_wakes_once(db):
         )
         return run
 
+    monkeypatch.setattr("robothor.goals.controller.MIN_RUN_INTERVAL_SECONDS", 0)
     controller = GoalController(
         SimpleNamespace(execute=execute), SimpleNamespace(tenant_id=db, manifest_dir="unused")
     )

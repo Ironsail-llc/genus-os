@@ -1,5 +1,16 @@
 """An explicitly requested final task receipt, published only from durable evidence."""
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    import asyncio
+
+    from robothor.engine.runtime.contracts import ExecutionContext
+    from robothor.engine.tool_turn import ToolTurnRequest
+    from robothor.engine.tools.dispatch import ToolContext
+
 import asyncio
 import json
 import logging
@@ -10,7 +21,7 @@ from robothor.goals.report_channel import publish_report, require_report_context
 _FIELDS = {"title", "body", "status", "finalReport"}
 
 
-def requested(req, names):
+def requested(req: ToolTurnRequest, names: list[str]) -> bool:
     run = req.session.run
     todos = getattr(req.session, "todo_list", None)
     if (
@@ -36,7 +47,14 @@ def requested(req, names):
         return False
 
 
-async def publish(context, record_id, args, ctx, *, replayed=False):
+async def publish(
+    context: ExecutionContext,
+    record_id: Any,
+    args: dict[str, Any],
+    ctx: ToolContext,
+    *,
+    replayed: bool = False,
+) -> None:
     if args.get("finalReport") is not True or not set(args) <= _FIELDS:
         return
     try:

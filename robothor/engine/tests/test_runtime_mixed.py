@@ -17,15 +17,15 @@ from uuid import uuid4
 
 import litellm
 import pytest
-from bench.interactive.statistics import summary
-from bench.runtime.candidates import PROMPT, SCHEMA, FixtureGateway
 
+from bench.interactive.statistics import summary
+from robothor.engine.tests.runtime_fixtures import PROMPT, SCHEMA, FixtureGateway
 from robothor.engine.tests.test_runner import runner  # noqa: F401
 from robothor.goals import store
 from robothor.goals.controller import GoalController
 from robothor.goals.model import CreateGoal, GoalUpdate
 from robothor.goals.runtime import binding
-from robothor.goals.tests.test_store import db, private_database  # noqa: F401
+from robothor.goals.tests.test_store import db, private_database, register_tenant  # noqa: F401
 
 
 @pytest.mark.parametrize("tenants", [1, 5, 20])
@@ -114,7 +114,7 @@ async def test_native_requests_compete_with_background_goals(
             active.reset(token)
 
     async def workload():
-        tenant = str(uuid4())
+        tenant = register_tenant(str(uuid4()))
         await asyncio.to_thread(store.set_enabled, tenant, True, "operator")
         goal = await asyncio.to_thread(
             store.create,
@@ -131,6 +131,7 @@ async def test_native_requests_compete_with_background_goals(
             SimpleNamespace(tenant_id=tenant, manifest_dir="fixture"),
         )
         for index in range(30):
+            controller._last_run = 0  # Advance past the previous turn's scheduling interval.
             if index:
                 await asyncio.to_thread(
                     store.ingest_event, tenant, str(uuid4()), "fixture.next", {}

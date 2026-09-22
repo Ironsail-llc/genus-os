@@ -135,7 +135,6 @@ async def test_measured_durable_stop_cancels_active_descendants(runtime_db, tmp_
     from types import SimpleNamespace
 
     from bench.interactive.statistics import summary
-
     from robothor.engine.models import AgentRun
     from robothor.engine.runtime import CurrentRuntime, ExecutionContext, RunRequest
     from robothor.engine.runtime.activity import register

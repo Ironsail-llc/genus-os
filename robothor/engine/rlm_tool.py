@@ -11,6 +11,14 @@ Called from ``tools.py`` via ``asyncio.to_thread()`` (sync dispatch).
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    import asyncio
+    from collections.abc import Callable
+    from pathlib import Path
+
+
 import asyncio
 import json
 import logging
@@ -18,7 +26,7 @@ import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -381,7 +389,9 @@ def _build_custom_tools(workspace: str) -> dict[str, dict[str, Any]]:
 # ─── Main entry point ────────────────────────────────────────────────
 
 
-def _notify_progress(callback, status, elapsed_s=0):
+def _notify_progress(
+    callback: Callable[..., Any] | None, status: str, elapsed_s: float = 0
+) -> None:
     if callback is not None:
         try:
             callback({"event": "deep_progress", "status": status, "elapsed_s": elapsed_s})

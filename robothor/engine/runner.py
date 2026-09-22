@@ -106,7 +106,7 @@ from robothor.engine.run_deadline import (
 )
 from robothor.engine.run_finalizer import RunFinalizationMixin
 from robothor.engine.run_identity import _is_service_caller as _is_service_caller
-from robothor.engine.run_identity import resolve_run_identity
+from robothor.engine.run_identity import attach_tenant_access, resolve_run_identity
 from robothor.engine.run_lifecycle import RunLifecycleMixin, spawn_post_stall_autodream
 from robothor.engine.run_llm_calls import LLMCallMixin  # noqa: E402
 from robothor.engine.run_pacing import DeadlinePacer, checkin_note, mode_for_run  # noqa: E402
@@ -144,7 +144,8 @@ from robothor.engine.toolset_prep import (
     with_discovery_note,
     withdraw_toolset,
 )
-from robothor.engine.tracking import create_run, update_run
+from robothor.engine.tracking import create_run
+from robothor.engine.tracking import update_run as update_run
 from robothor.engine.warmup_steps import record_warmup_steps
 from robothor.engine.workflow_budget import propagates_to_caller
 from robothor.engine.workflow_completion import finish_after_tools, host_rendered_output
@@ -570,9 +571,6 @@ class AgentRunner(
         # Falling through to the config default writes a row the connection's RLS
         # binding refuses, and the refusal arrives as an opaque
         # InsufficientPrivilege at INSERT time. See test_nested_run_tenant.py.
-        from robothor.autonomy.intake import protect_payment_text
-
-        message = protect_payment_text(message)
         resolved_tenant = tenant_id or current_tenant_scope() or self.config.tenant_id
 
         readonly_mode, execution_mode, identity, user_id, user_role = await restored_context(
@@ -705,18 +703,7 @@ class AgentRunner(
         # it onto a fresh SpawnContext for any children this run spawns.
         session.identity = effective_identity
 
-        # Resolve hierarchical tenant access.
-        # owner/admin roles see child tenants; others see only their own.
-        try:
-            from robothor.engine.permissions import resolve_accessible_tenants
-
-            _user_role = getattr(session.run, "user_role", None)
-            session.run.accessible_tenant_ids = resolve_accessible_tenants(
-                resolved_tenant, _user_role
-            )
-        except Exception:
-            # Degrade gracefully — restrict to own tenant only.
-            session.run.accessible_tenant_ids = (resolved_tenant,)
+        attach_tenant_access(session.run, resolved_tenant)
 
         # Build system prompt + warmup in parallel where possible.
         # Both involve sync I/O so we run them concurrently in the executor.

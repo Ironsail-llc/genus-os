@@ -1,5 +1,16 @@
 """Limit optional interactive planning without changing the request's authority."""
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+    from datetime import datetime
+
+    from robothor.engine.models import AgentConfig
+    from robothor.engine.runtime.contracts import ExecutionContext
+
 import logging
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -16,7 +27,7 @@ logger = logging.getLogger(__name__)
 AUTOMATIC_PLAN_SECONDS = 5
 
 
-def context_for(config):
+def context_for(config: AgentConfig) -> ExecutionContext | None:
     request = classified_deadline.admitted_request()
     context = active_context.get()
     if (
@@ -37,7 +48,7 @@ def context_for(config):
     return replace(context, deadline=deadline)
 
 
-async def run(config, generate):
+async def run(config: AgentConfig, generate: Callable[[], Awaitable[Any]]) -> Any:
     context = context_for(config)
     if context is None:
         return await generate()

@@ -6,6 +6,7 @@ can settle a dispatched effect; unsupported effects remain uncertain.
 
 import logging
 
+from robothor.db.connection import tenant_scope
 from robothor.engine.runtime import effects
 
 logger = logging.getLogger(__name__)
@@ -14,7 +15,7 @@ logger = logging.getLogger(__name__)
 def sweep_terminal(tenant_id: str) -> int:
     """Bounded, repeatable housekeeping; failures leave the existing fence intact."""
     try:
-        with effects.get_connection() as conn, conn.cursor() as cur:
+        with tenant_scope(tenant_id), effects.get_connection() as conn, conn.cursor() as cur:
             cur.execute(
                 """WITH abandoned AS (
                     SELECT e.id FROM agent_runtime_effects e
@@ -34,7 +35,7 @@ def sweep_terminal(tenant_id: str) -> int:
 
         note_recovery.sweep(tenant_id)
         task_recovery.sweep(tenant_id)
-        return count
+        return int(count)
     except Exception:
         logger.warning("Terminal effect recovery deferred", exc_info=True)
         return 0

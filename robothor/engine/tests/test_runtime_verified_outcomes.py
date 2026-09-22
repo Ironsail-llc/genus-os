@@ -12,7 +12,7 @@ from robothor.engine.workflow_completion import WorkflowCompletion, workflow_com
 
 
 async def test_synthetic_gateway_rejects_unrequested_writes_and_deduplicates():
-    from bench.runtime.candidates import FixtureGateway
+    from robothor.engine.tests.runtime_fixtures import FixtureGateway
 
     gateway = FixtureGateway("fixture")
     assert (await gateway.dispatch("fixture")).get("error")
@@ -44,7 +44,8 @@ async def test_native_verified_action_repairs_or_fails_without_false_completion(
     primary_outage,
 ):
     import litellm
-    from bench.runtime.candidates import FixtureGateway
+
+    from robothor.engine.tests.runtime_fixtures import FixtureGateway
 
     engine = request.getfixturevalue("runner")
     monkeypatch.setattr(engine, "_persist_run_sync", MagicMock())

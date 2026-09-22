@@ -220,8 +220,9 @@ async def _dispatch_reserved(
     if uncertain or verify_success:
         from robothor.engine.runtime import note_recovery, task_recovery
 
-        adapter = task_recovery if name == "create_task" else note_recovery
-        recovered = await asyncio.to_thread(adapter.recover, context, record["id"])
+        verifiers = {"create_task": task_recovery.recover, "create_note": note_recovery.recover}
+        verifier = verifiers.get(name)
+        recovered = await asyncio.to_thread(verifier, context, record["id"]) if verifier else None
         if recovered is not None:
             if verify_success and not uncertain:
                 # First-call acknowledgement plus host readback is verification,

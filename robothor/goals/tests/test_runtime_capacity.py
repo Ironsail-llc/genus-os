@@ -12,17 +12,17 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
-from bench.interactive.statistics import summary
 
+from bench.interactive.statistics import summary
 from robothor.goals import store
 from robothor.goals.model import CreateGoal, GoalUpdate
-from robothor.goals.tests.test_store import db, private_database  # noqa: F401
+from robothor.goals.tests.test_store import db, private_database, register_tenant  # noqa: F401
 
 
 @pytest.mark.parametrize("tenants", [1, 5, 20])
 def test_mixed_waiting_goals_and_operator_requests(db, tenants):  # noqa: F811
     def work(_):
-        tenant = str(uuid4())
+        tenant = register_tenant(str(uuid4()))
         store.set_enabled(tenant, True, "operator")
         goal = store.create(
             tenant,

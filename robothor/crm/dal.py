@@ -859,9 +859,11 @@ def create_note(
     person_id: str | None = None,
     company_id: str | None = None,
     tenant_id: str = DEFAULT_TENANT,
+    *,
+    note_id: str | None = None,
 ) -> str | None:
     """Create a note. Returns note UUID."""
-    note_id = str(uuid.uuid4())
+    note_id = note_id or str(uuid.uuid4())
     with get_connection() as conn:
         cur = conn.cursor()
         try:
@@ -1187,6 +1189,8 @@ def create_task(
     autonomy_budget: dict[str, Any] | None = None,
     follow_up_at: str | datetime | None = None,
     tenant_id: str = DEFAULT_TENANT,
+    *,
+    task_id: str | None = None,
 ) -> str | dict[str, Any] | None:
     """Create a task. Returns task UUID, or ``{"error": reason}`` on validation failure.
 
@@ -1202,7 +1206,7 @@ def create_task(
         ok, reason = validate_budget(autonomy_budget)
         if not ok:
             return {"error": reason}
-    task_id = str(uuid.uuid4())
+    task_id = task_id or str(uuid.uuid4())
     sla_deadline = _compute_sla_deadline(priority)
     started = datetime.now(UTC) if status == "IN_PROGRESS" else None
     blockers_json = json.dumps(blockers or [])

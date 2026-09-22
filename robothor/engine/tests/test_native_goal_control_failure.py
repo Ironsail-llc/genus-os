@@ -9,7 +9,6 @@ from uuid import uuid4
 import litellm
 import psycopg2
 import pytest
-from bench.runtime.uat_server import seed_unfinished_work
 
 from robothor.auth.deps import AuthContext
 from robothor.engine.chat_delivery import final_result
@@ -17,6 +16,7 @@ from robothor.engine.llm_client import LLMClient
 from robothor.engine.models import TriggerType
 from robothor.engine.runner import AgentRunner
 from robothor.engine.task_registry import get_task_registry
+from robothor.engine.tests.runtime_fixtures import seed_unfinished_work
 from robothor.goals import store
 from robothor.goals.model import CreateGoal, GoalUpdate
 

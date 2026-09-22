@@ -12,9 +12,9 @@ from uuid import uuid4
 import httpx
 import pytest
 import uvicorn
-from bench.interactive.statistics import summary
 from fastapi import FastAPI
 
+from bench.interactive.statistics import summary
 from robothor.auth.deps import AuthContext
 from robothor.engine import chat
 from robothor.engine.tests.test_runner import runner  # noqa: F401

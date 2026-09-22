@@ -4,6 +4,14 @@ A dedicated connection owns the session lock; it is never returned to a pool
 with a lock held. Normal exit, cancellation and process death release ownership.
 """
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from psycopg2.extensions import connection
+
+
 import json
 import logging
 from contextvars import ContextVar
@@ -11,10 +19,10 @@ from contextvars import ContextVar
 import psycopg2
 
 logger = logging.getLogger(__name__)
-current: ContextVar[object | None] = ContextVar("startup_resume_claim", default=None)
+current: ContextVar[connection | None] = ContextVar("startup_resume_claim", default=None)
 
 
-def acquire(tenant, run_id):
+def acquire(tenant: str, run_id: str) -> connection | None:
     from robothor.db.connection import get_connection
 
     connection = None
@@ -37,7 +45,7 @@ def acquire(tenant, run_id):
     return None
 
 
-def require_owned():
+def require_owned() -> None:
     """A disconnected session no longer owns the startup admission lock."""
     connection = current.get()
     if connection is None:

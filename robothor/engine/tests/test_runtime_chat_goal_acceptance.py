@@ -14,7 +14,6 @@ from uuid import uuid4
 
 import httpx
 import pytest
-from bench.runtime.uat_server import seed_unfinished_work
 from fastapi import FastAPI
 from litellm import ModelResponse
 
@@ -24,6 +23,7 @@ from robothor.engine.llm_client import LLMClient
 from robothor.engine.runtime.contracts import ExecutionContext
 from robothor.engine.runtime.current import active_context
 from robothor.engine.tests import test_runtime_controls
+from robothor.engine.tests.runtime_fixtures import seed_unfinished_work
 from robothor.engine.tests.test_runner import runner  # noqa: F401
 from robothor.engine.tools.dispatch import ToolContext
 from robothor.goals import store

@@ -42,5 +42,6 @@ def test_alarm_condition(non_privileged, linked, expected, why):
 def test_alarm_is_not_permanently_silent():
     """Guard against a future edit that makes the condition unreachable."""
     assert gw.scoping_is_vacuous(1, 0) is True, (
-        "the vacuous-scoping alarm can no longer fire under any input — it has become decoration"
+        "the vacuous-scoping alarm can no longer fire under any input — "
+        "it has become decoration"
     )

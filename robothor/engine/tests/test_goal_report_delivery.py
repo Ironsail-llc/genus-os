@@ -84,3 +84,14 @@ def test_report_records_host_origin_and_retains_final_output_validation():
         run = validated_completion(session, session.get_final_text())
     assert str(run.status) == "failed"
     assert "Other required outcome is missing" in run.error_message
+
+
+def test_trusted_report_keeps_the_output_correction_budget():
+    session, req, ctx = setup_turn()
+    with report_scope(req, ["report_pursuit_goal"]) as state:
+        publish_report(ctx, "The goal is paused; one task remains open.")
+    record_report_turn(state, session, [])
+    with output_validation_scope(lambda run, text: "Expected a structured report"):
+        assert not finish_goal_report(session)
+        assert "workflow output validation" in session.messages[-1]["content"]
+        assert not getattr(session, "goal_report_complete", False)

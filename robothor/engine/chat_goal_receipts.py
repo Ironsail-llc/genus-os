@@ -1,7 +1,14 @@
 """Recover committed goal controls from history attributed by trusted dispatch."""
 
+from __future__ import annotations
 
-def family_goal_receipts(cur, run, auth):
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from robothor.auth.deps import AuthContext
+
+
+def family_goal_receipts(cur: Any, run: dict[str, Any], auth: AuthContext) -> list[dict[str, Any]]:
     cur.execute(
         """WITH RECURSIVE family AS (
             SELECT id FROM agent_runs

@@ -1,10 +1,23 @@
 """Restore only the saved pending plan belonging to a recovered execution."""
 
+from __future__ import annotations
 
-async def attach_plan(outcome, session, request_id, auth, session_key):
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from robothor.auth.deps import AuthContext
+    from robothor.engine.chat import ChatSession
+
+
+async def attach_plan(
+    outcome: dict[str, Any],
+    session: ChatSession | None,
+    request_id: str,
+    auth: AuthContext,
+    session_key: str,
+) -> None:
     import asyncio
     from dataclasses import fields
-    from types import SimpleNamespace
 
     from robothor.engine.chat import _get_session, _plan_is_expired, _plan_to_dict
     from robothor.engine.chat_store import load_plan_state
@@ -32,7 +45,12 @@ async def attach_plan(outcome, session, request_id, auth, session_key):
     ):
         saved = await asyncio.to_thread(load_plan_state, session_key, tenant_id=auth.tenant_id)
         if saved and saved.get("exploration_run_id") == outcome.get("run_id"):
-            candidate = SimpleNamespace(created_at=saved.get("created_at", ""))
+            candidate = PlanState(
+                plan_id=saved.get("plan_id", ""),
+                plan_text=saved.get("plan_text", ""),
+                original_message=saved.get("original_message", ""),
+                created_at=saved.get("created_at", ""),
+            )
             if saved.get("status") == "pending" and not _plan_is_expired(candidate):
                 restored = _get_session(session_key)
                 if restored.active_plan is None and restored.active_task is None:

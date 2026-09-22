@@ -1,5 +1,16 @@
 """Use saved action evidence when the initial chat execution is interrupted."""
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    import asyncio
+
+    from robothor.auth.deps import AuthContext
+    from robothor.engine.chat import ChatSession
+    from robothor.engine.models import AgentRun, PlanState
+
 import asyncio
 import logging
 from types import SimpleNamespace
@@ -7,7 +18,7 @@ from uuid import UUID
 
 from psycopg2.extras import RealDictCursor
 
-from robothor.db.connection import get_connection
+from robothor.db.connection import get_connection, tenant_scope
 from robothor.engine.chat_effect_receipts import family_effect_receipts
 from robothor.engine.chat_goal_receipts import family_goal_receipts
 from robothor.engine.chat_receipts import family_calendar_receipts
@@ -18,8 +29,14 @@ logger = logging.getLogger(__name__)
 _INTERRUPTED = {RunStatus.FAILED, RunStatus.TIMEOUT, RunStatus.CANCELLED}
 
 
-def _saved_result(run_id, auth, observed_run=None):
-    with get_connection() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+def _saved_result(
+    run_id: str, auth: AuthContext, observed_run: AgentRun | None = None
+) -> dict[str, Any] | None:
+    with (
+        tenant_scope(auth.tenant_id),
+        get_connection() as conn,
+        conn.cursor(cursor_factory=RealDictCursor) as cur,
+    ):
         cur.execute("SET LOCAL statement_timeout = '750ms'")
         cur.execute(
             """SELECT id,agent_id,status,output_text,error_message FROM agent_runs
@@ -62,7 +79,7 @@ def _saved_result(run_id, auth, observed_run=None):
     }
 
 
-async def final_result(run, auth):
+async def final_result(run: AgentRun, auth: AuthContext) -> dict[str, Any]:
     fallback = result_text(run)
     if run.status not in _INTERRUPTED:
         return {"text": fallback}
@@ -77,8 +94,8 @@ async def final_result(run, auth):
         return {"text": fallback}
 
 
-def _saved_request(identifier, auth):
-    with get_connection() as conn, conn.cursor() as cur:
+def _saved_request(identifier: str, auth: AuthContext) -> dict[str, Any] | None:
+    with tenant_scope(auth.tenant_id), get_connection() as conn, conn.cursor() as cur:
         cur.execute("SET LOCAL statement_timeout = '750ms'")
         cur.execute(
             """SELECT id FROM agent_runs WHERE tenant_id=%s AND user_id=%s
@@ -92,8 +109,15 @@ def _saved_request(identifier, auth):
 
 
 async def deliver_interruption(
-    queue, session, auth, session_key, message, *, aborted=False, plan=None
-):
+    queue: asyncio.Queue[Any],
+    session: ChatSession,
+    auth: AuthContext,
+    session_key: str,
+    message: str,
+    *,
+    aborted: bool = False,
+    plan: PlanState | None = None,
+) -> bool:
     """Recover an exception after the native runner durably recorded interruption."""
     from robothor.engine.chat_history import append_turn
     from robothor.engine.chat_store import save_exchange_async
@@ -130,7 +154,14 @@ async def deliver_interruption(
     return True
 
 
-async def deliver_plan_interruption(queue, session, auth, session_key, plan, error):
+async def deliver_plan_interruption(
+    queue: asyncio.Queue[Any],
+    session: ChatSession,
+    auth: AuthContext,
+    session_key: str,
+    plan: PlanState,
+    error: BaseException,
+) -> None:
     """Resolve interrupted approval delivery without admitting the plan again."""
     aborted = isinstance(error, asyncio.CancelledError)
     if await deliver_interruption(

@@ -4,6 +4,16 @@ The caller must enable this only for an admitted, standalone interactive report
 tool. This module does not install that integration or decide request intent.
 """
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+
+    from robothor.engine.models import AgentRun
+    from robothor.engine.tools.dispatch import ToolContext
+
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -33,10 +43,10 @@ def report_turn(
     run_id: str,
     *,
     enabled: bool,
-    tool_name="report_pursuit_goal",
-    finalizes=True,
-    allowed_goal_statuses=None,
-):
+    tool_name: str = "report_pursuit_goal",
+    finalizes: bool = True,
+    allowed_goal_statuses: tuple[str, ...] | None = None,
+) -> Iterator[ReportTurn]:
     state = ReportTurn(tenant_id, agent_id, run_id, enabled, tool_name)
     state.finalizes = finalizes
     state.allowed_goal_statuses = allowed_goal_statuses
@@ -51,7 +61,9 @@ def report_turn(
         _turn.reset(token)
 
 
-def require_report_context(ctx, *, tool_name="report_pursuit_goal") -> ReportTurn:
+def require_report_context(
+    ctx: ToolContext, *, tool_name: str = "report_pursuit_goal"
+) -> ReportTurn:
     state = _turn.get()
     if (
         state is None
@@ -65,7 +77,9 @@ def require_report_context(ctx, *, tool_name="report_pursuit_goal") -> ReportTur
     return state
 
 
-def publish_report(ctx, message: str, *, tool_name="report_pursuit_goal") -> None:
+def publish_report(
+    ctx: ToolContext, message: str, *, tool_name: str = "report_pursuit_goal"
+) -> None:
     state = require_report_context(ctx, tool_name=tool_name)
     if state.message is not None:
         raise ValueError("Only one final goal report is allowed per tool turn")
@@ -74,7 +88,7 @@ def publish_report(ctx, message: str, *, tool_name="report_pursuit_goal") -> Non
     state.message = message
 
 
-def consume_report(state: ReportTurn, run) -> str | None:
+def consume_report(state: ReportTurn, run: AgentRun) -> str | None:
     if state.active:
         raise ValueError("The tool turn must finish before consuming its report")
     if (state.tenant_id, state.agent_id, state.run_id) != (run.tenant_id, run.agent_id, run.id):

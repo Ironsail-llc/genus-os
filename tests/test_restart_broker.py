@@ -89,9 +89,9 @@ class TestAllowedUnits:
         loudly instead of passing silently.
         """
         _, log = _run(tmp_path, "robothor-delphi-engine")
-        assert not any("robothor-delphi-engine" in c for c in _restarted(log)), (
-            "the restart broker still accepts the decommissioned Delphi engine"
-        )
+        assert not any(
+            "robothor-delphi-engine" in c for c in _restarted(log)
+        ), "the restart broker still accepts the decommissioned Delphi engine"
 
     def test_several_requests_are_all_honoured(self, tmp_path: Path):
         _, log = _run(tmp_path, "robothor-bridge", "robothor-app")

@@ -83,7 +83,6 @@ def volume_condition_line(unit: str) -> str:
 def volume_gate_path(unit: str) -> str:
     return volume_condition_line(unit).split()[-1]
 
-
 FAKE_TOKEN_ENV = {
     "ROBOTHOR_TELEGRAM_BOT_TOKEN": "tok123",
     "ROBOTHOR_TELEGRAM_CHAT_ID": "42",
@@ -422,7 +421,9 @@ class TestCronDedupSurvivesAnUnwritableStateDir:
             "fallback state dir" in result.stdout + result.stderr
             and "dedup disabled" in result.stdout + result.stderr
         ), "an untrusted fallback dir must be named and dedup explicitly disabled"
-        assert list(elsewhere.iterdir()) == [], "no stamp may be written through the symlink"
+        assert list(elsewhere.iterdir()) == [], (
+            "no stamp may be written through the symlink"
+        )
 
     def test_a_preexisting_owned_directory_is_adopted_normally(self, tmp_path: Path):
         """A fallback dir that already exists, is a real directory (not a
@@ -549,7 +550,9 @@ class TestAWedgedVolumeSkipsTheBackupUnits:
     @pytest.mark.parametrize("unit", sorted(VOLUME_GATED_UNITS))
     def test_backup_units_gate_on_the_volume_probe(self, unit: str):
         conditions = [
-            line for line in unit_text(unit).splitlines() if line.startswith("ExecCondition=")
+            line
+            for line in unit_text(unit).splitlines()
+            if line.startswith("ExecCondition=")
         ]
         assert conditions, (
             f"{unit} has no ExecCondition= — a wedged volume makes it RUN and "
@@ -573,8 +576,12 @@ class TestAWedgedVolumeSkipsTheBackupUnits:
         """systemd runs ExecCondition= before ExecStart= regardless of order,
         but a reader must not have to know that."""
         lines = unit_text(unit).splitlines()
-        condition = next(i for i, line in enumerate(lines) if line.startswith("ExecCondition="))
-        start = next(i for i, line in enumerate(lines) if line.startswith("ExecStart="))
+        condition = next(
+            i for i, line in enumerate(lines) if line.startswith("ExecCondition=")
+        )
+        start = next(
+            i for i, line in enumerate(lines) if line.startswith("ExecStart=")
+        )
         assert condition < start, f"{unit} declares ExecCondition= after ExecStart="
 
     @pytest.mark.parametrize("unit", sorted(VOLUME_GATED_UNITS))
@@ -888,7 +895,9 @@ class TestUndeliverablePageIsSpooled:
         )
         assert "robothor-sample.service" in files[0].read_text()
 
-    def test_replacing_a_pending_page_leaves_another_units_page_alone(self, tmp_path: Path):
+    def test_replacing_a_pending_page_leaves_another_units_page_alone(
+        self, tmp_path: Path
+    ):
         """Collapsing duplicates must key on the unit, not empty the spool.
 
         A page for some OTHER unit is a different failure, still undelivered —
@@ -1010,7 +1019,7 @@ def install_status_curl(tmp_path: Path, statuses: list[str]) -> Path:
         # operator received from one Telegram refused — the exact distinction
         # the drop notice turns on.
         f'case "$code" in 2*) printf \'%s\\n\' "$@" >> "{tmp_path / "curl-delivered.txt"}" ;; esac\n'
-        'for a in "$@"; do [ "$a" = \'%{http_code}\' ] && printf \'%s\' "$code"; done\n'
+        "for a in \"$@\"; do [ \"$a\" = '%{http_code}' ] && printf '%s' \"$code\"; done\n"
         "exit 0\n"
     )
     curl.chmod(curl.stat().st_mode | stat.S_IEXEC)
@@ -1154,7 +1163,9 @@ class TestARejectedPageDoesNotWedgeTheSpool:
         after the fact is noise, and holding the queue for it is worse."""
         log = install_status_curl(tmp_path, ["200"])
         write_spooled(tmp_path, SPOOLED_EPOCH_OLDER, "PAGE-ANCIENT")
-        env = base_env(tmp_path, ROBOTHOR_ALERT_SPOOL_MAX_AGE_SECONDS="60", **FAKE_TOKEN_ENV)
+        env = base_env(
+            tmp_path, ROBOTHOR_ALERT_SPOOL_MAX_AGE_SECONDS="60", **FAKE_TOKEN_ENV
+        )
         result = run_drain(tmp_path, env)
         assert result.returncode == 0, result.stdout + result.stderr
         assert curl_calls(log) == 0, "an aged-out page was still sent"
@@ -1197,7 +1208,7 @@ class TestARejectedPageDoesNotWedgeTheSpool:
         assert poisoned(tmp_path) == []
 
     def test_the_still_spooled_count_excludes_what_it_quarantined(self, tmp_path: Path):
-        """ "3 page(s) still spooled" when two are.
+        """"3 page(s) still spooled" when two are.
 
         The count was the size of the queue this drain STARTED with, minus
         what it delivered — so every page it quarantined on the way through
@@ -1288,7 +1299,9 @@ class TestTheDrainNeverCountsAPageItCannotRemove:
             "clean delivery of a page the operator is about to receive again"
         )
 
-    def test_an_over_cap_page_that_cannot_be_removed_is_named_not_counted(self, tmp_path: Path):
+    def test_an_over_cap_page_that_cannot_be_removed_is_named_not_counted(
+        self, tmp_path: Path
+    ):
         """Same unchecked `rm` on the cap-drop path: it announced N pages
         dropped while dropping none of them."""
         install_status_curl(tmp_path, ["200"])
@@ -1375,7 +1388,9 @@ class TestAnUnreadableSpoolFileIsNamedNotDeleted:
         into poison/ where it is still readable."""
         install_status_curl(tmp_path, ["200"])
         self.unreadable_page(tmp_path)
-        env = base_env(tmp_path, ROBOTHOR_ALERT_SPOOL_MAX_AGE_SECONDS="60", **FAKE_TOKEN_ENV)
+        env = base_env(
+            tmp_path, ROBOTHOR_ALERT_SPOOL_MAX_AGE_SECONDS="60", **FAKE_TOKEN_ENV
+        )
         run_drain(tmp_path, env)
         assert len(poisoned(tmp_path)) == 1
 
@@ -1388,7 +1403,9 @@ class TestTheSpoolDirIsCreatedUsableByBothAccounts:
     row normally creates it 1777; this is the path where it does not exist
     yet."""
 
-    def test_a_spool_dir_this_run_creates_is_sticky_and_world_writable(self, tmp_path: Path):
+    def test_a_spool_dir_this_run_creates_is_sticky_and_world_writable(
+        self, tmp_path: Path
+    ):
         install_fake_curl(tmp_path, fail_first=99)
         result = run_send(tmp_path, base_env(tmp_path, **FAKE_TOKEN_ENV))
         assert result.returncode != 0
@@ -1584,7 +1601,8 @@ def test_the_entry_guard_refuses_a_pytest_path_in_the_body(tmp_path: Path):
         "only inspected the dedup key"
     )
     assert spooled(tmp_path) == [], (
-        "refused, then spooled: the next liveness drain would deliver it anyway, five minutes later"
+        "refused, then spooled: the next liveness drain would deliver it "
+        "anyway, five minutes later"
     )
 
 

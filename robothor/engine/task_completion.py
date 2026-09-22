@@ -1,7 +1,15 @@
 """Known unfinished worker items prevent automatic task closure."""
 
+from __future__ import annotations
 
-def capture_pending_items(run, session):
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from robothor.engine.models import AgentRun
+    from robothor.engine.session import AgentSession
+
+
+def capture_pending_items(run: AgentRun, session: AgentSession | None) -> None:
     if session is None:
         return
     todos = getattr(session, "todo_list", None)
@@ -12,9 +20,9 @@ def capture_pending_items(run, session):
     ]
 
 
-def keep_pending_task_open(run):
+def keep_pending_task_open(run: AgentRun) -> bool:
     """Persist the next step; a completed turn is not completed task work."""
-    if not run.pending_task_items:
+    if not run.pending_task_items or not run.task_id:
         return False
     from robothor.constants import DEFAULT_TENANT
     from robothor.crm import dal

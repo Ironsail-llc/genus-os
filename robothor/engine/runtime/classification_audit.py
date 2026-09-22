@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from robothor.db.connection import tenant_scope
+
 if TYPE_CHECKING:
     from datetime import datetime
 
@@ -19,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 
 def _has_run(context: ExecutionContext) -> bool:
-    with get_connection() as conn, conn.cursor() as cur:
+    with tenant_scope(context.tenant_id), get_connection() as conn, conn.cursor() as cur:
         cur.execute(
             """SELECT 1 FROM agent_runs WHERE tenant_id=%s
                AND runtime_context->>'request_id'=%s

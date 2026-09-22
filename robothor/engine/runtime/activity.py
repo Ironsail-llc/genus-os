@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 
 @dataclass
 class Activity:
-    task: asyncio.Task
+    task: asyncio.Task[Any]
     loop: asyncio.AbstractEventLoop
     sessions: dict[str, Any] = field(default_factory=dict)
     goal_id: str | None = None

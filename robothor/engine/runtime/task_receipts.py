@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from robothor.db.connection import tenant_scope
 from robothor.engine.runtime import effects
 
 
@@ -17,7 +18,7 @@ def remember_existing(tenant_id: str, task_id: Any, *, cursor: Any = None) -> No
         _bind(cursor, record, task_id)
         record["_native_readback"] = True
         return
-    with effects.get_connection() as conn, conn.cursor() as cur:
+    with tenant_scope(tenant_id), effects.get_connection() as conn, conn.cursor() as cur:
         _bind(cur, record, task_id)
     record["_native_readback"] = True
 
