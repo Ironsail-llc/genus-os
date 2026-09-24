@@ -513,9 +513,14 @@ PIN_KEY = "_pin"
 ACTIVE_REQUEST_PIN = "active_request"
 
 
+#: What the operator added while the run worked (live_inbox.py). It amends the
+#: request, so it is kept the same way the request is.
+FOLLOWUP_PIN = "live_followup"
+
+
 def _is_pinned(msg: dict[str, Any]) -> bool:
-    """Did the ENGINE pin this message as the active request?"""
-    return msg.get(PIN_KEY) == ACTIVE_REQUEST_PIN
+    """Did the ENGINE pin this message as the request, or an addition to it?"""
+    return msg.get(PIN_KEY) in (ACTIVE_REQUEST_PIN, FOLLOWUP_PIN)
 
 
 def _is_retained_context(msg: dict[str, Any]) -> bool:

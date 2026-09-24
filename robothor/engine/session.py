@@ -274,6 +274,10 @@ class AgentSession:
         # verifier.
         self._interrupted: bool = False
         self._interrupt_note: str | None = None
+        # Chat messages sent while this run works (live_inbox.py). The channel
+        # owns the inbox; the loop drains it at its safe points.
+        self.live_inbox: Any = None
+        self.late_extensions: int = 0
 
     @property
     def run_id(self) -> str:
@@ -327,7 +331,11 @@ class AgentSession:
     @property
     def has_pending_control(self) -> bool:
         """A final tool report must not discard steering or an interruption."""
-        return bool(self._pending_steer) or self._interrupt_requested
+        return (
+            bool(self._pending_steer)
+            or self._interrupt_requested
+            or bool(self.live_inbox is not None and len(self.live_inbox))
+        )
 
     def consume_interrupt(self) -> str | None:
         """Pop and return the pending interrupt message if requested.
@@ -1009,7 +1017,9 @@ class AgentSession:
         (e.g. thinking + text blocks from extended thinking responses).
         """
         for msg in reversed(self.messages):
-            if msg.get("role") != "assistant":
+            # An answer already sent as an interim (live_inbox.py) is not the
+            # result: the run was extended past it to answer a follow-up.
+            if msg.get("role") != "assistant" or msg.get("_superseded"):
                 continue
             content = msg.get("content")
             if not content:

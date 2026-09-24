@@ -51,6 +51,13 @@ from robothor.engine.chat_delivery import deliver_interruption, deliver_plan_int
 from robothor.engine.chat_delivery import final_result as delivery_result
 from robothor.engine.chat_history import MAX_HISTORY as _MAX_HISTORY
 from robothor.engine.chat_history import ChatHistory, append_turn, as_history
+from robothor.engine.chat_live import (
+    drop_live_inbox,
+    join_running_turn,
+    register_live_inbox,
+    seal_live_inbox,
+    single_event_response,
+)
 from robothor.engine.chat_plan_changes import reject_plan, revise_plan
 from robothor.engine.chat_plan_claim import (
     admit_plan,
@@ -72,6 +79,7 @@ from robothor.engine.chat_store import (
     save_plan_state_async,
 )
 from robothor.engine.feature_flags import per_user_sessions_mode
+from robothor.engine.live_inbox import LiveInbox, history_text
 from robothor.engine.models import PLAN_TTL_SECONDS, DeepRunState, PlanState, RunStatus, TriggerType
 from robothor.engine.runtime.chat_control import start, stop
 from robothor.engine.sanitize import sanitize_log
@@ -240,6 +248,9 @@ class ChatSession:
     active_plan: PlanState | None = None
     active_deep: DeepRunState | None = None
     last_used: float = field(default_factory=time.monotonic)
+    # Running turns' mailboxes for messages sent mid-run, by request id, with
+    # whose each is (chat_live.py).
+    live_inboxes: dict[str, Any] = field(default_factory=dict)
 
 
 # In-memory session cache over the PostgreSQL store (see module docstring and
@@ -372,6 +383,11 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
 
     session_key = _effective_session_key(auth, session_key)
     session = _get_session(session_key)
+    # Sent while this session's run works: join it (chat_live.py).
+    if body.get("join_running"):
+        return single_event_response(join_running_turn(session, auth, session_key, body))
+    inbox = LiveInbox()
+    pending: list[str] = []
 
     queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
 
@@ -379,6 +395,13 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
         """Execute agent in background, push events to queue."""
         try:
             last_sent_len = 0
+
+            async def on_interim(text: str) -> None:
+                nonlocal last_sent_len
+                last_sent_len = 0  # the next call's cumulative text starts over
+                await queue.put({"event": "interim", "data": {"text": text}})
+
+            inbox.on_interim = on_interim
 
             async def on_content(cumulative: str) -> None:
                 nonlocal last_sent_len
@@ -413,14 +436,16 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
                 user_id=auth.user_id,
                 user_role=auth.role,
                 identity=identity,
+                live_inbox=inbox,
             )
+            pending.extend(seal_live_inbox(session, inbox))
 
             delivered = await delivery_result(run, auth)
             final_text = delivered["text"]
-            # Always record user message in session history
+            # Always record user message (plus what joined mid-run) in session history
             append_turn(
                 session,
-                user_message=message,
+                user_message=history_text(message, inbox.taken),
                 assistant_text=final_text or None,
             )
 
@@ -429,7 +454,7 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
                 asyncio.create_task(
                     save_exchange_async(
                         session_key,
-                        message,
+                        history_text(message, inbox.taken),
                         final_text,
                         channel="webchat",
                         model_override=session.model_override,
@@ -473,29 +498,35 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
                 }
             )
         except asyncio.CancelledError:
-            if await deliver_interruption(queue, session, auth, session_key, message, aborted=True):
+            turn = history_text(message, inbox.taken)
+            if await deliver_interruption(queue, session, auth, session_key, turn, aborted=True):
                 return
             await queue.put({"event": "done", "data": {"text": "", "aborted": True}})
         except Exception as e:
-            if await deliver_interruption(queue, session, auth, session_key, message):
+            turn = history_text(message, inbox.taken)
+            if await deliver_interruption(queue, session, auth, session_key, turn):
                 return
             logger.error("Chat agent error: %s", e, exc_info=True)
-            # Record the failed attempt so next run has context
+            # Record the failed attempt (and what joined it) so next run has context
             append_turn(
                 session,
-                user_message=message,
+                user_message=turn,
                 assistant_text=f"[Internal error — run failed: {e}]",
             )
             if len(session.history) > MAX_HISTORY:
                 session.history[:] = session.history[-MAX_HISTORY:]
             await queue.put({"event": "error", "data": {"error": str(e)}})
         finally:
+            pending.extend(seal_live_inbox(session, inbox))
+            if pending:  # never taken: the browser sends them as the next turn
+                await queue.put({"event": "pending_followups", "data": {"messages": pending}})
             await queue.put(None)  # Sentinel
             if session.active_task is asyncio.current_task():
                 session.active_task = None
 
     # Start agent as background task
     task = start(session, run_agent, auth, session_key, body.get("request_id"))
+    register_live_inbox(session, auth, inbox)  # before any await: see chat_live.py
 
     async def sse_generator() -> AsyncGenerator[str, None]:
         """Yield SSE events from the queue, with keepalive comments."""
@@ -617,7 +648,11 @@ async def chat_abort(request: Request) -> JSONResponse:
     auth = _auth_context(request)
     session_key = _effective_session_key(auth, session_key)
     session = _get_session(session_key)
-    return JSONResponse(await stop(session, auth, session_key, body.get("request_id")))
+    stopped_request = session.active_request_id
+    result = await stop(session, auth, session_key, body.get("request_id"))
+    if result.get("aborted"):  # only a run that was actually cancelled
+        drop_live_inbox(session, stopped_request)
+    return JSONResponse(result)
 
 
 @router.post("/clear")
@@ -631,6 +666,7 @@ async def chat_clear(request: Request) -> JSONResponse:
     session = _get_session(session_key)
 
     # Cancel any active task first
+    drop_live_inbox(session)
     if session.active_task and not session.active_task.done():
         session.active_task.cancel()
 

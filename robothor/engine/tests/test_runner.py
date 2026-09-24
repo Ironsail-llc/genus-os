@@ -1961,14 +1961,16 @@ class TestInterruptSteerWiring:
     advertised live-steering capability did nothing.
     """
 
-    @pytest.mark.asyncio
-    async def test_after_iteration_drains_steer_into_user_message(self, runner):
+    def test_the_loop_top_drains_steer_into_user_message(self):
+        """One consumer, at the loop top (live_inbox.absorb_operator_steer). The
+        second one that lived in `_after_iteration` raced it under another label."""
+        from robothor.engine.live_inbox import absorb_operator_steer
         from robothor.engine.session import AgentSession
 
         session = AgentSession(agent_id="test-agent")
         session.steer("focus on the budget question")
 
-        await runner._after_iteration(session, 1)
+        absorb_operator_steer(session)
 
         # Steer is consumed (drained) and surfaced for the next API call.
         assert session.consume_pending_steer() is None
@@ -1977,16 +1979,16 @@ class TestInterruptSteerWiring:
             for m in session.messages
         ), "steer text was not injected as a user message"
 
-    @pytest.mark.asyncio
-    async def test_steer_never_touches_system_prompt(self, runner):
+    def test_steer_never_touches_system_prompt(self):
         """Cache safety: steering must not mutate the system prompt prefix."""
+        from robothor.engine.live_inbox import absorb_operator_steer
         from robothor.engine.session import AgentSession
 
         session = AgentSession(agent_id="test-agent")
         session.messages = [{"role": "system", "content": "STATIC SYSTEM PROMPT"}]
         session.steer("new guidance")
 
-        await runner._after_iteration(session, 1)
+        absorb_operator_steer(session)
 
         assert session.messages[0] == {"role": "system", "content": "STATIC SYSTEM PROMPT"}
 

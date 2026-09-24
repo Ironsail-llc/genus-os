@@ -58,9 +58,7 @@ from pathlib import Path
 # The seam, drawn 2026-09-16 (hostile review I6). This module is the façade:
 # every import site keeps working, and the two halves that share nothing but
 # the item definitions live apart where the size ratchet can see them.
-from robothor.engine.deliverable_check import (
-    check_contract,
-)
+from robothor.engine.deliverable_check import check_contract
 from robothor.engine.deliverable_extract import (
     extract_contract,
     required_deliverables,
@@ -225,9 +223,10 @@ def task_text_for_run(run: object, session: object = None) -> str:
 
     Returns ``""`` when none is available; the contract then requires nothing.
     """
+    from robothor.engine.live_inbox import followup_text
     from robothor.engine.skill_contract import loaded_skill_text
 
-    return _join(_prompt_text(run, session), loaded_skill_text(session))
+    return _join(_prompt_text(run, session), followup_text(session), loaded_skill_text(session))
 
 
 def _join(*parts: str) -> str:

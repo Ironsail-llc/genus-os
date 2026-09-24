@@ -68,10 +68,11 @@ def test_the_loop_consumes_steers_and_interrupts():
     method was decomposed. The check follows the code rather than being
     dropped: what matters is that SOMETHING on the loop's path consumes them,
     not which file it lives in."""
-    from robothor.engine import loop_guards
+    from robothor.engine import live_inbox, loop_guards
 
     src = inspect.getsource(loop_guards)
-    assert "consume_pending_steer()" in src
+    assert "absorb_operator_steer(session)" in src
+    assert "consume_pending_steer()" in inspect.getsource(live_inbox)
     assert "consume_interrupt()" in src
 
 
