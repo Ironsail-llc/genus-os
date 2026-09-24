@@ -34,7 +34,18 @@ interface ChatMessage {
   content: string;
   timestamp: Date;
   recovery?: ChatRecoveryRequest;
+  /** Where a message sent while the agent was working went (live follow-ups). */
+  note?: string;
 }
+
+/** A message typed while a turn ran, waiting to be sent as the next turn. */
+interface QueuedFollowup {
+  id: string;
+  text: string;
+}
+
+const JOINED_NOTE = "Added to the running task";
+const QUEUED_NOTE = "Queued — sends when this reply finishes";
 
 interface ActivePlan {
   plan_id: string;
@@ -139,6 +150,13 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
   const scrollEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+  // Live follow-ups: messages typed while a turn runs. The engine takes them
+  // into that turn (`followup_joined`) or hands them back (`followup_queued`,
+  // `pending_followups`); those are sent as the next ordinary turn when the
+  // running stream ends, so a message is delayed at worst, never dropped.
+  const followupQueue = useRef<QueuedFollowup[]>([]);
+  const joinedFollowups = useRef<QueuedFollowup[]>([]);
+  const [queuedCount, setQueuedCount] = useState(0);
   const { notifyConversationUpdate, setRender } = useVisualState();
   const { aiName } = useRuntimeConfig();
 
@@ -624,14 +642,51 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
     }
   }, [input, isStreaming, isPlanning, deepPlan, handleSharedStreamEvent, agent]);
 
-  const sendMessage = useCallback(async () => {
-    if (deepMode || planMode) {
+  const noteMessages = useCallback((ids: string[], note: string | undefined) => {
+    setMessages((prev) => prev.map((m) => (ids.includes(m.id) ? { ...m, note } : m)));
+  }, []);
+
+  const queueFollowups = useCallback((items: QueuedFollowup[]) => {
+    if (!items.length) return;
+    followupQueue.current = [...followupQueue.current, ...items];
+    setQueuedCount(followupQueue.current.length);
+    noteMessages(items.map((i) => i.id), QUEUED_NOTE);
+  }, [noteMessages]);
+
+  /** Typed while a turn runs: offer it to that turn; anything else waits for the next. */
+  const sendFollowup = useCallback(async (text: string) => {
+    const id = `user-${Date.now()}`;
+    setMessages((prev) => [...prev, { id, role: "user", content: text, timestamp: new Date(), note: "Sending…" }]);
+    setInput("");
+    let joined = false;
+    try {
+      const res = await fetch("/api/chat/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: text, join_running: true, ...(agent ? { agent } : {}) }),
+      });
+      joined = res.ok && (await res.text()).includes("event: followup_joined");
+    } catch {
+      joined = false;
+    }
+    if (joined) {
+      joinedFollowups.current = [...joinedFollowups.current, { id, text }];
+      noteMessages([id], JOINED_NOTE);
+    } else {
+      queueFollowups([{ id, text }]);
+    }
+  }, [agent, noteMessages, queueFollowups]);
+
+  const sendMessage = useCallback(async (queued?: QueuedFollowup[] | unknown) => {
+    const flushing = Array.isArray(queued) ? (queued as QueuedFollowup[]) : null;
+    if (!flushing && (deepMode || planMode)) {
       // Deep mode routes through plan mode (deep always plans first).
       // Standalone plan mode also uses sendPlanMessage.
       return sendPlanMessage();
     }
 
-    const text = input.trim();
+    const text = flushing ? flushing.map((q) => q.text).join("\n\n") : input.trim();
+    if (!flushing && text && isStreaming) return sendFollowup(text);
     if (!text || isStreaming) return;
 
     setActiveAsks([]);
@@ -642,8 +697,13 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
       content: text,
       timestamp: new Date(),
     };
-    setMessages((prev) => [...prev, userMsg]);
-    setInput("");
+    if (flushing) {
+      // Their bubbles are already on screen, where they were typed.
+      noteMessages(flushing.map((q) => q.id), undefined);
+    } else {
+      setMessages((prev) => [...prev, userMsg]);
+      setInput("");
+    }
     setIsStreaming(true);
     setStreamingText("");
 
@@ -746,6 +806,26 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
           } else if (eventType === "iteration_start") {
             setCurrentIteration(parsed.iteration || 0);
             setMaxIterations(parsed.max_iterations || 0);
+          } else if (eventType === "interim") {
+            // An answer the agent superseded because a follow-up arrived while
+            // it was being written: it stands as its own message, and the
+            // revised one streams in after it.
+            interceptor.flush();
+            const content = stripResidualMarkers(String(parsed.text ?? fullResponse)).trim();
+            if (content) {
+              setMessages((prev) => [...prev, { id: `asst-interim-${Date.now()}`, role: "assistant", content, timestamp: new Date() }]);
+            }
+            fullResponse = "";
+            setStreamingText("");
+          } else if (eventType === "pending_followups") {
+            // Never taken by the turn: they go out as the next turn instead.
+            const pending: string[] = Array.isArray(parsed.messages) ? parsed.messages : [];
+            const items = pending.map((text, n) => {
+              const at = joinedFollowups.current.findIndex((j) => j.text === text);
+              const match = at >= 0 ? joinedFollowups.current.splice(at, 1)[0] : null;
+              return { id: match?.id ?? `user-${Date.now()}-${n}`, text };
+            });
+            queueFollowups(items);
           } else if (eventType === "done") {
             // Flush any buffered text from marker interceptor
             const flushed = interceptor.flush();
@@ -872,8 +952,20 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
       setIsStreaming(false);
       setStreamingText("");
       abortRef.current = null;
+      joinedFollowups.current = [];
     }
-  }, [input, isStreaming, planMode, deepMode, sendPlanMessage, notifyConversationUpdate, setRender, handleSharedStreamEvent, agent]);
+  }, [input, isStreaming, planMode, deepMode, sendPlanMessage, sendFollowup, noteMessages, queueFollowups, notifyConversationUpdate, setRender, handleSharedStreamEvent, agent]);
+
+  // Once nothing is running, what waited goes out as one ordinary turn.
+  const sendMessageRef = useRef(sendMessage);
+  sendMessageRef.current = sendMessage;
+  useEffect(() => {
+    if (!queuedCount || isStreaming || isPlanning || isPlanExecuting || isDeepReasoning) return;
+    const items = followupQueue.current;
+    followupQueue.current = [];
+    setQueuedCount(0);
+    void sendMessageRef.current(items);
+  }, [queuedCount, isStreaming, isPlanning, isPlanExecuting, isDeepReasoning]);
 
   const handlePlanApprove = useCallback(async () => {
     if (!activePlan) return;
@@ -1242,6 +1334,9 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
                 ) : (
                   <p>{msg.content}</p>
                 )}
+                {msg.note && (
+                  <p className="mt-1 text-[11px] opacity-75" data-testid="message-note">{msg.note}</p>
+                )}
               </div>
             </div>
           ))}
@@ -1509,13 +1604,25 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder={deepMode ? "Ask a deep reasoning question..." : planMode ? "Describe what you want planned..." : "Ask me anything..."}
+            placeholder={deepMode ? "Ask a deep reasoning question..." : planMode ? "Describe what you want planned..." : isStreaming ? "Add to the running task..." : "Ask me anything..."}
             className={`flex-1 resize-none rounded-lg border bg-background px-3 py-2 text-sm min-h-[44px] max-h-[120px] focus:outline-none focus:ring-1 ${deepMode ? "border-primary/30 focus:ring-primary/50" : planMode ? "border-warning/30 focus:ring-warning/50" : "border-border focus:ring-ring"}`}
             rows={1}
-            disabled={isStreaming || isPlanExecuting || isPlanning || isDeepReasoning}
+            // Open while an ordinary reply streams: what is typed joins it.
+            disabled={(isStreaming && (planMode || deepMode)) || isPlanExecuting || isPlanning || isDeepReasoning}
             data-testid="chat-input"
           />
           {stopNotice && <p role="status" className="text-xs text-muted-foreground">{stopNotice}</p>}
+          {isStreaming && !planMode && !deepMode && input.trim() && (
+            <Button
+              size="icon"
+              onClick={sendMessage}
+              aria-label="Add to the running task"
+              className="shrink-0"
+              data-testid="followup-button"
+            >
+              <Send className="w-4 h-4" />
+            </Button>
+          )}
           {isStreaming || isPlanning || isDeepReasoning || isPlanExecuting ? (
             <Button
               size="icon"
