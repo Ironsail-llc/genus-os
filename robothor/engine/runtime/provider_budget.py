@@ -1,8 +1,10 @@
 """Conservative text request reservations shared by all runs in a goal attempt.
 
-UTF-8 payload bytes plus message framing bound supported text tokenizers. Images,
-audio and provider-side tools have no bound here and are refused for capped goals.
-Each real provider attempt gets its own reservation; an uncertain attempt stays charged.
+The input bound is a TOKEN ceiling — the engine's ceiling-grade estimator plus a
+per-message framing allowance — because the shared budget it is subtracted from
+is denominated in tokens. Images, audio and provider-side tools have no bound
+here and are refused for capped goals. Each real provider attempt gets its own
+reservation; an uncertain attempt stays charged.
 """
 
 from __future__ import annotations
@@ -43,6 +45,46 @@ async def budget_operation(budget: Any, name: str, *args: Any) -> None:
         getattr(budget, name)(*args)
 
 
+#: Framing allowance per message, plus one for the request envelope. It is in
+#: TOKENS, like everything else subtracted from the budget. The value was 256
+#: BYTES per message back when the whole bound was measured in bytes; keeping
+#: the number keeps the allowance conservative rather than quietly shrinking it.
+_FRAMING_TOKENS = 256
+
+
+def _input_token_bound(kwargs: dict[str, Any]) -> int:
+    """A ceiling on this request's INPUT tokens, in the budget's own unit.
+
+    The shared budget is denominated in tokens — ``SharedBudget(token_remaining)``,
+    where ``token_remaining`` is the goal's token budget less what it has spent,
+    and it is settled against the provider's reported ``total_tokens``. The bound
+    subtracted from it therefore has to be tokens too.
+
+    It used to be the payload's UTF-8 BYTE count. Bytes are a valid upper bound on
+    tokens, but three to four times larger than the number they stood in for, so
+    the subtraction over-charged every request: on 2026-09-22 a goal with 72,200
+    tokens left refused a request whose payload was 68,104 bytes — roughly 20,000
+    tokens, which it could easily afford — and the pursuit stopped with the budget
+    unspent.
+
+    ``context_fit.estimate_for`` is the engine's ceiling-grade estimator: it prices
+    dense content at what it costs and errs high, which is what a reservation
+    needs. Tools and the response format are prompt too, so they are priced
+    through the same arithmetic rather than a second, disagreeing one.
+    """
+    from robothor.engine.context_fit import estimate_for
+
+    messages = kwargs.get("messages", [])
+    model = kwargs.get("model")
+    bound = estimate_for(messages, model) + _FRAMING_TOKENS * (len(messages) + 1)
+    extra = {key: kwargs[key] for key in ("tools", "response_format") if key in kwargs}
+    if extra:
+        bound += estimate_for(
+            [{"role": "system", "content": json.dumps(extra, ensure_ascii=False)}], model
+        )
+    return bound
+
+
 async def goal_completion(call: Any, kwargs: dict[str, Any], budget: Any) -> Any:
     from robothor.engine.request_budget import _text_only
 
@@ -52,12 +94,7 @@ async def goal_completion(call: Any, kwargs: dict[str, Any], budget: Any) -> Any
         or kwargs.get("n", 1) != 1
     ):
         raise RequestBudgetError("No goal token bound for multimodal or provider-tool requests")
-    payload = {
-        key: kwargs[key] for key in ("messages", "tools", "response_format") if key in kwargs
-    }
-    input_bound = len(json.dumps(payload, ensure_ascii=False).encode("utf-8")) + 256 * (
-        len(kwargs.get("messages", [])) + 1
-    )
+    input_bound = _input_token_bound(kwargs)
     limit = await budget_value(budget, "limit")
     remaining = limit - await budget_value(budget, "charged") if limit is not None else None
     output_bound = kwargs.get("max_tokens") or 4096
