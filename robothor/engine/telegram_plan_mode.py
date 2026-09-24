@@ -94,6 +94,8 @@ class PlanModeMixin:
 
         def _build_background_config(self) -> Any: ...
 
+        def _drain_if_pending(self, chat_id: str, session_key: str, session: Any) -> None: ...
+
         def _build_identity(self, *a: Any, **k: Any) -> Any: ...
 
         def _build_plan_keyboard(self, plan_id: str, revision_count: int = 0) -> Any: ...
@@ -564,6 +566,8 @@ class PlanModeMixin:
                 await self._record_interactive_delivery(run_for_delivery, sent_error)
         finally:
             self._active_tasks.pop(chat_id, None)
+            # A message sent during execution waited for this; nothing else drains it.
+            self._drain_if_pending(chat_id, session_key, session)
 
     async def _execute_deep_plan(
         self,

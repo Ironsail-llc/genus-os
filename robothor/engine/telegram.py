@@ -58,17 +58,13 @@ if TYPE_CHECKING:
     from robothor.engine.runner import AgentRunner
     from robothor.identity import IdentityContext
 
-from robothor.engine.telegram_attachments import (  # noqa: E402
-    TelegramAttachmentsMixin,
-)
+from robothor.engine.telegram_attachments import TelegramAttachmentsMixin  # noqa: E402
 from robothor.engine.telegram_handlers import (  # noqa: E402
     AVAILABLE_MODELS,
     TelegramHandlersMixin,
 )
-from robothor.engine.telegram_plan_mode import (  # noqa: E402
-    TYPING_INTERVAL,
-    PlanModeMixin,
-)
+from robothor.engine.telegram_live import TelegramLiveFollowupMixin  # noqa: E402
+from robothor.engine.telegram_plan_mode import TYPING_INTERVAL, PlanModeMixin  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -151,7 +147,9 @@ def _md_to_html(text: str) -> str:
     return text
 
 
-class TelegramBot(TelegramAttachmentsMixin, TelegramHandlersMixin, PlanModeMixin):
+class TelegramBot(
+    TelegramAttachmentsMixin, TelegramHandlersMixin, PlanModeMixin, TelegramLiveFollowupMixin
+):
     """Aiogram v3 Telegram bot for Genus OS."""
 
     def __init__(self, config: EngineConfig, runner: AgentRunner) -> None:
@@ -308,6 +306,9 @@ class TelegramBot(TelegramAttachmentsMixin, TelegramHandlersMixin, PlanModeMixin
         where a second sender's message arriving in the async gap could
         silently overwrite it before this run gets to read it.
         """
+        # A message sent while this chat's run works joins it (telegram_live.py).
+        if await self._join_live_run(chat_id, user_text, sender_info, attachments):
+            return
         self._message_buffers.setdefault(chat_id, []).append(user_text)
         if sender_info is not None:
             self._pending_sender_info[chat_id] = sender_info
@@ -540,6 +541,7 @@ class TelegramBot(TelegramAttachmentsMixin, TelegramHandlersMixin, PlanModeMixin
 
         # ── Execute agent ──
         model = self._model_override.get(chat_id)
+        inbox = self._open_live_inbox(chat_id, sender_info)  # messages sent mid-run
 
         async def run_agent() -> None:
             nonlocal stream_msg_id
@@ -600,12 +602,15 @@ class TelegramBot(TelegramAttachmentsMixin, TelegramHandlersMixin, PlanModeMixin
                     user_id=str((_user or {}).get("user_id") or f"telegram:{chat_id}"),
                     user_role=str((_user or {}).get("role") or "user"),
                     identity=_identity,
+                    live_inbox=inbox,
                 )
                 run_for_delivery = run
 
                 async with _lock:
-                    # Always record user message in session history
-                    session.history.append({"role": "user", "content": user_text})
+                    # Always record user message (plus what joined mid-run) in history
+                    session.history.append(
+                        {"role": "user", "content": self._live_turn_text(inbox, user_text)}
+                    )
 
                     if run.output_text:
                         session.history.append({"role": "assistant", "content": run.output_text})
@@ -624,7 +629,7 @@ class TelegramBot(TelegramAttachmentsMixin, TelegramHandlersMixin, PlanModeMixin
                 user_extras = build_user_extras(
                     user_message_id=user_message_id,
                     reply_ctx=reply_ctx,
-                    attachments=attachments,
+                    attachments=self._live_attachments(inbox, attachments),
                 )
 
                 # Delete status message, deliver final output as new message.
@@ -661,7 +666,7 @@ class TelegramBot(TelegramAttachmentsMixin, TelegramHandlersMixin, PlanModeMixin
 
                     async def _persist_and_map(
                         session_key: str = session_key,
-                        user_text: str = user_text,
+                        user_text: str = self._live_turn_text(inbox, user_text),
                         output_text: str | None = run.output_text,
                         model: Any = model,
                         tenant_id: str = _tenant,
@@ -785,11 +790,8 @@ class TelegramBot(TelegramAttachmentsMixin, TelegramHandlersMixin, PlanModeMixin
                 typing_active = False
                 typing_task.cancel()
                 self._active_tasks.pop(chat_id, None)
-
-                # Drain any messages that arrived while this run was active
-                if self._message_buffers.get(chat_id) and not self._drain_scheduled.get(chat_id):
-                    self._drain_scheduled[chat_id] = True
-                    asyncio.create_task(self._drain_and_run(chat_id, session_key, session))
+                # Requeue what the run never took, then drain what queued behind it
+                self._finish_live_run(chat_id, session_key, session, inbox)
 
         task = asyncio.create_task(run_agent())
         self._active_tasks[chat_id] = task

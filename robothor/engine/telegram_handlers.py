@@ -280,6 +280,7 @@ class TelegramHandlersMixin:
         # Clear any buffered (not-yet-started) messages
         self._message_buffers.pop(chat_id, None)
         self._drain_scheduled.pop(chat_id, None)
+        self._drop_live_inbox(chat_id)  # and what was sent to the run mid-flight
         task = self._active_tasks.get(chat_id)
         if task and not task.done():
             task.cancel()

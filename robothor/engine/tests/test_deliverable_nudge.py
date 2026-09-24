@@ -61,15 +61,22 @@ class TestTheLoopActuallyUsesIt:
     about."""
 
     def test_the_runner_consults_it_before_returning(self):
-        src = (Path(__file__).resolve().parents[1] / "runner.py").read_text()
-        assert "nudge_for_missing_deliverable" in src, (
-            "the run loop never asks about the deliverable"
-        )
+        """The no-tool-calls branch asks `keep_going_after_answer`, which holds
+        the whole "may the loop stop here?" decision (live_inbox.py): output
+        repair, this nudge, then follow-ups the conversation sent mid-run. The
+        check follows the call one hop instead of being dropped."""
+        engine = Path(__file__).resolve().parents[1]
+        src = (engine / "runner.py").read_text()
         # It must be consulted on the no-tool-calls path, which is where the
         # agent declares itself finished.
         branch = src.split("if not assistant_msg.tool_calls:", 1)[-1].split("# ── Execute", 1)[0]
-        assert "nudge_for_missing_deliverable" in branch, (
+        assert "keep_going_after_answer(" in branch, (
             "the check is not on the path where the agent says it is done"
+        )
+        helper = (engine / "live_inbox.py").read_text().split("def keep_going_after_answer", 1)[1]
+        helper = helper.split("\ndef ", 1)[0]
+        assert "nudge_for_missing_deliverable(" in helper, (
+            "the run loop never asks about the deliverable"
         )
 
 

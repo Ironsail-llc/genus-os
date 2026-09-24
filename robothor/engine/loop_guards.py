@@ -30,6 +30,7 @@ import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from robothor.engine.live_inbox import absorb_live_input
 from robothor.goals.runtime import stop_pursuit
 
 if TYPE_CHECKING:
@@ -60,7 +61,7 @@ def check_iteration_guards(
     """True when the loop must stop. Side effects happen here, as they did inline."""
     if _wallclock_expired(session, watchdog, wallclock_deadline, wallclock_ceiling):
         return True
-    _absorb_steer(session)
+    absorb_live_input(session)
     if _interrupted(session):
         return True
     if _watchdog_aborted(session, watchdog):
@@ -94,14 +95,6 @@ def _wallclock_expired(session: Any, watchdog: Any, deadline: float | None, ceil
         return False
     session.record_error(reason)
     return True
-
-
-def _absorb_steer(session: Any) -> None:
-    text = session.consume_pending_steer()
-    if not text:
-        return
-    session.messages.append({"role": "user", "content": f"[operator steering update]\n{text}"})
-    logger.info("Live steer injected into run %s", session.run_id)
 
 
 def _interrupted(session: Any) -> bool:

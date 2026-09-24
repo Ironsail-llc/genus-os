@@ -1,10 +1,45 @@
-# Telegram: sending and receiving files
+# Telegram: messages, files, and adding context mid-task
 
 Telegram is a built-in channel and needs no `ROBOTHOR_CHANNELS` entry. Set
 `ROBOTHOR_TELEGRAM_BOT_TOKEN` and it starts; see
 [Channel access](access.md) for who is allowed to reach it.
 
-This page is about the attachments half — pictures and files, both directions.
+This page covers adding context while the agent is working, then pictures and
+files in both directions.
+
+## Adding context while the agent is working
+
+A message you send while the agent is still working on your last one joins
+that run instead of waiting behind it. The bot reacts with 👀 to show the
+message reached the running agent.
+
+The agent does not see the message at once. It picks it up at the next safe
+point:
+
+| When you send it | What happens |
+|------------------|--------------|
+| While a tool is running | It is added right after that tool's result, before the agent's next step |
+| While the agent is writing its final answer | The run keeps going. You get the answer it was writing as its own message, then a revised one that takes your addition into account |
+| After the run's last safe point | It becomes a new turn once the run finishes, as it did before this change. Nothing is dropped |
+
+What you add is stored with your original request in the conversation's history,
+so later turns know it was said. Compaction keeps it too, the same way it keeps
+the request.
+
+Some messages always wait for their own turn:
+
+- a reply to a question the agent asked (`ask_user`), and replies in plan mode.
+  Those are answers, not additions;
+- in a group chat, a message from someone other than the person whose request
+  is running.
+
+One run takes at most three additions after it has started writing its final
+answer. Anything past that becomes a new turn, so a long conversation cannot
+hold a run open forever.
+
+`/stop` ends the run and discards what you added to it. The same mechanism
+carries operator `/steer` messages, which name a run explicitly and can target
+any run, not only the chat's own.
 
 ## Receiving: the inbox
 

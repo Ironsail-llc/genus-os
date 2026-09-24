@@ -60,18 +60,14 @@ from robothor.engine.finalization_budget import FinalizationBudget  # noqa: E402
 from robothor.engine.injection_screen import screen_run_prompt
 from robothor.engine.journal_resume import maybe_prepend_journal_resume
 from robothor.engine.last_resort import all_models_failed
+from robothor.engine.live_inbox import keep_going_after_answer
 
 # LLM dispatch/cost/streaming + the request-timeout constants now live in
 # llm_client.LLMClient (Phase A / Slice 1). AgentRunner delegates to an
 # instance of it; the historical method surface is preserved via thin
 # delegators/aliases below so existing call sites keep working unchanged.
 from robothor.engine.llm_client import LLMClient  # noqa: E402
-from robothor.engine.loop_guards import (
-    GuardState,
-    append_engine_note,
-    check_iteration_guards,
-    nudge_for_missing_deliverable,
-)
+from robothor.engine.loop_guards import GuardState, append_engine_note, check_iteration_guards
 from robothor.engine.models import (
     AgentConfig,
     AgentRun,
@@ -80,7 +76,7 @@ from robothor.engine.models import (
     StepType,
     TriggerType,
 )
-from robothor.engine.output_validation import request_output_repair, validated_completion
+from robothor.engine.output_validation import validated_completion
 from robothor.engine.plan_integrity import nudge_for_plan_research
 from robothor.engine.prompts import (
     EXECUTION_MODE_PREAMBLE,
@@ -403,6 +399,7 @@ def _send_soft_runaway_alert(
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
+    from robothor.engine.live_inbox import LiveInbox
     from robothor.identity import IdentityContext
 
 # Trigger types that run with no interactive human and are therefore governed by
@@ -547,6 +544,7 @@ class AgentRunner(
         user_id: str = "",
         user_role: str = "",
         identity: IdentityContext | None = None,
+        live_inbox: LiveInbox | None = None,
     ) -> AgentRun:
         """Execute an agent with the given message.
 
@@ -637,6 +635,7 @@ class AgentRunner(
         )
 
         await attach_session(session)
+        session.live_inbox = live_inbox  # chat sent mid-run; see live_inbox.py
         session.response_format = agent_config.response_format
         session.provider_order = agent_config.provider_order
 
@@ -2059,9 +2058,7 @@ class AgentRunner(
                     if await require_alignment(self, session, models, assistant_msg.content or ""):
                         continue
 
-                if request_output_repair(session) or nudge_for_missing_deliverable(
-                    session, _workspace
-                ):
+                if await keep_going_after_answer(session, _workspace, assistant_msg.content):
                     continue
                 return
 

@@ -193,15 +193,10 @@ class RunLifecycleMixin:
         non-blocking and exception-safe — the caller suppresses
         exceptions to keep the loop alive.
         """
-        # G3 (Rip 9 wiring): drain any operator steer queued via
-        # interrupt_api.steer_session into the conversation so the next LLM
-        # call sees it. Injected as a *user* turn — never the system prompt —
-        # so the cached prefix stays intact (prompt-cache discipline).
-        steer = session.consume_pending_steer()
-        if steer:
-            session.messages.append({"role": "user", "content": f"[steer] {steer}"})
-            # A steer is a user turn too — count it for the memory-review nudge.
-            session._turns_since_memory += 1
+        # Operator steers and live chat follow-ups are drained in ONE place,
+        # live_inbox.absorb_live_input at the top of the next iteration. A second
+        # consumer here raced it under a different label ("[steer]" vs
+        # "[operator steering update]"), and whichever ran first won.
 
     async def _send_progress_report(
         self,
