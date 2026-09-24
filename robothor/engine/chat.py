@@ -54,7 +54,7 @@ from robothor.engine.chat_history import ChatHistory, append_turn, as_history
 from robothor.engine.chat_live import (
     drop_live_inbox,
     join_running_turn,
-    open_live_inbox,
+    register_live_inbox,
     seal_live_inbox,
     single_event_response,
 )
@@ -79,7 +79,7 @@ from robothor.engine.chat_store import (
     save_plan_state_async,
 )
 from robothor.engine.feature_flags import per_user_sessions_mode
-from robothor.engine.live_inbox import history_text
+from robothor.engine.live_inbox import LiveInbox, history_text
 from robothor.engine.models import PLAN_TTL_SECONDS, DeepRunState, PlanState, RunStatus, TriggerType
 from robothor.engine.runtime.chat_control import start, stop
 from robothor.engine.sanitize import sanitize_log
@@ -248,9 +248,9 @@ class ChatSession:
     active_plan: PlanState | None = None
     active_deep: DeepRunState | None = None
     last_used: float = field(default_factory=time.monotonic)
-    # The running turn's mailbox for messages sent mid-run, and whose it is.
-    live_inbox: Any = None
-    live_owner: tuple[str, str] | None = None
+    # Running turns' mailboxes for messages sent mid-run, by request id, with
+    # whose each is (chat_live.py).
+    live_inboxes: dict[str, Any] = field(default_factory=dict)
 
 
 # In-memory session cache over the PostgreSQL store (see module docstring and
@@ -385,8 +385,8 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
     session = _get_session(session_key)
     # Sent while this session's run works: join it (chat_live.py).
     if body.get("join_running"):
-        return single_event_response(join_running_turn(session, auth, message))
-    inbox = open_live_inbox(session, auth)
+        return single_event_response(join_running_turn(session, auth, session_key, body))
+    inbox = LiveInbox()
     pending: list[str] = []
 
     queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
@@ -526,6 +526,7 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
 
     # Start agent as background task
     task = start(session, run_agent, auth, session_key, body.get("request_id"))
+    register_live_inbox(session, auth, inbox)  # before any await: see chat_live.py
 
     async def sse_generator() -> AsyncGenerator[str, None]:
         """Yield SSE events from the queue, with keepalive comments."""
@@ -647,8 +648,11 @@ async def chat_abort(request: Request) -> JSONResponse:
     auth = _auth_context(request)
     session_key = _effective_session_key(auth, session_key)
     session = _get_session(session_key)
-    drop_live_inbox(session)  # first: what was added mid-run goes with the run
-    return JSONResponse(await stop(session, auth, session_key, body.get("request_id")))
+    stopped_request = session.active_request_id
+    result = await stop(session, auth, session_key, body.get("request_id"))
+    if result.get("aborted"):  # only a run that was actually cancelled
+        drop_live_inbox(session, stopped_request)
+    return JSONResponse(result)
 
 
 @router.post("/clear")

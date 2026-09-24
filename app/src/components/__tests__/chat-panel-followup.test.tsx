@@ -83,6 +83,8 @@ describe("adding to a running task in the Helm", () => {
     await type("Also include Y.");
     await waitFor(() => expect(screen.getByText("Added to the running task")).toBeTruthy());
     expect(sends[1]).toMatchObject({ message: "Also include Y.", join_running: true });
+    // It names the turn it is for: two tabs are two turns (review #2).
+    expect(sends[1].running_request_id).toBe(sends[0].request_id);
 
     await act(async () => { running.release(); });
     await waitFor(() => expect(screen.getByText("Done, with Y.")).toBeTruthy());
@@ -139,5 +141,84 @@ describe("adding to a running task in the Helm", () => {
     await act(async () => { running.release(); });
     await waitFor(() => expect(screen.getByText("second answer")).toBeTruthy());
     expect(sends.filter((s) => !s.join_running).map((s) => s.message)).toEqual(["Draft it.", "Then do Z."]);
+  });
+
+  it("Stop discards what was waiting instead of sending it after the stop", async () => {
+    const running = heldStream([], [{ event: "done", data: { text: "", aborted: true } }]);
+    const sends = engine(running.body, "followup_queued");
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
+    const route = fetchMock.getMockImplementation() as (u: string | URL | Request, i?: RequestInit) => Promise<unknown>;
+    fetchMock.mockImplementation(async (url: string | URL | Request, init?: RequestInit) => {
+      if (String(url) === "/api/chat/abort") {
+        return new Response(JSON.stringify({ ok: true, aborted: true, durable_stopped: true }));
+      }
+      return route(url, init);
+    });
+    render(<ChatPanel />);
+    await type("Long job.");
+    await waitFor(() => expect(screen.getByTestId("abort-button")).toBeTruthy());
+    await type("Then do Z.");
+    await waitFor(() => expect(screen.getByText("Queued — sends when this reply finishes")).toBeTruthy());
+
+    await act(async () => { fireEvent.click(screen.getByTestId("abort-button")); });
+    await act(async () => { running.release(); });
+    await waitFor(() => expect(screen.getByText("Not sent — the task was stopped")).toBeTruthy());
+    await new Promise((r) => setTimeout(r, 50));
+    expect(sends.filter((s) => !s.join_running).map((s) => s.message)).toEqual(["Long job."]);
+  });
+
+  it("sends queued messages in the order they were typed", async () => {
+    // "Also Y" joins but is never taken (comes back at the very end); "skip Y"
+    // is queued at once. Arrival order would send them reversed (review #4).
+    const running = heldStream([], [
+      { event: "done", data: { text: "First answer." } },
+      { event: "pending_followups", data: { messages: ["Also do Y."] } },
+    ]);
+    const replies = ["followup_joined", "followup_queued"];
+    const sends: Array<Record<string, unknown>> = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      if (String(url) !== "/api/chat/send") return { ok: true, json: async () => ({ messages: [], agents: [] }) };
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      sends.push(body);
+      if (body.join_running) {
+        const reply = replies.shift()!;
+        return sseResponse(stream([{ event: reply, data: { event: reply } }]));
+      }
+      return sseResponse(sends.filter((b) => !b.join_running).length === 1 ? running.body : stream([{ event: "done", data: { text: "second answer" } }]));
+    }));
+    render(<ChatPanel />);
+    await type("Draft it.");
+    await waitFor(() => expect(screen.getByTestId("abort-button")).toBeTruthy());
+    await type("Also do Y.");
+    await waitFor(() => expect(screen.getByText("Added to the running task")).toBeTruthy());
+    await type("Actually, skip Y.");
+    await waitFor(() => expect(screen.getByText("Queued — sends when this reply finishes")).toBeTruthy());
+
+    await act(async () => { running.release(); });
+    await waitFor(() => expect(screen.getByText("second answer")).toBeTruthy());
+    const flushed = sends.filter((b) => !b.join_running).map((b) => b.message);
+    expect(flushed[1]).toBe("Also do Y.\n\nActually, skip Y.");
+  });
+
+  it("says so when the connection drops before the task confirmed what was added", async () => {
+    let fail!: () => void;
+    const dropped = new Promise<void>((resolve) => { fail = resolve; });
+    const body = new ReadableStream({
+      async start(controller) {
+        await dropped;
+        controller.error(new TypeError("network error"));
+      },
+    });
+    engine(body, "followup_joined");
+    render(<ChatPanel />);
+    await type("Draft it.");
+    await waitFor(() => expect(screen.getByTestId("abort-button")).toBeTruthy());
+    await type("Also include Y.");
+    await waitFor(() => expect(screen.getByText("Added to the running task")).toBeTruthy());
+
+    await act(async () => { fail(); });
+    await waitFor(() =>
+      expect(screen.getByText("May not have reached the task — the connection dropped")).toBeTruthy(),
+    );
   });
 });

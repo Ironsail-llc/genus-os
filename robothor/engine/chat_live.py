@@ -2,9 +2,10 @@
 
 The web half of live follow-ups (robothor/engine/live_inbox.py; Telegram's is
 telegram_live.py). ``/chat/send`` opens a ``LiveInbox`` for every run and parks
-it on the ``ChatSession``. A later ``/chat/send`` carrying ``join_running: true``
-for the same session, from the same person, goes into that inbox instead of
-starting a second run, and gets a one-event stream back:
+it on the ``ChatSession`` under the run's request id: two tabs, two turns, two
+inboxes. A later ``/chat/send`` carrying ``join_running: true`` and the
+``running_request_id`` of the turn it is for, from the same person, goes into
+that turn's inbox instead of starting a second run, and gets one event back:
 
 * ``followup_joined``: the running turn has it and will take it at its next
   safe point.
@@ -30,11 +31,14 @@ clients other than the Helm depend on that (test_concurrent_session.py).
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from fastapi.responses import StreamingResponse
 
-from robothor.engine.live_inbox import LiveInbox
+from robothor.engine.runtime.chat_control import request_key
+
+if TYPE_CHECKING:
+    from robothor.engine.live_inbox import LiveInbox
 
 FOLLOWUP_JOINED = "followup_joined"
 FOLLOWUP_QUEUED = "followup_queued"
@@ -44,36 +48,43 @@ def _owner(auth: Any) -> tuple[str, str]:
     return (str(auth.tenant_id), str(auth.user_id))
 
 
-def open_live_inbox(session: Any, auth: Any) -> LiveInbox:
-    """Before the run task exists, so no request can find the session busy
-    with no inbox to join."""
-    inbox = LiveInbox()
-    session.live_inbox, session.live_owner = inbox, _owner(auth)
-    return inbox
+def register_live_inbox(session: Any, auth: Any, inbox: LiveInbox) -> None:
+    """Park the run's inbox under its request id.
+
+    Called right after ``chat_control.start`` has set ``active_request_id`` and
+    before anything awaits, so the run task has not taken a step yet: no request
+    can find the turn running with no inbox to join.
+    """
+    session.live_inboxes[session.active_request_id] = (inbox, _owner(auth))
 
 
-def join_running_turn(session: Any, auth: Any, message: str) -> str:
-    """``followup_joined`` when the running turn took it, else ``followup_queued``."""
-    task = session.active_task
-    inbox: LiveInbox | None = session.live_inbox
-    if task is None or task.done() or inbox is None or session.live_owner != _owner(auth):
+def join_running_turn(session: Any, auth: Any, session_key: str, body: dict[str, Any]) -> str:
+    """``followup_joined`` when the named turn took it, else ``followup_queued``."""
+    running = body.get("running_request_id")
+    if not running:
         return FOLLOWUP_QUEUED
-    return FOLLOWUP_JOINED if inbox.push(message) else FOLLOWUP_QUEUED
+    entry = session.live_inboxes.get(request_key(auth, session_key, running))
+    if entry is None or entry[1] != _owner(auth):
+        return FOLLOWUP_QUEUED
+    return FOLLOWUP_JOINED if entry[0].push(str(body.get("message", ""))) else FOLLOWUP_QUEUED
 
 
 def seal_live_inbox(session: Any, inbox: LiveInbox) -> list[str]:
     """Stop accepting; return what the run never took. Idempotent."""
-    if session.live_inbox is inbox:
-        session.live_inbox = session.live_owner = None
+    for key in [k for k, entry in session.live_inboxes.items() if entry[0] is inbox]:
+        del session.live_inboxes[key]
     return [item.text for item in inbox.close()]
 
 
-def drop_live_inbox(session: Any) -> None:
-    """``/chat/abort`` and ``/chat/clear``: what was added goes with the run."""
-    inbox: LiveInbox | None = session.live_inbox
-    if inbox is not None:
-        inbox.close()
-    session.live_inbox = session.live_owner = None
+def drop_live_inbox(session: Any, request_id: str | None = None) -> None:
+    """What was added goes with the run: the one ``/chat/abort`` actually
+    cancelled, or every run, for ``/chat/clear``. An abort that cancelled
+    nothing must drop nothing; the run's own seal hands its leftovers back."""
+    keys = [request_id] if request_id else list(session.live_inboxes)
+    for key in keys:
+        entry = session.live_inboxes.pop(key, None)
+        if entry is not None:
+            entry[0].close()
 
 
 def single_event_response(event: str) -> StreamingResponse:

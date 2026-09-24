@@ -38,14 +38,17 @@ interface ChatMessage {
   note?: string;
 }
 
-/** A message typed while a turn ran, waiting to be sent as the next turn. */
+/** A message typed while a turn ran. `seq` is typing order: queued ones go out in it. */
 interface QueuedFollowup {
   id: string;
   text: string;
+  seq: number;
 }
 
 const JOINED_NOTE = "Added to the running task";
 const QUEUED_NOTE = "Queued — sends when this reply finishes";
+const STOPPED_NOTE = "Not sent — the task was stopped";
+const DROPPED_NOTE = "May not have reached the task — the connection dropped";
 
 interface ActivePlan {
   plan_id: string;
@@ -155,7 +158,12 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
   // `pending_followups`); those are sent as the next ordinary turn when the
   // running stream ends, so a message is delayed at worst, never dropped.
   const followupQueue = useRef<QueuedFollowup[]>([]);
+  // Joined but not yet confirmed taken: the running stream's end settles them.
   const joinedFollowups = useRef<QueuedFollowup[]>([]);
+  // Offered and awaiting the engine's answer; `pending_followups` can arrive first.
+  const inFlightFollowups = useRef<QueuedFollowup[]>([]);
+  const claimedFollowups = useRef<Set<string>>(new Set());
+  const followupSeq = useRef(0);
   const [queuedCount, setQueuedCount] = useState(0);
   const { notifyConversationUpdate, setRender } = useVisualState();
   const { aiName } = useRuntimeConfig();
@@ -655,27 +663,42 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
 
   /** Typed while a turn runs: offer it to that turn; anything else waits for the next. */
   const sendFollowup = useCallback(async (text: string) => {
-    const id = `user-${Date.now()}`;
-    setMessages((prev) => [...prev, { id, role: "user", content: text, timestamp: new Date(), note: "Sending…" }]);
+    if (isStopping) return; // a stop is under way: what is typed now stays in the box
+    const item = { id: `user-${Date.now()}`, text, seq: followupSeq.current++ };
+    setMessages((prev) => [...prev, { id: item.id, role: "user", content: text, timestamp: new Date(), note: "Sending…" }]);
     setInput("");
+    inFlightFollowups.current = [...inFlightFollowups.current, item];
     let joined = false;
     try {
       const res = await fetch("/api/chat/send", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: text, join_running: true, ...(agent ? { agent } : {}) }),
+        // It names the turn it is for: two tabs are two turns, two inboxes.
+        body: JSON.stringify({ message: text, join_running: true, running_request_id: requestIdRef.current, ...(agent ? { agent } : {}) }),
       });
       joined = res.ok && (await res.text()).includes("event: followup_joined");
     } catch {
       joined = false;
     }
+    inFlightFollowups.current = inFlightFollowups.current.filter((f) => f.id !== item.id);
+    if (claimedFollowups.current.delete(item.id)) return; // the stream already handed it back
     if (joined) {
-      joinedFollowups.current = [...joinedFollowups.current, { id, text }];
-      noteMessages([id], JOINED_NOTE);
+      joinedFollowups.current = [...joinedFollowups.current, item];
+      noteMessages([item.id], JOINED_NOTE);
     } else {
-      queueFollowups([{ id, text }]);
+      queueFollowups([item]);
     }
-  }, [agent, noteMessages, queueFollowups]);
+  }, [agent, isStopping, noteMessages, queueFollowups]);
+
+  /** Stop: what was waiting goes with the task, not out as a turn after it. */
+  const discardFollowups = useCallback(() => {
+    const ids = [...followupQueue.current, ...joinedFollowups.current, ...inFlightFollowups.current].map((f) => f.id);
+    ids.forEach((id) => claimedFollowups.current.add(id));
+    followupQueue.current = [];
+    joinedFollowups.current = [];
+    setQueuedCount(0);
+    noteMessages(ids, STOPPED_NOTE);
+  }, [noteMessages]);
 
   const sendMessage = useCallback(async (queued?: QueuedFollowup[] | unknown) => {
     const flushing = Array.isArray(queued) ? (queued as QueuedFollowup[]) : null;
@@ -685,7 +708,7 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
       return sendPlanMessage();
     }
 
-    const text = flushing ? flushing.map((q) => q.text).join("\n\n") : input.trim();
+    const text = flushing ? [...flushing].sort((a, b) => a.seq - b.seq).map((q) => q.text).join("\n\n") : input.trim();
     if (!flushing && text && isStreaming) return sendFollowup(text);
     if (!text || isStreaming) return;
 
@@ -713,6 +736,7 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
     setStopNotice(null);
     setIsStopping(false);
     setRuntimeProgress("Submitting request…");
+    let streamSettled = false;
 
     try {
       const requestId = requestIdRef.current!;
@@ -820,11 +844,22 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
           } else if (eventType === "pending_followups") {
             // Never taken by the turn: they go out as the next turn instead.
             const pending: string[] = Array.isArray(parsed.messages) ? parsed.messages : [];
+            const orphans: ChatMessage[] = [];
             const items = pending.map((text, n) => {
-              const at = joinedFollowups.current.findIndex((j) => j.text === text);
-              const match = at >= 0 ? joinedFollowups.current.splice(at, 1)[0] : null;
-              return { id: match?.id ?? `user-${Date.now()}-${n}`, text };
+              const take = (list: QueuedFollowup[]) => {
+                const at = list.findIndex((j) => j.text === text);
+                return at >= 0 ? list.splice(at, 1)[0] : null;
+              };
+              const inFlight = take(inFlightFollowups.current);
+              if (inFlight) claimedFollowups.current.add(inFlight.id);
+              const match = take(joinedFollowups.current) ?? inFlight;
+              if (match) return match;
+              // Not typed here (another tab's, say): show it before sending it.
+              const orphan = { id: `user-${Date.now()}-${n}`, text, seq: followupSeq.current++ };
+              orphans.push({ id: orphan.id, role: "user", content: text, timestamp: new Date() });
+              return orphan;
             });
+            if (orphans.length) setMessages((prev) => [...prev, ...orphans]);
             queueFollowups(items);
           } else if (eventType === "done") {
             // Flush any buffered text from marker interceptor
@@ -905,6 +940,7 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
       setCurrentIteration(0);
       setMaxIterations(0);
 
+      streamSettled = receivedTerminal;
       if (!receivedTerminal) fullResponse = OUTCOME_UNKNOWN;
       else if (fullResponse !== OUTCOME_UNKNOWN) {
         const scope = requestScopes.current[requestIdRef.current!];
@@ -952,9 +988,19 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
       setIsStreaming(false);
       setStreamingText("");
       abortRef.current = null;
+      // A stream that ended without its terminal event never said whether the
+      // task took what joined it: say so rather than keep claiming "Added".
+      if (!streamSettled) noteMessages(joinedFollowups.current.map((f) => f.id), DROPPED_NOTE);
       joinedFollowups.current = [];
     }
   }, [input, isStreaming, planMode, deepMode, sendPlanMessage, sendFollowup, noteMessages, queueFollowups, notifyConversationUpdate, setRender, handleSharedStreamEvent, agent]);
+
+  // Another agent is another conversation: what waited for this one is not sent there.
+  useEffect(() => {
+    followupQueue.current = [];
+    joinedFollowups.current = [];
+    setQueuedCount(0);
+  }, [agent]);
 
   // Once nothing is running, what waited goes out as one ordinary turn.
   const sendMessageRef = useRef(sendMessage);
@@ -1182,6 +1228,7 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
 
   const handleAbort = async () => {
     if (isStopping) return;
+    discardFollowups();
     const stoppedRequest = requestIdRef.current;
     const stoppedController = abortRef.current;
     setIsStopping(true);
