@@ -30,7 +30,7 @@ import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from robothor.engine.live_inbox import absorb_live_input
+from robothor.engine.live_inbox import absorb_followups, absorb_operator_steer
 from robothor.goals.runtime import stop_pursuit
 
 if TYPE_CHECKING:
@@ -61,12 +61,15 @@ def check_iteration_guards(
     """True when the loop must stop. Side effects happen here, as they did inline."""
     if _wallclock_expired(session, watchdog, wallclock_deadline, wallclock_ceiling):
         return True
-    absorb_live_input(session)
-    if _interrupted(session):
+    absorb_operator_steer(session)
+    if _interrupted(session) or _watchdog_aborted(session, watchdog):
         return True
-    if _watchdog_aborted(session, watchdog):
+    if stop_pursuit(session) or _runaway(session, agent_config, state):
         return True
-    return stop_pursuit(session) or _runaway(session, agent_config, state)
+    # Last: a chat follow-up is taken only by a run that goes on to answer it.
+    # Taken and then stopped, it would be answered by nobody and never requeued.
+    absorb_followups(session)
+    return False
 
 
 def _wallclock_expired(session: Any, watchdog: Any, deadline: float | None, ceiling: int) -> bool:

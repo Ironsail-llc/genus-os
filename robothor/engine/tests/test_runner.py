@@ -1962,15 +1962,15 @@ class TestInterruptSteerWiring:
     """
 
     def test_the_loop_top_drains_steer_into_user_message(self):
-        """One consumer, at the loop top (live_inbox.absorb_live_input). The
+        """One consumer, at the loop top (live_inbox.absorb_operator_steer). The
         second one that lived in `_after_iteration` raced it under another label."""
-        from robothor.engine.live_inbox import absorb_live_input
+        from robothor.engine.live_inbox import absorb_operator_steer
         from robothor.engine.session import AgentSession
 
         session = AgentSession(agent_id="test-agent")
         session.steer("focus on the budget question")
 
-        absorb_live_input(session)
+        absorb_operator_steer(session)
 
         # Steer is consumed (drained) and surfaced for the next API call.
         assert session.consume_pending_steer() is None
@@ -1981,14 +1981,14 @@ class TestInterruptSteerWiring:
 
     def test_steer_never_touches_system_prompt(self):
         """Cache safety: steering must not mutate the system prompt prefix."""
-        from robothor.engine.live_inbox import absorb_live_input
+        from robothor.engine.live_inbox import absorb_operator_steer
         from robothor.engine.session import AgentSession
 
         session = AgentSession(agent_id="test-agent")
         session.messages = [{"role": "system", "content": "STATIC SYSTEM PROMPT"}]
         session.steer("new guidance")
 
-        absorb_live_input(session)
+        absorb_operator_steer(session)
 
         assert session.messages[0] == {"role": "system", "content": "STATIC SYSTEM PROMPT"}
 

@@ -153,6 +153,82 @@ def test_a_deliverable_named_mid_run_is_part_of_the_task() -> None:
     assert "/tmp/report.md" in text
 
 
+@pytest.mark.asyncio
+async def test_a_superseded_answer_is_never_the_final_answer() -> None:
+    """Review #1: it was already sent as an interim. If the run then ends with
+    no newer text (budget, interrupt, a reasoning-only turn), reporting it again
+    as the result would answer the follow-up with the answer it superseded."""
+    from robothor.engine.live_inbox import extend_for_late_followups
+
+    box = LiveInbox()
+    s = _session_with(box)
+    s.messages.append({"role": "assistant", "content": "the forecast"})
+    box.push("and the tides?")
+    assert await extend_for_late_followups(s, "the forecast") is True
+    assert s.get_final_text() is None
+
+
+@pytest.mark.asyncio
+async def test_a_block_list_answer_is_delivered_as_its_text() -> None:
+    """Review #4: extended-thinking content is a list of blocks, not a str."""
+    from robothor.engine.live_inbox import extend_for_late_followups
+
+    sent: list[str] = []
+
+    async def on_interim(text: str) -> None:
+        sent.append(text)
+
+    box = LiveInbox(on_interim=on_interim)
+    s = _session_with(box)
+    blocks = [{"type": "thinking", "thinking": "hmm"}, {"type": "text", "text": "the forecast"}]
+    s.messages.append({"role": "assistant", "content": blocks})
+    box.push("and the tides?")
+    assert await extend_for_late_followups(s, blocks) is True
+    assert sent == ["the forecast"]
+
+
+class TestFollowupsWaitForTheRunToGoOn:
+    """Review #3: taking a follow-up and then stopping answered nobody, and
+    `close()` could not hand it back because it had been taken."""
+
+    def _guards(self, s):
+        from robothor.engine.loop_guards import GuardState, check_iteration_guards
+
+        return check_iteration_guards(
+            s,
+            MagicMock(),
+            watchdog=None,
+            wallclock_deadline=None,
+            wallclock_ceiling=0,
+            state=GuardState(),
+        )
+
+    def test_an_interrupted_run_leaves_them_for_the_channel(self) -> None:
+        box = LiveInbox()
+        s = _session_with(box)
+        box.push("also Y")
+        s.interrupt("halt")
+        assert self._guards(s) is True
+        assert [i.text for i in box.close()] == ["also Y"]
+
+    def test_a_confirmed_routine_operation_leaves_them_for_the_channel(self) -> None:
+        box = LiveInbox()
+        s = _session_with(box)
+        s.routine_operation_bound = True
+        box.push("also Y")
+        with patch("robothor.engine.loop_guards._runaway", return_value=False):
+            self._guards(s)
+        assert [i.text for i in box.close()] == ["also Y"]
+
+    def test_a_run_that_goes_on_takes_them(self) -> None:
+        box = LiveInbox()
+        s = _session_with(box)
+        box.push("also Y")
+        with patch("robothor.engine.loop_guards._runaway", return_value=False):
+            assert self._guards(s) is False
+        assert [i.text for i in box.taken] == ["also Y"]
+
+
 def test_compaction_keeps_a_followup_with_the_request() -> None:
     """It amends the request; summarising it away would undo what was asked."""
     from robothor.engine.compaction import _split_for_summary

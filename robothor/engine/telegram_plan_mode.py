@@ -96,6 +96,8 @@ class PlanModeMixin:
 
         def _drain_if_pending(self, chat_id: str, session_key: str, session: Any) -> None: ...
 
+        def _release_task(self, chat_id: str) -> None: ...
+
         def _build_identity(self, *a: Any, **k: Any) -> Any: ...
 
         def _build_plan_keyboard(self, plan_id: str, revision_count: int = 0) -> Any: ...
@@ -565,7 +567,7 @@ class PlanModeMixin:
             if getattr(run_for_delivery, "delivery_status", None) is None:
                 await self._record_interactive_delivery(run_for_delivery, sent_error)
         finally:
-            self._active_tasks.pop(chat_id, None)
+            self._release_task(chat_id)  # only if still ours; see telegram_live.py
             # A message sent during execution waited for this; nothing else drains it.
             self._drain_if_pending(chat_id, session_key, session)
 

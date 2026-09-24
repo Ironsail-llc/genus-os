@@ -438,6 +438,7 @@ class TelegramBot(
         the coalescing buffer), the legacy chat_id-keyed cache lookup is
         used — this keeps flag-off/no-threading callers byte-identical.
         """
+        inbox = self._open_live_inbox(chat_id, sender_info)  # messages sent mid-run; first
         # ── Idle timeout: compress stale sessions ──
         now = time.monotonic()
         last = self._last_message_at.get(chat_id, 0.0)
@@ -541,7 +542,6 @@ class TelegramBot(
 
         # ── Execute agent ──
         model = self._model_override.get(chat_id)
-        inbox = self._open_live_inbox(chat_id, sender_info)  # messages sent mid-run
 
         async def run_agent() -> None:
             nonlocal stream_msg_id
@@ -605,6 +605,7 @@ class TelegramBot(
                     live_inbox=inbox,
                 )
                 run_for_delivery = run
+                self._seal_live_inbox(chat_id, inbox)  # later messages are a new turn
 
                 async with _lock:
                     # Always record user message (plus what joined mid-run) in history
@@ -787,8 +788,7 @@ class TelegramBot(
                 nonlocal typing_active
                 typing_active = False
                 typing_task.cancel()
-                self._active_tasks.pop(chat_id, None)
-                # Requeue what the run never took, then drain what queued behind it
+                # Release the chat, requeue what the run never took, drain the rest
                 self._finish_live_run(chat_id, session_key, session, inbox)
 
         task = asyncio.create_task(run_agent())
@@ -1950,6 +1950,7 @@ class TelegramBot(
 
             polling_stop_timeout = POLLING_STOP_TIMEOUT_SECONDS
         # Clear message buffers and cancel all active tasks
+        self._drop_all_live_inboxes()  # first: a cancelled run's finally requeues them
         self._message_buffers.clear()
         self._drain_scheduled.clear()
         self._attachment_buffers.clear()

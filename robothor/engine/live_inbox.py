@@ -42,6 +42,10 @@ logger = logging.getLogger(__name__)
 #: goes out as a normal follow-up turn.
 MAX_LATE_EXTENSIONS = 3
 
+#: Engine key on an assistant turn the operator already received as an interim
+#: message. ``get_final_text`` skips it; ``strip_engine_keys`` drops it.
+SUPERSEDED_KEY = "_superseded"
+
 _FRAMING = (
     "[Follow-up from the user, sent while you were working. Take it into "
     "account and continue; do not redo work that is already done.]"
@@ -98,20 +102,20 @@ class LiveInbox:
         return items
 
 
-def absorb_live_input(session: Any) -> None:
-    """The one place a live run takes in new instructions: the loop top.
+def absorb_operator_steer(session: Any) -> None:
+    """Operator steers (``/steer``, the runs API, goal updates), at the loop top.
 
     Here, and only here, the previous tool turn's results are all recorded, so
-    a user turn cannot land between an assistant's calls and their results.
-    Operator steers (``/steer``, the runs API, goal updates) come first, then
-    whatever the conversation itself sent.
+    a user turn cannot land between an assistant's calls and their results. A
+    steer is consumed even when the run then stops, so it cannot survive into a
+    resumed run. Chat follow-ups are the opposite: ``check_iteration_guards``
+    takes them only once every stop check has passed.
     """
     text = session.consume_pending_steer()
     if text:
         session.messages.append({"role": "user", "content": f"[operator steering update]\n{text}"})
         _count_user_turn(session)
         logger.info("Live steer injected into run %s", session.run_id)
-    absorb_followups(session)
 
 
 def _count_user_turn(session: Any) -> None:
@@ -120,9 +124,16 @@ def _count_user_turn(session: Any) -> None:
 
 
 def absorb_followups(session: Any) -> bool:
-    """Append pending follow-ups as one user turn. True when anything landed."""
+    """Append pending follow-ups as one user turn. True when anything landed.
+
+    Nothing is taken during a confirmed routine operation: that turn is
+    synthesised without a model (routine_request.py), so a follow-up taken there
+    would be recorded as heard by a run that never read it.
+    """
     inbox: LiveInbox | None = getattr(session, "live_inbox", None)
-    items = inbox.take() if inbox is not None else []
+    if inbox is None or getattr(session, "routine_operation_bound", False):
+        return False
+    items = inbox.take()
     if not items:
         return False
     from robothor.engine.chat_backstop import protect_if_human_chat
@@ -162,17 +173,28 @@ async def extend_for_late_followups(session: Any, answer: str | None) -> bool:
     """
     if not absorb_late_followups(session):
         return False
-    await deliver_interim(session, answer)
+    # Already sent as an interim; never report it again as the run's result.
+    superseded = next(m for m in reversed(session.messages) if m.get("role") == "assistant")
+    superseded[SUPERSEDED_KEY] = True
+    await deliver_interim(session, _text_of(answer))
     return True
 
 
-async def deliver_interim(session: Any, text: str | None) -> None:
+def _text_of(content: Any) -> str:
+    """Plain text, or the text blocks of an extended-thinking block list."""
+    if isinstance(content, list):
+        blocks = [b for b in content if isinstance(b, dict) and b.get("type") == "text"]
+        return "\n".join(str(b.get("text") or "") for b in blocks)
+    return str(content or "")
+
+
+async def deliver_interim(session: Any, text: str) -> None:
     """Hand the superseded answer to the channel; it must never fail the run."""
     callback = session.live_inbox.on_interim
-    if callback is None or not (text or "").strip():
+    if callback is None or not text.strip():
         return
     try:
-        await callback(text or "")
+        await callback(text)
     except Exception as e:  # noqa: BLE001 - delivery is best-effort
         logger.warning("interim delivery failed for run %s: %s", session.run_id, e)
 

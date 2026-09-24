@@ -194,7 +194,7 @@ class RunLifecycleMixin:
         exceptions to keep the loop alive.
         """
         # Operator steers and live chat follow-ups are drained in ONE place,
-        # live_inbox.absorb_live_input at the top of the next iteration. A second
+        # live_inbox.absorb_operator_steer at the top of the next iteration. A second
         # consumer here raced it under a different label ("[steer]" vs
         # "[operator steering update]"), and whichever ran first won.
 

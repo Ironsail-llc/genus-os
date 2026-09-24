@@ -11,12 +11,15 @@ What does not join a live run, and still waits for its own turn:
 * anything the handler intercepts first (an ``ask_user`` answer, plan-mode
   replies). Those never reach ``_enqueue_message``;
 * a message from a different sender in a group chat. It is theirs, not an
-  addendum to someone else's request;
+  addendum to someone else's request. A run whose sender is unknown takes no
+  one's messages;
 * a message the run never took (it arrived after the loop's last safe point,
-  or past the extension cap). ``_finish_live_run`` hands those back to the
-  buffer, so the race can delay a message but never drop it.
+  past the extension cap, or as the run stopped). ``_seal_live_inbox`` hands
+  those back to the buffer the moment ``execute`` returns, each with its own
+  sender, reply context and message id, so the race can delay a message but
+  never drop it or run it as someone else.
 
-``/stop`` discards the inbox along with the buffer.
+``/stop`` discards the inbox along with the buffer, and so does shutdown.
 """
 
 from __future__ import annotations
@@ -50,6 +53,8 @@ class TelegramLiveFollowupMixin:
     _drain_scheduled: dict[str, bool]
     _attachment_buffers: dict[str, list[dict[str, Any]]]
     _user_message_id_buffers: dict[str, str]
+    _reply_context_buffers: dict[str, dict[str, Any]]
+    _pending_sender_info: dict[str, dict[str, Any]]
     bot: Any
 
     def _live_inboxes(self) -> dict[str, tuple[LiveInbox, str | None]]:
@@ -64,6 +69,12 @@ class TelegramLiveFollowupMixin:
 
         inbox = LiveInbox(on_interim=on_interim)
         self._live_inboxes()[chat_id] = (inbox, _sender_id(sender_info))
+        # Busy from the moment the buffer is claimed, not from when the run task
+        # exists: the "Thinking..." send in between is an await, and a message
+        # landing there used to start a second, concurrent run.
+        current = self._active_tasks.get(chat_id)
+        if current is None or current.done():
+            self._active_tasks[chat_id] = asyncio.current_task()  # type: ignore[assignment]
         return inbox
 
     async def _join_live_run(
@@ -79,16 +90,21 @@ class TelegramLiveFollowupMixin:
         if task is None or task.done() or entry is None:
             return False
         inbox, owner = entry
-        sender = _sender_id(sender_info)
-        if owner and sender and owner != sender:
+        if owner is None or owner != _sender_id(sender_info):
             return False
         message_id = self._user_message_id_buffers.get(chat_id)
-        meta = {"attachments": list(attachments or []), "message_id": message_id}
+        meta = {
+            "attachments": list(attachments or []),
+            "message_id": message_id,
+            "reply_ctx": self._reply_context_buffers.get(chat_id),
+            "sender_info": sender_info,
+        }
         if not inbox.push(user_text, meta):
             return False
-        # The handler stashed this message's id for a drain that will not
-        # happen now; leaving it would mislabel the next queued turn.
+        # The handler stashed these for a drain that will not happen now; left
+        # behind, they would label the next queued turn.
         self._user_message_id_buffers.pop(chat_id, None)
+        self._reply_context_buffers.pop(chat_id, None)
         await self._ack_joined(chat_id, message_id)
         return True
 
@@ -102,10 +118,13 @@ class TelegramLiveFollowupMixin:
                 reaction=[ReactionTypeEmoji(emoji=JOINED_REACTION)],
             )
 
-    def _finish_live_run(
-        self, chat_id: str, session_key: str, session: Any, inbox: LiveInbox
-    ) -> None:
-        """Close the run's inbox, requeue what it never took, drain the buffer."""
+    def _seal_live_inbox(self, chat_id: str, inbox: LiveInbox) -> None:
+        """``execute`` returned: stop accepting, requeue what the run never took.
+
+        Called the moment the run returns, not in ``finally``: a message sent
+        while the reply is being delivered would otherwise get the 👀 of a
+        message that joined, and then run as a separate turn anyway.
+        """
         entry = self._live_inboxes().get(chat_id)
         if entry is not None and entry[0] is inbox:
             del self._live_inboxes()[chat_id]
@@ -113,9 +132,31 @@ class TelegramLiveFollowupMixin:
             self._message_buffers.setdefault(chat_id, []).append(item.text)
             if item.meta.get("attachments"):
                 self._attachment_buffers.setdefault(chat_id, []).extend(item.meta["attachments"])
-            if item.meta.get("message_id"):
-                self._user_message_id_buffers.setdefault(chat_id, item.meta["message_id"])
+            for buffer, key in (
+                (self._user_message_id_buffers, "message_id"),
+                (self._reply_context_buffers, "reply_ctx"),
+                (self._pending_sender_info, "sender_info"),
+            ):
+                if item.meta.get(key):
+                    buffer.setdefault(chat_id, item.meta[key])
+
+    def _finish_live_run(
+        self, chat_id: str, session_key: str, session: Any, inbox: LiveInbox
+    ) -> None:
+        """The run's ``finally``: release the chat, requeue, drain what waits."""
+        self._release_task(chat_id)
+        self._seal_live_inbox(chat_id, inbox)
         self._drain_if_pending(chat_id, session_key, session)
+
+    def _release_task(self, chat_id: str) -> None:
+        """Clear the chat's busy marker only if it is still this task's.
+
+        After ``/stop``, or an approved plan overwriting the entry, a finishing
+        run popping by key hid the NEWER run from everything that asks whether
+        the chat is busy.
+        """
+        if self._active_tasks.get(chat_id) is asyncio.current_task():
+            self._active_tasks.pop(chat_id, None)
 
     def _drain_if_pending(self, chat_id: str, session_key: str, session: Any) -> None:
         """Start the next turn for anything that queued behind a finished run."""
@@ -128,6 +169,12 @@ class TelegramLiveFollowupMixin:
         entry = self._live_inboxes().pop(chat_id, None)
         if entry is not None:
             entry[0].close()
+
+    def _drop_all_live_inboxes(self) -> None:
+        """Shutdown, BEFORE the runs are cancelled: their ``finally`` would
+        otherwise requeue into the just-cleared buffers and start a new run."""
+        for chat_id in list(self._live_inboxes()):
+            self._drop_live_inbox(chat_id)
 
     def _append_user_turn(self, session: Any, inbox: LiveInbox, user_text: str) -> None:
         """The request as the conversation keeps it: plus what joined mid-run."""

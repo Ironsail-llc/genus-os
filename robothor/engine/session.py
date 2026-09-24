@@ -1017,7 +1017,9 @@ class AgentSession:
         (e.g. thinking + text blocks from extended thinking responses).
         """
         for msg in reversed(self.messages):
-            if msg.get("role") != "assistant":
+            # An answer already sent as an interim (live_inbox.py) is not the
+            # result: the run was extended past it to answer a follow-up.
+            if msg.get("role") != "assistant" or msg.get("_superseded"):
                 continue
             content = msg.get("content")
             if not content:

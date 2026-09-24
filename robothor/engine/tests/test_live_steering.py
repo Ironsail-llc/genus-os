@@ -71,7 +71,7 @@ def test_the_loop_consumes_steers_and_interrupts():
     from robothor.engine import live_inbox, loop_guards
 
     src = inspect.getsource(loop_guards)
-    assert "absorb_live_input(session)" in src
+    assert "absorb_operator_steer(session)" in src
     assert "consume_pending_steer()" in inspect.getsource(live_inbox)
     assert "consume_interrupt()" in src
 
