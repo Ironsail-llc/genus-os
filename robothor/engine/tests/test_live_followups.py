@@ -126,6 +126,33 @@ class TestAbsorb:
         assert history_text("do X", []) == "do X"
 
 
+def test_a_card_typed_mid_run_gets_the_same_backstop_as_the_request() -> None:
+    """`session.start` masks a PAN a person typed; a follow-up is typed too."""
+    from robothor.engine.models import TriggerType
+
+    box = LiveInbox()
+    s = AgentSession(agent_id="a", trigger_type=TriggerType.TELEGRAM)
+    s.start("system prompt", "book it", [])
+    s.live_inbox = box
+    box.push("use card 4111 1111 1111 1111")
+    absorb_followups(s)
+    assert "4111 1111 1111 1111" not in str(s.messages[-1]["content"])
+    assert "4111 1111 1111 1111" not in str(s.messages[0]["content"])  # task record
+
+
+def test_a_deliverable_named_mid_run_is_part_of_the_task() -> None:
+    """ "Also save it to report.md" must reach the deliverable contract."""
+    from robothor.engine.deliverable_contract import task_text_for_run
+
+    box = LiveInbox()
+    s = _session_with(box)
+    box.push("also save it to /tmp/report.md")
+    absorb_followups(s)
+    text = task_text_for_run(s.run, s)
+    assert "do the thing" in text
+    assert "/tmp/report.md" in text
+
+
 def test_compaction_keeps_a_followup_with_the_request() -> None:
     """It amends the request; summarising it away would undo what was asked."""
     from robothor.engine.compaction import _split_for_summary

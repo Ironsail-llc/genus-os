@@ -129,6 +129,10 @@ class TelegramLiveFollowupMixin:
         if entry is not None:
             entry[0].close()
 
+    def _append_user_turn(self, session: Any, inbox: LiveInbox, user_text: str) -> None:
+        """The request as the conversation keeps it: plus what joined mid-run."""
+        session.history.append({"role": "user", "content": self._live_turn_text(inbox, user_text)})
+
     @staticmethod
     def _live_turn_text(inbox: LiveInbox, user_text: str) -> str:
         return history_text(user_text, inbox.taken)

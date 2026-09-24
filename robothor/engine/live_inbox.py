@@ -125,14 +125,18 @@ def absorb_followups(session: Any) -> bool:
     items = inbox.take() if inbox is not None else []
     if not items:
         return False
+    from robothor.engine.chat_backstop import protect_if_human_chat
     from robothor.engine.task_context import record_steering
 
-    body = "\n\n".join(item.text for item in items)
+    # The same payment backstop `session.start` applies to the request: a
+    # follow-up is text a person just typed, and it reaches the model the same way.
+    texts = [protect_if_human_chat(item.text, session.run.trigger_type) for item in items]
+    body = "\n\n".join(texts)
     session.messages.append(
         {"role": "user", "content": f"{_FRAMING}\n{body}", "_pin": FOLLOWUP_PIN}
     )
-    for item in items:
-        record_steering(session.messages, item.text)
+    for text in texts:
+        record_steering(session.messages, text)
     _count_user_turn(session)
     logger.info("Live follow-up (%d message(s)) joined run %s", len(items), session.run_id)
     return True
@@ -196,3 +200,14 @@ def history_text(original: str, absorbed: list[FollowUp]) -> str:
         return original
     added = "\n\n".join(f"[added while working] {item.text}" for item in absorbed)
     return f"{original}\n\n{added}"
+
+
+def followup_text(session: Any) -> str:
+    """What the run took mid-flight, for readers of "what was this task?".
+
+    The deliverable contract reads it: a follow-up can name a deliverable
+    exactly as the request can. Only what the run actually took counts; a
+    message it never reached goes out as its own turn, with its own contract.
+    """
+    inbox: LiveInbox | None = getattr(session, "live_inbox", None)
+    return "\n\n".join(item.text for item in inbox.taken) if inbox is not None else ""

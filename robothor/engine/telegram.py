@@ -608,9 +608,7 @@ class TelegramBot(
 
                 async with _lock:
                     # Always record user message (plus what joined mid-run) in history
-                    session.history.append(
-                        {"role": "user", "content": self._live_turn_text(inbox, user_text)}
-                    )
+                    self._append_user_turn(session, inbox, user_text)
 
                     if run.output_text:
                         session.history.append({"role": "assistant", "content": run.output_text})
@@ -766,9 +764,9 @@ class TelegramBot(
                         )
             except Exception as e:
                 logger.error("Failed to process message: %s", e, exc_info=True)
-                # Record the failed attempt so next run has context
+                # Record the failed attempt (and what joined it) so next run has context
                 async with _lock:
-                    session.history.append({"role": "user", "content": user_text})
+                    self._append_user_turn(session, inbox, user_text)
                     session.history.append(
                         {
                             "role": "assistant",

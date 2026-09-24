@@ -112,6 +112,29 @@ async def test_a_message_mid_run_joins_the_run(bot):
 
 
 @pytest.mark.asyncio
+async def test_a_failed_run_still_records_what_was_added(bot):
+    started, release = asyncio.Event(), asyncio.Event()
+
+    async def execute(**kwargs):
+        started.set()
+        await release.wait()
+        kwargs["live_inbox"].take()
+        raise RuntimeError("provider down")
+
+    bot.runner.execute = AsyncMock(side_effect=execute)
+    await _send(bot, "draft the summary", "500")
+    await started.wait()
+    await _send(bot, "also include Y", "501")
+    release.set()
+    await _settle(bot)
+
+    _, session = _session(bot)
+    user_rows = [m["content"] for m in session.history if m["role"] == "user"]
+    assert len(user_rows) == 1 and "also include Y" in user_rows[0]
+    assert bot.runner.execute.await_count == 1, "taken, so not re-run as a new turn"
+
+
+@pytest.mark.asyncio
 async def test_a_message_the_run_never_took_becomes_a_follow_up_turn(bot):
     started, release = asyncio.Event(), asyncio.Event()
     messages = []
