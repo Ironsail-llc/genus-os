@@ -264,9 +264,14 @@ elif [[ "$DO_RESTART" -eq 1 ]]; then
     # The SAME lock the restart broker (infra/bin/robothor-restart-handler.sh)
     # takes, spelled identically — tests/test_install_units.py keeps the two
     # lines equal. Held from here to exit: neither side can enqueue a restart
-    # while the other is deciding its transaction.
+    # while the other is deciding its transaction. Created only when absent
+    # (noclobber is O_EXCL) and opened READ-ONLY — flock needs no write access.
+    # The lock is the service user's (tmpfiles.d), in sticky /run/lock, and
+    # under fs.protected_regular=2 root may not O_CREAT/O_WRONLY-open it:
+    # a write-mode open failed "Permission denied" and aborted the restart.
     LOCK_FILE="${ROBOTHOR_RESTART_LOCK:-/run/lock/robothor-restart.lock}"
-    exec 9>"$LOCK_FILE"
+    (set -C; : >"$LOCK_FILE") 2>/dev/null || true
+    exec 9<"$LOCK_FILE"
     flock 9
 
     systemctl daemon-reload
