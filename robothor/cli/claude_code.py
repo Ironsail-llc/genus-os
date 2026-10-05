@@ -92,11 +92,16 @@ def _status(args: Namespace) -> int:
     except Exception as e:  # noqa: BLE001
         print(f"Claude Code CLI: not usable ({e})")
         return 1
+    from robothor.engine.coding import env as coding_env
+
     source = secret_source(TOKEN_ENV, tenant_id=_tenant())
     print(f"{TOKEN_ENV}: {source}")
     if source in ("missing", "unavailable"):
-        print("Run `robothor claude-code login` to store a token.")
-        return 1
+        if coding_env.auth_mode() != "token" and coding_env.host_login_present():
+            print("Credential: this host's own Claude Code login (no token needed).")
+        else:
+            print("Sign in with `claude` on this host, or run `robothor claude-code login`.")
+            return 1
     if getattr(args, "no_ping", False):
         return 0
     return _ping()

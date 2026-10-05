@@ -16,7 +16,7 @@ delivery:
 
 # Opt-in tools on top of the default set: main delegates coding tasks to
 # Claude Code and sees each one through to a verified commit (skill:
-# claude-code). Needs `robothor claude-code login` once per instance.
+# claude-code). Uses the host's Claude Code login, or a token from `robothor claude-code login`.
 tools_opt_in:
   - claude_code_start
   - claude_code_status

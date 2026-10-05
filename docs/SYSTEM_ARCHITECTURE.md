@@ -1429,8 +1429,9 @@ opt-in `claude_code_*` tools and gets back a verified result, not a claim.
 
 The daemon calls `resume_interrupted_jobs()` after run recovery at startup, and
 stops the job tasks without marking them at shutdown, so a restart resumes
-them. The token is stored by `genus claude-code login` (`claude setup-token`)
-in the vault. See [Tools → Claude Code](TOOLS.md#claude-code-claude_code_).
+them. Jobs authenticate with the host's own Claude Code login, or with a token
+stored in the vault by `genus claude-code login` (`claude setup-token`), which
+wins when present. See [Tools → Claude Code](TOOLS.md#claude-code-claude_code_).
 
 ### Voice & SMS (Twilio)
 
