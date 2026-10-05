@@ -163,6 +163,7 @@ crm/143_autonomy_retention.sql
 crm/144_coding_jobs.sql
 crm/145_pr_reviews.sql
 crm/146_pr_review_tool_denies.sql
+crm/147_coding_job_limits.sql
 crm/127_runtime_contract.sql
 crm/138_goal_provider_reservations.sql
 crm/139_goal_task_family_controls.sql

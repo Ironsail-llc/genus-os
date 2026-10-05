@@ -1130,6 +1130,19 @@ _CLAUDE_CODE_SCHEMAS: dict[str, dict[str, Any]] = {
                         "type": "number",
                         "description": "Total dollar cap across all rounds (default 5)",
                     },
+                    "effort": {
+                        "type": "string",
+                        "enum": ["low", "medium", "high", "xhigh", "max"],
+                        "description": "Claude Code --effort level; default is the CLI's",
+                    },
+                    "max_turns": {
+                        "type": "integer",
+                        "description": "Turns per round (default the instance's, 1-500)",
+                    },
+                    "round_timeout_s": {
+                        "type": "number",
+                        "description": "Seconds one round may run (default the instance's, 60-7200)",
+                    },
                     "max_rounds": {
                         "type": "integer",
                         "description": "Claude Code rounds before the job fails (default 3, max 10)",
