@@ -19,24 +19,30 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 
 __all__ = ["CHECKS"]
 
+_HOST_LOGIN = "host Claude Code login"
+
 
 async def _ready(ctx: DoctorContext) -> Result:
-    """Whether coding jobs can start: the Claude Code CLI and its token.
+    """Whether coding jobs can start: the CLI, a credential, and the Bash sandbox.
 
     A failure names the missing half. Install the CLI for the engine's service
     user (or set ROBOTHOR_CLAUDE_BIN), then run `robothor claude-code login`,
     which stores CLAUDE_CODE_OAUTH_TOKEN in the vault. Prove it end to end with
-    `robothor claude-code status`.
+    `robothor claude-code status`. Every job's Bash runs in Claude Code's
+    sandbox with failIfUnavailable, so bubblewrap must be able to create
+    unprivileged user namespaces and socat must be installed. On the host
+    login, ~/.claude and ~/.claude.json must be writable by the engine (the
+    zz-claude-code.conf drop-in).
     """
     from robothor.engine.coding import env as coding_env
-    from robothor.engine.coding import probe, runner
+    from robothor.engine.coding import probe, runner, sandbox
     from robothor.engine.coding.env import TOKEN_ENV
     from robothor.secrets import secret_source
 
-    source = secret_source(TOKEN_ENV)
+    source: str = secret_source(TOKEN_ENV)
     has_token = source in ("vault", "env")
     if not has_token and coding_env.auth_mode() != "token" and coding_env.host_login_present():
-        has_token, source = True, "host Claude Code login"
+        has_token, source = True, _HOST_LOGIN
     try:
         runner.resolve_claude_binary()
     except runner.ClaudeCodeError:
@@ -57,13 +63,28 @@ async def _ready(ctx: DoctorContext) -> Result:
             f"Claude Code CLI {version}, but {TOKEN_ENV} is {source} and this host has no "
             "Claude Code login: sign in with `claude`, or run `robothor claude-code login`"
         )
-    return ok(f"Claude Code CLI {version}; credential from the {source}")
+    problems = sandbox.sandbox_problems()
+    if problems:
+        return fail(
+            "Claude Code's Bash sandbox cannot run here, and every coding job runs with "
+            "failIfUnavailable, so every job would fail: " + "; ".join(problems)
+        )
+    if source == _HOST_LOGIN:
+        unwritable = sandbox.unwritable_login_paths()
+        if unwritable:
+            return fail(
+                "coding jobs use the host Claude Code login, but this process cannot write "
+                f"{', '.join(unwritable)} (Claude Code refreshes its login there): install "
+                "infra/systemd/robothor-engine.service.d/zz-claude-code.conf with "
+                "scripts/install-units.sh, or store a token with `robothor claude-code login`"
+            )
+    return ok(f"Claude Code CLI {version}; credential from the {source}; Bash sandbox ready")
 
 
 CHECKS: tuple[Check, ...] = (
     Check(
         id="claude_code.ready",
-        title="The Claude Code driver has its CLI and token",
+        title="The Claude Code driver has its CLI, a credential and its sandbox",
         category="claude_code",
         severity="recommended",
         run=_ready,

@@ -192,3 +192,36 @@ def test_the_main_template_opts_in_to_every_claude_code_tool():
 
     assert "tools_allowed" not in manifest  # main keeps the default set...
     assert set(manifest["tools_opt_in"]) == CLAUDE_CODE_TOOLS  # ...plus these
+
+
+async def test_another_agent_gets_not_found_but_the_owner_sees_it(git_repo, manager):
+    started = await claude_code.HANDLERS["claude_code_start"](
+        {"task": "t", "repo_path": str(git_repo), "acceptance": {"verify_command": VERIFY}},
+        _ctx(),
+    )
+    job_id = started["job_id"]
+    await manager.wait(job_id, "test-tenant", timeout_s=20)
+
+    intruder = _ctx(agent_id="crm-hygiene")
+    for name in ("claude_code_status", "claude_code_wait", "claude_code_cancel"):
+        out = await claude_code.HANDLERS[name]({"job_id": job_id, "timeout_s": 1}, intruder)
+        assert "not found" in out.get("error", ""), (name, out)
+    out = await claude_code.HANDLERS["claude_code_followup"](
+        {"job_id": job_id, "message": "x"}, intruder
+    )
+    assert "not found" in out.get("error", "")
+
+    owner = _ctx(agent_id="crm-hygiene", user_role="owner")
+    out = await claude_code.HANDLERS["claude_code_status"]({"job_id": job_id}, owner)
+    assert out["job_id"] == job_id
+
+
+async def test_start_without_repo_roots_names_the_setting(git_repo, manager, monkeypatch):
+    from robothor.settings import reset_settings
+
+    monkeypatch.delenv("ROBOTHOR_CODING_REPO_ROOTS")
+    reset_settings()
+    out = await claude_code.HANDLERS["claude_code_start"](
+        {"task": "t", "repo_path": str(git_repo), "acceptance": {"verify_command": VERIFY}}, _ctx()
+    )
+    assert "ROBOTHOR_CODING_REPO_ROOTS" in out["error"]

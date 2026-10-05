@@ -22,7 +22,9 @@ Isolation from the operator's own configuration is in the argv, not in a hope:
 ``--setting-sources ""`` loads no user, project or local settings file and
 ``--strict-mcp-config`` loads no MCP server that was not passed explicitly
 (none is). ``--permission-mode dontAsk`` denies anything not on the allowed
-list instead of waiting on a prompt nobody will answer.
+list instead of waiting on a prompt nobody will answer. ``--settings`` carries
+the job's sandbox block (:mod:`robothor.engine.coding.sandbox`); it is an
+explicit flag, so ``--setting-sources ""`` does not drop it.
 """
 
 from __future__ import annotations
@@ -49,10 +51,10 @@ __all__ = [
     "ClaudeInvocation",
     "ClaudeResult",
     "ProgressEvent",
-    "ToolPreset",
     "StreamParser",
-    "allowed_tools_for_mode",
+    "MODES",
     "build_argv",
+    "check_mode",
     "resolve_claude_binary",
     "run_claude",
 ]
@@ -80,72 +82,16 @@ class ClaudeCodeError(RuntimeError):
     """The CLI could not be run at all."""
 
 
-# ── Mode presets ──────────────────────────────────────────────────────
+#: The job modes. Their tool rules and sandbox are built per job, from the
+#: job's own paths, in :mod:`robothor.engine.coding.sandbox`.
+MODES: tuple[str, ...] = ("code", "review", "readonly")
 
 
-@dataclass(frozen=True)
-class ToolPreset:
-    """The Claude Code tool lists a job mode fixes."""
-
-    allowed: tuple[str, ...]
-    disallowed: tuple[str, ...]
-
-
-#: Read-only git and ``gh pr`` commands, in Claude Code's permission-rule
-#: syntax. ``dontAsk`` denies every Bash command that matches none of these.
-_READ_ONLY_BASH: tuple[str, ...] = (
-    "Bash(git diff:*)",
-    "Bash(git log:*)",
-    "Bash(git show:*)",
-    "Bash(git status:*)",
-    "Bash(git blame:*)",
-    "Bash(git rev-parse:*)",
-    "Bash(git ls-files:*)",
-    "Bash(git grep:*)",
-    "Bash(git branch --list:*)",
-    "Bash(gh pr view:*)",
-    "Bash(gh pr diff:*)",
-    "Bash(gh pr checks:*)",
-    "Bash(gh pr list:*)",
-)
-
-#: Never, in any mode: these leave the worktree. A job's work reaches a remote
-#: only through the orchestrator's own git/GitHub tools, after verification.
-_NEVER: tuple[str, ...] = (
-    "Bash(git push:*)",
-    "Bash(gh pr create:*)",
-    "Bash(gh pr merge:*)",
-    "Bash(gh pr review:*)",
-    "Bash(gh pr comment:*)",
-    "Bash(gh api:*)",
-    "WebFetch",
-    "WebSearch",
-)
-
-_PRESETS: dict[str, ToolPreset] = {
-    "code": ToolPreset(
-        allowed=("Read", "Edit", "Write", "Grep", "Glob", "Bash"),
-        disallowed=_NEVER,
-    ),
-    "review": ToolPreset(
-        allowed=("Read", "Grep", "Glob", *_READ_ONLY_BASH),
-        disallowed=("Edit", "Write", "NotebookEdit", *_NEVER),
-    ),
-    "readonly": ToolPreset(
-        allowed=("Read", "Grep", "Glob", *_READ_ONLY_BASH),
-        disallowed=("Edit", "Write", "NotebookEdit", *_NEVER),
-    ),
-}
-
-MODES: tuple[str, ...] = tuple(_PRESETS)
-
-
-def allowed_tools_for_mode(mode: str) -> ToolPreset:
-    """The fixed tool lists for ``code``, ``review`` or ``readonly``."""
-    try:
-        return _PRESETS[mode]
-    except KeyError:
-        raise ValueError(f"unknown mode {mode!r}; expected one of {', '.join(MODES)}") from None
+def check_mode(mode: str) -> str:
+    """``mode`` when it is one of :data:`MODES`, else ``ValueError``."""
+    if mode not in MODES:
+        raise ValueError(f"unknown mode {mode!r}; expected one of {', '.join(MODES)}")
+    return mode
 
 
 # ── argv ──────────────────────────────────────────────────────────────
@@ -167,6 +113,8 @@ class ClaudeInvocation:
     append_system_prompt: str | None = None
     json_schema: dict[str, Any] | None = None
     resume_session_id: str | None = None
+    #: The ``--settings`` object (the job's sandbox block). None passes none.
+    settings: dict[str, Any] | None = None
 
 
 def resolve_claude_binary() -> str:
@@ -206,6 +154,8 @@ def build_argv(inv: ClaudeInvocation) -> list[str]:
         "--permission-mode",
         inv.permission_mode,
     ]
+    if inv.settings is not None:
+        argv += ["--settings", json.dumps(inv.settings, separators=(",", ":"))]
     if inv.model:
         argv += ["--model", inv.model]
     if inv.allowed_tools:
@@ -257,6 +207,9 @@ class ClaudeResult:
     exit_code: int | None = 0
     timed_out: bool = False
     stderr_tail: str = ""
+    #: False when the call ended (killed, timed out, crashed) before Claude
+    #: Code's own ``result`` line: ``total_cost_usd`` is then unknown, not 0.
+    got_result: bool = True
 
     @property
     def error_summary(self) -> str:
@@ -367,6 +320,7 @@ class StreamParser:
                 exit_code=exit_code,
                 timed_out=timed_out,
                 stderr_tail=stderr_tail,
+                got_result=False,
             )
         is_error = bool(data.get("is_error")) or timed_out or exit_code not in (0, None)
         return ClaudeResult(

@@ -365,3 +365,289 @@ async def test_auto_without_a_token_runs_on_the_hosts_claude_login(
     assert job.status == JobStatus.DONE
     assert runner.envs[0]["HOME"] == str(home)
     assert "CLAUDE_CODE_OAUTH_TOKEN" not in runner.envs[0]
+
+
+# ── where a job may run ───────────────────────────────────────────────
+
+
+async def test_repo_roots_are_required_to_start_a_job(git_repo, coding_env, monkeypatch):
+    monkeypatch.delenv("ROBOTHOR_CODING_REPO_ROOTS")
+    mgr = _manager(FakeRunner())
+    with pytest.raises(ValueError, match="ROBOTHOR_CODING_REPO_ROOTS"):
+        await _start(mgr, git_repo)
+
+
+async def test_a_repo_outside_the_roots_is_refused(git_repo, coding_env, monkeypatch, tmp_path):
+    monkeypatch.setenv("ROBOTHOR_CODING_REPO_ROOTS", str(tmp_path / "elsewhere"))
+    with pytest.raises(ValueError, match="outside"):
+        await _start(_manager(FakeRunner()), git_repo)
+
+
+async def test_the_live_workspace_is_refused_even_through_a_symlink(
+    git_repo, coding_env, monkeypatch, tmp_path
+):
+    monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(git_repo))
+    link = tmp_path / "link"
+    link.symlink_to(git_repo)
+    mgr = _manager(FakeRunner())
+    for target in (git_repo, link):
+        with pytest.raises(ValueError, match="workspace"):
+            await _start(mgr, target)
+
+
+async def test_a_repo_containing_home_or_the_workspace_is_refused(
+    git_repo, coding_env, monkeypatch, tmp_path
+):
+    mgr = _manager(FakeRunner())
+    monkeypatch.setenv("HOME", str(git_repo / "home"))
+    with pytest.raises(ValueError, match="home"):
+        await _start(mgr, git_repo)
+    monkeypatch.setenv("HOME", str(tmp_path / "h"))
+    monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(git_repo / "ws"))
+    from robothor.settings import reset_settings
+
+    reset_settings()
+    with pytest.raises(ValueError, match="workspace"):
+        await _start(mgr, git_repo)
+
+
+@pytest.mark.parametrize("mode", ["review", "readonly"])
+async def test_read_only_modes_refuse_a_verify_command(git_repo, coding_env, mode):
+    """An acceptance command runs engine-side, outside any sandbox: code mode only."""
+    with pytest.raises(ValueError, match="verify_command"):
+        await _start(
+            _manager(FakeRunner()),
+            git_repo,
+            mode=mode,
+            acceptance=Acceptance(verify_command=VERIFY, require_commit=False),
+        )
+
+
+# ── the sandbox travels with every round ──────────────────────────────
+
+
+async def test_code_rounds_run_sandboxed_with_edits_confined_to_the_worktree(git_repo, coding_env):
+    runner = FakeRunner(_commit_ok)
+    mgr = _manager(runner)
+    job = await mgr.wait((await _start(mgr, git_repo)).id, TENANT, timeout_s=20)
+    assert job.status == JobStatus.DONE, job.error
+
+    inv = runner.calls[0]
+    sandbox = inv.settings["sandbox"]
+    assert sandbox["enabled"] is True and sandbox["failIfUnavailable"] is True
+    tree = str(coding_env / job.id)
+    assert tree in sandbox["filesystem"]["allowWrite"]
+    assert str((git_repo / ".git" / "objects").resolve()) in sandbox["filesystem"]["allowWrite"]
+    assert str((git_repo / ".git" / "hooks").resolve()) in sandbox["filesystem"]["denyWrite"]
+    assert f"Edit(/{tree}/**)" in inv.allowed_tools
+    assert "Edit" not in inv.allowed_tools
+
+
+async def test_review_rounds_write_nothing(git_repo, coding_env):
+    runner = FakeRunner(_nothing, result=lambda: _result(structured_output={"v": 1}))
+    mgr = _manager(runner)
+    job = await _start(
+        mgr,
+        git_repo,
+        mode="review",
+        acceptance=Acceptance(verify_command=None, require_commit=False),
+        json_schema={"type": "object"},
+    )
+    await mgr.wait(job.id, TENANT, timeout_s=20)
+    sandbox = runner.calls[0].settings["sandbox"]
+    assert sandbox["filesystem"]["allowWrite"] == []
+    assert sandbox["network"]["allowedDomains"] == []
+
+
+# ── budget: a round with no result line spent its whole allowance ─────
+
+
+async def test_a_round_that_never_reports_is_charged_its_full_allowance(git_repo, coding_env):
+    killed = lambda: _result(  # noqa: E731
+        is_error=True,
+        subtype="no_result",
+        result_text="",
+        total_cost_usd=0.0,
+        num_turns=0,
+        timed_out=True,
+        got_result=False,
+    )
+    runner = FakeRunner(_nothing, _nothing, _nothing, result=killed)
+    mgr = _manager(runner)
+
+    job = await mgr.wait(
+        (await _start(mgr, git_repo, max_budget_usd=1.0, max_rounds=5)).id, TENANT, timeout_s=20
+    )
+
+    assert job.status == JobStatus.FAILED
+    assert "budget" in job.error.lower()
+    assert len(runner.calls) == 1
+    assert job.cost_usd == pytest.approx(1.0)
+
+
+async def test_later_rounds_get_only_the_remaining_budget(git_repo, coding_env):
+    runner = FakeRunner(_nothing, _commit_ok, result=lambda: _result(total_cost_usd=0.25))
+    mgr = _manager(runner)
+    job = await mgr.wait((await _start(mgr, git_repo, max_budget_usd=1.0)).id, TENANT, timeout_s=20)
+    assert job.status == JobStatus.DONE
+    assert [c.max_budget_usd for c in runner.calls] == [pytest.approx(1.0), pytest.approx(0.75)]
+
+
+# ── commits must be on the job branch, with HEAD on it ────────────────
+
+
+def _detach_and_commit(cwd: Path) -> None:
+    subprocess.run(["git", "checkout", "-q", "--detach"], cwd=cwd, check=True)
+    _commit_ok(cwd)
+
+
+def _switch_and_commit(cwd: Path) -> None:
+    subprocess.run(["git", "checkout", "-q", "-b", "elsewhere"], cwd=cwd, check=True)
+    _commit_ok(cwd)
+
+
+@pytest.mark.parametrize("action", [_detach_and_commit, _switch_and_commit])
+async def test_work_off_the_job_branch_never_passes(git_repo, coding_env, action):
+    mgr = _manager(FakeRunner(action))
+    job = await mgr.wait((await _start(mgr, git_repo, max_rounds=1)).id, TENANT, timeout_s=20)
+
+    assert job.status == JobStatus.FAILED
+    reasons = " ".join(job.result["verify"]["reasons"])
+    assert "genus/cc-" in reasons and "HEAD" in reasons
+    assert job.result["verify"]["commits"] == []
+
+
+# ── a job belongs to the agent that started it ───────────────────────
+
+
+async def test_another_agent_cannot_reach_the_job(git_repo, coding_env):
+    mgr = _manager(FakeRunner(_commit_ok))
+    job = await _start(mgr, git_repo)
+    await mgr.wait(job.id, TENANT, timeout_s=20, agent_id="main")
+
+    assert await mgr.get(job.id, TENANT, agent_id="intruder") is None
+    assert await mgr.wait(job.id, TENANT, timeout_s=1, agent_id="intruder") is None
+    with pytest.raises(LookupError):
+        await mgr.followup(job.id, TENANT, "x", agent_id="intruder")
+    with pytest.raises(LookupError):
+        await mgr.cancel(job.id, TENANT, agent_id="intruder")
+    assert await mgr.get(job.id, TENANT, agent_id="main") is not None
+
+
+# ── follow-ups are never lost and never double-run ────────────────────
+
+
+class GatedStore(MemoryJobStore):
+    """Holds the first DONE save until released: a window inside _finish."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.in_finish = asyncio.Event()
+        self.release = asyncio.Event()
+        self._gated = False
+
+    async def save(self, job):
+        if job.status == JobStatus.DONE and not self._gated:
+            self._gated = True
+            self.in_finish.set()
+            await self.release.wait()
+        await super().save(job)
+
+
+async def test_a_followup_arriving_during_finish_is_not_lost(git_repo, coding_env):
+    store = GatedStore()
+    runner = FakeRunner(_commit_ok, _nothing)
+    mgr = _manager(runner, store=store)
+    job = await _start(mgr, git_repo)
+    await asyncio.wait_for(store.in_finish.wait(), 10)
+
+    followup = asyncio.create_task(mgr.followup(job.id, TENANT, "also add a docstring"))
+    await asyncio.sleep(0.05)
+    store.release.set()
+    await followup
+    job = await mgr.wait(job.id, TENANT, timeout_s=20)
+    for _ in range(50):
+        if len(runner.calls) >= 2 and job.status in (JobStatus.DONE, JobStatus.FAILED):
+            break
+        await asyncio.sleep(0.05)
+        job = await mgr.wait(job.id, TENANT, timeout_s=20)
+
+    assert len(runner.calls) == 2, "the follow-up was dropped"
+    assert "also add a docstring" in runner.calls[1].prompt
+    assert job.status == JobStatus.DONE
+
+
+async def test_two_concurrent_followups_never_run_two_sessions(git_repo, coding_env):
+    running = 0
+    peak = 0
+    prompts: list[str] = []
+
+    async def runner(inv, *, env, timeout_s, on_event=None):
+        nonlocal running, peak
+        running += 1
+        peak = max(peak, running)
+        prompts.append(inv.prompt)
+        await asyncio.sleep(0.05)
+        if len(prompts) == 1:
+            _commit_ok(Path(inv.cwd))
+        running -= 1
+        return _result()
+
+    mgr = _manager(runner)
+    job = await mgr.wait((await _start(mgr, git_repo)).id, TENANT, timeout_s=20)
+    assert job.status == JobStatus.DONE
+
+    await asyncio.gather(
+        mgr.followup(job.id, TENANT, "first note"), mgr.followup(job.id, TENANT, "second note")
+    )
+    for _ in range(100):
+        job = await mgr.wait(job.id, TENANT, timeout_s=20)
+        if job.is_terminal and not job.pending_followups:
+            break
+        await asyncio.sleep(0.05)
+
+    assert peak == 1
+    joined = "\n".join(prompts[1:])
+    assert "first note" in joined and "second note" in joined
+
+
+# ── cleanup ───────────────────────────────────────────────────────────
+
+
+async def test_a_done_job_leaves_no_config_dir_and_a_failed_one_keeps_it(git_repo, coding_env):
+    from robothor.engine.coding.env import job_config_dir
+
+    mgr = _manager(FakeRunner(_commit_ok))
+    done = await mgr.wait((await _start(mgr, git_repo)).id, TENANT, timeout_s=20)
+    assert done.status == JobStatus.DONE
+    assert not job_config_dir(done.id).exists()
+
+    mgr = _manager(FakeRunner(_nothing))
+    failed = await mgr.wait((await _start(mgr, git_repo, max_rounds=1)).id, TENANT, timeout_s=20)
+    assert failed.status == JobStatus.FAILED
+    assert job_config_dir(failed.id).exists()
+
+
+async def test_the_reaper_removes_old_finished_jobs_and_spares_recent_ones(git_repo, coding_env):
+    from datetime import UTC, datetime, timedelta
+
+    from robothor.engine.coding.env import job_config_dir
+    from robothor.engine.coding.tests.conftest import git
+
+    store = MemoryJobStore()
+    mgr = _manager(FakeRunner(_nothing, _nothing), store=store)
+    old = await mgr.wait((await _start(mgr, git_repo, max_rounds=1)).id, TENANT, timeout_s=20)
+    recent = await mgr.wait((await _start(mgr, git_repo, max_rounds=1)).id, TENANT, timeout_s=20)
+    assert old.status == recent.status == JobStatus.FAILED
+    stale = (datetime.now(UTC) - timedelta(days=30)).isoformat()
+    store._rows[old.id].finished_at = stale
+
+    reaped = await mgr.reap(retention_days=7)
+
+    assert reaped == 1
+    assert not Path(old.worktree_path).exists()
+    assert not job_config_dir(old.id).exists()
+    assert old.branch not in git(git_repo, "branch", "--list")
+    assert Path(recent.worktree_path).exists()
+    assert recent.branch in git(git_repo, "branch", "--list")
+    assert await mgr.reap(retention_days=7) == 0  # idempotent

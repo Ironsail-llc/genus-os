@@ -36,7 +36,12 @@ On the host login the real ``HOME`` is kept (Claude Code refreshes its login
 under ``~/.claude``, which the engine unit must be able to write) and no token
 is passed. Secrets are still not inherited, and the runner's
 ``--setting-sources ""`` and ``--strict-mcp-config`` keep the user's personal
-settings, plugins, hooks and MCP servers out of every job.
+settings, plugins, hooks and MCP servers out of every job. The job's shell
+cannot read the login either: ``~/.claude`` and ``~/.claude.json`` are on its
+sandbox ``denyRead`` list (:mod:`robothor.engine.coding.sandbox`).
+
+:func:`build_git_env` is the same allowlist for the ENGINE's own git calls on
+a job's repository (:mod:`robothor.engine.coding.worktree`).
 """
 
 from __future__ import annotations
@@ -57,6 +62,7 @@ __all__ = [
     "TOKEN_ENV",
     "auth_mode",
     "build_claude_env",
+    "build_git_env",
     "build_verify_env",
     "job_config_dir",
     "resolve_oauth_token",
@@ -209,3 +215,21 @@ def build_verify_env(
     # The acceptance command needs no Claude login, so only an explicit `host`
     # keeps the real HOME; `auto` verifies in the private one.
     return _base_env(job_id, source, git_identity, auth_mode(source) == "host")
+
+
+def build_git_env(base: dict[str, str] | None = None) -> dict[str, str]:
+    """The environment for the ENGINE's own git calls on a job's repository.
+
+    The same allowlist as a job's: the process essentials, the real ``HOME``
+    and ``XDG_CONFIG_HOME`` (so the repository's and the user's git identity
+    still resolve) and nothing else — none of the credentials the engine holds.
+    """
+    source = dict(os.environ) if base is None else dict(base)
+    env = _essentials(source)
+    env["HOME"] = (source.get("HOME") or "").strip() or str(Path.home())
+    xdg = (source.get("XDG_CONFIG_HOME") or "").strip()
+    if xdg and not looks_like_a_credential_value(xdg):
+        env["XDG_CONFIG_HOME"] = xdg
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    env["GIT_PAGER"] = "cat"
+    return env

@@ -38,9 +38,10 @@ def git_repo(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def coding_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Point the worktree root and the per-job config home into tmp_path."""
+    """Point the worktree root, the repo roots and the per-job config home into tmp_path."""
     root = tmp_path / "worktrees"
     monkeypatch.setenv("ROBOTHOR_CODING_WORKTREE_ROOT", str(root))
+    monkeypatch.setenv("ROBOTHOR_CODING_REPO_ROOTS", str(tmp_path))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
     monkeypatch.delenv("ROBOTHOR_CLAUDE_CODE_AUTH", raising=False)
     return root

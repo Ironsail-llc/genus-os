@@ -60,3 +60,25 @@ async def test_startup_resume_is_skipped_under_ha(monkeypatch):
     monkeypatch.setattr(jobs_mod, "resume_interrupted_jobs", fake_resume)
     assert await daemon._resume_coding_jobs() == 0
     assert called == []
+
+
+async def test_startup_reaps_old_finished_jobs(monkeypatch):
+    calls = []
+
+    class FakeManager:
+        async def reap(self):
+            calls.append("reap")
+            return 2
+
+    monkeypatch.setattr(jobs_mod, "get_manager", lambda: FakeManager())
+    assert await daemon._reap_coding_jobs() == 2
+    assert calls == ["reap"]
+
+
+async def test_startup_reap_failure_is_never_fatal(monkeypatch):
+    class Broken:
+        async def reap(self):
+            raise RuntimeError("relation coding_jobs does not exist")
+
+    monkeypatch.setattr(jobs_mod, "get_manager", lambda: Broken())
+    assert await daemon._reap_coding_jobs() == 0

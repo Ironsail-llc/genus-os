@@ -1423,13 +1423,15 @@ opt-in `claude_code_*` tools and gets back a verified result, not a claim.
 |--------|------|
 | `runner.py` | argv for `claude -p --output-format stream-json --verbose` (`--setting-sources ""`, `--strict-mcp-config`, `--permission-mode dontAsk`, the mode's tool list, `--resume`), `create_subprocess_exec` with the prompt on stdin in its own process group, the stream parser (progress events, session id, cost, turns, structured output), timeout → kill the group |
 | `env.py` | the child environment, built from nothing: essentials, a private `HOME`/`CLAUDE_CONFIG_DIR` under `$XDG_CONFIG_HOME/robothor/claude-code/<job>`, `CLAUDE_CODE_OAUTH_TOKEN` vault first, `GH_TOKEN` only on an explicit grant |
-| `worktree.py` | one `git worktree` per job (`genus/cc-<id>` branch, or detached for review), never on a protected branch; removed at `done`/`cancelled`, kept at `failed` |
+| `worktree.py` | one `git worktree` per job (`genus/cc-<id>` branch, or detached for review), never on a protected branch; removed at `done`/`cancelled`, kept at `failed`; every engine-side git call with the allowlist env and hooks/fsmonitor off; commits read from the job branch ref |
 | `jobs.py` | `coding_jobs` rows + engine-owned asyncio tasks; the completion loop (run a round → run the acceptance command itself → check for a commit and a clean tree → resume the same session with the failure, up to `max_rounds`/`max_budget_usd`); per-tenant concurrency cap; resume-on-restart |
+| `sandbox.py` | the fence: the `--settings` sandbox block (Bash under bubblewrap, `failIfUnavailable`, `denyRead` over credential and instance paths, `allowWrite` = the worktree + the git state a commit needs, network only from `ROBOTHOR_CODING_ALLOWED_DOMAINS` in code mode) and the permission rules confining Edit/Write to the worktree and denying the secret paths to Read/Edit/Write; the doctor's bwrap/socat prerequisite check |
 | `probe.py` | `claude --version` and a one-turn ping through a job's exact environment, for `genus claude-code status` and the doctor |
 
-The daemon calls `resume_interrupted_jobs()` after run recovery at startup, and
+The daemon calls `resume_interrupted_jobs()` after run recovery at startup, then
+the reaper (finished jobs older than `ROBOTHOR_CODING_RETENTION_DAYS`), and
 stops the job tasks without marking them at shutdown, so a restart resumes
-them. Jobs authenticate with the host's own Claude Code login, or with a token
+them. `ROBOTHOR_CODING_REPO_ROOTS` is required to start a job. Jobs authenticate with the host's own Claude Code login, or with a token
 stored in the vault by `genus claude-code login` (`claude setup-token`), which
 wins when present. See [Tools → Claude Code](TOOLS.md#claude-code-claude_code_).
 

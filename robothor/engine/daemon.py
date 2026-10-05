@@ -1444,6 +1444,10 @@ async def main() -> int:
     resumed_jobs = await _resume_coding_jobs()
     if resumed_jobs:
         logger.info("Startup: resumed %d interrupted coding job(s)", resumed_jobs)
+    # ...and what finished ones older than ROBOTHOR_CODING_RETENTION_DAYS left
+    # behind (worktrees, config dirs, genus/cc-* branches). Also re-run after
+    # jobs finish, at most hourly, by the manager itself.
+    await _reap_coding_jobs()
 
     _init_fleet_capacity(config)
 
@@ -1750,6 +1754,17 @@ async def _resume_coding_jobs() -> int:
         return await coding_jobs.resume_interrupted_jobs(None)
     except Exception as e:  # noqa: BLE001 - a missing table must not stop the engine
         logger.warning("Startup: coding job resume failed: %s", _sanitize(e))
+        return 0
+
+
+async def _reap_coding_jobs() -> int:
+    """Remove what old finished coding jobs left behind. Never fatal."""
+    try:
+        from robothor.engine.coding import jobs as coding_jobs
+
+        return await coding_jobs.get_manager().reap()
+    except Exception as e:  # noqa: BLE001 - housekeeping must not stop the engine
+        logger.warning("Startup: coding job reaper failed: %s", _sanitize(e))
         return 0
 
 

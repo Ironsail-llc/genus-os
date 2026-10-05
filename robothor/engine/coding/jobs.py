@@ -44,18 +44,19 @@ import signal
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import asdict, dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, Protocol
 
 from robothor.engine.coding import env as coding_env
+from robothor.engine.coding import sandbox
 from robothor.engine.coding import worktree as wt
 from robothor.engine.coding.runner import (
     ClaudeInvocation,
     ClaudeResult,
     ProgressEvent,
-    allowed_tools_for_mode,
+    check_mode,
     run_claude,
 )
 
@@ -68,6 +69,7 @@ __all__ = [
     "JobStatus",
     "MemoryJobStore",
     "PgJobStore",
+    "check_repo_path",
     "get_manager",
     "resume_interrupted_jobs",
     "use_manager",
@@ -78,6 +80,7 @@ MAX_MAX_ROUNDS = 10
 _EVENTS_TAIL = 30
 _OUTPUT_TAIL = 3000
 _PROMPT_OUTPUT_TAIL = 2500
+_REAP_INTERVAL_S = 3600.0
 
 #: Told to every session. The task prompt says what to do; this says how to
 #: behave when nobody is there to ask.
@@ -183,6 +186,16 @@ class JobStore(Protocol):
     async def save(self, job: CodingJob) -> None: ...
     async def get(self, job_id: str, tenant_id: str) -> CodingJob | None: ...
     async def list_unfinished(self, tenant_id: str | None = None) -> list[CodingJob]: ...
+    async def list_reapable(self, finished_before: str) -> list[CodingJob]: ...
+
+
+def _reapable(job: CodingJob, finished_before: str) -> bool:
+    return (
+        job.status in TERMINAL
+        and bool(job.finished_at)
+        and str(job.finished_at) < finished_before
+        and not job.result.get("reaped_at")
+    )
 
 
 class MemoryJobStore:
@@ -209,6 +222,9 @@ class MemoryJobStore:
             for r in self._rows.values()
             if r.status in UNFINISHED and (tenant_id is None or r.tenant_id == tenant_id)
         ]
+
+    async def list_reapable(self, finished_before: str) -> list[CodingJob]:
+        return [copy.deepcopy(r) for r in self._rows.values() if _reapable(r, finished_before)]
 
 
 _COLUMNS = (
@@ -359,6 +375,19 @@ class PgJobStore:
             rows = cur.fetchall()
         return [_job_from_row(r) for r in rows]
 
+    def _list_reapable(self, finished_before: str) -> list[CodingJob]:
+        from psycopg2.extras import RealDictCursor
+
+        sql = (
+            f"SELECT {', '.join(_COLUMNS)} FROM coding_jobs "
+            "WHERE status IN ('done', 'failed', 'cancelled') AND finished_at < %s "
+            "AND COALESCE(result->>'reaped_at', '') = '' ORDER BY finished_at LIMIT 200"
+        )
+        with self._connect(None) as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(sql, (finished_before,))
+            rows = cur.fetchall()
+        return [_job_from_row(r) for r in rows]
+
     async def insert(self, job: CodingJob) -> None:
         await asyncio.to_thread(self._insert, copy.deepcopy(job))
 
@@ -370,6 +399,52 @@ class PgJobStore:
 
     async def list_unfinished(self, tenant_id: str | None = None) -> list[CodingJob]:
         return await asyncio.to_thread(self._list_unfinished, tenant_id)
+
+    async def list_reapable(self, finished_before: str) -> list[CodingJob]:
+        return await asyncio.to_thread(self._list_reapable, finished_before)
+
+
+# ── Where a job may run ───────────────────────────────────────────────
+
+
+def check_repo_path(raw: str) -> Path:
+    """The resolved repository a job may work on, or ``ValueError`` saying why not.
+
+    ``ROBOTHOR_CODING_REPO_ROOTS`` is required: with no roots no job starts. The
+    path is resolved (symlinks included) before any check. Even under a root,
+    the live workspace and the service user's home are refused — themselves and
+    anything that contains them — because a job there could rewrite the engine's
+    own code or reach every credential the home holds.
+    """
+    raw = (raw or "").strip()
+    if not raw:
+        raise ValueError("repo_path is required")
+    path = Path(raw).expanduser()
+    if not path.is_absolute():
+        raise ValueError("repo_path must be an absolute path")
+    configured = str(_settings().repo_roots or "")
+    roots = [
+        Path(r.strip()).expanduser().resolve() for r in configured.split(os.pathsep) if r.strip()
+    ]
+    if not roots:
+        raise ValueError(
+            "coding jobs are disabled until ROBOTHOR_CODING_REPO_ROOTS names the directories "
+            "repositories may live under (path-separated, for example ~/src)"
+        )
+    resolved = path.resolve()
+    if not any(resolved.is_relative_to(root) for root in roots):
+        shown = os.pathsep.join(str(r) for r in roots)
+        raise ValueError(f"repo_path is outside ROBOTHOR_CODING_REPO_ROOTS ({shown})")
+    workspace = sandbox.live_workspace()
+    if workspace is not None and workspace.resolve().is_relative_to(resolved):
+        raise ValueError(
+            f"repo_path {resolved} is (or contains) the live workspace; coding jobs never work "
+            "on the checkout the engine runs from"
+        )
+    with contextlib.suppress(RuntimeError):
+        if Path.home().resolve().is_relative_to(resolved):
+            raise ValueError(f"repo_path {resolved} is (or contains) the service user's home")
+    return resolved
 
 
 # ── Verification ──────────────────────────────────────────────────────
@@ -494,6 +569,15 @@ def _followup_prompt(job: CodingJob, messages: list[str]) -> str:
 
 # ── The manager ───────────────────────────────────────────────────────
 
+
+def _remove_config_dir(job_id: str) -> None:
+    """Delete the job's private ``~/.config/robothor/claude-code/<id>``."""
+    import shutil
+
+    with contextlib.suppress(Exception):
+        shutil.rmtree(coding_env.job_config_dir(job_id), ignore_errors=True)
+
+
 Runner = Callable[..., Awaitable[ClaudeResult]]
 
 
@@ -534,6 +618,8 @@ class CodingJobManager:
         self._cancel_requested: set[str] = set()
         self._saves: set[asyncio.Task[None]] = set()
         self._save_lock = asyncio.Lock()
+        self._locks: dict[str, asyncio.Lock] = {}
+        self._last_reap = 0.0
 
     # ── public API ──
 
@@ -557,9 +643,10 @@ class CodingJobManager:
         json_schema: dict[str, Any] | None = None,
     ) -> CodingJob:
         """Create the worktree and the row, and start the job's task."""
-        allowed_tools_for_mode(mode)  # raises ValueError on an unknown mode
+        check_mode(mode)
         if not task.strip():
             raise ValueError("task is required")
+        repo_path = str(check_repo_path(repo_path))
         if acceptance.verify_command:
             try:
                 if not shlex.split(acceptance.verify_command):
@@ -572,7 +659,15 @@ class CodingJobManager:
                 "when the task is done (for example `pytest -q tests/test_x.py`)"
             )
         if mode != "code":
-            acceptance = Acceptance(verify_command=acceptance.verify_command, require_commit=False)
+            if acceptance.verify_command:
+                # The acceptance command runs engine-side, outside Claude Code's
+                # sandbox. In code mode it can do nothing the sandboxed session
+                # could not; in a read-only mode it would be the only writer.
+                raise ValueError(
+                    f"acceptance.verify_command is only for code mode; a {mode} job is "
+                    "read-only and is judged by its answer (use json_schema for structure)"
+                )
+            acceptance = Acceptance(verify_command=None, require_commit=False)
         if grant_github and not await asyncio.to_thread(
             self._github_token_resolver, agent_id, tenant_id
         ):
@@ -619,49 +714,81 @@ class CodingJobManager:
         self._spawn(job, _initial_prompt(job))
         return job
 
-    async def get(self, job_id: str, tenant_id: str) -> CodingJob | None:
-        live = self._live.get(job_id)
-        if live is not None:
-            return live if live.tenant_id == tenant_id else None
-        return await self._store.get(job_id, tenant_id)
+    async def get(
+        self, job_id: str, tenant_id: str, *, agent_id: str | None = None
+    ) -> CodingJob | None:
+        """The job, when it is this tenant's — and, given ``agent_id``, that agent's.
 
-    async def wait(self, job_id: str, tenant_id: str, timeout_s: float) -> CodingJob | None:
+        ``agent_id=None`` is the owner's (and the engine's own) view; an agent
+        calling through a tool passes its id and sees only the jobs it started.
+        """
+        live = self._live.get(job_id)
+        job = live if live is not None else await self._store.get(job_id, tenant_id)
+        if job is None or job.tenant_id != tenant_id:
+            return None
+        if agent_id is not None and job.agent_id != agent_id:
+            return None
+        return job
+
+    async def wait(
+        self, job_id: str, tenant_id: str, timeout_s: float, *, agent_id: str | None = None
+    ) -> CodingJob | None:
         """The job once it is finished, or as it stands when ``timeout_s`` runs out."""
-        job = await self.get(job_id, tenant_id)
+        job = await self.get(job_id, tenant_id, agent_id=agent_id)
         if job is None:
             return None
         task = self._tasks.get(job_id)
         if task is not None and not task.done():
             await asyncio.wait({task}, timeout=max(0.0, float(timeout_s)))
-        return await self.get(job_id, tenant_id)
+        return await self.get(job_id, tenant_id, agent_id=agent_id)
 
-    async def followup(self, job_id: str, tenant_id: str, message: str) -> CodingJob:
-        """Queue an instruction for a running job, or reopen a finished one with it."""
+    def _job_lock(self, job_id: str) -> asyncio.Lock:
+        lock = self._locks.get(job_id)
+        if lock is None:
+            lock = self._locks[job_id] = asyncio.Lock()
+        return lock
+
+    async def followup(
+        self, job_id: str, tenant_id: str, message: str, *, agent_id: str | None = None
+    ) -> CodingJob:
+        """Queue an instruction for a running job, or reopen a finished one with it.
+
+        One lock per job makes "is it running? else reopen it" atomic: two
+        follow-ups for a finished job reopen it once, and the second is queued
+        on the reopened run. A follow-up that lands while the task is still
+        finishing is queued, and the task picks it up before it exits.
+        """
         if not message.strip():
             raise ValueError("message is required")
-        job = await self.get(job_id, tenant_id)
-        if job is None:
-            raise LookupError(job_id)
-        if job.status == JobStatus.CANCELLED:
-            raise ValueError("a cancelled job cannot be followed up; start a new job")
-        if job_id in self._tasks and not self._tasks[job_id].done():
-            job.pending_followups.append(message)
-            await self._persist(job)
+        async with self._job_lock(job_id):
+            job = await self.get(job_id, tenant_id, agent_id=agent_id)
+            if job is None:
+                raise LookupError(job_id)
+            if job.status == JobStatus.CANCELLED:
+                raise ValueError("a cancelled job cannot be followed up; start a new job")
+            if job_id in self._tasks and not self._tasks[job_id].done():
+                job.pending_followups.append(message)
+                await self._persist(job)
+                return job
+            if not job.session_id:
+                raise ValueError("the job has no Claude Code session to follow up on yet")
+            await self._reopen(job)
+            self._spawn(job, _followup_prompt(job, [message]))
             return job
-        if not job.session_id:
-            raise ValueError("the job has no Claude Code session to follow up on yet")
-        # Reopen: same session, same branch, a fresh allowance of rounds.
+
+    async def _reopen(self, job: CodingJob) -> None:
+        """Same session, same branch, a fresh allowance of rounds."""
         await self._ensure_worktree(job)
         job.status = JobStatus.QUEUED
         job.error = ""
         job.finished_at = None
         job.max_rounds = job.rounds + DEFAULT_MAX_ROUNDS
         await self._persist(job)
-        self._spawn(job, _followup_prompt(job, [message]))
-        return job
 
-    async def cancel(self, job_id: str, tenant_id: str) -> CodingJob:
-        job = await self.get(job_id, tenant_id)
+    async def cancel(
+        self, job_id: str, tenant_id: str, *, agent_id: str | None = None
+    ) -> CodingJob:
+        job = await self.get(job_id, tenant_id, agent_id=agent_id)
         if job is None:
             raise LookupError(job_id)
         if job.is_terminal:
@@ -751,16 +878,80 @@ class CodingJobManager:
         await wt.restore_worktree(Path(job.repo_path), path, job.branch, ref=job.base_sha)
         job.worktree_path = str(path)
 
+    async def _job_paths(self, job: CodingJob) -> sandbox.JobPaths:
+        common: Path | None = None
+        admin: Path | None = None
+        with contextlib.suppress(Exception):
+            common, admin = await wt.git_dirs(job.worktree_path)
+        return sandbox.JobPaths(
+            home=Path.home(),
+            workspace=sandbox.live_workspace(),
+            worktree=Path(job.worktree_path),
+            git_common_dir=common,
+            git_admin_dir=admin,
+            branch=job.branch,
+        )
+
     async def _finish(self, job: CodingJob, status: JobStatus, error: str = "") -> None:
         job.status = status
         job.error = error
         job.finished_at = job.updated_at = _now()
-        if status in (JobStatus.DONE, JobStatus.CANCELLED) and job.worktree_path:
-            # The branch keeps the commits; a failed job keeps its directory so
-            # the operator can see what was left behind.
-            with contextlib.suppress(Exception):
-                await wt.remove_worktree(Path(job.repo_path), Path(job.worktree_path))
+        if status in (JobStatus.DONE, JobStatus.CANCELLED):
+            # The branch keeps the commits; a failed job keeps its worktree and
+            # its private config directory (the session transcript) so the
+            # operator can see what was left behind — until the reaper's
+            # retention runs out.
+            if job.worktree_path:
+                with contextlib.suppress(Exception):
+                    await wt.remove_worktree(Path(job.repo_path), Path(job.worktree_path))
+            _remove_config_dir(job.id)
         await self._persist(job)
+
+    def _reap_soon(self) -> None:
+        """Run the reaper in the background, at most once an hour per engine."""
+        now = asyncio.get_running_loop().time()
+        if self._last_reap and now - self._last_reap < _REAP_INTERVAL_S:
+            return
+        self._last_reap = now
+        reap = asyncio.create_task(self._reap_quietly())
+        self._saves.add(reap)
+        reap.add_done_callback(self._saves.discard)
+
+    async def _reap_quietly(self) -> None:
+        try:
+            await self.reap()
+        except Exception:  # noqa: BLE001 - housekeeping never fails a job
+            logger.warning("coding jobs: reaper failed", exc_info=True)
+
+    async def reap(self, retention_days: int | None = None) -> int:
+        """Remove what finished jobs older than the retention left behind.
+
+        Their worktree, their private config directory and their
+        ``genus/cc-*`` branch. The row stays, marked ``reaped_at``, as the
+        record of what the job did. Returns how many jobs were reaped.
+        """
+        days = int(_settings().retention_days if retention_days is None else retention_days)
+        if days <= 0:
+            return 0
+        cutoff = (datetime.now(UTC) - timedelta(days=days)).isoformat()
+        reaped = 0
+        for job in await self._store.list_reapable(cutoff):
+            if job.id in self._tasks:
+                continue
+            repo = Path(job.repo_path)
+            path = Path(job.worktree_path) if job.worktree_path else wt.worktree_path_for(job.id)
+            with contextlib.suppress(Exception):
+                await wt.remove_worktree(repo, path)
+            _remove_config_dir(job.id)
+            if job.branch and repo.is_dir():
+                with contextlib.suppress(Exception):
+                    await wt.delete_job_branch(repo, job.branch)
+            job.result["reaped_at"] = _now()
+            await self._persist(job)
+            reaped += 1
+        if reaped:
+            logger.info("coding jobs: reaped %d finished job(s) older than %d days", reaped, days)
+        return reaped
 
     async def _git_identity(self, job: CodingJob) -> tuple[str, str] | None:
         name = _settings().git_name.strip()
@@ -786,8 +977,15 @@ class CodingJobManager:
             )
         text = output.decode(errors="replace")
         commits: list[str] = []
-        if job.mode == "code":
-            commits = await wt.commits_since(job.worktree_path, job.base_sha)
+        if job.mode == "code" and job.branch:
+            commits = await wt.commits_on_branch(job.worktree_path, job.base_sha, job.branch)
+            head = await wt.head_branch(job.worktree_path)
+            if head != job.branch:
+                where = f"on branch `{head}`" if head else "detached"
+                reasons.append(
+                    f"HEAD is {where}, not on the job branch `{job.branch}`: check out "
+                    f"`{job.branch}` and commit your work there (never switch branches)."
+                )
             if job.acceptance.require_commit:
                 if not commits:
                     reasons.append("There is no new commit on the job branch: commit your work.")
@@ -842,8 +1040,22 @@ class CodingJobManager:
 
     async def _drive(self, job: CodingJob, prompt: str, resuming: bool) -> None:
         try:
-            async with self._sem(job.tenant_id):
-                await self._loop(job, prompt, resuming)
+            while True:
+                async with self._sem(job.tenant_id):
+                    await self._loop(job, prompt, resuming)
+                # A follow-up queued while the job was finishing (its task was
+                # still alive, so it was queued rather than reopening the job)
+                # is run here. No await between this check and the return, so
+                # nothing can be queued after it and lost.
+                if (
+                    job.status == JobStatus.CANCELLED
+                    or not job.pending_followups
+                    or not job.session_id
+                ):
+                    break
+                messages, job.pending_followups = job.pending_followups, []
+                await self._reopen(job)
+                prompt, resuming = _followup_prompt(job, messages), False
         except asyncio.CancelledError:
             if job.id in self._cancel_requested:
                 self._cancel_requested.discard(job.id)
@@ -856,6 +1068,8 @@ class CodingJobManager:
             await self._finish(
                 job, JobStatus.FAILED, f"internal error: {type(exc).__name__}: {exc}"
             )
+        if job.is_terminal:
+            self._reap_soon()
 
     async def _loop(self, job: CodingJob, prompt: str, resuming: bool) -> None:
         job.status = JobStatus.RUNNING
@@ -881,7 +1095,11 @@ class CodingJobManager:
         env = coding_env.build_claude_env(
             job_id=job.id, oauth_token=token, github_token=github, git_identity=identity
         )
-        preset = allowed_tools_for_mode(job.mode)
+        paths = await self._job_paths(job)
+        allowed_tools, disallowed_tools = sandbox.build_permissions(job.mode, paths)
+        settings = sandbox.build_sandbox_settings(
+            job.mode, paths, allowed_domains=sandbox.allowed_domains()
+        )
         round_timeout = float(_settings().round_timeout_s)
         max_turns = int(_settings().max_turns)
         needs_verify = job.mode == "code" or bool(job.acceptance.verify_command)
@@ -928,22 +1146,29 @@ class CodingJobManager:
                 prompt=prompt,
                 cwd=job.worktree_path,
                 model=job.model,
-                allowed_tools=preset.allowed,
-                disallowed_tools=preset.disallowed,
+                allowed_tools=allowed_tools,
+                disallowed_tools=disallowed_tools,
                 max_turns=max_turns,
                 max_budget_usd=remaining,
                 append_system_prompt=SYSTEM_PROMPT,
                 json_schema=job.json_schema,
                 resume_session_id=job.session_id,
+                settings=settings,
             )
             result = await self._runner(
                 inv, env=env, timeout_s=round_timeout, on_event=lambda e: self._on_event(job, e)
             )
             job.session_id = result.session_id or job.session_id
-            job.cost_usd = round(job.cost_usd + float(result.total_cost_usd or 0.0), 6)
+            spent = float(result.total_cost_usd or 0.0)
+            if not result.got_result and remaining is not None:
+                # Killed or crashed before Claude Code reported its cost: the
+                # round may have spent all it was allowed, so it is charged that.
+                spent = max(spent, remaining)
+            job.cost_usd = round(job.cost_usd + spent, 6)
             job.turns += int(result.num_turns or 0)
             job.result["last_round"] = {
                 "round": job.rounds,
+                "charged_usd": spent,
                 "is_error": result.is_error,
                 "subtype": result.subtype,
                 "error": result.error_summary,

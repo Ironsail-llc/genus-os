@@ -109,3 +109,112 @@ async def test_not_a_repository_is_a_clear_error(tmp_path, coding_env):
 
 async def test_removing_an_already_gone_worktree_is_quiet(git_repo, coding_env):
     await remove_worktree(git_repo, Path(coding_env) / "never-existed")
+
+
+# ── engine-side git is hardened ───────────────────────────────────────
+
+
+async def test_engine_git_never_runs_repository_hooks(git_repo, coding_env):
+    """A repository's hooks are code the engine would run as itself."""
+    marker = git_repo.parent / "hook-ran"
+    hook = git_repo / ".git" / "hooks" / "post-checkout"
+    hook.write_text(f"#!/bin/sh\ntouch {marker}\n")
+    hook.chmod(0o755)
+
+    await create_worktree(git_repo, worktree_path_for("jobh"), branch="genus/cc-jobh")
+
+    assert not marker.exists(), "git worktree add ran the repository's post-checkout hook"
+
+
+async def test_engine_git_runs_with_a_scrubbed_env_and_no_hooks_or_fsmonitor(
+    git_repo, coding_env, monkeypatch
+):
+    import asyncio
+
+    from robothor.engine.coding import worktree as wt_mod
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-" + "a" * 40)
+    monkeypatch.setenv("ROBOTHOR_DB_PASSWORD", "hunter2")
+    seen: list[tuple[tuple, dict]] = []
+    real = asyncio.create_subprocess_exec
+
+    async def spy(*argv, **kw):
+        seen.append((argv, kw))
+        return await real(*argv, **kw)
+
+    monkeypatch.setattr(wt_mod.asyncio, "create_subprocess_exec", spy)
+    await wt_mod.head_sha(git_repo)
+
+    argv, kw = seen[-1]
+    assert "OPENROUTER_API_KEY" not in kw["env"]
+    assert "ROBOTHOR_DB_PASSWORD" not in kw["env"]
+    assert kw["env"]["GIT_TERMINAL_PROMPT"] == "0"
+    joined = " ".join(argv)
+    assert "-c core.hooksPath=/dev/null" in joined
+    assert "-c core.fsmonitor=false" in joined
+
+
+# ── commit detection is on the job branch, not wherever HEAD went ─────
+
+
+async def test_commits_are_counted_on_the_job_branch(git_repo, coding_env):
+    from robothor.engine.coding.worktree import commits_on_branch, head_branch
+
+    path = worktree_path_for("jobb")
+    info = await create_worktree(git_repo, path, branch="genus/cc-jobb")
+    (path / "y.txt").write_text("y")
+    git(path, "add", "y.txt")
+    git(path, "commit", "-q", "-m", "y")
+
+    assert await head_branch(path) == "genus/cc-jobb"
+    assert await commits_on_branch(path, info.base_sha, "genus/cc-jobb") == [
+        git(path, "rev-parse", "HEAD")
+    ]
+
+
+async def test_a_detached_head_commit_is_not_on_the_job_branch(git_repo, coding_env):
+    from robothor.engine.coding.worktree import commits_on_branch, head_branch
+
+    path = worktree_path_for("jobd")
+    info = await create_worktree(git_repo, path, branch="genus/cc-jobd")
+    git(path, "checkout", "-q", "--detach")
+    (path / "z.txt").write_text("z")
+    git(path, "add", "z.txt")
+    git(path, "commit", "-q", "-m", "z")
+
+    assert await head_branch(path) is None
+    assert await commits_on_branch(path, info.base_sha, "genus/cc-jobd") == []
+
+
+async def test_a_commit_on_a_switched_branch_is_not_on_the_job_branch(git_repo, coding_env):
+    from robothor.engine.coding.worktree import commits_on_branch, head_branch
+
+    path = worktree_path_for("jobs")
+    info = await create_worktree(git_repo, path, branch="genus/cc-jobs")
+    git(path, "checkout", "-q", "-b", "elsewhere")
+    (path / "w.txt").write_text("w")
+    git(path, "add", "w.txt")
+    git(path, "commit", "-q", "-m", "w")
+
+    assert await head_branch(path) == "elsewhere"
+    assert await commits_on_branch(path, info.base_sha, "genus/cc-jobs") == []
+
+
+async def test_git_dirs_name_the_common_dir_and_the_worktree_admin_dir(git_repo, coding_env):
+    from robothor.engine.coding.worktree import git_dirs
+
+    path = worktree_path_for("jobg")
+    await create_worktree(git_repo, path, branch="genus/cc-jobg")
+    common, admin = await git_dirs(path)
+    assert common == (git_repo / ".git").resolve()
+    assert admin.parent == common / "worktrees"
+
+
+async def test_delete_branch_only_touches_job_branches(git_repo, coding_env):
+    from robothor.engine.coding.worktree import delete_job_branch
+
+    git(git_repo, "branch", "genus/cc-old")
+    await delete_job_branch(git_repo, "genus/cc-old")
+    assert "genus/cc-old" not in git(git_repo, "branch", "--list")
+    with pytest.raises(WorktreeError):
+        await delete_job_branch(git_repo, "main")

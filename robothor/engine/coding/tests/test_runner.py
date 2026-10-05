@@ -12,8 +12,8 @@ import pytest
 from robothor.engine.coding.runner import (
     ClaudeInvocation,
     StreamParser,
-    allowed_tools_for_mode,
     build_argv,
+    check_mode,
     run_claude,
 )
 from robothor.engine.coding.tests.conftest import FIXTURES
@@ -79,23 +79,29 @@ def test_argv_refuses_a_resume_id_that_is_not_a_session_uuid(tmp_path):
         build_argv(_inv(tmp_path, resume_session_id="--dangerously-skip-permissions"))
 
 
-def test_mode_presets_fix_the_tool_list():
-    code = allowed_tools_for_mode("code")
-    review = allowed_tools_for_mode("review")
-    readonly = allowed_tools_for_mode("readonly")
-
-    assert {"Read", "Edit", "Write", "Grep", "Glob", "Bash"} <= set(code.allowed)
-    for preset in (review, readonly):
-        assert "Edit" not in preset.allowed and "Write" not in preset.allowed
-        assert "Bash" not in preset.allowed  # only scoped Bash patterns
-        assert all(
-            t.startswith(("Read", "Grep", "Glob", "Bash(git ", "Bash(gh pr "))
-            for t in preset.allowed
-        )
-        assert {"Edit", "Write"} <= set(preset.disallowed)
-    assert "Bash(git push:*)" in code.disallowed
+def test_modes_are_closed():
+    assert check_mode("code") == "code"
     with pytest.raises(ValueError):
-        allowed_tools_for_mode("yolo")
+        check_mode("yolo")
+
+
+def test_argv_carries_the_sandbox_settings_as_json(tmp_path):
+    settings = {"sandbox": {"enabled": True, "failIfUnavailable": True}}
+    argv = build_argv(_inv(tmp_path, settings=settings))
+    assert json.loads(argv[argv.index("--settings") + 1]) == settings
+    # Explicit settings survive --setting-sources "" (which drops only files).
+    assert argv[argv.index("--setting-sources") + 1] == ""
+
+
+def test_argv_without_settings_passes_none(tmp_path):
+    assert "--settings" not in build_argv(_inv(tmp_path))
+
+
+def test_a_call_with_no_result_line_says_its_cost_is_unknown():
+    parser = StreamParser()
+    parser.feed(json.dumps({"type": "system", "subtype": "init", "session_id": "s-1"}))
+    result = parser.finish(exit_code=None, stderr_tail="", timed_out=True)
+    assert result.got_result is False
 
 
 # ── stream parser ─────────────────────────────────────────────────────

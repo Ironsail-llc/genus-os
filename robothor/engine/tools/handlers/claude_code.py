@@ -1,8 +1,9 @@
 """claude_code_* tools — an agent delegates a coding task to Claude Code.
 
 The work is in :mod:`robothor.engine.coding`; this module is the agent-facing
-surface: argument checks, tenant scoping (every lookup is by job id AND the
-caller's tenant), the benchmark refusal, and a status view small enough to fit
+surface: argument checks, scoping (every lookup is by job id AND the caller's
+tenant AND the agent that started the job — only the owner role sees every
+agent's jobs), the benchmark refusal, and a status view small enough to fit
 the persisted step record.
 
 Gating, in the order a call meets it: the tools are in ``OPT_IN_TOOLS``, so
@@ -14,7 +15,6 @@ outright, because a job spends real money and writes real commits.
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -91,21 +91,9 @@ def _view(job: CodingJob) -> dict[str, Any]:
     return view
 
 
-def _check_repo(raw: str) -> str | None:
-    """Why ``raw`` may not be worked on, or None."""
-    if not raw:
-        return "repo_path is required"
-    path = Path(raw).expanduser()
-    if not path.is_absolute():
-        return "repo_path must be an absolute path"
-    from robothor.settings import get_settings
-
-    roots = [r for r in get_settings().coding.repo_roots.split(os.pathsep) if r.strip()]
-    if roots:
-        resolved = path.resolve()
-        if not any(resolved.is_relative_to(Path(r).expanduser().resolve()) for r in roots):
-            return f"repo_path is outside ROBOTHOR_CODING_REPO_ROOTS ({os.pathsep.join(roots)})"
-    return None
+def _scope(ctx: ToolContext) -> str | None:
+    """Whose jobs the caller may see: its own, or — for the owner — any in the tenant."""
+    return None if ctx.user_role == "owner" else ctx.agent_id
 
 
 async def _start(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
@@ -118,9 +106,10 @@ async def _start(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     if not task:
         return {"error": "task is required: a precise spec of the change"}
     repo = str(args.get("repo_path") or "").strip()
-    problem = _check_repo(repo)
-    if problem:
-        return {"error": problem}
+    if not repo:
+        return {"error": "repo_path is required"}
+    if not Path(repo).expanduser().is_absolute():
+        return {"error": "repo_path must be an absolute path"}
     raw_acceptance = args.get("acceptance")
     if not isinstance(raw_acceptance, dict):
         return {"error": "acceptance is required: {verify_command, require_commit}"}
@@ -175,7 +164,7 @@ async def _status(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.engine.coding.jobs import get_manager
 
     job_id = str(args.get("job_id") or "")
-    job = await get_manager().get(job_id, ctx.tenant_id)
+    job = await get_manager().get(job_id, ctx.tenant_id, agent_id=_scope(ctx))
     return _view(job) if job else _not_found(job_id)
 
 
@@ -193,7 +182,7 @@ async def _wait(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     requested = max(1, min(requested, _MAX_WAIT))
     # A wait may not outlive the run that is waiting: leave it time to report.
     timeout, note = run_pacing.clamp_tool_timeout(requested, run_id=ctx.run_id or "")
-    job = await get_manager().wait(job_id, ctx.tenant_id, timeout_s=timeout)
+    job = await get_manager().wait(job_id, ctx.tenant_id, timeout_s=timeout, agent_id=_scope(ctx))
     if job is None:
         return _not_found(job_id)
     view = _view(job)
@@ -213,7 +202,7 @@ async def _followup(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     if not message:
         return {"error": "message is required"}
     try:
-        job = await get_manager().followup(job_id, ctx.tenant_id, message)
+        job = await get_manager().followup(job_id, ctx.tenant_id, message, agent_id=_scope(ctx))
     except LookupError:
         return _not_found(job_id)
     except (ValueError, WorktreeError) as exc:
@@ -228,7 +217,7 @@ async def _cancel(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 
     job_id = str(args.get("job_id") or "")
     try:
-        job = await get_manager().cancel(job_id, ctx.tenant_id)
+        job = await get_manager().cancel(job_id, ctx.tenant_id, agent_id=_scope(ctx))
     except LookupError:
         return _not_found(job_id)
     return _view(job)
