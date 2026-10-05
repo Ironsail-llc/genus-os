@@ -138,6 +138,11 @@ EXTERNAL_SIDE_EFFECT_TOOLS: frozenset[str] = frozenset(
         "gws_chat_send",
         "gws_chat_list_spaces",
         "gws_chat_list_messages",
+        # GitHub review posting: writes onto someone else's pull request. Each
+        # handler also refuses ctx.is_benchmark itself.
+        "github_create_review",
+        "github_reply_review_comment",
+        "github_resolve_threads",
         # Messaging / paging a human.
         "message",
         "send_message",

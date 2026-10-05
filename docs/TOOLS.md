@@ -355,6 +355,55 @@ command.
 `send_email` is not a tool either — it is the `send-email` **skill**, invoked
 with `invoke_skill(name="send-email")`.
 
+### GitHub pull-request review
+
+Six tools on the instance's `GITHUB_TOKEN` (vault first). The three reads are
+offered to every agent. The three writes are **opt-in**: an agent is offered
+them only when its manifest lists them in `tools_allowed`. Every write is
+refused on a benchmark run.
+
+| Tool | Returns |
+|---|---|
+| `github_pr_diff` | The pull request's unified diff. Cut at 150,000 characters with `truncated: true` and `total_chars`; past that, read `github_pr_files`. |
+| `github_pr_files` | One entry per changed file: `filename`, `status`, `additions`, `deletions`, `patch` (null for a binary or oversized file). Patches share a 150,000-character budget; a file past it has `patch_omitted: true`. |
+| `github_compare` | `base...head`: `status` (`ahead`, `behind`, `diverged`, `identical`, or `missing` when the base commit is gone, reported only after the repo and head are confirmed reachable; otherwise an error names the repo/auth problem), `commits`, `files`, `full_review_required`, and `files_truncated` / `commits_truncated` (the list hit GitHub's cap). |
+| `github_create_review` *(opt-in)* | Posts a review and returns `review_id`, `url`, `event`, `inline_count`, `comment_ids`, `posted_as_comment`, `anchors_folded` and `already_posted`. Idempotent: if this token already has an automated review (footer marker) at the same `commit_id` it posts nothing and returns that review with `already_posted: true`; the same lookup runs after a timeout or 5xx on the POST. Aborts with "head moved" if the head changes while files are read. The body is capped at 60,000 characters (non-blocking findings cut first, then out-of-diff, then summary; "…N more finding(s) omitted") and each inline comment at 8,000. Comments fold into the body only on an anchor-related 422; other 422s are returned as errors. |
+| `github_reply_review_comment` *(opt-in)* | Replies inside an existing review thread and returns the new comment's id and url. |
+| `github_resolve_threads` *(opt-in)* | Resolves only the threads opened by the `review_ids` you pass, and returns `resolved`, `thread_ids` and `already_resolved`. |
+
+**Choosing incremental or full.** Before a re-review, call `github_compare`
+with the last reviewed SHA as `base` and the current head as `head`. When
+`full_review_required` is true, review the whole pull request. That happens on
+`diverged` or `behind` (a rebase or force-push rewrote history) and on
+`missing` (the old commit is gone). `identical` means there is nothing new.
+`robothor.pr_review.posting.decide_review` applies the same rule in code.
+
+**What `github_create_review` does with your findings.**
+
+* Only `blocker` and `major` findings become inline comments. `minor`, `nit`
+  and any unknown severity go in the body under *Non-blocking*.
+* GitHub rejects the whole review if one inline comment points outside the
+  diff. So a finding whose `path`/`line`/`side` the diff cannot carry moves to
+  the body under *Other findings*, and nothing is dropped. Use `side: LEFT` for
+  removed lines. A `start_line` range stays inline only inside one hunk.
+* `prior_issues` (on a re-review) appear under *Previous findings* with their
+  status.
+* GitHub will not let the token's own user APPROVE or REQUEST_CHANGES on a
+  pull request that user opened. The tool posts a COMMENT whose first line is
+  `APPROVED` or `CHANGES REQUESTED` instead, and returns
+  `posted_as_comment: true`. It decides this up front when it can read the
+  token's login. When GitHub answers 422, it retries the same way.
+* Any other 422 with inline comments is treated as a bad anchor. The tool
+  retries **once** with every finding in the body (`anchors_folded: true`).
+* The tool refuses when the pull request's head is no longer `commit_id`,
+  because the anchors were checked against a diff that has since changed.
+  Re-review the new head.
+
+**Resolving threads.** Pass the `review_id`s that `github_create_review`
+returned. A thread belongs to the review its first comment was posted in. So a
+thread someone opened by hand from the same account is never resolved, even
+though it has the same author.
+
 ### Vision: `view_image` and `analyze_image`
 
 Two tools, one rule:
