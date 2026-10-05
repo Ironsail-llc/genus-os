@@ -85,6 +85,37 @@ finding, for every caller. The summary, every finding, previous-finding notes
 and the Chat announcement pass through the secret redactor
 (`robothor/secrets/redaction.py`) before they are posted or stored.
 
+**What the review job is told.** Besides the diff it can read, prepare puts
+in the prompt, all as data and never as instructions: the title, author,
+branch, labels and linked issues; the description (redacted, at most 16,000
+characters); what people already said on the pull request — reviews, line
+comments and conversation comments, without bots or the reviewer's own
+account (redacted, 1,500 characters each, the latest 40); and the GitHub
+state — `mergeable` / `mergeable_state`, the files a merge into the base
+conflicts in (a `git merge-tree` in the reviewer's own clone, before the job
+starts), and the head commit's check runs and commit statuses. A merge
+conflict or a failing check is a blocking finding the model must report,
+unless it shows the check cannot be caused by the change. When no ticket key
+is found and Jira is configured, a title search in the repository's project
+offers up to five candidate tickets, marked as not linked.
+
+**Large pull requests go deep.** From `ROBOTHOR_PR_REVIEW_DEEP_LINES` (1,500)
+changed lines, the job runs at `ROBOTHOR_PR_REVIEW_DEEP_EFFORT` (`xhigh`,
+never lower than the configured effort), the prompt requires the four lens
+groups as explicit sequential passes, and when the first round used under 60%
+of its turns the same session gets one completeness pass (re-walk the thinnest
+lenses, the tests against every changed behaviour, the description and every
+earlier comment) and returns the whole result again. Finalize posts the job's
+final output, once, as before; a completeness round that returns nothing
+leaves the first round's result in place.
+
+**Which model wrote it.** Reviews run on `ROBOTHOR_PR_REVIEW_MODEL` (`opus`,
+the CLI alias that tracks the newest Opus) at `ROBOTHOR_PR_REVIEW_EFFORT`
+(`high`). The coding job records the model Claude Code actually ran
+(`system/init`, else the `modelUsage` keys), and the review footer names it
+with the effort and the guidelines' hash, e.g. `Automated review ·
+claude-opus-5-5 · effort high · guidelines 42a69406da62`.
+
 **What the review job may do.** It runs in its own read-only worktree at the
 pull request's head with Read, Grep, Glob and read-only `git`, and no network
 (no `gh`, no web). It cannot edit, push or comment. Claude Code runs it with
@@ -172,7 +203,7 @@ never left running.
    | `ROBOTHOR_PR_REVIEW_BOT_LOGIN` | GitHub login whose requested reviews it picks up — requests naming that login directly (`user-review-requested:`); a review requested from a team the login belongs to is ignored |
    | `ROBOTHOR_PR_REVIEW_REQUIRE_TICKET` / `_TICKET_PREFIXES` | the optional ticket rule; prefixes as `owner/repo:PREFIX` or bare `PREFIX` |
    | `ROBOTHOR_PR_REVIEW_GUIDELINES_PATH` | the team's own review guidelines (see [parity](#parity-with-an-existing-review-bot)) |
-   | `ROBOTHOR_PR_REVIEW_MODEL` | the Claude Code model for reviews (e.g. `opus`); empty uses `ROBOTHOR_CLAUDE_CODE_MODEL` |
+   | `ROBOTHOR_PR_REVIEW_MODEL` | `opus` (default): the CLI alias, which each Claude Code update points at the newest Opus. Never pin a dated model id here; the model actually used is named in every review footer |
 
    [Settings](reference/configuration.md#pr_review) lists every
    `ROBOTHOR_PR_REVIEW_*` value. If `ROBOTHOR_CODING_REPO_ROOTS` is set, it
@@ -197,7 +228,7 @@ change in what it reads, and to beat it where it can. To reproduce one:
 |---|---|
 | `ALLOWED_REPOS=owner/repo:PREFIX,…` | `ROBOTHOR_PR_REVIEW_REPOS` — the same value |
 | `REVIEW_GUIDELINES_PATH` | copy the file to `brain/pr-review-guidelines.md` (instance data, gitignored with `brain/*.md`) and set `ROBOTHOR_PR_REVIEW_GUIDELINES_PATH=<workspace>/brain/pr-review-guidelines.md` |
-| `REVIEW_MODEL` / `REVIEW_EFFORT` / `REVIEW_MAX_TURNS` / `REVIEW_TIMEOUT_MS` | `ROBOTHOR_PR_REVIEW_MODEL=opus`, `_EFFORT=high`, `_MAX_TURNS=80`, `_ROUND_TIMEOUT=1800` (the last three are the defaults) |
+| `REVIEW_MODEL` / `REVIEW_EFFORT` / `REVIEW_MAX_TURNS` / `REVIEW_TIMEOUT_MS` | `ROBOTHOR_PR_REVIEW_MODEL=opus`, `_EFFORT=high`, `_MAX_TURNS=80`, `_ROUND_TIMEOUT=1800` (all four are the defaults) |
 | `CHAT_SPACE` / `CHAT_SELF_USER_ID` | `ROBOTHOR_PR_REVIEW_CHAT_SPACE` / `_CHAT_SELF_USERS` |
 | `CHAT_CLAIM_REACTION` / `CHAT_APPROVED_REACTION` | `ROBOTHOR_PR_REVIEW_CLAIM_REACTION` (👀) / `_APPROVED_REACTION` (👍) |
 | `JIRA_BASE_URL`, `JIRA_EMAIL`, `JIRA_API_TOKEN` | `JIRA_BASE_URL`, `JIRA_USER_EMAIL`, and `JIRA_API_TOKEN` in the vault |

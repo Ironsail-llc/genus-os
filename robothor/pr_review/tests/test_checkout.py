@@ -59,6 +59,23 @@ async def test_clones_then_fetches_the_pull_request_head(tmp_path, remote):
     assert again == dest
 
 
+async def test_a_stacked_pr_also_fetches_the_default_branch(tmp_path, remote):
+    bare, head, base = remote
+    _git(bare, "branch", "-q", "stack", base)  # the PR is stacked on another branch
+    dest = tmp_path / "c"
+    await ensure_checkout(
+        dest,
+        number=7,
+        head_sha=head,
+        base_branch="stack",
+        remote_url=str(bare),
+        token="",
+        also_fetch=("main", "-bad", "stack"),
+    )
+    assert _git(dest, "rev-parse", "refs/remotes/origin/stack") == base
+    assert _git(dest, "rev-parse", "refs/remotes/origin/main") == base
+
+
 async def test_unknown_head_is_an_error(tmp_path, remote):
     bare, _head, _ = remote
     with pytest.raises(CheckoutError, match="not found"):
@@ -136,3 +153,34 @@ async def test_a_cancelled_git_call_kills_its_process(monkeypatch, tmp_path):
     with contextlib.suppress(asyncio.CancelledError):
         await task
     assert SlowProc.killed
+
+
+async def test_merge_conflicts_lists_conflicting_files(tmp_path):
+    from robothor.pr_review.checkout import merge_conflicts
+
+    repo = tmp_path / "r"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    _git(repo, "config", "user.email", "agent@example.com")
+    _git(repo, "config", "user.name", "Agent")
+    (repo / "a.txt").write_text("one\n")
+    (repo / "b.txt").write_text("b\n")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-q", "-m", "base")
+    _git(repo, "checkout", "-q", "-b", "pr")
+    (repo / "a.txt").write_text("pr\n")
+    _git(repo, "commit", "-qam", "pr")
+    pr = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "checkout", "-q", "-b", "clean", "main")
+    (repo / "c.txt").write_text("c\n")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-q", "-m", "clean")
+    _git(repo, "checkout", "-q", "main")
+    (repo / "a.txt").write_text("main\n")
+    _git(repo, "commit", "-qam", "main moved")
+
+    assert await merge_conflicts(repo, "main", pr) == ["a.txt"]
+    assert await merge_conflicts(repo, "main", "clean") == []
+    assert await merge_conflicts(repo, "main", "no-such-ref") is None
+    assert await merge_conflicts(repo, "--output=x", pr) is None
+    assert await merge_conflicts(tmp_path / "not-a-repo", "main", pr) is None

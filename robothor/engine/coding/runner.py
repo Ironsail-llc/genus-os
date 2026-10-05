@@ -230,6 +230,11 @@ class ClaudeResult:
     #: False when the call ended (killed, timed out, crashed) before Claude
     #: Code's own ``result`` line: ``total_cost_usd`` is then unknown, not 0.
     got_result: bool = True
+    #: The model Claude Code actually ran (``system/init``'s ``model``, else the
+    #: first ``modelUsage`` key) — what an alias such as ``opus`` resolved to.
+    model: str | None = None
+    #: Every model the call used (``modelUsage`` keys), main model first.
+    models_used: list[str] = field(default_factory=list)
 
     @property
     def error_summary(self) -> str:
@@ -341,9 +346,17 @@ class StreamParser:
                 timed_out=timed_out,
                 stderr_tail=stderr_tail,
                 got_result=False,
+                model=self.model,
             )
         is_error = bool(data.get("is_error")) or timed_out or exit_code not in (0, None)
+        usage = data.get("modelUsage")
+        used = [str(k) for k in usage] if isinstance(usage, dict) else []
+        model = self.model or (used[0] if used else None)
+        if model and model in used:
+            used = [model, *(m for m in used if m != model)]
         return ClaudeResult(
+            model=model,
+            models_used=used,
             session_id=str(data.get("session_id") or self.session_id or "") or None,
             is_error=is_error,
             subtype=str(data.get("subtype") or ""),

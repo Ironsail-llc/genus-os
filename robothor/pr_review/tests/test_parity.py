@@ -88,7 +88,7 @@ def test_settings_defaults_match_the_review_bot_profile(monkeypatch):
     assert cfg.approved_reaction == "\U0001f44d"
     assert cfg.claim_reaction == "\U0001f440"
     assert cfg.guidelines_path == ""
-    assert cfg.review_model == ""
+    assert cfg.review_model == "opus"  # the alias: always the newest Opus
 
 
 # ── 2. guidelines and prompt ─────────────────────────────────────────
@@ -231,7 +231,7 @@ async def test_prepare_uses_the_guidelines_file_and_the_model_knobs(tmp_path):
     assert args["max_turns"] == 80
     assert args["round_timeout_s"] == 1800
     assert args["max_budget_usd"] == 25
-    assert "model" not in args
+    assert args["model"] == "opus"  # the alias, never a pinned id
     assert result["guidelines"] == "instance"
 
 

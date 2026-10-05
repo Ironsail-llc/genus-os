@@ -22,6 +22,7 @@ refuse a benchmark run. The logic lives in :mod:`robothor.pr_review`.
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
@@ -113,6 +114,48 @@ def _ticket_fetcher(ctx: ToolContext) -> Any:
         return result
 
     return fetch
+
+
+#: JQL words that would change the query's meaning inside ``text ~``.
+_JQL_RESERVED = frozenset({"and", "or", "not", "empty", "null", "order", "by", "in", "is"})
+
+
+def _ticket_searcher(ctx: ToolContext) -> Any:
+    """Search the ticket system for issues matching a PR title; [] when Jira is not set up.
+
+    The title becomes a handful of plain words — no quotes, operators or
+    reserved words reach the JQL — searched within the repository's project.
+    """
+
+    async def search(prefix: str, title: str) -> list[dict[str, Any]]:
+        from robothor.engine.tools.handlers import jira
+
+        if not jira._get_base_url() or not jira._get_auth_header():
+            return []
+        words = [
+            w
+            for w in re.findall(r"[A-Za-z0-9]+", title.lower())
+            if len(w) >= 3 and w not in _JQL_RESERVED
+        ]
+        project = re.sub(r"[^A-Za-z0-9_]", "", prefix)
+        if not words or not project:
+            return []
+        jql = (
+            f'project = "{project}" AND text ~ "{" ".join(dict.fromkeys(words[:8]))}" '
+            "ORDER BY updated DESC"
+        )
+        result: dict[str, Any] = await jira._jira_search({"jql": jql, "max_results": 5}, ctx)
+        return [
+            {
+                "key": str(i.get("key") or ""),
+                "summary": str(i.get("summary") or ""),
+                "status": str(i.get("status") or ""),
+            }
+            for i in result.get("issues") or []
+            if isinstance(i, dict) and i.get("key")
+        ]
+
+    return search
 
 
 def _pr_args(args: dict[str, Any]) -> tuple[str, int] | dict[str, Any]:
@@ -225,6 +268,7 @@ async def _prepare(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             token=_get_token(),
             start_job=start_job,
             fetch_ticket=_ticket_fetcher(ctx),
+            search_tickets=_ticket_searcher(ctx),
         )
     except CheckoutError as exc:
         return {"error": f"checkout failed: {exc}"}

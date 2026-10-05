@@ -26,9 +26,13 @@ crash between GitHub accepting the review and the row recording it.
 from __future__ import annotations
 
 import logging
+import re
 from typing import TYPE_CHECKING, Any, Literal, Protocol
 
-from robothor.pr_review.checkout import ensure_checkout, read_at
+from robothor.pr_review.checkout import ensure_checkout, merge_conflicts, read_at
+from robothor.pr_review.context import checks as check_list
+from robothor.pr_review.context import discussion as discussion_items
+from robothor.pr_review.context import linked_issues, pr_description
 from robothor.pr_review.policy import decide_verdict, extract_ticket_key, is_blocking
 from robothor.pr_review.posting import decide_review
 from robothor.pr_review.prompt import (
@@ -43,8 +47,12 @@ from robothor.pr_review.ticket import ticket_context
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Mapping, Sequence
+    from pathlib import Path
 
     from robothor.pr_review.clients import ChatClient, GitHubPort
+
+    #: ``(ticket prefix, PR title) -> [{key, summary, status}]``.
+    TicketSearch = Callable[[str, str], Awaitable[list[dict[str, Any]]]]
     from robothor.pr_review.config import ReviewerConfig
     from robothor.pr_review.store import PrReviewRow, PrReviewStore
     from robothor.pr_review.ticket import TicketFetcher
@@ -165,6 +173,86 @@ async def _ticket_key(
 
 # ── prepare ─────────────────────────────────────────────────────────────
 
+#: The second round a deep review gets when its first used under 60% of its
+#: turns: same session, so it re-checks rather than starts over.
+COMPLETENESS_PASS = (
+    "Completeness pass. Before answering again: (1) name the lens groups you spent the "
+    "least time on and walk them again over the whole diff; (2) for every behaviour this "
+    "pull request changes, check the tests: is there one, does CI run it, would it fail if "
+    "the change were reverted, and does a test on the base branch break or stop checking "
+    "anything once this merges; (3) re-read every claim, runbook step and command in the "
+    "PR description and every point in <pr_discussion> against the code; (4) re-check the "
+    "GitHub state section; (5) re-check each finding's severity against the severity "
+    "rules: anything that can move money twice, lose or corrupt data, expose another "
+    "tenant's data or break the base branch on merge is at least major, whatever its "
+    "reach. Add what you missed, drop what you can now disprove, and return the FULL "
+    "structured result again: every finding, not only new ones."
+)
+_EFFORT_RANK = ("low", "medium", "high", "xhigh", "max")
+_CANDIDATES_MAX = 5
+
+
+def _effort(cfg: ReviewerConfig, deep: bool) -> str:
+    """The configured effort, raised to the deep effort on a deep review, never lowered."""
+    base = cfg.review_effort
+    if not deep or cfg.deep_effort not in _EFFORT_RANK:
+        return base
+    if base in _EFFORT_RANK and _EFFORT_RANK.index(base) >= _EFFORT_RANK.index(cfg.deep_effort):
+        return base
+    return cfg.deep_effort
+
+
+async def _optional(github: Any, name: str, *args: Any) -> Any:
+    """An optional GitHub read; None when the port lacks it or it fails."""
+    method = getattr(github, name, None)
+    if method is None:
+        return None
+    try:
+        return await method(*args)
+    except Exception as exc:  # noqa: BLE001 - context is extra; the review goes ahead
+        logger.info("pr_review: %s failed: %s", name, type(exc).__name__)
+        return None
+
+
+async def _pr_extras(
+    cfg: ReviewerConfig, github: Any, repo: str, number: int, head: str
+) -> dict[str, Any]:
+    """What reviewers already said, and the head commit's checks (None when unknown)."""
+    reviews = await _optional(github, "list_reviews", repo, number)
+    comments = await _optional(github, "list_review_comments", repo, number)
+    issue_comments = await _optional(github, "list_issue_comments", repo, number)
+    raw_checks = await _optional(github, "list_checks", repo, head)
+    exclude = (cfg.bot_login,) if cfg.bot_login else ()
+    return {
+        "discussion": discussion_items(
+            reviews or [], comments or [], issue_comments or [], exclude_logins=exclude
+        ),
+        "checks": (check_list(raw_checks, raw_checks) if isinstance(raw_checks, dict) else None),
+    }
+
+
+async def _ticket_candidates(
+    cfg: ReviewerConfig, repo: str, title: str, search: TicketSearch
+) -> tuple[dict[str, Any], ...]:
+    prefixes = cfg.prefixes_for(repo)
+    if not prefixes or not title.strip():
+        return ()
+    try:
+        found = await search(prefixes[0], title)
+    except Exception as exc:  # noqa: BLE001 - candidates are a courtesy
+        logger.info("pr_review: ticket search failed: %s", type(exc).__name__)
+        return ()
+    out = [
+        {
+            "key": str(t["key"]),
+            "summary": _redact(t.get("summary"))[:200],
+            "status": str(t.get("status") or ""),
+        }
+        for t in found or []
+        if isinstance(t, dict) and t.get("key")
+    ]
+    return tuple(out[:_CANDIDATES_MAX])
+
 
 def _bound(row: PrReviewRow, head: str) -> dict[str, Any]:
     return {
@@ -192,6 +280,8 @@ async def prepare(
     reader: Callable[..., Awaitable[str | None]] = read_at,
     remote_url: str | None = None,
     fetch_ticket: TicketFetcher | None = None,
+    search_tickets: TicketSearch | None = None,
+    conflicts: Callable[[Path, str, str], Awaitable[list[str] | None]] | None = None,
 ) -> dict[str, Any]:
     row = await store.get(tenant_id, repo, number)
     if row is None:
@@ -229,6 +319,9 @@ async def prepare(
             await store.save(row)
         return {"skip": True, "reason": f"{decision.reason}: resolve the task"}
 
+    # A stacked pull request finally lands on the default branch: fetch it too.
+    default_branch = str(((pr.get("base") or {}).get("repo") or {}).get("default_branch") or "")
+    stacked_on = default_branch if default_branch and default_branch != base_ref else ""
     path = await checkout(
         cfg.clone_dir(row.repo),
         number=number,
@@ -236,6 +329,7 @@ async def prepare(
         base_branch=base_ref,
         remote_url=remote_url or f"https://github.com/{row.repo}.git",
         token=token,
+        **({"also_fetch": (stacked_on,)} if stacked_on else {}),
     )
     # The rules a pull request is reviewed against come from the branch it
     # merges into: a PR that edits CLAUDE.md must not write its own review rules.
@@ -249,7 +343,14 @@ async def prepare(
     title, head_ref, _ = _pr_text(pr)
     ticket_key = await _ticket_key(cfg, github, row, pr)
     ticket = await ticket_context(ticket_key, fetch_ticket) if ticket_key else None
+    candidates: tuple[dict[str, Any], ...] = ()
+    if not ticket_key and search_tickets is not None:
+        candidates = await _ticket_candidates(cfg, row.repo, title, search_tickets)
     guidelines = load_guidelines(cfg.guidelines_path, skill_text)
+    extras = await _pr_extras(cfg, github, row.repo, number, head)
+    conflicted = await (conflicts or merge_conflicts)(path, f"origin/{base_ref}", head)
+    changed = int(pr.get("additions") or 0) + int(pr.get("deletions") or 0)
+    deep = (row.depth or "full") != "light" and changed >= cfg.deep_lines
     previous = [
         {k: i.get(k) for k in ("comment_id", "path", "line", "severity", "title", "body")}
         for i in row.last_review.get("issues") or []
@@ -274,11 +375,27 @@ async def prepare(
         previous_verdict=str(row.last_review.get("verdict") or ""),
         previous_summary=str(row.last_review.get("summary") or ""),
         previous_issues=previous,
+        description=pr_description(pr),
+        labels=tuple(str((lab or {}).get("name") or "") for lab in pr.get("labels") or [] if lab),
+        linked_issues=linked_issues(str(pr.get("body") or ""), own_repo=row.repo),
+        discussion=extras["discussion"],
+        mergeable=pr.get("mergeable") if isinstance(pr.get("mergeable"), bool) else None,
+        mergeable_state=str(pr.get("mergeable_state") or ""),
+        conflicts=tuple(conflicted) if conflicted is not None else None,
+        checks=extras["checks"],
+        changed_lines=changed,
+        deep=deep,
+        ticket_candidates=candidates,
+        stacked_on=stacked_on,
     )
+    acceptance: dict[str, Any] = {"require_commit": False}
+    if deep:
+        acceptance["second_pass"] = COMPLETENESS_PASS
+        acceptance["second_pass_below_turns"] = max(1, int(cfg.review_max_turns * 0.6))
     start_args: dict[str, Any] = {
         "task": build_review_prompt(guidelines, ctx),
         "repo_path": str(path),
-        "acceptance": {"require_commit": False},
+        "acceptance": acceptance,
         "mode": "review",
         "base_ref": head,
         "json_schema": review_output_schema(),
@@ -288,8 +405,9 @@ async def prepare(
         "max_turns": cfg.review_max_turns,
         "round_timeout_s": cfg.review_round_timeout_s,
     }
-    if cfg.review_effort:
-        start_args["effort"] = cfg.review_effort
+    effort = _effort(cfg, deep)
+    if effort:
+        start_args["effort"] = effort
     if cfg.review_model:
         start_args["model"] = cfg.review_model
 
@@ -335,6 +453,12 @@ async def prepare(
         "ticket": ticket_key or "",
         "ticket_state": ticket.state if ticket else "none",
         "guidelines": guidelines.source,
+        "deep": deep,
+        "github_state": {
+            "mergeable_state": ctx.mergeable_state,
+            "conflicts": list(conflicted or []),
+            "failing_checks": [c.name for c in ctx.checks or () if c.failing],
+        },
         "job_id": job_id,
         "next": "call claude_code_wait with this job_id until it is done, then "
         "pr_review_finalize with the same job_id",
@@ -429,6 +553,22 @@ def _already_posted(cfg: ReviewerConfig, row: PrReviewRow) -> dict[str, Any]:
         "digest": "",
         "next": "resolve the task with review_url as the evidence; it was already posted",
     }
+
+
+_GUIDELINES_SHA_RE = re.compile(r'<review_guidelines path="[^"]*" sha256="([0-9a-f]{6,64})">')
+
+
+def _footer_meta(job: Any) -> dict[str, str]:
+    """What the review footer cites: the model Claude Code actually ran (not the
+    alias it was given), the effort, and the guidelines' hash from the prompt."""
+    result = getattr(job, "result", None) or {}
+    found = _GUIDELINES_SHA_RE.search(str(getattr(job, "task", "") or ""))
+    meta = {
+        "model": str(result.get("model") or getattr(job, "model", "") or ""),
+        "effort": str(getattr(job, "effort", "") or ""),
+        "guidelines": found.group(1) if found else "",
+    }
+    return {k: v for k, v in meta.items() if v}
 
 
 def _job_problem(job: Any, row: PrReviewRow) -> str:
@@ -560,7 +700,7 @@ async def finalize(
             return {"error": "another finalize is posting this review; it posts once"}
         row = claimed
         prior_issues_seen = list(row.last_review.get("issues") or [])
-        context = {
+        context: dict[str, Any] = {
             "prior_issues_seen": prior_issues_seen,
             "prior_review_ids": list(row.review_ids),
             "ticket": ticket,
@@ -575,6 +715,7 @@ async def finalize(
                 "prior_review_ids": list(row.last_review.get("prior_review_ids") or []),
                 "ticket": row.last_review.get("ticket"),
             }
+    context.setdefault("footer_meta", _footer_meta(job))
     return await _post(
         cfg,
         store,
@@ -670,6 +811,7 @@ async def _post(
                 "issues": decision.issues,
                 "commit_id": head,
                 "prior_issues": prior_for_body,
+                "footer_meta": dict(context.get("footer_meta") or {}),
             }
         )
         if posted.get("error"):

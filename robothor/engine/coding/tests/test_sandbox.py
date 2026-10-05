@@ -138,3 +138,14 @@ def test_read_only_bash_has_no_git_grep_and_no_writing_or_external_forms(tmp_pat
     for flag in ("--output", "--ext-diff", "--no-index"):
         assert any(flag in rule for rule in denied), flag
     assert "Edit" in denied and "Write" in denied
+
+
+@pytest.mark.parametrize("mode", ["review", "readonly"])
+def test_read_only_bash_can_find_the_merge_base_but_not_write_a_merge(tmp_path, mode):
+    """The review prompt asks for ``git merge-base``; ``git merge-tree --write-tree``
+    writes objects into the shared git directory, so it stays out: the service
+    computes merge conflicts itself before the job starts."""
+    allowed, _ = build_permissions(mode, _paths(tmp_path))
+
+    assert "Bash(git merge-base:*)" in allowed
+    assert not any("merge-tree" in rule for rule in allowed)

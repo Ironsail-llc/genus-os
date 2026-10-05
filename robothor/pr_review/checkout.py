@@ -78,8 +78,13 @@ async def ensure_checkout(
     base_branch: str,
     remote_url: str,
     token: str,
+    also_fetch: tuple[str, ...] = (),
 ) -> Path:
-    """Clone (once) and fetch the PR head and base branch; return the clone path."""
+    """Clone (once) and fetch the PR head and base branch; return the clone path.
+
+    ``also_fetch`` names more branches to bring up to date (the default branch
+    of a stacked pull request); a name that is not a plain branch is skipped.
+    """
     if not _SHA_RE.match(head_sha or ""):
         raise CheckoutError(f"head sha {head_sha!r} is not a commit sha")
     if base_branch.startswith("-") or not _REF_RE.match(base_branch or ""):
@@ -107,12 +112,48 @@ async def ensure_checkout(
         "origin",
         f"+refs/pull/{int(number)}/head:refs/genus/pr/{int(number)}",
         f"+refs/heads/{base_branch}:refs/remotes/origin/{base_branch}",
+        *(
+            f"+refs/heads/{b}:refs/remotes/origin/{b}"
+            for b in dict.fromkeys(also_fetch)
+            if b != base_branch and not b.startswith("-") and _REF_RE.match(b)
+        ),
         token=token,
     )
     code, _ = await _git(dest, "cat-file", "-e", f"{head_sha}^{{commit}}", check=False)
     if code != 0:
         raise CheckoutError(f"head {head_sha[:12]} not found after fetching pull/{number}/head")
     return dest
+
+
+async def merge_conflicts(repo: Path, base: str, head: str) -> list[str] | None:
+    """The files that conflict when ``head`` is merged into ``base``; None when unknown.
+
+    ``git merge-tree --write-tree`` merges in memory and writes only objects
+    (never a ref, the index or a work tree) into the reviewer's own clone, on
+    the host, before the read-only review job starts.
+    """
+    if base.startswith("-") or head.startswith("-"):
+        return None
+    try:
+        code, out = await _git(
+            Path(repo),
+            "merge-tree",
+            "--write-tree",
+            "--name-only",
+            "--no-messages",
+            base,
+            head,
+            check=False,
+        )
+    except (CheckoutError, OSError):
+        return None
+    lines = out.splitlines()
+    # The first line is the merged tree's id; without it git refused the merge.
+    if code not in (0, 1) or not lines or not _SHA_RE.match(lines[0].strip()):
+        return None
+    if code == 0:
+        return []
+    return list(dict.fromkeys(line for line in lines[1:] if line.strip()))
 
 
 async def read_at(repo: Path, sha: str, relpath: str, max_chars: int = 20_000) -> str | None:

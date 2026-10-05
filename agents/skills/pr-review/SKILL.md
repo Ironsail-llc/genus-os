@@ -17,9 +17,14 @@ GitHub by the pr-reviewer, which recomputes the verdict from the findings.
 
 - **Read, Grep, Glob** over the checkout.
 - **Read-only git**: `git diff`, `git log`, `git show`, `git blame`,
-  `git ls-files`, `git rev-parse`, `git status`, `git branch --list`.
+  `git merge-base`, `git ls-files`, `git rev-parse`, `git status`,
+  `git branch --list`.
 - The base branch at `origin/<base>`, and the linked ticket's text when the
   task includes it.
+- From the task: the pull request's description, labels and linked issues;
+  what other reviewers have already said on it; and its GitHub state — the
+  merge state, the files a merge into the base conflicts in, and the checks
+  on the head commit.
 
 There is no network (no `gh`, no web). You cannot edit, run the test suite,
 start services, or post anything. A finding is verified by tracing the code,
@@ -33,7 +38,26 @@ not by running it.
   the branch left from. Most real findings compare new behaviour to what the
   code did there (`git show <merge-base>:<path>`), not to the diff's own intent.
 - **Read the description and any deploy notes as claims to verify**, not as
-  context to trust. Every "this is safe because…" is a lens target.
+  context to trust. Every "this is safe because…" is a lens target. A
+  runbook step, command or query in the description is part of the change:
+  one that would not work, or would cause harm if followed, is a finding.
+- **Read the GitHub state first.** A merge conflict with the base branch, or
+  a failing check on the head commit, is a blocking PR-level finding
+  (severity `blocker`, no line): the pull request cannot merge as it stands.
+  For a conflict, read the base's version of each conflicting file and say
+  what the rebase must keep. For a failing check, find what it runs and say
+  whether this change can cause it; only when the repository shows it cannot
+  is it `minor`, with the reason. Pending checks are not findings.
+- **Check the change against the base as it is now.** The base may have
+  moved since the merge-base. A test or caller that landed on the base
+  meanwhile and that this change breaks once merged — or makes pass without
+  checking anything — is a finding. A stacked pull request (its base is not
+  the default branch) finally lands on the default branch: when the task
+  says so, check it against that branch the same way.
+- **Read what other reviewers already said.** Verify each point at this
+  head: one that still applies is a finding like any other (say it was
+  raised before); one the code disproves is left out. Never post a point
+  only because someone raised it.
 - **Check the linked ticket when the task includes it**, as the baseline for
   whether the change does what it should: every acceptance criterion the
   change misses or contradicts is a finding. If the task says the ticket could
@@ -123,7 +147,11 @@ twelve lenses in order. On anything larger, make four separate passes, each
 with only its lenses and a fresh read of the diff: `1 3 12` (what changed vs
 what exists), `2 5 6` (who is affected and when), `4 8 9` (state, scope,
 truth), `7 10 11` (contract, tests, cost). Merge the findings and remove
-duplicates before verifying them.
+duplicates before verifying them. When the task marks the review **deep** (a
+very large change), the four passes are required and sequential, each a
+fresh read of the whole diff, and no finding is written until all four are
+done; the service may then ask for a completeness pass in the same session —
+answer it with the full result again, not only what is new.
 
 ### Verify every finding
 
@@ -144,6 +172,14 @@ list in hand: which changed files, deleted lines, migrations, config entries
 and frontend files have **no** finding and were not looked at by any lens?
 Walk those. New findings go through verification like the rest.
 
+Then a **words-match-code sweep**: put every docblock and comment the change
+touches or contradicts, every claim in the description (what changed, what
+did not, test counts, "unchanged", "dead code"), and every runbook, deploy
+note and command next to the final code. Each mismatch is a finding: a
+`nit` when only the words are wrong, `minor` when someone following them
+would be misled, and graded by its impact when following them causes harm.
+Nits never block.
+
 ### Severity
 
 - **blocker** — money wrong, data lost or corrupted, cross-tenant exposure, a
@@ -154,6 +190,25 @@ Walk those. New findings go through verification like the rest.
 - **minor** — latent (nothing reaches it today), low reach, or an edge the
   ticket accepts.
 - **nit** — naming, style, polish. Never blocking.
+
+**Severity floor: impact, not reach.** Anything that can move money twice
+(a double charge or a double refund), lose or corrupt data, expose one
+tenant's data to another, or break the base branch on merge (a conflict, a
+failing check, a base test this change breaks) is at least **major**,
+however unlikely the path — a rare path that pays twice is still a path
+that pays twice. Low reach can lower a finding about inconvenience; it never
+lowers one about money, data, tenancy or a broken base. This includes
+instructions the pull request gives people: a runbook step that re-opens a
+double payment is graded like code that does. When the fix depends on people
+following its runbook (records only operators can clear, a manual
+reconciliation), a runbook path that cannot be executed — the API refuses the
+credential it uses — or that re-opens the defect is **major**: in the
+incident there is no working path.
+
+**Turning a control off needs a trail.** When a change disables, bypasses or
+skips a check, gate or guard, ask how anyone will find the cases that went
+through without it. If nothing logs, records or flags them, that is a
+**major** silent outcome on anything touching money, compliance or safety.
 
 Only blocker and major findings block a merge. Minor findings and nits never
 stand in the way of an approval; they are shared for awareness.
@@ -177,8 +232,9 @@ stand in the way of an approval; they are shared for awareness.
 Propose `APPROVE` when no blocker or major finding remains; `REQUEST_CHANGES`
 when one does; `COMMENT` when you are unsure. The service recomputes the
 verdict from your findings, so the severity you assign is what decides it —
-assign it honestly. Do not hold back an approval for pending CI; a red check
-that points at a real defect in the diff is a finding, a queued one is not.
+assign it honestly. Do not hold back an approval for pending CI. A failing
+check on the head commit, or a merge conflict, blocks (see "Read the GitHub
+state first"); a queued check does not.
 
 ## Re-reviewing
 

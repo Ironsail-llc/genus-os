@@ -225,3 +225,21 @@ async def test_run_claude_times_out_and_kills_the_process_group(tmp_path):
 
     await asyncio.sleep(3.5)
     assert not marker.exists(), "the grandchild outlived the timeout kill"
+
+
+def test_the_result_names_the_model_claude_code_used():
+    parser = StreamParser()
+    init = {"type": "system", "subtype": "init", "session_id": "s-1", "model": "claude-opus-5-5"}
+    parser.feed(json.dumps(init))
+    usage = {"claude-opus-5-5": {}, "claude-haiku-4-5": {}}
+    parser.feed(json.dumps({"type": "result", "subtype": "success", "modelUsage": usage}))
+    result = parser.finish(exit_code=0, stderr_tail="", timed_out=False)
+    assert result.model == "claude-opus-5-5"
+    assert result.models_used == ["claude-opus-5-5", "claude-haiku-4-5"]
+
+
+def test_without_init_the_model_comes_from_model_usage():
+    parser = StreamParser()
+    usage = {"claude-opus-5-5": {"outputTokens": 3}}
+    parser.feed(json.dumps({"type": "result", "subtype": "success", "modelUsage": usage}))
+    assert parser.finish(exit_code=0, stderr_tail="", timed_out=False).model == "claude-opus-5-5"

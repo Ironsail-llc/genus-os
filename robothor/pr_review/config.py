@@ -69,10 +69,14 @@ class ReviewerConfig:
     max_concurrent: int = 2
     agent_id: str = "pr-reviewer"
     clone_root: str = ""
-    review_model: str = ""
+    review_model: str = "opus"
     review_budget_usd: float = 25.0
     review_effort: str = "high"
     review_max_turns: int = 80
+    #: Changed lines (additions + deletions) from which a review goes deep: a
+    #: higher effort, explicit sequential lens passes and a completeness pass.
+    deep_lines: int = 1500
+    deep_effort: str = "xhigh"
     review_round_timeout_s: float = 1800.0
     guidelines_path: str = ""
     stale_after_minutes: int = 180
@@ -136,6 +140,8 @@ def load_config() -> ReviewerConfig:
         review_budget_usd=float(s.review_budget_usd),
         review_effort=effort,
         review_max_turns=max(1, int(s.review_max_turns)),
+        deep_lines=max(1, int(s.deep_lines)),
+        deep_effort=s.deep_effort.strip().lower(),
         review_round_timeout_s=max(60.0, float(s.review_round_timeout_s)),
         guidelines_path=s.guidelines_path.strip(),
         approved_reaction=s.approved_reaction.strip(),

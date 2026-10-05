@@ -813,3 +813,36 @@ class TestCompareHardening:
         result = await github_api._github_compare({"repo": _REPO, "base": "a", "head": "b"}, _CTX)
         assert "status" not in result
         assert "head" in result["error"]
+
+
+# ─── review footer: the model and effort that wrote it ────────────────
+
+
+class TestReviewFooter:
+    def test_plain_footer_is_unchanged(self):
+        assert github_api.review_footer() == github_api._REVIEW_FOOTER
+
+    def test_footer_names_model_effort_and_guidelines(self):
+        footer = github_api.review_footer(
+            {"model": "claude-opus-5-5", "effort": "high", "guidelines": "42a69406da62"}
+        )
+        assert footer == (
+            "<sub>Automated review · claude-opus-5-5 · effort high · guidelines 42a69406da62</sub>"
+        )
+
+    def test_footer_drops_anything_that_is_not_a_plain_token(self):
+        footer = github_api.review_footer({"model": "x</sub><img src=y>", "effort": "high"})
+        assert "<img" not in footer and footer.endswith("effort high</sub>")
+
+    async def test_posted_body_carries_the_footer_meta(self, gh):
+        args = _review_args("COMMENT", [])
+        args["footer_meta"] = {"model": "claude-opus-5-5", "effort": "high"}
+        await github_api._github_create_review(args, _CTX)
+        (posted,) = gh.posted_reviews()
+        assert posted["body"].endswith("· claude-opus-5-5 · effort high</sub>")
+
+    async def test_a_review_with_a_detailed_footer_is_found_again(self, gh):
+        detailed = github_api.review_footer({"model": "claude-opus-5-5", "effort": "high"})
+        gh.existing_reviews = [_existing(body=f"hello\n\n{detailed}")]
+        result = await github_api._github_create_review(_review_args("COMMENT", []), _CTX)
+        assert result["already_posted"] is True

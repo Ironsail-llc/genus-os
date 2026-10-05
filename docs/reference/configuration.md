@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-461 settings in 16 groups.
+463 settings in 16 groups.
 
 ## autonomy
 
@@ -89,11 +89,13 @@ Host paths for the isolated personal browser service and clients.
 | `ROBOTHOR_PR_REVIEW_CHAT_SPACE` | str | _(empty)_ | no | no | unreleased | Google Chat space resource name (spaces/...) watched for pull-request links and re-review requests, and where results are announced in the original thread. Empty disables the Chat source. |
 | `ROBOTHOR_PR_REVIEW_CLAIM_REACTION` | str | `👀` | no | no | unreleased | Emoji reacted on a Chat message when its pull request or re-review is queued. Empty reacts with nothing. |
 | `ROBOTHOR_PR_REVIEW_CLONE_ROOT` | str | _(empty)_ | no | no | unreleased | Where pr_review_prepare keeps one clone per reviewed repository. Empty means <workspace>/.genus/pr-review/repos. When ROBOTHOR_CODING_REPO_ROOTS is set it must include this directory. |
+| `ROBOTHOR_PR_REVIEW_DEEP_EFFORT` | str | `xhigh` | no | no | unreleased | Claude Code --effort for a deep review (low, medium, high, xhigh or max). Never lowers ROBOTHOR_PR_REVIEW_EFFORT. |
+| `ROBOTHOR_PR_REVIEW_DEEP_LINES` | int | `1500` | no | no | unreleased | Changed lines (additions plus deletions) from which a review goes deep: ROBOTHOR_PR_REVIEW_DEEP_EFFORT, four explicit sequential lens passes, and a completeness pass in the same session when the first round used under 60% of its turns. |
 | `ROBOTHOR_PR_REVIEW_EFFORT` | str | `high` | no | no | unreleased | Claude Code --effort for review jobs: low, medium, high, xhigh or max. Empty leaves the CLI's default. |
 | `ROBOTHOR_PR_REVIEW_GUIDELINES_PATH` | str | _(empty)_ | no | no | unreleased | Instance review-guidelines file (e.g. <workspace>/brain/pr-review-guidelines.md). When set and readable, its content replaces the pr-review skill's generic guidelines in every review prompt; re-read for every review. |
 | `ROBOTHOR_PR_REVIEW_MAX_CONCURRENT` | int | `2` | no | no | unreleased | Review tasks the intake keeps open at once; further pull requests wait and are queued on a later poll. |
 | `ROBOTHOR_PR_REVIEW_MAX_TURNS` | int | `80` | no | no | unreleased | Claude Code turns one review round may take (--max-turns). |
-| `ROBOTHOR_PR_REVIEW_MODEL` | str | _(empty)_ | no | no | unreleased | Claude Code model alias for review jobs. Empty uses ROBOTHOR_CLAUDE_CODE_MODEL. |
+| `ROBOTHOR_PR_REVIEW_MODEL` | str | `opus` | no | no | unreleased | Claude Code model alias for review jobs. The default `opus` is the CLI's alias, which each Claude Code update points at the newest Opus; never pin a dated model id here. Empty uses ROBOTHOR_CLAUDE_CODE_MODEL. The model actually used is named in each review's footer. |
 | `ROBOTHOR_PR_REVIEW_REPOS` | str | _(empty)_ | no | no | unreleased | Comma-separated owner/repo list the pr-reviewer may review. Pull-request links posted in the Chat space count only for these repositories. An entry may carry its ticket prefix as owner/repo:PREFIX (another review bot's ALLOWED_REPOS format). Empty disables the repository sources. |
 | `ROBOTHOR_PR_REVIEW_REQUIRE_TICKET` | bool | `false` | no | no | unreleased | A pull request with no ticket key in its title, branch, description or commit messages gets a blocking [no-ticket] finding and is never approved. |
 | `ROBOTHOR_PR_REVIEW_RETRY_COOLDOWN_MINUTES` | int | `60` | no | no | unreleased | A failed review is retried on the same head after this long, at most 3 attempts per head; a new head is retried at once. |

@@ -104,6 +104,54 @@ class GitHubClient:
     async def list_commits(self, repo: str, number: int) -> list[dict[str, Any]]:
         return await self._pages(f"/repos/{repo}/pulls/{number}/commits", {"per_page": 100}, 3)
 
+    async def list_reviews(self, repo: str, number: int) -> list[dict[str, Any]]:
+        return await self._pages(f"/repos/{repo}/pulls/{number}/reviews", {"per_page": 100}, 3)
+
+    async def list_review_comments(self, repo: str, number: int) -> list[dict[str, Any]]:
+        return await self._pages(f"/repos/{repo}/pulls/{number}/comments", {"per_page": 100}, 3)
+
+    async def list_issue_comments(self, repo: str, number: int) -> list[dict[str, Any]]:
+        return await self._pages(f"/repos/{repo}/issues/{number}/comments", {"per_page": 100}, 3)
+
+    async def list_checks(self, repo: str, sha: str) -> dict[str, Any]:
+        """The commit's check runs and combined commit statuses (first page of each).
+
+        A token without the Checks permission gets 403 on check runs; the
+        Actions workflow jobs for the commit stand in for them then.
+        """
+        import httpx
+
+        ref = quote(sha, safe="")
+        try:
+            data = await self._get(f"/repos/{repo}/commits/{ref}/check-runs", {"per_page": 100})
+            runs = list((data or {}).get("check_runs") or [])
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code != 403:
+                raise
+            runs = await self._workflow_jobs(repo, sha)
+        statuses = await self._get(f"/repos/{repo}/commits/{ref}/status", {"per_page": 100})
+        return {"check_runs": runs, "statuses": (statuses or {}).get("statuses") or []}
+
+    async def _workflow_jobs(self, repo: str, sha: str) -> list[dict[str, Any]]:
+        """Actions jobs for ``sha``, shaped like check runs (``Workflow / job`` names)."""
+        data = await self._get(f"/repos/{repo}/actions/runs", {"head_sha": sha, "per_page": 50})
+        out: list[dict[str, Any]] = []
+        for run in (data or {}).get("workflow_runs") or []:
+            jobs = await self._get(
+                f"/repos/{repo}/actions/runs/{int(run['id'])}/jobs", {"per_page": 100}
+            )
+            out.extend(
+                {
+                    "name": f"{run.get('name') or 'workflow'} / {job.get('name') or 'job'}",
+                    "status": job.get("status"),
+                    "conclusion": job.get("conclusion"),
+                    "started_at": job.get("started_at"),
+                    "completed_at": job.get("completed_at"),
+                }
+                for job in (jobs or {}).get("jobs") or []
+            )
+        return out
+
     async def compare_status(self, repo: str, base: str, head: str) -> str:
         data = await self._get(
             f"/repos/{repo}/compare/{quote(base, safe='')}...{quote(head, safe='')}"
