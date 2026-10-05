@@ -122,17 +122,33 @@ class Acceptance:
 
     verify_command: str | None = None
     require_commit: bool = True
+    #: Read-only jobs only: one more round in the same session with this
+    #: instruction, when the first finished round used fewer than
+    #: ``second_pass_below_turns`` turns (always, when that is None). The job's
+    #: answer is the second round's; a second round that returns nothing
+    #: leaves the first answer in place.
+    second_pass: str | None = None
+    second_pass_below_turns: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {"verify_command": self.verify_command, "require_commit": self.require_commit}
+        return {
+            "verify_command": self.verify_command,
+            "require_commit": self.require_commit,
+            "second_pass": self.second_pass,
+            "second_pass_below_turns": self.second_pass_below_turns,
+        }
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any] | None) -> Acceptance:
         raw = raw or {}
         cmd = raw.get("verify_command")
+        second = str(raw.get("second_pass") or "").strip() or None
+        below = raw.get("second_pass_below_turns")
         return cls(
             verify_command=str(cmd).strip() or None if cmd else None,
             require_commit=bool(raw.get("require_commit", True)),
+            second_pass=second,
+            second_pass_below_turns=int(below) if below is not None else None,
         )
 
 
@@ -684,7 +700,12 @@ class CodingJobManager:
                     f"acceptance.verify_command is only for code mode; a {mode} job is "
                     "read-only and is judged by its answer (use json_schema for structure)"
                 )
-            acceptance = Acceptance(verify_command=None, require_commit=False)
+            acceptance = Acceptance(
+                verify_command=None,
+                require_commit=False,
+                second_pass=acceptance.second_pass,
+                second_pass_below_turns=acceptance.second_pass_below_turns,
+            )
         if grant_github and not await asyncio.to_thread(
             self._github_token_resolver, agent_id, tenant_id
         ):
@@ -1058,6 +1079,21 @@ class CodingJobManager:
             )
         job.result["evidence"] = evidence
 
+    @staticmethod
+    def _second_pass_prompt(job: CodingJob, result: ClaudeResult) -> str:
+        """The second-pass prompt when this finished round earns one, else "" (recorded)."""
+        instruction = job.acceptance.second_pass
+        if not instruction or job.mode == "code" or "second_pass" in job.result:
+            return ""
+        below = job.acceptance.second_pass_below_turns
+        if job.rounds >= job.max_rounds or (
+            below is not None and int(result.num_turns or 0) >= below
+        ):
+            job.result["second_pass"] = "skipped"
+            return ""
+        job.result["second_pass"] = "running"
+        return _followup_prompt(job, [instruction])
+
     async def _drive(self, job: CodingJob, prompt: str, resuming: bool) -> None:
         try:
             while True:
@@ -1216,7 +1252,18 @@ class CodingJobManager:
                 missing_structured = (
                     job.json_schema is not None and result.structured_output is None
                 )
+                if job.result.get("second_pass") == "running":
+                    # The answer is the second round's when it gave one, else
+                    # the first round's (still in structured_output).
+                    ok = not result.is_error and not missing_structured
+                    job.result["second_pass"] = "done" if ok else "incomplete"
+                    await self._finish(job, JobStatus.DONE)
+                    return
                 if not result.is_error and not missing_structured:
+                    second = self._second_pass_prompt(job, result)
+                    if second:
+                        prompt = second
+                        continue
                     await self._finish(job, JobStatus.DONE)
                     return
                 prompt = (

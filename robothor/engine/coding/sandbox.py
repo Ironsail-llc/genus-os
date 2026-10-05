@@ -85,6 +85,7 @@ READ_ONLY_BASH: tuple[str, ...] = (
     "Bash(git status:*)",
     "Bash(git blame:*)",
     "Bash(git rev-parse:*)",
+    "Bash(git merge-base:*)",
     "Bash(git ls-files:*)",
     "Bash(git branch --list:*)",
 )
