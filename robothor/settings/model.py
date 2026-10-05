@@ -3209,7 +3209,7 @@ class PrReviewSettings(SettingsGroup):
         since="unreleased",
     )
     watch_repos: bool = declare(
-        True,
+        False,
         "ROBOTHOR_PR_REVIEW_WATCH_REPOS",
         "Review every open, non-draft pull request in the configured repositories, and "
         "re-review when its head moves. False reviews only pull requests posted in the "

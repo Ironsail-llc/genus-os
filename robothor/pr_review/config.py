@@ -21,7 +21,7 @@ def _csv(value: str) -> tuple[str, ...]:
 @dataclass(frozen=True)
 class ReviewerConfig:
     repos: tuple[str, ...] = ()
-    watch_repos: bool = True
+    watch_repos: bool = False
     bot_login: str = ""
     chat_space: str = ""
     chat_self_users: tuple[str, ...] = ()

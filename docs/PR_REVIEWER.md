@@ -85,7 +85,7 @@ present.
    | Setting | What to set |
    |---|---|
    | `ROBOTHOR_PR_REVIEW_REPOS` | `owner/repo,owner/other` — the repositories it may review |
-   | `ROBOTHOR_PR_REVIEW_WATCH_REPOS` | `true` (default) reviews every open pull request there; `false` only those posted in Chat or requesting the bot |
+   | `ROBOTHOR_PR_REVIEW_WATCH_REPOS` | `false` (default) reviews only pull requests posted in Chat or requesting the bot; `true` reviews every open pull request in the repos |
    | `ROBOTHOR_PR_REVIEW_CHAT_SPACE` | `spaces/…` to watch and announce in; empty for GitHub only |
    | `ROBOTHOR_PR_REVIEW_CHAT_SELF_USERS` | the `users/…` the gws CLI posts as, so its own messages are never requests |
    | `ROBOTHOR_PR_REVIEW_BOT_LOGIN` | GitHub login whose requested reviews it picks up |

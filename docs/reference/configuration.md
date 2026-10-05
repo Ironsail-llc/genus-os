@@ -93,7 +93,7 @@ Host paths for the isolated personal browser service and clients.
 | `ROBOTHOR_PR_REVIEW_STALE_AFTER_MINUTES` | int | `180` | no | no | unreleased | A review queued or running this long without being finalized is marked failed, so a lost task never holds a concurrency slot forever. |
 | `ROBOTHOR_PR_REVIEW_TELEGRAM_DIGEST` | bool | `false` | no | no | unreleased | pr_review_finalize returns a one-line digest per posted review for the agent to deliver; the agent's delivery must announce on Telegram for it to arrive. |
 | `ROBOTHOR_PR_REVIEW_TICKET_PREFIXES` | str | _(empty)_ | no | no | unreleased | Comma-separated ticket key prefixes (e.g. ABC) the ticket rule looks for. Empty accepts any uppercase KEY-123. |
-| `ROBOTHOR_PR_REVIEW_WATCH_REPOS` | bool | `true` | no | no | unreleased | Review every open, non-draft pull request in the configured repositories, and re-review when its head moves. False reviews only pull requests posted in the Chat space or that request the bot login's review. |
+| `ROBOTHOR_PR_REVIEW_WATCH_REPOS` | bool | `false` | no | no | unreleased | Review every open, non-draft pull request in the configured repositories, and re-review when its head moves. False reviews only pull requests posted in the Chat space or that request the bot login's review. |
 
 ## paths
 
