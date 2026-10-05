@@ -28,21 +28,29 @@ delivery:
   channel: telegram
   to: "${ROBOTHOR_TELEGRAM_CHAT_ID}"
 
-# The default tool set plus the opt-in tools this agent's work needs: watching
-# and (only if its run is ending) cancelling the review job, and the
-# deterministic pr_review_* halves. pr_review_prepare STARTS the read-only
-# Claude Code job itself and pr_review_finalize posts through the GitHub review
-# handlers directly, so this agent can neither start an arbitrary coding job
-# nor post, reply on or resolve a review: claude_code_start and the github_*
-# review-write tools are deliberately absent. Needs `robothor claude-code
-# login` once per instance (or the host's Claude Code login), and GITHUB_TOKEN
-# in the vault.
-tools_opt_in:
-  - claude_code_status
-  - claude_code_wait
-  - claude_code_cancel
+# Exactly the tools its instructions call, and nothing else: its task queue,
+# the deterministic pr_review_* halves, watching and (only if its run is
+# ending) cancelling the review job, and its status file. pr_review_prepare
+# STARTS the read-only Claude Code job itself and pr_review_finalize posts
+# through the GitHub review handlers directly, so this agent can neither start
+# an arbitrary coding job nor post, reply on or resolve a review:
+# claude_code_start and the github_* review-write tools are deliberately
+# absent. An explicit list, not `tools_opt_in` on the default set: that gave it
+# over 200 tools, past the deferral threshold, so every call went through
+# `tool_call`. Needs `robothor claude-code login` once per instance (or the
+# host's Claude Code login), and GITHUB_TOKEN in the vault.
+tools_allowed:
+  - list_my_tasks
+  - get_task
+  - update_task
+  - resolve_task
   - pr_review_prepare
   - pr_review_finalize
+  - claude_code_wait
+  - claude_code_status
+  - claude_code_cancel
+  - read_file
+  - write_file
 
 # grant_github on a review job hands Claude Code GH_TOKEN for read-only
 # `gh pr view/diff/checks`; the engine gives it only to an agent that names it.

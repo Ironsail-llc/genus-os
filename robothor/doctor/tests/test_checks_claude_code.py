@@ -155,6 +155,67 @@ def test_sandbox_problems_names_missing_binaries(monkeypatch):
     assert any("socat" in p for p in problems)
 
 
+def test_the_probe_mounts_a_fresh_proc_in_a_new_pid_namespace():
+    """Claude Code's sandbox mounts /proc in its own pid namespace. Observed
+    2026-10-05: inside the engine unit that mount is refused, and a probe that
+    never mounted /proc passed while every job's Bash failed."""
+    probe = _sandbox._BWRAP_PROBE
+    assert "--unshare-pid" in probe and "--unshare-user" in probe
+    assert probe[probe.index("--proc") + 1] == "/proc"
+
+
+def _bwrap_fails(monkeypatch, stderr):
+    import subprocess
+
+    from robothor.engine.coding import sandbox
+
+    monkeypatch.setattr(sandbox.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(sandbox, "engine_unit_proc_problems", lambda show=None: [])
+    monkeypatch.setattr(
+        sandbox.subprocess,
+        "run",
+        lambda *a, **k: subprocess.CompletedProcess(a, 1, stdout="", stderr=stderr),
+    )
+    return _REAL_SANDBOX_PROBLEMS()
+
+
+def test_a_refused_proc_mount_names_the_unit_fix(monkeypatch):
+    [problem] = _bwrap_fails(monkeypatch, "bwrap: Can't mount proc on /newroot/proc: EPERM")
+    assert "ProtectKernelTunables" in problem and "ProtectKernelLogs" in problem
+    assert "zz-claude-code.conf" in problem
+    assert "AppArmor" not in problem
+
+
+def test_a_refused_user_namespace_keeps_the_apparmor_hint(monkeypatch):
+    [problem] = _bwrap_fails(
+        monkeypatch, "bwrap: setting up uid map: open /proc/self/uid_map: Permission denied"
+    )
+    assert "AppArmor" in problem
+
+
+@pytest.mark.parametrize(
+    ("shown", "named"),
+    [
+        ("ProtectKernelTunables=yes\nProtectKernelLogs=no\n", ["ProtectKernelTunables"]),
+        ("ProtectKernelTunables=no\nProtectKernelLogs=yes\n", ["ProtectKernelLogs"]),
+        ("ProtectKernelTunables=no\nProtectKernelLogs=no\n", []),
+        ("", []),  # no systemd, or the unit is not installed: nothing to say
+    ],
+)
+def test_the_engine_units_proc_overmounts_are_reported(shown, named):
+    problems = _sandbox.engine_unit_proc_problems(show=lambda: shown)
+    assert bool(problems) is bool(named)
+    for directive in named:
+        assert directive in problems[0] and "zz-claude-code.conf" in problems[0]
+
+
+def test_an_unreadable_engine_unit_is_not_a_problem():
+    def broken() -> str:
+        raise OSError("no systemctl")
+
+    assert _sandbox.engine_unit_proc_problems(show=broken) == []
+
+
 def test_unwritable_login_paths_reports_a_read_only_claude_dir(tmp_path, monkeypatch):
     from robothor.engine.coding import sandbox
 

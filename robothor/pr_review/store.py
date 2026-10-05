@@ -221,7 +221,8 @@ class MemoryStore:
         return [r for r in self._all(tenant_id) if thread and r.chat_thread == thread]
 
     async def list_pending(self, tenant_id: str) -> list[PrReviewRow]:
-        return [r for r in self._all(tenant_id) if r.pending_trigger]
+        # A closed row is never dispatched, whatever trigger it still carries.
+        return [r for r in self._all(tenant_id) if r.pending_trigger and r.status != "closed"]
 
     async def list_active(self, tenant_id: str) -> list[PrReviewRow]:
         return [r for r in self._all(tenant_id) if r.status in ACTIVE_STATUSES]
@@ -459,7 +460,10 @@ class PgStore:
         return await asyncio.to_thread(self._select, tenant_id, "chat_thread = %s", (thread,))
 
     async def list_pending(self, tenant_id: str) -> list[PrReviewRow]:
-        return await asyncio.to_thread(self._select, tenant_id, "pending_trigger <> ''", ())
+        # A closed row is never dispatched, whatever trigger it still carries.
+        return await asyncio.to_thread(
+            self._select, tenant_id, "pending_trigger <> '' AND status <> 'closed'", ()
+        )
 
     async def list_active(self, tenant_id: str) -> list[PrReviewRow]:
         return await asyncio.to_thread(

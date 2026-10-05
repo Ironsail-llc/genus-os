@@ -44,6 +44,7 @@ __all__ = [
     "allowed_domains",
     "build_permissions",
     "build_sandbox_settings",
+    "engine_unit_proc_problems",
     "live_workspace",
     "sandbox_problems",
     "secret_paths",
@@ -255,14 +256,66 @@ def build_permissions(mode: str, paths: JobPaths) -> tuple[tuple[str, ...], tupl
 # ── Host prerequisites (the doctor) ───────────────────────────────────
 
 #: What Claude Code's Linux sandbox does on start: bubblewrap in fresh user,
-#: pid and network namespaces. If this cannot run, neither can a job's Bash.
+#: pid and network namespaces, with a fresh /proc for the new pid namespace.
+#: If this cannot run, neither can a job's Bash. The /proc mount is the part
+#: systemd hardening breaks (see _PROC_OVERMOUNTS), so the probe must make it:
+#: without ``--proc`` it passed inside the engine unit while every job's Bash
+#: failed "Can't mount proc" (observed 2026-10-05).
 _BWRAP_PROBE = (
     "--ro-bind", "/", "/",
     "--dev", "/dev",
+    "--proc", "/proc",
     "--unshare-user", "--unshare-pid", "--unshare-net",
     "--die-with-parent",
     "--", "/bin/true",
 )  # fmt: skip
+
+#: Engine-unit directives that overmount parts of /proc. The kernel refuses a
+#: fresh /proc mount inside a user namespace while /proc carries overmounts,
+#: so either one breaks Claude Code's sandbox. ProtectProc=, ProtectClock=,
+#: ProtectHostname=, ProtectControlGroups= and an empty CapabilityBoundingSet=
+#: do not. zz-claude-code.conf turns these two off for the engine.
+_PROC_OVERMOUNTS = ("ProtectKernelTunables", "ProtectKernelLogs")
+_ENGINE_UNIT = "robothor-engine.service"
+_PROC_FIX = (
+    "the engine unit's ProtectKernelTunables=/ProtectKernelLogs= overmount /proc, "
+    "so bubblewrap cannot mount a fresh one: install "
+    "infra/systemd/robothor-engine.service.d/zz-claude-code.conf (sets both to no) "
+    "with scripts/install-units.sh"
+)
+
+
+def _show_engine_unit() -> str:
+    proc = subprocess.run(  # noqa: S603 - fixed argv, no shell
+        ["systemctl", "show", _ENGINE_UNIT, *(f"--property={p}" for p in _PROC_OVERMOUNTS)],  # noqa: S607
+        capture_output=True,
+        text=True,
+        timeout=5,
+        check=False,
+    )
+    return proc.stdout if proc.returncode == 0 else ""
+
+
+def engine_unit_proc_problems(show: Any = None) -> list[str]:
+    """The engine unit's /proc overmounts, read from systemd; empty when none.
+
+    ``robothor doctor`` runs from a shell, not inside the engine unit, so its
+    own bwrap probe cannot see what the unit's hardening does to /proc. The
+    unit's effective properties can. No systemd, or no engine unit installed,
+    is nothing to report.
+    """
+    try:
+        shown = (show or _show_engine_unit)()
+    except (OSError, subprocess.SubprocessError):
+        return []
+    enabled = [
+        key
+        for key, _, value in (line.partition("=") for line in shown.splitlines())
+        if key in _PROC_OVERMOUNTS and value.strip() == "yes"
+    ]
+    if not enabled:
+        return []
+    return [f"{', '.join(f'{k}=yes' for k in enabled)} on {_ENGINE_UNIT}: {_PROC_FIX}"]
 
 
 def sandbox_problems() -> list[str]:
@@ -287,11 +340,17 @@ def sandbox_problems() -> list[str]:
         else:
             if proc.returncode != 0:
                 why = (proc.stderr or proc.stdout).strip().splitlines()[-1:] or ["no output"]
-                problems.append(
-                    "bwrap cannot create unprivileged user namespaces "
-                    f"({why[0][:160]}); on Ubuntu 24.04+ install an AppArmor profile "
-                    "for /usr/bin/bwrap that allows `userns`"
-                )
+                # "Can't mount proc on /newroot/proc"; a userns refusal names
+                # /proc/self/uid_map instead, so match the mount, not "proc".
+                if "mount proc" in why[0].lower():
+                    problems.append(f"bwrap cannot mount /proc ({why[0][:160]}); {_PROC_FIX}")
+                else:
+                    problems.append(
+                        "bwrap cannot create unprivileged user namespaces "
+                        f"({why[0][:160]}); on Ubuntu 24.04+ install an AppArmor profile "
+                        "for /usr/bin/bwrap that allows `userns`"
+                    )
+    problems.extend(engine_unit_proc_problems())
     return problems
 
 

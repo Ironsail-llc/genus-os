@@ -100,10 +100,13 @@ notes (real tools, output fields, the verdict rule) and the repository's own
 **base** branch (`origin/<base>`), when present — a pull request cannot
 rewrite the rules it is reviewed against.
 
-**Who may call what.** The pr-reviewer agent opts into
-`claude_code_status/_wait/_cancel` and `pr_review_prepare/_finalize` only: it
-cannot start an arbitrary Claude Code job or post, reply on or resolve a
-review itself. Migration 146 makes the rest a permission: `user` and `member`
+**Who may call what.** The pr-reviewer agent's `tools_allowed` is eleven
+tools — its task queue (`list_my_tasks`, `get_task`, `update_task`,
+`resolve_task`), `claude_code_status/_wait/_cancel`,
+`pr_review_prepare/_finalize`, and `read_file`/`write_file` for its status
+file — so it stays under the deferral threshold and calls every tool
+directly. It cannot start an arbitrary Claude Code job or post, reply on or
+resolve a review itself. Migration 146 makes the rest a permission: `user` and `member`
 callers are denied `github_create_review`, `github_reply_review_comment`,
 `github_resolve_threads`, `claude_code_start/_followup/_cancel` and the three
 `pr_review_*` tools; `service` — the role every unattended run dispatches as,
@@ -130,6 +133,14 @@ reports `requested.review_url` once the review is posted. Such a review has no
 Chat thread; its finalize result carries a Telegram digest line, which reaches
 Telegram when the pr-reviewer is installed with `delivery_mode=announce`. Main
 runs as `owner` on Telegram, which migration 146 leaves allowed.
+
+**Stopping reviews of one pull request.** `pr_review_intake(pr="<url or
+owner/repo#N>", action="skip")` closes its row, clears any queued trigger and
+resolves its open review task — no hand edits to `pr_reviews`. It stays
+stopped through later polls and Chat messages until someone asks for a review
+of it again with `pr_review_intake(pr=...)`. A review job already running is
+not killed (`claude_code_cancel` stops it), but its result is never posted. A
+`closed` row is never dispatched, whatever trigger it still carries.
 
 **Timeouts.** `claude_code_wait` enforces its own wait (up to 1800 s), so the
 registry gives it 1830 s; `pr_review_prepare` and `pr_review_finalize` get the
@@ -158,7 +169,7 @@ never left running.
    | `ROBOTHOR_PR_REVIEW_WATCH_REPOS` | `false` (default) reviews only pull requests posted in Chat or requesting the bot; `true` reviews every open pull request in the repos |
    | `ROBOTHOR_PR_REVIEW_CHAT_SPACE` | `spaces/…` to watch and announce in; empty for GitHub only |
    | `ROBOTHOR_PR_REVIEW_CHAT_SELF_USERS` | the `users/…` the gws CLI posts as, so its own messages are never requests |
-   | `ROBOTHOR_PR_REVIEW_BOT_LOGIN` | GitHub login whose requested reviews it picks up |
+   | `ROBOTHOR_PR_REVIEW_BOT_LOGIN` | GitHub login whose requested reviews it picks up — requests naming that login directly (`user-review-requested:`); a review requested from a team the login belongs to is ignored |
    | `ROBOTHOR_PR_REVIEW_REQUIRE_TICKET` / `_TICKET_PREFIXES` | the optional ticket rule; prefixes as `owner/repo:PREFIX` or bare `PREFIX` |
    | `ROBOTHOR_PR_REVIEW_GUIDELINES_PATH` | the team's own review guidelines (see [parity](#parity-with-an-existing-review-bot)) |
    | `ROBOTHOR_PR_REVIEW_MODEL` | the Claude Code model for reviews (e.g. `opus`); empty uses `ROBOTHOR_CLAUDE_CODE_MODEL` |
@@ -232,8 +243,15 @@ Reply "re-review" to try again.".
 ## Operating it
 
 - `pr_review_intake` returns counts (`tasks_created`, `deferred`, `retries`,
-  `chat_errors`, `open_tasks`, `queued_tasks`, `errors`) in each workflow run,
-  or `{"skipped": "locked"}` when another intake run holds the tenant's lock.
+  `chat_errors`, `open_tasks`, `queued_tasks`, `resumable_tasks`, `errors`) in
+  each workflow run, or `{"skipped": "locked"}` when another intake run holds
+  the tenant's lock.
+- A review whose agent run died after prepare (engine restart, run timeout)
+  is **resumable** once its bound job has been finished for 10 minutes with
+  nobody finalizing it: the intake puts its task back to `TODO` and counts it
+  in `queued_tasks`, so the run workflow wakes the agent, and
+  `pr_review_prepare` hands that run the job already bound. The agent also
+  resumes its own `IN_PROGRESS` review tasks before taking new ones.
 - `pr_reviews` holds one row per pull request: `status` is `pending`,
   `queued`, `reviewing`, `posting`, `approved`, `changes_requested`,
   `commented`, `failed`, `skipped` or `closed`; `job_id` is the review job

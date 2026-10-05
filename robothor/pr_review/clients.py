@@ -80,9 +80,12 @@ class GitHubClient:
         )
 
     async def review_requested(self, login: str) -> list[tuple[str, int]]:
+        # user-review-requested: requests naming this login directly.
+        # review-requested: also matches every team the login is in, which
+        # queued months-old pull requests nobody had asked the bot to review.
         data = await self._get(
             "/search/issues",
-            {"q": f"is:pr is:open archived:false review-requested:{login}", "per_page": 100},
+            {"q": f"is:pr is:open archived:false user-review-requested:{login}", "per_page": 100},
         )
         out: list[tuple[str, int]] = []
         for item in (data or {}).get("items") or []:

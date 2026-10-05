@@ -51,6 +51,32 @@ def test_the_intake_schema_offers_pr():
     assert props["pr"]["type"] == "string"
 
 
+async def test_intake_skip_action_stops_reviews_of_one_pr():
+    store, github, tasks = MemoryStore(), FakeGitHub(), FakeTasks()
+    github.add(make_pr(7, "1" * 40))
+    cfg = ReviewerConfig(repos=(REPO,), watch_repos=True, chat_space="")
+    with (
+        patch("robothor.pr_review.config.load_config", return_value=cfg),
+        patch.object(pr_review, "_store", return_value=store),
+        patch.object(pr_review, "_github", return_value=github),
+        patch.object(pr_review, "_tasks", return_value=tasks),
+    ):
+        await pr_review._intake({"pr": f"{REPO}#7"}, _OWNER)
+        result = await pr_review._intake({"pr": f"{REPO}#7", "action": "skip"}, _OWNER)
+        bad = await pr_review._intake({"pr": f"{REPO}#7", "action": "bogus"}, _OWNER)
+        missing = await pr_review._intake({"action": "skip"}, _OWNER)
+    assert result["skipped"]["status"] == "closed"
+    assert tasks.closed == ["task-1"]
+    assert "error" in bad and "error" in missing
+
+
+def test_the_intake_schema_offers_the_skip_action():
+    from robothor.engine.tools.schemas import get_engine_schemas
+
+    props = get_engine_schemas()["pr_review_intake"]["function"]["parameters"]["properties"]
+    assert props["action"]["enum"] == ["review", "skip"]
+
+
 async def test_the_ticket_fetcher_is_none_without_jira(monkeypatch):
     for name in ("JIRA_BASE_URL", "JIRA_USER_EMAIL", "JIRA_API_TOKEN"):
         monkeypatch.delenv(name, raising=False)

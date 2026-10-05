@@ -122,6 +122,14 @@ class FakeTasks:
     def __init__(self) -> None:
         self.created: list[dict[str, Any]] = []
         self.by_key: dict[str, str] = {}
+        self.reopened: list[str] = []
+        self.closed: list[str] = []
+
+    async def close(self, task_id: str, resolution: str) -> None:
+        self.closed.append(task_id)
+
+    async def reopen(self, task_id: str) -> None:
+        self.reopened.append(task_id)
 
     async def create(self, spec: ReviewTaskSpec) -> str:
         if spec.dedup_value in self.by_key:

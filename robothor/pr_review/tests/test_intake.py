@@ -8,7 +8,7 @@ import pytest
 
 from robothor.pr_review.config import ReviewerConfig
 from robothor.pr_review.intake import Intake, parse_chat_time
-from robothor.pr_review.store import MemoryStore
+from robothor.pr_review.store import MemoryStore, PrReviewRow
 from robothor.pr_review.tests.fakes import REPO, FakeChat, FakeGitHub, FakeTasks, make_pr
 
 TENANT = "test-tenant"
@@ -273,6 +273,173 @@ async def test_stale_review_is_failed_and_frees_the_slot(env):
     assert summary["stale"] == 1
     row = await env["store"].get(TENANT, REPO, 7)
     assert row.status == "failed"
+
+
+class _Jobs:
+    """``job_state`` for the intake: one coding job's status and finish time."""
+
+    def __init__(self, **jobs):
+        self.jobs = jobs
+
+    async def __call__(self, job_id):
+        return self.jobs.get(job_id)
+
+
+async def _orphan(env, job_id="job-1"):
+    """A review whose run died after prepare: the row is ``reviewing``, bound
+    to a job, and its task is still IN_PROGRESS with nobody attending it."""
+    env["github"].add(make_pr(7, SHA1))
+    cfg = _cfg(watch_repos=True, chat_space="")
+    await _run(env, cfg)
+    row = await env["store"].get(TENANT, REPO, 7)
+    row.status = "reviewing"
+    row.job_id = job_id
+    await env["store"].save(row)
+    return cfg, row.task_id
+
+
+async def _count(env, cfg, job_state, now=NOW):
+    intake = Intake(
+        cfg,
+        env["store"],
+        TENANT,
+        tasks=env["tasks"],
+        github=env["github"],
+        now=now,
+        job_state=job_state,
+    )
+    return await intake.run(count_only=True)
+
+
+async def test_finished_job_with_no_run_attending_wakes_the_agent(env):
+    """Observed 2026-10-05: a pr-reviewer run died mid-review; its job finished,
+    but the row stayed ``reviewing`` and the run workflow (which wakes the agent
+    only for queued work) never woke it, so the review sat until the 180-minute
+    stale timeout failed it."""
+    cfg, task_id = await _orphan(env)
+    jobs = _Jobs(**{"job-1": ("done", NOW - timedelta(minutes=15))})
+    counts = await _count(env, cfg, jobs)
+    assert counts["resumable_tasks"] == 1
+    assert counts["queued_tasks"] == 1  # the run workflow's wake condition
+    summary = await _run(env, cfg, job_state=jobs)
+    assert env["tasks"].reopened == [task_id]  # back to TODO for any instructions
+    assert summary["resumable_tasks"] == 1
+    row = await env["store"].get(TENANT, REPO, 7)
+    assert row.status == "reviewing" and row.job_id == "job-1"  # prepare returns it
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        ("running", None),
+        ("queued", None),
+        # Just finished: the run that started it is most likely finalizing now.
+        ("done", NOW - timedelta(minutes=1)),
+        None,  # unknown job: left to the stale timeout
+    ],
+)
+async def test_a_job_still_attended_is_not_resumable(env, state):
+    cfg, _ = await _orphan(env)
+    jobs = _Jobs(**({"job-1": state} if state else {}))
+    counts = await _count(env, cfg, jobs)
+    assert counts["resumable_tasks"] == 0 and counts["queued_tasks"] == 0
+    await _run(env, cfg, job_state=jobs)
+    assert env["tasks"].reopened == []
+
+
+async def test_without_a_job_lookup_nothing_is_resumable(env):
+    cfg, _ = await _orphan(env)
+    summary = await _run(env, cfg)
+    assert summary["resumable_tasks"] == 0 and env["tasks"].reopened == []
+
+
+@pytest.mark.parametrize(("status", "reopened"), [("IN_PROGRESS", True), ("TODO", False)])
+async def test_crm_sink_reopens_only_an_in_progress_task(monkeypatch, status, reopened):
+    from robothor.crm import dal
+    from robothor.pr_review.tasks import CrmTaskSink
+
+    updates = []
+    monkeypatch.setattr(dal, "get_task", lambda task_id, tenant_id: {"status": status})
+    monkeypatch.setattr(
+        dal, "update_task", lambda task_id, **kw: updates.append((task_id, kw)) or True
+    )
+    await CrmTaskSink(TENANT).reopen("task-1")
+    assert bool(updates) is reopened
+    if reopened:
+        assert updates[0][0] == "task-1" and updates[0][1]["status"] == "TODO"
+        assert updates[0][1]["tenant_id"] == TENANT
+
+
+async def _closed_with_trigger(env):
+    """Observed 2026-10-05: a row closed by hand kept its pending trigger and
+    was dispatched — and reviewed — when capacity freed 17 minutes later."""
+    row = PrReviewRow(tenant_id=TENANT, repo=REPO, number=7, status="closed")
+    row.pending_trigger = "initial"
+    await env["store"].save(row)
+    env["github"].add(make_pr(7, SHA1))
+
+
+async def test_a_closed_row_is_never_dispatched_and_its_trigger_is_cleared(env):
+    await _closed_with_trigger(env)
+    summary = await _run(env, _cfg(chat_space=""))
+    assert summary["tasks_created"] == 0 and env["tasks"].created == []
+    row = await env["store"].get(TENANT, REPO, 7)
+    assert row.status == "closed"
+
+
+async def test_list_pending_excludes_closed_rows(env):
+    await _closed_with_trigger(env)
+    assert await env["store"].list_pending(TENANT) == []
+
+
+async def test_pg_store_list_pending_excludes_closed_rows(monkeypatch):
+    from robothor.pr_review.store import PgStore
+
+    seen = []
+    store = PgStore()
+    monkeypatch.setattr(store, "_select", lambda tenant, where, params: seen.append(where) or [])
+    assert await store.list_pending(TENANT) == []
+    assert "pending_trigger <> ''" in seen[0] and "status <> 'closed'" in seen[0]
+
+
+async def test_dispatch_clears_the_trigger_of_a_closed_row(env):
+    await _closed_with_trigger(env)
+    intake = Intake(_cfg(chat_space=""), env["store"], TENANT, tasks=env["tasks"], now=NOW)
+    await intake._dispatch_row(await env["store"].get(TENANT, REPO, 7), active=0)
+    row = await env["store"].get(TENANT, REPO, 7)
+    assert row.pending_trigger == "" and env["tasks"].created == []
+
+
+def _intake(env, cfg):
+    return Intake(cfg, env["store"], TENANT, tasks=env["tasks"], github=env["github"], now=NOW)
+
+
+async def test_the_operator_can_stop_reviews_of_one_pull_request(env):
+    """``pr_review_intake(pr=..., action="skip")``: closed, trigger cleared,
+    open task closed — and it stays stopped through later polls (watch_repos
+    would otherwise reopen a closed row whose pull request is open)."""
+    env["github"].add(make_pr(7, SHA1))
+    cfg = _cfg(watch_repos=True, chat_space="")
+    await _run(env, cfg)
+    task_id = (await env["store"].get(TENANT, REPO, 7)).task_id
+    result = await _intake(env, cfg).skip(f"{REPO}#7")
+    assert result["skipped"]["status"] == "closed"
+    row = await env["store"].get(TENANT, REPO, 7)
+    assert row.status == "closed" and row.pending_trigger == ""
+    assert env["tasks"].closed == [task_id]
+    env["github"].add(make_pr(7, SHA2))  # a new head
+    summary = await _run(env, cfg)
+    assert summary["tasks_created"] == 0
+    assert (await env["store"].get(TENANT, REPO, 7)).status == "closed"
+    # An explicit request for this pull request is the way back.
+    again = await _intake(env, cfg).request(f"{REPO}#7")
+    assert again["requested"]["status"] == "queued"
+
+
+async def test_skip_refuses_an_unknown_or_unconfigured_pull_request(env):
+    cfg = _cfg(chat_space="")
+    assert "error" in await _intake(env, cfg).skip("other/repo#1")
+    assert "error" in await _intake(env, cfg).skip("not a pr")
 
 
 async def test_not_configured_runs_nothing(env):

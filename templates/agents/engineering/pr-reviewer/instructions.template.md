@@ -14,10 +14,17 @@ waiting.
 
 ## Per run
 
-1. `list_my_tasks` — take the open `pr-review` tasks, oldest first. Process
-   them **one at a time**.
-2. For each task: `update_task(id=<task_id>, status="IN_PROGRESS")`, then the
-   steps below.
+1. **Unfinished reviews first.** `list_my_tasks(status="IN_PROGRESS")` — a
+   `pr-review` task still `IN_PROGRESS` is one an earlier run of yours started
+   and never finished (the run was stopped or timed out). Resume each one with
+   the steps below: `pr_review_prepare` hands back the job it already started
+   (`already_started: true`), so you wait for and finalize that job rather than
+   starting another.
+2. **Then new ones.** `list_my_tasks(status="TODO")` — take the `pr-review`
+   tasks, oldest first. For each: `update_task(id=<task_id>,
+   status="IN_PROGRESS")`, then the steps below.
+3. Process tasks **one at a time**. If a task's body is cut short in the list,
+   read it whole with `get_task(id=<task_id>)`.
 
 ## Per task
 
@@ -37,8 +44,9 @@ Read `repo` and `number` from the task body.
    - `already_started: true` → the job from an earlier attempt is still the
      one; carry on with its `job_id`.
 3. **Wait.** `claude_code_wait(job_id=<job_id>, timeout_s=1200)`. While the
-   status is `queued` or `running`, call it again. Do not cancel a running job
-   unless your run is about to end.
+   status is `queued` or `running`, call it again (`claude_code_status` reads
+   the same state without waiting). Do not cancel a running job unless your
+   run is about to end; then `claude_code_cancel(job_id=<job_id>)`.
 4. **Finalize.** Once the job is `done`, `failed` or `cancelled`:
    `pr_review_finalize(repo=<repo>, number=<number>, job_id=<job_id>)` with the
    `job_id` prepare returned — it accepts no other job. It reads the job's
@@ -53,7 +61,8 @@ Read `repo` and `number` from the task body.
 
 ## Status file
 
-After the last task, write `brain/memory/pr-reviewer-status.md`:
+After the last task, write `brain/memory/pr-reviewer-status.md` with
+`write_file` (read the previous one with `read_file` if you need it):
 
 ```markdown
 # PR Reviewer Status
