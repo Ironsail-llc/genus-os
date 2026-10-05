@@ -386,6 +386,12 @@ READONLY_TOOLS: frozenset[str] = frozenset(
         # Report rendering (pure output, no side effects)
         "render_report",
         "render_devops_report",
+        # Claude Code driver: reading a coding job's state changes nothing.
+        # Unclassified until 2026-10-05, so a claude_code_wait cut short by its
+        # deadline was journalled as an UNCERTAIN write, and the effects guard
+        # then refused every later wait for that principal across runs.
+        "claude_code_status",
+        "claude_code_wait",
     }
 )
 

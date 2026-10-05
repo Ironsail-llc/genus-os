@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 from robothor.engine.runtime import effects
 from robothor.engine.runtime.current import active_context
 from robothor.engine.tools.constants import READONLY_TOOLS
+from robothor.engine.tools.read_only import is_read_only_call
 from robothor.goals.runtime import RECOVERY_BOOKKEEPING_ACTIONS
 
 if TYPE_CHECKING:
@@ -26,9 +27,14 @@ logger = logging.getLogger(__name__)
 
 
 def _bypass(name: str, args: dict[str, Any], ctx: ToolContext) -> bool:
+    # A read is never journalled: a read cut short by its deadline is not an
+    # unresolved write, and journalling it as one fenced every later call of
+    # that tool for the principal (claude_code_wait, 2026-10-05).
+    # tool_call is bypassed whatever it wraps — its inner dispatch comes back
+    # through here under the inner tool's own name.
     return (
         ctx.is_benchmark
-        or name in READONLY_TOOLS
+        or is_read_only_call(name, args, READONLY_TOOLS)
         or name in {"tool_call", "gws_calendar_add_attendees"}
         or name == "update_pursuit_goal"
         and args.get("action") in RECOVERY_BOOKKEEPING_ACTIONS

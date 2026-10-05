@@ -206,7 +206,16 @@ _BENCHMARK_EXTRA_READS: frozenset[str] = frozenset(
 #: live Gmail call. A graded agent that can read the operator's mail can put
 #: the operator's mail in its answer, and the sandbox exists so that a
 #: benchmark touches nothing real in EITHER direction.
-_BENCHMARK_WITHHELD_READS: frozenset[str] = frozenset(DESKTOP_TOOLS | BENCHMARK_TOOLS | GWS_TOOLS)
+#:
+#: The Claude Code reads joined on 2026-10-05, when they were classified
+#: read-only: they read the operator's REAL coding jobs (and the handlers
+#: refuse a benchmark run anyway).
+_BENCHMARK_WITHHELD_READS: frozenset[str] = frozenset(
+    DESKTOP_TOOLS
+    | BENCHMARK_TOOLS
+    | GWS_TOOLS
+    | {"claude_code_status", "claude_code_wait"}
+)
 
 
 def _adapter_declared_read_only_tools() -> frozenset[str]:

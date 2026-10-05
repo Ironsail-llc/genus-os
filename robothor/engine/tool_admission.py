@@ -34,6 +34,7 @@ from typing import TYPE_CHECKING, Any
 from robothor.constants import GUARDRAIL_BLOCKED_ERROR_TYPE
 from robothor.engine.run_deadline import wrapup_refusal
 from robothor.engine.sanitize import sanitize_log as _sanitize
+from robothor.engine.tools.read_only import is_read_only_call
 
 if TYPE_CHECKING:
     from robothor.engine.models import AgentConfig
@@ -122,7 +123,8 @@ class ToolAdmissionMixin:
         # ── [PLAN MODE GUARD] Runtime enforcement ──
         # Belt-and-suspenders: even though schemas are filtered, block any
         # non-readonly tool call during plan mode at runtime.
-        if readonly_mode and tool_name not in readonly_tool_set:
+        # A tool_call inherits the classification of the call it wraps.
+        if readonly_mode and not is_read_only_call(tool_name, tool_args, readonly_tool_set):
             return ToolVerdict(
                 allowed=False,
                 message=(

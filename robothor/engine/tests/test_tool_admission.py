@@ -155,6 +155,25 @@ class TestPlanModeGate:
 
     @pytest.mark.asyncio
     @pytest.mark.usefixtures("_mock_run_persistence")
+    @pytest.mark.parametrize(
+        ("inner", "admitted"), [("read_file", True), ("claude_code_wait", True), ("send_email", False)]
+    )
+    async def test_tool_call_is_classified_as_the_call_it_wraps(
+        self, runner, agent_config, inner, admitted
+    ):
+        """A deferred agent reads through ``tool_call``; in plan mode the
+        wrapper is a read exactly when the call inside it is."""
+        _, executed, _ = await _run_one_tool_call(
+            runner,
+            agent_config,
+            tool_name="tool_call",
+            tool_args={"name": inner, "arguments": {}},
+            readonly_mode=True,
+        )
+        assert (executed == ["tool_call"]) is admitted
+
+    @pytest.mark.asyncio
+    @pytest.mark.usefixtures("_mock_run_persistence")
     async def test_the_run_continues_after_a_refusal(self, runner, agent_config):
         """A refused tool is feedback to the model, not a fatal error."""
         run, _, _ = await _run_one_tool_call(
