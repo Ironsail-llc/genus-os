@@ -93,7 +93,13 @@ class ReviewerConfig:
         return own or self.ticket_prefixes
 
     def clone_dir(self, repo: str) -> Path:
-        root = self.clone_root or str(Path.home() / "robothor" / ".genus" / "pr-review" / "repos")
+        if self.clone_root:
+            root = self.clone_root
+        else:
+            from robothor.settings.sources import workspace_path
+
+            workspace = workspace_path() or Path.home() / "robothor"
+            root = str(workspace / ".genus" / "pr-review" / "repos")
         owner, name = repo.split("/", 1)
         return Path(root).expanduser() / owner / name
 
