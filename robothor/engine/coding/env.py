@@ -24,11 +24,19 @@ What it gets:
 * ``GH_TOKEN`` only when the job was explicitly granted it;
 * a git identity, so a commit in the worktree does not fail for want of one.
 
-``ROBOTHOR_CLAUDE_CODE_AUTH=host`` is the one escape hatch, for a developer box
-whose service user is logged in to Claude Code itself: it keeps the real
-``HOME`` (and so the real login) and passes no token. Secrets are still not
-inherited. It is not for production — the service user's personal Claude Code
-configuration (plugins, memory) then applies to every job.
+``ROBOTHOR_CLAUDE_CODE_AUTH`` picks the credential:
+
+* ``auto`` (default) — the vault token when one is stored, otherwise the
+  Claude Code login the service user already has on this host. An instance
+  whose engine runs as a user logged in to Claude Code needs no extra step.
+* ``token`` — only the stored token; a job fails without one.
+* ``host`` — always the host login, never a token.
+
+On the host login the real ``HOME`` is kept (Claude Code refreshes its login
+under ``~/.claude``, which the engine unit must be able to write) and no token
+is passed. Secrets are still not inherited, and the runner's
+``--setting-sources ""`` and ``--strict-mcp-config`` keep the user's personal
+settings, plugins, hooks and MCP servers out of every job.
 """
 
 from __future__ import annotations
@@ -44,6 +52,8 @@ from robothor.secrets import resolve_secret
 
 __all__ = [
     "AUTH_MODE_ENV",
+    "host_login_present",
+    "uses_host_login",
     "TOKEN_ENV",
     "auth_mode",
     "build_claude_env",
@@ -55,7 +65,7 @@ __all__ = [
 #: The credential Claude Code reads for subscription auth (`claude setup-token`).
 TOKEN_ENV = "CLAUDE_CODE_OAUTH_TOKEN"
 
-#: ``token`` (default) or ``host``. See the module docstring.
+#: ``auto`` (default), ``token`` or ``host``. See the module docstring.
 AUTH_MODE_ENV = "ROBOTHOR_CLAUDE_CODE_AUTH"
 
 #: Names a child needs to be a working process. Values still go through the
@@ -96,13 +106,28 @@ def resolve_oauth_token(tenant_id: str = DEFAULT_TENANT) -> str | None:
 
 
 def auth_mode(source: dict[str, str] | None = None) -> str:
-    """``token`` or ``host``: from ``source`` when it names one, else the setting."""
+    """``auto``, ``token`` or ``host``: from ``source`` when it names one, else the setting."""
     raw = (source or {}).get(AUTH_MODE_ENV)
     if raw is None:
         from robothor.settings import get_settings
 
         raw = get_settings().coding.claude_code_auth
-    return "host" if str(raw).strip().lower() == "host" else "token"
+    mode = str(raw).strip().lower()
+    return mode if mode in ("token", "host") else "auto"
+
+
+def uses_host_login(oauth_token: str | None, source: dict[str, str] | None = None) -> bool:
+    """Whether a job runs on the host's own Claude Code login rather than a token."""
+    mode = auth_mode(source)
+    return mode == "host" or (mode == "auto" and not oauth_token)
+
+
+def host_login_present(source: dict[str, str] | None = None) -> bool:
+    """Whether the service user is logged in to Claude Code on this host."""
+    src = dict(os.environ) if source is None else source
+    home = (src.get("HOME") or "").strip() or str(Path.home())
+    config = (src.get("CLAUDE_CONFIG_DIR") or "").strip() or str(Path(home) / ".claude")
+    return (Path(config) / ".credentials.json").is_file()
 
 
 def _essentials(source: dict[str, str]) -> dict[str, str]:
@@ -130,10 +155,11 @@ def _base_env(
     job_id: str,
     source: dict[str, str],
     git_identity: tuple[str, str] | None,
+    host_login: bool,
 ) -> dict[str, str]:
     env = _essentials(source)
     env.update(_FIXED)
-    if auth_mode(source) == "host":
+    if host_login:
         real_home = (source.get("HOME") or "").strip() or str(Path.home())
         env["HOME"] = real_home
     else:
@@ -163,8 +189,9 @@ def build_claude_env(
 ) -> dict[str, str]:
     """The complete environment for one job's ``claude -p`` subprocess."""
     source = dict(os.environ) if base is None else dict(base)
-    env = _base_env(job_id, source, git_identity)
-    if auth_mode(source) != "host" and oauth_token:
+    host_login = uses_host_login(oauth_token, source)
+    env = _base_env(job_id, source, git_identity, host_login)
+    if not host_login and oauth_token:
         env[TOKEN_ENV] = oauth_token
     if github_token:
         env["GH_TOKEN"] = github_token
@@ -179,4 +206,6 @@ def build_verify_env(
 ) -> dict[str, str]:
     """The environment the acceptance command runs in: no credential at all."""
     source = dict(os.environ) if base is None else dict(base)
-    return _base_env(job_id, source, git_identity)
+    # The acceptance command needs no Claude login, so only an explicit `host`
+    # keeps the real HOME; `auto` verifies in the private one.
+    return _base_env(job_id, source, git_identity, auth_mode(source) == "host")

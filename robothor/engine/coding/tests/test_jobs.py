@@ -210,7 +210,8 @@ async def test_code_mode_requires_an_acceptance_check(git_repo, coding_env):
         )
 
 
-async def test_a_missing_token_fails_fast_with_the_fix(git_repo, coding_env):
+async def test_a_missing_token_fails_fast_with_the_fix(git_repo, coding_env, tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path / "no-login-home"))  # and no host login
     mgr = CodingJobManager(
         store=MemoryJobStore(), runner=FakeRunner(), token_resolver=lambda t: None
     )
@@ -348,3 +349,19 @@ async def test_concurrency_is_capped_per_tenant(git_repo, coding_env):
     b = await mgr.wait(b.id, TENANT, timeout_s=20)
     assert a.status == b.status == JobStatus.DONE
     assert peak == 1
+
+
+async def test_auto_without_a_token_runs_on_the_hosts_claude_login(
+    git_repo, coding_env, tmp_path, monkeypatch
+):
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    (home / ".claude" / ".credentials.json").write_text("{}")
+    monkeypatch.setenv("HOME", str(home))
+    runner = FakeRunner(_commit_ok)
+    mgr = CodingJobManager(store=MemoryJobStore(), runner=runner, token_resolver=lambda t: None)
+    job = await mgr.wait((await _start(mgr, git_repo)).id, TENANT, timeout_s=20)
+
+    assert job.status == JobStatus.DONE
+    assert runner.envs[0]["HOME"] == str(home)
+    assert "CLAUDE_CODE_OAUTH_TOKEN" not in runner.envs[0]

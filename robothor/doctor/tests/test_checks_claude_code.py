@@ -27,6 +27,7 @@ def test_skips_when_neither_cli_nor_token_exists():
             side_effect=ClaudeCodeError("nope"),
         ),
         patch("robothor.secrets.secret_source", return_value="missing"),
+        patch("robothor.engine.coding.env.host_login_present", return_value=False),
     ):
         result = _run()
     assert result.status == "skip"
@@ -45,11 +46,12 @@ def test_fails_when_a_token_exists_but_the_cli_does_not():
     assert "CLI" in result.detail
 
 
-def test_fails_when_the_cli_exists_but_no_token():
+def test_fails_when_the_cli_exists_but_no_token_and_no_host_login():
     with (
         patch("robothor.engine.coding.runner.resolve_claude_binary", return_value="/opt/claude"),
         patch("robothor.engine.coding.probe.cli_version", new=AsyncMock(return_value="2.1.289")),
         patch("robothor.secrets.secret_source", return_value="missing"),
+        patch("robothor.engine.coding.env.host_login_present", return_value=False),
     ):
         result = _run()
     assert result.status == "fail"
@@ -65,3 +67,16 @@ def test_passes_with_cli_and_token_and_never_prints_the_value():
         result = _run()
     assert result.status == "pass"
     assert "2.1.289" in result.detail and "vault" in result.detail
+
+
+def test_passes_on_the_hosts_claude_login_without_a_token(monkeypatch):
+    monkeypatch.delenv("ROBOTHOR_CLAUDE_CODE_AUTH", raising=False)
+    with (
+        patch("robothor.engine.coding.runner.resolve_claude_binary", return_value="/opt/claude"),
+        patch("robothor.engine.coding.probe.cli_version", new=AsyncMock(return_value="2.1.289")),
+        patch("robothor.secrets.secret_source", return_value="missing"),
+        patch("robothor.engine.coding.env.host_login_present", return_value=True),
+    ):
+        result = _run()
+    assert result.status == "pass"
+    assert "host" in result.detail

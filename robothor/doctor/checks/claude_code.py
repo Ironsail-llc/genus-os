@@ -28,12 +28,15 @@ async def _ready(ctx: DoctorContext) -> Result:
     which stores CLAUDE_CODE_OAUTH_TOKEN in the vault. Prove it end to end with
     `robothor claude-code status`.
     """
+    from robothor.engine.coding import env as coding_env
     from robothor.engine.coding import probe, runner
     from robothor.engine.coding.env import TOKEN_ENV
     from robothor.secrets import secret_source
 
     source = secret_source(TOKEN_ENV)
     has_token = source in ("vault", "env")
+    if not has_token and coding_env.auth_mode() != "token" and coding_env.host_login_present():
+        has_token, source = True, "host Claude Code login"
     try:
         runner.resolve_claude_binary()
     except runner.ClaudeCodeError:
@@ -51,9 +54,10 @@ async def _ready(ctx: DoctorContext) -> Result:
             return fail(f"the Claude Code CLI does not run: {type(exc).__name__}"[:200])
     if not has_token:
         return fail(
-            f"Claude Code CLI {version}, but {TOKEN_ENV} is {source}: run `robothor claude-code login`"
+            f"Claude Code CLI {version}, but {TOKEN_ENV} is {source} and this host has no "
+            "Claude Code login: sign in with `claude`, or run `robothor claude-code login`"
         )
-    return ok(f"Claude Code CLI {version}; token from the {source}")
+    return ok(f"Claude Code CLI {version}; credential from the {source}")
 
 
 CHECKS: tuple[Check, ...] = (

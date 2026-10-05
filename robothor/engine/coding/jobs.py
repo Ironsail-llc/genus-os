@@ -862,14 +862,14 @@ class CodingJobManager:
         job.updated_at = _now()
         await self._persist(job)
 
-        host_auth = coding_env.auth_mode() == "host"
         token = await asyncio.to_thread(self._token_resolver, job.tenant_id)
-        if not token and not host_auth:
+        if coding_env.uses_host_login(token) and not coding_env.host_login_present():
             await self._finish(
                 job,
                 JobStatus.FAILED,
-                "No Claude Code token: the operator must run `robothor claude-code login` "
-                f"(it stores {coding_env.TOKEN_ENV} in the vault).",
+                "No Claude Code credential: the engine's user is not logged in to Claude Code "
+                "on this host (run `claude` once and sign in), and no token is stored "
+                f"(`robothor claude-code login` stores {coding_env.TOKEN_ENV} in the vault).",
             )
             return
         github = (

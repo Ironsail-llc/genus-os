@@ -220,16 +220,24 @@ and the tool list, not a sandbox.
 
 **Getting it.** The tools are opt-in: name them in `tools_allowed`, or — for an
 agent that keeps the default set, like the `main` template — in `tools_opt_in`.
-They are refused in benchmark runs. Set the token up once:
+They are refused in benchmark runs.
+
+**Credential.** If the engine's user is already logged in to Claude Code on the
+host, there is nothing to set up: with `ROBOTHOR_CLAUDE_CODE_AUTH=auto` (the
+default) jobs use that login when no token is stored. Claude Code refreshes the
+login under `~/.claude` and `~/.claude.json`, so the engine unit needs both in
+`ReadWritePaths=`. On a host where that user is not logged in, store a
+subscription token instead:
 
 ```bash
-genus claude-code login
-genus claude-code status
+genus claude-code login    # claude setup-token → vault, then a one-turn proof
+genus claude-code status   # CLI version, which credential resolves, one-turn ping
 ```
 
-`login` runs `claude setup-token`, stores the token in the vault and proves it
-with a one-turn call; `status` prints the CLI version, where the token resolves
-from (never its value) and pings again.
+A stored token always wins over the host login; `ROBOTHOR_CLAUDE_CODE_AUTH=token`
+requires it. Either way the runner's `--setting-sources ""` and
+`--strict-mcp-config` keep the user's personal settings, plugins, hooks and MCP
+servers out of every job.
 
 `genus doctor` reports `claude_code.ready` (skipped on an instance with neither
 the CLI nor a token). The `claude-code` skill is the orchestrator's procedure:

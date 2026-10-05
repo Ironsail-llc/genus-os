@@ -3103,13 +3103,14 @@ class CodingSettings(SettingsGroup):
         since="unreleased",
     )
     claude_code_auth: str = declare(
-        "token",
+        "auto",
         "ROBOTHOR_CLAUDE_CODE_AUTH",
-        "How a coding job authenticates. `token` (the default) gives each job a private "
-        "HOME and the CLAUDE_CODE_OAUTH_TOKEN stored by `robothor claude-code login`. "
-        "`host` keeps the service user's own HOME and Claude Code login — for a developer "
-        "box only, because that user's personal Claude Code plugins and memory then apply "
-        "to every job.",
+        "How a coding job authenticates. `auto` (the default) uses the "
+        "CLAUDE_CODE_OAUTH_TOKEN stored by `robothor claude-code login` when there is one, "
+        "otherwise the Claude Code login the engine's user already has on this host. "
+        "`token` requires the stored token; `host` always uses the host login. The host "
+        "login needs ~/.claude writable by the engine unit; personal settings, plugins and "
+        "MCP servers are excluded either way.",
         restart_required=False,
         since="unreleased",
     )

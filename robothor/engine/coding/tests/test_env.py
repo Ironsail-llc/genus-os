@@ -139,3 +139,37 @@ def test_token_is_resolved_vault_first_through_the_accessor(monkeypatch):
 
     assert resolve_oauth_token("test-tenant") == "from-vault"
     assert calls == [(TOKEN_ENV, "test-tenant")]
+
+
+def test_auth_defaults_to_auto():
+    from robothor.settings.model import CodingSettings
+
+    assert CodingSettings().claude_code_auth == "auto"
+
+
+def test_auto_without_a_stored_token_uses_the_hosts_claude_login(tmp_path):
+    """No vault token: the job runs on the Claude Code login already on the box."""
+    base = dict(FLEET_ENV, XDG_CONFIG_HOME=str(tmp_path), ROBOTHOR_CLAUDE_CODE_AUTH="auto")
+    env = build_claude_env(job_id="j", oauth_token=None, base=base)
+
+    assert env["HOME"] == "/users/alice"
+    assert "CLAUDE_CONFIG_DIR" not in env
+    assert TOKEN_ENV not in env
+    assert "OPENROUTER_API_KEY" not in env
+
+
+def test_auto_with_a_stored_token_prefers_the_token(tmp_path):
+    base = dict(FLEET_ENV, XDG_CONFIG_HOME=str(tmp_path), ROBOTHOR_CLAUDE_CODE_AUTH="auto")
+    env = build_claude_env(job_id="j", oauth_token="tok", base=base)
+
+    assert env[TOKEN_ENV] == "tok"
+    assert env["HOME"].endswith("/robothor/claude-code/j")
+
+
+def test_host_login_present_reads_the_credentials_file(tmp_path):
+    from robothor.engine.coding.env import host_login_present
+
+    assert host_login_present({"HOME": str(tmp_path)}) is False
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".claude" / ".credentials.json").write_text("{}")
+    assert host_login_present({"HOME": str(tmp_path)}) is True
