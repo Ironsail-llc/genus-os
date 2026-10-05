@@ -90,6 +90,13 @@ class FakeGitHub:
         self.compare: dict[str, Any] | None = None
         self.threads_pages: list[dict[str, Any]] = []
         self.resolved: list[str] = []
+        self.existing_reviews: list[dict[str, Any]] = []
+        self.post_error: Exception | None = None
+        self.pr_reads = 0
+        self.pr_after_first_read: dict[str, Any] | None = None
+        self.repo_status = 200
+        self.commit_status = 200
+        self.comment_pages: list[list[dict[str, Any]]] | None = None
 
     # ── helpers ──
     def posted_reviews(self) -> list[dict[str, Any]]:
@@ -110,7 +117,16 @@ class FakeGitHub:
         if path == f"{base}/pulls/7" and request.method == "GET":
             if "diff" in request.headers.get("Accept", ""):
                 return httpx.Response(200, text=self.diff)
+            self.pr_reads += 1
+            if self.pr_after_first_read is not None and self.pr_reads > 1:
+                return httpx.Response(200, json=self.pr_after_first_read)
             return httpx.Response(200, json=self.pr)
+        if path == base:
+            return httpx.Response(self.repo_status, json={"full_name": _REPO})
+        if path.startswith(f"{base}/commits/"):
+            return httpx.Response(self.commit_status, json={"sha": path.split("/")[-1]})
+        if path == f"{base}/pulls/7/reviews" and request.method == "GET":
+            return httpx.Response(200, json=self.existing_reviews)
         if path == f"{base}/pulls/404":
             return httpx.Response(404, json={"message": "Not Found"})
         if path == f"{base}/pulls/7/files":
@@ -122,10 +138,19 @@ class FakeGitHub:
                 return httpx.Response(200, json=self.files[:1], headers={"Link": link})
             return httpx.Response(200, json=self.files[1:] if page == 2 else self.files)
         if path == f"{base}/pulls/7/reviews" and request.method == "POST":
+            if self.post_error is not None:
+                raise self.post_error
             if self.review_responses:
                 return self.review_responses.pop(0)
             return _review_ok()
         if path.startswith(f"{base}/pulls/7/reviews/") and path.endswith("/comments"):
+            if self.comment_pages is not None:
+                page = int(request.url.params.get("page", "1"))
+                hdrs = {}
+                if page < len(self.comment_pages):
+                    nxt = f"https://api.github.com{path}?per_page=100&page={page + 1}"
+                    hdrs["Link"] = f'<{nxt}>; rel="next"'
+                return httpx.Response(200, json=self.comment_pages[page - 1], headers=hdrs)
             return httpx.Response(200, json=self.review_comments)
         if path.startswith(f"{base}/pulls/7/comments/") and path.endswith("/replies"):
             return httpx.Response(
@@ -617,3 +642,174 @@ class TestRegistration:
 
         for name in READ_TOOLS + WRITE_TOOLS:
             assert "review" in TOOL_HINTS[name].keywords or "diff" in TOOL_HINTS[name].keywords
+
+
+# ─── review hardening ──────────────────────────────────────────────
+
+
+def _existing(review_id: int = 321, commit: str = _HEAD, user: str = "robo-bot", body: str = ""):
+    return {
+        "id": review_id,
+        "user": {"login": user},
+        "commit_id": commit,
+        "body": body or f"hello\n\n{github_api._REVIEW_FOOTER}",
+        "html_url": f"https://github.com/{_REPO}/pull/7#pullrequestreview-{review_id}",
+    }
+
+
+class TestIdempotentPosting:
+    async def test_existing_review_at_head_is_not_posted_again(self, gh):
+        gh.existing_reviews = [_existing()]
+        result = await github_api._github_create_review(_review_args("COMMENT", []), _CTX)
+        assert result["already_posted"] is True
+        assert result["review_id"] == 321
+        assert "pullrequestreview-321" in result["url"]
+        assert gh.posted_reviews() == []
+
+    async def test_already_posted_returns_the_reviews_inline_comments(self, gh):
+        """A retried post must still hand back comment ids, or re-reviews lose our threads."""
+        gh.existing_reviews = [_existing()]
+        gh.review_comments = [
+            {"id": 11, "path": "app.py", "line": 3},
+            {"id": 12, "path": "app.py", "line": 9},
+        ]
+        result = await github_api._github_create_review(_review_args("COMMENT", []), _CTX)
+        assert result["already_posted"] is True
+        assert result["comment_ids"] == [11, 12]
+        assert result["comments"] == [
+            {"id": 11, "path": "app.py", "line": 3},
+            {"id": 12, "path": "app.py", "line": 9},
+        ]
+
+    @pytest.mark.parametrize(
+        "review",
+        [
+            _existing(commit="c" * 40),
+            _existing(user="someone-else"),
+            _existing(body="a human wrote this"),
+        ],
+    )
+    async def test_non_matching_reviews_do_not_block(self, gh, review):
+        gh.existing_reviews = [review]
+        result = await github_api._github_create_review(_review_args("COMMENT", []), _CTX)
+        assert result["already_posted"] is False
+        assert len(gh.posted_reviews()) == 1
+
+    async def test_timeout_on_post_returns_the_review_that_landed(self, gh):
+        gh.post_error = httpx.ReadTimeout("slow")
+        gh.existing_reviews = []
+
+        # The review appears server-side only after the (timed out) POST.
+        orig = gh.handler
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            resp = None
+            try:
+                resp = orig(request)
+            finally:
+                if request.method == "POST":
+                    gh.existing_reviews = [_existing()]
+            return resp
+
+        gh.handler = handler  # type: ignore[method-assign]
+        result = await github_api._github_create_review(_review_args("COMMENT", []), _CTX)
+        assert result["already_posted"] is True
+        assert result["review_id"] == 321
+
+    async def test_timeout_with_no_review_reports_failure(self, gh):
+        gh.post_error = httpx.ReadTimeout("slow")
+        result = await github_api._github_create_review(_review_args("COMMENT", []), _CTX)
+        assert "error" in result
+
+    async def test_5xx_on_post_checks_for_the_review(self, gh):
+        gh.review_responses = [httpx.Response(502, json={"message": "bad gateway"})]
+        orig = gh.handler
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            resp = orig(request)
+            if request.method == "POST":
+                gh.existing_reviews = [_existing()]
+            return resp
+
+        gh.handler = handler  # type: ignore[method-assign]
+        result = await github_api._github_create_review(_review_args("COMMENT", []), _CTX)
+        assert result["already_posted"] is True
+
+
+class TestBodyLimits:
+    async def test_body_is_capped_and_non_blocking_truncated_first(self, gh):
+        minors = [_issue("minor", f"m{i}", None, body="x" * 2000) for i in range(100)]
+        result = await github_api._github_create_review(
+            _review_args("COMMENT", [_issue("blocker", "keep me", 11), *minors]), _CTX
+        )
+        (posted,) = gh.posted_reviews()
+        assert len(posted["body"]) <= 60_000
+        assert "more finding(s) omitted" in posted["body"]
+        assert posted["body"].endswith(github_api._REVIEW_FOOTER)
+        assert "Summary text." in posted["body"]
+        assert result["inline_count"] == 1
+
+    async def test_inline_comment_bodies_are_capped(self, gh):
+        await github_api._github_create_review(
+            _review_args("COMMENT", [_issue("blocker", "big", 11, body="y" * 20_000)]), _CTX
+        )
+        (posted,) = gh.posted_reviews()
+        assert len(posted["comments"][0]["body"]) <= 8_000
+
+    async def test_a_non_anchor_422_is_not_folded(self, gh):
+        gh.review_responses = [_422("Body is too long (maximum is 65536 characters)")]
+        result = await github_api._github_create_review(
+            _review_args("COMMENT", [_issue("blocker", "In diff", 11)]), _CTX
+        )
+        assert "error" in result
+        assert "too long" in result["error"]
+        assert len(gh.posted_reviews()) == 1
+
+
+class TestCommentIdsAndRace:
+    async def test_comment_ids_follow_pagination(self, gh):
+        gh.comment_pages = [[{"id": 1}, {"id": 2}], [{"id": 3}]]
+        result = await github_api._github_create_review(
+            _review_args("COMMENT", [_issue("blocker", "In diff", 11)]), _CTX
+        )
+        assert result["comment_ids"] == [1, 2, 3]
+
+    async def test_head_moving_while_reading_files_aborts(self, gh):
+        gh.pr_after_first_read = _pr(head="d" * 40)
+        result = await github_api._github_create_review(
+            _review_args("COMMENT", [_issue("blocker", "In diff", 11)]), _CTX
+        )
+        assert "head moved" in result["error"]
+        assert result["head_sha"] == "d" * 40
+        assert gh.posted_reviews() == []
+
+
+class TestCompareHardening:
+    async def test_flags_report_truncation(self, gh):
+        gh.compare = {
+            "status": "ahead",
+            "total_commits": 400,
+            "commits": [{"sha": "s"}] * 250,
+            "files": [{"filename": f"f{i}"} for i in range(300)],
+        }
+        result = await github_api._github_compare({"repo": _REPO, "base": "a", "head": "b"}, _CTX)
+        assert result["files_truncated"] is True
+        assert result["commits_truncated"] is True
+
+    async def test_flags_false_when_complete(self, gh):
+        gh.compare = {"status": "ahead", "total_commits": 1, "commits": [{"sha": "s"}], "files": []}
+        result = await github_api._github_compare({"repo": _REPO, "base": "a", "head": "b"}, _CTX)
+        assert result["files_truncated"] is False
+        assert result["commits_truncated"] is False
+
+    async def test_404_with_unreachable_repo_is_an_error_not_missing(self, gh):
+        gh.repo_status = 404
+        result = await github_api._github_compare({"repo": _REPO, "base": "a", "head": "b"}, _CTX)
+        assert "status" not in result
+        assert _REPO in result["error"]
+
+    async def test_404_with_unreachable_head_is_an_error(self, gh):
+        gh.commit_status = 404
+        result = await github_api._github_compare({"repo": _REPO, "base": "a", "head": "b"}, _CTX)
+        assert "status" not in result
+        assert "head" in result["error"]

@@ -269,3 +269,20 @@ class TestDecideReview:
             kind="rereview", head_sha="b", last_reviewed_sha="a", compare_status="identical"
         )
         assert (d.action, d.reason) == ("skip", "no_new_commits")
+
+
+def test_trailing_newline_creates_no_phantom_line():
+    lines = commentable_lines("@@ -1,2 +1,2 @@\n a\n-b\n+c\n")
+    assert sorted(lines["RIGHT"]) == [1, 2]
+    assert sorted(lines["LEFT"]) == [1, 2]
+
+
+def test_compose_body_cap_truncates_non_blocking_first():
+    from robothor.pr_review.posting import compose_body
+
+    minors = [{"severity": "minor", "title": f"m{i}", "body": "x" * 500} for i in range(50)]
+    major = [{"severity": "major", "title": "keep", "body": "k"}]
+    body = compose_body("sum", major, minors, footer="FOOT", max_chars=5000)
+    assert len(body) <= 5000
+    assert "keep" in body and "sum" in body and body.endswith("FOOT")
+    assert "more finding(s) omitted" in body

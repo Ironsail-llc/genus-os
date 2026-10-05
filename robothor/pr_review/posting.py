@@ -30,6 +30,7 @@ if TYPE_CHECKING:
     from collections.abc import Collection, Iterable, Mapping
 
 __all__ = [
+    "REVIEW_BODY_MAX_CHARS",
     "DEFAULT_INLINE_SEVERITIES",
     "FULL_REVIEW_COMPARE_STATUSES",
     "ReviewDecision",
@@ -69,7 +70,7 @@ def commentable_lines(patch: str | None) -> dict[str, dict[int, int]]:
         return out
     left = right = 0
     hunk = -1
-    for line in patch.split("\n"):
+    for line in patch.rstrip("\n").split("\n"):
         m = _HUNK_RE.match(line)
         if m:
             left, right = int(m.group(1)), int(m.group(2))
@@ -171,6 +172,27 @@ def _prior_item(prior: Mapping[str, Any]) -> str:
     return f"{item}: {note}" if note else item
 
 
+#: GitHub rejects a review body over 65,536 characters; stay well under it.
+REVIEW_BODY_MAX_CHARS = 60_000
+
+
+def _omitted(n: int) -> str:
+    return f"…{n} more finding(s) omitted"
+
+
+def _fit(items: list[str], room: int) -> tuple[list[str], int]:
+    """The longest prefix of ``items`` (joined by blank lines) within ``room``."""
+    kept: list[str] = []
+    used = 0
+    for item in items:
+        cost = len(item) + 2
+        if used + cost > room:
+            break
+        kept.append(item)
+        used += cost
+    return kept, len(items) - len(kept)
+
+
 def compose_body(
     summary: str,
     out_of_diff: Iterable[Mapping[str, Any]],
@@ -178,23 +200,65 @@ def compose_body(
     prior_issues: Iterable[Mapping[str, Any]] | None = None,
     *,
     footer: str = "",
+    max_chars: int | None = REVIEW_BODY_MAX_CHARS,
 ) -> str:
-    """The review body. Empty when there is nothing to say (a clean approval)."""
-    parts: list[str] = [summary.strip()] if summary and summary.strip() else []
-    prior = list(prior_issues or [])
-    if prior:
-        parts += ["### Previous findings", *(_prior_item(p) for p in prior)]
-    blocking = list(out_of_diff)
-    if blocking:
-        parts += ["### Other findings", *(_list_item(i) for i in blocking)]
-    minor = list(non_blocking)
-    if minor:
-        parts += ["### Non-blocking (for awareness)", *(_list_item(i) for i in minor)]
-    if not parts:
+    """The review body. Empty when there is nothing to say (a clean approval).
+
+    Never longer than ``max_chars`` (None disables the cap). Over the cap, the
+    non-blocking section is cut first, then the out-of-diff findings, and the
+    summary last; each cut section ends with "…N more finding(s) omitted". The
+    footer is never cut: it is the marker that makes a posted review findable.
+    """
+    summary_text = summary.strip() if summary else ""
+    prior = [_prior_item(p) for p in (prior_issues or [])]
+    major = [_list_item(i) for i in out_of_diff]
+    minor = [_list_item(i) for i in non_blocking]
+    if not (summary_text or prior or major or minor):
         return ""
+
+    def build(sum_text: str, major_items: list[str], minor_items: list[str]) -> str:
+        parts: list[str] = [sum_text] if sum_text else []
+        if prior:
+            parts += ["### Previous findings", *prior]
+        if major_items:
+            parts += ["### Other findings", *major_items]
+        if minor_items:
+            parts += ["### Non-blocking (for awareness)", *minor_items]
+        if footer:
+            parts.append(footer)
+        return "\n\n".join(parts)
+
+    body = build(summary_text, major, minor)
+    if max_chars is None or len(body) <= max_chars:
+        return body
+
+    # Cut the non-blocking section first.
+    base_len = len(build(summary_text, major, [])) + len("### Non-blocking (for awareness)") + 4
+    room = max_chars - base_len - len(_omitted(len(minor))) - 4
+    kept, dropped = _fit(minor, room)
+    minor_out = [*kept, _omitted(dropped)] if dropped else kept
+    body = build(summary_text, major, minor_out)
+    if len(body) <= max_chars:
+        return body
+
+    # Then the out-of-diff findings.
+    base_len = len(build(summary_text, [], [])) + len("### Other findings") + 4
+    room = max_chars - base_len - len(_omitted(len(major))) - 4
+    kept, dropped = _fit(major, room)
+    major_out = [*kept, _omitted(dropped)] if dropped else kept
+    minor_all = [_omitted(len(minor))] if minor else []
+    body = build(summary_text, major_out, minor_all)
+    if len(body) <= max_chars:
+        return body
+
+    # The summary goes last; a hard cut keeps the footer whatever else is huge.
+    marker = "…(truncated)"
+    room = max_chars - len(footer) - len(marker) - 4
+    head = build(summary_text, major_out, minor_all)
     if footer:
-        parts.append(footer)
-    return "\n\n".join(parts)
+        head = head[: -len(footer)].rstrip("\n")
+    head = head[: max(room, 0)] + marker
+    return f"{head}\n\n{footer}" if footer else head
 
 
 _OWN_PR_PREFIX = {"APPROVE": "APPROVED", "REQUEST_CHANGES": "CHANGES REQUESTED"}

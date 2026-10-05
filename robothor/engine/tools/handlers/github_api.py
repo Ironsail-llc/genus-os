@@ -597,6 +597,11 @@ _OWN_PR_ERROR_RE = re.compile(
     r"(can ?not|cannot) (approve|request changes on) your own pull request", re.IGNORECASE
 )
 _REVIEW_FOOTER = "<sub>Automated review</sub>"
+#: Per-comment cap for inline review comments (the review body has its own).
+_INLINE_COMMENT_MAX_CHARS = 8_000
+#: A 422 is only an anchor problem (worth folding comments into the body) when
+#: GitHub's message talks about where the comment goes.
+_ANCHOR_422_RE = re.compile(r"line|path|diff|pull_request_review_thread|position", re.IGNORECASE)
 
 
 def _client(timeout: float = 20.0) -> httpx.AsyncClient:
@@ -771,7 +776,23 @@ async def _github_compare(args: dict[str, Any], ctx: ToolContext) -> dict[str, A
         async with _client(30.0) as client:
             resp = await client.get(url, headers=_headers(token))
             if resp.status_code == 404:
-                # The base commit is gone — typically a force-push since the last review.
+                # Before reading 404 as "the base was force-pushed away", confirm
+                # the repo and head are reachable: a bad token or repo name 404s too.
+                headers = _headers(token)
+                repo_resp = await client.get(f"{_GITHUB_API}/repos/{repo}", headers=headers)
+                if repo_resp.status_code != 200:
+                    return {
+                        "error": f"repository {repo} is not reachable "
+                        f"(GitHub {repo_resp.status_code}) — check the repo name and token access"
+                    }
+                head_resp = await client.get(
+                    f"{_GITHUB_API}/repos/{repo}/commits/{quote(head, safe='')}", headers=headers
+                )
+                if head_resp.status_code != 200:
+                    return {
+                        "error": f"head commit {head} not found in {repo} "
+                        f"(GitHub {head_resp.status_code})"
+                    }
                 return {
                     "repo": repo,
                     "base": base,
@@ -789,6 +810,7 @@ async def _github_compare(args: dict[str, Any], ctx: ToolContext) -> dict[str, A
         return {"error": f"GitHub request failed: {e}"}
 
     status = str(data.get("status") or "")
+    raw_files = data.get("files") or []
     budget = [_PATCH_BUDGET_CHARS]
     commits = [
         {
@@ -807,8 +829,11 @@ async def _github_compare(args: dict[str, Any], ctx: ToolContext) -> dict[str, A
         "behind_by": data.get("behind_by"),
         "total_commits": data.get("total_commits", len(commits)),
         "full_review_required": status in FULL_REVIEW_COMPARE_STATUSES,
+        # GitHub's compare lists at most 300 files and a page of commits.
+        "files_truncated": len(raw_files) >= 300,
+        "commits_truncated": len(commits) < int(data.get("total_commits") or len(commits)),
         "commits": commits,
-        "files": [_slim_file(f, budget) for f in data.get("files") or []],
+        "files": [_slim_file(f, budget) for f in raw_files],
     }
 
 
@@ -836,6 +861,81 @@ async def _viewer_login(client: httpx.AsyncClient, headers: dict[str, str]) -> s
         return str(resp.json().get("login") or "")
     except Exception:  # noqa: BLE001 - an unknown viewer defers to the 422 fallback
         return ""
+
+
+async def _find_own_review(
+    client: httpx.AsyncClient,
+    headers: dict[str, str],
+    pr_url: str,
+    viewer: str,
+    commit_id: str,
+) -> dict[str, Any] | None:
+    """An automated review by this token at ``commit_id``, if one already exists.
+
+    Matches on commit, the footer marker and (when the token can say who it is)
+    the author. A failed lookup is "none found": posting is the safe default.
+    """
+    try:
+        reviews = await _paginate(
+            client, f"{pr_url}/reviews", headers, {"per_page": 100}, max_pages=10
+        )
+    except Exception:  # noqa: BLE001
+        return None
+    for r in reviews:
+        if r.get("commit_id") != commit_id or _REVIEW_FOOTER not in str(r.get("body") or ""):
+            continue
+        login = str((r.get("user") or {}).get("login") or "")
+        if viewer and login.lower() != viewer.lower():
+            continue
+        return r
+    return None
+
+
+async def _review_comments(
+    client: httpx.AsyncClient, headers: dict[str, str], pr_url: str, review_id: Any
+) -> list[dict[str, Any]]:
+    """The inline comments a review posted, as ``{id, path, line}`` in posting order."""
+    if review_id is None:
+        return []
+    try:
+        cs = await _paginate(
+            client,
+            f"{pr_url}/reviews/{review_id}/comments",
+            headers,
+            {"per_page": 100},
+            max_pages=10,
+        )
+    except Exception:  # noqa: BLE001 - the review is posted; ids are a convenience
+        return []
+    return [
+        {"id": c["id"], "path": c.get("path", ""), "line": c.get("line")} for c in cs if "id" in c
+    ]
+
+
+async def _already_posted(
+    client: httpx.AsyncClient,
+    headers: dict[str, str],
+    pr_url: str,
+    repo: str,
+    number: int,
+    verdict: str,
+    commit_id: str,
+    review: dict[str, Any],
+) -> dict[str, Any]:
+    rid = review.get("id")
+    comments = await _review_comments(client, headers, pr_url, rid)
+    return {
+        "repo": repo,
+        "number": number,
+        "review_id": rid,
+        "url": review.get("html_url")
+        or f"https://github.com/{repo}/pull/{number}#pullrequestreview-{rid}",
+        "verdict": verdict,
+        "already_posted": True,
+        "comment_ids": [c["id"] for c in comments],
+        "comments": comments,
+        "commit_id": commit_id,
+    }
 
 
 @_handler("github_create_review")
@@ -897,9 +997,29 @@ async def _github_create_review(args: dict[str, Any], ctx: ToolContext) -> dict[
             files = await _pr_patches(client, repo, number, headers)
             patches = {str(f.get("filename")): f.get("patch") for f in files}
 
+            existing = await _find_own_review(client, headers, pr_url, viewer, commit_id)
+            if existing is not None:
+                return await _already_posted(
+                    client, headers, pr_url, repo, number, verdict, commit_id, existing
+                )
+
+            # Re-read the head: a push while the files were read leaves anchors stale.
+            recheck = await client.get(pr_url, headers=headers)
+            recheck.raise_for_status()
+            now_sha = str((recheck.json().get("head") or {}).get("sha") or "")
+            if now_sha and now_sha != commit_id:
+                return {
+                    "error": "PR head moved since the review was written; re-review the new head",
+                    "head_sha": now_sha,
+                    "commit_id": commit_id,
+                }
+
             blocking, non_blocking = split_by_severity(issues)
             proposed = [{**i, "body": format_issue_comment(i), "_issue": i} for i in blocking]
             inline, unanchored = partition_comments(proposed, patches)
+            for c in inline:
+                if len(c["body"]) > _INLINE_COMMENT_MAX_CHARS:
+                    c["body"] = c["body"][: _INLINE_COMMENT_MAX_CHARS - 1] + "…"
             out_of_diff = [c["_issue"] for c in unanchored]
 
             def _body(blocking_in_body: list[Any]) -> str:
@@ -926,17 +1046,32 @@ async def _github_create_review(args: dict[str, Any], ctx: ToolContext) -> dict[
                     "body": body or ("" if event == "APPROVE" else "No findings."),
                     "comments": inline,
                 }
-                resp = await client.post(f"{pr_url}/reviews", headers=headers, json=payload)
+                try:
+                    resp = await client.post(f"{pr_url}/reviews", headers=headers, json=payload)
+                except httpx.TransportError as exc:
+                    # Timeout or reset: the review may have been created anyway.
+                    landed = await _find_own_review(client, headers, pr_url, viewer, commit_id)
+                    if landed is not None:
+                        return await _already_posted(
+                            client, headers, pr_url, repo, number, verdict, commit_id, landed
+                        )
+                    return {"error": f"GitHub request failed: {exc!r}"}
                 if resp.status_code < 400:
                     review = resp.json()
                     break
+                if resp.status_code >= 500:
+                    landed = await _find_own_review(client, headers, pr_url, viewer, commit_id)
+                    if landed is not None:
+                        return await _already_posted(
+                            client, headers, pr_url, repo, number, verdict, commit_id, landed
+                        )
                 if resp.status_code != 422:
                     resp.raise_for_status()
                 last_error = _error_detail(resp)
                 if event != "COMMENT" and _OWN_PR_ERROR_RE.search(last_error):
                     event, body, as_comment = "COMMENT", own_pr_body(verdict, body), True
                     continue
-                if inline and not anchors_folded:
+                if inline and not anchors_folded and _ANCHOR_422_RE.search(last_error):
                     # One invalid anchor sinks the whole review: fold every finding
                     # into the body and try exactly once more.
                     body = _body(list(blocking))
@@ -952,19 +1087,8 @@ async def _github_create_review(args: dict[str, Any], ctx: ToolContext) -> dict[
             comment_ids: list[int] = []
             posted_comments: list[dict[str, Any]] = []
             if inline and review_id is not None:
-                try:
-                    cresp = await client.get(
-                        f"{pr_url}/reviews/{review_id}/comments", headers=headers
-                    )
-                    if cresp.status_code == 200:
-                        posted_comments = [
-                            {"id": c["id"], "path": c.get("path", ""), "line": c.get("line")}
-                            for c in cresp.json()
-                            if "id" in c
-                        ]
-                        comment_ids = [c["id"] for c in posted_comments]
-                except Exception:  # noqa: BLE001 - the review is posted; ids are a convenience
-                    comment_ids, posted_comments = [], []
+                posted_comments = await _review_comments(client, headers, pr_url, review_id)
+                comment_ids = [c["id"] for c in posted_comments]
     except httpx.HTTPStatusError as e:
         return _http_error(e, f"PR #{number} in {repo}")
     except Exception as e:
@@ -983,6 +1107,7 @@ async def _github_create_review(args: dict[str, Any], ctx: ToolContext) -> dict[
         "inline_count": len(inline),
         "body_findings": len(blocking) - len(inline) + len(non_blocking),
         "anchors_folded": anchors_folded,
+        "already_posted": False,
         "comment_ids": comment_ids,
         "comments": posted_comments,
         "commit_id": commit_id,
