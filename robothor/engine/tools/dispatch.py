@@ -193,6 +193,7 @@ def builtin_handlers() -> dict[str, Any]:
         attachments,
         benchmark,
         browser,
+        claude_code,
         code_exec,
         crm,
         desktop,
@@ -274,6 +275,7 @@ def builtin_handlers() -> dict[str, Any]:
         ask_user,
         images,
         attachments,
+        claude_code,
     ]:
         all_handlers.update(mod.HANDLERS)
 

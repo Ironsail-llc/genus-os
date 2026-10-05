@@ -3089,6 +3089,111 @@ class AutonomySettings(SettingsGroup):
     )
 
 
+class CodingSettings(SettingsGroup):
+    """The Claude Code driver: the claude_code_* tools (robothor/engine/coding/)."""
+
+    restart_units: ClassVar[tuple[str, ...]] = ("robothor-engine",)
+
+    claude_bin: str = declare(
+        "",
+        "ROBOTHOR_CLAUDE_BIN",
+        "The Claude Code CLI a coding job runs. Empty looks for `claude` on PATH, then "
+        "~/.local/bin/claude (where the native installer puts it).",
+        restart_required=False,
+        since="unreleased",
+    )
+    claude_code_auth: str = declare(
+        "token",
+        "ROBOTHOR_CLAUDE_CODE_AUTH",
+        "How a coding job authenticates. `token` (the default) gives each job a private "
+        "HOME and the CLAUDE_CODE_OAUTH_TOKEN stored by `robothor claude-code login`. "
+        "`host` keeps the service user's own HOME and Claude Code login — for a developer "
+        "box only, because that user's personal Claude Code plugins and memory then apply "
+        "to every job.",
+        restart_required=False,
+        since="unreleased",
+    )
+    claude_code_model: str = declare(
+        "",
+        "ROBOTHOR_CLAUDE_CODE_MODEL",
+        "Model alias a coding job uses when the agent names none (sonnet, opus, ...). "
+        "Empty uses the Claude Code CLI's own default.",
+        restart_required=False,
+        since="unreleased",
+    )
+    max_budget_usd: float = declare(
+        5.0,
+        "ROBOTHOR_CLAUDE_CODE_MAX_BUDGET_USD",
+        "Default dollar cap for one coding job across all its rounds, when the agent "
+        "names none. Each round is told only what is left.",
+        restart_required=False,
+        since="unreleased",
+    )
+    max_turns: int = declare(
+        80,
+        "ROBOTHOR_CLAUDE_CODE_MAX_TURNS",
+        "Claude Code turns allowed in one round of a coding job (--max-turns).",
+        restart_required=False,
+        since="unreleased",
+    )
+    round_timeout_s: float = declare(
+        3600.0,
+        "ROBOTHOR_CLAUDE_CODE_ROUND_TIMEOUT",
+        "Seconds one Claude Code round may run before its process group is killed. "
+        "A killed round still counts, and the next one resumes the same session.",
+        restart_required=False,
+        since="unreleased",
+    )
+    verify_timeout_s: float = declare(
+        900.0,
+        "ROBOTHOR_CODING_VERIFY_TIMEOUT",
+        "Seconds a coding job's acceptance verify_command may run before it is killed "
+        "and counted as a failure.",
+        restart_required=False,
+        since="unreleased",
+    )
+    max_concurrent: int = declare(
+        2,
+        "ROBOTHOR_CODING_MAX_CONCURRENT",
+        "Coding jobs one tenant may run at once; more wait as `queued`.",
+        since="unreleased",
+    )
+    worktree_root: str = declare(
+        "",
+        "ROBOTHOR_CODING_WORKTREE_ROOT",
+        "Where coding jobs' git worktrees are created, one directory per job. Empty means "
+        "<workspace>/.genus/worktrees. Must be writable by the engine: under the shipped "
+        "unit that means inside the workspace or a ReadWritePaths= drop-in.",
+        restart_required=False,
+        since="unreleased",
+    )
+    repo_roots: str = declare(
+        "",
+        "ROBOTHOR_CODING_REPO_ROOTS",
+        "Path-separated directories a coding job's repo_path must sit under. Empty allows "
+        "any git repository the engine can read; the job still works only in its own "
+        "worktree and never on main/master.",
+        restart_required=False,
+        since="unreleased",
+    )
+    git_name: str = declare(
+        "",
+        "ROBOTHOR_CODING_GIT_NAME",
+        "Author name on coding-job commits. Empty uses the target repository's "
+        "user.name, then a generic agent name.",
+        restart_required=False,
+        since="unreleased",
+    )
+    git_email: str = declare(
+        "",
+        "ROBOTHOR_CODING_GIT_EMAIL",
+        "Author email on coding-job commits. Empty uses the target repository's "
+        "user.email, then a generic placeholder address.",
+        restart_required=False,
+        since="unreleased",
+    )
+
+
 class GenusSettings(BaseSettings):
     """Every Genus OS setting, grouped.
 
@@ -3105,6 +3210,7 @@ class GenusSettings(BaseSettings):
     )
 
     autonomy: AutonomySettings = Field(default_factory=AutonomySettings)
+    coding: CodingSettings = Field(default_factory=CodingSettings)
     paths: PathsSettings = Field(default_factory=PathsSettings)
     database: DatabaseSettings = Field(default_factory=DatabaseSettings)
     redis: RedisSettings = Field(default_factory=RedisSettings)

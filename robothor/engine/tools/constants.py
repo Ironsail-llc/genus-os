@@ -45,6 +45,17 @@ GIT_TOOLS = frozenset(
     {"git_status", "git_diff", "git_branch", "git_commit", "git_push", "create_pull_request"}
 )
 
+# Claude Code driver (robothor/engine/coding/). Opt-in: listed in OPT_IN_TOOLS.
+CLAUDE_CODE_TOOLS = frozenset(
+    {
+        "claude_code_start",
+        "claude_code_status",
+        "claude_code_wait",
+        "claude_code_followup",
+        "claude_code_cancel",
+    }
+)
+
 # Google Workspace tools (gws CLI)
 GWS_TOOLS = frozenset(
     {
@@ -374,7 +385,10 @@ TOOLSEARCH_TOOLS = frozenset({"tool_search", "tool_describe", "tool_call"})
 # them cost every agent on every instance ~6.5k characters of schema and two
 # unbounded CRM writes (`sales_discover`, `sales_propose_email`) it had no
 # business being offered. `web_render` drives a headless browser, which is a
-# separate capability from `web_fetch` and should be asked for.
+# separate capability from `web_fetch` and should be asked for. The
+# `claude_code_*` tools start a whole autonomous coding agent that spends real
+# money; only an agent whose manifest names them (`tools_allowed`, or
+# `tools_opt_in` on top of the default set) is offered them.
 #
 # Advertisement is only half the gate. RBAC is the other half: the `__default__`
 # `service`/`user` roles hold a `*` allow, so migration 138 adds the matching
@@ -396,6 +410,7 @@ OPT_IN_TOOLS: frozenset[str] = frozenset(
         "sales_process_queue",
         "sales_propose_email",
         "sales_research_parallel",
+        *CLAUDE_CODE_TOOLS,
     }
 )
 

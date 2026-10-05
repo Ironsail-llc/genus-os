@@ -1257,6 +1257,25 @@ def _build_parser() -> argparse.ArgumentParser:
     codex_test.add_argument("--model", default="codex/gpt-5.5")
     codex_test.add_argument("--timeout", type=int, default=120)
 
+    # claude-code -- the Claude Code driver's subscription token
+    cc_parser = subparsers.add_parser(
+        "claude-code", help="Manage the Claude Code token the claude_code_* tools use"
+    )
+    cc_sub = cc_parser.add_subparsers(dest="claude_code_command")
+    cc_login = cc_sub.add_parser(
+        "login", help="Run `claude setup-token` and store the token in the vault"
+    )
+    cc_login.add_argument(
+        "--token-stdin",
+        action="store_true",
+        help="Read an existing token from stdin instead of running setup-token",
+    )
+    cc_login.add_argument("--no-ping", action="store_true", help="Skip the one-turn proof call")
+    cc_status = cc_sub.add_parser(
+        "status", help="Show the CLI version and token source, and prove it with a ping"
+    )
+    cc_status.add_argument("--no-ping", action="store_true", help="Skip the one-turn proof call")
+
     eng_parser = subparsers.add_parser("engine", help="Manage the agent engine")
     eng_sub = eng_parser.add_subparsers(dest="engine_command")
     eng_run = eng_sub.add_parser("run", help="Run a single agent")
@@ -1448,6 +1467,10 @@ def main(argv: list[str] | None = None) -> int:
         from robothor.cli.codex import cmd_codex
 
         return cmd_codex(args)
+    if args.command == "claude-code":
+        from robothor.cli.claude_code import cmd_claude_code
+
+        return cmd_claude_code(args)
     if args.command == "engine":
         from robothor.cli.engine import cmd_engine
 

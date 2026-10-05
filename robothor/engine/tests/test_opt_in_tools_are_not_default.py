@@ -66,12 +66,40 @@ def test_tools_denied_still_beats_an_explicit_request(registry):
 
 def test_the_opt_in_list_cannot_drift_from_the_sales_package():
     """A hand-maintained name list drifted once already (2026-08-22)."""
+    from robothor.engine.tools.constants import CLAUDE_CODE_TOOLS
     from robothor.sales.tool_schemas import SALES_SCHEMAS
 
     assert set(SALES_SCHEMAS) < OPT_IN_TOOLS
-    assert OPT_IN_TOOLS - set(SALES_SCHEMAS) == {"web_render"}
+    assert OPT_IN_TOOLS - set(SALES_SCHEMAS) == {"web_render"} | CLAUDE_CODE_TOOLS
 
 
 def test_every_opt_in_tool_has_a_registered_schema(registry):
     """An opt-in name with no schema is a manifest key that silently does nothing."""
     assert set(registry._schemas) >= OPT_IN_TOOLS
+
+
+def test_tools_opt_in_adds_an_opt_in_tool_to_the_default_set(registry):
+    """`tools_opt_in` is additive: the default set, plus the named opt-in tools.
+
+    The main template declares no `tools_allowed` (it gets the default set) and
+    still has to be able to drive Claude Code, which is opt-in.
+    """
+    from robothor.engine.tools.constants import CLAUDE_CODE_TOOLS
+
+    default = set(registry.get_tool_names(AgentConfig(id="probe", name="Probe")))
+    config = AgentConfig(id="probe", name="Probe", tools_opt_in=sorted(CLAUDE_CODE_TOOLS))
+
+    names = set(registry.get_tool_names(config))
+
+    assert names == default | CLAUDE_CODE_TOOLS
+    assert not names & (OPT_IN_TOOLS - CLAUDE_CODE_TOOLS)
+
+
+def test_tools_opt_in_cannot_resurrect_a_denied_tool(registry):
+    config = AgentConfig(
+        id="probe",
+        name="Probe",
+        tools_opt_in=["claude_code_start"],
+        tools_denied=["claude_code_*"],
+    )
+    assert "claude_code_start" not in set(registry.get_tool_names(config))

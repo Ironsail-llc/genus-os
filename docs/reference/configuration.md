@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-423 settings in 14 groups.
+435 settings in 15 groups.
 
 ## autonomy
 
@@ -55,6 +55,23 @@ Host paths for the isolated personal browser service and clients.
 | `ROBOTHOR_AUTONOMY_PAYMENT_EVENT_RETENTION_DAYS` | int | `2555` | `robothor-autonomy`, `robothor-engine`, `robothor-bridge` | no | legacy | How long a payment event is kept. Seven years by default, because these are financial records and a jurisdiction may require them for that long. NOT swept automatically: a payment position is reconstructed from its whole event log, so deleting part of one silently rewrites what was charged. Deleting them is an operator action against a closed operation, and the window above is the documented policy for it. |
 | `ROBOTHOR_AUTONOMY_SOCKET` | str | `/run/robothor-autonomy/broker.sock` | `robothor-autonomy`, `robothor-engine`, `robothor-bridge` | no | legacy | Private Unix socket shared by the protected browser service and its authenticated clients. Its parent directory must be owned by the service user with mode 0700. |
 | `ROBOTHOR_AUTONOMY_TERMS_RETENTION_DAYS` | int | `365` | `robothor-autonomy`, `robothor-engine`, `robothor-bridge` | no | legacy | How long a terms or receipt observation is kept before it is deleted outright. These hold the rendered review page — the owner's name, date of birth, address and the answers they gave a website — sealed with a key derived from the vault master key. The owner can also erase one at any time from the operation's page, which keeps the audit fact and drops the content. 0 disables the sweep and keeps them forever. |
+
+## coding
+
+| Variable | Type | Default | Restart | Secret | Since | Description |
+| --- | --- | --- | --- | --- | --- | --- |
+| `ROBOTHOR_CLAUDE_BIN` | str | _(empty)_ | no | no | unreleased | The Claude Code CLI a coding job runs. Empty looks for `claude` on PATH, then ~/.local/bin/claude (where the native installer puts it). |
+| `ROBOTHOR_CLAUDE_CODE_AUTH` | str | `token` | no | no | unreleased | How a coding job authenticates. `token` (the default) gives each job a private HOME and the CLAUDE_CODE_OAUTH_TOKEN stored by `robothor claude-code login`. `host` keeps the service user's own HOME and Claude Code login — for a developer box only, because that user's personal Claude Code plugins and memory then apply to every job. |
+| `ROBOTHOR_CLAUDE_CODE_MAX_BUDGET_USD` | float | `5.0` | no | no | unreleased | Default dollar cap for one coding job across all its rounds, when the agent names none. Each round is told only what is left. |
+| `ROBOTHOR_CLAUDE_CODE_MAX_TURNS` | int | `80` | no | no | unreleased | Claude Code turns allowed in one round of a coding job (--max-turns). |
+| `ROBOTHOR_CLAUDE_CODE_MODEL` | str | _(empty)_ | no | no | unreleased | Model alias a coding job uses when the agent names none (sonnet, opus, ...). Empty uses the Claude Code CLI's own default. |
+| `ROBOTHOR_CLAUDE_CODE_ROUND_TIMEOUT` | float | `3600.0` | no | no | unreleased | Seconds one Claude Code round may run before its process group is killed. A killed round still counts, and the next one resumes the same session. |
+| `ROBOTHOR_CODING_GIT_EMAIL` | str | _(empty)_ | no | no | unreleased | Author email on coding-job commits. Empty uses the target repository's user.email, then a generic placeholder address. |
+| `ROBOTHOR_CODING_GIT_NAME` | str | _(empty)_ | no | no | unreleased | Author name on coding-job commits. Empty uses the target repository's user.name, then a generic agent name. |
+| `ROBOTHOR_CODING_MAX_CONCURRENT` | int | `2` | `robothor-engine` | no | unreleased | Coding jobs one tenant may run at once; more wait as `queued`. |
+| `ROBOTHOR_CODING_REPO_ROOTS` | str | _(empty)_ | no | no | unreleased | Path-separated directories a coding job's repo_path must sit under. Empty allows any git repository the engine can read; the job still works only in its own worktree and never on main/master. |
+| `ROBOTHOR_CODING_VERIFY_TIMEOUT` | float | `900.0` | no | no | unreleased | Seconds a coding job's acceptance verify_command may run before it is killed and counted as a failure. |
+| `ROBOTHOR_CODING_WORKTREE_ROOT` | str | _(empty)_ | no | no | unreleased | Where coding jobs' git worktrees are created, one directory per job. Empty means <workspace>/.genus/worktrees. Must be writable by the engine: under the shipped unit that means inside the workspace or a ReadWritePaths= drop-in. |
 
 ## paths
 

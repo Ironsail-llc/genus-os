@@ -1440,6 +1440,11 @@ async def main() -> int:
 
     await recover_repairs(runner, config)
 
+    # Claude Code jobs a previous engine left running (claude_code_* tools).
+    resumed_jobs = await _resume_coding_jobs()
+    if resumed_jobs:
+        logger.info("Startup: resumed %d interrupted coding job(s)", resumed_jobs)
+
     _init_fleet_capacity(config)
 
     # Initialize inter-agent messaging + teams so the send_agent_message /
@@ -1694,6 +1699,9 @@ async def main() -> int:
 
     await get_task_registry().drain(timeout=DRAIN_TIMEOUT_SECONDS)
 
+    # Stop Claude Code jobs WITHOUT marking them, so the next start resumes them.
+    await _stop_coding_jobs()
+
     await scheduler.stop()
     await hooks.stop()
     if bot is not None:
@@ -1719,6 +1727,34 @@ async def main() -> int:
     await asyncio.gather(*pending, return_exceptions=True)
     logger.info("Engine stopped")
     return 1 if subsystem_crashed else 0
+
+
+async def _resume_coding_jobs() -> int:
+    """Continue every Claude Code job left ``queued``/``running``. Never fatal.
+
+    All tenants this process can see: the jobs are engine-owned tasks, and this
+    engine is the only thing that will ever pick them up again. Under RLS the
+    connection's own tenant binding narrows the read.
+    """
+    try:
+        from robothor.engine.coding import jobs as coding_jobs
+
+        return await coding_jobs.resume_interrupted_jobs(None)
+    except Exception as e:  # noqa: BLE001 - a missing table must not stop the engine
+        logger.warning("Startup: coding job resume failed: %s", _sanitize(e))
+        return 0
+
+
+async def _stop_coding_jobs() -> None:
+    """Cancel running coding-job tasks, leaving their rows resumable."""
+    try:
+        from robothor.engine.coding import jobs as coding_jobs
+
+        manager = coding_jobs._manager
+        if manager is not None:
+            await manager.shutdown()
+    except Exception as e:  # noqa: BLE001 - shutdown continues regardless
+        logger.debug("Coding job shutdown failed: %s", e)
 
 
 def _record_watchdog_event(event_type: str, detail: str) -> None:
