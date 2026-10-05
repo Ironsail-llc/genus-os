@@ -82,3 +82,20 @@ async def test_startup_reap_failure_is_never_fatal(monkeypatch):
 
     monkeypatch.setattr(jobs_mod, "get_manager", lambda: Broken())
     assert await daemon._reap_coding_jobs() == 0
+
+
+async def test_startup_resumes_then_reaps(monkeypatch):
+    calls = []
+
+    async def fake_resume():
+        calls.append("resume")
+        return 2
+
+    async def fake_reap():
+        calls.append("reap")
+        return 0
+
+    monkeypatch.setattr(daemon, "_resume_coding_jobs", fake_resume)
+    monkeypatch.setattr(daemon, "_reap_coding_jobs", fake_reap)
+    await daemon._start_coding_jobs()
+    assert calls == ["resume", "reap"]
