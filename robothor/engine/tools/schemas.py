@@ -1072,11 +1072,168 @@ _GITHUB_REVIEW_SCHEMAS: dict[str, dict[str, Any]] = {
 }
 
 
+_JOB_ID_PARAM = {"type": "string", "description": "The job_id claude_code_start returned"}
+
+#: The Claude Code driver (robothor/engine/coding/). Opt-in: see OPT_IN_TOOLS.
+_CLAUDE_CODE_SCHEMAS: dict[str, dict[str, Any]] = {
+    "claude_code_start": {
+        "type": "function",
+        "function": {
+            "name": "claude_code_start",
+            "description": (
+                "Use this to delegate a coding task to Claude Code, which edits, tests and "
+                "commits in its own git worktree while you wait. Returns a job_id; then call "
+                "claude_code_wait. Done only when your verify_command exits 0 and a new commit "
+                "exists; on failure the engine resumes the session with the failing output. "
+                "Report the job's evidence (commit sha, verify result), never a claim."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task": {
+                        "type": "string",
+                        "description": "The spec: goal, files or area, constraints, done-when",
+                    },
+                    "repo_path": {
+                        "type": "string",
+                        "description": "Absolute path of the git repository to work on",
+                    },
+                    "acceptance": {
+                        "type": "object",
+                        "description": "How the engine decides the job is done",
+                        "properties": {
+                            "verify_command": {
+                                "type": "string",
+                                "description": (
+                                    "Command run from the repo root that exits 0 only when the "
+                                    "task is done, e.g. 'pytest -q tests/test_x.py'. Run without "
+                                    "a shell; use \"bash -c '...'\" for pipes. Required for "
+                                    "mode=code."
+                                ),
+                            },
+                            "require_commit": {
+                                "type": "boolean",
+                                "description": "Require a new commit and a clean tree (default true)",
+                            },
+                        },
+                    },
+                    "mode": {
+                        "type": "string",
+                        "enum": ["code", "review", "readonly"],
+                        "description": "code (default): edit + commit; review/readonly: read-only",
+                    },
+                    "model": {
+                        "type": "string",
+                        "description": "Claude Code model alias (sonnet, opus, ...); default is the instance's",
+                    },
+                    "max_budget_usd": {
+                        "type": "number",
+                        "description": "Total dollar cap across all rounds (default 5)",
+                    },
+                    "max_rounds": {
+                        "type": "integer",
+                        "description": "Claude Code rounds before the job fails (default 3, max 10)",
+                    },
+                    "base_ref": {
+                        "type": "string",
+                        "description": "Branch, tag or sha to start from (default HEAD)",
+                    },
+                    "json_schema": {
+                        "type": "object",
+                        "description": "Optional JSON Schema for Claude Code's structured final answer",
+                    },
+                    "grant_github": {
+                        "type": "boolean",
+                        "description": (
+                            "Give Claude Code GH_TOKEN for read-only gh commands; needs GH_TOKEN "
+                            "in this agent's manifest secrets"
+                        ),
+                    },
+                },
+                "required": ["task", "repo_path", "acceptance"],
+            },
+        },
+    },
+    "claude_code_status": {
+        "type": "function",
+        "function": {
+            "name": "claude_code_status",
+            "description": (
+                "Use this to see a Claude Code job's state now without waiting: status, rounds, "
+                "cost, its last few actions, and the verify result and evidence once checked."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {"job_id": _JOB_ID_PARAM},
+                "required": ["job_id"],
+            },
+        },
+    },
+    "claude_code_wait": {
+        "type": "function",
+        "function": {
+            "name": "claude_code_wait",
+            "description": (
+                "Use this after claude_code_start to block until the job finishes or timeout_s "
+                "passes, then returns its status. A job still running after the wait is normal: "
+                "wait again. The wait is shortened to leave your run time to report."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "job_id": _JOB_ID_PARAM,
+                    "timeout_s": {
+                        "type": "integer",
+                        "description": "Seconds to wait (default 300, max 1800)",
+                    },
+                },
+                "required": ["job_id"],
+            },
+        },
+    },
+    "claude_code_followup": {
+        "type": "function",
+        "function": {
+            "name": "claude_code_followup",
+            "description": (
+                "Use this to send Claude Code a specific correction in the same session: queued "
+                "for the next round of a running job, or reopening a finished or failed one with a "
+                "fresh round allowance. Say exactly what is wrong and what to change."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "job_id": _JOB_ID_PARAM,
+                    "message": {"type": "string", "description": "The instruction"},
+                },
+                "required": ["job_id", "message"],
+            },
+        },
+    },
+    "claude_code_cancel": {
+        "type": "function",
+        "function": {
+            "name": "claude_code_cancel",
+            "description": (
+                "Use this to stop a Claude Code job: kills the running round and removes its "
+                "worktree (the branch and any commits stay)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {"job_id": _JOB_ID_PARAM},
+                "required": ["job_id"],
+            },
+        },
+    },
+}
+
+
 def get_engine_schemas() -> dict[str, dict[str, Any]]:
     """Return all engine-specific tool schemas keyed by tool name."""
     schemas: dict[str, dict[str, Any]] = {}
 
     schemas.update(_CODE_SCHEMAS)
+    schemas.update(_CLAUDE_CODE_SCHEMAS)
     schemas.update(_ATTACHMENT_SCHEMAS)
 
     schemas["read_file"] = {

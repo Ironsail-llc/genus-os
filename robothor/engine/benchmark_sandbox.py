@@ -151,6 +151,12 @@ EXTERNAL_SIDE_EFFECT_TOOLS: frozenset[str] = frozenset(
         # Spawning more agents (a child inherits none of this gating for free).
         "spawn_agent",
         "spawn_agents",
+        # A whole paid coding agent with a shell, writing real commits.
+        "claude_code_start",
+        "claude_code_status",
+        "claude_code_wait",
+        "claude_code_followup",
+        "claude_code_cancel",
         # Anything that drives a machine or a camera.
         "browser",
         "browser_navigate",

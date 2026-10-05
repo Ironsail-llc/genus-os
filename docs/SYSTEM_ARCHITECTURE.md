@@ -382,6 +382,7 @@ Two databases on the same instance:
 | `crm_messages` | CRM messages |
 | `workflow_approvals` | A workflow step waiting on a human verdict, and the verdict |
 | `agent_questions` | A question an agent asked a person (`ask_user`, or a guardrail escalation) and the free-text answer. Separate from `workflow_approvals` because the workflow resume driver acts on every decided row it finds, and an answer is not a verdict |
+| `coding_jobs` | One Claude Code job per row (`claude_code_*` tools, migration 144): repo, worktree, branch, Claude Code session id, status, rounds, cost, acceptance spec, last-events tail, and `result` holding the verify outcome and goal-shaped evidence. Rows left `queued`/`running` are resumed at engine start. Tenant RLS |
 
 ### Canonical schema lifecycle
 
@@ -1412,6 +1413,27 @@ posting `/api/admin/identities/reload`, best effort. Full rules, tables and CLI:
 `question`, `escalation`. Operator-scoped and audited (identifiers only — the
 answer text is content, not an identifier). `escalation` is proxied to the
 engine, because settling it means waking a coroutine in that process.
+
+#### Claude Code driver (`robothor/engine/coding/`)
+
+A cheap orchestrator model delegates coding to the Claude Code CLI through the
+opt-in `claude_code_*` tools and gets back a verified result, not a claim.
+
+| Module | Role |
+|--------|------|
+| `runner.py` | argv for `claude -p --output-format stream-json --verbose` (`--setting-sources ""`, `--strict-mcp-config`, `--permission-mode dontAsk`, the mode's tool list, `--resume`), `create_subprocess_exec` with the prompt on stdin in its own process group, the stream parser (progress events, session id, cost, turns, structured output), timeout → kill the group |
+| `env.py` | the child environment, built from nothing: essentials, a private `HOME`/`CLAUDE_CONFIG_DIR` under `$XDG_CONFIG_HOME/robothor/claude-code/<job>`, `CLAUDE_CODE_OAUTH_TOKEN` vault first, `GH_TOKEN` only on an explicit grant |
+| `worktree.py` | one `git worktree` per job (`genus/cc-<id>` branch, or detached for review), never on a protected branch; removed at `done`/`cancelled`, kept at `failed`; every engine-side git call with the allowlist env and hooks/fsmonitor off; commits read from the job branch ref |
+| `jobs.py` | `coding_jobs` rows + engine-owned asyncio tasks; the completion loop (run a round → run the acceptance command itself → check for a commit and a clean tree → resume the same session with the failure, up to `max_rounds`/`max_budget_usd`); per-tenant concurrency cap; resume-on-restart |
+| `sandbox.py` | the fence: the `--settings` sandbox block (Bash under bubblewrap, `failIfUnavailable`, `denyRead` over credential and instance paths, `allowWrite` = the worktree + the git state a commit needs, network only from `ROBOTHOR_CODING_ALLOWED_DOMAINS` in code mode) and the permission rules confining Edit/Write to the worktree and denying the secret paths to Read/Edit/Write; the doctor's bwrap/socat prerequisite check |
+| `probe.py` | `claude --version` and a one-turn ping through a job's exact environment, for `genus claude-code status` and the doctor |
+
+The daemon calls `resume_interrupted_jobs()` after run recovery at startup, then
+the reaper (finished jobs older than `ROBOTHOR_CODING_RETENTION_DAYS`), and
+stops the job tasks without marking them at shutdown, so a restart resumes
+them. `ROBOTHOR_CODING_REPO_ROOTS` is required to start a job. Jobs authenticate with the host's own Claude Code login, or with a token
+stored in the vault by `genus claude-code login` (`claude setup-token`), which
+wins when present. See [Tools → Claude Code](TOOLS.md#claude-code-claude_code_).
 
 ### Voice & SMS (Twilio)
 

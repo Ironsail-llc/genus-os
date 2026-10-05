@@ -101,10 +101,34 @@ _CALENDAR: tuple[str, ...] = (
     "call",
 )
 _CHAT: tuple[str, ...] = ("chat", "space", "room", "hangout")
+_CODING: tuple[str, ...] = (
+    "code",
+    "coding",
+    "claude",
+    "bug",
+    "fix",
+    "test",
+    "repo",
+    "commit",
+    "job",
+)
 _PR: tuple[str, ...] = ("github", "pr", "pull", "code")
 
 TOOL_HINTS: dict[str, ToolHint] = {
     "exec": ToolHint(keywords=("run", "shell", "command", "terminal", "execute")),
+    # ── Claude Code driver ────────────────────────────────────────────
+    "claude_code_start": ToolHint(
+        keywords=(*_CODING, "delegate", "implement", "build", "write", "refactor", "start"),
+        rank_bias=1.0,
+        when_to_use=(
+            "Use this to delegate a coding task to Claude Code, which edits, tests and "
+            "commits in its own git worktree while you wait."
+        ),
+    ),
+    "claude_code_wait": ToolHint(keywords=(*_CODING, "wait", "finish", "result", "done")),
+    "claude_code_status": ToolHint(keywords=(*_CODING, "status", "progress", "check")),
+    "claude_code_followup": ToolHint(keywords=(*_CODING, "followup", "follow", "correct", "retry")),
+    "claude_code_cancel": ToolHint(keywords=(*_CODING, "cancel", "stop", "abort")),
     # ── Live Gmail ────────────────────────────────────────────────────
     "gws_gmail_search": ToolHint(
         keywords=(

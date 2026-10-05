@@ -165,6 +165,151 @@ and the tenant's `workflow_bindings` must authorize that workflow for the reques
 stage. It does not create approvals. Stop requests run on a separate workflow and
 continue while delivery and research switches are off.
 
+### Claude Code (`claude_code_*`)
+
+An agent delegates a coding task to the [Claude Code](https://docs.claude.com/en/docs/claude-code)
+CLI and sees it through to a **verified** commit. Claude Code writes the code;
+the engine decides whether it is done.
+
+| Tool | Purpose |
+|---|---|
+| `claude_code_start` | Start a job: `task` (the spec), `repo_path`, `acceptance` `{verify_command, require_commit}`, optional `mode`, `model`, `max_budget_usd`, `max_rounds`, `base_ref`, `json_schema`. Returns a `job_id` at once. |
+| `claude_code_wait` | Block until the job finishes or `timeout_s` (default 300, max 1800) passes. The wait is shortened to leave the calling run time to report. |
+| `claude_code_status` | The job now: status, rounds, cost, its last actions, the verify result and evidence. Only the agent that started a job (or the owner) can see or steer it. |
+| `claude_code_followup` | A specific correction into the same Claude Code session: queued for a running job, or reopening a finished one with a fresh round allowance. |
+| `claude_code_cancel` | Kill the running round and remove the worktree. The branch and any commits stay. |
+
+**How a job runs.** Each job gets its own git worktree
+(`ROBOTHOR_CODING_WORKTREE_ROOT`, default `<workspace>/.genus/worktrees/<job>`)
+on a new branch `genus/cc-<id>`, never on `main`/`master`. The engine runs
+`claude -p --output-format stream-json` there with no shell, the prompt on
+stdin, `--setting-sources ""` and `--strict-mcp-config` (none of the service
+user's own Claude Code settings or MCP servers), `--permission-mode dontAsk`
+with a tool list per mode, and `--settings` carrying the job's sandbox (see
+**Security model** below):
+
+| `mode` | Claude Code may use |
+|---|---|
+| `code` (default) | Read, Grep, Glob; Edit and Write **only under the job's worktree**; Bash (sandboxed). Never `git push`, `gh pr create/merge/review/comment`, `gh api`, WebFetch, WebSearch. |
+| `review`, `readonly` | Read, Grep, Glob, and Bash limited to read-only `git` (`diff`, `log`, `show`, `status`, `blame`, `rev-parse`, `ls-files`, `branch --list`), with `--output`, `--ext-diff`/`--ext`, `--textconv` and `--no-index` denied. No `git grep` (its `-O` runs a program; the Grep tool does the job), no `gh` (no network). No edits, no commit, no `verify_command`. |
+
+**When it is done.** After every round the engine runs `verify_command` itself
+in the worktree — `shlex`-split, no shell (write `bash -c '…'` for a pipeline),
+with no credential in its environment — and, for `code` jobs, requires a new
+commit on the job branch and a clean tree (tool caches such as `__pycache__` do
+not count; an untracked source file does). Commits are read from
+`refs/heads/genus/cc-<id>`, never from wherever HEAD points, and HEAD must still
+be a symbolic ref to that branch — a session that detached HEAD or switched
+branches fails verification with the reason. Claude Code saying "done" counts
+for nothing. On failure the engine resumes the **same** session with the failing
+output, up to `max_rounds` (default 3) within `max_budget_usd` (default 5,
+`ROBOTHOR_CLAUDE_CODE_MAX_BUDGET_USD`). A `done` job carries `evidence` in the
+`test_run` / `commit` shape session goals validate: the verify exit code and
+output sha256, the commit sha. Each round is given only what is left of the
+job's budget as its `--max-budget-usd`, and a round that ends without Claude
+Code's own result line (timed out, killed, crashed) is charged that whole
+allowance, since its real spend is unknown.
+
+**Durable.** Jobs are rows in `coding_jobs` and tasks the engine owns, so a run
+can start one and end. An engine restart resumes every job still `queued` or
+`running` (with `--resume <session_id>`; the resume counts as a round). At most
+`ROBOTHOR_CODING_MAX_CONCURRENT` (default 2) run per tenant; the rest wait as
+`queued`. A follow-up that arrives while a job is finishing is run, not dropped,
+and two follow-ups to a finished job reopen it once.
+
+**Cleanup.** A `done` or `cancelled` job's worktree and private config
+directory are removed when it ends; a `failed` job keeps both for inspection.
+The reaper — at engine start and at most hourly after a job finishes — removes
+the worktree, config directory and `genus/cc-*` branch of every finished job
+older than `ROBOTHOR_CODING_RETENTION_DAYS` (default 7) and marks the row
+`reaped_at`. Merge or push a job's branch before then.
+
+**What it sees.** The child environment is built from nothing: `PATH`, locale,
+`TERM`, `TZ`, `TMPDIR`, a private `HOME`/`CLAUDE_CONFIG_DIR` under
+`$XDG_CONFIG_HOME/robothor/claude-code/<job>` (writable under the engine unit),
+and `CLAUDE_CODE_OAUTH_TOKEN` resolved vault first. No fleet secret is
+inherited. `GH_TOKEN` travels only with `grant_github: true` **and** `GH_TOKEN`
+in the calling agent's own manifest `secrets:`. The engine's own git calls on a
+job's repository use the same allowlist environment and run with
+`-c core.hooksPath=/dev/null -c core.fsmonitor=false`.
+
+**Security model.** A `code` job is an autonomous agent with a shell, running
+as the engine's service user. The `main` template opts in to the tools on
+purpose — the operator wants Robothor to code — and the fence is what makes
+that acceptable:
+
+- **Where.** `ROBOTHOR_CODING_REPO_ROOTS` is required: with it empty every
+  `claude_code_start` is refused. `repo_path` is resolved (symlinks included)
+  and must sit under a root; the live workspace and the service user's home are
+  refused even under a root, as is any directory containing them.
+- **Bash** runs in Claude Code's sandbox (bubblewrap + a filtering proxy),
+  `failIfUnavailable: true` and `allowUnsandboxedCommands: false`. It cannot
+  read `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.azure`, `~/.netrc`,
+  `~/.git-credentials`, `~/.pgpass`, `~/.docker`, `~/.kube`, `~/.config`,
+  `~/.claude`, `~/.claude.json`, `~/.robothor`, the instance workspace's `brain/`,
+  `.robothor/` and `local/`, `/run/robothor` or `/etc/robothor`. It can write
+  the job's worktree and only what `git commit` in a linked worktree needs
+  from the repository's git directory (`objects/`, the job branch's ref and
+  reflog directory, the worktree's own admin directory) — never `hooks/` or
+  `config`. It has no network unless `ROBOTHOR_CODING_ALLOWED_DOMAINS` names
+  domains (code mode only). The process table shows only the sandbox's own
+  processes, so the engine's environment is out of reach.
+- **Read/Edit/Write/Grep/Glob** are not sandboxed (they run in the Claude Code
+  process), so permission rules fence them: Edit and Write are allowed only as
+  `Edit(//<worktree>/**)`/`Write(//<worktree>/**)`, and Read/Edit/Write are
+  denied on every path above.
+- **review/readonly** jobs run under the same sandbox with nothing writable and
+  no network, with the sandbox's auto-allow of Bash turned off so the git
+  allowlist stays the gate, and may not carry a `verify_command` (it would run
+  engine-side, outside the sandbox).
+- **Not covered.** `/tmp` stays writable inside the sandbox (its default);
+  the acceptance command of a code job runs engine-side without the sandbox
+  but with no credential in its environment, and can do nothing the sandboxed
+  session could not already arrange through the worktree; with a stored token,
+  `CLAUDE_CODE_OAUTH_TOKEN` is in the job's environment (the shell has no
+  network to send it anywhere unless domains are allowed).
+
+The sandbox needs `bwrap` able to create unprivileged user namespaces (on
+Ubuntu 24.04+ an AppArmor profile for `/usr/bin/bwrap` allowing `userns`) and
+`socat`; `genus doctor` fails `claude_code.ready` without them, since every job
+would fail.
+
+**Getting it.** The tools are opt-in: name them in `tools_allowed`, or — for an
+agent that keeps the default set, like the `main` template — in `tools_opt_in`.
+They are refused in benchmark runs.
+
+**Credential.** If the engine's user is already logged in to Claude Code on the
+host, there is nothing to set up: with `ROBOTHOR_CLAUDE_CODE_AUTH=auto` (the
+default) jobs use that login when no token is stored. Claude Code refreshes the
+login under `~/.claude` and `~/.claude.json`, so the engine unit needs both
+writable: `infra/systemd/robothor-engine.service.d/zz-claude-code.conf`
+(installed by `scripts/install-units.sh`) adds exactly those two
+`ReadWritePaths=`, and `claude_code.ready` fails when the host login is in use
+and either is read-only. On a host where that user is not logged in, store a
+subscription token instead:
+
+```bash
+genus claude-code login    # claude setup-token → vault, then a one-turn proof
+genus claude-code status   # CLI version, which credential resolves, one-turn ping
+```
+
+A stored token always wins over the host login; `ROBOTHOR_CLAUDE_CODE_AUTH=token`
+requires it. Either way the runner's `--setting-sources ""` and
+`--strict-mcp-config` keep the user's personal settings, plugins, hooks and MCP
+servers out of every job.
+
+`genus doctor` reports `claude_code.ready` (skipped on an instance with neither
+the CLI nor a token). The `claude-code` skill is the orchestrator's procedure:
+spec, acceptance command, wait, specific follow-ups, and a report that cites the
+job id, commit sha and verify result rather than claiming the work is done.
+
+A repository outside the workspace needs its `.git` writable by the engine
+(`git worktree add` writes there): add it to a `ReadWritePaths=` drop-in, and
+name its parent in `ROBOTHOR_CODING_REPO_ROOTS`. Worktrees stay under
+`<workspace>/.genus/worktrees` by default: the workspace is writable under the
+engine unit, `.genus/` is gitignored, and the other writable home
+(`~/.config/robothor`) is on the sandbox's `denyRead` list.
+
 ### Google Workspace (`gws_*`)
 
 Eleven tools, all shelling out to the `gws` CLI with the instance's Workspace
