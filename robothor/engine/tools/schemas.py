@@ -895,6 +895,183 @@ _HUMAN_IN_THE_LOOP_SCHEMAS: dict[str, dict[str, Any]] = {
 }
 
 
+# GitHub pull-request diff + review tools. Module-level, like _WEB_READ_SCHEMAS,
+# so get_engine_schemas does not grow past its pinned size.
+_GH_REPO = {"type": "string", "description": "Repository in owner/repo format"}
+_GH_NUMBER = {"type": "integer", "description": "Pull request number"}
+_GH_ISSUE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "path": {
+            "type": "string",
+            "description": "File path as shown in the diff; empty for PR-wide findings",
+        },
+        "line": {
+            "type": "integer",
+            "description": "Anchor line (new file for RIGHT, old file for LEFT); omit if none",
+        },
+        "start_line": {
+            "type": "integer",
+            "description": "First line of a multi-line range; omit for one line",
+        },
+        "side": {"type": "string", "enum": ["RIGHT", "LEFT"]},
+        "severity": {
+            "type": "string",
+            "description": "blocker, major, minor or nit. Only blocker/major go inline.",
+        },
+        "title": {"type": "string"},
+        "body": {"type": "string", "description": "Full finding in GitHub markdown"},
+    },
+    "required": ["severity", "title", "body"],
+}
+
+_GITHUB_REVIEW_SCHEMAS: dict[str, dict[str, Any]] = {
+    "github_pr_diff": {
+        "type": "function",
+        "function": {
+            "name": "github_pr_diff",
+            "description": (
+                "The pull request's unified diff. Cut at 150,000 characters with "
+                "truncated: true; read github_pr_files for per-file patches past that."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {"repo": _GH_REPO, "number": _GH_NUMBER},
+                "required": ["repo", "number"],
+            },
+        },
+    },
+    "github_pr_files": {
+        "type": "function",
+        "function": {
+            "name": "github_pr_files",
+            "description": (
+                "Changed files of a pull request: filename, status, additions, deletions "
+                "and patch (null for binary or oversized files)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {"repo": _GH_REPO, "number": _GH_NUMBER},
+                "required": ["repo", "number"],
+            },
+        },
+    },
+    "github_compare": {
+        "type": "function",
+        "function": {
+            "name": "github_compare",
+            "description": (
+                "Compare two commits (base...head): status ahead/behind/diverged/identical/"
+                "missing, commits and changed files. full_review_required is true when "
+                "history was rewritten (diverged, behind or missing base) — re-review the "
+                "whole pull request then, not just base..head."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "repo": _GH_REPO,
+                    "base": {"type": "string", "description": "Base commit SHA or ref"},
+                    "head": {"type": "string", "description": "Head commit SHA or ref"},
+                },
+                "required": ["repo", "base", "head"],
+            },
+        },
+    },
+    "github_create_review": {
+        "type": "function",
+        "function": {
+            "name": "github_create_review",
+            "description": (
+                "Post a pull-request review. Blocker/major findings become inline comments "
+                "where the diff can carry the anchor; anchors outside the diff, and every "
+                "minor/nit finding, go in the review body instead — nothing is dropped. On "
+                "the token user's own pull request APPROVE/REQUEST_CHANGES is posted as a "
+                "COMMENT starting 'APPROVED' / 'CHANGES REQUESTED'. Refuses if the head moved "
+                "past commit_id. Returns review_id, url, inline_count and comment_ids."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "repo": _GH_REPO,
+                    "number": _GH_NUMBER,
+                    "verdict": {
+                        "type": "string",
+                        "enum": ["APPROVE", "COMMENT", "REQUEST_CHANGES"],
+                    },
+                    "summary": {"type": "string", "description": "Top of the review body"},
+                    "issues": {"type": "array", "items": _GH_ISSUE_SCHEMA},
+                    "commit_id": {
+                        "type": "string",
+                        "description": "Head SHA the review was written against",
+                    },
+                    "prior_issues": {
+                        "type": "array",
+                        "description": "Re-reviews: status of each finding from the last review",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "description": {"type": "string"},
+                                "status": {
+                                    "type": "string",
+                                    "enum": ["resolved", "partially_resolved", "unresolved"],
+                                },
+                                "note": {"type": "string"},
+                            },
+                            "required": ["description", "status"],
+                        },
+                    },
+                },
+                "required": ["repo", "number", "verdict", "summary", "issues", "commit_id"],
+            },
+        },
+    },
+    "github_reply_review_comment": {
+        "type": "function",
+        "function": {
+            "name": "github_reply_review_comment",
+            "description": "Reply inside an existing pull-request review-comment thread.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "repo": _GH_REPO,
+                    "number": _GH_NUMBER,
+                    "comment_id": {
+                        "type": "integer",
+                        "description": "Id of a review comment in the thread",
+                    },
+                    "body": {"type": "string", "description": "Reply text (GitHub markdown)"},
+                },
+                "required": ["repo", "number", "comment_id", "body"],
+            },
+        },
+    },
+    "github_resolve_threads": {
+        "type": "function",
+        "function": {
+            "name": "github_resolve_threads",
+            "description": (
+                "Resolve the review threads opened by the given review ids — only those. "
+                "Threads anyone else opened, including by hand from the same account, are "
+                "left alone."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "repo": _GH_REPO,
+                    "number": _GH_NUMBER,
+                    "review_ids": {
+                        "type": "array",
+                        "items": {"type": "integer"},
+                        "description": "review_id values returned by github_create_review",
+                    },
+                },
+                "required": ["repo", "number", "review_ids"],
+            },
+        },
+    },
+}
+
+
 def get_engine_schemas() -> dict[str, dict[str, Any]]:
     """Return all engine-specific tool schemas keyed by tool name."""
     schemas: dict[str, dict[str, Any]] = {}
@@ -3314,6 +3491,8 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
             },
         },
     }
+
+    schemas.update(_GITHUB_REVIEW_SCHEMAS)
 
     # ── DevOps metrics storage tools ──
 

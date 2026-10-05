@@ -1,10 +1,13 @@
-"""GitHub REST API tool handlers for dev team operations monitoring."""
+"""GitHub REST API tool handlers: dev-team metrics, pull-request diffs, review posting."""
 
 from __future__ import annotations
 
 import asyncio
+import json
+import re
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
+from urllib.parse import quote
 
 import httpx
 
@@ -570,4 +573,572 @@ async def _github_review_stats(args: dict[str, Any], ctx: ToolContext) -> dict[s
         "days": days,
         "prs_analyzed": len(recent_prs),
         "reviewers": reviewers,
+    }
+
+
+# ── Pull-request diffs and review posting ──────────────────────────────
+#
+# Read tools (diff, files, compare) are read-only and offered by default. The
+# three write tools (create_review, reply_review_comment, resolve_threads) are
+# in OPT_IN_TOOLS: an agent is offered them only when its manifest names them
+# in `tools_allowed`, and each refuses a benchmark run. The posting rules —
+# anchor partition, severity split, body, own-PR fallback — are pure and live
+# in robothor.pr_review.posting.
+
+#: A diff larger than this is cut, with ``truncated: true`` saying so. Enough
+#: for a large pull request; past it the agent should read per-file patches.
+_DIFF_MAX_CHARS = 150_000
+#: Shared patch budget for github_pr_files / github_compare output.
+_PATCH_BUDGET_CHARS = 150_000
+
+_REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+_VERDICTS = frozenset({"APPROVE", "COMMENT", "REQUEST_CHANGES"})
+_OWN_PR_ERROR_RE = re.compile(
+    r"(can ?not|cannot) (approve|request changes on) your own pull request", re.IGNORECASE
+)
+_REVIEW_FOOTER = "<sub>Automated review</sub>"
+
+
+def _client(timeout: float = 20.0) -> httpx.AsyncClient:
+    """The HTTP client every review tool uses (tests swap in a fake transport)."""
+    return httpx.AsyncClient(timeout=timeout, follow_redirects=True)
+
+
+def _valid_repo(repo: str) -> bool:
+    return bool(_REPO_RE.match(repo)) and ".." not in repo
+
+
+def _pr_args(args: dict[str, Any]) -> tuple[str, int] | dict[str, Any]:
+    """``(repo, number)`` or an error dict. ``pr_number`` is accepted as an alias."""
+    repo = str(args.get("repo") or "")
+    number: Any = args.get("number", args.get("pr_number"))
+    if not repo or number in (None, ""):
+        return {"error": "repo and number are required"}
+    if not _valid_repo(repo):
+        return {"error": f"repo must be in owner/repo format, got {repo!r}"}
+    try:
+        num = int(number)
+    except (TypeError, ValueError):
+        return {"error": f"number must be an integer, got {number!r}"}
+    if num <= 0:
+        return {"error": f"number must be positive, got {num}"}
+    return repo, num
+
+
+def _error_detail(resp: httpx.Response) -> str:
+    """GitHub's own words for a failure: message plus any ``errors`` entries."""
+    try:
+        data = resp.json()
+    except ValueError:
+        return resp.text[:500]
+    if not isinstance(data, dict):
+        return str(data)[:500]
+    parts = [str(data.get("message") or "")]
+    parts.extend(
+        err.get("message", json.dumps(err)) if isinstance(err, dict) else str(err)
+        for err in data.get("errors") or []
+    )
+    return "; ".join(p for p in parts if p)[:1000]
+
+
+def _http_error(e: httpx.HTTPStatusError, what: str) -> dict[str, Any]:
+    status = e.response.status_code
+    if status == 404:
+        return {"error": f"{what} not found"}
+    if status == 401:
+        return {"error": "GitHub authentication failed — check token"}
+    return {"error": f"GitHub API error {status}: {_error_detail(e.response)}"}
+
+
+def _slim_file(f: dict[str, Any], budget: list[int]) -> dict[str, Any]:
+    """One changed file; its patch is dropped once the shared budget is spent."""
+    patch = f.get("patch")
+    out: dict[str, Any] = {
+        "filename": f.get("filename", ""),
+        "status": f.get("status", ""),
+        "additions": f.get("additions", 0),
+        "deletions": f.get("deletions", 0),
+        "patch": None,
+    }
+    if f.get("previous_filename"):
+        out["previous_filename"] = f["previous_filename"]
+    if patch:
+        if len(patch) <= budget[0]:
+            out["patch"] = patch
+            budget[0] -= len(patch)
+        else:
+            out["patch_omitted"] = True
+    return out
+
+
+async def _pr_patches(
+    client: httpx.AsyncClient, repo: str, number: int, headers: dict[str, str]
+) -> list[dict[str, Any]]:
+    """Every changed file of a pull request (GitHub caps the list at 3,000)."""
+    return await _paginate(
+        client,
+        f"{_GITHUB_API}/repos/{repo}/pulls/{number}/files",
+        headers,
+        {"per_page": 100},
+        max_pages=30,
+    )
+
+
+@_handler("github_pr_diff")
+async def _github_pr_diff(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    """The pull request's unified diff, capped at _DIFF_MAX_CHARS."""
+    parsed = _pr_args(args)
+    if isinstance(parsed, dict):
+        return parsed
+    repo, number = parsed
+    token = _get_token()
+    if not token:
+        return {"error": "GITHUB_TOKEN not configured"}
+
+    headers = {**_headers(token), "Accept": "application/vnd.github.diff"}
+    try:
+        async with _client(30.0) as client:
+            resp = await client.get(f"{_GITHUB_API}/repos/{repo}/pulls/{number}", headers=headers)
+            if resp.status_code == 406:
+                return {
+                    "error": "GitHub will not render this diff (too large); "
+                    "use github_pr_files for per-file patches"
+                }
+            resp.raise_for_status()
+            diff = resp.text
+    except httpx.HTTPStatusError as e:
+        return _http_error(e, f"PR #{number} in {repo}")
+    except Exception as e:
+        return {"error": f"GitHub request failed: {e}"}
+
+    return {
+        "repo": repo,
+        "number": number,
+        "diff": diff[:_DIFF_MAX_CHARS],
+        "truncated": len(diff) > _DIFF_MAX_CHARS,
+        "total_chars": len(diff),
+    }
+
+
+@_handler("github_pr_files")
+async def _github_pr_files(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    """Changed files with status, line counts and per-file patch."""
+    parsed = _pr_args(args)
+    if isinstance(parsed, dict):
+        return parsed
+    repo, number = parsed
+    token = _get_token()
+    if not token:
+        return {"error": "GITHUB_TOKEN not configured"}
+
+    try:
+        async with _client() as client:
+            files = await _pr_patches(client, repo, number, _headers(token))
+    except httpx.HTTPStatusError as e:
+        return _http_error(e, f"PR #{number} in {repo}")
+    except Exception as e:
+        return {"error": f"GitHub request failed: {e}"}
+
+    budget = [_PATCH_BUDGET_CHARS]
+    slim = [_slim_file(f, budget) for f in files]
+    return {
+        "repo": repo,
+        "number": number,
+        "files": slim,
+        "count": len(slim),
+        "patches_omitted": sum(1 for f in slim if f.get("patch_omitted")),
+    }
+
+
+@_handler("github_compare")
+async def _github_compare(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    """Compare two commits; diverged/behind/missing mean a full review is required."""
+    from robothor.pr_review.posting import FULL_REVIEW_COMPARE_STATUSES
+
+    repo = str(args.get("repo") or "")
+    base = str(args.get("base") or "")
+    head = str(args.get("head") or "")
+    if not repo or not base or not head:
+        return {"error": "repo, base and head are required"}
+    if not _valid_repo(repo):
+        return {"error": f"repo must be in owner/repo format, got {repo!r}"}
+    token = _get_token()
+    if not token:
+        return {"error": "GITHUB_TOKEN not configured"}
+
+    url = f"{_GITHUB_API}/repos/{repo}/compare/{quote(base, safe='')}...{quote(head, safe='')}"
+    try:
+        async with _client(30.0) as client:
+            resp = await client.get(url, headers=_headers(token))
+            if resp.status_code == 404:
+                # The base commit is gone — typically a force-push since the last review.
+                return {
+                    "repo": repo,
+                    "base": base,
+                    "head": head,
+                    "status": "missing",
+                    "full_review_required": True,
+                    "commits": [],
+                    "files": [],
+                }
+            resp.raise_for_status()
+            data = resp.json()
+    except httpx.HTTPStatusError as e:
+        return _http_error(e, f"comparison {base}...{head} in {repo}")
+    except Exception as e:
+        return {"error": f"GitHub request failed: {e}"}
+
+    status = str(data.get("status") or "")
+    budget = [_PATCH_BUDGET_CHARS]
+    commits = [
+        {
+            "sha": c.get("sha", ""),
+            "message": str((c.get("commit") or {}).get("message") or "").split("\n", 1)[0],
+            "author": ((c.get("commit") or {}).get("author") or {}).get("name", ""),
+        }
+        for c in data.get("commits") or []
+    ]
+    return {
+        "repo": repo,
+        "base": base,
+        "head": head,
+        "status": status,
+        "ahead_by": data.get("ahead_by"),
+        "behind_by": data.get("behind_by"),
+        "total_commits": data.get("total_commits", len(commits)),
+        "full_review_required": status in FULL_REVIEW_COMPARE_STATUSES,
+        "commits": commits,
+        "files": [_slim_file(f, budget) for f in data.get("files") or []],
+    }
+
+
+def _validate_issues(raw: Any) -> list[dict[str, Any]] | str:
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        return "issues must be a list"
+    out: list[dict[str, Any]] = []
+    for i, item in enumerate(raw):
+        if not isinstance(item, dict):
+            return f"issues[{i}] must be an object"
+        if not item.get("title") and not item.get("body"):
+            return f"issues[{i}] needs a title or body"
+        out.append(item)
+    return out
+
+
+async def _viewer_login(client: httpx.AsyncClient, headers: dict[str, str]) -> str:
+    """The token's own login, or "" when the token cannot say (app tokens 403 here)."""
+    try:
+        resp = await client.get(f"{_GITHUB_API}/user", headers=headers)
+        if resp.status_code != 200:
+            return ""
+        return str(resp.json().get("login") or "")
+    except Exception:  # noqa: BLE001 - an unknown viewer defers to the 422 fallback
+        return ""
+
+
+@_handler("github_create_review")
+async def _github_create_review(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    """Post a review: blocking findings inline where the diff allows, the rest in the body."""
+    from robothor.pr_review.posting import (
+        compose_body,
+        format_issue_comment,
+        own_pr_body,
+        partition_comments,
+        split_by_severity,
+    )
+
+    if ctx.is_benchmark:
+        return {"error": "github_create_review is refused on a benchmark run"}
+    parsed = _pr_args(args)
+    if isinstance(parsed, dict):
+        return parsed
+    repo, number = parsed
+    verdict = str(args.get("verdict") or "").upper()
+    if verdict not in _VERDICTS:
+        return {"error": f"verdict must be one of {sorted(_VERDICTS)}, got {verdict!r}"}
+    issues = _validate_issues(args.get("issues"))
+    if isinstance(issues, str):
+        return {"error": issues}
+    prior = args.get("prior_issues") or []
+    if not isinstance(prior, list) or not all(isinstance(p, dict) for p in prior):
+        return {"error": "prior_issues must be a list of objects"}
+    summary = str(args.get("summary") or "")
+    commit_id = str(args.get("commit_id") or "")
+    if not commit_id:
+        return {"error": "commit_id is required (the head SHA the review was written against)"}
+    token = _get_token()
+    if not token:
+        return {"error": "GITHUB_TOKEN not configured"}
+
+    headers = _headers(token)
+    pr_url = f"{_GITHUB_API}/repos/{repo}/pulls/{number}"
+    try:
+        async with _client(30.0) as client:
+            resp = await client.get(pr_url, headers=headers)
+            resp.raise_for_status()
+            pr = resp.json()
+            head_sha = str((pr.get("head") or {}).get("sha") or "")
+            if head_sha and head_sha != commit_id:
+                # Anchors are checked against the CURRENT diff; posting them on an
+                # older commit would land them on the wrong lines or 422.
+                return {
+                    "error": "PR head moved since the review was written; re-review the new head",
+                    "head_sha": head_sha,
+                    "commit_id": commit_id,
+                }
+            author = str((pr.get("user") or {}).get("login") or "")
+            viewer = await _viewer_login(client, headers)
+            files = await _pr_patches(client, repo, number, headers)
+            patches = {str(f.get("filename")): f.get("patch") for f in files}
+
+            blocking, non_blocking = split_by_severity(issues)
+            proposed = [{**i, "body": format_issue_comment(i), "_issue": i} for i in blocking]
+            inline, unanchored = partition_comments(proposed, patches)
+            out_of_diff = [c["_issue"] for c in unanchored]
+
+            def _body(blocking_in_body: list[Any]) -> str:
+                return compose_body(
+                    summary, blocking_in_body, non_blocking, prior, footer=_REVIEW_FOOTER
+                )
+
+            body = _body(out_of_diff)
+            event = verdict
+            as_comment = False
+            if verdict != "COMMENT" and author and viewer and author.lower() == viewer.lower():
+                # GitHub refuses APPROVE / REQUEST_CHANGES on your own pull request.
+                event, body, as_comment = "COMMENT", own_pr_body(verdict, body), True
+            anchors_folded = False
+
+            # At most three posts: as decided, the own-PR fallback, anchors folded.
+            review: dict[str, Any] | None = None
+            last_error = ""
+            for _attempt in range(3):
+                payload: dict[str, Any] = {
+                    "commit_id": commit_id,
+                    "event": event,
+                    # COMMENT and REQUEST_CHANGES 422 on an empty body.
+                    "body": body or ("" if event == "APPROVE" else "No findings."),
+                    "comments": inline,
+                }
+                resp = await client.post(f"{pr_url}/reviews", headers=headers, json=payload)
+                if resp.status_code < 400:
+                    review = resp.json()
+                    break
+                if resp.status_code != 422:
+                    resp.raise_for_status()
+                last_error = _error_detail(resp)
+                if event != "COMMENT" and _OWN_PR_ERROR_RE.search(last_error):
+                    event, body, as_comment = "COMMENT", own_pr_body(verdict, body), True
+                    continue
+                if inline and not anchors_folded:
+                    # One invalid anchor sinks the whole review: fold every finding
+                    # into the body and try exactly once more.
+                    body = _body(list(blocking))
+                    if as_comment:
+                        body = own_pr_body(verdict, body)
+                    inline, anchors_folded = [], True
+                    continue
+                break
+            if review is None:
+                return {"error": f"GitHub API error 422: {last_error}"}
+
+            review_id = review.get("id")
+            comment_ids: list[int] = []
+            if inline and review_id is not None:
+                try:
+                    cresp = await client.get(
+                        f"{pr_url}/reviews/{review_id}/comments", headers=headers
+                    )
+                    if cresp.status_code == 200:
+                        comment_ids = [c["id"] for c in cresp.json() if "id" in c]
+                except Exception:  # noqa: BLE001 - the review is posted; ids are a convenience
+                    comment_ids = []
+    except httpx.HTTPStatusError as e:
+        return _http_error(e, f"PR #{number} in {repo}")
+    except Exception as e:
+        return {"error": f"GitHub request failed: {e}"}
+
+    return {
+        "repo": repo,
+        "number": number,
+        "review_id": review_id,
+        "url": review.get("html_url")
+        or f"https://github.com/{repo}/pull/{number}#pullrequestreview-{review_id}",
+        "verdict": verdict,
+        "event": event,
+        "posted_as_comment": as_comment,
+        "inline_count": len(inline),
+        "body_findings": len(blocking) - len(inline) + len(non_blocking),
+        "anchors_folded": anchors_folded,
+        "comment_ids": comment_ids,
+        "commit_id": commit_id,
+    }
+
+
+@_handler("github_reply_review_comment")
+async def _github_reply_review_comment(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    """Reply inside an existing review-comment thread."""
+    if ctx.is_benchmark:
+        return {"error": "github_reply_review_comment is refused on a benchmark run"}
+    parsed = _pr_args(args)
+    if isinstance(parsed, dict):
+        return parsed
+    repo, number = parsed
+    body = str(args.get("body") or "")
+    if not body.strip():
+        return {"error": "body is required"}
+    try:
+        comment_id = int(args.get("comment_id"))  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return {"error": "comment_id must be an integer"}
+    token = _get_token()
+    if not token:
+        return {"error": "GITHUB_TOKEN not configured"}
+
+    try:
+        async with _client() as client:
+            resp = await client.post(
+                f"{_GITHUB_API}/repos/{repo}/pulls/{number}/comments/{comment_id}/replies",
+                headers=_headers(token),
+                json={"body": body},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+    except httpx.HTTPStatusError as e:
+        return _http_error(e, f"review comment {comment_id} on PR #{number} in {repo}")
+    except Exception as e:
+        return {"error": f"GitHub request failed: {e}"}
+
+    return {
+        "repo": repo,
+        "number": number,
+        "comment_id": data.get("id"),
+        "in_reply_to_id": data.get("in_reply_to_id", comment_id),
+        "url": data.get("html_url", ""),
+    }
+
+
+_THREADS_QUERY = """
+query($owner: String!, $repo: String!, $number: Int!, $after: String) {
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $number) {
+      reviewThreads(first: 100, after: $after) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          id
+          isResolved
+          comments(first: 1) {
+            nodes { databaseId author { login } pullRequestReview { databaseId } }
+          }
+        }
+      }
+    }
+  }
+}
+"""
+
+_RESOLVE_MUTATION = """
+mutation($id: ID!) {
+  resolveReviewThread(input: { threadId: $id }) { thread { id isResolved } }
+}
+"""
+
+
+class _GraphQLError(Exception):
+    """GitHub answered 200 with an ``errors`` array."""
+
+
+async def _graphql(
+    client: httpx.AsyncClient, headers: dict[str, str], query: str, variables: dict[str, Any]
+) -> dict[str, Any]:
+    resp = await client.post(
+        f"{_GITHUB_API}/graphql", headers=headers, json={"query": query, "variables": variables}
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    if data.get("errors"):
+        msgs = "; ".join(str(e.get("message", e)) for e in data["errors"])
+        raise _GraphQLError(f"GitHub GraphQL error: {msgs}")
+    result: dict[str, Any] = data.get("data") or {}
+    return result
+
+
+@_handler("github_resolve_threads")
+async def _github_resolve_threads(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    """Resolve the review threads that the given reviews opened — and no others.
+
+    A thread belongs to the review its FIRST comment was posted in. Matching on
+    review id rather than on author login is the point: a person writing by
+    hand from the same account opens threads under a different review, and
+    those are theirs to resolve.
+    """
+    if ctx.is_benchmark:
+        return {"error": "github_resolve_threads is refused on a benchmark run"}
+    parsed = _pr_args(args)
+    if isinstance(parsed, dict):
+        return parsed
+    repo, number = parsed
+    raw_ids = args.get("review_ids") or []
+    if not isinstance(raw_ids, list):
+        return {"error": "review_ids must be a list of integer review ids"}
+    try:
+        review_ids = {int(r) for r in raw_ids}
+    except (TypeError, ValueError):
+        return {"error": "review_ids must be a list of integer review ids"}
+    if not review_ids:
+        return {"error": "review_ids is required — only threads from these reviews are resolved"}
+    token = _get_token()
+    if not token:
+        return {"error": "GITHUB_TOKEN not configured"}
+
+    owner, name = repo.split("/", 1)
+    headers = _headers(token)
+    to_resolve: list[str] = []
+    already = 0
+    try:
+        async with _client(30.0) as client:
+            after: str | None = None
+            for _ in range(20):  # 2,000 threads is far past any real pull request
+                data = await _graphql(
+                    client,
+                    headers,
+                    _THREADS_QUERY,
+                    {"owner": owner, "repo": name, "number": number, "after": after},
+                )
+                threads = ((data.get("repository") or {}).get("pullRequest") or {}).get(
+                    "reviewThreads"
+                )
+                if not threads:
+                    return {"error": f"PR #{number} in {repo} not found"}
+                for t in threads.get("nodes") or []:
+                    first = ((t.get("comments") or {}).get("nodes") or [None])[0] or {}
+                    review = first.get("pullRequestReview") or {}
+                    if review.get("databaseId") not in review_ids:
+                        continue
+                    if t.get("isResolved"):
+                        already += 1
+                    else:
+                        to_resolve.append(str(t["id"]))
+                page = threads.get("pageInfo") or {}
+                after = page.get("endCursor") if page.get("hasNextPage") else None
+                if not after:
+                    break
+            for thread_id in to_resolve:
+                await _graphql(client, headers, _RESOLVE_MUTATION, {"id": thread_id})
+    except httpx.HTTPStatusError as e:
+        return _http_error(e, f"PR #{number} in {repo}")
+    except _GraphQLError as e:
+        return {"error": str(e)}
+    except Exception as e:
+        return {"error": f"GitHub request failed: {e}"}
+
+    return {
+        "repo": repo,
+        "number": number,
+        "resolved": len(to_resolve),
+        "thread_ids": to_resolve,
+        "already_resolved": already,
+        "review_ids": sorted(review_ids),
     }

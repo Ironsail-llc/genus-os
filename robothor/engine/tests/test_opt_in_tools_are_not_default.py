@@ -66,10 +66,11 @@ def test_tools_denied_still_beats_an_explicit_request(registry):
 
 def test_the_opt_in_list_cannot_drift_from_the_sales_package():
     """A hand-maintained name list drifted once already (2026-08-22)."""
+    from robothor.engine.tools.constants import GITHUB_REVIEW_WRITE_TOOLS
     from robothor.sales.tool_schemas import SALES_SCHEMAS
 
     assert set(SALES_SCHEMAS) < OPT_IN_TOOLS
-    assert OPT_IN_TOOLS - set(SALES_SCHEMAS) == {"web_render"}
+    assert OPT_IN_TOOLS - set(SALES_SCHEMAS) == {"web_render"} | GITHUB_REVIEW_WRITE_TOOLS
 
 
 def test_every_opt_in_tool_has_a_registered_schema(registry):
