@@ -153,6 +153,19 @@ GITHUB_API_TOOLS = frozenset(
         "github_pr_stats",
         "github_commit_activity",
         "github_review_stats",
+        "github_pr_diff",
+        "github_pr_files",
+        "github_compare",
+    }
+)
+
+# GitHub review-posting tools: they write to someone else's pull request, so
+# they are OPT_IN_TOOLS (below): offered only to a manifest that names them.
+GITHUB_REVIEW_WRITE_TOOLS = frozenset(
+    {
+        "github_create_review",
+        "github_reply_review_comment",
+        "github_resolve_threads",
     }
 )
 
@@ -349,6 +362,9 @@ READONLY_TOOLS: frozenset[str] = frozenset(
         "github_pr_stats",
         "github_commit_activity",
         "github_review_stats",
+        "github_pr_diff",
+        "github_pr_files",
+        "github_compare",
         # DevOps metrics read-only tools
         "devops_query_metrics",
         # Identity read-only tools
@@ -381,11 +397,17 @@ TOOLSEARCH_TOOLS = frozenset({"tool_search", "tool_describe", "tool_call"})
 # explicit denies. Both halves are needed — a tool an agent cannot see is still
 # a tool it can name.
 #
+# The three GitHub review-posting tools post, reply and resolve on pull
+# requests other people own; an agent reviews code only when its manifest
+# says so. Their RBAC half is NOT added yet: a `service`-role deny would also
+# stop the reviewer agent that names them, so it waits for a dedicated role.
+#
 # Spelled out rather than imported from robothor.sales so this module stays
 # import-light; test_opt_in_tools_are_not_default pins the two together.
 OPT_IN_TOOLS: frozenset[str] = frozenset(
     {
         "web_render",
+        *GITHUB_REVIEW_WRITE_TOOLS,
         "sales_create_request",
         "sales_discover",
         "sales_get_context",
