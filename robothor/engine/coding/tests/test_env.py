@@ -22,7 +22,7 @@ FLEET_ENV = {
     "LC_ALL": "C.UTF-8",
     "TERM": "xterm",
     "TZ": "UTC",
-    "HOME": "/home/alice",
+    "HOME": "/users/alice",
     "OPENROUTER_API_KEY": "sk-or-v1-" + "a" * 40,
     "TELEGRAM_BOT_TOKEN": "123456:" + "b" * 35,
     "ROBOTHOR_TELEGRAM_BOT_TOKEN": "123456:" + "b" * 35,
@@ -33,19 +33,19 @@ FLEET_ENV = {
     "AWS_SECRET_ACCESS_KEY": "e" * 40,
     "DATABASE_URL": "postgresql://alice:hunter2@db/genus",
     "SSH_AUTH_SOCK": "/run/user/1000/ssh-agent",
-    "XDG_CONFIG_HOME": "/home/alice/.config",
+    "XDG_CONFIG_HOME": "/users/alice/.config",
     "ROBOTHOR_WORKSPACE": "/opt/robothor",
 }
 
 
 def test_job_config_dir_lives_under_xdg_config_robothor(tmp_path):
-    base = {"XDG_CONFIG_HOME": str(tmp_path / "xdg"), "HOME": "/home/alice"}
+    base = {"XDG_CONFIG_HOME": str(tmp_path / "xdg"), "HOME": "/users/alice"}
     assert (
         job_config_dir("job-1", base=base)
         == tmp_path / "xdg" / "robothor" / "claude-code" / "job-1"
     )
-    assert job_config_dir("job-1", base={"HOME": "/home/alice"}) == Path(
-        "/home/alice/.config/robothor/claude-code/job-1"
+    assert job_config_dir("job-1", base={"HOME": "/users/alice"}) == Path(
+        "/users/alice/.config/robothor/claude-code/job-1"
     )
 
 
@@ -120,7 +120,7 @@ def test_host_auth_mode_keeps_the_service_users_own_login(tmp_path):
     base = dict(FLEET_ENV, XDG_CONFIG_HOME=str(tmp_path), ROBOTHOR_CLAUDE_CODE_AUTH="host")
     env = build_claude_env(job_id="j", oauth_token=None, base=base)
 
-    assert env["HOME"] == "/home/alice"
+    assert env["HOME"] == "/users/alice"
     assert "CLAUDE_CONFIG_DIR" not in env
     assert TOKEN_ENV not in env
     assert "OPENROUTER_API_KEY" not in env

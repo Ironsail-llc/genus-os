@@ -1735,7 +1735,15 @@ async def _resume_coding_jobs() -> int:
     All tenants this process can see: the jobs are engine-owned tasks, and this
     engine is the only thing that will ever pick them up again. Under RLS the
     connection's own tenant binding narrows the read.
+
+    Under HA every replica runs this startup path, so resuming would put N
+    engines on one Claude Code session; HA engines skip it and leave the rows.
     """
+    from robothor.engine.leader import ha_leader_enabled
+
+    if ha_leader_enabled():
+        logger.warning("Startup: HA enabled — interrupted coding jobs are not auto-resumed")
+        return 0
     try:
         from robothor.engine.coding import jobs as coding_jobs
 

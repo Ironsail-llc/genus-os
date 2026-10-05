@@ -73,7 +73,7 @@ _FIXED = {
 _JOB_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 
 _GENERIC_GIT_NAME = "Genus Agent"
-_GENERIC_GIT_EMAIL = "agent@genus.invalid"
+_GENERIC_GIT_EMAIL = "agent@example.com"
 
 
 def job_config_dir(job_id: str, *, base: dict[str, str] | None = None) -> Path:

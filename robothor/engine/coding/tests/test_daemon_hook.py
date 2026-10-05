@@ -42,3 +42,21 @@ async def test_shutdown_without_a_manager_does_nothing(monkeypatch):
     monkeypatch.setattr(jobs_mod, "_manager", None)
     await daemon._stop_coding_jobs()
     assert jobs_mod._manager is None  # never built just to be stopped
+
+
+async def test_startup_resume_is_skipped_under_ha(monkeypatch):
+    """Every HA replica runs startup; only one may own a resumed job.
+
+    Until resume is leader-gated, HA engines leave interrupted jobs for the
+    operator rather than letting N replicas drive the same Claude Code session.
+    """
+    called = []
+
+    async def fake_resume(tenant_id=None):
+        called.append(tenant_id)
+        return 1
+
+    monkeypatch.setenv("ROBOTHOR_HA_LEADER_ENABLED", "true")
+    monkeypatch.setattr(jobs_mod, "resume_interrupted_jobs", fake_resume)
+    assert await daemon._resume_coding_jobs() == 0
+    assert called == []
