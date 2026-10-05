@@ -351,6 +351,7 @@ EXPECTED_DROPINS: dict[str, set[str]] = {
         "onfailure.conf",
         "restart-forever.conf",
         "upgrade-rip-flags.conf",
+        "zz-claude-code.conf",
         "zz-sandbox.conf",
     },
     "robothor-bridge.service.d": {
@@ -424,6 +425,22 @@ def test_onfailure_dropin_matches_its_other_installer_byte_for_byte(dirname: str
     body = generator.split("<<'EOF'\n", 1)[1].split("\nEOF\n", 1)[0] + "\n"
     mirror = (UNIT_DIR / dirname / "onfailure.conf").read_text()
     assert mirror == body
+
+
+def test_claude_code_dropin_makes_only_the_host_login_writable():
+    """Coding jobs on the host Claude Code login refresh it under ~/.claude and
+    rewrite ~/.claude.json; ProtectHome=read-only would turn that into a job
+    that fails on its first token refresh. Optional (`-`) paths, absolute
+    service-home placeholders (never %h, which is /root in a system unit), and
+    nothing broader than those two entries."""
+    body = directives(
+        (UNIT_DIR / "robothor-engine.service.d" / "zz-claude-code.conf").read_text()
+    ).strip()
+    assert body.splitlines() == [
+        "[Service]",
+        "ReadWritePaths=-/home/robothor/.claude",
+        "ReadWritePaths=-/home/robothor/.claude.json",
+    ]
 
 
 def test_restart_forever_dropins_agree_on_their_directives():
