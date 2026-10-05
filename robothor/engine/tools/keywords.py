@@ -112,6 +112,7 @@ _CODING: tuple[str, ...] = (
     "commit",
     "job",
 )
+_PR: tuple[str, ...] = ("github", "pr", "pull", "code")
 
 TOOL_HINTS: dict[str, ToolHint] = {
     "exec": ToolHint(keywords=("run", "shell", "command", "terminal", "execute")),
@@ -459,6 +460,25 @@ TOOL_HINTS: dict[str, ToolHint] = {
             "subscription",
             "browse",
         ),
+    ),
+    # ── GitHub pull-request review ────────────────────────────────────
+    "github_pr_diff": ToolHint(
+        keywords=(*_PR, "diff", "change", "patch", "read", "review"),
+        rank_bias=0.5,
+    ),
+    "github_pr_files": ToolHint(keywords=(*_PR, "diff", "file", "patch", "change", "review")),
+    "github_compare": ToolHint(
+        keywords=(*_PR, "diff", "compare", "commit", "since", "rereview", "review")
+    ),
+    "github_create_review": ToolHint(
+        keywords=(*_PR, "review", "approve", "comment", "request", "change", "post", "inline")
+    ),
+    "github_reply_review_comment": ToolHint(
+        # Not "respond"/"thread": "respond to the thread" means email first.
+        keywords=(*_PR, "review", "reply", "comment")
+    ),
+    "github_resolve_threads": ToolHint(
+        keywords=(*_PR, "review", "resolve", "thread", "close", "comment")
     ),
 }
 
