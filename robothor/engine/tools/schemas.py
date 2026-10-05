@@ -3577,11 +3577,18 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
         "type": "function",
         "function": {
             "name": "jira_get_issue",
-            "description": "Get a single JIRA issue with changelog for cycle time analysis.",
+            "description": (
+                "Get a single JIRA issue with changelog for cycle time analysis. "
+                "include_text=true adds its description and acceptance criteria as plain text."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "issue_key": {"type": "string", "description": "Issue key (e.g. 'ENG-123')"},
+                    "include_text": {
+                        "type": "boolean",
+                        "description": "Also return description and acceptance_criteria text",
+                    },
                 },
                 "required": ["issue_key"],
             },
