@@ -161,6 +161,7 @@ crm/141_autonomy_handoff_check_leases.sql
 crm/142_autonomy_suppressed_terms.sql
 crm/143_autonomy_retention.sql
 crm/144_coding_jobs.sql
+crm/145_pr_reviews.sql
 crm/127_runtime_contract.sql
 crm/138_goal_provider_reservations.sql
 crm/139_goal_task_family_controls.sql

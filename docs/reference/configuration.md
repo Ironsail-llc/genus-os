@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-435 settings in 15 groups.
+452 settings in 16 groups.
 
 ## autonomy
 
@@ -72,6 +72,28 @@ Host paths for the isolated personal browser service and clients.
 | `ROBOTHOR_CODING_REPO_ROOTS` | str | _(empty)_ | no | no | unreleased | Path-separated directories a coding job's repo_path must sit under. Empty allows any git repository the engine can read; the job still works only in its own worktree and never on main/master. |
 | `ROBOTHOR_CODING_VERIFY_TIMEOUT` | float | `900.0` | no | no | unreleased | Seconds a coding job's acceptance verify_command may run before it is killed and counted as a failure. |
 | `ROBOTHOR_CODING_WORKTREE_ROOT` | str | _(empty)_ | no | no | unreleased | Where coding jobs' git worktrees are created, one directory per job. Empty means <workspace>/.genus/worktrees. Must be writable by the engine: under the shipped unit that means inside the workspace or a ReadWritePaths= drop-in. |
+
+## pr_review
+
+| Variable | Type | Default | Restart | Secret | Since | Description |
+| --- | --- | --- | --- | --- | --- | --- |
+| `ROBOTHOR_PR_REVIEW_AGENT` | str | `pr-reviewer` | no | no | unreleased | Agent the intake assigns review tasks to. |
+| `ROBOTHOR_PR_REVIEW_BLOCKING_EVENT` | str | `REQUEST_CHANGES` | no | no | unreleased | Review event posted when a blocker or major finding remains: REQUEST_CHANGES, or COMMENT for a reviewer that should never block a merge. Never APPROVE. |
+| `ROBOTHOR_PR_REVIEW_BOT_LOGIN` | str | _(empty)_ | no | no | unreleased | GitHub login whose requested reviews are picked up, from any repository the token can read. Empty skips the requested-review source. |
+| `ROBOTHOR_PR_REVIEW_BUDGET_USD` | float | `3.0` | no | no | unreleased | Dollar cap for one review job across its rounds. |
+| `ROBOTHOR_PR_REVIEW_CHAT_LOOKBACK_MINUTES` | int | `60` | no | no | unreleased | On the first poll of a Chat space, how far back to read. Later polls continue from the stored cursor. |
+| `ROBOTHOR_PR_REVIEW_CHAT_SELF_USERS` | str | _(empty)_ | no | no | unreleased | Comma-separated Chat user resource names (users/...) whose messages are the reviewer's own and are never treated as requests. |
+| `ROBOTHOR_PR_REVIEW_CHAT_SPACE` | str | _(empty)_ | no | no | unreleased | Google Chat space resource name (spaces/...) watched for pull-request links and re-review requests, and where results are announced in the original thread. Empty disables the Chat source. |
+| `ROBOTHOR_PR_REVIEW_CLAIM_REACTION` | str | `👀` | no | no | unreleased | Emoji reacted on a Chat message when its pull request or re-review is queued. Empty reacts with nothing. |
+| `ROBOTHOR_PR_REVIEW_CLONE_ROOT` | str | _(empty)_ | no | no | unreleased | Where pr_review_prepare keeps one clone per reviewed repository. Empty means <workspace>/.genus/pr-review/repos. When ROBOTHOR_CODING_REPO_ROOTS is set it must include this directory. |
+| `ROBOTHOR_PR_REVIEW_MAX_CONCURRENT` | int | `2` | no | no | unreleased | Review tasks the intake keeps open at once; further pull requests wait and are queued on a later poll. |
+| `ROBOTHOR_PR_REVIEW_MODEL` | str | _(empty)_ | no | no | unreleased | Claude Code model alias for review jobs. Empty uses ROBOTHOR_CLAUDE_CODE_MODEL. |
+| `ROBOTHOR_PR_REVIEW_REPOS` | str | _(empty)_ | no | no | unreleased | Comma-separated owner/repo list the pr-reviewer may review. Pull-request links posted in the Chat space count only for these repositories. Empty disables the repository sources. |
+| `ROBOTHOR_PR_REVIEW_REQUIRE_TICKET` | bool | `false` | no | no | unreleased | A pull request with no ticket key in its title, branch, description or commit messages gets a blocking [no-ticket] finding and is never approved. |
+| `ROBOTHOR_PR_REVIEW_STALE_AFTER_MINUTES` | int | `180` | no | no | unreleased | A review queued or running this long without being finalized is marked failed, so a lost task never holds a concurrency slot forever. |
+| `ROBOTHOR_PR_REVIEW_TELEGRAM_DIGEST` | bool | `false` | no | no | unreleased | pr_review_finalize returns a one-line digest per posted review for the agent to deliver; the agent's delivery must announce on Telegram for it to arrive. |
+| `ROBOTHOR_PR_REVIEW_TICKET_PREFIXES` | str | _(empty)_ | no | no | unreleased | Comma-separated ticket key prefixes (e.g. ABC) the ticket rule looks for. Empty accepts any uppercase KEY-123. |
+| `ROBOTHOR_PR_REVIEW_WATCH_REPOS` | bool | `true` | no | no | unreleased | Review every open, non-draft pull request in the configured repositories, and re-review when its head moves. False reviews only pull requests posted in the Chat space or that request the bot login's review. |
 
 ## paths
 

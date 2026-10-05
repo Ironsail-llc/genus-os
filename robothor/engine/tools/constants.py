@@ -56,6 +56,9 @@ CLAUDE_CODE_TOOLS = frozenset(
     }
 )
 
+# pr-reviewer suite (robothor/pr_review/). Opt-in: listed in OPT_IN_TOOLS.
+PR_REVIEW_TOOLS = frozenset({"pr_review_intake", "pr_review_prepare", "pr_review_finalize"})
+
 # Google Workspace tools (gws CLI)
 GWS_TOOLS = frozenset(
     {
@@ -404,7 +407,8 @@ TOOLSEARCH_TOOLS = frozenset({"tool_search", "tool_describe", "tool_call"})
 # separate capability from `web_fetch` and should be asked for. The
 # `claude_code_*` tools start a whole autonomous coding agent that spends real
 # money; only an agent whose manifest names them (`tools_allowed`, or
-# `tools_opt_in` on top of the default set) is offered them.
+# `tools_opt_in` on top of the default set) is offered them. The
+# `pr_review_*` tools post reviews and read a chat space; same rule.
 #
 # Advertisement is only half the gate. RBAC is the other half: the `__default__`
 # `service`/`user` roles hold a `*` allow, so migration 138 adds the matching
@@ -433,6 +437,7 @@ OPT_IN_TOOLS: frozenset[str] = frozenset(
         "sales_propose_email",
         "sales_research_parallel",
         *CLAUDE_CODE_TOOLS,
+        *PR_REVIEW_TOOLS,
     }
 )
 

@@ -1,0 +1,53 @@
+# pr-reviewer run — template.
+#
+# Install beside pr-review-intake.yaml (copy to docs/workflows/, exclude
+# locally). See docs/PR_REVIEWER.md.
+#
+# Wakes the pr-reviewer agent only when a review task is waiting, so an idle
+# instance spends nothing on a model. The first step is the same intake tool
+# with poll: false — no GitHub or Chat reads, just dispatch and counts. The
+# engine never runs the agent twice at once, so a tick that lands during a
+# long review is skipped, not stacked.
+
+id: pr-review-run
+name: PR Review Run
+description: Run the pr-reviewer agent when a pr-review task is queued
+version: "2026-10-05"
+
+triggers:
+  - type: cron
+    cron: "*/2 * * * *"
+    timezone: UTC
+  - type: manual
+
+# Above one review: Claude Code's run plus the agent's own steps.
+timeout_seconds: 3600
+
+steps:
+  - id: queue
+    type: tool
+    tool_name: pr_review_intake
+    tool_args:
+      poll: false
+    tool_timeout_seconds: 120
+    on_failure: abort
+
+  - id: any-queued
+    type: condition
+    input: "{{ steps['queue']['tool_output']['queued_tasks'] }}"
+    branches:
+      - when: "int(value) > 0"
+        goto: review
+      - otherwise: true
+        goto: done
+
+  - id: review
+    type: agent
+    agent_id: pr-reviewer
+    message: >
+      Review run. Process your open pr-review tasks one at a time, oldest first,
+      following your instructions exactly.
+    on_failure: abort
+
+  - id: done
+    type: noop

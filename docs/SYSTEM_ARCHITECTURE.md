@@ -383,6 +383,9 @@ Two databases on the same instance:
 | `workflow_approvals` | A workflow step waiting on a human verdict, and the verdict |
 | `agent_questions` | A question an agent asked a person (`ask_user`, or a guardrail escalation) and the free-text answer. Separate from `workflow_approvals` because the workflow resume driver acts on every decided row it finds, and an answer is not a verdict |
 | `coding_jobs` | One Claude Code job per row (`claude_code_*` tools, migration 144): repo, worktree, branch, Claude Code session id, status, rounds, cost, acceptance spec, last-events tail, and `result` holding the verify outcome and goal-shaped evidence. Rows left `queued`/`running` are resumed at engine start. Tenant RLS |
+| `pr_reviews` | One row per (tenant, repo, pull request) for the pr-reviewer suite (migration 145): head we saw, head we last reviewed, head a task is queued for, status, pending trigger, Chat thread refs, our GitHub review ids (the only threads it resolves) and the last review's findings with their inline comment ids. Tenant RLS |
+| `pr_review_messages` | Each Google Chat message the pr-review intake handled, once, with what it did or the error it raised — a failing message is recorded and skipped, never retried. Tenant RLS |
+| `pr_review_cursors` | Where each Chat source's last intake poll stopped. Tenant RLS |
 
 ### Canonical schema lifecycle
 
@@ -1431,6 +1434,19 @@ The daemon calls `resume_interrupted_jobs()` after run recovery at startup, and
 stops the job tasks without marking them at shutdown, so a restart resumes
 them. The token is stored by `genus claude-code login` (`claude setup-token`)
 in the vault. See [Tools → Claude Code](TOOLS.md#claude-code-claude_code_).
+
+#### pr-reviewer suite (`robothor/pr_review/`)
+
+Pull-request review built on the Claude Code driver. Deterministic intake
+(`pr_review_intake`, cron workflow every 2 min) polls GitHub and a Google Chat
+space and files one CRM task per pull-request head for the `pr-reviewer`
+agent; `pr_review_prepare` returns read-only review-job arguments;
+`pr_review_finalize` reads the job's structured output itself, recomputes the
+verdict (`policy.py`) and posts. Pure modules: `posting.py` (anchors, body,
+`decide_review`), `policy.py`, `classify.py`, `depth.py`, `schema.py`,
+`prompt.py`; I/O: `clients.py` (GitHub, gws Chat), `checkout.py` (one clone
+per repo, token via `GIT_CONFIG_*` env only), `store.py` (the three tables
+above), `tasks.py` (CRM). See [PR_REVIEWER.md](PR_REVIEWER.md).
 
 ### Voice & SMS (Twilio)
 

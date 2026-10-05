@@ -480,6 +480,14 @@ TOOL_HINTS: dict[str, ToolHint] = {
     "github_resolve_threads": ToolHint(
         keywords=(*_PR, "review", "resolve", "thread", "close", "comment")
     ),
+    # ── pr-reviewer suite ─────────────────────────────────────────────
+    "pr_review_intake": ToolHint(keywords=(*_PR, "review", "intake", "poll", "queue", "chat")),
+    "pr_review_prepare": ToolHint(
+        keywords=(*_PR, "review", "prepare", "checkout", "start", "task")
+    ),
+    "pr_review_finalize": ToolHint(
+        keywords=(*_PR, "review", "finalize", "post", "verdict", "result")
+    ),
 }
 
 

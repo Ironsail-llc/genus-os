@@ -841,6 +841,7 @@ async def _viewer_login(client: httpx.AsyncClient, headers: dict[str, str]) -> s
 @_handler("github_create_review")
 async def _github_create_review(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     """Post a review: blocking findings inline where the diff allows, the rest in the body."""
+    from robothor.pr_review.policy import guard_posted_verdict
     from robothor.pr_review.posting import (
         compose_body,
         format_issue_comment,
@@ -861,6 +862,9 @@ async def _github_create_review(args: dict[str, Any], ctx: ToolContext) -> dict[
     issues = _validate_issues(args.get("issues"))
     if isinstance(issues, str):
         return {"error": issues}
+    # Every caller crosses this: an APPROVE beside a blocker/major finding is
+    # never posted, whoever asked for it (robothor.pr_review.policy).
+    verdict, verdict_overridden = guard_posted_verdict(verdict, issues)
     prior = args.get("prior_issues") or []
     if not isinstance(prior, list) or not all(isinstance(p, dict) for p in prior):
         return {"error": "prior_issues must be a list of objects"}
@@ -946,15 +950,21 @@ async def _github_create_review(args: dict[str, Any], ctx: ToolContext) -> dict[
 
             review_id = review.get("id")
             comment_ids: list[int] = []
+            posted_comments: list[dict[str, Any]] = []
             if inline and review_id is not None:
                 try:
                     cresp = await client.get(
                         f"{pr_url}/reviews/{review_id}/comments", headers=headers
                     )
                     if cresp.status_code == 200:
-                        comment_ids = [c["id"] for c in cresp.json() if "id" in c]
+                        posted_comments = [
+                            {"id": c["id"], "path": c.get("path", ""), "line": c.get("line")}
+                            for c in cresp.json()
+                            if "id" in c
+                        ]
+                        comment_ids = [c["id"] for c in posted_comments]
                 except Exception:  # noqa: BLE001 - the review is posted; ids are a convenience
-                    comment_ids = []
+                    comment_ids, posted_comments = [], []
     except httpx.HTTPStatusError as e:
         return _http_error(e, f"PR #{number} in {repo}")
     except Exception as e:
@@ -967,12 +977,14 @@ async def _github_create_review(args: dict[str, Any], ctx: ToolContext) -> dict[
         "url": review.get("html_url")
         or f"https://github.com/{repo}/pull/{number}#pullrequestreview-{review_id}",
         "verdict": verdict,
+        "verdict_overridden": verdict_overridden,
         "event": event,
         "posted_as_comment": as_comment,
         "inline_count": len(inline),
         "body_findings": len(blocking) - len(inline) + len(non_blocking),
         "anchors_folded": anchors_folded,
         "comment_ids": comment_ids,
+        "comments": posted_comments,
         "commit_id": commit_id,
     }
 

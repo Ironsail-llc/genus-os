@@ -297,7 +297,7 @@ refused on a benchmark run.
 | `github_pr_diff` | The pull request's unified diff. Cut at 150,000 characters with `truncated: true` and `total_chars`; past that, read `github_pr_files`. |
 | `github_pr_files` | One entry per changed file: `filename`, `status`, `additions`, `deletions`, `patch` (null for a binary or oversized file). Patches share a 150,000-character budget; a file past it has `patch_omitted: true`. |
 | `github_compare` | `base...head`: `status` (`ahead`, `behind`, `diverged`, `identical`, or `missing` when the base commit is gone), `commits`, `files` and `full_review_required`. |
-| `github_create_review` *(opt-in)* | Posts a review and returns `review_id`, `url`, `event`, `inline_count`, `comment_ids`, `posted_as_comment` and `anchors_folded`. |
+| `github_create_review` *(opt-in)* | Posts a review and returns `review_id`, `url`, `verdict`, `verdict_overridden`, `event`, `inline_count`, `comment_ids`, `comments` (`id`, `path`, `line` of each inline comment), `posted_as_comment` and `anchors_folded`. |
 | `github_reply_review_comment` *(opt-in)* | Replies inside an existing review thread and returns the new comment's id and url. |
 | `github_resolve_threads` *(opt-in)* | Resolves only the threads opened by the `review_ids` you pass, and returns `resolved`, `thread_ids` and `already_resolved`. |
 
@@ -310,6 +310,9 @@ with the last reviewed SHA as `base` and the current head as `head`. When
 
 **What `github_create_review` does with your findings.**
 
+* An `APPROVE` beside any `blocker` or `major` finding is never posted: the
+  tool posts `REQUEST_CHANGES` and returns `verdict_overridden: true`, for
+  every caller (`robothor.pr_review.policy.guard_posted_verdict`).
 * Only `blocker` and `major` findings become inline comments. `minor`, `nit`
   and any unknown severity go in the body under *Non-blocking*.
 * GitHub rejects the whole review if one inline comment points outside the
@@ -333,6 +336,24 @@ with the last reviewed SHA as `base` and the current head as `head`. When
 returned. A thread belongs to the review its first comment was posted in. So a
 thread someone opened by hand from the same account is never resolved, even
 though it has the same author.
+
+### pr-reviewer suite (`pr_review_*`)
+
+Three opt-in tools that hold the deterministic halves of the pr-reviewer agent
+(docs/PR_REVIEWER.md). They are refused on a benchmark run.
+
+| Tool | Purpose |
+|---|---|
+| `pr_review_intake` | Poll the configured repositories (`ROBOTHOR_PR_REVIEW_REPOS`), pull requests requesting `ROBOTHOR_PR_REVIEW_BOT_LOGIN`'s review, and the Chat space (`ROBOTHOR_PR_REVIEW_CHAT_SPACE`); claim new links with a reaction; file one `pr-review` CRM task per pull-request head. No model. `poll: false` only dispatches and counts. Returns counts including `open_tasks` and `queued_tasks`. Run by the `pr-review-intake` workflow. |
+| `pr_review_prepare` | Fetch the head into a local clone and return `start_args` for `claude_code_start` (mode `review`, the review prompt, the output schema, the budget). `skip: true` means nothing to review. |
+| `pr_review_finalize` | Read the review job's structured output from the job itself, validate it, recompute the verdict, post through `github_create_review`, reply on our previous threads, resolve our own threads on approval, announce in the Chat thread and record the state. Returns `review_url`. `dismiss: true` closes an ambiguous re-review request that was not one. |
+
+**Choosing.** A pr-reviewer agent never calls `github_create_review` itself:
+`pr_review_finalize` is the only path that applies the policy (any blocker or
+major means `REQUEST_CHANGES`, or `COMMENT` with
+`ROBOTHOR_PR_REVIEW_BLOCKING_EVENT=COMMENT`; `APPROVE` only when the model
+approved and nothing blocking remains; the optional ticket rule). Use the
+`github_*` review tools directly only for a one-off review outside the suite.
 
 ### Vision: `view_image` and `analyze_image`
 

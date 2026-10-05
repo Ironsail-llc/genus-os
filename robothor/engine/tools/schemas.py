@@ -1228,6 +1228,77 @@ _CLAUDE_CODE_SCHEMAS: dict[str, dict[str, Any]] = {
 }
 
 
+#: The pr-reviewer suite (robothor/pr_review/). Opt-in: see OPT_IN_TOOLS.
+_PR_REVIEW_SCHEMAS: dict[str, dict[str, Any]] = {
+    "pr_review_intake": {
+        "type": "function",
+        "function": {
+            "name": "pr_review_intake",
+            "description": (
+                "Poll the configured GitHub repositories and Chat space for pull requests "
+                "that need a review, and file one pr-review task per pull-request head. "
+                "Deterministic; normally run by the pr-review-intake workflow. Returns "
+                "counts, including open_tasks. poll=false only reports and dispatches."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "poll": {
+                        "type": "boolean",
+                        "description": "Read GitHub and Chat (default true)",
+                    }
+                },
+            },
+        },
+    },
+    "pr_review_prepare": {
+        "type": "function",
+        "function": {
+            "name": "pr_review_prepare",
+            "description": (
+                "Use this first for a pr-review task: fetches the pull request's head and "
+                "returns start_args — pass them to claude_code_start exactly as given. "
+                "skip: true means there is nothing to review; resolve the task."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {"repo": _GH_REPO, "number": _GH_NUMBER},
+                "required": ["repo", "number"],
+            },
+        },
+    },
+    "pr_review_finalize": {
+        "type": "function",
+        "function": {
+            "name": "pr_review_finalize",
+            "description": (
+                "Use this after claude_code_wait reports the review job finished (done or "
+                "failed). Reads the job's result itself, recomputes the verdict from the "
+                "findings, posts the review, replies on previous threads, announces in the "
+                "chat thread and returns review_url. dismiss=true closes an ambiguous "
+                "re-review request that was not one."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "repo": _GH_REPO,
+                    "number": _GH_NUMBER,
+                    "job_id": {
+                        "type": "string",
+                        "description": "The review job's job_id from claude_code_start",
+                    },
+                    "dismiss": {
+                        "type": "boolean",
+                        "description": "The ambiguous reply was not a re-review request",
+                    },
+                },
+                "required": ["repo", "number"],
+            },
+        },
+    },
+}
+
+
 def get_engine_schemas() -> dict[str, dict[str, Any]]:
     """Return all engine-specific tool schemas keyed by tool name."""
     schemas: dict[str, dict[str, Any]] = {}
@@ -3649,7 +3720,7 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
         },
     }
 
-    schemas.update(_GITHUB_REVIEW_SCHEMAS)
+    schemas.update(_GITHUB_REVIEW_SCHEMAS | _PR_REVIEW_SCHEMAS)
 
     # ── DevOps metrics storage tools ──
 

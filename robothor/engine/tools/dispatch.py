@@ -216,6 +216,7 @@ def builtin_handlers() -> dict[str, Any]:
         messaging,
         observability,
         pdf,
+        pr_review,
         reasoning,
         reports,
         sales,
@@ -276,6 +277,7 @@ def builtin_handlers() -> dict[str, Any]:
         images,
         attachments,
         claude_code,
+        pr_review,
     ]:
         all_handlers.update(mod.HANDLERS)
 
