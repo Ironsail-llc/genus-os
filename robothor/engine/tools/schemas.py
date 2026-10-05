@@ -1275,6 +1275,15 @@ _PR_REVIEW_SCHEMAS: dict[str, dict[str, Any]] = {
                             "again later with the same pr for requested.review_url"
                         ),
                     },
+                    "action": {
+                        "type": "string",
+                        "enum": ["review", "skip"],
+                        "description": (
+                            "With pr: 'review' (default) queues it; 'skip' stops reviewing "
+                            "it — closes it and its open task, and later polls leave it "
+                            "alone until a review is asked for again"
+                        ),
+                    },
                 },
             },
         },

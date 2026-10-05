@@ -85,6 +85,9 @@ NO_CHANGES_REPLY = "No changes?"
 IN_PROGRESS_REPLY = (
     "A review is already running for this PR. I'll check for newer commits once it's posted."
 )
+#: ``error`` of a row the operator closed with ``action="skip"``: a closed row
+#: is otherwise reopened when a poll finds its pull request open again.
+OPERATOR_SKIP_NOTE = "stopped by the operator (pr_review_intake action=skip)"
 #: Coding-job statuses after which nothing more happens unless a run finalizes.
 _TERMINAL_JOB_STATUSES = frozenset({"done", "failed", "cancelled"})
 #: How long a finished job may wait for the run that started it before the
@@ -252,6 +255,8 @@ class Intake:
             else:
                 if row.status == "closed":
                     row.status = "pending"
+                    if row.error == OPERATOR_SKIP_NOTE:
+                        row.error = ""  # an explicit request lifts the operator's skip
                 if not row.chat_thread:
                     row.source = "operator"  # no thread to answer in: the digest reports it
                 _raise_trigger(row, "rereview" if row.last_reviewed_sha else "initial")
@@ -374,6 +379,8 @@ class Intake:
                 row = self._new_row(repo, number, source)
                 self.summary["discovered"] += 1
             if row.status == "closed":
+                if row.error == OPERATOR_SKIP_NOTE:
+                    continue  # the operator stopped reviews of this pull request
                 row.status = "pending"
             row.head_sha = head
             row.title = str(pr.get("title") or row.title)
@@ -537,21 +544,74 @@ class Intake:
     async def _dispatch(self) -> None:
         active = len(await self.store.list_active(self.tenant_id))
         for row in await self.store.list_pending(self.tenant_id):
-            if row.status in ACTIVE_STATUSES:
-                if not row.followup:
-                    row.followup = True
-                    await self.store.save(row)
-                continue
-            if active >= self.cfg.max_concurrent:
-                self.summary["deferred"] += 1
-                continue
-            try:
-                if await self._dispatch_one(row):
-                    active += 1
-            except Exception as exc:  # noqa: BLE001 - keep the trigger; next tick retries
-                self._error(f"dispatch {row.key}", exc)
-                row.error = str(exc)[:_ERROR_MAX]
+            if await self._dispatch_row(row, active):
+                active += 1
+
+    async def _dispatch_row(self, row: PrReviewRow, active: int) -> bool:
+        """Dispatch one pending row; True when it took a review slot."""
+        if row.status == "closed":
+            # Never review a closed row, whatever trigger it still carries:
+            # one closed by hand was dispatched and reviewed when capacity
+            # freed (2026-10-05). list_pending excludes them too.
+            self._clear(row)
+            await self.store.save(row)
+            return False
+        if row.status in ACTIVE_STATUSES:
+            if not row.followup:
+                row.followup = True
                 await self.store.save(row)
+            return False
+        if active >= self.cfg.max_concurrent:
+            self.summary["deferred"] += 1
+            return False
+        try:
+            return await self._dispatch_one(row)
+        except Exception as exc:  # noqa: BLE001 - keep the trigger; next tick retries
+            self._error(f"dispatch {row.key}", exc)
+            row.error = str(exc)[:_ERROR_MAX]
+            await self.store.save(row)
+            return False
+
+    async def skip(self, pr: str) -> dict[str, Any]:
+        """Stop reviewing one pull request (``pr_review_intake(pr=..., action="skip")``).
+
+        Closes the row, clears its trigger and closes its open task. It stays
+        stopped through later polls and Chat messages; asking for a review of
+        it (``pr_review_intake(pr=...)``) is the way back. A review job already
+        running is not killed — cancel it with ``claude_code_cancel`` — but its
+        result is never posted, because finalize only posts a row under review.
+        """
+        parsed = parse_pr_ref(pr)
+        if parsed is None:
+            return {"error": f"not a pull request: {pr!r} (use a URL or owner/repo#N)"}
+        repo, number = parsed
+        configured = next((r for r in self.cfg.repos if r.lower() == repo.lower()), None)
+        if configured is None:
+            return {"error": f"{repo} is not in ROBOTHOR_PR_REVIEW_REPOS"}
+        async with self.store.intake_lock(self.tenant_id) as held:
+            if not held:
+                return {"skipped": "locked", "note": "an intake run is in progress; ask again"}
+            row = await self.store.get(self.tenant_id, configured, number)
+            if row is None:
+                row = self._new_row(configured, number, "operator")
+            was = row.status
+            row.status = "closed"
+            row.error = OPERATOR_SKIP_NOTE
+            self._clear(row)
+            await self.store.save(row)
+            close = getattr(self.tasks, "close", None)
+            if row.task_id and close is not None:
+                try:
+                    await close(row.task_id, "Stopped by the operator: not reviewing this PR")
+                except Exception as exc:  # noqa: BLE001 - the row is what stops reviews
+                    self._error(f"close task {row.key}", exc)
+            result: dict[str, Any] = {"pr": row.key, "status": "closed", "was": was}
+            if was in ("reviewing", "posting") and row.job_id:
+                result["note"] = (
+                    f"review job {row.job_id} is still running; its result will not be "
+                    "posted (claude_code_cancel stops it)"
+                )
+            return {"skipped": result, "errors": self.summary["errors"]}
 
     @staticmethod
     def _clear(row: PrReviewRow) -> None:

@@ -167,6 +167,11 @@ async def _intake(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     poll = args.get("poll", True) is not False
     count_only = args.get("count_only") is True
     requested = str(args.get("pr") or "").strip()
+    action = str(args.get("action") or "review").strip().lower()
+    if action not in ("review", "skip"):
+        return {"error": f"action must be 'review' or 'skip', not {action!r}"}
+    if action == "skip" and not requested:
+        return {"error": "action='skip' needs pr=<url or owner/repo#N>"}
     intake = Intake(
         cfg,
         _store(),
@@ -176,6 +181,8 @@ async def _intake(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         chat=_chat() if cfg.chat_space else None,
         job_state=_job_state(ctx.tenant_id),
     )
+    if action == "skip":
+        return await intake.skip(requested)
     if requested:
         return await intake.request(requested)
     return await intake.run(poll=poll, count_only=count_only)

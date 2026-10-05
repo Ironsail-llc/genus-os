@@ -134,6 +134,14 @@ Chat thread; its finalize result carries a Telegram digest line, which reaches
 Telegram when the pr-reviewer is installed with `delivery_mode=announce`. Main
 runs as `owner` on Telegram, which migration 146 leaves allowed.
 
+**Stopping reviews of one pull request.** `pr_review_intake(pr="<url or
+owner/repo#N>", action="skip")` closes its row, clears any queued trigger and
+resolves its open review task — no hand edits to `pr_reviews`. It stays
+stopped through later polls and Chat messages until someone asks for a review
+of it again with `pr_review_intake(pr=...)`. A review job already running is
+not killed (`claude_code_cancel` stops it), but its result is never posted. A
+`closed` row is never dispatched, whatever trigger it still carries.
+
 **Timeouts.** `claude_code_wait` enforces its own wait (up to 1800 s), so the
 registry gives it 1830 s; `pr_review_prepare` and `pr_review_finalize` get the
 600 s long-running floor. A git clone or fetch that is cancelled is killed,
