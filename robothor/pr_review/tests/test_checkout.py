@@ -59,6 +59,23 @@ async def test_clones_then_fetches_the_pull_request_head(tmp_path, remote):
     assert again == dest
 
 
+async def test_a_stacked_pr_also_fetches_the_default_branch(tmp_path, remote):
+    bare, head, base = remote
+    _git(bare, "branch", "-q", "stack", base)  # the PR is stacked on another branch
+    dest = tmp_path / "c"
+    await ensure_checkout(
+        dest,
+        number=7,
+        head_sha=head,
+        base_branch="stack",
+        remote_url=str(bare),
+        token="",
+        also_fetch=("main", "-bad", "stack"),
+    )
+    assert _git(dest, "rev-parse", "refs/remotes/origin/stack") == base
+    assert _git(dest, "rev-parse", "refs/remotes/origin/main") == base
+
+
 async def test_unknown_head_is_an_error(tmp_path, remote):
     bare, _head, _ = remote
     with pytest.raises(CheckoutError, match="not found"):

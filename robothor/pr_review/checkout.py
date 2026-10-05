@@ -78,8 +78,13 @@ async def ensure_checkout(
     base_branch: str,
     remote_url: str,
     token: str,
+    also_fetch: tuple[str, ...] = (),
 ) -> Path:
-    """Clone (once) and fetch the PR head and base branch; return the clone path."""
+    """Clone (once) and fetch the PR head and base branch; return the clone path.
+
+    ``also_fetch`` names more branches to bring up to date (the default branch
+    of a stacked pull request); a name that is not a plain branch is skipped.
+    """
     if not _SHA_RE.match(head_sha or ""):
         raise CheckoutError(f"head sha {head_sha!r} is not a commit sha")
     if base_branch.startswith("-") or not _REF_RE.match(base_branch or ""):
@@ -107,6 +112,11 @@ async def ensure_checkout(
         "origin",
         f"+refs/pull/{int(number)}/head:refs/genus/pr/{int(number)}",
         f"+refs/heads/{base_branch}:refs/remotes/origin/{base_branch}",
+        *(
+            f"+refs/heads/{b}:refs/remotes/origin/{b}"
+            for b in dict.fromkeys(also_fetch)
+            if b != base_branch and not b.startswith("-") and _REF_RE.match(b)
+        ),
         token=token,
     )
     code, _ = await _git(dest, "cat-file", "-e", f"{head_sha}^{{commit}}", check=False)

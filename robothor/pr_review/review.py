@@ -319,6 +319,9 @@ async def prepare(
             await store.save(row)
         return {"skip": True, "reason": f"{decision.reason}: resolve the task"}
 
+    # A stacked pull request finally lands on the default branch: fetch it too.
+    default_branch = str(((pr.get("base") or {}).get("repo") or {}).get("default_branch") or "")
+    stacked_on = default_branch if default_branch and default_branch != base_ref else ""
     path = await checkout(
         cfg.clone_dir(row.repo),
         number=number,
@@ -326,6 +329,7 @@ async def prepare(
         base_branch=base_ref,
         remote_url=remote_url or f"https://github.com/{row.repo}.git",
         token=token,
+        **({"also_fetch": (stacked_on,)} if stacked_on else {}),
     )
     # The rules a pull request is reviewed against come from the branch it
     # merges into: a PR that edits CLAUDE.md must not write its own review rules.
@@ -382,6 +386,7 @@ async def prepare(
         changed_lines=changed,
         deep=deep,
         ticket_candidates=candidates,
+        stacked_on=stacked_on,
     )
     acceptance: dict[str, Any] = {"require_commit": False}
     if deep:

@@ -301,6 +301,46 @@ async def test_prepare_puts_the_pr_context_in_the_task(tmp_path):
     assert result["github_state"]["conflicts"] == ["src/a.py"]
 
 
+async def test_a_stacked_pr_is_also_checked_against_the_default_branch(tmp_path):
+    gh = RichGitHub()
+    pr = make_pr(7, SHA)
+    pr["base"] = {"ref": "feature-base", "repo": {"default_branch": "main"}}
+    gh.add(pr)
+    seen: dict[str, Any] = {}
+
+    store = MemoryStore()
+    await store.save(PrReviewRow(tenant_id=TENANT, repo=REPO, number=7, status="queued"))
+
+    async def checkout(dest, **kw):
+        seen.update(kw)
+        return tmp_path
+
+    async def reader(*_):
+        return None
+
+    calls: list[dict[str, Any]] = []
+
+    async def start(args):
+        calls.append(args)
+        return {"job_id": "job-1"}
+
+    await prepare(
+        ReviewerConfig(repos=(REPO,)),
+        store,
+        TENANT,
+        REPO,
+        7,
+        github=gh,
+        skill_text="g",
+        token="",
+        start_job=start,
+        checkout=checkout,
+        reader=reader,
+    )
+    assert seen["base_branch"] == "feature-base" and seen["also_fetch"] == ("main",)
+    assert "origin/main" in calls[0]["task"] and "stacked" in calls[0]["task"]
+
+
 async def test_prepare_goes_deep_on_a_large_pull_request(tmp_path):
     gh = RichGitHub()
     pr = make_pr(7, SHA)

@@ -51,7 +51,9 @@ not by running it.
 - **Check the change against the base as it is now.** The base may have
   moved since the merge-base. A test or caller that landed on the base
   meanwhile and that this change breaks once merged — or makes pass without
-  checking anything — is a finding.
+  checking anything — is a finding. A stacked pull request (its base is not
+  the default branch) finally lands on the default branch: when the task
+  says so, check it against that branch the same way.
 - **Read what other reviewers already said.** Verify each point at this
   head: one that still applies is a finding like any other (say it was
   raised before); one the code disproves is left out. Never post a point
@@ -197,7 +199,16 @@ however unlikely the path — a rare path that pays twice is still a path
 that pays twice. Low reach can lower a finding about inconvenience; it never
 lowers one about money, data, tenancy or a broken base. This includes
 instructions the pull request gives people: a runbook step that re-opens a
-double payment is graded like code that does.
+double payment is graded like code that does. When the fix depends on people
+following its runbook (records only operators can clear, a manual
+reconciliation), a runbook path that cannot be executed — the API refuses the
+credential it uses — or that re-opens the defect is **major**: in the
+incident there is no working path.
+
+**Turning a control off needs a trail.** When a change disables, bypasses or
+skips a check, gate or guard, ask how anyone will find the cases that went
+through without it. If nothing logs, records or flags them, that is a
+**major** silent outcome on anything touching money, compliance or safety.
 
 Only blocker and major findings block a merge. Minor findings and nits never
 stand in the way of an approval; they are shared for awareness.
