@@ -447,7 +447,7 @@ async def test_pr_review_queue_count_is_a_read(gateway, effect_db, monkeypatch):
 
 
 def test_tool_call_inherits_the_classification_of_what_it_wraps():
-    from robothor.engine.tools.read_only import is_read_only_call
+    from robothor.engine.wrapped_call import is_read_only_call
 
     assert is_read_only_call("tool_call", {"name": "claude_code_wait", "arguments": {}})
     assert is_read_only_call("tool_call", {"name": "github_pr_diff", "arguments": {}})

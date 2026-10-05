@@ -38,6 +38,15 @@ def test_tool_call_wrapping_an_ordinary_tool_keeps_the_configured_cap() -> None:
     assert resolve_tool_timeout("tool_call", 120, {"name": "tool_call"}) == 120
 
 
+def test_inner_call_looks_through_the_wrapper_only() -> None:
+    from robothor.engine.wrapped_call import inner_call
+
+    assert inner_call("tool_call", {"name": " x ", "arguments": {"a": 1}}) == ("x", {"a": 1})
+    assert inner_call("tool_call", {"name": "x", "arguments": "bad"}) == ("x", {})
+    assert inner_call("read_file", {"path": "p"}) == ("read_file", {"path": "p"})
+    assert inner_call("tool_call", None) == ("tool_call", {})
+
+
 def _request() -> Any:
     run = SimpleNamespace(
         id="r",

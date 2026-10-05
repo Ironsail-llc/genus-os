@@ -40,13 +40,13 @@ from __future__ import annotations
 from typing import Any
 
 from robothor.engine.tool_self_timed import SELF_TIMED_GRACE_SECONDS, self_timed_ceiling
+from robothor.engine.wrapped_call import inner_call
 
 __all__ = [
     "HARNESS_BUDGETED_TOOLS",
     "LONG_RUNNING_FLOOR_SECONDS",
     "LONG_RUNNING_TOOLS",
     "SELF_TIMED_GRACE_SECONDS",
-    "budgeted_tool_name",
     "resolve_tool_timeout",
     "self_timed_ceiling",
 ]
@@ -107,36 +107,14 @@ HARNESS_BUDGETED_TOOLS = frozenset(
 )
 
 
-#: The deferred-toolset meta-tool. It runs another tool, so it has no budget of
-#: its own: the deadline wrapping it is the one the tool it runs would get.
-_WRAPPER_TOOL = "tool_call"
-
-
-def budgeted_tool_name(tool_name: str, arguments: Any = None) -> str:
-    """The tool whose budget a call is spent on.
-
-    For ``tool_call`` that is the tool it wraps. Observed 2026-10-05: a deferred
-    agent's ``tool_call(name="claude_code_wait", arguments={"timeout_s": 1200})``
-    was cut at the 120 s default, because the deadline was resolved for the
-    wrapper's name. Anything that is not a plain tool name — missing, not a
-    string, or another meta-tool the handler will refuse — earns no budget.
-    """
-    if tool_name != _WRAPPER_TOOL or not isinstance(arguments, dict):
-        return tool_name
-    inner = arguments.get("name")
-    if not isinstance(inner, str) or not inner.strip() or inner.strip() == _WRAPPER_TOOL:
-        return tool_name
-    return inner.strip()
-
-
 def resolve_tool_timeout(tool_name: str, configured: int, arguments: Any = None) -> int:
     """Per-tool wall-clock cap, in seconds. 0 means unlimited.
 
     One owner per budget: where the callee already bounds its own work, this
-    layer must not impose a second, smaller bound. Pass the call's
-    ``arguments`` so a ``tool_call`` is bounded as the tool it runs.
+    layer must not impose a second, smaller bound. With the call's
+    ``arguments``, a ``tool_call`` gets the budget of the tool it wraps.
     """
-    tool_name = budgeted_tool_name(tool_name, arguments)
+    tool_name, _ = inner_call(tool_name, arguments)
     if tool_name in HARNESS_BUDGETED_TOOLS:
         return 0
     ceiling = self_timed_ceiling(tool_name)

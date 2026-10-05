@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any
 from robothor.engine.runtime import effects
 from robothor.engine.runtime.current import active_context
 from robothor.engine.tools.constants import READONLY_TOOLS
-from robothor.engine.tools.read_only import is_read_only_call
+from robothor.engine.wrapped_call import is_read_only_call
 from robothor.goals.runtime import RECOVERY_BOOKKEEPING_ACTIONS
 
 if TYPE_CHECKING:

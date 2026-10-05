@@ -23,19 +23,14 @@ two tool calls run at the same time.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any
 
 from robothor.engine.tools.constants import READONLY_TOOLS
-
-if TYPE_CHECKING:
-    from collections.abc import Iterable
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
     "adapter_read_only_tools",
     "declared_read_only_tools",
-    "is_read_only_call",
     "plugin_read_only_tools",
 ]
 
@@ -90,39 +85,3 @@ def declared_read_only_tools() -> frozenset[str]:
     answer at import time — before any adapter has connected.
     """
     return frozenset(READONLY_TOOLS | adapter_read_only_tools() | plugin_read_only_tools())
-
-
-#: The deferred-toolset meta-tool: it has no effect of its own, only the one of
-#: the tool it runs.
-_WRAPPER_TOOL = "tool_call"
-
-
-def _read_only_by_arguments(name: str, arguments: dict[str, Any]) -> bool:
-    """Tools that are a read in one argument shape and a write in another.
-
-    ``pr_review_intake(count_only=True)`` only counts the queue; without it
-    (or with ``pr=``) it polls, files tasks and starts reviews.
-    """
-    if name == "pr_review_intake":
-        return arguments.get("count_only") is True and not arguments.get("pr")
-    return False
-
-
-def is_read_only_call(
-    name: str, arguments: Any = None, read_only: Iterable[str] | None = None
-) -> bool:
-    """Whether THIS call — a name with its arguments — has no side effects.
-
-    ``tool_call`` inherits the classification of the call it wraps, so a
-    deferred agent reading through the wrapper is treated exactly as one that
-    reads directly. ``read_only`` defaults to core's own table; callers that
-    honour bundle declarations pass :func:`declared_read_only_tools`.
-    """
-    names = READONLY_TOOLS if read_only is None else frozenset(read_only)
-    args = arguments if isinstance(arguments, dict) else {}
-    if name == _WRAPPER_TOOL:
-        inner = args.get("name")
-        if not isinstance(inner, str) or not inner.strip() or inner.strip() == _WRAPPER_TOOL:
-            return False
-        return is_read_only_call(inner.strip(), args.get("arguments"), names)
-    return name in names or _read_only_by_arguments(name, args)
