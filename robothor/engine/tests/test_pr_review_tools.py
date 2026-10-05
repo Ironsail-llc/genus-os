@@ -117,3 +117,34 @@ async def test_intake_count_only_changes_nothing():
     ):
         result = await pr_review._intake({"count_only": True}, _CTX)
     assert result["queued_tasks"] == 0 and tasks.created == [] and chat.reactions == []
+
+
+async def test_ticket_searcher_builds_a_safe_jql_and_slims_the_result():
+    from robothor.engine.tools.handlers import jira
+
+    seen: dict = {}
+
+    async def fake_search(args, ctx):
+        seen.update(args)
+        return {"issues": [{"key": "ABC-9", "summary": "retry job", "status": "Backlog"}]}
+
+    with (
+        patch.object(jira, "_get_base_url", return_value="https://jira.example.com"),
+        patch.object(jira, "_get_auth_header", return_value="Basic x"),
+        patch.object(jira, "_jira_search", fake_search),
+    ):
+        found = await pr_review._ticket_searcher(_CTX)(
+            "ABC", 'fix(refunds): refund "once" and never zero OR project = X'
+        )
+    assert found == [{"key": "ABC-9", "summary": "retry job", "status": "Backlog"}]
+    jql = seen["jql"]
+    assert jql.startswith('project = "ABC" AND text ~ "')
+    assert jql.count('"') == 4  # the title's own quotes never reach the JQL
+    assert "refunds" in jql and seen["max_results"] == 5
+
+
+async def test_ticket_searcher_is_quiet_without_jira():
+    from robothor.engine.tools.handlers import jira
+
+    with patch.object(jira, "_get_base_url", return_value=""):
+        assert await pr_review._ticket_searcher(_CTX)("ABC", "anything") == []

@@ -3303,6 +3303,24 @@ class PrReviewSettings(SettingsGroup):
         restart_required=False,
         since="unreleased",
     )
+    deep_lines: int = declare(
+        1500,
+        "ROBOTHOR_PR_REVIEW_DEEP_LINES",
+        "Changed lines (additions plus deletions) from which a review goes deep: "
+        "ROBOTHOR_PR_REVIEW_DEEP_EFFORT, four explicit sequential lens passes, and a "
+        "completeness pass in the same session when the first round used under 60% of "
+        "its turns.",
+        restart_required=False,
+        since="unreleased",
+    )
+    deep_effort: str = declare(
+        "xhigh",
+        "ROBOTHOR_PR_REVIEW_DEEP_EFFORT",
+        "Claude Code --effort for a deep review (low, medium, high, xhigh or max). Never "
+        "lowers ROBOTHOR_PR_REVIEW_EFFORT.",
+        restart_required=False,
+        since="unreleased",
+    )
     review_round_timeout_s: float = declare(
         1800.0,
         "ROBOTHOR_PR_REVIEW_ROUND_TIMEOUT",

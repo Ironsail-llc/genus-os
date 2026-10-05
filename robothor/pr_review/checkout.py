@@ -115,6 +115,37 @@ async def ensure_checkout(
     return dest
 
 
+async def merge_conflicts(repo: Path, base: str, head: str) -> list[str] | None:
+    """The files that conflict when ``head`` is merged into ``base``; None when unknown.
+
+    ``git merge-tree --write-tree`` merges in memory and writes only objects
+    (never a ref, the index or a work tree) into the reviewer's own clone, on
+    the host, before the read-only review job starts.
+    """
+    if base.startswith("-") or head.startswith("-"):
+        return None
+    try:
+        code, out = await _git(
+            Path(repo),
+            "merge-tree",
+            "--write-tree",
+            "--name-only",
+            "--no-messages",
+            base,
+            head,
+            check=False,
+        )
+    except (CheckoutError, OSError):
+        return None
+    lines = out.splitlines()
+    # The first line is the merged tree's id; without it git refused the merge.
+    if code not in (0, 1) or not lines or not _SHA_RE.match(lines[0].strip()):
+        return None
+    if code == 0:
+        return []
+    return list(dict.fromkeys(line for line in lines[1:] if line.strip()))
+
+
 async def read_at(repo: Path, sha: str, relpath: str, max_chars: int = 20_000) -> str | None:
     """A file's content at ``sha`` (a commit or a ref such as ``origin/main``), or None."""
     if relpath.startswith("-") or ".." in relpath.split("/") or sha.startswith("-"):

@@ -101,6 +101,25 @@ class GitHubClient:
     async def list_commits(self, repo: str, number: int) -> list[dict[str, Any]]:
         return await self._pages(f"/repos/{repo}/pulls/{number}/commits", {"per_page": 100}, 3)
 
+    async def list_reviews(self, repo: str, number: int) -> list[dict[str, Any]]:
+        return await self._pages(f"/repos/{repo}/pulls/{number}/reviews", {"per_page": 100}, 3)
+
+    async def list_review_comments(self, repo: str, number: int) -> list[dict[str, Any]]:
+        return await self._pages(f"/repos/{repo}/pulls/{number}/comments", {"per_page": 100}, 3)
+
+    async def list_issue_comments(self, repo: str, number: int) -> list[dict[str, Any]]:
+        return await self._pages(f"/repos/{repo}/issues/{number}/comments", {"per_page": 100}, 3)
+
+    async def list_checks(self, repo: str, sha: str) -> dict[str, Any]:
+        """The commit's check runs and combined commit statuses (first page of each)."""
+        ref = quote(sha, safe="")
+        runs = await self._get(f"/repos/{repo}/commits/{ref}/check-runs", {"per_page": 100})
+        statuses = await self._get(f"/repos/{repo}/commits/{ref}/status", {"per_page": 100})
+        return {
+            "check_runs": (runs or {}).get("check_runs") or [],
+            "statuses": (statuses or {}).get("statuses") or [],
+        }
+
     async def compare_status(self, repo: str, base: str, head: str) -> str:
         data = await self._get(
             f"/repos/{repo}/compare/{quote(base, safe='')}...{quote(head, safe='')}"
