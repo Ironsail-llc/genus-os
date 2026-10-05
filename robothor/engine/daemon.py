@@ -1440,14 +1440,7 @@ async def main() -> int:
 
     await recover_repairs(runner, config)
 
-    # Claude Code jobs a previous engine left running (claude_code_* tools).
-    resumed_jobs = await _resume_coding_jobs()
-    if resumed_jobs:
-        logger.info("Startup: resumed %d interrupted coding job(s)", resumed_jobs)
-    # ...and what finished ones older than ROBOTHOR_CODING_RETENTION_DAYS left
-    # behind (worktrees, config dirs, genus/cc-* branches). Also re-run after
-    # jobs finish, at most hourly, by the manager itself.
-    await _reap_coding_jobs()
+    await _start_coding_jobs()  # resume interrupted Claude Code jobs, reap old ones
 
     _init_fleet_capacity(config)
 
@@ -1703,8 +1696,7 @@ async def main() -> int:
 
     await get_task_registry().drain(timeout=DRAIN_TIMEOUT_SECONDS)
 
-    # Stop Claude Code jobs WITHOUT marking them, so the next start resumes them.
-    await _stop_coding_jobs()
+    await _stop_coding_jobs()  # unmarked, so the next start resumes them
 
     await scheduler.stop()
     await hooks.stop()
@@ -1731,6 +1723,20 @@ async def main() -> int:
     await asyncio.gather(*pending, return_exceptions=True)
     logger.info("Engine stopped")
     return 1 if subsystem_crashed else 0
+
+
+async def _start_coding_jobs() -> None:
+    """Startup for the claude_code_* tools. Never fatal.
+
+    Resumes the jobs a previous engine left running, then removes what finished
+    ones older than ROBOTHOR_CODING_RETENTION_DAYS left behind (worktrees,
+    config dirs, genus/cc-* branches); the manager re-runs that reaper after
+    jobs finish, at most hourly.
+    """
+    resumed_jobs = await _resume_coding_jobs()
+    if resumed_jobs:
+        logger.info("Startup: resumed %d interrupted coding job(s)", resumed_jobs)
+    await _reap_coding_jobs()
 
 
 async def _resume_coding_jobs() -> int:
