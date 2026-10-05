@@ -3,10 +3,24 @@
 Claude Code never works in the operator's checkout. Each job gets its own
 worktree under ``ROBOTHOR_CODING_WORKTREE_ROOT`` (default
 ``$ROBOTHOR_WORKSPACE/.genus/worktrees``), on a new branch for ``code`` jobs or
-a detached ref for ``review``/``readonly`` ones. The branch outlives the
+a detached ref for ``review``/``readonly`` ones.
+
+Why the default stays under the workspace: the engine unit's
+``ProtectHome=read-only`` leaves it exactly two writable homes for this —
+the workspace (``ReadWritePaths=`` on it) and ``~/.config/robothor`` — and
+``~/.config`` is on every job's sandbox ``denyRead`` list, so a worktree there
+would be unreadable to the job's own shell. ``.genus/`` is gitignored, holds
+no instance data (``brain/`` and ``.robothor/`` stay denied), and the sandbox
+grants write on each job's own worktree only. The branch outlives the
 worktree: removing the directory at the end of a job keeps the commits, and a
 follow-up re-attaches the same branch at the same path, which is also where
 Claude Code filed the session it resumes.
+
+Every engine-side git call runs with the job allowlist environment (no
+credential the engine holds) and ``-c core.hooksPath=/dev/null -c
+core.fsmonitor=false``: a repository's hooks and fsmonitor command are code,
+and the engine must not run a job's — or a target repository's — code as
+itself.
 
 A job never works on a protected branch (``main``/``master`` — the same set the
 ``git_*`` tools refuse), and a ref that starts with ``-`` is refused before it
@@ -16,7 +30,6 @@ reaches git's argv.
 from __future__ import annotations
 
 import asyncio
-import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -25,10 +38,14 @@ from robothor.engine.tools.constants import PROTECTED_BRANCHES
 __all__ = [
     "WorktreeError",
     "WorktreeInfo",
+    "commits_on_branch",
     "commits_since",
     "create_worktree",
+    "delete_job_branch",
     "dirty_paths",
+    "git_dirs",
     "git_identity",
+    "head_branch",
     "head_sha",
     "is_dirty",
     "remove_worktree",
@@ -38,6 +55,13 @@ __all__ = [
 ]
 
 _GIT_TIMEOUT = 60.0
+
+#: Prepended to every engine-side git call. Hooks and fsmonitor are commands
+#: git runs; in a job's worktree they are the job's (or the target repo's).
+_GIT_HARDENING = ("-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false")
+
+#: The only branches the reaper may delete.
+JOB_BRANCH_PREFIX = "genus/cc-"
 
 
 class WorktreeError(RuntimeError):
@@ -70,13 +94,16 @@ def worktree_path_for(job_id: str) -> Path:
 async def _git(
     cwd: Path | str, *args: str, check: bool = True, strip: bool = True
 ) -> tuple[int, str, str]:
+    from robothor.engine.coding.env import build_git_env
+
     proc = await asyncio.create_subprocess_exec(
         "git",
+        *_GIT_HARDENING,
         *args,
         cwd=str(cwd),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
-        env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+        env=build_git_env(),
     )
     try:
         out, err = await asyncio.wait_for(proc.communicate(), _GIT_TIMEOUT)
@@ -168,6 +195,43 @@ async def remove_worktree(repo: Path | str, path: Path | str) -> None:
 async def head_sha(path: Path | str) -> str:
     _, out, _ = await _git(path, "rev-parse", "HEAD")
     return out
+
+
+async def head_branch(path: Path | str) -> str | None:
+    """The branch HEAD is a symbolic ref to, or None when HEAD is detached."""
+    code, out, _ = await _git(path, "symbolic-ref", "-q", "HEAD", check=False)
+    if code != 0 or not out.startswith("refs/heads/"):
+        return None
+    return out[len("refs/heads/") :]
+
+
+async def commits_on_branch(path: Path | str, base_sha: str, branch: str) -> list[str]:
+    """Commits on ``refs/heads/<branch>`` that ``base_sha`` does not have, newest first.
+
+    Read from the branch ref, never from HEAD: a session that detached HEAD or
+    switched branches has not committed anything to the job's branch.
+    """
+    _refuse_option(base_sha, "base sha")
+    _refuse_option(branch, "branch name")
+    code, out, _ = await _git(path, "rev-list", f"{base_sha}..refs/heads/{branch}", check=False)
+    if code != 0:
+        return []
+    return [line for line in out.splitlines() if line]
+
+
+async def git_dirs(path: Path | str) -> tuple[Path, Path]:
+    """``(common git dir, this worktree's own git dir)``, absolute and resolved."""
+    _, common, _ = await _git(path, "rev-parse", "--path-format=absolute", "--git-common-dir")
+    _, own, _ = await _git(path, "rev-parse", "--path-format=absolute", "--git-dir")
+    return Path(common).resolve(), Path(own).resolve()
+
+
+async def delete_job_branch(repo: Path | str, branch: str) -> None:
+    """Delete a job's ``genus/cc-*`` branch; refuse any other name."""
+    _refuse_option(branch, "branch name")
+    if not branch.startswith(JOB_BRANCH_PREFIX) or branch in PROTECTED_BRANCHES:
+        raise WorktreeError(f"refusing to delete non-job branch {branch!r}")
+    await _git(repo, "branch", "-D", "--", branch, check=False)
 
 
 async def commits_since(path: Path | str, base_sha: str) -> list[str]:

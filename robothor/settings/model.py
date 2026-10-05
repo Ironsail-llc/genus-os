@@ -3171,9 +3171,28 @@ class CodingSettings(SettingsGroup):
     repo_roots: str = declare(
         "",
         "ROBOTHOR_CODING_REPO_ROOTS",
-        "Path-separated directories a coding job's repo_path must sit under. Empty allows "
-        "any git repository the engine can read; the job still works only in its own "
-        "worktree and never on main/master.",
+        "Path-separated directories a coding job's repo_path must sit under. REQUIRED: "
+        "empty refuses every claude_code_start. The live workspace itself, the service "
+        "user's home itself, and any directory containing either are refused even under "
+        "a root. The job still works only in its own worktree and never on main/master.",
+        restart_required=False,
+        since="unreleased",
+    )
+    allowed_domains: str = declare(
+        "",
+        "ROBOTHOR_CODING_ALLOWED_DOMAINS",
+        "Comma-separated domains a code-mode job's sandboxed shell may reach (for "
+        "example pypi.org,files.pythonhosted.org). Empty means no network at all. "
+        "review and readonly jobs never have network, whatever this says.",
+        restart_required=False,
+        since="unreleased",
+    )
+    retention_days: int = declare(
+        7,
+        "ROBOTHOR_CODING_RETENTION_DAYS",
+        "Days a finished coding job's worktree, private config directory and "
+        "genus/cc-* branch are kept before the reaper removes them. Merge or push a "
+        "job's branch before then.",
         restart_required=False,
         since="unreleased",
     )

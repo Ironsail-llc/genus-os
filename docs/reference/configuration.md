@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-454 settings in 16 groups.
+456 settings in 16 groups.
 
 ## autonomy
 
@@ -66,10 +66,12 @@ Host paths for the isolated personal browser service and clients.
 | `ROBOTHOR_CLAUDE_CODE_MAX_TURNS` | int | `80` | no | no | unreleased | Claude Code turns allowed in one round of a coding job (--max-turns). |
 | `ROBOTHOR_CLAUDE_CODE_MODEL` | str | _(empty)_ | no | no | unreleased | Model alias a coding job uses when the agent names none (sonnet, opus, ...). Empty uses the Claude Code CLI's own default. |
 | `ROBOTHOR_CLAUDE_CODE_ROUND_TIMEOUT` | float | `3600.0` | no | no | unreleased | Seconds one Claude Code round may run before its process group is killed. A killed round still counts, and the next one resumes the same session. |
+| `ROBOTHOR_CODING_ALLOWED_DOMAINS` | str | _(empty)_ | no | no | unreleased | Comma-separated domains a code-mode job's sandboxed shell may reach (for example pypi.org,files.pythonhosted.org). Empty means no network at all. review and readonly jobs never have network, whatever this says. |
 | `ROBOTHOR_CODING_GIT_EMAIL` | str | _(empty)_ | no | no | unreleased | Author email on coding-job commits. Empty uses the target repository's user.email, then a generic placeholder address. |
 | `ROBOTHOR_CODING_GIT_NAME` | str | _(empty)_ | no | no | unreleased | Author name on coding-job commits. Empty uses the target repository's user.name, then a generic agent name. |
 | `ROBOTHOR_CODING_MAX_CONCURRENT` | int | `2` | `robothor-engine` | no | unreleased | Coding jobs one tenant may run at once; more wait as `queued`. |
-| `ROBOTHOR_CODING_REPO_ROOTS` | str | _(empty)_ | no | no | unreleased | Path-separated directories a coding job's repo_path must sit under. Empty allows any git repository the engine can read; the job still works only in its own worktree and never on main/master. |
+| `ROBOTHOR_CODING_REPO_ROOTS` | str | _(empty)_ | no | no | unreleased | Path-separated directories a coding job's repo_path must sit under. REQUIRED: empty refuses every claude_code_start. The live workspace itself, the service user's home itself, and any directory containing either are refused even under a root. The job still works only in its own worktree and never on main/master. |
+| `ROBOTHOR_CODING_RETENTION_DAYS` | int | `7` | no | no | unreleased | Days a finished coding job's worktree, private config directory and genus/cc-* branch are kept before the reaper removes them. Merge or push a job's branch before then. |
 | `ROBOTHOR_CODING_VERIFY_TIMEOUT` | float | `900.0` | no | no | unreleased | Seconds a coding job's acceptance verify_command may run before it is killed and counted as a failure. |
 | `ROBOTHOR_CODING_WORKTREE_ROOT` | str | _(empty)_ | no | no | unreleased | Where coding jobs' git worktrees are created, one directory per job. Empty means <workspace>/.genus/worktrees. Must be writable by the engine: under the shipped unit that means inside the workspace or a ReadWritePaths= drop-in. |
 

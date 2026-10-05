@@ -49,6 +49,12 @@ engine runs it itself in the worktree after every round; Claude Code saying
 - It runs without a shell. For a pipeline write `bash -c '...'` explicitly.
 - Leave `require_commit` true for code changes: the job is not done until the
   work is committed on the job branch with a clean tree.
+- `review` and `readonly` jobs take no `verify_command`: they are judged by
+  their answer (ask for one with `json_schema`).
+- The repository must sit under `ROBOTHOR_CODING_REPO_ROOTS`; the live Genus
+  workspace itself is refused. The job's shell has no network unless the
+  operator allowed domains, so a task that needs to install packages must say
+  so to the operator rather than retry.
 
 ## 3. Start, then wait
 
