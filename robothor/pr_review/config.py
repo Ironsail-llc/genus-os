@@ -37,6 +37,8 @@ class ReviewerConfig:
     review_model: str = ""
     review_budget_usd: float = 3.0
     stale_after_minutes: int = 180
+    skip_labels: tuple[str, ...] = ()
+    retry_cooldown_minutes: int = 60
     extra: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -80,4 +82,6 @@ def load_config() -> ReviewerConfig:
         review_model=s.review_model.strip(),
         review_budget_usd=float(s.review_budget_usd),
         stale_after_minutes=max(10, int(s.stale_after_minutes)),
+        skip_labels=_csv(s.skip_labels),
+        retry_cooldown_minutes=max(1, int(s.retry_cooldown_minutes)),
     )

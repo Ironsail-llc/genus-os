@@ -4,10 +4,12 @@
 # locally). See docs/PR_REVIEWER.md.
 #
 # Wakes the pr-reviewer agent only when a review task is waiting, so an idle
-# instance spends nothing on a model. The first step is the same intake tool
-# with poll: false — no GitHub or Chat reads, just dispatch and counts. The
-# engine never runs the agent twice at once, so a tick that lands during a
-# long review is skipped, not stacked.
+# instance spends nothing on a model. The first step is the intake tool with
+# count_only: true — it reads the queue and changes nothing. Only the
+# pr-review-intake workflow dispatches (under a per-tenant lock), so the two
+# crons can never file the same review twice. The engine never runs the agent
+# twice at once, so a tick that lands during a long review is skipped, not
+# stacked.
 
 id: pr-review-run
 name: PR Review Run
@@ -28,7 +30,7 @@ steps:
     type: tool
     tool_name: pr_review_intake
     tool_args:
-      poll: false
+      count_only: true
     tool_timeout_seconds: 120
     on_failure: abort
 

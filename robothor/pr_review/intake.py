@@ -6,7 +6,9 @@ anywhere in here; every decision is a rule.
 **Sources.**
 
 1. GitHub — every open, non-draft pull request in the configured repositories
-   (``watch_repos``), plus pull requests requesting the bot login's review. A
+   (``watch_repos``), plus pull requests requesting the bot login's review —
+   in the configured repositories only (a request from a fork or any other
+   repository the token can read is ignored). A
    pull request whose head differs from the head we last reviewed (and from the
    head a task was already filed for) gets a trigger.
 2. Google Chat — messages in the configured space since the stored cursor. A
@@ -14,15 +16,28 @@ anywhere in here; every decision is a rule.
    (reaction) and triggers an initial review. A thread reply from the person
    who posted the link is classified by :func:`classify_rereview`: a clear
    request triggers a re-review; an ambiguous one is handed to the agent as a
-   task to decide. Every message is handled once; one that raises is recorded
-   with its error and skipped — never retried forever.
+   task to decide; a reviewer's status line ("#12: Approved") does nothing. In
+   a thread that posted several pull requests, a reply naming some of them
+   ("12 is ready for re-review") re-reviews only those. Every message is
+   handled once; one that raises is recorded with its error and skipped —
+   never retried forever.
 
 **Dispatch.** Each pending trigger becomes at most ONE CRM task for the pull
 request's current head, deduplicated by repo+number+sha, up to
 ``max_concurrent`` open review tasks. :func:`decide_review` decides full,
 incremental or skip by SHA; :class:`DepthPolicy` skips lockfile-only and bot
 changes. A trigger that arrives while a review is running is kept and
-dispatched after that review is finalized.
+dispatched after that review is finalized. A Chat-posted pull request that is
+closed, a draft or skipped gets a thread reply saying so.
+
+**One writer.** A run holds the store's per-tenant intake lock; a concurrent
+run returns ``{"skipped": "locked"}`` and changes nothing. Only the intake
+dispatches: the pr-review-run workflow calls it with ``count_only`` to decide
+whether to wake the agent.
+
+**Retries.** A failed review (job failure, stale, posting error) is retried
+on the same head after ``retry_cooldown_minutes``, at most
+:data:`MAX_ATTEMPTS` times per head; a new head starts over.
 """
 
 from __future__ import annotations
@@ -31,7 +46,12 @@ import logging
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Literal
 
-from robothor.pr_review.classify import classify_rereview, match_allowed_prs, message_search_text
+from robothor.pr_review.classify import (
+    classify_rereview,
+    match_allowed_prs,
+    mentioned_numbers,
+    message_search_text,
+)
 from robothor.pr_review.depth import Depth, DepthPolicy
 from robothor.pr_review.posting import decide_review
 from robothor.pr_review.store import ACTIVE_STATUSES, PrReviewRow
@@ -45,10 +65,13 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["Intake", "parse_chat_time"]
+__all__ = ["MAX_ATTEMPTS", "Intake", "parse_chat_time"]
 
 #: Strongest first. A weaker trigger never replaces a stronger pending one.
-_TRIGGER_RANK = {"initial": 4, "rereview": 3, "new_head": 2, "ambiguous": 1, "": 0}
+_TRIGGER_RANK = {"initial": 4, "rereview": 3, "new_head": 2, "retry": 2, "ambiguous": 1, "": 0}
+#: Failed review attempts on one head before the intake stops retrying it.
+MAX_ATTEMPTS = 3
+_DRAFT_NOTE = "draft: waiting until it is ready for review"
 #: Re-read this much before the cursor: Chat's createTime filter is strict and
 #: clocks are not; per-message dedupe makes the overlap free.
 _CURSOR_OVERLAP = timedelta(seconds=60)
@@ -77,6 +100,10 @@ def parse_chat_time(value: str) -> datetime | None:
 
 def _format_chat_time(value: datetime) -> str:
     return value.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+def trigger_is_retry(row: PrReviewRow) -> bool:
+    return row.pending_trigger == "retry"
 
 
 def _raise_trigger(row: PrReviewRow, trigger: str, text: str = "") -> bool:
@@ -109,7 +136,7 @@ class Intake:
         self.github = github
         self.chat = chat
         self.now = now or datetime.now(UTC)
-        self.depth_policy = depth_policy or DepthPolicy()
+        self.depth_policy = depth_policy or DepthPolicy(skip_labels=cfg.skip_labels)
         self.summary: dict[str, Any] = {
             "discovered": 0,
             "chat_messages": 0,
@@ -121,6 +148,7 @@ class Intake:
             "closed": 0,
             "no_new_commits": 0,
             "stale": 0,
+            "retries": 0,
             "errors": [],
         }
 
@@ -138,17 +166,26 @@ class Intake:
             source=source,
         )
 
-    async def run(self, *, poll: bool = True) -> dict[str, Any]:
-        if poll:
-            if self.github is None and (self.cfg.repos or self.cfg.bot_login):
-                self._error("github", "GITHUB_TOKEN not configured")
-            elif self.github is not None:
-                await self._poll_github()
-            if self.cfg.chat_space and self.chat is not None:
-                await self._poll_chat()
-        await self._expire_stale()
-        if self.github is not None:
-            await self._dispatch()
+    async def run(self, *, poll: bool = True, count_only: bool = False) -> dict[str, Any]:
+        if count_only:
+            return await self._counts()
+        async with self.store.intake_lock(self.tenant_id) as held:
+            if not held:
+                return {"skipped": "locked"}
+            if poll:
+                if self.github is None and (self.cfg.repos or self.cfg.bot_login):
+                    self._error("github", "GITHUB_TOKEN not configured")
+                elif self.github is not None:
+                    await self._poll_github()
+                if self.cfg.chat_space and self.chat is not None:
+                    await self._poll_chat()
+            await self._expire_stale()
+            await self._retry_failed()
+            if self.github is not None:
+                await self._dispatch()
+            return await self._counts()
+
+    async def _counts(self) -> dict[str, Any]:
         active = await self.store.list_active(self.tenant_id)
         pending = await self.store.list_pending(self.tenant_id)
         self.summary["open_tasks"] = len(active)
@@ -179,7 +216,7 @@ class Intake:
                 self._error("github review-requested search", exc)
                 requested = []
             for repo, number in requested:
-                if (repo.lower(), number) in candidates:
+                if (repo.lower(), number) in candidates or not self.cfg.allows_repo(repo):
                     continue
                 try:
                     found = await self.github.get_pr(repo, number)
@@ -301,6 +338,9 @@ class Intake:
             return "ignored", "not a tracked thread, or not the original poster"
         text = str(message.get("text") or message.get("argumentText") or "")
         intent = classify_rereview(text)
+        named = mentioned_numbers(text) & {r.number for r in rows}
+        if named and len(rows) > 1:
+            rows = [r for r in rows if r.number in named]
         if intent == "other":
             return "reply", "not a re-review request"
         trigger = "rereview" if intent == "rereview" else "ambiguous"
@@ -335,8 +375,24 @@ class Intake:
             if row.updated_at < cutoff:
                 row.status = "failed"
                 row.error = f"no result within {self.cfg.stale_after_minutes} minutes"
+                row.attempts += 1
+                row.failed_at = self.now
                 await self.store.save(row)
                 self.summary["stale"] += 1
+
+    async def _retry_failed(self) -> None:
+        """Re-queue failed reviews: a new head at once, the same head after a cooldown."""
+        cooldown = timedelta(minutes=self.cfg.retry_cooldown_minutes)
+        for row in await self.store.list_failed(self.tenant_id):
+            if row.pending_trigger:
+                continue
+            new_head = bool(row.head_sha and row.queued_sha and row.head_sha != row.queued_sha)
+            cooled = row.failed_at is None or row.failed_at <= self.now - cooldown
+            if (new_head or (row.attempts < MAX_ATTEMPTS and cooled)) and _raise_trigger(
+                row, "retry"
+            ):
+                await self.store.save(row)
+                self.summary["retries"] += 1
 
     async def _dispatch(self) -> None:
         active = len(await self.store.list_active(self.tenant_id))
@@ -357,7 +413,8 @@ class Intake:
                 row.error = str(exc)[:_ERROR_MAX]
                 await self.store.save(row)
 
-    def _clear(self, row: PrReviewRow) -> None:
+    @staticmethod
+    def _clear(row: PrReviewRow) -> None:
         row.pending_trigger = ""
         row.trigger_text = ""
         row.followup = False
@@ -376,10 +433,24 @@ class Intake:
             self._clear(row)
             await self.store.save(row)
             self.summary["closed"] += 1
+            merged = "merged" if pr.get("merged") or pr.get("merged_at") else "closed"
+            await self._say(row, f"This pull request is {merged}; not reviewing it.")
             return False
         if pr.get("draft"):
-            return False  # stays pending until it is ready for review
+            # Stays pending until it is ready for review; say so once.
+            if row.error != _DRAFT_NOTE:
+                row.error = _DRAFT_NOTE
+                await self.store.save(row)
+                await self._say(row, "This is a draft; I'll review it once it's ready for review.")
+            return False
         head = str((pr.get("head") or {}).get("sha") or "")
+        if head != row.queued_sha:
+            row.attempts = 0  # a new head starts its retry budget over
+        elif trigger_is_retry(row) and row.attempts >= MAX_ATTEMPTS:
+            row.error = f"gave up after {row.attempts} failed attempts on this head"
+            self._clear(row)
+            await self.store.save(row)
+            return False
         row.head_sha = head
         row.title = str(pr.get("title") or row.title)
         row.author = str((pr.get("user") or {}).get("login") or row.author)
@@ -413,6 +484,11 @@ class Intake:
             self._clear(row)
             await self.store.save(row)
             self.summary["skipped"] += 1
+            await self._say(
+                row,
+                "Skipped: nothing to review here (a bot author, a skip label, or only "
+                "lockfiles and generated files changed).",
+            )
             return False
 
         spec = ReviewTaskSpec(

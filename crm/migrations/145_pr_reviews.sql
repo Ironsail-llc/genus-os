@@ -6,7 +6,11 @@
 -- request the intake has not turned into a task yet (initial, new_head,
 -- rereview, ambiguous). review_ids are OUR review ids on GitHub — the only
 -- threads the reviewer ever resolves. last_review keeps the previous findings
--- (with their inline comment ids) for the next re-review.
+-- (with their inline comment ids) for the next re-review. job_id is the
+-- coding job pr_review_prepare started for queued_sha: pr_review_finalize
+-- posts only that job's result, and only once (status reviewing -> posting
+-- -> verdict, each step a compare-and-set). failed_at drives the retry
+-- cooldown for a failed review on an unchanged head.
 --
 -- pr_review_messages: each Google Chat message the intake handled, once.
 -- A message that failed to process is recorded with its error and skipped.
@@ -21,7 +25,7 @@ CREATE TABLE IF NOT EXISTS pr_reviews (
     author TEXT NOT NULL DEFAULT '',
     source TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN (
-        'pending', 'queued', 'reviewing', 'changes_requested', 'commented',
+        'pending', 'queued', 'reviewing', 'posting', 'changes_requested', 'commented',
         'approved', 'closed', 'failed', 'skipped'
     )),
     head_sha TEXT NOT NULL DEFAULT '',
@@ -42,6 +46,8 @@ CREATE TABLE IF NOT EXISTS pr_reviews (
     last_review JSONB NOT NULL DEFAULT '{}'::jsonb,
     attempts INTEGER NOT NULL DEFAULT 0,
     error TEXT NOT NULL DEFAULT '',
+    job_id TEXT NOT NULL DEFAULT '',
+    failed_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (tenant_id, repo, number)
@@ -50,7 +56,7 @@ CREATE TABLE IF NOT EXISTS pr_reviews (
 CREATE INDEX IF NOT EXISTS pr_reviews_pending
     ON pr_reviews (tenant_id, updated_at) WHERE pending_trigger <> '';
 CREATE INDEX IF NOT EXISTS pr_reviews_active
-    ON pr_reviews (tenant_id) WHERE status IN ('queued', 'reviewing');
+    ON pr_reviews (tenant_id) WHERE status IN ('queued', 'reviewing', 'posting');
 CREATE INDEX IF NOT EXISTS pr_reviews_thread
     ON pr_reviews (tenant_id, chat_thread) WHERE chat_thread <> '';
 
@@ -60,6 +66,8 @@ CREATE TABLE IF NOT EXISTS pr_review_messages (
     kind TEXT NOT NULL,
     outcome TEXT NOT NULL DEFAULT '',
     error TEXT NOT NULL DEFAULT '',
+    job_id TEXT NOT NULL DEFAULT '',
+    failed_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (tenant_id, message_name)
 );

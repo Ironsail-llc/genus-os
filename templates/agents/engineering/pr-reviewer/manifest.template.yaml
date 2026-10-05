@@ -28,22 +28,21 @@ delivery:
   channel: telegram
   to: "${ROBOTHOR_TELEGRAM_CHAT_ID}"
 
-# The default tool set plus the opt-in tools this agent's work needs: the
-# Claude Code driver (review jobs run read-only), the deterministic pr_review_*
-# halves, and the GitHub review-posting tools pr_review_finalize posts through.
-# Needs `robothor claude-code login` once per instance, and GITHUB_TOKEN in
-# the vault.
+# The default tool set plus the opt-in tools this agent's work needs: watching
+# and (only if its run is ending) cancelling the review job, and the
+# deterministic pr_review_* halves. pr_review_prepare STARTS the read-only
+# Claude Code job itself and pr_review_finalize posts through the GitHub review
+# handlers directly, so this agent can neither start an arbitrary coding job
+# nor post, reply on or resolve a review: claude_code_start and the github_*
+# review-write tools are deliberately absent. Needs `robothor claude-code
+# login` once per instance (or the host's Claude Code login), and GITHUB_TOKEN
+# in the vault.
 tools_opt_in:
-  - claude_code_start
   - claude_code_status
   - claude_code_wait
   - claude_code_cancel
-  - pr_review_intake
   - pr_review_prepare
   - pr_review_finalize
-  - github_create_review
-  - github_reply_review_comment
-  - github_resolve_threads
 
 # grant_github on a review job hands Claude Code GH_TOKEN for read-only
 # `gh pr view/diff/checks`; the engine gives it only to an agent that names it.

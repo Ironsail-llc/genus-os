@@ -1,14 +1,18 @@
 """pr_review_* tools — the deterministic halves of the pr-reviewer suite.
 
 * ``pr_review_intake`` — poll GitHub and the Chat space, file one CRM task per
-  pull-request head. Run from a cron workflow; no model involved.
-* ``pr_review_prepare`` — fetch the head into a local clone and return the
-  exact ``claude_code_start`` arguments for a read-only review job.
-* ``pr_review_finalize`` — read the job's structured output from the coding
-  job itself, recompute the verdict in code, post the review, reply on our
-  previous threads, resolve our own threads on approval, announce in Chat,
-  record the state. The agent never handles the verdict, so it cannot post
-  one unchecked.
+  pull-request head. Run from a cron workflow; no model involved; one run per
+  tenant at a time. ``count_only`` just reads the queue (the run workflow).
+* ``pr_review_prepare`` — fetch the head into a local clone, build the review
+  prompt, START the read-only Claude Code review job and bind its id to the
+  pull request. The agent never sees or edits the job's arguments.
+* ``pr_review_finalize`` — for the job prepare bound, and only that job, read
+  its structured output from the coding job itself, recompute the verdict in
+  code, post the review (once), reply on our previous threads, resolve our
+  own threads on approval, announce in Chat, record the state. The agent
+  never handles the verdict, so it cannot post one unchecked. It posts
+  through the GitHub review handlers directly, so the agent needs none of the
+  ``github_*`` review-write tools.
 
 All three are opt-in (``OPT_IN_TOOLS``), are external side effects, and
 refuse a benchmark run. The logic lives in :mod:`robothor.pr_review`.
@@ -123,6 +127,7 @@ async def _intake(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             "note": "set ROBOTHOR_PR_REVIEW_REPOS, _BOT_LOGIN or _CHAT_SPACE to enable",
         }
     poll = args.get("poll", True) is not False
+    count_only = args.get("count_only") is True
     intake = Intake(
         cfg,
         _store(),
@@ -131,7 +136,7 @@ async def _intake(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         github=_github(),
         chat=_chat() if cfg.chat_space else None,
     )
-    return await intake.run(poll=poll)
+    return await intake.run(poll=poll, count_only=count_only)
 
 
 async def _prepare(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
@@ -152,6 +157,13 @@ async def _prepare(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     github = _github()
     if github is None:
         return {"error": "GITHUB_TOKEN not configured"}
+
+    async def start_job(start_args: dict[str, Any]) -> dict[str, Any]:
+        from robothor.engine.tools.handlers.claude_code import _start
+
+        result: dict[str, Any] = await _start(start_args, ctx)
+        return result
+
     try:
         return await prepare(
             load_config(),
@@ -162,6 +174,7 @@ async def _prepare(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             github=github,
             skill_text=skill,
             token=_get_token(),
+            start_job=start_job,
         )
     except CheckoutError as exc:
         return {"error": f"checkout failed: {exc}"}

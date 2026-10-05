@@ -1,7 +1,7 @@
 """One local clone per reviewed repository, fetched to the pull request's head.
 
-A review job's worktree is cut from this clone (``claude_code_start`` with
-``base_ref=<head sha>``), so the clone must hold the head commit and the base
+A review job's worktree is cut from this clone (pr_review_prepare starts the
+job with ``base_ref=<head sha>``), so the clone must hold the head commit and the base
 branch for ``git merge-base``. The GitHub token reaches git only through
 ``GIT_CONFIG_*`` environment variables as an ``http.extraHeader``: it is
 never written to ``.git/config`` and never appears in an argv.
@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import os
 import re
 from pathlib import Path
@@ -57,6 +58,12 @@ async def _git(cwd: Path, *args: str, token: str = "", check: bool = True) -> tu
         proc.kill()
         await proc.wait()
         raise CheckoutError(f"git {args[0]} timed out") from None
+    finally:
+        # Cancelled (the tool's own deadline, or the run ending): never leave a
+        # clone or fetch running unsupervised on the host.
+        if proc.returncode is None:
+            with contextlib.suppress(ProcessLookupError):
+                proc.kill()
     code = proc.returncode or 0
     if check and code != 0:
         raise CheckoutError(f"git {args[0]} failed: {err.decode(errors='replace').strip()[:400]}")
@@ -109,8 +116,8 @@ async def ensure_checkout(
 
 
 async def read_at(repo: Path, sha: str, relpath: str, max_chars: int = 20_000) -> str | None:
-    """A file's content at ``sha``, or None when it does not exist there."""
-    if relpath.startswith("-") or ".." in relpath.split("/"):
+    """A file's content at ``sha`` (a commit or a ref such as ``origin/main``), or None."""
+    if relpath.startswith("-") or ".." in relpath.split("/") or sha.startswith("-"):
         return None
     code, out = await _git(Path(repo), "show", f"{sha}:{relpath}", check=False)
     if code != 0:

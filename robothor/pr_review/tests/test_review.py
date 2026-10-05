@@ -21,6 +21,7 @@ SHA2 = "2" * 40
 
 @dataclass
 class FakeJob:
+    id: str = "job-1"
     status: str = "done"
     base_sha: str = SHA1
     error: str = ""
@@ -81,6 +82,11 @@ def _output(verdict: str, issues: list, prior: list | None = None) -> dict[str, 
 
 @pytest.fixture
 async def env():
+    return await make_env()
+
+
+async def make_env() -> dict[str, Any]:
+    """A pull request under review: prepare has bound job-1 to head SHA1."""
     store = MemoryStore()
     github = FakeGitHub()
     github.add(make_pr(7, SHA1))
@@ -89,8 +95,9 @@ async def env():
         repo=REPO,
         number=7,
         url=f"https://github.com/{REPO}/pull/7",
-        status="queued",
+        status="reviewing",
         queued_sha=SHA1,
+        job_id="job-1",
         chat_space="spaces/AAAA",
         chat_thread="spaces/AAAA/threads/t1",
         chat_message="spaces/AAAA/messages/m1",
@@ -231,6 +238,7 @@ async def test_digest_only_when_enabled(env):
 
 async def test_dismiss_returns_the_row_to_its_last_state(env):
     row = await env["store"].get(TENANT, REPO, 7)
+    row.status, row.job_id = "queued", ""  # an ambiguous trigger, before any prepare
     row.last_reviewed_sha = SHA1
     row.last_review = {"verdict": "REQUEST_CHANGES"}
     await env["store"].save(row)
@@ -239,15 +247,33 @@ async def test_dismiss_returns_the_row_to_its_last_state(env):
     assert (await env["store"].get(TENANT, REPO, 7)).status == "changes_requested"
 
 
+class StartRecorder:
+    def __init__(self, job_id: str = "job-9") -> None:
+        self.calls: list[dict[str, Any]] = []
+        self.job_id = job_id
+
+    async def __call__(self, args: dict[str, Any]) -> dict[str, Any]:
+        self.calls.append(args)
+        return {"job_id": self.job_id, "status": "queued"}
+
+
+async def _queue(env) -> None:
+    row = await env["store"].get(TENANT, REPO, 7)
+    row.status, row.job_id = "queued", ""
+    await env["store"].save(row)
+
+
 async def test_prepare_builds_the_claude_code_arguments(env, tmp_path):
     calls: dict[str, Any] = {}
+    start = StartRecorder()
+    await _queue(env)
 
     async def fake_checkout(dest, **kw):
         calls.update(kw, dest=dest)
         return tmp_path
 
     async def fake_read(path, sha, rel):
-        return "Use snake_case." if rel == "CLAUDE.md" else None
+        return "Use snake_case." if rel == "CLAUDE.md" and sha == "origin/main" else None
 
     cfg = ReviewerConfig(repos=(REPO,), clone_root=str(tmp_path / "clones"), review_model="sonnet")
     result = await prepare(
@@ -261,8 +287,10 @@ async def test_prepare_builds_the_claude_code_arguments(env, tmp_path):
         token="t",
         checkout=fake_checkout,
         reader=fake_read,
+        start_job=start,
     )
-    args = result["start_args"]
+    [args] = start.calls
+    assert result["job_id"] == "job-9" and "start_args" not in result
     assert args["mode"] == "review" and args["base_ref"] == SHA1
     assert args["repo_path"] == str(tmp_path)
     assert args["json_schema"] == REVIEW_OUTPUT_SCHEMA
@@ -272,10 +300,12 @@ async def test_prepare_builds_the_claude_code_arguments(env, tmp_path):
     assert "initial review" in args["task"]
     assert calls["dest"] == Path(tmp_path / "clones" / "acme" / "widgets")
     assert calls["head_sha"] == SHA1 and calls["number"] == 7
-    assert (await env["store"].get(TENANT, REPO, 7)).status == "reviewing"
+    row = await env["store"].get(TENANT, REPO, 7)
+    assert (row.status, row.job_id, row.queued_sha) == ("reviewing", "job-9", SHA1)
 
 
 async def test_prepare_incremental_lists_previous_findings(env, tmp_path):
+    await _queue(env)
     row = await env["store"].get(TENANT, REPO, 7)
     row.last_reviewed_sha = "0" * 40
     row.last_review = {
@@ -301,14 +331,16 @@ async def test_prepare_incremental_lists_previous_findings(env, tmp_path):
         token="",
         checkout=fake_checkout,
         reader=fake_read,
+        start_job=(start := StartRecorder()),
     )
     assert result["mode"] == "incremental"
-    task = result["start_args"]["task"]
+    task = start.calls[0]["task"]
     assert "RE-REVIEW" in task and '"comment_id": 77' in task
     assert f"git diff {'0' * 40}..HEAD" in task
 
 
 async def test_prepare_skips_an_already_reviewed_head(env):
+    await _queue(env)
     row = await env["store"].get(TENANT, REPO, 7)
     row.last_reviewed_sha = SHA1
     await env["store"].save(row)
@@ -321,5 +353,6 @@ async def test_prepare_skips_an_already_reviewed_head(env):
         github=env["github"],
         skill_text="g",
         token="",
+        start_job=StartRecorder(),
     )
     assert result["skip"] is True

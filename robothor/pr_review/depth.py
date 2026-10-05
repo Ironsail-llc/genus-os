@@ -1,7 +1,9 @@
 """How much review a pull request earns: full, light, or none at all.
 
-* ``SKIP`` — bot authors (dependency bumps), skip labels, or a change made
-  only of lockfiles and generated files. No task is created.
+* ``SKIP`` — bot authors (dependency bumps), an operator-configured skip
+  label (none by default: a label anyone can add must not switch the review
+  off unless the operator says so), or a change made only of lockfiles and
+  generated files. No task is created.
 * ``FULL`` — risky labels (security, auth, billing, migration) or anything
   past the small-change threshold.
 * ``LIGHT`` — a small change: one reviewer walks the lenses without splitting.
@@ -31,8 +33,10 @@ class DepthPolicy:
 
     small_max_lines: int = 50
     risky_labels: tuple[str, ...] = ("billing", "security", "auth", "migration")
-    skip_labels: tuple[str, ...] = ("dependabot", "dependencies")
+    skip_labels: tuple[str, ...] = ()
     skip_authors: tuple[str, ...] = ("dependabot[bot]", "renovate[bot]")
+    #: Exact file names (``package-lock.json``), suffixes (``.snap``, ``.min.js``)
+    #: and infixes wrapped in dots (``.generated.``). See :meth:`is_generated`.
     skip_paths: tuple[str, ...] = (
         "package-lock.json",
         "poetry.lock",
@@ -83,5 +87,20 @@ class DepthPolicy:
         )
 
     def is_generated(self, path: str) -> bool:
-        low = path.lower()
-        return any(marker in low for marker in self.skip_paths)
+        """Whether ``path`` is a lockfile or generated file, by its base name.
+
+        A marker like ``.snap`` is a suffix: ``a.test.ts.snap`` is generated,
+        ``snapshot.snapshot.ts`` is code. ``.generated.`` matches inside the
+        name; a plain name like ``uv.lock`` must be the whole base name.
+        """
+        name = path.replace("\\", "/").rsplit("/", 1)[-1].lower()
+        for marker in (m.lower() for m in self.skip_paths):
+            if marker.startswith(".") and marker.endswith(".") and len(marker) > 1:
+                if marker in name:
+                    return True
+            elif marker.startswith("."):
+                if name.endswith(marker):
+                    return True
+            elif name == marker:
+                return True
+        return False

@@ -244,11 +244,15 @@ async def test_max_concurrent_defers_the_rest(env):
     assert summary["tasks_created"] == 2 and summary["deferred"] == 1
 
 
-async def test_review_requested_from_any_repo(env):
+async def test_review_requested_only_from_configured_repos(env):
+    # A review request from a fork or any repository the token can read is not
+    # an invitation to clone it and run Claude Code over it.
     env["github"].add(make_pr(5, SHA1, repo="acme/gadgets"), repo="acme/gadgets")
-    env["github"].requested = [("acme/gadgets", 5)]
+    env["github"].add(make_pr(6, SHA2))
+    env["github"].requested = [("acme/gadgets", 5), (REPO, 6)]
     summary = await _run(env, _cfg(bot_login="review-bot", chat_space=""))
     assert summary["tasks_created"] == 1
+    assert env["tasks"].created[0]["spec"].row.number == 6
 
 
 async def test_one_failing_repo_does_not_stop_the_others(env):
@@ -282,3 +286,159 @@ def test_parse_chat_time_accepts_nanoseconds():
     )
     assert parse_chat_time("") is None
     assert parse_chat_time("garbage") is None
+
+
+# ── serialization ───────────────────────────────────────────────────────
+
+
+async def test_a_concurrent_intake_run_is_skipped(env):
+    env["github"].add(make_pr(7, SHA1))
+    env["chat"].post(f"review {URL}")
+    async with env["store"].intake_lock(TENANT) as held:
+        assert held
+        summary = await _run(env)
+    assert summary == {"skipped": "locked"}
+    assert env["tasks"].created == []
+
+
+async def test_count_only_never_dispatches(env):
+    env["github"].add(make_pr(7, SHA1))
+    env["chat"].post(f"review {URL}")
+    intake = Intake(
+        _cfg(),
+        env["store"],
+        TENANT,
+        tasks=env["tasks"],
+        github=env["github"],
+        chat=env["chat"],
+        now=NOW,
+    )
+    await intake._poll_chat()  # a trigger is pending, nothing dispatched yet
+    summary = await Intake(
+        _cfg(),
+        env["store"],
+        TENANT,
+        tasks=env["tasks"],
+        github=env["github"],
+        chat=env["chat"],
+        now=NOW,
+    ).run(count_only=True)
+    assert env["tasks"].created == []
+    assert summary["queued_tasks"] == 0 and summary["pending"] == 1
+
+
+async def test_a_trigger_raised_during_posting_survives_the_post(env):
+    # The intake and finalize write one row; neither may revert the other's columns.
+    env["github"].add(make_pr(7, SHA1))
+    env["chat"].post(f"review {URL}")
+    await _run(env)
+    reviewer_copy = await env["store"].get(TENANT, REPO, 7)
+    intake_copy = await env["store"].get(TENANT, REPO, 7)
+    intake_copy.pending_trigger = "rereview"
+    await env["store"].save(intake_copy)
+    reviewer_copy.status = "commented"
+    reviewer_copy.last_reviewed_sha = SHA1
+    await env["store"].save(reviewer_copy)
+    row = await env["store"].get(TENANT, REPO, 7)
+    assert (row.pending_trigger, row.status) == ("rereview", "commented")
+
+
+# ── say why, retry failures ─────────────────────────────────────────────
+
+
+async def test_a_closed_chat_pr_gets_a_reply_saying_so(env):
+    env["github"].add(make_pr(7, SHA1, state="closed"))
+    env["chat"].post(f"review {URL}")
+    await _run(env)
+    assert env["chat"].replies and "closed" in env["chat"].replies[-1][2].lower()
+
+
+async def test_a_draft_chat_pr_is_told_once(env):
+    env["github"].add(make_pr(7, SHA1, draft=True))
+    env["chat"].post(f"review {URL}")
+    await _run(env)
+    await _run(env)
+    assert len(env["chat"].replies) == 1 and "draft" in env["chat"].replies[0][2].lower()
+
+
+async def test_a_skipped_chat_pr_gets_a_reply_saying_why(env):
+    env["github"].add(
+        make_pr(7, SHA1), files=[{"filename": "yarn.lock", "additions": 900, "deletions": 3}]
+    )
+    env["chat"].post(f"review {URL}")
+    await _run(env)
+    assert env["chat"].replies and "skip" in env["chat"].replies[-1][2].lower()
+
+
+async def _fail_review(env, sha=SHA1, attempts=1, minutes_ago=0):
+    row = await env["store"].get(TENANT, REPO, 7)
+    row.status = "failed"
+    row.queued_sha = sha
+    row.attempts = attempts
+    row.failed_at = NOW - timedelta(minutes=minutes_ago)
+    await env["store"].save(row)
+
+
+async def test_a_failed_review_is_retried_after_the_cooldown(env):
+    env["github"].add(make_pr(7, SHA1))
+    cfg = _cfg(watch_repos=True, chat_space="")
+    await _run(env, cfg)
+    await _fail_review(env, minutes_ago=10)
+    assert (await _run(env, cfg))["tasks_created"] == 0  # cooling down
+    await _fail_review(env, minutes_ago=61)
+    env["tasks"].by_key.clear()  # the first task was resolved
+    assert (await _run(env, cfg))["tasks_created"] == 1
+
+
+async def test_a_failed_review_stops_after_three_attempts_on_one_head(env):
+    env["github"].add(make_pr(7, SHA1))
+    cfg = _cfg(watch_repos=True, chat_space="")
+    await _run(env, cfg)
+    await _fail_review(env, attempts=3, minutes_ago=600)
+    env["tasks"].by_key.clear()
+    assert (await _run(env, cfg))["tasks_created"] == 0
+    env["github"].add(make_pr(7, SHA2))  # a new head starts over
+    assert (await _run(env, cfg))["tasks_created"] == 1
+
+
+# ── real-thread shapes (synthetic) ──────────────────────────────────────
+
+
+async def _thread_of_two(env):
+    env["github"].add(make_pr(7, SHA1))
+    env["github"].add(make_pr(8, SHA1))
+    env["chat"].post(f"two for review {URL} https://github.com/{REPO}/pull/8")
+    await _run(env)
+    await _finish(env, 7)
+    await _finish(env, 8)
+    env["github"].add(make_pr(7, SHA2))
+    env["github"].add(make_pr(8, SHA2))
+
+
+async def test_a_reply_naming_one_pr_of_a_multi_pr_thread_rereviews_only_that_one(env):
+    await _thread_of_two(env)
+    env["chat"].post("8 is ready for re-review", reply=True, time="2026-10-05T10:05:00.000000Z")
+    await _run(env)
+    assert [t["spec"].row.number for t in env["tasks"].created[2:]] == [8]
+
+
+async def test_a_reply_naming_no_pr_rereviews_the_whole_thread(env):
+    await _thread_of_two(env)
+    env["chat"].post("updated, ready for re-review", reply=True, time="2026-10-05T10:05:00.000000Z")
+    await _run(env)
+    assert sorted(t["spec"].row.number for t in env["tasks"].created[2:]) == [7, 8]
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["#7: Approved", "#7: Comments/change request", "#7: No changes?", "Changes requested on both"],
+)
+async def test_review_status_lines_in_the_thread_trigger_nothing(env, text):
+    env["github"].add(make_pr(7, SHA1))
+    env["chat"].post(f"review {URL}")
+    await _run(env)
+    await _finish(env)
+    env["github"].add(make_pr(7, SHA2))
+    env["chat"].post(text, reply=True, time="2026-10-05T10:05:00.000000Z")
+    summary = await _run(env)
+    assert summary["tasks_created"] == 0 and summary["triggers"] == 0

@@ -79,9 +79,8 @@ def task_body(spec: ReviewTaskSpec) -> str:
         "",
         build_dedup_marker(DEDUP_KEY, spec.dedup_value),
         "",
-        "Steps: pr_review_prepare(repo, number) -> claude_code_start(**start_args) -> "
-        "claude_code_wait until done -> pr_review_finalize(repo, number, job_id) -> "
-        "resolve_task with the review URL.",
+        "Steps: pr_review_prepare(repo, number) -> claude_code_wait(job_id) until done -> "
+        "pr_review_finalize(repo, number, job_id) -> resolve_task with the review URL.",
     ]
     return "\n".join(lines)
 

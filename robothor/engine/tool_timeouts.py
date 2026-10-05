@@ -68,6 +68,14 @@ LONG_RUNNING_TOOLS = frozenset(
         # Waits on a person; ask_user.bounded_timeout caps its own wait below
         # what this grants, so the two agree instead of racing.
         "ask_user",
+        # pr_review_prepare clones/fetches a whole repository (each git step is
+        # bounded at 300 s by robothor.pr_review.checkout) before starting the
+        # review job; pr_review_finalize posts a review, its thread replies and
+        # resolutions, and the Chat announcement — a dozen API round-trips.
+        # Cut short at 120 s, prepare left a half-fetched clone and finalize a
+        # review half-posted (it resumes, but only on a retry).
+        "pr_review_prepare",
+        "pr_review_finalize",
     }
 )
 
@@ -115,10 +123,14 @@ def self_timed_ceiling(tool_name: str) -> int:
             DRAIN_GRACE_SECONDS,
             MAX_TIMEOUT_SECONDS,
         )
+        from robothor.engine.tools.handlers.claude_code import _MAX_WAIT
         from robothor.engine.tools.handlers.filesystem import MAX_EXEC_TIMEOUT
 
         _self_timed_ceilings.update(
             {
+                # Waits on a coding job up to its own clamped timeout_s (and never
+                # past the run's deadline: run_pacing.clamp_tool_timeout).
+                "claude_code_wait": _MAX_WAIT + SELF_TIMED_GRACE_SECONDS,
                 "exec": MAX_EXEC_TIMEOUT + SELF_TIMED_GRACE_SECONDS,
                 "execute_code": (
                     MAX_TIMEOUT_SECONDS + int(DRAIN_GRACE_SECONDS) + SELF_TIMED_GRACE_SECONDS

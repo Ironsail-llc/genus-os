@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-452 settings in 16 groups.
+454 settings in 16 groups.
 
 ## autonomy
 
@@ -90,6 +90,8 @@ Host paths for the isolated personal browser service and clients.
 | `ROBOTHOR_PR_REVIEW_MODEL` | str | _(empty)_ | no | no | unreleased | Claude Code model alias for review jobs. Empty uses ROBOTHOR_CLAUDE_CODE_MODEL. |
 | `ROBOTHOR_PR_REVIEW_REPOS` | str | _(empty)_ | no | no | unreleased | Comma-separated owner/repo list the pr-reviewer may review. Pull-request links posted in the Chat space count only for these repositories. Empty disables the repository sources. |
 | `ROBOTHOR_PR_REVIEW_REQUIRE_TICKET` | bool | `false` | no | no | unreleased | A pull request with no ticket key in its title, branch, description or commit messages gets a blocking [no-ticket] finding and is never approved. |
+| `ROBOTHOR_PR_REVIEW_RETRY_COOLDOWN_MINUTES` | int | `60` | no | no | unreleased | A failed review is retried on the same head after this long, at most 3 attempts per head; a new head is retried at once. |
+| `ROBOTHOR_PR_REVIEW_SKIP_LABELS` | str | _(empty)_ | no | no | unreleased | Comma-separated pull-request labels that skip the review entirely. Empty (the default) skips by label never: anyone who can label a pull request could otherwise switch its review off. |
 | `ROBOTHOR_PR_REVIEW_STALE_AFTER_MINUTES` | int | `180` | no | no | unreleased | A review queued or running this long without being finalized is marked failed, so a lost task never holds a concurrency slot forever. |
 | `ROBOTHOR_PR_REVIEW_TELEGRAM_DIGEST` | bool | `false` | no | no | unreleased | pr_review_finalize returns a one-line digest per posted review for the agent to deliver; the agent's delivery must announce on Telegram for it to arrive. |
 | `ROBOTHOR_PR_REVIEW_TICKET_PREFIXES` | str | _(empty)_ | no | no | unreleased | Comma-separated ticket key prefixes (e.g. ABC) the ticket rule looks for. Empty accepts any uppercase KEY-123. |

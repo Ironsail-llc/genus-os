@@ -138,3 +138,29 @@ def test_guard_posted_verdict_refuses_approve_with_blocking_issue():
 def test_guard_posted_verdict_leaves_everything_else_alone():
     assert guard_posted_verdict("APPROVE", [_issue("nit")]) == ("APPROVE", False)
     assert guard_posted_verdict("COMMENT", [_issue("blocker")]) == ("COMMENT", False)
+
+
+def test_a_prior_blocker_the_model_never_mentions_still_blocks():
+    # Silence is not "fixed": omitting a previous blocker must not approve.
+    result = decide_verdict("APPROVE", [], prior_issues=[], prior_severities={11: "blocker"})
+    assert result.verdict == "REQUEST_CHANGES"
+    assert [p["comment_id"] for p in result.prior_blocking] == [11]
+    assert result.prior_blocking[0]["status"] == "unreported"
+
+
+def test_an_unknown_prior_status_still_blocks():
+    prior = [{"comment_id": 11, "description": "x", "status": "maybe", "note": ""}]
+    result = decide_verdict("APPROVE", [], prior_issues=prior, prior_severities={11: "major"})
+    assert result.verdict == "REQUEST_CHANGES"
+
+
+def test_resolved_ids_lists_only_what_the_model_reported_resolved():
+    prior = [
+        {"comment_id": 11, "description": "x", "status": "resolved", "note": ""},
+        {"comment_id": 12, "description": "y", "status": "unresolved", "note": ""},
+    ]
+    result = decide_verdict(
+        "COMMENT", [], prior_issues=prior, prior_severities={11: "major", 12: "major"}
+    )
+    assert result.resolved_ids == [11]
+    assert result.verdict == "REQUEST_CHANGES"

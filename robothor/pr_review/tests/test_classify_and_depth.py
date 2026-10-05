@@ -39,13 +39,37 @@ def test_match_allowed_prs_drops_other_repos():
 
 @pytest.mark.parametrize(
     "text",
-    ["ptal", "re-review please", "fixed, can you look again", "Pushed the changes", "rereview"],
+    [
+        "ptal",
+        "re-review please",
+        "fixed, can you look again",
+        "Pushed the changes",
+        "rereview",
+        "@Alice Updated PR. Can you re-review?",
+        "can you take another look?",
+    ],
 )
 def test_rereview_requests(text):
     assert classify_rereview(text) == "rereview"
 
 
-@pytest.mark.parametrize("text", ["thanks", "ok", "👍", "LGTM", "", "  "])
+@pytest.mark.parametrize(
+    "text",
+    [
+        "thanks",
+        "ok",
+        "👍",
+        "LGTM",
+        "",
+        "  ",
+        "#12: Approved",
+        "#12: Comments/change request",
+        "#12: No changes?",
+        "#747: This PR is merged; skipping the review.",
+        "both approved with comments",
+        "Changes requested on both",
+    ],
+)
 def test_acknowledgements_are_other(text):
     assert classify_rereview(text) == "other"
 
@@ -56,6 +80,7 @@ def test_acknowledgements_are_other(text):
         "not fixed yet",
         "will fix tomorrow",
         "is this fixed?",
+        "bot will you review?",
         "working on it, haven't pushed",
         "why does the parser need this branch",
     ],
@@ -70,7 +95,6 @@ def test_depth_skips_bot_authors_and_lockfile_only_changes():
     assert (
         policy.depth_for(files=("package-lock.json", "yarn.lock"), changed_lines=900) is Depth.SKIP
     )
-    assert policy.depth_for(labels=("dependencies",)) is Depth.SKIP
 
 
 def test_depth_small_is_light_and_risky_is_full():
@@ -87,3 +111,21 @@ def test_depth_from_github_files():
     ]
     depth = DepthPolicy().depth_for_pr(pr={"user": {"login": "alice"}, "labels": []}, files=files)
     assert depth is Depth.FULL  # 5012 changed lines in total; one real file
+
+
+def test_snap_matches_the_suffix_only():
+    policy = DepthPolicy()
+    assert policy.is_generated("tests/__snapshots__/a.test.ts.snap")
+    assert not policy.is_generated("src/snapshot.snapshot.ts")
+    assert not policy.is_generated("src/snapper.ts")
+    assert not policy.is_generated("docs/uv.lock.md")
+    assert policy.is_generated("web/package-lock.json")
+    assert policy.is_generated("api/client.generated.ts")
+
+
+def test_labels_skip_only_when_configured():
+    assert DepthPolicy().depth_for(labels=("dependencies",), changed_lines=5, files=("a.py",)) is (
+        Depth.LIGHT
+    )
+    policy = DepthPolicy(skip_labels=("no-review",))
+    assert policy.depth_for(labels=("No-Review",), files=("a.py",)) is Depth.SKIP

@@ -77,3 +77,43 @@ async def test_prepare_needs_the_skill():
     with patch.object(pr_review, "_skill_text", return_value=None):
         result = await pr_review._prepare({"repo": REPO, "number": 7}, _CTX)
     assert "skill" in result["error"]
+
+
+async def test_prepare_starts_the_job_itself_under_the_callers_context():
+    seen: dict = {}
+
+    async def fake_start(args, ctx):
+        seen.update(args=args, ctx=ctx)
+        return {"job_id": "job-1", "status": "queued"}
+
+    async def fake_prepare(*a, start_job, **kw):
+        return await start_job({"task": "review", "mode": "review"})
+
+    with (
+        patch.object(pr_review, "_skill_text", return_value="guide"),
+        patch.object(pr_review, "_github", return_value=FakeGitHub()),
+        patch.object(pr_review, "_store", return_value=MemoryStore()),
+        patch("robothor.pr_review.config.load_config", return_value=ReviewerConfig()),
+        patch("robothor.engine.tools.handlers.github_api._get_token", return_value=""),
+        patch("robothor.engine.tools.handlers.claude_code._start", fake_start),
+        patch("robothor.pr_review.review.prepare", fake_prepare),
+    ):
+        result = await pr_review._prepare({"repo": REPO, "number": 7}, _CTX)
+    assert result["job_id"] == "job-1"
+    assert seen["ctx"] is _CTX and seen["args"]["mode"] == "review"
+
+
+async def test_intake_count_only_changes_nothing():
+    store, github, chat, tasks = MemoryStore(), FakeGitHub(), FakeChat(), FakeTasks()
+    github.add(make_pr(7, "1" * 40))
+    chat.post(f"https://github.com/{REPO}/pull/7", time="2099-01-01T00:00:00.000000Z")
+    cfg = ReviewerConfig(repos=(REPO,), watch_repos=True, chat_space="spaces/AAAA")
+    with (
+        patch("robothor.pr_review.config.load_config", return_value=cfg),
+        patch.object(pr_review, "_store", return_value=store),
+        patch.object(pr_review, "_github", return_value=github),
+        patch.object(pr_review, "_chat", return_value=chat),
+        patch.object(pr_review, "_tasks", return_value=tasks),
+    ):
+        result = await pr_review._intake({"count_only": True}, _CTX)
+    assert result["queued_tasks"] == 0 and tasks.created == [] and chat.reactions == []

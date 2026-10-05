@@ -3337,6 +3337,23 @@ class PrReviewSettings(SettingsGroup):
         restart_required=False,
         since="unreleased",
     )
+    skip_labels: str = declare(
+        "",
+        "ROBOTHOR_PR_REVIEW_SKIP_LABELS",
+        "Comma-separated pull-request labels that skip the review entirely. Empty (the "
+        "default) skips by label never: anyone who can label a pull request could "
+        "otherwise switch its review off.",
+        restart_required=False,
+        since="unreleased",
+    )
+    retry_cooldown_minutes: int = declare(
+        60,
+        "ROBOTHOR_PR_REVIEW_RETRY_COOLDOWN_MINUTES",
+        "A failed review is retried on the same head after this long, at most 3 attempts "
+        "per head; a new head is retried at once.",
+        restart_required=False,
+        since="unreleased",
+    )
 
 
 class GenusSettings(BaseSettings):

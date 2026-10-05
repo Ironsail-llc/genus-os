@@ -2,10 +2,12 @@
 
 The model proposes a verdict; this module decides it. The rules:
 
-* Any ``blocker`` or ``major`` finding — new, or a previous one reported
-  ``unresolved`` / ``partially_resolved`` — makes the verdict the configured
+* Any ``blocker`` or ``major`` finding — new, or a previous one the model did
+  not explicitly report ``resolved`` — makes the verdict the configured
   blocking event (``REQUEST_CHANGES``, or ``COMMENT`` for an instance that
-  never wants to block a merge). Never ``APPROVE``.
+  never wants to block a merge). Never ``APPROVE``. Silence is not a fix: a
+  previous blocking finding the model leaves out of ``prior_issues``, or
+  reports with any status other than ``resolved``, still blocks.
 * ``APPROVE`` is posted only when the model itself approved AND nothing
   blocking remains. ``minor`` findings and nits never stand in the way.
 * ``REQUEST_CHANGES`` with nothing blocking has no basis and becomes
@@ -41,8 +43,8 @@ __all__ = [
 
 VERDICTS: frozenset[str] = frozenset({"APPROVE", "COMMENT", "REQUEST_CHANGES"})
 BLOCKING_SEVERITIES: frozenset[str] = frozenset({"blocker", "major"})
-#: Previous-finding statuses that mean the finding still stands.
-_STILL_OPEN: frozenset[str] = frozenset({"unresolved", "partially_resolved"})
+#: The only previous-finding status that clears a blocking finding.
+_RESOLVED = "resolved"
 _BLOCKING_EVENTS: frozenset[str] = frozenset({"REQUEST_CHANGES", "COMMENT"})
 
 NO_TICKET_TITLE = "[no-ticket] No linked ticket"
@@ -71,6 +73,8 @@ class PolicyResult:
     blocking: list[dict[str, Any]] = field(default_factory=list)
     prior_blocking: list[dict[str, Any]] = field(default_factory=list)
     reasons: list[str] = field(default_factory=list)
+    #: Previous comment ids the model explicitly reported ``resolved``.
+    resolved_ids: list[int] = field(default_factory=list)
 
     @property
     def overridden(self) -> bool:
@@ -111,17 +115,26 @@ def decide_verdict(
 
     blocking = [i for i in out_issues if is_blocking(i)]
     severities = {int(k): str(v).lower() for k, v in (prior_severities or {}).items()}
-    prior_blocking: list[dict[str, Any]] = []
+    reported: dict[int, Mapping[str, Any]] = {}
     for prior in prior_issues or []:
-        status = str(prior.get("status") or "").strip().lower()
         cid = prior.get("comment_id")
-        if (
-            status in _STILL_OPEN
-            and isinstance(cid, int)
-            and not isinstance(cid, bool)
-            and severities.get(cid) in BLOCKING_SEVERITIES
-        ):
-            prior_blocking.append(dict(prior))
+        if isinstance(cid, int) and not isinstance(cid, bool) and cid not in reported:
+            reported[cid] = prior
+    resolved_ids = [
+        cid
+        for cid, prior in reported.items()
+        if cid in severities and str(prior.get("status") or "").strip().lower() == _RESOLVED
+    ]
+    prior_blocking: list[dict[str, Any]] = []
+    for cid, severity in severities.items():
+        if severity not in BLOCKING_SEVERITIES or cid in resolved_ids:
+            continue
+        found = reported.get(cid)
+        prior_blocking.append(
+            dict(found) if found else {"comment_id": cid, "status": "unreported", "note": ""}
+        )
+    if any(p.get("status") == "unreported" for p in prior_blocking):
+        reasons.append("a previous blocking finding was not reported resolved")
 
     if blocking or prior_blocking:
         verdict = event
@@ -140,6 +153,7 @@ def decide_verdict(
         blocking=blocking,
         prior_blocking=prior_blocking,
         reasons=reasons,
+        resolved_ids=resolved_ids,
     )
 
 

@@ -1237,8 +1237,9 @@ _PR_REVIEW_SCHEMAS: dict[str, dict[str, Any]] = {
             "description": (
                 "Poll the configured GitHub repositories and Chat space for pull requests "
                 "that need a review, and file one pr-review task per pull-request head. "
-                "Deterministic; normally run by the pr-review-intake workflow. Returns "
-                "counts, including open_tasks. poll=false only reports and dispatches."
+                "Deterministic; normally run by the pr-review-intake workflow, one run at a "
+                "time per tenant (a concurrent run returns skipped: locked). Returns counts, "
+                "including open_tasks and queued_tasks. count_only=true only counts."
             ),
             "parameters": {
                 "type": "object",
@@ -1246,7 +1247,11 @@ _PR_REVIEW_SCHEMAS: dict[str, dict[str, Any]] = {
                     "poll": {
                         "type": "boolean",
                         "description": "Read GitHub and Chat (default true)",
-                    }
+                    },
+                    "count_only": {
+                        "type": "boolean",
+                        "description": "Only report open_tasks / queued_tasks; change nothing",
+                    },
                 },
             },
         },
@@ -1256,9 +1261,10 @@ _PR_REVIEW_SCHEMAS: dict[str, dict[str, Any]] = {
         "function": {
             "name": "pr_review_prepare",
             "description": (
-                "Use this first for a pr-review task: fetches the pull request's head and "
-                "returns start_args — pass them to claude_code_start exactly as given. "
-                "skip: true means there is nothing to review; resolve the task."
+                "Use this first for a pr-review task: fetches the pull request's head, "
+                "starts the read-only Claude Code review job and returns its job_id for "
+                "claude_code_wait and pr_review_finalize. skip: true means there is nothing "
+                "to review; resolve the task."
             ),
             "parameters": {
                 "type": "object",
@@ -1285,7 +1291,7 @@ _PR_REVIEW_SCHEMAS: dict[str, dict[str, Any]] = {
                     "number": _GH_NUMBER,
                     "job_id": {
                         "type": "string",
-                        "description": "The review job's job_id from claude_code_start",
+                        "description": "The job_id pr_review_prepare returned (no other)",
                     },
                     "dismiss": {
                         "type": "boolean",

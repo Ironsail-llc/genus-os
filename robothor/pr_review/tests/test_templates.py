@@ -36,16 +36,31 @@ def test_manifest_validates_strictly():
     assert "model" not in data  # the fleet default applies
 
 
-def test_manifest_opts_into_exactly_known_opt_in_tools():
+def test_manifest_opts_into_exactly_what_the_agent_calls():
     data = _render()
     opt_in = set(data["tools_opt_in"])
     assert opt_in <= OPT_IN_TOOLS
-    assert {
-        "claude_code_start",
+    # prepare starts the job and finalize posts through the GitHub handlers
+    # directly: the agent itself can neither start an arbitrary Claude Code job
+    # nor post, reply on or resolve a review.
+    assert opt_in == {
+        "claude_code_status",
         "claude_code_wait",
+        "claude_code_cancel",
         "pr_review_prepare",
         "pr_review_finalize",
-    } <= opt_in
+    }
+
+
+def test_manifest_gives_the_long_tools_room():
+    from robothor.engine.tool_timeouts import resolve_tool_timeout
+
+    data = _render()
+    configured = int((data.get("v2") or {}).get("tool_timeout_seconds", 120))
+    # claude_code_wait(timeout_s=1200) as instructed, and a first clone of a large repo.
+    assert resolve_tool_timeout("claude_code_wait", configured) >= 1200 + 30
+    assert resolve_tool_timeout("pr_review_prepare", configured) >= 600
+    assert resolve_tool_timeout("pr_review_finalize", configured) >= 300
 
 
 def test_catalog_lists_the_agent():
@@ -73,7 +88,8 @@ def test_run_workflow_wakes_the_agent_only_when_queued():
 
     wf = parse_workflow(yaml.safe_load((WORKFLOWS / "pr-review-run.yaml").read_text()))
     queue, cond, review, done = wf.steps
-    assert queue.tool_name == "pr_review_intake" and queue.tool_args == {"poll": False}
+    # Counting only: the run workflow never dispatches; only the intake does.
+    assert queue.tool_name == "pr_review_intake" and queue.tool_args == {"count_only": True}
     assert review.agent_id == "pr-reviewer"
 
     def branch(tool_output: dict) -> str:
