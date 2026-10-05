@@ -19,9 +19,7 @@ async def test_review_requested_matches_direct_requests_not_team_requests(monkey
     async def fake_get(path: str, params: dict[str, Any] | None = None) -> Any:
         seen.append({"path": path, **(params or {})})
         return {
-            "items": [
-                {"repository_url": "https://api.github.com/repos/acme/widgets", "number": 7}
-            ]
+            "items": [{"repository_url": "https://api.github.com/repos/acme/widgets", "number": 7}]
         }
 
     monkeypatch.setattr(client, "_get", fake_get)

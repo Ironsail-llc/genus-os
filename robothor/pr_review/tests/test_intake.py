@@ -300,7 +300,12 @@ async def _orphan(env, job_id="job-1"):
 
 async def _count(env, cfg, job_state, now=NOW):
     intake = Intake(
-        cfg, env["store"], TENANT, tasks=env["tasks"], github=env["github"], now=now,
+        cfg,
+        env["store"],
+        TENANT,
+        tasks=env["tasks"],
+        github=env["github"],
+        now=now,
         job_state=job_state,
     )
     return await intake.run(count_only=True)

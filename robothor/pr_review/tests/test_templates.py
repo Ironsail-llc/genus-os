@@ -87,7 +87,7 @@ def test_installed_agent_is_not_deferred():
     names = registry._get_filtered_names(config)
     assert len(names) <= deferred_tools_threshold()
     assert not registry.should_defer(config)
-    assert _AGENT_TOOLS <= set(names)
+    assert set(names) >= _AGENT_TOOLS
     assert set(names) & OPT_IN_TOOLS == _AGENT_TOOLS & OPT_IN_TOOLS
 
 

@@ -156,7 +156,8 @@ class TestPlanModeGate:
     @pytest.mark.asyncio
     @pytest.mark.usefixtures("_mock_run_persistence")
     @pytest.mark.parametrize(
-        ("inner", "admitted"), [("read_file", True), ("claude_code_wait", True), ("send_email", False)]
+        ("inner", "admitted"),
+        [("read_file", True), ("claude_code_wait", True), ("send_email", False)],
     )
     async def test_tool_call_is_classified_as_the_call_it_wraps(
         self, runner, agent_config, inner, admitted

@@ -23,10 +23,12 @@ two tool calls run at the same time.
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from robothor.engine.tools.constants import READONLY_TOOLS
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
 
 logger = logging.getLogger(__name__)
 

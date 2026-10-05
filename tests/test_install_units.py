@@ -461,7 +461,9 @@ def test_claude_code_dropin_lifts_exactly_the_proc_overmounts_and_wins():
     assert relaxed == {"ProtectKernelTunables=no", "ProtectKernelLogs=no"}
     for other in sorted(dropins.glob("*.conf")):
         text = directives(other.read_text())
-        if other.name != ours and any(f"{d}=yes" in text for d in ("ProtectKernelTunables", "ProtectKernelLogs")):
+        if other.name != ours and any(
+            f"{d}=yes" in text for d in ("ProtectKernelTunables", "ProtectKernelLogs")
+        ):
             assert other.name < ours, f"{other.name} sorts after {ours} and would re-enable it"
     hardening = directives((dropins / "hardening.conf").read_text())
     for kept in ("NoNewPrivileges=yes", "ProtectKernelModules=yes", "ProtectControlGroups=yes"):

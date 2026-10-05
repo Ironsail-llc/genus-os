@@ -211,10 +211,7 @@ _BENCHMARK_EXTRA_READS: frozenset[str] = frozenset(
 #: read-only: they read the operator's REAL coding jobs (and the handlers
 #: refuse a benchmark run anyway).
 _BENCHMARK_WITHHELD_READS: frozenset[str] = frozenset(
-    DESKTOP_TOOLS
-    | BENCHMARK_TOOLS
-    | GWS_TOOLS
-    | {"claude_code_status", "claude_code_wait"}
+    DESKTOP_TOOLS | BENCHMARK_TOOLS | GWS_TOOLS | {"claude_code_status", "claude_code_wait"}
 )
 
 
