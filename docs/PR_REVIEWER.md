@@ -86,10 +86,16 @@ and the Chat announcement pass through the secret redactor
 (`robothor/secrets/redaction.py`) before they are posted or stored.
 
 **What the review job may do.** It runs in its own read-only worktree at the
-pull request's head with Read, Grep, Glob, read-only `git` and
-`gh pr view/diff/checks`. It cannot edit, push, comment or call `gh api`. The
-review content comes from the `pr-review` skill (twelve lenses, severities,
-verify-or-drop, a completeness pass, re-review rules) plus the repository's own
+pull request's head with Read, Grep, Glob and read-only `git`, and no network
+(no `gh`, no web). It cannot edit, push or comment. Claude Code runs it with
+`--effort` `ROBOTHOR_PR_REVIEW_EFFORT` (default `high`), up to
+`ROBOTHOR_PR_REVIEW_MAX_TURNS` turns (80) per round, 1800 s per round
+(`ROBOTHOR_PR_REVIEW_ROUND_TIMEOUT`) and a $25 notional cap
+(`ROBOTHOR_PR_REVIEW_BUDGET_USD`). The review guidelines are the instance's
+own file when `ROBOTHOR_PR_REVIEW_GUIDELINES_PATH` names a readable one, else
+the `pr-review` skill (twelve lenses, severities, verify-or-drop, a
+completeness pass, re-review rules); either way the prompt adds the operating
+notes (real tools, output fields, the verdict rule) and the repository's own
 `.github/review-guidelines.md`, `CLAUDE.md` or `AGENTS.md` read from the
 **base** branch (`origin/<base>`), when present — a pull request cannot
 rewrite the rules it is reviewed against.
@@ -104,6 +110,26 @@ callers are denied `github_create_review`, `github_reply_review_comment`,
 including both workflows and the pr-reviewer agent step — is denied only the
 three `github_*` review-write tools, because finalize calls their handlers
 directly. `owner` and `admin` keep everything.
+
+**The linked ticket.** prepare finds a ticket key in the title, branch,
+description or commit messages (trailers included), using the repository's
+prefix from `owner/repo:PREFIX` entries in `ROBOTHOR_PR_REVIEW_REPOS` or
+`_TICKET_PREFIXES` (bare `PREFIX` entries apply to every other repository).
+It fetches the issue through the Jira integration (`jira_get_issue` with
+`include_text`, no model; `JIRA_BASE_URL`, `JIRA_USER_EMAIL`, `JIRA_API_TOKEN`)
+and puts its summary, status, description and acceptance criteria — redacted,
+at most 8,000 characters — in the prompt, telling the model to check the pull
+request against each criterion. When Jira is not configured or the fetch
+fails, the prompt says so and forbids inventing criteria.
+
+**Asking for a review.** Main opts into `pr_review_intake`: when the operator
+asks it to review a pull request it calls `pr_review_intake(pr="<url or
+owner/repo#N>")`, which queues that one pull request (configured repositories
+only) for the pr-reviewer and returns `requested.status`; calling it again
+reports `requested.review_url` once the review is posted. Such a review has no
+Chat thread; its finalize result carries a Telegram digest line, which reaches
+Telegram when the pr-reviewer is installed with `delivery_mode=announce`. Main
+runs as `owner` on Telegram, which migration 146 leaves allowed.
 
 **Timeouts.** `claude_code_wait` enforces its own wait (up to 1800 s), so the
 registry gives it 1830 s; `pr_review_prepare` and `pr_review_finalize` get the
@@ -128,24 +154,80 @@ never left running.
 
    | Setting | What to set |
    |---|---|
-   | `ROBOTHOR_PR_REVIEW_REPOS` | `owner/repo,owner/other` — the repositories it may review |
+   | `ROBOTHOR_PR_REVIEW_REPOS` | `owner/repo,owner/other` — the repositories it may review; `owner/repo:PREFIX` also sets that repository's ticket prefix |
    | `ROBOTHOR_PR_REVIEW_WATCH_REPOS` | `false` (default) reviews only pull requests posted in Chat or requesting the bot; `true` reviews every open pull request in the repos |
    | `ROBOTHOR_PR_REVIEW_CHAT_SPACE` | `spaces/…` to watch and announce in; empty for GitHub only |
    | `ROBOTHOR_PR_REVIEW_CHAT_SELF_USERS` | the `users/…` the gws CLI posts as, so its own messages are never requests |
    | `ROBOTHOR_PR_REVIEW_BOT_LOGIN` | GitHub login whose requested reviews it picks up |
-   | `ROBOTHOR_PR_REVIEW_REQUIRE_TICKET` / `_TICKET_PREFIXES` | the optional ticket rule |
+   | `ROBOTHOR_PR_REVIEW_REQUIRE_TICKET` / `_TICKET_PREFIXES` | the optional ticket rule; prefixes as `owner/repo:PREFIX` or bare `PREFIX` |
+   | `ROBOTHOR_PR_REVIEW_GUIDELINES_PATH` | the team's own review guidelines (see [parity](#parity-with-an-existing-review-bot)) |
+   | `ROBOTHOR_PR_REVIEW_MODEL` | the Claude Code model for reviews (e.g. `opus`); empty uses `ROBOTHOR_CLAUDE_CODE_MODEL` |
 
    [Settings](reference/configuration.md#pr_review) lists every
    `ROBOTHOR_PR_REVIEW_*` value. If `ROBOTHOR_CODING_REPO_ROOTS` is set, it
    must include the clone root (`ROBOTHOR_PR_REVIEW_CLONE_ROOT`, default
    `<workspace>/.genus/pr-review/repos`).
 5. **Apply migrations 145** (`pr_reviews`, `pr_review_messages`,
-   `pr_review_cursors`) **and 146** (tool permissions) and restart the engine.
+   `pr_review_cursors`), **146** (tool permissions) **and 147** (per-job
+   Claude Code limits on `coding_jobs`) and restart the engine.
 
 **Cutover from another review bot.** Never run the suite on the same
 repositories as another automated reviewer: both would claim the same links
 and post two reviews per head. Stop the other bot first, or start with a
 disjoint `ROBOTHOR_PR_REVIEW_REPOS` and move repositories over one at a time.
+
+## Parity with an existing review bot
+
+The suite is built to replace a team's own review bot (Claude Code over the
+GitHub and Jira APIs, triggered from a Chat space) without the team noticing a
+change in what it reads, and to beat it where it can. To reproduce one:
+
+| Old bot setting | Genus setting |
+|---|---|
+| `ALLOWED_REPOS=owner/repo:PREFIX,…` | `ROBOTHOR_PR_REVIEW_REPOS` — the same value |
+| `REVIEW_GUIDELINES_PATH` | copy the file to `brain/pr-review-guidelines.md` (instance data, gitignored with `brain/*.md`) and set `ROBOTHOR_PR_REVIEW_GUIDELINES_PATH=<workspace>/brain/pr-review-guidelines.md` |
+| `REVIEW_MODEL` / `REVIEW_EFFORT` / `REVIEW_MAX_TURNS` / `REVIEW_TIMEOUT_MS` | `ROBOTHOR_PR_REVIEW_MODEL=opus`, `_EFFORT=high`, `_MAX_TURNS=80`, `_ROUND_TIMEOUT=1800` (the last three are the defaults) |
+| `CHAT_SPACE` / `CHAT_SELF_USER_ID` | `ROBOTHOR_PR_REVIEW_CHAT_SPACE` / `_CHAT_SELF_USERS` |
+| `CHAT_CLAIM_REACTION` / `CHAT_APPROVED_REACTION` | `ROBOTHOR_PR_REVIEW_CLAIM_REACTION` (👀) / `_APPROVED_REACTION` (👍) |
+| `JIRA_BASE_URL`, `JIRA_EMAIL`, `JIRA_API_TOKEN` | `JIRA_BASE_URL`, `JIRA_USER_EMAIL`, and `JIRA_API_TOKEN` in the vault |
+| `REVIEW_MODE=auto` | always: reviews are posted live, exactly once |
+
+**Kept as the team knows it.** The guidelines file verbatim, framed the same
+way ("the guidelines win on conflict", the operating notes, the re-review
+section with the previous summary, previous issues and the incremental compare
+range); the ticket and its acceptance criteria as the baseline; 👀 on the
+claimed message and 👍 replacing it on approval; thread replies prefixed with
+the linked PR number: `#N: Approved`, `#N: Comments/change request`,
+`#N: No changes?` (a re-review request with no new commits), "A review is
+already running for this PR…" (a request while one runs), "This PR is merged;
+skipping the review.", and "⚠️ Automated review failed after N attempts: …
+Reply "re-review" to try again.".
+
+**Deliberately better.**
+
+- **Blocking findings never get through.** The verdict is recomputed in code:
+  a blocker or major finding, or a previous one not reported `resolved`, is
+  `REQUEST_CHANGES`, whatever the model proposed. The old bot posted the
+  model's verdict.
+- **Previous findings are followed up, not just listed.** Each one is tracked
+  by its inline comment id; the re-review replies on its thread (resolved,
+  partially resolved, still open) and resolves our threads only on approval.
+- **The prompt promises only what the job can do.** A review job has no
+  network, so the operating notes say so and map guideline steps it cannot run
+  (`gh pr diff`, sub-agents, Jira tools) to what it can (`git diff
+  origin/<base>...HEAD`, separate passes, the ticket fetched for it), instead
+  of leaving the model to fail at them.
+- **The ticket is fetched for the model**, redacted and size-capped, and a
+  missing or unreadable ticket is said plainly — the model is told not to
+  invent criteria.
+- **The Chat reply adds the blocking count**: `#N: Comments/change request —
+  2 blocking`; the familiar prefix stays. A re-review requested while a review
+  runs gets "No changes?" only if it was not already told a review is running.
+- **Rules come from the base branch**, so a pull request cannot rewrite the
+  `CLAUDE.md` it is reviewed against; output is redacted before posting; the
+  job is sandboxed read-only.
+- **The assistant can be asked** to review one pull request
+  (`pr_review_intake(pr=...)`), and reports the posted review.
 
 ## Operating it
 

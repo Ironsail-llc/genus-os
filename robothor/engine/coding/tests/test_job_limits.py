@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import pytest
 
 from robothor.engine.coding import jobs as jobs_mod
 from robothor.engine.coding.jobs import Acceptance, CodingJobManager, JobStatus, MemoryJobStore
-from robothor.engine.coding.runner import ClaudeInvocation
 from robothor.engine.coding.tests.test_jobs import TENANT, FakeRunner, _manager, _result, _start
 from robothor.engine.tools.dispatch import ToolContext
 from robothor.engine.tools.handlers import claude_code
+
+if TYPE_CHECKING:
+    from robothor.engine.coding.runner import ClaudeInvocation
 
 
 async def test_per_job_effort_turns_and_round_timeout_reach_the_runner(git_repo, coding_env):

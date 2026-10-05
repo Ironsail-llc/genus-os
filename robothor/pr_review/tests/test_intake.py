@@ -158,7 +158,7 @@ async def test_rereview_without_new_commits_says_so(env):
     summary = await _run(env)
     assert summary["tasks_created"] == 0
     assert summary["no_new_commits"] == 1
-    assert env["chat"].replies[-1][2] == f"<{URL}|#7>: No new commits since the last review."
+    assert env["chat"].replies[-1][2] == f"<{URL}|#7>: No changes?"
 
 
 async def test_malformed_message_is_recorded_and_skipped(env):

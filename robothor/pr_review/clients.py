@@ -32,6 +32,7 @@ class GitHubPort(Protocol):
 class ChatClient(Protocol):
     async def list_messages(self, space: str, since: str) -> list[dict[str, Any]]: ...
     async def react(self, message: str, emoji: str) -> bool: ...
+    async def unreact(self, message: str, emoji: str, self_users: tuple[str, ...] = ()) -> bool: ...
     async def reply(self, space: str, thread: str, text: str) -> str: ...
 
 
@@ -158,6 +159,50 @@ class GwsChat:
             ]
         )
         return not data.get("error")
+
+    async def unreact(self, message: str, emoji: str, self_users: tuple[str, ...] = ()) -> bool:
+        """Remove our ``emoji`` reaction from ``message``; True when one was removed.
+
+        Lists the message's reactions with that emoji and deletes the ones by
+        ``self_users`` (any, when none are configured: Chat lets a user delete
+        only their own, so another person's is refused and left alone).
+        """
+        if not emoji or not message:
+            return False
+        safe = emoji.replace("\\", "").replace('"', "")
+        data = await self._run(
+            [
+                "chat",
+                "spaces",
+                "messages",
+                "reactions",
+                "list",
+                "--params",
+                json.dumps({"parent": message, "filter": f'emoji.unicode = "{safe}"'}),
+            ]
+        )
+        if data.get("error"):
+            return False
+        removed = False
+        for reaction in data.get("reactions") or []:
+            if not isinstance(reaction, dict) or not reaction.get("name"):
+                continue
+            user = str((reaction.get("user") or {}).get("name") or "")
+            if self_users and user not in self_users:
+                continue
+            deleted = await self._run(
+                [
+                    "chat",
+                    "spaces",
+                    "messages",
+                    "reactions",
+                    "delete",
+                    "--params",
+                    json.dumps({"name": str(reaction["name"])}),
+                ]
+            )
+            removed = removed or not deleted.get("error")
+        return removed
 
     async def reply(self, space: str, thread: str, text: str) -> str:
         data = await self._run(

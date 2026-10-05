@@ -73,6 +73,7 @@ class FakeChat:
     def __init__(self) -> None:
         self.messages: list[dict[str, Any]] = []
         self.reactions: list[tuple[str, str]] = []
+        self.unreactions: list[tuple[str, str]] = []
         self.replies: list[tuple[str, str, str]] = []
         self.list_calls: list[str] = []
         self._n = 0
@@ -106,6 +107,10 @@ class FakeChat:
 
     async def react(self, message: str, emoji: str) -> bool:
         self.reactions.append((message, emoji))
+        return True
+
+    async def unreact(self, message: str, emoji: str, self_users: tuple[str, ...] = ()) -> bool:
+        self.unreactions.append((message, emoji))
         return True
 
     async def reply(self, space: str, thread: str, text: str) -> str:

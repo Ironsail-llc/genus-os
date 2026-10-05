@@ -3223,8 +3223,9 @@ class PrReviewSettings(SettingsGroup):
         "",
         "ROBOTHOR_PR_REVIEW_REPOS",
         "Comma-separated owner/repo list the pr-reviewer may review. Pull-request links "
-        "posted in the Chat space count only for these repositories. Empty disables the "
-        "repository sources.",
+        "posted in the Chat space count only for these repositories. An entry may carry "
+        "its ticket prefix as owner/repo:PREFIX (another review bot's ALLOWED_REPOS "
+        "format). Empty disables the repository sources.",
         restart_required=False,
         since="unreleased",
     )
@@ -3270,6 +3271,45 @@ class PrReviewSettings(SettingsGroup):
         restart_required=False,
         since="unreleased",
     )
+    approved_reaction: str = declare(
+        "\U0001f44d",
+        "ROBOTHOR_PR_REVIEW_APPROVED_REACTION",
+        "Emoji that replaces the claim reaction on the Chat message when its pull request "
+        "is approved. Empty leaves the claim reaction in place.",
+        restart_required=False,
+        since="unreleased",
+    )
+    guidelines_path: str = declare(
+        "",
+        "ROBOTHOR_PR_REVIEW_GUIDELINES_PATH",
+        "Instance review-guidelines file (e.g. <workspace>/brain/pr-review-guidelines.md). "
+        "When set and readable, its content replaces the pr-review skill's generic "
+        "guidelines in every review prompt; re-read for every review.",
+        restart_required=False,
+        since="unreleased",
+    )
+    review_effort: str = declare(
+        "high",
+        "ROBOTHOR_PR_REVIEW_EFFORT",
+        "Claude Code --effort for review jobs: low, medium, high, xhigh or max. Empty "
+        "leaves the CLI's default.",
+        restart_required=False,
+        since="unreleased",
+    )
+    review_max_turns: int = declare(
+        80,
+        "ROBOTHOR_PR_REVIEW_MAX_TURNS",
+        "Claude Code turns one review round may take (--max-turns).",
+        restart_required=False,
+        since="unreleased",
+    )
+    review_round_timeout_s: float = declare(
+        1800.0,
+        "ROBOTHOR_PR_REVIEW_ROUND_TIMEOUT",
+        "Seconds one review round may run before Claude Code is killed.",
+        restart_required=False,
+        since="unreleased",
+    )
     claim_reaction: str = declare(
         "\U0001f440",
         "ROBOTHOR_PR_REVIEW_CLAIM_REACTION",
@@ -3297,8 +3337,9 @@ class PrReviewSettings(SettingsGroup):
     ticket_prefixes: str = declare(
         "",
         "ROBOTHOR_PR_REVIEW_TICKET_PREFIXES",
-        "Comma-separated ticket key prefixes (e.g. ABC) the ticket rule looks for. Empty "
-        "accepts any uppercase KEY-123.",
+        "Ticket key prefixes the reviewer links pull requests to: owner/repo:PREFIX "
+        "entries apply to that repository, bare PREFIX entries (e.g. ABC) to every "
+        "repository without its own, comma-separated. Empty accepts any uppercase KEY-123.",
         restart_required=False,
         since="unreleased",
     )
@@ -3342,9 +3383,10 @@ class PrReviewSettings(SettingsGroup):
         since="unreleased",
     )
     review_budget_usd: float = declare(
-        3.0,
+        25.0,
         "ROBOTHOR_PR_REVIEW_BUDGET_USD",
-        "Dollar cap for one review job across its rounds.",
+        "Dollar cap for one review job across its rounds. On a Claude subscription this "
+        "is the CLI's notional cost, a runaway guard rather than a bill.",
         restart_required=False,
         since="unreleased",
     )

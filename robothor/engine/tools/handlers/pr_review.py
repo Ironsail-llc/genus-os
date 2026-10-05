@@ -3,6 +3,8 @@
 * ``pr_review_intake`` — poll GitHub and the Chat space, file one CRM task per
   pull-request head. Run from a cron workflow; no model involved; one run per
   tenant at a time. ``count_only`` just reads the queue (the run workflow).
+  ``pr`` (a URL or ``owner/repo#N``) queues that one pull request on demand —
+  how the operator asks main for a review — and reports a finished one.
 * ``pr_review_prepare`` — fetch the head into a local clone, build the review
   prompt, START the read-only Claude Code review job and bind its id to the
   pull request. The agent never sees or edits the job's arguments.
@@ -77,6 +79,22 @@ def _skill_text() -> str | None:
     return get_skill_content(SKILL_NAME)
 
 
+def _ticket_fetcher(ctx: ToolContext) -> Any:
+    """Fetch a ticket through the Jira handler (no model); None when Jira is not configured."""
+
+    async def fetch(key: str) -> dict[str, Any] | None:
+        from robothor.engine.tools.handlers import jira
+
+        if not jira._get_base_url() or not jira._get_auth_header():
+            return None
+        result: dict[str, Any] = await jira._jira_get_issue(
+            {"issue_key": key, "include_text": True}, ctx
+        )
+        return result
+
+    return fetch
+
+
 def _pr_args(args: dict[str, Any]) -> tuple[str, int] | dict[str, Any]:
     from robothor.engine.tools.handlers.github_api import _pr_args as parse
 
@@ -128,6 +146,7 @@ async def _intake(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         }
     poll = args.get("poll", True) is not False
     count_only = args.get("count_only") is True
+    requested = str(args.get("pr") or "").strip()
     intake = Intake(
         cfg,
         _store(),
@@ -136,6 +155,8 @@ async def _intake(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         github=_github(),
         chat=_chat() if cfg.chat_space else None,
     )
+    if requested:
+        return await intake.request(requested)
     return await intake.run(poll=poll, count_only=count_only)
 
 
@@ -175,6 +196,7 @@ async def _prepare(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             skill_text=skill,
             token=_get_token(),
             start_job=start_job,
+            fetch_ticket=_ticket_fetcher(ctx),
         )
     except CheckoutError as exc:
         return {"error": f"checkout failed: {exc}"}

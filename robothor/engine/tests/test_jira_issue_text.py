@@ -119,12 +119,17 @@ def test_adf_text_keeps_headings_lists_and_code():
                 "content": [
                     {
                         "type": "listItem",
-                        "content": [{"type": "paragraph", "content": [{"type": "text", "text": "a"}]}],
+                        "content": [
+                            {"type": "paragraph", "content": [{"type": "text", "text": "a"}]}
+                        ],
                     }
                 ],
             },
             {"type": "codeBlock", "content": [{"type": "text", "text": "x = 1"}]},
-            {"type": "paragraph", "content": [{"type": "hardBreak"}, {"type": "text", "text": "z"}]},
+            {
+                "type": "paragraph",
+                "content": [{"type": "hardBreak"}, {"type": "text", "text": "z"}],
+            },
         ],
     }
     assert adf_to_text(doc) == "Scope\n1. a\nx = 1\n\nz"

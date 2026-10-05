@@ -173,7 +173,7 @@ the engine decides whether it is done.
 
 | Tool | Purpose |
 |---|---|
-| `claude_code_start` | Start a job: `task` (the spec), `repo_path`, `acceptance` `{verify_command, require_commit}`, optional `mode`, `model`, `max_budget_usd`, `max_rounds`, `base_ref`, `json_schema`. Returns a `job_id` at once. |
+| `claude_code_start` | Start a job: `task` (the spec), `repo_path`, `acceptance` `{verify_command, require_commit}`, optional `mode`, `model`, `max_budget_usd`, `max_rounds`, `base_ref`, `json_schema`, and per-job `effort` (`--effort` low…max), `max_turns` and `round_timeout_s`. Returns a `job_id` at once. |
 | `claude_code_wait` | Block until the job finishes or `timeout_s` (default 300, max 1800) passes. The wait is shortened to leave the calling run time to report. |
 | `claude_code_status` | The job now: status, rounds, cost, its last actions, the verify result and evidence. Only the agent that started a job (or the owner) can see or steer it. |
 | `claude_code_followup` | A specific correction into the same Claude Code session: queued for a running job, or reopening a finished one with a fresh round allowance. |

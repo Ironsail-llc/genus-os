@@ -1252,7 +1252,9 @@ _PR_REVIEW_SCHEMAS: dict[str, dict[str, Any]] = {
                 "that need a review, and file one pr-review task per pull-request head. "
                 "Deterministic; normally run by the pr-review-intake workflow, one run at a "
                 "time per tenant (a concurrent run returns skipped: locked). Returns counts, "
-                "including open_tasks and queued_tasks. count_only=true only counts."
+                "including open_tasks and queued_tasks. count_only=true only counts. "
+                "Use pr=<url or owner/repo#N> when the operator asks for a review of one "
+                "pull request."
             ),
             "parameters": {
                 "type": "object",
@@ -1264,6 +1266,14 @@ _PR_REVIEW_SCHEMAS: dict[str, dict[str, Any]] = {
                     "count_only": {
                         "type": "boolean",
                         "description": "Only report open_tasks / queued_tasks; change nothing",
+                    },
+                    "pr": {
+                        "type": "string",
+                        "description": (
+                            "Review this one pull request now (URL or owner/repo#N, a "
+                            "configured repository only). Returns requested.status; call "
+                            "again later with the same pr for requested.review_url"
+                        ),
                     },
                 },
             },

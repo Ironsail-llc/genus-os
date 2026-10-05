@@ -31,9 +31,15 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol
 from robothor.pr_review.checkout import ensure_checkout, read_at
 from robothor.pr_review.policy import decide_verdict, extract_ticket_key, is_blocking
 from robothor.pr_review.posting import decide_review
-from robothor.pr_review.prompt import APPENDIX_PATHS, ReviewContext, build_review_prompt
+from robothor.pr_review.prompt import (
+    APPENDIX_PATHS,
+    ReviewContext,
+    build_review_prompt,
+    load_guidelines,
+)
 from robothor.pr_review.schema import review_output_schema, validate_review_output
 from robothor.pr_review.store import ACTIVE_STATUSES, FINAL_STATUSES
+from robothor.pr_review.ticket import ticket_context
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Mapping, Sequence
@@ -41,6 +47,7 @@ if TYPE_CHECKING:
     from robothor.pr_review.clients import ChatClient, GitHubPort
     from robothor.pr_review.config import ReviewerConfig
     from robothor.pr_review.store import PrReviewRow, PrReviewStore
+    from robothor.pr_review.ticket import TicketFetcher
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +64,8 @@ _PRIOR_LABEL = {
     "unresolved": "Still open",
 }
 _ERROR_MAX = 500
+#: ``PrReviewRow.source`` of a review the operator asked for (pr_review_intake(pr=...)).
+OPERATOR_SOURCE = "operator"
 #: Statuses prepare may claim a row from: anything not already bound to a job.
 _PREPARABLE = frozenset({"pending", "queued", "failed", "skipped", "closed", *FINAL_STATUSES})
 
@@ -143,13 +152,15 @@ def _pr_text(pr: dict[str, Any]) -> tuple[str, str, str]:
 async def _ticket_key(
     cfg: ReviewerConfig, github: GitHubPort, row: PrReviewRow, pr: dict[str, Any]
 ) -> str | None:
+    """The ticket key in the title, branch or body, else in a commit message or trailer."""
+    prefixes = cfg.prefixes_for(row.repo)
     title, branch, body = _pr_text(pr)
-    key = extract_ticket_key(cfg.ticket_prefixes, title=title, branch=branch, body=body)
-    if key or not cfg.require_ticket:
+    key = extract_ticket_key(prefixes, title=title, branch=branch, body=body)
+    if key:
         return key
     commits = await github.list_commits(row.repo, row.number)
     messages = [str((c.get("commit") or {}).get("message") or "") for c in commits]
-    return extract_ticket_key(cfg.ticket_prefixes, commit_messages=messages)
+    return extract_ticket_key(prefixes, commit_messages=messages)
 
 
 # ── prepare ─────────────────────────────────────────────────────────────
@@ -180,6 +191,7 @@ async def prepare(
     checkout: Callable[..., Awaitable[Any]] = ensure_checkout,
     reader: Callable[..., Awaitable[str | None]] = read_at,
     remote_url: str | None = None,
+    fetch_ticket: TicketFetcher | None = None,
 ) -> dict[str, Any]:
     row = await store.get(tenant_id, repo, number)
     if row is None:
@@ -235,6 +247,9 @@ async def prepare(
             break
 
     title, head_ref, _ = _pr_text(pr)
+    ticket_key = await _ticket_key(cfg, github, row, pr)
+    ticket = await ticket_context(ticket_key, fetch_ticket) if ticket_key else None
+    guidelines = load_guidelines(cfg.guidelines_path, skill_text)
     previous = [
         {k: i.get(k) for k in ("comment_id", "path", "line", "severity", "title", "body")}
         for i in row.last_review.get("issues") or []
@@ -252,7 +267,8 @@ async def prepare(
         depth=row.depth or "full",
         since_sha=decision.since_sha or row.last_reviewed_sha,
         compare_status=compare_status,
-        ticket_key=await _ticket_key(cfg, github, row, pr),
+        ticket_key=ticket_key,
+        ticket=ticket,
         appendix=appendix,
         appendix_path=appendix_path,
         previous_verdict=str(row.last_review.get("verdict") or ""),
@@ -260,7 +276,7 @@ async def prepare(
         previous_issues=previous,
     )
     start_args: dict[str, Any] = {
-        "task": build_review_prompt(skill_text, ctx),
+        "task": build_review_prompt(guidelines, ctx),
         "repo_path": str(path),
         "acceptance": {"require_commit": False},
         "mode": "review",
@@ -269,7 +285,11 @@ async def prepare(
         "grant_github": True,
         "max_budget_usd": cfg.review_budget_usd,
         "max_rounds": 2,
+        "max_turns": cfg.review_max_turns,
+        "round_timeout_s": cfg.review_round_timeout_s,
     }
+    if cfg.review_effort:
+        start_args["effort"] = cfg.review_effort
     if cfg.review_model:
         start_args["model"] = cfg.review_model
 
@@ -312,6 +332,9 @@ async def prepare(
         "mode": ctx.mode,
         "since_sha": ctx.since_sha if ctx.mode == "incremental" else "",
         "depth": ctx.depth,
+        "ticket": ticket_key or "",
+        "ticket_state": ticket.state if ticket else "none",
+        "guidelines": guidelines.source,
         "job_id": job_id,
         "next": "call claude_code_wait with this job_id until it is done, then "
         "pr_review_finalize with the same job_id",
@@ -342,7 +365,9 @@ async def _announce(
 
 
 def _digest(cfg: ReviewerConfig, row: PrReviewRow, text: str) -> str:
-    return f"PR review {row.repo}#{row.number}: {text}" if cfg.telegram_digest else ""
+    """The Telegram line: with the digest on, or for a review the operator asked for."""
+    wanted = cfg.telegram_digest or row.source == OPERATOR_SOURCE
+    return f"PR review {row.repo}#{row.number}: {text}" if wanted else ""
 
 
 async def _fail(
@@ -369,11 +394,13 @@ async def _fail(
     claimed.attempts += 1
     claimed.failed_at = datetime.now(UTC)
     await store.save(claimed)
+    short = reason if len(reason) <= 300 else f"{reason[:300]}\u2026"
     announced = await _announce(
         store,
         chat,
         claimed,
-        f'Automated review failed: {reason[:300]}. Reply "re-review" to retry.',
+        f"\u26a0\ufe0f Automated review failed after {_plural(claimed.attempts, 'attempt')}: "
+        f'{short}\nReply "re-review" to try again.',
     )
     return {
         "status": "failed",
@@ -385,11 +412,10 @@ async def _fail(
 
 
 def _verdict_text(verdict: str, blocking: int) -> str:
+    """The thread reply, in the wording reviewers already know, plus the blocking count."""
     if verdict == "APPROVE":
         return "Approved"
-    if blocking:
-        return f"Needs changes — {_plural(blocking, 'blocking finding')}"
-    return "Comments, nothing blocking"
+    return "Comments/change request" + (f" \u2014 {blocking} blocking" if blocking else "")
 
 
 def _already_posted(cfg: ReviewerConfig, row: PrReviewRow) -> dict[str, Any]:
@@ -563,6 +589,20 @@ async def finalize(
     )
 
 
+async def _swap_reactions(cfg: ReviewerConfig, chat: ChatClient | None, row: PrReviewRow) -> None:
+    """On approval the approved reaction replaces our claim reaction on the PR message."""
+    if not (chat and row.chat_message and cfg.approved_reaction):
+        return
+    try:
+        await chat.react(row.chat_message, cfg.approved_reaction)
+        if cfg.claim_reaction and cfg.claim_reaction != cfg.approved_reaction:
+            removed = await chat.unreact(row.chat_message, cfg.claim_reaction, cfg.chat_self_users)
+            if not removed:
+                logger.info("pr_review: could not remove the claim reaction on %s", row.key)
+    except Exception:  # noqa: BLE001 - a reaction is decoration
+        logger.debug("pr_review approve reaction failed for %s", row.key)
+
+
 def _prior_severities(issues: list[dict[str, Any]]) -> dict[int, str]:
     out: dict[int, str] = {}
     for issue in issues:
@@ -683,12 +723,9 @@ async def _post(
     blocking = len(decision.blocking) + len(decision.prior_blocking)
     text = _verdict_text(decision.verdict, blocking)
     if "announced" not in done:
+        if decision.verdict == "APPROVE":
+            await _swap_reactions(cfg, chat, row)
         announced = await _announce(store, chat, row, text)
-        if announced and decision.verdict == "APPROVE" and chat and row.chat_message:
-            try:
-                await chat.react(row.chat_message, "\U0001f44d")
-            except Exception:  # noqa: BLE001 - a reaction is decoration
-                logger.debug("pr_review approve reaction failed for %s", row.key)
         row.last_review = _record("announced", announced)
         await store.save(row)
 
@@ -725,9 +762,11 @@ async def _post(
     final.error = ""
     final.attempts = 0
     final.failed_at = None
-    final.followup = False
+    # ``followup`` stays: a request made during this review is still pending,
+    # and the intake clears it when it dispatches (or quietly skips) that one.
     await store.save(final)
 
+    digest = _digest(cfg, final, f"{text} \u2014 {review_url}")
     return {
         "status": "posted",
         "review_url": review_url,
@@ -741,7 +780,7 @@ async def _post(
         "thread_replies": done.get("replies", 0),
         "threads_resolved": done.get("resolved", 0),
         "chat_announced": done.get("announced", False),
-        "digest": _digest(cfg, final, f"{text} — {review_url}"),
+        "digest": digest,
         "next": "resolve the task with review_url as the evidence"
-        + ("; your final output is the digest line, verbatim" if cfg.telegram_digest else ""),
+        + ("; your final output is the digest line, verbatim" if digest else ""),
     }

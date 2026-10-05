@@ -17,24 +17,28 @@ GitHub by the pr-reviewer, which recomputes the verdict from the findings.
 
 - **Read, Grep, Glob** over the checkout.
 - **Read-only git**: `git diff`, `git log`, `git show`, `git blame`,
-  `git grep`, `git ls-files`, `git rev-parse`, `git status`.
-- **Read-only gh**: `gh pr view`, `gh pr diff`, `gh pr checks`, `gh pr list`.
+  `git ls-files`, `git rev-parse`, `git status`, `git branch --list`.
+- The base branch at `origin/<base>`, and the linked ticket's text when the
+  task includes it.
 
-You cannot edit, run the test suite, start services, fetch the web, or post
-anything. A finding is verified by tracing the code, not by running it.
+There is no network (no `gh`, no web). You cannot edit, run the test suite,
+start services, or post anything. A finding is verified by tracing the code,
+not by running it.
 
 ## Before reviewing
 
-- **Get the diff.** `gh pr diff` diffs against the pull request's real base.
-  If `gh` is unavailable, `git diff $(git merge-base origin/<base> HEAD)..HEAD`.
+- **Get the diff.** `git diff origin/<base>...HEAD` diffs against the pull
+  request's real base (the task names it).
 - **Pin the merge-base.** `git merge-base origin/<base> HEAD` is the commit
   the branch left from. Most real findings compare new behaviour to what the
   code did there (`git show <merge-base>:<path>`), not to the diff's own intent.
 - **Read the description and any deploy notes as claims to verify**, not as
   context to trust. Every "this is safe because…" is a lens target.
-- **Read the linked ticket when one is given**, as the baseline for whether the
-  change does what it should. If you cannot read it, judge against the
-  description and say so in the summary.
+- **Check the linked ticket when the task includes it**, as the baseline for
+  whether the change does what it should: every acceptance criterion the
+  change misses or contradicts is a finding. If the task says the ticket could
+  not be read, judge against the description, say so in the summary, and
+  never invent criteria.
 - **Apply the repository's own rules.** When the task includes the
   repository's review rules (from `.github/review-guidelines.md`, `CLAUDE.md`
   or `AGENTS.md`), check the diff against them too, and read any project doc

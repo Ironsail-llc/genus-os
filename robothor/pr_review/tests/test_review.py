@@ -135,7 +135,7 @@ async def test_model_approve_with_a_blocker_posts_request_changes(env):
     assert row.review_ids == [501]
     assert row.last_review["issues"][0]["comment_id"] == 9000
     assert env["chat"].replies[-1][2] == (
-        f"<https://github.com/{REPO}/pull/7|#7>: Needs changes — 1 blocking finding"
+        f"<https://github.com/{REPO}/pull/7|#7>: Comments/change request — 1 blocking"
     )
 
 

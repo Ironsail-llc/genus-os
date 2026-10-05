@@ -43,11 +43,13 @@ on the same head after ``retry_cooldown_minutes``, at most
 from __future__ import annotations
 
 import logging
+import re
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Literal
 
 from robothor.pr_review.classify import (
     classify_rereview,
+    extract_pr_refs,
     match_allowed_prs,
     mentioned_numbers,
     message_search_text,
@@ -65,7 +67,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["MAX_ATTEMPTS", "Intake", "parse_chat_time"]
+__all__ = ["MAX_ATTEMPTS", "Intake", "parse_chat_time", "parse_pr_ref"]
 
 #: Strongest first. A weaker trigger never replaces a stronger pending one.
 _TRIGGER_RANK = {"initial": 4, "rereview": 3, "new_head": 2, "retry": 2, "ambiguous": 1, "": 0}
@@ -77,6 +79,23 @@ _DRAFT_NOTE = "draft: waiting until it is ready for review"
 _CURSOR_OVERLAP = timedelta(seconds=60)
 _CHAT_SOURCE = "chat"
 _ERROR_MAX = 500
+#: Thread replies, in the wording of the review bot teams already know.
+NO_CHANGES_REPLY = "No changes?"
+IN_PROGRESS_REPLY = (
+    "A review is already running for this PR. I'll check for newer commits once it's posted."
+)
+_SHORTHAND_RE = re.compile(r"^\s*([\w.-]+/[\w.-]+)\s*#\s*(\d+)\s*$")
+
+
+def parse_pr_ref(text: str) -> tuple[str, int] | None:
+    """``owner/repo#N`` or a github.com pull-request URL, as ``(repo, number)``."""
+    m = _SHORTHAND_RE.match(text or "")
+    if m:
+        return m.group(1), int(m.group(2))
+    refs = extract_pr_refs(text or "")
+    if len(refs) == 1:
+        return f"{refs[0].owner}/{refs[0].repo}", refs[0].number
+    return None
 
 
 def parse_chat_time(value: str) -> datetime | None:
@@ -184,6 +203,65 @@ class Intake:
             if self.github is not None:
                 await self._dispatch()
             return await self._counts()
+
+    async def request(self, pr: str) -> dict[str, Any]:
+        """Queue one pull request on demand (``pr_review_intake(pr=...)``).
+
+        For the operator asking an agent for a review: no Chat thread, so the
+        result goes to the caller and the Telegram digest. A pull request
+        already reviewed at its current head is reported, not reviewed again;
+        asking again later reports the finished review.
+        """
+        parsed = parse_pr_ref(pr)
+        if parsed is None:
+            return {"error": f"not a pull request: {pr!r} (use a URL or owner/repo#N)"}
+        repo, number = parsed
+        configured = next((r for r in self.cfg.repos if r.lower() == repo.lower()), None)
+        if configured is None:
+            return {"error": f"{repo} is not in ROBOTHOR_PR_REVIEW_REPOS; not reviewing it"}
+        if self.github is None:
+            return {"error": "GITHUB_TOKEN not configured"}
+        async with self.store.intake_lock(self.tenant_id) as held:
+            if not held:
+                return {"skipped": "locked", "note": "an intake run is in progress; ask again"}
+            found = await self.github.get_pr(configured, number)
+            if found is None:
+                return {"error": f"{configured}#{number} not found on GitHub"}
+            row = await self.store.get(self.tenant_id, configured, number)
+            if row is None:
+                row = self._new_row(configured, number, "operator")
+                self.summary["discovered"] += 1
+            head = str((found.get("head") or {}).get("sha") or "")
+            note = ""
+            if row.status in ACTIVE_STATUSES:
+                note = "a review of this pull request is already queued or running"
+            elif head and head == row.last_reviewed_sha:
+                note = "no new commits since the last review; reporting it"
+            else:
+                if row.status == "closed":
+                    row.status = "pending"
+                _raise_trigger(row, "rereview" if row.last_reviewed_sha else "initial")
+                await self.store.save(row)
+                await self._dispatch()
+            row = await self.store.get(self.tenant_id, configured, number) or row
+            await self._counts()
+            self.summary["requested"] = {
+                "pr": row.key,
+                "status": row.status,
+                "head_sha": head,
+                "task_id": row.task_id,
+                "review_url": str(row.last_review.get("url") or ""),
+                "verdict": str(row.last_review.get("verdict") or ""),
+                "error": row.error,
+                "note": note
+                or (
+                    "queued: the pr-reviewer agent reviews it shortly; call again with "
+                    "the same pr for the review_url"
+                    if row.status == "queued"
+                    else ""
+                ),
+            }
+            return self.summary
 
     async def _counts(self) -> dict[str, Any]:
         active = await self.store.list_active(self.tenant_id)
@@ -349,6 +427,8 @@ class Intake:
             if _raise_trigger(row, trigger, text):
                 raised += 1
                 await self.store.save(row)
+                if trigger == "rereview" and row.status in ACTIVE_STATUSES:
+                    await self._say(row, IN_PROGRESS_REPLY)
         self.summary["triggers"] += raised
         if raised and trigger == "rereview" and self.chat is not None and self.cfg.claim_reaction:
             await self.chat.react(str(message.get("name") or ""), self.cfg.claim_reaction)
@@ -434,7 +514,7 @@ class Intake:
             await self.store.save(row)
             self.summary["closed"] += 1
             merged = "merged" if pr.get("merged") or pr.get("merged_at") else "closed"
-            await self._say(row, f"This pull request is {merged}; not reviewing it.")
+            await self._say(row, f"This PR is {merged}; skipping the review.")
             return False
         if pr.get("draft"):
             # Stays pending until it is ready for review; say so once.
@@ -468,11 +548,14 @@ class Intake:
             compare_status=compare_status,
         )
         if decision.action == "skip":
+            # A request made while a review ran was already told it would be
+            # checked for newer commits; finding none is not news.
+            followup = row.followup
             self._clear(row)
             await self.store.save(row)
             self.summary["no_new_commits"] += 1
-            if trigger == "rereview":
-                await self._say(row, "No new commits since the last review.")
+            if trigger == "rereview" and not followup:
+                await self._say(row, NO_CHANGES_REPLY)
             return False
 
         files = await self.github.list_files(row.repo, row.number)
