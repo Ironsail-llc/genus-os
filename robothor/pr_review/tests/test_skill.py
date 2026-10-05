@@ -38,6 +38,9 @@ def test_every_lens_and_rule_is_present():
         "Completeness pass",
         "Re-reviewing",
         "300 changed lines",
+        "Severity floor",
+        "words-match-code sweep",
+        "Read the GitHub state first",
     ):
         assert phrase in text
     for severity in ("blocker", "major", "minor", "nit"):

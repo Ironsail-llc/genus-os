@@ -85,6 +85,30 @@ finding, for every caller. The summary, every finding, previous-finding notes
 and the Chat announcement pass through the secret redactor
 (`robothor/secrets/redaction.py`) before they are posted or stored.
 
+**What the review job is told.** Besides the diff it can read, prepare puts
+in the prompt, all as data and never as instructions: the title, author,
+branch, labels and linked issues; the description (redacted, at most 16,000
+characters); what people already said on the pull request — reviews, line
+comments and conversation comments, without bots or the reviewer's own
+account (redacted, 1,500 characters each, the latest 40); and the GitHub
+state — `mergeable` / `mergeable_state`, the files a merge into the base
+conflicts in (a `git merge-tree` in the reviewer's own clone, before the job
+starts), and the head commit's check runs and commit statuses. A merge
+conflict or a failing check is a blocking finding the model must report,
+unless it shows the check cannot be caused by the change. When no ticket key
+is found and Jira is configured, a title search in the repository's project
+offers up to five candidate tickets, marked as not linked.
+
+**Large pull requests go deep.** From `ROBOTHOR_PR_REVIEW_DEEP_LINES` (1,500)
+changed lines, the job runs at `ROBOTHOR_PR_REVIEW_DEEP_EFFORT` (`xhigh`,
+never lower than the configured effort), the prompt requires the four lens
+groups as explicit sequential passes, and when the first round used under 60%
+of its turns the same session gets one completeness pass (re-walk the thinnest
+lenses, the tests against every changed behaviour, the description and every
+earlier comment) and returns the whole result again. Finalize posts the job's
+final output, once, as before; a completeness round that returns nothing
+leaves the first round's result in place.
+
 **What the review job may do.** It runs in its own read-only worktree at the
 pull request's head with Read, Grep, Glob and read-only `git`, and no network
 (no `gh`, no web). It cannot edit, push or comment. Claude Code runs it with
