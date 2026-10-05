@@ -275,6 +275,96 @@ async def test_stale_review_is_failed_and_frees_the_slot(env):
     assert row.status == "failed"
 
 
+class _Jobs:
+    """``job_state`` for the intake: one coding job's status and finish time."""
+
+    def __init__(self, **jobs):
+        self.jobs = jobs
+
+    async def __call__(self, job_id):
+        return self.jobs.get(job_id)
+
+
+async def _orphan(env, job_id="job-1"):
+    """A review whose run died after prepare: the row is ``reviewing``, bound
+    to a job, and its task is still IN_PROGRESS with nobody attending it."""
+    env["github"].add(make_pr(7, SHA1))
+    cfg = _cfg(watch_repos=True, chat_space="")
+    await _run(env, cfg)
+    row = await env["store"].get(TENANT, REPO, 7)
+    row.status = "reviewing"
+    row.job_id = job_id
+    await env["store"].save(row)
+    return cfg, row.task_id
+
+
+async def _count(env, cfg, job_state, now=NOW):
+    intake = Intake(
+        cfg, env["store"], TENANT, tasks=env["tasks"], github=env["github"], now=now,
+        job_state=job_state,
+    )
+    return await intake.run(count_only=True)
+
+
+async def test_finished_job_with_no_run_attending_wakes_the_agent(env):
+    """Observed 2026-10-05: a pr-reviewer run died mid-review; its job finished,
+    but the row stayed ``reviewing`` and the run workflow (which wakes the agent
+    only for queued work) never woke it, so the review sat until the 180-minute
+    stale timeout failed it."""
+    cfg, task_id = await _orphan(env)
+    jobs = _Jobs(**{"job-1": ("done", NOW - timedelta(minutes=15))})
+    counts = await _count(env, cfg, jobs)
+    assert counts["resumable_tasks"] == 1
+    assert counts["queued_tasks"] == 1  # the run workflow's wake condition
+    summary = await _run(env, cfg, job_state=jobs)
+    assert env["tasks"].reopened == [task_id]  # back to TODO for any instructions
+    assert summary["resumable_tasks"] == 1
+    row = await env["store"].get(TENANT, REPO, 7)
+    assert row.status == "reviewing" and row.job_id == "job-1"  # prepare returns it
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        ("running", None),
+        ("queued", None),
+        # Just finished: the run that started it is most likely finalizing now.
+        ("done", NOW - timedelta(minutes=1)),
+        None,  # unknown job: left to the stale timeout
+    ],
+)
+async def test_a_job_still_attended_is_not_resumable(env, state):
+    cfg, _ = await _orphan(env)
+    jobs = _Jobs(**({"job-1": state} if state else {}))
+    counts = await _count(env, cfg, jobs)
+    assert counts["resumable_tasks"] == 0 and counts["queued_tasks"] == 0
+    await _run(env, cfg, job_state=jobs)
+    assert env["tasks"].reopened == []
+
+
+async def test_without_a_job_lookup_nothing_is_resumable(env):
+    cfg, _ = await _orphan(env)
+    summary = await _run(env, cfg)
+    assert summary["resumable_tasks"] == 0 and env["tasks"].reopened == []
+
+
+@pytest.mark.parametrize(("status", "reopened"), [("IN_PROGRESS", True), ("TODO", False)])
+async def test_crm_sink_reopens_only_an_in_progress_task(monkeypatch, status, reopened):
+    from robothor.crm import dal
+    from robothor.pr_review.tasks import CrmTaskSink
+
+    updates = []
+    monkeypatch.setattr(dal, "get_task", lambda task_id, tenant_id: {"status": status})
+    monkeypatch.setattr(
+        dal, "update_task", lambda task_id, **kw: updates.append((task_id, kw)) or True
+    )
+    await CrmTaskSink(TENANT).reopen("task-1")
+    assert bool(updates) is reopened
+    if reopened:
+        assert updates[0][0] == "task-1" and updates[0][1]["status"] == "TODO"
+        assert updates[0][1]["tenant_id"] == TENANT
+
+
 async def test_not_configured_runs_nothing(env):
     summary = await _run(env, ReviewerConfig())
     assert summary["tasks_created"] == 0 and summary["errors"] == []

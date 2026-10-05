@@ -117,3 +117,28 @@ async def test_intake_count_only_changes_nothing():
     ):
         result = await pr_review._intake({"count_only": True}, _CTX)
     assert result["queued_tasks"] == 0 and tasks.created == [] and chat.reactions == []
+
+
+async def test_job_state_reads_the_bound_job_for_the_tenant():
+    """The intake's orphaned-review check: status and an aware finish time."""
+    from datetime import UTC, datetime
+
+    jobs = {
+        "done": SimpleNamespace(status="done", finished_at="2026-10-05T10:00:00+00:00"),
+        "naive": SimpleNamespace(status="failed", finished_at="2026-10-05T10:00:00"),
+        "running": SimpleNamespace(status="running", finished_at=None),
+    }
+    seen = []
+
+    async def get(job_id, tenant_id):
+        seen.append(tenant_id)
+        return jobs.get(job_id)
+
+    with patch("robothor.engine.coding.jobs.get_manager", return_value=SimpleNamespace(get=get)):
+        lookup = pr_review._job_state("test-tenant")
+        finished = datetime(2026, 10, 5, 10, tzinfo=UTC)
+        assert await lookup("done") == ("done", finished)
+        assert await lookup("naive") == ("failed", finished)
+        assert await lookup("running") == ("running", None)
+        assert await lookup("missing") is None
+    assert set(seen) == {"test-tenant"}

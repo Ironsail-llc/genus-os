@@ -122,3 +122,15 @@ class CrmTaskSink:
 
     async def create(self, spec: ReviewTaskSpec) -> str:
         return await asyncio.to_thread(self._create, spec)
+
+    def _reopen(self, task_id: str) -> None:
+        from robothor.crm.dal import get_task, update_task
+
+        task = get_task(task_id, tenant_id=self.tenant_id)
+        if not task or str(task.get("status") or "") != "IN_PROGRESS":
+            return
+        update_task(task_id, changed_by=self.created_by, tenant_id=self.tenant_id, status="TODO")
+
+    async def reopen(self, task_id: str) -> None:
+        """Put an orphaned review's IN_PROGRESS task back to TODO."""
+        await asyncio.to_thread(self._reopen, task_id)

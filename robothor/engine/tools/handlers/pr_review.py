@@ -22,6 +22,7 @@ refuse a benchmark run. The logic lives in :mod:`robothor.pr_review`.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -71,6 +72,25 @@ def _tasks(tenant_id: str) -> TaskSink:
     from robothor.pr_review.tasks import CrmTaskSink
 
     return CrmTaskSink(tenant_id)
+
+
+def _job_state(tenant_id: str) -> Any:
+    """``job_id -> (status, finished_at)`` for the intake's orphaned-review check."""
+
+    async def lookup(job_id: str) -> tuple[str, datetime | None] | None:
+        from robothor.engine.coding.jobs import get_manager
+
+        job = await get_manager().get(job_id, tenant_id)
+        if job is None:
+            return None
+        finished: datetime | None = None
+        if job.finished_at:
+            finished = datetime.fromisoformat(str(job.finished_at))
+            if finished.tzinfo is None:
+                finished = finished.replace(tzinfo=UTC)
+        return str(job.status), finished
+
+    return lookup
 
 
 def _skill_text() -> str | None:
@@ -154,6 +174,7 @@ async def _intake(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         tasks=_tasks(ctx.tenant_id),
         github=_github(),
         chat=_chat() if cfg.chat_space else None,
+        job_state=_job_state(ctx.tenant_id),
     )
     if requested:
         return await intake.request(requested)
