@@ -440,7 +440,32 @@ def test_claude_code_dropin_makes_only_the_host_login_writable():
         "[Service]",
         "ReadWritePaths=-/home/robothor/.claude",
         "ReadWritePaths=-/home/robothor/.claude.json",
+        "ProtectKernelTunables=no",
+        "ProtectKernelLogs=no",
     ]
+
+
+def test_claude_code_dropin_lifts_exactly_the_proc_overmounts_and_wins():
+    """Claude Code's Bash sandbox mounts a fresh /proc in a user + pid
+    namespace; the kernel refuses that while ProtectKernelTunables= or
+    ProtectKernelLogs= overmount /proc (each alone breaks it — observed
+    2026-10-05). The drop-in turns off those two and nothing else, and must
+    sort after every drop-in that turns them on, or it silently loses."""
+    dropins = UNIT_DIR / "robothor-engine.service.d"
+    ours = "zz-claude-code.conf"
+    relaxed = {
+        line
+        for line in directives((dropins / ours).read_text()).splitlines()
+        if line.startswith("Protect")
+    }
+    assert relaxed == {"ProtectKernelTunables=no", "ProtectKernelLogs=no"}
+    for other in sorted(dropins.glob("*.conf")):
+        text = directives(other.read_text())
+        if other.name != ours and any(f"{d}=yes" in text for d in ("ProtectKernelTunables", "ProtectKernelLogs")):
+            assert other.name < ours, f"{other.name} sorts after {ours} and would re-enable it"
+    hardening = directives((dropins / "hardening.conf").read_text())
+    for kept in ("NoNewPrivileges=yes", "ProtectKernelModules=yes", "ProtectControlGroups=yes"):
+        assert kept in hardening or kept in (UNIT_DIR / "robothor-engine.service").read_text()
 
 
 def test_restart_forever_dropins_agree_on_their_directives():

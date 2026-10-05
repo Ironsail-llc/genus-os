@@ -30,7 +30,10 @@ async def _ready(ctx: DoctorContext) -> Result:
     which stores CLAUDE_CODE_OAUTH_TOKEN in the vault. Prove it end to end with
     `robothor claude-code status`. Every job's Bash runs in Claude Code's
     sandbox with failIfUnavailable, so bubblewrap must be able to create
-    unprivileged user namespaces and socat must be installed. On the host
+    unprivileged user namespaces and mount a fresh /proc in them — which the
+    engine unit's ProtectKernelTunables=/ProtectKernelLogs= prevent, so the
+    check also reads both off the unit (zz-claude-code.conf turns them off) —
+    and socat must be installed. On the host
     login, ~/.claude and ~/.claude.json must be writable by the engine (the
     zz-claude-code.conf drop-in).
     """
