@@ -3394,9 +3394,12 @@ class PrReviewSettings(SettingsGroup):
         since="unreleased",
     )
     review_model: str = declare(
-        "",
+        "opus",
         "ROBOTHOR_PR_REVIEW_MODEL",
-        "Claude Code model alias for review jobs. Empty uses ROBOTHOR_CLAUDE_CODE_MODEL.",
+        "Claude Code model alias for review jobs. The default `opus` is the CLI's alias, "
+        "which each Claude Code update points at the newest Opus; never pin a dated model "
+        "id here. Empty uses ROBOTHOR_CLAUDE_CODE_MODEL. The model actually used is named "
+        "in each review's footer.",
         restart_required=False,
         since="unreleased",
     )

@@ -69,7 +69,7 @@ class ReviewerConfig:
     max_concurrent: int = 2
     agent_id: str = "pr-reviewer"
     clone_root: str = ""
-    review_model: str = ""
+    review_model: str = "opus"
     review_budget_usd: float = 25.0
     review_effort: str = "high"
     review_max_turns: int = 80

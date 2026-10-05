@@ -597,6 +597,34 @@ _OWN_PR_ERROR_RE = re.compile(
     r"(can ?not|cannot) (approve|request changes on) your own pull request", re.IGNORECASE
 )
 _REVIEW_FOOTER = "<sub>Automated review</sub>"
+#: Every footer starts with this, with or without details: how a posted review
+#: is found again (idempotent posting).
+_REVIEW_FOOTER_MARK = "<sub>Automated review"
+_FOOTER_TOKEN_RE = re.compile(r"^[A-Za-z0-9._:-]{1,64}$")
+
+
+def review_footer(meta: dict[str, Any] | None = None) -> str:
+    """The review footer, naming the model, effort and guidelines that wrote it.
+
+    Only plain tokens (letters, digits, ``. _ : -``) are shown, so nothing a
+    caller passes can inject markup into the review body.
+    """
+    meta = meta or {}
+    parts = []
+    model = str(meta.get("model") or "")
+    if _FOOTER_TOKEN_RE.match(model):
+        parts.append(model)
+    effort = str(meta.get("effort") or "")
+    if _FOOTER_TOKEN_RE.match(effort):
+        parts.append(f"effort {effort}")
+    guidelines = str(meta.get("guidelines") or "")
+    if _FOOTER_TOKEN_RE.match(guidelines):
+        parts.append(f"guidelines {guidelines}")
+    if not parts:
+        return _REVIEW_FOOTER
+    return f"{_REVIEW_FOOTER_MARK} · " + " · ".join(parts) + "</sub>"
+
+
 #: Per-comment cap for inline review comments (the review body has its own).
 _INLINE_COMMENT_MAX_CHARS = 8_000
 #: A 422 is only an anchor problem (worth folding comments into the body) when
@@ -882,7 +910,7 @@ async def _find_own_review(
     except Exception:  # noqa: BLE001
         return None
     for r in reviews:
-        if r.get("commit_id") != commit_id or _REVIEW_FOOTER not in str(r.get("body") or ""):
+        if r.get("commit_id") != commit_id or _REVIEW_FOOTER_MARK not in str(r.get("body") or ""):
             continue
         login = str((r.get("user") or {}).get("login") or "")
         if viewer and login.lower() != viewer.lower():
@@ -969,6 +997,8 @@ async def _github_create_review(args: dict[str, Any], ctx: ToolContext) -> dict[
     if not isinstance(prior, list) or not all(isinstance(p, dict) for p in prior):
         return {"error": "prior_issues must be a list of objects"}
     summary = str(args.get("summary") or "")
+    meta = args.get("footer_meta")
+    footer = review_footer(meta if isinstance(meta, dict) else None)
     commit_id = str(args.get("commit_id") or "")
     if not commit_id:
         return {"error": "commit_id is required (the head SHA the review was written against)"}
@@ -1023,9 +1053,7 @@ async def _github_create_review(args: dict[str, Any], ctx: ToolContext) -> dict[
             out_of_diff = [c["_issue"] for c in unanchored]
 
             def _body(blocking_in_body: list[Any]) -> str:
-                return compose_body(
-                    summary, blocking_in_body, non_blocking, prior, footer=_REVIEW_FOOTER
-                )
+                return compose_body(summary, blocking_in_body, non_blocking, prior, footer=footer)
 
             body = _body(out_of_diff)
             event = verdict

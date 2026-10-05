@@ -139,6 +139,18 @@ async def test_model_approve_with_a_blocker_posts_request_changes(env):
     )
 
 
+async def test_the_review_footer_names_the_model_effort_and_guidelines(env):
+    job = FakeJob(result={"structured_output": _output("APPROVE", []), "model": "claude-opus-5-5"})
+    job.effort = "high"  # type: ignore[attr-defined]
+    job.task = '<review_guidelines path="g.md" sha256="42a69406da62">\n…'  # type: ignore[attr-defined]
+    await _finalize(env, job)
+    assert env["poster"].reviews[0]["footer_meta"] == {
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "guidelines": "42a69406da62",
+    }
+
+
 async def test_clean_approval_resolves_our_threads_and_reacts(env):
     row = await env["store"].get(TENANT, REPO, 7)
     row.review_ids = [400]

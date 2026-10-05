@@ -80,9 +80,7 @@ async def test_a_quick_first_round_gets_one_second_pass(git_repo, coding_env):
 
 
 async def test_a_long_first_round_is_not_asked_again(git_repo, coding_env):
-    runner = FakeRunner(
-        _nothing, result=Scripted({"num_turns": 60, "structured_output": {"n": 1}})
-    )
+    runner = FakeRunner(_nothing, result=Scripted({"num_turns": 60, "structured_output": {"n": 1}}))
     mgr = _manager(runner)
     job = await _review(
         mgr,
@@ -116,9 +114,7 @@ async def test_a_failed_second_pass_keeps_the_first_answer(git_repo, coding_env)
 
 
 async def test_without_a_second_pass_nothing_changes(git_repo, coding_env):
-    runner = FakeRunner(
-        _nothing, result=Scripted({"num_turns": 5, "structured_output": {"n": 1}})
-    )
+    runner = FakeRunner(_nothing, result=Scripted({"num_turns": 5, "structured_output": {"n": 1}}))
     mgr = _manager(runner)
     job = await _review(mgr, git_repo, Acceptance(require_commit=False))
     assert job.status == JobStatus.DONE and job.rounds == 1
@@ -138,3 +134,11 @@ async def test_a_code_job_ignores_the_second_pass(git_repo, coding_env):
     )
     job = await mgr.wait(job.id, TENANT, timeout_s=20)
     assert job.status == JobStatus.DONE and job.rounds == 1
+
+
+async def test_the_job_records_the_model_claude_code_used(git_repo, coding_env):
+    used = {"num_turns": 5, "structured_output": {"n": 1}, "model": "claude-opus-5-5"}
+    runner = FakeRunner(_nothing, result=Scripted(used))
+    mgr = _manager(runner)
+    job = await _review(mgr, git_repo, Acceptance(require_commit=False))
+    assert job.result["model"] == "claude-opus-5-5"

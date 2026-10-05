@@ -26,6 +26,7 @@ crash between GitHub accepting the review and the row recording it.
 from __future__ import annotations
 
 import logging
+import re
 from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 from robothor.pr_review.checkout import ensure_checkout, merge_conflicts, read_at
@@ -549,6 +550,22 @@ def _already_posted(cfg: ReviewerConfig, row: PrReviewRow) -> dict[str, Any]:
     }
 
 
+_GUIDELINES_SHA_RE = re.compile(r'<review_guidelines path="[^"]*" sha256="([0-9a-f]{6,64})">')
+
+
+def _footer_meta(job: Any) -> dict[str, str]:
+    """What the review footer cites: the model Claude Code actually ran (not the
+    alias it was given), the effort, and the guidelines' hash from the prompt."""
+    result = getattr(job, "result", None) or {}
+    found = _GUIDELINES_SHA_RE.search(str(getattr(job, "task", "") or ""))
+    meta = {
+        "model": str(result.get("model") or getattr(job, "model", "") or ""),
+        "effort": str(getattr(job, "effort", "") or ""),
+        "guidelines": found.group(1) if found else "",
+    }
+    return {k: v for k, v in meta.items() if v}
+
+
 def _job_problem(job: Any, row: PrReviewRow) -> str:
     job_id = str(getattr(job, "id", "") or "")
     if not row.job_id or job_id != row.job_id:
@@ -678,7 +695,7 @@ async def finalize(
             return {"error": "another finalize is posting this review; it posts once"}
         row = claimed
         prior_issues_seen = list(row.last_review.get("issues") or [])
-        context = {
+        context: dict[str, Any] = {
             "prior_issues_seen": prior_issues_seen,
             "prior_review_ids": list(row.review_ids),
             "ticket": ticket,
@@ -693,6 +710,7 @@ async def finalize(
                 "prior_review_ids": list(row.last_review.get("prior_review_ids") or []),
                 "ticket": row.last_review.get("ticket"),
             }
+    context.setdefault("footer_meta", _footer_meta(job))
     return await _post(
         cfg,
         store,
@@ -788,6 +806,7 @@ async def _post(
                 "issues": decision.issues,
                 "commit_id": head,
                 "prior_issues": prior_for_body,
+                "footer_meta": dict(context.get("footer_meta") or {}),
             }
         )
         if posted.get("error"):

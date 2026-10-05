@@ -1234,6 +1234,10 @@ class CodingJobManager:
                 "permission_denials": len(result.permission_denials),
             }
             job.result["claude_result"] = result.result_text[-_OUTPUT_TAIL:]
+            if result.model:
+                # What the alias resolved to this round: the review footer cites it.
+                job.result["model"] = result.model
+                job.result["models_used"] = list(result.models_used)
             if result.structured_output is not None:
                 job.result["structured_output"] = result.structured_output
             job.updated_at = _now()
