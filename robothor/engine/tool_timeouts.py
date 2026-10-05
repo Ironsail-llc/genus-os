@@ -37,7 +37,10 @@ killed mid-work.
 
 from __future__ import annotations
 
+from typing import Any
+
 from robothor.engine.tool_self_timed import SELF_TIMED_GRACE_SECONDS, self_timed_ceiling
+from robothor.engine.wrapped_call import inner_call
 
 __all__ = [
     "HARNESS_BUDGETED_TOOLS",
@@ -104,12 +107,14 @@ HARNESS_BUDGETED_TOOLS = frozenset(
 )
 
 
-def resolve_tool_timeout(tool_name: str, configured: int) -> int:
+def resolve_tool_timeout(tool_name: str, configured: int, arguments: Any = None) -> int:
     """Per-tool wall-clock cap, in seconds. 0 means unlimited.
 
     One owner per budget: where the callee already bounds its own work, this
-    layer must not impose a second, smaller bound.
+    layer must not impose a second, smaller bound. With the call's
+    ``arguments``, a ``tool_call`` gets the budget of the tool it wraps.
     """
+    tool_name, _ = inner_call(tool_name, arguments)
     if tool_name in HARNESS_BUDGETED_TOOLS:
         return 0
     ceiling = self_timed_ceiling(tool_name)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import yaml
@@ -36,20 +37,58 @@ def test_manifest_validates_strictly():
     assert "model" not in data  # the fleet default applies
 
 
-def test_manifest_opts_into_exactly_what_the_agent_calls():
+#: Every tool the agent's instructions tell it to call — and nothing else.
+_AGENT_TOOLS = {
+    "list_my_tasks",
+    "get_task",
+    "update_task",
+    "resolve_task",
+    "pr_review_prepare",
+    "pr_review_finalize",
+    "claude_code_wait",
+    "claude_code_status",
+    "claude_code_cancel",
+    "read_file",
+    "write_file",
+}
+
+
+def test_manifest_allows_exactly_what_the_agent_calls():
     data = _render()
-    opt_in = set(data["tools_opt_in"])
-    assert opt_in <= OPT_IN_TOOLS
+    assert "tools_opt_in" not in data
+    allowed = set(data["tools_allowed"])
     # prepare starts the job and finalize posts through the GitHub handlers
     # directly: the agent itself can neither start an arbitrary Claude Code job
     # nor post, reply on or resolve a review.
-    assert opt_in == {
-        "claude_code_status",
-        "claude_code_wait",
-        "claude_code_cancel",
-        "pr_review_prepare",
-        "pr_review_finalize",
-    }
+    assert allowed == _AGENT_TOOLS
+    assert not allowed & {"claude_code_start", "claude_code_followup", "pr_review_intake"}
+    assert not {n for n in allowed if n.startswith("github_")}
+
+
+def test_instructions_name_exactly_the_allowed_tools():
+    from robothor.engine.tools import get_registry
+
+    registered = get_registry().registered_tool_names()
+    text = (BUNDLE / "instructions.template.md").read_text()
+    named = {word for word in re.findall(r"\b[a-z][a-z0-9_]+\b", text) if word in registered}
+    assert named == set(_render()["tools_allowed"])
+
+
+def test_installed_agent_is_not_deferred():
+    """Observed 2026-10-05: ``tools_opt_in`` on the default set gave the agent
+    219 tools, past the deferral threshold, so every call went through
+    ``tool_call`` — where the waits were cut at 120 s."""
+    from robothor.engine.config import manifest_to_agent_config
+    from robothor.engine.feature_flags import deferred_tools_threshold
+    from robothor.engine.tools import get_registry
+
+    registry = get_registry()
+    config = manifest_to_agent_config(_render())
+    names = registry._get_filtered_names(config)
+    assert len(names) <= deferred_tools_threshold()
+    assert not registry.should_defer(config)
+    assert set(names) >= _AGENT_TOOLS
+    assert set(names) & OPT_IN_TOOLS == _AGENT_TOOLS & OPT_IN_TOOLS
 
 
 def test_manifest_gives_the_long_tools_room():

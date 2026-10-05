@@ -274,6 +274,19 @@ Ubuntu 24.04+ an AppArmor profile for `/usr/bin/bwrap` allowing `userns`) and
 `socat`; `genus doctor` fails `claude_code.ready` without them, since every job
 would fail.
 
+It also needs to mount a fresh `/proc` for its pid namespace, which the kernel
+refuses while `/proc` carries overmounts — and the engine unit's
+`ProtectKernelTunables=yes` and `ProtectKernelLogs=yes` create exactly those.
+`failIfUnavailable` does not catch this (Claude Code starts; every Bash call
+errors), so a job silently runs with no shell. The shipped
+`robothor-engine.service.d/zz-claude-code.conf` sets both to `no` (it sorts
+after `hardening.conf`, so it wins). The cost is small: the engine is
+non-root, holds no capabilities and runs with `NoNewPrivileges=yes`, so it
+could not write `/proc/sys` or read the kernel log anyway; `ProtectProc=`,
+`ProtectKernelModules=`, `ProtectControlGroups=` and the rest stay on.
+`claude_code.ready` probes the `/proc` mount and reads both properties off
+the engine unit, and names this drop-in when either is still on.
+
 **Getting it.** The tools are opt-in: name them in `tools_allowed`, or — for an
 agent that keeps the default set, like the `main` template — in `tools_opt_in`.
 They are refused in benchmark runs.
