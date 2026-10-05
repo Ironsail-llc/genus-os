@@ -368,6 +368,29 @@ class TestCreateReview:
         assert result["comment_ids"] == [9001]
         assert result["posted_as_comment"] is False
 
+    async def test_approve_with_a_blocking_finding_is_never_posted_as_approve(self, gh):
+        """Every caller crosses this guard, not only the pr-reviewer's finalize."""
+        result = await github_api._github_create_review(
+            _review_args("APPROVE", [_issue("blocker", "In diff", 11)]), _CTX
+        )
+        [posted] = gh.posted_reviews()
+        assert posted["event"] == "REQUEST_CHANGES"
+        assert result["verdict"] == "REQUEST_CHANGES"
+        assert result["verdict_overridden"] is True
+
+    async def test_approve_with_only_minor_findings_stays_approve(self, gh):
+        result = await github_api._github_create_review(
+            _review_args("APPROVE", [_issue("minor", "Naming", 12)]), _CTX
+        )
+        assert gh.posted_reviews()[0]["event"] == "APPROVE"
+        assert result["verdict_overridden"] is False
+
+    async def test_returns_the_inline_comments_with_their_anchors(self, gh):
+        result = await github_api._github_create_review(
+            _review_args("REQUEST_CHANGES", [_issue("blocker", "In diff", 11)]), _CTX
+        )
+        assert result["comments"] == [{"id": 9001, "path": "src/a.py", "line": 11}]
+
     async def test_multi_line_range_is_posted(self, gh):
         issues = [_issue("blocker", "Range", 13, start_line=11)]
         await github_api._github_create_review(_review_args("COMMENT", issues), _CTX)
@@ -385,13 +408,13 @@ class TestCreateReview:
         assert "**resolved** — Null check: Fixed" in posted["body"]
 
     @pytest.mark.parametrize(
-        ("verdict", "prefix"),
-        [("APPROVE", "APPROVED"), ("REQUEST_CHANGES", "CHANGES REQUESTED")],
+        ("verdict", "prefix", "severity"),
+        [("APPROVE", "APPROVED", "minor"), ("REQUEST_CHANGES", "CHANGES REQUESTED", "blocker")],
     )
-    async def test_own_pr_posts_the_verdict_as_a_comment(self, gh, verdict, prefix):
+    async def test_own_pr_posts_the_verdict_as_a_comment(self, gh, verdict, prefix, severity):
         gh.pr = _pr(author="Robo-Bot")  # case differs: logins compare case-insensitively
         result = await github_api._github_create_review(
-            _review_args(verdict, [_issue("blocker", "In diff", 11)]), _CTX
+            _review_args(verdict, [_issue(severity, "In diff", 11)]), _CTX
         )
         [posted] = gh.posted_reviews()
         assert posted["event"] == "COMMENT"
@@ -642,6 +665,21 @@ class TestIdempotentPosting:
         assert result["review_id"] == 321
         assert "pullrequestreview-321" in result["url"]
         assert gh.posted_reviews() == []
+
+    async def test_already_posted_returns_the_reviews_inline_comments(self, gh):
+        """A retried post must still hand back comment ids, or re-reviews lose our threads."""
+        gh.existing_reviews = [_existing()]
+        gh.review_comments = [
+            {"id": 11, "path": "app.py", "line": 3},
+            {"id": 12, "path": "app.py", "line": 9},
+        ]
+        result = await github_api._github_create_review(_review_args("COMMENT", []), _CTX)
+        assert result["already_posted"] is True
+        assert result["comment_ids"] == [11, 12]
+        assert result["comments"] == [
+            {"id": 11, "path": "app.py", "line": 3},
+            {"id": 12, "path": "app.py", "line": 9},
+        ]
 
     @pytest.mark.parametrize(
         "review",

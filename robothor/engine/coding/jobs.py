@@ -56,6 +56,7 @@ from robothor.engine.coding.runner import (
     ClaudeInvocation,
     ClaudeResult,
     ProgressEvent,
+    check_effort,
     check_mode,
     run_claude,
 )
@@ -149,6 +150,11 @@ class CodingJob:
     base_ref: str = "HEAD"
     base_sha: str = ""
     model: str | None = None
+    #: Per-job ``--effort`` / ``--max-turns`` / round timeout; None uses the
+    #: instance's coding settings (the CLI default for effort).
+    effort: str | None = None
+    max_turns: int | None = None
+    round_timeout_s: float | None = None
     max_rounds: int = DEFAULT_MAX_ROUNDS
     max_budget_usd: float | None = None
     grant_github: bool = False
@@ -241,6 +247,9 @@ _COLUMNS = (
     "base_sha",
     "mode",
     "model",
+    "effort",
+    "max_turns",
+    "round_timeout_s",
     "task",
     "acceptance",
     "json_schema",
@@ -304,7 +313,7 @@ def _job_from_row(row: dict[str, Any]) -> CodingJob:
     for col in ("created_at", "updated_at", "finished_at"):
         if data.get(col) is not None and not isinstance(data[col], str):
             data[col] = data[col].isoformat()
-    for col in ("cost_usd", "max_budget_usd"):
+    for col in ("cost_usd", "max_budget_usd", "round_timeout_s"):
         if data.get(col) is not None:
             data[col] = float(data[col])
     data["events_tail"] = list(data.get("events_tail") or [])
@@ -641,9 +650,17 @@ class CodingJobManager:
         task_id: str | None = None,
         grant_github: bool = False,
         json_schema: dict[str, Any] | None = None,
+        effort: str | None = None,
+        max_turns: int | None = None,
+        round_timeout_s: float | None = None,
     ) -> CodingJob:
         """Create the worktree and the row, and start the job's task."""
         check_mode(mode)
+        effort = check_effort(effort)
+        if max_turns is not None and int(max_turns) < 1:
+            raise ValueError("max_turns must be a positive integer")
+        if round_timeout_s is not None and float(round_timeout_s) <= 0:
+            raise ValueError("round_timeout_s must be a positive number of seconds")
         if not task.strip():
             raise ValueError("task is required")
         repo_path = str(check_repo_path(repo_path))
@@ -698,6 +715,9 @@ class CodingJobManager:
             base_ref=base_ref or "HEAD",
             base_sha=info.base_sha,
             model=model or _settings().claude_code_model.strip() or None,
+            effort=effort,
+            max_turns=int(max_turns) if max_turns is not None else None,
+            round_timeout_s=float(round_timeout_s) if round_timeout_s is not None else None,
             max_rounds=max(1, min(int(max_rounds or DEFAULT_MAX_ROUNDS), MAX_MAX_ROUNDS)),
             max_budget_usd=float(budget) if budget else None,
             grant_github=grant_github,
@@ -1100,8 +1120,8 @@ class CodingJobManager:
         settings = sandbox.build_sandbox_settings(
             job.mode, paths, allowed_domains=sandbox.allowed_domains()
         )
-        round_timeout = float(_settings().round_timeout_s)
-        max_turns = int(_settings().max_turns)
+        round_timeout = float(job.round_timeout_s or _settings().round_timeout_s)
+        max_turns = int(job.max_turns or _settings().max_turns)
         needs_verify = job.mode == "code" or bool(job.acceptance.verify_command)
 
         if resuming and needs_verify and job.base_sha:
@@ -1146,6 +1166,7 @@ class CodingJobManager:
                 prompt=prompt,
                 cwd=job.worktree_path,
                 model=job.model,
+                effort=job.effort,
                 allowed_tools=allowed_tools,
                 disallowed_tools=disallowed_tools,
                 max_turns=max_turns,

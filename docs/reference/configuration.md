@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-437 settings in 15 groups.
+461 settings in 16 groups.
 
 ## autonomy
 
@@ -74,6 +74,35 @@ Host paths for the isolated personal browser service and clients.
 | `ROBOTHOR_CODING_RETENTION_DAYS` | int | `7` | no | no | unreleased | Days a finished coding job's worktree, private config directory and genus/cc-* branch are kept before the reaper removes them. Merge or push a job's branch before then. |
 | `ROBOTHOR_CODING_VERIFY_TIMEOUT` | float | `900.0` | no | no | unreleased | Seconds a coding job's acceptance verify_command may run before it is killed and counted as a failure. |
 | `ROBOTHOR_CODING_WORKTREE_ROOT` | str | _(empty)_ | no | no | unreleased | Where coding jobs' git worktrees are created, one directory per job. Empty means <workspace>/.genus/worktrees. Must be writable by the engine: under the shipped unit that means inside the workspace or a ReadWritePaths= drop-in. |
+
+## pr_review
+
+| Variable | Type | Default | Restart | Secret | Since | Description |
+| --- | --- | --- | --- | --- | --- | --- |
+| `ROBOTHOR_PR_REVIEW_AGENT` | str | `pr-reviewer` | no | no | unreleased | Agent the intake assigns review tasks to. |
+| `ROBOTHOR_PR_REVIEW_APPROVED_REACTION` | str | `👍` | no | no | unreleased | Emoji that replaces the claim reaction on the Chat message when its pull request is approved. Empty leaves the claim reaction in place. |
+| `ROBOTHOR_PR_REVIEW_BLOCKING_EVENT` | str | `REQUEST_CHANGES` | no | no | unreleased | Review event posted when a blocker or major finding remains: REQUEST_CHANGES, or COMMENT for a reviewer that should never block a merge. Never APPROVE. |
+| `ROBOTHOR_PR_REVIEW_BOT_LOGIN` | str | _(empty)_ | no | no | unreleased | GitHub login whose requested reviews are picked up, from any repository the token can read. Empty skips the requested-review source. |
+| `ROBOTHOR_PR_REVIEW_BUDGET_USD` | float | `25.0` | no | no | unreleased | Dollar cap for one review job across its rounds. On a Claude subscription this is the CLI's notional cost, a runaway guard rather than a bill. |
+| `ROBOTHOR_PR_REVIEW_CHAT_LOOKBACK_MINUTES` | int | `60` | no | no | unreleased | On the first poll of a Chat space, how far back to read. Later polls continue from the stored cursor. |
+| `ROBOTHOR_PR_REVIEW_CHAT_SELF_USERS` | str | _(empty)_ | no | no | unreleased | Comma-separated Chat user resource names (users/...) whose messages are the reviewer's own and are never treated as requests. |
+| `ROBOTHOR_PR_REVIEW_CHAT_SPACE` | str | _(empty)_ | no | no | unreleased | Google Chat space resource name (spaces/...) watched for pull-request links and re-review requests, and where results are announced in the original thread. Empty disables the Chat source. |
+| `ROBOTHOR_PR_REVIEW_CLAIM_REACTION` | str | `👀` | no | no | unreleased | Emoji reacted on a Chat message when its pull request or re-review is queued. Empty reacts with nothing. |
+| `ROBOTHOR_PR_REVIEW_CLONE_ROOT` | str | _(empty)_ | no | no | unreleased | Where pr_review_prepare keeps one clone per reviewed repository. Empty means <workspace>/.genus/pr-review/repos. When ROBOTHOR_CODING_REPO_ROOTS is set it must include this directory. |
+| `ROBOTHOR_PR_REVIEW_EFFORT` | str | `high` | no | no | unreleased | Claude Code --effort for review jobs: low, medium, high, xhigh or max. Empty leaves the CLI's default. |
+| `ROBOTHOR_PR_REVIEW_GUIDELINES_PATH` | str | _(empty)_ | no | no | unreleased | Instance review-guidelines file (e.g. <workspace>/brain/pr-review-guidelines.md). When set and readable, its content replaces the pr-review skill's generic guidelines in every review prompt; re-read for every review. |
+| `ROBOTHOR_PR_REVIEW_MAX_CONCURRENT` | int | `2` | no | no | unreleased | Review tasks the intake keeps open at once; further pull requests wait and are queued on a later poll. |
+| `ROBOTHOR_PR_REVIEW_MAX_TURNS` | int | `80` | no | no | unreleased | Claude Code turns one review round may take (--max-turns). |
+| `ROBOTHOR_PR_REVIEW_MODEL` | str | _(empty)_ | no | no | unreleased | Claude Code model alias for review jobs. Empty uses ROBOTHOR_CLAUDE_CODE_MODEL. |
+| `ROBOTHOR_PR_REVIEW_REPOS` | str | _(empty)_ | no | no | unreleased | Comma-separated owner/repo list the pr-reviewer may review. Pull-request links posted in the Chat space count only for these repositories. An entry may carry its ticket prefix as owner/repo:PREFIX (another review bot's ALLOWED_REPOS format). Empty disables the repository sources. |
+| `ROBOTHOR_PR_REVIEW_REQUIRE_TICKET` | bool | `false` | no | no | unreleased | A pull request with no ticket key in its title, branch, description or commit messages gets a blocking [no-ticket] finding and is never approved. |
+| `ROBOTHOR_PR_REVIEW_RETRY_COOLDOWN_MINUTES` | int | `60` | no | no | unreleased | A failed review is retried on the same head after this long, at most 3 attempts per head; a new head is retried at once. |
+| `ROBOTHOR_PR_REVIEW_ROUND_TIMEOUT` | float | `1800.0` | no | no | unreleased | Seconds one review round may run before Claude Code is killed. |
+| `ROBOTHOR_PR_REVIEW_SKIP_LABELS` | str | _(empty)_ | no | no | unreleased | Comma-separated pull-request labels that skip the review entirely. Empty (the default) skips by label never: anyone who can label a pull request could otherwise switch its review off. |
+| `ROBOTHOR_PR_REVIEW_STALE_AFTER_MINUTES` | int | `180` | no | no | unreleased | A review queued or running this long without being finalized is marked failed, so a lost task never holds a concurrency slot forever. |
+| `ROBOTHOR_PR_REVIEW_TELEGRAM_DIGEST` | bool | `false` | no | no | unreleased | pr_review_finalize returns a one-line digest per posted review for the agent to deliver; the agent's delivery must announce on Telegram for it to arrive. |
+| `ROBOTHOR_PR_REVIEW_TICKET_PREFIXES` | str | _(empty)_ | no | no | unreleased | Ticket key prefixes the reviewer links pull requests to: owner/repo:PREFIX entries apply to that repository, bare PREFIX entries (e.g. ABC) to every repository without its own, comma-separated. Empty accepts any uppercase KEY-123. |
+| `ROBOTHOR_PR_REVIEW_WATCH_REPOS` | bool | `false` | no | no | unreleased | Review every open, non-draft pull request in the configured repositories, and re-review when its head moves. False reviews only pull requests posted in the Chat space or that request the bot login's review. |
 
 ## paths
 

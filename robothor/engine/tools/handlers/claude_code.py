@@ -124,6 +124,25 @@ async def _start(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     schema = args.get("json_schema")
     if schema is not None and not isinstance(schema, dict):
         return {"error": "json_schema must be an object"}
+    from robothor.engine.coding.runner import EFFORTS
+
+    effort = str(args.get("effort") or "").strip() or None
+    if effort is not None and effort not in EFFORTS:
+        return {"error": f"effort must be one of {', '.join(EFFORTS)}, not {effort!r}"}
+    try:
+        max_turns = int(args["max_turns"]) if args.get("max_turns") is not None else None
+        if max_turns is not None and not 1 <= max_turns <= 500:
+            raise ValueError
+    except (TypeError, ValueError):
+        return {"error": "max_turns must be an integer from 1 to 500"}
+    try:
+        round_timeout = (
+            float(args["round_timeout_s"]) if args.get("round_timeout_s") is not None else None
+        )
+        if round_timeout is not None and not 60 <= round_timeout <= 7200:
+            raise ValueError
+    except (TypeError, ValueError):
+        return {"error": "round_timeout_s must be seconds from 60 to 7200"}
 
     try:
         job = await get_manager().start(
@@ -140,6 +159,9 @@ async def _start(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             run_id=ctx.run_id,
             grant_github=bool(args.get("grant_github")),
             json_schema=schema,
+            effort=effort,
+            max_turns=max_turns,
+            round_timeout_s=round_timeout,
         )
     except (ValueError, WorktreeError) as exc:
         return {"error": str(exc)}

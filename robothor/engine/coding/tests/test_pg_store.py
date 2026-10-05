@@ -10,13 +10,16 @@ from robothor.engine.coding.jobs import Acceptance, CodingJob, JobStatus, PgJobS
 
 pytestmark = pytest.mark.integration
 
-MIGRATION = Path(__file__).resolve().parents[4] / "crm" / "migrations" / "144_coding_jobs.sql"
+MIGRATIONS = Path(__file__).resolve().parents[4] / "crm" / "migrations"
+MIGRATION = MIGRATIONS / "144_coding_jobs.sql"
+LIMITS = MIGRATIONS / "147_coding_job_limits.sql"
 
 
 @pytest.fixture
 def store(db_conn, mock_get_connection):
     with db_conn.cursor() as cur:
         cur.execute(MIGRATION.read_text())
+        cur.execute(LIMITS.read_text())
     return PgJobStore()
 
 
@@ -34,6 +37,9 @@ async def test_roundtrip_and_unfinished_listing(store, test_prefix):
         acceptance=Acceptance(verify_command="pytest -q", require_commit=True),
         branch="genus/cc-abc",
         max_budget_usd=2.5,
+        effort="high",
+        max_turns=40,
+        round_timeout_s=1800.0,
     )
     await store.insert(job)
 
@@ -52,6 +58,7 @@ async def test_roundtrip_and_unfinished_listing(store, test_prefix):
     assert loaded.acceptance.verify_command == "pytest -q"
     assert loaded.cost_usd == pytest.approx(0.1234)
     assert loaded.max_budget_usd == pytest.approx(2.5)
+    assert (loaded.effort, loaded.max_turns, loaded.round_timeout_s) == ("high", 40, 1800.0)
     assert loaded.events_tail == ["tool_use: Bash: pytest -q"]
     assert loaded.result["verify"]["exit_code"] == 1
 

@@ -1,0 +1,77 @@
+id: pr-reviewer
+name: PR Reviewer
+description: Reviews pull requests with Claude Code and posts the result on GitHub, in the Chat thread and (optionally) as a Telegram digest
+version: "{{ version }}"
+department: engineering
+
+reports_to: {{ reports_to }}
+creates_tasks_for: []
+receives_tasks_from: []
+escalates_to: {{ escalates_to }}
+
+tags_produced: []
+tags_consumed: [pr-review]
+
+# No cron of its own: the pr-review-run workflow (templates/workflows/) wakes
+# this agent only when the intake has queued a review task.
+schedule:
+  cron: ""
+  timezone: {{ timezone }}
+  timeout_seconds: 3300
+  max_iterations: 40
+  session_target: isolated
+
+# `none` keeps the agent silent. For the Telegram digest set
+# ROBOTHOR_PR_REVIEW_TELEGRAM_DIGEST=true and install with delivery_mode=announce.
+delivery:
+  mode: {{ delivery_mode }}
+  channel: telegram
+  to: "${ROBOTHOR_TELEGRAM_CHAT_ID}"
+
+# The default tool set plus the opt-in tools this agent's work needs: watching
+# and (only if its run is ending) cancelling the review job, and the
+# deterministic pr_review_* halves. pr_review_prepare STARTS the read-only
+# Claude Code job itself and pr_review_finalize posts through the GitHub review
+# handlers directly, so this agent can neither start an arbitrary coding job
+# nor post, reply on or resolve a review: claude_code_start and the github_*
+# review-write tools are deliberately absent. Needs `robothor claude-code
+# login` once per instance (or the host's Claude Code login), and GITHUB_TOKEN
+# in the vault.
+tools_opt_in:
+  - claude_code_status
+  - claude_code_wait
+  - claude_code_cancel
+  - pr_review_prepare
+  - pr_review_finalize
+
+# grant_github on a review job hands Claude Code GH_TOKEN for read-only
+# `gh pr view/diff/checks`; the engine gives it only to an agent that names it.
+secrets:
+  - GITHUB_TOKEN
+
+task_protocol: true
+auto_task: false
+review_workflow: false
+notification_inbox: false
+status_file: brain/memory/pr-reviewer-status.md
+shared_working_state: false
+
+warmup:
+  context_files:
+    - brain/memory/pr-reviewer-status.md
+
+instruction_file: brain/agents/PR_REVIEWER.md
+bootstrap_files:
+  - brain/AGENTS.md
+
+v2:
+  error_feedback: true
+  guardrails:
+    - no_destructive_writes
+    - write_path_restrict
+  write_path_allowlist:
+    - "brain/memory/pr-reviewer-status.md"
+
+changelog:
+  - date: "2026-10-05"
+    change: "Initial template: Claude Code review jobs, verdict recomputed in code, live GitHub posting, Chat thread announcements, optional Telegram digest."

@@ -28,6 +28,7 @@ tools_opt_in:
   - claude_code_wait
   - claude_code_followup
   - claude_code_cancel
+  - pr_review_intake
 
 task_protocol: true
 status_file: brain/memory/main-status.md

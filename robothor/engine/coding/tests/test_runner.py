@@ -51,6 +51,7 @@ def test_argv_carries_every_optional_flag(tmp_path):
         _inv(
             tmp_path,
             model="sonnet",
+            effort="high",
             allowed_tools=("Read", "Bash(git diff:*)"),
             disallowed_tools=("Write",),
             max_turns=12,
@@ -65,6 +66,7 @@ def test_argv_carries_every_optional_flag(tmp_path):
         return argv[argv.index(flag) + 1]
 
     assert val("--model") == "sonnet"
+    assert val("--effort") == "high"
     assert val("--allowedTools") == "Read,Bash(git diff:*)"
     assert val("--disallowedTools") == "Write"
     assert val("--max-turns") == "12"
@@ -72,6 +74,15 @@ def test_argv_carries_every_optional_flag(tmp_path):
     assert val("--append-system-prompt") == "be brief"
     assert json.loads(val("--json-schema")) == schema
     assert val("--resume") == "5f0c7a52-0000-4000-8000-000000000001"
+
+
+def test_argv_without_effort_passes_none(tmp_path):
+    assert "--effort" not in build_argv(_inv(tmp_path))
+
+
+def test_argv_refuses_an_effort_the_cli_does_not_know(tmp_path):
+    with pytest.raises(ValueError, match="effort"):
+        build_argv(_inv(tmp_path, effort="--dangerously-skip-permissions"))
 
 
 def test_argv_refuses_a_resume_id_that_is_not_a_session_uuid(tmp_path):

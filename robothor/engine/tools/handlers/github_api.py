@@ -891,10 +891,39 @@ async def _find_own_review(
     return None
 
 
-def _already_posted(
-    repo: str, number: int, verdict: str, commit_id: str, review: dict[str, Any]
+async def _review_comments(
+    client: httpx.AsyncClient, headers: dict[str, str], pr_url: str, review_id: Any
+) -> list[dict[str, Any]]:
+    """The inline comments a review posted, as ``{id, path, line}`` in posting order."""
+    if review_id is None:
+        return []
+    try:
+        cs = await _paginate(
+            client,
+            f"{pr_url}/reviews/{review_id}/comments",
+            headers,
+            {"per_page": 100},
+            max_pages=10,
+        )
+    except Exception:  # noqa: BLE001 - the review is posted; ids are a convenience
+        return []
+    return [
+        {"id": c["id"], "path": c.get("path", ""), "line": c.get("line")} for c in cs if "id" in c
+    ]
+
+
+async def _already_posted(
+    client: httpx.AsyncClient,
+    headers: dict[str, str],
+    pr_url: str,
+    repo: str,
+    number: int,
+    verdict: str,
+    commit_id: str,
+    review: dict[str, Any],
 ) -> dict[str, Any]:
     rid = review.get("id")
+    comments = await _review_comments(client, headers, pr_url, rid)
     return {
         "repo": repo,
         "number": number,
@@ -903,6 +932,8 @@ def _already_posted(
         or f"https://github.com/{repo}/pull/{number}#pullrequestreview-{rid}",
         "verdict": verdict,
         "already_posted": True,
+        "comment_ids": [c["id"] for c in comments],
+        "comments": comments,
         "commit_id": commit_id,
     }
 
@@ -910,6 +941,7 @@ def _already_posted(
 @_handler("github_create_review")
 async def _github_create_review(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     """Post a review: blocking findings inline where the diff allows, the rest in the body."""
+    from robothor.pr_review.policy import guard_posted_verdict
     from robothor.pr_review.posting import (
         compose_body,
         format_issue_comment,
@@ -930,6 +962,9 @@ async def _github_create_review(args: dict[str, Any], ctx: ToolContext) -> dict[
     issues = _validate_issues(args.get("issues"))
     if isinstance(issues, str):
         return {"error": issues}
+    # Every caller crosses this: an APPROVE beside a blocker/major finding is
+    # never posted, whoever asked for it (robothor.pr_review.policy).
+    verdict, verdict_overridden = guard_posted_verdict(verdict, issues)
     prior = args.get("prior_issues") or []
     if not isinstance(prior, list) or not all(isinstance(p, dict) for p in prior):
         return {"error": "prior_issues must be a list of objects"}
@@ -964,7 +999,9 @@ async def _github_create_review(args: dict[str, Any], ctx: ToolContext) -> dict[
 
             existing = await _find_own_review(client, headers, pr_url, viewer, commit_id)
             if existing is not None:
-                return _already_posted(repo, number, verdict, commit_id, existing)
+                return await _already_posted(
+                    client, headers, pr_url, repo, number, verdict, commit_id, existing
+                )
 
             # Re-read the head: a push while the files were read leaves anchors stale.
             recheck = await client.get(pr_url, headers=headers)
@@ -1015,7 +1052,9 @@ async def _github_create_review(args: dict[str, Any], ctx: ToolContext) -> dict[
                     # Timeout or reset: the review may have been created anyway.
                     landed = await _find_own_review(client, headers, pr_url, viewer, commit_id)
                     if landed is not None:
-                        return _already_posted(repo, number, verdict, commit_id, landed)
+                        return await _already_posted(
+                            client, headers, pr_url, repo, number, verdict, commit_id, landed
+                        )
                     return {"error": f"GitHub request failed: {exc!r}"}
                 if resp.status_code < 400:
                     review = resp.json()
@@ -1023,7 +1062,9 @@ async def _github_create_review(args: dict[str, Any], ctx: ToolContext) -> dict[
                 if resp.status_code >= 500:
                     landed = await _find_own_review(client, headers, pr_url, viewer, commit_id)
                     if landed is not None:
-                        return _already_posted(repo, number, verdict, commit_id, landed)
+                        return await _already_posted(
+                            client, headers, pr_url, repo, number, verdict, commit_id, landed
+                        )
                 if resp.status_code != 422:
                     resp.raise_for_status()
                 last_error = _error_detail(resp)
@@ -1044,18 +1085,10 @@ async def _github_create_review(args: dict[str, Any], ctx: ToolContext) -> dict[
 
             review_id = review.get("id")
             comment_ids: list[int] = []
+            posted_comments: list[dict[str, Any]] = []
             if inline and review_id is not None:
-                try:
-                    cs = await _paginate(
-                        client,
-                        f"{pr_url}/reviews/{review_id}/comments",
-                        headers,
-                        {"per_page": 100},
-                        max_pages=10,
-                    )
-                    comment_ids = [c["id"] for c in cs if "id" in c]
-                except Exception:  # noqa: BLE001 - the review is posted; ids are a convenience
-                    comment_ids = []
+                posted_comments = await _review_comments(client, headers, pr_url, review_id)
+                comment_ids = [c["id"] for c in posted_comments]
     except httpx.HTTPStatusError as e:
         return _http_error(e, f"PR #{number} in {repo}")
     except Exception as e:
@@ -1068,6 +1101,7 @@ async def _github_create_review(args: dict[str, Any], ctx: ToolContext) -> dict[
         "url": review.get("html_url")
         or f"https://github.com/{repo}/pull/{number}#pullrequestreview-{review_id}",
         "verdict": verdict,
+        "verdict_overridden": verdict_overridden,
         "event": event,
         "posted_as_comment": as_comment,
         "inline_count": len(inline),
@@ -1075,6 +1109,7 @@ async def _github_create_review(args: dict[str, Any], ctx: ToolContext) -> dict[
         "anchors_folded": anchors_folded,
         "already_posted": False,
         "comment_ids": comment_ids,
+        "comments": posted_comments,
         "commit_id": commit_id,
     }
 

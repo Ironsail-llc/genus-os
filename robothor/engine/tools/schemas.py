@@ -1130,6 +1130,19 @@ _CLAUDE_CODE_SCHEMAS: dict[str, dict[str, Any]] = {
                         "type": "number",
                         "description": "Total dollar cap across all rounds (default 5)",
                     },
+                    "effort": {
+                        "type": "string",
+                        "enum": ["low", "medium", "high", "xhigh", "max"],
+                        "description": "Claude Code --effort level; default is the CLI's",
+                    },
+                    "max_turns": {
+                        "type": "integer",
+                        "description": "Turns per round (default the instance's, 1-500)",
+                    },
+                    "round_timeout_s": {
+                        "type": "number",
+                        "description": "Seconds one round may run (default the instance's, 60-7200)",
+                    },
                     "max_rounds": {
                         "type": "integer",
                         "description": "Claude Code rounds before the job fails (default 3, max 10)",
@@ -1222,6 +1235,93 @@ _CLAUDE_CODE_SCHEMAS: dict[str, dict[str, Any]] = {
                 "type": "object",
                 "properties": {"job_id": _JOB_ID_PARAM},
                 "required": ["job_id"],
+            },
+        },
+    },
+}
+
+
+#: The pr-reviewer suite (robothor/pr_review/). Opt-in: see OPT_IN_TOOLS.
+_PR_REVIEW_SCHEMAS: dict[str, dict[str, Any]] = {
+    "pr_review_intake": {
+        "type": "function",
+        "function": {
+            "name": "pr_review_intake",
+            "description": (
+                "Poll the configured GitHub repositories and Chat space for pull requests "
+                "that need a review, and file one pr-review task per pull-request head. "
+                "Deterministic; normally run by the pr-review-intake workflow, one run at a "
+                "time per tenant (a concurrent run returns skipped: locked). Returns counts, "
+                "including open_tasks and queued_tasks. count_only=true only counts. "
+                "Use pr=<url or owner/repo#N> when the operator asks for a review of one "
+                "pull request."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "poll": {
+                        "type": "boolean",
+                        "description": "Read GitHub and Chat (default true)",
+                    },
+                    "count_only": {
+                        "type": "boolean",
+                        "description": "Only report open_tasks / queued_tasks; change nothing",
+                    },
+                    "pr": {
+                        "type": "string",
+                        "description": (
+                            "Review this one pull request now (URL or owner/repo#N, a "
+                            "configured repository only). Returns requested.status; call "
+                            "again later with the same pr for requested.review_url"
+                        ),
+                    },
+                },
+            },
+        },
+    },
+    "pr_review_prepare": {
+        "type": "function",
+        "function": {
+            "name": "pr_review_prepare",
+            "description": (
+                "Use this first for a pr-review task: fetches the pull request's head, "
+                "starts the read-only Claude Code review job and returns its job_id for "
+                "claude_code_wait and pr_review_finalize. skip: true means there is nothing "
+                "to review; resolve the task."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {"repo": _GH_REPO, "number": _GH_NUMBER},
+                "required": ["repo", "number"],
+            },
+        },
+    },
+    "pr_review_finalize": {
+        "type": "function",
+        "function": {
+            "name": "pr_review_finalize",
+            "description": (
+                "Use this after claude_code_wait reports the review job finished (done or "
+                "failed). Reads the job's result itself, recomputes the verdict from the "
+                "findings, posts the review, replies on previous threads, announces in the "
+                "chat thread and returns review_url. dismiss=true closes an ambiguous "
+                "re-review request that was not one."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "repo": _GH_REPO,
+                    "number": _GH_NUMBER,
+                    "job_id": {
+                        "type": "string",
+                        "description": "The job_id pr_review_prepare returned (no other)",
+                    },
+                    "dismiss": {
+                        "type": "boolean",
+                        "description": "The ambiguous reply was not a re-review request",
+                    },
+                },
+                "required": ["repo", "number"],
             },
         },
     },
@@ -3487,11 +3587,18 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
         "type": "function",
         "function": {
             "name": "jira_get_issue",
-            "description": "Get a single JIRA issue with changelog for cycle time analysis.",
+            "description": (
+                "Get a single JIRA issue with changelog for cycle time analysis. "
+                "include_text=true adds its description and acceptance criteria as plain text."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "issue_key": {"type": "string", "description": "Issue key (e.g. 'ENG-123')"},
+                    "include_text": {
+                        "type": "boolean",
+                        "description": "Also return description and acceptance_criteria text",
+                    },
                 },
                 "required": ["issue_key"],
             },
@@ -3649,7 +3756,7 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
         },
     }
 
-    schemas.update(_GITHUB_REVIEW_SCHEMAS)
+    schemas.update(_GITHUB_REVIEW_SCHEMAS | _PR_REVIEW_SCHEMAS)
 
     # ── DevOps metrics storage tools ──
 

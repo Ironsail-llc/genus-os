@@ -52,8 +52,10 @@ __all__ = [
     "ClaudeResult",
     "ProgressEvent",
     "StreamParser",
+    "EFFORTS",
     "MODES",
     "build_argv",
+    "check_effort",
     "check_mode",
     "resolve_claude_binary",
     "run_claude",
@@ -87,6 +89,19 @@ class ClaudeCodeError(RuntimeError):
 MODES: tuple[str, ...] = ("code", "review", "readonly")
 
 
+#: ``claude --effort`` levels (Claude Code 2.1.289+). Checked before argv.
+EFFORTS: tuple[str, ...] = ("low", "medium", "high", "xhigh", "max")
+
+
+def check_effort(effort: str | None) -> str | None:
+    """``effort`` when it is empty or one of :data:`EFFORTS`, else ``ValueError``."""
+    if effort is None or effort == "":
+        return None
+    if effort not in EFFORTS:
+        raise ValueError(f"unknown effort {effort!r}; expected one of {', '.join(EFFORTS)}")
+    return effort
+
+
 def check_mode(mode: str) -> str:
     """``mode`` when it is one of :data:`MODES`, else ``ValueError``."""
     if mode not in MODES:
@@ -105,6 +120,8 @@ class ClaudeInvocation:
     cwd: Path | str
     binary: str | None = None
     model: str | None = None
+    #: ``--effort`` level; None leaves the CLI's default.
+    effort: str | None = None
     permission_mode: str = "dontAsk"
     allowed_tools: tuple[str, ...] = ()
     disallowed_tools: tuple[str, ...] = ()
@@ -158,6 +175,9 @@ def build_argv(inv: ClaudeInvocation) -> list[str]:
         argv += ["--settings", json.dumps(inv.settings, separators=(",", ":"))]
     if inv.model:
         argv += ["--model", inv.model]
+    effort = check_effort(inv.effort)
+    if effort:
+        argv += ["--effort", effort]
     if inv.allowed_tools:
         argv += ["--allowedTools", ",".join(inv.allowed_tools)]
     if inv.disallowed_tools:
