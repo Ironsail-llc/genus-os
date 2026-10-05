@@ -240,6 +240,8 @@ class Intake:
             else:
                 if row.status == "closed":
                     row.status = "pending"
+                if not row.chat_thread:
+                    row.source = "operator"  # no thread to answer in: the digest reports it
                 _raise_trigger(row, "rereview" if row.last_reviewed_sha else "initial")
                 await self.store.save(row)
                 await self._dispatch()

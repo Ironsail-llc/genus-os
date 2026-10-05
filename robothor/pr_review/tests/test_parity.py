@@ -450,6 +450,16 @@ async def test_an_on_demand_request_accepts_owner_repo_number_and_reports_a_done
     assert tasks.created == []
 
 
+async def test_an_on_demand_request_for_a_threadless_row_reports_via_the_digest():
+    from robothor.pr_review.store import PrReviewRow
+
+    store, github, chat, tasks = MemoryStore(), FakeGitHub(), FakeChat(), FakeTasks()
+    github.add(make_pr(7, SHA1))
+    await store.save(PrReviewRow(tenant_id=TENANT, repo=REPO, number=7, url=URL, source="github"))
+    await _intake(store, github, chat, tasks).request(URL)
+    assert (await store.get(TENANT, REPO, 7)).source == "operator"
+
+
 async def test_an_on_demand_request_refuses_other_repositories():
     store, github, chat, tasks = MemoryStore(), FakeGitHub(), FakeChat(), FakeTasks()
     out = await _intake(store, github, chat, tasks).request("https://github.com/evil/x/pull/1")
