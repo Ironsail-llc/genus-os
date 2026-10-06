@@ -122,7 +122,10 @@ pull request's head with Read, Grep, Glob and read-only `git`, and no network
 `--effort` `ROBOTHOR_PR_REVIEW_EFFORT` (default `high`), up to
 `ROBOTHOR_PR_REVIEW_MAX_TURNS` turns (80) per round, 1800 s per round
 (`ROBOTHOR_PR_REVIEW_ROUND_TIMEOUT`) and a $25 notional cap
-(`ROBOTHOR_PR_REVIEW_BUDGET_USD`). The review guidelines are the instance's
+(`ROBOTHOR_PR_REVIEW_BUDGET_USD`). The dollar figures (the cap, a job's
+`cost_usd`) are Claude Code's API-equivalent estimate: on a subscription login
+(the host's `claude` login or a `claude setup-token` token) nothing is billed
+per review, and the figure only paces usage against the plan's limits. The review guidelines are the instance's
 own file when `ROBOTHOR_PR_REVIEW_GUIDELINES_PATH` names a readable one, else
 the `pr-review` skill (twelve lenses, severities, verify-or-drop, a
 completeness pass, re-review rules); either way the prompt adds the operating
@@ -242,8 +245,10 @@ claimed message and 👍 replacing it on approval; thread replies prefixed with
 the linked PR number: `#N: Approved`, `#N: Comments/change request`,
 `#N: No changes?` (a re-review request with no new commits), "A review is
 already running for this PR…" (a request while one runs), "This PR is merged;
-skipping the review.", and "⚠️ Automated review failed after N attempts: …
-Reply "re-review" to try again.".
+skipping the review.", and on a failure "⚠️ Automated review failed (attempt N
+of 3): … I'll retry automatically in about 60 min; reply "re-review" to retry
+now." — "gave up after 3 attempts … Reply "re-review" to try again." once the
+retries are spent.
 
 **Deliberately better.**
 
@@ -291,6 +296,13 @@ Reply "re-review" to try again.".
   never finalized within `ROBOTHOR_PR_REVIEW_STALE_AFTER_MINUTES`) is retried
   at once on a new head, and on the same head after
   `ROBOTHOR_PR_REVIEW_RETRY_COOLDOWN_MINUTES` (default 60), at most 3 attempts
-  per head; the author can always reply "re-review" in the Chat thread. A
+  per head; the author can always reply "re-review" in the Chat thread.
+  **A posting failure never pays for a second review:** when the review was
+  written and only the post failed, the retry's `pr_review_prepare` binds the
+  same finished job again (`status: posting`, `resumed: true`) and finalize
+  posts it, skipping every step already recorded. `github_create_review`
+  itself retries a 500/502/503/504 or a dropped connection twice (after 2 s,
+  then 5 s), checking before each retry that the review did not land anyway;
+  a failure it gives up on carries `transient: true`. A
   failure on a pull request with no Chat thread is reported in the Telegram
   digest when `ROBOTHOR_PR_REVIEW_TELEGRAM_DIGEST` is on.

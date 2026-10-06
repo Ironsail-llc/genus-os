@@ -329,11 +329,24 @@ async def test_a_non_blocking_comment_says_comments_change_request():
     assert env["chat"].replies[-1][2] == f"<{URL}|#7>: Comments/change request"
 
 
-async def test_a_failure_says_how_many_attempts_and_how_to_retry():
+async def test_a_failure_says_which_attempt_and_that_it_retries_itself():
     env = await make_env()
     await _finalize(env, {"verdict": "nope"})
     text = env["chat"].replies[-1][2]
-    assert text.startswith(f"<{URL}|#7>: ⚠️ Automated review failed after 1 attempt: ")
+    assert text.startswith(f"<{URL}|#7>: ⚠️ Automated review failed (attempt 1 of 3): ")
+    assert text.endswith(
+        '\nI\'ll retry automatically in about 60 min; reply "re-review" to retry now.'
+    )
+
+
+async def test_the_last_failure_says_it_gave_up_and_how_to_retry():
+    env = await make_env()
+    row = await env["store"].get(TENANT, REPO, 7)
+    row.attempts = 2
+    await env["store"].save(row)
+    await _finalize(env, {"verdict": "nope"})
+    text = env["chat"].replies[-1][2]
+    assert text.startswith(f"<{URL}|#7>: ⚠️ Automated review gave up after 3 attempts: ")
     assert text.endswith('\nReply "re-review" to try again.')
 
 
