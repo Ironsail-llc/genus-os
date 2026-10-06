@@ -368,3 +368,217 @@ async def test_prepare_skips_an_already_reviewed_head(env):
         start_job=StartRecorder(),
     )
     assert result["skip"] is True
+
+
+# ── a posting failure re-posts the written review, never a new job ──────
+
+
+class FlakyPoster(FakePoster):
+    """GitHub refuses the first ``fails`` posts with a transient 5xx."""
+
+    def __init__(self, fails: int = 1) -> None:
+        super().__init__()
+        self.fails = fails
+
+    async def create_review(self, args: dict[str, Any]) -> dict[str, Any]:
+        if self.fails:
+            self.fails -= 1
+            self.reviews.append(args)
+            return {"error": "GitHub API error 500: no detail", "transient": True}
+        return await super().create_review(args)
+
+
+def _jobs(*jobs: FakeJob):
+    by_id = {j.id: j for j in jobs}
+
+    async def lookup(job_id: str):
+        job = by_id.get(job_id)
+        return (job.status, None) if job else None
+
+    return lookup
+
+
+async def _prepare_again(env, *, job_status, start=None):
+    start = start or StartRecorder()
+
+    async def no_checkout(*a, **kw):
+        raise AssertionError("a resumed post must not check the pull request out again")
+
+    result = await prepare(
+        ReviewerConfig(repos=(REPO,)),
+        env["store"],
+        TENANT,
+        REPO,
+        7,
+        github=env["github"],
+        skill_text="g",
+        token="",
+        checkout=no_checkout,
+        start_job=start,
+        job_status=job_status,
+    )
+    return result, start
+
+
+async def test_a_posting_failure_resumes_without_a_new_job(env):
+    env["poster"] = FlakyPoster(fails=1)
+    job = FakeJob(result={"structured_output": _output("APPROVE", [_issue("nit")])})
+    failed = await _finalize(env, job)
+    assert failed["status"] == "failed"
+    assert (await env["store"].get(TENANT, REPO, 7)).status == "failed"
+
+    result, start = await _prepare_again(env, job_status=_jobs(job))
+    assert result["resumed"] is True and result["job_id"] == "job-1"
+    assert start.calls == []
+    assert (await env["store"].get(TENANT, REPO, 7)).status == "posting"
+
+    posted = await _finalize(env, job)
+    assert posted["status"] == "posted" and posted["verdict"] == "APPROVE"
+    assert len(env["poster"].reviews) == 2  # the refused post, then the one that landed
+    row = await env["store"].get(TENANT, REPO, 7)
+    assert row.status == "approved" and row.last_reviewed_sha == SHA1
+
+
+async def test_a_resume_after_the_review_landed_does_not_post_it_again(env):
+    job = FakeJob(result={"structured_output": _output("COMMENT", [_issue("minor")])})
+    row = await env["store"].get(TENANT, REPO, 7)
+    # Posting crashed after the review landed; the intake expired the row to failed.
+    row.status = "failed"
+    row.last_review = {
+        "pending": {
+            "job_id": "job-1",
+            "prior_issues_seen": [],
+            "prior_review_ids": [],
+            "ticket": None,
+            "done": {"review": {"review_id": 777, "url": "u", "inline_count": 0, "issues": []}},
+        }
+    }
+    await env["store"].save(row)
+
+    result, start = await _prepare_again(env, job_status=_jobs(job))
+    assert result["resumed"] is True and start.calls == []
+    posted = await _finalize(env, job)
+    assert posted["status"] == "posted"
+    assert env["poster"].reviews == []
+    assert (await env["store"].get(TENANT, REPO, 7)).review_ids == [777]
+
+
+async def _failed_while_posting(env) -> FakeJob:
+    env["poster"] = FlakyPoster(fails=1)
+    job = FakeJob(result={"structured_output": _output("APPROVE", [])})
+    await _finalize(env, job)
+    return job
+
+
+async def test_a_moved_head_reviews_afresh(env, tmp_path):
+    job = await _failed_while_posting(env)
+    env["github"].add(make_pr(7, SHA2))
+
+    async def fake_checkout(dest, **kw):
+        return tmp_path
+
+    async def fake_read(path, sha, rel):
+        return None
+
+    start = StartRecorder()
+    result = await prepare(
+        ReviewerConfig(repos=(REPO,)),
+        env["store"],
+        TENANT,
+        REPO,
+        7,
+        github=env["github"],
+        skill_text="g",
+        token="",
+        checkout=fake_checkout,
+        reader=fake_read,
+        start_job=start,
+        job_status=_jobs(job),
+    )
+    assert "resumed" not in result and len(start.calls) == 1
+
+
+async def test_a_vanished_job_reviews_afresh(env, tmp_path):
+    await _failed_while_posting(env)
+
+    async def fake_checkout(dest, **kw):
+        return tmp_path
+
+    async def fake_read(path, sha, rel):
+        return None
+
+    start = StartRecorder()
+    result = await prepare(
+        ReviewerConfig(repos=(REPO,)),
+        env["store"],
+        TENANT,
+        REPO,
+        7,
+        github=env["github"],
+        skill_text="g",
+        token="",
+        checkout=fake_checkout,
+        reader=fake_read,
+        start_job=start,
+        job_status=_jobs(),
+    )
+    assert "resumed" not in result and len(start.calls) == 1
+
+
+async def test_a_failure_before_posting_reviews_afresh(env, tmp_path):
+    job = FakeJob(status="failed", error="crashed")
+    await _finalize(env, job)
+    assert (await env["store"].get(TENANT, REPO, 7)).status == "failed"
+
+    async def fake_checkout(dest, **kw):
+        return tmp_path
+
+    async def fake_read(path, sha, rel):
+        return None
+
+    start = StartRecorder()
+    result = await prepare(
+        ReviewerConfig(repos=(REPO,)),
+        env["store"],
+        TENANT,
+        REPO,
+        7,
+        github=env["github"],
+        skill_text="g",
+        token="",
+        checkout=fake_checkout,
+        reader=fake_read,
+        start_job=start,
+        job_status=_jobs(job),
+    )
+    assert "resumed" not in result and len(start.calls) == 1
+
+
+async def test_the_intakes_retry_resumes_the_post(env):
+    """The real hand-off: the intake re-queues the failed row (status queued)
+    and files a task; prepare then re-posts the written review."""
+    from datetime import UTC, datetime, timedelta
+
+    from robothor.pr_review.intake import Intake
+    from robothor.pr_review.tests.fakes import FakeTasks
+
+    env["poster"] = FlakyPoster(fails=1)
+    job = FakeJob(result={"structured_output": _output("APPROVE", [])})
+    await _finalize(env, job)
+    cfg = ReviewerConfig(repos=(REPO,))
+    tasks = FakeTasks()
+    intake = Intake(
+        cfg,
+        env["store"],
+        TENANT,
+        tasks=tasks,
+        github=env["github"],
+        chat=env["chat"],
+        now=datetime.now(UTC) + timedelta(minutes=cfg.retry_cooldown_minutes + 1),
+    )
+    await intake.run(poll=False)
+    assert (await env["store"].get(TENANT, REPO, 7)).status == "queued"
+
+    result, start = await _prepare_again(env, job_status=_jobs(job))
+    assert result.get("resumed") is True and start.calls == []
+    assert (await _finalize(env, job))["status"] == "posted"

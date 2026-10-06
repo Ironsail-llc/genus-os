@@ -43,6 +43,8 @@ Read `repo` and `number` from the task body.
    - `error` → `resolve_task(id, resolution="Prepare failed: <error>")` and stop.
    - `already_started: true` → the job from an earlier attempt is still the
      one; carry on with its `job_id`.
+   - `resumed: true` → the review was already written and only posting
+     failed; skip the wait and go straight to step 4 with its `job_id`.
 3. **Wait.** `claude_code_wait(job_id=<job_id>, timeout_s=1200)`. While the
    status is `queued` or `running`, call it again (`claude_code_status` reads
    the same state without waiting). Do not cancel a running job unless your

@@ -209,6 +209,7 @@ def gh():
     with (
         patch.object(github_api, "_get_token", return_value="ghp_test"),
         patch.object(github_api, "_client", side_effect=factory),
+        patch.object(github_api, "_TRANSIENT_BACKOFF_S", (0.0, 0.0)),
     ):
         yield fake
 
@@ -734,6 +735,65 @@ class TestIdempotentPosting:
         gh.handler = handler  # type: ignore[method-assign]
         result = await github_api._github_create_review(_review_args("COMMENT", []), _CTX)
         assert result["already_posted"] is True
+
+
+class TestTransientRetry:
+    """A bare 5xx or a dropped connection from GitHub is retried, still posting once.
+
+    2026-10-06: two finished reviews were lost to one empty-bodied 500 each;
+    the same payloads were accepted minutes later.
+    """
+
+    async def test_a_500_then_success_posts(self, gh):
+        gh.review_responses = [httpx.Response(500, text="")]
+        result = await github_api._github_create_review(_review_args("COMMENT", []), _CTX)
+        assert result["review_id"] == 555
+        assert len(gh.posted_reviews()) == 2
+
+    async def test_persistent_5xx_gives_up_after_two_retries(self, gh):
+        gh.review_responses = [httpx.Response(500, text="") for _ in range(5)]
+        result = await github_api._github_create_review(_review_args("COMMENT", []), _CTX)
+        assert result["transient"] is True
+        assert result["error"].startswith("GitHub API error 500")
+        assert len(gh.posted_reviews()) == 3
+
+    async def test_a_5xx_that_landed_is_not_posted_again(self, gh):
+        gh.review_responses = [httpx.Response(502, text="")]
+        orig = gh.handler
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            resp = orig(request)
+            if request.method == "POST":
+                gh.existing_reviews = [_existing()]
+            return resp
+
+        gh.handler = handler  # type: ignore[method-assign]
+        result = await github_api._github_create_review(_review_args("COMMENT", []), _CTX)
+        assert result["already_posted"] is True
+        assert len(gh.posted_reviews()) == 1
+
+    async def test_a_timeout_then_success_posts(self, gh):
+        orig = gh.handler
+        calls = {"n": 0}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.method == "POST" and request.url.path.endswith("/reviews"):
+                calls["n"] += 1
+                if calls["n"] == 1:
+                    gh.requests.append(request)
+                    raise httpx.ReadTimeout("slow")
+            return orig(request)
+
+        gh.handler = handler  # type: ignore[method-assign]
+        result = await github_api._github_create_review(_review_args("COMMENT", []), _CTX)
+        assert result["review_id"] == 555
+        assert len(gh.posted_reviews()) == 2
+
+    async def test_a_422_is_not_retried_as_transient(self, gh):
+        gh.review_responses = [_422("Body is too long (maximum is 65536 characters)")]
+        result = await github_api._github_create_review(_review_args("COMMENT", []), _CTX)
+        assert "transient" not in result
+        assert len(gh.posted_reviews()) == 1
 
 
 class TestBodyLimits:

@@ -630,6 +630,11 @@ _INLINE_COMMENT_MAX_CHARS = 8_000
 #: A 422 is only an anchor problem (worth folding comments into the body) when
 #: GitHub's message talks about where the comment goes.
 _ANCHOR_422_RE = re.compile(r"line|path|diff|pull_request_review_thread|position", re.IGNORECASE)
+#: GitHub answers these, and drops connections, for reasons of its own: the
+#: same review posts fine moments later (2026-10-06: two finished reviews lost
+#: to one empty-bodied 500 each). One wait per retry, then give up.
+_TRANSIENT_STATUSES = frozenset({500, 502, 503, 504})
+_TRANSIENT_BACKOFF_S: tuple[float, ...] = (2.0, 5.0)
 
 
 def _client(timeout: float = 20.0) -> httpx.AsyncClient:
@@ -1063,10 +1068,25 @@ async def _github_create_review(args: dict[str, Any], ctx: ToolContext) -> dict[
                 event, body, as_comment = "COMMENT", own_pr_body(verdict, body), True
             anchors_folded = False
 
-            # At most three posts: as decided, the own-PR fallback, anchors folded.
+            # At most three posts: as decided, the own-PR fallback, anchors folded;
+            # plus one per transient retry.
             review: dict[str, Any] | None = None
             last_error = ""
-            for _attempt in range(3):
+            waits = list(_TRANSIENT_BACKOFF_S)
+
+            async def _landed_after_failure(retrying: bool) -> dict[str, Any] | None:
+                # A failed post may have created the review anyway: look before
+                # posting again or reporting failure, so it posts at most once.
+                if retrying:
+                    await asyncio.sleep(waits.pop(0))
+                landed = await _find_own_review(client, headers, pr_url, viewer, commit_id)
+                if landed is None:
+                    return None
+                return await _already_posted(
+                    client, headers, pr_url, repo, number, verdict, commit_id, landed
+                )
+
+            for _attempt in range(3 + len(waits)):
                 payload: dict[str, Any] = {
                     "commit_id": commit_id,
                     "event": event,
@@ -1077,22 +1097,29 @@ async def _github_create_review(args: dict[str, Any], ctx: ToolContext) -> dict[
                 try:
                     resp = await client.post(f"{pr_url}/reviews", headers=headers, json=payload)
                 except httpx.TransportError as exc:
-                    # Timeout or reset: the review may have been created anyway.
-                    landed = await _find_own_review(client, headers, pr_url, viewer, commit_id)
-                    if landed is not None:
-                        return await _already_posted(
-                            client, headers, pr_url, repo, number, verdict, commit_id, landed
-                        )
-                    return {"error": f"GitHub request failed: {exc!r}"}
+                    retrying = bool(waits)
+                    already = await _landed_after_failure(retrying)
+                    if already is not None:
+                        return already
+                    if retrying:
+                        continue
+                    return {"error": f"GitHub request failed: {exc!r}", "transient": True}
                 if resp.status_code < 400:
                     review = resp.json()
                     break
                 if resp.status_code >= 500:
-                    landed = await _find_own_review(client, headers, pr_url, viewer, commit_id)
-                    if landed is not None:
-                        return await _already_posted(
-                            client, headers, pr_url, repo, number, verdict, commit_id, landed
-                        )
+                    retrying = resp.status_code in _TRANSIENT_STATUSES and bool(waits)
+                    already = await _landed_after_failure(retrying)
+                    if already is not None:
+                        return already
+                    if retrying:
+                        continue
+                    if resp.status_code in _TRANSIENT_STATUSES:
+                        detail = _error_detail(resp) or "no detail"
+                        return {
+                            "error": f"GitHub API error {resp.status_code}: {detail}",
+                            "transient": True,
+                        }
                 if resp.status_code != 422:
                     resp.raise_for_status()
                 last_error = _error_detail(resp)

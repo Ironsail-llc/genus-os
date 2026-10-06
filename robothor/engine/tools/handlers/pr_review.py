@@ -269,6 +269,7 @@ async def _prepare(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             start_job=start_job,
             fetch_ticket=_ticket_fetcher(ctx),
             search_tickets=_ticket_searcher(ctx),
+            job_status=_job_state(ctx.tenant_id),
         )
     except CheckoutError as exc:
         return {"error": f"checkout failed: {exc}"}

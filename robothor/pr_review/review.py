@@ -33,6 +33,7 @@ from robothor.pr_review.checkout import ensure_checkout, merge_conflicts, read_a
 from robothor.pr_review.context import checks as check_list
 from robothor.pr_review.context import discussion as discussion_items
 from robothor.pr_review.context import linked_issues, pr_description
+from robothor.pr_review.intake import MAX_ATTEMPTS
 from robothor.pr_review.policy import decide_verdict, extract_ticket_key, is_blocking
 from robothor.pr_review.posting import decide_review
 from robothor.pr_review.prompt import (
@@ -53,6 +54,10 @@ if TYPE_CHECKING:
 
     #: ``(ticket prefix, PR title) -> [{key, summary, status}]``.
     TicketSearch = Callable[[str, str], Awaitable[list[dict[str, Any]]]]
+    from datetime import datetime
+
+    #: ``job_id -> (status, finished_at)``, or None when the job is gone.
+    JobStatus = Callable[[str], Awaitable[tuple[str, datetime | None] | None]]
     from robothor.pr_review.config import ReviewerConfig
     from robothor.pr_review.store import PrReviewRow, PrReviewStore
     from robothor.pr_review.ticket import TicketFetcher
@@ -76,6 +81,8 @@ _ERROR_MAX = 500
 OPERATOR_SOURCE = "operator"
 #: Statuses prepare may claim a row from: anything not already bound to a job.
 _PREPARABLE = frozenset({"pending", "queued", "failed", "skipped", "closed", *FINAL_STATUSES})
+#: Statuses a written-but-unposted review is re-posted from (see _resumable).
+_RESUMABLE = ("failed", "queued")
 
 
 class Poster(Protocol):
@@ -265,6 +272,54 @@ def _bound(row: PrReviewRow, head: str) -> dict[str, Any]:
     }
 
 
+def _resumable(row: PrReviewRow, head: str) -> bool:
+    """Whether a failed row holds a finished review that only failed to post.
+
+    ``last_review.pending`` is written only when finalize claims the row for
+    posting, a successful post replaces it, and a new job replaces ``job_id``:
+    the two agreeing on this head means the review was written for it and is
+    still the one to post. The row is ``failed``, or ``queued`` once the
+    intake's retry (or a "re-review" reply) has filed the task.
+    """
+    pending = row.last_review.get("pending") or {}
+    return (
+        row.status in _RESUMABLE
+        and bool(row.job_id)
+        and row.queued_sha == head
+        and pending.get("job_id") == row.job_id
+    )
+
+
+async def _resume_posting(
+    store: PrReviewStore, row: PrReviewRow, head: str, job_status: JobStatus | None
+) -> dict[str, Any] | None:
+    """Re-post a written review instead of paying for a new one, or None."""
+    if job_status is None or not _resumable(row, head):
+        return None
+    state = await job_status(row.job_id)
+    if state is None or state[0] != "done":
+        return None
+    claimed = await store.transition(
+        row.tenant_id,
+        row.repo,
+        row.number,
+        from_statuses=_RESUMABLE,
+        to_status="posting",
+        job_id=row.job_id,
+    )
+    if claimed is None:
+        return None
+    return {
+        "repo": row.repo,
+        "number": row.number,
+        "head_sha": head,
+        "job_id": row.job_id,
+        "resumed": True,
+        "next": "the review is already written; only posting failed — "
+        "call pr_review_finalize with this job_id",
+    }
+
+
 async def prepare(
     cfg: ReviewerConfig,
     store: PrReviewStore,
@@ -282,6 +337,7 @@ async def prepare(
     fetch_ticket: TicketFetcher | None = None,
     search_tickets: TicketSearch | None = None,
     conflicts: Callable[[Path, str, str], Awaitable[list[str] | None]] | None = None,
+    job_status: JobStatus | None = None,
 ) -> dict[str, Any]:
     row = await store.get(tenant_id, repo, number)
     if row is None:
@@ -299,6 +355,9 @@ async def prepare(
         row.pending_trigger = ""
         await store.save(row)
         return {"skip": True, "reason": "pull request is closed; resolve the task"}
+    resumed = await _resume_posting(store, row, head, job_status)
+    if resumed is not None:
+        return resumed
     base_ref = str((pr.get("base") or {}).get("ref") or "main")
 
     kind: Literal["initial", "rereview"] = "rereview" if row.last_reviewed_sha else "initial"
@@ -494,6 +553,20 @@ def _digest(cfg: ReviewerConfig, row: PrReviewRow, text: str) -> str:
     return f"PR review {row.repo}#{row.number}: {text}" if wanted else ""
 
 
+def _failure_text(cfg: ReviewerConfig, attempts: int, reason: str) -> str:
+    """What the thread is told: the intake retries by itself until MAX_ATTEMPTS."""
+    if attempts < MAX_ATTEMPTS:
+        return (
+            f"\u26a0\ufe0f Automated review failed (attempt {attempts} of {MAX_ATTEMPTS}): "
+            f"{reason}\nI'll retry automatically in about {cfg.retry_cooldown_minutes} min; "
+            'reply "re-review" to retry now.'
+        )
+    return (
+        f"\u26a0\ufe0f Automated review gave up after {_plural(attempts, 'attempt')}: "
+        f'{reason}\nReply "re-review" to try again.'
+    )
+
+
 async def _fail(
     cfg: ReviewerConfig,
     store: PrReviewStore,
@@ -523,8 +596,7 @@ async def _fail(
         store,
         chat,
         claimed,
-        f"\u26a0\ufe0f Automated review failed after {_plural(claimed.attempts, 'attempt')}: "
-        f'{short}\nReply "re-review" to try again.',
+        _failure_text(cfg, claimed.attempts, short),
     )
     return {
         "status": "failed",
