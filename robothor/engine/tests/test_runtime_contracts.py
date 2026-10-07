@@ -224,3 +224,29 @@ async def test_uncapped_async_goal_ledger_preserves_provider_output_bound():
     ledger.value_async.assert_awaited_once_with("limit")
     assert ledger.reserve_async.call_args.args[1] > 100
     assert ledger.settle_async.call_args.args[1] == 100
+
+
+async def test_goal_admission_prices_input_in_tokens_not_bytes():
+    """A payload whose UTF-8 size dwarfs its token count must still be admitted.
+
+    The bound subtracted from the goal's token budget used to be the payload's
+    BYTE count, so a goal with room to spare refused a request it could afford
+    and the pursuit stopped with the budget unspent (2026-09-22).
+    """
+    from types import SimpleNamespace
+
+    from robothor.engine.runtime.provider_budget import goal_completion
+
+    # Prose: ~4 bytes per token, so this is ~11k tokens in ~40k bytes.
+    prose = "the quick brown fox jumps over the lazy dog " * 900
+    ledger = SimpleNamespace(
+        value_async=AsyncMock(side_effect=lambda name: 20_000 if name == "limit" else 0),
+        reserve_async=AsyncMock(),
+        settle_async=AsyncMock(),
+    )
+    provider = AsyncMock(return_value={"usage": {"total_tokens": 100}})
+    await goal_completion(
+        provider, {"messages": [{"role": "user", "content": prose}], "max_tokens": 4096}, ledger
+    )
+    provider.assert_awaited_once()
+    assert provider.call_args.kwargs["max_tokens"] == 4096
