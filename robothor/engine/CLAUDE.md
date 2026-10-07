@@ -25,6 +25,7 @@ The Python Agent Engine: LLM runner, tool registry, Telegram bot, scheduler, hoo
 | `tools/` | Tool schemas (`schemas.py`), registry/filtering (`registry.py`), dispatch (`dispatch.py`), handlers (`handlers/`) |
 | `channels/` | Channel protocol + receipt (`base.py`), name→channel registry (`registry.py`), one wrapper per surface (`telegram.py`, `event_bus.py`, `sender.py`) |
 | `scheduler.py` | Cron-based agent scheduling + heartbeat |
+| `coding/` | Claude Code driver behind the `claude_code_*` tools: `claude -p` runner, allowlisted env, per-job worktree, durable jobs with the verify-then-resume completion loop |
 
 ## Testing
 

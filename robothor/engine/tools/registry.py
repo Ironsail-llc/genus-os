@@ -1035,6 +1035,12 @@ class ToolRegistry:
             # instance never deployed, and a headless browser, are not what an
             # agent that declared no tool list was asking for. See OPT_IN_TOOLS.
             names = [n for n in self._schemas if n not in OPT_IN_TOOLS]
+            # ...unless the manifest asked for one by name (`tools_opt_in`).
+            names.extend(
+                n
+                for n in (getattr(config, "tools_opt_in", None) or [])
+                if n in OPT_IN_TOOLS and n in self._schemas and n not in names
+            )
 
         if config.id == "main":
             from robothor.goals.tools import TOOL_NAMES

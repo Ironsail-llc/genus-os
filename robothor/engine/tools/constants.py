@@ -45,6 +45,20 @@ GIT_TOOLS = frozenset(
     {"git_status", "git_diff", "git_branch", "git_commit", "git_push", "create_pull_request"}
 )
 
+# Claude Code driver (robothor/engine/coding/). Opt-in: listed in OPT_IN_TOOLS.
+CLAUDE_CODE_TOOLS = frozenset(
+    {
+        "claude_code_start",
+        "claude_code_status",
+        "claude_code_wait",
+        "claude_code_followup",
+        "claude_code_cancel",
+    }
+)
+
+# pr-reviewer suite (robothor/pr_review/). Opt-in: listed in OPT_IN_TOOLS.
+PR_REVIEW_TOOLS = frozenset({"pr_review_intake", "pr_review_prepare", "pr_review_finalize"})
+
 # Google Workspace tools (gws CLI)
 GWS_TOOLS = frozenset(
     {
@@ -56,6 +70,8 @@ GWS_TOOLS = frozenset(
         "gws_calendar_list",
         "gws_calendar_create",
         "gws_calendar_add_attendees",
+        "gws_calendar_update",
+        "gws_calendar_respond",
         "gws_calendar_delete",
         "gws_chat_send",
         "gws_chat_list_spaces",
@@ -153,6 +169,19 @@ GITHUB_API_TOOLS = frozenset(
         "github_pr_stats",
         "github_commit_activity",
         "github_review_stats",
+        "github_pr_diff",
+        "github_pr_files",
+        "github_compare",
+    }
+)
+
+# GitHub review-posting tools: they write to someone else's pull request, so
+# they are OPT_IN_TOOLS (below): offered only to a manifest that names them.
+GITHUB_REVIEW_WRITE_TOOLS = frozenset(
+    {
+        "github_create_review",
+        "github_reply_review_comment",
+        "github_resolve_threads",
     }
 )
 
@@ -190,7 +219,8 @@ PROTECTED_BRANCHES = frozenset({"main", "master"})
 # after one journald warning. A name in a DENY table is different — denying
 # something that does not exist costs nothing and covers the day a plugin, an
 # adapter or a rename brings it into being. That is a real defence and it is
-# also indistinguishable from rot, which is how `gws_calendar_update`,
+# also indistinguishable from rot, which is how `gws_calendar_update` (a
+# real tool now),
 # `gws_gmail_draft` and `send_email` survived in four engine tables for months
 # while an agent read them in the source and hallucinated calls to them.
 #
@@ -349,6 +379,9 @@ READONLY_TOOLS: frozenset[str] = frozenset(
         "github_pr_stats",
         "github_commit_activity",
         "github_review_stats",
+        "github_pr_diff",
+        "github_pr_files",
+        "github_compare",
         # DevOps metrics read-only tools
         "devops_query_metrics",
         # Identity read-only tools
@@ -356,6 +389,12 @@ READONLY_TOOLS: frozenset[str] = frozenset(
         # Report rendering (pure output, no side effects)
         "render_report",
         "render_devops_report",
+        # Claude Code driver: reading a coding job's state changes nothing.
+        # Unclassified until 2026-10-05, so a claude_code_wait cut short by its
+        # deadline was journalled as an UNCERTAIN write, and the effects guard
+        # then refused every later wait for that principal across runs.
+        "claude_code_status",
+        "claude_code_wait",
     }
 )
 
@@ -374,18 +413,28 @@ TOOLSEARCH_TOOLS = frozenset({"tool_search", "tool_describe", "tool_call"})
 # them cost every agent on every instance ~6.5k characters of schema and two
 # unbounded CRM writes (`sales_discover`, `sales_propose_email`) it had no
 # business being offered. `web_render` drives a headless browser, which is a
-# separate capability from `web_fetch` and should be asked for.
+# separate capability from `web_fetch` and should be asked for. The
+# `claude_code_*` tools start a whole autonomous coding agent that spends real
+# money; only an agent whose manifest names them (`tools_allowed`, or
+# `tools_opt_in` on top of the default set) is offered them. The
+# `pr_review_*` tools post reviews and read a chat space; same rule.
 #
 # Advertisement is only half the gate. RBAC is the other half: the `__default__`
 # `service`/`user` roles hold a `*` allow, so migration 138 adds the matching
 # explicit denies. Both halves are needed — a tool an agent cannot see is still
 # a tool it can name.
 #
+# The three GitHub review-posting tools post, reply and resolve on pull
+# requests other people own; an agent reviews code only when its manifest
+# says so. Their RBAC half is NOT added yet: a `service`-role deny would also
+# stop the reviewer agent that names them, so it waits for a dedicated role.
+#
 # Spelled out rather than imported from robothor.sales so this module stays
 # import-light; test_opt_in_tools_are_not_default pins the two together.
 OPT_IN_TOOLS: frozenset[str] = frozenset(
     {
         "web_render",
+        *GITHUB_REVIEW_WRITE_TOOLS,
         "sales_create_request",
         "sales_discover",
         "sales_get_context",
@@ -396,6 +445,8 @@ OPT_IN_TOOLS: frozenset[str] = frozenset(
         "sales_process_queue",
         "sales_propose_email",
         "sales_research_parallel",
+        *CLAUDE_CODE_TOOLS,
+        *PR_REVIEW_TOOLS,
     }
 )
 
@@ -411,7 +462,15 @@ CORE_TOOLS: frozenset[str] = frozenset(
         "list_pursuit_goals",
         "report_pursuit_goal",
         "update_pursuit_goal",
+        # Calendar: the operator's meetings are everyday work, not a deferred
+        # niche. Deferring them behind tool_search is how "add Bob to the 3pm"
+        # became a capability gap.
+        "gws_calendar_list",
+        "gws_calendar_create",
+        "gws_calendar_update",
         "gws_calendar_add_attendees",
+        "gws_calendar_respond",
+        "gws_calendar_delete",
         # File / shell
         "read_file",
         "write_file",

@@ -25,6 +25,45 @@ class TestNoDestructiveWrites:
         result = engine.check_pre_execution("exec", {"command": "psql -c 'DELETE FROM users'"})
         assert not result.allowed
 
+    @pytest.mark.parametrize(
+        "command",
+        [
+            'echo "=== delete from /tmp cwd ===" ; cd /tmp && gws calendar events delete x',
+            'echo "delete from cache"',
+            "ls  # DELETE FROM later",
+            'grep -i "drop table" file.sql',
+            'git log --grep "truncate"',
+        ],
+    )
+    def test_sql_words_in_text_are_not_blocked(self, command):
+        engine = GuardrailEngine(enabled_policies=["no_destructive_writes"])
+        assert engine.check_pre_execution("exec", {"command": command}).allowed
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            'psql -c "DELETE FROM users"',
+            "psql -d x <<'SQL'\nDELETE FROM t;\nSQL",
+            'echo "DROP TABLE x" | psql',
+            'sqlite3 db "DROP TABLE t"',
+            "rm -rf /",
+            "rm -rf ~",
+            "rm -rf $HOME",
+            'psql -c "DROP DATABASE prod"',
+            'mysql -e "TRUNCATE t"',
+        ],
+    )
+    def test_real_destructive_commands_still_blocked(self, command):
+        engine = GuardrailEngine(enabled_policies=["no_destructive_writes"])
+        assert not engine.check_pre_execution("exec", {"command": command}).allowed
+
+    def test_summary_points_to_self_fix(self):
+        from robothor.engine.guardrails import guardrail_summary
+
+        text = guardrail_summary(["no_destructive_writes"])
+        assert "work around" not in text
+        assert "fix it yourself" in text
+
     def test_allows_safe_commands(self):
         engine = GuardrailEngine(enabled_policies=["no_destructive_writes"])
         result = engine.check_pre_execution("exec", {"command": "ls -la /tmp"})

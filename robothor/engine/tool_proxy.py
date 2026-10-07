@@ -268,7 +268,7 @@ class RunToolProxy:
             return refusal
 
         timeout = _resolve_tool_timeout(
-            name, getattr(req.agent_config, "tool_timeout_seconds", 120)
+            name, getattr(req.agent_config, "tool_timeout_seconds", 120), verdict.tool_args
         )
         started = asyncio.get_running_loop().time()
         result = await self._runner.registry.execute(

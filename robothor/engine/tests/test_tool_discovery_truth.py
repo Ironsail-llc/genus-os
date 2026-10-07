@@ -581,7 +581,7 @@ class TestUnknownNameSuggestions:
         token = set_deferred_allowed(frozenset({*GWS_TOOLS, "read_file"}))
         try:
             out = await HANDLERS["tool_call"](
-                {"name": "gws_calendar_update", "arguments": {}}, ToolContext()
+                {"name": "gws_calendar_edit", "arguments": {}}, ToolContext()
             )
         finally:
             clear_deferred_allowed(token)

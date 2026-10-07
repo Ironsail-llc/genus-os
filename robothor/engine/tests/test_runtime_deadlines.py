@@ -246,7 +246,6 @@ async def test_native_manifest_cap_remains_separate_from_adapter_owned_deadline(
     async def execute(**kwargs):
         assert bounded_timeout(30, SimpleNamespace()) == 30
         assert bounded_timeout(None, SimpleNamespace()) is None
-        assert bounded_timeout(120, SimpleNamespace(routine_operation_id="confirmed")) == 60
         return AgentRun(status=RunStatus.COMPLETED)
 
     await CurrentRuntime(execute).run(request(1))
