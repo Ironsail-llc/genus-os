@@ -59,3 +59,8 @@ python@3.11
 # never mailboxes, and the ones in this repo are fixtures. Same class as the
 # pnpm@ and python@ entries above.
 @thread.v2
+
+# Google Meet / Gemini notes system sender. A Google Workspace service
+# address, identical on every instance -- the CRM blocklist names it so
+# ingestion never turns it into a person. Platform-level, not instance data.
+gemini-notes@google.com

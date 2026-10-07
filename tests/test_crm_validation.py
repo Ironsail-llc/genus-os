@@ -166,7 +166,7 @@ class TestAgentSenderBlocklist:
 
     def test_real_colleague_email_not_blocked(self):
         # Domain-wide rules would block real people; only exact addresses are blocked.
-        valid, _ = validate_person_input("Philip", "Ironsail", email="philip@ironsail.ai")
+        valid, _ = validate_person_input("Philip", "Ironsail", email="colleague@example.com")
         assert valid is True
 
     def test_blocked_emails_is_a_set(self):
