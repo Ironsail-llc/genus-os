@@ -59,6 +59,7 @@ import yaml
 
 from robothor.constants import DEFAULT_TENANT
 from robothor.engine.feature_flags import benchmark_sandbox_mode
+from robothor.engine.tools.constants import WORKSPACE_TOOLS
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from collections.abc import Iterator
@@ -125,21 +126,9 @@ EXTERNAL_SIDE_EFFECT_TOOLS: frozenset[str] = frozenset(
         # being added to a read list. Three chat tools were missing, one of
         # which posts a real Google Chat message — a defence-in-depth comment
         # that was false for 27% of the family. Asserted against GWS_TOOLS by
-        # test_registered_tool_names.py so it cannot drift again.
-        "gws_gmail_send",
-        "gws_gmail_reply",
-        "gws_gmail_modify",
-        "gws_gmail_search",
-        "gws_gmail_get",
-        "gws_calendar_create",
-        "gws_calendar_add_attendees",
-        "gws_calendar_update",
-        "gws_calendar_respond",
-        "gws_calendar_delete",
-        "gws_calendar_list",
-        "gws_chat_send",
-        "gws_chat_list_spaces",
-        "gws_chat_list_messages",
+        # test_registered_tool_names.py so it cannot drift again — and now
+        # taken from the family itself, so it cannot be a hand-kept copy.
+        *WORKSPACE_TOOLS,
         # GitHub review posting: writes onto someone else's pull request. Each
         # handler also refuses ctx.is_benchmark itself.
         "github_create_review",

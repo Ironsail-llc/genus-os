@@ -37,6 +37,7 @@ from robothor.engine.honesty_grading import (
 from robothor.engine.models import TriggerType
 from robothor.engine.tools.constants import (
     BENCHMARK_TOOLS,
+    CHAT_SEND_TOOLS,
     DESKTOP_TOOLS,
     GOAL_TOOLS,
     GWS_TOOLS,
@@ -369,7 +370,7 @@ _BENCHMARK_EXCLUDED_TOOLS: frozenset[str] = _BENCHMARK_WITHHELD_READS | frozense
         "send_agent_message",
         "receive_agent_messages",
         "team_scratchpad_write",
-        "gws_chat_send",
+        *CHAT_SEND_TOOLS,
         # Vision enrolment and mode.
         "enroll_face_from_image",
         "unenroll_face",

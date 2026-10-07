@@ -21,6 +21,16 @@ from datetime import UTC
 from pathlib import Path
 from typing import Any
 
+from robothor.engine.tools.constants import (
+    CALENDAR_ADD_ATTENDEES_TOOL,
+    CALENDAR_CREATE_TOOLS,
+    CALENDAR_DELETE_TOOL,
+    CALENDAR_RESPOND_TOOL,
+    CALENDAR_UPDATE_TOOL,
+    CALENDAR_WRITE_TOOLS,
+    MAIL_SEND_TOOLS,
+)
+
 logger = logging.getLogger(__name__)
 
 # Agents this log covers. Only agents with cross-session isolation benefit.
@@ -28,13 +38,8 @@ _TRACKED_AGENT_IDS: set[str] = {"main"}
 
 # Tools whose calls are worth summarizing.
 _NOTABLE_TOOLS: set[str] = {
-    "gws_calendar_create",
-    "gws_calendar_update",
-    "gws_calendar_add_attendees",
-    "gws_calendar_respond",
-    "gws_calendar_delete",
-    "gws_gmail_send",
-    "gws_gmail_reply",
+    *CALENDAR_WRITE_TOOLS,
+    *MAIL_SEND_TOOLS,
     "create_task",
     "update_task",
     "resolve_task",
@@ -69,20 +74,20 @@ def _summarize_step(step: Any) -> str | None:
     args = getattr(step, "tool_input", None) or {}
     out = getattr(step, "tool_output", None) or {}
 
-    if name == "gws_calendar_create":
+    if name in CALENDAR_CREATE_TOOLS:
         if isinstance(out, dict) and out.get("status") == "deduped":
             return f"calendar_deduped: {out.get('summary') or args.get('summary', '?')}"
         summary = args.get("summary", "?")
         start = args.get("start", "?")
         return f"calendar_create: {summary!r} @ {start}"
-    if name in ("gws_calendar_update", "gws_calendar_add_attendees"):
+    if name in (CALENDAR_UPDATE_TOOL, CALENDAR_ADD_ATTENDEES_TOOL):
         changed = ",".join(out.get("changed") or []) if isinstance(out, dict) else ""
         return f"calendar_update: event={args.get('event_id', '?')} changed={changed or '-'}"
-    if name == "gws_calendar_respond":
+    if name == CALENDAR_RESPOND_TOOL:
         return f"calendar_respond: event={args.get('event_id', '?')} {args.get('response', '?')}"
-    if name == "gws_calendar_delete":
+    if name == CALENDAR_DELETE_TOOL:
         return f"calendar_delete: event={args.get('event_id', '?')}"
-    if name in ("gws_gmail_send", "gws_gmail_reply"):
+    if name in MAIL_SEND_TOOLS:
         thread = args.get("thread_id") or (out.get("threadId") if isinstance(out, dict) else "")
         to = args.get("to", "?")
         subj = (args.get("subject") or "").strip() or "(no subject)"

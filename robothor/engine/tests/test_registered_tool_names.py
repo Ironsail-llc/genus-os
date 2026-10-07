@@ -55,11 +55,17 @@ def _deny_tables() -> dict[str, frozenset[str]]:
     import robothor.engine.benchmark_sandbox as benchmark_sandbox
     import robothor.engine.guardrails as guardrails
     import robothor.engine.run_verification as run_verification
+    from robothor.engine.tools import constants
 
     tables: dict[str, frozenset[str]] = {}
     for module in (guardrails, run_verification, benchmark_sandbox):
         for attr in dir(module):
             if not attr.upper().endswith("TOOLS"):
+                continue
+            # A tool family imported by name from constants.py is that
+            # module's table, checked with the allow tables — not a second
+            # deny table here.
+            if getattr(constants, attr, None) is getattr(module, attr):
                 continue
             value = getattr(module, attr)
             if isinstance(value, frozenset) and all(isinstance(v, str) for v in value):
@@ -163,10 +169,11 @@ def test_the_deny_tables_were_actually_found() -> None:
     ``frozenset`` to ``set`` and putting a phantom in each left the suite
     green. The count is exact: a table that stops being discovered — renamed,
     retyped, moved — has to be noticed here rather than silently dropping out
-    of the check.
+    of the check. 10 since run_verification's mail-send and calendar-write
+    tables became the shared families in ``tools/constants.py``.
     """
     tables = _deny_tables()
-    assert len(tables) == 12, sorted(tables)
+    assert len(tables) == 10, sorted(tables)
     assert "guardrails._EMAIL_SEND_TOOLS" in tables
 
 
