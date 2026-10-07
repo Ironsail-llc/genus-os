@@ -60,18 +60,31 @@ def adapter_read_only_tools() -> frozenset[str]:
         return frozenset()
 
 
+#: ``(plugin generation, names)``. Discovery walks every installed distribution
+#: (~100 ms) and this is read on every tool call; uncached it was most of a
+#: run's CPU. Generation-keyed, so ``reload_plugins()`` is seen on the next read.
+_plugin_cache: tuple[int, frozenset[str]] | None = None
+
+
 def plugin_read_only_tools() -> frozenset[str]:
     """Plugin tools their own package declared read-only.
 
     Same seam, same rule, same fail-closed behaviour as the adapter half. A
     plugin that fails to load contributes nothing rather than stopping the
     caller — one broken package must not be able to make the engine refuse to
-    classify anything.
+    classify anything. A failure is not cached: the next read tries again.
     """
+    global _plugin_cache
     try:
         from robothor.plugins import load_plugins
+        from robothor.plugins.loader import generation
 
-        return frozenset(load_plugins(reserved_names=set()).read_only)
+        current = generation()
+        if _plugin_cache is not None and _plugin_cache[0] == current:
+            return _plugin_cache[1]
+        names = frozenset(load_plugins(reserved_names=set()).read_only)
+        _plugin_cache = (current, names)
+        return names
     except Exception as exc:  # noqa: BLE001 - one broken package is not an outage
         logger.debug("plugin read-only classification unavailable: %s", exc)
         return frozenset()
