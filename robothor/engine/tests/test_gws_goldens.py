@@ -222,7 +222,11 @@ THREAD_ALREADY_RE: dict[str, Any] = {
     "id": "thread-9",
     "messages": [
         _thread_message(
-            "m1", "Bob <bob@example.com>", "agent@example.com", "RE: Budget", msgid="<b1@example.com>"
+            "m1",
+            "Bob <bob@example.com>",
+            "agent@example.com",
+            "RE: Budget",
+            msgid="<b1@example.com>",
         )
     ],
 }
