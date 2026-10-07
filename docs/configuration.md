@@ -125,12 +125,31 @@ changes it in the layer that wins:
 - no unit sets it → the ordinary `config.yaml` write.
 
 Then it runs `systemctl daemon-reload` and schedules the restart as a
-transient timer, `systemd-run --on-active=15s --unit=genus-config-restart-<ts>
-systemctl restart <units>`, so a run that made the change can finish replying
-before its own engine restarts. It needs passwordless `sudo`, which the owner
-shell (`robothor-host-exec`) has and the engine unit (`NoNewPrivileges=yes`)
-deliberately does not; a failed step is reported by name and nothing after it
-runs.
+transient timer, one per target unit with a fixed name:
+`systemd-run --on-active=15s --unit=genus-config-restart-<unit> --collect
+systemctl restart <unit>`. That way a run that made the change can finish
+replying before its own engine restarts. If that unit's timer is already
+waiting, a second `--apply` leaves it alone ("restart already scheduled"): it
+fires after this reload, so it picks the change up, and a second restart a
+second later would SIGTERM the first start's secrets loader.
+
+It needs passwordless `sudo`, which the owner shell (`robothor-host-exec`) has
+and the engine unit (`NoNewPrivileges=yes`) deliberately does not. A failed
+step is reported by name and nothing after it runs. If the drop-in was
+already installed when a later step failed, the reply says **PARTIAL** and
+lists what landed (`--json`: `"partial": true`, `dropins`,
+`restart_scheduled`).
+
+Two refusals, both with nothing written:
+
+- **A value with a control character** (newline, carriage return, NUL, any
+  of `\x00`–`\x1f` or `\x7f`) is refused by `set` on every path. In a unit
+  file a newline starts a new directive, and an `ExecStartPre=+…` line would
+  run as root on the next restart.
+- **A unit file or environment file that could not be read** (for example a
+  root-only secrets file). The variable may be set there and win, so
+  `--apply` will not claim success past it; the refusal names the file.
+  `get` lists the same files under the unit as "could not read … unverified".
 
 ### From the Helm, without a shell
 

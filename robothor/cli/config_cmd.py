@@ -112,37 +112,64 @@ def _unknown_name(name: str) -> int:
     return 2
 
 
-def _systemd_origins(record: dict[str, Any]) -> list[Any]:
-    """Where each unit that reads this setting gets it from, if systemd sets it.
+def _systemd_reports(record: dict[str, Any]) -> list[Any]:
+    """What each unit that reads this setting says about it, per systemd.
 
     Asked of the unit files, not this process: the shell an agent runs
     ``genus config get`` in is not the engine, and a drop-in on the engine is
-    invisible to that shell's environment.
+    invisible to that shell's environment. A unit is reported when it sets
+    the variable OR when some of its files could not be read -- "not set" is
+    then unverified, and nothing downstream may treat it as known.
     """
     from robothor.settings import systemd_env
 
     units = _units_for(record)
     found: dict[str, Any] = {}
     for name in (record["env"], *record["aliases"]):
-        for origin in systemd_env.lookup(
+        for report in systemd_env.inspect(
             name, units, runner=_systemd_runner, reader=_systemd_reader
         ):
-            found.setdefault(origin.unit, origin)
+            have = found.get(report.unit)
+            if have is None:
+                found[report.unit] = report
+                continue
+            if have.origin is None and report.origin is not None:
+                have.origin = report.origin
+            have.unreadable = sorted(set(have.unreadable) | set(report.unreadable))
     return list(found.values())
 
 
-def _origin_json(origin: Any) -> dict[str, Any]:
-    """An origin for ``--json``: where, never what (a value can be a credential)."""
+def _systemd_origins(record: dict[str, Any]) -> list[Any]:
+    return [r.origin for r in _systemd_reports(record) if r.origin is not None]
+
+
+def _report_json(report: Any) -> dict[str, Any]:
+    """A unit's report for ``--json``: where, never what (a value can be a credential)."""
+    origin = report.origin
     return {
-        "unit": origin.unit,
-        "name": origin.name,
-        "kind": origin.kind,
-        "path": origin.path,
-        "line": origin.line,
-        "declared_in": origin.declared_in,
-        "overrides": [f"{o.path}:{o.line}" for o in origin.shadowed],
-        "unreadable_environment_files": list(origin.unreadable),
+        "unit": report.unit,
+        "name": origin.name if origin else None,
+        "kind": origin.kind if origin else None,
+        "path": origin.path if origin else None,
+        "line": origin.line if origin else None,
+        "declared_in": origin.declared_in if origin else None,
+        "overrides": [f"{o.path}:{o.line}" for o in origin.shadowed] if origin else [],
+        "unreadable": list(report.unreadable),
     }
+
+
+def _unreadable_refusal(record: dict[str, Any], reports: list[Any]) -> str | None:
+    """Why ``--apply`` cannot claim success: a file it could not read may win."""
+    blind = [(r.unit, path) for r in reports for path in r.unreadable]
+    if not blind:
+        return None
+    where = "; ".join(f"{unit}: {path}" for unit, path in blind)
+    return (
+        f"{record['env']}: cannot verify which value wins -- could not read {where}. "
+        "An EnvironmentFile beats every Environment= line, so a change made here may "
+        "not be the one the service reads. Nothing was changed. Run as a user that can "
+        "read those files, or check them and edit them directly."
+    )
 
 
 # ── get / explain / list ─────────────────────────────────────────────────────
@@ -157,7 +184,7 @@ def _cmd_get(args: argparse.Namespace) -> int:
 
     value, source, detail = _resolve(record)
     shown = _display(record, value)
-    origins = [] if record["governed"] else _systemd_origins(record)
+    reports = [] if record["governed"] else _systemd_reports(record)
     if getattr(args, "json", False):
         print(
             json.dumps(
@@ -167,7 +194,7 @@ def _cmd_get(args: argparse.Namespace) -> int:
                     "source": source,
                     "detail": detail,
                     "secret": record["secret"],
-                    "systemd": [_origin_json(o) for o in origins],
+                    "systemd": [_report_json(r) for r in reports],
                 },
                 indent=2,
                 sort_keys=True,
@@ -178,12 +205,16 @@ def _cmd_get(args: argparse.Namespace) -> int:
 
     print(f"{record['env']} = {shown}")
     print(f"  source: {source} ({detail})")
-    for origin in origins:
-        print(f"  systemd: {systemd_env.describe(origin, secret=record['secret'])}")
-        for beaten in origin.shadowed:
-            print(f"    overrides {beaten.path}:{beaten.line}")
-        for path in origin.unreadable:
-            print(f"    could not read EnvironmentFile {path}; it would win if it sets this")
+    for report in reports:
+        origin = report.origin
+        if origin is not None:
+            print(f"  systemd: {systemd_env.describe(origin, secret=record['secret'])}")
+            for beaten in origin.shadowed:
+                print(f"    overrides {beaten.path}:{beaten.line}")
+        else:
+            print(f"  systemd: {report.unit}: not set in the files that could be read")
+        for path in report.unreadable:
+            print(f"    could not read {path}; it may set this, unverified")
     return 0
 
 
@@ -304,28 +335,26 @@ def _set_result(
                 sort_keys=True,
             )
         )
-    elif errors:
+        return 1 if errors else 0
+    # A partial apply is said on both streams: what landed on stdout, what did
+    # not on stderr. Neither half is allowed to read as the whole.
+    for path in extra.get("dropins", []):
+        print(f"wrote {path}")
+    for transient in extra.get("restart_scheduled", []):
+        print(f"restart scheduled in 15s (transient unit {transient})")
+    for transient in extra.get("restart_coalesced", []):
+        print(f"restart already scheduled ({transient}); it will pick this change up")
+    if errors:
+        if extra.get("partial"):
+            _err("PARTIAL: the lines above landed; the step below did not.")
         for error in errors:
             _err(error)
-    else:
-        for path in extra.get("dropins", []):
-            print(f"wrote {path}")
-        if extra.get("restart_scheduled"):
-            print(
-                f"restart of {', '.join(extra['restart_units'])} scheduled in 15s "
-                f"(transient unit {extra['restart_scheduled']})"
-            )
-        elif pending:
+    elif not extra.get("restart_scheduled") and not extra.get("restart_coalesced"):
+        if pending:
             print(f"restart required: {', '.join(pending)}")
         else:
             print("applied")
     return 1 if errors else 0
-
-
-def _stamp() -> str:
-    import time
-
-    return time.strftime("%Y%m%dT%H%M%S")
 
 
 def _set_apply(args: argparse.Namespace, record: dict[str, Any], as_json: bool) -> int:
@@ -340,6 +369,11 @@ def _set_apply(args: argparse.Namespace, record: dict[str, Any], as_json: bool) 
     restart is scheduled through ``systemd-run --on-active=15s`` so the run
     that asked for the change can reply before its engine restarts.
 
+    Refused, with nothing written, when any unit or environment file the
+    target units name could not be read: the variable may be set there and
+    win, and claiming "applied" past a file nobody read is the defect this
+    command exists to remove.
+
     A governed flag is live through the flag store already; ``--apply`` adds
     nothing to it.
     """
@@ -350,7 +384,11 @@ def _set_apply(args: argparse.Namespace, record: dict[str, Any], as_json: bool) 
 
     try:
         value = operator.validate(record, args.value)
-        origins = _systemd_origins(record)
+        reports = _systemd_reports(record)
+        refusal = _unreadable_refusal(record, reports)
+        if refusal:
+            return _set_result(False, [], [refusal], as_json)
+        origins = [r.origin for r in reports if r.origin is not None]
         if origins:
             plans = [
                 systemd_env.plan_dropin(
@@ -363,37 +401,39 @@ def _set_apply(args: argparse.Namespace, record: dict[str, Any], as_json: bool) 
                 )
                 for origin in origins
             ]
-            result = systemd_env.apply_dropins(plans, runner=_systemd_runner, stamp=_stamp())
-            extra = {
-                "dropins": result.written,
-                "restart_units": result.units,
-                "restart_scheduled": result.restart_unit,
-            }
-            return _set_result(True, result.units, [], as_json, extra)
-
-        pending = operator.apply_change(
-            record,
-            value,
-            actor=f"operator:{_operator_name()}",
-            reason="genus config set --apply",
-        )
-        if not pending:
-            return _set_result(True, [], [], as_json)
-        result = systemd_env.apply_dropins(
-            [],
-            runner=_systemd_runner,
-            stamp=_stamp(),
-            reload=False,
-            units=[systemd_env.unit_name(u) for u in pending],
-        )
-        extra = {"restart_units": result.units, "restart_scheduled": result.restart_unit}
-        return _set_result(True, list(pending), [], as_json, extra)
+            result = systemd_env.apply_dropins(plans, runner=_systemd_runner)
+        else:
+            pending = operator.apply_change(
+                record,
+                value,
+                actor=f"operator:{_operator_name()}",
+                reason="genus config set --apply",
+            )
+            if not pending:
+                return _set_result(True, [], [], as_json)
+            result = systemd_env.apply_dropins(
+                [], runner=_systemd_runner, reload=False, units=list(pending)
+            )
     except operator.SettingError as exc:
         return _set_result(False, [], [exc.message], as_json)
-    except systemd_env.DropinConflictError as exc:
+    except (systemd_env.DropinConflictError, systemd_env.UnsafeValueError) as exc:
         return _set_result(False, [], [str(exc)], as_json)
     except systemd_env.ApplyError as exc:
-        return _set_result(False, [], [f"{record['env']}: {exc}"], as_json)
+        extra = {
+            "partial": exc.partial,
+            "dropins": exc.written,
+            "reloaded": exc.reloaded,
+            "restart_scheduled": exc.scheduled,
+        }
+        return _set_result(False, [], [f"{record['env']}: {exc}"], as_json, extra)
+
+    extra = {
+        "dropins": result.written,
+        "restart_units": result.units,
+        "restart_scheduled": result.scheduled,
+        "restart_coalesced": result.coalesced,
+    }
+    return _set_result(True, result.units, [], as_json, extra)
 
 
 def _cmd_set(args: argparse.Namespace) -> int:
@@ -404,11 +444,21 @@ def _cmd_set(args: argparse.Namespace) -> int:
     calls too. What is left here is the CLI's half: an exit code and a line of
     text. A governed flag comes back with no units -- it resolves from the DB
     on the engine's next read (a five-second TTL), so it is live.
+
+    A value with a control character is refused on every path before
+    anything is routed: a newline in a value becomes a directive of its own
+    in a unit file (run as root on the next restart) and a broken line in
+    config.yaml.
     """
+    from robothor.settings.systemd_env import unsafe_value_message
+
     as_json = getattr(args, "json", False)
     record = _record(args.name)
     if record is None:
         return _unknown_name(args.name)
+    problem = unsafe_value_message(record["env"], str(args.value))
+    if problem:
+        return _set_result(False, [], [problem], as_json)
     if getattr(args, "apply", False):
         return _set_apply(args, record, as_json)
     return _cmd_set_plain(args, record, as_json)

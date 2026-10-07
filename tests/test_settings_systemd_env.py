@@ -214,6 +214,40 @@ def test_an_environment_file_cannot_be_overridden_by_a_dropin() -> None:
     assert "/etc/robothor/robothor.env" in str(exc.value)
 
 
+# ── refusing values that would become systemd directives ─────────────────────
+
+
+@pytest.mark.parametrize("bad", ["a\nExecStartPre=+/usr/bin/id\n#", "a\rb", "a\x00b", "a\x7fb"])
+def test_plan_refuses_a_value_with_control_characters(bad: str) -> None:
+    with pytest.raises(se.UnsafeValueError):
+        se.plan_dropin("ROBOTHOR_X", bad, UNIT, None)
+
+
+@pytest.mark.parametrize("bad", ["a\nb", "a\rb", "a\x00b", "\tx"])
+def test_unsafe_value_helper_flags_control_characters(bad: str) -> None:
+    assert se.control_characters(bad)
+
+
+def test_plain_values_pass_the_helper() -> None:
+    assert not se.control_characters("true")
+    assert not se.control_characters('a b %c "d" \\e')
+
+
+def test_plan_refuses_a_name_that_is_not_an_environment_name() -> None:
+    with pytest.raises(se.UnsafeValueError):
+        se.plan_dropin("X=1\nExecStart", "v", UNIT, None)
+
+
+def test_note_control_characters_never_reach_the_file() -> None:
+    plan = se.plan_dropin(
+        "ROBOTHOR_X", "true", UNIT, None, note="by operator:eve\nExecStartPre=+/usr/bin/id"
+    )
+    lines = plan.content.splitlines()
+    assert not any(line.startswith("ExecStartPre") for line in lines)
+    directives = [ln for ln in lines if ln and not ln.startswith("#")]
+    assert directives == ["[Service]", 'Environment="ROBOTHOR_X=true"']
+
+
 # ── applying ─────────────────────────────────────────────────────────────────
 
 
@@ -221,39 +255,111 @@ def test_an_environment_file_cannot_be_overridden_by_a_dropin() -> None:
 class Recorder:
     calls: list[list[str]] = field(default_factory=list)
     fail_on: str | None = None
+    timer_substate: str = ""
 
     def __call__(self, argv: list[str], stdin: str | None = None) -> subprocess.CompletedProcess:
         self.calls.append(list(argv))
+        if argv[:2] == ["systemctl", "show"]:
+            out = f"SubState={self.timer_substate}\n" if self.timer_substate else ""
+            return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
         code = 1 if self.fail_on and self.fail_on in argv else 0
         return subprocess.CompletedProcess(argv, code, stdout="", stderr="denied" if code else "")
+
+
+def _sudo(run: Recorder) -> list[list[str]]:
+    return [c for c in run.calls if c[:1] == ["sudo"]]
 
 
 def test_apply_installs_reloads_and_schedules_a_delayed_restart(tmp_path) -> None:
     plan = se.plan_dropin("ROBOTHOR_X", "true", UNIT, None)
     run = Recorder()
-    result = se.apply_dropins([plan], runner=run, scratch=tmp_path, stamp="20261006T120000")
-    flat = [" ".join(c) for c in run.calls]
-    assert any(c.startswith("sudo -n install") and plan.path in c for c in flat)
-    assert "sudo -n systemctl daemon-reload" in flat
-    restart = [c for c in run.calls if "systemd-run" in c]
-    assert restart, flat
+    result = se.apply_dropins([plan], runner=run, scratch=tmp_path)
+    flat = [" ".join(c) for c in _sudo(run)]
+    assert flat[0].startswith("sudo -n install") and plan.path in flat[0]
+    assert flat[1] == "sudo -n systemctl daemon-reload"
+    restart = [c for c in _sudo(run) if "systemd-run" in c]
+    assert len(restart) == 1
     assert "--on-active=15s" in restart[0]
-    assert "--unit=genus-config-restart-20261006T120000" in restart[0]
+    assert "--unit=genus-config-restart-robothor-engine" in restart[0]
+    assert "--collect" in restart[0]
     assert restart[0][-3:] == ["systemctl", "restart", UNIT]
-    # install < daemon-reload < restart
-    order = [flat.index(c) for c in flat]
-    assert order == sorted(order)
-    assert result.restart_unit == "genus-config-restart-20261006T120000"
+    assert result.scheduled == ["genus-config-restart-robothor-engine"]
+    assert result.coalesced == []
     assert result.written == [plan.path]
+
+
+def test_restart_unit_name_is_fixed_per_target_not_per_second(tmp_path) -> None:
+    plan = se.plan_dropin("ROBOTHOR_X", "true", UNIT, None)
+    first, second = Recorder(), Recorder()
+    se.apply_dropins([plan], runner=first, scratch=tmp_path)
+    se.apply_dropins([plan], runner=second, scratch=tmp_path)
+    name = [c for c in first.calls if "systemd-run" in c][0]
+    again = [c for c in second.calls if "systemd-run" in c][0]
+    assert name == again
+
+
+def test_a_pending_restart_timer_is_coalesced_not_doubled(tmp_path) -> None:
+    """Two restarts 1-2 s apart SIGTERM the first start's secrets loader."""
+    plan = se.plan_dropin("ROBOTHOR_X", "true", UNIT, None)
+    run = Recorder(timer_substate="waiting")
+    result = se.apply_dropins([plan], runner=run, scratch=tmp_path)
+    assert not [c for c in run.calls if "systemd-run" in c]
+    assert result.coalesced == ["genus-config-restart-robothor-engine"]
+    assert result.scheduled == []
+    # The drop-in is still written and systemd reloaded: the pending restart picks it up.
+    assert any("install" in c for c in _sudo(run))
+    assert ["sudo", "-n", "systemctl", "daemon-reload"] in run.calls
 
 
 def test_apply_stops_at_the_first_failure_and_says_which(tmp_path) -> None:
     plan = se.plan_dropin("ROBOTHOR_X", "true", UNIT, None)
     run = Recorder(fail_on="install")
     with pytest.raises(se.ApplyError) as exc:
-        se.apply_dropins([plan], runner=run, scratch=tmp_path, stamp="t")
+        se.apply_dropins([plan], runner=run, scratch=tmp_path)
     assert "install" in str(exc.value)
+    assert exc.value.written == []
     assert not any("daemon-reload" in c for c in run.calls)
+
+
+def test_a_failed_restart_after_the_install_is_reported_as_partial(tmp_path) -> None:
+    plan = se.plan_dropin("ROBOTHOR_X", "true", UNIT, None)
+    run = Recorder(fail_on="systemd-run")
+    with pytest.raises(se.ApplyError) as exc:
+        se.apply_dropins([plan], runner=run, scratch=tmp_path)
+    assert exc.value.written == [plan.path]
+    assert exc.value.reloaded is True
+    assert exc.value.scheduled == []
+
+
+# ── unreadable files are said, not skipped ───────────────────────────────────
+
+
+def _show(dropins: str = f"{DROPDIR}/zz-a.conf"):
+    out = f"FragmentPath={FRAGMENT}\nDropInPaths={dropins}\n"
+
+    def run(argv: list[str], stdin: str | None = None) -> subprocess.CompletedProcess:
+        return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
+
+    return run
+
+
+def test_inspect_reports_unreadable_env_files_even_with_no_origin() -> None:
+    contents = {FRAGMENT: "[Service]\nEnvironmentFile=-/run/robothor/secrets.env\n"}
+    [report] = se.inspect("ROBOTHOR_X", ["robothor-engine"], runner=_show(""), reader=contents.get)
+    assert report.origin is None
+    assert report.unreadable == ["/run/robothor/secrets.env"]
+
+
+def test_inspect_reports_unreadable_unit_files() -> None:
+    contents = {FRAGMENT: "[Service]\n"}  # the drop-in is not readable
+    [report] = se.inspect("ROBOTHOR_X", ["robothor-engine"], runner=_show(), reader=contents.get)
+    assert report.unreadable == [f"{DROPDIR}/zz-a.conf"]
+
+
+def test_lookup_attaches_unreadable_unit_files_to_the_origin() -> None:
+    contents = {FRAGMENT: "[Service]\nEnvironment=ROBOTHOR_X=1\n"}
+    [origin] = se.lookup("ROBOTHOR_X", ["robothor-engine"], runner=_show(), reader=contents.get)
+    assert origin.unreadable == [f"{DROPDIR}/zz-a.conf"]
 
 
 def test_lookup_uses_injected_systemctl_and_reader() -> None:

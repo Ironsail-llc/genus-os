@@ -44,16 +44,22 @@ __all__ = [
     "DropinConflictError",
     "DropinPlan",
     "Origin",
+    "UnitReport",
+    "UnsafeValueError",
     "apply_dropins",
+    "control_characters",
     "describe",
     "dropin_basename",
     "find_origin",
+    "inspect",
     "lookup",
     "parse_env_file",
     "parse_environment_value",
     "parse_show",
     "plan_dropin",
+    "restart_unit_for",
     "unit_name",
+    "unsafe_value_message",
 ]
 
 Runner = Callable[..., "subprocess.CompletedProcess[str]"]
@@ -69,7 +75,29 @@ class DropinConflictError(Exception):
 
 
 class ApplyError(Exception):
-    """A step of writing / reloading / scheduling failed; the message names it."""
+    """A step of writing / reloading / scheduling failed; the message names it.
+
+    Carries how far it got, because a drop-in installed with no restart
+    scheduled is a real state the operator must be told about, not a failure
+    that changed nothing.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        written: list[str] | None = None,
+        reloaded: bool = False,
+        scheduled: list[str] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.written = list(written or [])
+        self.reloaded = reloaded
+        self.scheduled = list(scheduled or [])
+
+    @property
+    def partial(self) -> bool:
+        return bool(self.written or self.scheduled)
 
 
 @dataclass
@@ -102,7 +130,56 @@ class DropinPlan:
 class ApplyResult:
     written: list[str]
     units: list[str]
-    restart_unit: str
+    #: transient restart units this call created
+    scheduled: list[str] = field(default_factory=list)
+    #: restart timers already pending, left alone so one restart covers both
+    coalesced: list[str] = field(default_factory=list)
+
+
+@dataclass
+class UnitReport:
+    """What one unit says about one variable -- including what could not be read."""
+
+    unit: str
+    origin: Origin | None
+    #: unit files and environment files this process could not read; the
+    #: variable may be set in one of them, so nothing is claimed past them
+    unreadable: list[str] = field(default_factory=list)
+
+
+class UnsafeValueError(ValueError):
+    """A name or value that would not stay one ``Environment=`` assignment."""
+
+
+#: \x00-\x1f and \x7f. A newline in a value written into a unit file is a new
+#: directive -- ``ExecStartPre=+...`` would run as root on the next restart.
+_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+_ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_UNIT_NAME = re.compile(r"^[A-Za-z0-9@._:-]+$")
+
+
+def control_characters(value: str) -> list[str]:
+    """The control characters in ``value``, as ``repr`` strings (empty = safe)."""
+    return sorted({repr(ch) for ch in _CONTROL.findall(value)})
+
+
+def unsafe_value_message(name: str, value: str) -> str | None:
+    """Why ``value`` must not be stored for ``name``, or None when it may."""
+    found = control_characters(value)
+    if not found:
+        return None
+    return (
+        f"{name}: the value contains control character(s) {', '.join(found)}. "
+        "A setting is one line; a newline written into a unit file or config.yaml "
+        "becomes a directive of its own, so it is refused."
+    )
+
+
+def restart_unit_for(unit: str) -> str:
+    """The ONE transient unit name that restarts ``unit`` -- fixed, so a second
+    apply finds the first one's timer instead of stacking another restart."""
+    stem = unit_name(unit).removesuffix(".service")
+    return f"genus-config-restart-{re.sub(r'[^A-Za-z0-9-]+', '-', stem).strip('-')}"
 
 
 def unit_name(unit: str) -> str:
@@ -249,17 +326,22 @@ def parse_show(output: str) -> list[str]:
     return fragment + dropins
 
 
-def lookup(
+def inspect(
     name: str,
     units: list[str] | tuple[str, ...],
     *,
     runner: Runner | None = None,
     reader: Reader | None = None,
-) -> list[Origin]:
-    """One :class:`Origin` per unit that sets ``name``. Empty when systemd is absent."""
+) -> list[UnitReport]:
+    """One :class:`UnitReport` per unit systemd knows. Empty when systemd is absent.
+
+    A unit that does not set ``name`` is still reported when some of its files
+    could not be read: "not set" is then unverified, and the caller must not
+    act as if it were known.
+    """
     run = runner or _default_runner
     read = reader or _default_reader
-    origins: list[Origin] = []
+    reports: list[UnitReport] = []
     for raw in units:
         unit = unit_name(raw)
         try:
@@ -268,13 +350,35 @@ def lookup(
             return []
         if shown.returncode != 0:
             continue
-        files = [(p, text) for p in parse_show(shown.stdout) if (text := read(p)) is not None]
+        files: list[tuple[str, str]] = []
         unreadable: list[str] = []
+        for path in parse_show(shown.stdout):
+            text = read(path)
+            if text is None:
+                unreadable.append(path)
+            else:
+                files.append((path, text))
         origin = find_origin(name, files, read_env_file=read, unit=unit, unreadable=unreadable)
         if origin is not None:
             origin.unreadable = unreadable
-            origins.append(origin)
-    return origins
+        if origin is not None or unreadable:
+            reports.append(UnitReport(unit=unit, origin=origin, unreadable=unreadable))
+    return reports
+
+
+def lookup(
+    name: str,
+    units: list[str] | tuple[str, ...],
+    *,
+    runner: Runner | None = None,
+    reader: Reader | None = None,
+) -> list[Origin]:
+    """One :class:`Origin` per unit that sets ``name``; see :func:`inspect`."""
+    return [
+        report.origin
+        for report in inspect(name, units, runner=runner, reader=reader)
+        if report.origin is not None
+    ]
 
 
 # ── showing an origin ────────────────────────────────────────────────────────
@@ -339,7 +443,17 @@ def plan_dropin(
             drop-in that sorts after the default name sets it and ``override``
             was not given. The message names the file.
     """
+    # Defence in depth: the CLI refuses these first, but this function writes
+    # a root-owned unit file and must not trust its caller to have.
+    if not _ENV_NAME.match(name):
+        raise UnsafeValueError(f"{name!r} is not an environment variable name")
+    problem = unsafe_value_message(name, value)
+    if problem:
+        raise UnsafeValueError(problem)
     unit = unit_name(unit)
+    if not _UNIT_NAME.match(unit):
+        raise UnsafeValueError(f"{unit!r} is not a systemd unit name")
+    note = _CONTROL.sub(" ", note)
     directory = f"/etc/systemd/system/{unit}.d"
     basename = dropin_basename(name)
 
@@ -384,9 +498,20 @@ def plan_dropin(
     if note:
         header.append(f"# {note}")
     if origin is not None:
-        header.append(f"# Previously from: {origin.path}:{origin.line}")
+        header.append(f"# Previously from: {_CONTROL.sub(' ', origin.path)}:{origin.line}")
     content = "\n".join([*header, "[Service]", f'Environment="{name}={_escape(value)}"', ""])
     return DropinPlan(unit=unit, name=name, path=f"{directory}/{basename}", content=content)
+
+
+def _restart_pending(run: Runner, transient: str) -> bool:
+    """Whether ``<transient>.timer`` is loaded and still waiting to fire."""
+    try:
+        shown = run(["systemctl", "show", f"{transient}.timer", "-p", "SubState"])
+    except (OSError, subprocess.SubprocessError):
+        return False
+    if shown.returncode != 0:
+        return False
+    return any(line.strip() == "SubState=waiting" for line in (shown.stdout or "").splitlines())
 
 
 def apply_dropins(
@@ -394,33 +519,52 @@ def apply_dropins(
     *,
     runner: Runner | None = None,
     scratch: Path | None = None,
-    stamp: str,
     reload: bool = True,
     units: list[str] | None = None,
 ) -> ApplyResult:
     """Install each drop-in with sudo, reload systemd, schedule the restart.
 
     ``units`` adds units to restart beyond those the plans write to (a
-    config.yaml change that still needs its declared units restarted). The
-    restart is a transient timer (``systemd-run --on-active``), so it runs
-    outside the caller's own cgroup and survives the engine it restarts.
+    config.yaml change that still needs its declared units restarted).
+
+    The restart is a transient timer (``systemd-run --on-active``), so it runs
+    outside the caller's own cgroup and survives the engine it restarts. Its
+    name is fixed per target unit (:func:`restart_unit_for`): when one is
+    already waiting, it is left alone -- it fires after this call's
+    daemon-reload, so it picks this change up too -- rather than stacking a
+    second restart a second or two after the first, which SIGTERMs the first
+    start's ``ExecStartPre=`` secrets loader. ``--collect`` and
+    ``RemainAfterElapse=no`` unload the pair once it has run, so the name is
+    free for the next change.
 
     Raises:
-        ApplyError: a step failed; nothing after it ran.
+        ApplyError: a step failed; nothing after it ran. It carries what had
+            already happened (drop-ins written, reload done, restarts
+            scheduled) so the caller can report a partial apply honestly.
     """
     run = runner or _default_runner
-    units = sorted({p.unit for p in plans} | set(units or ()))
+    targets = sorted({p.unit for p in plans} | {unit_name(u) for u in units or ()})
+    written: list[str] = []
+    reloaded = False
+    scheduled: list[str] = []
+    coalesced: list[str] = []
 
     def step(argv: list[str]) -> None:
         try:
             done = run(argv)
         except (OSError, subprocess.SubprocessError) as exc:
-            raise ApplyError(f"{' '.join(argv)}: {exc}") from exc
+            raise ApplyError(
+                f"{' '.join(argv)}: {exc}", written=written, reloaded=reloaded, scheduled=scheduled
+            ) from exc
         if done.returncode != 0:
             detail = (done.stderr or done.stdout or "").strip()
-            raise ApplyError(f"{' '.join(argv)} failed ({done.returncode}): {detail}")
+            raise ApplyError(
+                f"{' '.join(argv)} failed ({done.returncode}): {detail}",
+                written=written,
+                reloaded=reloaded,
+                scheduled=scheduled,
+            )
 
-    written: list[str] = []
     with tempfile.TemporaryDirectory(dir=scratch) as tmp:
         for index, plan in enumerate(plans):
             source = Path(tmp) / f"dropin-{index}.conf"
@@ -429,17 +573,25 @@ def apply_dropins(
             written.append(plan.path)
     if reload:
         step(["sudo", "-n", "systemctl", "daemon-reload"])
-    restart_unit = f"genus-config-restart-{stamp}"
-    step(
-        [
-            "sudo",
-            "-n",
-            "systemd-run",
-            f"--on-active={RESTART_DELAY}",
-            f"--unit={restart_unit}",
-            "systemctl",
-            "restart",
-            *units,
-        ]
-    )
-    return ApplyResult(written=written, units=units, restart_unit=restart_unit)
+        reloaded = True
+    for unit in targets:
+        transient = restart_unit_for(unit)
+        if _restart_pending(run, transient):
+            coalesced.append(transient)
+            continue
+        step(
+            [
+                "sudo",
+                "-n",
+                "systemd-run",
+                f"--on-active={RESTART_DELAY}",
+                f"--unit={transient}",
+                "--collect",
+                "--timer-property=RemainAfterElapse=no",
+                "systemctl",
+                "restart",
+                unit,
+            ]
+        )
+        scheduled.append(transient)
+    return ApplyResult(written=written, units=targets, scheduled=scheduled, coalesced=coalesced)

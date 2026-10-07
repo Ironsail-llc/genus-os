@@ -507,6 +507,11 @@ def _two_dropins() -> dict[str, str]:
     }
 
 
+def _readable(files: dict[str, str]) -> dict[str, str]:
+    """The same unit, with its secrets file readable and not setting the variable."""
+    return {**files, "/run/robothor/secrets.env": "OTHER=1\n"}
+
+
 def test_get_names_the_dropin_that_sets_the_value(monkeypatch, capsys) -> None:
     _systemd(monkeypatch, _two_dropins())
     monkeypatch.setenv("ROBOTHOR_ENGINE_PORT", "18899")
@@ -560,7 +565,7 @@ def test_set_without_apply_warns_that_systemd_shadows_config_yaml(monkeypatch, c
 
 
 def test_set_apply_refuses_a_later_dropin_and_names_it(monkeypatch, tmp_path, capsys) -> None:
-    fake = _systemd(monkeypatch, _two_dropins())
+    fake = _systemd(monkeypatch, _readable(_two_dropins()))
     rc = cmd_config(
         _args(config_command="set", name="ROBOTHOR_ENGINE_PORT", value="18801", apply=True)
     )
@@ -575,7 +580,7 @@ def test_set_apply_refuses_a_later_dropin_and_names_it(monkeypatch, tmp_path, ca
 def test_set_apply_override_writes_a_later_dropin_and_schedules_restart(
     monkeypatch, tmp_path, capsys
 ) -> None:
-    fake = _systemd(monkeypatch, _two_dropins())
+    fake = _systemd(monkeypatch, _readable(_two_dropins()))
     rc = cmd_config(
         _args(
             config_command="set",
@@ -637,3 +642,124 @@ def test_set_apply_reports_a_sudo_failure(monkeypatch, capsys) -> None:
     )
     assert rc == 1
     assert "a password is required" in capsys.readouterr().err
+
+
+# ── review fixes: control characters, unverifiable origins, partial applies ──
+
+
+@pytest.mark.parametrize("bad", ["8080\nExecStartPre=+/usr/bin/id\n#", "1\r2", "1\x002"])
+@pytest.mark.parametrize("apply", [False, True])
+def test_set_refuses_control_characters_on_every_path(
+    monkeypatch, tmp_path, capsys, bad, apply
+) -> None:
+    fake = _systemd(monkeypatch, _two_dropins())
+    rc = cmd_config(
+        _args(
+            config_command="set",
+            name="ROBOTHOR_AI_DOMAIN",
+            value=bad,
+            apply=apply,
+            override=True,
+        )
+    )
+    assert rc == 1
+    assert "control character" in capsys.readouterr().err
+    assert not [c for c in fake.calls if c[:1] == ["sudo"]]
+    assert not _config_path(tmp_path).exists()
+
+
+def test_set_apply_refuses_when_an_unreadable_env_file_could_win(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    """The secrets file is root-only; the variable may be set there."""
+    fake = _systemd(monkeypatch, _two_dropins())  # secrets.env not in the dict: unreadable
+    rc = cmd_config(
+        _args(
+            config_command="set",
+            name="ROBOTHOR_ENGINE_PORT",
+            value="18801",
+            apply=True,
+            override=True,
+        )
+    )
+    assert rc == 1
+    assert "/run/robothor/secrets.env" in capsys.readouterr().err
+    assert not [c for c in fake.calls if c[:1] == ["sudo"]]
+
+
+def test_set_apply_refuses_when_only_an_unreadable_env_file_is_in_play(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    fake = _systemd(
+        monkeypatch, {_ENGINE: "[Service]\nEnvironmentFile=-/run/robothor/secrets.env\n"}
+    )
+    rc = cmd_config(
+        _args(config_command="set", name="ROBOTHOR_ENGINE_PORT", value="18801", apply=True)
+    )
+    assert rc == 1
+    assert "/run/robothor/secrets.env" in capsys.readouterr().err
+    assert not _config_path(tmp_path).exists()
+    assert not [c for c in fake.calls if c[:1] == ["sudo"]]
+
+
+def test_get_names_unreadable_files_even_with_no_origin(monkeypatch, capsys) -> None:
+    _systemd(monkeypatch, {_ENGINE: "[Service]\nEnvironmentFile=-/run/robothor/secrets.env\n"})
+    assert cmd_config(_args(config_command="get", name="ROBOTHOR_ENGINE_PORT")) == 0
+    assert "/run/robothor/secrets.env" in capsys.readouterr().out
+
+
+def test_set_apply_reports_partial_when_the_restart_cannot_be_scheduled(
+    monkeypatch, capsys
+) -> None:
+    import subprocess
+
+    fake = _systemd(monkeypatch, {_ENGINE: "[Service]\nEnvironment=ROBOTHOR_ENGINE_PORT=1\n"})
+
+    def failing(argv, stdin=None):
+        if "systemd-run" in argv:
+            fake.calls.append(list(argv))
+            return subprocess.CompletedProcess(argv, 1, stdout="", stderr="unit exists")
+        return fake(argv, stdin)
+
+    from robothor.cli import config_cmd
+
+    monkeypatch.setattr(config_cmd, "_systemd_runner", failing)
+    rc = cmd_config(
+        _args(
+            config_command="set",
+            name="ROBOTHOR_ENGINE_PORT",
+            value="18801",
+            apply=True,
+            json=True,
+        )
+    )
+    assert rc == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["applied"] is False
+    assert payload["partial"] is True
+    assert payload["dropins"] == [f"{_DROPS}/zz-genus-config-robothor-engine-port.conf"]
+    assert payload["restart_scheduled"] == []
+    assert "unit exists" in payload["errors"][0]
+
+
+def test_set_apply_coalesces_with_a_pending_restart(monkeypatch, capsys) -> None:
+    import subprocess
+
+    fake = _systemd(monkeypatch, {_ENGINE: "[Service]\nEnvironment=ROBOTHOR_ENGINE_PORT=1\n"})
+
+    def pending(argv, stdin=None):
+        if argv[:2] == ["systemctl", "show"] and argv[2].startswith("genus-config-restart-"):
+            fake.calls.append(list(argv))
+            return subprocess.CompletedProcess(argv, 0, stdout="SubState=waiting\n", stderr="")
+        return fake(argv, stdin)
+
+    from robothor.cli import config_cmd
+
+    monkeypatch.setattr(config_cmd, "_systemd_runner", pending)
+    rc = cmd_config(
+        _args(config_command="set", name="ROBOTHOR_ENGINE_PORT", value="18801", apply=True)
+    )
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "already scheduled" in out
+    assert not [c for c in fake.calls if "systemd-run" in c]
