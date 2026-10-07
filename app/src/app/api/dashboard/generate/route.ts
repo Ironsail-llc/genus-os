@@ -1,36 +1,13 @@
 import { getDashboardSystemPrompt, buildEnrichedPrompt } from "@/lib/dashboard/system-prompt";
-import { validateDashboardCode, detectCodeType } from "@/lib/dashboard/code-validator";
+import { detectCodeType } from "@/lib/dashboard/code-validator";
 import { fetchDataForNeeds } from "@/lib/dashboard/conversation-context";
 import { triageDashboard } from "@/lib/dashboard/triage-prompt";
 import { isTrivialResponse } from "@/lib/dashboard/topic-detector";
 import type { ConversationMessage } from "@/lib/dashboard/topic-detector";
 import { getEngineClient } from "@/lib/engine/server-client";
-import DOMPurify from "isomorphic-dompurify";
+import { renderDashboard } from "@/lib/dashboard/finalize-html";
 
-export const SANITIZE_CONFIG = {
-  ADD_TAGS: ["svg", "polyline", "path", "circle", "rect", "line", "text", "g", "defs", "linearGradient", "stop"],
-  ADD_ATTR: ["data-testid", "viewBox", "points", "stroke", "stroke-width", "stroke-linecap", "stroke-linejoin", "fill", "d", "cx", "cy", "r", "x1", "y1", "x2", "y2", "offset", "stop-color", "stop-opacity", "height", "width"],
-  ALLOW_DATA_ATTR: false,
-  ALLOW_UNKNOWN_PROTOCOLS: false,
-  FORBID_TAGS: [
-    "script",
-    "iframe",
-    "object",
-    "embed",
-    "link",
-    "meta",
-    "base",
-    "a",
-    "form",
-    "input",
-    "button",
-    "select",
-    "textarea",
-    "option",
-    "fieldset",
-  ],
-  FORBID_ATTR: ["srcdoc"],
-};
+export { SANITIZE_CONFIG } from "@/lib/dashboard/finalize-html";
 
 const RATE_LIMIT_WINDOW = 60_000;
 const RATE_LIMIT_MAX = 10;
@@ -160,23 +137,19 @@ async function generateBuffered(systemPrompt: string, userPrompt: string) {
       }, 10_000);
 
       try {
-        const fullCode = await getEngineClient().dashboardCompletion(
-          "render",
-          systemPrompt,
+        const result = await renderDashboard(
+          (prompt) => getEngineClient().dashboardCompletion("render", systemPrompt, prompt),
           userPrompt,
         );
-        const validation = validateDashboardCode(fullCode);
-        const codeType = detectCodeType(validation.code);
 
-        if (!validation.valid) {
-          console.error("[dashboard-error] source=server-validation |", validation.errors.join("; "), "| code_length:", fullCode.length, "| first_100:", fullCode.slice(0, 100));
+        if (!result.ok) {
+          console.error("[dashboard-error] source=server-validation |", result.errors.join("; "));
           controller.enqueue(encoder.encode(
-            JSON.stringify({ error: "Generated dashboard failed quality check", errors: validation.errors })
+            JSON.stringify({ error: "Generated dashboard failed quality check", errors: result.errors })
           ));
         } else {
-          const sanitized = DOMPurify.sanitize(validation.code, SANITIZE_CONFIG);
           controller.enqueue(encoder.encode(
-            JSON.stringify({ html: sanitized, type: codeType, sanitized: true })
+            JSON.stringify({ html: result.html, type: detectCodeType(result.html), sanitized: true })
           ));
         }
       } catch {

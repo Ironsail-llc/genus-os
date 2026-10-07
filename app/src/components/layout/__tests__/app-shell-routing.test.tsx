@@ -1,12 +1,18 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, act, waitFor } from "@testing-library/react";
 
+// Mutable so a test can stand in for the agent pushing a visual mid-chat.
+const mockVisual = vi.hoisted(() => ({
+  viewStack: [] as Array<{ toolName: string; props: Record<string, unknown>; title: string }>,
+  pendingAgentData: null as Record<string, unknown> | null,
+}));
 vi.mock("@/hooks/use-visual-state", () => ({
   useVisualState: () => ({
     notifyConversationUpdate: vi.fn(),
     setRender: vi.fn(),
-    currentView: null,
-    viewStack: [],
+    currentView: mockVisual.viewStack.at(-1) ?? null,
+    viewStack: mockVisual.viewStack,
+    pendingAgentData: mockVisual.pendingAgentData,
     popView: vi.fn(),
     clearViews: vi.fn(),
     canvasMode: "idle",
@@ -42,6 +48,9 @@ vi.mock("@/hooks/use-agents", () => ({
 }));
 
 vi.mock("@/hooks/use-dashboard-agent", () => ({ useDashboardAgent: vi.fn() }));
+vi.mock("@/components/canvas/live-canvas", () => ({
+  LiveCanvas: () => <div data-testid="live-canvas" />,
+}));
 vi.mock("@/lib/api/health", () => ({ fetchHealth: vi.fn().mockResolvedValue({ status: "ok", services: [] }) }));
 vi.mock("@/lib/api/people", () => ({ fetchPeople: vi.fn().mockResolvedValue([]) }));
 vi.mock("@/lib/api/conversations", () => ({ fetchConversations: vi.fn().mockResolvedValue([]) }));
@@ -88,6 +97,8 @@ describe("AppShell — URL-synced views", () => {
     mockSession.status = "authenticated";
     desktopViewport();
     window.history.replaceState(null, "", "/");
+    mockVisual.viewStack = [];
+    mockVisual.pendingAgentData = null;
     global.fetch = vi.fn().mockResolvedValue({
       ok: true,
       json: () => Promise.resolve({ messages: [], active: false }),
@@ -171,6 +182,44 @@ describe("AppShell — URL-synced views", () => {
     // the rail belongs to chat only
     fireEvent.click(screen.getByTestId("nav-runs"));
     expect(screen.queryByTestId("canvas-rail")).toBeNull();
+  });
+
+  it("puts the conversation canvas in the chat rail", async () => {
+    await renderShell();
+    fireEvent.click(screen.getByTestId("canvas-rail-toggle"));
+    expect(await screen.findByTestId("live-canvas")).toBeInTheDocument();
+  });
+
+  it("makes the open canvas the main stage, with chat as a narrow side column", async () => {
+    await renderShell();
+    const chat = screen.getByTestId("chat-container");
+    expect(chat.className).toContain("flex-1");
+    fireEvent.click(screen.getByTestId("canvas-rail-toggle"));
+    const canvas = screen.getByTestId("canvas-rail");
+    expect(canvas.className).toContain("flex-1");
+    // canvas on the left, chat docked to its right at a fixed width
+    expect(canvas.compareDocumentPosition(chat) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(chat.className).not.toContain("flex-1");
+    expect(chat.className).toContain("shrink-0");
+  });
+
+  it("opens the canvas rail when the agent pushes a visual mid-chat", async () => {
+    const { rerender } = await renderShell();
+    expect(screen.queryByTestId("canvas-rail")).toBeNull();
+    mockVisual.viewStack = [{ toolName: "render_bar_chart", props: {}, title: "bar chart" }];
+    const { AppShell } = await import("../app-shell");
+    rerender(<AppShell />);
+    expect(screen.getByTestId("canvas-rail")).toBeInTheDocument();
+    expect(await screen.findByTestId("live-canvas")).toBeInTheDocument();
+  });
+
+  it("opens the canvas rail when the agent asks for a dashboard mid-chat", async () => {
+    const { rerender } = await renderShell();
+    expect(screen.queryByTestId("canvas-rail")).toBeNull();
+    mockVisual.pendingAgentData = { intent: "bar_chart" };
+    const { AppShell } = await import("../app-shell");
+    rerender(<AppShell />);
+    expect(screen.getByTestId("canvas-rail")).toBeInTheDocument();
   });
 
   it("hides settings navigation from a non-operator", async () => {

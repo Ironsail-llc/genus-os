@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import Any
 
-# ─── Blocklists ──────────────────────────────────────────────────────────
+# ─── Blocklists ──────────────────────────────────────────────────────────────
 
 PERSON_BLOCKLIST: set[str] = {
     # Furniture / objects misidentified as people (from vision pipeline)
@@ -50,6 +50,20 @@ PERSON_BLOCKLIST: set[str] = {
     "linkedin (noreply)",
     "gitguardian",
     "openrouter team",
+    # Agent / system senders that conversation ingestion recreates (task 251deb11).
+    # These are the names crm-hygiene soft-deletes and ingestion recreates each beat.
+    "crm task",
+    "crm-hygiene agent",
+    "the assistant",
+    "conversation resolver",
+    "email classifier",
+    "email-analyst",
+    "main agent",
+    "assistant",
+    "architect",
+    "conversation inbox monitor",
+    "main",
+    "agent-architect",
 }
 
 COMPANY_BLOCKLIST: set[str] = {
@@ -61,6 +75,13 @@ COMPANY_BLOCKLIST: set[str] = {
 }
 
 NULL_STRINGS: set[str] = {"null", "none", "n/a"}
+
+# Exact sender addresses that must never become CRM people (agent/system mailboxes).
+# Deliberately exact-match only: a domain-wide rule (e.g. *@ironsail.ai) would block
+# real colleagues, including the operator, so it is intentionally NOT used here.
+BLOCKED_EMAILS: set[str] = {
+    "gemini-notes@google.com",
+}
 
 
 def scrub_null_string(value: str | None) -> str | None:
@@ -89,6 +110,10 @@ def validate_person_input(
         return False, f"blocked: '{full_name}' is in the person blocklist"
     if first_name.strip().lower() in PERSON_BLOCKLIST:
         return False, f"blocked: '{first_name}' is in the person blocklist"
+
+    # Blocked sender addresses (exact match only)
+    if email and email.strip().lower() in BLOCKED_EMAILS:
+        return False, f"blocked: '{email.strip().lower()}' is in the blocked-email list"
 
     # Reject literal null strings
     if first_name.strip().lower() in NULL_STRINGS:
@@ -128,7 +153,7 @@ def normalize_email(email: str | None) -> str | None:
     return normalized
 
 
-# ─── Autonomy budget validation ───────────────────────────────────────────
+# ─── Autonomy budget validation ──────────────────────────────────────────────
 # Lives here (not in robothor.engine.autonomy) so the CRM data layer can
 # validate the autonomy_budget JSONB it persists without importing the engine.
 # Engine code keeps `from robothor.engine.autonomy import validate_budget`
