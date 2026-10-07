@@ -1,0 +1,55 @@
+{
+  "args": {
+    "message_id": "msg-html"
+  },
+  "calendar_requests": [],
+  "context": {
+    "is_benchmark": false,
+    "run_id": "run-golden",
+    "tenant_id": "tenant-a"
+  },
+  "crm_write_through": {
+    "calls": [],
+    "sql": []
+  },
+  "dnc_lookups": [],
+  "guardrail_events": [],
+  "gws_calls": [
+    {
+      "argv": [
+        "gmail",
+        "users",
+        "messages",
+        "get",
+        "--params",
+        "{\"userId\": \"me\", \"id\": \"msg-html\", \"format\": \"full\"}"
+      ],
+      "params": {
+        "format": "full",
+        "id": "msg-html",
+        "userId": "me"
+      },
+      "timeout": 30
+    }
+  ],
+  "result": {
+    "body_chars": 32,
+    "body_text": "Invoice 42 is ready.\n\nTotal £120",
+    "body_truncated": false,
+    "cc": "",
+    "date": "Tue, 16 Sep 2026 10:00:00 +0000",
+    "from": "billing@example.com",
+    "id": "msg-html",
+    "labels": [
+      "INBOX"
+    ],
+    "message_id": "",
+    "snippet": "Invoice 42 is ready",
+    "subject": "Invoice 42",
+    "thread_id": "thread-2",
+    "to": "agent@example.com"
+  },
+  "scenario": "gmail_get_message_html",
+  "scheduling_policy_lookups": [],
+  "tool": "gws_gmail_get"
+}

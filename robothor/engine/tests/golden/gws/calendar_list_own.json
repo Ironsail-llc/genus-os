@@ -1,0 +1,50 @@
+{
+  "args": {
+    "calendar": "own",
+    "max_results": "7",
+    "time_min": "2026-10-08T00:00:00Z"
+  },
+  "calendar_requests": [],
+  "context": {
+    "is_benchmark": false,
+    "run_id": "run-golden",
+    "tenant_id": "tenant-a"
+  },
+  "crm_write_through": {
+    "calls": [],
+    "sql": []
+  },
+  "dnc_lookups": [],
+  "guardrail_events": [],
+  "gws_calls": [
+    {
+      "argv": [
+        "calendar",
+        "events",
+        "list",
+        "--params",
+        "{\"calendarId\": \"primary\", \"timeMin\": \"2026-10-08T00:00:00Z\", \"singleEvents\": true, \"orderBy\": \"startTime\", \"maxResults\": 7}"
+      ],
+      "params": {
+        "calendarId": "primary",
+        "maxResults": 7,
+        "orderBy": "startTime",
+        "singleEvents": true,
+        "timeMin": "2026-10-08T00:00:00Z"
+      },
+      "timeout": 30
+    }
+  ],
+  "result": {
+    "calendar": {
+      "id": "primary",
+      "kind": "own"
+    },
+    "items": [],
+    "kind": "calendar#events",
+    "summary": "calendar"
+  },
+  "scenario": "calendar_list_own",
+  "scheduling_policy_lookups": [],
+  "tool": "gws_calendar_list"
+}

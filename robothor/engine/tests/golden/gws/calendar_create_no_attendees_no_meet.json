@@ -1,0 +1,142 @@
+{
+  "args": {
+    "end": "2026-10-10T10:30:00+01:00",
+    "start": "2026-10-10T08:00:00+01:00",
+    "summary": "Flight to Lisbon",
+    "with_meet": false
+  },
+  "calendar_requests": [],
+  "context": {
+    "is_benchmark": false,
+    "run_id": "run-golden",
+    "tenant_id": "tenant-a"
+  },
+  "crm_write_through": {
+    "calls": [
+      {
+        "fn": "_record_calendar_event",
+        "kwargs": {
+          "result": {
+            "creator": {
+              "email": "agent@example.com"
+            },
+            "end": {
+              "dateTime": "2026-10-10T10:30:00+01:00"
+            },
+            "htmlLink": "https://calendar.example.test/evt-new",
+            "id": "evt-new",
+            "organizer": {
+              "email": "alice@example.com",
+              "self": true
+            },
+            "start": {
+              "dateTime": "2026-10-10T08:00:00+01:00"
+            },
+            "status": "confirmed",
+            "summary": "Flight to Lisbon"
+          }
+        }
+      }
+    ],
+    "sql": [
+      {
+        "params": [
+          "tenant-default",
+          "evt-new",
+          "Flight to Lisbon",
+          null,
+          null,
+          "2026-10-10T08:00:00+01:00",
+          "2026-10-10T10:30:00+01:00",
+          "alice@example.com",
+          "https://calendar.example.test/evt-new",
+          "confirmed"
+        ],
+        "sql": "INSERT INTO calendar_event (tenant_id, google_event_id, title, description, location, start_at, end_at, organizer_email, hangout_link, status) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT (tenant_id, google_event_id) DO UPDATE SET title = EXCLUDED.title, description = EXCLUDED.description, location = EXCLUDED.location, start_at = EXCLUDED.start_at, end_at = EXCLUDED.end_at, organizer_email = EXCLUDED.organizer_email, hangout_link = EXCLUDED.hangout_link, status = EXCLUDED.status, updated_at = NOW() RETURNING id"
+      },
+      {
+        "params": [
+          "crm-event-1"
+        ],
+        "sql": "DELETE FROM calendar_event_participant WHERE event_id = %s"
+      },
+      {
+        "commit": true
+      }
+    ]
+  },
+  "dnc_lookups": [],
+  "guardrail_events": [],
+  "gws_calls": [
+    {
+      "argv": [
+        "calendar",
+        "events",
+        "list",
+        "--params",
+        "{\"calendarId\": \"alice@example.com\", \"timeMin\": \"2026-09-26T08:00:00+01:00\", \"timeMax\": \"2026-10-24T08:00:00+01:00\", \"singleEvents\": true, \"orderBy\": \"startTime\", \"maxResults\": 250}"
+      ],
+      "params": {
+        "calendarId": "alice@example.com",
+        "maxResults": 250,
+        "orderBy": "startTime",
+        "singleEvents": true,
+        "timeMax": "2026-10-24T08:00:00+01:00",
+        "timeMin": "2026-09-26T08:00:00+01:00"
+      },
+      "timeout": 30
+    },
+    {
+      "argv": [
+        "calendar",
+        "events",
+        "insert",
+        "--params",
+        "{\"calendarId\": \"alice@example.com\"}",
+        "--json",
+        "{\"summary\": \"Flight to Lisbon\", \"start\": {\"dateTime\": \"2026-10-10T08:00:00+01:00\"}, \"end\": {\"dateTime\": \"2026-10-10T10:30:00+01:00\"}}"
+      ],
+      "json": {
+        "end": {
+          "dateTime": "2026-10-10T10:30:00+01:00"
+        },
+        "start": {
+          "dateTime": "2026-10-10T08:00:00+01:00"
+        },
+        "summary": "Flight to Lisbon"
+      },
+      "params": {
+        "calendarId": "alice@example.com"
+      },
+      "timeout": 30
+    }
+  ],
+  "result": {
+    "calendar": {
+      "id": "alice@example.com",
+      "kind": "operator"
+    },
+    "creator": {
+      "email": "agent@example.com"
+    },
+    "end": {
+      "dateTime": "2026-10-10T10:30:00+01:00"
+    },
+    "htmlLink": "https://calendar.example.test/evt-new",
+    "id": "evt-new",
+    "invitations_requested": false,
+    "organizer": {
+      "email": "alice@example.com",
+      "self": true
+    },
+    "send_updates": "none",
+    "start": {
+      "dateTime": "2026-10-10T08:00:00+01:00"
+    },
+    "status": "confirmed",
+    "summary": "Flight to Lisbon"
+  },
+  "scenario": "calendar_create_no_attendees_no_meet",
+  "scheduling_policy_lookups": [],
+  "tool": "gws_calendar_create"
+}

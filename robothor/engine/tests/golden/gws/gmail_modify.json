@@ -1,0 +1,60 @@
+{
+  "args": {
+    "add_labels": [
+      "STARRED"
+    ],
+    "message_id": "msg-plain",
+    "remove_labels": [
+      "UNREAD"
+    ]
+  },
+  "calendar_requests": [],
+  "context": {
+    "is_benchmark": false,
+    "run_id": "run-golden",
+    "tenant_id": "tenant-a"
+  },
+  "crm_write_through": {
+    "calls": [],
+    "sql": []
+  },
+  "dnc_lookups": [],
+  "guardrail_events": [],
+  "gws_calls": [
+    {
+      "argv": [
+        "gmail",
+        "users",
+        "messages",
+        "modify",
+        "--params",
+        "{\"userId\": \"me\", \"id\": \"msg-plain\"}",
+        "--json",
+        "{\"addLabelIds\": [\"STARRED\"], \"removeLabelIds\": [\"UNREAD\"]}"
+      ],
+      "json": {
+        "addLabelIds": [
+          "STARRED"
+        ],
+        "removeLabelIds": [
+          "UNREAD"
+        ]
+      },
+      "params": {
+        "id": "msg-plain",
+        "userId": "me"
+      },
+      "timeout": 30
+    }
+  ],
+  "result": {
+    "id": "msg-plain",
+    "labelIds": [
+      "INBOX",
+      "STARRED"
+    ]
+  },
+  "scenario": "gmail_modify",
+  "scheduling_policy_lookups": [],
+  "tool": "gws_gmail_modify"
+}

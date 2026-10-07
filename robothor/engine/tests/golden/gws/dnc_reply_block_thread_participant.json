@@ -1,0 +1,62 @@
+{
+  "args": {
+    "body": "Thanks.",
+    "cc": "dave@example.com",
+    "thread_id": "thread-9"
+  },
+  "calendar_requests": [],
+  "context": {
+    "is_benchmark": false,
+    "run_id": "run-golden",
+    "tenant_id": "tenant-a"
+  },
+  "crm_write_through": {
+    "calls": [],
+    "sql": []
+  },
+  "dnc_lookups": [
+    {
+      "addresses": [
+        "bob@example.com",
+        "carol@example.com",
+        "dave@example.com"
+      ],
+      "tenant_id": "tenant-a"
+    }
+  ],
+  "guardrail_events": [
+    {
+      "action": "blocked",
+      "guard": "do_not_contact",
+      "mode": "enforce",
+      "reason": "recipients flagged do_not_contact: carol@example.com",
+      "run_id": "run-golden",
+      "tool_name": "gws_gmail_reply"
+    }
+  ],
+  "gws_calls": [
+    {
+      "argv": [
+        "gmail",
+        "users",
+        "threads",
+        "get",
+        "--params",
+        "{\"userId\": \"me\", \"id\": \"thread-9\", \"format\": \"metadata\"}"
+      ],
+      "params": {
+        "format": "metadata",
+        "id": "thread-9",
+        "userId": "me"
+      },
+      "timeout": 30
+    }
+  ],
+  "result": {
+    "error": "gws_gmail_reply refused: carol@example.com has opted out of contact (crm_people.do_not_contact). Do not send to this address, and do not work around it by using another channel or another address for the same person. Remove them from the recipients and try again if the message is for someone else.",
+    "guard": "do_not_contact"
+  },
+  "scenario": "dnc_reply_block_thread_participant",
+  "scheduling_policy_lookups": [],
+  "tool": "gws_gmail_reply"
+}

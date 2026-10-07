@@ -1,0 +1,37 @@
+{
+  "args": {
+    "body": "B",
+    "cc": "carol@example.com",
+    "subject": "S",
+    "to": "bob@example.com"
+  },
+  "calendar_requests": [],
+  "context": {
+    "is_benchmark": false,
+    "run_id": "run-golden",
+    "tenant_id": ""
+  },
+  "crm_write_through": {
+    "calls": [],
+    "sql": []
+  },
+  "dnc_lookups": [],
+  "guardrail_events": [
+    {
+      "action": "blocked",
+      "guard": "do_not_contact",
+      "mode": "enforce",
+      "reason": "no tenant on the call — opt-out list could not be scoped",
+      "run_id": "run-golden",
+      "tool_name": "gws_gmail_send"
+    }
+  ],
+  "gws_calls": [],
+  "result": {
+    "error": "gws_gmail_send refused: this call carries no tenant, so the do-not-contact list could not be scoped and it is unknown whether a recipient has opted out. Not sending. This is a wiring fault, not something to work around — report it to the operator.",
+    "guard": "do_not_contact"
+  },
+  "scenario": "dnc_send_no_tenant",
+  "scheduling_policy_lookups": [],
+  "tool": "gws_gmail_send"
+}

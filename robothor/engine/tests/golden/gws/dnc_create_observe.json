@@ -1,0 +1,224 @@
+{
+  "args": {
+    "attendees": [
+      "bob@example.com"
+    ],
+    "description": "Numbers and next steps",
+    "end": "2026-10-09T15:00:00-04:00",
+    "location": "Room 4",
+    "start": "2026-10-09T14:00:00-04:00",
+    "summary": "Quarterly review"
+  },
+  "calendar_requests": [],
+  "context": {
+    "is_benchmark": false,
+    "run_id": "run-golden",
+    "tenant_id": "tenant-a"
+  },
+  "crm_write_through": {
+    "calls": [
+      {
+        "fn": "_record_calendar_event",
+        "kwargs": {
+          "result": {
+            "attendees": [
+              {
+                "email": "bob@example.com",
+                "responseStatus": "needsAction"
+              }
+            ],
+            "creator": {
+              "email": "agent@example.com"
+            },
+            "description": "Numbers and next steps",
+            "end": {
+              "dateTime": "2026-10-09T15:00:00-04:00"
+            },
+            "hangoutLink": "https://meet.example.test/abc-defg-hij",
+            "htmlLink": "https://calendar.example.test/evt-new",
+            "id": "evt-new",
+            "location": "Room 4",
+            "organizer": {
+              "email": "alice@example.com",
+              "self": true
+            },
+            "start": {
+              "dateTime": "2026-10-09T14:00:00-04:00"
+            },
+            "status": "confirmed",
+            "summary": "Quarterly review"
+          }
+        }
+      }
+    ],
+    "sql": [
+      {
+        "params": [
+          "tenant-default",
+          "evt-new",
+          "Quarterly review",
+          "Numbers and next steps",
+          "Room 4",
+          "2026-10-09T14:00:00-04:00",
+          "2026-10-09T15:00:00-04:00",
+          "alice@example.com",
+          "https://calendar.example.test/evt-new",
+          "confirmed"
+        ],
+        "sql": "INSERT INTO calendar_event (tenant_id, google_event_id, title, description, location, start_at, end_at, organizer_email, hangout_link, status) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT (tenant_id, google_event_id) DO UPDATE SET title = EXCLUDED.title, description = EXCLUDED.description, location = EXCLUDED.location, start_at = EXCLUDED.start_at, end_at = EXCLUDED.end_at, organizer_email = EXCLUDED.organizer_email, hangout_link = EXCLUDED.hangout_link, status = EXCLUDED.status, updated_at = NOW() RETURNING id"
+      },
+      {
+        "params": [
+          "crm-event-1"
+        ],
+        "sql": "DELETE FROM calendar_event_participant WHERE event_id = %s"
+      },
+      {
+        "params": [
+          "tenant-default",
+          "crm-event-1",
+          "person-bob",
+          "attendee",
+          "bob@example.com",
+          null,
+          "needsAction",
+          false
+        ],
+        "sql": "INSERT INTO calendar_event_participant (tenant_id, event_id, person_id, role, email, display_name, response_status, organizer) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"
+      },
+      {
+        "params": [
+          "tenant-default",
+          "person-bob",
+          "2026-10-09T14:00:00-04:00",
+          "crm-event-1",
+          "Quarterly review",
+          "Numbers and next steps"
+        ],
+        "sql": "INSERT INTO timeline_activity (tenant_id, person_id, occurred_at, activity_type, source_table, source_id, channel, title, snippet) VALUES (%s, %s, %s, 'calendar_event', 'calendar_event', %s, 'calendar', %s, %s) ON CONFLICT (tenant_id, source_table, source_id) DO NOTHING"
+      },
+      {
+        "commit": true
+      }
+    ]
+  },
+  "dnc_lookups": [
+    {
+      "addresses": [
+        "bob@example.com"
+      ],
+      "tenant_id": "tenant-a"
+    }
+  ],
+  "guardrail_events": [
+    {
+      "action": "observed",
+      "guard": "do_not_contact",
+      "mode": "observe",
+      "reason": "recipients flagged do_not_contact: bob@example.com",
+      "run_id": "run-golden",
+      "tool_name": "gws_calendar_create"
+    }
+  ],
+  "gws_calls": [
+    {
+      "argv": [
+        "calendar",
+        "events",
+        "list",
+        "--params",
+        "{\"calendarId\": \"alice@example.com\", \"timeMin\": \"2026-09-25T14:00:00-04:00\", \"timeMax\": \"2026-10-23T14:00:00-04:00\", \"singleEvents\": true, \"orderBy\": \"startTime\", \"maxResults\": 250}"
+      ],
+      "params": {
+        "calendarId": "alice@example.com",
+        "maxResults": 250,
+        "orderBy": "startTime",
+        "singleEvents": true,
+        "timeMax": "2026-10-23T14:00:00-04:00",
+        "timeMin": "2026-09-25T14:00:00-04:00"
+      },
+      "timeout": 30
+    },
+    {
+      "argv": [
+        "calendar",
+        "events",
+        "insert",
+        "--params",
+        "{\"calendarId\": \"alice@example.com\", \"conferenceDataVersion\": 1, \"sendUpdates\": \"all\"}",
+        "--json",
+        "{\"summary\": \"Quarterly review\", \"start\": {\"dateTime\": \"2026-10-09T14:00:00-04:00\"}, \"end\": {\"dateTime\": \"2026-10-09T15:00:00-04:00\"}, \"description\": \"Numbers and next steps\", \"location\": \"Room 4\", \"attendees\": [{\"email\": \"bob@example.com\"}], \"conferenceData\": {\"createRequest\": {\"requestId\": \"robothor-Quarterly-review-2026-10-09\", \"conferenceSolutionKey\": {\"type\": \"hangoutsMeet\"}}}}"
+      ],
+      "json": {
+        "attendees": [
+          {
+            "email": "bob@example.com"
+          }
+        ],
+        "conferenceData": {
+          "createRequest": {
+            "conferenceSolutionKey": {
+              "type": "hangoutsMeet"
+            },
+            "requestId": "robothor-Quarterly-review-2026-10-09"
+          }
+        },
+        "description": "Numbers and next steps",
+        "end": {
+          "dateTime": "2026-10-09T15:00:00-04:00"
+        },
+        "location": "Room 4",
+        "start": {
+          "dateTime": "2026-10-09T14:00:00-04:00"
+        },
+        "summary": "Quarterly review"
+      },
+      "params": {
+        "calendarId": "alice@example.com",
+        "conferenceDataVersion": 1,
+        "sendUpdates": "all"
+      },
+      "timeout": 30
+    }
+  ],
+  "result": {
+    "attendees": [
+      {
+        "email": "bob@example.com",
+        "responseStatus": "needsAction"
+      }
+    ],
+    "attendees_notified": [
+      "bob@example.com"
+    ],
+    "calendar": {
+      "id": "alice@example.com",
+      "kind": "operator"
+    },
+    "creator": {
+      "email": "agent@example.com"
+    },
+    "description": "Numbers and next steps",
+    "end": {
+      "dateTime": "2026-10-09T15:00:00-04:00"
+    },
+    "hangoutLink": "https://meet.example.test/abc-defg-hij",
+    "htmlLink": "https://calendar.example.test/evt-new",
+    "id": "evt-new",
+    "invitations_requested": true,
+    "location": "Room 4",
+    "organizer": {
+      "email": "alice@example.com",
+      "self": true
+    },
+    "send_updates": "all",
+    "start": {
+      "dateTime": "2026-10-09T14:00:00-04:00"
+    },
+    "status": "confirmed",
+    "summary": "Quarterly review"
+  },
+  "scenario": "dnc_create_observe",
+  "scheduling_policy_lookups": [],
+  "tool": "gws_calendar_create"
+}

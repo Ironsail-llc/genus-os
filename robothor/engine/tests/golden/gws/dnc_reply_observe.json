@@ -1,0 +1,202 @@
+{
+  "args": {
+    "body": "Thanks.",
+    "cc": "dave@example.com",
+    "thread_id": "thread-9"
+  },
+  "calendar_requests": [],
+  "context": {
+    "is_benchmark": false,
+    "run_id": "run-golden",
+    "tenant_id": "tenant-a"
+  },
+  "crm_write_through": {
+    "calls": [
+      {
+        "fn": "_record_sent_email",
+        "kwargs": {
+          "body": "Thanks.",
+          "cc": "dave@example.com",
+          "result": {
+            "id": "sent-1",
+            "labelIds": [
+              "SENT"
+            ],
+            "threadId": "thread-9"
+          },
+          "subject": "Re: Kickoff",
+          "to": "bob@example.com, carol@example.com"
+        }
+      }
+    ],
+    "sql": [
+      {
+        "params": [
+          "tenant-default",
+          "thread-9",
+          "Re: Kickoff"
+        ],
+        "sql": "INSERT INTO message_thread (tenant_id, channel, external_thread_id, subject, last_message_at, message_count) VALUES (%s, 'email', %s, %s, NOW(), 1) ON CONFLICT (tenant_id, channel, external_thread_id) DO UPDATE SET last_message_at = EXCLUDED.last_message_at, message_count = message_thread.message_count + 1, updated_at = NOW() RETURNING id"
+      },
+      {
+        "params": [
+          "tenant-default",
+          "crm-thread-1",
+          "sent-1",
+          "Re: Kickoff",
+          "Thanks.",
+          "Thanks."
+        ],
+        "sql": "INSERT INTO message (tenant_id, thread_id, channel, direction, external_message_id, subject, body_text, snippet, occurred_at) VALUES (%s, %s, 'email', 'outbound', %s, %s, %s, %s, NOW()) ON CONFLICT (tenant_id, channel, external_message_id) DO UPDATE SET thread_id = EXCLUDED.thread_id RETURNING id, (xmax = 0) AS inserted"
+      },
+      {
+        "params": [
+          "tenant-default",
+          "crm-message-1",
+          "to",
+          "person-bob",
+          "bob@example.com"
+        ],
+        "sql": "INSERT INTO message_participant (tenant_id, message_id, role, person_id, handle) VALUES (%s, %s, %s, %s, %s)"
+      },
+      {
+        "params": [
+          "tenant-default",
+          "person-bob",
+          "crm-message-1",
+          "Re: Kickoff",
+          "Thanks."
+        ],
+        "sql": "INSERT INTO timeline_activity (tenant_id, person_id, occurred_at, activity_type, source_table, source_id, channel, direction, title, snippet) VALUES (%s, %s, NOW(), 'email', 'message', %s, 'email', 'outbound', %s, %s) ON CONFLICT (tenant_id, source_table, source_id) DO NOTHING"
+      },
+      {
+        "params": [
+          "tenant-default",
+          "crm-message-1",
+          "to",
+          null,
+          "carol@example.com"
+        ],
+        "sql": "INSERT INTO message_participant (tenant_id, message_id, role, person_id, handle) VALUES (%s, %s, %s, %s, %s)"
+      },
+      {
+        "params": [
+          "tenant-default",
+          "crm-message-1",
+          "cc",
+          null,
+          "dave@example.com"
+        ],
+        "sql": "INSERT INTO message_participant (tenant_id, message_id, role, person_id, handle) VALUES (%s, %s, %s, %s, %s)"
+      },
+      {
+        "commit": true
+      }
+    ]
+  },
+  "dnc_lookups": [
+    {
+      "addresses": [
+        "bob@example.com",
+        "carol@example.com",
+        "dave@example.com"
+      ],
+      "tenant_id": "tenant-a"
+    }
+  ],
+  "guardrail_events": [
+    {
+      "action": "observed",
+      "guard": "do_not_contact",
+      "mode": "observe",
+      "reason": "recipients flagged do_not_contact: carol@example.com",
+      "run_id": "run-golden",
+      "tool_name": "gws_gmail_reply"
+    }
+  ],
+  "gws_calls": [
+    {
+      "argv": [
+        "gmail",
+        "users",
+        "threads",
+        "get",
+        "--params",
+        "{\"userId\": \"me\", \"id\": \"thread-9\", \"format\": \"metadata\"}"
+      ],
+      "params": {
+        "format": "metadata",
+        "id": "thread-9",
+        "userId": "me"
+      },
+      "timeout": 30
+    },
+    {
+      "argv": [
+        "gmail",
+        "users",
+        "messages",
+        "send",
+        "--params",
+        "{\"userId\":\"me\"}",
+        "--json",
+        "{\"raw\": \"Q29udGVudC1UeXBlOiB0ZXh0L3BsYWluOyBjaGFyc2V0PSJ1cy1hc2NpaSIKTUlNRS1WZXJzaW9uOiAxLjAKQ29udGVudC1UcmFuc2Zlci1FbmNvZGluZzogN2JpdApUbzogYm9iQGV4YW1wbGUuY29tLCBjYXJvbEBleGFtcGxlLmNvbQpTdWJqZWN0OiBSZTogS2lja29mZgpDYzogZGF2ZUBleGFtcGxlLmNvbQpJbi1SZXBseS1UbzogPG0zQGV4YW1wbGUuY29tPgpSZWZlcmVuY2VzOiA8bTNAZXhhbXBsZS5jb20-CgpUaGFua3Mu\", \"threadId\": \"thread-9\"}"
+      ],
+      "json": {
+        "raw": "Q29udGVudC1UeXBlOiB0ZXh0L3BsYWluOyBjaGFyc2V0PSJ1cy1hc2NpaSIKTUlNRS1WZXJzaW9uOiAxLjAKQ29udGVudC1UcmFuc2Zlci1FbmNvZGluZzogN2JpdApUbzogYm9iQGV4YW1wbGUuY29tLCBjYXJvbEBleGFtcGxlLmNvbQpTdWJqZWN0OiBSZTogS2lja29mZgpDYzogZGF2ZUBleGFtcGxlLmNvbQpJbi1SZXBseS1UbzogPG0zQGV4YW1wbGUuY29tPgpSZWZlcmVuY2VzOiA8bTNAZXhhbXBsZS5jb20-CgpUaGFua3Mu",
+        "raw_decoded": {
+          "body": "Thanks.",
+          "headers": [
+            [
+              "Content-Type",
+              "text/plain; charset=\"us-ascii\""
+            ],
+            [
+              "MIME-Version",
+              "1.0"
+            ],
+            [
+              "Content-Transfer-Encoding",
+              "7bit"
+            ],
+            [
+              "To",
+              "bob@example.com, carol@example.com"
+            ],
+            [
+              "Subject",
+              "Re: Kickoff"
+            ],
+            [
+              "Cc",
+              "dave@example.com"
+            ],
+            [
+              "In-Reply-To",
+              "<m3@example.com>"
+            ],
+            [
+              "References",
+              "<m3@example.com>"
+            ]
+          ]
+        },
+        "threadId": "thread-9"
+      },
+      "params": {
+        "userId": "me"
+      },
+      "timeout": 30
+    }
+  ],
+  "result": {
+    "id": "sent-1",
+    "labelIds": [
+      "SENT"
+    ],
+    "threadId": "thread-9"
+  },
+  "scenario": "dnc_reply_observe",
+  "scheduling_policy_lookups": [],
+  "tool": "gws_gmail_reply"
+}

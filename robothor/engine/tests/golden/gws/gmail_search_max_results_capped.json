@@ -1,0 +1,45 @@
+{
+  "args": {
+    "max_results": 500,
+    "query": "x"
+  },
+  "calendar_requests": [],
+  "context": {
+    "is_benchmark": false,
+    "run_id": "run-golden",
+    "tenant_id": "tenant-a"
+  },
+  "crm_write_through": {
+    "calls": [],
+    "sql": []
+  },
+  "dnc_lookups": [],
+  "guardrail_events": [],
+  "gws_calls": [
+    {
+      "argv": [
+        "gmail",
+        "users",
+        "messages",
+        "list",
+        "--params",
+        "{\"userId\": \"me\", \"q\": \"x\", \"maxResults\": 25}"
+      ],
+      "params": {
+        "maxResults": 25,
+        "q": "x",
+        "userId": "me"
+      },
+      "timeout": 30
+    }
+  ],
+  "result": {
+    "count": 0,
+    "messages": [],
+    "query": "x",
+    "truncated": false
+  },
+  "scenario": "gmail_search_max_results_capped",
+  "scheduling_policy_lookups": [],
+  "tool": "gws_gmail_search"
+}

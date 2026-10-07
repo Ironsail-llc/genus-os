@@ -1,0 +1,78 @@
+{
+  "args": {
+    "event_id": "meeting",
+    "summary": "New title"
+  },
+  "calendar_requests": [
+    {
+      "calendar_id": "alice@example.com",
+      "event_id": "meeting",
+      "method": "GET"
+    },
+    {
+      "body": {
+        "summary": "New title"
+      },
+      "calendar_id": "alice@example.com",
+      "etag": "\"v1\"",
+      "event_id": "meeting",
+      "method": "PATCH",
+      "send_updates": "all"
+    },
+    {
+      "calendar_id": "alice@example.com",
+      "event_id": "meeting",
+      "method": "GET"
+    },
+    {
+      "body": {
+        "summary": "New title"
+      },
+      "calendar_id": "alice@example.com",
+      "etag": "\"v2\"",
+      "event_id": "meeting",
+      "method": "PATCH",
+      "send_updates": "all"
+    }
+  ],
+  "context": {
+    "is_benchmark": false,
+    "run_id": "run-golden",
+    "tenant_id": "tenant-a"
+  },
+  "crm_write_through": {
+    "calls": [],
+    "sql": []
+  },
+  "dnc_lookups": [
+    {
+      "addresses": [
+        "alice@example.com",
+        "bob@example.com"
+      ],
+      "tenant_id": "tenant-a"
+    },
+    {
+      "addresses": [
+        "alice@example.com",
+        "bob@example.com"
+      ],
+      "tenant_id": "tenant-a"
+    }
+  ],
+  "guardrail_events": [],
+  "gws_calls": [],
+  "result": {
+    "calendar": {
+      "id": "alice@example.com",
+      "kind": "operator"
+    },
+    "error": "Calendar HTTP 412",
+    "invitations_requested": false,
+    "status_code": 412,
+    "verification": "failed"
+  },
+  "scenario": "calendar_update_412_twice",
+  "scheduling_policy_lookups": [],
+  "tool": "gws_calendar_update"
+}

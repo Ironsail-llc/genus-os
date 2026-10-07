@@ -1,0 +1,24 @@
+{
+  "args": {
+    "summary": "X"
+  },
+  "calendar_requests": [],
+  "context": {
+    "is_benchmark": false,
+    "run_id": "run-golden",
+    "tenant_id": "tenant-a"
+  },
+  "crm_write_through": {
+    "calls": [],
+    "sql": []
+  },
+  "dnc_lookups": [],
+  "guardrail_events": [],
+  "gws_calls": [],
+  "result": {
+    "error": "event_id is required — find it with gws_calendar_list"
+  },
+  "scenario": "calendar_update_missing_event_id",
+  "scheduling_policy_lookups": [],
+  "tool": "gws_calendar_update"
+}

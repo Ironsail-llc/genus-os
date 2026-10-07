@@ -1,0 +1,37 @@
+{
+  "args": {
+    "calendar_id": "team@example.com",
+    "event_id": "meeting",
+    "response": "accepted"
+  },
+  "calendar_requests": [
+    {
+      "calendar_id": "team@example.com",
+      "event_id": "meeting",
+      "method": "GET"
+    }
+  ],
+  "context": {
+    "is_benchmark": false,
+    "run_id": "run-golden",
+    "tenant_id": "tenant-a"
+  },
+  "crm_write_through": {
+    "calls": [],
+    "sql": []
+  },
+  "dnc_lookups": [],
+  "guardrail_events": [],
+  "gws_calls": [],
+  "result": {
+    "calendar": {
+      "id": "team@example.com",
+      "kind": "other"
+    },
+    "error": "This calendar is not on the meeting's guest list, so it has no RSVP to send.",
+    "invitations_requested": false
+  },
+  "scenario": "calendar_respond_not_a_guest",
+  "scheduling_policy_lookups": [],
+  "tool": "gws_calendar_respond"
+}

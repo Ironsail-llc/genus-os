@@ -1,0 +1,75 @@
+{
+  "args": {
+    "attendees": [
+      "bob@example.com"
+    ],
+    "event_id": "meeting"
+  },
+  "calendar_requests": [
+    {
+      "calendar_id": "alice@example.com",
+      "event_id": "meeting",
+      "method": "GET"
+    }
+  ],
+  "context": {
+    "is_benchmark": false,
+    "run_id": "run-golden",
+    "tenant_id": "tenant-a"
+  },
+  "crm_write_through": {
+    "calls": [],
+    "sql": []
+  },
+  "dnc_lookups": [],
+  "guardrail_events": [],
+  "gws_calls": [],
+  "result": {
+    "added": [],
+    "already_present": [
+      "bob@example.com"
+    ],
+    "attendees": [
+      {
+        "email": "alice@example.com",
+        "responseStatus": "needsAction"
+      },
+      {
+        "email": "Bob@Example.com",
+        "responseStatus": "accepted"
+      }
+    ],
+    "calendar": {
+      "id": "alice@example.com",
+      "kind": "operator"
+    },
+    "declined": [],
+    "end": {
+      "dateTime": "2026-10-08T10:30:00-04:00",
+      "timeZone": "America/New_York"
+    },
+    "event_id": "meeting",
+    "htmlLink": "https://calendar.example.test/meeting",
+    "invitations_requested": false,
+    "note": "Nothing to change; the event already matches. No notification was requested.",
+    "recurrence": null,
+    "removed": [],
+    "response_status": {
+      "bob@example.com": "accepted"
+    },
+    "start": {
+      "dateTime": "2026-10-08T10:00:00-04:00",
+      "timeZone": "America/New_York"
+    },
+    "status": "already_present",
+    "summary": "Planning",
+    "verification": "verified"
+  },
+  "scenario": "calendar_add_attendees_already_present",
+  "scheduling_policy_lookups": [
+    [
+      "bob@example.com"
+    ]
+  ],
+  "tool": "gws_calendar_add_attendees"
+}

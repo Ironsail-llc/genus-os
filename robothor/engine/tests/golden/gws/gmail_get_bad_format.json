@@ -1,0 +1,26 @@
+{
+  "args": {
+    "format": "raw",
+    "message_id": "m"
+  },
+  "calendar_requests": [],
+  "context": {
+    "is_benchmark": false,
+    "run_id": "run-golden",
+    "tenant_id": "tenant-a"
+  },
+  "crm_write_through": {
+    "calls": [],
+    "sql": []
+  },
+  "dnc_lookups": [],
+  "guardrail_events": [],
+  "gws_calls": [],
+  "result": {
+    "error": "format='raw' is not valid. Use 'full' (the default, with the decoded body), or 'metadata'/'minimal' for headers and snippet only.",
+    "hint": "invalid_params"
+  },
+  "scenario": "gmail_get_bad_format",
+  "scheduling_policy_lookups": [],
+  "tool": "gws_gmail_get"
+}

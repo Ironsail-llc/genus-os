@@ -1,0 +1,26 @@
+{
+  "args": {
+    "calendar": "primary",
+    "time_min": "2026-10-08T00:00:00Z"
+  },
+  "calendar_requests": [],
+  "context": {
+    "is_benchmark": false,
+    "run_id": "run-golden",
+    "tenant_id": "tenant-a"
+  },
+  "crm_write_through": {
+    "calls": [],
+    "sql": []
+  },
+  "dnc_lookups": [],
+  "guardrail_events": [],
+  "gws_calls": [],
+  "result": {
+    "error": "calendar='primary' is not valid. Use calendar='operator' for the operator's own calendar (the default), or calendar='own' for YOUR calendar, which the operator never sees. For a third, shared calendar pass its address as calendar_id — note that 'primary' as a calendar_id means YOUR account's calendar, not the operator's.",
+    "hint": "invalid_params"
+  },
+  "scenario": "calendar_list_invalid_calendar",
+  "scheduling_policy_lookups": [],
+  "tool": "gws_calendar_list"
+}

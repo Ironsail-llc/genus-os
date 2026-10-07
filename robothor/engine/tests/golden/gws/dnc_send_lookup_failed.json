@@ -1,0 +1,36 @@
+{
+  "args": {
+    "body": "B",
+    "cc": "carol@example.com",
+    "subject": "S",
+    "to": "bob@example.com"
+  },
+  "calendar_requests": [],
+  "context": {
+    "is_benchmark": false,
+    "run_id": "run-golden",
+    "tenant_id": "tenant-a"
+  },
+  "crm_write_through": {
+    "calls": [],
+    "sql": []
+  },
+  "dnc_lookups": [
+    {
+      "addresses": [
+        "bob@example.com",
+        "carol@example.com"
+      ],
+      "tenant_id": "tenant-a"
+    }
+  ],
+  "guardrail_events": [],
+  "gws_calls": [],
+  "result": {
+    "error": "gws_gmail_send refused: the do-not-contact list could not be read, so it is unknown whether a recipient has opted out. Not sending. Retry once the CRM database is reachable, or tell the operator plainly that it did not go out.",
+    "guard": "do_not_contact"
+  },
+  "scenario": "dnc_send_lookup_failed",
+  "scheduling_policy_lookups": [],
+  "tool": "gws_gmail_send"
+}

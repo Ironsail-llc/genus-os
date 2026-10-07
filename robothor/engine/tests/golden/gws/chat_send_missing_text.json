@@ -1,0 +1,24 @@
+{
+  "args": {
+    "space": "spaces/AAA"
+  },
+  "calendar_requests": [],
+  "context": {
+    "is_benchmark": false,
+    "run_id": "run-golden",
+    "tenant_id": "tenant-a"
+  },
+  "crm_write_through": {
+    "calls": [],
+    "sql": []
+  },
+  "dnc_lookups": [],
+  "guardrail_events": [],
+  "gws_calls": [],
+  "result": {
+    "error": "space and text are required"
+  },
+  "scenario": "chat_send_missing_text",
+  "scheduling_policy_lookups": [],
+  "tool": "gws_chat_send"
+}

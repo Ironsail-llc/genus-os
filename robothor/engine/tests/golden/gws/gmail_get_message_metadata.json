@@ -1,0 +1,52 @@
+{
+  "args": {
+    "format": "metadata",
+    "message_id": "msg-plain"
+  },
+  "calendar_requests": [],
+  "context": {
+    "is_benchmark": false,
+    "run_id": "run-golden",
+    "tenant_id": "tenant-a"
+  },
+  "crm_write_through": {
+    "calls": [],
+    "sql": []
+  },
+  "dnc_lookups": [],
+  "guardrail_events": [],
+  "gws_calls": [
+    {
+      "argv": [
+        "gmail",
+        "users",
+        "messages",
+        "get",
+        "--params",
+        "{\"userId\": \"me\", \"id\": \"msg-plain\", \"format\": \"metadata\"}"
+      ],
+      "params": {
+        "format": "metadata",
+        "id": "msg-plain",
+        "userId": "me"
+      },
+      "timeout": 30
+    }
+  ],
+  "result": {
+    "date": "Tue, 16 Sep 2026 09:00:00 +0000",
+    "from": "Bob <bob@example.com>",
+    "id": "msg-plain",
+    "labels": [
+      "INBOX",
+      "UNREAD"
+    ],
+    "snippet": "The Q3 numbers are attached",
+    "subject": "Q3 numbers",
+    "thread_id": "thread-1",
+    "to": "Agent <agent@example.com>"
+  },
+  "scenario": "gmail_get_message_metadata",
+  "scheduling_policy_lookups": [],
+  "tool": "gws_gmail_get"
+}

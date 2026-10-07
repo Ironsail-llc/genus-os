@@ -1,0 +1,41 @@
+{
+  "args": {
+    "page_size": 500,
+    "space": "spaces/AAA"
+  },
+  "calendar_requests": [],
+  "context": {
+    "is_benchmark": false,
+    "run_id": "run-golden",
+    "tenant_id": "tenant-a"
+  },
+  "crm_write_through": {
+    "calls": [],
+    "sql": []
+  },
+  "dnc_lookups": [],
+  "guardrail_events": [],
+  "gws_calls": [
+    {
+      "argv": [
+        "chat",
+        "spaces",
+        "messages",
+        "list",
+        "--params",
+        "{\"parent\": \"spaces/AAA\", \"pageSize\": 100}"
+      ],
+      "params": {
+        "pageSize": 100,
+        "parent": "spaces/AAA"
+      },
+      "timeout": 30
+    }
+  ],
+  "result": {
+    "messages": []
+  },
+  "scenario": "chat_list_messages",
+  "scheduling_policy_lookups": [],
+  "tool": "gws_chat_list_messages"
+}

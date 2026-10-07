@@ -1,0 +1,24 @@
+{
+  "args": {
+    "body": "x"
+  },
+  "calendar_requests": [],
+  "context": {
+    "is_benchmark": false,
+    "run_id": "run-golden",
+    "tenant_id": "tenant-a"
+  },
+  "crm_write_through": {
+    "calls": [],
+    "sql": []
+  },
+  "dnc_lookups": [],
+  "guardrail_events": [],
+  "gws_calls": [],
+  "result": {
+    "error": "thread_id is required — get it from the task body"
+  },
+  "scenario": "gmail_reply_missing_thread_id",
+  "scheduling_policy_lookups": [],
+  "tool": "gws_gmail_reply"
+}

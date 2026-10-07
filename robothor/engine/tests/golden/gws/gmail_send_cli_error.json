@@ -1,0 +1,93 @@
+{
+  "args": {
+    "body": "B",
+    "subject": "S",
+    "to": "bob@example.com"
+  },
+  "calendar_requests": [],
+  "context": {
+    "is_benchmark": false,
+    "run_id": "run-golden",
+    "tenant_id": "tenant-a"
+  },
+  "crm_write_through": {
+    "calls": [
+      {
+        "fn": "_record_sent_email",
+        "kwargs": {
+          "body": "B",
+          "cc": "",
+          "result": {
+            "error": "quota exceeded",
+            "hint": "rate_limited"
+          },
+          "subject": "S",
+          "to": "bob@example.com"
+        }
+      }
+    ],
+    "sql": []
+  },
+  "dnc_lookups": [
+    {
+      "addresses": [
+        "bob@example.com"
+      ],
+      "tenant_id": "tenant-a"
+    }
+  ],
+  "guardrail_events": [],
+  "gws_calls": [
+    {
+      "argv": [
+        "gmail",
+        "users",
+        "messages",
+        "send",
+        "--params",
+        "{\"userId\":\"me\"}",
+        "--json",
+        "{\"raw\": \"Q29udGVudC1UeXBlOiB0ZXh0L3BsYWluOyBjaGFyc2V0PSJ1cy1hc2NpaSIKTUlNRS1WZXJzaW9uOiAxLjAKQ29udGVudC1UcmFuc2Zlci1FbmNvZGluZzogN2JpdApUbzogYm9iQGV4YW1wbGUuY29tClN1YmplY3Q6IFMKCkI=\"}"
+      ],
+      "json": {
+        "raw": "Q29udGVudC1UeXBlOiB0ZXh0L3BsYWluOyBjaGFyc2V0PSJ1cy1hc2NpaSIKTUlNRS1WZXJzaW9uOiAxLjAKQ29udGVudC1UcmFuc2Zlci1FbmNvZGluZzogN2JpdApUbzogYm9iQGV4YW1wbGUuY29tClN1YmplY3Q6IFMKCkI=",
+        "raw_decoded": {
+          "body": "B",
+          "headers": [
+            [
+              "Content-Type",
+              "text/plain; charset=\"us-ascii\""
+            ],
+            [
+              "MIME-Version",
+              "1.0"
+            ],
+            [
+              "Content-Transfer-Encoding",
+              "7bit"
+            ],
+            [
+              "To",
+              "bob@example.com"
+            ],
+            [
+              "Subject",
+              "S"
+            ]
+          ]
+        }
+      },
+      "params": {
+        "userId": "me"
+      },
+      "timeout": 30
+    }
+  ],
+  "result": {
+    "error": "quota exceeded",
+    "hint": "rate_limited"
+  },
+  "scenario": "gmail_send_cli_error",
+  "scheduling_policy_lookups": [],
+  "tool": "gws_gmail_send"
+}

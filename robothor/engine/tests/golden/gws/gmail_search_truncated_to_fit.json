@@ -1,0 +1,583 @@
+{
+  "args": {
+    "max_results": 25,
+    "query": "label:newsletters"
+  },
+  "calendar_requests": [],
+  "context": {
+    "is_benchmark": false,
+    "run_id": "run-golden",
+    "tenant_id": "tenant-a"
+  },
+  "crm_write_through": {
+    "calls": [],
+    "sql": []
+  },
+  "dnc_lookups": [],
+  "guardrail_events": [],
+  "gws_calls": [
+    {
+      "argv": [
+        "gmail",
+        "users",
+        "messages",
+        "list",
+        "--params",
+        "{\"userId\": \"me\", \"q\": \"label:newsletters\", \"maxResults\": 25}"
+      ],
+      "params": {
+        "maxResults": 25,
+        "q": "label:newsletters",
+        "userId": "me"
+      },
+      "timeout": 30
+    },
+    {
+      "argv": [
+        "gmail",
+        "users",
+        "messages",
+        "get",
+        "--params",
+        "{\"userId\": \"me\", \"id\": \"id-00\", \"format\": \"metadata\"}"
+      ],
+      "params": {
+        "format": "metadata",
+        "id": "id-00",
+        "userId": "me"
+      },
+      "timeout": 30
+    },
+    {
+      "argv": [
+        "gmail",
+        "users",
+        "messages",
+        "get",
+        "--params",
+        "{\"userId\": \"me\", \"id\": \"id-01\", \"format\": \"metadata\"}"
+      ],
+      "params": {
+        "format": "metadata",
+        "id": "id-01",
+        "userId": "me"
+      },
+      "timeout": 30
+    },
+    {
+      "argv": [
+        "gmail",
+        "users",
+        "messages",
+        "get",
+        "--params",
+        "{\"userId\": \"me\", \"id\": \"id-02\", \"format\": \"metadata\"}"
+      ],
+      "params": {
+        "format": "metadata",
+        "id": "id-02",
+        "userId": "me"
+      },
+      "timeout": 30
+    },
+    {
+      "argv": [
+        "gmail",
+        "users",
+        "messages",
+        "get",
+        "--params",
+        "{\"userId\": \"me\", \"id\": \"id-03\", \"format\": \"metadata\"}"
+      ],
+      "params": {
+        "format": "metadata",
+        "id": "id-03",
+        "userId": "me"
+      },
+      "timeout": 30
+    },
+    {
+      "argv": [
+        "gmail",
+        "users",
+        "messages",
+        "get",
+        "--params",
+        "{\"userId\": \"me\", \"id\": \"id-04\", \"format\": \"metadata\"}"
+      ],
+      "params": {
+        "format": "metadata",
+        "id": "id-04",
+        "userId": "me"
+      },
+      "timeout": 30
+    },
+    {
+      "argv": [
+        "gmail",
+        "users",
+        "messages",
+        "get",
+        "--params",
+        "{\"userId\": \"me\", \"id\": \"id-05\", \"format\": \"metadata\"}"
+      ],
+      "params": {
+        "format": "metadata",
+        "id": "id-05",
+        "userId": "me"
+      },
+      "timeout": 30
+    },
+    {
+      "argv": [
+        "gmail",
+        "users",
+        "messages",
+        "get",
+        "--params",
+        "{\"userId\": \"me\", \"id\": \"id-06\", \"format\": \"metadata\"}"
+      ],
+      "params": {
+        "format": "metadata",
+        "id": "id-06",
+        "userId": "me"
+      },
+      "timeout": 30
+    },
+    {
+      "argv": [
+        "gmail",
+        "users",
+        "messages",
+        "get",
+        "--params",
+        "{\"userId\": \"me\", \"id\": \"id-07\", \"format\": \"metadata\"}"
+      ],
+      "params": {
+        "format": "metadata",
+        "id": "id-07",
+        "userId": "me"
+      },
+      "timeout": 30
+    },
+    {
+      "argv": [
+        "gmail",
+        "users",
+        "messages",
+        "get",
+        "--params",
+        "{\"userId\": \"me\", \"id\": \"id-08\", \"format\": \"metadata\"}"
+      ],
+      "params": {
+        "format": "metadata",
+        "id": "id-08",
+        "userId": "me"
+      },
+      "timeout": 30
+    },
+    {
+      "argv": [
+        "gmail",
+        "users",
+        "messages",
+        "get",
+        "--params",
+        "{\"userId\": \"me\", \"id\": \"id-09\", \"format\": \"metadata\"}"
+      ],
+      "params": {
+        "format": "metadata",
+        "id": "id-09",
+        "userId": "me"
+      },
+      "timeout": 30
+    },
+    {
+      "argv": [
+        "gmail",
+        "users",
+        "messages",
+        "get",
+        "--params",
+        "{\"userId\": \"me\", \"id\": \"id-10\", \"format\": \"metadata\"}"
+      ],
+      "params": {
+        "format": "metadata",
+        "id": "id-10",
+        "userId": "me"
+      },
+      "timeout": 30
+    },
+    {
+      "argv": [
+        "gmail",
+        "users",
+        "messages",
+        "get",
+        "--params",
+        "{\"userId\": \"me\", \"id\": \"id-11\", \"format\": \"metadata\"}"
+      ],
+      "params": {
+        "format": "metadata",
+        "id": "id-11",
+        "userId": "me"
+      },
+      "timeout": 30
+    },
+    {
+      "argv": [
+        "gmail",
+        "users",
+        "messages",
+        "get",
+        "--params",
+        "{\"userId\": \"me\", \"id\": \"id-12\", \"format\": \"metadata\"}"
+      ],
+      "params": {
+        "format": "metadata",
+        "id": "id-12",
+        "userId": "me"
+      },
+      "timeout": 30
+    },
+    {
+      "argv": [
+        "gmail",
+        "users",
+        "messages",
+        "get",
+        "--params",
+        "{\"userId\": \"me\", \"id\": \"id-13\", \"format\": \"metadata\"}"
+      ],
+      "params": {
+        "format": "metadata",
+        "id": "id-13",
+        "userId": "me"
+      },
+      "timeout": 30
+    },
+    {
+      "argv": [
+        "gmail",
+        "users",
+        "messages",
+        "get",
+        "--params",
+        "{\"userId\": \"me\", \"id\": \"id-14\", \"format\": \"metadata\"}"
+      ],
+      "params": {
+        "format": "metadata",
+        "id": "id-14",
+        "userId": "me"
+      },
+      "timeout": 30
+    },
+    {
+      "argv": [
+        "gmail",
+        "users",
+        "messages",
+        "get",
+        "--params",
+        "{\"userId\": \"me\", \"id\": \"id-15\", \"format\": \"metadata\"}"
+      ],
+      "params": {
+        "format": "metadata",
+        "id": "id-15",
+        "userId": "me"
+      },
+      "timeout": 30
+    },
+    {
+      "argv": [
+        "gmail",
+        "users",
+        "messages",
+        "get",
+        "--params",
+        "{\"userId\": \"me\", \"id\": \"id-16\", \"format\": \"metadata\"}"
+      ],
+      "params": {
+        "format": "metadata",
+        "id": "id-16",
+        "userId": "me"
+      },
+      "timeout": 30
+    },
+    {
+      "argv": [
+        "gmail",
+        "users",
+        "messages",
+        "get",
+        "--params",
+        "{\"userId\": \"me\", \"id\": \"id-17\", \"format\": \"metadata\"}"
+      ],
+      "params": {
+        "format": "metadata",
+        "id": "id-17",
+        "userId": "me"
+      },
+      "timeout": 30
+    },
+    {
+      "argv": [
+        "gmail",
+        "users",
+        "messages",
+        "get",
+        "--params",
+        "{\"userId\": \"me\", \"id\": \"id-18\", \"format\": \"metadata\"}"
+      ],
+      "params": {
+        "format": "metadata",
+        "id": "id-18",
+        "userId": "me"
+      },
+      "timeout": 30
+    },
+    {
+      "argv": [
+        "gmail",
+        "users",
+        "messages",
+        "get",
+        "--params",
+        "{\"userId\": \"me\", \"id\": \"id-19\", \"format\": \"metadata\"}"
+      ],
+      "params": {
+        "format": "metadata",
+        "id": "id-19",
+        "userId": "me"
+      },
+      "timeout": 30
+    },
+    {
+      "argv": [
+        "gmail",
+        "users",
+        "messages",
+        "get",
+        "--params",
+        "{\"userId\": \"me\", \"id\": \"id-20\", \"format\": \"metadata\"}"
+      ],
+      "params": {
+        "format": "metadata",
+        "id": "id-20",
+        "userId": "me"
+      },
+      "timeout": 30
+    },
+    {
+      "argv": [
+        "gmail",
+        "users",
+        "messages",
+        "get",
+        "--params",
+        "{\"userId\": \"me\", \"id\": \"id-21\", \"format\": \"metadata\"}"
+      ],
+      "params": {
+        "format": "metadata",
+        "id": "id-21",
+        "userId": "me"
+      },
+      "timeout": 30
+    },
+    {
+      "argv": [
+        "gmail",
+        "users",
+        "messages",
+        "get",
+        "--params",
+        "{\"userId\": \"me\", \"id\": \"id-22\", \"format\": \"metadata\"}"
+      ],
+      "params": {
+        "format": "metadata",
+        "id": "id-22",
+        "userId": "me"
+      },
+      "timeout": 30
+    },
+    {
+      "argv": [
+        "gmail",
+        "users",
+        "messages",
+        "get",
+        "--params",
+        "{\"userId\": \"me\", \"id\": \"id-23\", \"format\": \"metadata\"}"
+      ],
+      "params": {
+        "format": "metadata",
+        "id": "id-23",
+        "userId": "me"
+      },
+      "timeout": 30
+    },
+    {
+      "argv": [
+        "gmail",
+        "users",
+        "messages",
+        "get",
+        "--params",
+        "{\"userId\": \"me\", \"id\": \"id-24\", \"format\": \"metadata\"}"
+      ],
+      "params": {
+        "format": "metadata",
+        "id": "id-24",
+        "userId": "me"
+      },
+      "timeout": 30
+    }
+  ],
+  "result": {
+    "count": 9,
+    "messages": [
+      {
+        "date": "Tue, 16 Sep 2026 09:00:00 +0000",
+        "fields_omitted": [
+          "to"
+        ],
+        "from": "Bob <bob@example.com>",
+        "id": "id-16",
+        "labels": [
+          "INBOX",
+          "UNREAD"
+        ],
+        "snippet": "16 yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy…",
+        "subject": "Q3 numbers",
+        "thread_id": "thread-1"
+      },
+      {
+        "date": "Tue, 16 Sep 2026 09:00:00 +0000",
+        "fields_omitted": [
+          "to"
+        ],
+        "from": "Bob <bob@example.com>",
+        "id": "id-17",
+        "labels": [
+          "INBOX",
+          "UNREAD"
+        ],
+        "snippet": "17 yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy…",
+        "subject": "Q3 numbers",
+        "thread_id": "thread-1"
+      },
+      {
+        "date": "Tue, 16 Sep 2026 09:00:00 +0000",
+        "fields_omitted": [
+          "to"
+        ],
+        "from": "Bob <bob@example.com>",
+        "id": "id-18",
+        "labels": [
+          "INBOX",
+          "UNREAD"
+        ],
+        "snippet": "18 yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy…",
+        "subject": "Q3 numbers",
+        "thread_id": "thread-1"
+      },
+      {
+        "date": "Tue, 16 Sep 2026 09:00:00 +0000",
+        "fields_omitted": [
+          "to"
+        ],
+        "from": "Bob <bob@example.com>",
+        "id": "id-19",
+        "labels": [
+          "INBOX",
+          "UNREAD"
+        ],
+        "snippet": "19 yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy…",
+        "subject": "Q3 numbers",
+        "thread_id": "thread-1"
+      },
+      {
+        "date": "Tue, 16 Sep 2026 09:00:00 +0000",
+        "fields_omitted": [
+          "to"
+        ],
+        "from": "Bob <bob@example.com>",
+        "id": "id-20",
+        "labels": [
+          "INBOX",
+          "UNREAD"
+        ],
+        "snippet": "20 yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy…",
+        "subject": "Q3 numbers",
+        "thread_id": "thread-1"
+      },
+      {
+        "date": "Tue, 16 Sep 2026 09:00:00 +0000",
+        "fields_omitted": [
+          "to"
+        ],
+        "from": "Bob <bob@example.com>",
+        "id": "id-21",
+        "labels": [
+          "INBOX",
+          "UNREAD"
+        ],
+        "snippet": "21 yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy…",
+        "subject": "Q3 numbers",
+        "thread_id": "thread-1"
+      },
+      {
+        "date": "Tue, 16 Sep 2026 09:00:00 +0000",
+        "fields_omitted": [
+          "to"
+        ],
+        "from": "Bob <bob@example.com>",
+        "id": "id-22",
+        "labels": [
+          "INBOX",
+          "UNREAD"
+        ],
+        "snippet": "22 yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy…",
+        "subject": "Q3 numbers",
+        "thread_id": "thread-1"
+      },
+      {
+        "date": "Tue, 16 Sep 2026 09:00:00 +0000",
+        "fields_omitted": [
+          "to"
+        ],
+        "from": "Bob <bob@example.com>",
+        "id": "id-23",
+        "labels": [
+          "INBOX",
+          "UNREAD"
+        ],
+        "snippet": "23 yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy…",
+        "subject": "Q3 numbers",
+        "thread_id": "thread-1"
+      },
+      {
+        "date": "Tue, 16 Sep 2026 09:00:00 +0000",
+        "fields_omitted": [
+          "to"
+        ],
+        "from": "Bob <bob@example.com>",
+        "id": "id-24",
+        "labels": [
+          "INBOX",
+          "UNREAD"
+        ],
+        "snippet": "24 yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy…",
+        "subject": "Q3 numbers",
+        "thread_id": "thread-1"
+      }
+    ],
+    "note": "16 of 25 match(es) omitted to fit the tool-output limit; narrow the query or lower max_results.",
+    "query": "label:newsletters",
+    "results_truncated": 16,
+    "truncated": true
+  },
+  "scenario": "gmail_search_truncated_to_fit",
+  "scheduling_policy_lookups": [],
+  "tool": "gws_gmail_search"
+}

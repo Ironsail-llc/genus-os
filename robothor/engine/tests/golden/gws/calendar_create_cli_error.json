@@ -1,0 +1,92 @@
+{
+  "args": {
+    "attendees": [
+      "bob@example.com"
+    ],
+    "description": "Numbers and next steps",
+    "end": "2026-10-09T15:00:00-04:00",
+    "force": true,
+    "location": "Room 4",
+    "start": "2026-10-09T14:00:00-04:00",
+    "summary": "Quarterly review"
+  },
+  "calendar_requests": [],
+  "context": {
+    "is_benchmark": false,
+    "run_id": "run-golden",
+    "tenant_id": "tenant-a"
+  },
+  "crm_write_through": {
+    "calls": [
+      {
+        "fn": "_record_calendar_event",
+        "kwargs": {
+          "result": {
+            "error": "Forbidden",
+            "hint": "permission"
+          }
+        }
+      }
+    ],
+    "sql": []
+  },
+  "dnc_lookups": [
+    {
+      "addresses": [
+        "bob@example.com"
+      ],
+      "tenant_id": "tenant-a"
+    }
+  ],
+  "guardrail_events": [],
+  "gws_calls": [
+    {
+      "argv": [
+        "calendar",
+        "events",
+        "insert",
+        "--params",
+        "{\"calendarId\": \"alice@example.com\", \"conferenceDataVersion\": 1, \"sendUpdates\": \"all\"}",
+        "--json",
+        "{\"summary\": \"Quarterly review\", \"start\": {\"dateTime\": \"2026-10-09T14:00:00-04:00\"}, \"end\": {\"dateTime\": \"2026-10-09T15:00:00-04:00\"}, \"description\": \"Numbers and next steps\", \"location\": \"Room 4\", \"attendees\": [{\"email\": \"bob@example.com\"}], \"conferenceData\": {\"createRequest\": {\"requestId\": \"robothor-Quarterly-review-2026-10-09\", \"conferenceSolutionKey\": {\"type\": \"hangoutsMeet\"}}}}"
+      ],
+      "json": {
+        "attendees": [
+          {
+            "email": "bob@example.com"
+          }
+        ],
+        "conferenceData": {
+          "createRequest": {
+            "conferenceSolutionKey": {
+              "type": "hangoutsMeet"
+            },
+            "requestId": "robothor-Quarterly-review-2026-10-09"
+          }
+        },
+        "description": "Numbers and next steps",
+        "end": {
+          "dateTime": "2026-10-09T15:00:00-04:00"
+        },
+        "location": "Room 4",
+        "start": {
+          "dateTime": "2026-10-09T14:00:00-04:00"
+        },
+        "summary": "Quarterly review"
+      },
+      "params": {
+        "calendarId": "alice@example.com",
+        "conferenceDataVersion": 1,
+        "sendUpdates": "all"
+      },
+      "timeout": 30
+    }
+  ],
+  "result": {
+    "error": "Forbidden",
+    "hint": "permission"
+  },
+  "scenario": "calendar_create_cli_error",
+  "scheduling_policy_lookups": [],
+  "tool": "gws_calendar_create"
+}

@@ -1,0 +1,51 @@
+{
+  "args": {
+    "attendees": [
+      "dave@example.com"
+    ],
+    "event_id": "meeting"
+  },
+  "calendar_requests": [
+    {
+      "calendar_id": "alice@example.com",
+      "event_id": "meeting",
+      "method": "GET"
+    }
+  ],
+  "context": {
+    "is_benchmark": false,
+    "run_id": "run-golden",
+    "tenant_id": "tenant-a"
+  },
+  "crm_write_through": {
+    "calls": [],
+    "sql": []
+  },
+  "dnc_lookups": [
+    {
+      "addresses": [
+        "alice@example.com",
+        "bob@example.com",
+        "dave@example.com"
+      ],
+      "tenant_id": "tenant-a"
+    }
+  ],
+  "guardrail_events": [],
+  "gws_calls": [],
+  "result": {
+    "calendar": {
+      "id": "alice@example.com",
+      "kind": "operator"
+    },
+    "error": "gws_calendar_add_attendees refused: the do-not-contact list could not be read, so it is unknown whether a recipient has opted out. Not sending. Retry once the CRM database is reachable, or tell the operator plainly that it did not go out.",
+    "guard": "do_not_contact"
+  },
+  "scenario": "dnc_add_attendees_lookup_failed",
+  "scheduling_policy_lookups": [
+    [
+      "dave@example.com"
+    ]
+  ],
+  "tool": "gws_calendar_add_attendees"
+}
