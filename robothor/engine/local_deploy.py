@@ -168,9 +168,7 @@ def deploy(workspace: Path, revision: str, job_path: Path) -> dict[str, Any]:
         # Runtime releases intentionally omit pytest. Use the instance's dev
         # interpreter against the candidate's exact code, then import the
         # entrypoints with the runtime interpreter before any service switch.
-        test_python = get_settings().engine.deploy_test_python or str(
-            workspace / "venv/bin/python"
-        )
+        test_python = get_settings().engine.deploy_test_python or str(workspace / "venv/bin/python")
         with (job_path.parent / "tests.log").open("w") as test_log:
             subprocess.run(
                 [
