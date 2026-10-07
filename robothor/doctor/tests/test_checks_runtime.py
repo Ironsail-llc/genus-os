@@ -678,6 +678,37 @@ def test_email_transport_names_the_credential_source_not_the_credential(
     assert "env" in row.detail, "which layer answered is the question an operator has"
 
 
+def test_email_transport_on_microsoft365_names_graph_not_gws(settings, monkeypatch) -> None:
+    """A Microsoft 365 install has no gws CLI and needs none: mail goes
+    through Microsoft Graph, which workspace.m365_connection proves."""
+    from robothor.engine.tools.handlers import gws
+
+    def _never() -> bool:
+        raise AssertionError("a microsoft365 instance probed the gws CLI")
+
+    monkeypatch.setattr(gws, "gws_available", _never)
+    settings(ROBOTHOR_WORKSPACE_PROVIDER="microsoft365")
+    row = _run(channel_checks.CHECKS, "email.transport", make_ctx())[0]
+
+    assert row.status == "pass"
+    assert "Microsoft Graph" in row.detail
+    assert "workspace.m365_connection" in row.detail
+
+
+def test_email_transport_on_microsoft365_still_polices_smtp(settings, monkeypatch) -> None:
+    from robothor.engine.tools.handlers import gws
+
+    monkeypatch.setattr(gws, "gws_available", lambda: True)
+    settings(
+        ROBOTHOR_WORKSPACE_PROVIDER="microsoft365",
+        ROBOTHOR_EMAIL_SMTP_HOST="smtp.example.com",
+    )
+    row = _run(channel_checks.CHECKS, "email.transport", make_ctx())[0]
+
+    assert row.status == "fail"
+    assert "ROBOTHOR_EMAIL_FROM" in row.detail
+
+
 def test_email_transport_fails_on_half_configured_smtp(settings, no_gws) -> None:
     """A host with no from-address sends nothing, and says so at the first
     delivery rather than here — which is a message nobody reads until it is

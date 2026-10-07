@@ -1111,7 +1111,10 @@ instance where no agent holds a calendar tool) — the instance's Google account
 lists the operator's calendar with `accessRole` `owner` or `writer`. Without it
 every event an agent creates lands on the assistant's own calendar while
 looking like a success. The fix is in the operator's Google Calendar: share it
-with this instance's account, "Make changes to events".
+with this instance's account, "Make changes to events". On a Microsoft 365
+instance (`ROBOTHOR_WORKSPACE_PROVIDER=microsoft365`) it passes with a note
+instead: the owner's Exchange calendar is checked by
+`workspace.m365_connection` (see [Microsoft 365](workspace/microsoft365.md)).
 
 **`tools.exec_allowlist_bypasses_denied_tool`** — an `exec_allowlist` regex
 that admits a Google CLI (`gog gmail send`, `gws calendar events insert`) for

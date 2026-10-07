@@ -713,6 +713,7 @@ genus doctor --fix --dry-run        # say what --fix would repair
 | `redis` | Redis answers a PING |
 | `models` | a provider credential resolves; the fleet's default model answers a one-token completion; Ollama is reachable |
 | `channels` | Telegram is configured consistently (and `getMe` answers); a Slack bot token, if set, is shaped like one |
+| `workspace` | Microsoft 365 only (skips on Google): the app credential works, the assistant's inbox and the owner's calendar are readable, a canary mailbox is **denied**, and the owner's mailbox timezone matches the instance. See [Microsoft 365](workspace/microsoft365.md#6-run-the-doctor) |
 | `services` | engine, bridge, orchestrator and vision answer a health endpoint |
 | `manifests` | every agent manifest satisfies the schema; none is present-but-unreadable |
 | `identity` | an operator is configured in `owner.yaml`; an owner account exists so somebody can sign in |
