@@ -16,8 +16,9 @@ anyone in a group chat could fire it.
 
 from __future__ import annotations
 
+import re
 from copy import deepcopy
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -109,43 +110,117 @@ def recurrence_of(event: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
-def _instant(value: Any) -> datetime | None:
+_DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+def _default_timezone() -> str:
+    """The operator's configured zone, for a naive time on an event with none."""
+    from robothor.constants import DEFAULT_TIMEZONE, platform_timezone
+
     try:
-        return datetime.fromisoformat(str(value))
+        return platform_timezone()
+    except Exception:  # noqa: BLE001 - a settings problem must not lose the edit
+        return DEFAULT_TIMEZONE
+
+
+def _zone(name: Any) -> Any:
+    from zoneinfo import ZoneInfo
+
+    try:
+        return ZoneInfo(str(name)) if name else None
+    except (KeyError, ValueError):
+        return None
+
+
+def _instant(value: Any, zone: Any = None) -> datetime | None:
+    """Parse a date-time; a naive one is read in ``zone`` when one is given."""
+    try:
+        moment = datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
+    if moment.tzinfo is None and zone:
+        tz = _zone(zone)
+        if tz is not None:
+            moment = moment.replace(tzinfo=tz)
+    return moment
+
+
+def _as_date(value: Any) -> date | None:
+    if not isinstance(value, str) or not _DATE_RE.fullmatch(value):
+        return None
+    try:
+        return date.fromisoformat(value)
     except ValueError:
         return None
 
 
-def _same_time(before: Any, after: Any) -> bool:
+def _kind(value: str) -> str | None:
+    """``date`` (all-day), ``dateTime``, or ``None`` for something unparseable."""
+    if _DATE_RE.fullmatch(value):
+        return "date" if _as_date(value) else None
+    return "dateTime" if _instant(value) is not None else None
+
+
+def _same_time(before: Any, after: Any, zone: Any = None) -> bool:
     """Compare INSTANTS, not representations.
 
-    Google normalises an echoed ``timeZone`` into an equivalent offset, and
-    comparing the dicts turned a write that had SUCCEEDED into a reported
-    failure.
+    Google normalises an echoed ``timeZone`` into an equivalent offset, and it
+    localises a naive time (the format the schema invites) in the event's zone
+    before echoing it with an offset. Comparing representations — or a naive
+    instant to an aware one — turned writes that had SUCCEEDED into reported
+    failures. Each side is read in its own ``timeZone``, then ``zone``.
     """
     if before == after:
         return True
     if not isinstance(before, dict) or not isinstance(after, dict):
         return False
-    if "dateTime" not in before or "dateTime" not in after:
+    if before.get("date") or after.get("date"):
+        return (
+            not before.get("dateTime")
+            and not after.get("dateTime")
+            and before.get("date") == after.get("date")
+        )
+    if not before.get("dateTime") or not after.get("dateTime"):
         return False
-    one, two = _instant(before["dateTime"]), _instant(after["dateTime"])
-    return one is not None and one == two
+    one = _instant(before["dateTime"], before.get("timeZone") or zone)
+    two = _instant(after["dateTime"], after.get("timeZone") or zone)
+    if one is None or two is None or (one.tzinfo is None) != (two.tzinfo is None):
+        return False
+    return one == two
 
 
-def _time_value(value: str, existing: Any) -> dict[str, Any]:
-    """The same ``{"dateTime": ...}`` shape ``gws_calendar_create`` writes.
+def _event_zone(event: dict[str, Any]) -> str:
+    for key in ("start", "end"):
+        value = event.get(key)
+        if isinstance(value, dict) and value.get("timeZone"):
+            return str(value["timeZone"])
+    return _default_timezone()
 
-    The event's own ``timeZone`` is kept: it decides how the meeting displays
-    and, for a recurring series, how its occurrences expand. An all-day event
-    being given a time has its ``date`` cleared, or Google would see both.
+
+def _time_value(value: str, existing: Any, zone: str) -> dict[str, Any]:
+    """The shape ``gws_calendar_create`` writes, kept consistent with the event.
+
+    A bare date writes ``{"date": ...}`` — an all-day event stays all-day. A
+    date-time keeps the event's own ``timeZone`` (it decides how the meeting
+    displays and how a series expands); a naive one on an event with no zone
+    gets the operator's, because Google rejects a naive time with no zone. The
+    other representation is cleared with ``null``, or Google would see both.
     """
-    out: dict[str, Any] = {"dateTime": value}
-    if isinstance(existing, dict):
-        if existing.get("timeZone"):
-            out["timeZone"] = existing["timeZone"]
-        if "date" in existing:
-            out["date"] = None
+    existing = existing if isinstance(existing, dict) else {}
+    if _kind(value) == "date":
+        out: dict[str, Any] = {"date": value}
+        if existing.get("dateTime"):
+            out["dateTime"] = None
+        return out
+    out = {"dateTime": value}
+    tz = existing.get("timeZone")
+    parsed = _instant(value)
+    if not tz and parsed is not None and parsed.tzinfo is None:
+        tz = zone
+    if tz:
+        out["timeZone"] = tz
+    if existing.get("date"):
+        out["date"] = None
     return out
 
 
@@ -173,6 +248,7 @@ def _conditional_patch(
     *,
     send_updates: str,
     cancelled: Any = None,
+    allow_omitted: bool = False,
 ) -> dict[str, Any]:
     """One write; a conflict gets one fresh merge, an uncertain write only a read.
 
@@ -200,7 +276,7 @@ def _conditional_patch(
             if isinstance(planned, dict):
                 return planned
             body, verify, extra = planned
-            if "attendees" in body and before.get("attendeesOmitted"):
+            if "attendees" in body and before.get("attendeesOmitted") and not allow_omitted:
                 return {
                     "error": "Calendar returned an incomplete guest list; refusing to overwrite it",
                     "invitations_requested": False,
@@ -230,11 +306,13 @@ def _conditional_patch(
                 return {**written, "invitations_requested": False, "verification": "failed"}
             after = api.request("GET", calendar_id, event_id)
             shown = after if "error" not in after else before
+            zone = _event_zone(before)
             verified = (
                 "error" not in after
                 and verify(after)
                 and all(
-                    _same_time(body.get(k, before.get(k)), after.get(k)) for k in ("start", "end")
+                    _same_time(body.get(k, before.get(k)), after.get(k), zone)
+                    for k in ("start", "end")
                 )
                 and all(
                     before.get(k) == after.get(k)
@@ -264,6 +342,10 @@ def _conditional_patch(
                 result["attendees_notified"] = [a["email"] for a in _attendee_view(shown)]
             if "error" in after and ("error" not in written or written.get("outcome_unknown")):
                 result["reconciliation_pending"] = True
+            if not verified and "error" in written:
+                # The write may or may not have landed and the readback could
+                # not settle it: the effect ledger records this as uncertain.
+                result["outcome_unknown"] = True
             if not verified or "error" in written:
                 result["error"] = (
                     "Update outcome could not be verified; do not repeat the write. "
@@ -271,6 +353,71 @@ def _conditional_patch(
                 )
             return result
     raise AssertionError("unreachable")
+
+
+def _protected(event: dict[str, Any], calendar_id: str) -> set[str]:
+    """Addresses an edit may not remove: the organiser and this calendar's own."""
+    out = {calendar_id.casefold()}
+    organizer = event.get("organizer") or {}
+    if organizer.get("email"):
+        out.add(str(organizer["email"]).casefold())
+    for entry in event.get("attendees", []):
+        if entry.get("organizer") or entry.get("self"):
+            out.add(_email(entry))
+    out.discard("")
+    return out
+
+
+def _plan_times(
+    before: dict[str, Any], start: str | None, end: str | None, zone: str
+) -> dict[str, Any]:
+    """The new ``start``/``end`` values, or ``{"error": ...}``.
+
+    Moving only one end keeps the meeting's length — in days for an all-day
+    event, as a duration for a timed one.
+    """
+    old_start = before.get("start") or {}
+    old_end = before.get("end") or {}
+    out: dict[str, Any] = {}
+    if start is not None:
+        out["start"] = _time_value(start, old_start, zone)
+    if end is not None:
+        out["end"] = _time_value(end, old_end, zone)
+    kind = _kind(start) if start is not None else _kind(end) if end is not None else None
+    if kind is None:
+        return out
+    if start is not None and end is None:
+        if kind == "date":
+            first = _as_date(old_start.get("date"))
+            last = _as_date(old_end.get("date"))
+            days = (last - first).days if first and last and last > first else 1
+            moved = _as_date(start)
+            assert moved is not None
+            out["end"] = _time_value((moved + timedelta(days=days)).isoformat(), old_end, zone)
+        else:
+            one = _instant(old_start.get("dateTime"), old_start.get("timeZone") or zone)
+            two = _instant(old_end.get("dateTime"), old_end.get("timeZone") or zone)
+            moved_at = _instant(start)
+            if one is None or two is None or moved_at is None:
+                return {"error": "The event has no timed end to keep the length of; pass end too"}
+            out["end"] = _time_value((moved_at + (two - one)).isoformat(), old_end, zone)
+    first_value: dict[str, Any] = out.get("start") or old_start
+    last_value: dict[str, Any] = out["end"]
+    if not first_value.get(kind):
+        return {"error": "The event's start is the other kind (all-day vs timed); pass start too"}
+    if kind == "date":
+        first = _as_date(first_value.get("date"))
+        last = _as_date(last_value.get("date"))
+        backwards = bool(first and last and last <= first)
+    else:
+        one = _instant(first_value.get("dateTime"), first_value.get("timeZone") or zone)
+        two = _instant(last_value.get("dateTime"), last_value.get("timeZone") or zone)
+        backwards = bool(
+            one and two and (one.tzinfo is None) == (two.tzinfo is None) and two <= one
+        )
+    if backwards:
+        return {"error": "end must be after start"}
+    return out
 
 
 def update_event(
@@ -299,14 +446,15 @@ def update_event(
     if clash:
         return {"error": f"Cannot both add and remove {', '.join(clash)}"}
     texts = {k: v for k, v in (fields or {}).items() if k in TEXT_FIELDS}
-    if start is not None and _instant(start) is None:
-        return {"error": "start must be an RFC3339 date-time, e.g. 2026-10-09T14:00:00-04:00"}
-    if end is not None and _instant(end) is None:
-        return {"error": "end must be an RFC3339 date-time, e.g. 2026-10-09T15:00:00-04:00"}
-    if start is not None and end is not None:
-        one, two = _instant(start), _instant(end)
-        if one and two and (one.tzinfo is None) == (two.tzinfo is None) and two <= one:
-            return {"error": "end must be after start"}
+    hint = "an RFC3339 date-time (2026-10-09T14:00:00-04:00) or, for all-day, a date (2026-10-09)"
+    start_kind = _kind(start) if start is not None else None
+    end_kind = _kind(end) if end is not None else None
+    if start is not None and start_kind is None:
+        return {"error": f"start must be {hint}"}
+    if end is not None and end_kind is None:
+        return {"error": f"end must be {hint}"}
+    if start_kind and end_kind and start_kind != end_kind:
+        return {"error": "start and end must both be dates (all-day) or both date-times"}
 
     def plan(before: dict[str, Any]) -> dict[str, Any] | Plan:
         existing = deepcopy(before.get("attendees", []))
@@ -317,36 +465,27 @@ def update_event(
         status = _response_status(before)
         declined = sorted(e for e in already if status.get(e) == "declined")
 
+        protected = _protected(before, calendar_id)
+        refused = sorted(e for e in to_remove if e in protected)
+        if refused:
+            return {
+                "error": (
+                    f"Cannot remove {', '.join(refused)}: the organiser and this calendar's own "
+                    "entry stay on the meeting. To leave it, use gws_calendar_respond with "
+                    "response='declined'; to cancel it, gws_calendar_delete."
+                ),
+                "invitations_requested": False,
+            }
+
         body: dict[str, Any] = {k: v for k, v in texts.items() if before.get(k) != v}
-        new_start = new_end = None
-        if start is not None:
-            new_start = _time_value(start, before.get("start"))
-            if end is None:
-                old_one = _instant((before.get("start") or {}).get("dateTime"))
-                old_two = _instant((before.get("end") or {}).get("dateTime"))
-                moved = _instant(start)
-                if old_one is None or old_two is None or moved is None:
-                    return {
-                        "error": "The event has no timed end to keep the length of; pass end too",
-                        "invitations_requested": False,
-                    }
-                new_end = _time_value((moved + (old_two - old_one)).isoformat(), before.get("end"))
-        if end is not None:
-            new_end = _time_value(end, before.get("end"))
-            if start is None:
-                old_one = _instant((before.get("start") or {}).get("dateTime"))
-                two = _instant(end)
-                if (
-                    old_one
-                    and two
-                    and (old_one.tzinfo is None) == (two.tzinfo is None)
-                    and two <= old_one
-                ):
-                    return {"error": "end must be after start", "invitations_requested": False}
-        if new_start is not None and not _same_time(before.get("start"), new_start):
-            body["start"] = new_start
-        if new_end is not None and not _same_time(before.get("end"), new_end):
-            body["end"] = new_end
+        zone = _event_zone(before)
+        times = _plan_times(before, start, end, zone)
+        if "error" in times:
+            return {**times, "invitations_requested": False}
+        for key in ("start", "end"):
+            value = times.get(key)
+            if value is not None and not _same_time(before.get(key), value, zone):
+                body[key] = value
         if missing or removed:
             body["attendees"] = [a for a in existing if _email(a) not in set(removed)] + [
                 {"email": e} for e in missing
@@ -507,8 +646,17 @@ def respond(
                 and all(_entry_preserved(old, after.get("attendees", [])) for old in others)
             )
 
-        return {"attendees": attendees}, verify, {"response": response}
+        # A guest's copy with a hidden guest list carries `attendeesOmitted`
+        # and (usually) only the self entry. Google's documented RSVP for that
+        # copy is a PATCH carrying just the self entry.
+        patch = [mine] if before.get("attendeesOmitted") else attendees
+        return {"attendees": patch}, verify, {"response": response}
 
     return _conditional_patch(
-        calendar_id, event_id, plan, send_updates=send_updates, cancelled=cancelled
+        calendar_id,
+        event_id,
+        plan,
+        send_updates=send_updates,
+        cancelled=cancelled,
+        allow_omitted=True,
     )

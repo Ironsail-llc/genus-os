@@ -22,6 +22,23 @@ from robothor.engine.tools.handlers import gws as gws_handlers
 OPERATOR = "alice@example.com"
 
 
+def _google_echo(value: dict[str, Any]) -> dict[str, Any]:
+    """What Google stores and echoes: nulls cleared, a naive time localised in
+    its ``timeZone`` and returned with an explicit offset. A naive time with no
+    zone is a 400 at Google."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    out = {k: v for k, v in value.items() if v is not None}
+    if "dateTime" in out:
+        moment = datetime.fromisoformat(out["dateTime"])
+        if moment.tzinfo is None:
+            assert out.get("timeZone"), "Google rejects a naive time with no timeZone"
+            moment = moment.replace(tzinfo=ZoneInfo(out["timeZone"]))
+            out["dateTime"] = moment.isoformat()
+    return out
+
+
 class FakeCalendar:
     def __init__(self) -> None:
         self.event: dict[str, Any] = {
@@ -56,7 +73,7 @@ class FakeCalendar:
             body = deepcopy(kwargs["body"])
             for key in ("start", "end"):
                 if key in body:
-                    self.event[key] = body.pop(key)
+                    self.event[key] = _google_echo(body.pop(key))
             self.event.update(body)
             self.event["etag"] = '"v2"'
         return deepcopy(self.event)
@@ -78,6 +95,7 @@ def cal(monkeypatch: pytest.MonkeyPatch, tmp_path) -> FakeCalendar:
     monkeypatch.setattr(calendar_attendees, "CalendarTransport", lambda: fake)
     monkeypatch.setattr(gws_handlers, "_dnc_refusal", lambda *a, **k: None)
     monkeypatch.setattr(gws_handlers, "_send_updates", lambda: "all")
+    monkeypatch.setattr("robothor.engine.guardrails._lookup_scheduling_policies", lambda emails: {})
     return fake
 
 
@@ -380,3 +398,234 @@ def test_a_bare_yes_binds_nothing() -> None:
 
     assert not hasattr(calendar_operations, "confirmation_id")
     assert importlib.util.find_spec("robothor.engine.routine_request") is None
+
+
+# ── Review fixes ──────────────────────────────────────────────────────
+
+
+def test_a_naive_reschedule_that_google_applied_is_verified(cal: FakeCalendar) -> None:
+    """A naive start ("2026-10-09T14:00:00") is what the schema invites. Google
+    localises it in the event's zone and echoes an offset; comparing naive to
+    aware called a write that landed `partial`."""
+    out = _call(
+        "gws_calendar_update",
+        {"event_id": "meeting", "start": "2026-10-09T14:00:00", "end": "2026-10-09T15:00:00"},
+    )
+    assert "error" not in out, out
+    assert out["status"] == "updated"
+    assert out["verification"] == "verified"
+    assert cal.event["start"]["dateTime"] == "2026-10-09T14:00:00-04:00"
+
+
+def test_a_naive_start_alone_keeps_the_length_and_verifies(cal: FakeCalendar) -> None:
+    out = _call("gws_calendar_update", {"event_id": "meeting", "start": "2026-10-09T14:00:00"})
+    assert out["verification"] == "verified", out
+    assert cal.event["end"]["dateTime"] == "2026-10-09T14:30:00-04:00"
+
+
+def test_a_naive_time_on_an_event_with_no_zone_gets_the_operator_zone(
+    cal: FakeCalendar, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for key in ("start", "end"):
+        cal.event[key].pop("timeZone")
+    monkeypatch.setattr(calendar_attendees, "_default_timezone", lambda: "America/Chicago")
+    out = _call("gws_calendar_update", {"event_id": "meeting", "start": "2026-10-09T14:00:00"})
+    assert out["verification"] == "verified", out
+    [patch] = cal.patches()
+    assert patch["body"]["start"]["timeZone"] == "America/Chicago"
+    assert patch["body"]["end"]["timeZone"] == "America/Chicago"
+    assert cal.event["start"]["dateTime"] == "2026-10-09T14:00:00-05:00"
+
+
+@pytest.mark.parametrize("tool", ["gws_calendar_update", "gws_calendar_add_attendees"])
+def test_a_no_auto_person_cannot_be_added(
+    cal: FakeCalendar, monkeypatch: pytest.MonkeyPatch, tool: str
+) -> None:
+    """`scheduling_policy='no_auto'` is a data policy: agents may not put this
+    person on a meeting. It guarded create only, so an edit was the way round."""
+    monkeypatch.setattr(
+        "robothor.engine.guardrails._lookup_scheduling_policies",
+        lambda emails: {"eve@example.com": "no_auto"} if "eve@example.com" in emails else {},
+    )
+    args = (
+        {"event_id": "meeting", "add_attendees": ["Eve@example.com"]}
+        if tool == "gws_calendar_update"
+        else {"event_id": "meeting", "attendees": ["Eve@example.com"]}
+    )
+    out = _call(tool, args)
+    assert "no_auto" in out["error"]
+    assert cal.calls == []
+
+
+def test_a_no_auto_guest_already_on_the_meeting_does_not_block_a_reschedule(
+    cal: FakeCalendar, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "robothor.engine.guardrails._lookup_scheduling_policies",
+        lambda emails: {e: "no_auto" for e in emails if e == "bob@example.com"},
+    )
+    out = _call("gws_calendar_update", {"event_id": "meeting", "summary": "Moved"})
+    assert "error" not in out, out
+
+
+def test_respond_on_a_hidden_guest_list_patches_only_the_self_entry(cal: FakeCalendar) -> None:
+    """A guest's copy with a hidden guest list carries only the self entry and
+    `attendeesOmitted`. Google's documented RSVP is a PATCH with just that entry."""
+    cal.event["attendees"] = [{"email": OPERATOR, "self": True, "responseStatus": "needsAction"}]
+    cal.event["attendeesOmitted"] = True
+    out = _call("gws_calendar_respond", {"event_id": "meeting", "response": "accepted"})
+    assert "error" not in out, out
+    [patch] = cal.patches()
+    assert patch["body"] == {
+        "attendees": [{"email": OPERATOR, "self": True, "responseStatus": "accepted"}]
+    }
+
+
+def test_an_update_still_refuses_to_overwrite_a_hidden_guest_list(cal: FakeCalendar) -> None:
+    cal.event["attendeesOmitted"] = True
+    out = _call("gws_calendar_update", {"event_id": "meeting", "add_attendees": ["d@example.com"]})
+    assert "incomplete guest list" in out["error"]
+    assert cal.patches() == []
+
+
+@pytest.mark.parametrize("who", ["carol@example.com", OPERATOR.upper()])
+def test_the_organiser_and_the_calendars_own_entry_cannot_be_removed(
+    cal: FakeCalendar, who: str
+) -> None:
+    cal.event["attendees"].append({"email": "carol@example.com", "organizer": True})
+    out = _call("gws_calendar_update", {"event_id": "meeting", "remove_attendees": [who]})
+    assert "error" in out
+    assert "cannot remove" in out["error"].lower()
+    assert cal.patches() == []
+
+
+def test_the_self_entry_cannot_be_removed_on_own_calendar(cal: FakeCalendar) -> None:
+    cal.event["attendees"].append({"email": "bot@example.com", "self": True})
+    out = _call(
+        "gws_calendar_update",
+        {"event_id": "meeting", "remove_attendees": ["bot@example.com"], "calendar": "own"},
+    )
+    assert "cannot remove" in out["error"].lower()
+    assert cal.patches() == []
+
+
+@pytest.fixture
+def all_day(cal: FakeCalendar) -> FakeCalendar:
+    cal.event["start"] = {"date": "2026-10-08"}
+    cal.event["end"] = {"date": "2026-10-10"}
+    return cal
+
+
+def test_moving_an_all_day_event_keeps_it_all_day_and_its_length(all_day: FakeCalendar) -> None:
+    out = _call("gws_calendar_update", {"event_id": "meeting", "start": "2026-10-20"})
+    assert out["verification"] == "verified", out
+    [patch] = all_day.patches()
+    assert patch["body"]["start"] == {"date": "2026-10-20"}
+    assert patch["body"]["end"] == {"date": "2026-10-22"}
+    assert all_day.event["start"] == {"date": "2026-10-20"}
+
+
+def test_bare_dates_turn_a_timed_event_all_day(cal: FakeCalendar) -> None:
+    out = _call(
+        "gws_calendar_update", {"event_id": "meeting", "start": "2026-10-20", "end": "2026-10-21"}
+    )
+    assert out["verification"] == "verified", out
+    [patch] = cal.patches()
+    assert patch["body"]["start"]["date"] == "2026-10-20"
+    assert patch["body"]["start"]["dateTime"] is None
+    assert cal.event["start"] == {"date": "2026-10-20"}
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        {"start": "2026-10-20", "end": "2026-10-20T10:00:00"},
+        {"start": "2026-10-21", "end": "2026-10-20"},
+        {"start": "2026-13-40"},
+    ],
+)
+def test_mixed_or_backwards_dates_are_refused(cal: FakeCalendar, args: dict[str, Any]) -> None:
+    out = _call("gws_calendar_update", {"event_id": "meeting", **args})
+    assert "error" in out
+    assert cal.patches() == []
+
+
+def test_a_timed_start_on_an_all_day_event_needs_an_end(all_day: FakeCalendar) -> None:
+    out = _call("gws_calendar_update", {"event_id": "meeting", "start": "2026-10-20T10:00:00"})
+    assert "pass end" in out["error"]
+    assert all_day.patches() == []
+
+
+# ── Effect ledger + evidence ──────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "tool", ["gws_calendar_update", "gws_calendar_add_attendees", "gws_calendar_respond"]
+)
+def test_calendar_edits_go_through_the_effect_ledger(tool: str) -> None:
+    """add_attendees bypassed the ledger because the retired draft flow kept its
+    own. That ledger no longer receives writes, so the bypass left edits with no
+    durable record at all."""
+    from types import SimpleNamespace
+
+    from robothor.engine.runtime.effect_dispatch import _bypass
+
+    assert _bypass(tool, {"event_id": "meeting"}, SimpleNamespace(is_benchmark=False)) is False
+
+
+@pytest.mark.asyncio
+async def test_a_verified_edit_names_the_evidence_reference_for_its_effect(
+    cal: FakeCalendar,
+) -> None:
+    from uuid import uuid4
+
+    from robothor.engine.runtime import effects
+    from robothor.engine.tools.dispatch import ToolContext
+
+    effect_id = uuid4()
+    token = effects.active_effect.set({"id": effect_id})
+    try:
+        out = await gws_handlers.HANDLERS["gws_calendar_update"](
+            {"event_id": "meeting", "summary": "Moved"}, ToolContext(tenant_id="fixture")
+        )
+    finally:
+        effects.active_effect.reset(token)
+    assert out["evidence_reference"] == f"calendar-effect:{effect_id}"
+
+
+@pytest.mark.asyncio
+async def test_an_unverified_edit_offers_no_evidence(cal: FakeCalendar) -> None:
+    from uuid import uuid4
+
+    from robothor.engine.runtime import effects
+    from robothor.engine.tools.dispatch import ToolContext
+
+    cal.failure = {"error": "conflict", "status_code": 412}
+    token = effects.active_effect.set({"id": uuid4()})
+    try:
+        out = await gws_handlers.HANDLERS["gws_calendar_update"](
+            {"event_id": "meeting", "summary": "Moved"}, ToolContext(tenant_id="fixture")
+        )
+    finally:
+        effects.active_effect.reset(token)
+    assert "evidence_reference" not in out
+
+
+def test_a_new_style_step_is_not_reported_as_an_unmatched_legacy_operation() -> None:
+    """New edits carry no operation_id; their receipt is the runtime effect.
+    The legacy reader must not invent an `unmatched` calendar receipt for them."""
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+
+    from robothor.engine.chat_receipts import calendar_receipts
+
+    cur = MagicMock()
+    cur.fetchall.return_value = [
+        {
+            "tool_name": "gws_calendar_add_attendees",
+            "tool_input": {"event_id": "meeting", "attendees": ["d@example.com"]},
+            "tool_output": {"status": "updated", "verification": "verified"},
+        }
+    ]
+    auth = SimpleNamespace(tenant_id="fixture", user_id="owner")
+    assert calendar_receipts(cur, {"id": "run", "agent_id": "main"}, auth) == []

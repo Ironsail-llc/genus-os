@@ -2328,6 +2328,33 @@ def _email_list(value: Any, field: str) -> tuple[list[str], dict[str, Any] | Non
     return [e.strip() for e in value], None
 
 
+def _no_auto_refusal(emails: list[str]) -> dict[str, Any] | None:
+    """The CRM's per-person ``scheduling_policy='no_auto'``, for anyone being added.
+
+    A data policy, not a confirmation gate: agents may not put this person on a
+    meeting at all — only the operator can. It guarded ``gws_calendar_create``
+    (``guardrails.recurring_meeting_proposal_required``) and nothing else, so
+    adding them to an existing meeting was the way round it. Guests already on
+    the meeting are not re-screened: moving a meeting does not invite anyone.
+    """
+    if not emails:
+        return None
+    from robothor.engine.guardrails import _lookup_scheduling_policies
+
+    policies = _lookup_scheduling_policies([e.casefold() for e in emails])
+    blocked = sorted(email for email, policy in policies.items() if policy == "no_auto")
+    if not blocked:
+        return None
+    return {
+        "error": (
+            f"Blocked — {', '.join(blocked)} has scheduling_policy='no_auto'. Agents may not "
+            "add this person to a meeting; only the operator can."
+        ),
+        "guardrail": "scheduling_policy",
+        "invitations_requested": False,
+    }
+
+
 def _calendar_update(
     args: dict[str, Any],
     *,
@@ -2379,6 +2406,9 @@ def _calendar_update(
                 "summary, description or location"
             )
         }
+    refusal = _no_auto_refusal(add)
+    if refusal is not None:
+        return refusal
     try:
         calendar_id, kind = _resolve_calendar(args)
     except _InvalidCalendarError as bad_calendar:
@@ -2463,6 +2493,28 @@ def _calendar_respond(
         ),
     )
     return {**result, "calendar": _calendar_block(calendar_id, kind)}
+
+
+def _with_evidence_reference(result: dict[str, Any]) -> dict[str, Any]:
+    """Name the durable record a goal can cite for a verified edit.
+
+    The edit is journalled in the runtime effect ledger (``effect_dispatch``);
+    ``calendar-effect:<id>`` is the reference ``robothor.goals.evidence``
+    checks independently. Only a verified change offers one.
+    """
+    from robothor.engine.runtime import effects
+
+    record = effects.active_effect.get()
+    if (
+        record
+        and record.get("id")
+        and isinstance(result, dict)
+        and not result.get("error")
+        and result.get("verification") == "verified"
+        and result.get("status") == "updated"
+    ):
+        result["evidence_reference"] = f"calendar-effect:{record['id']}"
+    return result
 
 
 #: Calendar edits that take a cancellation flag, checked just before the write.
@@ -2898,7 +2950,7 @@ for _tool_name in (
                 # task; the flag is checked immediately before the PATCH.
                 cancelled = OperationCancellation(ctx.run_id)
                 try:
-                    return await asyncio.to_thread(
+                    result = await asyncio.to_thread(
                         _CALENDAR_EDITS[tn],
                         args,
                         run_id=ctx.run_id,
@@ -2908,6 +2960,7 @@ for _tool_name in (
                 except asyncio.CancelledError:
                     cancelled.set()
                     raise
+                return _with_evidence_reference(result)
             return await asyncio.to_thread(
                 _handle_gws_tool, tn, args, run_id=ctx.run_id, tenant_id=ctx.tenant_id
             )

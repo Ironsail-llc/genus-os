@@ -104,15 +104,21 @@ _CALENDAR_UPDATE_SCHEMA = {
             "type": "object",
             "properties": {
                 "event_id": {"type": "string", "description": "Event id from gws_calendar_list"},
-                "start": {"type": "string", "description": "New start, RFC3339"},
-                "end": {"type": "string", "description": "New end, RFC3339"},
+                "start": {
+                    "type": "string",
+                    "description": "New start: RFC3339 (no offset = the event's zone), or YYYY-MM-DD for all-day",
+                },
+                "end": {
+                    "type": "string",
+                    "description": "New end, same form as start (all-day end date is exclusive)",
+                },
                 "summary": {"type": "string", "description": "New title"},
                 "description": {"type": "string", "description": "New description/notes"},
                 "location": {"type": "string", "description": "New location"},
                 "add_attendees": {**_EMAILS, "description": "Addresses to invite"},
                 "remove_attendees": {
                     **_EMAILS,
-                    "description": "Addresses to take off the invitation",
+                    "description": "Addresses to take off the invitation (not the organiser or this calendar)",
                 },
                 "calendar": _CALENDAR_WHOSE,
                 "calendar_id": _CALENDAR_ID_OVERRIDE,
