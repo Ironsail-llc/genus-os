@@ -70,6 +70,8 @@ GWS_TOOLS = frozenset(
         "gws_calendar_list",
         "gws_calendar_create",
         "gws_calendar_add_attendees",
+        "gws_calendar_update",
+        "gws_calendar_respond",
         "gws_calendar_delete",
         "gws_chat_send",
         "gws_chat_list_spaces",
@@ -217,7 +219,8 @@ PROTECTED_BRANCHES = frozenset({"main", "master"})
 # after one journald warning. A name in a DENY table is different — denying
 # something that does not exist costs nothing and covers the day a plugin, an
 # adapter or a rename brings it into being. That is a real defence and it is
-# also indistinguishable from rot, which is how `gws_calendar_update`,
+# also indistinguishable from rot, which is how `gws_calendar_update` (a
+# real tool now),
 # `gws_gmail_draft` and `send_email` survived in four engine tables for months
 # while an agent read them in the source and hallucinated calls to them.
 #
@@ -459,7 +462,15 @@ CORE_TOOLS: frozenset[str] = frozenset(
         "list_pursuit_goals",
         "report_pursuit_goal",
         "update_pursuit_goal",
+        # Calendar: the operator's meetings are everyday work, not a deferred
+        # niche. Deferring them behind tool_search is how "add Bob to the 3pm"
+        # became a capability gap.
+        "gws_calendar_list",
+        "gws_calendar_create",
+        "gws_calendar_update",
         "gws_calendar_add_attendees",
+        "gws_calendar_respond",
+        "gws_calendar_delete",
         # File / shell
         "read_file",
         "write_file",

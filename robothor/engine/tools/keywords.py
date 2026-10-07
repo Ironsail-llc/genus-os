@@ -229,13 +229,50 @@ TOOL_HINTS: dict[str, ToolHint] = {
             "meeting",
             "event",
             "add",
-            "update",
             "attendee",
             "invite",
             "guest",
             "existing",
         ),
         when_to_use="Use this to add attendees to an EXISTING meeting while preserving existing guests and RSVPs.",
+    ),
+    "gws_calendar_update": ToolHint(
+        keywords=(
+            "calendar",
+            "meeting",
+            "event",
+            "appointment",
+            "update",
+            "edit",
+            "change",
+            "move",
+            "reschedule",
+            "postpone",
+            "rename",
+            "existing",
+            "remove",
+            "guest",
+        ),
+        when_to_use=(
+            "Use this to change an EXISTING event — move it to another time, rename it, edit "
+            "its notes or place, or add or remove guests."
+        ),
+    ),
+    "gws_calendar_respond": ToolHint(
+        keywords=(
+            "calendar",
+            "meeting",
+            "event",
+            "invite",
+            "rsvp",
+            "accept",
+            "decline",
+            "tentative",
+            "respond",
+            "reply",
+            "invitation",
+        ),
+        when_to_use="Use this to RSVP to an invitation: accept, decline or tentatively accept.",
     ),
     # ── Google Chat ───────────────────────────────────────────────────
     "gws_chat_send": ToolHint(

@@ -55,30 +55,92 @@ _WEB_READ_SCHEMAS = {
     },
 }
 
+_CALENDAR_WHOSE = {
+    "type": "string",
+    "description": "Whose calendar: 'operator' (the operator's own calendar — the default, and what 'my calendar' means when the operator says it) or 'own' (YOUR calendar, the assistant's account).",
+    "default": "operator",
+    "enum": ["operator", "own"],
+}
+_CALENDAR_ID_OVERRIDE = {
+    "type": "string",
+    "description": "An explicit calendar id, overriding `calendar`. 'primary' is your own account's calendar, not the operator's.",
+}
+_EMAILS = {"type": "array", "items": {"type": "string"}}
+
 _CALENDAR_ATTENDEE_SCHEMA = {
     "type": "function",
     "function": {
         "name": "gws_calendar_add_attendees",
         "description": (
             "Use this to add attendees to an EXISTING meeting while preserving existing guests and RSVPs. "
-            "For a draft pass draft=true; confirm with operation_id only. "
-            "Verifies once and stops. Notifications requested is not delivery proof. "
-            "On error report partial state; never remove/re-add guests, resend, or upgrade tools."
+            "Writes directly and emails the invitation (same as gws_calendar_update with "
+            "add_attendees). Returns the guest list, `calendar`, `send_updates` and `htmlLink`."
         ),
         "parameters": {
             "type": "object",
             "properties": {
-                "event_id": {"type": "string"},
-                "operation_id": {
-                    "type": "string",
-                    "description": "Execute a previously drafted operation with its original arguments",
-                },
-                "draft": {"type": "boolean", "default": False},
-                "attendees": {"type": "array", "items": {"type": "string"}, "minItems": 1},
-                "calendar": {"type": "string", "enum": ["operator", "own"], "default": "operator"},
-                "calendar_id": {"type": "string", "description": "Explicit calendar override"},
+                "event_id": {"type": "string", "description": "Event id from gws_calendar_list"},
+                "attendees": {**_EMAILS, "minItems": 1, "description": "Addresses to invite"},
+                "calendar": _CALENDAR_WHOSE,
+                "calendar_id": _CALENDAR_ID_OVERRIDE,
             },
-            "required": [],
+            "required": ["event_id", "attendees"],
+        },
+    },
+}
+
+_CALENDAR_UPDATE_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "gws_calendar_update",
+        "description": (
+            "Use this to change an EXISTING event — move it to another time, rename it, edit "
+            "its notes or place, or add or remove guests. One call; only what you pass changes, "
+            "existing guests and RSVPs are kept, and moving only `start` keeps the length. "
+            "Emails the guests. Returns the event's `start`, `end`, `attendees`, `calendar`, "
+            "`send_updates` and `htmlLink` — report those."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "event_id": {"type": "string", "description": "Event id from gws_calendar_list"},
+                "start": {"type": "string", "description": "New start, RFC3339"},
+                "end": {"type": "string", "description": "New end, RFC3339"},
+                "summary": {"type": "string", "description": "New title"},
+                "description": {"type": "string", "description": "New description/notes"},
+                "location": {"type": "string", "description": "New location"},
+                "add_attendees": {**_EMAILS, "description": "Addresses to invite"},
+                "remove_attendees": {
+                    **_EMAILS,
+                    "description": "Addresses to take off the invitation",
+                },
+                "calendar": _CALENDAR_WHOSE,
+                "calendar_id": _CALENDAR_ID_OVERRIDE,
+            },
+            "required": ["event_id"],
+        },
+    },
+}
+
+_CALENDAR_RESPOND_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "gws_calendar_respond",
+        "description": (
+            "Use this to RSVP to an invitation: accept, decline or tentatively accept. Answers "
+            "for the calendar owner (the operator by default); only that one RSVP changes "
+            "and the organiser is notified."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "event_id": {"type": "string", "description": "Event id from gws_calendar_list"},
+                "response": {"type": "string", "enum": ["accepted", "declined", "tentative"]},
+                "comment": {"type": "string", "description": "Optional note to the organiser"},
+                "calendar": _CALENDAR_WHOSE,
+                "calendar_id": _CALENDAR_ID_OVERRIDE,
+            },
+            "required": ["event_id", "response"],
         },
     },
 }
@@ -2360,6 +2422,8 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
         },
     }
     schemas["gws_calendar_add_attendees"] = _CALENDAR_ATTENDEE_SCHEMA
+    schemas["gws_calendar_update"] = _CALENDAR_UPDATE_SCHEMA
+    schemas["gws_calendar_respond"] = _CALENDAR_RESPOND_SCHEMA
     schemas["gws_calendar_delete"] = {
         "type": "function",
         "function": {

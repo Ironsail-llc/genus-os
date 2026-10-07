@@ -669,7 +669,8 @@ flags:
       incident to close, not a soak in progress.
 
       Enforced on outbound email (gws_gmail_send, gws_gmail_reply) and
-      calendar invitations (gws_calendar_create). Telegram, SMS and chat are
+      calendar invitations (gws_calendar_create, gws_calendar_update,
+      gws_calendar_add_attendees, gws_calendar_respond). Telegram, SMS and chat are
       NOT enforced — see docs/CRM_DATA_FABRIC.md.
 
   - name: ROBOTHOR_CALENDAR_SEND_UPDATES
@@ -686,7 +687,8 @@ flags:
     soak: |
       Not a ladder: the values are `all` (default), `externalOnly` and `none`,
       and they say who Google emails when an agent creates or cancels an event
-      with attendees.
+      with attendees, edits one (gws_calendar_update, gws_calendar_add_attendees)
+      or RSVPs to one (gws_calendar_respond).
 
       It ships at `all` with no soak because the state it replaces was
       effectively `none` and nobody chose it: `gws_calendar_create` passed no
