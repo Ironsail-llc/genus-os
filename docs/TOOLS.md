@@ -97,7 +97,7 @@ passed `sendUpdates`, so nothing reached him by mail either. The API returned a
 successful event for each call, so the assistant reported success truthfully as
 far as it could see.
 
-The three calendar tools now take a `calendar` parameter:
+Every calendar tool takes a `calendar` parameter:
 
 | Value | Calendar | When |
 |---|---|---|
@@ -119,11 +119,31 @@ And every calendar result now carries the facts needed to report it honestly:
 calendar" should be reading `kind` before it says so.
 
 **Invitations.** When an event has attendees, the create passes
-`sendUpdates` (and a delete passes it too — a cancellation nobody is told about
-is not a cancellation). The value is the governed setting
+`sendUpdates` (and a delete, an update and an RSVP pass it too — a cancellation
+or a move nobody is told about did not happen as far as the guests know). The value is the governed setting
 `ROBOTHOR_CALENDAR_SEND_UPDATES`, default `all`. Set it to `none` and events
 still get created, `invitations_requested` comes back `false`, and the agent should
 say so rather than claim the attendees were told.
+
+**Editing an existing meeting is a direct write.** `gws_calendar_update` changes
+time, title, description, location and guests in one call; `gws_calendar_add_attendees`
+is the same write with only additions; `gws_calendar_respond` sets the calendar
+owner's own RSVP. There is no draft and no "reply yes to confirm" step: editing a
+meeting is ordinary assistant work, not a payment or an irreversible external
+action. Each one reads the event, keeps every existing guest and RSVP whole,
+writes conditionally on the version it read (`If-Match`; a conflicting edit gets
+one fresh read and merge), and reads back once. An uncertain write is reported,
+never blindly repeated. Everyone who will be mailed about the change is screened
+against the do-not-contact list first, and nobody whose CRM record says
+`scheduling_policy='no_auto'` can be added (the same per-person policy create
+honours). A time with no offset is read in the event's own `timeZone` (or the
+instance's `ROBOTHOR_TIMEZONE` when the event has none); a bare `YYYY-MM-DD`
+makes or keeps the event all-day, and moving only the start of an all-day event
+keeps its length in days. The organiser and the calendar's own entry cannot be
+removed — decline with `gws_calendar_respond` instead. A verified edit returns
+`evidence_reference: calendar-effect:<id>`, the durable record in the runtime
+effect ledger that a pursuit goal can cite as independent evidence. All six calendar tools are core tools, so
+they are offered directly rather than behind `tool_search`.
 
 **This needs one thing set up outside the platform**: the operator's calendar
 must be shared with the instance's Google account with "Make changes to
@@ -339,6 +359,9 @@ its answer.
 | `gws_gmail_modify` | The message id and its labels after the change. Mark read/unread, archive, add or remove labels. |
 | `gws_calendar_list` | The events in a range: id, start, end, summary, location, attendees — plus `calendar`, saying whose calendar was read. Reads the **operator's** by default. |
 | `gws_calendar_create` | The created event, plus `calendar` (`operator`/`own`/`other`), `invitations_requested` and `htmlLink` — **or `{"status": "deduped"}` with nothing created**, when a matching event already exists within ±14 days. Writes to the **operator's** calendar by default, adds a Google Meet link, and emails the attendees. See [Whose calendar](#whose-calendar). |
+| `gws_calendar_update` | The event after the change: `start`, `end`, `summary`, `attendees` (each with its `responseStatus`), `added`/`removed`/`already_present`, `changed`, `recurrence`, `calendar`, `send_updates`, `invitations_requested`, `attendees_notified` (only under `all`) and `htmlLink`. `status` is `updated`, `unchanged` (nothing written) or `partial` (could not verify — do not repeat the write). Moving only `start` keeps the meeting's length. |
+| `gws_calendar_add_attendees` | The same as `gws_calendar_update` with `add_attendees`: a direct write, kept so existing manifests keep working. `status: already_present` when everyone was already invited; a guest who **declined** is reported as declined. |
+| `gws_calendar_respond` | Sets the calendar owner's RSVP (`accepted`, `declined`, `tentative`, optional `comment`) and nothing else; returns `response`, `status`, `calendar` and `htmlLink`. Refuses when the calendar is the organiser or is not on the guest list. Works on a guest's copy with a hidden guest list (`attendeesOmitted`) by patching only its own entry. |
 | `gws_calendar_delete` | Confirmation plus `calendar` and `cancellations_sent`. Deletes permanently from the **operator's** calendar by default and emails the attendees a cancellation. |
 | `gws_chat_send` | The created message's resource name. |
 | `gws_chat_list_spaces` | Each space's resource name and display name. |

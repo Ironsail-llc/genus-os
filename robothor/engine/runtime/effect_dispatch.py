@@ -1,7 +1,8 @@
 """Bind native business dispatch to the durable effect ledger.
 
-Calendar attendee operations retain their existing provider-specific ledger.
-The deferred tool wrapper is accounted at its actual underlying dispatch.
+Calendar edits are journalled here like every other write; the retired
+attendee draft flow's own ledger no longer receives any. The deferred tool
+wrapper is accounted at its actual underlying dispatch.
 """
 
 from __future__ import annotations
@@ -35,7 +36,7 @@ def _bypass(name: str, args: dict[str, Any], ctx: ToolContext) -> bool:
     return (
         ctx.is_benchmark
         or is_read_only_call(name, args, READONLY_TOOLS)
-        or name in {"tool_call", "gws_calendar_add_attendees"}
+        or name == "tool_call"
         or name == "update_pursuit_goal"
         and args.get("action") in RECOVERY_BOOKKEEPING_ACTIONS
     )

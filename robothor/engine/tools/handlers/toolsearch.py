@@ -77,7 +77,7 @@ def _closest(name: str, candidates: list[str], limit: int = 3) -> list[str]:
     """The nearest allowed names to one the agent got wrong.
 
     A model that has read instruction text naming ``gws_gmail_draft`` or
-    ``gws_calendar_update`` — neither of which this platform registers — gets
+    ``gws_calendar_edit`` — neither of which this platform registers — gets
     "unknown tool" and no way forward. Ranked by the same scorer the search
     uses, on the wrong name read as a query, so "gws_gmail_draft" reaches the
     Gmail family rather than whatever sorts nearest alphabetically.

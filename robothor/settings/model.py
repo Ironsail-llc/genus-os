@@ -797,12 +797,6 @@ class EngineSettings(SettingsGroup):
 
     restart_units: ClassVar[tuple[str, ...]] = ("robothor-engine",)
 
-    calendar_operations_enabled: bool = declare(
-        False,
-        "ROBOTHOR_CALENDAR_OPERATIONS_ENABLED",
-        "Enable durable native attendee updates after migrations 126/127 and test-calendar canaries.",
-    )
-
     host: str = declare(
         "127.0.0.1",
         "ROBOTHOR_ENGINE_HOST",

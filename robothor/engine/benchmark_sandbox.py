@@ -133,6 +133,8 @@ EXTERNAL_SIDE_EFFECT_TOOLS: frozenset[str] = frozenset(
         "gws_gmail_get",
         "gws_calendar_create",
         "gws_calendar_add_attendees",
+        "gws_calendar_update",
+        "gws_calendar_respond",
         "gws_calendar_delete",
         "gws_calendar_list",
         "gws_chat_send",
