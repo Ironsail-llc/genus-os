@@ -60,6 +60,8 @@
       {
         "params": [
           "tenant-default",
+          "google",
+          "evt-new",
           "evt-new",
           "Quarterly review",
           "Numbers and next steps",
@@ -70,7 +72,7 @@
           "https://calendar.example.test/evt-new",
           "confirmed"
         ],
-        "sql": "INSERT INTO calendar_event (tenant_id, google_event_id, title, description, location, start_at, end_at, organizer_email, hangout_link, status) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT (tenant_id, google_event_id) DO UPDATE SET title = EXCLUDED.title, description = EXCLUDED.description, location = EXCLUDED.location, start_at = EXCLUDED.start_at, end_at = EXCLUDED.end_at, organizer_email = EXCLUDED.organizer_email, hangout_link = EXCLUDED.hangout_link, status = EXCLUDED.status, updated_at = NOW() RETURNING id"
+        "sql": "INSERT INTO calendar_event (tenant_id, provider, external_event_id, google_event_id, title, description, location, start_at, end_at, organizer_email, hangout_link, status) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT (tenant_id, provider, external_event_id) DO UPDATE SET title = EXCLUDED.title, description = EXCLUDED.description, location = EXCLUDED.location, start_at = EXCLUDED.start_at, end_at = EXCLUDED.end_at, organizer_email = EXCLUDED.organizer_email, hangout_link = EXCLUDED.hangout_link, status = EXCLUDED.status, updated_at = NOW() RETURNING id"
       },
       {
         "params": [
