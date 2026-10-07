@@ -15,6 +15,7 @@ import yaml
 from robothor.cli import main
 from robothor.constants import DEFAULT_TENANT
 from robothor.doctor.checks import workspace_m365
+from robothor.settings import reset_settings
 from robothor.workspace.microsoft import graph_client_from_vault
 from robothor.workspace.tests.fake_graph import CLIENT_ID, TENANT_ID, FakeGraphTenant
 
@@ -250,12 +251,29 @@ def tenant(vault, monkeypatch) -> FakeGraphTenant:
     return fake
 
 
-def test_enable_flips_the_provider_when_the_probe_passes(tenant, env_workspace, capsys) -> None:
+def test_enable_flips_the_provider_when_the_probe_passes(
+    tenant, env_workspace, capsys, monkeypatch
+) -> None:
+    monkeypatch.setenv("ROBOTHOR_AI_EMAIL", ASSISTANT)
+    reset_settings()
     rc = main([*BASE_ARGS, "--enable"])
     out = capsys.readouterr().out
     assert rc == 0, out
     assert _workspace_settings(env_workspace)["workspace_provider"] == "microsoft365"
     assert "enabled" in out.lower()
+
+
+def test_enable_refuses_when_ai_email_is_not_the_assistant_mailbox(
+    tenant, env_workspace, capsys, monkeypatch
+) -> None:
+    # The duplicate-reply guard identifies the assistant by ROBOTHOR_AI_EMAIL.
+    monkeypatch.setenv("ROBOTHOR_AI_EMAIL", "bot@example.com")
+    reset_settings()
+    rc = main([*BASE_ARGS, "--enable"])
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "ROBOTHOR_AI_EMAIL" in captured.out + captured.err
+    assert "workspace_provider" not in _workspace_settings(env_workspace)
 
 
 def test_enable_refuses_when_the_canary_is_readable(tenant, env_workspace, capsys) -> None:

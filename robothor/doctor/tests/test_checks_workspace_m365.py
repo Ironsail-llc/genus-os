@@ -308,3 +308,34 @@ def test_timezone_mapping_covers_the_common_zones() -> None:
     assert workspace_m365.iana_for("GMT Standard Time") == "Europe/London"
     assert workspace_m365.iana_for("Europe/Berlin") == "Europe/Berlin"
     assert workspace_m365.iana_for("Not A Zone") is None
+
+
+# ── workspace.m365_assistant_identity ────────────────────────────────────────
+# The mail guards identify the assistant by ROBOTHOR_AI_EMAIL: the
+# duplicate-reply guard compares the thread's last sender with it, and reply-all
+# strips it from the recipients. On Microsoft 365 the assistant actually sends
+# from m365_assistant_mailbox, so the two must be the same address or the guard
+# misses the assistant's own replies and the assistant mails itself.
+
+
+def test_matching_assistant_identity_passes(connected, settings) -> None:
+    settings(ROBOTHOR_AI_EMAIL="Assistant@Example.com")
+    (row,) = _run("workspace.m365_assistant_identity")
+    assert row.status == "pass", row.detail
+
+
+def test_a_different_ai_email_fails_and_names_both(connected, settings) -> None:
+    settings(ROBOTHOR_AI_EMAIL="bot@example.com")
+    (row,) = _run("workspace.m365_assistant_identity")
+    assert row.status == "fail"
+    assert "bot@example.com" in row.detail and ASSISTANT in row.detail
+
+
+def test_an_unset_ai_email_fails(connected, settings) -> None:
+    settings(ROBOTHOR_AI_EMAIL="")
+    (row,) = _run("workspace.m365_assistant_identity")
+    assert row.status == "fail"
+
+
+def test_assistant_identity_is_required_severity() -> None:
+    assert _BY_ID["workspace.m365_assistant_identity"].severity == "required"

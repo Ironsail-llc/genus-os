@@ -242,6 +242,7 @@ Every check must pass:
 |-------|----------|-------------|
 | `workspace.m365_connection` | required | The mailboxes are set, the vault holds the credential, Entra issues a token, and the assistant's inbox and the owner's calendar can be read |
 | `workspace.m365_scope` | required | Reading the canary mailbox is **denied**. If the app can read it, its scope is not restricted: it can read mailboxes beyond the assistant and the owner. That is an error |
+| `workspace.m365_assistant_identity` | required | `ROBOTHOR_AI_EMAIL` is the assistant mailbox. The mail guards recognise the assistant by `ROBOTHOR_AI_EMAIL` (the duplicate-reply guard and reply-all), while on Microsoft 365 it sends from the assistant mailbox, so a different address makes the guard miss the assistant's own replies |
 | `workspace.m365_canary_configured` | recommended | A canary mailbox is set. Without one the scope is unproven |
 | `workspace.m365_timezone` | recommended | The owner's Exchange timezone matches `ROBOTHOR_TIMEZONE`. Windows zone names such as `Eastern Standard Time` are mapped to IANA names. A zone that can't be mapped, or settings the app may not read, are reported but don't fail |
 
@@ -261,8 +262,9 @@ genus workspace connect microsoft365 --enable
 ```
 
 The ids and mailboxes from step 3 are reused, so you only need flags to
-change them. `--enable` runs the connection and scope probes and sets
-`ROBOTHOR_WORKSPACE_PROVIDER=microsoft365` in `config.yaml` only if both pass.
+change them. `--enable` runs the connection, scope and assistant-identity probes and sets
+`ROBOTHOR_WORKSPACE_PROVIDER=microsoft365` in `config.yaml` only if all pass
+(set `ROBOTHOR_AI_EMAIL` to the assistant mailbox first).
 It needs a canary: an unproven scope is never enabled. Restart the engine
 afterwards so it reads the new setting.
 

@@ -424,6 +424,38 @@ async def _canary_configured(ctx: DoctorContext) -> Result:
     return ok(f"canary mailbox {canary} is configured")
 
 
+# ── workspace.m365_assistant_identity ─────────────────────────────────────────
+
+
+async def _assistant_identity(ctx: DoctorContext) -> Result:
+    """ROBOTHOR_AI_EMAIL is the assistant's Exchange mailbox.
+
+    The mail guards identify the assistant by ROBOTHOR_AI_EMAIL: the
+    duplicate-reply guard compares a thread's last sender with it and reply-all
+    removes it from the recipients. On Microsoft 365 the assistant sends from
+    ``m365_assistant_mailbox``, so a different address makes the guard miss the
+    assistant's own replies and the assistant mail itself.
+    """
+    if not await _active(ctx):
+        return skip(_INACTIVE)
+    assistant, _owner, _canary = _mailboxes(ctx)
+    ai_email = (ctx.settings.channels.ai_email or "").strip().lower()
+    if not assistant:
+        return fail("no assistant mailbox configured (ROBOTHOR_M365_ASSISTANT_MAILBOX)")
+    if not ai_email:
+        return fail(
+            f"ROBOTHOR_AI_EMAIL is unset; set it to the assistant mailbox {assistant} so the "
+            "duplicate-reply guard and reply-all recognise the assistant's own mail"
+        )
+    if ai_email != assistant:
+        return fail(
+            f"ROBOTHOR_AI_EMAIL ({ai_email}) differs from the assistant mailbox ({assistant}); "
+            "the duplicate-reply guard would miss the assistant's own replies. Set them to "
+            "the same address"
+        )
+    return ok(f"ROBOTHOR_AI_EMAIL matches the assistant mailbox {assistant}")
+
+
 # ── workspace.m365_timezone ──────────────────────────────────────────────────
 
 
@@ -483,9 +515,10 @@ async def _timezone(ctx: DoctorContext) -> Result:
 async def probe_for_enable(ctx: DoctorContext) -> tuple[bool, list[str]]:
     """Run the required checks the way ``connect --enable`` needs them.
 
-    Passes only when every connection step passes AND a configured canary is
-    denied: enabling an unscoped (or unproven) app would hand the assistant
-    the whole tenant's mail.
+    Passes only when every connection step passes, a configured canary is
+    denied (enabling an unscoped or unproven app would hand the assistant the
+    whole tenant's mail) AND ROBOTHOR_AI_EMAIL is the assistant mailbox (or
+    the duplicate-reply guard misses the assistant's own replies).
     """
     lines: list[str] = []
     passed = True
@@ -495,6 +528,9 @@ async def probe_for_enable(ctx: DoctorContext) -> tuple[bool, list[str]]:
     scope = await _scope(ctx)
     lines.append(f"{scope.status:4}  scope  {scope.detail}")
     passed = passed and scope.status == "pass"
+    identity = await _assistant_identity(ctx)
+    lines.append(f"{identity.status:4}  identity  {identity.detail}")
+    passed = passed and identity.status == "pass"
     return passed, lines
 
 
@@ -519,6 +555,13 @@ CHECKS: tuple[Check, ...] = (
         category="workspace",
         severity="recommended",
         run=_canary_configured,
+    ),
+    Check(
+        id="workspace.m365_assistant_identity",
+        title="Microsoft 365: ROBOTHOR_AI_EMAIL is the assistant mailbox",
+        category="workspace",
+        severity="required",
+        run=_assistant_identity,
     ),
     Check(
         id="workspace.m365_timezone",
