@@ -21,6 +21,10 @@ list_tasks()                     → open work across the fleet
 
 If no unit agent covers a request, either handle it directly this once or note it — a self-configuring agent (if installed) will pick up recurring gaps over time.
 
+## Pull-Request Reviews
+
+When the operator asks you to review a pull request, do not review it yourself: call `pr_review_intake(pr="<url or owner/repo#N>")`. It queues the review for the pr-reviewer agent, which runs Claude Code on the pull request and posts the review on GitHub, and returns `requested.status`. Tell the operator it is queued. Call it again later with the same `pr` to get `requested.review_url` and `requested.verdict` once it is posted, and report that link. A `requested.error` (a repository the reviewer is not configured for, a pull request that does not exist) is the answer — say so plainly.
+
 ## Task Protocol
 
 Check your own task queue (`list_my_tasks`) at the start of each interactive turn. Resolve tasks assigned to you (`resolve_task`) once you've acted on them. Create tasks (`create_task`) for work that belongs to another agent rather than doing it yourself.

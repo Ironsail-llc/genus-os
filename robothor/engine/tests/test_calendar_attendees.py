@@ -230,3 +230,26 @@ def test_cancel_while_reading_prevents_later_background_write(api):
     )
     assert "cancelled before write" in result["error"]
     assert [c[0] for c in api.calls] == ["GET"]
+
+
+def test_operator_interrupt_is_visible_to_worker_without_consuming_it():
+    from robothor.engine import session_registry
+    from robothor.engine.session import AgentSession
+
+    session = AgentSession(agent_id="fixture")
+    session_registry.register(session)
+    try:
+        signal = calendar.OperationCancellation(session.run_id)
+        assert not signal.is_set()
+        session.interrupt("Stop")
+        assert signal.is_set()
+        assert session.consume_interrupt() == "Stop"
+    finally:
+        session_registry.unregister(session)
+
+
+def test_a_run_with_no_id_still_cancels_on_its_own_flag():
+    signal = calendar.OperationCancellation("")
+    assert not signal.is_set()
+    signal.set()
+    assert signal.is_set()

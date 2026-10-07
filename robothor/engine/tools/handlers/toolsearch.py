@@ -77,7 +77,7 @@ def _closest(name: str, candidates: list[str], limit: int = 3) -> list[str]:
     """The nearest allowed names to one the agent got wrong.
 
     A model that has read instruction text naming ``gws_gmail_draft`` or
-    ``gws_calendar_update`` — neither of which this platform registers — gets
+    ``gws_calendar_edit`` — neither of which this platform registers — gets
     "unknown tool" and no way forward. Ranked by the same scorer the search
     uses, on the wrong name read as a query, so "gws_gmail_draft" reaches the
     Gmail family rather than whatever sorts nearest alphabetically.
@@ -267,6 +267,11 @@ async def _tool_call(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     # The out-of-allow-list check above (against the _deferred_allowed set) is
     # what prevents escalation; we never reach registry.execute for a denied
     # tool. tool_call grants no reach beyond the agent's own allow-list.
+    #
+    # timeout=0: the dispatcher that ran THIS call already bounded it by the
+    # inner tool's own budget (wrapped_call.inner_call). The registry
+    # default here was a second, 120 s deadline under that one, which cut
+    # claude_code_wait at two minutes on every deferred run.
     return await get_registry().execute(
         name,
         tool_args,
@@ -279,6 +284,7 @@ async def _tool_call(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         accessible_tenant_ids=ctx.accessible_tenant_ids,
         task_author_override=ctx.task_author_override,
         is_benchmark=ctx.is_benchmark,
+        timeout=0,
     )
 
 

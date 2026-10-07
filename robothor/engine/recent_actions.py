@@ -29,6 +29,9 @@ _TRACKED_AGENT_IDS: set[str] = {"main"}
 # Tools whose calls are worth summarizing.
 _NOTABLE_TOOLS: set[str] = {
     "gws_calendar_create",
+    "gws_calendar_update",
+    "gws_calendar_add_attendees",
+    "gws_calendar_respond",
     "gws_calendar_delete",
     "gws_gmail_send",
     "gws_gmail_reply",
@@ -72,6 +75,11 @@ def _summarize_step(step: Any) -> str | None:
         summary = args.get("summary", "?")
         start = args.get("start", "?")
         return f"calendar_create: {summary!r} @ {start}"
+    if name in ("gws_calendar_update", "gws_calendar_add_attendees"):
+        changed = ",".join(out.get("changed") or []) if isinstance(out, dict) else ""
+        return f"calendar_update: event={args.get('event_id', '?')} changed={changed or '-'}"
+    if name == "gws_calendar_respond":
+        return f"calendar_respond: event={args.get('event_id', '?')} {args.get('response', '?')}"
     if name == "gws_calendar_delete":
         return f"calendar_delete: event={args.get('event_id', '?')}"
     if name in ("gws_gmail_send", "gws_gmail_reply"):

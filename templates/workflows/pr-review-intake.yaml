@@ -1,0 +1,34 @@
+# pr-reviewer intake — template.
+#
+# Install: copy to docs/workflows/ in the instance workspace and exclude it
+# locally (echo docs/workflows/pr-review-intake.yaml >> .git/info/exclude);
+# docs/workflows/ is tracked, and which repositories and chat space an instance
+# reviews is instance data. See docs/PR_REVIEWER.md.
+#
+# Pattern: one deterministic tool step, no model. pr_review_intake polls the
+# configured GitHub repositories and Chat space (ROBOTHOR_PR_REVIEW_*), claims
+# new pull requests in Chat, and files one pr-review CRM task per head for the
+# pr-reviewer agent. Kept apart from pr-review-run so a review that takes
+# twenty minutes never delays the next claim.
+
+id: pr-review-intake
+name: PR Review Intake
+description: Poll GitHub and the Chat space for pull requests to review; file one task per head
+version: "2026-10-05"
+
+triggers:
+  - type: cron
+    cron: "*/2 * * * *"
+    timezone: UTC
+  - type: manual
+
+timeout_seconds: 300
+
+steps:
+  - id: intake
+    type: tool
+    tool_name: pr_review_intake
+    tool_args:
+      poll: true
+    tool_timeout_seconds: 240
+    on_failure: abort

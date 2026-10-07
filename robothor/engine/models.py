@@ -313,6 +313,10 @@ class AgentConfig:
     # Tools
     tools_allowed: list[str] = field(default_factory=list)
     tools_denied: list[str] = field(default_factory=list)
+    # Opt-in tools (OPT_IN_TOOLS) added on top of the DEFAULT set. Only
+    # meaningful when tools_allowed is empty; an explicit tools_allowed names
+    # its opt-in tools directly.
+    tools_opt_in: list[str] = field(default_factory=list)
 
     # Credential tier (manifest key `v2.credentials`). "operator" lets this
     # agent use the vault tools; empty refuses them. Deliberately NOT the
