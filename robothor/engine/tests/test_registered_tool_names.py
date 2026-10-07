@@ -1,7 +1,8 @@
 """Every tool name the engine's own tables carry has to be a real tool.
 
 Four engine tables named tools this platform has never registered:
-``gws_calendar_update`` (run_verification, benchmark_sandbox),
+``gws_calendar_update`` (run_verification, benchmark_sandbox — since made a
+real tool),
 ``gws_gmail_draft`` (benchmark_sandbox), ``send_email`` (guardrails,
 run_verification, and a ranking test that accepted it as a correct answer) —
 and ``CORE_TOOLS`` listed ``message``, so the set advertised under deferred
@@ -172,7 +173,7 @@ def test_the_deny_tables_were_actually_found() -> None:
 # ── The specific phantoms, named ──────────────────────────────────────
 
 
-@pytest.mark.parametrize("phantom", ["gws_calendar_update", "gws_gmail_draft", "send_email"])
+@pytest.mark.parametrize("phantom", ["gws_gmail_draft", "send_email"])
 def test_a_named_phantom_is_gone_from_every_engine_table(
     phantom: str, dispatchable: set[str]
 ) -> None:

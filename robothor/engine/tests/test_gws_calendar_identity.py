@@ -41,6 +41,8 @@ CALENDAR_TOOL_ARGS: dict[str, dict[str, Any]] = {
     "gws_calendar_list": {"time_min": "2026-10-01T00:00:00Z"},
     "gws_calendar_delete": {"event_id": "e"},
     "gws_calendar_add_attendees": {"event_id": "e", "attendees": ["sam@example.com"]},
+    "gws_calendar_update": {"event_id": "e", "summary": "s"},
+    "gws_calendar_respond": {"event_id": "e", "response": "accepted"},
 }
 
 

@@ -55,30 +55,98 @@ _WEB_READ_SCHEMAS = {
     },
 }
 
+_CALENDAR_WHOSE = {
+    "type": "string",
+    "description": "Whose calendar: 'operator' (the operator's own calendar — the default, and what 'my calendar' means when the operator says it) or 'own' (YOUR calendar, the assistant's account).",
+    "default": "operator",
+    "enum": ["operator", "own"],
+}
+_CALENDAR_ID_OVERRIDE = {
+    "type": "string",
+    "description": "An explicit calendar id, overriding `calendar`. 'primary' is your own account's calendar, not the operator's.",
+}
+_EMAILS = {"type": "array", "items": {"type": "string"}}
+
 _CALENDAR_ATTENDEE_SCHEMA = {
     "type": "function",
     "function": {
         "name": "gws_calendar_add_attendees",
         "description": (
             "Use this to add attendees to an EXISTING meeting while preserving existing guests and RSVPs. "
-            "For a draft pass draft=true; confirm with operation_id only. "
-            "Verifies once and stops. Notifications requested is not delivery proof. "
-            "On error report partial state; never remove/re-add guests, resend, or upgrade tools."
+            "Writes directly and emails the invitation (same as gws_calendar_update with "
+            "add_attendees). Returns the guest list, `calendar`, `send_updates` and `htmlLink`."
         ),
         "parameters": {
             "type": "object",
             "properties": {
-                "event_id": {"type": "string"},
-                "operation_id": {
-                    "type": "string",
-                    "description": "Execute a previously drafted operation with its original arguments",
-                },
-                "draft": {"type": "boolean", "default": False},
-                "attendees": {"type": "array", "items": {"type": "string"}, "minItems": 1},
-                "calendar": {"type": "string", "enum": ["operator", "own"], "default": "operator"},
-                "calendar_id": {"type": "string", "description": "Explicit calendar override"},
+                "event_id": {"type": "string", "description": "Event id from gws_calendar_list"},
+                "attendees": {**_EMAILS, "minItems": 1, "description": "Addresses to invite"},
+                "calendar": _CALENDAR_WHOSE,
+                "calendar_id": _CALENDAR_ID_OVERRIDE,
             },
-            "required": [],
+            "required": ["event_id", "attendees"],
+        },
+    },
+}
+
+_CALENDAR_UPDATE_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "gws_calendar_update",
+        "description": (
+            "Use this to change an EXISTING event — move it to another time, rename it, edit "
+            "its notes or place, or add or remove guests. One call; only what you pass changes, "
+            "existing guests and RSVPs are kept, and moving only `start` keeps the length. "
+            "Emails the guests. Returns the event's `start`, `end`, `attendees`, `calendar`, "
+            "`send_updates` and `htmlLink` — report those."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "event_id": {"type": "string", "description": "Event id from gws_calendar_list"},
+                "start": {
+                    "type": "string",
+                    "description": "New start: RFC3339 (no offset = the event's zone), or YYYY-MM-DD for all-day",
+                },
+                "end": {
+                    "type": "string",
+                    "description": "New end, same form as start (all-day end date is exclusive)",
+                },
+                "summary": {"type": "string", "description": "New title"},
+                "description": {"type": "string", "description": "New description/notes"},
+                "location": {"type": "string", "description": "New location"},
+                "add_attendees": {**_EMAILS, "description": "Addresses to invite"},
+                "remove_attendees": {
+                    **_EMAILS,
+                    "description": "Addresses to take off the invitation (not the organiser or this calendar)",
+                },
+                "calendar": _CALENDAR_WHOSE,
+                "calendar_id": _CALENDAR_ID_OVERRIDE,
+            },
+            "required": ["event_id"],
+        },
+    },
+}
+
+_CALENDAR_RESPOND_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "gws_calendar_respond",
+        "description": (
+            "Use this to RSVP to an invitation: accept, decline or tentatively accept. Answers "
+            "for the calendar owner (the operator by default); only that one RSVP changes "
+            "and the organiser is notified."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "event_id": {"type": "string", "description": "Event id from gws_calendar_list"},
+                "response": {"type": "string", "enum": ["accepted", "declined", "tentative"]},
+                "comment": {"type": "string", "description": "Optional note to the organiser"},
+                "calendar": _CALENDAR_WHOSE,
+                "calendar_id": _CALENDAR_ID_OVERRIDE,
+            },
+            "required": ["event_id", "response"],
         },
     },
 }
@@ -895,11 +963,454 @@ _HUMAN_IN_THE_LOOP_SCHEMAS: dict[str, dict[str, Any]] = {
 }
 
 
+# GitHub pull-request diff + review tools. Module-level, like _WEB_READ_SCHEMAS,
+# so get_engine_schemas does not grow past its pinned size.
+_GH_REPO = {"type": "string", "description": "Repository in owner/repo format"}
+_GH_NUMBER = {"type": "integer", "description": "Pull request number"}
+_GH_ISSUE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "path": {
+            "type": "string",
+            "description": "File path as shown in the diff; empty for PR-wide findings",
+        },
+        "line": {
+            "type": "integer",
+            "description": "Anchor line (new file for RIGHT, old file for LEFT); omit if none",
+        },
+        "start_line": {
+            "type": "integer",
+            "description": "First line of a multi-line range; omit for one line",
+        },
+        "side": {"type": "string", "enum": ["RIGHT", "LEFT"]},
+        "severity": {
+            "type": "string",
+            "description": "blocker, major, minor or nit. Only blocker/major go inline.",
+        },
+        "title": {"type": "string"},
+        "body": {"type": "string", "description": "Full finding in GitHub markdown"},
+    },
+    "required": ["severity", "title", "body"],
+}
+
+_GITHUB_REVIEW_SCHEMAS: dict[str, dict[str, Any]] = {
+    "github_pr_diff": {
+        "type": "function",
+        "function": {
+            "name": "github_pr_diff",
+            "description": (
+                "The pull request's unified diff. Cut at 150,000 characters with "
+                "truncated: true; read github_pr_files for per-file patches past that."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {"repo": _GH_REPO, "number": _GH_NUMBER},
+                "required": ["repo", "number"],
+            },
+        },
+    },
+    "github_pr_files": {
+        "type": "function",
+        "function": {
+            "name": "github_pr_files",
+            "description": (
+                "Changed files of a pull request: filename, status, additions, deletions "
+                "and patch (null for binary or oversized files)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {"repo": _GH_REPO, "number": _GH_NUMBER},
+                "required": ["repo", "number"],
+            },
+        },
+    },
+    "github_compare": {
+        "type": "function",
+        "function": {
+            "name": "github_compare",
+            "description": (
+                "Compare two commits (base...head): status ahead/behind/diverged/identical/"
+                "missing, commits and changed files. full_review_required is true when "
+                "history was rewritten (diverged, behind or missing base) — re-review the "
+                "whole pull request then, not just base..head."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "repo": _GH_REPO,
+                    "base": {"type": "string", "description": "Base commit SHA or ref"},
+                    "head": {"type": "string", "description": "Head commit SHA or ref"},
+                },
+                "required": ["repo", "base", "head"],
+            },
+        },
+    },
+    "github_create_review": {
+        "type": "function",
+        "function": {
+            "name": "github_create_review",
+            "description": (
+                "Post a pull-request review. Blocker/major findings become inline comments "
+                "where the diff can carry the anchor; anchors outside the diff, and every "
+                "minor/nit finding, go in the review body instead — nothing is dropped. On "
+                "the token user's own pull request APPROVE/REQUEST_CHANGES is posted as a "
+                "COMMENT starting 'APPROVED' / 'CHANGES REQUESTED'. Refuses if the head moved "
+                "past commit_id. Returns review_id, url, inline_count and comment_ids."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "repo": _GH_REPO,
+                    "number": _GH_NUMBER,
+                    "verdict": {
+                        "type": "string",
+                        "enum": ["APPROVE", "COMMENT", "REQUEST_CHANGES"],
+                    },
+                    "summary": {"type": "string", "description": "Top of the review body"},
+                    "issues": {"type": "array", "items": _GH_ISSUE_SCHEMA},
+                    "commit_id": {
+                        "type": "string",
+                        "description": "Head SHA the review was written against",
+                    },
+                    "prior_issues": {
+                        "type": "array",
+                        "description": "Re-reviews: status of each finding from the last review",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "description": {"type": "string"},
+                                "status": {
+                                    "type": "string",
+                                    "enum": ["resolved", "partially_resolved", "unresolved"],
+                                },
+                                "note": {"type": "string"},
+                            },
+                            "required": ["description", "status"],
+                        },
+                    },
+                },
+                "required": ["repo", "number", "verdict", "summary", "issues", "commit_id"],
+            },
+        },
+    },
+    "github_reply_review_comment": {
+        "type": "function",
+        "function": {
+            "name": "github_reply_review_comment",
+            "description": "Reply inside an existing pull-request review-comment thread.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "repo": _GH_REPO,
+                    "number": _GH_NUMBER,
+                    "comment_id": {
+                        "type": "integer",
+                        "description": "Id of a review comment in the thread",
+                    },
+                    "body": {"type": "string", "description": "Reply text (GitHub markdown)"},
+                },
+                "required": ["repo", "number", "comment_id", "body"],
+            },
+        },
+    },
+    "github_resolve_threads": {
+        "type": "function",
+        "function": {
+            "name": "github_resolve_threads",
+            "description": (
+                "Resolve the review threads opened by the given review ids — only those. "
+                "Threads anyone else opened, including by hand from the same account, are "
+                "left alone."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "repo": _GH_REPO,
+                    "number": _GH_NUMBER,
+                    "review_ids": {
+                        "type": "array",
+                        "items": {"type": "integer"},
+                        "description": "review_id values returned by github_create_review",
+                    },
+                },
+                "required": ["repo", "number", "review_ids"],
+            },
+        },
+    },
+}
+
+
+_JOB_ID_PARAM = {"type": "string", "description": "The job_id claude_code_start returned"}
+
+#: The Claude Code driver (robothor/engine/coding/). Opt-in: see OPT_IN_TOOLS.
+_CLAUDE_CODE_SCHEMAS: dict[str, dict[str, Any]] = {
+    "claude_code_start": {
+        "type": "function",
+        "function": {
+            "name": "claude_code_start",
+            "description": (
+                "Use this to delegate a coding task to Claude Code, which edits, tests and "
+                "commits in its own git worktree while you wait. Returns a job_id; then call "
+                "claude_code_wait. Done only when your verify_command exits 0 and a new commit "
+                "exists; on failure the engine resumes the session with the failing output. "
+                "Report the job's evidence (commit sha, verify result), never a claim."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task": {
+                        "type": "string",
+                        "description": "The spec: goal, files or area, constraints, done-when",
+                    },
+                    "repo_path": {
+                        "type": "string",
+                        "description": "Absolute path of the git repository to work on",
+                    },
+                    "acceptance": {
+                        "type": "object",
+                        "description": "How the engine decides the job is done",
+                        "properties": {
+                            "verify_command": {
+                                "type": "string",
+                                "description": (
+                                    "Command run from the repo root that exits 0 only when the "
+                                    "task is done, e.g. 'pytest -q tests/test_x.py'. Run without "
+                                    "a shell; use \"bash -c '...'\" for pipes. Required for "
+                                    "mode=code."
+                                ),
+                            },
+                            "require_commit": {
+                                "type": "boolean",
+                                "description": "Require a new commit and a clean tree (default true)",
+                            },
+                        },
+                    },
+                    "mode": {
+                        "type": "string",
+                        "enum": ["code", "review", "readonly"],
+                        "description": "code (default): edit + commit; review/readonly: read-only",
+                    },
+                    "model": {
+                        "type": "string",
+                        "description": "Claude Code model alias (sonnet, opus, ...); default is the instance's",
+                    },
+                    "max_budget_usd": {
+                        "type": "number",
+                        "description": "Total dollar cap across all rounds (default 5)",
+                    },
+                    "effort": {
+                        "type": "string",
+                        "enum": ["low", "medium", "high", "xhigh", "max"],
+                        "description": "Claude Code --effort level; default is the CLI's",
+                    },
+                    "max_turns": {
+                        "type": "integer",
+                        "description": "Turns per round (default the instance's, 1-500)",
+                    },
+                    "round_timeout_s": {
+                        "type": "number",
+                        "description": "Seconds one round may run (default the instance's, 60-7200)",
+                    },
+                    "max_rounds": {
+                        "type": "integer",
+                        "description": "Claude Code rounds before the job fails (default 3, max 10)",
+                    },
+                    "base_ref": {
+                        "type": "string",
+                        "description": "Branch, tag or sha to start from (default HEAD)",
+                    },
+                    "json_schema": {
+                        "type": "object",
+                        "description": "Optional JSON Schema for Claude Code's structured final answer",
+                    },
+                    "grant_github": {
+                        "type": "boolean",
+                        "description": (
+                            "Give Claude Code GH_TOKEN for read-only gh commands; needs GH_TOKEN "
+                            "in this agent's manifest secrets"
+                        ),
+                    },
+                },
+                "required": ["task", "repo_path", "acceptance"],
+            },
+        },
+    },
+    "claude_code_status": {
+        "type": "function",
+        "function": {
+            "name": "claude_code_status",
+            "description": (
+                "Use this to see a Claude Code job's state now without waiting: status, rounds, "
+                "cost, its last few actions, and the verify result and evidence once checked."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {"job_id": _JOB_ID_PARAM},
+                "required": ["job_id"],
+            },
+        },
+    },
+    "claude_code_wait": {
+        "type": "function",
+        "function": {
+            "name": "claude_code_wait",
+            "description": (
+                "Use this after claude_code_start to block until the job finishes or timeout_s "
+                "passes, then returns its status. A job still running after the wait is normal: "
+                "wait again. The wait is shortened to leave your run time to report."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "job_id": _JOB_ID_PARAM,
+                    "timeout_s": {
+                        "type": "integer",
+                        "description": "Seconds to wait (default 300, max 1800)",
+                    },
+                },
+                "required": ["job_id"],
+            },
+        },
+    },
+    "claude_code_followup": {
+        "type": "function",
+        "function": {
+            "name": "claude_code_followup",
+            "description": (
+                "Use this to send Claude Code a specific correction in the same session: queued "
+                "for the next round of a running job, or reopening a finished or failed one with a "
+                "fresh round allowance. Say exactly what is wrong and what to change."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "job_id": _JOB_ID_PARAM,
+                    "message": {"type": "string", "description": "The instruction"},
+                },
+                "required": ["job_id", "message"],
+            },
+        },
+    },
+    "claude_code_cancel": {
+        "type": "function",
+        "function": {
+            "name": "claude_code_cancel",
+            "description": (
+                "Use this to stop a Claude Code job: kills the running round and removes its "
+                "worktree (the branch and any commits stay)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {"job_id": _JOB_ID_PARAM},
+                "required": ["job_id"],
+            },
+        },
+    },
+}
+
+
+#: The pr-reviewer suite (robothor/pr_review/). Opt-in: see OPT_IN_TOOLS.
+_PR_REVIEW_SCHEMAS: dict[str, dict[str, Any]] = {
+    "pr_review_intake": {
+        "type": "function",
+        "function": {
+            "name": "pr_review_intake",
+            "description": (
+                "Poll the configured GitHub repositories and Chat space for pull requests "
+                "that need a review, and file one pr-review task per pull-request head. "
+                "Deterministic; normally run by the pr-review-intake workflow, one run at a "
+                "time per tenant (a concurrent run returns skipped: locked). Returns counts, "
+                "including open_tasks and queued_tasks. count_only=true only counts. "
+                "Use pr=<url or owner/repo#N> when the operator asks for a review of one "
+                "pull request."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "poll": {
+                        "type": "boolean",
+                        "description": "Read GitHub and Chat (default true)",
+                    },
+                    "count_only": {
+                        "type": "boolean",
+                        "description": "Only report open_tasks / queued_tasks; change nothing",
+                    },
+                    "pr": {
+                        "type": "string",
+                        "description": (
+                            "Review this one pull request now (URL or owner/repo#N, a "
+                            "configured repository only). Returns requested.status; call "
+                            "again later with the same pr for requested.review_url"
+                        ),
+                    },
+                    "action": {
+                        "type": "string",
+                        "enum": ["review", "skip"],
+                        "description": (
+                            "With pr: 'review' (default) queues it; 'skip' stops reviewing "
+                            "it — closes it and its open task, and later polls leave it "
+                            "alone until a review is asked for again"
+                        ),
+                    },
+                },
+            },
+        },
+    },
+    "pr_review_prepare": {
+        "type": "function",
+        "function": {
+            "name": "pr_review_prepare",
+            "description": (
+                "Use this first for a pr-review task: fetches the pull request's head, "
+                "starts the read-only Claude Code review job and returns its job_id for "
+                "claude_code_wait and pr_review_finalize. skip: true means there is nothing "
+                "to review; resolve the task."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {"repo": _GH_REPO, "number": _GH_NUMBER},
+                "required": ["repo", "number"],
+            },
+        },
+    },
+    "pr_review_finalize": {
+        "type": "function",
+        "function": {
+            "name": "pr_review_finalize",
+            "description": (
+                "Use this after claude_code_wait reports the review job finished (done or "
+                "failed). Reads the job's result itself, recomputes the verdict from the "
+                "findings, posts the review, replies on previous threads, announces in the "
+                "chat thread and returns review_url. dismiss=true closes an ambiguous "
+                "re-review request that was not one."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "repo": _GH_REPO,
+                    "number": _GH_NUMBER,
+                    "job_id": {
+                        "type": "string",
+                        "description": "The job_id pr_review_prepare returned (no other)",
+                    },
+                    "dismiss": {
+                        "type": "boolean",
+                        "description": "The ambiguous reply was not a re-review request",
+                    },
+                },
+                "required": ["repo", "number"],
+            },
+        },
+    },
+}
+
+
 def get_engine_schemas() -> dict[str, dict[str, Any]]:
     """Return all engine-specific tool schemas keyed by tool name."""
     schemas: dict[str, dict[str, Any]] = {}
 
     schemas.update(_CODE_SCHEMAS)
+    schemas.update(_CLAUDE_CODE_SCHEMAS)
     schemas.update(_ATTACHMENT_SCHEMAS)
 
     schemas["read_file"] = {
@@ -1917,6 +2428,8 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
         },
     }
     schemas["gws_calendar_add_attendees"] = _CALENDAR_ATTENDEE_SCHEMA
+    schemas["gws_calendar_update"] = _CALENDAR_UPDATE_SCHEMA
+    schemas["gws_calendar_respond"] = _CALENDAR_RESPOND_SCHEMA
     schemas["gws_calendar_delete"] = {
         "type": "function",
         "function": {
@@ -3153,11 +3666,18 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
         "type": "function",
         "function": {
             "name": "jira_get_issue",
-            "description": "Get a single JIRA issue with changelog for cycle time analysis.",
+            "description": (
+                "Get a single JIRA issue with changelog for cycle time analysis. "
+                "include_text=true adds its description and acceptance criteria as plain text."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "issue_key": {"type": "string", "description": "Issue key (e.g. 'ENG-123')"},
+                    "include_text": {
+                        "type": "boolean",
+                        "description": "Also return description and acceptance_criteria text",
+                    },
                 },
                 "required": ["issue_key"],
             },
@@ -3314,6 +3834,8 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
             },
         },
     }
+
+    schemas.update(_GITHUB_REVIEW_SCHEMAS | _PR_REVIEW_SCHEMAS)
 
     # ── DevOps metrics storage tools ──
 

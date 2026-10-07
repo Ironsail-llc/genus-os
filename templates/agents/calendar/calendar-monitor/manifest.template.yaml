@@ -33,6 +33,8 @@ tools_allowed:
   - append_to_block
   - gws_calendar_list
   - gws_calendar_create
+  - gws_calendar_update
+  - gws_calendar_respond
   - gws_calendar_delete
 tools_denied:
   - create_person

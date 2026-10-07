@@ -297,7 +297,9 @@ class ToolTurnMixin:
 
         started = time.monotonic()
         timeout = _resolve_tool_timeout(
-            call.tool_name, getattr(req.agent_config, "tool_timeout_seconds", 120)
+            call.tool_name,
+            getattr(req.agent_config, "tool_timeout_seconds", 120),
+            call.tool_args,
         )
         kwargs = {
             "agent_id": req.agent_config.id,

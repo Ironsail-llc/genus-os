@@ -79,6 +79,8 @@ CHECK_MODULES = (
     # real dispatch, because this control has twice been inert with a green
     # suite and an empty evidence table behind it.
     "step_efficiency",
+    # Opt-in: skips on an instance that never set up the Claude Code driver.
+    "claude_code",
     # Before the host, because a plugin is code this platform did not write and
     # the engine imports it at boot: "what third-party code is running here, and
     # did the operator mean it to" belongs with the instance's own state rather

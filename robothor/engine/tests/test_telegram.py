@@ -2518,11 +2518,17 @@ class TestPerSenderIdentityThreading:
         bot.send_message = AsyncMock(return_value=[MagicMock(message_id=1)])
         bot._build_background_config = MagicMock(return_value=MagicMock())
 
-        # Mirrors the production on_plan_decision callback: fire-and-forget
-        # via asyncio.create_task, the exact scheduling gap the finding names.
-        task = asyncio.create_task(bot._execute_approved_plan("55555", session_key, session))
-        await task
+        # Approval is persisted (strict) before execution starts; unit runs
+        # have no database, so the durable write is faked as successful.
+        with patch(
+            "robothor.engine.telegram_plan_mode.save_plan_state_async", new_callable=AsyncMock
+        ) as persist:
+            # Mirrors the production on_plan_decision callback: fire-and-forget
+            # via asyncio.create_task, the exact scheduling gap the finding names.
+            task = asyncio.create_task(bot._execute_approved_plan("55555", session_key, session))
+            await task
 
+        persist.assert_awaited_once()
         identity = captured["identity"]
         assert identity is not None
         assert identity.display_name == "Alice"

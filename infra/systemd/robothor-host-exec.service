@@ -21,7 +21,14 @@ TimeoutStopSec=15
 KillMode=control-group
 NoNewPrivileges=no
 ProtectSystem=off
-ProtectHome=read-only
+# The verified-owner path is the owner's whole computer: the engine routes a
+# command here only after the owner check passes. ProtectHome=read-only made
+# every path under /home read-only for those commands -- the workspace repo,
+# ~/.config (CLI token caches such as the Google Workspace CLI's), the
+# operator's own files -- so a CLI that had already done its job failed on its
+# output file and the agent could never fix its own configuration. The engine
+# unit keeps ProtectHome=read-only for non-owner, cron and sub-agent runs.
+ProtectHome=no
 
 [Install]
 WantedBy=multi-user.target

@@ -43,10 +43,22 @@ def _isolated(monkeypatch, tmp_path):
     reset_alias_warnings()
     reset_unknown_key_warnings()
     reset_settings()
+    # Never ask the real systemd on the box which drop-in sets what.
+    from robothor.cli import config_cmd
+
+    monkeypatch.setattr(config_cmd, "_systemd_runner", _NoSystemd())
+    monkeypatch.setattr(config_cmd, "_systemd_reader", lambda _p: None)
     yield
     reset_settings()
     reset_alias_warnings()
     reset_unknown_key_warnings()
+
+
+class _NoSystemd:
+    def __call__(self, argv, stdin=None):
+        import subprocess
+
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
 
 
 def _args(**kwargs) -> argparse.Namespace:
@@ -450,3 +462,304 @@ class TestOneFingerprintForOneCredential:
         body = inspect.getsource(operator)
         assert "sha256" not in body, "a second fingerprint for the same credential"
         assert "hashlib" not in body
+
+
+# ── systemd drop-ins: naming them, and changing a value there ────────────────
+
+_ENGINE = "/etc/systemd/system/robothor-engine.service"
+_DROPS = "/etc/systemd/system/robothor-engine.service.d"
+
+
+class _FakeSystemd:
+    """``systemctl show`` answered from a dict; every other call recorded."""
+
+    def __init__(self, files: dict[str, str]) -> None:
+        self.files = files
+        self.calls: list[list[str]] = []
+
+    def __call__(self, argv, stdin=None):
+        import subprocess
+
+        self.calls.append(list(argv))
+        if argv[:2] == ["systemctl", "show"]:
+            if argv[2] != "robothor-engine.service":
+                return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+            drops = " ".join(sorted(p for p in self.files if p.startswith(_DROPS)))
+            out = f"FragmentPath={_ENGINE}\nDropInPaths={drops}\n"
+            return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+
+def _systemd(monkeypatch, files: dict[str, str]) -> _FakeSystemd:
+    from robothor.cli import config_cmd
+
+    fake = _FakeSystemd(files)
+    monkeypatch.setattr(config_cmd, "_systemd_runner", fake)
+    monkeypatch.setattr(config_cmd, "_systemd_reader", files.get)
+    return fake
+
+
+def _two_dropins() -> dict[str, str]:
+    return {
+        _ENGINE: "[Service]\nEnvironmentFile=-/run/robothor/secrets.env\n",
+        f"{_DROPS}/zz-port.conf": "[Service]\nEnvironment=ROBOTHOR_ENGINE_PORT=18800\n",
+        f"{_DROPS}/zzzzzzzz-port-pin.conf": "[Service]\nEnvironment=ROBOTHOR_ENGINE_PORT=18899\n",
+    }
+
+
+def _readable(files: dict[str, str]) -> dict[str, str]:
+    """The same unit, with its secrets file readable and not setting the variable."""
+    return {**files, "/run/robothor/secrets.env": "OTHER=1\n"}
+
+
+def test_get_names_the_dropin_that_sets_the_value(monkeypatch, capsys) -> None:
+    _systemd(monkeypatch, _two_dropins())
+    monkeypatch.setenv("ROBOTHOR_ENGINE_PORT", "18899")
+    assert cmd_config(_args(config_command="get", name="ROBOTHOR_ENGINE_PORT")) == 0
+    out = capsys.readouterr().out
+    assert f"{_DROPS}/zzzzzzzz-port-pin.conf:2" in out
+    assert f"{_DROPS}/zz-port.conf" in out  # the one it overrides, named too
+    assert "/run/robothor/secrets.env" in out  # unreadable, so said, not guessed
+
+
+def test_get_reports_the_unit_even_when_this_shell_lacks_the_variable(monkeypatch, capsys) -> None:
+    """The agent's shell (host-exec) does not carry the engine's drop-ins."""
+    _systemd(monkeypatch, _two_dropins())
+    assert cmd_config(_args(config_command="get", name="ROBOTHOR_ENGINE_PORT")) == 0
+    out = capsys.readouterr().out
+    assert "default" in out
+    assert "robothor-engine.service: ROBOTHOR_ENGINE_PORT=18899" in out
+
+
+def test_get_json_carries_the_systemd_origin(monkeypatch, capsys) -> None:
+    _systemd(monkeypatch, _two_dropins())
+    cmd_config(_args(config_command="get", name="ROBOTHOR_ENGINE_PORT", json=True))
+    payload = json.loads(capsys.readouterr().out)
+    [origin] = payload["systemd"]
+    assert origin["unit"] == "robothor-engine.service"
+    assert origin["path"] == f"{_DROPS}/zzzzzzzz-port-pin.conf"
+    assert origin["kind"] == "Environment"
+
+
+def test_get_never_prints_a_secret_from_a_dropin(monkeypatch, capsys) -> None:
+    _systemd(
+        monkeypatch,
+        {
+            _ENGINE: "[Service]\n",
+            f"{_DROPS}/zz-db.conf": "[Service]\nEnvironment=ROBOTHOR_DB_PASSWORD=hunter2-real\n",
+        },
+    )
+    assert cmd_config(_args(config_command="get", name="ROBOTHOR_DB_PASSWORD")) == 0
+    out = capsys.readouterr().out
+    assert "hunter2-real" not in out
+    assert f"{_DROPS}/zz-db.conf" in out
+
+
+def test_set_without_apply_warns_that_systemd_shadows_config_yaml(monkeypatch, capsys) -> None:
+    _systemd(monkeypatch, _two_dropins())
+    rc = cmd_config(_args(config_command="set", name="ROBOTHOR_ENGINE_PORT", value="18801"))
+    assert rc == 0
+    captured = capsys.readouterr()
+    assert "zzzzzzzz-port-pin.conf" in captured.err
+    assert "--apply" in captured.err
+
+
+def test_set_apply_refuses_a_later_dropin_and_names_it(monkeypatch, tmp_path, capsys) -> None:
+    fake = _systemd(monkeypatch, _readable(_two_dropins()))
+    rc = cmd_config(
+        _args(config_command="set", name="ROBOTHOR_ENGINE_PORT", value="18801", apply=True)
+    )
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert f"{_DROPS}/zzzzzzzz-port-pin.conf" in err
+    assert "--override" in err
+    assert not [c for c in fake.calls if c[:1] == ["sudo"]]
+    assert not _config_path(tmp_path).exists()
+
+
+def test_set_apply_override_writes_a_later_dropin_and_schedules_restart(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    fake = _systemd(monkeypatch, _readable(_two_dropins()))
+    rc = cmd_config(
+        _args(
+            config_command="set",
+            name="ROBOTHOR_ENGINE_PORT",
+            value="18801",
+            apply=True,
+            override=True,
+        )
+    )
+    assert rc == 0, capsys.readouterr().err
+    out = capsys.readouterr().out
+    sudo = [c for c in fake.calls if c[:1] == ["sudo"]]
+    installs = [c for c in sudo if "install" in c]
+    assert len(installs) == 1
+    target = installs[0][-1]
+    assert target.startswith(f"{_DROPS}/")
+    assert target.rsplit("/", 1)[1] > "zzzzzzzz-port-pin.conf"
+    assert ["sudo", "-n", "systemctl", "daemon-reload"] in sudo
+    restart = [c for c in sudo if "systemd-run" in c]
+    assert restart and restart[0][-3:] == ["systemctl", "restart", "robothor-engine.service"]
+    assert "--on-active=15s" in restart[0]
+    assert target in out
+    assert "restart" in out
+    # The drop-in is the layer that wins; config.yaml is not written behind it.
+    assert not _config_path(tmp_path).exists()
+
+
+def test_set_apply_with_no_systemd_origin_writes_config_and_schedules_restart(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    fake = _systemd(monkeypatch, {_ENGINE: "[Service]\n"})
+    rc = cmd_config(
+        _args(config_command="set", name="ROBOTHOR_ENGINE_PORT", value="18801", apply=True)
+    )
+    assert rc == 0
+    assert _config_path(tmp_path).exists()
+    sudo = [c for c in fake.calls if c[:1] == ["sudo"]]
+    assert not [c for c in sudo if "install" in c]
+    restart = [c for c in sudo if "systemd-run" in c]
+    assert restart and "robothor-engine.service" in restart[0]
+
+
+def test_set_apply_reports_a_sudo_failure(monkeypatch, capsys) -> None:
+    import subprocess
+
+    fake = _systemd(monkeypatch, {_ENGINE: "[Service]\nEnvironment=ROBOTHOR_ENGINE_PORT=1\n"})
+
+    def failing(argv, stdin=None):
+        if argv[:1] == ["sudo"]:
+            fake.calls.append(list(argv))
+            return subprocess.CompletedProcess(argv, 1, stdout="", stderr="a password is required")
+        return fake(argv, stdin)
+
+    from robothor.cli import config_cmd
+
+    monkeypatch.setattr(config_cmd, "_systemd_runner", failing)
+    rc = cmd_config(
+        _args(config_command="set", name="ROBOTHOR_ENGINE_PORT", value="18801", apply=True)
+    )
+    assert rc == 1
+    assert "a password is required" in capsys.readouterr().err
+
+
+# ── review fixes: control characters, unverifiable origins, partial applies ──
+
+
+@pytest.mark.parametrize("bad", ["8080\nExecStartPre=+/usr/bin/id\n#", "1\r2", "1\x002"])
+@pytest.mark.parametrize("apply", [False, True])
+def test_set_refuses_control_characters_on_every_path(
+    monkeypatch, tmp_path, capsys, bad, apply
+) -> None:
+    fake = _systemd(monkeypatch, _two_dropins())
+    rc = cmd_config(
+        _args(
+            config_command="set",
+            name="ROBOTHOR_AI_DOMAIN",
+            value=bad,
+            apply=apply,
+            override=True,
+        )
+    )
+    assert rc == 1
+    assert "control character" in capsys.readouterr().err
+    assert not [c for c in fake.calls if c[:1] == ["sudo"]]
+    assert not _config_path(tmp_path).exists()
+
+
+def test_set_apply_refuses_when_an_unreadable_env_file_could_win(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    """The secrets file is root-only; the variable may be set there."""
+    fake = _systemd(monkeypatch, _two_dropins())  # secrets.env not in the dict: unreadable
+    rc = cmd_config(
+        _args(
+            config_command="set",
+            name="ROBOTHOR_ENGINE_PORT",
+            value="18801",
+            apply=True,
+            override=True,
+        )
+    )
+    assert rc == 1
+    assert "/run/robothor/secrets.env" in capsys.readouterr().err
+    assert not [c for c in fake.calls if c[:1] == ["sudo"]]
+
+
+def test_set_apply_refuses_when_only_an_unreadable_env_file_is_in_play(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    fake = _systemd(
+        monkeypatch, {_ENGINE: "[Service]\nEnvironmentFile=-/run/robothor/secrets.env\n"}
+    )
+    rc = cmd_config(
+        _args(config_command="set", name="ROBOTHOR_ENGINE_PORT", value="18801", apply=True)
+    )
+    assert rc == 1
+    assert "/run/robothor/secrets.env" in capsys.readouterr().err
+    assert not _config_path(tmp_path).exists()
+    assert not [c for c in fake.calls if c[:1] == ["sudo"]]
+
+
+def test_get_names_unreadable_files_even_with_no_origin(monkeypatch, capsys) -> None:
+    _systemd(monkeypatch, {_ENGINE: "[Service]\nEnvironmentFile=-/run/robothor/secrets.env\n"})
+    assert cmd_config(_args(config_command="get", name="ROBOTHOR_ENGINE_PORT")) == 0
+    assert "/run/robothor/secrets.env" in capsys.readouterr().out
+
+
+def test_set_apply_reports_partial_when_the_restart_cannot_be_scheduled(
+    monkeypatch, capsys
+) -> None:
+    import subprocess
+
+    fake = _systemd(monkeypatch, {_ENGINE: "[Service]\nEnvironment=ROBOTHOR_ENGINE_PORT=1\n"})
+
+    def failing(argv, stdin=None):
+        if "systemd-run" in argv:
+            fake.calls.append(list(argv))
+            return subprocess.CompletedProcess(argv, 1, stdout="", stderr="unit exists")
+        return fake(argv, stdin)
+
+    from robothor.cli import config_cmd
+
+    monkeypatch.setattr(config_cmd, "_systemd_runner", failing)
+    rc = cmd_config(
+        _args(
+            config_command="set",
+            name="ROBOTHOR_ENGINE_PORT",
+            value="18801",
+            apply=True,
+            json=True,
+        )
+    )
+    assert rc == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["applied"] is False
+    assert payload["partial"] is True
+    assert payload["dropins"] == [f"{_DROPS}/zz-genus-config-robothor-engine-port.conf"]
+    assert payload["restart_scheduled"] == []
+    assert "unit exists" in payload["errors"][0]
+
+
+def test_set_apply_coalesces_with_a_pending_restart(monkeypatch, capsys) -> None:
+    import subprocess
+
+    fake = _systemd(monkeypatch, {_ENGINE: "[Service]\nEnvironment=ROBOTHOR_ENGINE_PORT=1\n"})
+
+    def pending(argv, stdin=None):
+        if argv[:2] == ["systemctl", "show"] and argv[2].startswith("genus-config-restart-"):
+            fake.calls.append(list(argv))
+            return subprocess.CompletedProcess(argv, 0, stdout="SubState=waiting\n", stderr="")
+        return fake(argv, stdin)
+
+    from robothor.cli import config_cmd
+
+    monkeypatch.setattr(config_cmd, "_systemd_runner", pending)
+    rc = cmd_config(
+        _args(config_command="set", name="ROBOTHOR_ENGINE_PORT", value="18801", apply=True)
+    )
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "already scheduled" in out
+    assert not [c for c in fake.calls if "systemd-run" in c]

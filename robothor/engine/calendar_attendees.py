@@ -1,33 +1,97 @@
-"""A bounded read/merge/conditional-write/readback operation."""
+"""Edit an existing event: one bounded read / merge / conditional write / readback.
+
+Every change to an existing meeting — adding or removing guests, moving it,
+renaming it, RSVPing — goes through ``_conditional_patch``: read the event,
+work out the smallest patch against what is ACTUALLY there (existing guests
+and their RSVPs are carried over whole), write it with ``If-Match`` on the
+version that was read, then read it back once to verify. A conflicting edit
+gets one fresh read and merge; an uncertain write is only ever read back,
+never blindly repeated.
+
+These are direct writes. Editing a meeting is ordinary assistant work, not a
+payment or an irreversible external action, so there is no draft and no
+"reply yes to confirm" step. That step used to exist, and a bare "yes" from
+anyone in a group chat could fire it.
+"""
 
 from __future__ import annotations
 
+import re
 from copy import deepcopy
+from datetime import date, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterable
 
 from robothor.engine.calendar_transport import CalendarTransport
 
+#: Fields a plain update may set verbatim.
+TEXT_FIELDS = ("summary", "description", "location")
+
+#: The RSVP values Google accepts from an attendee.
+RESPONSES = ("accepted", "declined", "tentative")
+
+
+class OperationCancellation:
+    """Observe both task cancellation and the operator's live interrupt flag.
+
+    The write runs in a worker thread, which keeps going after the awaiting
+    task is cancelled. Checking this immediately before the PATCH is what stops
+    a cancelled request from still landing a moment later.
+    """
+
+    def __init__(self, run_id: str) -> None:
+        from threading import Event
+
+        from robothor.engine import session_registry
+
+        self.event = Event()
+        self.session = session_registry.lookup(run_id) if run_id else None
+
+    def set(self) -> None:
+        self.event.set()
+
+    def is_set(self) -> bool:
+        return self.event.is_set() or bool(
+            self.session
+            and (
+                getattr(self.session, "_interrupt_requested", False)
+                or getattr(self.session, "was_interrupted", False)
+            )
+        )
+
+
+def _email(entry: dict[str, Any]) -> str:
+    return str(entry.get("email") or "").casefold()
+
 
 def _emails(event: dict[str, Any]) -> set[str]:
-    return {a.get("email", "").casefold() for a in event.get("attendees", [])}
+    return {_email(a) for a in event.get("attendees", [])}
 
 
 def _response_status(event: dict[str, Any]) -> dict[str, str]:
     return {
-        a.get("email", "").casefold(): str(a.get("responseStatus") or "needsAction")
-        for a in event.get("attendees", [])
+        _email(a): str(a.get("responseStatus") or "needsAction") for a in event.get("attendees", [])
     }
 
 
+def _unique(emails: Iterable[str]) -> list[str]:
+    """Casefolded, stripped, first occurrence wins, order kept."""
+    seen: list[str] = []
+    for raw in emails:
+        email = str(raw).strip().casefold()
+        if email and email not in seen:
+            seen.append(email)
+    return seen
+
+
 def recurrence_of(event: dict[str, Any]) -> dict[str, Any] | None:
-    """Whether this write touches a SERIES, and say so before it happens.
+    """Whether this write touches a SERIES, and say so.
 
     A single guest added to a ``FREQ=WEEKLY;COUNT=52`` master mails every
     existing guest about the whole series. Nothing in the result said the
-    event recurred at all, so nobody could weigh that before confirming.
+    event recurred at all, so nobody could weigh that.
     """
     if event.get("recurrence"):
         return {
@@ -46,109 +110,179 @@ def recurrence_of(event: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
-def _instant(value: Any) -> Any:
-    from datetime import datetime
+_DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+def _default_timezone() -> str:
+    """The operator's configured zone, for a naive time on an event with none."""
+    from robothor.constants import DEFAULT_TIMEZONE, platform_timezone
 
     try:
-        return datetime.fromisoformat(str(value))
+        return platform_timezone()
+    except Exception:  # noqa: BLE001 - a settings problem must not lose the edit
+        return DEFAULT_TIMEZONE
+
+
+def _zone(name: Any) -> Any:
+    from zoneinfo import ZoneInfo
+
+    try:
+        return ZoneInfo(str(name)) if name else None
+    except (KeyError, ValueError):
+        return None
+
+
+def _instant(value: Any, zone: Any = None) -> datetime | None:
+    """Parse a date-time; a naive one is read in ``zone`` when one is given."""
+    try:
+        moment = datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
+    if moment.tzinfo is None and zone:
+        tz = _zone(zone)
+        if tz is not None:
+            moment = moment.replace(tzinfo=tz)
+    return moment
+
+
+def _as_date(value: Any) -> date | None:
+    if not isinstance(value, str) or not _DATE_RE.fullmatch(value):
+        return None
+    try:
+        return date.fromisoformat(value)
     except ValueError:
         return None
 
 
-def _same_time(before: Any, after: Any) -> bool:
+def _kind(value: str) -> str | None:
+    """``date`` (all-day), ``dateTime``, or ``None`` for something unparseable."""
+    if _DATE_RE.fullmatch(value):
+        return "date" if _as_date(value) else None
+    return "dateTime" if _instant(value) is not None else None
+
+
+def _same_time(before: Any, after: Any, zone: Any = None) -> bool:
     """Compare INSTANTS, not representations.
 
-    Google normalises an echoed ``timeZone`` into an equivalent offset, and
-    comparing the dicts turned a write that had SUCCEEDED into a blocked
-    operation needing human reconciliation.
+    Google normalises an echoed ``timeZone`` into an equivalent offset, and it
+    localises a naive time (the format the schema invites) in the event's zone
+    before echoing it with an offset. Comparing representations — or a naive
+    instant to an aware one — turned writes that had SUCCEEDED into reported
+    failures. Each side is read in its own ``timeZone``, then ``zone``.
     """
     if before == after:
         return True
     if not isinstance(before, dict) or not isinstance(after, dict):
         return False
-    if "dateTime" not in before or "dateTime" not in after:
+    if before.get("date") or after.get("date"):
+        return (
+            not before.get("dateTime")
+            and not after.get("dateTime")
+            and before.get("date") == after.get("date")
+        )
+    if not before.get("dateTime") or not after.get("dateTime"):
         return False
-    one, two = _instant(before["dateTime"]), _instant(after["dateTime"])
-    return one is not None and one == two
+    one = _instant(before["dateTime"], before.get("timeZone") or zone)
+    two = _instant(after["dateTime"], after.get("timeZone") or zone)
+    if one is None or two is None or (one.tzinfo is None) != (two.tzinfo is None):
+        return False
+    return one == two
 
 
-def add_attendees(
+def _event_zone(event: dict[str, Any]) -> str:
+    for key in ("start", "end"):
+        value = event.get(key)
+        if isinstance(value, dict) and value.get("timeZone"):
+            return str(value["timeZone"])
+    return _default_timezone()
+
+
+def _time_value(value: str, existing: Any, zone: str) -> dict[str, Any]:
+    """The shape ``gws_calendar_create`` writes, kept consistent with the event.
+
+    A bare date writes ``{"date": ...}`` — an all-day event stays all-day. A
+    date-time keeps the event's own ``timeZone`` (it decides how the meeting
+    displays and how a series expands); a naive one on an event with no zone
+    gets the operator's, because Google rejects a naive time with no zone. The
+    other representation is cleared with ``null``, or Google would see both.
+    """
+    existing = existing if isinstance(existing, dict) else {}
+    if _kind(value) == "date":
+        out: dict[str, Any] = {"date": value}
+        if existing.get("dateTime"):
+            out["dateTime"] = None
+        return out
+    out = {"dateTime": value}
+    tz = existing.get("timeZone")
+    parsed = _instant(value)
+    if not tz and parsed is not None and parsed.tzinfo is None:
+        tz = zone
+    if tz:
+        out["timeZone"] = tz
+    if existing.get("date"):
+        out["date"] = None
+    return out
+
+
+def _attendee_view(event: dict[str, Any]) -> list[dict[str, str]]:
+    return [
+        {
+            "email": str(a.get("email") or ""),
+            "responseStatus": str(a.get("responseStatus") or "needsAction"),
+        }
+        for a in event.get("attendees", [])
+    ]
+
+
+def _entry_preserved(old: dict[str, Any], attendees: list[dict[str, Any]]) -> bool:
+    return any(all(actual.get(k) == v for k, v in old.items()) for actual in attendees)
+
+
+Plan = tuple[dict[str, Any], "Callable[[dict[str, Any]], bool]", dict[str, Any]]
+
+
+def _conditional_patch(
     calendar_id: str,
     event_id: str,
-    emails: list[str],
+    plan: Callable[[dict[str, Any]], dict[str, Any] | Plan],
     *,
-    screen: Callable[..., dict[str, Any] | None],
-    expected_event: dict[str, Any] | None = None,
+    send_updates: str,
     cancelled: Any = None,
-    prefetched: dict[str, Any] | None = None,
+    allow_omitted: bool = False,
 ) -> dict[str, Any]:
     """One write; a conflict gets one fresh merge, an uncertain write only a read.
 
+    ``plan(before)`` returns either a finished result (a refusal, or "nothing
+    to change") or ``(patch body, verify(after) -> bool, extra result fields)``.
     Returning an error never authorizes an agent to remove/re-add an attendee
     or blindly resend an invitation.
     """
-    requested = set(emails)
     if cancelled is not None and cancelled.is_set():
         return {
             "error": "Calendar operation cancelled before write",
             "invitations_requested": False,
         }
     with CalendarTransport() as api:
-        # A caller that already read this event (to record the pre-write
-        # version) hands the read in rather than paying for a second one.
-        before = (
-            deepcopy(prefetched)
-            if prefetched is not None
-            else api.request("GET", calendar_id, event_id)
-        )
         for attempt in range(2):
+            before = api.request("GET", calendar_id, event_id)
             if "error" in before:
                 return {**before, "verification": "unavailable", "invitations_requested": False}
-            if before.get("attendeesOmitted") or before.get("status") == "cancelled":
+            if before.get("status") == "cancelled":
                 return {
-                    "error": "Cannot edit an incomplete or cancelled event",
+                    "error": "Cannot edit a cancelled event",
                     "invitations_requested": False,
                 }
-            if expected_event and any(before.get(k) != v for k, v in expected_event.items()):
+            planned = plan(before)
+            if isinstance(planned, dict):
+                return planned
+            body, verify, extra = planned
+            if "attendees" in body and before.get("attendeesOmitted") and not allow_omitted:
                 return {
-                    "error": "The meeting details changed since the draft; prepare a new draft",
+                    "error": "Calendar returned an incomplete guest list; refusing to overwrite it",
                     "invitations_requested": False,
                 }
-            missing = sorted(requested - _emails(before))
-            if not missing:
-                status = _response_status(before)
-                declined = sorted(e for e in requested if status.get(e) == "declined")
-                note = "Already on the invitation; no notification was requested."
-                if declined:
-                    # Re-adding a declined guest is a no-op at Google: they stay
-                    # declined and no new invitation goes out. Saying "already
-                    # invited" reports a refusal as a success.
-                    note = (
-                        "Already on the invitation, but "
-                        + ", ".join(declined)
-                        + " declined. Re-adding a declined guest does not re-invite them and no "
-                        "notification was requested; ask the operator how to proceed."
-                    )
-                return {
-                    "event_id": event_id,
-                    "status": "already_present",
-                    "verification": "verified",
-                    "added": [],
-                    "already_present": sorted(requested),
-                    "declined": declined,
-                    "response_status": {e: status.get(e, "needsAction") for e in sorted(requested)},
-                    "note": note,
-                    "recurrence": recurrence_of(before),
-                    "invitations_requested": False,
-                    "htmlLink": before.get("htmlLink"),
-                }
-            refusal = screen(*sorted(_emails(before) | requested))
-            if refusal:
-                return refusal
             if not before.get("etag"):
                 return {"error": "Calendar omitted the version; refusing an unconditional write"}
-            attendees = deepcopy(before.get("attendees", []))
-            attendees.extend({"email": email} for email in missing)
             if cancelled is not None and cancelled.is_set():
                 return {
                     "error": "Calendar operation cancelled before write",
@@ -158,11 +292,11 @@ def add_attendees(
                 "PATCH",
                 calendar_id,
                 event_id,
-                body={"attendees": attendees},
+                body=body,
                 etag=before["etag"],
+                send_updates=send_updates,
             )
             if written.get("status_code") == 412 and attempt == 0:
-                before = api.request("GET", calendar_id, event_id)
                 continue
             if (
                 "error" in written
@@ -171,40 +305,358 @@ def add_attendees(
             ):
                 return {**written, "invitations_requested": False, "verification": "failed"}
             after = api.request("GET", calendar_id, event_id)
-            present = "error" not in after and requested <= _emails(after)
-            preserved = (
-                present
+            shown = after if "error" not in after else before
+            zone = _event_zone(before)
+            verified = (
+                "error" not in after
+                and verify(after)
                 and all(
-                    any(
-                        all(actual.get(k) == v for k, v in old.items())
-                        for actual in after.get("attendees", [])
-                    )
-                    for old in before.get("attendees", [])
+                    _same_time(body.get(k, before.get(k)), after.get(k), zone)
+                    for k in ("start", "end")
                 )
-                and all(_same_time(before.get(k), after.get(k)) for k in ("start", "end"))
                 and all(
                     before.get(k) == after.get(k)
                     for k in ("organizer", "conferenceData", "hangoutLink")
                 )
             )
-            result = {
+            requested = None if "error" in written else send_updates != "none"
+            result: dict[str, Any] = {
                 "event_id": event_id,
-                "added": missing if present else [],
-                "already_present": sorted(requested & _emails(before)),
+                "status": "updated" if verified else "partial",
+                "verification": "verified" if verified else "unverified",
+                "changed": sorted(body),
+                "summary": shown.get("summary"),
+                "start": shown.get("start"),
+                "end": shown.get("end"),
+                "attendees": _attendee_view(shown),
                 "recurrence": recurrence_of(before),
-                "status": "updated" if preserved else "partial",
-                "verification": "verified" if preserved else "unverified",
-                "invitations_requested": None if "error" in written else True,
-                "send_updates": "all",
+                "invitations_requested": requested,
+                "send_updates": send_updates,
                 "delivery_verified": False,
-                "htmlLink": after.get("htmlLink") or before.get("htmlLink"),
+                "htmlLink": shown.get("htmlLink") or before.get("htmlLink"),
+                **extra,
             }
+            # Only `all` lets the handler name who Google mailed; under any
+            # other setting the key is absent rather than a guess.
+            if requested and send_updates == "all":
+                result["attendees_notified"] = [a["email"] for a in _attendee_view(shown)]
             if "error" in after and ("error" not in written or written.get("outcome_unknown")):
                 result["reconciliation_pending"] = True
-            if not preserved or "error" in written:
+            if not verified and "error" in written:
+                # The write may or may not have landed and the readback could
+                # not settle it: the effect ledger records this as uncertain.
+                result["outcome_unknown"] = True
+            if not verified or "error" in written:
                 result["error"] = (
-                    "Update outcome requires reconciliation; do not repeat the write. "
-                    "Report the partial result and record a separate integration repair task."
+                    "Update outcome could not be verified; do not repeat the write. "
+                    "Read the event with gws_calendar_list and report what it shows."
                 )
             return result
     raise AssertionError("unreachable")
+
+
+def _protected(event: dict[str, Any], calendar_id: str) -> set[str]:
+    """Addresses an edit may not remove: the organiser and this calendar's own."""
+    out = {calendar_id.casefold()}
+    organizer = event.get("organizer") or {}
+    if organizer.get("email"):
+        out.add(str(organizer["email"]).casefold())
+    for entry in event.get("attendees", []):
+        if entry.get("organizer") or entry.get("self"):
+            out.add(_email(entry))
+    out.discard("")
+    return out
+
+
+def _plan_times(
+    before: dict[str, Any], start: str | None, end: str | None, zone: str
+) -> dict[str, Any]:
+    """The new ``start``/``end`` values, or ``{"error": ...}``.
+
+    Moving only one end keeps the meeting's length — in days for an all-day
+    event, as a duration for a timed one.
+    """
+    old_start = before.get("start") or {}
+    old_end = before.get("end") or {}
+    out: dict[str, Any] = {}
+    if start is not None:
+        out["start"] = _time_value(start, old_start, zone)
+    if end is not None:
+        out["end"] = _time_value(end, old_end, zone)
+    kind = _kind(start) if start is not None else _kind(end) if end is not None else None
+    if kind is None:
+        return out
+    if start is not None and end is None:
+        if kind == "date":
+            first = _as_date(old_start.get("date"))
+            last = _as_date(old_end.get("date"))
+            days = (last - first).days if first and last and last > first else 1
+            moved = _as_date(start)
+            assert moved is not None
+            out["end"] = _time_value((moved + timedelta(days=days)).isoformat(), old_end, zone)
+        else:
+            one = _instant(old_start.get("dateTime"), old_start.get("timeZone") or zone)
+            two = _instant(old_end.get("dateTime"), old_end.get("timeZone") or zone)
+            moved_at = _instant(start)
+            if one is None or two is None or moved_at is None:
+                return {"error": "The event has no timed end to keep the length of; pass end too"}
+            out["end"] = _time_value((moved_at + (two - one)).isoformat(), old_end, zone)
+    first_value: dict[str, Any] = out.get("start") or old_start
+    last_value: dict[str, Any] = out["end"]
+    if not first_value.get(kind):
+        return {"error": "The event's start is the other kind (all-day vs timed); pass start too"}
+    if kind == "date":
+        first = _as_date(first_value.get("date"))
+        last = _as_date(last_value.get("date"))
+        backwards = bool(first and last and last <= first)
+    else:
+        one = _instant(first_value.get("dateTime"), first_value.get("timeZone") or zone)
+        two = _instant(last_value.get("dateTime"), last_value.get("timeZone") or zone)
+        backwards = bool(
+            one and two and (one.tzinfo is None) == (two.tzinfo is None) and two <= one
+        )
+    if backwards:
+        return {"error": "end must be after start"}
+    return out
+
+
+def update_event(
+    calendar_id: str,
+    event_id: str,
+    *,
+    screen: Callable[..., dict[str, Any] | None],
+    add: Iterable[str] = (),
+    remove: Iterable[str] = (),
+    start: str | None = None,
+    end: str | None = None,
+    fields: dict[str, Any] | None = None,
+    send_updates: str = "all",
+    cancelled: Any = None,
+) -> dict[str, Any]:
+    """Patch an existing event: guests, time, title, notes, place — in one write.
+
+    Existing guests are carried over whole (RSVP, optional flag, comment);
+    additions and removals match case-insensitively. Moving only the start
+    keeps the meeting's length. Everyone who will be mailed about the change is
+    screened against the do-not-contact list first.
+    """
+    to_add = _unique(add)
+    to_remove = _unique(remove)
+    clash = sorted(set(to_add) & set(to_remove))
+    if clash:
+        return {"error": f"Cannot both add and remove {', '.join(clash)}"}
+    texts = {k: v for k, v in (fields or {}).items() if k in TEXT_FIELDS}
+    hint = "an RFC3339 date-time (2026-10-09T14:00:00-04:00) or, for all-day, a date (2026-10-09)"
+    start_kind = _kind(start) if start is not None else None
+    end_kind = _kind(end) if end is not None else None
+    if start is not None and start_kind is None:
+        return {"error": f"start must be {hint}"}
+    if end is not None and end_kind is None:
+        return {"error": f"end must be {hint}"}
+    if start_kind and end_kind and start_kind != end_kind:
+        return {"error": "start and end must both be dates (all-day) or both date-times"}
+
+    def plan(before: dict[str, Any]) -> dict[str, Any] | Plan:
+        existing = deepcopy(before.get("attendees", []))
+        present = _emails(before)
+        missing = [e for e in to_add if e not in present]
+        removed = [e for e in to_remove if e in present]
+        already = sorted(e for e in to_add if e in present)
+        status = _response_status(before)
+        declined = sorted(e for e in already if status.get(e) == "declined")
+
+        protected = _protected(before, calendar_id)
+        refused = sorted(e for e in to_remove if e in protected)
+        if refused:
+            return {
+                "error": (
+                    f"Cannot remove {', '.join(refused)}: the organiser and this calendar's own "
+                    "entry stay on the meeting. To leave it, use gws_calendar_respond with "
+                    "response='declined'; to cancel it, gws_calendar_delete."
+                ),
+                "invitations_requested": False,
+            }
+
+        body: dict[str, Any] = {k: v for k, v in texts.items() if before.get(k) != v}
+        zone = _event_zone(before)
+        times = _plan_times(before, start, end, zone)
+        if "error" in times:
+            return {**times, "invitations_requested": False}
+        for key in ("start", "end"):
+            value = times.get(key)
+            if value is not None and not _same_time(before.get(key), value, zone):
+                body[key] = value
+        if missing or removed:
+            body["attendees"] = [a for a in existing if _email(a) not in set(removed)] + [
+                {"email": e} for e in missing
+            ]
+
+        extra = {
+            "added": missing,
+            "removed": removed,
+            "already_present": already,
+            "declined": declined,
+        }
+        if not body:
+            note = "Nothing to change; the event already matches. No notification was requested."
+            if declined:
+                # Re-adding a declined guest is a no-op at Google: they stay
+                # declined and no new invitation goes out. Saying "already
+                # invited" reports a refusal as a success.
+                note = (
+                    "Already on the invitation, but "
+                    + ", ".join(declined)
+                    + " declined. Re-adding a declined guest does not re-invite them and no "
+                    "notification was requested; ask the operator how to proceed."
+                )
+            only_adds = bool(to_add) and not (to_remove or texts or start or end)
+            return {
+                "event_id": event_id,
+                "status": "already_present" if only_adds else "unchanged",
+                "verification": "verified",
+                **extra,
+                "response_status": {e: status.get(e, "needsAction") for e in already},
+                "note": note,
+                "summary": before.get("summary"),
+                "start": before.get("start"),
+                "end": before.get("end"),
+                "attendees": _attendee_view(before),
+                "recurrence": recurrence_of(before),
+                "invitations_requested": False,
+                "htmlLink": before.get("htmlLink"),
+            }
+
+        # Who will hear about this: everyone left on the invitation when
+        # Google is asked to mail, and the newly invited in every case — an
+        # added guest gets the event on their calendar whether mailed or not.
+        remaining = [_email(a) for a in body.get("attendees", existing)]
+        recipients = set(missing) | (set(remaining) if send_updates != "none" else set())
+        recipients -= set(removed)
+        if recipients:
+            refusal = screen(*sorted(recipients))
+            if refusal:
+                return refusal
+
+        def verify(after: dict[str, Any]) -> bool:
+            got = _emails(after)
+            if not set(missing) <= got or set(removed) & got:
+                return False
+            kept = [a for a in existing if _email(a) not in set(removed)]
+            if not all(_entry_preserved(old, after.get("attendees", [])) for old in kept):
+                return False
+            return all(after.get(k) == v for k, v in body.items() if k in TEXT_FIELDS)
+
+        return body, verify, extra
+
+    return _conditional_patch(
+        calendar_id, event_id, plan, send_updates=send_updates, cancelled=cancelled
+    )
+
+
+def add_attendees(
+    calendar_id: str,
+    event_id: str,
+    emails: list[str],
+    *,
+    screen: Callable[..., dict[str, Any] | None],
+    send_updates: str = "all",
+    cancelled: Any = None,
+) -> dict[str, Any]:
+    """Add guests to an existing event — ``update_event`` with only additions."""
+    return update_event(
+        calendar_id,
+        event_id,
+        add=emails,
+        screen=screen,
+        send_updates=send_updates,
+        cancelled=cancelled,
+    )
+
+
+def respond(
+    calendar_id: str,
+    event_id: str,
+    response: str,
+    *,
+    screen: Callable[..., dict[str, Any] | None],
+    comment: str | None = None,
+    send_updates: str = "all",
+    cancelled: Any = None,
+) -> dict[str, Any]:
+    """Set the calendar owner's own RSVP on an invitation.
+
+    The owner's entry is the one Google flags ``self`` (the attendee entry for
+    the calendar this copy of the event lives on), or failing that the one whose
+    address is the calendar's. Nobody else's RSVP is touched.
+    """
+    if response not in RESPONSES:
+        return {"error": f"response must be one of {', '.join(RESPONSES)}"}
+
+    def plan(before: dict[str, Any]) -> dict[str, Any] | Plan:
+        attendees = deepcopy(before.get("attendees", []))
+        index = next((i for i, a in enumerate(attendees) if a.get("self")), None)
+        if index is None:
+            index = next(
+                (i for i, a in enumerate(attendees) if _email(a) == calendar_id.casefold()), None
+            )
+        if index is None:
+            organizer = before.get("organizer") or {}
+            if organizer.get("self") or str(organizer.get("email") or "").casefold() == (
+                calendar_id.casefold()
+            ):
+                why = "This calendar organises the meeting; an organiser has no RSVP to send."
+            else:
+                why = "This calendar is not on the meeting's guest list, so it has no RSVP to send."
+            return {"error": why, "invitations_requested": False}
+        mine = attendees[index]
+        if mine.get("responseStatus") == response and (
+            comment is None or mine.get("comment") == comment
+        ):
+            return {
+                "event_id": event_id,
+                "status": "unchanged",
+                "verification": "verified",
+                "response": response,
+                "note": f"Already {response}; nothing was sent.",
+                "summary": before.get("summary"),
+                "start": before.get("start"),
+                "end": before.get("end"),
+                "invitations_requested": False,
+                "htmlLink": before.get("htmlLink"),
+            }
+        mine["responseStatus"] = response
+        if comment is not None:
+            mine["comment"] = comment
+        organizer = str((before.get("organizer") or {}).get("email") or "")
+        if organizer and send_updates != "none":
+            refusal = screen(organizer)
+            if refusal:
+                return refusal
+        target = _email(mine)
+
+        def verify(after: dict[str, Any]) -> bool:
+            entry = next(
+                (a for a in after.get("attendees", []) if a.get("self") or _email(a) == target),
+                None,
+            )
+            others = [a for i, a in enumerate(before.get("attendees", [])) if i != index]
+            return (
+                entry is not None
+                and entry.get("responseStatus") == response
+                and all(_entry_preserved(old, after.get("attendees", [])) for old in others)
+            )
+
+        # A guest's copy with a hidden guest list carries `attendeesOmitted`
+        # and (usually) only the self entry. Google's documented RSVP for that
+        # copy is a PATCH carrying just the self entry.
+        patch = [mine] if before.get("attendeesOmitted") else attendees
+        return {"attendees": patch}, verify, {"response": response}
+
+    return _conditional_patch(
+        calendar_id,
+        event_id,
+        plan,
+        send_updates=send_updates,
+        cancelled=cancelled,
+        allow_omitted=True,
+    )

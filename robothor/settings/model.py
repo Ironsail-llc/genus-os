@@ -797,12 +797,6 @@ class EngineSettings(SettingsGroup):
 
     restart_units: ClassVar[tuple[str, ...]] = ("robothor-engine",)
 
-    calendar_operations_enabled: bool = declare(
-        False,
-        "ROBOTHOR_CALENDAR_OPERATIONS_ENABLED",
-        "Enable durable native attendee updates after migrations 126/127 and test-calendar canaries.",
-    )
-
     host: str = declare(
         "127.0.0.1",
         "ROBOTHOR_ENGINE_HOST",
@@ -1214,6 +1208,22 @@ class EngineSettings(SettingsGroup):
         "The single mailbox address that bound connection sends as. Every "
         "approved sender is checked against it, and Gmail would silently "
         "rewrite a From header that disagreed.",
+    )
+    host_exec_socket: str = declare(
+        "",
+        "ROBOTHOR_HOST_EXEC_SOCKET",
+        "Unix socket of the host-execution service (robothor-host-exec). The "
+        "service binds it (empty means /run/robothor-host/exec.sock) and the "
+        "engine's main agent sends owner commands to it; empty in the engine "
+        "means host execution is not offered and exec stays in the engine's "
+        "own sandbox.",
+    )
+    deploy_test_python: str = declare(
+        "",
+        "ROBOTHOR_DEPLOY_TEST_PYTHON",
+        "Interpreter a local deploy runs its pre-switch test gate with: the "
+        "instance's dev interpreter, since runtime releases omit pytest. Empty "
+        "means <workspace>/venv/bin/python.",
     )
 
 
@@ -3089,6 +3099,355 @@ class AutonomySettings(SettingsGroup):
     )
 
 
+class CodingSettings(SettingsGroup):
+    """The Claude Code driver: the claude_code_* tools (robothor/engine/coding/)."""
+
+    restart_units: ClassVar[tuple[str, ...]] = ("robothor-engine",)
+
+    claude_bin: str = declare(
+        "",
+        "ROBOTHOR_CLAUDE_BIN",
+        "The Claude Code CLI a coding job runs. Empty looks for `claude` on PATH, then "
+        "~/.local/bin/claude (where the native installer puts it).",
+        restart_required=False,
+        since="unreleased",
+    )
+    claude_code_auth: str = declare(
+        "auto",
+        "ROBOTHOR_CLAUDE_CODE_AUTH",
+        "How a coding job authenticates. `auto` (the default) uses the "
+        "CLAUDE_CODE_OAUTH_TOKEN stored by `robothor claude-code login` when there is one, "
+        "otherwise the Claude Code login the engine's user already has on this host. "
+        "`token` requires the stored token; `host` always uses the host login. The host "
+        "login needs ~/.claude writable by the engine unit; personal settings, plugins and "
+        "MCP servers are excluded either way.",
+        restart_required=False,
+        since="unreleased",
+    )
+    claude_code_model: str = declare(
+        "",
+        "ROBOTHOR_CLAUDE_CODE_MODEL",
+        "Model alias a coding job uses when the agent names none (sonnet, opus, ...). "
+        "Empty uses the Claude Code CLI's own default.",
+        restart_required=False,
+        since="unreleased",
+    )
+    max_budget_usd: float = declare(
+        5.0,
+        "ROBOTHOR_CLAUDE_CODE_MAX_BUDGET_USD",
+        "Default dollar cap for one coding job across all its rounds, when the agent "
+        "names none. Each round is told only what is left.",
+        restart_required=False,
+        since="unreleased",
+    )
+    max_turns: int = declare(
+        80,
+        "ROBOTHOR_CLAUDE_CODE_MAX_TURNS",
+        "Claude Code turns allowed in one round of a coding job (--max-turns).",
+        restart_required=False,
+        since="unreleased",
+    )
+    round_timeout_s: float = declare(
+        3600.0,
+        "ROBOTHOR_CLAUDE_CODE_ROUND_TIMEOUT",
+        "Seconds one Claude Code round may run before its process group is killed. "
+        "A killed round still counts, and the next one resumes the same session.",
+        restart_required=False,
+        since="unreleased",
+    )
+    verify_timeout_s: float = declare(
+        900.0,
+        "ROBOTHOR_CODING_VERIFY_TIMEOUT",
+        "Seconds a coding job's acceptance verify_command may run before it is killed "
+        "and counted as a failure.",
+        restart_required=False,
+        since="unreleased",
+    )
+    max_concurrent: int = declare(
+        2,
+        "ROBOTHOR_CODING_MAX_CONCURRENT",
+        "Coding jobs one tenant may run at once; more wait as `queued`.",
+        since="unreleased",
+    )
+    worktree_root: str = declare(
+        "",
+        "ROBOTHOR_CODING_WORKTREE_ROOT",
+        "Where coding jobs' git worktrees are created, one directory per job. Empty means "
+        "<workspace>/.genus/worktrees. Must be writable by the engine: under the shipped "
+        "unit that means inside the workspace or a ReadWritePaths= drop-in.",
+        restart_required=False,
+        since="unreleased",
+    )
+    repo_roots: str = declare(
+        "",
+        "ROBOTHOR_CODING_REPO_ROOTS",
+        "Path-separated directories a coding job's repo_path must sit under. REQUIRED: "
+        "empty refuses every claude_code_start. The live workspace itself, the service "
+        "user's home itself, and any directory containing either are refused even under "
+        "a root. The job still works only in its own worktree and never on main/master.",
+        restart_required=False,
+        since="unreleased",
+    )
+    allowed_domains: str = declare(
+        "",
+        "ROBOTHOR_CODING_ALLOWED_DOMAINS",
+        "Comma-separated domains a code-mode job's sandboxed shell may reach (for "
+        "example pypi.org,files.pythonhosted.org). Empty means no network at all. "
+        "review and readonly jobs never have network, whatever this says.",
+        restart_required=False,
+        since="unreleased",
+    )
+    retention_days: int = declare(
+        7,
+        "ROBOTHOR_CODING_RETENTION_DAYS",
+        "Days a finished coding job's worktree, private config directory and "
+        "genus/cc-* branch are kept before the reaper removes them. Merge or push a "
+        "job's branch before then.",
+        restart_required=False,
+        since="unreleased",
+    )
+    git_name: str = declare(
+        "",
+        "ROBOTHOR_CODING_GIT_NAME",
+        "Author name on coding-job commits. Empty uses the target repository's "
+        "user.name, then a generic agent name.",
+        restart_required=False,
+        since="unreleased",
+    )
+    git_email: str = declare(
+        "",
+        "ROBOTHOR_CODING_GIT_EMAIL",
+        "Author email on coding-job commits. Empty uses the target repository's "
+        "user.email, then a generic placeholder address.",
+        restart_required=False,
+        since="unreleased",
+    )
+
+
+class PrReviewSettings(SettingsGroup):
+    """The pr-reviewer suite: intake, review jobs and posting (robothor/pr_review/)."""
+
+    restart_units: ClassVar[tuple[str, ...]] = ("robothor-engine",)
+
+    repos: str = declare(
+        "",
+        "ROBOTHOR_PR_REVIEW_REPOS",
+        "Comma-separated owner/repo list the pr-reviewer may review. Pull-request links "
+        "posted in the Chat space count only for these repositories. An entry may carry "
+        "its ticket prefix as owner/repo:PREFIX (another review bot's ALLOWED_REPOS "
+        "format). Empty disables the repository sources.",
+        restart_required=False,
+        since="unreleased",
+    )
+    watch_repos: bool = declare(
+        False,
+        "ROBOTHOR_PR_REVIEW_WATCH_REPOS",
+        "Review every open, non-draft pull request in the configured repositories, and "
+        "re-review when its head moves. False reviews only pull requests posted in the "
+        "Chat space or that request the bot login's review.",
+        restart_required=False,
+        since="unreleased",
+    )
+    bot_login: str = declare(
+        "",
+        "ROBOTHOR_PR_REVIEW_BOT_LOGIN",
+        "GitHub login whose requested reviews are picked up, from any repository the token "
+        "can read. Empty skips the requested-review source.",
+        restart_required=False,
+        since="unreleased",
+    )
+    chat_space: str = declare(
+        "",
+        "ROBOTHOR_PR_REVIEW_CHAT_SPACE",
+        "Google Chat space resource name (spaces/...) watched for pull-request links and "
+        "re-review requests, and where results are announced in the original thread. "
+        "Empty disables the Chat source.",
+        restart_required=False,
+        since="unreleased",
+    )
+    chat_self_users: str = declare(
+        "",
+        "ROBOTHOR_PR_REVIEW_CHAT_SELF_USERS",
+        "Comma-separated Chat user resource names (users/...) whose messages are the "
+        "reviewer's own and are never treated as requests.",
+        restart_required=False,
+        since="unreleased",
+    )
+    chat_lookback_minutes: int = declare(
+        60,
+        "ROBOTHOR_PR_REVIEW_CHAT_LOOKBACK_MINUTES",
+        "On the first poll of a Chat space, how far back to read. Later polls continue "
+        "from the stored cursor.",
+        restart_required=False,
+        since="unreleased",
+    )
+    approved_reaction: str = declare(
+        "\U0001f44d",
+        "ROBOTHOR_PR_REVIEW_APPROVED_REACTION",
+        "Emoji that replaces the claim reaction on the Chat message when its pull request "
+        "is approved. Empty leaves the claim reaction in place.",
+        restart_required=False,
+        since="unreleased",
+    )
+    guidelines_path: str = declare(
+        "",
+        "ROBOTHOR_PR_REVIEW_GUIDELINES_PATH",
+        "Instance review-guidelines file (e.g. <workspace>/brain/pr-review-guidelines.md). "
+        "When set and readable, its content replaces the pr-review skill's generic "
+        "guidelines in every review prompt; re-read for every review.",
+        restart_required=False,
+        since="unreleased",
+    )
+    review_effort: str = declare(
+        "high",
+        "ROBOTHOR_PR_REVIEW_EFFORT",
+        "Claude Code --effort for review jobs: low, medium, high, xhigh or max. Empty "
+        "leaves the CLI's default.",
+        restart_required=False,
+        since="unreleased",
+    )
+    review_max_turns: int = declare(
+        80,
+        "ROBOTHOR_PR_REVIEW_MAX_TURNS",
+        "Claude Code turns one review round may take (--max-turns).",
+        restart_required=False,
+        since="unreleased",
+    )
+    deep_lines: int = declare(
+        1500,
+        "ROBOTHOR_PR_REVIEW_DEEP_LINES",
+        "Changed lines (additions plus deletions) from which a review goes deep: "
+        "ROBOTHOR_PR_REVIEW_DEEP_EFFORT, four explicit sequential lens passes, and a "
+        "completeness pass in the same session when the first round used under 60% of "
+        "its turns.",
+        restart_required=False,
+        since="unreleased",
+    )
+    deep_effort: str = declare(
+        "xhigh",
+        "ROBOTHOR_PR_REVIEW_DEEP_EFFORT",
+        "Claude Code --effort for a deep review (low, medium, high, xhigh or max). Never "
+        "lowers ROBOTHOR_PR_REVIEW_EFFORT.",
+        restart_required=False,
+        since="unreleased",
+    )
+    review_round_timeout_s: float = declare(
+        1800.0,
+        "ROBOTHOR_PR_REVIEW_ROUND_TIMEOUT",
+        "Seconds one review round may run before Claude Code is killed.",
+        restart_required=False,
+        since="unreleased",
+    )
+    claim_reaction: str = declare(
+        "\U0001f440",
+        "ROBOTHOR_PR_REVIEW_CLAIM_REACTION",
+        "Emoji reacted on a Chat message when its pull request or re-review is queued. "
+        "Empty reacts with nothing.",
+        restart_required=False,
+        since="unreleased",
+    )
+    telegram_digest: bool = declare(
+        False,
+        "ROBOTHOR_PR_REVIEW_TELEGRAM_DIGEST",
+        "pr_review_finalize returns a one-line digest per posted review for the agent to "
+        "deliver; the agent's delivery must announce on Telegram for it to arrive.",
+        restart_required=False,
+        since="unreleased",
+    )
+    require_ticket: bool = declare(
+        False,
+        "ROBOTHOR_PR_REVIEW_REQUIRE_TICKET",
+        "A pull request with no ticket key in its title, branch, description or commit "
+        "messages gets a blocking [no-ticket] finding and is never approved.",
+        restart_required=False,
+        since="unreleased",
+    )
+    ticket_prefixes: str = declare(
+        "",
+        "ROBOTHOR_PR_REVIEW_TICKET_PREFIXES",
+        "Ticket key prefixes the reviewer links pull requests to: owner/repo:PREFIX "
+        "entries apply to that repository, bare PREFIX entries (e.g. ABC) to every "
+        "repository without its own, comma-separated. Empty accepts any uppercase KEY-123.",
+        restart_required=False,
+        since="unreleased",
+    )
+    blocking_event: str = declare(
+        "REQUEST_CHANGES",
+        "ROBOTHOR_PR_REVIEW_BLOCKING_EVENT",
+        "Review event posted when a blocker or major finding remains: REQUEST_CHANGES, "
+        "or COMMENT for a reviewer that should never block a merge. Never APPROVE.",
+        restart_required=False,
+        since="unreleased",
+    )
+    max_concurrent: int = declare(
+        2,
+        "ROBOTHOR_PR_REVIEW_MAX_CONCURRENT",
+        "Review tasks the intake keeps open at once; further pull requests wait and are "
+        "queued on a later poll.",
+        restart_required=False,
+        since="unreleased",
+    )
+    agent_id: str = declare(
+        "pr-reviewer",
+        "ROBOTHOR_PR_REVIEW_AGENT",
+        "Agent the intake assigns review tasks to.",
+        restart_required=False,
+        since="unreleased",
+    )
+    clone_root: str = declare(
+        "",
+        "ROBOTHOR_PR_REVIEW_CLONE_ROOT",
+        "Where pr_review_prepare keeps one clone per reviewed repository. Empty means "
+        "<workspace>/.genus/pr-review/repos. When ROBOTHOR_CODING_REPO_ROOTS is set it "
+        "must include this directory.",
+        restart_required=False,
+        since="unreleased",
+    )
+    review_model: str = declare(
+        "opus",
+        "ROBOTHOR_PR_REVIEW_MODEL",
+        "Claude Code model alias for review jobs. The default `opus` is the CLI's alias, "
+        "which each Claude Code update points at the newest Opus; never pin a dated model "
+        "id here. Empty uses ROBOTHOR_CLAUDE_CODE_MODEL. The model actually used is named "
+        "in each review's footer.",
+        restart_required=False,
+        since="unreleased",
+    )
+    review_budget_usd: float = declare(
+        25.0,
+        "ROBOTHOR_PR_REVIEW_BUDGET_USD",
+        "Dollar cap for one review job across its rounds. On a Claude subscription this "
+        "is the CLI's notional cost, a runaway guard rather than a bill.",
+        restart_required=False,
+        since="unreleased",
+    )
+    stale_after_minutes: int = declare(
+        180,
+        "ROBOTHOR_PR_REVIEW_STALE_AFTER_MINUTES",
+        "A review queued or running this long without being finalized is marked failed, "
+        "so a lost task never holds a concurrency slot forever.",
+        restart_required=False,
+        since="unreleased",
+    )
+    skip_labels: str = declare(
+        "",
+        "ROBOTHOR_PR_REVIEW_SKIP_LABELS",
+        "Comma-separated pull-request labels that skip the review entirely. Empty (the "
+        "default) skips by label never: anyone who can label a pull request could "
+        "otherwise switch its review off.",
+        restart_required=False,
+        since="unreleased",
+    )
+    retry_cooldown_minutes: int = declare(
+        60,
+        "ROBOTHOR_PR_REVIEW_RETRY_COOLDOWN_MINUTES",
+        "A failed review is retried on the same head after this long, at most 3 attempts "
+        "per head; a new head is retried at once.",
+        restart_required=False,
+        since="unreleased",
+    )
+
+
 class GenusSettings(BaseSettings):
     """Every Genus OS setting, grouped.
 
@@ -3105,6 +3464,8 @@ class GenusSettings(BaseSettings):
     )
 
     autonomy: AutonomySettings = Field(default_factory=AutonomySettings)
+    coding: CodingSettings = Field(default_factory=CodingSettings)
+    pr_review: PrReviewSettings = Field(default_factory=PrReviewSettings)
     paths: PathsSettings = Field(default_factory=PathsSettings)
     database: DatabaseSettings = Field(default_factory=DatabaseSettings)
     redis: RedisSettings = Field(default_factory=RedisSettings)

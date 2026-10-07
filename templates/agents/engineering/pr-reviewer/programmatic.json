@@ -1,0 +1,9 @@
+{
+  "name": "PR Reviewer",
+  "id": "pr-reviewer",
+  "version": "2026-10-05",
+  "format": "robothor-native/v1",
+  "department": "engineering",
+  "description": "Reviews pull requests with Claude Code and posts the result on GitHub",
+  "tags": ["pr-review"]
+}
