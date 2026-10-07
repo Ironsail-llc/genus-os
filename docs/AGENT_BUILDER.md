@@ -400,6 +400,12 @@ delivery:
 
 **Only 3 agents talk to the user:** main (via heartbeat), morning briefing, evening wind-down. All other agents use `delivery: none`.
 
+An agent that does announce, but whose output contract is "these lines or
+nothing", sets `delivery.line_filter` to a regex: only matching lines are
+delivered, a run left with none is silent (`delivery_status`
+`suppressed_filtered`), and a failed run's error always gets through. The
+pr-reviewer uses `'^\W*PR review '` so only its digest lines reach Telegram.
+
 Coordination — who this unit connects to:
 
 ```yaml
