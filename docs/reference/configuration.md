@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-462 settings in 16 groups.
+464 settings in 16 groups.
 
 ## autonomy
 
@@ -245,6 +245,7 @@ The agent execution layer: bind address, concurrency, pacing, sandbox.
 | `ROBOTHOR_BUDDY_GRADER_DRYRUN` | bool | `false` | `robothor-engine` | no | legacy | Run the verification grader without writing its verdicts, for checking a grading change against live runs. |
 | `ROBOTHOR_DAEMON_START_TS` | str | _(empty)_ | `robothor-engine` | no | legacy | ISO timestamp the daemon sets on itself at boot and child processes read to report uptime. Set by the engine, not by an operator. |
 | `ROBOTHOR_DEFAULT_CHAT_AGENT` | str | `main` | `robothor-engine` | no | legacy | Agent an inbound chat is routed to when nothing names one. |
+| `ROBOTHOR_DEPLOY_TEST_PYTHON` | str | _(empty)_ | `robothor-engine` | no | legacy | Interpreter a local deploy runs its pre-switch test gate with: the instance's dev interpreter, since runtime releases omit pytest. Empty means <workspace>/venv/bin/python. |
 | `ROBOTHOR_ENGINE_HOST` | str | `127.0.0.1` | `robothor-engine` | no | legacy | Address the engine's HTTP surface binds to. Loopback by default; the auth guard refuses the insecure dev mode on any other address. |
 | `ROBOTHOR_ENGINE_PORT` | int | `18800` | `robothor-engine` | no | legacy | Engine HTTP port. |
 | `ROBOTHOR_ENGINE_URL` | str | `http://127.0.0.1:18800` | `robothor-engine` | no | legacy | Base URL the dashboard's server-side client calls the engine on. |
@@ -254,6 +255,7 @@ The agent execution layer: bind address, concurrency, pacing, sandbox.
 | `ROBOTHOR_EXECUTE_CODE_TIMEOUT` | int | `300` | no | no | unreleased | Wall-clock seconds one `execute_code` snippet gets. The agent may ask for less and never for more, and the run's own remaining budget still clamps it. On expiry the snippet's process group is killed, along with every descendant the engine has seen it start. A snippet can DEFEAT both deliberately -- a child started in its own session, then `os._exit` to skip the snippet's own cleanup -- so this is a budget for honest work, not a containment boundary for hostile code. Only a delegated cgroup (`Delegate=yes` on the engine's unit) would close that; until then, grant `execute_code` to agents you would grant `exec`. |
 | `ROBOTHOR_EXECUTION_MODE` | str | `auto` | `robothor-engine` | no | legacy | Which tier runs agents: auto, cloud, or local. 'local' switches the budgets as well as the model — cloud-era wall-clock budgets were 78% of local-tier failures. |
 | `ROBOTHOR_EXEC_SPILL_MAX_BYTES` | int | `8388608` | no | no | unreleased | Largest `exec` spill file, in bytes (default 8 MiB). A command whose output is bigger has its spill cut at this size with a marker saying so, and the result says how much the file holds. Before the spill existed nothing from a command reached the disk at all, so a single `exec` under the 900-second ceiling could otherwise fill the workspace. A spill is also refused outright when writing it would leave the filesystem with less than 64 MiB free. |
+| `ROBOTHOR_HOST_EXEC_SOCKET` | str | _(empty)_ | `robothor-engine` | no | legacy | Unix socket of the host-execution service (robothor-host-exec). The service binds it (empty means /run/robothor-host/exec.sock) and the engine's main agent sends owner commands to it; empty in the engine means host execution is not offered and exec stays in the engine's own sandbox. |
 | `ROBOTHOR_IMPORTANCE_THRESHOLD` | float | `0.3` | `robothor-engine` | no | legacy | Minimum importance score for an extracted fact to be stored. |
 | `ROBOTHOR_LOCAL_GATE_WAIT_SECONDS` | int | `120` | no | no | legacy | How long a local-tier run waits for a GPU slot before giving up. |
 | `ROBOTHOR_LOCAL_MAX_CONCURRENT` | int | `0` | no | no | legacy | Concurrency ceiling while on the local tier. 0 lets the host profile derive one from VRAM and core count. |
