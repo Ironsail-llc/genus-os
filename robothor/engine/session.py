@@ -695,10 +695,11 @@ class AgentSession:
 
         # Offload large results to temp file, keeping summary + path in context
         self._last_offload_path = None
+        is_readback = self._is_offload_readback(tool_name, tool_input)
         if (
             self._tool_offload_threshold
             and len(content) > self._tool_offload_threshold
-            and not self._is_offload_readback(tool_name, tool_input)
+            and not is_readback
         ):
             content = self._offload_tool_result(content, tool_name)
 
@@ -716,6 +717,7 @@ class AgentSession:
                 "role": "tool",
                 "tool_call_id": tool_call_id,
                 "content": content,
+                "offload_readback": is_readback,
             }
         )
 
@@ -983,6 +985,13 @@ class AgentSession:
             if "[Full output:" in content:
                 # Already an offload stub — the summary plus the retrieval
                 # pointer. Thinning it again would destroy the pointer.
+                continue
+            if msg.get("offload_readback"):
+                # A read-back of an offloaded artifact is the agent's only copy
+                # of that data. Re-thinning it re-offloads it and hands back a
+                # stub, so the agent reads again — the loop this exemption
+                # exists to break. The ledger marked it loop-exempt at record
+                # time; honor that here.
                 continue
             summary = extract_tool_summary(content)
             if len(summary) >= len(content):
