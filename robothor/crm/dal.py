@@ -4317,7 +4317,8 @@ def get_person_events(
         cur.execute(
             """
             SELECT DISTINCT ON (ce.id)
-                   ce.id, ce.google_event_id, ce.title, ce.description,
+                   ce.id, ce.provider, ce.external_event_id, ce.google_event_id,
+                   ce.title, ce.description,
                    ce.location, ce.start_at, ce.end_at, ce.hangout_link,
                    ce.status, cep.role, cep.response_status
               FROM calendar_event ce
