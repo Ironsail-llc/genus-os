@@ -59,25 +59,53 @@ CLAUDE_CODE_TOOLS = frozenset(
 # pr-reviewer suite (robothor/pr_review/). Opt-in: listed in OPT_IN_TOOLS.
 PR_REVIEW_TOOLS = frozenset({"pr_review_intake", "pr_review_prepare", "pr_review_finalize"})
 
-# Google Workspace tools (gws CLI)
-GWS_TOOLS = frozenset(
-    {
-        "gws_gmail_search",
-        "gws_gmail_get",
-        "gws_gmail_reply",
-        "gws_gmail_send",
-        "gws_gmail_modify",
-        "gws_calendar_list",
-        "gws_calendar_create",
-        "gws_calendar_add_attendees",
-        "gws_calendar_update",
-        "gws_calendar_respond",
-        "gws_calendar_delete",
-        "gws_chat_send",
-        "gws_chat_list_spaces",
-        "gws_chat_list_messages",
-    }
+# ── Workspace tool families (mail, calendar, chat) ──────────────────────
+#
+# The ONE place a Workspace tool name is spelled. Every guard, accounting and
+# verification table elsewhere derives from these, so a tool keeps every guard
+# whichever provider serves it. ``test_tool_families.py`` fails on a literal
+# Workspace tool name anywhere else in the package.
+
+MAIL_SEARCH_TOOL = "gws_gmail_search"
+MAIL_GET_TOOL = "gws_gmail_get"
+MAIL_SEND_TOOL = "gws_gmail_send"
+MAIL_REPLY_TOOL = "gws_gmail_reply"
+MAIL_MODIFY_TOOL = "gws_gmail_modify"
+CALENDAR_LIST_TOOL = "gws_calendar_list"
+CALENDAR_CREATE_TOOL = "gws_calendar_create"
+CALENDAR_UPDATE_TOOL = "gws_calendar_update"
+CALENDAR_ADD_ATTENDEES_TOOL = "gws_calendar_add_attendees"
+CALENDAR_RESPOND_TOOL = "gws_calendar_respond"
+CALENDAR_DELETE_TOOL = "gws_calendar_delete"
+CHAT_SEND_TOOL = "gws_chat_send"
+CHAT_LIST_SPACES_TOOL = "gws_chat_list_spaces"
+CHAT_LIST_MESSAGES_TOOL = "gws_chat_list_messages"
+
+MAIL_READ_TOOLS: frozenset[str] = frozenset({MAIL_SEARCH_TOOL, MAIL_GET_TOOL})
+#: Tools that put a message in someone's inbox.
+MAIL_SEND_TOOLS: frozenset[str] = frozenset({MAIL_SEND_TOOL, MAIL_REPLY_TOOL})
+MAIL_WRITE_TOOLS: frozenset[str] = MAIL_SEND_TOOLS | {MAIL_MODIFY_TOOL}
+
+CALENDAR_READ_TOOLS: frozenset[str] = frozenset({CALENDAR_LIST_TOOL})
+CALENDAR_CREATE_TOOLS: frozenset[str] = frozenset({CALENDAR_CREATE_TOOL})
+#: Edits to an existing event (the effect-ledger journalled writes).
+CALENDAR_EDIT_TOOLS: frozenset[str] = frozenset(
+    {CALENDAR_UPDATE_TOOL, CALENDAR_ADD_ATTENDEES_TOOL, CALENDAR_RESPOND_TOOL}
 )
+CALENDAR_WRITE_TOOLS: frozenset[str] = (
+    CALENDAR_CREATE_TOOLS | CALENDAR_EDIT_TOOLS | {CALENDAR_DELETE_TOOL}
+)
+
+CHAT_READ_TOOLS: frozenset[str] = frozenset({CHAT_LIST_SPACES_TOOL, CHAT_LIST_MESSAGES_TOOL})
+CHAT_SEND_TOOLS: frozenset[str] = frozenset({CHAT_SEND_TOOL})
+CHAT_TOOLS: frozenset[str] = CHAT_READ_TOOLS | CHAT_SEND_TOOLS
+
+WORKSPACE_TOOLS: frozenset[str] = (
+    MAIL_READ_TOOLS | MAIL_WRITE_TOOLS | CALENDAR_READ_TOOLS | CALENDAR_WRITE_TOOLS | CHAT_TOOLS
+)
+
+# Google Workspace tools (gws CLI). Kept as the historical name.
+GWS_TOOLS = WORKSPACE_TOOLS
 
 # Browser automation tool
 BROWSER_TOOLS = frozenset({"browser"})
@@ -342,11 +370,9 @@ READONLY_TOOLS: frozenset[str] = frozenset(
         "git_status",
         "git_diff",
         # Google Workspace (read-only)
-        "gws_gmail_search",
-        "gws_gmail_get",
-        "gws_calendar_list",
-        "gws_chat_list_spaces",
-        "gws_chat_list_messages",
+        *MAIL_READ_TOOLS,
+        *CALENDAR_READ_TOOLS,
+        *CHAT_READ_TOOLS,
         # Desktop read-only tools
         "desktop_screenshot",
         "desktop_window_list",
@@ -465,12 +491,8 @@ CORE_TOOLS: frozenset[str] = frozenset(
         # Calendar: the operator's meetings are everyday work, not a deferred
         # niche. Deferring them behind tool_search is how "add Bob to the 3pm"
         # became a capability gap.
-        "gws_calendar_list",
-        "gws_calendar_create",
-        "gws_calendar_update",
-        "gws_calendar_add_attendees",
-        "gws_calendar_respond",
-        "gws_calendar_delete",
+        *CALENDAR_READ_TOOLS,
+        *CALENDAR_WRITE_TOOLS,
         # File / shell
         "read_file",
         "write_file",

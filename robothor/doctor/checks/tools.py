@@ -33,6 +33,14 @@ from fnmatch import fnmatch
 from typing import TYPE_CHECKING, Any
 
 from robothor.doctor.model import Check, Result, fail, info, ok, skip
+from robothor.engine.tools.constants import (
+    CALENDAR_CREATE_TOOL,
+    CALENDAR_DELETE_TOOL,
+    CHAT_SEND_TOOL,
+    MAIL_REPLY_TOOL,
+    MAIL_SEARCH_TOOL,
+    MAIL_SEND_TOOL,
+)
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from pathlib import Path
@@ -453,27 +461,27 @@ async def _tools_named_but_not_granted(ctx: DoctorContext) -> Result:
 #: `curl` straight at the REST API are all still missed by it, which is why a
 #: finding here is a floor and not a bound.
 _CLI_EQUIVALENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("gog gmail send --to alice@example.com", ("gws_gmail_send", "gws_gmail_reply")),
-    ("bash -lc 'gog gmail send'", ("gws_gmail_send", "gws_gmail_reply")),
-    ("env gog gmail send", ("gws_gmail_send", "gws_gmail_reply")),
-    ("/usr/local/bin/gog gmail send", ("gws_gmail_send", "gws_gmail_reply")),
-    ("gog gmail drafts send", ("gws_gmail_send",)),
-    ("gog gmail forward --to alice@example.com", ("gws_gmail_send", "gws_gmail_reply")),
-    ("python -m gogcli gmail send", ("gws_gmail_send", "gws_gmail_reply")),
+    ("gog gmail send --to alice@example.com", (MAIL_SEND_TOOL, MAIL_REPLY_TOOL)),
+    ("bash -lc 'gog gmail send'", (MAIL_SEND_TOOL, MAIL_REPLY_TOOL)),
+    ("env gog gmail send", (MAIL_SEND_TOOL, MAIL_REPLY_TOOL)),
+    ("/usr/local/bin/gog gmail send", (MAIL_SEND_TOOL, MAIL_REPLY_TOOL)),
+    ("gog gmail drafts send", (MAIL_SEND_TOOL,)),
+    ("gog gmail forward --to alice@example.com", (MAIL_SEND_TOOL, MAIL_REPLY_TOOL)),
+    ("python -m gogcli gmail send", (MAIL_SEND_TOOL, MAIL_REPLY_TOOL)),
     (
         "curl -X POST https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
-        ("gws_gmail_send", "gws_gmail_reply"),
+        (MAIL_SEND_TOOL, MAIL_REPLY_TOOL),
     ),
-    ("gws gmail users messages send", ("gws_gmail_send", "gws_gmail_reply")),
-    ("gog gmail reply --thread t", ("gws_gmail_reply",)),
-    ("gog gmail search --query q", ("gws_gmail_search",)),
-    ("gws gmail users messages list", ("gws_gmail_search",)),
-    ("gog calendar events insert", ("gws_calendar_create",)),
-    ("gws calendar events insert", ("gws_calendar_create",)),
-    ("gog calendar events delete", ("gws_calendar_delete",)),
-    ("gws calendar events delete", ("gws_calendar_delete",)),
-    ("gog chat send --space s", ("gws_chat_send",)),
-    ("gws chat spaces messages create", ("gws_chat_send",)),
+    ("gws gmail users messages send", (MAIL_SEND_TOOL, MAIL_REPLY_TOOL)),
+    ("gog gmail reply --thread t", (MAIL_REPLY_TOOL,)),
+    ("gog gmail search --query q", (MAIL_SEARCH_TOOL,)),
+    ("gws gmail users messages list", (MAIL_SEARCH_TOOL,)),
+    ("gog calendar events insert", (CALENDAR_CREATE_TOOL,)),
+    ("gws calendar events insert", (CALENDAR_CREATE_TOOL,)),
+    ("gog calendar events delete", (CALENDAR_DELETE_TOOL,)),
+    ("gws calendar events delete", (CALENDAR_DELETE_TOOL,)),
+    ("gog chat send --space s", (CHAT_SEND_TOOL,)),
+    ("gws chat spaces messages create", (CHAT_SEND_TOOL,)),
 )
 
 
@@ -834,10 +842,10 @@ def _calendar_tool_granted(directory: Path) -> bool:
     required check that fails for everyone who does not use the feature trains
     operators to ignore the report.
     """
-    from robothor.engine.tools.constants import GWS_TOOLS
+    from robothor.engine.tools.constants import CALENDAR_READ_TOOLS, CALENDAR_WRITE_TOOLS
 
     registered = _registered_names()
-    calendar_tools = {name for name in GWS_TOOLS if name.startswith("gws_calendar_")}
+    calendar_tools = CALENDAR_READ_TOOLS | CALENDAR_WRITE_TOOLS
     for manifest in _scan_manifests(directory):
         if _granted(manifest, registered) & calendar_tools:
             return True

@@ -41,6 +41,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from robothor.engine.feature_flags import tool_verify_mode
+from robothor.engine.tools.constants import CALENDAR_CREATE_TOOLS, MAIL_SEND_TOOLS
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -451,9 +452,8 @@ async def _check_notification(
 #: tool name -> post-condition checker. Membership is the whole contract: a
 #: tool that is not here is never verified and never touched.
 POST_CONDITION_CHECKS: dict[str, Checker] = {
-    "gws_gmail_send": _check_gmail_message,
-    "gws_gmail_reply": _check_gmail_message,
-    "gws_calendar_create": _check_calendar_event,
+    **dict.fromkeys(sorted(MAIL_SEND_TOOLS), _check_gmail_message),
+    **dict.fromkeys(sorted(CALENDAR_CREATE_TOOLS), _check_calendar_event),
     "create_task": _check_task_created,
     "update_task": _check_task_updated,
     "resolve_task": _check_task_resolved,

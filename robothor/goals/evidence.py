@@ -15,16 +15,10 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
+from robothor.engine.tools.constants import CALENDAR_WRITE_TOOLS
+
 #: Effect-ledger tools whose verified result is calendar evidence.
-CALENDAR_EFFECT_TOOLS = frozenset(
-    {
-        "gws_calendar_create",
-        "gws_calendar_update",
-        "gws_calendar_add_attendees",
-        "gws_calendar_respond",
-        "gws_calendar_delete",
-    }
-)
+CALENDAR_EFFECT_TOOLS = CALENDAR_WRITE_TOOLS
 
 
 def _operation_row(cur: Any, tenant: str, identifier: str) -> Any:
