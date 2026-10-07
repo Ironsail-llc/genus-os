@@ -1440,6 +1440,8 @@ async def main() -> int:
 
     await recover_repairs(runner, config)
 
+    await _start_coding_jobs()  # resume interrupted Claude Code jobs, reap old ones
+
     _init_fleet_capacity(config)
 
     # Initialize inter-agent messaging + teams so the send_agent_message /
@@ -1694,6 +1696,8 @@ async def main() -> int:
 
     await get_task_registry().drain(timeout=DRAIN_TIMEOUT_SECONDS)
 
+    await _stop_coding_jobs()  # unmarked, so the next start resumes them
+
     await scheduler.stop()
     await hooks.stop()
     if bot is not None:
@@ -1719,6 +1723,67 @@ async def main() -> int:
     await asyncio.gather(*pending, return_exceptions=True)
     logger.info("Engine stopped")
     return 1 if subsystem_crashed else 0
+
+
+async def _start_coding_jobs() -> None:
+    """Startup for the claude_code_* tools. Never fatal.
+
+    Resumes the jobs a previous engine left running, then removes what finished
+    ones older than ROBOTHOR_CODING_RETENTION_DAYS left behind (worktrees,
+    config dirs, genus/cc-* branches); the manager re-runs that reaper after
+    jobs finish, at most hourly.
+    """
+    resumed_jobs = await _resume_coding_jobs()
+    if resumed_jobs:
+        logger.info("Startup: resumed %d interrupted coding job(s)", resumed_jobs)
+    await _reap_coding_jobs()
+
+
+async def _resume_coding_jobs() -> int:
+    """Continue every Claude Code job left ``queued``/``running``. Never fatal.
+
+    All tenants this process can see: the jobs are engine-owned tasks, and this
+    engine is the only thing that will ever pick them up again. Under RLS the
+    connection's own tenant binding narrows the read.
+
+    Under HA every replica runs this startup path, so resuming would put N
+    engines on one Claude Code session; HA engines skip it and leave the rows.
+    """
+    from robothor.engine.leader import ha_leader_enabled
+
+    if ha_leader_enabled():
+        logger.warning("Startup: HA enabled — interrupted coding jobs are not auto-resumed")
+        return 0
+    try:
+        from robothor.engine.coding import jobs as coding_jobs
+
+        return await coding_jobs.resume_interrupted_jobs(None)
+    except Exception as e:  # noqa: BLE001 - a missing table must not stop the engine
+        logger.warning("Startup: coding job resume failed: %s", _sanitize(e))
+        return 0
+
+
+async def _reap_coding_jobs() -> int:
+    """Remove what old finished coding jobs left behind. Never fatal."""
+    try:
+        from robothor.engine.coding import jobs as coding_jobs
+
+        return await coding_jobs.get_manager().reap()
+    except Exception as e:  # noqa: BLE001 - housekeeping must not stop the engine
+        logger.warning("Startup: coding job reaper failed: %s", _sanitize(e))
+        return 0
+
+
+async def _stop_coding_jobs() -> None:
+    """Cancel running coding-job tasks, leaving their rows resumable."""
+    try:
+        from robothor.engine.coding import jobs as coding_jobs
+
+        manager = coding_jobs._manager
+        if manager is not None:
+            await manager.shutdown()
+    except Exception as e:  # noqa: BLE001 - shutdown continues regardless
+        logger.debug("Coding job shutdown failed: %s", e)
 
 
 def _record_watchdog_event(event_type: str, detail: str) -> None:

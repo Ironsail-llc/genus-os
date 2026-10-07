@@ -343,7 +343,13 @@ EXPECTED_DROPINS: dict[str, set[str]] = {
     # Chromium) was an endless five-second loop. Stopping loudly beats
     # grinding quietly — which is the opposite trade to the engine's.
     "robothor-autonomy.service.d": {
+        "browser-host.conf",
         "onfailure.conf",
+    },
+    # The host-exec unit runs from the release tree, not the checkout; its
+    # release.conf points ExecStart/WorkingDirectory/PYTHONPATH there.
+    "robothor-host-exec.service.d": {
+        "release.conf",
     },
     "robothor-engine.service.d": {
         "boot-guard.conf",
@@ -351,6 +357,7 @@ EXPECTED_DROPINS: dict[str, set[str]] = {
         "onfailure.conf",
         "restart-forever.conf",
         "upgrade-rip-flags.conf",
+        "zz-claude-code.conf",
         "zz-sandbox.conf",
     },
     "robothor-bridge.service.d": {
@@ -424,6 +431,49 @@ def test_onfailure_dropin_matches_its_other_installer_byte_for_byte(dirname: str
     body = generator.split("<<'EOF'\n", 1)[1].split("\nEOF\n", 1)[0] + "\n"
     mirror = (UNIT_DIR / dirname / "onfailure.conf").read_text()
     assert mirror == body
+
+
+def test_claude_code_dropin_makes_only_the_host_login_writable():
+    """Coding jobs on the host Claude Code login refresh it under ~/.claude and
+    rewrite ~/.claude.json; ProtectHome=read-only would turn that into a job
+    that fails on its first token refresh. Optional (`-`) paths, absolute
+    service-home placeholders (never %h, which is /root in a system unit), and
+    nothing broader than those two entries."""
+    body = directives(
+        (UNIT_DIR / "robothor-engine.service.d" / "zz-claude-code.conf").read_text()
+    ).strip()
+    assert body.splitlines() == [
+        "[Service]",
+        "ReadWritePaths=-/home/robothor/.claude",
+        "ReadWritePaths=-/home/robothor/.claude.json",
+        "ProtectKernelTunables=no",
+        "ProtectKernelLogs=no",
+    ]
+
+
+def test_claude_code_dropin_lifts_exactly_the_proc_overmounts_and_wins():
+    """Claude Code's Bash sandbox mounts a fresh /proc in a user + pid
+    namespace; the kernel refuses that while ProtectKernelTunables= or
+    ProtectKernelLogs= overmount /proc (each alone breaks it — observed
+    2026-10-05). The drop-in turns off those two and nothing else, and must
+    sort after every drop-in that turns them on, or it silently loses."""
+    dropins = UNIT_DIR / "robothor-engine.service.d"
+    ours = "zz-claude-code.conf"
+    relaxed = {
+        line
+        for line in directives((dropins / ours).read_text()).splitlines()
+        if line.startswith("Protect")
+    }
+    assert relaxed == {"ProtectKernelTunables=no", "ProtectKernelLogs=no"}
+    for other in sorted(dropins.glob("*.conf")):
+        text = directives(other.read_text())
+        if other.name != ours and any(
+            f"{d}=yes" in text for d in ("ProtectKernelTunables", "ProtectKernelLogs")
+        ):
+            assert other.name < ours, f"{other.name} sorts after {ours} and would re-enable it"
+    hardening = directives((dropins / "hardening.conf").read_text())
+    for kept in ("NoNewPrivileges=yes", "ProtectKernelModules=yes", "ProtectControlGroups=yes"):
+        assert kept in hardening or kept in (UNIT_DIR / "robothor-engine.service").read_text()
 
 
 def test_restart_forever_dropins_agree_on_their_directives():
@@ -1265,3 +1315,62 @@ def test_installer_and_broker_share_the_lock_line():
     installer = INSTALL.read_text()
     line = 'LOCK_FILE="${ROBOTHOR_RESTART_LOCK:-/run/lock/robothor-restart.lock}"'
     assert line in handler and line in installer
+    for lock_line in RESTART_LOCK_LINES:
+        assert lock_line in handler and lock_line in installer, lock_line
+    # Never open the lock for writing: see test_an_existing_lock_another_user_owns.
+    assert "exec 9>" not in handler and "exec 9>" not in installer
+
+
+#: How both scripts take the lock, spelled identically. Create it only when
+#: absent (noclobber is O_EXCL), then open it READ-ONLY: flock works on any fd.
+RESTART_LOCK_LINES = (
+    '(set -C; : >"$LOCK_FILE") 2>/dev/null || true',
+    'exec 9<"$LOCK_FILE"',
+    "flock 9",
+)
+
+
+def _unwritable_lock(env: dict[str, str]) -> Path:
+    """The lock as root meets it under fs.protected_regular=2: it exists, in
+    sticky /run/lock, owned by the service user (tmpfiles.d creates it), and an
+    O_CREAT/O_WRONLY open of it is refused. A read-only file reproduces the
+    refusal for a non-root test."""
+    lock = Path(env["ROBOTHOR_RESTART_LOCK"])
+    lock.write_text("")
+    lock.chmod(0o444)
+    return lock
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root can write a read-only file")
+def test_an_existing_lock_another_user_owns_does_not_abort_the_restart(tmp_path: Path):
+    """Observed 2026-10-05: `exec 9>"$LOCK_FILE"` failed with "Permission
+    denied" for root on the service user's lock, and the restart step aborted."""
+    log = install_fake_systemctl(tmp_path)
+    env = restart_env(tmp_path)
+    _unwritable_lock(env)
+    result = run_install(tmp_path / "root", env, "--restart")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert len(restart_calls(log)) == 1
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root can write a read-only file")
+def test_the_broker_takes_an_existing_lock_it_cannot_write(tmp_path: Path):
+    handler = REPO_ROOT / "infra" / "bin" / "robothor-restart-handler.sh"
+    install_fake_systemctl(tmp_path)
+    env = restart_env(tmp_path)
+    _unwritable_lock(env)
+    requests = tmp_path / "requests"
+    requests.mkdir()
+    env["ROBOTHOR_RESTART_REQUEST_DIR"] = str(requests)
+    result = subprocess.run(
+        ["bash", str(handler)], capture_output=True, text=True, timeout=30, env=env
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_a_missing_lock_is_created(tmp_path: Path):
+    install_fake_systemctl(tmp_path)
+    env = restart_env(tmp_path)
+    result = run_install(tmp_path / "root", env, "--restart")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert Path(env["ROBOTHOR_RESTART_LOCK"]).exists()

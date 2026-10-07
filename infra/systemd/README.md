@@ -298,3 +298,21 @@ its private `/ready` response: `accepting=false`, `active_workflows=0`, and
 `opening_workflow=false` mean a restart will not destroy a live page. Send
 `SIGUSR2` to resume admission if deferring the upgrade. This drain applies to
 the browser service only; controller restarts remain independent.
+
+## `robothor-host-exec.service` leaves `/home` writable
+
+`robothor-host-exec` is the verified-owner shell: the engine hands it a
+command only after the owner check passes, and it is how the main agent runs
+its own computer. It sets `ProtectHome=no` on purpose. With
+`ProtectHome=read-only` every path under `/home` was read-only for owner
+commands — the workspace repo, `~/.config` (CLI token caches) — so a CLI that
+had already done its work failed writing its output file ("Read-only file
+system"), and the agent could neither diagnose that correctly nor edit its own
+configuration. The engine unit keeps `ProtectHome=read-only`: non-owner, cron
+and sub-agent runs stay confined. `tests/test_systemd_hardening.py` pins both.
+
+To change a setting a drop-in injects, use `genus config set NAME VALUE
+--apply` from that shell; see [Configuration](../../docs/configuration.md#when-a-systemd-unit-sets-it).
+It names any later drop-in that would keep winning, writes
+`zz-genus-config-<name>.conf`, reloads systemd and schedules the restart
+15 seconds out.

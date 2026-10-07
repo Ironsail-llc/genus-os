@@ -22,13 +22,15 @@ from typing import Any
 import httpx
 from fastapi import Request  # noqa: TC002 — FastAPI resolves this at runtime
 
+from robothor.settings import get_settings
+
 AUDIENCE = "genus-host-execution"
 DEFAULT_SOCKET = "/run/robothor-host/exec.sock"
-HOST_WORKSPACE = Path(os.environ.get("ROBOTHOR_WORKSPACE", Path.cwd()))
+HOST_WORKSPACE = Path(get_settings().paths.workspace or Path.cwd())
 
 
 def socket_path() -> str:
-    return os.environ.get("ROBOTHOR_HOST_EXEC_SOCKET", "")
+    return get_settings().engine.host_exec_socket
 
 
 def eligible(ctx: Any) -> bool:
@@ -257,7 +259,7 @@ def main() -> None:
 
     uvicorn.run(
         create_app(),
-        uds=os.environ.get("ROBOTHOR_HOST_EXEC_SOCKET", DEFAULT_SOCKET),
+        uds=get_settings().engine.host_exec_socket or DEFAULT_SOCKET,
         log_level="info",
     )
 

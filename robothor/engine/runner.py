@@ -1021,12 +1021,6 @@ class AgentRunner(
             task_record["mode"] = "plan" if readonly_mode else "execute"
             install_context(session.messages, task_record)
 
-        from robothor.engine.routine_request import bind_confirmation
-
-        # Five arguments, not three: #610 scopes the draft to this agent and
-        # skips binding in plan mode. The branch predates both.
-        await bind_confirmation(session, message, conversation_history, agent_config, readonly_mode)
-
         watchdog.touch("session_started")
 
         initialize_budget(session.run, agent_config, spawn_context)
@@ -1150,9 +1144,7 @@ class AgentRunner(
                 )
 
                 plan_result = None
-                if not getattr(session, "routine_operation_bound", False) and self._should_plan(
-                    agent_config, route
-                ):
+                if self._should_plan(agent_config, route):
                     plan_result = await self._run_planner(
                         agent_config, message, planner_tool_names(_prepared), models
                     )
@@ -1465,14 +1457,8 @@ class AgentRunner(
 
         # ── [VERIFIER] Self-validation step ──
         output_text = session.get_final_text()
-        # Two independent reasons not to verify: a bound routine confirmation
-        # (#610) and a host-rendered answer such as a goal report. Either one
-        # alone is sufficient, so both have to be checked.
-        if (
-            not getattr(session, "routine_operation_bound", False)
-            and not host_rendered_output(session)
-            and self._should_verify(agent_config, route, session)
-        ):
+        # A host-rendered answer such as a goal report is not re-verified.
+        if not host_rendered_output(session) and self._should_verify(agent_config, route, session):
             output_text = await self._run_verification(
                 agent_config,
                 session,
@@ -1488,10 +1474,6 @@ class AgentRunner(
                 on_status=on_status,
                 on_stream_event=on_stream_event,
             )
-
-        from robothor.engine.routine_request import attach_draft_reference
-
-        output_text = attach_draft_reference(session, output_text)
 
         # ── [TELEMETRY] Publish run metrics ──
         self._publish_run_telemetry(trace, session.run)
@@ -1747,9 +1729,6 @@ class AgentRunner(
         on_stream_event: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
     ) -> None:
         """Core conversation loop: LLM call → tool execution → repeat."""
-        from robothor.engine import routine_request
-
-        _bound, tool_schemas = routine_request.bound_toolset(session, tool_schemas)
         # Track models that hit permanent errors (401/403/429) across iterations
         broken_models: set[str] = set()
 
@@ -1961,16 +1940,15 @@ class AgentRunner(
             # against the model that will actually be tried next (G2b), runs
             # every iteration, and never raises — losing compaction costs
             # money, taking the run down with it costs the work.
-            if not _bound:
-                await keep_context_within_budget(
-                    session,
-                    agent_config,
-                    iteration=_iteration,
-                    models=models,
-                    broken_models=broken_models,
-                    hook_registry=hook_registry,
-                    pre_iteration_msg_idx=_pre_iteration_msg_idx,
-                )
+            await keep_context_within_budget(
+                session,
+                agent_config,
+                iteration=_iteration,
+                models=models,
+                broken_models=broken_models,
+                hook_registry=hook_registry,
+                pre_iteration_msg_idx=_pre_iteration_msg_idx,
+            )
 
             # ── [SCRATCHPAD] Inject working state summary ──
             if scratchpad and scratchpad.should_inject():
@@ -2000,24 +1978,21 @@ class AgentRunner(
             # when the budget ends loses the whole run, so it is cancelled.
             try:
                 async with _stop.call_window():
-                    if getattr(session, "routine_operation_id", None):
-                        response = routine_request.confirmed_response(session)
-                    else:
-                        (
-                            response,
-                            model_used,
-                            elapsed_ms,
-                            msg_dict,
-                        ) = await self._llm_call_and_record(
-                            session,
-                            models,
-                            tool_schemas,
-                            on_content,
-                            broken_models,
-                            agent_config.temperature,
-                            trace,
-                            on_stream_event=on_stream_event,
-                        )
+                    (
+                        response,
+                        model_used,
+                        elapsed_ms,
+                        msg_dict,
+                    ) = await self._llm_call_and_record(
+                        session,
+                        models,
+                        tool_schemas,
+                        on_content,
+                        broken_models,
+                        agent_config.temperature,
+                        trace,
+                        on_stream_event=on_stream_event,
+                    )
             except RunBudgetError:
                 end_run_at_budget(
                     session,
@@ -2114,10 +2089,6 @@ class AgentRunner(
                 return
 
             # ── [ERROR RECOVERY] Attempt autonomous recovery before escalation ──
-            if _bound:
-                await routine_request.finish_confirmation(session, on_content)
-                return
-
             # robothor/engine/error_actions.py. `applied` suppresses the error
             # feedback below: doing both tells the agent to analyse a failure
             # the platform has just handled.

@@ -1,0 +1,124 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "verdict",
+    "summary",
+    "issues",
+    "prior_issues"
+  ],
+  "properties": {
+    "verdict": {
+      "type": "string",
+      "enum": [
+        "APPROVE",
+        "COMMENT",
+        "REQUEST_CHANGES"
+      ],
+      "description": "Your proposed verdict. The service recomputes it from the issues: any blocker or major finding means it is never posted as APPROVE."
+    },
+    "summary": {
+      "type": "string",
+      "description": "The top of the review body in GitHub markdown: what the change does and what you checked. Do not repeat the issues here."
+    },
+    "issues": {
+      "type": "array",
+      "description": "Every finding of this review, nits included. Empty if none.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "path",
+          "line",
+          "start_line",
+          "side",
+          "severity",
+          "title",
+          "body"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "File path relative to the repository root, as shown in the diff. Empty string for a PR-wide finding."
+          },
+          "line": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Anchor line: new-file numbering for RIGHT, old-file for LEFT. null when the finding is not tied to a changed line."
+          },
+          "start_line": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "First line of a multi-line range, or null."
+          },
+          "side": {
+            "type": "string",
+            "enum": [
+              "RIGHT",
+              "LEFT"
+            ]
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "blocker",
+              "major",
+              "minor",
+              "nit"
+            ]
+          },
+          "title": {
+            "type": "string",
+            "description": "One-line summary."
+          },
+          "body": {
+            "type": "string",
+            "description": "The full comment in GitHub markdown, with how it was verified."
+          }
+        }
+      }
+    },
+    "prior_issues": {
+      "type": "array",
+      "description": "Re-reviews only: the status of each finding from the previous review. Empty for an initial review.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "comment_id",
+          "description",
+          "status",
+          "note"
+        ],
+        "properties": {
+          "comment_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "The previous finding's comment_id as given, or null."
+          },
+          "description": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "resolved",
+              "partially_resolved",
+              "unresolved"
+            ]
+          },
+          "note": {
+            "type": "string",
+            "description": "How it was (or was not) addressed."
+          }
+        }
+      }
+    }
+  }
+}
