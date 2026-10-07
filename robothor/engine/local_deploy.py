@@ -19,6 +19,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from robothor.settings import get_settings
+
 STATE = Path("/run/robothor/local-deployment.json")
 LOCK = Path("/run/robothor/local-deployment.lock")
 OVERRIDE = Path("/etc/systemd/system/robothor-engine.service.d/zzzzzz-local-integration.conf")
@@ -166,7 +168,7 @@ def deploy(workspace: Path, revision: str, job_path: Path) -> dict[str, Any]:
         # Runtime releases intentionally omit pytest. Use the instance's dev
         # interpreter against the candidate's exact code, then import the
         # entrypoints with the runtime interpreter before any service switch.
-        test_python = os.environ.get("ROBOTHOR_DEPLOY_TEST_PYTHON") or str(
+        test_python = get_settings().engine.deploy_test_python or str(
             workspace / "venv/bin/python"
         )
         with (job_path.parent / "tests.log").open("w") as test_log:
