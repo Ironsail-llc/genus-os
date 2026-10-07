@@ -19,6 +19,7 @@ from robothor.engine.tools.constants import (
     CALENDAR_WRITE_TOOLS,
     CHAT_SEND_TOOLS,
     CHAT_TOOLS,
+    MAIL_READ_TOOLS,
     MAIL_WRITE_TOOLS,
     MAX_TOOL_OUTPUT_CHARS,
     WORKSPACE_TOOLS,
@@ -183,17 +184,38 @@ def _calendar() -> BlockingCalendar:
     return calendar
 
 
-def _workspace_unavailable(tenant_id: str | None) -> dict[str, Any] | None:
-    """The refusal when the configured provider cannot serve mail/calendar yet."""
+def _workspace_unavailable(tenant_id: str | None, tool_name: str = "") -> dict[str, Any] | None:
+    """The refusal when the configured provider cannot serve this tool yet.
+
+    A provider can be live for calendar while its mail is not built
+    (``UnavailableMail``): a mail tool is then refused here, before any guard.
+    """
     from robothor.workspace import get_workspace
     from robothor.workspace.bridge import error_result
-    from robothor.workspace.errors import WorkspaceError
+    from robothor.workspace.errors import Unsupported, WorkspaceError
 
     try:
-        get_workspace(tenant_id)
+        workspace = get_workspace(tenant_id)
     except WorkspaceError as exc:
         return error_result(exc)
+    if (
+        tool_name in MAIL_READ_TOOLS | MAIL_WRITE_TOOLS
+        and getattr(workspace.mail, "available", True) is False
+    ):
+        return error_result(
+            Unsupported(
+                f"{workspace.provider} mail is not available yet",
+                code="provider_not_available",
+            )
+        )
     return None
+
+
+def _workspace_provider_name() -> str:
+    """Which provider serves the calendar: the CRM keys its event rows by it."""
+    from robothor.workspace import get_workspace
+
+    return get_workspace().provider
 
 
 # ── Contact 360 write-through helpers ────────────────────────────────────────
@@ -1933,7 +1955,14 @@ def _calendar_create(
         # No attendees: no `sendUpdates` on the wire at all.
         send_updates=send_updates if attendees else None,
     )
-    _record_calendar_event(result=cal_result if isinstance(cal_result, dict) else {})
+    created = cal_result if isinstance(cal_result, dict) else {}
+    provider = _workspace_provider_name()
+    if provider == "google":
+        _record_calendar_event(result=created)
+    else:
+        # Keyed (tenant, provider, external id): a Graph immutable id is not
+        # a Google event id and must not be filed as one.
+        _record_calendar_event(result=created, provider=provider)
     if isinstance(cal_result, dict) and "error" not in cal_result:
         cal_result["calendar"] = _calendar_block(calendar_id, calendar_kind)
         # With no attendees Google mails nobody whatever the flag says, so
@@ -2523,7 +2552,7 @@ for _tool_name in sorted(WORKSPACE_TOOLS):
             if tn not in CHAT_TOOLS:
                 # A provider that cannot serve mail/calendar yet refuses here,
                 # before any guard or transport runs.
-                unavailable = _workspace_unavailable(ctx.tenant_id)
+                unavailable = _workspace_unavailable(ctx.tenant_id, tn)
                 if unavailable is not None:
                     return unavailable
             with bind_engine_loop(asyncio.get_running_loop()):

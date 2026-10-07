@@ -251,6 +251,22 @@ def _entry_preserved(old: dict[str, Any], attendees: list[dict[str, Any]]) -> bo
 Plan = tuple[dict[str, Any], "Callable[[dict[str, Any]], bool]", dict[str, Any]]
 
 
+def _patch(
+    api: Any,
+    ref: CalendarRef,
+    event_id: str,
+    body: dict[str, Any],
+    *,
+    etag: str,
+    send_updates: str,
+) -> dict[str, Any]:
+    """The default write: the planned body as one conditional PATCH."""
+    result: dict[str, Any] = api.conditional_patch(
+        ref, event_id, body, etag=etag, send_updates=send_updates
+    )
+    return result
+
+
 def _calendar_api(provider: CalendarProvider | None) -> Any:
     """The provider's synchronous face; this module runs in a worker thread."""
     from robothor.workspace import get_workspace
@@ -268,13 +284,15 @@ def _conditional_patch(
     cancelled: Any = None,
     allow_omitted: bool = False,
     provider: CalendarProvider | None = None,
+    write: Callable[..., dict[str, Any]] = _patch,
 ) -> dict[str, Any]:
     """One write; a conflict gets one fresh merge, an uncertain write only a read.
 
     ``plan(before)`` returns either a finished result (a refusal, or "nothing
     to change") or ``(patch body, verify(after) -> bool, extra result fields)``.
-    Returning an error never authorizes an agent to remove/re-add an attendee
-    or blindly resend an invitation.
+    ``write`` performs the planned change (a conditional PATCH unless a caller
+    says otherwise). Returning an error never authorizes an agent to
+    remove/re-add an attendee or blindly resend an invitation.
     """
     if cancelled is not None and cancelled.is_set():
         return {
@@ -308,8 +326,8 @@ def _conditional_patch(
                     "error": "Calendar operation cancelled before write",
                     "invitations_requested": False,
                 }
-            written = api.conditional_patch(
-                ref, event_id, body, etag=before["etag"], send_updates=send_updates
+            written = write(
+                api, ref, event_id, body, etag=before["etag"], send_updates=send_updates
             )
             if written.get("status_code") == 412 and attempt == 0:
                 continue
@@ -678,6 +696,26 @@ def respond(
         patch = [mine] if before.get("attendeesOmitted") else attendees
         return {"attendees": patch}, verify, {"response": response}
 
+    def write(
+        api: Any,
+        ref: CalendarRef,
+        event_id: str,
+        body: dict[str, Any],
+        *,
+        etag: str,
+        send_updates: str,
+    ) -> dict[str, Any]:
+        # A provider whose RSVP is an action rather than an attendee-list
+        # PATCH (Microsoft Graph's accept/decline/tentativelyAccept) offers
+        # `rsvp`; everything before and after the write is the same.
+        rsvp = getattr(api, "rsvp", None)
+        if rsvp is None:
+            return _patch(api, ref, event_id, body, etag=etag, send_updates=send_updates)
+        result: dict[str, Any] = rsvp(
+            ref, event_id, response, comment=comment, send_response=send_updates != "none"
+        )
+        return result
+
     return _conditional_patch(
         calendar,
         event_id,
@@ -686,4 +724,5 @@ def respond(
         cancelled=cancelled,
         allow_omitted=True,
         provider=provider,
+        write=write,
     )

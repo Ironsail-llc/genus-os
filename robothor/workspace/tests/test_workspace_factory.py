@@ -1,4 +1,4 @@
-"""get_workspace(): Google by default, Microsoft 365 dark until its transport ships."""
+"""get_workspace(): Google by default; Microsoft 365 calendar when selected and configured."""
 
 from __future__ import annotations
 
@@ -45,10 +45,33 @@ def test_explicit_google(provider_env) -> None:
     assert get_workspace().provider == "google"
 
 
-def test_microsoft365_is_dark(provider_env) -> None:
+def test_microsoft365_without_an_assistant_mailbox_is_refused(provider_env, monkeypatch) -> None:
+    monkeypatch.delenv("ROBOTHOR_M365_ASSISTANT_MAILBOX", raising=False)
     provider_env("microsoft365")
-    with pytest.raises(Unsupported, match="microsoft365"):
+    with pytest.raises(Unsupported, match="m365_assistant_mailbox") as caught:
         get_workspace()
+    assert caught.value.code == "not_configured"
+
+
+def test_microsoft365_serves_calendar_and_keeps_mail_dark(provider_env, monkeypatch) -> None:
+    from robothor.workspace import UnavailableMail, reset_workspace_cache
+    from robothor.workspace.microsoft.calendar import GraphCalendar
+
+    monkeypatch.setenv("ROBOTHOR_M365_ASSISTANT_MAILBOX", "Assistant@example.com")
+    monkeypatch.setenv("ROBOTHOR_M365_OWNER_MAILBOX", "owner@example.com")
+    reset_workspace_cache()
+    provider_env("microsoft365")
+    ws = get_workspace("tenant-a")
+    assert ws.provider == "microsoft365"
+    assert ws.capabilities["send_updates_modes"] == ("all",)
+    assert isinstance(ws.calendar, GraphCalendar)
+    assert ws.calendar.resolve("own").mailbox == "assistant@example.com"
+    assert isinstance(ws.mail, UnavailableMail)
+    assert ws.mail.available is False
+    # Cached per platform tenant; a different tenant gets its own credentials.
+    assert get_workspace("tenant-a") is ws
+    assert get_workspace("tenant-b") is not ws
+    reset_workspace_cache()
 
 
 # ── the worker-thread bridge ──────────────────────────────────────────

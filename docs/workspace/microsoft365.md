@@ -1,11 +1,11 @@
 # Microsoft 365 workspace
 
-> **Status: in development.** The Microsoft Graph transport and its sign-in
-> exist, but no tool uses them yet. Leave `ROBOTHOR_WORKSPACE_PROVIDER` at
-> `google`: with `microsoft365` selected, every mail and calendar tool refuses
-> (`hint: "unsupported"`) until the Microsoft 365 mail and calendar providers
-> ship. This page grows with each part of the work; the connect command,
-> the doctor check and the full runbook come later.
+> **Status: in development.** Calendar works: with
+> `ROBOTHOR_WORKSPACE_PROVIDER=microsoft365` and an assistant mailbox set, the
+> `gws_calendar_*` tools run against Exchange Online (see [Calendar](#calendar)).
+> Mail does not yet: every `gws_gmail_*` tool refuses (`hint: "unsupported"`)
+> until the Microsoft 365 mail provider ships. The connect command, the doctor
+> check and the full runbook come later.
 
 Genus OS reads and sends mail and manages calendars through the `gws_*` tools.
 By default they run against Google Workspace. With
@@ -23,7 +23,7 @@ the names keeps every rule. Only the transport underneath changes:
 | Layer | Google | Microsoft 365 |
 |-------|--------|---------------|
 | Tools and guards | `gws_*` tools, shared rules | same tools, same rules |
-| Provider (`robothor/workspace/protocols.py`) | `GoogleMail`, `GoogleCalendar` (`robothor/workspace/google/adapter.py`) | not yet built (selecting it refuses) |
+| Provider (`robothor/workspace/protocols.py`) | `GoogleMail`, `GoogleCalendar` (`robothor/workspace/google/adapter.py`) | `GraphCalendar` (`robothor/workspace/microsoft/calendar.py`); mail not yet built (refuses) |
 | Transport | `gws` CLI, plus conditional Calendar HTTP for edits | `robothor/workspace/microsoft/graph.py` (`GraphClient`) |
 | Sign-in | Google OAuth | Entra app-only (`robothor/workspace/microsoft/auth.py`) |
 
@@ -120,3 +120,84 @@ description can quote a rejected secret back, so it is never logged.
 | `ROBOTHOR_M365_SCOPE_CANARY_MAILBOX` | A mailbox the app must *not* be able to read |
 
 See [Settings](../reference/configuration.md) for the generated reference.
+
+## Calendar
+
+`GraphCalendar` (`robothor/workspace/microsoft/calendar.py`) serves every
+`gws_calendar_*` tool. Each guard still runs in the handler first, before any
+Graph request: do-not-contact on every invitee, the `no_auto` scheduling
+policy, duplicate-event detection, the calendar-identity check, and the
+cancellation check right before a write. A blocked call sends nothing to
+Graph.
+
+**Which calendar.** `calendar="own"` is the assistant mailbox's default
+calendar (`/users/{assistant}/calendar`). `calendar="operator"` (the default)
+is the owner mailbox's (`/users/{owner}/calendar`), using
+`ROBOTHOR_M365_OWNER_MAILBOX` when set and the owner.yaml address otherwise.
+An explicit `calendar_id` that is an address is that mailbox's default
+calendar; any other id is a calendar in the assistant's mailbox
+(`/users/{assistant}/calendars/{id}`).
+
+**Events look like Google's.** The provider translates Graph events into the
+Google Calendar v3 shape the tools, dedup and CRM already read:
+
+| Graph | Tool result |
+|-------|-------------|
+| `subject`, `body` (read as text), `location.displayName` | `summary`, `description`, `location` |
+| `start`/`end` (UTC) + `originalStartTimeZone` | `start.dateTime` with an offset, in the event's own zone, plus `timeZone` (IANA) |
+| `isAllDay` | `start.date` / `end.date` (end exclusive, as Google) |
+| attendee `status.response` | `responseStatus`: `none`/`notResponded` → `needsAction`, `tentativelyAccepted` → `tentative`, `accepted`, `declined` |
+| `isOrganizer`, `organizer` | `organizer.self`, `organizer.email`; the mailbox's own entry is `self: true` |
+| `isCancelled` | `status: "cancelled"` |
+| `webLink` | `htmlLink` |
+| `onlineMeeting.joinUrl` | `conferenceData` (solution `teamsForBusiness`) |
+| `recurrence` / `seriesMasterId` | `recurrence: ["RRULE:…"]` / `recurringEventId` |
+| `@odata.etag` | `etag` |
+
+Listing uses `calendarView`, which expands a series into its occurrences (as
+Google's `singleEvents=true`). Ids are Graph **immutable ids**, so the id
+recorded at create time stays valid, and the CRM write-through files the
+event under `provider = 'microsoft365'` with that id as `external_event_id`.
+
+**Teams meetings.** `with_meet=true` (the default) creates a Microsoft Teams
+meeting (`isOnlineMeeting`, `onlineMeetingProvider: teamsForBusiness`); the
+join link comes back in `conferenceData`. A Google Meet link cannot be
+attached to an Exchange event and is refused.
+
+**Exchange always notifies.** When the organiser creates, changes or cancels a
+meeting with attendees, Exchange mails them; there is no quiet mode. So with
+attendees involved the `calendar_send_updates` flag must be `all`: under
+`none` or `externalOnly` a create, edit or delete of such a meeting is refused
+before anything is written (`hint: "unsupported"`). Events without attendees
+are unaffected. An RSVP honours the flag exactly (`sendResponse` is false
+under `none`).
+
+**Edits.** `gws_calendar_update` and `gws_calendar_add_attendees` use the same
+read / merge / conditional write / read-back loop as Google. The write is a
+PATCH with `If-Match: <etag>`; if the event changed in between, Graph answers
+412 and the loop re-reads, merges and tries once more. `gws_calendar_respond`
+reads the event the same way, then sends Graph's `accept`, `decline` or
+`tentativelyAccept` action, and reads it back to verify.
+
+**Delete.** On a meeting this mailbox organises, with attendees,
+`gws_calendar_delete` calls `/cancel`, which removes the event and sends the
+attendees a cancellation (the result says `method: "cancel"`). Anything else
+(no attendees, or the mailbox's copy of someone else's meeting) is a plain
+`DELETE` (`method: "delete"`).
+
+**Recurrence.** A create may carry one `RRULE` with `FREQ` `DAILY`,
+`WEEKLY`, `MONTHLY` or `YEARLY` and only these parts: `INTERVAL`, `BYDAY`
+(weekdays; for monthly or yearly, one numbered weekday such as `2TU` or
+`-1FR`), `BYMONTHDAY` (one day, 1–31), and `COUNT` or `UNTIL`. Anything else
+(`BYSETPOS`, `BYMONTH`, hourly rules, `EXDATE`/`RDATE`, several rules) is
+refused before any write rather than approximated. Reading maps every Graph
+pattern back to an `RRULE`.
+
+**Time zones.** Graph answers in UTC (`Prefer: outlook.timezone="UTC"`); each
+event is shown in its own zone, with Windows zone names (`Eastern Standard
+Time`) mapped to IANA (`America/New_York`) by the CLDR table in
+`robothor/workspace/microsoft/timezones.py`. Writes send IANA names. A time
+with an offset is converted into the event's zone; a time without one is read
+in that zone, or the instance's `ROBOTHOR_TIMEZONE`. If a tenant rejects an
+IANA name, the create is retried once with the Windows name (or in UTC when
+CLDR has none).
