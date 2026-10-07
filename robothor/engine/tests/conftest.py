@@ -378,3 +378,8 @@ def isolated_plan_claims(monkeypatch):
     monkeypatch.setattr(
         "robothor.engine.chat_plan_changes.replace_pending_async", AsyncMock(return_value=True)
     )
+    # /chat/plan/start persists the draft with strict=True before publishing it,
+    # so an unreachable database is a hard error there. Unit runs (CI has no
+    # PostgreSQL) get a successful fake write; tests that care about the
+    # persisted payload or a failed write patch this name themselves.
+    monkeypatch.setattr("robothor.engine.chat.save_plan_state_async", AsyncMock(return_value=None))
