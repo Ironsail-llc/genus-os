@@ -1209,6 +1209,22 @@ class EngineSettings(SettingsGroup):
         "approved sender is checked against it, and Gmail would silently "
         "rewrite a From header that disagreed.",
     )
+    host_exec_socket: str = declare(
+        "",
+        "ROBOTHOR_HOST_EXEC_SOCKET",
+        "Unix socket of the host-execution service (robothor-host-exec). The "
+        "service binds it (empty means /run/robothor-host/exec.sock) and the "
+        "engine's main agent sends owner commands to it; empty in the engine "
+        "means host execution is not offered and exec stays in the engine's "
+        "own sandbox.",
+    )
+    deploy_test_python: str = declare(
+        "",
+        "ROBOTHOR_DEPLOY_TEST_PYTHON",
+        "Interpreter a local deploy runs its pre-switch test gate with: the "
+        "instance's dev interpreter, since runtime releases omit pytest. Empty "
+        "means <workspace>/venv/bin/python.",
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -343,7 +343,13 @@ EXPECTED_DROPINS: dict[str, set[str]] = {
     # Chromium) was an endless five-second loop. Stopping loudly beats
     # grinding quietly — which is the opposite trade to the engine's.
     "robothor-autonomy.service.d": {
+        "browser-host.conf",
         "onfailure.conf",
+    },
+    # The host-exec unit runs from the release tree, not the checkout; its
+    # release.conf points ExecStart/WorkingDirectory/PYTHONPATH there.
+    "robothor-host-exec.service.d": {
+        "release.conf",
     },
     "robothor-engine.service.d": {
         "boot-guard.conf",
