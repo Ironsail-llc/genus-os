@@ -61,8 +61,17 @@ known.
 | Table | Purpose |
 |---|---|
 | `call_log` | Voice call (Twilio) — direct `person_id` FK (calls are 1:1) |
-| `calendar_event` | Shadow of Google Calendar events |
+| `calendar_event` | Shadow of calendar events, unique on `(tenant, provider, external_event_id)` (migration 148) |
 | `calendar_event_participant` | Junction `(event × role × person)` |
+
+`calendar_event.provider` (`google` by default) plus `external_event_id` (the
+provider's own event id) identify an event, so a Microsoft 365 event can sit
+next to a Google one. `google_event_id` and its `(tenant, google_event_id)`
+unique constraint remain as a dual-write: Google events still fill it, other
+providers leave it NULL. A trigger copies `google_event_id` into
+`external_event_id` when a pre-148 writer sets only the old column.
+`get_person_events` returns `provider`, `external_event_id` and
+`google_event_id`.
 
 ### Existing tables with new FK (migration 046)
 | Table | Added |
@@ -283,6 +292,7 @@ per-test rollback stays intact.
 | `crm/migrations/048_voice_calendar.sql` | call_log, calendar_event, calendar_event_participant |
 | `crm/migrations/049_timeline_activity.sql` | timeline_activity + initial backfill |
 | `crm/migrations/113_add_do_not_contact.sql` | `crm_people.do_not_contact` + partial index on the opted-out rows |
+| `crm/migrations/148_calendar_event_provider_identity.sql` | `calendar_event.provider` + `external_event_id` (backfilled), unique on `(tenant, provider, external_event_id)` |
 
 ## Open work
 
