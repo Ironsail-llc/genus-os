@@ -69,6 +69,14 @@ describe("EngineClient — the session key, or the absence of one", () => {
     expect(Object.keys(lastBody())).toEqual(["message"]);
   });
 
+  it("asks /chat/send to join the running turn only when told to", async () => {
+    await (await client()).chatSend("also Y", "", undefined, true);
+    expect(lastBody()).toEqual({ message: "also Y", join_running: true });
+
+    await (await client()).chatSend("hi", "", "request-1");
+    expect(lastBody()).toEqual({ message: "hi", request_id: "request-1" });
+  });
+
   it("names the session on /chat/send when an agent was chosen", async () => {
     await (await client()).chatSend("hello", "agent:scheduler:primary");
 

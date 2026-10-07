@@ -40,7 +40,13 @@ export async function POST(req: Request) {
     // system message its instructions never mention.
     if (!sessionKey) ensureCanvasPromptInjected().catch(() => {});
 
-    const engineRes = await (body.request_id === undefined ? client.chatSend(message, sessionKey) : client.chatSend(message, sessionKey, body.request_id));
+    // Only a literal `true`: this changes what the request does (offer the text to
+    // the running turn; never start one), so nothing merely truthy may turn it on.
+    const engineRes = await (body.join_running === true
+      ? client.chatSend(message, sessionKey, body.request_id, true)
+      : body.request_id === undefined
+        ? client.chatSend(message, sessionKey)
+        : client.chatSend(message, sessionKey, body.request_id));
 
     if (!engineRes.body) {
       return new Response(

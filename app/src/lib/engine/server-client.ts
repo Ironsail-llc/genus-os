@@ -105,11 +105,18 @@ class EngineClient {
    * Send a chat message. Returns the raw Response with SSE body.
    * Caller is responsible for reading the SSE stream.
    */
-  async chatSend(message: string, sessionKey = "", requestId?: string): Promise<Response> {
+  async chatSend(message: string, sessionKey = "", requestId?: string, joinRunning = false): Promise<Response> {
+    // `join_running`: sent while this session's turn works, so offer it to that
+    // turn instead of starting another (robothor/engine/chat_live.py).
     const res = await fetchStream(`${ENGINE_URL}/chat/send`, {
       method: "POST",
       headers: await engineHeaders(true),
-      body: JSON.stringify({ message, ...keyed(sessionKey), ...(requestId ? { request_id: requestId } : {}) }),
+      body: JSON.stringify({
+        message,
+        ...keyed(sessionKey),
+        ...(requestId ? { request_id: requestId } : {}),
+        ...(joinRunning ? { join_running: true } : {}),
+      }),
     });
     if (!res.ok) {
       throw new Error(`Engine error: ${res.status} ${res.statusText}`);

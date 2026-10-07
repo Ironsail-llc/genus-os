@@ -132,6 +132,31 @@ an ask-binding change and not part of this channel.
 reports that no answer came and names the row id; the row stays answerable, and a
 late answer still reaches a later turn.
 
+## Adding context while the agent is working
+
+The composer stays open while a reply streams. What you type then goes to the
+task that is already running instead of starting a second one, the same as on
+Telegram (see [the Telegram channel](telegram.md#adding-context-while-the-agent-is-working)
+for when the agent picks it up).
+
+Under your message the Helm shows where it went:
+
+| Note | Meaning |
+|------|---------|
+| *Added to the running task* | The running task has it and will read it at its next safe point. |
+| *Queued — sends when this reply finishes* | Nothing running could take it: a plan is executing, the task had just finished, or it belongs to someone else. It is sent as your next message the moment the current reply ends. |
+
+If the agent was already writing its answer when your message arrived, that
+answer stays on screen as its own message and a revised one follows. A message
+the task never got to is sent as your next turn automatically, so nothing you
+type is lost. **Stop** ends the task and discards what you added to it.
+
+For API clients: this is opt-in. `POST /chat/send` with `"join_running": true`
+answers with one SSE event, `followup_joined` or `followup_queued`, and never
+starts a run itself; without the flag the endpoint behaves as it always has. The
+running turn's own stream adds two events: `interim` (a superseded answer) and
+`pending_followups` (messages the turn never took, to send as the next turn).
+
 ## `genus channel verify webchat` exits 2
 
 Exit code 2 means "there was nothing to verify", and this channel declares no

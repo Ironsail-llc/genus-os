@@ -153,6 +153,16 @@ describe("the chat BFF routes and the chosen agent", () => {
     expect(engine.chatSend).toHaveBeenCalledWith("hello", "");
   });
 
+  it("forwards join_running, and only when the browser set it", async () => {
+    const { send } = await routes();
+
+    await send(post("http://helm.test/api/chat/send", { message: "also Y", join_running: true }));
+    expect(engine.chatSend).toHaveBeenLastCalledWith("also Y", "", undefined, true);
+
+    await send(post("http://helm.test/api/chat/send", { message: "hi", join_running: "yes" }));
+    expect(engine.chatSend).toHaveBeenLastCalledWith("hi", "");
+  });
+
   it("sends the agent's session key when the body names one", async () => {
     const { send } = await routes();
 
