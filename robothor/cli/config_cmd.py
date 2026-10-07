@@ -8,11 +8,17 @@ variable name, the type, the default, whether it holds a credential, whether a
 change is live or needs a restart, whether it is a governed flag — so these
 commands route by that metadata instead of asking the operator to know:
 
-``get``       the effective value and where it came from.
+``get``       the effective value and where it came from -- including, for a
+              value a systemd unit injects, the exact drop-in (or
+              environment file) that sets it.
 ``explain``   everything declared about one setting.
 ``set``       the value, to the right place: a governed flag to the DB store
               (live), a secret refused (``genus vault set`` owns those), and
               everything else to the ``settings:`` block of config.yaml.
+              ``--apply`` changes it where it actually wins: a systemd
+              ``Environment=`` override is replaced by a ``zz-genus-config-*``
+              drop-in (``--override`` to outrank a later drop-in), then
+              systemd is reloaded and the restart scheduled 15 s out.
 ``list``      every setting, or one group, or only what is configured.
 ``validate``  an alias for ``genus doctor``, which asks everything this
               command used to ask and a dozen more. Kept so existing runbooks
@@ -29,6 +35,7 @@ from __future__ import annotations
 import argparse  # noqa: TC003
 import json
 import sys
+from typing import Any
 
 from robothor.settings import operator
 from robothor.settings.operator import (
@@ -60,6 +67,11 @@ _mask = operator.mask
 _display = operator.display
 _db_rows = operator.db_rows
 _db_value = operator.db_value
+
+#: Injectable for tests: how ``systemctl``/``sudo`` are run and unit files read.
+#: ``None`` means the real ones (see ``robothor.settings.systemd_env``).
+_systemd_runner: Any = None
+_systemd_reader: Any = None
 
 # ── shared helpers ───────────────────────────────────────────────────────────
 
@@ -100,6 +112,66 @@ def _unknown_name(name: str) -> int:
     return 2
 
 
+def _systemd_reports(record: dict[str, Any]) -> list[Any]:
+    """What each unit that reads this setting says about it, per systemd.
+
+    Asked of the unit files, not this process: the shell an agent runs
+    ``genus config get`` in is not the engine, and a drop-in on the engine is
+    invisible to that shell's environment. A unit is reported when it sets
+    the variable OR when some of its files could not be read -- "not set" is
+    then unverified, and nothing downstream may treat it as known.
+    """
+    from robothor.settings import systemd_env
+
+    units = _units_for(record)
+    found: dict[str, Any] = {}
+    for name in (record["env"], *record["aliases"]):
+        for report in systemd_env.inspect(
+            name, units, runner=_systemd_runner, reader=_systemd_reader
+        ):
+            have = found.get(report.unit)
+            if have is None:
+                found[report.unit] = report
+                continue
+            if have.origin is None and report.origin is not None:
+                have.origin = report.origin
+            have.unreadable = sorted(set(have.unreadable) | set(report.unreadable))
+    return list(found.values())
+
+
+def _systemd_origins(record: dict[str, Any]) -> list[Any]:
+    return [r.origin for r in _systemd_reports(record) if r.origin is not None]
+
+
+def _report_json(report: Any) -> dict[str, Any]:
+    """A unit's report for ``--json``: where, never what (a value can be a credential)."""
+    origin = report.origin
+    return {
+        "unit": report.unit,
+        "name": origin.name if origin else None,
+        "kind": origin.kind if origin else None,
+        "path": origin.path if origin else None,
+        "line": origin.line if origin else None,
+        "declared_in": origin.declared_in if origin else None,
+        "overrides": [f"{o.path}:{o.line}" for o in origin.shadowed] if origin else [],
+        "unreadable": list(report.unreadable),
+    }
+
+
+def _unreadable_refusal(record: dict[str, Any], reports: list[Any]) -> str | None:
+    """Why ``--apply`` cannot claim success: a file it could not read may win."""
+    blind = [(r.unit, path) for r in reports for path in r.unreadable]
+    if not blind:
+        return None
+    where = "; ".join(f"{unit}: {path}" for unit, path in blind)
+    return (
+        f"{record['env']}: cannot verify which value wins -- could not read {where}. "
+        "An EnvironmentFile beats every Environment= line, so a change made here may "
+        "not be the one the service reads. Nothing was changed. Run as a user that can "
+        "read those files, or check them and edit them directly."
+    )
+
+
 # ── get / explain / list ─────────────────────────────────────────────────────
 
 
@@ -108,8 +180,11 @@ def _cmd_get(args: argparse.Namespace) -> int:
     if record is None:
         return _unknown_name(args.name)
 
+    from robothor.settings import systemd_env
+
     value, source, detail = _resolve(record)
     shown = _display(record, value)
+    reports = [] if record["governed"] else _systemd_reports(record)
     if getattr(args, "json", False):
         print(
             json.dumps(
@@ -119,6 +194,7 @@ def _cmd_get(args: argparse.Namespace) -> int:
                     "source": source,
                     "detail": detail,
                     "secret": record["secret"],
+                    "systemd": [_report_json(r) for r in reports],
                 },
                 indent=2,
                 sort_keys=True,
@@ -129,6 +205,16 @@ def _cmd_get(args: argparse.Namespace) -> int:
 
     print(f"{record['env']} = {shown}")
     print(f"  source: {source} ({detail})")
+    for report in reports:
+        origin = report.origin
+        if origin is not None:
+            print(f"  systemd: {systemd_env.describe(origin, secret=record['secret'])}")
+            for beaten in origin.shadowed:
+                print(f"    overrides {beaten.path}:{beaten.line}")
+        else:
+            print(f"  systemd: {report.unit}: not set in the files that could be read")
+        for path in report.unreadable:
+            print(f"    could not read {path}; it may set this, unverified")
     return 0
 
 
@@ -233,23 +319,121 @@ def _cmd_list(args: argparse.Namespace) -> int:
 # ── set ──────────────────────────────────────────────────────────────────────
 
 
-def _set_result(applied: bool, pending: list[str], errors: list[str], as_json: bool) -> int:
+def _set_result(
+    applied: bool,
+    pending: list[str],
+    errors: list[str],
+    as_json: bool,
+    extra: dict[str, Any] | None = None,
+) -> int:
+    extra = extra or {}
     if as_json:
         print(
             json.dumps(
-                {"applied": applied, "pending_restart": pending, "errors": errors},
+                {"applied": applied, "pending_restart": pending, "errors": errors, **extra},
                 indent=2,
                 sort_keys=True,
             )
         )
-    elif errors:
+        return 1 if errors else 0
+    # A partial apply is said on both streams: what landed on stdout, what did
+    # not on stderr. Neither half is allowed to read as the whole.
+    for path in extra.get("dropins", []):
+        print(f"wrote {path}")
+    for transient in extra.get("restart_scheduled", []):
+        print(f"restart scheduled in 15s (transient unit {transient})")
+    for transient in extra.get("restart_coalesced", []):
+        print(f"restart already scheduled ({transient}); it will pick this change up")
+    if errors:
+        if extra.get("partial"):
+            _err("PARTIAL: the lines above landed; the step below did not.")
         for error in errors:
             _err(error)
-    elif pending:
-        print(f"restart required: {', '.join(pending)}")
-    else:
-        print("applied")
+    elif not extra.get("restart_scheduled") and not extra.get("restart_coalesced"):
+        if pending:
+            print(f"restart required: {', '.join(pending)}")
+        else:
+            print("applied")
     return 1 if errors else 0
+
+
+def _set_apply(args: argparse.Namespace, record: dict[str, Any], as_json: bool) -> int:
+    """``set --apply``: change the value in the layer that wins, then restart.
+
+    A value a systemd ``Environment=`` line injects sits above config.yaml, so
+    writing the file changes nothing the service reads. Here the change goes
+    to a drop-in that sorts after the current winner -- or, when the variable
+    comes from an ``EnvironmentFile=``, is refused naming that file, because
+    systemd lets an environment file beat every ``Environment=`` line. With
+    no systemd origin it is the ordinary config.yaml write. Either way the
+    restart is scheduled through ``systemd-run --on-active=15s`` so the run
+    that asked for the change can reply before its engine restarts.
+
+    Refused, with nothing written, when any unit or environment file the
+    target units name could not be read: the variable may be set there and
+    win, and claiming "applied" past a file nobody read is the defect this
+    command exists to remove.
+
+    A governed flag is live through the flag store already; ``--apply`` adds
+    nothing to it.
+    """
+    from robothor.settings import systemd_env
+
+    if record["governed"]:
+        return _cmd_set_plain(args, record, as_json)
+
+    try:
+        value = operator.validate(record, args.value)
+        reports = _systemd_reports(record)
+        refusal = _unreadable_refusal(record, reports)
+        if refusal:
+            return _set_result(False, [], [refusal], as_json)
+        origins = [r.origin for r in reports if r.origin is not None]
+        if origins:
+            plans = [
+                systemd_env.plan_dropin(
+                    record["env"],
+                    str(args.value),
+                    origin.unit,
+                    origin,
+                    override=getattr(args, "override", False),
+                    note=f"by operator:{_operator_name()}",
+                )
+                for origin in origins
+            ]
+            result = systemd_env.apply_dropins(plans, runner=_systemd_runner)
+        else:
+            pending = operator.apply_change(
+                record,
+                value,
+                actor=f"operator:{_operator_name()}",
+                reason="genus config set --apply",
+            )
+            if not pending:
+                return _set_result(True, [], [], as_json)
+            result = systemd_env.apply_dropins(
+                [], runner=_systemd_runner, reload=False, units=list(pending)
+            )
+    except operator.SettingError as exc:
+        return _set_result(False, [], [exc.message], as_json)
+    except (systemd_env.DropinConflictError, systemd_env.UnsafeValueError) as exc:
+        return _set_result(False, [], [str(exc)], as_json)
+    except systemd_env.ApplyError as exc:
+        extra = {
+            "partial": exc.partial,
+            "dropins": exc.written,
+            "reloaded": exc.reloaded,
+            "restart_scheduled": exc.scheduled,
+        }
+        return _set_result(False, [], [f"{record['env']}: {exc}"], as_json, extra)
+
+    extra = {
+        "dropins": result.written,
+        "restart_units": result.units,
+        "restart_scheduled": result.scheduled,
+        "restart_coalesced": result.coalesced,
+    }
+    return _set_result(True, result.units, [], as_json, extra)
 
 
 def _cmd_set(args: argparse.Namespace) -> int:
@@ -260,12 +444,28 @@ def _cmd_set(args: argparse.Namespace) -> int:
     calls too. What is left here is the CLI's half: an exit code and a line of
     text. A governed flag comes back with no units -- it resolves from the DB
     on the engine's next read (a five-second TTL), so it is live.
+
+    A value with a control character is refused on every path before
+    anything is routed: a newline in a value becomes a directive of its own
+    in a unit file (run as root on the next restart) and a broken line in
+    config.yaml.
     """
+    from robothor.settings.systemd_env import unsafe_value_message
+
     as_json = getattr(args, "json", False)
     record = _record(args.name)
     if record is None:
         return _unknown_name(args.name)
+    problem = unsafe_value_message(record["env"], str(args.value))
+    if problem:
+        return _set_result(False, [], [problem], as_json)
+    if getattr(args, "apply", False):
+        return _set_apply(args, record, as_json)
+    return _cmd_set_plain(args, record, as_json)
 
+
+def _cmd_set_plain(args: argparse.Namespace, record: dict[str, Any], as_json: bool) -> int:
+    """The config.yaml / flag-store write, warning when systemd would shadow it."""
     try:
         value = operator.validate(record, args.value)
         pending = operator.apply_change(
@@ -277,6 +477,15 @@ def _cmd_set(args: argparse.Namespace) -> int:
     except operator.SettingError as exc:
         return _set_result(False, [], [exc.message], as_json)
 
+    if not record["governed"]:
+        # The file write landed, but a unit that sets the variable keeps
+        # reading its own value. Say so on stderr (stdout stays the result).
+        for origin in _systemd_origins(record):
+            where = origin.path if origin.line is None else f"{origin.path}:{origin.line}"
+            _err(
+                f"note: {origin.unit} reads {record['env']} from {where}, which wins over "
+                "config.yaml. Re-run with --apply to change it there and restart."
+            )
     return _set_result(True, list(pending), [], as_json)
 
 

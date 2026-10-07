@@ -467,6 +467,19 @@ def _build_parser() -> argparse.ArgumentParser:
     config_set.add_argument("name", help="Environment variable name")
     config_set.add_argument("value", help="New value; validated against the declared type")
     config_set.add_argument("--json", action="store_true", help="Machine-readable output")
+    config_set.add_argument(
+        "--apply",
+        action="store_true",
+        help=(
+            "Change it in the layer that wins (a systemd drop-in when a unit sets it, "
+            "else config.yaml), reload systemd and schedule the restart in 15s (uses sudo)"
+        ),
+    )
+    config_set.add_argument(
+        "--override",
+        action="store_true",
+        help="With --apply: write a drop-in sorting after a later one that sets the variable",
+    )
 
     config_explain = config_sub.add_parser("explain", help="Everything declared about a setting")
     config_explain.add_argument("name", help="Environment variable name")

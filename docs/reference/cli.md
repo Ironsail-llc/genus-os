@@ -282,7 +282,7 @@ Usage: `genus config get <name> [--json]`
 
 Change one setting.
 
-Usage: `genus config set <name> <value> [--json]`
+Usage: `genus config set <name> <value> [--json] [--apply] [--override]`
 
 | Argument | Required | Description |
 | --- | --- | --- |
@@ -292,6 +292,8 @@ Usage: `genus config set <name> <value> [--json]`
 | Flag | Takes | Default | Description |
 | --- | --- | --- | --- |
 | `--json` | — | off | Machine-readable output |
+| `--apply` | — | off | Change it in the layer that wins (a systemd drop-in when a unit sets it, else config.yaml), reload systemd and schedule the restart in 15s (uses sudo) |
+| `--override` | — | off | With --apply: write a drop-in sorting after a later one that sets the variable |
 
 ### `genus config explain`
 
