@@ -36,7 +36,7 @@ required:
     # Must stay a superset of the departments in templates/agents/_catalog.yaml —
     # `examples` was missing here while the catalog shipped it and hello-world
     # declared it.
-    enum: [email, calendar, operations, security, communications, crm, briefings, core, examples, system, custom]
+    enum: [email, calendar, operations, security, communications, crm, briefings, core, engineering, examples, system, custom]
 
 recommended:
   model:
@@ -169,6 +169,15 @@ recommended:
   tools_denied:
     type: list[string]
     default: []
+  tools_opt_in:
+    type: list[string]
+    default: []
+    description: >
+      Opt-in tools (the `claude_code_*` driver, `web_render`, `sales_*`) added
+      on top of the default tool set, for an agent that declares no
+      `tools_allowed`. An agent with an explicit `tools_allowed` names opt-in
+      tools there instead. `tools_denied` still wins.
+    example: ["claude_code_start", "claude_code_wait"]
   secrets:
     type: list[string]
     default: []

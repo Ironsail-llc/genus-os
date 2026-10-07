@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-423 settings in 14 groups.
+464 settings in 16 groups.
 
 ## autonomy
 
@@ -55,6 +55,56 @@ Host paths for the isolated personal browser service and clients.
 | `ROBOTHOR_AUTONOMY_PAYMENT_EVENT_RETENTION_DAYS` | int | `2555` | `robothor-autonomy`, `robothor-engine`, `robothor-bridge` | no | legacy | How long a payment event is kept. Seven years by default, because these are financial records and a jurisdiction may require them for that long. NOT swept automatically: a payment position is reconstructed from its whole event log, so deleting part of one silently rewrites what was charged. Deleting them is an operator action against a closed operation, and the window above is the documented policy for it. |
 | `ROBOTHOR_AUTONOMY_SOCKET` | str | `/run/robothor-autonomy/broker.sock` | `robothor-autonomy`, `robothor-engine`, `robothor-bridge` | no | legacy | Private Unix socket shared by the protected browser service and its authenticated clients. Its parent directory must be owned by the service user with mode 0700. |
 | `ROBOTHOR_AUTONOMY_TERMS_RETENTION_DAYS` | int | `365` | `robothor-autonomy`, `robothor-engine`, `robothor-bridge` | no | legacy | How long a terms or receipt observation is kept before it is deleted outright. These hold the rendered review page — the owner's name, date of birth, address and the answers they gave a website — sealed with a key derived from the vault master key. The owner can also erase one at any time from the operation's page, which keeps the audit fact and drops the content. 0 disables the sweep and keeps them forever. |
+
+## coding
+
+| Variable | Type | Default | Restart | Secret | Since | Description |
+| --- | --- | --- | --- | --- | --- | --- |
+| `ROBOTHOR_CLAUDE_BIN` | str | _(empty)_ | no | no | unreleased | The Claude Code CLI a coding job runs. Empty looks for `claude` on PATH, then ~/.local/bin/claude (where the native installer puts it). |
+| `ROBOTHOR_CLAUDE_CODE_AUTH` | str | `auto` | no | no | unreleased | How a coding job authenticates. `auto` (the default) uses the CLAUDE_CODE_OAUTH_TOKEN stored by `robothor claude-code login` when there is one, otherwise the Claude Code login the engine's user already has on this host. `token` requires the stored token; `host` always uses the host login. The host login needs ~/.claude writable by the engine unit; personal settings, plugins and MCP servers are excluded either way. |
+| `ROBOTHOR_CLAUDE_CODE_MAX_BUDGET_USD` | float | `5.0` | no | no | unreleased | Default dollar cap for one coding job across all its rounds, when the agent names none. Each round is told only what is left. |
+| `ROBOTHOR_CLAUDE_CODE_MAX_TURNS` | int | `80` | no | no | unreleased | Claude Code turns allowed in one round of a coding job (--max-turns). |
+| `ROBOTHOR_CLAUDE_CODE_MODEL` | str | _(empty)_ | no | no | unreleased | Model alias a coding job uses when the agent names none (sonnet, opus, ...). Empty uses the Claude Code CLI's own default. |
+| `ROBOTHOR_CLAUDE_CODE_ROUND_TIMEOUT` | float | `3600.0` | no | no | unreleased | Seconds one Claude Code round may run before its process group is killed. A killed round still counts, and the next one resumes the same session. |
+| `ROBOTHOR_CODING_ALLOWED_DOMAINS` | str | _(empty)_ | no | no | unreleased | Comma-separated domains a code-mode job's sandboxed shell may reach (for example pypi.org,files.pythonhosted.org). Empty means no network at all. review and readonly jobs never have network, whatever this says. |
+| `ROBOTHOR_CODING_GIT_EMAIL` | str | _(empty)_ | no | no | unreleased | Author email on coding-job commits. Empty uses the target repository's user.email, then a generic placeholder address. |
+| `ROBOTHOR_CODING_GIT_NAME` | str | _(empty)_ | no | no | unreleased | Author name on coding-job commits. Empty uses the target repository's user.name, then a generic agent name. |
+| `ROBOTHOR_CODING_MAX_CONCURRENT` | int | `2` | `robothor-engine` | no | unreleased | Coding jobs one tenant may run at once; more wait as `queued`. |
+| `ROBOTHOR_CODING_REPO_ROOTS` | str | _(empty)_ | no | no | unreleased | Path-separated directories a coding job's repo_path must sit under. REQUIRED: empty refuses every claude_code_start. The live workspace itself, the service user's home itself, and any directory containing either are refused even under a root. The job still works only in its own worktree and never on main/master. |
+| `ROBOTHOR_CODING_RETENTION_DAYS` | int | `7` | no | no | unreleased | Days a finished coding job's worktree, private config directory and genus/cc-* branch are kept before the reaper removes them. Merge or push a job's branch before then. |
+| `ROBOTHOR_CODING_VERIFY_TIMEOUT` | float | `900.0` | no | no | unreleased | Seconds a coding job's acceptance verify_command may run before it is killed and counted as a failure. |
+| `ROBOTHOR_CODING_WORKTREE_ROOT` | str | _(empty)_ | no | no | unreleased | Where coding jobs' git worktrees are created, one directory per job. Empty means <workspace>/.genus/worktrees. Must be writable by the engine: under the shipped unit that means inside the workspace or a ReadWritePaths= drop-in. |
+
+## pr_review
+
+| Variable | Type | Default | Restart | Secret | Since | Description |
+| --- | --- | --- | --- | --- | --- | --- |
+| `ROBOTHOR_PR_REVIEW_AGENT` | str | `pr-reviewer` | no | no | unreleased | Agent the intake assigns review tasks to. |
+| `ROBOTHOR_PR_REVIEW_APPROVED_REACTION` | str | `👍` | no | no | unreleased | Emoji that replaces the claim reaction on the Chat message when its pull request is approved. Empty leaves the claim reaction in place. |
+| `ROBOTHOR_PR_REVIEW_BLOCKING_EVENT` | str | `REQUEST_CHANGES` | no | no | unreleased | Review event posted when a blocker or major finding remains: REQUEST_CHANGES, or COMMENT for a reviewer that should never block a merge. Never APPROVE. |
+| `ROBOTHOR_PR_REVIEW_BOT_LOGIN` | str | _(empty)_ | no | no | unreleased | GitHub login whose requested reviews are picked up, from any repository the token can read. Empty skips the requested-review source. |
+| `ROBOTHOR_PR_REVIEW_BUDGET_USD` | float | `25.0` | no | no | unreleased | Dollar cap for one review job across its rounds. On a Claude subscription this is the CLI's notional cost, a runaway guard rather than a bill. |
+| `ROBOTHOR_PR_REVIEW_CHAT_LOOKBACK_MINUTES` | int | `60` | no | no | unreleased | On the first poll of a Chat space, how far back to read. Later polls continue from the stored cursor. |
+| `ROBOTHOR_PR_REVIEW_CHAT_SELF_USERS` | str | _(empty)_ | no | no | unreleased | Comma-separated Chat user resource names (users/...) whose messages are the reviewer's own and are never treated as requests. |
+| `ROBOTHOR_PR_REVIEW_CHAT_SPACE` | str | _(empty)_ | no | no | unreleased | Google Chat space resource name (spaces/...) watched for pull-request links and re-review requests, and where results are announced in the original thread. Empty disables the Chat source. |
+| `ROBOTHOR_PR_REVIEW_CLAIM_REACTION` | str | `👀` | no | no | unreleased | Emoji reacted on a Chat message when its pull request or re-review is queued. Empty reacts with nothing. |
+| `ROBOTHOR_PR_REVIEW_CLONE_ROOT` | str | _(empty)_ | no | no | unreleased | Where pr_review_prepare keeps one clone per reviewed repository. Empty means <workspace>/.genus/pr-review/repos. When ROBOTHOR_CODING_REPO_ROOTS is set it must include this directory. |
+| `ROBOTHOR_PR_REVIEW_DEEP_EFFORT` | str | `xhigh` | no | no | unreleased | Claude Code --effort for a deep review (low, medium, high, xhigh or max). Never lowers ROBOTHOR_PR_REVIEW_EFFORT. |
+| `ROBOTHOR_PR_REVIEW_DEEP_LINES` | int | `1500` | no | no | unreleased | Changed lines (additions plus deletions) from which a review goes deep: ROBOTHOR_PR_REVIEW_DEEP_EFFORT, four explicit sequential lens passes, and a completeness pass in the same session when the first round used under 60% of its turns. |
+| `ROBOTHOR_PR_REVIEW_EFFORT` | str | `high` | no | no | unreleased | Claude Code --effort for review jobs: low, medium, high, xhigh or max. Empty leaves the CLI's default. |
+| `ROBOTHOR_PR_REVIEW_GUIDELINES_PATH` | str | _(empty)_ | no | no | unreleased | Instance review-guidelines file (e.g. <workspace>/brain/pr-review-guidelines.md). When set and readable, its content replaces the pr-review skill's generic guidelines in every review prompt; re-read for every review. |
+| `ROBOTHOR_PR_REVIEW_MAX_CONCURRENT` | int | `2` | no | no | unreleased | Review tasks the intake keeps open at once; further pull requests wait and are queued on a later poll. |
+| `ROBOTHOR_PR_REVIEW_MAX_TURNS` | int | `80` | no | no | unreleased | Claude Code turns one review round may take (--max-turns). |
+| `ROBOTHOR_PR_REVIEW_MODEL` | str | `opus` | no | no | unreleased | Claude Code model alias for review jobs. The default `opus` is the CLI's alias, which each Claude Code update points at the newest Opus; never pin a dated model id here. Empty uses ROBOTHOR_CLAUDE_CODE_MODEL. The model actually used is named in each review's footer. |
+| `ROBOTHOR_PR_REVIEW_REPOS` | str | _(empty)_ | no | no | unreleased | Comma-separated owner/repo list the pr-reviewer may review. Pull-request links posted in the Chat space count only for these repositories. An entry may carry its ticket prefix as owner/repo:PREFIX (another review bot's ALLOWED_REPOS format). Empty disables the repository sources. |
+| `ROBOTHOR_PR_REVIEW_REQUIRE_TICKET` | bool | `false` | no | no | unreleased | A pull request with no ticket key in its title, branch, description or commit messages gets a blocking [no-ticket] finding and is never approved. |
+| `ROBOTHOR_PR_REVIEW_RETRY_COOLDOWN_MINUTES` | int | `60` | no | no | unreleased | A failed review is retried on the same head after this long, at most 3 attempts per head; a new head is retried at once. |
+| `ROBOTHOR_PR_REVIEW_ROUND_TIMEOUT` | float | `1800.0` | no | no | unreleased | Seconds one review round may run before Claude Code is killed. |
+| `ROBOTHOR_PR_REVIEW_SKIP_LABELS` | str | _(empty)_ | no | no | unreleased | Comma-separated pull-request labels that skip the review entirely. Empty (the default) skips by label never: anyone who can label a pull request could otherwise switch its review off. |
+| `ROBOTHOR_PR_REVIEW_STALE_AFTER_MINUTES` | int | `180` | no | no | unreleased | A review queued or running this long without being finalized is marked failed, so a lost task never holds a concurrency slot forever. |
+| `ROBOTHOR_PR_REVIEW_TELEGRAM_DIGEST` | bool | `false` | no | no | unreleased | pr_review_finalize returns a one-line digest per posted review for the agent to deliver; the agent's delivery must announce on Telegram for it to arrive. |
+| `ROBOTHOR_PR_REVIEW_TICKET_PREFIXES` | str | _(empty)_ | no | no | unreleased | Ticket key prefixes the reviewer links pull requests to: owner/repo:PREFIX entries apply to that repository, bare PREFIX entries (e.g. ABC) to every repository without its own, comma-separated. Empty accepts any uppercase KEY-123. |
+| `ROBOTHOR_PR_REVIEW_WATCH_REPOS` | bool | `false` | no | no | unreleased | Review every open, non-draft pull request in the configured repositories, and re-review when its head moves. False reviews only pull requests posted in the Chat space or that request the bot login's review. |
 
 ## paths
 
@@ -193,9 +243,9 @@ The agent execution layer: bind address, concurrency, pacing, sandbox.
 | `ROBOTHOR_ALLOW_EMPTY_FLEET` | bool | `true` | `robothor-engine` | no | legacy | Let the engine start with no agent manifests at all. True suits a fresh install; false makes an emptied manifest directory fatal. |
 | `ROBOTHOR_AUTODREAM_UNLOAD_BELOW_GB` | float | `24.0` | `robothor-engine` | no | legacy | Free VRAM (GiB) below which the autodream pass unloads local models rather than competing with live agent work. |
 | `ROBOTHOR_BUDDY_GRADER_DRYRUN` | bool | `false` | `robothor-engine` | no | legacy | Run the verification grader without writing its verdicts, for checking a grading change against live runs. |
-| `ROBOTHOR_CALENDAR_OPERATIONS_ENABLED` | bool | `false` | `robothor-engine` | no | legacy | Enable durable native attendee updates after migrations 126/127 and test-calendar canaries. |
 | `ROBOTHOR_DAEMON_START_TS` | str | _(empty)_ | `robothor-engine` | no | legacy | ISO timestamp the daemon sets on itself at boot and child processes read to report uptime. Set by the engine, not by an operator. |
 | `ROBOTHOR_DEFAULT_CHAT_AGENT` | str | `main` | `robothor-engine` | no | legacy | Agent an inbound chat is routed to when nothing names one. |
+| `ROBOTHOR_DEPLOY_TEST_PYTHON` | str | _(empty)_ | `robothor-engine` | no | legacy | Interpreter a local deploy runs its pre-switch test gate with: the instance's dev interpreter, since runtime releases omit pytest. Empty means <workspace>/venv/bin/python. |
 | `ROBOTHOR_ENGINE_HOST` | str | `127.0.0.1` | `robothor-engine` | no | legacy | Address the engine's HTTP surface binds to. Loopback by default; the auth guard refuses the insecure dev mode on any other address. |
 | `ROBOTHOR_ENGINE_PORT` | int | `18800` | `robothor-engine` | no | legacy | Engine HTTP port. |
 | `ROBOTHOR_ENGINE_URL` | str | `http://127.0.0.1:18800` | `robothor-engine` | no | legacy | Base URL the dashboard's server-side client calls the engine on. |
@@ -205,6 +255,7 @@ The agent execution layer: bind address, concurrency, pacing, sandbox.
 | `ROBOTHOR_EXECUTE_CODE_TIMEOUT` | int | `300` | no | no | unreleased | Wall-clock seconds one `execute_code` snippet gets. The agent may ask for less and never for more, and the run's own remaining budget still clamps it. On expiry the snippet's process group is killed, along with every descendant the engine has seen it start. A snippet can DEFEAT both deliberately -- a child started in its own session, then `os._exit` to skip the snippet's own cleanup -- so this is a budget for honest work, not a containment boundary for hostile code. Only a delegated cgroup (`Delegate=yes` on the engine's unit) would close that; until then, grant `execute_code` to agents you would grant `exec`. |
 | `ROBOTHOR_EXECUTION_MODE` | str | `auto` | `robothor-engine` | no | legacy | Which tier runs agents: auto, cloud, or local. 'local' switches the budgets as well as the model — cloud-era wall-clock budgets were 78% of local-tier failures. |
 | `ROBOTHOR_EXEC_SPILL_MAX_BYTES` | int | `8388608` | no | no | unreleased | Largest `exec` spill file, in bytes (default 8 MiB). A command whose output is bigger has its spill cut at this size with a marker saying so, and the result says how much the file holds. Before the spill existed nothing from a command reached the disk at all, so a single `exec` under the 900-second ceiling could otherwise fill the workspace. A spill is also refused outright when writing it would leave the filesystem with less than 64 MiB free. |
+| `ROBOTHOR_HOST_EXEC_SOCKET` | str | _(empty)_ | `robothor-engine` | no | legacy | Unix socket of the host-execution service (robothor-host-exec). The service binds it (empty means /run/robothor-host/exec.sock) and the engine's main agent sends owner commands to it; empty in the engine means host execution is not offered and exec stays in the engine's own sandbox. |
 | `ROBOTHOR_IMPORTANCE_THRESHOLD` | float | `0.3` | `robothor-engine` | no | legacy | Minimum importance score for an extracted fact to be stored. |
 | `ROBOTHOR_LOCAL_GATE_WAIT_SECONDS` | int | `120` | no | no | legacy | How long a local-tier run waits for a GPU slot before giving up. |
 | `ROBOTHOR_LOCAL_MAX_CONCURRENT` | int | `0` | no | no | legacy | Concurrency ceiling while on the local tier. 0 lets the host profile derive one from VRAM and core count. |

@@ -14,6 +14,22 @@ schedule:
 delivery:
   mode: none
 
+# Opt-in tools on top of the default set: main delegates coding tasks to
+# Claude Code and sees each one through to a verified commit (skill:
+# claude-code). Uses the host's Claude Code login, or a token from `robothor claude-code login`.
+# Deliberate: the operator wants main to code. The mitigation is the job fence
+# (docs/TOOLS.md, "Security model"): every job's shell is sandboxed (no
+# credentials, no network by default, writes only to its worktree), Edit/Write
+# are confined to the worktree, and no job starts until the operator sets
+# ROBOTHOR_CODING_REPO_ROOTS.
+tools_opt_in:
+  - claude_code_start
+  - claude_code_status
+  - claude_code_wait
+  - claude_code_followup
+  - claude_code_cancel
+  - pr_review_intake
+
 task_protocol: true
 status_file: brain/memory/main-status.md
 

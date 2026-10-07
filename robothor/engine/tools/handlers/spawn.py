@@ -170,7 +170,10 @@ def _narrow_child_config(
             # ordinary tool here is still a narrowing (the child would have
             # been offered it anyway); naming an opt-in one is a grant, which
             # is the one thing this argument may never be.
-            granted = sorted(set(tools_override) & OPT_IN_TOOLS)
+            # The child's own `tools_opt_in` is part of its default set, so
+            # naming one of those is a narrowing too.
+            own_opt_in = set(getattr(child_config, "tools_opt_in", None) or ())
+            granted = sorted((set(tools_override) & OPT_IN_TOOLS) - own_opt_in)
             if granted:
                 raise ValueError(
                     "tools_override cannot grant a tool the child's manifest never asked "

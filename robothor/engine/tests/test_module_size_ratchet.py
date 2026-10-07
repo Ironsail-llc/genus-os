@@ -704,8 +704,13 @@ CAPS = {
     # rediscovered by the next reviewer costs more than five lines.
     "robothor/engine/code_exec_process.py": 355,
     # The per-tool wall-clock rule, with one definition instead of four.
-    "robothor/engine/tool_timeouts.py": 144,
-    "robothor/engine/tools/read_only.py": 87,
+    # The self-timed ceilings moved to tool_self_timed.py (2026-10-05).
+    "robothor/engine/tool_timeouts.py": 132,
+    "robothor/engine/tool_self_timed.py": 56,
+    # +13 (2026-10-07): the generation-keyed plugin cache. Discovery ran twice
+    # per tool call and was most of a run's CPU; the cache belongs beside the
+    # one function that reads it, not in a module of its own.
+    "robothor/engine/tools/read_only.py": 100,
     "robothor/engine/run_budget.py": 120,
     # Live host state for the warmup preamble (2026-09-13). Bounded from the
     # day it lands, like schedule_reconcile.py: this is the module that would

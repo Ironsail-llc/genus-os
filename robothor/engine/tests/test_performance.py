@@ -7,7 +7,6 @@ import pytest
 
 from robothor.engine.models import RunStep, StepType
 from robothor.engine.performance import periodic_progress, run_measurements
-from robothor.engine.routine_request import TOOL, attach_draft_reference
 
 
 def test_parallel_tool_time_is_counted_once_and_errors_not_verified():
@@ -40,21 +39,6 @@ async def test_progress_runs_while_provider_is_waiting_and_cancels():
         await task
     assert callback.await_count >= 1
     assert callback.call_args.args[0]["event"] == "progress"
-
-
-def test_draft_marker_attached_from_tool_evidence():
-    session = SimpleNamespace(
-        run=SimpleNamespace(
-            steps=[
-                RunStep(tool_name=TOOL, tool_output={"status": "draft", "operation_id": "fixture"})
-            ]
-        )
-    )
-    assert attach_draft_reference(session, "Review this draft.").endswith(
-        "Calendar operation: fixture"
-    )
-    text = attach_draft_reference(session, "Review this draft.")
-    assert attach_draft_reference(session, text) == text
 
 
 async def test_progress_names_phase_and_elapsed_time_without_tool_arguments():

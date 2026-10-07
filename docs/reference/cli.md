@@ -28,7 +28,7 @@ Where to start, rather than reading this top to bottom:
 Settings are documented in the [configuration reference](configuration.md),
 not here: a flag belongs to one command, a setting to the whole instance.
 
-37 verbs.
+38 verbs.
 
 ## `genus plugin`
 
@@ -282,7 +282,7 @@ Usage: `genus config get <name> [--json]`
 
 Change one setting.
 
-Usage: `genus config set <name> <value> [--json]`
+Usage: `genus config set <name> <value> [--json] [--apply] [--override]`
 
 | Argument | Required | Description |
 | --- | --- | --- |
@@ -292,6 +292,8 @@ Usage: `genus config set <name> <value> [--json]`
 | Flag | Takes | Default | Description |
 | --- | --- | --- | --- |
 | `--json` | — | off | Machine-readable output |
+| `--apply` | — | off | Change it in the layer that wins (a systemd drop-in when a unit sets it, else config.yaml), reload systemd and schedule the restart in 15s (uses sudo) |
+| `--override` | — | off | With --apply: write a drop-in sorting after a later one that sets the variable |
 
 ### `genus config explain`
 
@@ -1587,6 +1589,33 @@ Usage: `genus codex test [prompt] [--model MODEL] [--timeout TIMEOUT]`
 | --- | --- | --- | --- |
 | `--model` | `MODEL` | `codex/gpt-5.5` |  |
 | `--timeout` | `TIMEOUT` | `120` |  |
+
+## `genus claude-code`
+
+Manage the Claude Code token the claude_code_* tools use.
+
+Usage: `genus claude-code {login,status}`
+
+### `genus claude-code login`
+
+Run `claude setup-token` and store the token in the vault.
+
+Usage: `genus claude-code login [--token-stdin] [--no-ping]`
+
+| Flag | Takes | Default | Description |
+| --- | --- | --- | --- |
+| `--token-stdin` | — | off | Read an existing token from stdin instead of running setup-token |
+| `--no-ping` | — | off | Skip the one-turn proof call |
+
+### `genus claude-code status`
+
+Show the CLI version and token source, and prove it with a ping.
+
+Usage: `genus claude-code status [--no-ping]`
+
+| Flag | Takes | Default | Description |
+| --- | --- | --- | --- |
+| `--no-ping` | — | off | Skip the one-turn proof call |
 
 ## `genus engine`
 

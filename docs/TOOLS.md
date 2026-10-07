@@ -97,7 +97,7 @@ passed `sendUpdates`, so nothing reached him by mail either. The API returned a
 successful event for each call, so the assistant reported success truthfully as
 far as it could see.
 
-The three calendar tools now take a `calendar` parameter:
+Every calendar tool takes a `calendar` parameter:
 
 | Value | Calendar | When |
 |---|---|---|
@@ -119,11 +119,31 @@ And every calendar result now carries the facts needed to report it honestly:
 calendar" should be reading `kind` before it says so.
 
 **Invitations.** When an event has attendees, the create passes
-`sendUpdates` (and a delete passes it too — a cancellation nobody is told about
-is not a cancellation). The value is the governed setting
+`sendUpdates` (and a delete, an update and an RSVP pass it too — a cancellation
+or a move nobody is told about did not happen as far as the guests know). The value is the governed setting
 `ROBOTHOR_CALENDAR_SEND_UPDATES`, default `all`. Set it to `none` and events
 still get created, `invitations_requested` comes back `false`, and the agent should
 say so rather than claim the attendees were told.
+
+**Editing an existing meeting is a direct write.** `gws_calendar_update` changes
+time, title, description, location and guests in one call; `gws_calendar_add_attendees`
+is the same write with only additions; `gws_calendar_respond` sets the calendar
+owner's own RSVP. There is no draft and no "reply yes to confirm" step: editing a
+meeting is ordinary assistant work, not a payment or an irreversible external
+action. Each one reads the event, keeps every existing guest and RSVP whole,
+writes conditionally on the version it read (`If-Match`; a conflicting edit gets
+one fresh read and merge), and reads back once. An uncertain write is reported,
+never blindly repeated. Everyone who will be mailed about the change is screened
+against the do-not-contact list first, and nobody whose CRM record says
+`scheduling_policy='no_auto'` can be added (the same per-person policy create
+honours). A time with no offset is read in the event's own `timeZone` (or the
+instance's `ROBOTHOR_TIMEZONE` when the event has none); a bare `YYYY-MM-DD`
+makes or keeps the event all-day, and moving only the start of an all-day event
+keeps its length in days. The organiser and the calendar's own entry cannot be
+removed — decline with `gws_calendar_respond` instead. A verified edit returns
+`evidence_reference: calendar-effect:<id>`, the durable record in the runtime
+effect ledger that a pursuit goal can cite as independent evidence. All six calendar tools are core tools, so
+they are offered directly rather than behind `tool_search`.
 
 **This needs one thing set up outside the platform**: the operator's calendar
 must be shared with the instance's Google account with "Make changes to
@@ -165,6 +185,164 @@ and the tenant's `workflow_bindings` must authorize that workflow for the reques
 stage. It does not create approvals. Stop requests run on a separate workflow and
 continue while delivery and research switches are off.
 
+### Claude Code (`claude_code_*`)
+
+An agent delegates a coding task to the [Claude Code](https://docs.claude.com/en/docs/claude-code)
+CLI and sees it through to a **verified** commit. Claude Code writes the code;
+the engine decides whether it is done.
+
+| Tool | Purpose |
+|---|---|
+| `claude_code_start` | Start a job: `task` (the spec), `repo_path`, `acceptance` `{verify_command, require_commit}`, optional `mode`, `model`, `max_budget_usd`, `max_rounds`, `base_ref`, `json_schema`, and per-job `effort` (`--effort` low…max), `max_turns` and `round_timeout_s`. Returns a `job_id` at once. |
+| `claude_code_wait` | Block until the job finishes or `timeout_s` (default 300, max 1800) passes. The wait is shortened to leave the calling run time to report. |
+| `claude_code_status` | The job now: status, rounds, cost, its last actions, the verify result and evidence. Only the agent that started a job (or the owner) can see or steer it. |
+| `claude_code_followup` | A specific correction into the same Claude Code session: queued for a running job, or reopening a finished one with a fresh round allowance. |
+| `claude_code_cancel` | Kill the running round and remove the worktree. The branch and any commits stay. |
+
+**How a job runs.** Each job gets its own git worktree
+(`ROBOTHOR_CODING_WORKTREE_ROOT`, default `<workspace>/.genus/worktrees/<job>`)
+on a new branch `genus/cc-<id>`, never on `main`/`master`. The engine runs
+`claude -p --output-format stream-json` there with no shell, the prompt on
+stdin, `--setting-sources ""` and `--strict-mcp-config` (none of the service
+user's own Claude Code settings or MCP servers), `--permission-mode dontAsk`
+with a tool list per mode, and `--settings` carrying the job's sandbox (see
+**Security model** below):
+
+| `mode` | Claude Code may use |
+|---|---|
+| `code` (default) | Read, Grep, Glob; Edit and Write **only under the job's worktree**; Bash (sandboxed). Never `git push`, `gh pr create/merge/review/comment`, `gh api`, WebFetch, WebSearch. |
+| `review`, `readonly` | Read, Grep, Glob, and Bash limited to read-only `git` (`diff`, `log`, `show`, `status`, `blame`, `rev-parse`, `ls-files`, `branch --list`), with `--output`, `--ext-diff`/`--ext`, `--textconv` and `--no-index` denied. No `git grep` (its `-O` runs a program; the Grep tool does the job), no `gh` (no network). No edits, no commit, no `verify_command`. |
+
+**When it is done.** After every round the engine runs `verify_command` itself
+in the worktree — `shlex`-split, no shell (write `bash -c '…'` for a pipeline),
+with no credential in its environment — and, for `code` jobs, requires a new
+commit on the job branch and a clean tree (tool caches such as `__pycache__` do
+not count; an untracked source file does). Commits are read from
+`refs/heads/genus/cc-<id>`, never from wherever HEAD points, and HEAD must still
+be a symbolic ref to that branch — a session that detached HEAD or switched
+branches fails verification with the reason. Claude Code saying "done" counts
+for nothing. On failure the engine resumes the **same** session with the failing
+output, up to `max_rounds` (default 3) within `max_budget_usd` (default 5,
+`ROBOTHOR_CLAUDE_CODE_MAX_BUDGET_USD`). A `done` job carries `evidence` in the
+`test_run` / `commit` shape session goals validate: the verify exit code and
+output sha256, the commit sha. Each round is given only what is left of the
+job's budget as its `--max-budget-usd`, and a round that ends without Claude
+Code's own result line (timed out, killed, crashed) is charged that whole
+allowance, since its real spend is unknown.
+
+**Durable.** Jobs are rows in `coding_jobs` and tasks the engine owns, so a run
+can start one and end. An engine restart resumes every job still `queued` or
+`running` (with `--resume <session_id>`; the resume counts as a round). At most
+`ROBOTHOR_CODING_MAX_CONCURRENT` (default 2) run per tenant; the rest wait as
+`queued`. A follow-up that arrives while a job is finishing is run, not dropped,
+and two follow-ups to a finished job reopen it once.
+
+**Cleanup.** A `done` or `cancelled` job's worktree and private config
+directory are removed when it ends; a `failed` job keeps both for inspection.
+The reaper — at engine start and at most hourly after a job finishes — removes
+the worktree, config directory and `genus/cc-*` branch of every finished job
+older than `ROBOTHOR_CODING_RETENTION_DAYS` (default 7) and marks the row
+`reaped_at`. Merge or push a job's branch before then.
+
+**What it sees.** The child environment is built from nothing: `PATH`, locale,
+`TERM`, `TZ`, `TMPDIR`, a private `HOME`/`CLAUDE_CONFIG_DIR` under
+`$XDG_CONFIG_HOME/robothor/claude-code/<job>` (writable under the engine unit),
+and `CLAUDE_CODE_OAUTH_TOKEN` resolved vault first. No fleet secret is
+inherited. `GH_TOKEN` travels only with `grant_github: true` **and** `GH_TOKEN`
+in the calling agent's own manifest `secrets:`. The engine's own git calls on a
+job's repository use the same allowlist environment and run with
+`-c core.hooksPath=/dev/null -c core.fsmonitor=false`.
+
+**Security model.** A `code` job is an autonomous agent with a shell, running
+as the engine's service user. The `main` template opts in to the tools on
+purpose — the operator wants Robothor to code — and the fence is what makes
+that acceptable:
+
+- **Where.** `ROBOTHOR_CODING_REPO_ROOTS` is required: with it empty every
+  `claude_code_start` is refused. `repo_path` is resolved (symlinks included)
+  and must sit under a root; the live workspace and the service user's home are
+  refused even under a root, as is any directory containing them.
+- **Bash** runs in Claude Code's sandbox (bubblewrap + a filtering proxy),
+  `failIfUnavailable: true` and `allowUnsandboxedCommands: false`. It cannot
+  read `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.azure`, `~/.netrc`,
+  `~/.git-credentials`, `~/.pgpass`, `~/.docker`, `~/.kube`, `~/.config`,
+  `~/.claude`, `~/.claude.json`, `~/.robothor`, the instance workspace's `brain/`,
+  `.robothor/` and `local/`, `/run/robothor` or `/etc/robothor`. It can write
+  the job's worktree and only what `git commit` in a linked worktree needs
+  from the repository's git directory (`objects/`, the job branch's ref and
+  reflog directory, the worktree's own admin directory) — never `hooks/` or
+  `config`. It has no network unless `ROBOTHOR_CODING_ALLOWED_DOMAINS` names
+  domains (code mode only). The process table shows only the sandbox's own
+  processes, so the engine's environment is out of reach.
+- **Read/Edit/Write/Grep/Glob** are not sandboxed (they run in the Claude Code
+  process), so permission rules fence them: Edit and Write are allowed only as
+  `Edit(//<worktree>/**)`/`Write(//<worktree>/**)`, and Read/Edit/Write are
+  denied on every path above.
+- **review/readonly** jobs run under the same sandbox with nothing writable and
+  no network, with the sandbox's auto-allow of Bash turned off so the git
+  allowlist stays the gate, and may not carry a `verify_command` (it would run
+  engine-side, outside the sandbox).
+- **Not covered.** `/tmp` stays writable inside the sandbox (its default);
+  the acceptance command of a code job runs engine-side without the sandbox
+  but with no credential in its environment, and can do nothing the sandboxed
+  session could not already arrange through the worktree; with a stored token,
+  `CLAUDE_CODE_OAUTH_TOKEN` is in the job's environment (the shell has no
+  network to send it anywhere unless domains are allowed).
+
+The sandbox needs `bwrap` able to create unprivileged user namespaces (on
+Ubuntu 24.04+ an AppArmor profile for `/usr/bin/bwrap` allowing `userns`) and
+`socat`; `genus doctor` fails `claude_code.ready` without them, since every job
+would fail.
+
+It also needs to mount a fresh `/proc` for its pid namespace, which the kernel
+refuses while `/proc` carries overmounts — and the engine unit's
+`ProtectKernelTunables=yes` and `ProtectKernelLogs=yes` create exactly those.
+`failIfUnavailable` does not catch this (Claude Code starts; every Bash call
+errors), so a job silently runs with no shell. The shipped
+`robothor-engine.service.d/zz-claude-code.conf` sets both to `no` (it sorts
+after `hardening.conf`, so it wins). The cost is small: the engine is
+non-root, holds no capabilities and runs with `NoNewPrivileges=yes`, so it
+could not write `/proc/sys` or read the kernel log anyway; `ProtectProc=`,
+`ProtectKernelModules=`, `ProtectControlGroups=` and the rest stay on.
+`claude_code.ready` probes the `/proc` mount and reads both properties off
+the engine unit, and names this drop-in when either is still on.
+
+**Getting it.** The tools are opt-in: name them in `tools_allowed`, or — for an
+agent that keeps the default set, like the `main` template — in `tools_opt_in`.
+They are refused in benchmark runs.
+
+**Credential.** If the engine's user is already logged in to Claude Code on the
+host, there is nothing to set up: with `ROBOTHOR_CLAUDE_CODE_AUTH=auto` (the
+default) jobs use that login when no token is stored. Claude Code refreshes the
+login under `~/.claude` and `~/.claude.json`, so the engine unit needs both
+writable: `infra/systemd/robothor-engine.service.d/zz-claude-code.conf`
+(installed by `scripts/install-units.sh`) adds exactly those two
+`ReadWritePaths=`, and `claude_code.ready` fails when the host login is in use
+and either is read-only. On a host where that user is not logged in, store a
+subscription token instead:
+
+```bash
+genus claude-code login    # claude setup-token → vault, then a one-turn proof
+genus claude-code status   # CLI version, which credential resolves, one-turn ping
+```
+
+A stored token always wins over the host login; `ROBOTHOR_CLAUDE_CODE_AUTH=token`
+requires it. Either way the runner's `--setting-sources ""` and
+`--strict-mcp-config` keep the user's personal settings, plugins, hooks and MCP
+servers out of every job.
+
+`genus doctor` reports `claude_code.ready` (skipped on an instance with neither
+the CLI nor a token). The `claude-code` skill is the orchestrator's procedure:
+spec, acceptance command, wait, specific follow-ups, and a report that cites the
+job id, commit sha and verify result rather than claiming the work is done.
+
+A repository outside the workspace needs its `.git` writable by the engine
+(`git worktree add` writes there): add it to a `ReadWritePaths=` drop-in, and
+name its parent in `ROBOTHOR_CODING_REPO_ROOTS`. Worktrees stay under
+`<workspace>/.genus/worktrees` by default: the workspace is writable under the
+engine unit, `.genus/` is gitignored, and the other writable home
+(`~/.config/robothor`) is on the sandbox's `denyRead` list.
+
 ### Google Workspace (`gws_*`)
 
 Eleven tools, all shelling out to the `gws` CLI with the instance's Workspace
@@ -181,6 +359,9 @@ its answer.
 | `gws_gmail_modify` | The message id and its labels after the change. Mark read/unread, archive, add or remove labels. |
 | `gws_calendar_list` | The events in a range: id, start, end, summary, location, attendees — plus `calendar`, saying whose calendar was read. Reads the **operator's** by default. |
 | `gws_calendar_create` | The created event, plus `calendar` (`operator`/`own`/`other`), `invitations_requested` and `htmlLink` — **or `{"status": "deduped"}` with nothing created**, when a matching event already exists within ±14 days. Writes to the **operator's** calendar by default, adds a Google Meet link, and emails the attendees. See [Whose calendar](#whose-calendar). |
+| `gws_calendar_update` | The event after the change: `start`, `end`, `summary`, `attendees` (each with its `responseStatus`), `added`/`removed`/`already_present`, `changed`, `recurrence`, `calendar`, `send_updates`, `invitations_requested`, `attendees_notified` (only under `all`) and `htmlLink`. `status` is `updated`, `unchanged` (nothing written) or `partial` (could not verify — do not repeat the write). Moving only `start` keeps the meeting's length. |
+| `gws_calendar_add_attendees` | The same as `gws_calendar_update` with `add_attendees`: a direct write, kept so existing manifests keep working. `status: already_present` when everyone was already invited; a guest who **declined** is reported as declined. |
+| `gws_calendar_respond` | Sets the calendar owner's RSVP (`accepted`, `declined`, `tentative`, optional `comment`) and nothing else; returns `response`, `status`, `calendar` and `htmlLink`. Refuses when the calendar is the organiser or is not on the guest list. Works on a guest's copy with a hidden guest list (`attendeesOmitted`) by patching only its own entry. |
 | `gws_calendar_delete` | Confirmation plus `calendar` and `cancellations_sent`. Deletes permanently from the **operator's** calendar by default and emails the attendees a cancellation. |
 | `gws_chat_send` | The created message's resource name. |
 | `gws_chat_list_spaces` | Each space's resource name and display name. |
@@ -209,6 +390,76 @@ command.
 
 `send_email` is not a tool either — it is the `send-email` **skill**, invoked
 with `invoke_skill(name="send-email")`.
+
+### GitHub pull-request review
+
+Six tools on the instance's `GITHUB_TOKEN` (vault first). The three reads are
+offered to every agent. The three writes are **opt-in**: an agent is offered
+them only when its manifest lists them in `tools_allowed`. Every write is
+refused on a benchmark run.
+
+| Tool | Returns |
+|---|---|
+| `github_pr_diff` | The pull request's unified diff. Cut at 150,000 characters with `truncated: true` and `total_chars`; past that, read `github_pr_files`. |
+| `github_pr_files` | One entry per changed file: `filename`, `status`, `additions`, `deletions`, `patch` (null for a binary or oversized file). Patches share a 150,000-character budget; a file past it has `patch_omitted: true`. |
+| `github_compare` | `base...head`: `status` (`ahead`, `behind`, `diverged`, `identical`, or `missing` when the base commit is gone, reported only after the repo and head are confirmed reachable; otherwise an error names the repo/auth problem), `commits`, `files`, `full_review_required`, and `files_truncated` / `commits_truncated` (the list hit GitHub's cap). |
+| `github_create_review` *(opt-in)* | Posts a review and returns `review_id`, `url`, `verdict`, `verdict_overridden`, `event`, `inline_count`, `comment_ids`, `comments` (`id`, `path`, `line` of each inline comment), `posted_as_comment`, `anchors_folded` and `already_posted`. Idempotent: if this token already has an automated review (footer marker) at the same `commit_id` it posts nothing and returns that review with `already_posted: true`; the same lookup runs after a timeout or 5xx on the POST. Aborts with "head moved" if the head changes while files are read. The body is capped at 60,000 characters (non-blocking findings cut first, then out-of-diff, then summary; "…N more finding(s) omitted") and each inline comment at 8,000. Comments fold into the body only on an anchor-related 422; other 422s are returned as errors. |
+| `github_reply_review_comment` *(opt-in)* | Replies inside an existing review thread and returns the new comment's id and url. |
+| `github_resolve_threads` *(opt-in)* | Resolves only the threads opened by the `review_ids` you pass, and returns `resolved`, `thread_ids` and `already_resolved`. |
+
+**Choosing incremental or full.** Before a re-review, call `github_compare`
+with the last reviewed SHA as `base` and the current head as `head`. When
+`full_review_required` is true, review the whole pull request. That happens on
+`diverged` or `behind` (a rebase or force-push rewrote history) and on
+`missing` (the old commit is gone). `identical` means there is nothing new.
+`robothor.pr_review.posting.decide_review` applies the same rule in code.
+
+**What `github_create_review` does with your findings.**
+
+* An `APPROVE` beside any `blocker` or `major` finding is never posted: the
+  tool posts `REQUEST_CHANGES` and returns `verdict_overridden: true`, for
+  every caller (`robothor.pr_review.policy.guard_posted_verdict`).
+* Only `blocker` and `major` findings become inline comments. `minor`, `nit`
+  and any unknown severity go in the body under *Non-blocking*.
+* GitHub rejects the whole review if one inline comment points outside the
+  diff. So a finding whose `path`/`line`/`side` the diff cannot carry moves to
+  the body under *Other findings*, and nothing is dropped. Use `side: LEFT` for
+  removed lines. A `start_line` range stays inline only inside one hunk.
+* `prior_issues` (on a re-review) appear under *Previous findings* with their
+  status.
+* GitHub will not let the token's own user APPROVE or REQUEST_CHANGES on a
+  pull request that user opened. The tool posts a COMMENT whose first line is
+  `APPROVED` or `CHANGES REQUESTED` instead, and returns
+  `posted_as_comment: true`. It decides this up front when it can read the
+  token's login. When GitHub answers 422, it retries the same way.
+* Any other 422 with inline comments is treated as a bad anchor. The tool
+  retries **once** with every finding in the body (`anchors_folded: true`).
+* The tool refuses when the pull request's head is no longer `commit_id`,
+  because the anchors were checked against a diff that has since changed.
+  Re-review the new head.
+
+**Resolving threads.** Pass the `review_id`s that `github_create_review`
+returned. A thread belongs to the review its first comment was posted in. So a
+thread someone opened by hand from the same account is never resolved, even
+though it has the same author.
+
+### pr-reviewer suite (`pr_review_*`)
+
+Three opt-in tools that hold the deterministic halves of the pr-reviewer agent
+(docs/PR_REVIEWER.md). They are refused on a benchmark run.
+
+| Tool | Purpose |
+|---|---|
+| `pr_review_intake` | Poll the configured repositories (`ROBOTHOR_PR_REVIEW_REPOS`), pull requests requesting `ROBOTHOR_PR_REVIEW_BOT_LOGIN`'s review, and the Chat space (`ROBOTHOR_PR_REVIEW_CHAT_SPACE`); claim new links with a reaction; file one `pr-review` CRM task per pull-request head. No model; one run per tenant at a time (a concurrent run returns `skipped: locked`). `count_only: true` only reports the queue (the `pr-review-run` workflow). Returns counts including `open_tasks` and `queued_tasks`. Run by the `pr-review-intake` workflow. |
+| `pr_review_prepare` | Fetch the head into a local clone, build the review prompt (repository rules read from the base branch) and start the read-only Claude Code review job itself; returns its `job_id`, bound to the pull request. `skip: true` means nothing to review; `already_started: true` returns the job a previous call started; `resumed: true` returns a finished job whose post failed, to finalize again without a new review. |
+| `pr_review_finalize` | For the `job_id` prepare bound, and no other: read the job's structured output from the job itself, validate and redact it, recompute the verdict, post through the `github_create_review` handler (once — a repeat call returns the posted review), reply on our previous threads, resolve our own threads on approval, announce in the Chat thread and record the state. Returns `review_url`. `dismiss: true` closes an ambiguous re-review request that was not one. |
+
+**Choosing.** A pr-reviewer agent never calls `github_create_review` itself:
+`pr_review_finalize` is the only path that applies the policy (any blocker or
+major means `REQUEST_CHANGES`, or `COMMENT` with
+`ROBOTHOR_PR_REVIEW_BLOCKING_EVENT=COMMENT`; `APPROVE` only when the model
+approved and nothing blocking remains; the optional ticket rule). Use the
+`github_*` review tools directly only for a one-off review outside the suite.
 
 ### Vision: `view_image` and `analyze_image`
 
