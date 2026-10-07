@@ -190,6 +190,19 @@ describe("AppShell — URL-synced views", () => {
     expect(await screen.findByTestId("live-canvas")).toBeInTheDocument();
   });
 
+  it("makes the open canvas the main stage, with chat as a narrow side column", async () => {
+    await renderShell();
+    const chat = screen.getByTestId("chat-container");
+    expect(chat.className).toContain("flex-1");
+    fireEvent.click(screen.getByTestId("canvas-rail-toggle"));
+    const canvas = screen.getByTestId("canvas-rail");
+    expect(canvas.className).toContain("flex-1");
+    // canvas on the left, chat docked to its right at a fixed width
+    expect(canvas.compareDocumentPosition(chat) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(chat.className).not.toContain("flex-1");
+    expect(chat.className).toContain("shrink-0");
+  });
+
   it("opens the canvas rail when the agent pushes a visual mid-chat", async () => {
     const { rerender } = await renderShell();
     expect(screen.queryByTestId("canvas-rail")).toBeNull();

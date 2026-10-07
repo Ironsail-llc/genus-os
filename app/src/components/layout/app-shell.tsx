@@ -283,13 +283,28 @@ export function AppShell() {
               {isComingSoonView(view) && <ComingSoonView view={view} />}
             </div>
 
-            {/* Chat — docked rail beside other views, the main column on chat. */}
+            {/* The conversation canvas, when open, is the chat view's main
+                stage; chat docks beside it as a narrow column. */}
+            {showCanvasRail && (
+              <section
+                className="flex-1 min-w-0 min-h-0"
+                data-testid="canvas-rail"
+                aria-label="Canvas"
+              >
+                <LiveCanvas />
+              </section>
+            )}
+
+            {/* Chat — docked rail beside other views (and beside an open
+                canvas); the main column on chat otherwise. */}
             {!isMobile && (
               <div
                 className={
-                  isChatView
+                  isChatView && !showCanvasRail
                     ? "flex-1 min-w-0 min-h-0"
-                    : "shrink-0 border-l border-border transition-[width] duration-200 overflow-hidden"
+                    : isChatView
+                      ? "w-[420px] shrink-0 min-h-0 border-l border-border"
+                      : "shrink-0 border-l border-border transition-[width] duration-200 overflow-hidden"
                 }
                 style={isChatView ? undefined : { width: chatOpen ? 400 : 0 }}
                 data-testid="chat-container"
@@ -298,17 +313,6 @@ export function AppShell() {
                   <ChatPanel />
                 </div>
               </div>
-            )}
-
-            {/* The conversation canvas is an optional rail on the chat view. */}
-            {showCanvasRail && (
-              <aside
-                className="w-[460px] shrink-0 min-h-0 border-l border-border"
-                data-testid="canvas-rail"
-                aria-label="Canvas"
-              >
-                <LiveCanvas />
-              </aside>
             )}
           </div>
         </div>
