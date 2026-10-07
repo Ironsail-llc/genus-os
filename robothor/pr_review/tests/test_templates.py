@@ -142,3 +142,13 @@ def test_run_workflow_wakes_the_agent_only_when_queued():
     assert branch({"queued_tasks": 2}) == "review"
     assert branch({"queued_tasks": 0}) == "done"
     assert branch({"error": "boom"}) == "done"
+
+
+def test_delivery_passes_only_the_digest_lines():
+    """The digest pr_review_finalize writes gets through; narration does not."""
+    pattern = re.compile(_render()["delivery"]["line_filter"])
+    assert pattern.search("PR review acme/widgets#7: Approved — https://example.com/r/1")
+    assert pattern.search("- PR review acme/widgets#7: review failed — x")
+    assert not pattern.search(
+        "_(no digest output — finalize returned an empty digest for a stale review)_"
+    )

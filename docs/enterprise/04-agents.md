@@ -13,7 +13,7 @@ you can change later, and the advanced drawer is where you change it now:
 |---|---|
 | `model.primary` and `model.fallbacks` | Which model runs it, and what it falls back to. An ordered list, replaced wholesale when you edit it |
 | `schedule` | Cron, heartbeat or worker. `schedule.enabled: false` is the stop switch |
-| `delivery` | Which channel the agent reports on, and to whom. `none` is right for most workers |
+| `delivery` | Which channel the agent reports on, and to whom. `none` is right for most workers — `delivery.line_filter` (a regex) delivers only matching lines, so an agent whose output is "these lines or nothing" never sends its narration |
 | `tools_allowed` / `tools_denied` | The agent's tool surface. Start narrow |
 | `instruction_file` | The markdown file that is the agent's actual instructions |
 

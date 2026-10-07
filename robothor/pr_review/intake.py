@@ -74,6 +74,10 @@ __all__ = ["MAX_ATTEMPTS", "Intake", "parse_chat_time", "parse_pr_ref"]
 _TRIGGER_RANK = {"initial": 4, "rereview": 3, "new_head": 2, "retry": 2, "ambiguous": 1, "": 0}
 #: Failed review attempts on one head before the intake stops retrying it.
 MAX_ATTEMPTS = 3
+#: A review that was written but failed to post (GitHub 5xx) is re-posted, not
+#: re-reviewed, so it costs nothing to retry soon. GitHub's 500s cleared within
+#: minutes (2026-10-06/07); the hour a fresh review waits left PRs unreviewed.
+POST_RETRY_COOLDOWN = timedelta(minutes=5)
 _DRAFT_NOTE = "draft: waiting until it is ready for review"
 #: Re-read this much before the cursor: Chat's createTime filter is strict and
 #: clocks are not; per-message dedupe makes the overlap free.
@@ -135,6 +139,12 @@ def _format_chat_time(value: datetime) -> str:
 
 def trigger_is_retry(row: PrReviewRow) -> bool:
     return row.pending_trigger == "retry"
+
+
+def post_only(row: PrReviewRow) -> bool:
+    """Whether a failed row holds a written review that only failed to post."""
+    pending = row.last_review.get("pending") or {}
+    return bool(row.job_id) and pending.get("job_id") == row.job_id
 
 
 def _raise_trigger(row: PrReviewRow, trigger: str, text: str = "") -> bool:
@@ -529,11 +539,14 @@ class Intake:
 
     async def _retry_failed(self) -> None:
         """Re-queue failed reviews: a new head at once, the same head after a cooldown."""
-        cooldown = timedelta(minutes=self.cfg.retry_cooldown_minutes)
+        review_cooldown = timedelta(minutes=self.cfg.retry_cooldown_minutes)
         for row in await self.store.list_failed(self.tenant_id):
             if row.pending_trigger:
                 continue
             new_head = bool(row.head_sha and row.queued_sha and row.head_sha != row.queued_sha)
+            cooldown = (
+                min(POST_RETRY_COOLDOWN, review_cooldown) if post_only(row) else review_cooldown
+            )
             cooled = row.failed_at is None or row.failed_at <= self.now - cooldown
             if (new_head or (row.attempts < MAX_ATTEMPTS and cooled)) and _raise_trigger(
                 row, "retry"

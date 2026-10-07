@@ -448,6 +448,21 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _delivery_fields(delivery: dict[str, Any]) -> dict[str, Any]:
+    """The top-level ``delivery:`` block as AgentConfig fields."""
+    try:
+        mode = DeliveryMode(delivery.get("mode", "none"))
+    except ValueError:
+        mode = DeliveryMode.NONE
+    return {
+        "delivery_mode": mode,
+        "delivery_channel": delivery.get("channel", ""),
+        "delivery_to": delivery.get("to", "") or _default_chat_id(),
+        "surface_to_channel": bool(delivery.get("surface_to_channel", True)),
+        "delivery_line_filter": str(delivery.get("line_filter") or ""),
+    }
+
+
 def _tool_policy(manifest: dict[str, Any]) -> dict[str, Any]:
     """The three manifest keys that say what an agent may reach.
 
@@ -496,12 +511,6 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
     delivery = manifest.get("delivery", {})
     streams = manifest.get("streams", {})
     warmup = manifest.get("warmup", {})
-
-    delivery_mode_str = delivery.get("mode", "none")
-    try:
-        delivery_mode = DeliveryMode(delivery_mode_str)
-    except ValueError:
-        delivery_mode = DeliveryMode.NONE
 
     # Parse hooks
     raw_hooks = manifest.get("hooks", [])
@@ -644,10 +653,7 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
         session_target=schedule.get("session_target", "isolated"),
         catch_up=schedule.get("catch_up", "coalesce"),
         stale_after_minutes=int(schedule.get("stale_after_minutes", 120)),
-        delivery_mode=delivery_mode,
-        delivery_channel=delivery.get("channel", ""),
-        delivery_to=delivery.get("to", "") or _default_chat_id(),
-        surface_to_channel=bool(delivery.get("surface_to_channel", True)),
+        **_delivery_fields(delivery),
         **_tool_policy(manifest),
         service_role=resolve_service_role(
             str(manifest.get("id", "")),

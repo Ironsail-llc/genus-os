@@ -669,3 +669,68 @@ class TestRealSendPathProbe:
         assert result is True
         assert run.delivery_status == "delivered"
         assert run.delivered_at is not None
+
+
+class TestDeliveryLineFilter:
+    """``delivery.line_filter``: an agent whose output contract is "these lines
+    or nothing" gets exactly those lines, never the model's narration
+    (2026-10-07: the pr-reviewer sent "(no digest output — finalize returned an
+    empty digest for a stale review)" to the operator's Telegram)."""
+
+    @pytest.mark.asyncio
+    async def test_narration_alone_is_suppressed(self, _register_mock_sender):
+        from robothor.engine.delivery import deliver
+
+        config = _make_config(delivery_line_filter=r"^PR review ")
+        run = _make_run(
+            output_text="_(no digest output — finalize returned an empty digest for a stale review)_"
+        )
+        assert await deliver(config, run) is True
+        _register_mock_sender.assert_not_called()
+        assert run.delivery_status == "suppressed_filtered"
+
+    @pytest.mark.asyncio
+    async def test_only_matching_lines_are_sent(self, _register_mock_sender):
+        from robothor.engine.delivery import deliver
+
+        config = _make_config(delivery_line_filter=r"^PR review ")
+        run = _make_run(
+            output_text="Here are the digests:\n"
+            "PR review acme/widgets#7: Approved — https://example.com/r/1\n"
+            "Done.\n"
+            "PR review acme/widgets#8: Comments/change request — https://example.com/r/2"
+        )
+        await deliver(config, run)
+        _register_mock_sender.assert_called_once()
+        sent = _register_mock_sender.call_args.args[1]
+        assert "Here are the digests" not in sent and "Done." not in sent
+        assert "acme/widgets#7" in sent and "acme/widgets#8" in sent
+
+    @pytest.mark.asyncio
+    async def test_a_failed_run_still_reaches_the_operator(self, _register_mock_sender):
+        from robothor.engine.delivery import deliver
+
+        config = _make_config(delivery_line_filter=r"^PR review ")
+        run = _make_run(output_text=None, error_message="Safety limit reached.")
+        await deliver(config, run)
+        _register_mock_sender.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_no_filter_delivers_as_before(self, _register_mock_sender):
+        from robothor.engine.delivery import deliver
+
+        await deliver(_make_config(), _make_run(output_text="Anything at all"))
+        _register_mock_sender.assert_called_once()
+
+
+def test_the_manifest_reads_line_filter():
+    from robothor.engine.config import manifest_to_agent_config
+
+    config = manifest_to_agent_config(
+        {
+            "id": "x",
+            "name": "X",
+            "delivery": {"mode": "announce", "to": "1", "line_filter": "^PR review "},
+        }
+    )
+    assert config.delivery_line_filter == "^PR review "

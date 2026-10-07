@@ -309,6 +309,11 @@ class AgentConfig:
     # canonical session so main has visibility. Default on for fleet agents; main
     # is skipped at runtime by authorship filter.
     surface_to_channel: bool = True
+    # delivery.line_filter: a regex. When set, only output lines matching it are
+    # delivered, and a run left with none is silent. For agents whose output
+    # contract is "these lines or nothing" (the pr-reviewer's digest lines), so
+    # the model's narration never reaches the operator. Failed runs are exempt.
+    delivery_line_filter: str = ""
 
     # Tools
     tools_allowed: list[str] = field(default_factory=list)

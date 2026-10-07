@@ -22,7 +22,6 @@ written down rather than assumed.
 from __future__ import annotations
 
 import logging
-import re
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
@@ -37,6 +36,7 @@ from robothor.engine.delivery_attachments import (
     take_queued_attachments,  # noqa: F401 - re-export
 )
 from robothor.engine.delivery_attachments import send_attachments as _send_attachments
+from robothor.engine.delivery_filters import filter_lines, is_trivial_output
 from robothor.engine.models import AgentConfig, AgentRun, DeliveryMode
 from robothor.engine.thin_announce import (
     NoteSubstitution,
@@ -170,41 +170,9 @@ async def _persist_delivery_status(run: AgentRun) -> None:
         logger.warning("Failed to persist delivery status for run %s", run.id)
 
 
-_TRIVIAL_PATTERNS = [
-    "all clear",
-    "all quiet",
-    "nothing new",
-    "board is clean",
-    "no open tasks",
-    "standing down",
-    "no updates",
-    "nothing to report",
-    "inbox empty",
-    "fleet clean",
-    "no new activity",
-    "board unchanged",
-    "no changes",
-    "no movement",
-    "nothing actionable",
-]
-
-
 def _is_heartbeat_run(run: AgentRun) -> bool:
     """Check if this run came from a heartbeat trigger."""
     return bool(run.trigger_detail and run.trigger_detail.startswith("heartbeat:"))
-
-
-def _is_trivial_output(text: str) -> bool:
-    """Detect 'nothing to report' output that shouldn't be delivered.
-
-    Short messages (<300 chars) containing common filler phrases are suppressed.
-    Uses word-boundary matching to avoid false positives on substrings.
-    Substantial reports always get through.
-    """
-    if len(text) > 300:
-        return False
-    lower = text.lower()
-    return any(re.search(r"\b" + re.escape(p) + r"\b", lower) for p in _TRIVIAL_PATTERNS)
 
 
 # ── Mid-thought / incomplete-beat detection ──────────────────────────
@@ -633,11 +601,21 @@ async def deliver(config: AgentConfig, run: AgentRun) -> bool:
         text = delivered_source.strip()
 
     # Suppress trivial heartbeat output — short filler like "All quiet" or "Nothing new"
-    if _is_heartbeat_run(run) and _is_trivial_output(text):
+    if _is_heartbeat_run(run) and is_trivial_output(text):
         logger.debug("Suppressed trivial heartbeat output for %s: %s", config.id, text[:80])
         run.delivery_status = "suppressed_trivial"
         await _persist_delivery_status(run)
         return True
+
+    # delivery.line_filter: the agent's output contract is "these lines or
+    # nothing", so its narration ("no digest output — …") never reaches the
+    # operator. A failed run is exempt: its error always gets through.
+    if config.delivery_line_filter and not run.error_message:
+        text = filter_lines(config.id, text, config.delivery_line_filter)
+        if not text:
+            run.delivery_status = "suppressed_filtered"
+            await _persist_delivery_status(run)
+            return True
 
     # A thin announce reply is a meta-confirmation, not the content the announce
     # promised. Swap in the note the run wrote — see _substitute_note_body, and

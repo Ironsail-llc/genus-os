@@ -209,7 +209,9 @@ def gh():
     with (
         patch.object(github_api, "_get_token", return_value="ghp_test"),
         patch.object(github_api, "_client", side_effect=factory),
-        patch.object(github_api, "_TRANSIENT_BACKOFF_S", (0.0, 0.0)),
+        patch.object(
+            github_api, "_TRANSIENT_BACKOFF_S", (0.0,) * len(github_api._TRANSIENT_BACKOFF_S)
+        ),
     ):
         yield fake
 
@@ -750,12 +752,18 @@ class TestTransientRetry:
         assert result["review_id"] == 555
         assert len(gh.posted_reviews()) == 2
 
-    async def test_persistent_5xx_gives_up_after_two_retries(self, gh):
-        gh.review_responses = [httpx.Response(500, text="") for _ in range(5)]
+    async def test_persistent_5xx_gives_up_after_three_retries(self, gh):
+        gh.review_responses = [httpx.Response(500, text="") for _ in range(6)]
         result = await github_api._github_create_review(_review_args("COMMENT", []), _CTX)
         assert result["transient"] is True
         assert result["error"].startswith("GitHub API error 500")
-        assert len(gh.posted_reviews()) == 3
+        assert len(gh.posted_reviews()) == 4
+
+    def test_the_retries_span_at_least_a_minute(self):
+        # 2026-10-07 (#2135): a 500 outlasted 2 s + 5 s of retries; the same
+        # reviews posted fine minutes later. Spread the retries over a minute+.
+        assert len(github_api._TRANSIENT_BACKOFF_S) >= 3
+        assert sum(github_api._TRANSIENT_BACKOFF_S) >= 60
 
     async def test_a_5xx_that_landed_is_not_posted_again(self, gh):
         gh.review_responses = [httpx.Response(502, text="")]
