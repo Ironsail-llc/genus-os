@@ -66,3 +66,41 @@ class TestValidation:
 
     def test_a_valid_component_is_returned_normalised(self) -> None:
         assert validate_component("  OpenRouter  ", what="provider id") == "openrouter"
+
+
+class TestWorkspaceKey:
+    """``workspace/<provider>/<field>`` -- one mail/calendar provider credential."""
+
+    def test_shape(self) -> None:
+        from robothor.vault.naming import workspace_key
+
+        assert workspace_key("microsoft365", "client_id") == "workspace/microsoft365/client_id"
+
+    @pytest.mark.parametrize(
+        "field",
+        [
+            "tenant_id",
+            "client_id",
+            "client_certificate_pem",
+            "client_private_key_pem",
+            "client_secret",
+        ],
+    )
+    def test_every_microsoft_field_is_expressible(self, field: str) -> None:
+        from robothor.vault.naming import workspace_key
+
+        assert workspace_key("microsoft365", field) == f"workspace/microsoft365/{field}"
+
+    def test_components_are_normalised(self) -> None:
+        from robothor.vault.naming import workspace_key
+
+        assert workspace_key(" Microsoft365 ", "Client_ID") == "workspace/microsoft365/client_id"
+
+    @pytest.mark.parametrize("bad", ["", " ", "a/b", "has space", "../x", "-lead"])
+    def test_bad_components_are_rejected(self, bad: str) -> None:
+        from robothor.vault.naming import workspace_key
+
+        with pytest.raises(ValueError):
+            workspace_key(bad, "client_id")
+        with pytest.raises(ValueError):
+            workspace_key("microsoft365", bad)

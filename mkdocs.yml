@@ -104,6 +104,7 @@ exclude_docs: |
   !/channels/email.md
   !/channels/access.md
   !/channels/webchat.md
+  !/workspace/microsoft365.md
   !/runbooks/BENCHMARK_SANDBOX.md
   !/runbooks/LOCAL_FALLBACK.md
   !/runbooks/INTERACTIVE_REQUEST_PERFORMANCE.md
@@ -155,6 +156,7 @@ nav:
       - Teams channel: channels/teams.md
       - Channel access: channels/access.md
       - Web chat channel: channels/webchat.md
+      - Microsoft 365 workspace: workspace/microsoft365.md
       - Observability: OBSERVABILITY.md
       - Snapshot and restore: runbooks/SNAPSHOT_RESTORE.md
       - Benchmark sandbox: runbooks/BENCHMARK_SANDBOX.md

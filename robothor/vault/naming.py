@@ -9,10 +9,11 @@ nobody reads, and the operator is left with a provider the UI calls configured
 and the engine calls missing. That is the failure this module exists to make
 impossible: every name is built here, by a function, from validated parts.
 
-Two rules, and they are the whole vocabulary:
+Three rules, and they are the whole vocabulary:
 
     providers/<provider-id>/api_key[_<N>]   one credential, N >= 2 for spares
     channels/<channel>/<field>              one channel setting
+    workspace/<provider>/<field>            one mail/calendar provider setting
 """
 
 from __future__ import annotations
@@ -28,6 +29,7 @@ _COMPONENT = re.compile(r"^[a-z0-9][a-z0-9_.-]*$")
 
 PROVIDER_PREFIX = "providers"
 CHANNEL_PREFIX = "channels"
+WORKSPACE_PREFIX = "workspace"
 API_KEY_FIELD = "api_key"
 
 
@@ -89,6 +91,19 @@ def channel_field(channel: str, field: str) -> str:
     name = validate_component(channel, what="channel name")
     attribute = validate_component(field, what="channel field")
     return f"{CHANNEL_PREFIX}/{name}/{attribute}"
+
+
+def workspace_key(provider: str, field: str) -> str:
+    """The vault key holding one mail/calendar provider credential.
+
+    ``workspace/microsoft365/client_id`` and its siblings (``tenant_id``,
+    ``client_certificate_pem``, ``client_private_key_pem``, ``client_secret``).
+    A third prefix rather than a ``providers/`` row because a workspace
+    provider is configured by several fields, not one API key slot.
+    """
+    name = validate_component(provider, what="workspace provider")
+    attribute = validate_component(field, what="workspace field")
+    return f"{WORKSPACE_PREFIX}/{name}/{attribute}"
 
 
 def env_name(vault_key: str) -> str:
@@ -299,6 +314,7 @@ __all__ = [
     "CHANNELS",
     "CHANNEL_PREFIX",
     "PROVIDER_PREFIX",
+    "WORKSPACE_PREFIX",
     "channel_field",
     "env_name",
     "env_names_for_vault_key",
@@ -306,4 +322,5 @@ __all__ = [
     "provider_key",
     "validate_component",
     "vault_keys_for_env_name",
+    "workspace_key",
 ]
