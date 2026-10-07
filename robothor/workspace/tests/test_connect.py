@@ -61,7 +61,7 @@ def test_load_certificate_round_trips_and_rejects_a_mismatched_key() -> None:
     "value",
     [
         "assistant@example.com",
-        "First.Last+genus@sub.example.co.uk",
+        "First.Last+genus@sub.contoso.example",
     ],
 )
 def test_mailbox_validation_accepts_addresses(value: str) -> None:
