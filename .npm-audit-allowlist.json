@@ -22,5 +22,35 @@
     "package": "tar",
     "reason": "bundled inside the npm CLI package (node_modules/npm/node_modules/tar, dep of @semantic-release/npm — release tooling, not product runtime); npm's only offered fix is a semver-major DOWNGRADE of semantic-release 25 to 24.2.9, trading a dev-only DoS for a release-tooling regression — remove when a published npm ships a patched bundle",
     "added": "2026-08-21"
+  },
+  {
+    "id": "GHSA-qhr7-859c-m2p7",
+    "package": "brace-expansion",
+    "reason": "bundled inside the npm CLI package (node_modules/npm/node_modules/brace-expansion, dep of @semantic-release/npm — release tooling, not product runtime, unused by our release config); the lockfile cannot change a bundled copy and the pinned npm 11.21.0 ships 5.0.9 — remove when a published npm ships a patched bundle",
+    "added": "2026-10-07"
+  },
+  {
+    "id": "GHSA-6j4f-fj2g-mc7p",
+    "package": "brace-expansion",
+    "reason": "bundled inside the npm CLI package (node_modules/npm/node_modules/brace-expansion, dep of @semantic-release/npm — release tooling, not product runtime, unused by our release config); the lockfile cannot change a bundled copy and the pinned npm 11.21.0 ships 5.0.9 — remove when a published npm ships a patched bundle",
+    "added": "2026-10-07"
+  },
+  {
+    "id": "GHSA-ch52-4w7c-c8xp",
+    "package": "http-cache-semantics",
+    "reason": "bundled inside the npm CLI package (node_modules/npm/node_modules/http-cache-semantics, dep of @semantic-release/npm — release tooling, not product runtime, unused by our release config); the lockfile cannot change a bundled copy and the pinned npm 11.21.0 ships 4.2.0 — remove when a published npm ships a patched bundle; no patched http-cache-semantics is published as of 2026-10-07",
+    "added": "2026-10-07"
+  },
+  {
+    "id": "GHSA-rfgv-xxqx-mfg5",
+    "package": "undici",
+    "reason": "bundled inside the npm CLI package (node_modules/npm/node_modules/undici, dep of @semantic-release/npm — release tooling, not product runtime, unused by our release config); the lockfile cannot change a bundled copy and the pinned npm 11.21.0 ships 6.28.0 — remove when a published npm ships a patched bundle",
+    "added": "2026-10-07"
+  },
+  {
+    "id": "GHSA-vfj7-8cjw-p6xm",
+    "package": "braces",
+    "reason": "release tooling only (node_modules/braces via semantic-release/micromatch, never in product runtime); every published braces is affected (<=3.0.3, latest 3.0.3) and npm's only offered fix is a semver-major DOWNGRADE of the release toolchain — remove when a patched braces is published",
+    "added": "2026-10-07"
   }
 ]

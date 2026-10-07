@@ -9,13 +9,23 @@ guard three different ways and requires the check to say so each time.
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING, Any
+from typing import Any
+
+import pytest
 
 from robothor.doctor.checks import step_efficiency as step_checks
 from robothor.doctor.tests.conftest import make_ctx
 
-if TYPE_CHECKING:
-    import pytest
+
+@pytest.fixture(autouse=True)
+def _no_durable_stop(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every dispatch carrying a run id first asks the database whether that
+    run was durably stopped. The unit suite has no database, and that read is
+    not what this probe is about: on a box without one the check correctly
+    reports a skip, which would hide every outcome asserted below."""
+    import robothor.engine.runtime.controls as controls
+
+    monkeypatch.setattr(controls, "stopped", lambda tenant, run_id: False)
 
 
 def _run() -> Any:
