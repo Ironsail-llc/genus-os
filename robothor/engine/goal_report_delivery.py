@@ -37,7 +37,6 @@ def report_scope(req: ToolTurnRequest, names: list[str]) -> AbstractContextManag
         and not run.is_benchmark
         and not req.readonly_mode
         and binding.get() is None
-        and not getattr(req.session, "routine_operation_id", None)
     )
     return report_turn(
         run.tenant_id,

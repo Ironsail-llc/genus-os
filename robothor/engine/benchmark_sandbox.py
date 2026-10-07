@@ -133,11 +133,18 @@ EXTERNAL_SIDE_EFFECT_TOOLS: frozenset[str] = frozenset(
         "gws_gmail_get",
         "gws_calendar_create",
         "gws_calendar_add_attendees",
+        "gws_calendar_update",
+        "gws_calendar_respond",
         "gws_calendar_delete",
         "gws_calendar_list",
         "gws_chat_send",
         "gws_chat_list_spaces",
         "gws_chat_list_messages",
+        # GitHub review posting: writes onto someone else's pull request. Each
+        # handler also refuses ctx.is_benchmark itself.
+        "github_create_review",
+        "github_reply_review_comment",
+        "github_resolve_threads",
         # Messaging / paging a human.
         "message",
         "send_message",
@@ -146,6 +153,16 @@ EXTERNAL_SIDE_EFFECT_TOOLS: frozenset[str] = frozenset(
         # Spawning more agents (a child inherits none of this gating for free).
         "spawn_agent",
         "spawn_agents",
+        # A whole paid coding agent with a shell, writing real commits.
+        "claude_code_start",
+        "claude_code_status",
+        "claude_code_wait",
+        "claude_code_followup",
+        "claude_code_cancel",
+        # The pr-reviewer suite: polls a chat space, files tasks, posts reviews.
+        "pr_review_intake",
+        "pr_review_prepare",
+        "pr_review_finalize",
         # Anything that drives a machine or a camera.
         "browser",
         "browser_navigate",

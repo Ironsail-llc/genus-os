@@ -113,9 +113,7 @@ def test_dropin_hardening_mirror_keeps_the_core_posture():
     text = _dropin_mirrors().get("hardening.conf", "")
     assert text, "infra/systemd/robothor-engine.service.d/hardening.conf mirror missing"
     for directive in ("NoNewPrivileges=yes", "ProtectSystem=strict"):
-        assert directive in text, (
-            f"hardening.conf mirror regressed: missing {directive!r}"
-        )
+        assert directive in text, f"hardening.conf mirror regressed: missing {directive!r}"
 
 
 def test_dropin_sandbox_mirror_exists_and_documents_why_paths_are_absolute():
@@ -124,4 +122,51 @@ def test_dropin_sandbox_mirror_exists_and_documents_why_paths_are_absolute():
     assert "%h" in text, (
         "zz-sandbox.conf mirror should keep the live file's own explanation of "
         "why it uses absolute paths instead of %h"
+    )
+
+
+# --- owner host execution -----------------------------------------------------
+#
+# robothor-host-exec.service is the verified-owner path: the engine hands a
+# command to it only after the owner check passes, and it is how the main agent
+# operates its own computer. ProtectHome=read-only there made all of /home
+# read-only for every owner command -- the repo, ~/.config, CLI token caches --
+# so a calendar CLI that had already written the event reported "Read-only
+# file system" and the agent diagnosed a failing disk. Confinement belongs on
+# the engine (non-owner, cron and sub-agent runs), not on the owner's shell.
+
+
+def _service_directives(src: str) -> list[str]:
+    return [
+        line.strip()
+        for line in src.splitlines()
+        if line.strip() and not line.strip().startswith(("#", ";"))
+    ]
+
+
+def test_host_exec_can_write_the_home_directory():
+    src = _unit("infra/systemd/robothor-host-exec.service")
+    assert src, "host-exec unit missing"
+    directives = _service_directives(src)
+    protect = [d for d in directives if d.startswith("ProtectHome=")]
+    assert protect == ["ProtectHome=no"], (
+        f"host-exec must leave /home writable for the verified owner, got {protect}"
+    )
+
+
+def test_host_exec_dropins_do_not_reimpose_protect_home():
+    dropins = REPO_ROOT / "infra" / "systemd" / "robothor-host-exec.service.d"
+    offenders = [
+        f"{p.name}: {d}"
+        for p in sorted(dropins.glob("*.conf"))
+        for d in _service_directives(p.read_text())
+        if d.startswith("ProtectHome=") and d != "ProtectHome=no"
+    ]
+    assert not offenders, f"a host-exec drop-in makes /home read-only again: {offenders}"
+
+
+def test_engine_stays_confined_while_host_exec_is_open():
+    engine = _unit("infra/systemd/robothor-engine.service")
+    assert "ProtectHome=read-only" in _service_directives(engine), (
+        "only the owner path opens /home; the engine keeps ProtectHome=read-only"
     )

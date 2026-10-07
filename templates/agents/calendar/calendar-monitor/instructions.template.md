@@ -185,7 +185,7 @@ Example: `"calendar-monitor: Processed 4 calendar items, 1 conflict escalated"`
 
 ## Calendar Tool Reference
 
-> **Preferred**: You have native `gws_calendar_list`, `gws_calendar_create`, and `gws_calendar_delete` tools that return structured JSON. Use these instead of exec+gog when possible. The gog commands below remain as fallback.
+> **Preferred**: You have native `gws_calendar_list`, `gws_calendar_create`, `gws_calendar_update` (reschedule, rename, add or remove guests on an existing event), `gws_calendar_respond` (RSVP) and `gws_calendar_delete` tools that return structured JSON. Use these instead of exec+gog when possible. The gog commands below remain as fallback.
 
 ```bash
 # List events (for conflict detection)

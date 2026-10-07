@@ -178,3 +178,26 @@ def test_plain_credentials_follow_gws_config_directory(monkeypatch, tmp_path):
         api.client = httpx.Client(transport=httpx.MockTransport(serve))
         api._authenticate()
         assert api.token == "fixture-access"
+
+
+@pytest.mark.parametrize("send_updates", ["all", "externalOnly", "none"])
+def test_the_operator_notification_setting_reaches_the_wire(monkeypatch, send_updates):
+    """`sendUpdates` was hardcoded to "all", so an operator who chose
+    `externalOnly` or `none` still had every guest mailed on an edit."""
+    monkeypatch.setattr(
+        "robothor.settings.get_settings",
+        lambda: SimpleNamespace(channels=SimpleNamespace(google_workspace_token="fixture-token")),
+    )
+    seen = []
+
+    def serve(request):
+        seen.append(request.url.params["sendUpdates"])
+        return httpx.Response(200, json={"id": "meeting"})
+
+    with CalendarTransport() as api:
+        api.client.close()
+        api.client = httpx.Client(transport=httpx.MockTransport(serve))
+        api.request(
+            "PATCH", "owner@example.com", "meeting", etag='"v1"', body={}, send_updates=send_updates
+        )
+    assert seen == [send_updates]

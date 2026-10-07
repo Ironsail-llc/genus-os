@@ -1,0 +1,22 @@
+# PR Reviewer — template setup
+agent_id: pr-reviewer
+version: "2026-10-05"
+instruction_file_path: brain/agents/PR_REVIEWER.md
+
+variables:
+  timezone:
+    type: string
+    default: "UTC"
+    description: Timezone for timestamps in the status file
+  reports_to:
+    type: string
+    default: "main"
+    description: Agent to report to
+  escalates_to:
+    type: string
+    default: "main"
+    description: Agent to escalate to
+  delivery_mode:
+    type: string
+    default: "none"
+    description: "none, or announce for the Telegram digest (with ROBOTHOR_PR_REVIEW_TELEGRAM_DIGEST=true)"

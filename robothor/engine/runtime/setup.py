@@ -104,8 +104,6 @@ def bounded_timeout(timeout: float | None, session: Any) -> float | None:
     if context and context.deadline and not owns_deadline(context):
         remaining = max(0, (context.deadline - datetime.now(UTC)).total_seconds())
         timeout = min(timeout, remaining) if timeout else remaining
-    if getattr(session, "routine_operation_id", None):
-        timeout = min(timeout, 60) if timeout else 60
     return timeout
 
 

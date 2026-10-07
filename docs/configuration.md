@@ -87,6 +87,70 @@ reporting a value for something nothing reads.
 A secret is never printed. `get` and `list` show `<set, b2:ab12cd34>` —
 enough to tell two boxes apart without putting the value on your screen.
 
+### When a systemd unit sets it
+
+`source: env` alone does not say *which* file to change, and the shell you run
+`genus config get` in is often not the process that reads the setting (an
+agent's owner shell runs under `robothor-host-exec`, which does not carry the
+engine's drop-ins). So `get` also asks each unit the setting declares for its
+fragment and drop-ins (`systemctl show -p FragmentPath,DropInPaths`), walks
+their `[Service]` sections the way systemd does, and names the winner:
+
+```text
+ROBOTHOR_CALENDAR_OPERATIONS_ENABLED = false
+  source: env (ROBOTHOR_CALENDAR_OPERATIONS_ENABLED)
+  systemd: robothor-engine.service: ROBOTHOR_CALENDAR_OPERATIONS_ENABLED=false from /etc/systemd/system/robothor-engine.service.d/zzzzzzzz-calendar-operations-off.conf:16
+    overrides /etc/systemd/system/robothor-engine.service.d/zz-calendar-operations.conf:3
+```
+
+A later `Environment=` line replaces an earlier one, and any
+`EnvironmentFile=` beats every `Environment=` line. A value from an
+environment file is never shown — only the file's path — and a value from an
+`Environment=` line is masked when the setting is a secret or the name reads
+like a credential. `--json` carries the same under `systemd`.
+
+`genus config set NAME VALUE` without `--apply` still writes `config.yaml`,
+and warns on stderr when a unit's own value will keep winning. **`--apply`**
+changes it in the layer that wins:
+
+- the variable comes from a drop-in or the unit file → it writes
+  `/etc/systemd/system/<unit>.service.d/zz-genus-config-<name>.conf` through
+  `sudo -n`, with a header saying who wrote it and what it replaced. If a
+  drop-in that sorts *after* that name sets the same variable, the command
+  refuses and names that file; `--override` writes a name that sorts after it
+  (`zzzzzzzzz-genus-config-<name>.conf`). `config.yaml` is not written — it
+  would be shadowed anyway;
+- the variable comes from an `EnvironmentFile=` → refused, naming the file,
+  because no drop-in can outrank it;
+- no unit sets it → the ordinary `config.yaml` write.
+
+Then it runs `systemctl daemon-reload` and schedules the restart as a
+transient timer, one per target unit with a fixed name:
+`systemd-run --on-active=15s --unit=genus-config-restart-<unit> --collect
+systemctl restart <unit>`. That way a run that made the change can finish
+replying before its own engine restarts. If that unit's timer is already
+waiting, a second `--apply` leaves it alone ("restart already scheduled"): it
+fires after this reload, so it picks the change up, and a second restart a
+second later would SIGTERM the first start's secrets loader.
+
+It needs passwordless `sudo`, which the owner shell (`robothor-host-exec`) has
+and the engine unit (`NoNewPrivileges=yes`) deliberately does not. A failed
+step is reported by name and nothing after it runs. If the drop-in was
+already installed when a later step failed, the reply says **PARTIAL** and
+lists what landed (`--json`: `"partial": true`, `dropins`,
+`restart_scheduled`).
+
+Two refusals, both with nothing written:
+
+- **A value with a control character** (newline, carriage return, NUL, any
+  of `\x00`–`\x1f` or `\x7f`) is refused by `set` on every path. In a unit
+  file a newline starts a new directive, and an `ExecStartPre=+…` line would
+  run as root on the next restart.
+- **A unit file or environment file that could not be read** (for example a
+  root-only secrets file). The variable may be set there and win, so
+  `--apply` will not claim success past it; the refusal names the file.
+  `get` lists the same files under the unit as "could not read … unverified".
+
 ### From the Helm, without a shell
 
 Everything above is also a screen. **Settings › Config** renders the same

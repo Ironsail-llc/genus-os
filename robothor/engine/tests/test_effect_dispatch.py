@@ -332,3 +332,133 @@ async def test_extension_tools_keep_dynamic_classification(gateway, monkeypatch,
     assert len(writes) == (2 if read_only else 1)
     if not read_only:
         assert second["effect_id"] == first["effect_id"]
+
+
+# ── Reads that time out are not unresolved writes ─────────────────────────
+#
+# Observed 2026-10-05: ``claude_code_wait`` (a pure read of a coding job's
+# state) timed out, its cancellation was journalled as an ``uncertain`` effect,
+# and the guard then refused every later ``claude_code_wait`` for that
+# principal — "An earlier action is unresolved; audit/readback is required
+# before another write" — wedging the pr-reviewer across runs.
+
+
+def _effect_rows(connect, tool_name):
+    with connect() as conn, conn.cursor() as cur:
+        cur.execute("SELECT state FROM agent_runtime_effects WHERE tool_name=%s", (tool_name,))
+        return [row[0] for row in cur.fetchall()]
+
+
+def _wait_handlers(waits):
+    async def hang(args, tool_context):
+        waits.append(args)
+        await asyncio.Event().wait()
+
+    async def done(args, tool_context):
+        waits.append(args)
+        return {"job_id": args.get("job_id"), "status": "done"}
+
+    return hang, done
+
+
+@pytest.mark.parametrize("tool", ["claude_code_wait", "claude_code_status"])
+async def test_timed_out_coding_job_read_leaves_no_uncertain_effect(
+    gateway,
+    effect_db,  # noqa: F811
+    monkeypatch,
+    tool,
+):
+    _, _, call = gateway
+    waits: list = []
+    hang, done = _wait_handlers(waits)
+    monkeypatch.setattr(dispatch, "_get_handlers", lambda: {tool: hang})
+    with pytest.raises(TimeoutError):
+        await asyncio.wait_for(call(tool, {"job_id": "j1"}), 0.3)
+    assert _effect_rows(effect_db, tool) == []
+    monkeypatch.setattr(dispatch, "_get_handlers", lambda: {tool: done})
+    again = await call(tool, {"job_id": "j1"}, run="next-run")
+    assert again == {"job_id": "j1", "status": "done"}
+    assert len(waits) == 2
+
+
+async def test_timed_out_read_through_tool_call_leaves_no_uncertain_effect(
+    gateway,
+    effect_db,  # noqa: F811
+    monkeypatch,
+):
+    """The deferred path: ``tool_call`` wraps the read, and the wrapper's
+    timeout cancels the inner dispatch. Neither may journal an effect."""
+    from types import SimpleNamespace
+
+    from robothor.engine.tools.handlers import toolsearch
+
+    _, _, call = gateway
+    waits: list = []
+    hang, done = _wait_handlers(waits)
+    inner = {"claude_code_wait": hang}
+
+    async def execute(name, args, **kwargs):
+        return await dispatch._execute_tool(
+            name,
+            args,
+            agent_id=kwargs["agent_id"],
+            run_id=kwargs["run_id"],
+            tenant_id=kwargs["tenant_id"],
+            user_id=kwargs["user_id"],
+            user_role=kwargs["user_role"],
+        )
+
+    monkeypatch.setattr(
+        dispatch, "_get_handlers", lambda: {"tool_call": toolsearch._tool_call, **inner}
+    )
+    monkeypatch.setattr(toolsearch, "_allowed_names", lambda: ["claude_code_wait"])
+    monkeypatch.setattr(
+        "robothor.engine.tools.registry.get_registry", lambda: SimpleNamespace(execute=execute)
+    )
+    wrapped = {"name": "claude_code_wait", "arguments": {"job_id": "j1", "timeout_s": 1200}}
+    with pytest.raises(TimeoutError):
+        await asyncio.wait_for(call("tool_call", wrapped), 0.3)
+    assert _effect_rows(effect_db, "claude_code_wait") == []
+    assert _effect_rows(effect_db, "tool_call") == []
+    inner["claude_code_wait"] = done
+    again = await call("tool_call", wrapped, run="next-run")
+    assert again == {"job_id": "j1", "status": "done"}
+
+
+async def test_pr_review_queue_count_is_a_read(gateway, effect_db, monkeypatch):  # noqa: F811
+    """``pr_review_intake(count_only=True)`` only counts the queue; the polling
+    form (and the on-demand ``pr=`` form) still write and stay journalled."""
+    _, _, call = gateway
+    calls: list = []
+
+    async def handler(args, tool_context):
+        calls.append(args)
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(dispatch, "_get_handlers", lambda: {"pr_review_intake": handler})
+    with pytest.raises(TimeoutError):
+        await asyncio.wait_for(call("pr_review_intake", {"count_only": True}), 0.3)
+    assert _effect_rows(effect_db, "pr_review_intake") == []
+    with pytest.raises(TimeoutError):
+        await asyncio.wait_for(
+            call("pr_review_intake", {"count_only": True, "pr": "acme/widgets#1"}), 0.3
+        )
+    assert _effect_rows(effect_db, "pr_review_intake") == ["uncertain"]
+
+
+def test_tool_call_inherits_the_classification_of_what_it_wraps():
+    from robothor.engine.wrapped_call import is_read_only_call
+
+    assert is_read_only_call("tool_call", {"name": "claude_code_wait", "arguments": {}})
+    assert is_read_only_call("tool_call", {"name": "github_pr_diff", "arguments": {}})
+    assert not is_read_only_call("tool_call", {"name": "create_note", "arguments": {}})
+    assert not is_read_only_call("tool_call", {"name": "tool_call", "arguments": {}})
+    assert not is_read_only_call("tool_call", {})
+    assert is_read_only_call(
+        "tool_call", {"name": "pr_review_intake", "arguments": {"count_only": True}}
+    )
+    assert not is_read_only_call("tool_call", {"name": "pr_review_intake", "arguments": {}})
+    for name in ("jira_get_issue", "github_pr_files", "github_compare", "claude_code_status"):
+        assert is_read_only_call(name, {})
+    for name in ("claude_code_start", "claude_code_followup", "claude_code_cancel"):
+        assert not is_read_only_call(name, {})
