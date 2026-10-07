@@ -283,18 +283,24 @@ def _record_calendar_event(
     *,
     result: dict[str, Any],
     tenant_id: str | None = None,
+    provider: str = "google",
 ) -> None:
     """Upsert calendar_event + calendar_event_participant rows from a gws
-    calendar-create response. Emits timeline_activity per resolved attendee."""
+    calendar-create response. Emits timeline_activity per resolved attendee.
+
+    The row is keyed by ``(tenant_id, provider, external_event_id)``
+    (migration 148). Google events also keep ``google_event_id`` (dual-write);
+    other providers leave it NULL."""
     try:
         from robothor.constants import DEFAULT_TENANT
         from robothor.db.connection import get_connection
 
         if not isinstance(result, dict) or "error" in result:
             return
-        google_id = result.get("id")
-        if not google_id:
+        external_id = result.get("id")
+        if not external_id:
             return
+        google_id = str(external_id) if provider == "google" else None
         tenant_id = tenant_id or DEFAULT_TENANT
 
         summary = result.get("summary")
@@ -314,10 +320,11 @@ def _record_calendar_event(
             cur.execute(
                 """
                 INSERT INTO calendar_event
-                    (tenant_id, google_event_id, title, description, location,
+                    (tenant_id, provider, external_event_id, google_event_id,
+                     title, description, location,
                      start_at, end_at, organizer_email, hangout_link, status)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (tenant_id, google_event_id)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (tenant_id, provider, external_event_id)
                 DO UPDATE SET title            = EXCLUDED.title,
                               description      = EXCLUDED.description,
                               location         = EXCLUDED.location,
@@ -331,7 +338,9 @@ def _record_calendar_event(
                 """,
                 (
                     tenant_id,
-                    str(google_id),
+                    provider,
+                    str(external_id),
+                    google_id,
                     summary,
                     description,
                     location,

@@ -206,3 +206,34 @@ class TestGetPersonTasksNotesCalls:
         assert [t["title"] for t in get_person_tasks(person_id)] == ["Call Mixed"]
         assert [n["title"] for n in get_person_notes(person_id)] == ["Biography"]
         assert [c["twilio_call_sid"] for c in get_person_calls(person_id)] == ["CA-dal-1"]
+
+
+class TestGetPersonEvents:
+    def test_events_carry_provider_neutral_identity(self, db_cursor, db_conn, mock_get_connection):
+        person_id = str(uuid.uuid4())
+        db_cursor.execute(
+            "INSERT INTO crm_people (id, first_name) VALUES (%s, 'Cal')",
+            (person_id,),
+        )
+        db_cursor.execute(
+            """
+            INSERT INTO calendar_event (provider, external_event_id, google_event_id, title)
+            VALUES ('google', 'g-dal-1', 'g-dal-1', 'Sync') RETURNING id
+            """
+        )
+        event_id = db_cursor.fetchone()["id"]
+        db_cursor.execute(
+            """
+            INSERT INTO calendar_event_participant (event_id, person_id, email)
+            VALUES (%s, %s, 'cal@example.com')
+            """,
+            (event_id, person_id),
+        )
+
+        from robothor.crm.dal import get_person_events
+
+        [event] = get_person_events(person_id)
+        assert event["provider"] == "google"
+        assert event["external_event_id"] == "g-dal-1"
+        # Kept for callers that still read the Google-specific column.
+        assert event["google_event_id"] == "g-dal-1"

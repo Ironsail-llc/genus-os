@@ -8,7 +8,8 @@ After a successful gws_gmail_send / gws_gmail_reply, the handler must write
   * timeline_activity (one per resolved person, activity_type='email')
 
 After a successful gws_calendar_create, the handler must write
-  * calendar_event (insert, idempotent on google_event_id)
+  * calendar_event (insert, idempotent on (tenant_id, provider, external_event_id),
+    dual-writing google_event_id)
   * calendar_event_participant (one per attendee)
   * timeline_activity per resolved attendee (activity_type='calendar_event')
 
@@ -208,3 +209,32 @@ class TestCalendarCreateWriteThrough:
         t = db_cursor.fetchone()
         assert t is not None
         assert t["activity_type"] == "calendar_event"
+
+    def test_create_writes_provider_neutral_identity(
+        self, db_cursor, db_conn, seeded_recipient, mock_get_connection
+    ):
+        from robothor.engine.tools.handlers import gws
+
+        fake_event = {
+            "id": "gcal-event-identity",
+            "summary": "Identity",
+            "start": {"dateTime": "2026-05-02T15:00:00Z"},
+            "end": {"dateTime": "2026-05-02T15:30:00Z"},
+        }
+        gws._record_calendar_event(result=fake_event, tenant_id=DEFAULT_TENANT)
+        gws._record_calendar_event(
+            result=dict(fake_event, summary="Identity v2"), tenant_id=DEFAULT_TENANT
+        )
+
+        db_cursor.execute(
+            """
+            SELECT provider, external_event_id, google_event_id, title
+              FROM calendar_event
+             WHERE external_event_id = 'gcal-event-identity'
+            """
+        )
+        rows = db_cursor.fetchall()
+        assert len(rows) == 1
+        assert rows[0]["provider"] == "google"
+        assert rows[0]["google_event_id"] == "gcal-event-identity"
+        assert rows[0]["title"] == "Identity v2"
