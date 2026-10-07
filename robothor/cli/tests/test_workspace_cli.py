@@ -13,6 +13,7 @@ import pytest
 import yaml
 
 from robothor.cli import main
+from robothor.constants import DEFAULT_TENANT
 from robothor.doctor.checks import workspace_m365
 from robothor.workspace.microsoft import graph_client_from_vault
 from robothor.workspace.tests.fake_graph import CLIENT_ID, TENANT_ID, FakeGraphTenant
@@ -130,7 +131,9 @@ def test_connect_stores_the_credential_and_the_settings(vault, env_workspace, ca
     assert {category for _key, category, _tenant in vault.writes} == {"credential"}
     from robothor.settings import get_settings
 
-    expected_tenant = get_settings().database.tenant_id
+    # Same resolution as the command: the configured tenant, else the default
+    # tenant the Graph client reads from (graph_client_from_vault).
+    expected_tenant = get_settings().database.tenant_id or DEFAULT_TENANT
     assert {tenant for _key, _category, tenant in vault.writes} == {expected_tenant}
 
 
