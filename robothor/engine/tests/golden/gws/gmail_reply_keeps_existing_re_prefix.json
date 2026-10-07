@@ -108,10 +108,10 @@
         "--params",
         "{\"userId\":\"me\"}",
         "--json",
-        "{\"raw\": \"Q29udGVudC1UeXBlOiB0ZXh0L3BsYWluOyBjaGFyc2V0PSJ1cy1hc2NpaSIKTUlNRS1WZXJzaW9uOiAxLjAKQ29udGVudC1UcmFuc2Zlci1FbmNvZGluZzogN2JpdApUbzogYm9iQGV4YW1wbGUuY29tClN1YmplY3Q6IFJFOiBCdWRnZXQKSW4tUmVwbHktVG86IDxiMUB4LnRlc3Q-ClJlZmVyZW5jZXM6IDxiMUB4LnRlc3Q-CgpOb3RlZC4=\", \"threadId\": \"thread-9\"}"
+        "{\"raw\": \"Q29udGVudC1UeXBlOiB0ZXh0L3BsYWluOyBjaGFyc2V0PSJ1cy1hc2NpaSIKTUlNRS1WZXJzaW9uOiAxLjAKQ29udGVudC1UcmFuc2Zlci1FbmNvZGluZzogN2JpdApUbzogYm9iQGV4YW1wbGUuY29tClN1YmplY3Q6IFJFOiBCdWRnZXQKSW4tUmVwbHktVG86IDxiMUBleGFtcGxlLmNvbT4KUmVmZXJlbmNlczogPGIxQGV4YW1wbGUuY29tPgoKTm90ZWQu\", \"threadId\": \"thread-9\"}"
       ],
       "json": {
-        "raw": "Q29udGVudC1UeXBlOiB0ZXh0L3BsYWluOyBjaGFyc2V0PSJ1cy1hc2NpaSIKTUlNRS1WZXJzaW9uOiAxLjAKQ29udGVudC1UcmFuc2Zlci1FbmNvZGluZzogN2JpdApUbzogYm9iQGV4YW1wbGUuY29tClN1YmplY3Q6IFJFOiBCdWRnZXQKSW4tUmVwbHktVG86IDxiMUB4LnRlc3Q-ClJlZmVyZW5jZXM6IDxiMUB4LnRlc3Q-CgpOb3RlZC4=",
+        "raw": "Q29udGVudC1UeXBlOiB0ZXh0L3BsYWluOyBjaGFyc2V0PSJ1cy1hc2NpaSIKTUlNRS1WZXJzaW9uOiAxLjAKQ29udGVudC1UcmFuc2Zlci1FbmNvZGluZzogN2JpdApUbzogYm9iQGV4YW1wbGUuY29tClN1YmplY3Q6IFJFOiBCdWRnZXQKSW4tUmVwbHktVG86IDxiMUBleGFtcGxlLmNvbT4KUmVmZXJlbmNlczogPGIxQGV4YW1wbGUuY29tPgoKTm90ZWQu",
         "raw_decoded": {
           "body": "Noted.",
           "headers": [
@@ -137,11 +137,11 @@
             ],
             [
               "In-Reply-To",
-              "<b1@x.test>"
+              "<b1@example.com>"
             ],
             [
               "References",
-              "<b1@x.test>"
+              "<b1@example.com>"
             ]
           ]
         },
