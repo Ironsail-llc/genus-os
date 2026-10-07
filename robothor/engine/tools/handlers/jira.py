@@ -81,6 +81,89 @@ def _slim_issue(issue: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+_INLINE_ATTR = {"mention": "text", "emoji": "text", "inlineCard": "url", "status": "text"}
+
+
+def _adf_inline(node: Any) -> str:
+    if not isinstance(node, dict):
+        return str(node or "")
+    kind = node.get("type")
+    if kind == "text":
+        return str(node.get("text") or "")
+    if kind == "hardBreak":
+        return "\n"
+    if kind in _INLINE_ATTR:
+        return str((node.get("attrs") or {}).get(_INLINE_ATTR[kind]) or "")
+    return "".join(_adf_inline(c) for c in node.get("content") or [])
+
+
+def _adf_list(node: dict[str, Any], ordered: bool) -> list[str]:
+    lines: list[str] = []
+    for n, item in enumerate(node.get("content") or [], start=1):
+        body = _adf_blocks(item.get("content") or []) if isinstance(item, dict) else []
+        marker = f"{n}. " if ordered else "- "
+        for k, line in enumerate(body or [""]):
+            lines.append((marker if k == 0 else " " * len(marker)) + line)
+    return lines
+
+
+def _adf_blocks(nodes: list[Any]) -> list[str]:
+    lines: list[str] = []
+    for node in nodes:
+        if not isinstance(node, dict):
+            lines.append(str(node))
+            continue
+        kind = node.get("type")
+        if kind in ("bulletList", "orderedList"):
+            lines += _adf_list(node, ordered=kind == "orderedList")
+        elif kind == "blockquote":
+            lines += ["> " + line for line in _adf_blocks(node.get("content") or [])]
+        elif kind == "table":
+            for row in node.get("content") or []:
+                cells = [
+                    " ".join(_adf_blocks(cell.get("content") or []))
+                    for cell in (row.get("content") or [])
+                    if isinstance(cell, dict)
+                ]
+                lines.append(" | ".join(cells))
+        elif kind == "rule":
+            lines.append("---")
+        elif kind in ("paragraph", "heading", "codeBlock") or kind in _INLINE_ATTR:
+            lines.append(_adf_inline(node))
+        elif node.get("content"):
+            lines += _adf_blocks(node.get("content") or [])
+        else:
+            lines.append(_adf_inline(node))
+    return lines
+
+
+def adf_to_text(value: Any) -> str:
+    """Plain text from a Jira field: Atlassian Document Format, a string, or None."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, list):
+        return "\n".join(_adf_blocks(value)).strip()
+    if isinstance(value, dict):
+        if value.get("type") == "doc" or value.get("content") is not None:
+            return "\n".join(_adf_blocks(value.get("content") or [])).strip()
+        return _adf_inline(value).strip()
+    return str(value).strip()
+
+
+def _acceptance_criteria(data: dict[str, Any]) -> str:
+    """Every field whose display name mentions acceptance criteria, as text."""
+    names = data.get("names") or {}
+    fields = data.get("fields") or {}
+    parts = [
+        adf_to_text(fields.get(fid))
+        for fid, name in names.items()
+        if "acceptance" in str(name).lower() and fields.get(fid)
+    ]
+    return "\n\n".join(p for p in parts if p)
+
+
 def _extract_cycle_time(issue: dict[str, Any]) -> list[dict[str, Any]]:
     """Extract status transitions from issue changelog."""
     transitions: list[dict[str, Any]] = []
@@ -174,13 +257,14 @@ async def _jira_get_issue(args: dict[str, Any], ctx: ToolContext) -> dict[str, A
     issue_key = args.get("issue_key", "")
     if not issue_key:
         return {"error": "issue_key is required"}
+    include_text = args.get("include_text") is True
 
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.get(
                 f"{base_url}/rest/api/3/issue/{issue_key}",
                 headers=_headers(auth),
-                params={"expand": "changelog"},
+                params={"expand": "changelog,names" if include_text else "changelog"},
             )
             if resp.status_code == 404:
                 return {"error": f"Issue {issue_key} not found"}
@@ -195,6 +279,11 @@ async def _jira_get_issue(args: dict[str, Any], ctx: ToolContext) -> dict[str, A
 
     result = _slim_issue(data)
     result["transitions"] = _extract_cycle_time(data)
+    if include_text:
+        fields = data.get("fields") or {}
+        result["description"] = adf_to_text(fields.get("description"))
+        result["acceptance_criteria"] = _acceptance_criteria(data)
+        result["url"] = f"{base_url}/browse/{data.get('key') or issue_key}"
     return result
 
 

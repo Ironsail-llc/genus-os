@@ -1,0 +1,101 @@
+"""The engine resumes interrupted coding jobs at startup, and stops them cleanly."""
+
+from __future__ import annotations
+
+from robothor.engine import daemon
+from robothor.engine.coding import jobs as jobs_mod
+
+
+async def test_startup_resume_calls_the_manager(monkeypatch):
+    seen = {}
+
+    async def fake_resume(tenant_id=None):
+        seen["tenant"] = tenant_id
+        return 3
+
+    monkeypatch.setattr(jobs_mod, "resume_interrupted_jobs", fake_resume)
+    assert await daemon._resume_coding_jobs() == 3
+    assert seen == {"tenant": None}
+
+
+async def test_startup_resume_failure_is_never_fatal(monkeypatch):
+    async def broken(tenant_id=None):
+        raise RuntimeError("relation coding_jobs does not exist")
+
+    monkeypatch.setattr(jobs_mod, "resume_interrupted_jobs", broken)
+    assert await daemon._resume_coding_jobs() == 0
+
+
+async def test_shutdown_stops_jobs_without_marking_them(monkeypatch):
+    calls = []
+
+    class FakeManager:
+        async def shutdown(self):
+            calls.append("shutdown")
+
+    monkeypatch.setattr(jobs_mod, "_manager", FakeManager())
+    await daemon._stop_coding_jobs()
+    assert calls == ["shutdown"]
+
+
+async def test_shutdown_without_a_manager_does_nothing(monkeypatch):
+    monkeypatch.setattr(jobs_mod, "_manager", None)
+    await daemon._stop_coding_jobs()
+    assert jobs_mod._manager is None  # never built just to be stopped
+
+
+async def test_startup_resume_is_skipped_under_ha(monkeypatch):
+    """Every HA replica runs startup; only one may own a resumed job.
+
+    Until resume is leader-gated, HA engines leave interrupted jobs for the
+    operator rather than letting N replicas drive the same Claude Code session.
+    """
+    called = []
+
+    async def fake_resume(tenant_id=None):
+        called.append(tenant_id)
+        return 1
+
+    monkeypatch.setenv("ROBOTHOR_HA_LEADER_ENABLED", "true")
+    monkeypatch.setattr(jobs_mod, "resume_interrupted_jobs", fake_resume)
+    assert await daemon._resume_coding_jobs() == 0
+    assert called == []
+
+
+async def test_startup_reaps_old_finished_jobs(monkeypatch):
+    calls = []
+
+    class FakeManager:
+        async def reap(self):
+            calls.append("reap")
+            return 2
+
+    monkeypatch.setattr(jobs_mod, "get_manager", lambda: FakeManager())
+    assert await daemon._reap_coding_jobs() == 2
+    assert calls == ["reap"]
+
+
+async def test_startup_reap_failure_is_never_fatal(monkeypatch):
+    class Broken:
+        async def reap(self):
+            raise RuntimeError("relation coding_jobs does not exist")
+
+    monkeypatch.setattr(jobs_mod, "get_manager", lambda: Broken())
+    assert await daemon._reap_coding_jobs() == 0
+
+
+async def test_startup_resumes_then_reaps(monkeypatch):
+    calls = []
+
+    async def fake_resume():
+        calls.append("resume")
+        return 2
+
+    async def fake_reap():
+        calls.append("reap")
+        return 0
+
+    monkeypatch.setattr(daemon, "_resume_coding_jobs", fake_resume)
+    monkeypatch.setattr(daemon, "_reap_coding_jobs", fake_reap)
+    await daemon._start_coding_jobs()
+    assert calls == ["resume", "reap"]

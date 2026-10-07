@@ -51,8 +51,12 @@ REQUEST_DIR="${ROBOTHOR_RESTART_REQUEST_DIR:-/run/robothor/restart-requests}"
 # scripts/install-units.sh --restart takes the SAME lock, spelled identically
 # (tests/test_install_units.py keeps the lines equal), so a deploy cannot
 # enqueue a restart while this broker is deciding its own transaction.
+# Created only when absent (noclobber is O_EXCL) and opened READ-ONLY — flock
+# needs no write access, and under fs.protected_regular=2 root may not
+# O_CREAT/O_WRONLY-open the service user's lock in sticky /run/lock.
 LOCK_FILE="${ROBOTHOR_RESTART_LOCK:-/run/lock/robothor-restart.lock}"
-exec 9>"$LOCK_FILE"
+(set -C; : >"$LOCK_FILE") 2>/dev/null || true
+exec 9<"$LOCK_FILE"
 flock 9
 
 # The complete set of units the agent may restart. Adding a line here is a

@@ -101,9 +101,34 @@ _CALENDAR: tuple[str, ...] = (
     "call",
 )
 _CHAT: tuple[str, ...] = ("chat", "space", "room", "hangout")
+_CODING: tuple[str, ...] = (
+    "code",
+    "coding",
+    "claude",
+    "bug",
+    "fix",
+    "test",
+    "repo",
+    "commit",
+    "job",
+)
+_PR: tuple[str, ...] = ("github", "pr", "pull", "code")
 
 TOOL_HINTS: dict[str, ToolHint] = {
     "exec": ToolHint(keywords=("run", "shell", "command", "terminal", "execute")),
+    # ── Claude Code driver ────────────────────────────────────────────
+    "claude_code_start": ToolHint(
+        keywords=(*_CODING, "delegate", "implement", "build", "write", "refactor", "start"),
+        rank_bias=1.0,
+        when_to_use=(
+            "Use this to delegate a coding task to Claude Code, which edits, tests and "
+            "commits in its own git worktree while you wait."
+        ),
+    ),
+    "claude_code_wait": ToolHint(keywords=(*_CODING, "wait", "finish", "result", "done")),
+    "claude_code_status": ToolHint(keywords=(*_CODING, "status", "progress", "check")),
+    "claude_code_followup": ToolHint(keywords=(*_CODING, "followup", "follow", "correct", "retry")),
+    "claude_code_cancel": ToolHint(keywords=(*_CODING, "cancel", "stop", "abort")),
     # ── Live Gmail ────────────────────────────────────────────────────
     "gws_gmail_search": ToolHint(
         keywords=(
@@ -204,13 +229,50 @@ TOOL_HINTS: dict[str, ToolHint] = {
             "meeting",
             "event",
             "add",
-            "update",
             "attendee",
             "invite",
             "guest",
             "existing",
         ),
         when_to_use="Use this to add attendees to an EXISTING meeting while preserving existing guests and RSVPs.",
+    ),
+    "gws_calendar_update": ToolHint(
+        keywords=(
+            "calendar",
+            "meeting",
+            "event",
+            "appointment",
+            "update",
+            "edit",
+            "change",
+            "move",
+            "reschedule",
+            "postpone",
+            "rename",
+            "existing",
+            "remove",
+            "guest",
+        ),
+        when_to_use=(
+            "Use this to change an EXISTING event — move it to another time, rename it, edit "
+            "its notes or place, or add or remove guests."
+        ),
+    ),
+    "gws_calendar_respond": ToolHint(
+        keywords=(
+            "calendar",
+            "meeting",
+            "event",
+            "invite",
+            "rsvp",
+            "accept",
+            "decline",
+            "tentative",
+            "respond",
+            "reply",
+            "invitation",
+        ),
+        when_to_use="Use this to RSVP to an invitation: accept, decline or tentatively accept.",
     ),
     # ── Google Chat ───────────────────────────────────────────────────
     "gws_chat_send": ToolHint(
@@ -435,6 +497,33 @@ TOOL_HINTS: dict[str, ToolHint] = {
             "subscription",
             "browse",
         ),
+    ),
+    # ── GitHub pull-request review ────────────────────────────────────
+    "github_pr_diff": ToolHint(
+        keywords=(*_PR, "diff", "change", "patch", "read", "review"),
+        rank_bias=0.5,
+    ),
+    "github_pr_files": ToolHint(keywords=(*_PR, "diff", "file", "patch", "change", "review")),
+    "github_compare": ToolHint(
+        keywords=(*_PR, "diff", "compare", "commit", "since", "rereview", "review")
+    ),
+    "github_create_review": ToolHint(
+        keywords=(*_PR, "review", "approve", "comment", "request", "change", "post", "inline")
+    ),
+    "github_reply_review_comment": ToolHint(
+        # Not "respond"/"thread": "respond to the thread" means email first.
+        keywords=(*_PR, "review", "reply", "comment")
+    ),
+    "github_resolve_threads": ToolHint(
+        keywords=(*_PR, "review", "resolve", "thread", "close", "comment")
+    ),
+    # ── pr-reviewer suite ─────────────────────────────────────────────
+    "pr_review_intake": ToolHint(keywords=(*_PR, "review", "intake", "poll", "queue", "chat")),
+    "pr_review_prepare": ToolHint(
+        keywords=(*_PR, "review", "prepare", "checkout", "start", "task")
+    ),
+    "pr_review_finalize": ToolHint(
+        keywords=(*_PR, "review", "finalize", "post", "verdict", "result")
     ),
 }
 

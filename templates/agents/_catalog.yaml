@@ -34,6 +34,10 @@ departments:
     name: Operations
     description: Engine health, canary testing, and failure analysis
     agents: [failure-analyzer, canary, auto-researcher]
+  engineering:
+    name: Engineering
+    description: Pull-request review with Claude Code, posted live to GitHub
+    agents: [pr-reviewer]
   examples:
     name: Examples
     description: Learning templates for new agent builders

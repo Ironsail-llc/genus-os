@@ -122,6 +122,10 @@ _TABLE: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     ("set up a meeting with attendees", "gws_calendar_create", ()),
     ("book a call", "", ("gws_calendar_create",)),
     ("invite someone to a meeting", "", ("gws_calendar_create",)),
+    ("reschedule the meeting", "gws_calendar_update", ()),
+    ("move my 3pm to tomorrow", "", ("gws_calendar_update",)),
+    ("decline the invitation", "gws_calendar_respond", ()),
+    ("rsvp yes to the meeting", "gws_calendar_respond", ()),
     ("cancel the meeting", "gws_calendar_delete", ()),
     ("delete that appointment", "gws_calendar_delete", ()),
     # ── Mail: the outbound intents the keyword table missed ──

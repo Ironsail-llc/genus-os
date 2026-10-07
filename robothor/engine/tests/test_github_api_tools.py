@@ -46,9 +46,13 @@ class TestGithubToolSchemas:
     def test_github_tools_in_set(self):
         from robothor.engine.tools import GITHUB_API_TOOLS
 
-        assert len(GITHUB_API_TOOLS) == 5
+        # Five metrics tools plus the three pull-request read tools (diff,
+        # files, compare). The review-posting tools are a separate, opt-in set.
+        assert len(GITHUB_API_TOOLS) == 8
         assert "github_list_prs" in GITHUB_API_TOOLS
         assert "github_review_stats" in GITHUB_API_TOOLS
+        assert "github_pr_diff" in GITHUB_API_TOOLS
+        assert "github_create_review" not in GITHUB_API_TOOLS
 
 
 # ─── Response slimming ──────────────────────────────────────────────
