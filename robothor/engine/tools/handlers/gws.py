@@ -28,17 +28,37 @@ from robothor.workspace.bridge import bind_engine_loop
 # The Gmail parsers live with the Google adapter now (pure, provider-side). The
 # names stay importable from here: autonomy/mailbox.py, autonomy/verification.py
 # and the tests reach them through this module.
-from robothor.workspace.google.gmail_parse import (  # noqa: F401 - re-exported
-    _decode_b64,
-    _extract_attachments,
-    _extract_body,
-    _header_map,
-    _html_to_text,
-    _HtmlToText,
-    _shape_envelope,
-    _shape_message,
-    _strip_non_content_regions,
-    _walk_parts,
+# Re-exported under their old names: autonomy/ and existing tests import
+# these from gws. `x as x` marks the re-export explicit for mypy.
+from robothor.workspace.google.gmail_parse import (
+    _decode_b64 as _decode_b64,
+)
+from robothor.workspace.google.gmail_parse import (
+    _extract_attachments as _extract_attachments,
+)
+from robothor.workspace.google.gmail_parse import (
+    _extract_body as _extract_body,
+)
+from robothor.workspace.google.gmail_parse import (
+    _header_map as _header_map,
+)
+from robothor.workspace.google.gmail_parse import (
+    _html_to_text as _html_to_text,
+)
+from robothor.workspace.google.gmail_parse import (
+    _HtmlToText as _HtmlToText,
+)
+from robothor.workspace.google.gmail_parse import (
+    _shape_envelope as _shape_envelope,
+)
+from robothor.workspace.google.gmail_parse import (
+    _shape_message as _shape_message,
+)
+from robothor.workspace.google.gmail_parse import (
+    _strip_non_content_regions as _strip_non_content_regions,
+)
+from robothor.workspace.google.gmail_parse import (
+    _walk_parts as _walk_parts,
 )
 from robothor.workspace.query import parse_query
 from robothor.workspace.types import CalendarRef, as_calendar_ref
