@@ -11,7 +11,7 @@ Structure
 ---------
 ``GenusSettings`` is a shallow tree of groups (``paths``, ``database``,
 ``redis``, ``ollama``, ``providers``, ``engine``, ``channels``, ``auth``,
-``flags``, ``services``, ``secrets``, ``substrate``, ``ops``). Groups are
+``flags``, ``services``, ``secrets``, ``substrate``, ``ops``, ``workspace``, ...). Groups are
 plain
 ``BaseModel``s, populated by the sources in :mod:`robothor.settings.sources`,
 which resolve each leaf by its declared environment name rather than by
@@ -31,7 +31,7 @@ Declaring a setting here does NOT yet change who reads it. Every existing
 
 from __future__ import annotations
 
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -3448,6 +3448,45 @@ class PrReviewSettings(SettingsGroup):
     )
 
 
+class WorkspaceSettings(SettingsGroup):
+    """Which mail and calendar backend serves the gws_* tools (robothor/workspace/)."""
+
+    restart_units: ClassVar[tuple[str, ...]] = ("robothor-engine",)
+
+    workspace_provider: Literal["google", "microsoft365"] = declare(
+        "google",
+        "ROBOTHOR_WORKSPACE_PROVIDER",
+        "Mail and calendar backend behind the gws_* tools: `google` (the gws CLI) or "
+        "`microsoft365` (Microsoft Graph with an Entra app-only credential stored in the "
+        "vault under workspace/microsoft365/). The Microsoft 365 transport is being built "
+        "and nothing routes to it yet; leave this at `google`.",
+        since="unreleased",
+    )
+    m365_assistant_mailbox: str = declare(
+        "",
+        "ROBOTHOR_M365_ASSISTANT_MAILBOX",
+        "The assistant's own Exchange Online mailbox (user principal name or SMTP address) "
+        "when the workspace provider is microsoft365. Mail is sent from it and its inbox is "
+        "read.",
+        since="unreleased",
+    )
+    m365_owner_mailbox: str = declare(
+        "",
+        "ROBOTHOR_M365_OWNER_MAILBOX",
+        "The operator's Exchange Online mailbox when the workspace provider is microsoft365. "
+        "Its calendar is the one the assistant reads and edits for the operator.",
+        since="unreleased",
+    )
+    m365_scope_canary_mailbox: str = declare(
+        "",
+        "ROBOTHOR_M365_SCOPE_CANARY_MAILBOX",
+        "A mailbox in the same Microsoft 365 tenant that the app must NOT be able to read. "
+        "The doctor tries it to prove Exchange RBAC for Applications scopes the grant to the "
+        "assistant and owner mailboxes; a readable canary is an error. Empty skips the check.",
+        since="unreleased",
+    )
+
+
 class GenusSettings(BaseSettings):
     """Every Genus OS setting, grouped.
 
@@ -3466,6 +3505,7 @@ class GenusSettings(BaseSettings):
     autonomy: AutonomySettings = Field(default_factory=AutonomySettings)
     coding: CodingSettings = Field(default_factory=CodingSettings)
     pr_review: PrReviewSettings = Field(default_factory=PrReviewSettings)
+    workspace: WorkspaceSettings = Field(default_factory=WorkspaceSettings)
     paths: PathsSettings = Field(default_factory=PathsSettings)
     database: DatabaseSettings = Field(default_factory=DatabaseSettings)
     redis: RedisSettings = Field(default_factory=RedisSettings)

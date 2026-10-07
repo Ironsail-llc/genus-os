@@ -76,6 +76,7 @@ present; do not treat an instance path as a shipped security control.
 | Agent validation | `python scripts/validate_agents.py` |
 | Workflow engine | `docs/AGENT_BUILDER.md` (section 3) + `docs/workflows/*.yaml` + `robothor/engine/workflow.py` |
 | Vault / credential storage | `robothor/vault/` + `genus vault --help` |
+| Mail/calendar provider (Google or Microsoft 365) | `docs/workspace/microsoft365.md` + `robothor/workspace/` package |
 | Federation / multi-instance | `docs/FEDERATION.md` + `robothor/federation/` package |
 | Federation CLI | `genus federation {init,invite,connect,status,list,export,suspend,remove}` |
 | NATS server (federation transport) | `docs/FEDERATION.md` + the deployment's NATS config/service definition |

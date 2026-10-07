@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-464 settings in 16 groups.
+468 settings in 17 groups.
 
 ## autonomy
 
@@ -105,6 +105,15 @@ Host paths for the isolated personal browser service and clients.
 | `ROBOTHOR_PR_REVIEW_TELEGRAM_DIGEST` | bool | `false` | no | no | unreleased | pr_review_finalize returns a one-line digest per posted review for the agent to deliver; the agent's delivery must announce on Telegram for it to arrive. |
 | `ROBOTHOR_PR_REVIEW_TICKET_PREFIXES` | str | _(empty)_ | no | no | unreleased | Ticket key prefixes the reviewer links pull requests to: owner/repo:PREFIX entries apply to that repository, bare PREFIX entries (e.g. ABC) to every repository without its own, comma-separated. Empty accepts any uppercase KEY-123. |
 | `ROBOTHOR_PR_REVIEW_WATCH_REPOS` | bool | `false` | no | no | unreleased | Review every open, non-draft pull request in the configured repositories, and re-review when its head moves. False reviews only pull requests posted in the Chat space or that request the bot login's review. |
+
+## workspace
+
+| Variable | Type | Default | Restart | Secret | Since | Description |
+| --- | --- | --- | --- | --- | --- | --- |
+| `ROBOTHOR_M365_ASSISTANT_MAILBOX` | str | _(empty)_ | `robothor-engine` | no | unreleased | The assistant's own Exchange Online mailbox (user principal name or SMTP address) when the workspace provider is microsoft365. Mail is sent from it and its inbox is read. |
+| `ROBOTHOR_M365_OWNER_MAILBOX` | str | _(empty)_ | `robothor-engine` | no | unreleased | The operator's Exchange Online mailbox when the workspace provider is microsoft365. Its calendar is the one the assistant reads and edits for the operator. |
+| `ROBOTHOR_M365_SCOPE_CANARY_MAILBOX` | str | _(empty)_ | `robothor-engine` | no | unreleased | A mailbox in the same Microsoft 365 tenant that the app must NOT be able to read. The doctor tries it to prove Exchange RBAC for Applications scopes the grant to the assistant and owner mailboxes; a readable canary is an error. Empty skips the check. |
+| `ROBOTHOR_WORKSPACE_PROVIDER` | Literal | `google` | `robothor-engine` | no | unreleased | Mail and calendar backend behind the gws_* tools: `google` (the gws CLI) or `microsoft365` (Microsoft Graph with an Entra app-only credential stored in the vault under workspace/microsoft365/). The Microsoft 365 transport is being built and nothing routes to it yet; leave this at `google`. |
 
 ## paths
 
