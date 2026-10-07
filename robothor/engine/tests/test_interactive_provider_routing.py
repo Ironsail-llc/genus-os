@@ -49,6 +49,10 @@ async def test_native_dispatch_applies_preference_before_kwargs_leave_client(
 ):
     req = request()
     req.options["trigger_type"] = trigger
+    # Only an explicitly simple profile owns the bounded classification window
+    # that qualifies a chat for throughput routing; automatic ("") profiles keep
+    # their normal run budget and no routing preference.
+    req.options["agent_config"].difficulty_class = "simple"
     client = LLMClient()
     seen = []
 
@@ -118,6 +122,9 @@ async def test_unqualified_work_does_not_inherit_preference(variant):
         )
     elif variant in {"readonly_mode", "deep_plan", "spawn_context"}:
         req.options[variant] = True
+    elif variant == "released":
+        # Released only means something for a window that exists.
+        config.difficulty_class = "simple"
     current = (
         replace(req.context, principal_id="other") if variant == "foreign_context" else req.context
     )
