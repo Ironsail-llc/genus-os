@@ -1,11 +1,11 @@
 # Microsoft 365 workspace
 
-> **Status: in development.** The Microsoft Graph transport and its sign-in
-> exist, but no tool uses them yet. Leave `ROBOTHOR_WORKSPACE_PROVIDER` at
-> `google`: with `microsoft365` selected, every mail and calendar tool refuses
-> (`hint: "unsupported"`) until the Microsoft 365 mail and calendar providers
-> ship. This page grows with each part of the work; the connect command,
-> the doctor check and the full runbook come later.
+> **Status: mail available, calendar in development.** With
+> `ROBOTHOR_WORKSPACE_PROVIDER=microsoft365`, the `gws_gmail_*` tools read and
+> send mail from the assistant's Exchange Online mailbox. The
+> `gws_calendar_*` tools still refuse (`hint: "unsupported"`) until the
+> Microsoft 365 calendar ships. The connect command, the doctor check and the
+> full runbook come later.
 
 Genus OS reads and sends mail and manages calendars through the `gws_*` tools.
 By default they run against Google Workspace. With
@@ -23,7 +23,7 @@ the names keeps every rule. Only the transport underneath changes:
 | Layer | Google | Microsoft 365 |
 |-------|--------|---------------|
 | Tools and guards | `gws_*` tools, shared rules | same tools, same rules |
-| Provider (`robothor/workspace/protocols.py`) | `GoogleMail`, `GoogleCalendar` (`robothor/workspace/google/adapter.py`) | not yet built (selecting it refuses) |
+| Provider (`robothor/workspace/protocols.py`) | `GoogleMail`, `GoogleCalendar` (`robothor/workspace/google/adapter.py`) | `GraphMail` (`robothor/workspace/microsoft/mail.py`); calendar not yet built (refuses) |
 | Transport | `gws` CLI, plus conditional Calendar HTTP for edits | `robothor/workspace/microsoft/graph.py` (`GraphClient`) |
 | Sign-in | Google OAuth | Entra app-only (`robothor/workspace/microsoft/auth.py`) |
 
@@ -77,6 +77,119 @@ moves data:
 - **Errors carry Graph's error code and message, nothing more.** They never
   include a token or a message body. Each request has its own
   `client-request-id` for Microsoft support.
+
+## Mail
+
+`GraphMail` serves the mail tools from the mailbox in
+`ROBOTHOR_M365_ASSISTANT_MAILBOX`. Without that setting every mail tool
+refuses. The Graph client is built from the vault of the platform tenant
+that made the tool call.
+
+Every guard in the tool handler runs before Graph is called: do-not-contact,
+the duplicate-reply check, benchmark refusal and reply-all assembly. A refused
+send makes no Graph write.
+
+### Results look the same as Google's
+
+The provider turns each Graph message into Gmail's raw shape, and the Google
+shaper formats it. So a tool result has the same keys whichever provider
+served it:
+
+| Tool result field | From Graph |
+|-------------------|-----------|
+| `id` | the message's immutable id |
+| `thread_id` | `conversationId` |
+| `from`, `to`, `cc`, `subject`, `message_id` | `from`, `toRecipients`, `ccRecipients`, `subject`, `internetMessageId` |
+| `date` | `sentDateTime` as an RFC 5322 date |
+| `snippet` | `bodyPreview`, HTML-escaped like Gmail's |
+| `body_text` | the body, requested as text (`Prefer: outlook.body-content-type="text"`); an HTML body is converted to text the same way as a Gmail one |
+| `attachments` | name, type and size of each attachment (never the bytes) |
+
+### Search syntax
+
+Agents keep writing Gmail queries. Each one is translated to Graph. If a
+query can't be translated exactly, the tool refuses it and lists what is
+supported. It never drops a term and returns more mail than was asked for.
+
+| Gmail query | Graph |
+|-------------|-------|
+| `from:addr`, `to:addr` (a full address) | `$filter` on the address, exact |
+| `from:name`, `to:name`, `cc:`, `bcc:`, `subject:`, free text, `"a phrase"` | KQL `$search` |
+| `is:unread` / `is:read`, `is:starred`, `is:important` | `isRead`, `flag/flagStatus`, `importance` |
+| `has:attachment` | `hasAttachments` |
+| `label:<name>` | the Outlook category `<name>` |
+| `in:inbox`, `in:sent`, `in:trash`, `in:spam`, `in:drafts` | that folder (Inbox, Sent Items, Deleted Items, Junk Email, Drafts) |
+| `in:anywhere` | every folder |
+| `after:` / `before:` (`YYYY/MM/DD` or epoch seconds, UTC) | `receivedDateTime ge` / `lt` |
+| `newer_than:` / `older_than:` (`Nh`, `Nd`, `Nm` = 30 days, `Ny` = 365 days) | `receivedDateTime ge` / `lt` |
+| `a OR b`, `{a b}` | an OR group, when every part is the same kind |
+| `-is:…`, `-has:attachment` | the opposite value |
+
+These are refused: any other operator (`filename:`, `larger:`, `category:`
+and so on), other `is:`/`has:`/`in:` values, other negations (`-from:`,
+`-subject:`), more than one `in:`, and a group that mixes text terms with
+flag, date or label terms.
+
+How the query runs:
+
+- **Only structured terms** go into a `$filter`, sorted newest first on the
+  server. Graph needs the sort property to be filtered first, so a
+  `receivedDateTime` condition always leads the filter.
+- **Any text term** switches the query to KQL `$search`. Graph doesn't allow
+  `$search` together with `$filter` or `$orderby`, so every structured term is
+  also checked on each result, and the provider sorts the results itself.
+- **Deleted Items and Junk Email are left out** unless the query names a
+  folder, the same way Gmail leaves out trash and spam.
+
+### Labels
+
+Graph has no labels, so the provider builds Gmail's label list from the
+message:
+
+| Label | Means |
+|-------|-------|
+| `UNREAD` | `isRead` is false |
+| `INBOX`, `SENT`, `TRASH`, `SPAM`, `DRAFT` | the message is in Inbox, Sent Items, Deleted Items, Junk Email or Drafts |
+| `STARRED` | the message is flagged |
+| `IMPORTANT` | `importance` is high |
+| anything else | an Outlook category |
+
+`gws_gmail_modify` maps them back:
+
+| Change | Graph |
+|--------|-------|
+| add / remove `UNREAD` | `isRead` false / true |
+| add / remove `STARRED` | flag `flagged` / `notFlagged` |
+| add / remove `IMPORTANT` | importance `high` / `normal` |
+| remove `INBOX` | move to Archive |
+| add `INBOX`, or remove `TRASH` | move to Inbox |
+| add `TRASH` | move to Deleted Items |
+| any other label | add or remove that category |
+
+`SENT`, `DRAFT`, `SPAM`, `CHAT` and Gmail's `CATEGORY_*` tabs are refused, as
+is a label that is both added and removed. A refused change writes nothing.
+Immutable ids survive a move, so the id stays the same after archiving.
+
+### Sending and threading
+
+- **A new message** is a draft created from the MIME message the handler
+  built, then sent. The draft's immutable id is returned as the sent message's
+  `id`, with `threadId` set to its `conversationId`, so a read-back by that
+  id finds the sent message.
+- **A reply** (`gws_gmail_reply`, or `gws_gmail_send` with a `thread_id`) uses
+  `createReplyAll` on the newest message in the conversation that isn't a
+  draft, so Exchange keeps it in the same conversation. The draft's To, Cc and
+  Bcc are then replaced with exactly the recipients the handler approved,
+  and its body with the handler's body. Exchange's own reply-all list is
+  never sent. The subject Exchange gave the reply is kept, because changing it
+  can split the conversation. If the draft can't be prepared, it is deleted
+  without being sent.
+- **The duplicate-reply guard** reads the conversation oldest first. If the
+  last message is from the assistant (drafts included), the reply is skipped
+  before any write. The guard compares senders with `ROBOTHOR_AI_EMAIL`, so
+  set that to the same address as `ROBOTHOR_M365_ASSISTANT_MAILBOX`.
+- **Writes are sent once.** A send whose outcome is unknown comes back with
+  `outcome_unknown: true` and is not retried.
 
 ## Auth model
 

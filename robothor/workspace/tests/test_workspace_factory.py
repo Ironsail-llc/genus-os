@@ -1,4 +1,4 @@
-"""get_workspace(): Google by default, Microsoft 365 dark until its transport ships."""
+"""get_workspace(): Google by default; Microsoft 365 serves mail, its calendar stays dark."""
 
 from __future__ import annotations
 
@@ -45,9 +45,33 @@ def test_explicit_google(provider_env) -> None:
     assert get_workspace().provider == "google"
 
 
-def test_microsoft365_is_dark(provider_env) -> None:
+def test_microsoft365_serves_mail_and_keeps_calendar_dark(
+    provider_env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from robothor.workspace import reset_workspace_cache
+    from robothor.workspace.microsoft.mail import GraphMail
+
+    monkeypatch.setenv("ROBOTHOR_M365_ASSISTANT_MAILBOX", "assistant@example.com")
     provider_env("microsoft365")
-    with pytest.raises(Unsupported, match="microsoft365"):
+    reset_workspace_cache()
+    ws = get_workspace("tenant-a")
+    assert ws.provider == "microsoft365"
+    assert isinstance(ws.mail, GraphMail)
+    assert ws.mail.mailbox == "assistant@example.com"
+    assert ws.capabilities["labels"] == "categories"
+    assert "calendar" in ws.unavailable and "mail" not in ws.unavailable
+    with pytest.raises(Unsupported, match="calendar"):
+        ws.calendar.list  # noqa: B018 - any use of the dark calendar refuses
+    # One Graph client per platform tenant: the vault is per tenant.
+    assert get_workspace("tenant-a").mail is ws.mail
+    assert get_workspace("tenant-b").mail is not ws.mail
+    reset_workspace_cache()
+
+
+def test_microsoft365_without_a_mailbox_is_refused(provider_env, monkeypatch) -> None:
+    monkeypatch.delenv("ROBOTHOR_M365_ASSISTANT_MAILBOX", raising=False)
+    provider_env("microsoft365")
+    with pytest.raises(Unsupported, match="m365_assistant_mailbox"):
         get_workspace()
 
 

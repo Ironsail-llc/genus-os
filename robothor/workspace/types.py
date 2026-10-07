@@ -23,6 +23,7 @@ from typing import Any, Literal, NotRequired, TypedDict
 
 __all__ = [
     "GOOGLE_CAPABILITIES",
+    "MICROSOFT365_CAPABILITIES",
     "AllOf",
     "AnyOf",
     "Attachment",
@@ -256,4 +257,13 @@ GOOGLE_CAPABILITIES: Capabilities = {
     "send_updates_modes": ("all", "externalOnly", "none"),
     "labels": "gmail_labels",
     "online_meeting": "hangouts_meet",
+}
+
+#: Exchange always notifies attendees, labels are Outlook categories, and an
+#: online meeting is a Teams meeting.
+MICROSOFT365_CAPABILITIES: Capabilities = {
+    "provider": "microsoft365",
+    "send_updates_modes": ("all",),
+    "labels": "categories",
+    "online_meeting": "teams_meeting",
 }
