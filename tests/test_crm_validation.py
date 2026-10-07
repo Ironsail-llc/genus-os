@@ -1,6 +1,7 @@
 """Tests for robothor.crm.validation — blocklists and input validation (pure unit tests)."""
 
 from robothor.crm.validation import (
+    BLOCKED_EMAILS,
     COMPANY_BLOCKLIST,
     PERSON_BLOCKLIST,
     normalize_email,
@@ -124,3 +125,49 @@ class TestBlocklists:
     def test_blocklists_are_sets(self):
         assert isinstance(PERSON_BLOCKLIST, set)
         assert isinstance(COMPANY_BLOCKLIST, set)
+
+
+class TestAgentSenderBlocklist:
+    """Regression: conversation ingestion must not recreate agent/system contacts.
+
+    See task 251deb11 — crm-hygiene soft-deletes these and ingestion recreates
+    them each beat because validate_person_input did not block them.
+    """
+
+    AGENT_SENDERS = [
+        ("crm", "task"),
+        ("crm-hygiene", "agent"),
+        ("the", "assistant"),
+        ("conversation", "resolver"),
+        ("email", "classifier"),
+        ("email-analyst", ""),
+        ("main", "agent"),
+        ("assistant", ""),
+        ("architect", ""),
+        ("conversation", "inbox monitor"),
+        ("main", ""),
+        ("agent-architect", ""),
+    ]
+
+    def test_agent_senders_are_blocked(self):
+        for first, last in self.AGENT_SENDERS:
+            valid, reason = validate_person_input(first, last)
+            assert valid is False, f"{first!r} {last!r} should be blocked"
+            assert "blocklist" in reason
+
+    def test_blocked_email_address(self):
+        valid, reason = validate_person_input("System", "Mailer", email="gemini-notes@google.com")
+        assert valid is False
+        assert "blocked-email" in reason
+
+    def test_blocked_email_is_case_insensitive(self):
+        valid, _ = validate_person_input("System", "Mailer", email="Gemini-Notes@Google.com")
+        assert valid is False
+
+    def test_real_colleague_email_not_blocked(self):
+        # Domain-wide rules would block real people; only exact addresses are blocked.
+        valid, _ = validate_person_input("Philip", "Ironsail", email="colleague@example.com")
+        assert valid is True
+
+    def test_blocked_emails_is_a_set(self):
+        assert isinstance(BLOCKED_EMAILS, set)
