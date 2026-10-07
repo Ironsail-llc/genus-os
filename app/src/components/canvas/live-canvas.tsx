@@ -23,6 +23,7 @@ export function LiveCanvas() {
     setDashboardCode,
     clearDashboard,
     isUpdating,
+    pendingAgentData,
   } = useVisualState();
 
   const [error, setError] = useState<string | null>(null);
@@ -36,8 +37,10 @@ export function LiveCanvas() {
     if (welcomeLoadedRef.current) return;
     welcomeLoadedRef.current = true;
 
-    // Don't auto-generate if we have a view or existing dashboard
-    if (currentView || dashboardCode) return;
+    // Don't auto-generate if we have a view or existing dashboard — or the
+    // agent has asked for one, which the dashboard agent is about to render
+    // (a welcome page landing after it would overwrite the requested visual).
+    if (currentView || dashboardCode || pendingAgentData) return;
 
     const abort = new AbortController();
     setCanvasMode("loading");

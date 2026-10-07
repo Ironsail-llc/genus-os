@@ -83,6 +83,14 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const recoveryScopes = useRef<Record<string, string>>({});
   const requestScopes = useRef<Record<string, string>>({});
+  // A long turn's stream can close before its `done` event; its reply then
+  // arrives here from the recorded outcome. Its canvas markers must reach the
+  // canvas exactly as a streamed reply's do, or a slow visual is silently lost.
+  const { notifyConversationUpdate: notifyCanvas, setRender: renderOnCanvas } = useVisualState();
+  const messagesRef = useRef<ChatMessage[]>([]);
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
   const recoverMessage = useCallback((id: string, text: string, plan?: ActivePlan) => {
     if (plan) setActivePlan(current => current ?? plan);
     setMessages((prev) => prev.map((item) => {
@@ -90,7 +98,33 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
       if (item.recovery?.scope) forgetRequest(item.recovery.scope, item.recovery.requestId);
       return { ...item, content: stripResidualMarkers(text), recovery: undefined };
     }));
-  }, []);
+
+    const interceptor = new MarkerInterceptor();
+    const first = interceptor.addChunk(text);
+    const rest = interceptor.flush();
+    const agentData: Record<string, unknown> = {};
+    for (const marker of [...first.markers, ...rest.markers]) {
+      if (marker.type === "dashboard" && marker.data && typeof marker.data === "object") {
+        Object.assign(agentData, marker.data as Record<string, unknown>);
+      } else if (marker.type === "render") {
+        renderOnCanvas({ component: marker.component, props: marker.props });
+      }
+    }
+    const content = stripResidualMarkers(text).trim();
+    const hasAgentData = Object.keys(agentData).length > 0;
+    if (hasAgentData || content.length >= 200) {
+      const prior = messagesRef.current;
+      const at = prior.findIndex((m) => m.id === id);
+      const question = prior.slice(0, at < 0 ? prior.length : at).reverse().find((m) => m.role === "user");
+      notifyCanvas(
+        [
+          ...(question ? [{ role: "user", content: question.content }] : []),
+          { role: "assistant", content },
+        ].filter((m) => m.content.trim()),
+        hasAgentData ? agentData : undefined,
+      );
+    }
+  }, [notifyCanvas, renderOnCanvas]);
   const [input, setInput] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamingText, setStreamingText] = useState("");

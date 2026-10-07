@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import dynamic from "next/dynamic";
 import { useSession } from "next-auth/react";
 import { Sidebar } from "./sidebar";
 import { MobileTabBar } from "./mobile-tab-bar";
@@ -20,7 +21,6 @@ import { HealthView } from "@/components/views/health-view";
 import { MemoryView } from "@/components/views/memory-view";
 import { AuditView } from "@/components/views/audit-view";
 import { LogsView } from "@/components/views/logs-view";
-import { CanvasView } from "@/components/views/canvas-view";
 import { ComingSoonView } from "@/components/views/coming-soon-view";
 import { SettingsView } from "@/components/views/settings-view";
 import { MfaSetupBanner } from "@/components/mfa-setup-banner";
@@ -31,7 +31,15 @@ import { useAgents } from "@/hooks/use-agents";
 import { useInbox } from "@/hooks/use-inbox";
 import { useScreenSize } from "@/hooks/use-mobile";
 import { useViewRoute } from "@/hooks/use-view-route";
+import { useVisualState } from "@/hooks/use-visual-state";
 import { PanelRight, Zap } from "lucide-react";
+
+// The conversation canvas (agent-pushed components + chat-driven dashboards)
+// loads only when the rail first opens, keeping it out of the chat bundle.
+const LiveCanvas = dynamic(
+  () => import("@/components/canvas/live-canvas").then((m) => m.LiveCanvas),
+  { ssr: false },
+);
 
 function HeaderClock() {
   const [time, setTime] = useState("");
@@ -74,6 +82,9 @@ export function AppShell() {
 
   const [chatOpen, setChatOpen] = useState(true);
   const [canvasRailOpen, setCanvasRailOpen] = useState(false);
+  const { viewStack, pendingAgentData } = useVisualState();
+  const [seenVisualCount, setSeenVisualCount] = useState(viewStack.length);
+  const [seenAgentData, setSeenAgentData] = useState(pendingAgentData);
 
   // Lift data fetching — single source for sidebar badges + views
   const { tasks, isLoading: tasksLoading, approveTask, rejectTask, answerQuestion } =
@@ -98,6 +109,21 @@ export function AppShell() {
   // main column, optionally flanked by the canvas rail.
   const mobileInChat = isMobile && isChatView;
   const showCanvasRail = !isMobile && isChatView && canvasRailOpen;
+
+  // A visual the agent asks for mid-chat — a [RENDER:…] component or
+  // [DASHBOARD:…] data — must be seen where the operator is looking, so it
+  // opens the rail (mounting the canvas, whose dashboard agent then renders
+  // the data). Adjusted during render rather than in an effect; closing the
+  // rail afterwards sticks until the next visual.
+  const canAutoOpen = isChatView && !isMobile;
+  if (viewStack.length !== seenVisualCount) {
+    setSeenVisualCount(viewStack.length);
+    if (viewStack.length > seenVisualCount && canAutoOpen) setCanvasRailOpen(true);
+  }
+  if (pendingAgentData !== seenAgentData) {
+    setSeenAgentData(pendingAgentData);
+    if (pendingAgentData && canAutoOpen) setCanvasRailOpen(true);
+  }
 
   return (
     <div className="flex h-full w-full flex-col">
@@ -257,13 +283,28 @@ export function AppShell() {
               {isComingSoonView(view) && <ComingSoonView view={view} />}
             </div>
 
-            {/* Chat — docked rail beside other views, the main column on chat. */}
+            {/* The conversation canvas, when open, is the chat view's main
+                stage; chat docks beside it as a narrow column. */}
+            {showCanvasRail && (
+              <section
+                className="flex-1 min-w-0 min-h-0"
+                data-testid="canvas-rail"
+                aria-label="Canvas"
+              >
+                <LiveCanvas />
+              </section>
+            )}
+
+            {/* Chat — docked rail beside other views (and beside an open
+                canvas); the main column on chat otherwise. */}
             {!isMobile && (
               <div
                 className={
-                  isChatView
+                  isChatView && !showCanvasRail
                     ? "flex-1 min-w-0 min-h-0"
-                    : "shrink-0 border-l border-border transition-[width] duration-200 overflow-hidden"
+                    : isChatView
+                      ? "w-[420px] shrink-0 min-h-0 border-l border-border"
+                      : "shrink-0 border-l border-border transition-[width] duration-200 overflow-hidden"
                 }
                 style={isChatView ? undefined : { width: chatOpen ? 400 : 0 }}
                 data-testid="chat-container"
@@ -272,17 +313,6 @@ export function AppShell() {
                   <ChatPanel />
                 </div>
               </div>
-            )}
-
-            {/* The LLM canvas is an optional rail on the chat view. */}
-            {showCanvasRail && (
-              <aside
-                className="w-[380px] shrink-0 min-h-0 border-l border-border"
-                data-testid="canvas-rail"
-                aria-label="Canvas"
-              >
-                <CanvasView visible />
-              </aside>
             )}
           </div>
         </div>

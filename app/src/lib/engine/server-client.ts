@@ -46,6 +46,24 @@ async function verifiedDashboardHeaders(): Promise<Record<string, string>> {
   return headers;
 }
 
+/**
+ * Fetch an SSE endpoint with a bound on CONNECT (time to response headers),
+ * not on duration. A turn may stream for many minutes; AbortSignal.timeout on
+ * the whole fetch cut every turn longer than its budget mid-reply.
+ */
+async function fetchStream(url: string, init: RequestInit, connectMs = 120_000): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(
+    () => controller.abort(new DOMException("Engine did not answer in time", "TimeoutError")),
+    connectMs,
+  );
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 class EngineClient {
   /**
    * Run a provider-neutral dashboard completion inside the authenticated
@@ -88,11 +106,10 @@ class EngineClient {
    * Caller is responsible for reading the SSE stream.
    */
   async chatSend(message: string, sessionKey = "", requestId?: string): Promise<Response> {
-    const res = await fetch(`${ENGINE_URL}/chat/send`, {
+    const res = await fetchStream(`${ENGINE_URL}/chat/send`, {
       method: "POST",
       headers: await engineHeaders(true),
       body: JSON.stringify({ message, ...keyed(sessionKey), ...(requestId ? { request_id: requestId } : {}) }),
-      signal: AbortSignal.timeout(120_000),
     });
     if (!res.ok) {
       throw new Error(`Engine error: ${res.status} ${res.statusText}`);
@@ -171,11 +188,10 @@ class EngineClient {
 
   /** Start plan mode: explore with read-only tools. Returns SSE stream. */
   async planStart(message: string, deepPlan = false, sessionKey = "", requestId?: string): Promise<Response> {
-    const res = await fetch(`${ENGINE_URL}/chat/plan/start`, {
+    const res = await fetchStream(`${ENGINE_URL}/chat/plan/start`, {
       method: "POST",
       headers: await engineHeaders(true),
       body: JSON.stringify({ message, deep_plan: deepPlan, ...keyed(sessionKey), ...(requestId ? { request_id: requestId } : {}) }),
-      signal: AbortSignal.timeout(120_000),
     });
     if (!res.ok) {
       throw new Error(`Engine error: ${res.status} ${res.statusText}`);
@@ -185,11 +201,10 @@ class EngineClient {
 
   /** Approve a pending plan. Returns SSE stream of execution. */
   async planApprove(planId: string, sessionKey = "", requestId?: string): Promise<Response> {
-    const res = await fetch(`${ENGINE_URL}/chat/plan/approve`, {
+    const res = await fetchStream(`${ENGINE_URL}/chat/plan/approve`, {
       method: "POST",
       headers: await engineHeaders(true),
       body: JSON.stringify({ plan_id: planId, ...keyed(sessionKey), ...(requestId ? { request_id: requestId } : {}) }),
-      signal: AbortSignal.timeout(120_000),
     });
     return res;
   }
@@ -228,11 +243,10 @@ class EngineClient {
 
   /** Start deep reasoning. Returns SSE stream. */
   async deepStart(query: string, sessionKey = "", requestId?: string): Promise<Response> {
-    const res = await fetch(`${ENGINE_URL}/chat/deep/start`, {
+    const res = await fetchStream(`${ENGINE_URL}/chat/deep/start`, {
       method: "POST",
       headers: await engineHeaders(true),
       body: JSON.stringify({ query, ...keyed(sessionKey), ...(requestId ? { request_id: requestId } : {}) }),
-      signal: AbortSignal.timeout(120_000),
     });
     if (!res.ok) {
       throw new Error(`Engine error: ${res.status} ${res.statusText}`);

@@ -1,9 +1,8 @@
 import { fetchWelcomeContext } from "@/lib/dashboard/welcome-context";
 import { getDashboardSystemPrompt, getTimeAwarePrompt } from "@/lib/dashboard/system-prompt";
-import { validateDashboardCode, detectCodeType } from "@/lib/dashboard/code-validator";
+import { detectCodeType } from "@/lib/dashboard/code-validator";
 import { getEngineClient } from "@/lib/engine/server-client";
-import DOMPurify from "isomorphic-dompurify";
-import { SANITIZE_CONFIG } from "../generate/route";
+import { renderDashboard } from "@/lib/dashboard/finalize-html";
 
 /**
  * Build a data-bound welcome prompt that gives the model explicit values to use.
@@ -73,23 +72,19 @@ export async function POST() {
         const context = await fetchWelcomeContext();
         const systemPrompt = getDashboardSystemPrompt();
         const userPrompt = buildWelcomeUserPrompt(context);
-        const fullCode = await getEngineClient().dashboardCompletion(
-          "render",
-          systemPrompt,
+        const result = await renderDashboard(
+          (prompt) => getEngineClient().dashboardCompletion("render", systemPrompt, prompt),
           userPrompt,
         );
-        const validation = validateDashboardCode(fullCode);
-        const codeType = detectCodeType(validation.code);
 
-        if (!validation.valid) {
-          console.error("[dashboard-error] source=welcome-validation |", validation.errors.join("; "), "| code_length:", fullCode.length, "| first_100:", fullCode.slice(0, 100));
+        if (!result.ok) {
+          console.error("[dashboard-error] source=welcome-validation |", result.errors.join("; "));
           controller.enqueue(encoder.encode(
-            JSON.stringify({ error: "Generated dashboard failed quality check", errors: validation.errors })
+            JSON.stringify({ error: "Generated dashboard failed quality check", errors: result.errors })
           ));
         } else {
-          const sanitized = DOMPurify.sanitize(validation.code, SANITIZE_CONFIG);
           controller.enqueue(encoder.encode(
-            JSON.stringify({ html: sanitized, type: codeType, sanitized: true })
+            JSON.stringify({ html: result.html, type: detectCodeType(result.html), sanitized: true })
           ));
         }
       } catch {

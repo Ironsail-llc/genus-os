@@ -6,6 +6,7 @@ import {
   bridgeJwtCallback,
   bridgeSessionCallback,
   publicBridgeSessionCallback,
+  resetBridgeRefreshCacheForTests,
   signInAllowed,
 } from "@/lib/auth";
 
@@ -423,6 +424,7 @@ describe("the local provider asks the bridge, not the environment", () => {
 
 describe("the mfa-setup hint across a token refresh", () => {
   afterEach(() => {
+    resetBridgeRefreshCacheForTests();
     vi.unstubAllEnvs();
     vi.unstubAllGlobals();
     vi.resetModules();
@@ -482,5 +484,76 @@ describe("the mfa-setup hint across a token refresh", () => {
       } as JWT,
     });
     expect(token.mfaSetupRequired).toBe(true);
+  });
+});
+
+describe("concurrent refresh of one session", () => {
+  const rotated = {
+    access_token: "rotated-access-token",
+    refresh_token: "rotated-refresh-token",
+    user: {
+      id: "user-1",
+      email: "operator@example.com",
+      display_name: "Test Operator",
+      role: "owner",
+      tenant_id: "default",
+    },
+  };
+  const expired = (refresh: string): JWT => ({
+    bridgeAccess: "expired-access-token",
+    bridgeRefresh: refresh,
+    accessExpiresAt: 0,
+    role: "owner",
+    tenantId: "default",
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    resetBridgeRefreshCacheForTests();
+  });
+
+  // The bridge refresh token is single-use. A page that fires several requests
+  // as the access token expires sent the same refresh token several times: one
+  // won, the rest got 401 and wiped the role from their cookie — and whichever
+  // cookie landed last decided whether the operator's sidebar (Goals, Memory,
+  // Settings…) silently vanished.
+  it("shares one bridge refresh among simultaneous requests", async () => {
+    const fetchMock = vi.fn(async () => {
+      await new Promise((r) => setTimeout(r, 10));
+      return response(true, rotated);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const results = await Promise.all(
+      [1, 2, 3, 4].map(() => bridgeJwtCallback({ token: expired("shared-refresh-token") })),
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    for (const token of results) {
+      expect(token.role).toBe("owner");
+      expect(token.bridgeRefresh).toBe("rotated-refresh-token");
+      expect(token.bridgeAuthError).toBeUndefined();
+    }
+  });
+
+  it("gives a request that still carries the old cookie the same rotation", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(response(true, rotated));
+    vi.stubGlobal("fetch", fetchMock);
+    await bridgeJwtCallback({ token: expired("late-refresh-token") });
+    const late = await bridgeJwtCallback({ token: expired("late-refresh-token") });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(late.role).toBe("owner");
+    expect(late.bridgeAccess).toBe("rotated-access-token");
+  });
+
+  it("does not remember a failed refresh", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(response(false))
+      .mockResolvedValueOnce(response(true, rotated));
+    vi.stubGlobal("fetch", fetchMock);
+    const failed = await bridgeJwtCallback({ token: expired("flaky-refresh-token") });
+    expect(failed.bridgeAuthError).toBe("BridgeRefreshFailed");
+    const retried = await bridgeJwtCallback({ token: expired("flaky-refresh-token") });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(retried.role).toBe("owner");
   });
 });

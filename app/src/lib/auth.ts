@@ -16,6 +16,7 @@
  * the bridge credential before allowing private traffic.
  */
 
+import { createHash } from "node:crypto";
 import NextAuth, { CredentialsSignin } from "next-auth";
 import type { NextAuthConfig, Profile, Session, User } from "next-auth";
 import type { JWT } from "next-auth/jwt";
@@ -193,6 +194,43 @@ async function bridgeRefresh(refreshToken: string): Promise<SsoResult | null> {
   }
 }
 
+/**
+ * The bridge refresh token is single-use, but one page fires several requests
+ * at once — so as the access token expires they all present the same refresh
+ * token. Unshared, one won and the rest got 401 and wiped the role from their
+ * cookie; whichever cookie the browser kept last decided whether the operator
+ * silently lost every operator view. One refresh per token is shared by every
+ * concurrent caller, and its success is kept briefly for requests still
+ * carrying the old cookie. Failures are not kept, so a retry can recover.
+ */
+const REFRESH_REUSE_MS = 60_000;
+const sharedRefreshes = new Map<string, { result: Promise<SsoResult | null>; at: number }>();
+
+function refreshKey(refreshToken: string): string {
+  return createHash("sha256").update(refreshToken).digest("hex");
+}
+
+function sharedBridgeRefresh(refreshToken: string): Promise<SsoResult | null> {
+  const now = Date.now();
+  for (const [key, entry] of sharedRefreshes) {
+    if (now - entry.at > REFRESH_REUSE_MS) sharedRefreshes.delete(key);
+  }
+  const key = refreshKey(refreshToken);
+  const existing = sharedRefreshes.get(key);
+  if (existing) return existing.result;
+  const result = bridgeRefresh(refreshToken).then((refreshed) => {
+    if (!refreshed) sharedRefreshes.delete(key);
+    return refreshed;
+  });
+  sharedRefreshes.set(key, { result, at: now });
+  return result;
+}
+
+/** Test seam: forget every shared refresh. */
+export function resetBridgeRefreshCacheForTests(): void {
+  sharedRefreshes.clear();
+}
+
 function applyBridgeTokens(token: JWT, result: SsoResult): JWT {
   token.bridgeAccess = result.access_token;
   token.bridgeRefresh = result.refresh_token;
@@ -295,7 +333,7 @@ export async function bridgeJwtCallback({
 
   if (Date.now() <= token.accessExpiresAt) return token;
 
-  const refreshed = await bridgeRefresh(token.bridgeRefresh);
+  const refreshed = await sharedBridgeRefresh(token.bridgeRefresh);
   if (!refreshed) {
     return invalidateBridgeToken(token, "BridgeRefreshFailed");
   }
