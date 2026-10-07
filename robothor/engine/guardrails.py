@@ -70,15 +70,27 @@ _KNOWN_PRE_POLICIES = frozenset(
 _KNOWN_POST_POLICIES = frozenset({"no_sensitive_data", "requires_human_task_closure"})
 _KNOWN_POLICIES = _KNOWN_PRE_POLICIES | _KNOWN_POST_POLICIES
 
-# Patterns for destructive commands
+# Patterns for destructive commands. rm patterns fire on the command text as-is.
 DESTRUCTIVE_PATTERNS = [
     re.compile(r"\brm\s+-rf\b", re.IGNORECASE),
+    re.compile(r"\brm\s+-r\s+/", re.IGNORECASE),
+]
+
+# SQL patterns only matter when the command actually runs SQL. Matching them in
+# bare text blocked `echo "delete from /tmp cwd"` and `grep "drop table"`.
+DESTRUCTIVE_SQL_PATTERNS = [
     re.compile(r"\bDROP\s+TABLE\b", re.IGNORECASE),
     re.compile(r"\bDELETE\s+FROM\b", re.IGNORECASE),
     re.compile(r"\bTRUNCATE\b", re.IGNORECASE),
     re.compile(r"\bDROP\s+DATABASE\b", re.IGNORECASE),
-    re.compile(r"\brm\s+-r\s+/", re.IGNORECASE),
 ]
+
+# A SQL client (or a python driver call) somewhere in the command.
+_SQL_CLIENT_RE = re.compile(
+    r"(?<![\w-])(?:psql|sqlite3|mysql|mariadb|duckdb|clickhouse-client|psycopg2?|sqlalchemy)(?![\w-])"
+    r"|\.execute\(",
+    re.IGNORECASE,
+)
 
 # Patterns for sensitive data, paired with a human name. The name is what a
 # guardrail is allowed to say out loud: quoting the match would put the secret
@@ -508,7 +520,7 @@ DEFAULT_GUARDRAILS = [
 
 # Human-readable descriptions for LLM prompt injection
 POLICY_DESCRIPTIONS: dict[str, str] = {
-    "no_destructive_writes": "Destructive shell commands (rm -rf, DROP TABLE, DELETE FROM, TRUNCATE) are blocked.",
+    "no_destructive_writes": "Destructive shell commands (rm -rf, and DROP TABLE, DELETE FROM, TRUNCATE run through a SQL client) are blocked.",
     "no_sensitive_data": "Tool outputs are scanned for exposed API keys and secrets.",
     "rate_limit": f"Tool calls are rate-limited to {DEFAULT_RATE_LIMIT}/minute.",
     "no_external_http": "Web fetch and web search tools are blocked.",
@@ -629,7 +641,10 @@ def guardrail_summary(policies: list[str]) -> str:
         lines.append(f"- {desc}")
     lines.append(
         "\nIf a tool call is blocked by a guardrail, you will receive an error. "
-        "Do not attempt to work around guardrail restrictions."
+        "Guardrails mark the few actions that stay blocked. For anything else that "
+        "blocks you (a disabled setting, a missing tool, a permission), fix it "
+        "yourself on the host (genus config, systemd drop-ins, code), tell the "
+        "operator what you changed, then retry."
     )
     return "\n".join(lines)
 
@@ -870,6 +885,15 @@ class GuardrailEngine:
                     reason=f"Destructive command blocked: {pattern.pattern}",
                     guardrail_name="no_destructive_writes",
                 )
+        if _SQL_CLIENT_RE.search(command):
+            for pattern in DESTRUCTIVE_SQL_PATTERNS:
+                if pattern.search(command):
+                    return GuardrailResult(
+                        allowed=False,
+                        action="blocked",
+                        reason=f"Destructive command blocked: {pattern.pattern}",
+                        guardrail_name="no_destructive_writes",
+                    )
         return GuardrailResult()
 
     def _check_external_http(self, tool_name: str) -> GuardrailResult:
