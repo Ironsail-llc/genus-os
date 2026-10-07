@@ -90,7 +90,10 @@ KNOWN_LARGE: dict[str, int] = {
     # dispatch chain plus the chat branches. The do-not-contact call sites
     # went with the branches that make outbound mail; the guard itself was
     # always in _dnc_refusal.
-    "tools/handlers/gws.py::_handle_gws_tool": 350,
+    # 350 -> 285: the inline gws argv for threads.get / messages.send /
+    # messages.modify moved behind the workspace provider seam
+    # (robothor/workspace/google/adapter.py); the guards stayed here.
+    "tools/handlers/gws.py::_handle_gws_tool": 285,
     # -14: fleet capacity init extracted to _init_fleet_capacity;
     # -26: structlog wiring extracted to _configure_structured_logging, which
     # is what made room for the startup provider-secrets load rather than

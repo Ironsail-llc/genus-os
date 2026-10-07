@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import logging
 import os
 import re
 import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor
-from html.parser import HTMLParser
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -20,15 +18,37 @@ from robothor.engine.tools.constants import (
     CALENDAR_UPDATE_TOOL,
     CALENDAR_WRITE_TOOLS,
     CHAT_SEND_TOOLS,
+    CHAT_TOOLS,
     MAIL_WRITE_TOOLS,
     MAX_TOOL_OUTPUT_CHARS,
     WORKSPACE_TOOLS,
 )
+from robothor.workspace.bridge import bind_engine_loop
+
+# The Gmail parsers live with the Google adapter now (pure, provider-side). The
+# names stay importable from here: autonomy/mailbox.py, autonomy/verification.py
+# and the tests reach them through this module.
+from robothor.workspace.google.gmail_parse import (  # noqa: F401 - re-exported
+    _decode_b64,
+    _extract_attachments,
+    _extract_body,
+    _header_map,
+    _html_to_text,
+    _HtmlToText,
+    _shape_envelope,
+    _shape_message,
+    _strip_non_content_regions,
+    _walk_parts,
+)
+from robothor.workspace.query import parse_query
+from robothor.workspace.types import CalendarRef, as_calendar_ref
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterator
+    from collections.abc import Callable
 
     from robothor.engine.tools.dispatch import ToolContext
+    from robothor.workspace.protocols import BlockingCalendar, BlockingMail, CalendarProvider
+    from robothor.workspace.types import EventQuery
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +130,50 @@ ROBOTHOR_EMAIL = _resolve_robothor_email()
 _EMAIL_RE = re.compile(r"[\w.+-]+@[\w.-]+\.\w+")
 
 HANDLERS: dict[str, Any] = {}
+
+
+# ── The transport seam ─────────────────────────────────────────────────
+# Every mail and calendar call below goes through the workspace provider the
+# `workspace_provider` setting selects (Google, over the gws CLI, by default).
+# Only TRANSPORT moves behind it: every guard in this module — do-not-contact,
+# no-auto, dedup, duplicate-reply, reply-all assembly, CRM write-through,
+# benchmark refusal — stays here and runs before any provider is called.
+# These handlers run in a worker thread, so they use the provider's
+# synchronous face (`robothor.workspace.bridge.blocking`).
+
+
+def _mail() -> BlockingMail:
+    from robothor.workspace import get_workspace
+    from robothor.workspace.bridge import blocking
+
+    mail: BlockingMail = blocking(get_workspace().mail)
+    return mail
+
+
+def _calendar_provider() -> CalendarProvider:
+    from robothor.workspace import get_workspace
+
+    return get_workspace().calendar
+
+
+def _calendar() -> BlockingCalendar:
+    from robothor.workspace.bridge import blocking
+
+    calendar: BlockingCalendar = blocking(_calendar_provider())
+    return calendar
+
+
+def _workspace_unavailable(tenant_id: str | None) -> dict[str, Any] | None:
+    """The refusal when the configured provider cannot serve mail/calendar yet."""
+    from robothor.workspace import get_workspace
+    from robothor.workspace.bridge import error_result
+    from robothor.workspace.errors import WorkspaceError
+
+    try:
+        get_workspace(tenant_id)
+    except WorkspaceError as exc:
+        return error_result(exc)
+    return None
 
 
 # ── Contact 360 write-through helpers ────────────────────────────────────────
@@ -518,7 +582,13 @@ class _InvalidCalendarError(ValueError):
 
 
 def _resolve_calendar(args: dict[str, Any]) -> tuple[str, str]:
-    """``(calendar id, kind)`` for a calendar tool call. Kind is the honest half.
+    """``(calendar id, kind)`` -- :func:`_resolve_calendar_ref` as a pair."""
+    ref = _resolve_calendar_ref(args)
+    return ref.calendar_id, ref.kind
+
+
+def _resolve_calendar_ref(args: dict[str, Any]) -> CalendarRef:
+    """Which calendar a calendar tool call targets. Kind is the honest half.
 
     THE defect of 2026-09-16: ``calendar_id`` defaulted to ``"primary"``, and
     ``primary`` is the calendar of whichever account the ``gws`` CLI is signed
@@ -535,32 +605,37 @@ def _resolve_calendar(args: dict[str, Any]) -> tuple[str, str]:
     The operator's address comes from ``owner.yaml`` through
     ``robothor.owner_config`` — never a literal, which would be instance data in
     platform code. With no owner configured there is no operator calendar to
-    write to, so it degrades to ``primary`` and SAYS ``own``: the caller is told
-    which calendar it got, and can say so.
+    write to, so it degrades to the assistant's own calendar and SAYS ``own``:
+    the caller is told which calendar it got, and can say so.
+
+    The provider names the calendars (``resolve``): for Google, "own" is
+    ``primary``, the signed-in account's calendar.
     """
     explicit = str(args.get("calendar_id") or "").strip()
     owner_email = _operator_calendar_address()
     if explicit:
+        # The id the caller wrote goes through as written; `primary` is the
+        # schema's word for this account's own calendar.
         if explicit.lower() == "primary":
-            return explicit, "own"
+            return CalendarRef(explicit, "own")
         if owner_email and explicit.lower() == owner_email:
-            return explicit, "operator"
-        return explicit, "other"
+            return CalendarRef(explicit, "operator", mailbox=owner_email)
+        return CalendarRef(explicit, "other")
 
     raw = args.get("calendar")
     choice = "operator" if raw is None or raw == "" else str(raw).strip().lower()
     if choice not in _CALENDAR_CHOICES:
         raise _InvalidCalendarError(choice)
     if choice == "own":
-        return "primary", "own"
+        return _calendar().resolve("own")
     if owner_email:
-        return owner_email, "operator"
+        return _calendar().resolve("operator", address=owner_email)
     logger.warning(
         "calendar=%r requested but no operator identity is configured "
         "(~/.robothor/owner.yaml); falling back to this account's own calendar",
         choice,
     )
-    return "primary", "own"
+    return _calendar().resolve("own")
 
 
 def _recipients_for(args: dict[str, Any], calendar_kind: str) -> list[str]:
@@ -715,7 +790,7 @@ def _find_duplicate_event(
     summary: str,
     start: str,
     attendees: list[str],
-    calendar_id: str,
+    calendar_id: CalendarRef | str,
     owner_email: str,
     window_days: int = 14,
 ) -> dict[str, Any] | None:
@@ -734,7 +809,6 @@ def _find_duplicate_event(
     Silent on any list failure: dedup is best-effort, and an event the operator
     asked for is worth more than a duplicate they did not.
     """
-    import json as _json
     from datetime import datetime, timedelta
 
     try:
@@ -746,15 +820,16 @@ def _find_duplicate_event(
     time_min = (base - timedelta(days=window_days)).isoformat()
     time_max = (base + timedelta(days=window_days)).isoformat()
 
-    cal_params = {
-        "calendarId": calendar_id,
-        "timeMin": time_min,
-        "timeMax": time_max,
-        "singleEvents": True,
-        "orderBy": "startTime",
-        "maxResults": 250,
-    }
-    listed = _run_gws(["calendar", "events", "list", "--params", _json.dumps(cal_params)])
+    listed = _calendar().list(
+        as_calendar_ref(calendar_id),
+        {
+            "time_min": time_min,
+            "time_max": time_max,
+            "single_events": True,
+            "order_by": "startTime",
+            "max_results": 250,
+        },
+    )
     if not isinstance(listed, dict) or "error" in listed:
         logger.debug("gws_calendar_create dedup: list failed — skipping (result=%s)", listed)
         return None
@@ -819,416 +894,6 @@ def run_gws(args: list[str], timeout: int = 30) -> dict[str, Any]:
     return _run_gws(args, timeout)
 
 
-# ── Turning a Gmail API message into something an agent can read ──────
-#
-# The Gmail API returns a MIME tree with every body base64url-encoded, which is
-# the correct wire format and an unreadable tool result. Everything below
-# converts one of those into flat fields, once, in the handler — the place that
-# knows the cap it has to fit inside.
-
-
-class _HtmlToText(HTMLParser):
-    """The smallest HTML-to-text converter that does not lie.
-
-    Stdlib only, on purpose: an HTML-only email is a routine thing (an invoice,
-    a calendar invite, anything sent by a marketing system) and pulling a
-    parser dependency into the engine for it would be a supply-chain decision
-    made by a mail format. It drops ``script`` and ``style`` contents — those
-    are not the email, and handing a model the contents of a ``<script>`` tag
-    out of untrusted mail is an injection surface — turns block-level tags into
-    newlines, and unescapes entities (``convert_charrefs`` does that for us).
-
-    **Suppression is a STACK of open element names, not a depth counter.**
-
-    The counter only ever came down on a matching ``handle_endtag``, so any
-    suppressing element that was never explicitly closed pinned it above zero
-    for the rest of the document and the body came back empty. Three ways that
-    happens in ordinary mail, none of them exotic:
-
-    * ``</head>`` and ``</title>`` are **omissible in HTML5** and real mail
-      generators omit them. Valid HTML5 with no ``</head>`` returned "".
-    * a generator self-closes ``<style/>``, ``<script/>`` or ``<head/>``
-      (XHTML habits survive in mail templates).
-    * the mail is simply malformed, which is the normal case here.
-
-    The first round of this fix exempted the void elements, which was one
-    trigger of the same bug rather than the bug. A stack fixes the class: a
-    region is closed by its own end tag, by an **implicit close** — a start tag
-    that cannot legally appear inside it, which is how HTML5 says ``<body>``
-    ends an unclosed ``<head>`` — or by the end of the document, at which point
-    whatever is still open has no content left to suppress anyway.
-
-    ``body_text: ""`` with ``body_chars: 0`` and ``body_truncated: false`` is
-    indistinguishable from a genuinely blank message, so the agent reports real
-    mail as empty. That is the one failure this converter exists to prevent.
-    """
-
-    #: Elements with no end tag (HTML5's void elements). ``HTMLParser`` reports
-    #: them through ``handle_starttag`` alone unless they are written
-    #: self-closing, so none of them may ever open a region.
-    _VOID = frozenset(
-        {
-            "area",
-            "base",
-            "br",
-            "col",
-            "embed",
-            "hr",
-            "img",
-            "input",
-            "link",
-            "meta",
-            "param",
-            "source",
-            "track",
-            "wbr",
-        }
-    )
-
-    #: Elements whose CONTENT is not the email.
-    _DROP = frozenset({"script", "style", "head", "title"})
-
-    _BREAK = frozenset(
-        {"br", "p", "div", "tr", "li", "h1", "h2", "h3", "h4", "h5", "h6", "table", "blockquote"}
-    )
-
-    #: Flow content: a start tag that cannot appear inside ``head`` or ``title``,
-    #: so seeing one means the unclosed element ended. ``body`` is the canonical
-    #: case — HTML5 says an omitted ``</head>`` is implied by it — but mail
-    #: generators also drop straight into a ``<table>`` or a ``<div>``.
-    _FLOW = frozenset(
-        {
-            "body",
-            "div",
-            "p",
-            "table",
-            "tbody",
-            "thead",
-            "tr",
-            "td",
-            "th",
-            "span",
-            "a",
-            "ul",
-            "ol",
-            "li",
-            "h1",
-            "h2",
-            "h3",
-            "h4",
-            "h5",
-            "h6",
-            "blockquote",
-            "center",
-            "font",
-            "article",
-            "section",
-            "main",
-            "header",
-            "footer",
-        }
-    )
-
-    #: What each suppressing element may legally contain. Anything outside it
-    #: implicitly closes the element. ``script`` and ``style`` contain only
-    #: character data, so nothing closes them but their own end tag — a start
-    #: tag inside one is script text, not markup.
-    _MAY_CONTAIN: dict[str, frozenset[str]] = {
-        "head": frozenset({"title", "meta", "link", "style", "script", "base", "noscript"}),
-        "title": frozenset(),
-    }
-
-    def __init__(self) -> None:
-        super().__init__(convert_charrefs=True)
-        self._chunks: list[str] = []
-        self._open: list[str] = []
-
-    @property
-    def _suppressed(self) -> bool:
-        return bool(self._open)
-
-    def _implicitly_close(self, tag: str) -> None:
-        """Pop any open region that ``tag`` cannot legally appear inside.
-
-        ``<body>`` after an unclosed ``<head>``, or any flow content after an
-        unclosed ``<title>``. Character-data elements (``script``, ``style``)
-        are never closed this way: their contents are text, not tags.
-        """
-        while self._open:
-            top = self._open[-1]
-            allowed = self._MAY_CONTAIN.get(top)
-            if allowed is None:
-                return  # script/style — only its own end tag closes it
-            if tag in allowed:
-                return
-            if tag in self._FLOW or tag == "body":
-                self._open.pop()
-                continue
-            return
-
-    def handle_starttag(self, tag: str, attrs: Any) -> None:
-        self._implicitly_close(tag)
-        if tag in self._VOID:
-            # Never opens a region. `br` is also in _BREAK and still breaks.
-            if tag in self._BREAK and not self._suppressed:
-                self._chunks.append("\n")
-            if tag == "img" and not self._suppressed:
-                self._emit_alt(attrs)
-            return
-        if tag in self._DROP:
-            self._open.append(tag)
-            return
-        if tag in self._BREAK and not self._suppressed:
-            self._chunks.append("\n")
-
-    def _emit_alt(self, attrs: Any) -> None:
-        """An image's ``alt`` text, when it has any.
-
-        A body that is one image returned an empty ``body_text`` — true, and
-        indistinguishable from the empty-body bug this parser was rewritten to
-        fix. ``alt`` is the sender's own description of the image and is the
-        only text such a mail has.
-
-        An EMPTY ``alt`` is skipped, not emitted: ``alt=""`` is the HTML
-        convention for "this image carries no meaning", and a marketing mail
-        with a spacer gif per row would otherwise fill the body with noise.
-        """
-        for name, value in attrs or ():
-            if name == "alt" and value and str(value).strip():
-                self._chunks.append(f"[image: {str(value).strip()}]")
-                return
-
-    def handle_startendtag(self, tag: str, attrs: Any) -> None:
-        """``<style/>``, ``<head/>``, ``<meta … />``.
-
-        A self-closing tag opens and closes in one token, so it must never push
-        a region. Delegating to ``handle_starttag`` — which is what the previous
-        version did, under a docstring claiming this exact property — pushed
-        ``style``/``script``/``head`` and lost the rest of the document.
-        """
-        self._implicitly_close(tag)
-        if tag in self._BREAK and not self._suppressed:
-            self._chunks.append("\n")
-
-    def handle_endtag(self, tag: str) -> None:
-        if tag in self._VOID:
-            return
-        if tag in self._DROP:
-            # Pop to and including this tag if it is open at all. An end tag
-            # for something never opened (`</style>` alone) is ignored.
-            if tag in self._open:
-                while self._open and self._open.pop() != tag:
-                    pass
-            return
-        if tag == "head":
-            self._open.clear()
-            return
-        if tag in self._BREAK and not self._suppressed:
-            self._chunks.append("\n")
-
-    def handle_data(self, data: str) -> None:
-        if not self._suppressed:
-            self._chunks.append(data)
-
-    def text(self) -> str:
-        joined = "".join(self._chunks).replace("\xa0", " ")
-        lines = [re.sub(r"[ \t]+", " ", line).strip() for line in joined.splitlines()]
-        return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
-
-
-#: Elements whose contents ``HTMLParser`` hands over as one blob of character
-#: data rather than parsing (``CDATA_CONTENT_ELEMENTS``, plus ``title``, which
-#: behaves the same way in practice). Inside one of these the parser stops
-#: seeing tags entirely, so an element that is never closed swallows the whole
-#: rest of the document — no ``handle_starttag`` for ``<body>`` ever arrives,
-#: and no amount of bookkeeping in the handler can recover.
-#:
-#: They are therefore removed BEFORE parsing, closed or not.
-_NON_CONTENT = "script|style|title|xmp|iframe|noembed|noframes"
-
-#: A properly closed one.
-_CLOSED_REGION_RE = re.compile(rf"<({_NON_CONTENT})\b[^>]*>.*?</\1\s*>", re.IGNORECASE | re.DOTALL)
-
-#: A self-closed one: ``<style/>``. It has no contents to remove, only a tag.
-_SELF_CLOSED_RE = re.compile(rf"<(?:{_NON_CONTENT}|head)\b[^>]*/\s*>", re.IGNORECASE)
-
-#: An opener with no matching close. It runs to whatever ends the head — or to
-#: the end of the document, which is the honest reading of "the author never
-#: closed it": everything after is inside the element as far as any parser is
-#: concerned, so the only question is where a HUMAN would say it stopped.
-_UNCLOSED_REGION_RE = re.compile(
-    rf"<(?:{_NON_CONTENT})\b[^>]*>.*?(?=</head\s*>|<body\b|\Z)",
-    re.IGNORECASE | re.DOTALL,
-)
-
-
-def _strip_non_content_regions(html: str) -> str:
-    """Remove script/style/title regions, whether or not they are closed.
-
-    This is what makes an unclosed ``<style>`` survivable. ``HTMLParser`` puts
-    those elements into character-data mode, so ``<html><head><style>p{x}</head>
-    <body><p>REAL PROSE</p>`` delivers the entire rest of the document as one
-    `handle_data` call with `style` still open, and the body comes back empty.
-    Every one of the seven triggers in the re-review is this shape or the
-    omitted-``</head>`` shape; the handler's stack fixes the second, and only a
-    pre-pass can fix the first.
-    """
-    html = _CLOSED_REGION_RE.sub(" ", html)
-    html = _SELF_CLOSED_RE.sub(" ", html)
-    return _UNCLOSED_REGION_RE.sub(" ", html)
-
-
-def _html_to_text(html: str) -> str:
-    """Readable text from an HTML email body. Never raises on bad markup."""
-    parser = _HtmlToText()
-    try:
-        parser.feed(_strip_non_content_regions(html))
-        parser.close()
-    except Exception as exc:  # noqa: BLE001 - malformed mail is the normal case
-        logger.debug("gws: HTML body could not be parsed (%s); falling back", exc)
-        return re.sub(r"<[^>]+>", " ", html).strip()
-    return parser.text()
-
-
-def _decode_b64(data: str) -> str:
-    """Decode one base64url MIME part. Never raises: a body that will not
-    decode is still a message with headers worth returning."""
-    if not data:
-        return ""
-    try:
-        padded = data + "=" * (-len(data) % 4)
-        raw = base64.urlsafe_b64decode(padded.encode("ascii"))
-    except Exception as exc:  # noqa: BLE001 - a mangled part is not a crash
-        logger.debug("gws: body part would not base64-decode (%s)", exc)
-        return ""
-    try:
-        return raw.decode("utf-8")
-    except UnicodeDecodeError:
-        return raw.decode("latin-1", errors="replace")
-
-
-def _walk_parts(payload: dict[str, Any]) -> Iterator[dict[str, Any]]:
-    """Every MIME part of a message, depth first, the payload itself included."""
-    yield payload
-    for part in payload.get("parts") or ():
-        if isinstance(part, dict):
-            yield from _walk_parts(part)
-
-
-def _extract_body(payload: dict[str, Any]) -> str:
-    """The message's text: ``text/plain`` if it has one, else its HTML as text.
-
-    Preferring plain text is not an aesthetic choice — the HTML alternative of
-    the same message is the same words wrapped in three times the characters,
-    and the budget is 2,500 of them.
-    """
-    plain: list[str] = []
-    html: list[str] = []
-    for part in _walk_parts(payload):
-        if part.get("filename"):
-            continue  # an attachment, not the message
-        mime = str(part.get("mimeType", ""))
-        data = str((part.get("body") or {}).get("data", ""))
-        if not data:
-            continue
-        if mime.startswith("text/plain"):
-            plain.append(_decode_b64(data))
-        elif mime.startswith("text/html"):
-            html.append(_decode_b64(data))
-    if plain:
-        return "\n".join(t for t in plain if t).strip()
-    if html:
-        return _html_to_text("\n".join(html))
-    return ""
-
-
-def _extract_attachments(payload: dict[str, Any]) -> list[dict[str, Any]]:
-    """Attachments by name, type and size. Never their bytes: one PDF would be
-    the whole result, and the agent has `analyze_pdf` for the contents."""
-    found: list[dict[str, Any]] = []
-    for part in _walk_parts(payload):
-        filename = str(part.get("filename") or "")
-        if not filename:
-            continue
-        body = part.get("body") or {}
-        found.append(
-            {
-                "filename": filename,
-                "mime_type": str(part.get("mimeType", "")),
-                "size_bytes": int(body.get("size") or 0),
-            }
-        )
-    return found
-
-
-def _header_map(payload: dict[str, Any]) -> dict[str, str]:
-    """Headers keyed lowercase. A message with no headers at all is a real
-    shape the API returns, and it must not take the tool down."""
-    out: dict[str, str] = {}
-    for header in payload.get("headers") or ():
-        if isinstance(header, dict) and "name" in header:
-            out[str(header["name"]).lower()] = str(header.get("value", ""))
-    return out
-
-
-def _shape_envelope(
-    message: dict[str, Any], *, max_header_chars: int | None = None
-) -> dict[str, Any]:
-    """The described-but-unread form: who, when, about what, and its labels.
-
-    ``max_header_chars`` bounds each header, for the search path: a ``To:``
-    addressed to a distribution list is unbounded in the API and one of them
-    used to consume the whole result budget. ``gws_gmail_get`` passes nothing
-    and keeps the headers whole — asking for one message is asking for all of
-    it.
-    """
-
-    def cut(value: str) -> str:
-        if max_header_chars is None or len(value) <= max_header_chars:
-            return value
-        return value[:max_header_chars] + "…"
-
-    payload = message.get("payload") or {}
-    headers = _header_map(payload)
-    return {
-        "id": str(message.get("id", "")),
-        "thread_id": str(message.get("threadId", "")),
-        "date": headers.get("date", ""),
-        "from": cut(headers.get("from", "")),
-        "to": cut(headers.get("to", "")),
-        "subject": cut(headers.get("subject", "")),
-        # NOT unescaped: `html.unescape` turns `&lt;script&gt;` back into real
-        # `<script>` markup, reconstructing from untrusted mail exactly what the
-        # body path deliberately strips. Gmail's snippet is already text with
-        # its entities escaped; leaving them escaped is both safe and readable.
-        "snippet": cut(str(message.get("snippet", ""))),
-        "labels": [str(label) for label in (message.get("labelIds") or [])],
-    }
-
-
-def _shape_message(message: dict[str, Any], *, max_chars: int) -> dict[str, Any]:
-    """One message, whole: envelope, cc, message-id, decoded body, attachments."""
-    payload = message.get("payload") or {}
-    headers = _header_map(payload)
-    shaped = _shape_envelope(message)
-    shaped["cc"] = headers.get("cc", "")
-    shaped["message_id"] = headers.get("message-id", "")
-
-    body = _extract_body(payload)
-    shaped["body_chars"] = len(body)
-    if max_chars >= 0 and len(body) > max_chars:
-        shaped["body_text"] = body[:max_chars]
-        shaped["body_truncated"] = True
-    else:
-        shaped["body_text"] = body
-        shaped["body_truncated"] = False
-
-    attachments = _extract_attachments(payload)
-    if attachments:
-        shaped["attachments"] = attachments
-    return shaped
-
-
 # ── gws_gmail_search / gws_gmail_get ──────────────────────────────────
 
 
@@ -1242,11 +907,8 @@ def _fetch_message(message_id: str, fmt: str) -> dict[str, Any]:
     broad except makes this hard to reach; that is what makes it fragile, not
     what makes it safe.
     """
-    import json as _json
-
-    params = {"userId": "me", "id": message_id, "format": fmt}
     try:
-        result = _run_gws(["gmail", "users", "messages", "get", "--params", _json.dumps(params)])
+        result = _mail().get_message(message_id, fmt=fmt)
     except Exception as exc:  # noqa: BLE001 - one bad id must not lose the search
         logger.warning("gws: metadata fetch for %s raised %s", message_id, type(exc).__name__)
         return {
@@ -1275,7 +937,7 @@ def _gmail_search(args: dict[str, Any]) -> dict[str, Any]:
     One metadata call per id, a few at a time, is the cost of that. It is paid
     once per search instead of once per id per turn.
     """
-    import json as _json
+    import contextvars
 
     query = str(args.get("query", ""))
     try:
@@ -1284,8 +946,8 @@ def _gmail_search(args: dict[str, Any]) -> dict[str, Any]:
         requested = 10
     max_results = max(1, min(requested, GMAIL_SEARCH_MAX_RESULTS))
 
-    params = {"userId": "me", "q": query, "maxResults": max_results}
-    listed = _run_gws(["gmail", "users", "messages", "list", "--params", _json.dumps(params)])
+    mail = _mail()
+    listed = mail.search(parse_query(query), max_results=max_results)
     if not isinstance(listed, dict):
         return {"error": "gws returned an unexpected shape for a message list"}
     if "error" in listed:
@@ -1296,8 +958,11 @@ def _gmail_search(args: dict[str, Any]) -> dict[str, Any]:
         return {"query": query, "count": 0, "messages": [], "truncated": False}
 
     ids = [str(m.get("id", "")) for m in stubs]
+    # Pool threads start with an empty context; each fetch gets a copy of this
+    # one, so a provider that needs the engine loop (bridge.py) still finds it.
+    parent = contextvars.copy_context()
     with ThreadPoolExecutor(max_workers=GMAIL_METADATA_CONCURRENCY) as pool:
-        raw = list(pool.map(lambda i: _fetch_message(i, "metadata"), ids))
+        raw = list(pool.map(lambda i: parent.copy().run(_fetch_message, i, "metadata"), ids))
 
     described: list[dict[str, Any]] = []
     for stub, message in zip(stubs, raw, strict=False):
@@ -1311,7 +976,7 @@ def _gmail_search(args: dict[str, Any]) -> dict[str, Any]:
                 }
             )
             continue
-        envelope = _shape_envelope(message, max_header_chars=GMAIL_SEARCH_HEADER_MAX_CHARS)
+        envelope = mail.shape_envelope(message, max_header_chars=GMAIL_SEARCH_HEADER_MAX_CHARS)
         # The ids we asked with are authoritative: a metadata response that
         # omits them still describes the message we listed.
         if not envelope["id"]:
@@ -1497,8 +1162,6 @@ def _gmail_get(args: dict[str, Any]) -> dict[str, Any]:
     against it: ``metadata`` and ``minimal`` return the envelope only, and the
     default ``full`` decodes the body.
     """
-    import json as _json
-
     message_id = str(args.get("message_id", "") or "")
     thread_id = str(args.get("thread_id", "") or "")
     fmt = str(args.get("format", "full") or "full").strip().lower()
@@ -1525,9 +1188,9 @@ def _gmail_get(args: dict[str, Any]) -> dict[str, Any]:
             "hint": "invalid_params: get the id from gws_gmail_search",
         }
 
+    mail = _mail()
     if thread_id:
-        params = {"userId": "me", "id": thread_id, "format": "full" if with_body else "metadata"}
-        raw = _run_gws(["gmail", "users", "threads", "get", "--params", _json.dumps(params)])
+        raw = mail.get_thread(thread_id, fmt="full" if with_body else "metadata")
         if not isinstance(raw, dict):
             return {"error": "gws returned an unexpected shape for a thread"}
         if "error" in raw:
@@ -1539,13 +1202,12 @@ def _gmail_get(args: dict[str, Any]) -> dict[str, Any]:
             max(GMAIL_THREAD_MIN_BODY_CHARS, max_chars // max(1, len(messages))) if with_body else 0
         )
         shaped = [
-            _shape_message(m, max_chars=per_message) if with_body else _shape_envelope(m)
+            mail.shape_message(m, max_chars=per_message) if with_body else mail.shape_envelope(m)
             for m in messages
         ]
         return _fit_thread(thread_id or str(raw.get("id", "")), shaped)
 
-    params = {"userId": "me", "id": message_id, "format": "full" if with_body else "metadata"}
-    raw = _run_gws(["gmail", "users", "messages", "get", "--params", _json.dumps(params)])
+    raw = mail.get_message(message_id, fmt="full" if with_body else "metadata")
     if not isinstance(raw, dict):
         return {"error": "gws returned an unexpected shape for a message"}
     if "error" in raw:
@@ -1557,15 +1219,15 @@ def _gmail_get(args: dict[str, Any]) -> dict[str, Any]:
         # `format=metadata`, which the model chooses from a schema enum. It is
         # the "same message, two entry points, opposite answers" defect the
         # thread path was fixed for, in a third entry point.
-        return _fit_one_message(_shape_envelope(raw))
-    message = _shape_message(raw, max_chars=max_chars)
+        return _fit_one_message(mail.shape_envelope(raw))
+    message = mail.shape_message(raw, max_chars=max_chars)
     # A single pathological body (a 3 MB newsletter) can still overflow once
     # the envelope is counted; tighten until it fits rather than hand the
     # engine something it will cut in the middle of a word.
     budget = max_chars
     while budget > GMAIL_THREAD_MIN_BODY_CHARS and not _fits(message):
         budget //= 2
-        message = _shape_message(raw, max_chars=budget)
+        message = mail.shape_message(raw, max_chars=budget)
     return _fit_one_message(message)
 
 
@@ -2080,13 +1742,11 @@ def _log_dnc_block(
 
 def _calendar_list(args: dict[str, Any]) -> dict[str, Any]:
     """Read a calendar. Says whose in the result — see `_resolve_calendar`."""
-    import json as _json
-
     time_min = args.get("time_min", "")
     if not time_min:
         return {"error": "time_min is required"}
     try:
-        calendar_id, calendar_kind = _resolve_calendar(args)
+        ref = _resolve_calendar_ref(args)
     except _InvalidCalendarError as bad:
         return bad.as_result()
     try:
@@ -2095,22 +1755,21 @@ def _calendar_list(args: dict[str, Any]) -> dict[str, Any]:
         # A model emitting "max_results": null or "20" is ordinary, and raising
         # TypeError at it loses the whole call over a coercible argument.
         max_results = 20
-    cal_params: dict[str, Any] = {
-        "calendarId": calendar_id,
-        "timeMin": time_min,
-        "singleEvents": True,
-        "orderBy": "startTime",
-        "maxResults": max(1, min(max_results, 250)),
+    query: EventQuery = {
+        "time_min": time_min,
+        "single_events": True,
+        "order_by": "startTime",
+        "max_results": max(1, min(max_results, 250)),
     }
     time_max = args.get("time_max")
     if time_max:
-        cal_params["timeMax"] = time_max
-    listed = _run_gws(["calendar", "events", "list", "--params", _json.dumps(cal_params)])
+        query["time_max"] = time_max
+    listed = _calendar().list(ref, query)
     if isinstance(listed, dict) and "error" not in listed:
         # "Nothing on your calendar today" is a different sentence from
         # "nothing on MY calendar today", and the agent could not tell them
         # apart. Now every read says which one it read.
-        listed["calendar"] = _calendar_block(calendar_id, calendar_kind)
+        listed["calendar"] = _calendar_block(ref.calendar_id, ref.kind)
     return listed
 
 
@@ -2123,8 +1782,6 @@ def _calendar_create(
     things whose absence let an itinerary be created on the assistant's own
     calendar, with the operator as an attendee, and nobody told.
     """
-    import json as _json
-
     summary = args.get("summary", "")
     start = args.get("start", "")
     end = args.get("end", "")
@@ -2136,9 +1793,10 @@ def _calendar_create(
     # has reached the CLI at this point, so a bad `calendar` still refuses
     # before any read or write.
     try:
-        calendar_id, calendar_kind = _resolve_calendar(args)
+        ref = _resolve_calendar_ref(args)
     except _InvalidCalendarError as bad:
         return bad.as_result()
+    calendar_id, calendar_kind = ref.calendar_id, ref.kind
     owner_email = _operator_calendar_address()
 
     # Google emails every attendee on insert and on every edit, so this is
@@ -2166,7 +1824,7 @@ def _calendar_create(
             summary=summary,
             start=start,
             attendees=attendee_emails,
-            calendar_id=calendar_id,
+            calendar_id=ref,
             owner_email=owner_email,
         )
         if dup is not None:
@@ -2243,27 +1901,17 @@ def _calendar_create(
             }
         }
 
-    cal_params: dict[str, Any] = {"calendarId": calendar_id}
-    if with_meet:
-        cal_params["conferenceDataVersion"] = 1
     # Without this Google mails nobody. An event on a calendar the attendee
     # does not read, with no invitation, is an event that did not happen as
     # far as the attendee is concerned — which is exactly what the operator
     # experienced on 2026-09-16.
     send_updates = _send_updates() if attendees else "none"
-    if attendees:
-        cal_params["sendUpdates"] = send_updates
-
-    cal_result = _run_gws(
-        [
-            "calendar",
-            "events",
-            "insert",
-            "--params",
-            _json.dumps(cal_params),
-            "--json",
-            _json.dumps(event_body),
-        ]
+    cal_result = _calendar().create(
+        ref,
+        event_body,
+        conference=bool(with_meet),
+        # No attendees: no `sendUpdates` on the wire at all.
+        send_updates=send_updates if attendees else None,
     )
     _record_calendar_event(result=cal_result if isinstance(cal_result, dict) else {})
     if isinstance(cal_result, dict) and "error" not in cal_result:
@@ -2292,36 +1940,20 @@ def _calendar_create(
 
 def _calendar_delete(args: dict[str, Any]) -> dict[str, Any]:
     """Remove an event and email the attendees a cancellation."""
-    import json as _json
-
     event_id = args.get("event_id", "")
     if not event_id:
         return {"error": "event_id is required"}
     try:
-        calendar_id, calendar_kind = _resolve_calendar(args)
+        ref = _resolve_calendar_ref(args)
     except _InvalidCalendarError as bad:
         return bad.as_result()
     # A cancellation nobody is told about is not a cancellation: the attendees
     # keep the slot and turn up. Hoisted, because the flag store caches for 5s
     # and reading it twice let the report contradict the call it described.
     send_updates = _send_updates()
-    deleted = _run_gws(
-        [
-            "calendar",
-            "events",
-            "delete",
-            "--params",
-            _json.dumps(
-                {
-                    "calendarId": calendar_id,
-                    "eventId": event_id,
-                    "sendUpdates": send_updates,
-                }
-            ),
-        ]
-    )
+    deleted = _calendar().delete(ref, event_id, send_updates=send_updates)
     if isinstance(deleted, dict) and "error" not in deleted:
-        deleted["calendar"] = _calendar_block(calendar_id, calendar_kind)
+        deleted["calendar"] = _calendar_block(ref.calendar_id, ref.kind)
         deleted["event_id"] = event_id
         # What was ASKED of Google, not a claim about who it mailed. The
         # handler never reads the event, so it does not know whether it had
@@ -2428,11 +2060,11 @@ def _calendar_update(
     if refusal is not None:
         return refusal
     try:
-        calendar_id, kind = _resolve_calendar(args)
+        ref = _resolve_calendar_ref(args)
     except _InvalidCalendarError as bad_calendar:
         return bad_calendar.as_result()
     result = update_event(
-        calendar_id,
+        ref,
         event_id.strip(),
         add=add,
         remove=remove,
@@ -2444,8 +2076,9 @@ def _calendar_update(
         screen=lambda *recipients: _dnc_refusal(
             tool_name, *recipients, run_id=run_id, tenant_id=tenant_id
         ),
+        provider=_calendar_provider(),
     )
-    return {**result, "calendar": _calendar_block(calendar_id, kind)}
+    return {**result, "calendar": _calendar_block(ref.calendar_id, ref.kind)}
 
 
 def _calendar_add_attendees(
@@ -2496,11 +2129,11 @@ def _calendar_respond(
     if comment is not None and not isinstance(comment, str):
         return {"error": "comment must be a string"}
     try:
-        calendar_id, kind = _resolve_calendar(args)
+        ref = _resolve_calendar_ref(args)
     except _InvalidCalendarError as bad_calendar:
         return bad_calendar.as_result()
     result = respond(
-        calendar_id,
+        ref,
         event_id.strip(),
         str(response),
         comment=comment,
@@ -2509,8 +2142,9 @@ def _calendar_respond(
         screen=lambda *recipients: _dnc_refusal(
             "gws_calendar_respond", *recipients, run_id=run_id, tenant_id=tenant_id
         ),
+        provider=_calendar_provider(),
     )
-    return {**result, "calendar": _calendar_block(calendar_id, kind)}
+    return {**result, "calendar": _calendar_block(ref.calendar_id, ref.kind)}
 
 
 def _with_evidence_reference(result: dict[str, Any]) -> dict[str, Any]:
@@ -2572,14 +2206,7 @@ def _handle_gws_tool(
         # NOTE: Do NOT include metadataHeaders here — gws CLI v0.8.0 does not
         # correctly serialize array query params, causing the API to return 0
         # headers per message.  Fetching all headers (format=metadata only) works.
-        fetch_params = {
-            "userId": "me",
-            "id": thread_id,
-            "format": "metadata",
-        }
-        thread_data = _run_gws(
-            ["gmail", "users", "threads", "get", "--params", _json.dumps(fetch_params)]
-        )
+        thread_data = _mail().get_thread(thread_id, fmt="metadata")
         if isinstance(thread_data, str):
             try:
                 thread_data = _json.loads(thread_data)
@@ -2656,21 +2283,7 @@ def _handle_gws_tool(
             msg["References"] = message_id_header
 
         raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("ascii")
-        reply_json: dict[str, Any] = {"raw": raw, "threadId": thread_id}
-
-        reply_result = _run_gws(
-            [
-                "gmail",
-                "users",
-                "messages",
-                "send",
-                "--params",
-                '{"userId":"me"}',
-                "--json",
-                _json.dumps(reply_json),
-            ],
-            timeout=30,
-        )
+        reply_result = _mail().reply(raw, thread_id=thread_id)
         _record_sent_email(
             result=reply_result if isinstance(reply_result, dict) else {},
             to=", ".join(to_addresses),
@@ -2707,22 +2320,7 @@ def _handle_gws_tool(
         # Guard: prevent duplicate replies to the same thread
         if thread_id:
             try:
-                # NOTE: Do NOT include metadataHeaders — gws CLI bug (see gws_gmail_reply).
-                check_params = {
-                    "userId": "me",
-                    "id": thread_id,
-                    "format": "metadata",
-                }
-                thread_data = _run_gws(
-                    [
-                        "gmail",
-                        "users",
-                        "threads",
-                        "get",
-                        "--params",
-                        _json.dumps(check_params),
-                    ]
-                )
+                thread_data = _mail().get_thread(thread_id, fmt="metadata")
                 if isinstance(thread_data, str):
                     thread_data = _json.loads(thread_data)
                 if isinstance(thread_data, dict):
@@ -2768,23 +2366,7 @@ def _handle_gws_tool(
             msg["References"] = in_reply_to
 
         raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("ascii")
-        send_json: dict[str, Any] = {"raw": raw}
-        if thread_id:
-            send_json["threadId"] = thread_id
-
-        result = _run_gws(
-            [
-                "gmail",
-                "users",
-                "messages",
-                "send",
-                "--params",
-                '{"userId":"me"}',
-                "--json",
-                _json.dumps(send_json),
-            ],
-            timeout=30,
-        )
+        result = _mail().send(raw, thread_id=thread_id)
 
         # Add warning to result if threading was likely intended but missing
         if (
@@ -2814,25 +2396,9 @@ def _handle_gws_tool(
             return {"error": "message_id is required"}
         add_labels = args.get("add_labels", [])
         remove_labels = args.get("remove_labels", [])
-        modify_body: dict[str, Any] = {}
-        if add_labels:
-            modify_body["addLabelIds"] = add_labels
-        if remove_labels:
-            modify_body["removeLabelIds"] = remove_labels
-        if not modify_body:
+        if not add_labels and not remove_labels:
             return {"error": "At least one of add_labels or remove_labels is required"}
-        return _run_gws(
-            [
-                "gmail",
-                "users",
-                "messages",
-                "modify",
-                "--params",
-                _json.dumps({"userId": "me", "id": message_id}),
-                "--json",
-                _json.dumps(modify_body),
-            ]
-        )
+        return _mail().modify(message_id, add_labels=add_labels, remove_labels=remove_labels)
 
     if name == "gws_calendar_list":
         return _calendar_list(args)
@@ -2934,28 +2500,40 @@ for _tool_name in sorted(WORKSPACE_TOOLS):
         async def handler(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             if ctx.is_benchmark:
                 return _benchmark_refusal(tn)
-            if tn in _CALENDAR_EDITS:
-                from robothor.engine.calendar_attendees import OperationCancellation
-
-                # The write runs in a worker thread that outlives a cancelled
-                # task; the flag is checked immediately before the PATCH.
-                cancelled = OperationCancellation(ctx.run_id)
-                try:
-                    result = await asyncio.to_thread(
-                        _CALENDAR_EDITS[tn],
-                        args,
-                        run_id=ctx.run_id,
-                        tenant_id=ctx.tenant_id,
-                        cancelled=cancelled,
-                    )
-                except asyncio.CancelledError:
-                    cancelled.set()
-                    raise
-                return _with_evidence_reference(result)
-            return await asyncio.to_thread(
-                _handle_gws_tool, tn, args, run_id=ctx.run_id, tenant_id=ctx.tenant_id
-            )
+            if tn not in CHAT_TOOLS:
+                # A provider that cannot serve mail/calendar yet refuses here,
+                # before any guard or transport runs.
+                unavailable = _workspace_unavailable(ctx.tenant_id)
+                if unavailable is not None:
+                    return unavailable
+            with bind_engine_loop(asyncio.get_running_loop()):
+                return await _run_in_thread(tn, args, ctx)
 
         return handler
 
     HANDLERS[_tool_name] = _make_handler(_tool_name)
+
+
+async def _run_in_thread(tn: str, args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    """Run one gws tool in a worker thread (the CLI is a subprocess)."""
+    if tn in _CALENDAR_EDITS:
+        from robothor.engine.calendar_attendees import OperationCancellation
+
+        # The write runs in a worker thread that outlives a cancelled
+        # task; the flag is checked immediately before the PATCH.
+        cancelled = OperationCancellation(ctx.run_id)
+        try:
+            result = await asyncio.to_thread(
+                _CALENDAR_EDITS[tn],
+                args,
+                run_id=ctx.run_id,
+                tenant_id=ctx.tenant_id,
+                cancelled=cancelled,
+            )
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+        return _with_evidence_reference(result)
+    return await asyncio.to_thread(
+        _handle_gws_tool, tn, args, run_id=ctx.run_id, tenant_id=ctx.tenant_id
+    )
