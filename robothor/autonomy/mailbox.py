@@ -31,11 +31,12 @@ async def retrieve_verification(
     from robothor.autonomy.verification import extract_verification
     from robothor.constants import DEFAULT_TENANT
     from robothor.crm.dal import get_owner_person
+    from robothor.engine.tools.constants import MAIL_READ_TOOLS, MAIL_SEARCH_TOOL
     from robothor.engine.tools.dispatch import get_agent_toolset
     from robothor.engine.tools.handlers import gws
 
     allowed = get_agent_toolset() or frozenset()
-    if not {"gws_gmail_search", "gws_gmail_get"} <= allowed or ctx.tenant_id != DEFAULT_TENANT:
+    if not allowed >= MAIL_READ_TOOLS or ctx.tenant_id != DEFAULT_TENANT:
         raise PermissionError("verification_mailbox_not_authorized")
     owner = await asyncio.to_thread(get_owner_person, ctx.tenant_id)
     if scope.owner_id != "person:" + str(owner.get("id", "")):
@@ -68,7 +69,7 @@ async def retrieve_verification(
         after = source["created_epoch"]
     sender_domains = policy.verification_senders.get(row["proposal"]["origin"], frozenset())
     senders = " ".join("from:(@" + domain + ")" for domain in sorted({host} | sender_domains))
-    result = await gws.HANDLERS["gws_gmail_search"](
+    result = await gws.HANDLERS[MAIL_SEARCH_TOOL](
         {"query": f"to:{recipient} {{{senders}}} after:{after}", "max_results": 5}, ctx
     )
     fetched = [

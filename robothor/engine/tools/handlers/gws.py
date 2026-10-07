@@ -14,7 +14,16 @@ from html.parser import HTMLParser
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from robothor.engine.tools.constants import MAX_TOOL_OUTPUT_CHARS
+from robothor.engine.tools.constants import (
+    CALENDAR_ADD_ATTENDEES_TOOL,
+    CALENDAR_RESPOND_TOOL,
+    CALENDAR_UPDATE_TOOL,
+    CALENDAR_WRITE_TOOLS,
+    CHAT_SEND_TOOLS,
+    MAIL_WRITE_TOOLS,
+    MAX_TOOL_OUTPUT_CHARS,
+    WORKSPACE_TOOLS,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
@@ -2519,9 +2528,9 @@ def _with_evidence_reference(result: dict[str, Any]) -> dict[str, Any]:
 
 #: Calendar edits that take a cancellation flag, checked just before the write.
 _CALENDAR_EDITS: dict[str, Callable[..., dict[str, Any]]] = {
-    "gws_calendar_update": _calendar_update,
-    "gws_calendar_add_attendees": _calendar_add_attendees,
-    "gws_calendar_respond": _calendar_respond,
+    CALENDAR_UPDATE_TOOL: _calendar_update,
+    CALENDAR_ADD_ATTENDEES_TOOL: _calendar_add_attendees,
+    CALENDAR_RESPOND_TOOL: _calendar_respond,
 }
 
 
@@ -2881,19 +2890,7 @@ def _handle_gws_tool(
 # benchmark deny-list both ask "does this tool change anything at Google", and
 # the answer differs from "may a benchmark call it" — which is now no, for
 # every gws tool.
-_GWS_MUTATING_TOOLS: frozenset[str] = frozenset(
-    {
-        "gws_gmail_reply",
-        "gws_gmail_send",
-        "gws_gmail_modify",
-        "gws_calendar_create",
-        "gws_calendar_add_attendees",
-        "gws_calendar_update",
-        "gws_calendar_respond",
-        "gws_calendar_delete",
-        "gws_chat_send",
-    }
-)
+_GWS_MUTATING_TOOLS: frozenset[str] = MAIL_WRITE_TOOLS | CALENDAR_WRITE_TOOLS | CHAT_SEND_TOOLS
 
 
 def _benchmark_refusal(tool_name: str) -> dict[str, Any]:
@@ -2922,22 +2919,7 @@ def _benchmark_refusal(tool_name: str) -> dict[str, Any]:
 # module-level `_gws_handler` used to sit here, referenced by nothing, carrying
 # its own copy of the benchmark gate — two copies of a safety check, one of
 # them unreachable, which is the shape that makes one of them go stale.
-for _tool_name in (
-    "gws_gmail_search",
-    "gws_gmail_get",
-    "gws_gmail_reply",
-    "gws_gmail_send",
-    "gws_gmail_modify",
-    "gws_calendar_list",
-    "gws_calendar_create",
-    "gws_calendar_add_attendees",
-    "gws_calendar_update",
-    "gws_calendar_respond",
-    "gws_calendar_delete",
-    "gws_chat_send",
-    "gws_chat_list_spaces",
-    "gws_chat_list_messages",
-):
+for _tool_name in sorted(WORKSPACE_TOOLS):
 
     def _make_handler(tn: str) -> Callable[..., Any]:
         async def handler(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:

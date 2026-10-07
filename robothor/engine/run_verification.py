@@ -720,15 +720,19 @@ def extract_claims(text: str | None) -> list[Claim]:
 # Tool families
 # ──────────────────────────────────────────────────────────────────────
 
+# The Workspace members of these families (mail sends, the chat send,
+# calendar writes) come from robothor.engine.tools.constants and are added in
+# `_tool_families` below. They are imported there, not here: the tools package
+# imports this module (via honesty_grading), so a module-level import of it
+# from here is a cycle whenever this module is the first one loaded.
+#
 # `send_email` is not a tool — it is the `send-email` skill, invoked through
 # `invoke_skill`. Naming it here made the family look complete while matching
 # nothing.
-_EMAIL_SEND_TOOLS = frozenset({"gws_gmail_send", "gws_gmail_reply"})
 _MESSAGE_SEND_TOOLS = frozenset(
     {
         "send_notification",
         "send_agent_message",
-        "gws_chat_send",
         "telegram_send",
         "send_message",
         "send_telegram",
@@ -779,16 +783,6 @@ _MEMORY_WRITE_TOOLS = frozenset(
         "record_procedure",
         "intent_add",
         "leave_breadcrumb",
-    }
-)
-# Native calendar mutations that can support a verified calendar claim.
-_CALENDAR_WRITE_TOOLS = frozenset(
-    {
-        "gws_calendar_create",
-        "gws_calendar_update",
-        "gws_calendar_add_attendees",
-        "gws_calendar_respond",
-        "gws_calendar_delete",
     }
 )
 _SCHEDULE_WRITE_TOOLS = frozenset(
@@ -917,18 +911,26 @@ def _tool_families(name: str | None, args: dict[str, Any]) -> frozenset[str]:
     opaque, and treating it as evidence would let any run satisfy any claim.
     Observe-mode data will show how often that costs a false positive.
     """
+    # Lazy: see the note above _MESSAGE_SEND_TOOLS.
+    from robothor.engine.tools.constants import (
+        CALENDAR_WRITE_TOOLS,
+        CHAT_SEND_TOOLS,
+        MAIL_SEND_TOOLS,
+    )
+
     if not name:
         return frozenset()
     families: set[str] = set()
-    if name in _EMAIL_SEND_TOOLS or ("mail" in name and ("send" in name or "reply" in name)):
+    if name in MAIL_SEND_TOOLS or ("mail" in name and ("send" in name or "reply" in name)):
         families.add("email_send")
-    if name in _MESSAGE_SEND_TOOLS:
+    if name in _MESSAGE_SEND_TOOLS or name in CHAT_SEND_TOOLS:
         families.add("message_send")
     if name in _CRM_WRITE_TOOLS or _is_crm_write_name(name):
         families.add("crm_write")
     if name in _MEMORY_WRITE_TOOLS:
         families.add("memory_write")
-    if name in _CALENDAR_WRITE_TOOLS or (
+    # Native calendar mutations that can support a verified calendar claim.
+    if name in CALENDAR_WRITE_TOOLS or (
         "calendar" in name and any(v in name for v in ("create", "update", "delete", "add"))
     ):
         families.add("calendar_write")

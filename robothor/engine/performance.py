@@ -8,6 +8,7 @@ import time
 from typing import Any
 
 from robothor.engine.models import RunStep, StepType
+from robothor.engine.tools.constants import CALENDAR_ADD_ATTENDEES_TOOL
 
 
 class ProgressReporter:
@@ -27,7 +28,7 @@ class ProgressReporter:
             names = [str(n) for n in event.get("tools", [])]
             self.activity = (
                 "Working on the calendar request"
-                if names == ["gws_calendar_add_attendees"]
+                if names == [CALENDAR_ADD_ATTENDEES_TOOL]
                 else "Running requested tools"
             )
         elif kind == "tools_done":

@@ -9,6 +9,8 @@ if TYPE_CHECKING:
 
 from uuid import UUID
 
+from robothor.engine.tools.constants import CALENDAR_ADD_ATTENDEES_TOOL
+
 
 def _reference(value: Any) -> str | None:
     if value is None:
@@ -22,9 +24,9 @@ def _reference(value: Any) -> str | None:
 def calendar_receipts(cur: Any, run: dict[str, Any], auth: AuthContext) -> list[dict[str, Any]]:
     cur.execute(
         """SELECT tool_name,tool_input,tool_output FROM agent_run_steps
-           WHERE run_id=%s AND tool_name IN ('gws_calendar_add_attendees','tool_call')
+           WHERE run_id=%s AND tool_name IN (%s,'tool_call')
            ORDER BY step_number DESC""",
-        (run["id"],),
+        (run["id"], CALENDAR_ADD_ATTENDEES_TOOL),
     )
     identifiers, conflicts = set(), set()
     for step in cur.fetchall():
@@ -32,7 +34,7 @@ def calendar_receipts(cur: Any, run: dict[str, Any], auth: AuthContext) -> list[
         if step["tool_name"] == "tool_call":
             # The deferred dispatcher unwraps arguments but returns the tool's
             # result directly. Only its explicit calendar target is evidence.
-            if str(inputs.get("name", "")).strip() != "gws_calendar_add_attendees":
+            if str(inputs.get("name", "")).strip() != CALENDAR_ADD_ATTENDEES_TOOL:
                 continue
             inputs = inputs.get("arguments", {})
             if not isinstance(inputs, dict):

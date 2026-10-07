@@ -17,6 +17,8 @@ from dataclasses import dataclass, field
 from datetime import UTC
 from typing import Any
 
+from robothor.engine.tools.constants import CALENDAR_CREATE_TOOLS, MAIL_SEND_TOOLS
+
 logger = logging.getLogger(__name__)
 
 # Shell control characters that let a command chain/substitute/redirect past an
@@ -36,7 +38,7 @@ _SHELL_CONTROL = re.compile(r"[;|&<>\n\r`]|\$\(")
 # tool name ever passed to this check, while the route they were meant to cover
 # — the skill — went through `invoke_skill` and past the guard untouched. The
 # skill names are checked separately, below.
-_EMAIL_SEND_TOOLS = frozenset({"gws_gmail_send", "gws_gmail_reply"})
+_EMAIL_SEND_TOOLS = MAIL_SEND_TOOLS
 
 #: Skills that send mail, reached through `invoke_skill`. A skill invocation
 #: carries no `thread_id`, so under `inbound_only` there is nothing it could
@@ -1311,7 +1313,7 @@ class GuardrailEngine:
         the caller can pass ``attendee_confirmed=true`` to certify the proposal
         happened out-of-band.
         """
-        if tool_name != "gws_calendar_create":
+        if tool_name not in CALENDAR_CREATE_TOOLS:
             return GuardrailResult()
 
         if tool_args.get("force") or tool_args.get("attendee_confirmed"):
@@ -1360,7 +1362,7 @@ class GuardrailEngine:
             return GuardrailResult()
 
         # Look for a proposal step in this run.
-        proposal_tools = {"gws_gmail_send", "gws_gmail_reply"}
+        proposal_tools = MAIL_SEND_TOOLS
         proposal_keywords = (
             "propose",
             "suggest",
