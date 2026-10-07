@@ -29,9 +29,15 @@ from robothor.engine.model_registry import _MODEL_REGISTRY, _from_litellm_catalo
 #: model -> why the hand-maintained value differs from the catalog.
 #: Adding an entry here is a decision, and the reason is the point.
 KNOWN_DRIFT: dict[str, str] = {
-    "openrouter/z-ai/glm-5": (
-        "registry 204,800 vs catalog 202,752 — a 1% difference, and compaction "
-        "fires at the 80,000 absolute budget long before either binds."
+    "openrouter/xiaomi/mimo-v2.5": (
+        "registry 1,048,576 vs catalog 1,050,000 — the catalog rounds the 2**20 "
+        "window to a decimal 1.05M; a 0.1% difference, and compaction fires at "
+        "the 80,000 absolute budget long before either binds. The binary "
+        "figure is the one the serving provider allocates."
+    ),
+    "openrouter/xiaomi/mimo-v2.5-pro": (
+        "registry 1,048,576 vs catalog 1,050,000 — same rounding as mimo-v2.5 "
+        "above: the catalog's decimal 1.05M against the provider's 2**20 window."
     ),
     "openrouter/minimax/minimax-m2.5": (
         "registry 1,048,576 vs catalog 196,608. The registry value is the "

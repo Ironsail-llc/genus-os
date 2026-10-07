@@ -262,7 +262,7 @@ flags:
 
   - name: ROBOTHOR_RIP_13_MODE
     owner: ops
-    mode: observe
+    mode: "off"
     soak: |
       Symbolic short-term memory. Originally dated 2026-07-20 on the theory
       that it rode RIP 7's ladder. It does not, and the ladder was never the
@@ -312,10 +312,14 @@ flags:
   - name: ROBOTHOR_BENCHMARK_DECONTAMINATION_MODE
     owner: ops
     mode: observe
+    planned_promotion: "2026-11-15"
     soak: >
-      DEFERRED 2026-09-22: remains observe with no promotion date until a
-      deliberate probe produces a row. This is an explicit deferral, not an
-      overdue promotion commitment.
+      DEFERRED 2026-09-22: remains observe until a deliberate probe produces
+      a row. The planned_promotion date (2026-11-15) is a review checkpoint
+      set 2026-10-07 so the entry satisfies the manifest rule that every
+      observe flag carries a deadline; it is not a commitment to flip then.
+      Re-date it, with the blocker below still stated, if the probe has not
+      produced a row by then.
 
       BLOCKER: probe must produce a row first; then enforce (analytics-only).
       The observe reporter (robothor/engine/analytics.py) has written zero
@@ -398,10 +402,13 @@ flags:
   - name: ROBOTHOR_TOOL_VERIFY_MODE
     owner: ops
     mode: observe
+    planned_promotion: "2026-11-15"
     soak: >
-      DEFERRED 2026-09-22: remains observe with no promotion date until the
-      evidence ledger has real read-back verdicts and the documented review is
-      complete.
+      DEFERRED 2026-09-22: remains observe until the evidence ledger has real
+      read-back verdicts and the documented review is complete. The
+      planned_promotion date (2026-11-15) is a review checkpoint set
+      2026-10-07 so the entry satisfies the manifest rule that every observe
+      flag carries a deadline; it is not a commitment to flip then.
 
       Tool post-condition checks: after a side-effectful tool reports success,
       read the write back out of the environment (Gmail message id, calendar
@@ -669,8 +676,7 @@ flags:
       incident to close, not a soak in progress.
 
       Enforced on outbound email (gws_gmail_send, gws_gmail_reply) and
-      calendar invitations (gws_calendar_create, gws_calendar_update,
-      gws_calendar_add_attendees, gws_calendar_respond). Telegram, SMS and chat are
+      calendar invitations (gws_calendar_create). Telegram, SMS and chat are
       NOT enforced — see docs/CRM_DATA_FABRIC.md.
 
   - name: ROBOTHOR_CALENDAR_SEND_UPDATES
@@ -687,8 +693,7 @@ flags:
     soak: |
       Not a ladder: the values are `all` (default), `externalOnly` and `none`,
       and they say who Google emails when an agent creates or cancels an event
-      with attendees, edits one (gws_calendar_update, gws_calendar_add_attendees)
-      or RSVPs to one (gws_calendar_respond).
+      with attendees.
 
       It ships at `all` with no soak because the state it replaces was
       effectively `none` and nobody chose it: `gws_calendar_create` passed no

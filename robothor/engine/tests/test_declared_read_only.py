@@ -10,12 +10,21 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+
+from robothor.engine.tools import read_only
 from robothor.engine.tools.constants import READONLY_TOOLS
 from robothor.engine.tools.read_only import (
     adapter_read_only_tools,
     declared_read_only_tools,
     plugin_read_only_tools,
 )
+
+
+@pytest.fixture(autouse=True)
+def _fresh_plugin_classification(monkeypatch):
+    """Each test patches discovery its own way; none may read another's cache."""
+    monkeypatch.setattr(read_only, "_plugin_cache", None)
 
 
 class TestTheUnion:
@@ -85,3 +94,37 @@ def test_the_benchmark_allow_list_reads_the_same_helper():
     source = inspect.getsource(benchmark._adapter_declared_read_only_tools)
     assert "adapter_read_only_tools()" in source
     assert "get_loaded_adapters" not in source
+
+
+class TestItIsCheapOnTheToolCallPath:
+    """Every tool turn and every dispatch of a tool core does not own reads
+    this. Plugin discovery walks every installed distribution's entry points;
+    run per call, it was most of the CPU a run spent."""
+
+    def test_discovery_runs_once_per_plugin_generation(self):
+        loaded = MagicMock(read_only={"vendor_search"})
+        with patch("robothor.plugins.load_plugins", return_value=loaded) as load:
+            for _ in range(5):
+                assert "vendor_search" in declared_read_only_tools()
+        assert load.call_count == 1
+
+    def test_a_plugin_reload_is_seen_on_the_next_read(self):
+        from robothor.plugins import reload_plugins
+
+        with patch(
+            "robothor.plugins.load_plugins", return_value=MagicMock(read_only={"old_lookup"})
+        ):
+            assert "old_lookup" in plugin_read_only_tools()
+        reload_plugins()
+        with patch(
+            "robothor.plugins.load_plugins", return_value=MagicMock(read_only={"new_lookup"})
+        ):
+            assert plugin_read_only_tools() == frozenset({"new_lookup"})
+
+    def test_a_failed_discovery_is_not_remembered(self):
+        with patch("robothor.plugins.load_plugins", side_effect=RuntimeError("no")):
+            assert plugin_read_only_tools() == frozenset()
+        with patch(
+            "robothor.plugins.load_plugins", return_value=MagicMock(read_only={"vendor_search"})
+        ):
+            assert plugin_read_only_tools() == frozenset({"vendor_search"})
