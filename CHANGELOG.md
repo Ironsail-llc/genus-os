@@ -1,3 +1,9 @@
+## [1.107.0](https://github.com/Ironsail-llc/genus-os/compare/v1.106.2...v1.107.0) (2026-10-08)
+
+### Features
+
+* **pr-review:** approve past minors and conflicts, acknowledge authors' answers ([#668](https://github.com/Ironsail-llc/genus-os/issues/668)) ([5cba3c5](https://github.com/Ironsail-llc/genus-os/commit/5cba3c5dc1ae40dcd3ec67e23f78bc2da63118b0))
+
 ## [1.106.2](https://github.com/Ironsail-llc/genus-os/compare/v1.106.1...v1.106.2) (2026-10-08)
 
 ### Bug Fixes
