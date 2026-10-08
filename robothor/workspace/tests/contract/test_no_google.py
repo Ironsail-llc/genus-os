@@ -185,6 +185,11 @@ async def test_the_doctor_needs_no_google(
     env = m365_env
     env.tenant.deny(CANARY)  # type: ignore[attr-defined]
     monkeypatch.setattr(workspace_m365, "_vault_connected", lambda _tenant: True)
+    # The ingest worker records its rounds in Postgres (migration 149); this
+    # test is about Google, not the database, so report a current ingest.
+    monkeypatch.setattr(
+        workspace_m365, "_ingest_ages", lambda _ctx, _tenant: {"mail": 5.0, "calendar": 5.0}
+    )
 
     caplog.set_level(logging.WARNING)
     rows = []
