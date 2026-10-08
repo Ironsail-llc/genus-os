@@ -160,7 +160,7 @@ Before composing replies, search for relevant context:
 
 ---
 
-## Gmail Tool Reference
+## Mail Tool Reference
 
 These four are the whole interface. There is no CLI fallback: every guard that
 matters — threading, reply-all, the do-not-contact list, the duplicate-reply

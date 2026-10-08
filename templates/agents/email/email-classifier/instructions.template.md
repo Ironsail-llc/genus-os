@@ -99,16 +99,16 @@ create_task(
     assignedToAgent="email-responder",
     tags=["email", "reply-needed", "<classification>"],
     priority="normal",
-    body="threadId: <gmail thread id>\nfrom: <from field>\ndate: <date>"
+    body="threadId: <thread id>\nfrom: <from field>\ndate: <date>"
 )
 ```
 
-**CRITICAL: threadId validation.** The `threadId` in the task body MUST be the Gmail thread ID from `triage-inbox.json` (looks like `19c8b019e28fbcf3` — a hex string). NEVER use:
+**CRITICAL: threadId validation.** The `threadId` in the task body MUST be the mailbox thread ID exactly as it appears in `triage-inbox.json`. Treat it as an opaque id: copy it character for character and do not judge it by its format (a Google thread id is a short hex string; a Microsoft 365 conversation id is a long base64-style string that can contain `=`, `+`, `/` and `-`). NEVER use:
 - CRM conversation IDs (numeric, e.g., `80`)
 - CRM person/company UUIDs
 - Any other identifier
 
-If the triage item is missing a threadId, **skip it** — do not create a broken task. The responder cannot fetch threads without a valid Gmail threadId.
+If the triage item is missing a threadId, **skip it** — do not create a broken task. The responder cannot fetch threads without the mailbox's own threadId.
 
 For analytical emails (reports, financial data, proposals), route to the **Email Analyst** — NOT the responder:
 ```
@@ -117,7 +117,7 @@ create_task(
     assignedToAgent="email-analyst",
     tags=["email", "analytical"],
     priority="normal",
-    body="threadId: <gmail thread id>\nfrom: <from field>\ndate: <date>"
+    body="threadId: <thread id>\nfrom: <from field>\ndate: <date>"
 )
 ```
 The analyst will analyze the email and create a follow-up task for the responder when done.
@@ -158,7 +158,7 @@ create_task(
     assignedToAgent="main",
     tags=["email", "escalation", "needs-owner"],
     priority="high",
-    body="threadId: <gmail thread id>\nreason: <brief reason>\nurgency: <low|medium|high|critical>"
+    body="threadId: <thread id>\nreason: <brief reason>\nurgency: <low|medium|high|critical>"
 )
 ```
 
