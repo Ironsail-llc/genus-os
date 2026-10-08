@@ -680,3 +680,140 @@ time. Check them against the current pages before a client rollout:
   than 404.
 - That `GET /users/{id}/mailboxSettings/timeZone` needs `MailboxSettings.Read`
   and is not covered by `Mail.ReadWrite`.
+
+## Live verification
+
+The contract suites run against fakes. Exchange's real behaviour is checked
+by a separate **live smoke suite** (`robothor/workspace/tests/live/`) that runs
+against a Microsoft 365 dev or trial tenant you own. Do not enable
+`microsoft365` for a client until this suite passes against your dev tenant
+on the release you are deploying.
+
+The suite is safe by default:
+
+- **It doesn't run unless you ask.** Its tests are marked `live_m365`, which
+  `pytest.ini` deselects. Under any other `-m` expression (CI's included)
+  every test is collected and skipped unless `GENUS_LIVE_M365=1` and a
+  credential is configured. A skipped run reads no credential and opens no
+  connection; `robothor/workspace/tests/test_live_harness.py` checks this in
+  CI with sockets that fail on use.
+- **Tenant allowlist.** The run is refused, before the first request, unless
+  the credential's directory id is listed in `GENUS_LIVE_M365_TENANTS`. After
+  the first token, the token's own `tid` claim must be listed too. This stops
+  a run against a client's production tenant by mistake. If you configure the
+  tenant by domain name, list both the domain and the directory id. A wildcard
+  is refused.
+- **Mailbox fence.** Every request goes through a fence that allows only
+  `/users/{assistant or owner}/...` on Microsoft Graph and the token endpoint
+  of an allowlisted directory on Entra. The canary may only be read, to prove
+  the 403. Any message or invitation addressed to anyone except the assistant
+  and the owner is refused before it is sent.
+- **Cleanup.** Every subject the suite writes carries a unique run tag
+  (`genus-live-<timestamp>-<random>`). Each test deletes what it created, and
+  at the end the session deletes anything still carrying the tag from both
+  mailboxes.
+
+### Set up a dev tenant
+
+1. Get a tenant you control: a Microsoft 365 Developer Program sandbox or a
+   trial. Never use a client's tenant.
+2. Create three licensed users with Exchange Online mailboxes: an
+   **assistant**, an **owner** and a **canary**. Keep them for this suite only.
+3. Follow [Connect a tenant](#connect-a-tenant) steps 2 to 5 for this tenant:
+   register the app, create and upload the certificate, and scope it with RBAC
+   for Applications to the assistant and the owner only. The canary must stay
+   outside the scope.
+4. Give the suite the credential in one of two ways:
+   - **The vault** (the production path): run the connect command on an
+     instance and set `GENUS_LIVE_M365_PLATFORM_TENANT` to that instance's
+     platform tenant. The suite builds its client with
+     `graph_client_from_vault`.
+   - **Files**: set `GENUS_LIVE_M365_TENANT_ID`, `GENUS_LIVE_M365_CLIENT_ID`
+     and `GENUS_LIVE_M365_CERT_PATH` (a PEM file holding the certificate and
+     its private key, or the key in `GENUS_LIVE_M365_KEY_PATH`). Keep the files
+     outside the repository with mode `600`.
+
+| Variable | Meaning |
+|----------|---------|
+| `GENUS_LIVE_M365` | `1` to run the suite |
+| `GENUS_LIVE_M365_TENANTS` | Comma-separated directory ids (and domains) the suite may run against |
+| `GENUS_LIVE_M365_PLATFORM_TENANT` | Read the credential from this platform tenant's vault |
+| `GENUS_LIVE_M365_TENANT_ID`, `GENUS_LIVE_M365_CLIENT_ID`, `GENUS_LIVE_M365_CERT_PATH`, `GENUS_LIVE_M365_KEY_PATH` | Or read it from files |
+| `GENUS_LIVE_M365_ASSISTANT`, `GENUS_LIVE_M365_OWNER`, `GENUS_LIVE_M365_CANARY` | The three test mailboxes, all different |
+| `GENUS_LIVE_M365_CAPTURE` | Optional: a directory for scrubbed request/response captures |
+
+The suite never prints or logs these values, and they must never be
+committed.
+
+### Run it
+
+```bash
+GENUS_LIVE_M365=1 GENUS_LIVE_M365_TENANTS=<directory-id> GENUS_LIVE_M365_TENANT_ID=<directory-id> GENUS_LIVE_M365_CLIENT_ID=<application-id> GENUS_LIVE_M365_CERT_PATH=<path-to-pem> GENUS_LIVE_M365_ASSISTANT=assistant@example.com GENUS_LIVE_M365_OWNER=owner@example.com GENUS_LIVE_M365_CANARY=canary@example.com pytest robothor/workspace/tests/live -m live_m365 -p no:cacheprovider -rs
+```
+
+A full run takes several minutes, because the suite waits for Exchange to
+deliver mail, invitations and cancellations. Search can take up to ten minutes
+to index. A failure is a finding about Exchange or about the provider; its
+message says which question it answers. Don't retry until it passes.
+
+### Capture and promote fixtures
+
+With `GENUS_LIVE_M365_CAPTURE=<dir>`, each Graph exchange is written to
+`<dir>/<test name>/<sequence>.json`, scrubbed as it is written:
+
+- tokens, assertions, secrets and every header not on a short allowlist are
+  removed;
+- ids, etags and GUIDs are hashed with a salt that is new for each run, so
+  links between requests still match but nothing points back to the tenant;
+- the three mailboxes become `assistant@`, `owner@` and
+  `canary@tenant.example`, and every other address becomes `*.example`;
+- subjects, bodies and names are kept only when the suite wrote them;
+- mail header values lose addresses, IP addresses and non-Microsoft domains.
+
+An `Authentication-Results` sample from the header test is written to
+`<dir>/samples/`.
+
+To turn a capture into fixtures for `FakeGraphTenant`, run:
+
+```bash
+python scripts/m365_capture_to_fixtures.py <capture-dir> robothor/workspace/tests/fixtures/m365 --forbid <your-tenant-domain> --forbid <directory-id>
+```
+
+The script scrubs everything a second time, then checks for leaks: JWTs,
+bearer tokens, addresses outside `*.example`, unscrubbed GUIDs,
+`onmicrosoft.com` names, IP addresses outside the documentation ranges, and
+every `--forbid` value. If it finds one, it writes nothing. `--check` runs the
+same checks without writing. A test loads a fixture with
+`load_capture_fixture()` and serves it with `FakeGraphTenant.replay()`.
+Review each fixture before committing it.
+
+### Checklist
+
+Each open question about live Exchange behaviour has one test:
+
+| Question | Test (`test_m365_smoke.py::`) |
+|----------|-------------------------------|
+| Entra accepts the RS256 certificate assertion with `x5t#S256` and `x5t` | `test_auth_certificate_rs256_with_both_thumbprints` |
+| The PS256 fallback (`x5t#S256` only) is accepted | `test_auth_certificate_ps256_fallback` |
+| An out-of-scope mailbox answers 403 `ErrorAccessDenied`, not 404 (mail and calendar) | `test_scope_canary_mailbox_is_403_access_denied` |
+| After draft and send, the immutable id still reads the message | `test_mail_send_keeps_immutable_id_readable` |
+| `createReplyAll`, then PATCH recipients, then send stays in the same `conversationId` with only our recipients | `test_mail_reply_all_stays_in_conversation` |
+| A conversation read avoids `InefficientFilter` and comes back oldest first | `test_mail_conversation_thread_avoids_inefficient_filter` |
+| `$search` phrase quoting: words in order match, words out of order don't | `test_mail_search_phrase_quoting` |
+| Labels map to categories, and flag and read state round-trip | `test_mail_labels_categories_round_trip` |
+| `internetMessageHeaders` order, with an `Authentication-Results` sample captured | `test_mail_internet_message_headers_order` |
+| An IANA time zone is accepted on create (no Windows retry) | `test_calendar_iana_timezone_accepted_on_create` |
+| The Windows time zone fallback is accepted and reads back as IANA | `test_calendar_windows_timezone_fallback_path` |
+| The `originalStartTimeZone` format maps to IANA, and the UTC `Prefer` is honoured | `test_calendar_original_start_timezone_format` |
+| A concurrent edit answers 412 | `test_calendar_412_on_concurrent_edit` |
+| An occurrence of a recurring series answers 412 too | `test_calendar_412_on_recurring_occurrence` |
+| `accept`, `tentativelyAccept` and `decline` reach the organiser | `test_calendar_rsvp_accept_decline_tentative` |
+| The organiser's `/cancel` notifies the attendee (seen in the attendee's mailbox) | `test_calendar_organiser_cancel_notifies_attendee` |
+| An organiser's plain `DELETE` also notifies the attendee | `test_calendar_organiser_plain_delete_also_notifies` |
+| An all-day event reads back as the same dates under the UTC `Prefer` | `test_calendar_all_day_under_utc_prefer` |
+| Replacing the attendee list keeps existing RSVPs | `test_calendar_attendee_replace_keeps_rsvps` |
+| A plain-text description round-trips | `test_calendar_plain_text_description_round_trip` |
+| Mail delta: first sync, then incremental, each message published once | `test_ingest_delta_initial_then_incremental` |
+| A forced resync (invalid `deltaLink`, then no `deltaLink`) replays nothing | `test_ingest_forced_resync_does_not_replay` |
+| Calendar delta: the first sync publishes nothing, then `calendar.new` | `test_ingest_calendar_delta_baseline_then_new` |
+| The `workspace.m365_*` doctor checks pass, including canary denied and assistant identity | `test_doctor_m365_checks_green` |

@@ -181,6 +181,39 @@ class FakeGraphTenant:
         """Put mailboxes outside the app's management scope (403 on every request)."""
         self.denied_mailboxes.update(address.lower() for address in addresses)
 
+    def replay(self, exchanges: list[dict[str, Any]]) -> None:
+        """Answer with what a live tenant answered (a promoted capture fixture).
+
+        Each Graph exchange registers its method + path (ids already hashed by
+        the scrubber; query ignored); repeated requests to one path get the
+        recorded answers in order, the last one repeating. Token exchanges are
+        skipped: this tenant answers Entra itself.
+        """
+        queues: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+        for exchange in exchanges:
+            request, response = exchange["request"], exchange["response"]
+            url = httpx.URL(request["url"])
+            if url.host == LOGIN_HOST:
+                continue
+            path = unquote(url.path.removeprefix("/v1.0"))
+            queues[(request["method"].upper(), path)].append(response)
+
+        for (method, path), answers in queues.items():
+
+            async def answer(
+                tenant: FakeGraphTenant,
+                request: httpx.Request,
+                match: re.Match[str],
+                answers: list[dict[str, Any]] = answers,
+            ) -> httpx.Response:
+                recorded = answers.pop(0) if len(answers) > 1 else answers[0]
+                body = recorded.get("body")
+                if body is None:
+                    return httpx.Response(int(recorded["status"]))
+                return httpx.Response(int(recorded["status"]), json=body)
+
+            self.route(method, re.escape(path).replace("@", "(?:@|%40)"))(answer)
+
     def requests_matching(self, method: str, pattern: str) -> list[httpx.Request]:
         rx = re.compile(f"^{pattern}$")
         return [r for r in self.requests if r.method == method.upper() and rx.match(_graph_path(r))]
@@ -398,6 +431,16 @@ class _Occupancy:
 
     async def __aexit__(self, *exc: object) -> None:
         self.tenant.inflight[self.mailbox] -= 1
+
+
+def load_capture_fixture(path: str) -> list[dict[str, Any]]:
+    """A fixture written by ``scripts/m365_capture_to_fixtures.py``, for :meth:`FakeGraphTenant.replay`."""
+    from pathlib import Path
+
+    exchanges = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(exchanges, list):
+        raise ValueError("a capture fixture is a list of exchanges")
+    return exchanges
 
 
 def _graph_path(request: httpx.Request) -> str:
