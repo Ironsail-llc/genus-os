@@ -250,6 +250,8 @@ class Capabilities(TypedDict):
     labels: Literal["gmail_labels", "categories"]
     #: The online meeting a create can attach.
     online_meeting: Literal["hangouts_meet", "teams_meeting", "none"]
+    #: The chat service behind the ``gws_chat_*`` tools, or ``none``.
+    chat: Literal["google_chat", "none"]
 
 
 GOOGLE_CAPABILITIES: Capabilities = {
@@ -257,14 +259,18 @@ GOOGLE_CAPABILITIES: Capabilities = {
     "send_updates_modes": ("all", "externalOnly", "none"),
     "labels": "gmail_labels",
     "online_meeting": "hangouts_meet",
+    "chat": "google_chat",
 }
 
 #: Exchange Online. It notifies attendees of every organiser write and has no
 #: quiet mode, so ``all`` is the only ``sendUpdates`` it honours exactly;
 #: mail labels are Outlook categories; an online meeting is a Teams meeting.
+#: There is no chat yet: Google Chat is not reachable from an Exchange
+#: workspace, and Teams chat is a later phase.
 MICROSOFT365_CAPABILITIES: Capabilities = {
     "provider": "microsoft365",
     "send_updates_modes": ("all",),
     "labels": "categories",
     "online_meeting": "teams_meeting",
+    "chat": "none",
 }

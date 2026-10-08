@@ -235,6 +235,38 @@ def _workspace_unavailable(tool_name: str, tenant_id: str | None) -> dict[str, A
     return None
 
 
+#: What a chat tool says on a workspace with no chat service behind it.
+CHAT_UNAVAILABLE = (
+    "Google Chat is not available on a Microsoft 365 workspace; Teams chat is a later phase"
+)
+
+
+def _chat_unavailable(tenant_id: str | None) -> dict[str, Any] | None:
+    """The refusal for a ``gws_chat_*`` call the configured provider cannot serve.
+
+    The chat tools speak to Google Chat through the gws CLI. A workspace whose
+    capabilities declare no chat (Microsoft 365) has no Google account behind
+    that CLI, so the call is refused here, before any subprocess, rather than
+    failing later with a confusing "gws is not signed in".
+    """
+    from robothor.workspace import get_workspace
+    from robothor.workspace.bridge import error_result
+    from robothor.workspace.errors import Unsupported, WorkspaceError
+
+    try:
+        ws = get_workspace(tenant_id)
+    except WorkspaceError as exc:
+        return error_result(exc)
+    if ws.capabilities.get("chat", "none") == "google_chat":
+        return None
+    message = (
+        CHAT_UNAVAILABLE
+        if ws.provider == "microsoft365"
+        else (f"Google Chat is not available on a {ws.provider} workspace")
+    )
+    return error_result(Unsupported(message, code="provider_not_available"))
+
+
 def _workspace_provider_name() -> str:
     """Which provider serves the calendar: the CRM keys its event rows by it."""
     return _workspace().provider
@@ -2571,12 +2603,14 @@ for _tool_name in sorted(WORKSPACE_TOOLS):
         async def handler(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             if ctx.is_benchmark:
                 return _benchmark_refusal(tn)
-            if tn not in CHAT_TOOLS:
-                # A provider that cannot serve this tool's family yet refuses
-                # here, before any guard or transport runs.
+            # A provider that cannot serve this tool's family refuses here,
+            # before any guard or transport runs.
+            if tn in CHAT_TOOLS:
+                unavailable = _chat_unavailable(ctx.tenant_id)
+            else:
                 unavailable = _workspace_unavailable(tn, ctx.tenant_id)
-                if unavailable is not None:
-                    return unavailable
+            if unavailable is not None:
+                return unavailable
             with bind_engine_loop(asyncio.get_running_loop()), _bind_tenant(ctx.tenant_id):
                 return await _run_in_thread(tn, args, ctx)
 
