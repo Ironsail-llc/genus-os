@@ -1,0 +1,33 @@
+{
+  "args": {
+    "add_attendees": [
+      "dave@example.com"
+    ],
+    "event_id": "meeting"
+  },
+  "calendar_requests": [],
+  "context": {
+    "is_benchmark": false,
+    "run_id": "run-golden",
+    "tenant_id": "tenant-a"
+  },
+  "crm_write_through": {
+    "calls": [],
+    "sql": []
+  },
+  "dnc_lookups": [],
+  "guardrail_events": [],
+  "gws_calls": [],
+  "result": {
+    "error": "Blocked — dave@example.com has scheduling_policy='no_auto'. Agents may not add this person to a meeting; only the operator can.",
+    "guardrail": "scheduling_policy",
+    "invitations_requested": false
+  },
+  "scenario": "no_auto_update_refused",
+  "scheduling_policy_lookups": [
+    [
+      "dave@example.com"
+    ]
+  ],
+  "tool": "gws_calendar_update"
+}

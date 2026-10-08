@@ -582,3 +582,97 @@ async def test_the_intakes_retry_resumes_the_post(env):
     result, start = await _prepare_again(env, job_status=_jobs(job))
     assert result.get("resumed") is True and start.calls == []
     assert (await _finalize(env, job))["status"] == "posted"
+
+
+async def _intake_retry(env, minutes_later: float):
+    from datetime import UTC, datetime, timedelta
+
+    from robothor.pr_review.intake import Intake
+    from robothor.pr_review.tests.fakes import FakeTasks
+
+    intake = Intake(
+        ReviewerConfig(repos=(REPO,)),
+        env["store"],
+        TENANT,
+        tasks=FakeTasks(),
+        github=env["github"],
+        chat=env["chat"],
+        now=datetime.now(UTC) + timedelta(minutes=minutes_later),
+    )
+    await intake.run(poll=False)
+
+
+async def test_the_intakes_retry_on_a_moved_head_reviews_afresh(env, tmp_path):
+    """2026-10-07 (#2135): the post failed at SHA1, the head moved to SHA2,
+    and the intake's retry re-queued the row with queued_sha=SHA2. prepare
+    resumed the SHA1 job anyway; finalize refused it and the row stayed in
+    posting for good. A review written for another head is never re-posted."""
+    job = await _failed_while_posting(env)
+    env["github"].add(make_pr(7, SHA2))
+    await _intake_retry(env, ReviewerConfig().retry_cooldown_minutes + 1)
+    row = await env["store"].get(TENANT, REPO, 7)
+    assert row.status == "queued" and row.queued_sha == SHA2
+
+    async def fake_checkout(dest, **kw):
+        return tmp_path
+
+    async def fake_read(path, sha, rel):
+        return None
+
+    start = StartRecorder()
+    result = await prepare(
+        ReviewerConfig(repos=(REPO,)),
+        env["store"],
+        TENANT,
+        REPO,
+        7,
+        github=env["github"],
+        skill_text="g",
+        token="",
+        checkout=fake_checkout,
+        reader=fake_read,
+        start_job=start,
+        job_status=_jobs(job),
+    )
+    assert "resumed" not in result and len(start.calls) == 1
+    row = await env["store"].get(TENANT, REPO, 7)
+    assert row.status == "reviewing" and row.job_id == "job-9"
+    assert "pending" not in row.last_review
+
+
+async def test_a_posting_row_whose_job_no_longer_matches_is_released(env):
+    """The wedged state itself: a row in posting bound to a job that reviewed
+    another head. finalize must fail it with a trigger, not leave it posting."""
+    job = FakeJob(base_sha=SHA1, result={"structured_output": _output("APPROVE", [])})
+    row = await env["store"].get(TENANT, REPO, 7)
+    row.status = "posting"
+    row.queued_sha = SHA2
+    row.last_review = {"pending": {"job_id": "job-1"}}
+    await env["store"].save(row)
+
+    result = await _finalize(env, job)
+    assert result["status"] == "stale"
+    row = await env["store"].get(TENANT, REPO, 7)
+    assert row.status == "failed"
+    assert row.pending_trigger
+    assert "pending" not in row.last_review
+    assert env["poster"].reviews == []
+
+
+async def test_a_post_only_failure_retries_within_minutes(env):
+    """Re-posting a written review costs nothing: the intake retries it on the
+    short post cooldown, not the hour a fresh review waits."""
+    await _failed_while_posting(env)
+    await _intake_retry(env, 6)
+    assert (await env["store"].get(TENANT, REPO, 7)).status == "queued"
+
+
+async def test_a_review_failure_still_waits_the_full_cooldown(env):
+    await _finalize(env, FakeJob(status="failed", error="crashed"))
+    await _intake_retry(env, 6)
+    assert (await env["store"].get(TENANT, REPO, 7)).status == "failed"
+
+
+async def test_a_post_only_failure_tells_the_thread_the_short_wait(env):
+    await _failed_while_posting(env)
+    assert "retry automatically in about 5 min" in env["chat"].replies[-1][2]

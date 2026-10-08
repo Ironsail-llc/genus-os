@@ -1,0 +1,49 @@
+{
+  "args": {
+    "calendar_id": "team@example.com",
+    "time_min": "2026-10-08T00:00:00Z"
+  },
+  "calendar_requests": [],
+  "context": {
+    "is_benchmark": false,
+    "run_id": "run-golden",
+    "tenant_id": "tenant-a"
+  },
+  "crm_write_through": {
+    "calls": [],
+    "sql": []
+  },
+  "dnc_lookups": [],
+  "guardrail_events": [],
+  "gws_calls": [
+    {
+      "argv": [
+        "calendar",
+        "events",
+        "list",
+        "--params",
+        "{\"calendarId\": \"team@example.com\", \"timeMin\": \"2026-10-08T00:00:00Z\", \"singleEvents\": true, \"orderBy\": \"startTime\", \"maxResults\": 20}"
+      ],
+      "params": {
+        "calendarId": "team@example.com",
+        "maxResults": 20,
+        "orderBy": "startTime",
+        "singleEvents": true,
+        "timeMin": "2026-10-08T00:00:00Z"
+      },
+      "timeout": 30
+    }
+  ],
+  "result": {
+    "calendar": {
+      "id": "team@example.com",
+      "kind": "other"
+    },
+    "items": [],
+    "kind": "calendar#events",
+    "summary": "calendar"
+  },
+  "scenario": "calendar_list_explicit_other",
+  "scheduling_policy_lookups": [],
+  "tool": "gws_calendar_list"
+}

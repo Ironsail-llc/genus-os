@@ -1,0 +1,41 @@
+{
+  "args": {
+    "event_id": "evt-gone"
+  },
+  "calendar_requests": [],
+  "context": {
+    "is_benchmark": false,
+    "run_id": "run-golden",
+    "tenant_id": "tenant-a"
+  },
+  "crm_write_through": {
+    "calls": [],
+    "sql": []
+  },
+  "dnc_lookups": [],
+  "guardrail_events": [],
+  "gws_calls": [
+    {
+      "argv": [
+        "calendar",
+        "events",
+        "delete",
+        "--params",
+        "{\"calendarId\": \"alice@example.com\", \"eventId\": \"evt-gone\", \"sendUpdates\": \"all\"}"
+      ],
+      "params": {
+        "calendarId": "alice@example.com",
+        "eventId": "evt-gone",
+        "sendUpdates": "all"
+      },
+      "timeout": 30
+    }
+  ],
+  "result": {
+    "error": "Not Found",
+    "hint": "not_found"
+  },
+  "scenario": "calendar_delete_cli_error",
+  "scheduling_policy_lookups": [],
+  "tool": "gws_calendar_delete"
+}

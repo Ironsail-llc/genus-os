@@ -1,0 +1,144 @@
+{
+  "args": {
+    "body": "Answer.",
+    "subject": "Re: Kickoff",
+    "to": "bob@example.com"
+  },
+  "calendar_requests": [],
+  "context": {
+    "is_benchmark": false,
+    "run_id": "run-golden",
+    "tenant_id": "tenant-a"
+  },
+  "crm_write_through": {
+    "calls": [
+      {
+        "fn": "_record_sent_email",
+        "kwargs": {
+          "body": "Answer.",
+          "cc": "",
+          "result": {
+            "_warning": "No thread_id was provided but subject starts with 'Re:'. This message was sent as a new thread, not a reply. Use gws_gmail_reply to reply within existing conversations.",
+            "id": "sent-2",
+            "labelIds": [
+              "SENT"
+            ],
+            "threadId": "sent-2"
+          },
+          "subject": "Re: Kickoff",
+          "to": "bob@example.com"
+        }
+      }
+    ],
+    "sql": [
+      {
+        "params": [
+          "tenant-default",
+          "sent-2",
+          "Re: Kickoff"
+        ],
+        "sql": "INSERT INTO message_thread (tenant_id, channel, external_thread_id, subject, last_message_at, message_count) VALUES (%s, 'email', %s, %s, NOW(), 1) ON CONFLICT (tenant_id, channel, external_thread_id) DO UPDATE SET last_message_at = EXCLUDED.last_message_at, message_count = message_thread.message_count + 1, updated_at = NOW() RETURNING id"
+      },
+      {
+        "params": [
+          "tenant-default",
+          "crm-thread-1",
+          "sent-2",
+          "Re: Kickoff",
+          "Answer.",
+          "Answer."
+        ],
+        "sql": "INSERT INTO message (tenant_id, thread_id, channel, direction, external_message_id, subject, body_text, snippet, occurred_at) VALUES (%s, %s, 'email', 'outbound', %s, %s, %s, %s, NOW()) ON CONFLICT (tenant_id, channel, external_message_id) DO UPDATE SET thread_id = EXCLUDED.thread_id RETURNING id, (xmax = 0) AS inserted"
+      },
+      {
+        "params": [
+          "tenant-default",
+          "crm-message-1",
+          "to",
+          "person-bob",
+          "bob@example.com"
+        ],
+        "sql": "INSERT INTO message_participant (tenant_id, message_id, role, person_id, handle) VALUES (%s, %s, %s, %s, %s)"
+      },
+      {
+        "params": [
+          "tenant-default",
+          "person-bob",
+          "crm-message-1",
+          "Re: Kickoff",
+          "Answer."
+        ],
+        "sql": "INSERT INTO timeline_activity (tenant_id, person_id, occurred_at, activity_type, source_table, source_id, channel, direction, title, snippet) VALUES (%s, %s, NOW(), 'email', 'message', %s, 'email', 'outbound', %s, %s) ON CONFLICT (tenant_id, source_table, source_id) DO NOTHING"
+      },
+      {
+        "commit": true
+      }
+    ]
+  },
+  "dnc_lookups": [
+    {
+      "addresses": [
+        "bob@example.com"
+      ],
+      "tenant_id": "tenant-a"
+    }
+  ],
+  "guardrail_events": [],
+  "gws_calls": [
+    {
+      "argv": [
+        "gmail",
+        "users",
+        "messages",
+        "send",
+        "--params",
+        "{\"userId\":\"me\"}",
+        "--json",
+        "{\"raw\": \"Q29udGVudC1UeXBlOiB0ZXh0L3BsYWluOyBjaGFyc2V0PSJ1cy1hc2NpaSIKTUlNRS1WZXJzaW9uOiAxLjAKQ29udGVudC1UcmFuc2Zlci1FbmNvZGluZzogN2JpdApUbzogYm9iQGV4YW1wbGUuY29tClN1YmplY3Q6IFJlOiBLaWNrb2ZmCgpBbnN3ZXIu\"}"
+      ],
+      "json": {
+        "raw": "Q29udGVudC1UeXBlOiB0ZXh0L3BsYWluOyBjaGFyc2V0PSJ1cy1hc2NpaSIKTUlNRS1WZXJzaW9uOiAxLjAKQ29udGVudC1UcmFuc2Zlci1FbmNvZGluZzogN2JpdApUbzogYm9iQGV4YW1wbGUuY29tClN1YmplY3Q6IFJlOiBLaWNrb2ZmCgpBbnN3ZXIu",
+        "raw_decoded": {
+          "body": "Answer.",
+          "headers": [
+            [
+              "Content-Type",
+              "text/plain; charset=\"us-ascii\""
+            ],
+            [
+              "MIME-Version",
+              "1.0"
+            ],
+            [
+              "Content-Transfer-Encoding",
+              "7bit"
+            ],
+            [
+              "To",
+              "bob@example.com"
+            ],
+            [
+              "Subject",
+              "Re: Kickoff"
+            ]
+          ]
+        }
+      },
+      "params": {
+        "userId": "me"
+      },
+      "timeout": 30
+    }
+  ],
+  "result": {
+    "_warning": "No thread_id was provided but subject starts with 'Re:'. This message was sent as a new thread, not a reply. Use gws_gmail_reply to reply within existing conversations.",
+    "id": "sent-2",
+    "labelIds": [
+      "SENT"
+    ],
+    "threadId": "sent-2"
+  },
+  "scenario": "gmail_send_re_without_thread_warns",
+  "scheduling_policy_lookups": [],
+  "tool": "gws_gmail_send"
+}

@@ -1,0 +1,46 @@
+{
+  "args": {
+    "calendar": "own",
+    "event_id": "evt-existing"
+  },
+  "calendar_requests": [],
+  "context": {
+    "is_benchmark": false,
+    "run_id": "run-golden",
+    "tenant_id": "tenant-a"
+  },
+  "crm_write_through": {
+    "calls": [],
+    "sql": []
+  },
+  "dnc_lookups": [],
+  "guardrail_events": [],
+  "gws_calls": [
+    {
+      "argv": [
+        "calendar",
+        "events",
+        "delete",
+        "--params",
+        "{\"calendarId\": \"primary\", \"eventId\": \"evt-existing\", \"sendUpdates\": \"all\"}"
+      ],
+      "params": {
+        "calendarId": "primary",
+        "eventId": "evt-existing",
+        "sendUpdates": "all"
+      },
+      "timeout": 30
+    }
+  ],
+  "result": {
+    "calendar": {
+      "id": "primary",
+      "kind": "own"
+    },
+    "event_id": "evt-existing",
+    "send_updates": "all"
+  },
+  "scenario": "calendar_delete_own",
+  "scheduling_policy_lookups": [],
+  "tool": "gws_calendar_delete"
+}

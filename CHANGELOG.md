@@ -1,3 +1,19 @@
+## [1.105.0](https://github.com/Ironsail-llc/genus-os/compare/v1.104.0...v1.105.0) (2026-10-08)
+
+### Features
+
+* **crm:** provider-neutral calendar event identity ([#650](https://github.com/Ironsail-llc/genus-os/issues/650)) ([5dd9dd9](https://github.com/Ironsail-llc/genus-os/commit/5dd9dd98a88847ff488bd4611848006d5715c724))
+* **workspace:** entra app-only auth and graph client ([#652](https://github.com/Ironsail-llc/genus-os/issues/652)) ([2d9f38e](https://github.com/Ironsail-llc/genus-os/commit/2d9f38e55c863253772b4fbcc629cc6d7a325ed0))
+
+### Bug Fixes
+
+* **app:** bump next to 16.3.8 for the og image rce advisory ([#653](https://github.com/Ironsail-llc/genus-os/issues/653)) ([428472b](https://github.com/Ironsail-llc/genus-os/commit/428472baa59dba900462882763282ac68dca20e3))
+* **pr-review:** never strand a pull request on a stale written review ([#657](https://github.com/Ironsail-llc/genus-os/issues/657)) ([34d484b](https://github.com/Ironsail-llc/genus-os/commit/34d484b15e75023310f2b7c16fa033ba3b849756)), closes [impetus-one#2135](https://github.com/Ironsail-llc/impetus-one/issues/2135)
+
+### Code Refactoring
+
+* **tools:** derive every gws guard table from tool families ([#654](https://github.com/Ironsail-llc/genus-os/issues/654)) ([0ebf04f](https://github.com/Ironsail-llc/genus-os/commit/0ebf04f6385c4203573a0cca49be832820c2c732))
+
 ## [1.104.0](https://github.com/Ironsail-llc/genus-os/compare/v1.103.0...v1.104.0) (2026-10-07)
 
 ### Features

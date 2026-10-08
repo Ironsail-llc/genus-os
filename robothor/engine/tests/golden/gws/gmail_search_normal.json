@@ -1,0 +1,131 @@
+{
+  "args": {
+    "max_results": 5,
+    "query": "is:unread from:bob@example.com"
+  },
+  "calendar_requests": [],
+  "context": {
+    "is_benchmark": false,
+    "run_id": "run-golden",
+    "tenant_id": "tenant-a"
+  },
+  "crm_write_through": {
+    "calls": [],
+    "sql": []
+  },
+  "dnc_lookups": [],
+  "guardrail_events": [],
+  "gws_calls": [
+    {
+      "argv": [
+        "gmail",
+        "users",
+        "messages",
+        "list",
+        "--params",
+        "{\"userId\": \"me\", \"q\": \"is:unread from:bob@example.com\", \"maxResults\": 5}"
+      ],
+      "params": {
+        "maxResults": 5,
+        "q": "is:unread from:bob@example.com",
+        "userId": "me"
+      },
+      "timeout": 30
+    },
+    {
+      "argv": [
+        "gmail",
+        "users",
+        "messages",
+        "get",
+        "--params",
+        "{\"userId\": \"me\", \"id\": \"msg-html\", \"format\": \"metadata\"}"
+      ],
+      "params": {
+        "format": "metadata",
+        "id": "msg-html",
+        "userId": "me"
+      },
+      "timeout": 30
+    },
+    {
+      "argv": [
+        "gmail",
+        "users",
+        "messages",
+        "get",
+        "--params",
+        "{\"userId\": \"me\", \"id\": \"msg-multi\", \"format\": \"metadata\"}"
+      ],
+      "params": {
+        "format": "metadata",
+        "id": "msg-multi",
+        "userId": "me"
+      },
+      "timeout": 30
+    },
+    {
+      "argv": [
+        "gmail",
+        "users",
+        "messages",
+        "get",
+        "--params",
+        "{\"userId\": \"me\", \"id\": \"msg-plain\", \"format\": \"metadata\"}"
+      ],
+      "params": {
+        "format": "metadata",
+        "id": "msg-plain",
+        "userId": "me"
+      },
+      "timeout": 30
+    }
+  ],
+  "result": {
+    "count": 3,
+    "messages": [
+      {
+        "date": "Tue, 16 Sep 2026 09:00:00 +0000",
+        "from": "Bob <bob@example.com>",
+        "id": "msg-plain",
+        "labels": [
+          "INBOX",
+          "UNREAD"
+        ],
+        "snippet": "The Q3 numbers are attached",
+        "subject": "Q3 numbers",
+        "thread_id": "thread-1",
+        "to": "Agent <agent@example.com>"
+      },
+      {
+        "date": "Tue, 16 Sep 2026 10:00:00 +0000",
+        "from": "billing@example.com",
+        "id": "msg-html",
+        "labels": [
+          "INBOX"
+        ],
+        "snippet": "Invoice 42 is ready",
+        "subject": "Invoice 42",
+        "thread_id": "thread-2",
+        "to": "agent@example.com"
+      },
+      {
+        "date": "Tue, 16 Sep 2026 11:00:00 +0000",
+        "from": "bob@example.com",
+        "id": "msg-multi",
+        "labels": [
+          "INBOX"
+        ],
+        "snippet": "See attached",
+        "subject": "Contract",
+        "thread_id": "thread-3",
+        "to": "agent@example.com"
+      }
+    ],
+    "query": "is:unread from:bob@example.com",
+    "truncated": false
+  },
+  "scenario": "gmail_search_normal",
+  "scheduling_policy_lookups": [],
+  "tool": "gws_gmail_search"
+}

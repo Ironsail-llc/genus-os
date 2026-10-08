@@ -1,0 +1,25 @@
+{
+  "args": {
+    "anything": "at all"
+  },
+  "calendar_requests": [],
+  "context": {
+    "is_benchmark": true,
+    "run_id": "run-golden",
+    "tenant_id": "tenant-a"
+  },
+  "crm_write_through": {
+    "calls": [],
+    "sql": []
+  },
+  "dnc_lookups": [],
+  "guardrail_events": [],
+  "gws_calls": [],
+  "result": {
+    "error": "Tool 'gws_gmail_get' is disabled in benchmark mode — a benchmark never touches the real Google account, not even to read.",
+    "guard": "is_benchmark"
+  },
+  "scenario": "benchmark_refuses_gws_gmail_get",
+  "scheduling_policy_lookups": [],
+  "tool": "gws_gmail_get"
+}

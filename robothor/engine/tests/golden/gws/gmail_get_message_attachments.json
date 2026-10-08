@@ -1,0 +1,67 @@
+{
+  "args": {
+    "message_id": "msg-multi"
+  },
+  "calendar_requests": [],
+  "context": {
+    "is_benchmark": false,
+    "run_id": "run-golden",
+    "tenant_id": "tenant-a"
+  },
+  "crm_write_through": {
+    "calls": [],
+    "sql": []
+  },
+  "dnc_lookups": [],
+  "guardrail_events": [],
+  "gws_calls": [
+    {
+      "argv": [
+        "gmail",
+        "users",
+        "messages",
+        "get",
+        "--params",
+        "{\"userId\": \"me\", \"id\": \"msg-multi\", \"format\": \"full\"}"
+      ],
+      "params": {
+        "format": "full",
+        "id": "msg-multi",
+        "userId": "me"
+      },
+      "timeout": 30
+    }
+  ],
+  "result": {
+    "attachments": [
+      {
+        "filename": "contract.pdf",
+        "mime_type": "application/pdf",
+        "size_bytes": 20481
+      },
+      {
+        "filename": "chart.png",
+        "mime_type": "image/png",
+        "size_bytes": 512
+      }
+    ],
+    "body_chars": 22,
+    "body_text": "See attached contract.",
+    "body_truncated": false,
+    "cc": "",
+    "date": "Tue, 16 Sep 2026 11:00:00 +0000",
+    "from": "bob@example.com",
+    "id": "msg-multi",
+    "labels": [
+      "INBOX"
+    ],
+    "message_id": "",
+    "snippet": "See attached",
+    "subject": "Contract",
+    "thread_id": "thread-3",
+    "to": "agent@example.com"
+  },
+  "scenario": "gmail_get_message_attachments",
+  "scheduling_policy_lookups": [],
+  "tool": "gws_gmail_get"
+}

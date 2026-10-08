@@ -632,9 +632,11 @@ _INLINE_COMMENT_MAX_CHARS = 8_000
 _ANCHOR_422_RE = re.compile(r"line|path|diff|pull_request_review_thread|position", re.IGNORECASE)
 #: GitHub answers these, and drops connections, for reasons of its own: the
 #: same review posts fine moments later (2026-10-06: two finished reviews lost
-#: to one empty-bodied 500 each). One wait per retry, then give up.
+#: to one empty-bodied 500 each; 2026-10-07: a 500 outlasted 2 s + 5 s of
+#: retries). One wait per retry, about 85 s in all, then give up; the intake
+#: re-posts a written review a few minutes later (POST_RETRY_COOLDOWN).
 _TRANSIENT_STATUSES = frozenset({500, 502, 503, 504})
-_TRANSIENT_BACKOFF_S: tuple[float, ...] = (2.0, 5.0)
+_TRANSIENT_BACKOFF_S: tuple[float, ...] = (5.0, 20.0, 60.0)
 
 
 def _client(timeout: float = 20.0) -> httpx.AsyncClient:

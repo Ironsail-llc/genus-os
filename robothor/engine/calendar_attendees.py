@@ -8,6 +8,11 @@ version that was read, then read it back once to verify. A conflicting edit
 gets one fresh read and merge; an uncertain write is only ever read back,
 never blindly repeated.
 
+The calendar is reached through a workspace
+:class:`~robothor.workspace.protocols.CalendarProvider` (Google by default,
+whose session is one ``CalendarTransport``), never by constructing a
+transport here; every rule above is the provider-neutral part.
+
 These are direct writes. Editing a meeting is ordinary assistant work, not a
 payment or an irreversible external action, so there is no draft and no
 "reply yes to confirm" step. That step used to exist, and a bare "yes" from
@@ -21,10 +26,15 @@ from copy import deepcopy
 from datetime import date, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
+# The Google provider's session constructs `calendar_attendees.CalendarTransport`
+# at call time, so this name stays the seam tests patch.
+from robothor.engine.calendar_transport import CalendarTransport as CalendarTransport
+from robothor.workspace.types import CalendarRef, as_calendar_ref
+
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
 
-from robothor.engine.calendar_transport import CalendarTransport
+    from robothor.workspace.protocols import CalendarProvider
 
 #: Fields a plain update may set verbatim.
 TEXT_FIELDS = ("summary", "description", "location")
@@ -241,14 +251,23 @@ def _entry_preserved(old: dict[str, Any], attendees: list[dict[str, Any]]) -> bo
 Plan = tuple[dict[str, Any], "Callable[[dict[str, Any]], bool]", dict[str, Any]]
 
 
+def _calendar_api(provider: CalendarProvider | None) -> Any:
+    """The provider's synchronous face; this module runs in a worker thread."""
+    from robothor.workspace import get_workspace
+    from robothor.workspace.bridge import blocking
+
+    return blocking(provider if provider is not None else get_workspace().calendar)
+
+
 def _conditional_patch(
-    calendar_id: str,
+    calendar: CalendarRef | str,
     event_id: str,
     plan: Callable[[dict[str, Any]], dict[str, Any] | Plan],
     *,
     send_updates: str,
     cancelled: Any = None,
     allow_omitted: bool = False,
+    provider: CalendarProvider | None = None,
 ) -> dict[str, Any]:
     """One write; a conflict gets one fresh merge, an uncertain write only a read.
 
@@ -262,9 +281,10 @@ def _conditional_patch(
             "error": "Calendar operation cancelled before write",
             "invitations_requested": False,
         }
-    with CalendarTransport() as api:
+    ref = as_calendar_ref(calendar)
+    with _calendar_api(provider).session() as api:
         for attempt in range(2):
-            before = api.request("GET", calendar_id, event_id)
+            before = api.get(ref, event_id)
             if "error" in before:
                 return {**before, "verification": "unavailable", "invitations_requested": False}
             if before.get("status") == "cancelled":
@@ -288,13 +308,8 @@ def _conditional_patch(
                     "error": "Calendar operation cancelled before write",
                     "invitations_requested": False,
                 }
-            written = api.request(
-                "PATCH",
-                calendar_id,
-                event_id,
-                body=body,
-                etag=before["etag"],
-                send_updates=send_updates,
+            written = api.conditional_patch(
+                ref, event_id, body, etag=before["etag"], send_updates=send_updates
             )
             if written.get("status_code") == 412 and attempt == 0:
                 continue
@@ -304,7 +319,7 @@ def _conditional_patch(
                 and written.get("status_code", 0) < 500
             ):
                 return {**written, "invitations_requested": False, "verification": "failed"}
-            after = api.request("GET", calendar_id, event_id)
+            after = api.get(ref, event_id)
             shown = after if "error" not in after else before
             zone = _event_zone(before)
             verified = (
@@ -421,7 +436,7 @@ def _plan_times(
 
 
 def update_event(
-    calendar_id: str,
+    calendar: CalendarRef | str,
     event_id: str,
     *,
     screen: Callable[..., dict[str, Any] | None],
@@ -432,6 +447,7 @@ def update_event(
     fields: dict[str, Any] | None = None,
     send_updates: str = "all",
     cancelled: Any = None,
+    provider: CalendarProvider | None = None,
 ) -> dict[str, Any]:
     """Patch an existing event: guests, time, title, notes, place — in one write.
 
@@ -440,6 +456,7 @@ def update_event(
     keeps the meeting's length. Everyone who will be mailed about the change is
     screened against the do-not-contact list first.
     """
+    calendar_id = as_calendar_ref(calendar).calendar_id
     to_add = _unique(add)
     to_remove = _unique(remove)
     clash = sorted(set(to_add) & set(to_remove))
@@ -549,32 +566,39 @@ def update_event(
         return body, verify, extra
 
     return _conditional_patch(
-        calendar_id, event_id, plan, send_updates=send_updates, cancelled=cancelled
+        calendar,
+        event_id,
+        plan,
+        send_updates=send_updates,
+        cancelled=cancelled,
+        provider=provider,
     )
 
 
 def add_attendees(
-    calendar_id: str,
+    calendar: CalendarRef | str,
     event_id: str,
     emails: list[str],
     *,
     screen: Callable[..., dict[str, Any] | None],
     send_updates: str = "all",
     cancelled: Any = None,
+    provider: CalendarProvider | None = None,
 ) -> dict[str, Any]:
     """Add guests to an existing event — ``update_event`` with only additions."""
     return update_event(
-        calendar_id,
+        calendar,
         event_id,
         add=emails,
         screen=screen,
         send_updates=send_updates,
         cancelled=cancelled,
+        provider=provider,
     )
 
 
 def respond(
-    calendar_id: str,
+    calendar: CalendarRef | str,
     event_id: str,
     response: str,
     *,
@@ -582,6 +606,7 @@ def respond(
     comment: str | None = None,
     send_updates: str = "all",
     cancelled: Any = None,
+    provider: CalendarProvider | None = None,
 ) -> dict[str, Any]:
     """Set the calendar owner's own RSVP on an invitation.
 
@@ -589,6 +614,7 @@ def respond(
     the calendar this copy of the event lives on), or failing that the one whose
     address is the calendar's. Nobody else's RSVP is touched.
     """
+    calendar_id = as_calendar_ref(calendar).calendar_id
     if response not in RESPONSES:
         return {"error": f"response must be one of {', '.join(RESPONSES)}"}
 
@@ -653,10 +679,11 @@ def respond(
         return {"attendees": patch}, verify, {"response": response}
 
     return _conditional_patch(
-        calendar_id,
+        calendar,
         event_id,
         plan,
         send_updates=send_updates,
         cancelled=cancelled,
         allow_omitted=True,
+        provider=provider,
     )

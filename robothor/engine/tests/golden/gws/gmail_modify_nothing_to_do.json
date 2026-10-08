@@ -1,0 +1,24 @@
+{
+  "args": {
+    "message_id": "msg-plain"
+  },
+  "calendar_requests": [],
+  "context": {
+    "is_benchmark": false,
+    "run_id": "run-golden",
+    "tenant_id": "tenant-a"
+  },
+  "crm_write_through": {
+    "calls": [],
+    "sql": []
+  },
+  "dnc_lookups": [],
+  "guardrail_events": [],
+  "gws_calls": [],
+  "result": {
+    "error": "At least one of add_labels or remove_labels is required"
+  },
+  "scenario": "gmail_modify_nothing_to_do",
+  "scheduling_policy_lookups": [],
+  "tool": "gws_gmail_modify"
+}

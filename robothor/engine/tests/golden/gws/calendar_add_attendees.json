@@ -1,0 +1,122 @@
+{
+  "args": {
+    "attendees": [
+      "dave@example.com"
+    ],
+    "event_id": "meeting"
+  },
+  "calendar_requests": [
+    {
+      "calendar_id": "alice@example.com",
+      "event_id": "meeting",
+      "method": "GET"
+    },
+    {
+      "body": {
+        "attendees": [
+          {
+            "email": "alice@example.com",
+            "responseStatus": "needsAction"
+          },
+          {
+            "email": "Bob@Example.com",
+            "optional": true,
+            "responseStatus": "accepted"
+          },
+          {
+            "email": "dave@example.com"
+          }
+        ]
+      },
+      "calendar_id": "alice@example.com",
+      "etag": "\"v1\"",
+      "event_id": "meeting",
+      "method": "PATCH",
+      "send_updates": "all"
+    },
+    {
+      "calendar_id": "alice@example.com",
+      "event_id": "meeting",
+      "method": "GET"
+    }
+  ],
+  "context": {
+    "is_benchmark": false,
+    "run_id": "run-golden",
+    "tenant_id": "tenant-a"
+  },
+  "crm_write_through": {
+    "calls": [],
+    "sql": []
+  },
+  "dnc_lookups": [
+    {
+      "addresses": [
+        "alice@example.com",
+        "bob@example.com",
+        "dave@example.com"
+      ],
+      "tenant_id": "tenant-a"
+    }
+  ],
+  "guardrail_events": [],
+  "gws_calls": [],
+  "result": {
+    "added": [
+      "dave@example.com"
+    ],
+    "already_present": [],
+    "attendees": [
+      {
+        "email": "alice@example.com",
+        "responseStatus": "needsAction"
+      },
+      {
+        "email": "Bob@Example.com",
+        "responseStatus": "accepted"
+      },
+      {
+        "email": "dave@example.com",
+        "responseStatus": "needsAction"
+      }
+    ],
+    "attendees_notified": [
+      "alice@example.com",
+      "Bob@Example.com",
+      "dave@example.com"
+    ],
+    "calendar": {
+      "id": "alice@example.com",
+      "kind": "operator"
+    },
+    "changed": [
+      "attendees"
+    ],
+    "declined": [],
+    "delivery_verified": false,
+    "end": {
+      "dateTime": "2026-10-08T10:30:00-04:00",
+      "timeZone": "America/New_York"
+    },
+    "event_id": "meeting",
+    "htmlLink": "https://calendar.example.test/meeting",
+    "invitations_requested": true,
+    "recurrence": null,
+    "removed": [],
+    "send_updates": "all",
+    "start": {
+      "dateTime": "2026-10-08T10:00:00-04:00",
+      "timeZone": "America/New_York"
+    },
+    "status": "updated",
+    "summary": "Planning",
+    "verification": "verified"
+  },
+  "scenario": "calendar_add_attendees",
+  "scheduling_policy_lookups": [
+    [
+      "dave@example.com"
+    ]
+  ],
+  "tool": "gws_calendar_add_attendees"
+}

@@ -391,6 +391,35 @@ command.
 `send_email` is not a tool either — it is the `send-email` **skill**, invoked
 with `invoke_skill(name="send-email")`.
 
+#### The provider seam
+
+The mail and calendar tools reach the mailbox through a **workspace provider**,
+chosen by the `workspace_provider` setting (`ROBOTHOR_WORKSPACE_PROVIDER`).
+**Google is the default**, and the Google provider runs exactly the `gws` CLI
+calls the tools always ran. Microsoft 365 (`microsoft365`) is in development:
+selecting it now makes every mail and calendar tool refuse with
+`hint: "unsupported"`, rather than quietly reading the Google account. The chat
+tools are Google Chat only and are not affected.
+
+Only the transport moves behind the provider. Every guard stays in the tool
+handler and runs before any provider call: do-not-contact, `no_auto`
+scheduling, event dedup, the duplicate-reply check, reply-all assembly, the
+CRM write-through and the benchmark refusal. Characterization goldens
+(`robothor/engine/tests/golden/gws/`) pin the Google path byte for byte.
+
+| Piece | Where |
+|---|---|
+| Shapes (`MailMessage`, `SendResult`, `NormalizedEvent`, `CalendarRef`, `MailQuery`) | `robothor/workspace/types.py` |
+| `MailProvider`, `CalendarProvider`, `Workspace` | `robothor/workspace/protocols.py` |
+| Gmail search syntax → structured query (unknown operators kept, never dropped) | `robothor/workspace/query.py` |
+| Google adapter and Gmail parsing | `robothor/workspace/google/` |
+| Provider selection | `robothor.workspace.get_workspace()` |
+
+The handlers run in a worker thread, as they always have. They call a provider
+through `robothor.workspace.bridge.blocking()`, which uses the Google adapter's
+synchronous side directly and sends an async-only provider's calls to the
+engine's event loop. See [Microsoft 365 workspace](workspace/microsoft365.md).
+
 ### GitHub pull-request review
 
 Six tools on the instance's `GITHUB_TOKEN` (vault first). The three reads are

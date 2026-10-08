@@ -1,0 +1,42 @@
+{
+  "args": {
+    "message_id": "gone"
+  },
+  "calendar_requests": [],
+  "context": {
+    "is_benchmark": false,
+    "run_id": "run-golden",
+    "tenant_id": "tenant-a"
+  },
+  "crm_write_through": {
+    "calls": [],
+    "sql": []
+  },
+  "dnc_lookups": [],
+  "guardrail_events": [],
+  "gws_calls": [
+    {
+      "argv": [
+        "gmail",
+        "users",
+        "messages",
+        "get",
+        "--params",
+        "{\"userId\": \"me\", \"id\": \"gone\", \"format\": \"full\"}"
+      ],
+      "params": {
+        "format": "full",
+        "id": "gone",
+        "userId": "me"
+      },
+      "timeout": 30
+    }
+  ],
+  "result": {
+    "error": "Requested entity was not found.",
+    "hint": "x"
+  },
+  "scenario": "gmail_get_cli_error",
+  "scheduling_policy_lookups": [],
+  "tool": "gws_gmail_get"
+}

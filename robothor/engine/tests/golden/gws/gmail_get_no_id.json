@@ -1,0 +1,23 @@
+{
+  "args": {},
+  "calendar_requests": [],
+  "context": {
+    "is_benchmark": false,
+    "run_id": "run-golden",
+    "tenant_id": "tenant-a"
+  },
+  "crm_write_through": {
+    "calls": [],
+    "sql": []
+  },
+  "dnc_lookups": [],
+  "guardrail_events": [],
+  "gws_calls": [],
+  "result": {
+    "error": "Either message_id or thread_id is required",
+    "hint": "invalid_params: get the id from gws_gmail_search"
+  },
+  "scenario": "gmail_get_no_id",
+  "scheduling_policy_lookups": [],
+  "tool": "gws_gmail_get"
+}
