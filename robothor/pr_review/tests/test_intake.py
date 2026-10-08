@@ -609,3 +609,77 @@ async def test_review_status_lines_in_the_thread_trigger_nothing(env, text):
     env["chat"].post(text, reply=True, time="2026-10-05T10:05:00.000000Z")
     summary = await _run(env)
     assert summary["tasks_created"] == 0 and summary["triggers"] == 0
+
+
+# ── A new top-level message about a pull request already tracked ─────────
+# 2026-10-07: the operator posted "re-review <three PR links>" as a NEW
+# message. The intake took it for a duplicate post and dropped it — no
+# reaction, no reply, no review. A repost is a request: it re-reviews, and
+# the answers go to the thread the person is looking at now.
+
+T2 = "spaces/AAAA/threads/t2"
+LATER = "2026-10-05T10:05:00.000000Z"
+
+
+async def _reviewed(env):
+    env["github"].add(make_pr(7, SHA1))
+    env["chat"].post(f"review {URL}")
+    await _run(env)
+    await _finish(env)
+
+
+async def test_a_new_rereview_message_with_new_commits_queues_a_review(env):
+    await _reviewed(env)
+    env["github"].add(make_pr(7, SHA2))
+    msg = env["chat"].post(f"re-review {URL}", thread=T2, sender="users/bob", time=LATER)
+    summary = await _run(env)
+    assert summary["tasks_created"] == 1
+    assert "mode: incremental" in env["tasks"].created[-1]["body"]
+    assert (msg["name"], "\U0001f440") in env["chat"].reactions
+    row = await env["store"].get(TENANT, REPO, 7)
+    assert row.chat_thread == T2 and row.chat_poster == "users/bob"
+
+
+async def test_a_new_rereview_message_without_new_commits_answers_in_its_thread(env):
+    await _reviewed(env)
+    msg = env["chat"].post(f"re-review {URL}", thread=T2, time=LATER)
+    summary = await _run(env)
+    assert summary["tasks_created"] == 0
+    assert (msg["name"], "\U0001f440") in env["chat"].reactions
+    assert env["chat"].replies[-1][1:] == (T2, f"<{URL}|#7>: No changes?")
+
+
+async def test_a_plain_repost_of_a_reviewed_pr_is_a_request_too(env):
+    await _reviewed(env)
+    env["github"].add(make_pr(7, SHA2))
+    env["chat"].post(URL, thread=T2, time=LATER)
+    summary = await _run(env)
+    assert summary["tasks_created"] == 1
+
+
+async def test_a_new_message_while_a_review_runs_says_so_in_its_thread(env):
+    env["github"].add(make_pr(7, SHA1))
+    env["chat"].post(f"review {URL}")
+    await _run(env)
+    row = await env["store"].get(TENANT, REPO, 7)
+    row.status = "reviewing"
+    await env["store"].save(row)
+    env["chat"].post(f"re-review {URL}", thread=T2, time=LATER)
+    await _run(env)
+    row = await env["store"].get(TENANT, REPO, 7)
+    assert row.followup is True and row.pending_trigger == "rereview"
+    assert env["chat"].replies[-1][1] == T2
+    assert "already running" in env["chat"].replies[-1][2]
+
+
+async def test_a_new_message_about_a_pr_the_operator_stopped_is_still_ignored(env):
+    await _reviewed(env)
+    from robothor.pr_review.intake import OPERATOR_SKIP_NOTE
+
+    row = await env["store"].get(TENANT, REPO, 7)
+    row.status, row.error = "closed", OPERATOR_SKIP_NOTE
+    await env["store"].save(row)
+    env["github"].add(make_pr(7, SHA2))
+    env["chat"].post(f"re-review {URL}", thread=T2, time=LATER)
+    summary = await _run(env)
+    assert summary["tasks_created"] == 0

@@ -467,13 +467,26 @@ class Intake:
             if row is None:
                 row = self._new_row(pr.repo_full, pr.number, "chat")
                 self.summary["discovered"] += 1
-            elif row.chat_thread:
-                continue  # a repost; the original thread stays authoritative
+            elif row.status == "closed" and row.error == OPERATOR_SKIP_NOTE:
+                continue  # the operator stopped reviews of this pull request
+            # A new message about a tracked pull request is a request, not a
+            # duplicate: it moves the conversation to this thread, where the
+            # person is now looking (2026-10-07: "re-review <links>" posted
+            # fresh was dropped without a word).
+            repost = bool(row.chat_thread or row.last_reviewed_sha)
             row.chat_space = self.cfg.chat_space
             row.chat_thread = thread
             row.chat_message = str(message.get("name") or "")
             row.chat_poster = sender
-            if not row.last_reviewed_sha and _raise_trigger(row, "initial"):
+            if repost:
+                text = message_search_text(message)
+                trigger = "ambiguous" if classify_rereview(text) == "ambiguous" else "rereview"
+                if _raise_trigger(row, trigger, text):
+                    self.summary["triggers"] += 1
+                    if trigger == "rereview" and row.status in ACTIVE_STATUSES:
+                        await self.store.save(row)
+                        await self._say(row, IN_PROGRESS_REPLY)
+            elif not row.last_reviewed_sha and _raise_trigger(row, "initial"):
                 self.summary["triggers"] += 1
             await self.store.save(row)
             claimed += 1
