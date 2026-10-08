@@ -28,7 +28,7 @@ Where to start, rather than reading this top to bottom:
 Settings are documented in the [configuration reference](configuration.md),
 not here: a flag belongs to one command, a setting to the whole instance.
 
-38 verbs.
+39 verbs.
 
 ## `genus plugin`
 
@@ -1616,6 +1616,34 @@ Usage: `genus claude-code status [--no-ping]`
 | Flag | Takes | Default | Description |
 | --- | --- | --- | --- |
 | `--no-ping` | — | off | Skip the one-turn proof call |
+
+## `genus workspace`
+
+Connect the mail and calendar backend (Microsoft 365).
+
+Usage: `genus workspace {connect}`
+
+### `genus workspace connect`
+
+Connect Microsoft 365: create the app certificate, print the admin steps.
+
+Usage: `genus workspace connect <provider> [--tenant-id TENANT_ID] [--client-id CLIENT_ID] [--assistant-mailbox ASSISTANT_MAILBOX] [--owner-mailbox OWNER_MAILBOX] [--canary-mailbox CANARY_MAILBOX] [--dry-run] [--rotate] [--enable] [--json]`
+
+| Argument | Required | Description |
+| --- | --- | --- |
+| `provider` | yes | The provider to connect (Google needs no connect step) |
+
+| Flag | Takes | Default | Description |
+| --- | --- | --- | --- |
+| `--tenant-id` | `TENANT_ID` | — | Entra directory (tenant) id or verified domain |
+| `--client-id` | `CLIENT_ID` | — | Application (client) id of the app registration |
+| `--assistant-mailbox` | `ASSISTANT_MAILBOX` | — | The assistant's own mailbox |
+| `--owner-mailbox` | `OWNER_MAILBOX` | — | The operator's mailbox (its calendar is managed) |
+| `--canary-mailbox` | `CANARY_MAILBOX` | — | A third mailbox the app must NOT be able to read |
+| `--dry-run` | — | off | Print the plan; write nothing to the vault or config |
+| `--rotate` | — | off | Replace the stored certificate with a new one |
+| `--enable` | — | off | Set workspace_provider=microsoft365, only if the doctor probe passes |
+| `--json` | — | off | Machine-readable output |
 
 ## `genus engine`
 

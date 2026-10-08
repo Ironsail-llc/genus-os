@@ -1289,6 +1289,50 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     cc_status.add_argument("--no-ping", action="store_true", help="Skip the one-turn proof call")
 
+    # workspace -- the mail and calendar backend behind the gws_* tools
+    ws_parser = subparsers.add_parser(
+        "workspace", help="Connect the mail and calendar backend (Microsoft 365)"
+    )
+    ws_sub = ws_parser.add_subparsers(dest="workspace_command")
+    ws_m365 = ws_sub.add_parser(
+        "connect",
+        help="Connect Microsoft 365: create the app certificate, print the admin steps",
+        description=(
+            "Generate (or reuse) the Entra app certificate, store it with the directory and "
+            "client ids in the vault, record the mailboxes in config.yaml, and print the "
+            "certificate, the Graph permissions and the Exchange Online PowerShell that "
+            "scopes the app to the assistant and owner mailboxes. Re-run with --enable once "
+            "the admin steps are done: the provider switches only if the doctor probe passes."
+        ),
+    )
+    ws_m365.add_argument(
+        "workspace_provider",
+        metavar="provider",
+        choices=["microsoft365"],
+        help="The provider to connect (Google needs no connect step)",
+    )
+    ws_m365.add_argument("--tenant-id", help="Entra directory (tenant) id or verified domain")
+    ws_m365.add_argument("--client-id", help="Application (client) id of the app registration")
+    ws_m365.add_argument("--assistant-mailbox", help="The assistant's own mailbox")
+    ws_m365.add_argument("--owner-mailbox", help="The operator's mailbox (its calendar is managed)")
+    ws_m365.add_argument(
+        "--canary-mailbox", help="A third mailbox the app must NOT be able to read"
+    )
+    ws_m365.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print the plan; write nothing to the vault or config",
+    )
+    ws_m365.add_argument(
+        "--rotate", action="store_true", help="Replace the stored certificate with a new one"
+    )
+    ws_m365.add_argument(
+        "--enable",
+        action="store_true",
+        help="Set workspace_provider=microsoft365, only if the doctor probe passes",
+    )
+    ws_m365.add_argument("--json", action="store_true", help="Machine-readable output")
+
     eng_parser = subparsers.add_parser("engine", help="Manage the agent engine")
     eng_sub = eng_parser.add_subparsers(dest="engine_command")
     eng_run = eng_sub.add_parser("run", help="Run a single agent")
@@ -1484,6 +1528,10 @@ def main(argv: list[str] | None = None) -> int:
         from robothor.cli.claude_code import cmd_claude_code
 
         return cmd_claude_code(args)
+    if args.command == "workspace":
+        from robothor.cli.workspace import cmd_workspace
+
+        return cmd_workspace(args)
     if args.command == "engine":
         from robothor.cli.engine import cmd_engine
 

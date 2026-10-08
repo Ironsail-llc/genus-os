@@ -1360,6 +1360,28 @@ class TestOperatorCalendarWritable:
         assert "alice@example.com" not in result.detail
 
     @pytest.mark.asyncio
+    async def test_a_microsoft365_instance_does_not_ask_the_gws_cli(
+        self, calendared: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """On Microsoft 365 there is no Google account to ask; the operator's
+        calendar is proved by workspace.m365_connection instead. Failing here
+        would make every Microsoft 365 install exit 1."""
+        from robothor.engine.tools.handlers import gws as gws_handlers
+        from robothor.settings import reset_settings
+
+        def _never(*args, **kwargs):
+            raise AssertionError("a microsoft365 instance reached the gws CLI")
+
+        monkeypatch.setattr(gws_handlers, "_run_gws", _never)
+        monkeypatch.setenv("ROBOTHOR_WORKSPACE_PROVIDER", "microsoft365")
+        reset_settings()
+        result = await _run("calendar.operator_calendar_writable")
+
+        assert result.status == "pass"
+        assert "microsoft365" in result.detail
+        assert "workspace.m365_connection" in result.detail
+
+    @pytest.mark.asyncio
     async def test_an_instance_with_no_calendar_agent_skips(
         self, instance: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

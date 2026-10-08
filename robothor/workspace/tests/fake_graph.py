@@ -64,6 +64,10 @@ class FakeMailbox:
 
     address: str
     collections: dict[str, list[dict[str, Any]]] = field(default_factory=lambda: defaultdict(list))
+    #: What ``GET /users/{mailbox}/mailboxSettings/timeZone`` answers: Exchange
+    #: stores a Windows zone name unless the user picked an IANA one.
+    time_zone: str = "UTC"
+    calendar_id: str = "AAMkCalendarDefault"
 
     @property
     def messages(self) -> list[dict[str, Any]]:
@@ -120,6 +124,10 @@ class FakeGraphTenant:
         self.max_inflight: dict[str, int] = defaultdict(int)
         #: When set, nextLinks point at this origin instead of Graph's.
         self.next_link_origin: str | None = None
+        #: Mailboxes the app is NOT scoped to: every request addressed to one
+        #: answers 403 ErrorAccessDenied, the way Exchange RBAC for
+        #: Applications (or an ApplicationAccessPolicy) refuses it.
+        self.denied_mailboxes: set[str] = set()
         self._routes: list[_Route] = []
         self._faults: list[_Fault] = []
         self._token_counter = itertools.count(1)
@@ -169,6 +177,10 @@ class FakeGraphTenant:
             )
         )
 
+    def deny(self, *addresses: str) -> None:
+        """Put mailboxes outside the app's management scope (403 on every request)."""
+        self.denied_mailboxes.update(address.lower() for address in addresses)
+
     def requests_matching(self, method: str, pattern: str) -> list[httpx.Request]:
         rx = re.compile(f"^{pattern}$")
         return [r for r in self.requests if r.method == method.upper() and rx.match(_graph_path(r))]
@@ -192,6 +204,11 @@ class FakeGraphTenant:
                 return graph_error(fault.status, f"Fault{fault.status}", "scripted", fault.headers)
         if not self._authorised(request):
             return graph_error(401, "InvalidAuthenticationToken", "Access token is empty.")
+        scoped = re.match(r"^/users/([^/]+)", path)
+        if scoped and unquote(scoped.group(1)).lower() in self.denied_mailboxes:
+            return graph_error(
+                403, "ErrorAccessDenied", "Access to OData is disabled: application scope."
+            )
         for route in reversed(self._routes):
             if route.method != request.method:
                 continue
@@ -334,6 +351,31 @@ class FakeGraphTenant:
                         404, "ErrorItemNotFound", "The specified object was not found."
                     )
                 return httpx.Response(204)
+
+        @self.route("GET", mailbox_rx + r"/mailFolders/(?P<folder>[^/]+)/messages")
+        async def list_folder_messages(tenant, request, match):
+            box = tenant.mailbox(unquote(match["mailbox"]))
+            async with tenant._occupy(box.address):
+                folder = unquote(match["folder"]).lower()
+                top = int(request.url.params.get("$top", "10"))
+                page = [
+                    m
+                    for m in box.messages
+                    if str(m.get("parentFolderId", "inbox")).lower() == folder
+                ][:top]
+                return httpx.Response(200, json={"value": page})
+
+        @self.route("GET", mailbox_rx + r"/calendar")
+        async def get_calendar(tenant, request, match):
+            box = tenant.mailbox(unquote(match["mailbox"]))
+            async with tenant._occupy(box.address):
+                return httpx.Response(200, json={"id": box.calendar_id})
+
+        @self.route("GET", mailbox_rx + r"/mailboxSettings/timeZone")
+        async def get_time_zone(tenant, request, match):
+            box = tenant.mailbox(unquote(match["mailbox"]))
+            async with tenant._occupy(box.address):
+                return httpx.Response(200, json={"value": box.time_zone})
 
     def _occupy(self, mailbox: str) -> _Occupancy:
         return _Occupancy(self, mailbox)
