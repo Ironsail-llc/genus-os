@@ -289,6 +289,7 @@ def decide_review(
     last_reviewed_sha: str | None,
     completed_review_at_head: bool = False,
     compare_status: str | None = None,
+    replies_pending: bool = False,
 ) -> ReviewDecision:
     """Full, incremental, or skip — decided by SHA, never by asking the model.
 
@@ -298,7 +299,12 @@ def decide_review(
       (see ``github_compare``). ``diverged``/``behind``/``missing`` mean the
       history was rewritten, so the re-review falls back to a full one;
       ``identical`` means there is nothing new.
+    * ``replies_pending``: someone answered one of our findings on GitHub and
+      we have not replied yet. A re-review then looks again at the same head,
+      so the answer is acknowledged (team feedback 2026-10-08).
     """
+    if replies_pending and kind == "rereview" and last_reviewed_sha == head_sha:
+        return ReviewDecision(action="review", mode="incremental", since_sha=head_sha)
     skip_reason = "no_new_commits" if kind == "rereview" else "already_reviewed"
     if completed_review_at_head or last_reviewed_sha == head_sha:
         return ReviewDecision(action="skip", reason=skip_reason)

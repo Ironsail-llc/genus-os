@@ -676,3 +676,27 @@ async def test_a_review_failure_still_waits_the_full_cooldown(env):
 async def test_a_post_only_failure_tells_the_thread_the_short_wait(env):
     await _failed_while_posting(env)
     assert "retry automatically in about 5 min" in env["chat"].replies[-1][2]
+
+
+async def test_a_finding_the_author_justified_is_acknowledged_on_its_thread(env):
+    """Team feedback 2026-10-08: the author replied "out of scope" to a
+    finding; the reviewer accepted it. The thread says so and the PR passes."""
+    row = await env["store"].get(TENANT, REPO, 7)
+    row.review_ids = [400]
+    row.last_reviewed_sha = "0" * 40
+    row.last_review = {"issues": [{**_issue("major"), "comment_id": 77}]}
+    await env["store"].save(row)
+    prior = [
+        {
+            "comment_id": 77,
+            "description": "missing retry",
+            "status": "accepted",
+            "note": "agreed — out of scope for this ticket",
+        }
+    ]
+    job = FakeJob(result={"structured_output": _output("APPROVE", [], prior)})
+    result = await _finalize(env, job)
+    assert result["verdict"] == "APPROVE"
+    assert env["poster"].replies == [
+        (77, "**Acknowledged** — agreed — out of scope for this ticket")
+    ]

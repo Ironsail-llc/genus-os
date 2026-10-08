@@ -77,12 +77,14 @@ job's structured output from the coding job itself — the agent never relays
 it — and recomputes the verdict (`robothor/pr_review/policy.py`):
 
 - any `blocker` or `major` finding, or a previous one the model did not
-  explicitly report `resolved` — silence is not a fix — posts
+  explicitly report `resolved` or `accepted` — silence is not a fix — posts
   `REQUEST_CHANGES` (or `COMMENT` with
   `ROBOTHOR_PR_REVIEW_BLOCKING_EVENT=COMMENT`) — never `APPROVE`. Previous
   findings are tracked by the inline comment id GitHub gave each one, mapped
   by posting order, so two findings on one line never share an id;
-- `APPROVE` only when the model approved and nothing blocking remains;
+- `APPROVE` whenever nothing blocking remains, whatever the model proposed:
+  `minor` findings and nits are posted as suggestions and never hold back the
+  approval;
 - with `ROBOTHOR_PR_REVIEW_REQUIRE_TICKET=true`, a pull request with no ticket
   key in its title, branch, description or commit messages gets a blocking
   `[no-ticket]` finding.
@@ -100,9 +102,22 @@ comments and conversation comments, without bots or the reviewer's own
 account (redacted, 1,500 characters each, the latest 40); and the GitHub
 state — `mergeable` / `mergeable_state`, the files a merge into the base
 conflicts in (a `git merge-tree` in the reviewer's own clone, before the job
-starts), and the head commit's check runs and commit statuses. A merge
-conflict or a failing check is a blocking finding the model must report,
-unless it shows the check cannot be caused by the change. When no ticket key
+starts), and the head commit's check runs and commit statuses. A failing
+check is a blocking finding the model must report, unless it shows the check
+cannot be caused by the change. **A merge conflict is not a finding** and
+never holds back an approval — the authors know and rebase separately; the
+summary names the conflicting files.
+
+**Answers to findings are acknowledged.** On a re-review each previous
+finding is shown with the replies on its GitHub thread. When the author's
+reason holds ("out of scope", "not needed", "intended"), the model reports
+the finding `accepted`: it clears like a fix, and the thread gets an
+**Acknowledged** reply with the reason. A reason that does not hold stays
+`unresolved` with a note saying why. An answer needs no new commits and no
+Chat message: about every 10 minutes the intake checks pull requests with
+open findings, and one whose thread ends with someone else's reply is
+re-reviewed at the same head (a "re-review" request in Chat does the same at
+once, instead of "No changes?"). When no ticket key
 is found and Jira is configured, a title search in the repository's project
 offers up to five candidate tickets, marked as not linked.
 

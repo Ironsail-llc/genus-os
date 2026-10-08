@@ -16,7 +16,7 @@ __all__ = ["REVIEW_OUTPUT_SCHEMA", "SEVERITIES", "review_output_schema", "valida
 
 SEVERITIES: tuple[str, ...] = ("blocker", "major", "minor", "nit")
 _VERDICTS = ("APPROVE", "COMMENT", "REQUEST_CHANGES")
-_PRIOR_STATUSES = ("resolved", "partially_resolved", "unresolved")
+_PRIOR_STATUSES = ("resolved", "accepted", "partially_resolved", "unresolved")
 
 REVIEW_OUTPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -93,7 +93,10 @@ REVIEW_OUTPUT_SCHEMA: dict[str, Any] = {
                     "status": {"type": "string", "enum": list(_PRIOR_STATUSES)},
                     "note": {
                         "type": "string",
-                        "description": "How it was (or was not) addressed.",
+                        "description": (
+                            "How it was (or was not) addressed. For accepted: why the "
+                            "author's reply holds — this is posted on the finding's thread."
+                        ),
                     },
                 },
             },

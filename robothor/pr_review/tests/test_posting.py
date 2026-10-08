@@ -286,3 +286,13 @@ def test_compose_body_cap_truncates_non_blocking_first():
     assert len(body) <= 5000
     assert "keep" in body and "sum" in body and body.endswith("FOOT")
     assert "more finding(s) omitted" in body
+
+
+def test_an_answered_finding_reviews_the_same_head_again():
+    d = decide_review(kind="rereview", head_sha="a", last_reviewed_sha="a", replies_pending=True)
+    assert d.action == "review" and d.mode == "incremental" and d.since_sha == "a"
+
+
+def test_no_commits_and_no_replies_still_skips():
+    d = decide_review(kind="rereview", head_sha="a", last_reviewed_sha="a")
+    assert d.action == "skip"

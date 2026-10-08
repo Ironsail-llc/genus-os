@@ -24,7 +24,9 @@ __all__ = [
     "checks",
     "discussion",
     "linked_issues",
+    "pending_replies",
     "pr_description",
+    "thread_replies",
 ]
 
 #: Characters of the PR description in the prompt.
@@ -152,6 +154,68 @@ def discussion(
         items = [i for i in items if not i.created_at or i.created_at < before]
     items.sort(key=lambda i: i.created_at)
     return tuple(i for i in items if i.body or i.state)[-max_items:]
+
+
+def thread_replies(
+    review_comments: Iterable[Mapping[str, Any]],
+    *,
+    item_chars: int = DISCUSSION_ITEM_MAX,
+    per_thread: int = 10,
+) -> dict[int, list[dict[str, str]]]:
+    """People's replies on each review-comment thread, by the root comment's id.
+
+    A re-review shows each previous finding with what the author (or anyone)
+    answered on its thread — "out of scope", "not needed" — so the reviewer
+    can accept a justified answer instead of re-raising the finding (team
+    feedback 2026-10-08). Replies by the root comment's own author (us) and by
+    bots are left out.
+    """
+    comments = list(review_comments)
+    root_author = {
+        int(c["id"]): str((c.get("user") or {}).get("login") or "").lower()
+        for c in comments
+        if isinstance(c.get("id"), int) and not c.get("in_reply_to_id")
+    }
+    out: dict[int, list[dict[str, str]]] = {}
+    for c in sorted(comments, key=lambda c: str(c.get("created_at") or "")):
+        root = c.get("in_reply_to_id")
+        if not isinstance(root, int):
+            continue
+        us = root_author.get(root, "")
+        if not _is_person(c.get("user"), {us} if us else set()):
+            continue
+        body = _cap(_redact(c.get("body")).strip(), item_chars)
+        if body:
+            out.setdefault(root, []).append({"author": str(c["user"]["login"]), "body": body})
+    return {k: v[-per_thread:] for k, v in out.items()}
+
+
+def pending_replies(
+    review_comments: Iterable[Mapping[str, Any]], comment_ids: Iterable[int]
+) -> list[int]:
+    """Our findings (by root comment id) whose thread ends with a person's reply.
+
+    The last word on the thread is someone else's: they answered and we have
+    not. Once the re-review posts its "Acknowledged" / "Still open" reply the
+    thread ends with ours again, so this never loops.
+    """
+    wanted = {int(i) for i in comment_ids if isinstance(i, int)}
+    comments = list(review_comments)
+    root_author = {
+        int(c["id"]): str((c.get("user") or {}).get("login") or "").lower()
+        for c in comments
+        if isinstance(c.get("id"), int) and int(c["id"]) in wanted
+    }
+    last: dict[int, Mapping[str, Any]] = {}
+    for c in sorted(comments, key=lambda c: str(c.get("created_at") or "")):
+        root = c.get("in_reply_to_id")
+        if isinstance(root, int) and root in root_author:
+            last[root] = c
+    return sorted(
+        root
+        for root, c in last.items()
+        if _is_person(c.get("user"), {root_author[root]} if root_author[root] else set())
+    )
 
 
 def checks(

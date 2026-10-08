@@ -323,10 +323,11 @@ async def test_a_blocking_review_says_comments_change_request_with_the_count():
     assert env["chat"].unreactions == []
 
 
-async def test_a_non_blocking_comment_says_comments_change_request():
+async def test_only_minor_findings_say_approved():
+    # Team feedback 2026-10-08: "pass on minors".
     env = await make_env()
     await _finalize(env, _output("COMMENT", [_issue("minor")]))
-    assert env["chat"].replies[-1][2] == f"<{URL}|#7>: Comments/change request"
+    assert env["chat"].replies[-1][2] == f"<{URL}|#7>: Approved"
 
 
 async def test_a_failure_says_which_attempt_and_that_it_retries_itself():

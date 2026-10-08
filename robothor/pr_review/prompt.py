@@ -352,26 +352,22 @@ def _github_state_lines(c: ReviewContext) -> list[str]:
         lines += [f"  - {check.name}: {check.conclusion or 'unknown'}" for check in c.checks]
     conflicted = bool(c.conflicts) or c.mergeable_state == "dirty"
     failing = [check.name for check in c.checks or () if check.failing]
-    if conflicted or failing:
+    if conflicted:
+        # Team feedback 2026-10-08: the authors already know about conflicts
+        # and ask for approval of the changes; a conflict never holds it back.
         lines.append(
-            "These are blocking PR-level findings you must report (path empty, line null, "
-            "severity blocker): the pull request cannot merge as it stands. "
-            + (
-                f"For the conflict, read {base}'s version of each conflicting file "
-                f"(`git show {base}:<path>`) and say what the rebase must keep; check whether "
-                "the base's tests in those files still test anything once this change is "
-                "merged. "
-                if conflicted
-                else ""
-            )
-            + (
-                "For each failing check, find the test or step it runs and say whether this "
-                "change can cause the failure; only when the repository shows it cannot (for "
-                "example the same check fails on the base for an unrelated reason) report it "
-                "as minor instead, and say why."
-                if failing
-                else ""
-            )
+            "A merge conflict is not a finding and never holds back an approval: the "
+            "authors already know and rebase separately; you are reviewing the changes. "
+            "Say in one summary sentence which files conflict, nothing more."
+        )
+    if failing:
+        lines.append(
+            "A failing check is a blocking PR-level finding you must report (path empty, "
+            "line null, severity blocker): the pull request cannot merge as it stands. "
+            "For each failing check, find the test or step it runs and say whether this "
+            "change can cause the failure; only when the repository shows it cannot (for "
+            "example the same check fails on the base for an unrelated reason) report it "
+            "as minor instead, and say why."
         )
     lines.append(
         "Pending or queued checks are not findings. GitHub reports nothing about whether a "
@@ -455,6 +451,11 @@ def build_review_prompt(guidelines: Guidelines | str, c: ReviewContext) -> str:
         "exactly as given (null when it has none) and a status of resolved, "
         "partially_resolved or unresolved. A previous blocker or major you leave out, or "
         "do not report resolved, still blocks the merge.",
+        '3. The replies on each previous finding\'s thread (its "replies"). When the author '
+        'answered it ("out of scope", "not needed", "intended") and the reason holds '
+        "for this PR, report it as accepted with a note acknowledging their reason; the note "
+        "is posted on that thread. When the reason does not hold, keep it unresolved and say "
+        "why in the note. Never ignore a reply.",
         "Only raise new issues on code outside the incremental diff if the new changes make "
         "them relevant. Do not re-raise a previous issue as a new one.",
         "",
