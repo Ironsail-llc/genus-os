@@ -161,6 +161,12 @@ recommended:
       type: boolean
       default: true
       description: Mirror this agent's deliveries into the channel bus.
+    line_filter:
+      type: string
+      description: >
+        Regex. Only output lines matching it are delivered; a run left with no
+        matching line is silent (delivery_status suppressed_filtered). A failed
+        run's error is always delivered. For "these lines or nothing" agents.
   tools_allowed:
     type: list[string]
     description: >
@@ -393,6 +399,8 @@ optional:
         type: string
       surface_to_channel:
         type: boolean
+      line_filter:
+        type: string
     context_files:
       type: list[string]
     peer_agents:

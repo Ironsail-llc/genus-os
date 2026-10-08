@@ -23,10 +23,13 @@ schedule:
 
 # `none` keeps the agent silent. For the Telegram digest set
 # ROBOTHOR_PR_REVIEW_TELEGRAM_DIGEST=true and install with delivery_mode=announce.
+# line_filter: only the digest lines pr_review_finalize writes are delivered,
+# never the model's narration; a run with no digest stays silent.
 delivery:
   mode: {{ delivery_mode }}
   channel: telegram
   to: "${ROBOTHOR_TELEGRAM_CHAT_ID}"
+  line_filter: '^\W*PR review '
 
 # Exactly the tools its instructions call, and nothing else: its task queue,
 # the deterministic pr_review_* halves, watching and (only if its run is

@@ -33,7 +33,7 @@ from robothor.pr_review.checkout import ensure_checkout, merge_conflicts, read_a
 from robothor.pr_review.context import checks as check_list
 from robothor.pr_review.context import discussion as discussion_items
 from robothor.pr_review.context import linked_issues, pr_description
-from robothor.pr_review.intake import MAX_ATTEMPTS
+from robothor.pr_review.intake import MAX_ATTEMPTS, POST_RETRY_COOLDOWN, post_only
 from robothor.pr_review.policy import decide_verdict, extract_ticket_key, is_blocking
 from robothor.pr_review.posting import decide_review
 from robothor.pr_review.prompt import (
@@ -280,12 +280,19 @@ def _resumable(row: PrReviewRow, head: str) -> bool:
     the two agreeing on this head means the review was written for it and is
     still the one to post. The row is ``failed``, or ``queued`` once the
     intake's retry (or a "re-review" reply) has filed the task.
+
+    The head is checked against the commit the review was written for
+    (``pending.reviewed_sha``), never ``queued_sha``: the intake's retry sets
+    ``queued_sha`` to the current head before prepare runs, so that check
+    always passed and a review of an old head was resumed, refused by
+    finalize, and left the row in ``posting`` for good (2026-10-07, #2135).
     """
     pending = row.last_review.get("pending") or {}
+    reviewed = str(pending.get("reviewed_sha") or row.queued_sha)
     return (
         row.status in _RESUMABLE
         and bool(row.job_id)
-        and row.queued_sha == head
+        and reviewed == head
         and pending.get("job_id") == row.job_id
     )
 
@@ -501,6 +508,9 @@ async def prepare(
     claimed.head_sha = head
     claimed.queued_sha = head
     claimed.mode = ctx.mode
+    # A written-but-unposted review that was not resumed (its head moved, or
+    # its job is gone) is superseded by this job: never post it.
+    claimed.last_review.pop("pending", None)
     await store.save(claimed)
     return {
         "repo": row.repo,
@@ -553,12 +563,17 @@ def _digest(cfg: ReviewerConfig, row: PrReviewRow, text: str) -> str:
     return f"PR review {row.repo}#{row.number}: {text}" if wanted else ""
 
 
-def _failure_text(cfg: ReviewerConfig, attempts: int, reason: str) -> str:
+def _failure_text(
+    cfg: ReviewerConfig, attempts: int, reason: str, *, post_only: bool = False
+) -> str:
     """What the thread is told: the intake retries by itself until MAX_ATTEMPTS."""
+    wait = cfg.retry_cooldown_minutes
+    if post_only:
+        wait = min(wait, int(POST_RETRY_COOLDOWN.total_seconds() // 60))
     if attempts < MAX_ATTEMPTS:
         return (
             f"\u26a0\ufe0f Automated review failed (attempt {attempts} of {MAX_ATTEMPTS}): "
-            f"{reason}\nI'll retry automatically in about {cfg.retry_cooldown_minutes} min; "
+            f"{reason}\nI'll retry automatically in about {wait} min; "
             'reply "re-review" to retry now.'
         )
     return (
@@ -596,7 +611,7 @@ async def _fail(
         store,
         chat,
         claimed,
-        _failure_text(cfg, claimed.attempts, short),
+        _failure_text(cfg, claimed.attempts, short, post_only=post_only(claimed)),
     )
     return {
         "status": "failed",
@@ -658,6 +673,35 @@ def _job_problem(job: Any, row: PrReviewRow) -> str:
     return ""
 
 
+async def _release_stale_post(
+    cfg: ReviewerConfig, store: PrReviewStore, row: PrReviewRow, problem: str
+) -> dict[str, Any]:
+    from datetime import UTC, datetime
+
+    released = await store.transition(
+        row.tenant_id,
+        row.repo,
+        row.number,
+        from_statuses=("posting",),
+        to_status="failed",
+        job_id=row.job_id,
+    )
+    if released is None:
+        return {"error": problem}
+    released.error = f"stale written review dropped: {problem}"[:_ERROR_MAX]
+    released.failed_at = datetime.now(UTC)
+    released.last_review.pop("pending", None)
+    released.pending_trigger = released.pending_trigger or "new_head"
+    await store.save(released)
+    return {
+        "status": "stale",
+        "digest": ""
+        if row.chat_thread
+        else _digest(cfg, row, "the written review was for an older head; re-queued"),
+        "next": "resolve the task: the head moved, the intake will queue the new head",
+    }
+
+
 async def finalize(
     cfg: ReviewerConfig,
     store: PrReviewStore,
@@ -690,6 +734,11 @@ async def finalize(
         return {"error": "coding job not found for this tenant"}
     problem = _job_problem(job, row)
     if problem:
+        if row.status == "posting" and str(getattr(job, "id", "") or "") == row.job_id:
+            # The bound job reviewed another head than the one queued: it can
+            # never post. Release the row so the intake reviews the new head,
+            # instead of leaving it in posting where nothing picks it up.
+            return await _release_stale_post(cfg, store, row, problem)
         return {"error": problem}
     job_id = row.job_id
     if row.status in FINAL_STATUSES and row.last_review.get("job_id") == job_id:
@@ -777,7 +826,10 @@ async def finalize(
             "prior_review_ids": list(row.review_ids),
             "ticket": ticket,
         }
-        row.last_review = {**row.last_review, "pending": {"job_id": job_id, **context}}
+        row.last_review = {
+            **row.last_review,
+            "pending": {"job_id": job_id, "reviewed_sha": reviewed_sha, **context},
+        }
         await store.save(row)
     else:
         context = dict(row.last_review.get("pending") or {})

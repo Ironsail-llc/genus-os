@@ -190,6 +190,9 @@ never left running.
 2. **Install the agent.** `genus agent install pr-reviewer` (catalog
    department `engineering`). For a Telegram digest of each review, install it
    with `delivery_mode=announce` and set `ROBOTHOR_PR_REVIEW_TELEGRAM_DIGEST=true`.
+   The manifest's `delivery.line_filter` passes only the digest lines
+   (`PR review …`); a run with no digest sends nothing, whatever the model
+   writes.
 3. **Install the workflows.** Copy `templates/workflows/pr-review-intake.yaml`
    and `templates/workflows/pr-review-run.yaml` into the instance's
    `docs/workflows/`, and exclude them from git locally (append both paths to
@@ -298,11 +301,18 @@ retries are spent.
   `ROBOTHOR_PR_REVIEW_RETRY_COOLDOWN_MINUTES` (default 60), at most 3 attempts
   per head; the author can always reply "re-review" in the Chat thread.
   **A posting failure never pays for a second review:** when the review was
-  written and only the post failed, the retry's `pr_review_prepare` binds the
-  same finished job again (`status: posting`, `resumed: true`) and finalize
-  posts it, skipping every step already recorded. `github_create_review`
-  itself retries a 500/502/503/504 or a dropped connection twice (after 2 s,
-  then 5 s), checking before each retry that the review did not land anyway;
-  a failure it gives up on carries `transient: true`. A
+  written and only the post failed, the intake retries after 5 minutes (not
+  the full cooldown, since nothing is re-reviewed), the retry's
+  `pr_review_prepare` binds the same finished job again (`status: posting`,
+  `resumed: true`) and finalize posts it, skipping every step already
+  recorded. This happens only while the pull request's head is still the
+  commit that review was written for (`last_review.pending.reviewed_sha`); once
+  the head has moved, the written review is dropped and the new head is
+  reviewed afresh. A row left in `posting` with a job for another head is
+  released to `failed` (status `stale`) and re-queued, never left waiting.
+  `github_create_review` itself retries a 500/502/503/504 or a dropped
+  connection three times (after 5 s, 20 s, then 60 s), checking before each
+  retry that the review did not land anyway; a failure it gives up on carries
+  `transient: true`. A
   failure on a pull request with no Chat thread is reported in the Telegram
   digest when `ROBOTHOR_PR_REVIEW_TELEGRAM_DIGEST` is on.
