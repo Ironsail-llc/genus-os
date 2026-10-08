@@ -49,8 +49,9 @@ class IngestReport:
     mode: str = "incremental"  # "initial" | "incremental" | "resync"
     read: int = 0
     published: int = 0
-    #: Unseen items left unpublished because they are not newer than the
-    #: high-water mark: the replay a lost delta would otherwise cause.
+    #: Unseen items left unpublished as history: below the high-water mark
+    #: after a reset (the replay a lost delta would otherwise cause), or in an
+    #: ordinary round older than the seen set's retention.
     held_back: int = 0
     logged: int = 0
     #: New messages logged to the CRM as an interaction this round.

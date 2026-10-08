@@ -223,12 +223,33 @@ Every `ROBOTHOR_M365_INGEST_INTERVAL_SECONDS` (default 60) one round runs:
 
 The payloads follow the contract in [Event Bus](../event-bus.md#email-and-calendar-event-contract).
 
+**No unseen mail is dropped.** The worker records the id of every message
+it handles (`workspace_seen`) and never publishes an id twice; that seen set,
+not the time a message arrived, decides what is new. In an ordinary round the
+delta returns only what changed since the last one, and every unread message
+in it that the worker has not seen is published, whatever its
+`receivedDateTime`: two messages received in the same second, a delivery
+Exchange delayed, or mail moved into the inbox with an older date. The one
+exception is mail received more than 45 days ago (the seen set's retention,
+after which a handled id may already be purged), which is treated as history.
+
 **A lost delta never replays old mail.** Exchange can drop a delta
-(`410 syncStateNotFound`). The worker then starts a new one, and publishes
-from it only messages newer than the high-water mark (the newest message it
-had already processed) that it has not seen before. Both live in the database
-(migration 149: `workspace_sync_state` and `workspace_seen`). The first sync
-ever publishes at most 20 unread messages from the last week.
+(`410 syncStateNotFound`). The worker then starts a new one, which lists the
+whole inbox again from a day before the high-water mark (the newest
+`receivedDateTime` it has processed; it never moves backwards). From that
+listing it publishes only unseen unread messages received at or after the
+high-water mark, so a new message in the same second as the mark is still
+published. Unseen messages older than the mark are held back as history.
+If the seen set no longer covers the messages the new delta re-lists at or
+below the mark (the seen records were lost or purged), the mark's own second
+is held back too, because the unseen message there could be the one that set
+the mark. The high-water mark and the delta position live in
+`workspace_sync_state` (migration 149). The first sync ever publishes at most
+20 unread messages from the last week.
+
+The calendar follows the same rule over `lastModifiedDateTime`: an ordinary
+round publishes every change it has not seen, and after a 410 or the daily
+window renewal only unseen changes at or after the mark are published.
 
 The email log is written atomically (a temporary file, then a rename, under
 the same `.email-log.lock` the Google script uses). Existing entries are kept

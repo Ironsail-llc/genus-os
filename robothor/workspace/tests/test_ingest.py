@@ -260,6 +260,119 @@ async def test_a_lost_state_row_with_seen_ids_is_not_a_replay(mail, delta, bus, 
     assert bus.ids() == [m["id"] for m in old]
 
 
+# ── mail: nothing unseen is ever dropped at the high-water mark ────────
+
+
+def _stamp(when) -> str:
+    return when.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+async def _high_water(store: MemoryIngestStore):
+    return (await store.load(TENANT, "microsoft365", ME, "mail")).high_water
+
+
+async def test_incremental_publishes_unseen_mail_received_in_the_high_water_second(
+    mail, delta, bus, store
+) -> None:
+    """Two more messages stamped the same second as the high-water message are not lost."""
+    first = delta.deliver(ME, sender=ALICE, subject="First")
+    await mail.run_once()
+    same = first["receivedDateTime"]
+    twins = [delta.deliver(ME, sender=BOB, subject=f"Twin {i}", received=same) for i in range(2)]
+
+    report = await mail.run_once()
+
+    assert report.mode == "incremental"
+    assert bus.ids() == [first["id"]] + [m["id"] for m in twins]
+    assert report.held_back == 0
+    assert (await mail.run_once()).published == 0  # and only once
+    assert len(bus.ids()) == 3
+
+
+async def test_incremental_publishes_a_late_message_with_an_older_timestamp(
+    mail, delta, bus, store
+) -> None:
+    """Exchange delivery delays and moved-in mail carry a receivedDateTime from the past."""
+    _deliver(delta, 2)
+    await mail.run_once()
+    high_water = await _high_water(store)
+    late = delta.deliver(
+        ME, sender=BOB, subject="Delayed", received=_stamp(high_water - timedelta(minutes=10))
+    )
+
+    report = await mail.run_once()
+
+    assert report.mode == "incremental"
+    assert bus.ids()[-1] == late["id"]
+    assert bus.ids().count(late["id"]) == 1
+    assert report.held_back == 0
+    # The mark never moves backwards.
+    assert await _high_water(store) == high_water
+    await mail.run_once()
+    assert bus.ids().count(late["id"]) == 1
+
+
+async def test_incremental_holds_back_mail_older_than_the_seen_retention(
+    mail, delta, bus, store
+) -> None:
+    """Older than SEEN_TTL, a seen id may have been purged: that is history, not new mail."""
+    from robothor.workspace.ingest.state import SEEN_TTL
+
+    await mail.run_once()
+    # The delta was started long ago (its query floor is a week before that),
+    # so Exchange can still answer a message stamped before the retention.
+    delta.mail.clock += SEEN_TTL + timedelta(days=5)
+    ancient = delta.deliver(
+        ME,
+        sender=BOB,
+        subject="Ancient",
+        received=_stamp(delta.mail.clock - SEEN_TTL - timedelta(days=1)),
+    )
+    report = await mail.run_once()
+    assert ancient["id"] not in bus.ids()
+    assert report.held_back == 1
+
+
+async def test_a_410_resync_publishes_unseen_same_second_mail_but_no_old_mail(
+    mail, delta, bus, store
+) -> None:
+    old = _deliver(delta, 3)
+    old_read = delta.deliver(ME, sender=BOB, is_read=True, subject="Read long ago")
+    newest = delta.deliver(ME, sender=ALICE, subject="Newest")
+    await mail.run_once()
+    high_water = await _high_water(store)
+    assert _stamp(high_water) == newest["receivedDateTime"]
+
+    delta.expire_tokens()
+    # An old message turns unread again (it now looks new in the full listing),
+    # and two unseen messages land in the very second of the high-water mark.
+    delta.mail.message(ME, old_read["id"])["isRead"] = False
+    twins = [
+        delta.deliver(ME, sender=BOB, subject=f"Twin {i}", received=newest["receivedDateTime"])
+        for i in range(2)
+    ]
+    # And an unseen message stamped before the mark: what a new delta re-lists
+    # as history (a reset cannot tell it from mail the old delta covered).
+    older = delta.deliver(
+        ME,
+        sender=BOB,
+        subject="Before the mark",
+        received=_stamp(high_water - timedelta(minutes=5)),
+    )
+
+    report = await mail.run_once()
+
+    assert report.mode == "resync"
+    published = bus.ids()
+    assert len(published) == len(set(published)), "an email.new was published twice"
+    assert published == [m["id"] for m in [*old, newest, *twins]]
+    assert old_read["id"] not in published, "a message older than the high-water mark replayed"
+    assert older["id"] not in published, "an unseen message below the mark replayed"
+    assert report.held_back == 1  # ``older``; ``old_read`` is already in the seen set
+    assert (await mail.run_once()).mode == "incremental"
+    assert bus.ids() == published
+
+
 async def test_a_failed_publish_is_retried_next_round_without_duplicates(mail, delta, bus) -> None:
     from robothor.workspace.ingest.base import PublishFailed
 
@@ -399,3 +512,26 @@ async def test_a_calendar_410_or_daily_reinit_does_not_replay(calendar, delta, b
     assert report.mode == "resync"
     assert bus.types() == [("calendar.new", fresh["id"])]
     assert standing["id"] not in [i for _t, i in bus.types()]
+
+
+async def test_a_calendar_resync_publishes_an_unseen_change_in_the_high_water_second(
+    calendar, delta, bus, store
+) -> None:
+    start, end = _slot(delta, 2)
+    standing = delta.add_event(OWNER, subject="Standing", start=start, end=end)
+    await calendar.run_once()
+    mark = (await store.load(TENANT, "microsoft365", OWNER, "calendar")).high_water
+    assert mark is not None
+
+    delta.expire_tokens()
+    s2, e2 = _slot(delta, 4)
+    twin = delta.add_event(OWNER, subject="Same second", start=s2, end=e2)
+    twin["lastModifiedDateTime"] = standing["lastModifiedDateTime"]
+
+    report = await calendar.run_once()
+
+    assert report.mode == "resync"
+    assert bus.types() == [("calendar.new", twin["id"])]
+    assert standing["id"] not in [i for _t, i in bus.types()]
+    await calendar.run_once()
+    assert bus.types() == [("calendar.new", twin["id"])]
