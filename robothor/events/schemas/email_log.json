@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:genus-os:events:email_log",
+  "title": "email-log.json",
+  "description": "The email log the dashboards (robothor/engine/dashboards/data.py) and the memory ingest read. Entries are keyed by message id, the same id an email.new event carries, so a message is logged once. A writer merges into the file and never truncates it: entries it does not own keep every field the triage stages wrote.",
+  "type": "object",
+  "required": ["lastCheckedAt", "entries"],
+  "properties": {
+    "lastCheckedAt": {"type": ["string", "null"]},
+    "entries": {
+      "type": "object",
+      "additionalProperties": {"$ref": "#/$defs/entry"}
+    }
+  },
+  "additionalProperties": true,
+  "$defs": {
+    "entry": {
+      "type": "object",
+      "required": [
+        "id",
+        "threadId",
+        "fetchedAt",
+        "readAt",
+        "from",
+        "subject",
+        "date",
+        "labels",
+        "categorizedAt",
+        "urgency",
+        "category",
+        "actionRequired",
+        "actionCompletedAt",
+        "pendingReviewAt",
+        "reviewedAt"
+      ],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "threadId": {"type": ["string", "null"]},
+        "fetchedAt": {"type": "string"},
+        "readAt": {"type": ["string", "null"]},
+        "from": {"type": ["string", "null"]},
+        "subject": {"type": ["string", "null"]},
+        "date": {"type": ["string", "null"]},
+        "labels": {"type": "array", "items": {"type": "string"}},
+        "snippet": {"type": ["string", "null"]},
+        "categorizedAt": {"type": ["string", "null"]},
+        "urgency": {"type": ["string", "null"]},
+        "category": {"type": ["string", "null"]},
+        "actionRequired": {},
+        "actionCompletedAt": {"type": ["string", "null"]},
+        "pendingReviewAt": {"type": ["string", "null"]},
+        "reviewedAt": {"type": ["string", "null"]},
+        "messageCount": {"type": "integer", "minimum": 1},
+        "provider": {"enum": ["google", "microsoft365"]}
+      },
+      "additionalProperties": true
+    }
+  }
+}

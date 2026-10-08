@@ -171,3 +171,4 @@ crm/139_goal_task_family_controls.sql
 crm/140_chat_approval_receipts.sql
 crm/141_runtime_effects.sql
 crm/142_goal_effect_lookup.sql
+crm/149_workspace_sync_state.sql

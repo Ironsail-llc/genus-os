@@ -18,6 +18,10 @@ other instance each check skips and says the instance is on Google.
 * ``workspace.m365_timezone`` (recommended) -- the owner's Exchange timezone
   agrees with the instance's ``ROBOTHOR_TIMEZONE``, or "9 am" means two
   different things to the calendar and to the agents.
+* ``workspace.m365_ingest_freshness`` (recommended) -- under
+  ``workspace_provider = microsoft365``, the ingest worker completed a round
+  for the assistant inbox (and the owner calendar, when one is set) within
+  three ingest intervals. Reads the database only, so it also runs offline.
 
 Results name mailboxes (configuration, not data) and Graph status codes.
 Never a token, a message, an event or a credential.
@@ -509,6 +513,71 @@ async def _timezone(ctx: DoctorContext) -> Result:
     )
 
 
+# ── workspace.m365_ingest_freshness ──────────────────────────────────────────
+
+#: How many ingest intervals may pass before the ingest counts as stalled.
+FRESHNESS_INTERVALS = 3
+
+
+def _ingest_ages(ctx: DoctorContext, tenant_id: str) -> dict[str, float]:
+    """Seconds since each resource's last completed ingest round. Blocking."""
+    with ctx.db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT resource, EXTRACT(EPOCH FROM (now() - updated_at)) "
+            "FROM workspace_sync_state WHERE tenant_id = %s AND provider = %s",
+            (tenant_id, PROVIDER),
+        )
+        rows = cur.fetchall()
+    ages: dict[str, float] = {}
+    for resource, age in rows:
+        ages[str(resource)] = min(float(age), ages.get(str(resource), float(age)))
+    return ages
+
+
+async def _ingest_freshness(ctx: DoctorContext) -> Result:
+    """The Microsoft 365 ingest completed a round recently.
+
+    Fresh means within three ``m365_ingest_interval_seconds``. A resource that
+    never synced, or one that stopped, fails: inbound mail is then not
+    reaching the email pipeline. Fix: check the engine journal for
+    ``microsoft365 ... ingest deferred`` and run the connection check.
+    """
+    ws = ctx.settings.workspace
+    if ws.workspace_provider != PROVIDER:
+        return skip(
+            "workspace_provider is google: the Microsoft 365 ingest runs only under microsoft365"
+        )
+    expected = ["mail"] if (ws.m365_assistant_mailbox or "").strip() else []
+    if (ws.m365_owner_mailbox or "").strip():
+        expected.append("calendar")
+    if not expected:
+        return fail("no Microsoft 365 mailbox is configured, so nothing is ingested")
+    limit = FRESHNESS_INTERVALS * max(1, int(ws.m365_ingest_interval_seconds))
+    try:
+        ages = await ctx.run_blocking(_ingest_ages, ctx, _platform_tenant(ctx))
+    except Exception as exc:  # noqa: BLE001 - a check reports, it does not raise
+        return fail(
+            f"could not read the ingest state ({type(exc).__name__}); is migration 149 applied?"
+        )
+    problems: list[str] = []
+    for resource in expected:
+        age = ages.get(resource)
+        if age is None:
+            problems.append(f"{resource} has never synced")
+        elif age > limit:
+            problems.append(f"{resource} last synced {int(age)}s ago")
+    if problems:
+        return fail(
+            "Microsoft 365 ingest is behind (allowed "
+            f"{limit}s = {FRESHNESS_INTERVALS} x the ingest interval): " + "; ".join(problems)
+        )
+    return ok(
+        "Microsoft 365 ingest is current: "
+        + ", ".join(f"{r} {int(ages[r])}s ago" for r in expected)
+    )
+
+
 # ── the --enable gate ────────────────────────────────────────────────────────
 
 
@@ -569,5 +638,12 @@ CHECKS: tuple[Check, ...] = (
         category="workspace",
         severity="recommended",
         run=_timezone,
+    ),
+    Check(
+        id="workspace.m365_ingest_freshness",
+        title="Microsoft 365: the mail and calendar ingest is keeping up",
+        category="workspace",
+        severity="recommended",
+        run=_ingest_freshness,
     ),
 )

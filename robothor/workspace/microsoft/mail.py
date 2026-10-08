@@ -57,10 +57,12 @@ if TYPE_CHECKING:
     from robothor.workspace.microsoft.graph import GraphClient
 
 __all__ = [
+    "ENVELOPE_FIELDS",
     "SUPPORTED_LABELS",
     "SUPPORTED_SEARCH",
     "GraphMail",
     "SearchPlan",
+    "gmail_envelope",
     "labels_for",
     "translate_query",
 ]
@@ -121,6 +123,9 @@ _ENVELOPE_FIELDS = (
     "hasAttachments",
 )
 _FULL_FIELDS = (*_ENVELOPE_FIELDS, "body", "internetMessageHeaders")
+#: What an envelope reads: the ``$select`` of anything that only describes mail
+#: (the ingest worker's inbox delta among them).
+ENVELOPE_FIELDS = _ENVELOPE_FIELDS
 _SEARCH_FIELDS = (
     "id",
     "conversationId",
@@ -531,6 +536,13 @@ def _gmailize(message: dict[str, Any], folders: dict[str, str]) -> dict[str, Any
         "snippet": html.escape(str(message.get("bodyPreview") or ""), quote=False),
         "payload": payload,
     }
+
+
+def gmail_envelope(message: dict[str, Any], folders: dict[str, str]) -> dict[str, Any]:
+    """A Graph message as the mail tools' envelope (``id``, ``thread_id``, ``date``,
+    ``from``, ``to``, ``subject``, ``snippet``, ``labels``): the same translation
+    :meth:`GraphMail.shape_envelope` applies, for callers outside a tool call."""
+    return gmail_parse._shape_envelope(_gmailize(message, folders))
 
 
 # ── outgoing MIME ─────────────────────────────────────────────────────

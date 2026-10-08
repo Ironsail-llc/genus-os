@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:genus-os:events:calendar_event",
+  "title": "calendar.*",
+  "description": "Payload of a `calendar.new`, `calendar.modified`, `calendar.rescheduled` or `calendar.cancellation` event on the `calendar` stream. The meeting fields are the calendar-log.json meeting shape (id, title, start, end, attendees, hangoutLink) so a consumer that reads either sees the same keys. `change_type` repeats the event type in words.",
+  "type": "object",
+  "required": ["id", "change_type", "title", "start", "end", "attendees"],
+  "properties": {
+    "id": {
+      "description": "Provider event id (Google event id, Exchange immutable event id).",
+      "type": "string",
+      "minLength": 1
+    },
+    "change_type": {
+      "description": "created -> calendar.new, updated -> calendar.modified, rescheduled -> calendar.rescheduled, cancelled -> calendar.cancellation.",
+      "enum": ["created", "updated", "rescheduled", "cancelled"]
+    },
+    "title": {"type": "string"},
+    "start": {
+      "description": "ISO 8601 date-time (UTC) or, for an all-day event, a date. Empty when a removed event can no longer be read.",
+      "type": "string"
+    },
+    "end": {"type": "string"},
+    "attendees": {
+      "description": "Attendee email addresses.",
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "hangoutLink": {
+      "description": "The online-meeting join URL (Google Meet, Microsoft Teams), or empty.",
+      "type": "string"
+    },
+    "provider": {"enum": ["google", "microsoft365"]}
+  },
+  "additionalProperties": true
+}
