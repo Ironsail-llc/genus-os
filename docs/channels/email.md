@@ -14,7 +14,13 @@ obligation rather than a preference. Before a transport is chosen — before the
 checked against that flag, and a flagged recipient is refused with
 `failed:email_dnc` and a row in `agent_guardrail_events`. Nothing left the box.
 
-**There are two transports, and the fallback is for absence only.** The `gws`
+**On a Microsoft 365 workspace there is one transport: Microsoft Graph.** With
+`ROBOTHOR_WORKSPACE_PROVIDER=microsoft365` the channel sends as the assistant
+mailbox (`ROBOTHOR_M365_ASSISTANT_MAILBOX`), through the same provider the
+`gws_gmail_send` tool uses. It never probes for the `gws` CLI and never falls
+back to SMTP. See [Microsoft 365](../workspace/microsoft365.md).
+
+**Otherwise there are two transports, and the fallback is for absence only.** The `gws`
 CLI when it is installed, SMTP when it is not. A `gws` *error* — an expired
 OAuth grant, a quota — is a failed send and **not** a reason to retry over SMTP:
 the from-address and the audit trail differ between the two, so a silent swap

@@ -7,9 +7,10 @@
 > Exchange Online mailbox (see [Mail](#mail)) and the `gws_calendar_*` tools run
 > against Exchange Online calendars (see [Calendar](#calendar)). New inbox mail
 > and calendar changes are published by the platform's
-> [ingest worker](#ingestion). The `gws_chat_*` tools stay Google-only. Do not
-> pass `--enable` on a production instance until the release notes say it is
-> ready. [Connect a tenant](#connect-a-tenant) is the step-by-step runbook.
+> [ingest worker](#ingestion). The `gws_chat_*` tools stay Google-only: on a
+> Microsoft 365 workspace they refuse up front (Teams chat is a later phase).
+> Do not pass `--enable` on a production instance until the release notes say
+> it is ready. [Connect a tenant](#connect-a-tenant) is the step-by-step runbook.
 
 Genus OS reads and sends mail and manages calendars through the `gws_*` tools.
 By default they run against Google Workspace. With
@@ -601,6 +602,38 @@ needed. Token requests fail between steps 1 and 2, so do both together.
 | `canary mailbox ... was not found` | Typo, or the canary is not a mailbox | Set `ROBOTHOR_M365_SCOPE_CANARY_MAILBOX` to a real mailbox |
 | `Microsoft 365 ingest is behind` | The worker is failing each round, or the engine is down | Look for `microsoft365 ... ingest deferred` in the engine journal; run the connection check |
 | `could not read the ingest state` | Migration 149 not applied | `genus migrate` |
+
+## Verification
+
+Two suites under `robothor/workspace/tests/contract/` hold the providers to
+one contract. Both run in CI with no network, against in-memory fakes.
+
+- **Provider contract** (`test_contract.py`). Every scenario runs twice, on
+  Google and on Microsoft 365, through the real `gws_*` handlers and their
+  guards. The scenarios: search, read and reply-all in the same conversation;
+  a sent id read back by the engine's verification; a label round trip; the
+  duplicate-reply skip; do-not-contact on send, reply, create, add-attendees
+  and RSVP; a `no_auto` scheduling policy; dedup and `force`; a create, a
+  conditional edit that retries once after a 412, an attendee add, an RSVP and
+  a delete, each read back; cancellation before the write; benchmark refusal of
+  every tool; and the CRM rows' `provider` and external id. Every refusal is
+  asserted to make **zero** write requests to the provider. A difference
+  between the providers is read from `Workspace.capabilities`, not from the
+  provider's name. `test_m365_full_flow.py` runs the same steps as one day on
+  Microsoft 365: mail arrives, is triaged and answered in its conversation, a
+  meeting is made, edited, accepted and cancelled, an opted-out recipient is
+  blocked and a duplicate is caught. Delta ingestion has its own suite.
+- **No Google** (`test_no_google.py`). With `workspace_provider=microsoft365`,
+  `PATH` empty, no Google credential, and any attempt to resolve or run `gws`
+  failing the test: every mail and calendar tool, the engine's post-write
+  read-backs, the doctor's channel, workspace, calendar and tools checks, and
+  the email delivery channel all run. The test asserts zero `gws` calls, no
+  logged error or traceback, and no failing doctor check. The Google-only
+  checks pass with a note naming `microsoft365`.
+
+The email delivery channel follows the setting too. On Microsoft 365 it sends
+through Microsoft Graph as the assistant mailbox. It never probes for the `gws`
+CLI and never falls back to SMTP. See [Email](../channels/email.md).
 
 ### Verify against Microsoft docs
 

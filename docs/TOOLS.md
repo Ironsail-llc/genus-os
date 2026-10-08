@@ -397,9 +397,12 @@ The mail and calendar tools reach the mailbox through a **workspace provider**,
 chosen by the `workspace_provider` setting (`ROBOTHOR_WORKSPACE_PROVIDER`).
 **Google is the default**, and the Google provider runs exactly the `gws` CLI
 calls the tools always ran. Microsoft 365 (`microsoft365`) is in development:
-selecting it now makes every mail and calendar tool refuse with
-`hint: "unsupported"`, rather than quietly reading the Google account. The chat
-tools are Google Chat only and are not affected.
+the mail and calendar tools run against the assistant's Exchange Online
+mailbox and the operator's Exchange calendar, never the Google account. The
+chat tools are Google Chat only, so on a Microsoft 365 workspace they refuse up
+front with `hint: "unsupported"` and run no `gws` command. The engine's
+post-write read-back (a sent message, a created event) uses the same provider
+as the write.
 
 Only the transport moves behind the provider. Every guard stays in the tool
 handler and runs before any provider call: do-not-contact, `no_auto`

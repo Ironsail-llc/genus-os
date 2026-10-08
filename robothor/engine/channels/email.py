@@ -128,6 +128,9 @@ _ADDRESS_RE = re.compile(r"[^@\s,;<>\"]+@[^@\s,;<>\"]+\.[A-Za-z]{2,}\Z")
 #: raises, so the channel opens an ``SMTP_SSL`` connection instead.
 IMPLICIT_TLS_PORT = 465
 
+#: The transport kind for a Microsoft 365 workspace: Graph, as the assistant's mailbox.
+MICROSOFT365 = "microsoft365"
+
 #: Budgets. The gws one matches the tool path's; the SMTP one exists because a
 #: socket with no timeout is how a delivery becomes a hung run.
 GWS_TIMEOUT_S = 30
@@ -416,15 +419,46 @@ class EmailChannel:
     def _transport(self) -> _Transport:
         """Which transport this send would use. Opens nothing.
 
-        gws first, SMTP only when the CLI is absent. Never the other way round
-        and never both: see the module docstring.
+        On a Microsoft 365 workspace, Microsoft Graph -- as the assistant's
+        Exchange mailbox -- and nothing else: the gws CLI is not probed at all,
+        because an operator who chose Outlook must not have a briefing go out
+        as whatever Google account a leftover CLI is signed in to.
+
+        Otherwise gws first, SMTP only when the CLI is absent. Never the other
+        way round and never both: see the module docstring.
         """
+        microsoft365 = self._microsoft365_transport()
+        if microsoft365 is not None:
+            return microsoft365
         try:
             if self.gws_probe():
                 return _Transport(kind="gws")
         except Exception as exc:  # noqa: BLE001 — a probe is a report
             logger.warning("Could not probe for the gws CLI: %s", exc)
         return self._smtp_transport()
+
+    @staticmethod
+    def _microsoft365_transport() -> _Transport | None:
+        """The Graph transport when ``workspace_provider`` is microsoft365."""
+        try:
+            from robothor.settings import get_settings
+
+            workspace = get_settings().workspace
+        except Exception as exc:  # noqa: BLE001 — see _smtp_transport
+            logger.warning("Could not resolve this instance's workspace settings: %s", exc)
+            return None
+        if workspace.workspace_provider != "microsoft365":
+            return None
+        mailbox = (workspace.m365_assistant_mailbox or "").strip().lower()
+        if not mailbox:
+            return _Transport(
+                refusal=(
+                    "workspace_provider is microsoft365 but m365_assistant_mailbox "
+                    "(ROBOTHOR_M365_ASSISTANT_MAILBOX) is not set, so there is no "
+                    "mailbox to send from"
+                )
+            )
+        return _Transport(kind=MICROSOFT365, sender=mailbox)
 
     @staticmethod
     def _smtp_transport() -> _Transport:
@@ -629,6 +663,8 @@ class EmailChannel:
                 target=address,
                 body=body,
             )
+        if transport.kind == MICROSOFT365:
+            return await self._send_workspace(address, line, body, agent, tenant)
         if transport.kind == "gws":
             return await self._send_gws(address, line, body, agent)
         return await self._send_smtp(transport, address, line, body, agent)
@@ -751,6 +787,43 @@ class EmailChannel:
         return STATUS_DNC_UNREADABLE
 
     # ── transports ───────────────────────────────────────────────────────
+
+    async def _send_workspace(
+        self, address: str, subject: str, body: str, agent: str, tenant: str
+    ) -> SendReceipt:
+        """Send through the tenant's Microsoft 365 mailbox (Graph), insisting on an id.
+
+        The same message the gws path builds, handed to the workspace mail
+        provider the ``gws_gmail_send`` tool uses -- one transport per
+        provider, so the channel and the tool cannot disagree about which
+        mailbox a message comes from.
+        """
+        from robothor.workspace import get_workspace
+
+        try:
+            message = _message(address, subject, body)
+            raw = base64.urlsafe_b64encode(message.as_bytes()).decode("ascii")
+            result = await get_workspace(tenant).mail.send(raw)
+        except Exception as exc:  # noqa: BLE001 — a transport failure is a receipt
+            logger.error(
+                "The email channel's Microsoft 365 transport failed for %s: %s",
+                agent,
+                redact(_describe(exc)),
+            )
+            return SendReceipt(
+                acknowledged=0, expected=1, status=STATUS_SEND, target=address, body=body
+            )
+        message_id = str(result.get("id") or "") if isinstance(result, dict) else ""
+        if not message_id or (isinstance(result, dict) and result.get("error")):
+            logger.error(
+                "Microsoft 365 accepted a message for %s but returned no message id — "
+                "nothing proves it was sent",
+                agent,
+            )
+            return SendReceipt(
+                acknowledged=0, expected=1, status=STATUS_SEND, target=address, body=body
+            )
+        return receipt_from([{"id": message_id}], 1, target=address, body=body)
 
     async def _send_gws(self, address: str, subject: str, body: str, agent: str) -> SendReceipt:
         """Send through the gws CLI and insist on the message id it files under.
@@ -939,7 +1012,9 @@ class EmailChannel:
                 "no email transport on this instance: the gws CLI is not installed "
                 "and ROBOTHOR_EMAIL_SMTP_HOST + ROBOTHOR_EMAIL_FROM are not both set"
             )
-        if resolved.kind == "gws":
+        if resolved.kind in ("gws", MICROSOFT365):
+            # Microsoft Graph is proved by the doctor's workspace.m365_connection
+            # (credential, token, assistant inbox); nothing more is free here.
             return None
         if resolved.user and not resolved.password:
             return (
@@ -958,6 +1033,13 @@ class EmailChannel:
         problem = await self.transport_probe(transport)
         if problem is not None:
             return (step, False, problem)
+        if transport.kind == MICROSOFT365:
+            return (
+                step,
+                True,
+                f"workspace_provider is microsoft365; mail goes out through Microsoft "
+                f"Graph as {transport.sender}",
+            )
         if transport.kind == "gws":
             return (
                 step,
@@ -1016,7 +1098,9 @@ class EmailChannel:
             )
 
         body = "Genus OS channel verification."
-        if transport.kind == "gws":
+        if transport.kind == MICROSOFT365:
+            receipt = await self._send_workspace(address, DEFAULT_SUBJECT, body, "verify", tenant)
+        elif transport.kind == "gws":
             receipt = await self._send_gws(address, DEFAULT_SUBJECT, body, "verify")
         else:
             receipt = await self._send_smtp(transport, address, DEFAULT_SUBJECT, body, "verify")
