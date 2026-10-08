@@ -618,6 +618,24 @@ fingerprint. **Adding a channel's token is still `genus channel add` on the
 box** (and `genus init --telegram-token` for Telegram) — there is no API that
 writes channel credentials, by design.
 
+### How replies look in Telegram
+
+Agents write Markdown; Telegram is read on a phone. Every Telegram send goes
+through `robothor/engine/telegram_format.py`, which renders the Markdown to
+Telegram's HTML: headings become a bold line, `---` a thin rule, lists `•` /
+`1.` with nesting, `>` a quote, and a table one card per row
+(`Header: value` lines) — a pipe grid is unreadable at phone width. Long
+replies are split *after* rendering, with open tags closed and reopened at
+each cut, so Telegram never refuses a half-formatted chunk; a chunk it does
+refuse is resent as clean plain text, never raw Markdown.
+
+A reply holding a table is sent instead as one Bot API 10.1 rich message,
+which draws the table natively; if Telegram refuses it, the card rendering
+goes out. `ROBOTHOR_TELEGRAM_RICH_MESSAGES=0` turns the rich path off. Runs
+whose words reach Telegram (an interactive Telegram turn, or a manifest with
+`delivery.mode: announce` to `channel: telegram`) are also told so in their
+engine-context turn, so the model writes for a phone in the first place.
+
 ## Plugins
 
 `ROBOTHOR_PLUGIN_LOCKFILE` points at the plugin lockfile — the record of which

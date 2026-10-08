@@ -36,7 +36,7 @@ from typing import TYPE_CHECKING, Any
 from robothor.constants import DEFAULT_TENANT
 from robothor.engine.channels import telegram_ask
 from robothor.engine.channels.base import SendReceipt, receipt_from
-from robothor.engine.chunking import split_telegram_message
+from robothor.engine.telegram_format import planned_message_count
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from collections.abc import Sequence
@@ -259,7 +259,7 @@ class TelegramChannel:
             )
 
         full_text = f"*{config.name}*\n\n{text}"
-        expected_chunks = len(split_telegram_message(full_text))
+        expected_chunks = planned_message_count(full_text)
 
         try:
             sent = await sender(chat_id, full_text)
@@ -273,6 +273,9 @@ class TelegramChannel:
                 body=full_text,
             )
 
+        # A refused rich message falls back to chunks: the sender reports the
+        # plan it actually ran, which beats our prediction when present.
+        expected_chunks = getattr(sent, "expected", None) or expected_chunks
         receipt = receipt_from(sent, expected_chunks, target=chat_id, body=full_text)
         if receipt.acknowledged == 0:
             logger.error(

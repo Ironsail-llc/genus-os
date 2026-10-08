@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-471 settings in 17 groups.
+472 settings in 17 groups.
 
 ## autonomy
 
@@ -350,6 +350,7 @@ How the instance reaches people, and who it says it is.
 | `ROBOTHOR_TELEGRAM_BOT_NAME` | str | _(empty)_ | `robothor-engine` | no | legacy | @name of the Telegram bot, shown on the dashboard so an operator can find the right conversation. |
 | `ROBOTHOR_TELEGRAM_BOT_TOKEN` | str | _(unset)_ | `robothor-engine` | yes | legacy | Bot token for the Telegram channel. Empty disables Telegram. Also read from `TELEGRAM_BOT_TOKEN`. |
 | `ROBOTHOR_TELEGRAM_CHAT_ID` | str | _(empty)_ | `robothor-engine` | no | legacy | Default Telegram chat deliveries go to when an agent names none. Also read from `TELEGRAM_CHAT_ID`. |
+| `ROBOTHOR_TELEGRAM_RICH_MESSAGES` | bool | `true` | `robothor-engine` | no | legacy | Send a Telegram reply that holds a table as a Bot API 10.1 rich message, so the table is drawn natively. Off, or refused by Telegram, the table goes out as one card per row instead. |
 | `ROBOTHOR_VOICE_NOTES_ENABLED` | bool | `false` | `robothor-engine` | no | legacy | Transcribe inbound voice notes. Off unless a speech-to-text provider is actually configured. |
 
 ## auth

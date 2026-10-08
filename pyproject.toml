@@ -65,7 +65,10 @@ dependencies = [
     # single LLM call. Found 2026-08-24 running the WildClawBench harness,
     # which was the first thing to exercise the shipped image end to end.
     "orjson>=3.10",
-    "aiogram~=3.10",
+    # 3.29 is the first with Bot API 10.1 sendRichMessage (native tables).
+    "aiogram>=3.29,<4",
+    # Markdown → Telegram HTML (robothor/engine/telegram_format.py).
+    "markdown-it-py>=3.0",
     "apscheduler~=3.10",
     "croniter~=6.0",
     "html2text~=2024.2",

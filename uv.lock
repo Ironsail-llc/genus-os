@@ -1165,6 +1165,7 @@ dependencies = [
     { name = "httpcore" },
     { name = "httpx" },
     { name = "litellm" },
+    { name = "markdown-it-py" },
     { name = "numpy", version = "1.26.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.13'" },
     { name = "numpy", version = "2.5.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.13'" },
     { name = "orjson" },
@@ -1257,7 +1258,7 @@ vision = [
 
 [package.metadata]
 requires-dist = [
-    { name = "aiogram", specifier = "~=3.10" },
+    { name = "aiogram", specifier = ">=3.29,<4" },
     { name = "aiohttp", specifier = ">=3.14.3" },
     { name = "apscheduler", specifier = "~=3.10" },
     { name = "argon2-cffi", marker = "extra == 'api'", specifier = ">=23.1" },
@@ -1270,6 +1271,7 @@ requires-dist = [
     { name = "httpx", specifier = "~=0.27" },
     { name = "insightface", marker = "extra == 'vision'", specifier = ">=0.7" },
     { name = "litellm", specifier = ">=1.84.0,<2.0" },
+    { name = "markdown-it-py", specifier = ">=3.0" },
     { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.26,<2" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.13" },
     { name = "nats-py", marker = "extra == 'federation'", specifier = ">=2.0" },

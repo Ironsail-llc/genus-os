@@ -80,6 +80,7 @@ from robothor.engine.output_validation import validated_completion
 from robothor.engine.plan_integrity import nudge_for_plan_research
 from robothor.engine.prompts import (
     EXECUTION_MODE_PREAMBLE,
+    with_surface_note,
 )
 from robothor.engine.run_budget import (  # noqa: E402
     DEADLINE_WARNING_FRACTION as DEADLINE_WARNING_FRACTION,
@@ -976,6 +977,8 @@ class AgentRunner(
         # Deferral is otherwise invisible from inside the turn: a short schema
         # list and no statement that a longer one exists.
         engine_preamble = with_discovery_note(engine_preamble, _prepared)
+        # Telegram is read on a phone; say so, or the model writes for the Helm.
+        engine_preamble = with_surface_note(engine_preamble, trigger_type, agent_config)
         watchdog.touch("adapters_loaded")
 
         watchdog.touch("tools_built")

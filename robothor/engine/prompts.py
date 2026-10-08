@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 #: The one sentence rule 19 and both vision tool descriptions share.
 #:
 #: Measured 2026-09-17. An out-of-band vision tool answered 98 of 100 images
@@ -209,3 +211,36 @@ Include:
 
 End with [PLAN_READY] on its own line.
 """
+
+
+#: Engine-context line for a run whose words land in Telegram.
+#:
+#: Live, 2026-10-08: the operator called main's Telegram replies "almost always
+#: impossible to read" — five-column tables, ``---`` dividers and bold on every
+#: line, written for the Helm's wide renderer because the owner's Telegram and
+#: webchat share one session and nothing said which surface a turn is on. The
+#: renderer (``telegram_format``) now makes any Markdown legible; this keeps
+#: the model from writing a desktop document for a phone in the first place.
+TELEGRAM_SURFACE_NOTE = (
+    "This reply is read in Telegram on a phone. Write like a sharp text "
+    "message: short paragraphs, plain bullets or 'Label: value' lines. Avoid "
+    "wide tables (more than three columns) — use one short block per item "
+    "instead. No '---' dividers. Bold only the one or two things that "
+    "matter most, never whole lines or every item."
+)
+
+
+def with_surface_note(preamble: str, trigger_type: Any, agent_config: Any) -> str:
+    """The engine-context preamble, plus the Telegram note when the run's
+    words reach Telegram: an interactive Telegram turn, or a run whose
+    manifest announces to the Telegram channel."""
+    from robothor.engine.models import DeliveryMode, TriggerType
+
+    on_telegram = trigger_type == TriggerType.TELEGRAM or (
+        getattr(agent_config, "delivery_mode", None) == DeliveryMode.ANNOUNCE
+        and getattr(agent_config, "delivery_channel", "") == "telegram"
+        and trigger_type != TriggerType.WEBCHAT
+    )
+    if not on_telegram:
+        return preamble
+    return "\n\n".join(p for p in (preamble, TELEGRAM_SURFACE_NOTE) if p)
