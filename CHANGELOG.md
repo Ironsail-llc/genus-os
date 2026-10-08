@@ -1,3 +1,9 @@
+## [1.106.2](https://github.com/Ironsail-llc/genus-os/compare/v1.106.1...v1.106.2) (2026-10-08)
+
+### Bug Fixes
+
+* **pr-review:** re-review requests in new messages, replies only in-thread ([#667](https://github.com/Ironsail-llc/genus-os/issues/667)) ([52134d5](https://github.com/Ironsail-llc/genus-os/commit/52134d5963db2f74c8af2c9a20c7d6c3f9c804ba))
+
 ## [1.106.1](https://github.com/Ironsail-llc/genus-os/compare/v1.106.0...v1.106.1) (2026-10-08)
 
 ### Bug Fixes
