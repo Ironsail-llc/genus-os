@@ -700,3 +700,16 @@ async def test_a_finding_the_author_justified_is_acknowledged_on_its_thread(env)
     assert env["poster"].replies == [
         (77, "**Acknowledged** — agreed — out of scope for this ticket")
     ]
+
+
+def test_a_comment_without_its_line_still_maps_by_path_in_order():
+    """Defense in depth for 2026-10-08: GitHub returned line=null and every
+    finding lost its comment id. A missing line matches by path, in order."""
+    from robothor.pr_review.review import map_comment_ids
+
+    issues = [
+        {"path": "a.py", "line": 3, "severity": "major"},
+        {"path": "b.py", "line": 9, "severity": "blocker"},
+    ]
+    posted = {"comments": [{"id": 11, "path": "a.py", "line": None}, {"id": 12, "path": "b.py"}]}
+    assert map_comment_ids(issues, posted) == [11, 12]

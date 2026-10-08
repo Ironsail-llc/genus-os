@@ -151,7 +151,7 @@ def map_comment_ids(
             issue = issues[candidates[k]]
             if not anchored or (
                 issue.get("path") == comment.get("path")
-                and issue.get("line") == comment.get("line")
+                and comment.get("line") in (None, issue.get("line"))
             ):
                 out[candidates[k]] = cid
                 pos = k + 1
