@@ -226,7 +226,7 @@ never left running.
    |---|---|
    | `ROBOTHOR_PR_REVIEW_REPOS` | `owner/repo,owner/other` — the repositories it may review; `owner/repo:PREFIX` also sets that repository's ticket prefix |
    | `ROBOTHOR_PR_REVIEW_WATCH_REPOS` | `false` (default) reviews only pull requests posted in Chat or requesting the bot; `true` reviews every open pull request in the repos |
-   | `ROBOTHOR_PR_REVIEW_CHAT_SPACE` | `spaces/…` to watch and announce in; empty for GitHub only |
+   | `ROBOTHOR_PR_REVIEW_CHAT_SPACE` | `spaces/…` to watch and announce in — comma-separated for several review channels, each watched the same way, every answer going back to the space the PR was posted in; empty for GitHub only |
    | `ROBOTHOR_PR_REVIEW_CHAT_SELF_USERS` | the `users/…` the gws CLI posts as, so its own messages are never requests |
    | `ROBOTHOR_PR_REVIEW_BOT_LOGIN` | GitHub login whose requested reviews it picks up — requests naming that login directly (`user-review-requested:`); a review requested from a team the login belongs to is ignored |
    | `ROBOTHOR_PR_REVIEW_REQUIRE_TICKET` / `_TICKET_PREFIXES` | the optional ticket rule; prefixes as `owner/repo:PREFIX` or bare `PREFIX` |

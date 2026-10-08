@@ -236,8 +236,11 @@ class Intake:
                     self._error("github", "GITHUB_TOKEN not configured")
                 elif self.github is not None:
                     await self._poll_github()
-                if self.cfg.chat_space and self.chat is not None:
-                    await self._poll_chat()
+                if self.chat is not None:
+                    for n, space in enumerate(self.cfg.chat_spaces):
+                        # The first space keeps the cursor it always had, so
+                        # adding a space never replays the existing one.
+                        await self._poll_chat(space, _CHAT_SOURCE if n == 0 else f"chat:{space}")
                 if self.github is not None and self.now.minute % 10 < 2:
                     await self._poll_replies()
             await self._expire_stale()
@@ -435,10 +438,9 @@ class Intake:
 
     # ── Google Chat ─────────────────────────────────────────────────
 
-    async def _poll_chat(self) -> None:
+    async def _poll_chat(self, space: str, source: str) -> None:
         assert self.chat is not None
-        space = self.cfg.chat_space
-        cursor = await self.store.get_cursor(self.tenant_id, _CHAT_SOURCE)
+        cursor = await self.store.get_cursor(self.tenant_id, source)
         start = parse_chat_time(cursor)
         since = (
             start - _CURSOR_OVERLAP
@@ -448,7 +450,7 @@ class Intake:
         try:
             messages = await self.chat.list_messages(space, _format_chat_time(since))
         except Exception as exc:  # noqa: BLE001 - the GitHub half still runs
-            self._error("chat list", exc)
+            self._error(f"chat list {space}", exc)
             return
         newest = start
         for message in sorted(messages, key=lambda m: str(m.get("createTime") or "")):
@@ -460,7 +462,7 @@ class Intake:
                 continue
             self.summary["chat_messages"] += 1
             try:
-                kind, outcome = await self._handle_message(message)
+                kind, outcome = await self._handle_message(message, space)
             except Exception as exc:  # noqa: BLE001 - record it and move on, never wedge
                 self.summary["chat_errors"] += 1
                 self._error(f"chat message {name}", exc)
@@ -470,9 +472,9 @@ class Intake:
                 continue
             await self.store.record_message(self.tenant_id, name, kind, outcome)
         if newest is not None and (start is None or newest > start):
-            await self.store.set_cursor(self.tenant_id, _CHAT_SOURCE, _format_chat_time(newest))
+            await self.store.set_cursor(self.tenant_id, source, _format_chat_time(newest))
 
-    async def _handle_message(self, message: dict[str, Any]) -> tuple[str, str]:
+    async def _handle_message(self, message: dict[str, Any], space: str) -> tuple[str, str]:
         sender = message.get("sender") or {}
         sender_name = str(sender.get("name") or "")
         if (
@@ -484,10 +486,10 @@ class Intake:
         thread = str((message.get("thread") or {}).get("name") or "")
         if message.get("threadReply"):
             return await self._handle_reply(message, thread, sender_name)
-        return await self._handle_top_level(message, thread, sender_name)
+        return await self._handle_top_level(message, thread, sender_name, space)
 
     async def _handle_top_level(
-        self, message: dict[str, Any], thread: str, sender: str
+        self, message: dict[str, Any], thread: str, sender: str, space: str
     ) -> tuple[str, str]:
         found = match_allowed_prs(message_search_text(message), self.cfg.repos)
         if not found:
@@ -505,7 +507,7 @@ class Intake:
             # person is now looking (2026-10-07: "re-review <links>" posted
             # fresh was dropped without a word).
             repost = bool(row.chat_thread or row.last_reviewed_sha)
-            row.chat_space = self.cfg.chat_space
+            row.chat_space = space
             row.chat_thread = thread
             row.chat_message = str(message.get("name") or "")
             row.chat_poster = sender

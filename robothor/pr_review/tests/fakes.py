@@ -87,14 +87,16 @@ class FakeChat:
         text: str,
         *,
         sender: str = "users/alice",
-        thread: str = "spaces/AAAA/threads/t1",
+        thread: str = "",
         reply: bool = False,
         time: str = "2026-10-05T10:00:00.000000Z",
+        space: str = "spaces/AAAA",
         **extra: Any,
     ) -> dict[str, Any]:
         self._n += 1
+        thread = thread or f"{space}/threads/t1"
         msg = {
-            "name": f"spaces/AAAA/messages/m{self._n}",
+            "name": f"{space}/messages/m{self._n}",
             "text": text,
             "sender": {"name": sender, "type": "HUMAN"},
             "thread": {"name": thread},
@@ -107,7 +109,11 @@ class FakeChat:
 
     async def list_messages(self, space: str, since: str) -> list[dict[str, Any]]:
         self.list_calls.append(since)
-        return [m for m in self.messages if m["createTime"] > since]
+        return [
+            m
+            for m in self.messages
+            if m["createTime"] > since and m["name"].startswith(f"{space}/")
+        ]
 
     async def react(self, message: str, emoji: str) -> bool:
         self.reactions.append((message, emoji))
