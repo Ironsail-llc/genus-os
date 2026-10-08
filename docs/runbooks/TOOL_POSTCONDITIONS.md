@@ -14,13 +14,30 @@ landed:
 
 | Tool | Read-back |
 |------|-----------|
-| `gws_gmail_send`, `gws_gmail_reply` | `gmail.users.messages.get` on the returned message id |
-| `gws_calendar_create` | `calendar.events.get` on the returned event id (a `cancelled` event does not count) |
+| `gws_gmail_send`, `gws_gmail_reply` | `gmail.users.messages.get` on the returned message id (Google); Graph `get_message` by the returned immutable id (Microsoft 365) |
+| `gws_calendar_create` | `calendar.events.get` on the returned event id, on the calendar the create reports in its `calendar` block (Google); Graph `calendar.get` on that calendar's mailbox (Microsoft 365). A `cancelled` event does not count |
 | `create_task` | `dal.get_task` — row exists, title matches |
 | `update_task` | `dal.get_task` — the requested fields actually changed |
 | `resolve_task` | `dal.get_task` — status actually reads `DONE` |
 | `create_person`, `update_person` | `dal.get_person` — row exists, requested fields match |
 | `send_notification` | `dal.get_notification` — the row exists |
+
+The mail and calendar read-backs ask the **workspace provider that did the
+write** (`robothor.workspace.get_workspace(tenant)`, the same lookup the
+`gws_*` handlers use). On Google they are the gws CLI calls above, with the
+same argv and a 5-second budget. On `workspace_provider=microsoft365` they go
+through Microsoft Graph and never reach the gws CLI; a Microsoft 365 instance
+that cannot be built (no assistant mailbox) records a `verify_error` rather
+than asking Gmail.
+
+The calendar read-back uses the calendar the create wrote to: an explicit
+`calendar_id`, else the `calendar` block the create reports. It used to read
+`calendar_id or "primary"`, and `primary` is the assistant's own calendar, so
+an event created on the operator's calendar (the default) was looked for in
+the wrong place and recorded unverified. On Microsoft 365 the provider
+resolves the block's kind (`own` → the assistant mailbox, `operator` → the
+owner mailbox). Characterization tests
+(`robothor/engine/tests/test_provider_verification.py`) pin the Google argv.
 
 The verdict is written to the `agent_run_evidence` ledger as
 `kind='tool_verify'` (`verified` true/false) or `kind='verify_error'` when the

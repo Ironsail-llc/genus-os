@@ -28,7 +28,17 @@ async def retrieve_verification(
     # The legacy gws connector represents the appliance owner's
     # mailbox, not every tenant's mailbox. Do not accidentally extend
     # that access to another person's standing grant.
-    from robothor.autonomy.verification import extract_verification
+    from robothor.autonomy.verification import (
+        extract_verification,
+        mailbox_verification_unsupported,
+    )
+
+    # Before anything else: no authority read, no profile consumed, no mailbox
+    # query. Microsoft 365 has no trustworthy equivalent of Gmail's
+    # Authentication-Results header yet (see mailbox_verification_unsupported).
+    unsupported = mailbox_verification_unsupported()
+    if unsupported:
+        return {"error": "mailbox_verification_unsupported", "reason": unsupported}
     from robothor.constants import DEFAULT_TENANT
     from robothor.crm.dal import get_owner_person
     from robothor.engine.tools.constants import MAIL_READ_TOOLS, MAIL_SEARCH_TOOL
