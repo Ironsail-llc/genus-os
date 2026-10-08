@@ -480,7 +480,7 @@ async def test_count_only_never_dispatches(env):
         chat=env["chat"],
         now=NOW,
     )
-    await intake._poll_chat()  # a trigger is pending, nothing dispatched yet
+    await intake._poll_chat("spaces/AAAA", "chat")  # a trigger is pending, nothing dispatched yet
     summary = await Intake(
         _cfg(),
         env["store"],
@@ -753,3 +753,48 @@ async def test_a_thread_we_already_answered_triggers_nothing(env):
     env["github"].thread_comments[(REPO, 7)] = _thread(ours_last=True)
     summary = await _run(env, now=NOW + timedelta(minutes=10))
     assert summary["tasks_created"] == 0
+
+
+# ── More than one Chat space ────────────────────────────────────────────
+# 2026-10-08: a second review channel ("Ecommerce PR Reviews"). Every space
+# in ROBOTHOR_PR_REVIEW_CHAT_SPACE (comma-separated) is watched the same way,
+# and a pull request's answers go back to the space it was posted in.
+
+B = "spaces/BBBB"
+
+
+def _two_spaces():
+    return _cfg(chat_space="spaces/AAAA, spaces/BBBB")
+
+
+def test_the_config_reads_a_list_of_spaces():
+    assert _two_spaces().chat_spaces == ("spaces/AAAA", "spaces/BBBB")
+    assert _cfg().chat_spaces == ("spaces/AAAA",)
+
+
+async def test_a_link_in_the_second_space_is_claimed_and_answered_there(env):
+    env["github"].add(make_pr(7, SHA1))
+    msg = env["chat"].post(f"please review {URL}", space=B)
+    summary = await _run(env, _two_spaces())
+    assert summary["tasks_created"] == 1
+    assert (msg["name"], "\U0001f440") in env["chat"].reactions
+    row = await env["store"].get(TENANT, REPO, 7)
+    assert row.chat_space == B and row.chat_thread == f"{B}/threads/t1"
+    await _finish(env)
+    env["chat"].post("ptal", reply=True, space=B, time="2026-10-05T10:05:00.000000Z")
+    await _run(env, _two_spaces(), now=NOW + timedelta(minutes=3))
+    assert env["chat"].replies[-1][:2] == (B, f"{B}/threads/t1")
+
+
+async def test_each_space_keeps_its_own_cursor_and_the_first_keeps_the_old_one(env):
+    env["github"].add(make_pr(7, SHA1))
+    await env["store"].set_cursor(TENANT, "chat", "2026-10-05T10:30:00.000000Z")
+    env["chat"].post(f"review {URL}", time="2026-10-05T10:00:00.000000Z")  # before cursor
+    env["github"].add(make_pr(8, SHA2))
+    env["chat"].post(
+        f"review https://github.com/{REPO}/pull/8", space=B, time="2026-10-05T10:20:00.000000Z"
+    )
+    summary = await _run(env, _two_spaces())
+    assert summary["tasks_created"] == 1  # only the new space's message; the old one was seen
+    assert await env["store"].get(TENANT, REPO, 7) is None
+    assert await env["store"].get_cursor(TENANT, f"chat:{B}")

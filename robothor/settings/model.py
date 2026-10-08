@@ -3259,9 +3259,9 @@ class PrReviewSettings(SettingsGroup):
     chat_space: str = declare(
         "",
         "ROBOTHOR_PR_REVIEW_CHAT_SPACE",
-        "Google Chat space resource name (spaces/...) watched for pull-request links and "
-        "re-review requests, and where results are announced in the original thread. "
-        "Empty disables the Chat source.",
+        "Google Chat space resource names (spaces/..., comma-separated for several) watched "
+        "for pull-request links and re-review requests; results are announced in the "
+        "original thread, in the space it was posted in. Empty disables the Chat source.",
         restart_required=False,
         since="unreleased",
     )

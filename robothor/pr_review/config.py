@@ -85,6 +85,11 @@ class ReviewerConfig:
     extra: dict[str, Any] = field(default_factory=dict)
 
     @property
+    def chat_spaces(self) -> tuple[str, ...]:
+        """Every watched space: ``chat_space`` is a comma-separated list."""
+        return _csv(self.chat_space)
+
+    @property
     def configured(self) -> bool:
         return bool(self.repos or self.bot_login or self.chat_space)
 
