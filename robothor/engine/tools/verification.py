@@ -197,6 +197,33 @@ async def _gws_read(argv: list[str]) -> dict[str, Any]:
     return result if isinstance(result, dict) else {"output": str(result)}
 
 
+def _workspace(ctx: ToolContext) -> Any | None:
+    """The tenant's workspace when it is NOT Google, else None.
+
+    Google read-backs stay on the gws CLI (:func:`_gws_read`), byte for byte
+    what they always were. Any other provider (Microsoft 365) is read through
+    its own transport: asking the gws CLI about a Graph message id would fail
+    on a box with no Google account, and read the WRONG account on a box that
+    still has one.
+    """
+    from robothor.workspace import get_workspace
+
+    workspace = get_workspace(ctx.tenant_id)
+    return None if workspace.provider == "google" else workspace
+
+
+async def _provider_read(read: Callable[[], Awaitable[dict[str, Any]]]) -> dict[str, Any]:
+    """One provider read, a provider error as the ``{"error", ...}`` dict."""
+    from robothor.workspace.bridge import error_result
+    from robothor.workspace.errors import WorkspaceError
+
+    try:
+        result = await read()
+    except WorkspaceError as exc:
+        return error_result(exc)
+    return result if isinstance(result, dict) else {"output": str(result)}
+
+
 def _same(expected: Any, actual: Any) -> bool:
     """Compare a requested field value against what the row actually holds."""
     if isinstance(expected, bool) or isinstance(actual, bool):
@@ -229,8 +256,12 @@ async def _check_gmail_message(
             verified=False,
             detail={"reason": "send returned no message id", "result_keys": sorted(result)},
         )
-    params = json.dumps({"userId": "me", "id": message_id, "format": "minimal"})
-    read = await _gws_read(["gmail", "users", "messages", "get", "--params", params])
+    workspace = _workspace(ctx)
+    if workspace is not None:
+        read = await _provider_read(lambda: workspace.mail.get_message(message_id, fmt="minimal"))
+    else:
+        params = json.dumps({"userId": "me", "id": message_id, "format": "minimal"})
+        read = await _gws_read(["gmail", "users", "messages", "get", "--params", params])
     read_id = str(read.get("id") or "")
     detail: dict[str, Any] = {"expected_id": message_id, "read_back_id": read_id}
     if "error" in read:
@@ -247,15 +278,25 @@ async def _check_calendar_event(
 ) -> VerificationOutcome | None:
     """Fetch the created event back from Calendar (a cancelled event is absent)."""
     event_id = str(result.get("id") or "").strip()
-    calendar_id = str(args.get("calendar_id") or "primary")
+    # The calendar the create REPORTS it used. The tool defaults to the
+    # operator's calendar, so reading `primary` (the assistant's own) looked
+    # for every default create in the wrong place and recorded it unverified.
+    reported = result.get("calendar")
+    block: dict[str, Any] = reported if isinstance(reported, dict) else {}
+    calendar_id = str(args.get("calendar_id") or block.get("id") or "primary")
     if not event_id:
         return VerificationOutcome(
             reference="calendar:<no-id>",
             verified=False,
             detail={"reason": "create returned no event id", "result_keys": sorted(result)},
         )
-    params = json.dumps({"calendarId": calendar_id, "eventId": event_id})
-    read = await _gws_read(["calendar", "events", "get", "--params", params])
+    workspace = _workspace(ctx)
+    if workspace is not None:
+        ref = _calendar_ref(workspace, result, calendar_id)
+        read = await _provider_read(lambda: workspace.calendar.get(ref, event_id))
+    else:
+        params = json.dumps({"calendarId": calendar_id, "eventId": event_id})
+        read = await _gws_read(["calendar", "events", "get", "--params", params])
     read_id = str(read.get("id") or "")
     status = str(read.get("status") or "")
     detail: dict[str, Any] = {
@@ -270,6 +311,20 @@ async def _check_calendar_event(
         verified=read_id == event_id and status != "cancelled",
         detail=detail,
     )
+
+
+def _calendar_ref(workspace: Any, result: dict[str, Any], calendar_id: str) -> Any:
+    """The calendar the create landed on, from the ``calendar`` block it reports."""
+    from robothor.workspace.types import CalendarRef
+
+    reported = result.get("calendar")
+    block: dict[str, Any] = reported if isinstance(reported, dict) else {}
+    kind = str(block.get("kind") or "")
+    address = str(block.get("id") or "")
+    if kind in ("own", "operator"):
+        return workspace.calendar.resolve(kind, address=address)
+    target = address or calendar_id
+    return CalendarRef(target, "other", mailbox=target)
 
 
 def _row_id(args: dict[str, Any], result: dict[str, Any]) -> str:

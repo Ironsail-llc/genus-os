@@ -24,6 +24,7 @@ this is platform code.
 
 from __future__ import annotations
 
+import base64
 import logging
 import os
 from typing import Any
@@ -461,6 +462,66 @@ class TestSMTPIsAFallbackForABSENCEOnly:
 
         assert receipt.acknowledged == 0
         assert receipt.status == "failed:email_send"
+
+
+class TestAMicrosoft365WorkspaceSendsThroughGraph:
+    """workspace_provider=microsoft365: never the gws CLI, never SMTP."""
+
+    @pytest.fixture
+    def m365(self, monkeypatch):
+        from robothor.settings import reset_settings
+
+        monkeypatch.setenv("ROBOTHOR_WORKSPACE_PROVIDER", "microsoft365")
+        monkeypatch.setenv("ROBOTHOR_M365_ASSISTANT_MAILBOX", "assistant@example.com")
+        reset_settings()
+        sent: list[tuple[str, str]] = []
+
+        class Mail:
+            async def send(self, raw: str, *, thread_id: str | None = None) -> dict[str, Any]:
+                sent.append((raw, thread_id or ""))
+                return {"id": "graph-msg-1", "threadId": "conv-1", "labelIds": ["SENT"]}
+
+        class Workspace:
+            mail = Mail()
+
+        tenants: list[str] = []
+
+        def get_workspace(tenant_id: str | None = None) -> Workspace:
+            tenants.append(str(tenant_id))
+            return Workspace()
+
+        monkeypatch.setattr("robothor.workspace.get_workspace", get_workspace)
+        return sent, tenants
+
+    @pytest.mark.asyncio
+    async def test_a_leftover_gws_cli_is_never_probed_or_used(self, m365):
+        sent, tenants = m365
+        gws, smtp = _FakeGws(), _SMTPFactory()
+        channel = _channel(gws=gws, smtp=smtp)
+
+        def probe() -> bool:
+            raise AssertionError("a Microsoft 365 workspace probed for the gws CLI")
+
+        channel.gws_probe = probe
+        with patch("robothor.crm.dal.do_not_contact_emails", side_effect=_opt_out()):
+            receipt = await channel.send(WILLING, "hello", config=_config(), run=_run())
+
+        assert receipt.acknowledged == 1
+        assert receipt.platform_ids == ["graph-msg-1"]
+        assert (gws.calls, smtp.calls) == ([], [])
+        assert tenants == [TENANT]
+        ((raw, thread),) = sent
+        assert thread == ""
+        assert WILLING in base64.urlsafe_b64decode(raw).decode()
+        assert (await channel.health())["transport"] == "microsoft365"
+
+    @pytest.mark.asyncio
+    async def test_the_opt_out_still_refuses_first(self, m365):
+        sent, _ = m365
+        with patch("robothor.crm.dal.do_not_contact_emails", side_effect=_opt_out(WILLING)):
+            receipt = await _channel().send(WILLING, "hello", config=_config(), run=_run())
+        assert receipt.status == "failed:email_dnc"
+        assert sent == []
 
 
 class TestNoCredentialReachesALogRecord:
