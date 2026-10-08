@@ -687,12 +687,56 @@ def test_email_transport_on_microsoft365_names_graph_not_gws(settings, monkeypat
         raise AssertionError("a microsoft365 instance probed the gws CLI")
 
     monkeypatch.setattr(gws, "gws_available", _never)
-    settings(ROBOTHOR_WORKSPACE_PROVIDER="microsoft365")
+    settings(
+        ROBOTHOR_WORKSPACE_PROVIDER="microsoft365",
+        ROBOTHOR_M365_ASSISTANT_MAILBOX="assistant@example.com",
+    )
     row = _run(channel_checks.CHECKS, "email.transport", make_ctx())[0]
 
     assert row.status == "pass"
     assert "Microsoft Graph" in row.detail
     assert "workspace.m365_connection" in row.detail
+
+
+def test_email_transport_on_microsoft365_without_a_mailbox_fails(settings, monkeypatch) -> None:
+    """The channel would refuse every send (it never falls back to gws or
+    SMTP), so the doctor must not report a transport that does not exist."""
+    from robothor.engine.tools.handlers import gws
+
+    monkeypatch.setattr(gws, "gws_available", lambda: True)
+    monkeypatch.delenv("ROBOTHOR_M365_ASSISTANT_MAILBOX", raising=False)
+    settings(ROBOTHOR_WORKSPACE_PROVIDER="microsoft365")
+    row = _run(channel_checks.CHECKS, "email.transport", make_ctx())[0]
+
+    assert row.status == "fail"
+    assert "m365_assistant_mailbox" in row.detail
+
+
+def test_email_transport_on_microsoft365_prefers_graph_over_configured_smtp(
+    settings, monkeypatch
+) -> None:
+    """SMTP fully configured and the mailbox set: the channel sends through
+    Graph only, so the row must say Graph, not report an SMTP session as the path."""
+    from robothor.engine.channels import email as email_channel
+    from robothor.engine.tools.handlers import gws
+
+    monkeypatch.setattr(gws, "gws_available", lambda: True)
+
+    def _no_smtp(*_a, **_kw):
+        raise AssertionError("the doctor opened SMTP for a Graph-sending instance")
+
+    monkeypatch.setattr(email_channel, "_build_smtp", _no_smtp)
+    settings(
+        ROBOTHOR_WORKSPACE_PROVIDER="microsoft365",
+        ROBOTHOR_M365_ASSISTANT_MAILBOX="assistant@example.com",
+        ROBOTHOR_EMAIL_FROM="genus@example.com",
+        ROBOTHOR_EMAIL_SMTP_HOST="smtp.example.com",
+    )
+    row = _run(channel_checks.CHECKS, "email.transport", make_ctx())[0]
+
+    assert row.status == "pass"
+    assert "Microsoft Graph" in row.detail
+    assert "SMTP" in row.detail
 
 
 def test_email_transport_on_microsoft365_still_polices_smtp(settings, monkeypatch) -> None:
@@ -701,6 +745,7 @@ def test_email_transport_on_microsoft365_still_polices_smtp(settings, monkeypatc
     monkeypatch.setattr(gws, "gws_available", lambda: True)
     settings(
         ROBOTHOR_WORKSPACE_PROVIDER="microsoft365",
+        ROBOTHOR_M365_ASSISTANT_MAILBOX="assistant@example.com",
         ROBOTHOR_EMAIL_SMTP_HOST="smtp.example.com",
     )
     row = _run(channel_checks.CHECKS, "email.transport", make_ctx())[0]

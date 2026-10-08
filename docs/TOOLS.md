@@ -423,6 +423,18 @@ through `robothor.workspace.bridge.blocking()`, which uses the Google adapter's
 synchronous side directly and sends an async-only provider's calls to the
 engine's event loop. See [Microsoft 365 workspace](workspace/microsoft365.md).
 
+The post-condition read-back after `gws_gmail_send`, `gws_gmail_reply` and
+`gws_calendar_create` keeps the gws CLI argv on Google and reads Microsoft
+365 writes back through Graph by immutable id, on the calendar the create
+reported. See [Tool post-conditions](runbooks/TOOL_POSTCONDITIONS.md).
+
+**Descriptions are provider-neutral.** The tool descriptions say "message ID",
+"thread ID" and "online meeting link (Google Meet or Microsoft Teams, per the
+workspace)" rather than promising Gmail or Google Meet; names and parameters
+are unchanged. The engine-context line that tells the model it is a separate
+principal says "your own Google account" on Google (verbatim, as before) and
+"your own Microsoft 365 account" on Microsoft 365.
+
 ### GitHub pull-request review
 
 Six tools on the instance's `GITHUB_TOKEN` (vault first). The three reads are

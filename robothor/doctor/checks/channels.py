@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from robothor.doctor.model import Check, Result, fail, info, ok, skip
+from robothor.doctor.model import Check, Result, fail, ok, skip
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from robothor.doctor.context import DoctorContext
@@ -335,10 +335,22 @@ async def _email(ctx: DoctorContext) -> Result:
     microsoft365 = ctx.settings.workspace.workspace_provider == "microsoft365"
     gws = False if microsoft365 else bool(await ctx.run_blocking(gws_available))
 
+    mailbox = (ctx.settings.workspace.m365_assistant_mailbox or "").strip() if microsoft365 else ""
+
+    # On Microsoft 365 the channel has exactly one transport, Microsoft Graph as
+    # the assistant mailbox: no gws, and no SMTP fallback. With no mailbox it
+    # refuses every send, so the row must not claim a transport.
+    if microsoft365 and not mailbox:
+        return fail(
+            "workspace_provider is microsoft365 but m365_assistant_mailbox "
+            "(ROBOTHOR_M365_ASSISTANT_MAILBOX) is not set, so the email channel has "
+            "no mailbox to send from; it never falls back to the gws CLI or SMTP"
+        )
     if microsoft365 and not (host or sender or user or password):
-        return info(
-            "workspace_provider is microsoft365: mail goes through Microsoft Graph, "
-            "which workspace.m365_connection checks; the gws CLI is not used"
+        return ok(
+            "workspace_provider is microsoft365: the email channel sends through "
+            "Microsoft Graph as the assistant mailbox (m365_assistant_mailbox), whose "
+            "credential workspace.m365_connection checks; the gws CLI is not used"
         )
 
     if not (host or sender or user or password):
@@ -382,6 +394,14 @@ async def _email(ctx: DoctorContext) -> Result:
     if cleartext:
         return fail(cleartext)
 
+    if microsoft365 and mailbox:
+        # The channel prefers Graph exactly as it prefers gws on Google.
+        return ok(
+            "workspace_provider is microsoft365: the email channel sends through "
+            "Microsoft Graph as the assistant mailbox (m365_assistant_mailbox), whose "
+            "credential workspace.m365_connection checks; the SMTP settings are not "
+            "used on Microsoft 365"
+        )
     if gws:
         # Both are configured, and the channel prefers gws. Said plainly here
         # because the SMTP settings then look configured-and-unused, and an

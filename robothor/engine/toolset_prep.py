@@ -65,8 +65,8 @@ def deferred_toolset_note(visible: int, reachable: int) -> str:
 def principals_note() -> str:
     """One line naming the two principals this run acts between. Never "".
 
-    The assistant is a SEPARATE Google account from the operator: its own
-    address, its own calendar, its own Drive. Nothing in a run said so, and on
+    The assistant is a SEPARATE Google (or Microsoft 365) account from the
+    operator: its own address, its own calendar, its own Drive. Nothing in a run said so, and on
     2026-09-16 the model wrote the operator's itinerary to ``primary`` — its own
     calendar — added the operator as an attendee, and reported it as done. Every
     step was locally reasonable for an agent that believed "my calendar" and
@@ -97,10 +97,19 @@ def principals_note() -> str:
     The addresses ENRICH the sentence; they were never a precondition for it.
     """
     assistant = ""
+    # Which kind of account the assistant has follows `workspace_provider`.
+    # Google's wording is the line every run on a Google instance has always
+    # carried, byte for byte; Microsoft 365 names its own kind of account and
+    # falls back to the assistant mailbox the Graph tools act as.
+    account = "Google account"
     try:
         from robothor.settings import get_settings
 
-        assistant = (get_settings().channels.ai_email or "").strip()
+        settings = get_settings()
+        assistant = (settings.channels.ai_email or "").strip()
+        if settings.workspace.workspace_provider == "microsoft365":
+            account = "Microsoft 365 account"
+            assistant = assistant or (settings.workspace.m365_assistant_mailbox or "").strip()
     except Exception:  # noqa: BLE001 - an unreadable setting is not a failed run
         logger.debug("assistant address unavailable for the principals note", exc_info=True)
     operator_name = ""
@@ -117,9 +126,9 @@ def principals_note() -> str:
 
     parts = []
     if assistant:
-        parts.append(f"You are a separate principal with your own Google account ({assistant})")
+        parts.append(f"You are a separate principal with your own {account} ({assistant})")
     else:
-        parts.append("You are a separate principal with your own Google account")
+        parts.append(f"You are a separate principal with your own {account}")
     who = " ".join(p for p in (operator_name, f"<{operator_email}>" if operator_email else "") if p)
     if who:
         parts.append(
