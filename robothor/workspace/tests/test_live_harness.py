@@ -13,6 +13,7 @@ import base64
 import email.message
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -563,7 +564,7 @@ class TestScrubber:
         assert [h["name"] for h in out] == [h["name"] for h in headers]
         text = json.dumps(out)
         assert "contoso" not in text and "10.1.2.3" not in text and "203.0.113.9" not in text
-        assert "prod.outlook.com" in text, "Microsoft infrastructure names are kept"
+        assert re.search(r"\bprod\.outlook\.com\b", text), "Microsoft infrastructure names are kept"
         assert "spf=pass" in text and "dkim=none" in text
         assert out[2]["value"].startswith("<redacted")
         assert find_leaks(out) == []

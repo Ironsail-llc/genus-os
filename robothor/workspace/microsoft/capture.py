@@ -167,6 +167,8 @@ _EMAIL = re.compile(
 _GUID = re.compile(
     r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"
 )
+# A tenant's default domain: "<name>.onmicrosoft.com" (matched anywhere in text).
+_TENANT_NAME = re.compile(r"(?i)\b[a-z0-9-]+\.onmicrosoft\.com\b")
 _JWT = re.compile(r"eyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]*")
 _BEARER = re.compile(r"(?i)bearer\s+[A-Za-z0-9._~+/=-]+")
 _IPV4 = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
@@ -567,7 +569,7 @@ def _check_string(value: str, where: str, literals: list[str], found: list[str])
         for match in _GUID.finditer(value)
         if not _is_scrubbed_guid(match.group(0))
     )
-    if "onmicrosoft.com" in value.lower():
+    if _TENANT_NAME.search(value):
         found.append(f"{where}: an onmicrosoft.com tenant name")
     for match in _IPV4.finditer(value):
         try:
