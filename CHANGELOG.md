@@ -1,3 +1,13 @@
+## [1.108.0](https://github.com/Ironsail-llc/genus-os/compare/v1.107.0...v1.108.0) (2026-10-08)
+
+### Features
+
+* **pr-review:** watch several chat review channels ([#671](https://github.com/Ironsail-llc/genus-os/issues/671)) ([cc6ef01](https://github.com/Ironsail-llc/genus-os/commit/cc6ef01aaf58a7c96d7d43f4839728bf84961f4e))
+
+### Bug Fixes
+
+* **pr-review:** keep each finding's GitHub comment id ([#669](https://github.com/Ironsail-llc/genus-os/issues/669)) ([c30d729](https://github.com/Ironsail-llc/genus-os/commit/c30d7292f88d4eaebcd3c8df7b1ac5048a3ad1ca)), closes [#668](https://github.com/Ironsail-llc/genus-os/issues/668)
+
 ## [1.107.0](https://github.com/Ironsail-llc/genus-os/compare/v1.106.2...v1.107.0) (2026-10-08)
 
 ### Features
