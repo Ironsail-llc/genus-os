@@ -87,6 +87,9 @@ class FakeGitHub:
         self.review_comments = [
             {"id": 9001, "path": "src/a.py", "line": 11, "body": "x"},
         ]
+        # GET /pulls/7/comments — the PR's review comments with their lines.
+        # None: the endpoint is unavailable (the old fallback is used).
+        self.pr_comments: list[dict[str, Any]] | None = None
         self.compare: dict[str, Any] | None = None
         self.threads_pages: list[dict[str, Any]] = []
         self.resolved: list[str] = []
@@ -152,6 +155,10 @@ class FakeGitHub:
                     hdrs["Link"] = f'<{nxt}>; rel="next"'
                 return httpx.Response(200, json=self.comment_pages[page - 1], headers=hdrs)
             return httpx.Response(200, json=self.review_comments)
+        if path == f"{base}/pulls/7/comments" and request.method == "GET":
+            if self.pr_comments is None:
+                return httpx.Response(404, json={"message": "Not Found"})
+            return httpx.Response(200, json=self.pr_comments)
         if path.startswith(f"{base}/pulls/7/comments/") and path.endswith("/replies"):
             return httpx.Response(
                 201,
@@ -387,6 +394,21 @@ class TestCreateReview:
         )
         assert gh.posted_reviews()[0]["event"] == "APPROVE"
         assert result["verdict_overridden"] is False
+
+    async def test_comment_ids_map_although_the_review_endpoint_omits_lines(self, gh):
+        """2026-10-08: GitHub's reviews/{id}/comments returns line=null, so no
+        posted finding was ever mapped to its comment id (0 of 20) — the bot
+        never replied on its own threads and a forgotten prior blocker never
+        blocked. The PR's comment list carries the line; it is the source."""
+        gh.review_comments = [{"id": 9001, "path": "src/a.py", "line": None, "position": 1}]
+        gh.pr_comments = [
+            {"id": 8000, "path": "src/a.py", "line": 11, "pull_request_review_id": 1},
+            {"id": 9001, "path": "src/a.py", "line": 11, "pull_request_review_id": 555},
+        ]
+        result = await github_api._github_create_review(
+            _review_args("REQUEST_CHANGES", [_issue("blocker", "In diff", 11)]), _CTX
+        )
+        assert result["comments"] == [{"id": 9001, "path": "src/a.py", "line": 11}]
 
     async def test_returns_the_inline_comments_with_their_anchors(self, gh):
         result = await github_api._github_create_review(

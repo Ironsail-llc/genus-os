@@ -942,8 +942,22 @@ async def _review_comments(
         )
     except Exception:  # noqa: BLE001 - the review is posted; ids are a convenience
         return []
+    lines = {c["id"]: c.get("line") for c in cs if "id" in c}
+    if any(line is None for line in lines.values()):
+        # GitHub's reviews/{id}/comments returns line=null (2026-10-08: no
+        # posted finding was ever mapped to its id). The PR's comment list
+        # carries each comment's line; the review endpoint keeps the order.
+        try:
+            listed = await _paginate(
+                client, f"{pr_url}/comments", headers, {"per_page": 100}, max_pages=10
+            )
+        except Exception:  # noqa: BLE001 - fall back to what the review endpoint gave
+            listed = []
+        for c in listed:
+            if c.get("id") in lines and lines[c["id"]] is None:
+                lines[c["id"]] = c.get("line") or c.get("original_line")
     return [
-        {"id": c["id"], "path": c.get("path", ""), "line": c.get("line")} for c in cs if "id" in c
+        {"id": c["id"], "path": c.get("path", ""), "line": lines[c["id"]]} for c in cs if "id" in c
     ]
 
 
