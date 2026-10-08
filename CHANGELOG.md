@@ -1,3 +1,13 @@
+## [1.106.1](https://github.com/Ironsail-llc/genus-os/compare/v1.106.0...v1.106.1) (2026-10-08)
+
+### Bug Fixes
+
+* **workspace:** never drop unseen mail at the ingest high-water mark ([#666](https://github.com/Ironsail-llc/genus-os/issues/666)) ([e0f791c](https://github.com/Ironsail-llc/genus-os/commit/e0f791c88ee11063c5a43b3d61d7ac23b027f0f1)), closes [#662](https://github.com/Ironsail-llc/genus-os/issues/662)
+
+### Tests
+
+* **live:** microsoft 365 dev-tenant smoke suite ([#665](https://github.com/Ironsail-llc/genus-os/issues/665)) ([1ce95e7](https://github.com/Ironsail-llc/genus-os/commit/1ce95e7c11146dbae6c4058b1a4ab19a04ddf870))
+
 ## [1.106.0](https://github.com/Ironsail-llc/genus-os/compare/v1.105.0...v1.106.0) (2026-10-08)
 
 ### Features
