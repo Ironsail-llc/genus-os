@@ -8,13 +8,27 @@ calendar (``/users/{owner}/calendarView/delta`` over a window fixed when the
 delta starts: one day back to thirty ahead, renewed daily) and publishes
 ``calendar.new`` / ``.modified`` / ``.rescheduled`` / ``.cancellation``.
 
+**The seen set decides what is new; the high-water mark only guards a reset.**
+Every item id the ingestor handles goes into the seen set, and an id in it is
+never published again. In an ordinary (incremental) round the delta answers
+only what changed since the last one, so every unseen unread message in it is
+published, whatever its ``receivedDateTime`` -- a second message in the same
+second as the newest one, a delayed delivery or moved-in mail stamped in the
+past. Only mail older than :data:`~robothor.workspace.ingest.state.SEEN_TTL`
+is held back there: its seen id may already have been purged.
+
 **A lost delta never replays old mail.** Exchange can throw a delta away
 (``410 syncStateNotFound`` and friends). The ingestor then starts a new one,
-which answers the whole folder again -- and publishes from it only items that
-are newer than the high-water mark (the newest item it had processed) AND
-whose id it has not seen. The first ever sync publishes at most
-:data:`INITIAL_PUBLISH_LIMIT` unread messages from the last week, then
-everything else is history.
+which answers the whole folder again -- and publishes from it only unseen
+items at or after the high-water mark (the newest item time it had
+processed). The mark's own second is included, so unseen mail in it is not
+lost, unless the seen set no longer covers what the reset re-reads at or
+below the mark (lost or purged): then only items strictly newer than the mark
+are published, since the unseen one in its second could be the very item that
+set it. The first ever sync publishes at most :data:`INITIAL_PUBLISH_LIMIT`
+unread messages from the last week, then everything else is history. The
+calendar's daily window renewal and its 410 resync follow the same rule over
+``lastModifiedDateTime``.
 
 A message is mapped with the same translation the mail tools use
 (:func:`robothor.workspace.microsoft.mail.gmail_envelope`), so the event, the
@@ -37,7 +51,7 @@ from robothor.workspace.errors import NotFound, WorkspaceError
 from robothor.workspace.ingest.base import Ingestor, IngestReport, Publisher
 from robothor.workspace.ingest.crm import InteractionLogger, crm_key, interaction_payload
 from robothor.workspace.ingest.email_log import EmailLog, new_entry
-from robothor.workspace.ingest.state import IngestStore, SyncState
+from robothor.workspace.ingest.state import SEEN_TTL, IngestStore, SyncState
 from robothor.workspace.microsoft.mail import ENVELOPE_FIELDS, gmail_envelope
 
 if TYPE_CHECKING:
@@ -109,6 +123,33 @@ def _later(first: datetime | None, second: datetime | None) -> datetime | None:
     if second is None:
         return first
     return max(first, second)
+
+
+def _at_or_before(when: datetime | None, mark: datetime | None) -> bool:
+    return when is not None and mark is not None and when <= mark
+
+
+def _vouched(keys: list[str], seen: set[str]) -> bool:
+    """Does the seen set still cover what a resync re-reads at or below the mark?
+
+    True when any such item is seen, or when there is none (nothing to replay).
+    """
+    return not keys or any(k in seen for k in keys)
+
+
+def _fresh_after_reset(when: datetime | None, mark: datetime | None, *, inclusive: bool) -> bool:
+    """May an unseen item be published from a delta started again (410 or renewal)?
+
+    Only at or after the high-water mark: everything older is history the new
+    delta re-lists. The mark's own second counts (``inclusive``) -- a second
+    message in that second is new mail -- unless the seen set no longer covers
+    the mark, when it could be the very item that set it.
+    """
+    if when is None:
+        return False
+    if mark is None:
+        return True
+    return when >= mark if inclusive else when > mark
 
 
 class _GraphDeltaIngestor(Ingestor):
@@ -280,12 +321,23 @@ class GraphMailIngestor(_GraphDeltaIngestor):
         keys = {str(m["id"]): f"mail:{m['id']}" for m in messages}
         already = await self._seen(list(keys.values()))
 
+        received_at = {str(m["id"]): _parse(m.get("receivedDateTime")) for m in messages}
+        # A resync re-reads mail the seen set has already handled. When none of
+        # what it re-reads at or below the mark is in the seen set, the set no
+        # longer covers that stretch (lost, or purged after SEEN_TTL), so the
+        # mark's own second is held back too.
+        vouched = mode == "resync" and _vouched(
+            [keys[i] for i, when in received_at.items() if _at_or_before(when, high_water)],
+            already,
+        )
+        retention = self._now() - SEEN_TTL
+
         publish: list[dict[str, Any]] = []
         history: list[str] = []
         newest = high_water
         for message in messages:
             key = keys[str(message["id"])]
-            received = _parse(message.get("receivedDateTime"))
+            received = received_at[str(message["id"])]
             newest = _later(newest, received)
             if key in already:
                 continue
@@ -296,7 +348,14 @@ class GraphMailIngestor(_GraphDeltaIngestor):
                 else:
                     history.append(key)
                 continue
-            fresh = received is not None and (high_water is None or received > high_water)
+            if mode == "incremental":
+                # The delta answers only what changed since the last round, and
+                # the seen set decides what is new -- whatever its timestamp
+                # (delayed delivery, moved-in mail, the mark's own second).
+                # Older than the seen set's retention, a seen id may be gone.
+                fresh = received is None or received >= retention
+            else:
+                fresh = _fresh_after_reset(received, high_water, inclusive=vouched)
             if unread and fresh:
                 publish.append(message)
             else:
@@ -423,6 +482,17 @@ class GraphCalendarIngestor(_GraphDeltaIngestor):
     ) -> datetime | None:
         high_water = state.high_water if state is not None else None
         newest = high_water
+        # As for mail: the mark's own second is published on a resync only
+        # while the seen set still covers what the resync re-reads.
+        vouched = False
+        if mode == "resync":
+            below = [
+                self._keys(i)["version"]
+                for i in items
+                if "@removed" not in i
+                and _at_or_before(_parse(i.get("lastModifiedDateTime")), high_water)
+            ]
+            vouched = _vouched(below, await self._seen(below))
         for item in items:
             if "@removed" in item:
                 await self._removed(str(item["id"]), report)
@@ -438,9 +508,7 @@ class GraphCalendarIngestor(_GraphDeltaIngestor):
                 # not a stream of changes.
                 await self._mark([keys["id"], keys["version"], keys["slot"]])
                 continue
-            if mode == "resync" and (
-                modified is None or (high_water is not None and modified <= high_water)
-            ):
+            if mode == "resync" and not _fresh_after_reset(modified, high_water, inclusive=vouched):
                 report.held_back += 1
                 await self._mark([keys["id"], keys["version"], keys["slot"]])
                 continue
