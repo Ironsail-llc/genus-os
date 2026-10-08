@@ -1,0 +1,42 @@
+{
+  "args": {
+    "body": "x",
+    "thread_id": "thread-9"
+  },
+  "calendar_requests": [],
+  "context": {
+    "is_benchmark": false,
+    "run_id": "run-golden",
+    "tenant_id": "tenant-a"
+  },
+  "crm_write_through": {
+    "calls": [],
+    "sql": []
+  },
+  "dnc_lookups": [],
+  "guardrail_events": [],
+  "gws_calls": [
+    {
+      "argv": [
+        "gmail",
+        "users",
+        "threads",
+        "get",
+        "--params",
+        "{\"userId\": \"me\", \"id\": \"thread-9\", \"format\": \"metadata\"}"
+      ],
+      "params": {
+        "format": "metadata",
+        "id": "thread-9",
+        "userId": "me"
+      },
+      "timeout": 30
+    }
+  ],
+  "result": {
+    "error": "Thread thread-9 has no messages"
+  },
+  "scenario": "gmail_reply_empty_thread",
+  "scheduling_policy_lookups": [],
+  "tool": "gws_gmail_reply"
+}

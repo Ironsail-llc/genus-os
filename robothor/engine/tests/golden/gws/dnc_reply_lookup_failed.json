@@ -1,0 +1,53 @@
+{
+  "args": {
+    "body": "Thanks.",
+    "cc": "dave@example.com",
+    "thread_id": "thread-9"
+  },
+  "calendar_requests": [],
+  "context": {
+    "is_benchmark": false,
+    "run_id": "run-golden",
+    "tenant_id": "tenant-a"
+  },
+  "crm_write_through": {
+    "calls": [],
+    "sql": []
+  },
+  "dnc_lookups": [
+    {
+      "addresses": [
+        "bob@example.com",
+        "carol@example.com",
+        "dave@example.com"
+      ],
+      "tenant_id": "tenant-a"
+    }
+  ],
+  "guardrail_events": [],
+  "gws_calls": [
+    {
+      "argv": [
+        "gmail",
+        "users",
+        "threads",
+        "get",
+        "--params",
+        "{\"userId\": \"me\", \"id\": \"thread-9\", \"format\": \"metadata\"}"
+      ],
+      "params": {
+        "format": "metadata",
+        "id": "thread-9",
+        "userId": "me"
+      },
+      "timeout": 30
+    }
+  ],
+  "result": {
+    "error": "gws_gmail_reply refused: the do-not-contact list could not be read, so it is unknown whether a recipient has opted out. Not sending. Retry once the CRM database is reachable, or tell the operator plainly that it did not go out.",
+    "guard": "do_not_contact"
+  },
+  "scenario": "dnc_reply_lookup_failed",
+  "scheduling_policy_lookups": [],
+  "tool": "gws_gmail_reply"
+}

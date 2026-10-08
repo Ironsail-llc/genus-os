@@ -1,0 +1,27 @@
+{
+  "args": {
+    "attendees": [
+      "not-an-address"
+    ],
+    "event_id": "meeting"
+  },
+  "calendar_requests": [],
+  "context": {
+    "is_benchmark": false,
+    "run_id": "run-golden",
+    "tenant_id": "tenant-a"
+  },
+  "crm_write_through": {
+    "calls": [],
+    "sql": []
+  },
+  "dnc_lookups": [],
+  "guardrail_events": [],
+  "gws_calls": [],
+  "result": {
+    "error": "attendees must be a list of email addresses"
+  },
+  "scenario": "calendar_add_attendees_bad_list",
+  "scheduling_policy_lookups": [],
+  "tool": "gws_calendar_add_attendees"
+}

@@ -1,0 +1,52 @@
+{
+  "args": {
+    "event_id": "meeting",
+    "response": "accepted"
+  },
+  "calendar_requests": [
+    {
+      "calendar_id": "alice@example.com",
+      "event_id": "meeting",
+      "method": "GET"
+    }
+  ],
+  "context": {
+    "is_benchmark": false,
+    "run_id": "run-golden",
+    "tenant_id": "tenant-a"
+  },
+  "crm_write_through": {
+    "calls": [],
+    "sql": []
+  },
+  "dnc_lookups": [
+    {
+      "addresses": [
+        "carol@example.com"
+      ],
+      "tenant_id": "tenant-a"
+    }
+  ],
+  "guardrail_events": [
+    {
+      "action": "blocked",
+      "guard": "do_not_contact",
+      "mode": "enforce",
+      "reason": "recipients flagged do_not_contact: carol@example.com",
+      "run_id": "run-golden",
+      "tool_name": "gws_calendar_respond"
+    }
+  ],
+  "gws_calls": [],
+  "result": {
+    "calendar": {
+      "id": "alice@example.com",
+      "kind": "operator"
+    },
+    "error": "gws_calendar_respond refused: carol@example.com has opted out of contact (crm_people.do_not_contact). Do not send to this address, and do not work around it by using another channel or another address for the same person. Remove them from the recipients and try again if the message is for someone else.",
+    "guard": "do_not_contact"
+  },
+  "scenario": "dnc_respond_block_organizer",
+  "scheduling_policy_lookups": [],
+  "tool": "gws_calendar_respond"
+}

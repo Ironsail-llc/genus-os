@@ -1,0 +1,96 @@
+{
+  "args": {
+    "calendar": "own",
+    "event_id": "meeting",
+    "summary": "X"
+  },
+  "calendar_requests": [
+    {
+      "calendar_id": "primary",
+      "event_id": "meeting",
+      "method": "GET"
+    },
+    {
+      "body": {
+        "summary": "X"
+      },
+      "calendar_id": "primary",
+      "etag": "\"v1\"",
+      "event_id": "meeting",
+      "method": "PATCH",
+      "send_updates": "all"
+    },
+    {
+      "calendar_id": "primary",
+      "event_id": "meeting",
+      "method": "GET"
+    }
+  ],
+  "context": {
+    "is_benchmark": false,
+    "run_id": "run-golden",
+    "tenant_id": "tenant-a"
+  },
+  "crm_write_through": {
+    "calls": [],
+    "sql": []
+  },
+  "dnc_lookups": [
+    {
+      "addresses": [
+        "alice@example.com",
+        "bob@example.com"
+      ],
+      "tenant_id": "tenant-a"
+    }
+  ],
+  "guardrail_events": [],
+  "gws_calls": [],
+  "result": {
+    "added": [],
+    "already_present": [],
+    "attendees": [
+      {
+        "email": "alice@example.com",
+        "responseStatus": "needsAction"
+      },
+      {
+        "email": "Bob@Example.com",
+        "responseStatus": "accepted"
+      }
+    ],
+    "attendees_notified": [
+      "alice@example.com",
+      "Bob@Example.com"
+    ],
+    "calendar": {
+      "id": "primary",
+      "kind": "own"
+    },
+    "changed": [
+      "summary"
+    ],
+    "declined": [],
+    "delivery_verified": false,
+    "end": {
+      "dateTime": "2026-10-08T10:30:00-04:00",
+      "timeZone": "America/New_York"
+    },
+    "event_id": "meeting",
+    "htmlLink": "https://calendar.example.test/meeting",
+    "invitations_requested": true,
+    "recurrence": null,
+    "removed": [],
+    "send_updates": "all",
+    "start": {
+      "dateTime": "2026-10-08T10:00:00-04:00",
+      "timeZone": "America/New_York"
+    },
+    "status": "updated",
+    "summary": "X",
+    "verification": "verified"
+  },
+  "scenario": "calendar_update_own_calendar",
+  "scheduling_policy_lookups": [],
+  "tool": "gws_calendar_update"
+}

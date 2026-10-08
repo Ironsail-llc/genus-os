@@ -1,0 +1,55 @@
+{
+  "args": {
+    "message_id": "msg-huge"
+  },
+  "calendar_requests": [],
+  "context": {
+    "is_benchmark": false,
+    "run_id": "run-golden",
+    "tenant_id": "tenant-a"
+  },
+  "crm_write_through": {
+    "calls": [],
+    "sql": []
+  },
+  "dnc_lookups": [],
+  "guardrail_events": [],
+  "gws_calls": [
+    {
+      "argv": [
+        "gmail",
+        "users",
+        "messages",
+        "get",
+        "--params",
+        "{\"userId\": \"me\", \"id\": \"msg-huge\", \"format\": \"full\"}"
+      ],
+      "params": {
+        "format": "full",
+        "id": "msg-huge",
+        "userId": "me"
+      },
+      "timeout": 30
+    }
+  ],
+  "result": {
+    "body_chars": 23199,
+    "body_text": "line 00000 of the newsletter\nline 00001 of the newsletter\nline 00002 of the newsletter\nline 00003 of the newsletter\nline 00004 of the newsletter\nline 00005 of the newsletter\nline 00006 of the newsletter\nline 00007 of the newsletter\nline 00008 of the newsletter\nline 00009 of the newsletter\nline 00010 of the newsletter\nline 00011 of the newsletter\nline 00012 of the newsletter\nline 00013 of the newsletter\nline 00014 of the newsletter\nline 00015 of the newsletter\nline 00016 of the newsletter\nline 00017 of the newsletter\nline 00018 of the newsletter\nline 00019 of the newsletter\nline 00020 of the newsletter\nline 00021 of the newsletter\nline 00022 of the newsletter\nline 00023 of the newsletter\nline 00024 of the newsletter\nline 00025 of the newsletter\nline 00026 of the newsletter\nline 00027 of the newsletter\nline 00028 of the newsletter\nline 00029 of the newsletter\nline 00030 of the newsletter\nline 00031 of the newsletter\nline 00032 of the newsletter\nline 00033 of the newsletter\nline 00034 of the newsletter\nline 00035 of the newsletter\nline 00036 of the newsletter\nline 00037 of the newsletter\nline 00038 of the newsletter\nline 00039 of the newsletter\nline 00040 of the newsletter\nline 00041 of the newsletter\nline 00042 of the newsletter\nline 00043 of the newsletter\nline 00044 of the newsletter\nline 00045 of the newsletter\nline 00046 of the newsletter\nline 00047 of the newsletter\nline 00048 of the newsletter\nline 00049 of the newsletter\nline 00050 of the newsletter\nline 00051 of the newsletter\nline 00052 of the newsletter\nline 00053 of the newsletter\nline 00054 of the newsletter\nline 00055 of the newsletter\nline 00056 of the newsletter\nline 00057 of the newsletter\nline 00058 of the newsletter\nline 00059 of the newsletter\nline 00060 of the newsletter\nline 00061 of the newsletter\nline 00062 of the newsletter\nline 00063 of the newsletter\nline 00064 of the newsletter\nline 00065 of the newsletter\nline 00066 of the newsletter\nline 00067 of the newsletter\nline 00068 of the newsletter\nline 00069 of the newsletter\nline 00070 of the newsletter\nline 00071 of the newsletter\nline 00072 of the newsletter\nline 00073 of the newsletter\nline 00074 of the newsletter\nline 00075 of the newsletter\nline 00076 of the newsletter\nline 00077 of the newsletter\nline 00078 of the newsletter\nline 00079 of the newsletter\nline 00080 of the newsletter\nline 00081 of the newsletter\nline 00082 of the newsletter\nline 00083 of the newsletter\nline 00084 of the newsletter\nline 00085 of the newsletter\nline 0",
+    "body_truncated": true,
+    "cc": "",
+    "date": "Wed, 17 Sep 2026 08:00:00 +0000",
+    "from": "news@example.com",
+    "id": "msg-huge",
+    "labels": [
+      "INBOX"
+    ],
+    "message_id": "",
+    "snippet": "A very long newsletter",
+    "subject": "Newsletter",
+    "thread_id": "thread-5",
+    "to": "agent@example.com"
+  },
+  "scenario": "gmail_get_message_huge_body",
+  "scheduling_policy_lookups": [],
+  "tool": "gws_gmail_get"
+}

@@ -1,0 +1,83 @@
+{
+  "args": {
+    "format": "minimal",
+    "thread_id": "thread-9"
+  },
+  "calendar_requests": [],
+  "context": {
+    "is_benchmark": false,
+    "run_id": "run-golden",
+    "tenant_id": "tenant-a"
+  },
+  "crm_write_through": {
+    "calls": [],
+    "sql": []
+  },
+  "dnc_lookups": [],
+  "guardrail_events": [],
+  "gws_calls": [
+    {
+      "argv": [
+        "gmail",
+        "users",
+        "threads",
+        "get",
+        "--params",
+        "{\"userId\": \"me\", \"id\": \"thread-9\", \"format\": \"metadata\"}"
+      ],
+      "params": {
+        "format": "metadata",
+        "id": "thread-9",
+        "userId": "me"
+      },
+      "timeout": 30
+    }
+  ],
+  "result": {
+    "count": 3,
+    "messages": [
+      {
+        "date": "",
+        "from": "Bob <bob@example.com>",
+        "id": "m1",
+        "labels": [
+          "INBOX"
+        ],
+        "snippet": "",
+        "subject": "Kickoff",
+        "thread_id": "thread-9",
+        "to": "agent@example.com"
+      },
+      {
+        "date": "",
+        "from": "Agent <agent@example.com>",
+        "id": "m2",
+        "labels": [
+          "INBOX"
+        ],
+        "snippet": "",
+        "subject": "Re: Kickoff",
+        "thread_id": "thread-9",
+        "to": "bob@example.com"
+      },
+      {
+        "date": "",
+        "from": "Bob <bob@example.com>",
+        "id": "m3",
+        "labels": [
+          "INBOX"
+        ],
+        "snippet": "",
+        "subject": "Kickoff",
+        "thread_id": "thread-9",
+        "to": "agent@example.com, carol@example.com"
+      }
+    ],
+    "messages_in_thread": 3,
+    "thread_id": "thread-9",
+    "truncated": false
+  },
+  "scenario": "gmail_get_thread_metadata",
+  "scheduling_policy_lookups": [],
+  "tool": "gws_gmail_get"
+}
