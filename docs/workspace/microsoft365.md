@@ -5,12 +5,11 @@
 > checks exist: with `ROBOTHOR_WORKSPACE_PROVIDER=microsoft365` and an assistant
 > mailbox set, the `gws_gmail_*` tools read and send mail from the assistant's
 > Exchange Online mailbox (see [Mail](#mail)) and the `gws_calendar_*` tools run
-> against Exchange Online calendars (see [Calendar](#calendar)). The
-> `gws_chat_*` tools stay Google-only. Ingestion and the end-to-end
-> verification are still landing, so connect and verify a tenant with this
-> runbook but do not pass `--enable` on a production instance until the
-> release notes say it is ready. [Connect a tenant](#connect-a-tenant) is the
-> step-by-step runbook.
+> against Exchange Online calendars (see [Calendar](#calendar)). New inbox mail
+> and calendar changes are published by the platform's
+> [ingest worker](#ingestion). The `gws_chat_*` tools stay Google-only. Do not
+> pass `--enable` on a production instance until the release notes say it is
+> ready. [Connect a tenant](#connect-a-tenant) is the step-by-step runbook.
 
 Genus OS reads and sends mail and manages calendars through the `gws_*` tools.
 By default they run against Google Workspace. With
@@ -197,6 +196,49 @@ Immutable ids survive a move, so the id stays the same after archiving.
 - **Writes are sent once.** A send whose outcome is unknown comes back with
   `outcome_unknown: true` and is not retried.
 
+## Ingestion
+
+On Google, the instance's own sync scripts poll Gmail and publish `email.new`
+on the event bus, which starts the email pipeline. On Microsoft 365 the
+platform does this itself: with `ROBOTHOR_WORKSPACE_PROVIDER=microsoft365` the
+engine runs an ingest worker (`robothor/workspace/ingest/`). On a Google
+instance the worker starts no task at all, so nothing is published twice.
+With HA leader election on, only the leader replica ingests.
+
+Every `ROBOTHOR_M365_INGEST_INTERVAL_SECONDS` (default 60) one round runs:
+
+- **Assistant inbox** (`GET /users/{assistant}/mailFolders/inbox/messages/delta`,
+  envelope fields only, 50 per page). Each new unread message is merged into
+  `email-log.json` and published once as `email.new`. The payload and the log
+  entry use the same translation as the mail tools, so `from`, `date` and the
+  labels match what `gws_gmail_get` shows.
+- **Owner calendar** (`GET /users/{owner}/calendarView/delta` over one day
+  back to 30 days ahead; the window is fixed when the delta starts and renewed
+  daily). The first sync is a baseline and publishes nothing. After that each
+  change is published as `calendar.new`, `calendar.modified`,
+  `calendar.rescheduled` or `calendar.cancellation`. A delta removal is read
+  back: a deleted or cancelled event is a cancellation, an event moved out of
+  the window is a reschedule.
+
+The payloads follow the contract in [Event Bus](../event-bus.md#email-and-calendar-event-contract).
+
+**A lost delta never replays old mail.** Exchange can drop a delta
+(`410 syncStateNotFound`). The worker then starts a new one, and publishes
+from it only messages newer than the high-water mark (the newest message it
+had already processed) that it has not seen before. Both live in the database
+(migration 149: `workspace_sync_state` and `workspace_seen`). The first sync
+ever publishes at most 20 unread messages from the last week.
+
+The email log is written atomically (a temporary file, then a rename, under
+the same `.email-log.lock` the Google script uses). Existing entries are kept
+as they are, and a reply resets its conversation's first entry for re-triage.
+The log is capped at 2,000 entries. `ROBOTHOR_EMAIL_LOG_PATH` overrides where
+it goes; by default it is `<workspace>/brain/memory/email-log.json`, the file
+the dashboards read.
+
+Not done on Microsoft 365 yet: logging each email to the CRM, and the
+`triage-inbox.json` rebuild that the Google script also does.
+
 ## Auth model
 
 The assistant signs in as an **application**, not as a user:
@@ -237,6 +279,8 @@ description can quote a rejected secret back, so it is never logged.
 | `ROBOTHOR_M365_ASSISTANT_MAILBOX` | The assistant's mailbox |
 | `ROBOTHOR_M365_OWNER_MAILBOX` | The operator's mailbox, whose calendar the assistant manages |
 | `ROBOTHOR_M365_SCOPE_CANARY_MAILBOX` | A mailbox the app must *not* be able to read |
+| `ROBOTHOR_M365_INGEST_INTERVAL_SECONDS` | Seconds between ingest rounds (default 60) |
+| `ROBOTHOR_EMAIL_LOG_PATH` | Where the ingest merges new mail; empty means `<workspace>/brain/memory/email-log.json` |
 
 See [Settings](../reference/configuration.md) for the generated reference.
 
@@ -477,6 +521,7 @@ Every check must pass:
 | `workspace.m365_assistant_identity` | required | `ROBOTHOR_AI_EMAIL` is the assistant mailbox. The mail guards recognise the assistant by `ROBOTHOR_AI_EMAIL` (the duplicate-reply guard and reply-all), while on Microsoft 365 it sends from the assistant mailbox, so a different address makes the guard miss the assistant's own replies |
 | `workspace.m365_canary_configured` | recommended | A canary mailbox is set. Without one the scope is unproven |
 | `workspace.m365_timezone` | recommended | The owner's Exchange timezone matches `ROBOTHOR_TIMEZONE`. Windows zone names such as `Eastern Standard Time` are mapped to IANA names. A zone that can't be mapped, or settings the app may not read, are reported but don't fail |
+| `workspace.m365_ingest_freshness` | recommended | Only once `ROBOTHOR_WORKSPACE_PROVIDER=microsoft365`: the [ingest](#ingestion) finished a round for the inbox (and the calendar, when an owner mailbox is set) within three ingest intervals. It reads the database, not Graph |
 
 The checks run only on an instance with `ROBOTHOR_WORKSPACE_PROVIDER=microsoft365`
 or with a Microsoft 365 credential in the vault. Everywhere else they skip.
@@ -522,6 +567,8 @@ needed. Token requests fail between steps 1 and 2, so do both together.
 | `cannot read the assistant inbox ... graph HTTP 403` | Role assignment missing, mailbox not in the scope, or not applied yet | Step 5; wait for Exchange to apply it |
 | `app scope is not restricted` | Tenant-wide Entra consent next to RBAC, or no scope at all | Remove the permissions under API permissions in Entra (option A), or finish option B |
 | `canary mailbox ... was not found` | Typo, or the canary is not a mailbox | Set `ROBOTHOR_M365_SCOPE_CANARY_MAILBOX` to a real mailbox |
+| `Microsoft 365 ingest is behind` | The worker is failing each round, or the engine is down | Look for `microsoft365 ... ingest deferred` in the engine journal; run the connection check |
+| `could not read the ingest state` | Migration 149 not applied | `genus migrate` |
 
 ### Verify against Microsoft docs
 

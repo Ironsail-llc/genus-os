@@ -621,6 +621,26 @@ def _cleanup_stale_runs(tenant_id: str | None = None) -> int:
         sweep_terminal(tenant_id)
 
 
+def _background_workers(tenant_id: str) -> list[asyncio.Task[Any]]:
+    """Calendar write recovery, plus the Microsoft 365 ingest.
+
+    The ingest starts no task at all unless workspace_provider=microsoft365: a
+    Google instance's own sync scripts publish email.new / calendar.*.
+    """
+    from robothor.engine.calendar_recovery_worker import run as recover_calendar
+
+    tasks: list[asyncio.Task[Any]] = [
+        asyncio.create_task(recover_calendar(tenant_id), name="calendar-recovery")
+    ]
+    try:
+        from robothor.workspace.ingest import worker as ingest_worker
+
+        tasks.extend(ingest_worker.start_tasks(tenant_id))
+    except Exception as e:  # noqa: BLE001 - ingest must never keep the engine down
+        logger.warning("Microsoft 365 ingest not started: %s", type(e).__name__)
+    return tasks
+
+
 async def _start_federation(config: EngineConfig, runner: Any = None) -> Any:
     """Start federation NATS transport if connections exist.
 
@@ -1594,11 +1614,9 @@ async def main() -> int:
     # Federation — start NATS if connections exist (no-op otherwise)
     nats_mgr = await _start_federation(config, runner=runner)
 
-    from robothor.engine.calendar_recovery_worker import run as recover_calendar
-
     # Start all subsystems concurrently
     tasks = [
-        asyncio.create_task(recover_calendar(config.tenant_id), name="calendar-recovery"),
+        *_background_workers(config.tenant_id),
         asyncio.create_task(scheduler.start(), name="scheduler"),
         asyncio.create_task(hooks.start(), name="hooks"),
         asyncio.create_task(

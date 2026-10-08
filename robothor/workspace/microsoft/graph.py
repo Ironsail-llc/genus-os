@@ -231,6 +231,20 @@ class GraphClient:
         """One GET, retried on throttling. Returns the JSON object."""
         return await self._read(self._resolve(path), params, headers)
 
+    async def get_link(
+        self,
+        link: str,
+        *,
+        headers: Mapping[str, str] | None = None,
+    ) -> dict[str, Any]:
+        """GET a link Graph handed back (an ``@odata.nextLink`` or ``@odata.deltaLink``).
+
+        The link is absolute and server-chosen, so it gets the same origin check
+        as paging: anywhere but the base URL's origin is refused before the
+        bearer token is sent. Retried on throttling like any read.
+        """
+        return await self._read(self._check_next_link(link), None, headers)
+
     async def get_all(
         self,
         path: str,

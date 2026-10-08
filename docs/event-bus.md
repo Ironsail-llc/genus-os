@@ -9,7 +9,7 @@ Seven streams carry all system events:
 | Stream | Key | Events |
 |--------|-----|--------|
 | Email | `robothor:events:email` | `email.new`, `email.classified`, `email.responded` |
-| Calendar | `robothor:events:calendar` | `calendar.new`, `calendar.changed`, `calendar.conflict` |
+| Calendar | `robothor:events:calendar` | `calendar.new`, `calendar.modified`, `calendar.rescheduled`, `calendar.cancellation`, `calendar.conflict` |
 | CRM | `robothor:events:crm` | `crm.create`, `crm.update`, `crm.merge`, `crm.delete` |
 | Vision | `robothor:events:vision` | `vision.motion`, `vision.person`, `vision.unknown` |
 | Health | `robothor:events:health` | `health.check`, `health.alert`, `health.recovery` |
@@ -35,6 +35,54 @@ Every message uses a standard envelope:
 ```
 
 The `payload` field is a JSON string (Redis Streams require flat field values).
+
+## Email and calendar event contract
+
+The `email.new` and `calendar.*` payloads are written down as JSON Schemas in
+`robothor/events/schemas/`. Load and check them with
+`robothor.events.contract` (`schema(name)`, `validate(name, payload)`). The
+Google sync scripts and the Microsoft 365 ingest worker
+(`robothor/workspace/ingest/`) both publish to this contract, so a consumer
+does not need to know which provider sent an event.
+
+**`email.new`** on the `email` stream (`email_new.json`). One event per new
+inbound message, published once:
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `id` | string, required | Provider message id. The dedup key, and the key of the message's `email-log.json` entry |
+| `from` | string or null, required | The From header (`Name <address>` or a bare address) |
+| `subject` | string or null, required | |
+| `date` | string or null, required | The Date header (RFC 2822) |
+| `labels` | string array, required | Gmail label ids. Microsoft 365 builds them: `UNREAD`, `INBOX`, `STARRED`, `IMPORTANT`, then Outlook categories |
+| `threadId` | string, optional | Conversation id |
+| `provider` | `google` or `microsoft365`, optional | Absent means google |
+
+**`calendar.*`** on the `calendar` stream (`calendar_event.json`). The
+meeting fields are the `calendar-log.json` meeting shape:
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `id` | string, required | Provider event id |
+| `change_type` | required | `created` (`calendar.new`), `updated` (`calendar.modified`), `rescheduled` (`calendar.rescheduled`), `cancelled` (`calendar.cancellation`) |
+| `title` | string, required | |
+| `start`, `end` | string, required | ISO 8601 UTC, or a date for all-day events. Empty when a deleted event can't be read |
+| `attendees` | string array, required | Attendee email addresses |
+| `hangoutLink` | string, optional | Online-meeting join URL |
+| `provider` | optional | As above |
+
+`calendar.new`, `calendar.modified` and `calendar.rescheduled` trigger the
+calendar pipeline. `calendar.cancellation` is what the calendar consumer
+handles.
+
+**`email-log.json`** (`email_log.json`) is
+`{"lastCheckedAt": ..., "entries": {<id>: entry}}`. An entry carries `id`,
+`threadId`, `fetchedAt`, the envelope (`from`, `subject`, `date`, `labels`)
+and the triage stages (`readAt`, `categorizedAt`, `urgency`, `category`,
+`actionRequired`, `actionCompletedAt`, `pendingReviewAt`, `reviewedAt`), all
+null when the entry is new. A writer merges into the file and never truncates
+it: an entry is keyed by message id and added once, and the entries it didn't
+write keep every field.
 
 ## Publishing
 

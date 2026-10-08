@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:genus-os:events:email_new",
+  "title": "email.new",
+  "description": "Payload of an `email.new` event on the `email` stream: one new inbound message, published once. Consumers (docs/workflows/email-pipeline.yaml) read the full message through the gws_gmail_* tools by `id`; the payload only says that it arrived and from whom.",
+  "type": "object",
+  "required": ["id", "from", "subject", "date", "labels"],
+  "properties": {
+    "id": {
+      "description": "Provider message id: the Gmail message/thread id, or the Exchange immutable message id. The dedup key, and the key of the message's entry in email-log.json.",
+      "type": "string",
+      "minLength": 1
+    },
+    "from": {
+      "description": "The From header as the mail tools show it (`Name <address>` or a bare address). Null when the provider gave none.",
+      "type": ["string", "null"]
+    },
+    "subject": {"type": ["string", "null"]},
+    "date": {
+      "description": "The Date header (RFC 2822), as the mail tools show it.",
+      "type": ["string", "null"]
+    },
+    "labels": {
+      "description": "Gmail label ids. Microsoft 365 synthesises them: UNREAD, INBOX, STARRED, IMPORTANT, then Outlook categories.",
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "threadId": {
+      "description": "Conversation id (Gmail threadId, Exchange conversationId). Optional: the Google sync does not send it.",
+      "type": ["string", "null"]
+    },
+    "provider": {
+      "description": "Which workspace provider produced the event. Optional: absent means google.",
+      "enum": ["google", "microsoft365"]
+    }
+  },
+  "additionalProperties": true
+}

@@ -3486,6 +3486,23 @@ class WorkspaceSettings(SettingsGroup):
         "assistant and owner mailboxes; a readable canary is an error. Empty skips the check.",
         since="unreleased",
     )
+    m365_ingest_interval_seconds: int = declare(
+        60,
+        "ROBOTHOR_M365_INGEST_INTERVAL_SECONDS",
+        "Seconds between Microsoft 365 ingest rounds when the workspace provider is "
+        "microsoft365: each round reads the assistant inbox's and the owner calendar's "
+        "Graph delta, publishes email.new / calendar.* events for what is new and merges new "
+        "mail into the email log. The doctor's ingest-freshness check allows three intervals. "
+        "Has no effect on google, where the instance's own sync scripts publish these events.",
+        since="unreleased",
+    )
+    workspace_email_log_path: str = declare(
+        "",
+        "ROBOTHOR_EMAIL_LOG_PATH",
+        "The email-log.json the platform's mail ingest merges new messages into (the file the "
+        "dashboards read). Empty means <workspace>/brain/memory/email-log.json.",
+        since="unreleased",
+    )
 
 
 class GenusSettings(BaseSettings):
