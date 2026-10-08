@@ -2,6 +2,7 @@
 
 import base64
 import json
+import re
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -25,6 +26,16 @@ document.cookie='signed_in=yes; Secure; SameSite=Strict';
 document.querySelector('#confirmation').hidden=false;
 document.querySelector('#confirmation').textContent='Application received: ORDER-123';
 };</script>"""
+
+
+def _holds_code(code: str, text: str) -> bool:
+    """Whether ``code`` appears as a value of its own, not inside another token.
+
+    A three-digit code turns up inside random UUIDs and epoch timestamps by
+    chance (``...a739f...``, ``...1739...``), which made a plain substring check
+    fail at random. A stored code would be a whole token (``"739"`` or ``739``).
+    """
+    return re.search(rf"(?<![0-9A-Za-z]){re.escape(code)}(?![0-9A-Za-z])", text) is not None
 
 
 @pytest.mark.timeout(60)
@@ -221,10 +232,10 @@ async def test_personal_checkout_resumes_with_transient_code_and_one_charge(stor
         )
         assert result["state"] == "completed"
         assert charges == [{"number": "4242424242424242", "code": "739"}]
-        assert "739" not in json.dumps(store.operation(identity, operation["id"]))
-        assert "739" not in json.dumps(result)
-        assert "739" not in str(
-            store.consume_resource(identity, card["id"], "https://shop.example")
+        assert not _holds_code("739", json.dumps(store.operation(identity, operation["id"])))
+        assert not _holds_code("739", json.dumps(result))
+        assert not _holds_code(
+            "739", str(store.consume_resource(identity, card["id"], "https://shop.example"))
         )
         await broker.execute_on_page(identity, operation["id"], "main", plan, page)
         assert len(charges) == 1
