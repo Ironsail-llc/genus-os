@@ -185,26 +185,21 @@ Example: `"calendar-monitor: Processed 4 calendar items, 1 conflict escalated"`
 
 ## Calendar Tool Reference
 
-> **Preferred**: You have native `gws_calendar_list`, `gws_calendar_create`, `gws_calendar_update` (reschedule, rename, add or remove guests on an existing event), `gws_calendar_respond` (RSVP) and `gws_calendar_delete` tools that return structured JSON. Use these instead of exec+gog when possible. The gog commands below remain as fallback.
+You have native `gws_calendar_list`, `gws_calendar_create`, `gws_calendar_update` (reschedule, rename, add or remove guests on an existing event), `gws_calendar_respond` (RSVP) and `gws_calendar_delete` tools that return structured JSON. They read and write the operator's calendar by default and work the same on every calendar provider the instance is configured for. Do not reach the calendar any other way.
 
-```bash
+```
 # List events (for conflict detection)
-# **Preferred**: Use the `gws_calendar_list` tool
-gog calendar list {{ owner_email }} --account {{ ai_email }} --json --from today --to tomorrow
+gws_calendar_list(time_min="<now, RFC3339>", time_max="<tomorrow 23:59 local, RFC3339>")
 
-# Create event (if needed) — derive offset dynamically
-# **Preferred**: Use the `gws_calendar_create` tool
-OFFSET=$(date +%:z)
-gog calendar create {{ owner_email }} --account {{ ai_email }} --json \
-  --summary "Title" --from "2026-02-23T15:00:00${OFFSET}" --to "2026-02-23T16:00:00${OFFSET}" \
-  --description "Notes" --attendees "person@example.com" --with-meet
+# Create event (if needed) — RFC3339 with the CURRENT local offset, never a hardcoded one
+gws_calendar_create(summary="Title", start="2026-02-23T15:00:00<offset>", end="2026-02-23T16:00:00<offset>",
+                    description="Notes", attendees=["person@example.com"], with_meet=true)
 
 # Delete event
-# **Preferred**: Use the `gws_calendar_delete` tool
-gog calendar delete {{ owner_email }} <eventId> --account {{ ai_email }} --force
+gws_calendar_delete(event_id="<eventId>")
 ```
 
-Key flags: `--summary`, `--from`/`--to` (RFC3339 with offset — **always use `date +%:z`** to get current offset, never hardcode), `--all-day`, `--attendees` (comma-separated), **`--with-meet` (REQUIRED — always include on every event)**, `--rrule`, `--reminder popup:30m`, `--json`
+Always pass `with_meet=true` when creating an event.
 
 ---
 

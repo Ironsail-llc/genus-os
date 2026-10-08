@@ -27,6 +27,8 @@ tools_allowed:
   - get_entity
   - store_memory
   - list_conversations
+  - gws_gmail_get
+  - gws_gmail_modify
   - log_interaction
   - create_person
   - create_note
@@ -92,5 +94,7 @@ v2:
   error_feedback: true
 
 changelog:
+  - date: "2026-10-07"
+    change: "Grant gws_gmail_get and gws_gmail_modify and use them in place of the gog CLI for reading threads and marking mail read, so the classifier works on every workspace provider."
   - date: "2026-09-16"
     change: "Grant create_note, which the escalation step calls. Drop the tools_denied entry for `message`, which is not a registered tool."

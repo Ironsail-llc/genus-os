@@ -101,14 +101,14 @@ v2:
     - exec_allowlist
     - write_path_restrict
   exec_allowlist:
-    - "^gog calendar"
     - "^python3"
-    - "^gws calendar"
   write_path_allowlist:
     - "brain/memory/calendar-monitor-status.md"
     - "brain/memory/calendar-log.json"
 
 changelog:
+  - date: "2026-10-07"
+    change: "Reach the calendar only through the gws_calendar_* tools, which work on every workspace provider and carry the calendar guards. Drop the Google-CLI entries from exec_allowlist; `exec` stays for the status-file write."
   - date: "2026-03-09"
     change: "Upgrade to GLM-5 for reliable tool-calling (Qwen 3.5 mishandled gws tool schemas)"
   - date: "2026-03-09"

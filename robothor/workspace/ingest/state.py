@@ -9,9 +9,11 @@ Two tables (migration 149):
   same message is never published twice, even after the provider throws the
   delta away and the ingestor has to start a new one.
 
-The two together are the replay guard: after a lost delta (Graph's 410
-``syncStateNotFound``), an item is published only when it is newer than the
-high-water mark AND not seen. :class:`MemoryIngestStore` is the in-process
+The seen set decides what is new: in an ordinary delta round every unseen
+item is published, whatever its timestamp. The high-water mark only guards a
+reset: after a lost delta (Graph's 410 ``syncStateNotFound``), an item is
+published only when it is not seen AND at or after the high-water mark
+(strictly after, when the seen set no longer covers the mark). :class:`MemoryIngestStore` is the in-process
 store the unit tests use; :class:`PgIngestStore` is the real one.
 """
 

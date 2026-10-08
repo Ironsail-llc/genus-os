@@ -23,7 +23,6 @@ delivery:
 
 tools_allowed:
   - read_file
-  - exec
   - search_memory
   - get_entity
   - memory_block_read
@@ -76,13 +75,10 @@ tags_consumed: []
 
 v2:
   error_feedback: true
-  guardrails:
-    - exec_allowlist
-  exec_allowlist:
-    - "^gog calendar events"
-    - "^gws calendar"
 
 changelog:
+  - date: "2026-10-07"
+    change: "Read the calendar only through gws_calendar_list, which works on every workspace provider. Drop `exec` and its Google-CLI allowlist — they existed only for the gog fallback."
   - date: "2026-09-16"
     change: "Grant list_my_tasks, list_conversations, list_notes and create_note — the briefing calls all four and the manifest held none of them."
   - date: "2026-03-09"
