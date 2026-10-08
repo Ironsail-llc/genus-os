@@ -683,3 +683,73 @@ async def test_a_new_message_about_a_pr_the_operator_stopped_is_still_ignored(en
     env["chat"].post(f"re-review {URL}", thread=T2, time=LATER)
     summary = await _run(env)
     assert summary["tasks_created"] == 0
+
+
+# ── The author answered a finding on GitHub ─────────────────────────────
+# Team feedback 2026-10-08: "acknowledge replies". When the author replies
+# to one of our findings ("out of scope", "not needed") the reviewer must
+# look again, even with no new commits — never answer "No changes?".
+
+
+def _thread(*, ours_last: bool = False) -> list[dict]:
+    out = [
+        {
+            "id": 77,
+            "user": {"login": "genus-bot", "type": "User"},
+            "body": "missing retry",
+            "created_at": "2026-10-05T09:00:00Z",
+        },
+        {
+            "id": 78,
+            "in_reply_to_id": 77,
+            "user": {"login": "alice", "type": "User"},
+            "body": "out of scope for this ticket",
+            "created_at": "2026-10-05T09:30:00Z",
+        },
+    ]
+    if ours_last:
+        out.append(
+            {
+                "id": 79,
+                "in_reply_to_id": 77,
+                "user": {"login": "genus-bot", "type": "User"},
+                "body": "**Acknowledged**",
+                "created_at": "2026-10-05T09:40:00Z",
+            }
+        )
+    return out
+
+
+async def _reviewed_with_finding(env):
+    env["github"].add(make_pr(7, SHA1))
+    env["chat"].post(f"review {URL}")
+    await _run(env)
+    await _finish(env)
+    row = await env["store"].get(TENANT, REPO, 7)
+    row.last_review = {
+        "issues": [{"comment_id": 77, "severity": "major", "title": "missing retry"}]
+    }
+    await env["store"].save(row)
+
+
+async def test_a_rereview_request_with_an_answered_finding_reviews_without_new_commits(env):
+    await _reviewed_with_finding(env)
+    env["github"].thread_comments[(REPO, 7)] = _thread()
+    env["chat"].post("please re-review", reply=True, time=LATER)
+    summary = await _run(env, now=NOW + timedelta(minutes=3))
+    assert summary["tasks_created"] == 1
+    assert not env["chat"].replies or "No changes" not in env["chat"].replies[-1][2]
+
+
+async def test_an_answered_finding_is_noticed_without_any_chat_message(env):
+    await _reviewed_with_finding(env)
+    env["github"].thread_comments[(REPO, 7)] = _thread()
+    summary = await _run(env, now=NOW + timedelta(minutes=10))
+    assert summary["tasks_created"] == 1
+
+
+async def test_a_thread_we_already_answered_triggers_nothing(env):
+    await _reviewed_with_finding(env)
+    env["github"].thread_comments[(REPO, 7)] = _thread(ours_last=True)
+    summary = await _run(env, now=NOW + timedelta(minutes=10))
+    assert summary["tasks_created"] == 0

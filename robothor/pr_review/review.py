@@ -32,8 +32,13 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol
 from robothor.pr_review.checkout import ensure_checkout, merge_conflicts, read_at
 from robothor.pr_review.context import checks as check_list
 from robothor.pr_review.context import discussion as discussion_items
-from robothor.pr_review.context import linked_issues, pr_description
-from robothor.pr_review.intake import MAX_ATTEMPTS, POST_RETRY_COOLDOWN, post_only
+from robothor.pr_review.context import linked_issues, pr_description, thread_replies
+from robothor.pr_review.intake import (
+    MAX_ATTEMPTS,
+    POST_RETRY_COOLDOWN,
+    post_only,
+    replies_pending,
+)
 from robothor.pr_review.policy import decide_verdict, extract_ticket_key, is_blocking
 from robothor.pr_review.posting import decide_review
 from robothor.pr_review.prompt import (
@@ -73,6 +78,8 @@ _STATUS_FOR_VERDICT = {
 }
 _PRIOR_LABEL = {
     "resolved": "Resolved",
+    # The author's reply justified the finding and the reviewer agreed.
+    "accepted": "Acknowledged",
     "partially_resolved": "Partially resolved",
     "unresolved": "Still open",
 }
@@ -231,6 +238,7 @@ async def _pr_extras(
     raw_checks = await _optional(github, "list_checks", repo, head)
     exclude = (cfg.bot_login,) if cfg.bot_login else ()
     return {
+        "review_comments": comments or [],
         "discussion": discussion_items(
             reviews or [], comments or [], issue_comments or [], exclude_logins=exclude
         ),
@@ -371,11 +379,15 @@ async def prepare(
     compare_status = ""
     if kind == "rereview" and row.last_reviewed_sha != head:
         compare_status = await github.compare_status(row.repo, row.last_reviewed_sha, head)
+    answered = (
+        kind == "rereview" and row.last_reviewed_sha == head and await replies_pending(github, row)
+    )
     decision = decide_review(
         kind=kind,
         head_sha=head,
         last_reviewed_sha=row.last_reviewed_sha or None,
         compare_status=compare_status or None,
+        replies_pending=answered,
     )
     if decision.action == "skip":
         if row.status in ACTIVE_STATUSES:
@@ -417,8 +429,12 @@ async def prepare(
     conflicted = await (conflicts or merge_conflicts)(path, f"origin/{base_ref}", head)
     changed = int(pr.get("additions") or 0) + int(pr.get("deletions") or 0)
     deep = (row.depth or "full") != "light" and changed >= cfg.deep_lines
+    on_thread = thread_replies(extras.get("review_comments") or [])
     previous = [
-        {k: i.get(k) for k in ("comment_id", "path", "line", "severity", "title", "body")}
+        {
+            **{k: i.get(k) for k in ("comment_id", "path", "line", "severity", "title", "body")},
+            **({"replies": on_thread[i["comment_id"]]} if i.get("comment_id") in on_thread else {}),
+        }
         for i in row.last_review.get("issues") or []
     ]
     ctx = ReviewContext(

@@ -166,22 +166,51 @@ def test_prompt_lists_what_reviewers_already_said():
     assert "<pr_discussion>" in task and "carol" in task and "src/a.py:4" in task
 
 
-def test_prompt_makes_a_conflict_and_a_failing_check_blocking():
+def test_prompt_makes_a_failing_check_blocking():
     task = build_review_prompt(
         "g",
         _ctx(
-            mergeable=False,
-            mergeable_state="dirty",
-            conflicts=("src/a.test.ts",),
             checks=(
                 CheckRun(name="Run Unit Tests", conclusion="failure"),
                 CheckRun(name="lint", conclusion="success"),
             ),
         ),
     )
-    assert "dirty" in task and "src/a.test.ts" in task
     assert "Run Unit Tests: failure" in task
     assert "severity blocker" in task
+
+
+def test_prompt_never_makes_a_merge_conflict_a_finding():
+    # Team feedback 2026-10-08: "if there are conflicts, don't hold back the
+    # approval — we are already aware of them and are asking for approval of
+    # the changes."
+    task = build_review_prompt(
+        "g",
+        _ctx(mergeable=False, mergeable_state="dirty", conflicts=("src/a.test.ts",)),
+    )
+    assert "dirty" in task and "src/a.test.ts" in task  # still stated, as context
+    assert "severity blocker" not in task
+    assert "not a finding" in task
+
+
+def test_a_rereview_shows_each_previous_finding_with_the_replies_to_it():
+    task = build_review_prompt(
+        "g",
+        _ctx(
+            mode="incremental",
+            since_sha="0" * 40,
+            previous_issues=[
+                {
+                    "comment_id": 77,
+                    "severity": "major",
+                    "title": "missing retry",
+                    "replies": [{"author": "alice", "body": "out of scope for this ticket"}],
+                }
+            ],
+        ),
+    )
+    assert "out of scope for this ticket" in task
+    assert "accepted" in task
 
 
 def test_prompt_states_unknown_github_state_plainly():
@@ -403,3 +432,83 @@ async def test_prepare_searches_for_candidate_tickets_only_without_a_key(tmp_pat
     _, [args] = await _prepare(gh, tmp_path, cfg=cfg, search_tickets=search)
     assert asked == [("VE", "Change 7")]
     assert "VE-498" in args["task"]
+
+
+async def test_prepare_attaches_replies_to_the_previous_finding_they_answer(tmp_path):
+    gh = RichGitHub()
+    gh.add(make_pr(7, SHA))
+    gh.review_comments = [
+        {
+            "id": 77,
+            "user": {"login": "genus-bot", "type": "User"},
+            "body": "missing retry",
+            "created_at": "2026-10-01T00:00:00Z",
+        },
+        {
+            "id": 78,
+            "in_reply_to_id": 77,
+            "user": {"login": "alice", "type": "User"},
+            "body": "out of scope for this ticket",
+            "created_at": "2026-10-02T00:00:00Z",
+        },
+        {
+            "id": 79,
+            "in_reply_to_id": 77,
+            "user": {"login": "genus-bot", "type": "User"},
+            "body": "**Still open**",
+            "created_at": "2026-10-03T00:00:00Z",
+        },
+        {
+            "id": 90,
+            "in_reply_to_id": 55,
+            "user": {"login": "bob", "type": "User"},
+            "body": "unrelated thread",
+            "created_at": "2026-10-02T00:00:00Z",
+        },
+    ]
+    store = MemoryStore()
+    await store.save(
+        PrReviewRow(
+            tenant_id=TENANT,
+            repo=REPO,
+            number=7,
+            status="queued",
+            last_reviewed_sha="0" * 40,
+            last_review={
+                "issues": [{"comment_id": 77, "severity": "major", "title": "missing retry"}]
+            },
+        )
+    )
+    calls: list[dict[str, Any]] = []
+
+    async def start(args):
+        calls.append(args)
+        return {"job_id": "job-1"}
+
+    async def checkout(dest, **_):
+        return tmp_path
+
+    async def reader(*_):
+        return None
+
+    async def compare(*_):
+        return "ahead"
+
+    gh.compare_status = compare  # type: ignore[method-assign]
+    await prepare(
+        ReviewerConfig(repos=(REPO,), bot_login="genus-bot"),
+        store,
+        TENANT,
+        REPO,
+        7,
+        github=gh,
+        skill_text="g",
+        token="",
+        start_job=start,
+        checkout=checkout,
+        reader=reader,
+    )
+    task = calls[0]["task"]
+    previous = task[task.index("<previous_issues>") : task.index("</previous_issues>")]
+    assert "out of scope for this ticket" in previous
+    assert "unrelated thread" not in previous and "Still open" not in previous

@@ -109,13 +109,14 @@
             "type": "string",
             "enum": [
               "resolved",
+              "accepted",
               "partially_resolved",
               "unresolved"
             ]
           },
           "note": {
             "type": "string",
-            "description": "How it was (or was not) addressed."
+            "description": "How it was (or was not) addressed. For accepted: why the author's reply holds — this is posted on the finding's thread."
           }
         }
       }

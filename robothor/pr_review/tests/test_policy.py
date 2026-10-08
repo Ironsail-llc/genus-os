@@ -45,22 +45,35 @@ def test_minor_and_nit_never_block_an_approval():
     assert result.blocking == []
 
 
-def test_approve_requires_the_model_to_have_approved():
-    assert decide_verdict("COMMENT", []).verdict == "COMMENT"
+def test_nothing_blocking_approves_whatever_the_model_proposed():
+    # Team feedback 2026-10-08: "pass on minors". Minor issues and nits stay
+    # listed as suggestions, but they never hold back the approval.
+    for proposed in ("COMMENT", "REQUEST_CHANGES", "LGTM", ""):
+        result = decide_verdict(proposed, [_issue("minor"), _issue("nit")])
+        assert result.verdict == "APPROVE", proposed
+        assert result.blocking == []
 
 
-def test_request_changes_without_a_blocking_finding_is_a_comment():
+def test_an_approval_the_model_did_not_give_is_recorded_as_overridden():
     result = decide_verdict("REQUEST_CHANGES", [_issue("minor")])
-    assert result.verdict == "COMMENT"
-    assert result.overridden is True
+    assert result.overridden is True and result.model_verdict == "REQUEST_CHANGES"
 
 
 def test_blocking_issue_upgrades_a_comment_verdict():
     assert decide_verdict("COMMENT", [_issue("major")]).verdict == "REQUEST_CHANGES"
 
 
-def test_unknown_model_verdict_is_treated_as_comment():
-    assert decide_verdict("LGTM", []).verdict == "COMMENT"
+def test_unknown_model_verdict_with_a_blocker_blocks():
+    assert decide_verdict("LGTM", [_issue("blocker")]).verdict == "REQUEST_CHANGES"
+
+
+def test_a_prior_blocker_the_author_justified_is_accepted():
+    # Team feedback 2026-10-08: the author answered the finding ("out of
+    # scope", "not needed") and the reviewer agreed — it clears like a fix.
+    prior = [{"comment_id": 11, "description": "x", "status": "accepted", "note": "out of scope"}]
+    result = decide_verdict("APPROVE", [], prior_issues=prior, prior_severities={11: "major"})
+    assert result.verdict == "APPROVE"
+    assert result.resolved_ids == [11]
 
 
 def test_an_unresolved_prior_blocker_still_blocks():

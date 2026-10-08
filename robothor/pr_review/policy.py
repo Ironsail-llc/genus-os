@@ -7,11 +7,11 @@ The model proposes a verdict; this module decides it. The rules:
   blocking event (``REQUEST_CHANGES``, or ``COMMENT`` for an instance that
   never wants to block a merge). Never ``APPROVE``. Silence is not a fix: a
   previous blocking finding the model leaves out of ``prior_issues``, or
-  reports with any status other than ``resolved``, still blocks.
-* ``APPROVE`` is posted only when the model itself approved AND nothing
-  blocking remains. ``minor`` findings and nits never stand in the way.
-* ``REQUEST_CHANGES`` with nothing blocking has no basis and becomes
-  ``COMMENT``.
+  reports with any status other than ``resolved`` or ``accepted`` (the
+  author's reply justified it and the reviewer agreed), still blocks.
+* Nothing blocking means ``APPROVE``, whatever the model proposed: ``minor``
+  findings and nits are posted as suggestions and never hold back the
+  approval (team feedback 2026-10-08, "pass on minors").
 * Optional ticket rule: with ``require_ticket`` on, a pull request whose
   title, branch, body and commit messages carry no ticket key gets a blocking
   ``[no-ticket]`` finding, so it is never approved.
@@ -45,6 +45,8 @@ VERDICTS: frozenset[str] = frozenset({"APPROVE", "COMMENT", "REQUEST_CHANGES"})
 BLOCKING_SEVERITIES: frozenset[str] = frozenset({"blocker", "major"})
 #: The only previous-finding status that clears a blocking finding.
 _RESOLVED = "resolved"
+#: Previous-finding statuses that clear it: fixed, or justified by the author.
+_CLEARED: frozenset[str] = frozenset({_RESOLVED, "accepted"})
 _BLOCKING_EVENTS: frozenset[str] = frozenset({"REQUEST_CHANGES", "COMMENT"})
 
 NO_TICKET_TITLE = "[no-ticket] No linked ticket"
@@ -123,7 +125,7 @@ def decide_verdict(
     resolved_ids = [
         cid
         for cid, prior in reported.items()
-        if cid in severities and str(prior.get("status") or "").strip().lower() == _RESOLVED
+        if cid in severities and str(prior.get("status") or "").strip().lower() in _CLEARED
     ]
     prior_blocking: list[dict[str, Any]] = []
     for cid, severity in severities.items():
@@ -140,12 +142,10 @@ def decide_verdict(
         verdict = event
         if proposed == "APPROVE":
             reasons.append("model approved with blocking findings")
-    elif proposed == "APPROVE":
-        verdict = "APPROVE"
     else:
-        verdict = "COMMENT"
-        if proposed == "REQUEST_CHANGES":
-            reasons.append("changes requested without a blocking finding")
+        verdict = "APPROVE"
+        if proposed != "APPROVE":
+            reasons.append("nothing blocking: minor findings never hold back the approval")
     return PolicyResult(
         verdict=verdict,
         model_verdict=proposed,

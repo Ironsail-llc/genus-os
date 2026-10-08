@@ -37,6 +37,7 @@ if TYPE_CHECKING:
 __all__ = [
     "ACTIVE_STATUSES",
     "FINAL_STATUSES",
+    "FINDINGS_OPEN_STATUSES",
     "MemoryStore",
     "PgStore",
     "PrReviewRow",
@@ -48,6 +49,8 @@ __all__ = [
 ACTIVE_STATUSES: frozenset[str] = frozenset({"queued", "reviewing", "posting"})
 #: A review was posted for the row's last job.
 FINAL_STATUSES: frozenset[str] = frozenset({"approved", "changes_requested", "commented"})
+#: A posted review that left findings open: its threads may get answers.
+FINDINGS_OPEN_STATUSES: frozenset[str] = frozenset({"changes_requested", "commented"})
 
 
 def _now() -> datetime:
@@ -139,6 +142,7 @@ class PrReviewStore(Protocol):
     async def list_pending(self, tenant_id: str) -> list[PrReviewRow]: ...
     async def list_active(self, tenant_id: str) -> list[PrReviewRow]: ...
     async def list_failed(self, tenant_id: str) -> list[PrReviewRow]: ...
+    async def list_with_findings(self, tenant_id: str) -> list[PrReviewRow]: ...
     async def message_seen(self, tenant_id: str, name: str) -> bool: ...
     async def record_message(
         self, tenant_id: str, name: str, kind: str, outcome: str = "", error: str = ""
@@ -229,6 +233,9 @@ class MemoryStore:
 
     async def list_failed(self, tenant_id: str) -> list[PrReviewRow]:
         return [r for r in self._all(tenant_id) if r.status == "failed"]
+
+    async def list_with_findings(self, tenant_id: str) -> list[PrReviewRow]:
+        return [r for r in self._all(tenant_id) if r.status in FINDINGS_OPEN_STATUSES]
 
     async def message_seen(self, tenant_id: str, name: str) -> bool:
         return (tenant_id, name) in self.messages
@@ -472,6 +479,11 @@ class PgStore:
 
     async def list_failed(self, tenant_id: str) -> list[PrReviewRow]:
         return await asyncio.to_thread(self._select, tenant_id, "status = 'failed'", ())
+
+    async def list_with_findings(self, tenant_id: str) -> list[PrReviewRow]:
+        return await asyncio.to_thread(
+            self._select, tenant_id, "status IN ('changes_requested', 'commented')", ()
+        )
 
     async def message_seen(self, tenant_id: str, name: str) -> bool:
         return await asyncio.to_thread(self._message_seen, tenant_id, name)

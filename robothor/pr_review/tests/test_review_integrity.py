@@ -155,7 +155,7 @@ async def test_a_retry_after_a_lost_response_resumes_without_reposting(env):
     assert result["status"] == "posted"
     assert len(env["poster"].reviews) == 1
     assert len(env["chat"].replies) == 1
-    assert (await env["store"].get(TENANT, REPO, 7)).status == "commented"
+    assert (await env["store"].get(TENANT, REPO, 7)).status == "approved"
 
 
 async def test_concurrent_finalizes_post_once(env):

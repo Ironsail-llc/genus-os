@@ -55,6 +55,7 @@ from robothor.pr_review.classify import (
     mentioned_numbers,
     message_search_text,
 )
+from robothor.pr_review.context import pending_replies
 from robothor.pr_review.depth import Depth, DepthPolicy
 from robothor.pr_review.posting import decide_review
 from robothor.pr_review.store import ACTIVE_STATUSES, PrReviewRow
@@ -141,6 +142,21 @@ def trigger_is_retry(row: PrReviewRow) -> bool:
     return row.pending_trigger == "retry"
 
 
+async def replies_pending(github: Any, row: PrReviewRow) -> bool:
+    """Whether someone answered one of the row's findings on GitHub and we
+    have not replied yet. False when it cannot tell (no port, an error)."""
+    ids = [i.get("comment_id") for i in row.last_review.get("issues") or []]
+    method = getattr(github, "list_review_comments", None)
+    if method is None or not any(isinstance(i, int) for i in ids):
+        return False
+    try:
+        comments = await method(row.repo, row.number)
+    except Exception as exc:  # noqa: BLE001 - a missed reply waits for the next look
+        logger.info("pr_review: review comments for %s failed: %s", row.key, exc)
+        return False
+    return bool(pending_replies(comments or [], ids))
+
+
 def post_only(row: PrReviewRow) -> bool:
     """Whether a failed row holds a written review that only failed to post."""
     pending = row.last_review.get("pending") or {}
@@ -222,6 +238,8 @@ class Intake:
                     await self._poll_github()
                 if self.cfg.chat_space and self.chat is not None:
                     await self._poll_chat()
+                if self.github is not None and self.now.minute % 10 < 2:
+                    await self._poll_replies()
             await self._expire_stale()
             await self._reopen_resumable()
             await self._retry_failed()
@@ -401,6 +419,19 @@ class Intake:
                 if _raise_trigger(row, trigger):
                     self.summary["triggers"] += 1
             await self.store.save(row)
+
+    async def _poll_replies(self) -> None:
+        """Re-review a pull request whose author answered one of our findings
+        on GitHub ("out of scope", "not needed") and got no reply yet — no
+        Chat message needed. Runs every ~10 minutes: one GitHub call per PR
+        with findings open."""
+        for row in await self.store.list_with_findings(self.tenant_id):
+            if row.pending_trigger or not await replies_pending(self.github, row):
+                continue
+            if _raise_trigger(row, "rereview"):
+                await self.store.save(row)
+                self.summary["triggers"] += 1
+                self.summary["replies"] = self.summary.get("replies", 0) + 1
 
     # ── Google Chat ─────────────────────────────────────────────────
 
@@ -687,11 +718,17 @@ class Intake:
         compare_status = None
         if kind == "rereview" and row.last_reviewed_sha != head:
             compare_status = await self.github.compare_status(row.repo, row.last_reviewed_sha, head)
+        replies = (
+            kind == "rereview"
+            and row.last_reviewed_sha == head
+            and await replies_pending(self.github, row)
+        )
         decision = decide_review(
             kind=kind,
             head_sha=head,
             last_reviewed_sha=row.last_reviewed_sha or None,
             compare_status=compare_status,
+            replies_pending=replies,
         )
         if decision.action == "skip":
             # A request made while a review ran was already told it would be

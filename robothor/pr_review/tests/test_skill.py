@@ -80,3 +80,13 @@ def test_schema_validator_accepts_a_good_result_and_rejects_bad_ones():
     assert any("severity" in e for e in errors)
     assert any("line" in e for e in errors)
     assert any("extra" in e for e in errors)
+
+
+def test_accepted_is_a_valid_previous_finding_status():
+    out = {
+        "verdict": "APPROVE",
+        "summary": "s",
+        "issues": [],
+        "prior_issues": [{"comment_id": 3, "description": "d", "status": "accepted", "note": "n"}],
+    }
+    assert validate_review_output(out) == []

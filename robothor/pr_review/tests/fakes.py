@@ -41,6 +41,7 @@ class FakeGitHub:
         self.requested: list[tuple[str, int]] = []
         self.compare: dict[tuple[str, str], str] = {}
         self.fail_list: set[str] = set()
+        self.thread_comments: dict[tuple[str, int], list[dict[str, Any]]] = {}
 
     def add(self, pr: dict[str, Any], repo: str = REPO, files: list | None = None) -> None:
         self.prs[(repo, pr["number"])] = pr
@@ -67,6 +68,9 @@ class FakeGitHub:
 
     async def compare_status(self, repo: str, base: str, head: str) -> str:
         return self.compare.get((base, head), "ahead")
+
+    async def list_review_comments(self, repo: str, number: int) -> list[dict[str, Any]]:
+        return self.thread_comments.get((repo, number), [])
 
 
 class FakeChat:
