@@ -13,7 +13,7 @@ Work through these steps in order. Each step has the exact tool call. If a sourc
 ### 1. Today's Calendar
 
 ```
-exec: gog calendar events {{ owner_email }} --from today --to today
+gws_calendar_list(time_min="<today 00:00 local, RFC3339>", time_max="<today 23:59 local, RFC3339>")
 ```
 
 Extract: event titles, times, attendees, conflicts (overlapping events). Flag back-to-back meetings with no buffer.
@@ -65,7 +65,7 @@ Pre-loaded via warmup. Pull: last night's sleep score/duration, morning body bat
 ### 7. Week Preview
 
 ```
-exec: gog calendar events {{ owner_email }} --from tomorrow --to "+7d"
+gws_calendar_list(time_min="<tomorrow 00:00 local, RFC3339>", time_max="<today + 7 days 23:59 local, RFC3339>", max_results=50)
 ```
 
 Mention notable events in the coming week — important meetings, deadlines, travel. Skip routine items.
@@ -133,7 +133,7 @@ create_note(title="Morning Briefing — {date}", body="{the briefing text}")
 
 | Source | If unavailable |
 |--------|---------------|
-| Calendar (gog) | Skip calendar section, note "Calendar unavailable" |
+| Calendar (gws_calendar_list) | Skip calendar section, note "Calendar unavailable" |
 | Tasks (list_tasks) | Skip urgent section |
 | Memory blocks | Skip overnight section |
 | Health (garmin) | Skip health line |

@@ -12,9 +12,8 @@ Work through these steps in order. Each step has the exact tool call. If a sourc
 
 ### 1. Tomorrow's Calendar
 
-**Preferred**: Use the `gws_calendar_list` tool (structured JSON, no parsing needed). Fallback:
 ```
-exec: gog calendar events {{ owner_email }} --from tomorrow --to tomorrow
+gws_calendar_list(time_min="<tomorrow 00:00 local, RFC3339>", time_max="<tomorrow 23:59 local, RFC3339>")
 ```
 
 Extract: event titles, times, attendees, conflicts. Flag early-morning meetings or back-to-back blocks.
@@ -76,9 +75,8 @@ Pre-loaded via warmup. Pull: steps, stress average, body battery (current + tren
 
 ### 8. Week Ahead Glance
 
-**Preferred**: Use the `gws_calendar_list` tool. Fallback:
 ```
-exec: gog calendar events {{ owner_email }} --from "+1d" --to "+3d"
+gws_calendar_list(time_min="<tomorrow 00:00 local, RFC3339>", time_max="<today + 3 days 23:59 local, RFC3339>", max_results=50)
 ```
 
 Brief look at the next couple of days. Only mention if there's something notable.
@@ -176,7 +174,7 @@ create_note(title="Evening Wind-Down — {date}", body="{the briefing text}")
 
 | Source | If unavailable |
 |--------|---------------|
-| Calendar (gog) | Skip calendar section, note "Calendar unavailable" |
+| Calendar (gws_calendar_list) | Skip calendar section, note "Calendar unavailable" |
 | Tasks (list_tasks) | Skip done/open sections |
 | Memory blocks | Skip day review agent activity |
 | Conversations | Skip conversations section |

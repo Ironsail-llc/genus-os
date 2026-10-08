@@ -313,8 +313,9 @@ def check_relationships(manifest: dict[str, Any], all_manifests: dict[str, Any])
 def check_permission_coherence(manifest: dict[str, Any]) -> CheckResult:
     """H. No tool in both allowed AND denied."""
     result = CheckResult("H", "Permission coherence")
-    allowed = set(manifest.get("tools_allowed", []))
-    denied = set(manifest.get("tools_denied", []))
+    # `tools_denied:` with nothing under it is YAML null, not [].
+    allowed = set(manifest.get("tools_allowed") or [])
+    denied = set(manifest.get("tools_denied") or [])
     overlap = allowed & denied
 
     if overlap:
