@@ -655,7 +655,7 @@ optional:
         Regex patterns for allowed exec/shell commands. Requires
         exec_allowlist in guardrails list. If empty, no restriction
         (backward compat). Commands not matching any pattern are blocked.
-      example: ["^gog gmail thread (get|list)", "^gog gmail send --reply"]
+      example: ["^python3 scripts/", "^make (test|lint)"]
     write_path_allowlist:
       type: list[string]
       default: []

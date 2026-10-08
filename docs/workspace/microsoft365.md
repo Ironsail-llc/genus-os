@@ -342,6 +342,17 @@ passes. It never writes an environment file.
 - **Prompts.** The engine tells the model it has "your own Microsoft 365
   account" (with `ROBOTHOR_AI_EMAIL`, or the assistant mailbox when that is
   unset). The tool descriptions are provider-neutral.
+- **Shipped agent templates.** The agents the platform ships under
+  `templates/agents/` (the briefings, the calendar monitor and the email
+  agents) reach mail and calendar only through the `gws_gmail_*` and
+  `gws_calendar_*` tools, so an agent installed from them works on Microsoft
+  365 with no Google tooling on the box, and every call passes the same
+  guards. None of them runs a Google CLI (`gog`, `gws gmail`, `gws calendar`)
+  through `exec`, and their `exec_allowlist` entries name no Google CLI. A
+  ratchet test (`robothor/templates/tests/test_templates_provider_neutral.py`)
+  fails on any shipped template that does. Agents you wrote yourself are not
+  checked: if one tells the agent to run `gog` or `gws` through `exec`, move it
+  to the tools before switching the provider.
 
 ### Autonomy mailbox verification is disabled
 

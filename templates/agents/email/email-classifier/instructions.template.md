@@ -62,7 +62,7 @@ If a task already exists for this thread in ANY agent's queue, **skip it** — d
 
 ### Routine/automated — Dismiss
 
-- Mark as read: `gog gmail thread modify <id> --account {{ ai_email }} --remove UNREAD`
+- Mark as read: `gws_gmail_modify(message_id=<message id>, remove_labels=["UNREAD"])` for each unread message in the thread (get the message ids from `gws_gmail_get(thread_id=<threadId>, format="minimal")`)
 - No escalation needed for newsletters, promotions, bot notifications
 
 ### Unknown senders (`contact.known: false`) — Research, then decide
@@ -234,14 +234,16 @@ Use `search_memory` to make better classification decisions:
 
 ---
 
-## Gmail Tool Reference
+## Mail Tool Reference
 
-```bash
-# Read a thread (to inspect email content)
-gog gmail thread get <threadId> --account {{ ai_email }} --full --json
+These tools work the same on every mailbox provider the instance is configured for.
 
-# Mark as read (for dismissed emails)
-gog gmail thread modify <threadId> --account {{ ai_email }} --remove UNREAD
+```
+# Read a thread (to inspect email content) — every message, oldest first, decoded body
+gws_gmail_get(thread_id="<threadId>")
+
+# Mark as read (for dismissed emails) — once per unread message id in the thread
+gws_gmail_modify(message_id="<message id>", remove_labels=["UNREAD"])
 ```
 
 ---
