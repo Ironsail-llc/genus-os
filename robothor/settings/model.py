@@ -3458,8 +3458,9 @@ class WorkspaceSettings(SettingsGroup):
         "ROBOTHOR_WORKSPACE_PROVIDER",
         "Mail and calendar backend behind the gws_* tools: `google` (the gws CLI) or "
         "`microsoft365` (Microsoft Graph with an Entra app-only credential stored in the "
-        "vault under workspace/microsoft365/). The Microsoft 365 transport is being built "
-        "and nothing routes to it yet; leave this at `google`.",
+        "vault under workspace/microsoft365/). Under `microsoft365` the mail tools serve the "
+        "assistant's Exchange mailbox and the calendar tools refuse until the Microsoft 365 "
+        "calendar ships.",
         since="unreleased",
     )
     m365_assistant_mailbox: str = declare(

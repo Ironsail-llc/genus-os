@@ -407,12 +407,3 @@ async def test_delete_of_a_meeting_cancels_it(env: Env) -> None:
     assert env.requests("POST", f"/users/{OWNER}/events/.*/cancel")
     assert env.requests("DELETE", ".*") == []
     assert env.exchange.notifications[-1]["kind"] == "cancel"
-
-
-# ── mail is still dark on this branch ─────────────────────────────────
-
-
-async def test_mail_tools_still_refuse_on_microsoft365(env: Env) -> None:
-    out = await env.call("gws_gmail_send", {"to": GUEST, "subject": "S", "body": "B"})
-    assert out["hint"] == "unsupported"
-    assert env.tenant.requests == []

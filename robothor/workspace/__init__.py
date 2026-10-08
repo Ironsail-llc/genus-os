@@ -4,7 +4,9 @@ The ``gws_*`` tools keep their names and their guards; which backend serves
 them is the ``workspace_provider`` setting (``google`` by default,
 ``microsoft365`` opt-in). This package holds the shared error vocabulary
 (:mod:`robothor.workspace.errors`) and the per-provider transports
-(:mod:`robothor.workspace.microsoft` for Microsoft Graph). See
+(:mod:`robothor.workspace.microsoft` for Microsoft Graph: mail in
+:mod:`robothor.workspace.microsoft.mail`, calendar in
+:mod:`robothor.workspace.microsoft.calendar`). See
 ``docs/workspace/microsoft365.md``.
 
 :func:`get_workspace` returns the :class:`Workspace` bundle (mail + calendar
@@ -14,6 +16,7 @@ transport; the shapes are in :mod:`robothor.workspace.types`.
 
 from __future__ import annotations
 
+import asyncio
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any
 
@@ -21,9 +24,10 @@ from robothor.workspace.errors import Unsupported
 from robothor.workspace.protocols import Workspace
 
 if TYPE_CHECKING:
+    from robothor.workspace.microsoft.graph import GraphClient
     from robothor.workspace.protocols import CalendarProvider, MailProvider
 
-__all__ = ["UnavailableMail", "Workspace", "get_workspace", "reset_workspace_cache"]
+__all__ = ["Workspace", "get_workspace", "reset_workspace_cache"]
 
 
 @lru_cache(maxsize=1)
@@ -38,77 +42,41 @@ def _google() -> Workspace:
     )
 
 
-class UnavailableMail:
-    """Mail on a provider whose mail transport has not shipped: every call refuses.
-
-    ``available`` is False, so the ``gws_*`` handler refuses a mail tool before
-    any guard runs, the same way a whole dark provider is refused.
-    """
-
-    available = False
-
-    def __init__(self, provider: str) -> None:
-        self.provider = provider
-
-    def _refuse(self) -> Unsupported:
-        return Unsupported(
-            f"{self.provider} mail is not available yet; calendar tools work, mail "
-            "tools need workspace_provider=google for now",
-            code="provider_not_available",
-        )
-
-    async def search(self, query: Any, *, max_results: int) -> dict[str, Any]:
-        raise self._refuse()
-
-    async def get_message(self, message_id: str, *, fmt: str) -> dict[str, Any]:
-        raise self._refuse()
-
-    async def get_thread(self, thread_id: str, *, fmt: str) -> dict[str, Any]:
-        raise self._refuse()
-
-    async def send(self, raw: str, *, thread_id: str | None = None) -> dict[str, Any]:
-        raise self._refuse()
-
-    async def reply(self, raw: str, *, thread_id: str) -> dict[str, Any]:
-        raise self._refuse()
-
-    async def modify(
-        self, message_id: str, *, add_labels: Any, remove_labels: Any
-    ) -> dict[str, Any]:
-        raise self._refuse()
-
-    def shape_envelope(
-        self, raw: dict[str, Any], *, max_header_chars: int | None = None
-    ) -> dict[str, Any]:
-        raise self._refuse()
-
-    def shape_message(self, raw: dict[str, Any], *, max_chars: int) -> dict[str, Any]:
-        raise self._refuse()
-
-
 @lru_cache(maxsize=32)
 def _microsoft365(tenant_id: str, assistant_mailbox: str, owner_mailbox: str) -> Workspace:
     """One Microsoft 365 bundle per platform tenant and mailbox configuration.
 
-    The Graph client is built on first use from the tenant's vault (and once
-    per event loop), so constructing this never touches the network.
+    Mail and calendar share ONE Graph client, built on first use from the
+    tenant's vault (and once per event loop: an httpx client is bound to the
+    loop it was made on), so constructing this never touches the network.
+    The owner mailbox is part of the cache key, so a settings change rebuilds.
     """
     from robothor.workspace.microsoft.calendar import GraphCalendar
+    from robothor.workspace.microsoft.mail import GraphMail
     from robothor.workspace.types import MICROSOFT365_CAPABILITIES
 
-    async def graph() -> Any:
-        # Looked up at call time: the seam tests replace.
-        from robothor.workspace import microsoft
+    shared: dict[str, Any] = {}
 
-        return await microsoft.graph_client_from_vault(tenant_id)
+    async def graph() -> GraphClient:
+        loop = asyncio.get_running_loop()
+        if shared.get("loop") is not loop:
+            # Looked up at call time: the seam tests replace it, and the
+            # credential is read from the vault only when first used.
+            from robothor.workspace import microsoft
+
+            client = await microsoft.graph_client_from_vault(tenant_id)
+            if shared.get("loop") is not loop:
+                shared["loop"], shared["client"] = loop, client
+        client_for_loop: GraphClient = shared["client"]
+        return client_for_loop
 
     try:
         calendar: CalendarProvider = GraphCalendar(
             graph, assistant_mailbox=assistant_mailbox, owner_mailbox=owner_mailbox
         )
+        mail: MailProvider = GraphMail(assistant_mailbox, graph_factory=graph)
     except ValueError as exc:
         raise Unsupported(f"microsoft365 is misconfigured: {exc}", code="not_configured") from None
-    mail: MailProvider = UnavailableMail("microsoft365")
     return Workspace(
         provider="microsoft365",
         mail=mail,
@@ -127,11 +95,11 @@ def get_workspace(tenant_id: str | None = None) -> Workspace:
 
     Chosen by the ``workspace_provider`` setting. Google (the default) is
     stateless, so one shared instance serves every tenant. ``microsoft365``
-    serves CALENDAR through Microsoft Graph for platform tenant ``tenant_id``
-    (its app credential is in that tenant's vault); its mail is not built yet
-    and refuses (:class:`UnavailableMail`) rather than quietly serving Google
-    -- an operator who chose Outlook must not get Gmail. Without an assistant
-    mailbox configured, every Microsoft 365 call is refused.
+    serves mail and calendar from the ``m365_assistant_mailbox`` through
+    Microsoft Graph for platform tenant ``tenant_id`` (its app credential is
+    in that tenant's vault). It never falls back to Google -- an operator who
+    chose Outlook must not get Gmail: without an assistant mailbox configured,
+    every Microsoft 365 call is refused as not configured.
     """
     from robothor.constants import DEFAULT_TENANT
     from robothor.settings import get_settings

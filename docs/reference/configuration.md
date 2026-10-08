@@ -113,7 +113,7 @@ Host paths for the isolated personal browser service and clients.
 | `ROBOTHOR_M365_ASSISTANT_MAILBOX` | str | _(empty)_ | `robothor-engine` | no | unreleased | The assistant's own Exchange Online mailbox (user principal name or SMTP address) when the workspace provider is microsoft365. Mail is sent from it and its inbox is read. |
 | `ROBOTHOR_M365_OWNER_MAILBOX` | str | _(empty)_ | `robothor-engine` | no | unreleased | The operator's Exchange Online mailbox when the workspace provider is microsoft365. Its calendar is the one the assistant reads and edits for the operator. |
 | `ROBOTHOR_M365_SCOPE_CANARY_MAILBOX` | str | _(empty)_ | `robothor-engine` | no | unreleased | A mailbox in the same Microsoft 365 tenant that the app must NOT be able to read. The doctor tries it to prove Exchange RBAC for Applications scopes the grant to the assistant and owner mailboxes; a readable canary is an error. Empty skips the check. |
-| `ROBOTHOR_WORKSPACE_PROVIDER` | Literal | `google` | `robothor-engine` | no | unreleased | Mail and calendar backend behind the gws_* tools: `google` (the gws CLI) or `microsoft365` (Microsoft Graph with an Entra app-only credential stored in the vault under workspace/microsoft365/). The Microsoft 365 transport is being built and nothing routes to it yet; leave this at `google`. |
+| `ROBOTHOR_WORKSPACE_PROVIDER` | Literal | `google` | `robothor-engine` | no | unreleased | Mail and calendar backend behind the gws_* tools: `google` (the gws CLI) or `microsoft365` (Microsoft Graph with an Entra app-only credential stored in the vault under workspace/microsoft365/). Under `microsoft365` the mail tools serve the assistant's Exchange mailbox and the calendar tools refuse until the Microsoft 365 calendar ships. |
 
 ## paths
 

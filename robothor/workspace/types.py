@@ -260,7 +260,8 @@ GOOGLE_CAPABILITIES: Capabilities = {
 }
 
 #: Exchange Online. It notifies attendees of every organiser write and has no
-#: quiet mode, so ``all`` is the only ``sendUpdates`` it honours exactly.
+#: quiet mode, so ``all`` is the only ``sendUpdates`` it honours exactly;
+#: mail labels are Outlook categories; an online meeting is a Teams meeting.
 MICROSOFT365_CAPABILITIES: Capabilities = {
     "provider": "microsoft365",
     "send_updates_modes": ("all",),

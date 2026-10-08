@@ -59,7 +59,8 @@ class PlanResult:
 # ─── Body parsing helpers ──────────────────────────────────────────────
 
 
-_THREAD_ID_RE = re.compile(r"threadId:\s*([a-zA-Z0-9_-]+)")
+#: A Gmail thread id, or a Microsoft Graph conversation id (base64: '=', '+', '/').
+_THREAD_ID_RE = re.compile(r"threadId:\s*([A-Za-z0-9_\-=+/]+)")
 _FROM_RE = re.compile(r"(?m)^from:\s*([^\s<]+@[^\s>]+)")
 _OBJECTIVE_RE = re.compile(r"(?im)^objective:\s*(.+)$")
 _MISSING_DATUM_KEYWORDS = [

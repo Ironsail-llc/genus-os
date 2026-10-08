@@ -263,9 +263,14 @@ class GraphClient:
         path: str,
         json: Any = None,
         *,
+        content: bytes | None = None,
         headers: Mapping[str, str] | None = None,
     ) -> dict[str, Any]:
-        return await self._write("POST", self._resolve(path), json, headers)
+        """One POST of ``json``, or of raw ``content`` (a MIME upload) with the caller's
+        ``Content-Type`` header. Never retried."""
+        if json is not None and content is not None:
+            raise ValueError("pass json or content, not both")
+        return await self._write("POST", self._resolve(path), json, headers, content=content)
 
     async def patch(
         self,
@@ -337,6 +342,7 @@ class GraphClient:
         params: Mapping[str, Any] | None,
         headers: Mapping[str, str] | None,
         json: Any = None,
+        content: bytes | None = None,
     ) -> httpx.Response:
         token = await self.token_source.token()
         request_id = str(uuid.uuid4())
@@ -362,6 +368,8 @@ class GraphClient:
             kwargs["params"] = dict(params)
         if json is not None:
             kwargs["json"] = json
+        elif content is not None:
+            kwargs["content"] = content
         logger.debug(
             "graph %s %s client-request-id=%s",
             method,
@@ -420,9 +428,13 @@ class GraphClient:
         url: httpx.URL,
         json: Any,
         headers: Mapping[str, str] | None,
+        *,
+        content: bytes | None = None,
     ) -> dict[str, Any]:
         try:
-            response = await self._send(method, url, params=None, headers=headers, json=json)
+            response = await self._send(
+                method, url, params=None, headers=headers, json=json, content=content
+            )
         except _NOT_SENT as exc:
             raise WorkspaceError(f"graph {method} was not sent: {type(exc).__name__}") from None
         except httpx.TransportError as exc:
