@@ -76,6 +76,32 @@ SHARED_MAIL_DOMAINS = frozenset(
 )
 
 
+#: Why a mailbox verification is refused outright on Microsoft 365.
+MICROSOFT365_UNSUPPORTED = "mailbox verification is not supported on Microsoft 365 yet"
+
+
+def mailbox_verification_unsupported() -> str:
+    """Why this instance's mailbox cannot be trusted for a verification, or ``""``.
+
+    The anti-spoofing rule below trusts ``Authentication-Results`` only when it
+    starts ``mx.google.com;``, which Gmail's receiving MTA adds. An Exchange
+    mailbox receives no such header from Google -- but a SENDER can write one
+    into the message, so on Microsoft 365 it proves nothing. Until an Exchange
+    equivalent has its own security review, ``workspace_provider=microsoft365``
+    disables mailbox verification. Fail-closed: a provider that cannot be read
+    is not assumed to be Gmail.
+    """
+    try:
+        from robothor.settings import get_settings
+
+        provider = get_settings().workspace.workspace_provider
+    except Exception:  # noqa: BLE001 - unreadable settings never widen trust
+        return "mailbox verification is unavailable: the workspace provider could not be read"
+    if provider == "microsoft365":
+        return MICROSOFT365_UNSUPPORTED
+    return ""
+
+
 def shared_mail_domain(domain: str) -> bool:
     """A shared provider's own namespace, apex or subdomain."""
     domain = domain.strip().strip(".").lower()
@@ -91,6 +117,8 @@ def extract_verification(
     mode: str,
     sender_domains: frozenset[str] = frozenset(),
 ) -> str | None:
+    if mailbox_verification_unsupported():
+        return None
     host = urlsplit(destination).hostname or ""
     headers = {}
     for item in message.get("payload", {}).get("headers", []):

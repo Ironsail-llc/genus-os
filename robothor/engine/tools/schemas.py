@@ -2174,7 +2174,8 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
         },
     }
 
-    # ── Google Workspace tools ──
+    # ── Workspace mail + calendar tools (Google or Microsoft 365, per
+    #    workspace_provider; the gws_* names are kept for both) ──
     schemas["gws_gmail_search"] = {
         "type": "function",
         "function": {
@@ -2190,7 +2191,7 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "Gmail search query, e.g. 'is:unread newer_than:2d' or 'from:alice@example.com'",
+                        "description": "Mailbox search query in Gmail search syntax (it works on every workspace), e.g. 'is:unread newer_than:2d' or 'from:alice@example.com'",
                     },
                     "max_results": {
                         "type": "integer",
@@ -2217,10 +2218,10 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "message_id": {"type": "string", "description": "Gmail message ID"},
+                    "message_id": {"type": "string", "description": "Message ID"},
                     "thread_id": {
                         "type": "string",
-                        "description": "Gmail thread ID (returns all messages in thread)",
+                        "description": "Thread ID (returns all messages in thread)",
                     },
                     "format": {
                         "type": "string",
@@ -2251,7 +2252,7 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
                 "properties": {
                     "thread_id": {
                         "type": "string",
-                        "description": "Gmail thread ID (from task body) — REQUIRED to keep reply in the existing conversation",
+                        "description": "Thread ID (from task body) — REQUIRED to keep reply in the existing conversation",
                     },
                     "body": {
                         "type": "string",
@@ -2317,7 +2318,7 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "message_id": {"type": "string", "description": "Gmail message ID to modify"},
+                    "message_id": {"type": "string", "description": "Message ID to modify"},
                     "add_labels": {
                         "type": "array",
                         "items": {"type": "string"},
@@ -2409,7 +2410,7 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
                     },
                     "with_meet": {
                         "type": "boolean",
-                        "description": "Add a Google Meet video conference link (default true)",
+                        "description": "Add an online meeting link — Google Meet or Microsoft Teams, per the workspace (default true)",
                         "default": True,
                     },
                     "force": {

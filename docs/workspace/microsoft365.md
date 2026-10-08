@@ -326,6 +326,36 @@ CLDR has none).
 `ROBOTHOR_WORKSPACE_PROVIDER` only when you pass `--enable` and the probe
 passes. It never writes an environment file.
 
+## Read-backs, the email channel and prompts
+
+- **Verification read-backs.** After `gws_gmail_send` or `gws_gmail_reply`
+  the post-condition check reads the message back through Graph by the
+  immutable id the send returned. After `gws_calendar_create` it reads the
+  event back with `calendar.get` on the calendar the create reported (the
+  provider resolves `own` to the assistant mailbox and `operator` to
+  `m365_owner_mailbox`). A cancelled event does not count. The gws CLI is
+  never asked. See [Tool post-conditions](../runbooks/TOOL_POSTCONDITIONS.md).
+- **Email channel.** `delivery.channel: email` sends through Graph as the
+  assistant mailbox, never through the gws CLI or SMTP. `genus doctor --only
+  email.transport` names the Graph transport, and fails when no assistant
+  mailbox is set. See [Email](../channels/email.md).
+- **Prompts.** The engine tells the model it has "your own Microsoft 365
+  account" (with `ROBOTHOR_AI_EMAIL`, or the assistant mailbox when that is
+  unset). The tool descriptions are provider-neutral.
+
+### Autonomy mailbox verification is disabled
+
+The autonomy feature can read a website's one-time verification code from the
+mailbox. Its anti-spoofing rule trusts an `Authentication-Results` header only
+when it starts `mx.google.com;`, which Gmail's receiving server adds. On
+Exchange Online a sender can write that header into the message themselves, so
+it proves nothing. Until an Exchange equivalent has its own security review,
+mailbox verification is **off** on Microsoft 365. The request fails before
+any mailbox query, authority check or profile use, with
+`error: mailbox_verification_unsupported` and the reason "mailbox verification
+is not supported on Microsoft 365 yet", and no code is ever extracted. Google
+instances are unchanged.
+
 ## Connect a tenant
 
 This runbook connects one Microsoft 365 tenant to one Genus OS instance. It
