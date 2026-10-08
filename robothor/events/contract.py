@@ -9,7 +9,10 @@ the consumers already read, so the contract lives here as JSON Schemas under
 * ``email_new`` -- the payload of ``email.new`` on the ``email`` stream;
 * ``calendar_event`` -- the payload of every ``calendar.*`` change event on the
   ``calendar`` stream (:data:`CALENDAR_EVENT_TYPES`);
-* ``email_log`` -- the shape of ``email-log.json``, which the dashboards read.
+* ``email_log`` -- the shape of ``email-log.json``, which the dashboards read;
+* ``triage_inbox`` -- the shape of ``triage-inbox.json``, which the triage
+  agents read; a rebuild with items is announced as ``triage.refreshed`` on
+  the ``email`` stream (:data:`TRIAGE_REFRESHED`).
 
 The schemas name generic fields only. ``docs/event-bus.md`` documents them.
 """
@@ -31,6 +34,7 @@ __all__ = [
     "EMAIL_NEW",
     "EMAIL_STREAM",
     "SCHEMA_NAMES",
+    "TRIAGE_REFRESHED",
     "ContractError",
     "email_new_payload",
     "schema",
@@ -39,6 +43,9 @@ __all__ = [
 
 EMAIL_STREAM = "email"
 EMAIL_NEW = "email.new"
+#: On the email stream after a triage-inbox rebuild that has items; payload
+#: ``{"total": <items>, "emails": <email items>}``. The email classifier hooks it.
+TRIAGE_REFRESHED = "triage.refreshed"
 
 CALENDAR_STREAM = "calendar"
 CALENDAR_NEW = "calendar.new"
@@ -57,7 +64,7 @@ CALENDAR_EVENT_TYPES: dict[str, str] = {
     "cancelled": CALENDAR_CANCELLATION,
 }
 
-SCHEMA_NAMES = ("email_new", "calendar_event", "email_log")
+SCHEMA_NAMES = ("email_new", "calendar_event", "email_log", "triage_inbox")
 
 _SCHEMA_DIR = Path(__file__).resolve().parent / "schemas"
 

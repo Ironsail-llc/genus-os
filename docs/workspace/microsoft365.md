@@ -236,8 +236,40 @@ The log is capped at 2,000 entries. `ROBOTHOR_EMAIL_LOG_PATH` overrides where
 it goes; by default it is `<workspace>/brain/memory/email-log.json`, the file
 the dashboards read.
 
-Not done on Microsoft 365 yet: logging each email to the CRM, and the
-`triage-inbox.json` rebuild that the Google script also does.
+**Each new email is logged to the CRM once.** For every message it
+publishes, the worker records an incoming email interaction with the sender:
+the same body the Google script posts to the bridge's `/log-interaction`
+(the sender's name and address, `channel=email`, `direction=incoming`, and
+`From: 'Subject'` as the summary). It calls the bridge's own core,
+`robothor.crm.interactions.log_interaction`, in process: the contact is
+resolved by email address (and created if new), and the message is appended to
+their newest conversation. A logged message is marked `crm:<message id>` in
+`workspace_seen` and its log entry gets `crmLoggedAt`, so a retried round or a
+410 resync never logs it twice. The interaction is logged before `email.new`
+is published, so a round that dies in between re-publishes without logging
+again. If the CRM is down, the email is still published and the failure is
+logged; that message is not logged later.
+
+**The triage inbox is rebuilt.** `triage-inbox.json` is the small file the
+email classifier and the calendar monitor read instead of the full logs. The
+worker rebuilds it right after a round that brought new mail, and otherwise
+every five minutes (the Google script's cadence). It holds the email-log
+entries not yet categorized (`type: "new"`) and the follow-ups that are due
+(`type: "follow-up"`), plus pending items from `calendar-log.json` and
+`jira-log.json` when those files sit next to the email log. Items whose
+message or conversation id appears as `threadId:` in an open (or recently
+resolved, within 72 hours) `escalation` task are left out and listed in
+`activeEscalationIds`. Mail items also carry `threadId`, the conversation id
+the classifier puts in the tasks it creates. The file is written atomically
+(a temporary file, then a rename), and a rebuild with items publishes
+`triage.refreshed` on the `email` stream, which the email classifier hooks.
+The shape is the `triage_inbox` schema in
+[Event Bus](../event-bus.md#email-and-calendar-event-contract).
+`ROBOTHOR_TRIAGE_INBOX_PATH` overrides where it goes; by default it is
+`triage-inbox.json` beside the email log.
+
+On a Google instance none of this runs: the instance's own sync script logs
+to the CRM and writes the triage inbox.
 
 ## Auth model
 

@@ -12,6 +12,13 @@ it never stops the other one or the daemon. With HA leader election on, only
 the scheduler leader ingests, so two replicas never race to publish the same
 message. Seen ids older than
 :data:`~robothor.workspace.ingest.state.SEEN_TTL` are purged hourly.
+
+As the Google sync script does, each new email is also logged to the CRM as
+an interaction (:mod:`~robothor.workspace.ingest.crm`, once per message), and
+``triage-inbox.json`` is rebuilt (:mod:`~robothor.workspace.ingest.triage`)
+right after a round that brought new mail and otherwise every
+:data:`TRIAGE_REFRESH_SECONDS`, the script's cadence. A rebuild with items
+publishes ``triage.refreshed``, which the email classifier hooks.
 """
 
 from __future__ import annotations
@@ -21,22 +28,35 @@ import logging
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
-from robothor.workspace.ingest.base import Ingestor, Publisher, bus_publisher
+from robothor.events import contract
+from robothor.workspace.ingest.base import Ingestor, IngestReport, Publisher, bus_publisher
 from robothor.workspace.ingest.state import SEEN_TTL, IngestStore, PgIngestStore
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
     from robothor.settings.model import GenusSettings
+    from robothor.workspace.ingest.crm import InteractionLogger
     from robothor.workspace.ingest.email_log import EmailLog
+    from robothor.workspace.ingest.triage import TriageInbox
     from robothor.workspace.microsoft.graph import GraphClient
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["build_ingestors", "ingest_enabled", "run", "run_round", "start_tasks"]
+__all__ = [
+    "TRIAGE_REFRESH_SECONDS",
+    "TriageRefresher",
+    "build_ingestors",
+    "ingest_enabled",
+    "run",
+    "run_round",
+    "start_tasks",
+]
 
 PURGE_EVERY_SECONDS = 3600
 MIN_INTERVAL_SECONDS = 10
+#: The triage inbox is rebuilt at least this often (the Google sync's 5-minute cron).
+TRIAGE_REFRESH_SECONDS = 300
 
 
 def _settings(settings: GenusSettings | None) -> GenusSettings:
@@ -59,6 +79,7 @@ def build_ingestors(
     store: IngestStore,
     publish: Publisher,
     email_log: EmailLog | None,
+    log_interaction: InteractionLogger | None = None,
     settings: GenusSettings | None = None,
     now: Callable[[], datetime] | None = None,
 ) -> list[Ingestor]:
@@ -77,14 +98,22 @@ def build_ingestors(
     assistant = (ws.m365_assistant_mailbox or "").strip()
     owner = (ws.m365_owner_mailbox or "").strip()
     if assistant:
-        ingestors.append(GraphMailIngestor(mailbox=assistant, email_log=email_log, **common))
+        ingestors.append(
+            GraphMailIngestor(
+                mailbox=assistant, email_log=email_log, log_interaction=log_interaction, **common
+            )
+        )
     if owner:
         ingestors.append(GraphCalendarIngestor(mailbox=owner, **common))
     return ingestors
 
 
-async def run_round(ingestors: list[Ingestor]) -> None:
-    """One pass over every ingestor. Failures are logged by type, never raised."""
+async def run_round(ingestors: list[Ingestor]) -> list[IngestReport]:
+    """One pass over every ingestor; the reports of those that finished.
+
+    Failures are logged by type, never raised.
+    """
+    reports: list[IngestReport] = []
     for ingestor in ingestors:
         try:
             report = await ingestor.run_once()
@@ -94,15 +123,51 @@ async def run_round(ingestors: list[Ingestor]) -> None:
             detail = str(exc) if isinstance(exc, WorkspaceError) else type(exc).__name__
             logger.warning("microsoft365 %s ingest deferred: %s", ingestor.resource, detail)
             continue
+        reports.append(report)
         if report.published or report.held_back or report.mode != "incremental":
             logger.info(
-                "microsoft365 %s ingest (%s): read %d, published %d, held back %d",
+                "microsoft365 %s ingest (%s): read %d, published %d, held back %d, crm %d",
                 report.resource,
                 report.mode,
                 report.read,
                 report.published,
                 report.held_back,
+                report.crm_logged,
             )
+    return reports
+
+
+class TriageRefresher:
+    """Rebuilds the triage inbox after new mail, else every :data:`TRIAGE_REFRESH_SECONDS`."""
+
+    def __init__(self, triage: TriageInbox, publish: Publisher) -> None:
+        self.triage = triage
+        self.publish = publish
+        self.last: datetime | None = None
+
+    async def after_round(self, reports: list[IngestReport], now: datetime) -> None:
+        new_mail = any(r.resource == "mail" and r.published for r in reports)
+        due = self.last is None or (now - self.last).total_seconds() >= TRIAGE_REFRESH_SECONDS
+        if not (new_mail or due):
+            return
+        try:
+            inbox = await self.triage.rebuild(now=now)
+        except Exception as exc:  # noqa: BLE001 - the triage file must never stop ingestion
+            logger.warning("microsoft365 triage inbox deferred: %s", type(exc).__name__)
+            return
+        self.last = now
+        counts = inbox.get("counts") or {}
+        total = int(counts.get("total") or 0)
+        if not total:
+            return
+        try:
+            await self.publish(
+                contract.EMAIL_STREAM,
+                contract.TRIAGE_REFRESHED,
+                {"total": total, "emails": int(counts.get("emails") or 0)},
+            )
+        except Exception as exc:  # noqa: BLE001 - the next rebuild announces it again
+            logger.warning("microsoft365 triage.refreshed deferred: %s", type(exc).__name__)
 
 
 async def run(
@@ -113,6 +178,8 @@ async def run(
     store: IngestStore | None = None,
     publish: Publisher | None = None,
     email_log: EmailLog | None = None,
+    log_interaction: InteractionLogger | None = None,
+    triage: TriageInbox | None = None,
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     rounds: int | None = None,
     now: Callable[[], datetime] | None = None,
@@ -137,6 +204,19 @@ async def run(
         from robothor.workspace.ingest.email_log import EmailLog
 
         email_log = EmailLog()
+    if log_interaction is None:
+        from robothor.workspace.ingest.crm import dal_interaction_logger
+
+        log_interaction = dal_interaction_logger(tenant_id)
+    if triage is None:
+        from robothor.workspace.ingest import triage as triage_mod
+
+        triage = triage_mod.TriageInbox(
+            triage_mod.default_path(email_log.path),
+            email_log_path=email_log.path,
+            escalations=triage_mod.pg_escalation_ids(tenant_id),
+        )
+    refresher = TriageRefresher(triage, publish)
     if leader is None:
         from robothor.engine.leader import is_leader
 
@@ -172,12 +252,14 @@ async def run(
                         store=store,
                         publish=publish,
                         email_log=email_log,
+                        log_interaction=log_interaction,
                         settings=settings,
                         now=now,
                     )
-            if ingestors:
-                await run_round(ingestors)
             current = clock()
+            if ingestors:
+                reports = await run_round(ingestors)
+                await refresher.after_round(reports, current)
             if last_purge is None or (current - last_purge).total_seconds() >= PURGE_EVERY_SECONDS:
                 try:
                     await store.purge_seen(tenant_id, current - SEEN_TTL)

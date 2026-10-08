@@ -84,6 +84,18 @@ null when the entry is new. A writer merges into the file and never truncates
 it: an entry is keyed by message id and added once, and the entries it didn't
 write keep every field.
 
+**`triage-inbox.json`** (`triage_inbox.json`) is
+`{"preparedAt", "counts": {"emails", "calendar", "jira", "total"}, "items",
+"activeEscalationIds"}`: what the triage agents still have to look at,
+rebuilt after each mail sync. An item has a `source` (`email`, `calendar` or
+`jira`) and a `type`. Email items are `new` (not yet categorized: `id`,
+`threadId`, `from`, `subject`, `date`, `labels`, `snippet`, `messageCount`)
+or `follow-up` (a due `pendingReviewAt`); calendar items are `meeting` or
+`change`; jira items are `pending-action`. `activeEscalationIds` lists the
+thread ids already escalated, which are left out of `items`. A rebuild with
+items is announced as **`triage.refreshed`** on the `email` stream, payload
+`{"total": <items>, "emails": <email items>}`.
+
 ## Publishing
 
 ```python

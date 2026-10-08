@@ -3503,6 +3503,15 @@ class WorkspaceSettings(SettingsGroup):
         "dashboards read). Empty means <workspace>/brain/memory/email-log.json.",
         since="unreleased",
     )
+    workspace_triage_inbox_path: str = declare(
+        "",
+        "ROBOTHOR_TRIAGE_INBOX_PATH",
+        "The triage-inbox.json the platform's Microsoft 365 ingest rebuilds after new mail and "
+        "every five minutes: the pending email, calendar and jira items the email classifier "
+        "and calendar monitor read. Empty means triage-inbox.json beside the email log. Has no "
+        "effect on google, where the instance's own sync script writes it.",
+        since="unreleased",
+    )
 
 
 class GenusSettings(BaseSettings):

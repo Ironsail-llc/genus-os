@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-470 settings in 17 groups.
+471 settings in 17 groups.
 
 ## autonomy
 
@@ -115,6 +115,7 @@ Host paths for the isolated personal browser service and clients.
 | `ROBOTHOR_M365_INGEST_INTERVAL_SECONDS` | int | `60` | `robothor-engine` | no | unreleased | Seconds between Microsoft 365 ingest rounds when the workspace provider is microsoft365: each round reads the assistant inbox's and the owner calendar's Graph delta, publishes email.new / calendar.* events for what is new and merges new mail into the email log. The doctor's ingest-freshness check allows three intervals. Has no effect on google, where the instance's own sync scripts publish these events. |
 | `ROBOTHOR_M365_OWNER_MAILBOX` | str | _(empty)_ | `robothor-engine` | no | unreleased | The operator's Exchange Online mailbox when the workspace provider is microsoft365. Its calendar is the one the assistant reads and edits for the operator. |
 | `ROBOTHOR_M365_SCOPE_CANARY_MAILBOX` | str | _(empty)_ | `robothor-engine` | no | unreleased | A mailbox in the same Microsoft 365 tenant that the app must NOT be able to read. The doctor tries it to prove Exchange RBAC for Applications scopes the grant to the assistant and owner mailboxes; a readable canary is an error. Empty skips the check. |
+| `ROBOTHOR_TRIAGE_INBOX_PATH` | str | _(empty)_ | `robothor-engine` | no | unreleased | The triage-inbox.json the platform's Microsoft 365 ingest rebuilds after new mail and every five minutes: the pending email, calendar and jira items the email classifier and calendar monitor read. Empty means triage-inbox.json beside the email log. Has no effect on google, where the instance's own sync script writes it. |
 | `ROBOTHOR_WORKSPACE_PROVIDER` | Literal | `google` | `robothor-engine` | no | unreleased | Mail and calendar backend behind the gws_* tools: `google` (the gws CLI) or `microsoft365` (Microsoft Graph with an Entra app-only credential stored in the vault under workspace/microsoft365/). Under `microsoft365` the mail tools serve the assistant's Exchange mailbox and the calendar tools refuse until the Microsoft 365 calendar ships. |
 
 ## paths

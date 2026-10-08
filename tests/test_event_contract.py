@@ -43,6 +43,69 @@ GOOGLE_LOG_ENTRY = {
 }
 
 
+#: triage-inbox.json as the Google sync's build_triage_inbox writes it.
+GOOGLE_TRIAGE_INBOX = {
+    "preparedAt": "2026-10-05T13:15:05.000001+00:00",
+    "counts": {"emails": 2, "calendar": 2, "jira": 1, "total": 5},
+    "items": [
+        {
+            "source": "email",
+            "type": "new",
+            "id": "19a0f00000000001",
+            "from": "Alice Example <alice@example.com>",
+            "subject": "Quarterly numbers",
+            "date": "Mon, 05 Oct 2026 09:12:00 -0400",
+            "labels": ["UNREAD", "INBOX"],
+            "snippet": None,
+            "messageCount": 1,
+        },
+        {
+            "source": "email",
+            "type": "follow-up",
+            "id": "19a0f00000000002",
+            "from": "bob@example.com",
+            "subject": "Re: contract",
+            "date": "Sun, 04 Oct 2026 10:00:00 -0400",
+            "pendingReviewAt": "2026-10-05T12:00:00+00:00",
+        },
+        {
+            "source": "calendar",
+            "type": "meeting",
+            "id": "evt-0001",
+            "title": "Planning",
+            "start": "2026-10-06T14:00:00Z",
+            "startLocal": "2026-10-06T10:00:00-04:00",
+            "end": "2026-10-06T14:30:00Z",
+            "endLocal": "2026-10-06T10:30:00-04:00",
+            "attendees": ["alice@example.com"],
+        },
+        {
+            "source": "calendar",
+            "type": "change",
+            "id": "evt-0002",
+            "title": "Moved",
+            "changeType": "rescheduled",
+            "details": None,
+            "start": "2026-10-07T14:00:00Z",
+            "end": "2026-10-07T14:30:00Z",
+            "detectedAt": "2026-10-05T13:00:00+00:00",
+        },
+        {
+            "source": "jira",
+            "type": "pending-action",
+            "ticket": "OPS-1",
+            "action": "review",
+            "summary": "Check the rollout",
+        },
+    ],
+    "activeEscalationIds": ["19a0f00000000009"],
+}
+
+
+def test_the_google_triage_inbox_matches_the_schema() -> None:
+    contract.validate("triage_inbox", GOOGLE_TRIAGE_INBOX)
+
+
 def test_the_google_email_new_payload_matches_the_schema() -> None:
     contract.validate("email_new", GOOGLE_EMAIL_NEW)
 
@@ -94,6 +157,11 @@ def test_a_calendar_log_meeting_plus_change_type_matches_the_schema() -> None:
             },
         ),
         ("email_log", {"entries": {}}),
+        ("triage_inbox", {"counts": {}, "items": []}),
+        (
+            "triage_inbox",
+            dict(GOOGLE_TRIAGE_INBOX, items=[{"source": "email", "type": "new"}]),
+        ),
     ],
 )
 def test_the_schema_rejects_a_drifted_payload(name, bad) -> None:

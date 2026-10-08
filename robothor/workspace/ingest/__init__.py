@@ -8,6 +8,9 @@
   marks and the seen set (migration 149);
 * :mod:`~robothor.workspace.ingest.email_log` -- the atomic, merging
   ``email-log.json`` writer;
+* :mod:`~robothor.workspace.ingest.crm` -- one CRM interaction per new email;
+* :mod:`~robothor.workspace.ingest.triage` -- the ``triage-inbox.json``
+  rebuild the triage agents read;
 * :mod:`~robothor.workspace.ingest.worker` -- the daemon worker, dark unless
   ``workspace_provider = microsoft365``.
 

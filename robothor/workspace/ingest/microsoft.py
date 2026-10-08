@@ -35,6 +35,7 @@ from urllib.parse import quote
 from robothor.events import contract
 from robothor.workspace.errors import NotFound, WorkspaceError
 from robothor.workspace.ingest.base import Ingestor, IngestReport, Publisher
+from robothor.workspace.ingest.crm import InteractionLogger, crm_key, interaction_payload
 from robothor.workspace.ingest.email_log import EmailLog, new_entry
 from robothor.workspace.ingest.state import IngestStore, SyncState
 from robothor.workspace.microsoft.mail import ENVELOPE_FIELDS, gmail_envelope
@@ -221,9 +222,16 @@ class GraphMailIngestor(_GraphDeltaIngestor):
 
     resource = "mail"
 
-    def __init__(self, *, email_log: EmailLog | None = None, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        *,
+        email_log: EmailLog | None = None,
+        log_interaction: InteractionLogger | None = None,
+        **kwargs: Any,
+    ) -> None:
         super().__init__(**kwargs)
         self.email_log = email_log
+        self.log_interaction = log_interaction
 
     async def _first_page(self, state: SyncState | None, mode: str) -> dict[str, Any]:
         now = self._now()
@@ -301,6 +309,7 @@ class GraphMailIngestor(_GraphDeltaIngestor):
 
         await self._mark(history)
         entries = [self._entry(m) for m in publish]
+        await self._log_to_crm(entries, report)
         if entries and self.email_log is not None:
             report.logged = len(await self.email_log.merge(entries, now=self._now()))
         for message, entry in zip(publish, entries, strict=True):
@@ -309,6 +318,32 @@ class GraphMailIngestor(_GraphDeltaIngestor):
             await self._mark([keys[str(message["id"])]])
             report.published += 1
         return newest
+
+    async def _log_to_crm(self, entries: list[dict[str, Any]], report: IngestReport) -> None:
+        """One CRM interaction per new message, before it is published.
+
+        Before, so a round that dies between the two re-publishes next round
+        without logging again (the ``crm:`` key is already seen). A CRM failure
+        is logged by type and never holds the message back from the pipeline.
+        """
+        if self.log_interaction is None or not entries:
+            return
+        keys = {str(e["id"]): crm_key(str(e["id"])) for e in entries}
+        done = await self._seen(list(keys.values()))
+        for entry in entries:
+            key = keys[str(entry["id"])]
+            payload = interaction_payload(entry)
+            if key in done or payload is None:
+                continue
+            try:
+                logged = await self.log_interaction(payload)
+            except Exception as exc:  # noqa: BLE001 - the CRM must never stop ingestion
+                logger.warning("microsoft365 mail CRM log deferred: %s", type(exc).__name__)
+                continue
+            if logged:
+                await self._mark([key])
+                entry["crmLoggedAt"] = self._now().isoformat()
+                report.crm_logged += 1
 
 
 class GraphCalendarIngestor(_GraphDeltaIngestor):

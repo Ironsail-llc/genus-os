@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:genus-os:events:triage_inbox",
+  "title": "triage-inbox.json",
+  "description": "What the triage agents (the email classifier, the calendar monitor) still have to look at, rebuilt after every mail sync from email-log.json, calendar-log.json and jira-log.json. The agents read counts.<source> to decide whether to run, process the items of their source, and never re-escalate an id listed in activeEscalationIds. A triage.refreshed event on the email stream announces a rebuild that has items.",
+  "type": "object",
+  "required": ["preparedAt", "counts", "items", "activeEscalationIds"],
+  "properties": {
+    "preparedAt": {"type": "string"},
+    "counts": {
+      "type": "object",
+      "required": ["emails", "calendar", "jira", "total"],
+      "properties": {
+        "emails": {"type": "integer", "minimum": 0},
+        "calendar": {"type": "integer", "minimum": 0},
+        "jira": {"type": "integer", "minimum": 0},
+        "total": {"type": "integer", "minimum": 0}
+      }
+    },
+    "items": {"type": "array", "items": {"$ref": "#/$defs/item"}},
+    "activeEscalationIds": {"type": "array", "items": {"type": "string"}}
+  },
+  "additionalProperties": true,
+  "$defs": {
+    "item": {
+      "type": "object",
+      "required": ["source", "type"],
+      "oneOf": [
+        {
+          "properties": {
+            "source": {"const": "email"},
+            "type": {"enum": ["new", "follow-up"]},
+            "id": {"type": "string", "minLength": 1},
+            "threadId": {"type": ["string", "null"]},
+            "from": {"type": ["string", "null"]},
+            "subject": {"type": ["string", "null"]},
+            "date": {"type": ["string", "null"]},
+            "labels": {"type": "array", "items": {"type": "string"}},
+            "snippet": {"type": ["string", "null"]},
+            "messageCount": {"type": "integer", "minimum": 1},
+            "needsBackfill": {"type": "boolean"},
+            "pendingReviewAt": {"type": "string"}
+          },
+          "required": ["id", "from", "subject", "date"]
+        },
+        {
+          "properties": {
+            "source": {"const": "calendar"},
+            "type": {"enum": ["meeting", "change"]},
+            "id": {"type": ["string", "null"]},
+            "title": {"type": ["string", "null"]},
+            "attendees": {"type": "array"}
+          },
+          "required": ["id", "title", "start", "end"]
+        },
+        {
+          "properties": {
+            "source": {"const": "jira"},
+            "type": {"const": "pending-action"}
+          },
+          "required": ["ticket", "action", "summary"]
+        }
+      ]
+    }
+  }
+}

@@ -53,6 +53,8 @@ class IngestReport:
     #: high-water mark: the replay a lost delta would otherwise cause.
     held_back: int = 0
     logged: int = 0
+    #: New messages logged to the CRM as an interaction this round.
+    crm_logged: int = 0
 
 
 class Ingestor(abc.ABC):
