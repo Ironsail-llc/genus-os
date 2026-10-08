@@ -263,9 +263,7 @@ class GwsChat:
                 "messages",
                 "create",
                 "--params",
-                json.dumps(
-                    {"parent": space, "messageReplyOption": "REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD"}
-                ),
+                json.dumps({"parent": space, "messageReplyOption": "REPLY_MESSAGE_OR_FAIL"}),
                 "--json",
                 json.dumps({"text": text, "thread": {"name": thread}}),
             ]

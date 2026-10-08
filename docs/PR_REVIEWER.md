@@ -36,8 +36,15 @@ acknowledgement ("thanks", 👍) or a reviewer's status line ("#12: Approved",
 review bot's) does nothing; anything negated or unclear ("not fixed yet",
 "will push later", "is this fixed?") is handed to the agent as a task to
 decide. In a thread that posted several pull requests, a reply that names some
-of them ("12 is ready for re-review", "#12", a link) re-reviews only those. Every Chat
-message is handled once, and one that fails is recorded with its error in
+of them ("12 is ready for re-review", "#12", a link) re-reviews only those.
+A **new top-level message** linking a pull request that is already tracked
+("re-review <link>", or the link alone, from anyone) is a re-review request
+too: it is claimed with a reaction, the row moves to that new thread, and every
+answer ("No changes?", "A review is already running…", the posted review)
+goes there. Only a pull request the operator stopped with `action="skip"`
+stays ignored. Replies are posted in their thread or not at all
+(`REPLY_MESSAGE_OR_FAIL`): if the thread's message was deleted, the failure is
+logged in the intake's `errors`, never posted as a new top-level message. Every Chat message is handled once, and one that fails is recorded with its error in
 `pr_review_messages` and skipped — never retried. The Chat cursor survives
 restarts.
 
