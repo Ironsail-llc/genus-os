@@ -1,3 +1,23 @@
+## [1.106.0](https://github.com/Ironsail-llc/genus-os/compare/v1.105.0...v1.106.0) (2026-10-08)
+
+### Features
+
+* **engine:** provider-aware verification, email channel and prompts ([#663](https://github.com/Ironsail-llc/genus-os/issues/663)) ([66f41b6](https://github.com/Ironsail-llc/genus-os/commit/66f41b66f12d943cc718f6760f0ea2ef8cf61644)), closes [#660](https://github.com/Ironsail-llc/genus-os/issues/660) [#661](https://github.com/Ironsail-llc/genus-os/issues/661) [#661](https://github.com/Ironsail-llc/genus-os/issues/661) [#660](https://github.com/Ironsail-llc/genus-os/issues/660) [#660](https://github.com/Ironsail-llc/genus-os/issues/660) [#661](https://github.com/Ironsail-llc/genus-os/issues/661) [#661](https://github.com/Ironsail-llc/genus-os/issues/661) [#661](https://github.com/Ironsail-llc/genus-os/issues/661)
+* **templates:** provider-neutral mail and calendar in shipped agents ([#664](https://github.com/Ironsail-llc/genus-os/issues/664)) ([f25ef91](https://github.com/Ironsail-llc/genus-os/commit/f25ef9146c01a4ddbd2bd630e90d2cac5deb76d4))
+* **workspace:** m365 connect command and doctor check ([#655](https://github.com/Ironsail-llc/genus-os/issues/655)) ([bae93b4](https://github.com/Ironsail-llc/genus-os/commit/bae93b455e329b355ba8d1bb3ec16a414137fd1d))
+* **workspace:** microsoft 365 mail and calendar ([#660](https://github.com/Ironsail-llc/genus-os/issues/660)) ([a85c691](https://github.com/Ironsail-llc/genus-os/commit/a85c691553728061e50d624b3e28c0331105f060)), closes [#658](https://github.com/Ironsail-llc/genus-os/issues/658) [#658](https://github.com/Ironsail-llc/genus-os/issues/658) [#658](https://github.com/Ironsail-llc/genus-os/issues/658) [#658](https://github.com/Ironsail-llc/genus-os/issues/658) [#658](https://github.com/Ironsail-llc/genus-os/issues/658) [#655](https://github.com/Ironsail-llc/genus-os/issues/655) [#658](https://github.com/Ironsail-llc/genus-os/issues/658)
+* **workspace:** platform delta ingestion for microsoft 365 ([#662](https://github.com/Ironsail-llc/genus-os/issues/662)) ([38bdc80](https://github.com/Ironsail-llc/genus-os/commit/38bdc801a7eed257e4666f64359f0697654a85a7)), closes [#658](https://github.com/Ironsail-llc/genus-os/issues/658) [#658](https://github.com/Ironsail-llc/genus-os/issues/658)
+
+### Code Refactoring
+
+* **workspace:** transport seam behind gws tools ([#656](https://github.com/Ironsail-llc/genus-os/issues/656)) ([55046fd](https://github.com/Ironsail-llc/genus-os/commit/55046fd69705b12cc0b7d0357aa8aaa2bea632ab)), closes [#651](https://github.com/Ironsail-llc/genus-os/issues/651)
+
+### Tests
+
+* **autonomy:** match the verification code as a whole token, not a substring ([#659](https://github.com/Ironsail-llc/genus-os/issues/659)) ([d2a3bdd](https://github.com/Ironsail-llc/genus-os/commit/d2a3bddac7a230ca4c020eacf7aa380e16f5e945))
+* **gws:** characterization goldens for gmail and calendar paths ([#651](https://github.com/Ironsail-llc/genus-os/issues/651)) ([84154f6](https://github.com/Ironsail-llc/genus-os/commit/84154f6c7a6853f12bdb1e1054e4c10c78de1ce5))
+* **workspace:** provider contract suite and a no-google acceptance test ([#661](https://github.com/Ironsail-llc/genus-os/issues/661)) ([4e68a23](https://github.com/Ironsail-llc/genus-os/commit/4e68a230bd68348c0781351046b81122fa4a19f7)), closes [#660](https://github.com/Ironsail-llc/genus-os/issues/660) [#660](https://github.com/Ironsail-llc/genus-os/issues/660) [#660](https://github.com/Ironsail-llc/genus-os/issues/660)
+
 ## [1.105.0](https://github.com/Ironsail-llc/genus-os/compare/v1.104.0...v1.105.0) (2026-10-08)
 
 ### Features
