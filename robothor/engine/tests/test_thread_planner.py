@@ -557,3 +557,14 @@ class TestPlannerObservability:
         rec = run_complete[0]
         assert getattr(rec, "candidates_count", None) == 0
         assert "connection refused" in (getattr(rec, "error", "") or "")
+
+
+def test_thread_id_pattern_takes_whole_graph_ids() -> None:
+    """Microsoft Graph ids carry '=', '+' and '/' -- a Gmail-only pattern cut them short."""
+    from robothor.engine.thread_planner import _THREAD_ID_RE
+
+    graph_id = "AAQkADAwATM0MDAAMS1iNTcwLWI2NTEtMDACLTAwCgAQAN+3x/q_Ab-c=="
+    match = _THREAD_ID_RE.search(f"objective: reply\nthreadId: {graph_id}\nfrom: bob@example.com")
+    assert match is not None and match.group(1) == graph_id
+    gmail = _THREAD_ID_RE.search("threadId: 18c2f0a9b7e4d123")
+    assert gmail is not None and gmail.group(1) == "18c2f0a9b7e4d123"

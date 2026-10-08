@@ -1,16 +1,20 @@
 # Microsoft 365 workspace
 
-> **Status: in development.** The Microsoft Graph transport, its sign-in, the
-> connect command and the doctor checks exist. The mail and calendar providers
-> are still landing: until they ship, every mail and calendar tool refuses
-> (`hint: "unsupported"`) when `microsoft365` is selected, so connect and verify
-> a tenant with this runbook but do not pass `--enable` on a production
-> instance until the release notes say otherwise.
-> [Connect a tenant](#connect-a-tenant) is the step-by-step runbook.
+> **Status: in development.** The Microsoft 365 mail and calendar providers,
+> the Graph transport and its sign-in, the connect command and the doctor
+> checks exist: with `ROBOTHOR_WORKSPACE_PROVIDER=microsoft365` and an assistant
+> mailbox set, the `gws_gmail_*` tools read and send mail from the assistant's
+> Exchange Online mailbox (see [Mail](#mail)) and the `gws_calendar_*` tools run
+> against Exchange Online calendars (see [Calendar](#calendar)). The
+> `gws_chat_*` tools stay Google-only. Ingestion and the end-to-end
+> verification are still landing, so connect and verify a tenant with this
+> runbook but do not pass `--enable` on a production instance until the
+> release notes say it is ready. [Connect a tenant](#connect-a-tenant) is the
+> step-by-step runbook.
 
 Genus OS reads and sends mail and manages calendars through the `gws_*` tools.
 By default they run against Google Workspace. With
-`ROBOTHOR_WORKSPACE_PROVIDER=microsoft365` the same tools are meant to run
+`ROBOTHOR_WORKSPACE_PROVIDER=microsoft365` the same tools run
 against Exchange Online (Outlook mail and calendar) through Microsoft Graph.
 
 ## Architecture
@@ -24,7 +28,7 @@ the names keeps every rule. Only the transport underneath changes:
 | Layer | Google | Microsoft 365 |
 |-------|--------|---------------|
 | Tools and guards | `gws_*` tools, shared rules | same tools, same rules |
-| Provider (`robothor/workspace/protocols.py`) | `GoogleMail`, `GoogleCalendar` (`robothor/workspace/google/adapter.py`) | not yet built (selecting it refuses) |
+| Provider (`robothor/workspace/protocols.py`) | `GoogleMail`, `GoogleCalendar` (`robothor/workspace/google/adapter.py`) | `GraphMail` (`robothor/workspace/microsoft/mail.py`) and `GraphCalendar` (`robothor/workspace/microsoft/calendar.py`), sharing one Graph client |
 | Transport | `gws` CLI, plus conditional Calendar HTTP for edits | `robothor/workspace/microsoft/graph.py` (`GraphClient`) |
 | Sign-in | Google OAuth | Entra app-only (`robothor/workspace/microsoft/auth.py`) |
 
@@ -79,6 +83,120 @@ moves data:
   include a token or a message body. Each request has its own
   `client-request-id` for Microsoft support.
 
+## Mail
+
+`GraphMail` serves the mail tools from the mailbox in
+`ROBOTHOR_M365_ASSISTANT_MAILBOX`. Without that setting every Microsoft 365
+tool (mail and calendar) refuses as not configured; nothing falls back to
+Google. The Graph client is built from the vault of the platform tenant that
+made the tool call, and mail and calendar share it.
+
+Every guard in the tool handler runs before Graph is called: do-not-contact,
+the duplicate-reply check, benchmark refusal and reply-all assembly. A refused
+send makes no Graph write.
+
+### Results look the same as Google's
+
+The provider turns each Graph message into Gmail's raw shape, and the Google
+shaper formats it. So a tool result has the same keys whichever provider
+served it:
+
+| Tool result field | From Graph |
+|-------------------|-----------|
+| `id` | the message's immutable id |
+| `thread_id` | `conversationId` |
+| `from`, `to`, `cc`, `subject`, `message_id` | `from`, `toRecipients`, `ccRecipients`, `subject`, `internetMessageId` |
+| `date` | `sentDateTime` as an RFC 5322 date |
+| `snippet` | `bodyPreview`, HTML-escaped like Gmail's |
+| `body_text` | the body, requested as text (`Prefer: outlook.body-content-type="text"`); an HTML body is converted to text the same way as a Gmail one |
+| `attachments` | name, type and size of each attachment (never the bytes) |
+
+### Search syntax
+
+Agents keep writing Gmail queries. Each one is translated to Graph. If a
+query can't be translated exactly, the tool refuses it and lists what is
+supported. It never drops a term and returns more mail than was asked for.
+
+| Gmail query | Graph |
+|-------------|-------|
+| `from:addr`, `to:addr` (a full address) | `$filter` on the address, exact |
+| `from:name`, `to:name`, `cc:`, `bcc:`, `subject:`, free text, `"a phrase"` | KQL `$search` |
+| `is:unread` / `is:read`, `is:starred`, `is:important` | `isRead`, `flag/flagStatus`, `importance` |
+| `has:attachment` | `hasAttachments` |
+| `label:<name>` | the Outlook category `<name>` |
+| `in:inbox`, `in:sent`, `in:trash`, `in:spam`, `in:drafts` | that folder (Inbox, Sent Items, Deleted Items, Junk Email, Drafts) |
+| `in:anywhere` | every folder |
+| `after:` / `before:` (`YYYY/MM/DD` or epoch seconds, UTC) | `receivedDateTime ge` / `lt` |
+| `newer_than:` / `older_than:` (`Nh`, `Nd`, `Nm` = 30 days, `Ny` = 365 days) | `receivedDateTime ge` / `lt` |
+| `a OR b`, `{a b}` | an OR group, when every part is the same kind |
+| `-is:…`, `-has:attachment` | the opposite value |
+
+These are refused: any other operator (`filename:`, `larger:`, `category:`
+and so on), other `is:`/`has:`/`in:` values, other negations (`-from:`,
+`-subject:`), more than one `in:`, and a group that mixes text terms with
+flag, date or label terms.
+
+How the query runs:
+
+- **Only structured terms** go into a `$filter`, sorted newest first on the
+  server. Graph needs the sort property to be filtered first, so a
+  `receivedDateTime` condition always leads the filter.
+- **Any text term** switches the query to KQL `$search`. Graph doesn't allow
+  `$search` together with `$filter` or `$orderby`, so every structured term is
+  also checked on each result, and the provider sorts the results itself.
+- **Deleted Items and Junk Email are left out** unless the query names a
+  folder, the same way Gmail leaves out trash and spam.
+
+### Labels
+
+Graph has no labels, so the provider builds Gmail's label list from the
+message:
+
+| Label | Means |
+|-------|-------|
+| `UNREAD` | `isRead` is false |
+| `INBOX`, `SENT`, `TRASH`, `SPAM`, `DRAFT` | the message is in Inbox, Sent Items, Deleted Items, Junk Email or Drafts |
+| `STARRED` | the message is flagged |
+| `IMPORTANT` | `importance` is high |
+| anything else | an Outlook category |
+
+`gws_gmail_modify` maps them back:
+
+| Change | Graph |
+|--------|-------|
+| add / remove `UNREAD` | `isRead` false / true |
+| add / remove `STARRED` | flag `flagged` / `notFlagged` |
+| add / remove `IMPORTANT` | importance `high` / `normal` |
+| remove `INBOX` | move to Archive |
+| add `INBOX`, or remove `TRASH` | move to Inbox |
+| add `TRASH` | move to Deleted Items |
+| any other label | add or remove that category |
+
+`SENT`, `DRAFT`, `SPAM`, `CHAT` and Gmail's `CATEGORY_*` tabs are refused, as
+is a label that is both added and removed. A refused change writes nothing.
+Immutable ids survive a move, so the id stays the same after archiving.
+
+### Sending and threading
+
+- **A new message** is a draft created from the MIME message the handler
+  built, then sent. The draft's immutable id is returned as the sent message's
+  `id`, with `threadId` set to its `conversationId`, so a read-back by that
+  id finds the sent message.
+- **A reply** (`gws_gmail_reply`, or `gws_gmail_send` with a `thread_id`) uses
+  `createReplyAll` on the newest message in the conversation that isn't a
+  draft, so Exchange keeps it in the same conversation. The draft's To, Cc and
+  Bcc are then replaced with exactly the recipients the handler approved,
+  and its body with the handler's body. Exchange's own reply-all list is
+  never sent. The subject Exchange gave the reply is kept, because changing it
+  can split the conversation. If the draft can't be prepared, it is deleted
+  without being sent.
+- **The duplicate-reply guard** reads the conversation oldest first. If the
+  last message is from the assistant (drafts included), the reply is skipped
+  before any write. The guard compares senders with `ROBOTHOR_AI_EMAIL`, so
+  set that to the same address as `ROBOTHOR_M365_ASSISTANT_MAILBOX`.
+- **Writes are sent once.** A send whose outcome is unknown comes back with
+  `outcome_unknown: true` and is not retried.
+
 ## Auth model
 
 The assistant signs in as an **application**, not as a user:
@@ -121,6 +239,87 @@ description can quote a rejected secret back, so it is never logged.
 | `ROBOTHOR_M365_SCOPE_CANARY_MAILBOX` | A mailbox the app must *not* be able to read |
 
 See [Settings](../reference/configuration.md) for the generated reference.
+
+## Calendar
+
+`GraphCalendar` (`robothor/workspace/microsoft/calendar.py`) serves every
+`gws_calendar_*` tool. Each guard still runs in the handler first, before any
+Graph request: do-not-contact on every invitee, the `no_auto` scheduling
+policy, duplicate-event detection, the calendar-identity check, and the
+cancellation check right before a write. A blocked call sends nothing to
+Graph.
+
+**Which calendar.** `calendar="own"` is the assistant mailbox's default
+calendar (`/users/{assistant}/calendar`). `calendar="operator"` (the default)
+is the owner mailbox's (`/users/{owner}/calendar`), using
+`ROBOTHOR_M365_OWNER_MAILBOX` when set and the owner.yaml address otherwise.
+An explicit `calendar_id` that is an address is that mailbox's default
+calendar; any other id is a calendar in the assistant's mailbox
+(`/users/{assistant}/calendars/{id}`).
+
+**Events look like Google's.** The provider translates Graph events into the
+Google Calendar v3 shape the tools, dedup and CRM already read:
+
+| Graph | Tool result |
+|-------|-------------|
+| `subject`, `body` (read as text), `location.displayName` | `summary`, `description`, `location` |
+| `start`/`end` (UTC) + `originalStartTimeZone` | `start.dateTime` with an offset, in the event's own zone, plus `timeZone` (IANA) |
+| `isAllDay` | `start.date` / `end.date` (end exclusive, as Google) |
+| attendee `status.response` | `responseStatus`: `none`/`notResponded` → `needsAction`, `tentativelyAccepted` → `tentative`, `accepted`, `declined` |
+| `isOrganizer`, `organizer` | `organizer.self`, `organizer.email`; the mailbox's own entry is `self: true` |
+| `isCancelled` | `status: "cancelled"` |
+| `webLink` | `htmlLink` |
+| `onlineMeeting.joinUrl` | `conferenceData` (solution `teamsForBusiness`) |
+| `recurrence` / `seriesMasterId` | `recurrence: ["RRULE:…"]` / `recurringEventId` |
+| `@odata.etag` | `etag` |
+
+Listing uses `calendarView`, which expands a series into its occurrences (as
+Google's `singleEvents=true`). Ids are Graph **immutable ids**, so the id
+recorded at create time stays valid, and the CRM write-through files the
+event under `provider = 'microsoft365'` with that id as `external_event_id`.
+
+**Teams meetings.** `with_meet=true` (the default) creates a Microsoft Teams
+meeting (`isOnlineMeeting`, `onlineMeetingProvider: teamsForBusiness`); the
+join link comes back in `conferenceData`. A Google Meet link cannot be
+attached to an Exchange event and is refused.
+
+**Exchange always notifies.** When the organiser creates, changes or cancels a
+meeting with attendees, Exchange mails them; there is no quiet mode. So with
+attendees involved the `calendar_send_updates` flag must be `all`: under
+`none` or `externalOnly` a create, edit or delete of such a meeting is refused
+before anything is written (`hint: "unsupported"`). Events without attendees
+are unaffected. An RSVP honours the flag exactly (`sendResponse` is false
+under `none`).
+
+**Edits.** `gws_calendar_update` and `gws_calendar_add_attendees` use the same
+read / merge / conditional write / read-back loop as Google. The write is a
+PATCH with `If-Match: <etag>`; if the event changed in between, Graph answers
+412 and the loop re-reads, merges and tries once more. `gws_calendar_respond`
+reads the event the same way, then sends Graph's `accept`, `decline` or
+`tentativelyAccept` action, and reads it back to verify.
+
+**Delete.** On a meeting this mailbox organises, with attendees,
+`gws_calendar_delete` calls `/cancel`, which removes the event and sends the
+attendees a cancellation (the result says `method: "cancel"`). Anything else
+(no attendees, or the mailbox's copy of someone else's meeting) is a plain
+`DELETE` (`method: "delete"`).
+
+**Recurrence.** A create may carry one `RRULE` with `FREQ` `DAILY`,
+`WEEKLY`, `MONTHLY` or `YEARLY` and only these parts: `INTERVAL`, `BYDAY`
+(weekdays; for monthly or yearly, one numbered weekday such as `2TU` or
+`-1FR`), `BYMONTHDAY` (one day, 1–31), and `COUNT` or `UNTIL`. Anything else
+(`BYSETPOS`, `BYMONTH`, hourly rules, `EXDATE`/`RDATE`, several rules) is
+refused before any write rather than approximated. Reading maps every Graph
+pattern back to an `RRULE`.
+
+**Time zones.** Graph answers in UTC (`Prefer: outlook.timezone="UTC"`); each
+event is shown in its own zone, with Windows zone names (`Eastern Standard
+Time`) mapped to IANA (`America/New_York`) by the CLDR table in
+`robothor/workspace/microsoft/timezones.py`. Writes send IANA names. A time
+with an offset is converted into the event's zone; a time without one is read
+in that zone, or the instance's `ROBOTHOR_TIMEZONE`. If a tenant rejects an
+IANA name, the create is retried once with the Windows name (or in UTC when
+CLDR has none).
 
 `genus workspace connect microsoft365` writes the three mailbox settings to
 `config.yaml` (the same writer as `genus config set`) and sets

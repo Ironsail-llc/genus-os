@@ -25,7 +25,7 @@ twin when it has one (Google) and the engine's event loop when it does not.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
@@ -196,9 +196,16 @@ class BlockingCalendar(Protocol):
 
 @dataclass(frozen=True)
 class Workspace:
-    """The providers one tenant's ``gws_*`` tools use."""
+    """The providers one tenant's ``gws_*`` tools use.
+
+    ``unavailable`` maps a family (``"mail"``, ``"calendar"``) this provider
+    cannot serve yet to the reason; the handlers refuse that family's tools
+    up front, before any guard runs, rather than reach a provider that would
+    only refuse later.
+    """
 
     provider: str
     mail: MailProvider
     calendar: CalendarProvider
     capabilities: Capabilities
+    unavailable: dict[str, str] = field(default_factory=dict)

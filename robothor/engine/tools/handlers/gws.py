@@ -9,11 +9,14 @@ import re
 import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from robothor.engine.tools.constants import (
     CALENDAR_ADD_ATTENDEES_TOOL,
+    CALENDAR_READ_TOOLS,
     CALENDAR_RESPOND_TOOL,
     CALENDAR_UPDATE_TOOL,
     CALENDAR_WRITE_TOOLS,
@@ -64,10 +67,15 @@ from robothor.workspace.query import parse_query
 from robothor.workspace.types import CalendarRef, as_calendar_ref
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterator
 
     from robothor.engine.tools.dispatch import ToolContext
-    from robothor.workspace.protocols import BlockingCalendar, BlockingMail, CalendarProvider
+    from robothor.workspace.protocols import (
+        BlockingCalendar,
+        BlockingMail,
+        CalendarProvider,
+        Workspace,
+    )
     from robothor.workspace.types import EventQuery
 
 logger = logging.getLogger(__name__)
@@ -151,6 +159,9 @@ _EMAIL_RE = re.compile(r"[\w.+-]+@[\w.-]+\.\w+")
 
 HANDLERS: dict[str, Any] = {}
 
+#: Every calendar tool: what a provider without a calendar refuses up front.
+CALENDAR_TOOLS: frozenset[str] = CALENDAR_READ_TOOLS | CALENDAR_WRITE_TOOLS
+
 
 # ── The transport seam ─────────────────────────────────────────────────
 # Every mail and calendar call below goes through the workspace provider the
@@ -162,18 +173,36 @@ HANDLERS: dict[str, Any] = {}
 # synchronous face (`robothor.workspace.bridge.blocking`).
 
 
-def _mail() -> BlockingMail:
+#: The platform tenant of the tool call being served. Set by the async handler
+#: and copied into the worker thread by ``asyncio.to_thread``, so a provider
+#: with per-tenant credentials (Microsoft 365) reads the right vault.
+_tool_tenant: ContextVar[str | None] = ContextVar("gws_tool_tenant", default=None)
+
+
+@contextmanager
+def _bind_tenant(tenant_id: str | None) -> Iterator[None]:
+    token = _tool_tenant.set(tenant_id)
+    try:
+        yield
+    finally:
+        _tool_tenant.reset(token)
+
+
+def _workspace() -> Workspace:
     from robothor.workspace import get_workspace
+
+    return get_workspace(_tool_tenant.get())
+
+
+def _mail() -> BlockingMail:
     from robothor.workspace.bridge import blocking
 
-    mail: BlockingMail = blocking(get_workspace().mail)
+    mail: BlockingMail = blocking(_workspace().mail)
     return mail
 
 
 def _calendar_provider() -> CalendarProvider:
-    from robothor.workspace import get_workspace
-
-    return get_workspace().calendar
+    return _workspace().calendar
 
 
 def _calendar() -> BlockingCalendar:
@@ -183,17 +212,32 @@ def _calendar() -> BlockingCalendar:
     return calendar
 
 
-def _workspace_unavailable(tenant_id: str | None) -> dict[str, Any] | None:
-    """The refusal when the configured provider cannot serve mail/calendar yet."""
+def _workspace_unavailable(tool_name: str, tenant_id: str | None) -> dict[str, Any] | None:
+    """The refusal when the configured provider cannot serve this tool's family yet.
+
+    A provider lists a family it cannot serve in ``Workspace.unavailable``;
+    that family's tools are refused here, before any guard or transport runs.
+    Google and Microsoft 365 both serve mail and calendar, so today this only
+    reports a provider that cannot be built (unknown, or not configured).
+    """
     from robothor.workspace import get_workspace
     from robothor.workspace.bridge import error_result
-    from robothor.workspace.errors import WorkspaceError
+    from robothor.workspace.errors import Unsupported, WorkspaceError
 
     try:
-        get_workspace(tenant_id)
+        ws = get_workspace(tenant_id)
     except WorkspaceError as exc:
         return error_result(exc)
+    family = "calendar" if tool_name in CALENDAR_TOOLS else "mail"
+    reason = ws.unavailable.get(family)
+    if reason:
+        return error_result(Unsupported(reason, code="provider_not_available"))
     return None
+
+
+def _workspace_provider_name() -> str:
+    """Which provider serves the calendar: the CRM keys its event rows by it."""
+    return _workspace().provider
 
 
 # ── Contact 360 write-through helpers ────────────────────────────────────────
@@ -1933,7 +1977,14 @@ def _calendar_create(
         # No attendees: no `sendUpdates` on the wire at all.
         send_updates=send_updates if attendees else None,
     )
-    _record_calendar_event(result=cal_result if isinstance(cal_result, dict) else {})
+    created = cal_result if isinstance(cal_result, dict) else {}
+    provider = _workspace_provider_name()
+    if provider == "google":
+        _record_calendar_event(result=created)
+    else:
+        # Keyed (tenant, provider, external id): a Graph immutable id is not
+        # a Google event id and must not be filed as one.
+        _record_calendar_event(result=created, provider=provider)
     if isinstance(cal_result, dict) and "error" not in cal_result:
         cal_result["calendar"] = _calendar_block(calendar_id, calendar_kind)
         # With no attendees Google mails nobody whatever the flag says, so
@@ -2521,12 +2572,12 @@ for _tool_name in sorted(WORKSPACE_TOOLS):
             if ctx.is_benchmark:
                 return _benchmark_refusal(tn)
             if tn not in CHAT_TOOLS:
-                # A provider that cannot serve mail/calendar yet refuses here,
-                # before any guard or transport runs.
-                unavailable = _workspace_unavailable(ctx.tenant_id)
+                # A provider that cannot serve this tool's family yet refuses
+                # here, before any guard or transport runs.
+                unavailable = _workspace_unavailable(tn, ctx.tenant_id)
                 if unavailable is not None:
                     return unavailable
-            with bind_engine_loop(asyncio.get_running_loop()):
+            with bind_engine_loop(asyncio.get_running_loop()), _bind_tenant(ctx.tenant_id):
                 return await _run_in_thread(tn, args, ctx)
 
         return handler

@@ -1,4 +1,4 @@
-"""get_workspace(): Google by default, Microsoft 365 dark until its transport ships."""
+"""get_workspace(): Google by default; Microsoft 365 mail and calendar when selected."""
 
 from __future__ import annotations
 
@@ -45,10 +45,93 @@ def test_explicit_google(provider_env) -> None:
     assert get_workspace().provider == "google"
 
 
-def test_microsoft365_is_dark(provider_env) -> None:
+def test_microsoft365_without_an_assistant_mailbox_is_refused(provider_env, monkeypatch) -> None:
+    monkeypatch.delenv("ROBOTHOR_M365_ASSISTANT_MAILBOX", raising=False)
     provider_env("microsoft365")
-    with pytest.raises(Unsupported, match="microsoft365"):
+    with pytest.raises(Unsupported, match="m365_assistant_mailbox") as caught:
         get_workspace()
+    assert caught.value.code == "not_configured"
+
+
+def test_microsoft365_misconfigured_mailbox_is_not_configured(provider_env, monkeypatch) -> None:
+    from robothor.workspace import reset_workspace_cache
+
+    monkeypatch.setenv("ROBOTHOR_M365_ASSISTANT_MAILBOX", "not-an-address")
+    reset_workspace_cache()
+    provider_env("microsoft365")
+    with pytest.raises(Unsupported, match="misconfigured") as caught:
+        get_workspace("tenant-a")
+    assert caught.value.code == "not_configured"
+    reset_workspace_cache()
+
+
+def test_microsoft365_serves_mail_and_calendar(provider_env, monkeypatch) -> None:
+    from robothor.workspace import reset_workspace_cache
+    from robothor.workspace.microsoft.calendar import GraphCalendar
+    from robothor.workspace.microsoft.mail import GraphMail
+
+    monkeypatch.setenv("ROBOTHOR_M365_ASSISTANT_MAILBOX", "Assistant@example.com")
+    monkeypatch.setenv("ROBOTHOR_M365_OWNER_MAILBOX", "owner@example.com")
+    reset_workspace_cache()
+    provider_env("microsoft365")
+    ws = get_workspace("tenant-a")
+    assert ws.provider == "microsoft365"
+    assert ws.capabilities["send_updates_modes"] == ("all",)
+    assert ws.capabilities["labels"] == "categories"
+    assert ws.capabilities["online_meeting"] == "teams_meeting"
+    # Both families are real Graph providers: nothing is dark any more.
+    assert ws.unavailable == {}
+    assert isinstance(ws.mail, GraphMail)
+    assert ws.mail.mailbox == "assistant@example.com"
+    assert isinstance(ws.calendar, GraphCalendar)
+    assert ws.calendar.resolve("own").mailbox == "assistant@example.com"
+    # Cached per platform tenant; a different tenant gets its own credentials.
+    assert get_workspace("tenant-a") is ws
+    assert get_workspace("tenant-b") is not ws
+    assert get_workspace("tenant-b").mail is not ws.mail
+    reset_workspace_cache()
+
+
+def test_microsoft365_owner_mailbox_change_rebuilds(provider_env, monkeypatch) -> None:
+    from robothor.workspace import reset_workspace_cache
+
+    monkeypatch.setenv("ROBOTHOR_M365_ASSISTANT_MAILBOX", "assistant@example.com")
+    monkeypatch.setenv("ROBOTHOR_M365_OWNER_MAILBOX", "owner@example.com")
+    reset_workspace_cache()
+    provider_env("microsoft365")
+    first = get_workspace("tenant-a")
+    monkeypatch.setenv("ROBOTHOR_M365_OWNER_MAILBOX", "other-owner@example.com")
+    provider_env("microsoft365")
+    second = get_workspace("tenant-a")
+    assert second is not first
+    assert second.calendar.owner_mailbox == "other-owner@example.com"
+    reset_workspace_cache()
+
+
+def test_microsoft365_mail_and_calendar_share_one_graph_client(provider_env, monkeypatch) -> None:
+    from robothor.workspace import microsoft, reset_workspace_cache
+
+    built: list[object] = []
+
+    async def fake_from_vault(tenant_id: str) -> object:
+        client = object()
+        built.append(client)
+        return client
+
+    monkeypatch.setattr(microsoft, "graph_client_from_vault", fake_from_vault)
+    monkeypatch.setenv("ROBOTHOR_M365_ASSISTANT_MAILBOX", "assistant@example.com")
+    reset_workspace_cache()
+    provider_env("microsoft365")
+    ws = get_workspace("tenant-a")
+
+    async def both() -> tuple[object, object]:
+        return await ws.mail._factory(), await ws.calendar._factory()
+
+    mail_client, calendar_client = asyncio.run(both())
+    assert mail_client is calendar_client
+    assert len(built) == 1
+    reset_workspace_cache()
+    reset_workspace_cache()
 
 
 # ── the worker-thread bridge ──────────────────────────────────────────

@@ -351,3 +351,22 @@ async def test_mailbox_key_is_case_and_encoding_insensitive(client, tenant) -> N
     spellings = [MESSAGES, MESSAGES.replace("assistant", "ASSISTANT"), MESSAGES.replace("@", "%40")]
     await asyncio.gather(*(client.get(spellings[i % 3]) for i in range(12)))
     assert tenant.max_inflight[MAILBOX] == 4
+
+
+async def test_post_can_upload_raw_content(client, tenant) -> None:
+    seen: list[httpx.Request] = []
+
+    @tenant.route("POST", f"/users/{MAILBOX}/messages")
+    async def capture(tenant_, request, match):
+        seen.append(request)
+        return httpx.Response(201, json={"id": "d1"})
+
+    out = await client.post(MESSAGES, content=b"TUlNRQ==", headers={"Content-Type": "text/plain"})
+    assert out == {"id": "d1"}
+    assert seen[0].content == b"TUlNRQ=="
+    assert seen[0].headers["content-type"] == "text/plain"
+
+
+async def test_post_refuses_json_and_content_together(client) -> None:
+    with pytest.raises(ValueError):
+        await client.post(MESSAGES, {"a": 1}, content=b"x")
