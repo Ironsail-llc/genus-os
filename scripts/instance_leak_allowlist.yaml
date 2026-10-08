@@ -64,3 +64,9 @@ python@3.11
 # address, identical on every instance -- the CRM blocklist names it so
 # ingestion never turns it into a person. Platform-level, not instance data.
 gemini-notes@google.com
+
+# Microsoft's documented placeholder company domains (Contoso, Fabrikam: the Microsoft equivalent
+# of example.com). Used by the Microsoft 365 capture-scrubber tests, which
+# need a realistic non-.example address to prove it gets scrubbed.
+@contoso.com
+@fabrikam.co.uk

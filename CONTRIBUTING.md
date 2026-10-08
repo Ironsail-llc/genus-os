@@ -103,6 +103,7 @@ If the leak checker flags your code, move the personal data to your instance's `
 | `@pytest.mark.slow` | >10s wall time | >10s |
 | `@pytest.mark.e2e` | Full system end-to-end | >30s |
 | `@pytest.mark.smoke` | Health check only | <3s |
+| `@pytest.mark.live_m365` | Live Microsoft 365 dev-tenant smoke suite. Deselected by `pytest.ini`, and skipped unless `GENUS_LIVE_M365=1` with credentials and an allowlisted tenant. See [Microsoft 365: Live verification](https://github.com/Ironsail-llc/genus-os/blob/main/docs/workspace/microsoft365.md#live-verification) | minutes |
 
 ### Test Guidelines
 
