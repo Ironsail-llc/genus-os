@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from robothor.doctor.model import Check, Result, fail, ok, skip
+from robothor.doctor.model import Check, Result, fail, info, ok, skip
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from robothor.doctor.context import DoctorContext
@@ -329,7 +329,17 @@ async def _email(ctx: DoctorContext) -> Result:
     user = (channels.email_smtp_user or "").strip()
     found = email_credentials()
     password = found.smtp_password or ""
-    gws = bool(await ctx.run_blocking(gws_available))
+    # On Microsoft 365 the gws CLI is not this instance's mail path, so its
+    # presence (or absence) says nothing; Microsoft Graph is proved by
+    # workspace.m365_connection. SMTP, if configured, is still policed below.
+    microsoft365 = ctx.settings.workspace.workspace_provider == "microsoft365"
+    gws = False if microsoft365 else bool(await ctx.run_blocking(gws_available))
+
+    if microsoft365 and not (host or sender or user or password):
+        return info(
+            "workspace_provider is microsoft365: mail goes through Microsoft Graph, "
+            "which workspace.m365_connection checks; the gws CLI is not used"
+        )
 
     if not (host or sender or user or password):
         if gws:

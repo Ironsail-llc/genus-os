@@ -891,6 +891,13 @@ async def _operator_calendar_writable(ctx: DoctorContext) -> Result:
     The fix is one action in the operator's Google Calendar: share it with the
     assistant's account with "Make changes to events".
     """
+    if ctx.settings.workspace.workspace_provider == "microsoft365":
+        # No Google account behind the calendar tools on this instance. The
+        # operator's Exchange calendar is read by workspace.m365_connection.
+        return info(
+            "workspace_provider is microsoft365: the operator's calendar is checked by "
+            "workspace.m365_connection, not the gws CLI"
+        )
     directory = _manifest_dir(ctx)
     if not directory.is_dir():
         return skip(f"no manifest directory at {directory}")

@@ -101,7 +101,10 @@ nobody runs.
 
 `genus doctor` runs the configuration half (`email.transport`) and stops short
 of sending: a diagnostic that mails somebody every time a health panel refreshes
-is not a diagnostic. Its SMTP session is skipped under `--offline`.
+is not a diagnostic. Its SMTP session is skipped under `--offline`. On an
+instance with `ROBOTHOR_WORKSPACE_PROVIDER=microsoft365` it does not probe the
+`gws` CLI; Microsoft Graph is checked by `workspace.m365_connection` instead
+(see [Microsoft 365](../workspace/microsoft365.md)).
 
 ## Targets
 
