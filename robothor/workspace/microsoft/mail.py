@@ -230,7 +230,8 @@ def _parse_date(value: str) -> datetime | None:
     if not match:
         return None
     try:
-        return datetime(*(int(g) for g in match.groups()), tzinfo=UTC)
+        year, month, day = (int(g) for g in match.groups())
+        return datetime(year, month, day, tzinfo=UTC)
     except ValueError:
         return None
 
@@ -652,7 +653,9 @@ class GraphMail:
             raise NotFound("empty message id")
         return f"{self._base}/messages/{quote(message_id, safe='')}"
 
-    async def _conversation(self, conversation_id: str, fields: Iterable[str], **extra: Any):
+    async def _conversation(
+        self, conversation_id: str, fields: Iterable[str], **extra: Any
+    ) -> list[dict[str, Any]]:
         graph = await self._graph()
         params = {
             "$filter": f"conversationId eq {_odata(conversation_id)}",
@@ -768,7 +771,9 @@ class GraphMail:
             result["internetMessageId"] = str(draft["internetMessageId"])
         return result
 
-    async def _send_in_conversation(self, outgoing: _Outgoing, conversation_id: str):
+    async def _send_in_conversation(
+        self, outgoing: _Outgoing, conversation_id: str
+    ) -> dict[str, Any]:
         if not (outgoing.to or outgoing.cc or outgoing.bcc):
             raise WorkspaceError("the message to send has no recipients")
         items = await self._conversation(conversation_id, ("id", "isDraft", "receivedDateTime"))
