@@ -1,3 +1,9 @@
+## [1.108.1](https://github.com/Ironsail-llc/genus-os/compare/v1.108.0...v1.108.1) (2026-10-09)
+
+### Bug Fixes
+
+* **telegram:** render replies for a phone, never raw markdown ([#672](https://github.com/Ironsail-llc/genus-os/issues/672)) ([7b7b832](https://github.com/Ironsail-llc/genus-os/commit/7b7b832fa6e8d5a3604f60f4b48b3c1dfa4a890b))
+
 ## [1.108.0](https://github.com/Ironsail-llc/genus-os/compare/v1.107.0...v1.108.0) (2026-10-08)
 
 ### Features
