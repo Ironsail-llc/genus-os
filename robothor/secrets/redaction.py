@@ -162,7 +162,7 @@ _KEY_IS_A_NOUN = (
 #: filename. Without this the rotation suffix below would swallow them.
 _ABOUT_NOT_THE_THING = (
     r"(?:POOL|SIZE|COUNT|LEN|LENGTH|PREFIX|SUFFIX|PATH|FILE|DIR|NAME|ID|TYPE|ALG|ALGO"
-    r"|FORMAT|ENABLED|DISABLED|MODE|TTL|COLUMN|FIELD|ORDER|SOURCE|BACKEND|PROVIDER)"
+    r"|FORMAT|ENABLED|DISABLED|MODE|TTL|COLUMN|FIELD|ORDER|SOURCE|BACKEND|PROVIDER|BUDGET)"
 )
 
 #: At most eight segments, at most forty characters each. NOT a taste: an

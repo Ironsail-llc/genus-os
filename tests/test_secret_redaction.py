@@ -559,3 +559,13 @@ class TestRedactCarriesNoProductProse:
         out = redact('/secure profile\n{"legal_name":"private-person-canary"}')
         assert "private-person-canary" not in out
         assert "[" not in out and "]" not in out, out
+
+
+@pytest.mark.parametrize(
+    "innocent",
+    ["ROBOTHOR_PR_REVIEW_BUDGET_USD=25", "TOKEN_BUDGET=200000", "ROBOTHOR_KEY_BUDGET=3"],
+)
+def test_a_budget_setting_is_not_a_credential(innocent: str) -> None:
+    from robothor.secrets.redaction import redact
+
+    assert redact(innocent) == innocent
