@@ -1,8 +1,8 @@
 # PR reviewer
 
-The pr-reviewer suite reviews pull requests with Claude Code and posts the
-result live on GitHub: blocking findings as inline comments, everything else in
-the review body, a verdict the platform recomputes from the findings, and a
+The pr-reviewer suite reviews pull requests with Claude Code for the blockers
+and high issues they introduce, and posts the result live on GitHub: those
+findings as inline comments, a verdict the platform recomputes from them, and a
 short announcement in the Google Chat thread where the link was posted. It is
 off until an instance configures it.
 
@@ -82,9 +82,11 @@ it — and recomputes the verdict (`robothor/pr_review/policy.py`):
   `ROBOTHOR_PR_REVIEW_BLOCKING_EVENT=COMMENT`) — never `APPROVE`. Previous
   findings are tracked by the inline comment id GitHub gave each one, mapped
   by posting order, so two findings on one line never share an id;
-- `APPROVE` whenever nothing blocking remains, whatever the model proposed:
-  `minor` findings and nits are posted as suggestions and never hold back the
-  approval;
+- `APPROVE` whenever nothing blocking remains, whatever the model proposed;
+- only `blocker` and `major` findings are posted. A `minor` or `nit` the model
+  returns anyway is dropped (logged, never posted or carried into the next
+  re-review), so a pull request never gets a new round of polish requests on
+  every push;
 - with `ROBOTHOR_PR_REVIEW_REQUIRE_TICKET=true`, a pull request with no ticket
   key in its title, branch, description or commit messages gets a blocking
   `[no-ticket]` finding.
@@ -121,15 +123,24 @@ once, instead of "No changes?"). When no ticket key
 is found and Jira is configured, a title search in the repository's project
 offers up to five candidate tickets, marked as not linked.
 
+**A re-review has a finish line.** Its goal is to get the pull request to
+`APPROVE`. The prompt names the round ("round 4 of reviewing this pull
+request") and holds the model to five rules:
+- a deferral to a named follow-up ticket, or "out of scope", is `accepted`,
+  unless the pull request itself introduces money moving twice, data loss,
+  cross-tenant exposure or a security hole;
+- `partially_resolved` names only what is left of the original defect, and is
+  never widened to new files or surfaces;
+- new findings come only from the commits since the last review;
+- a finding the model got wrong is cleared, never swapped for another blocker;
+- after an approval, only a new blocker in the new commits counts.
+
+Behaviour already on the base branch is never a finding.
+
 **Large pull requests go deep.** From `ROBOTHOR_PR_REVIEW_DEEP_LINES` (1,500)
 changed lines, the job runs at `ROBOTHOR_PR_REVIEW_DEEP_EFFORT` (`xhigh`,
-never lower than the configured effort), the prompt requires the four lens
-groups as explicit sequential passes, and when the first round used under 60%
-of its turns the same session gets one completeness pass (re-walk the thinnest
-lenses, the tests against every changed behaviour, the description and every
-earlier comment) and returns the whole result again. Finalize posts the job's
-final output, once, as before; a completeness round that returns nothing
-leaves the first round's result in place.
+never lower than the configured effort) and is told to read the whole diff
+before writing the result.
 
 **Which model wrote it.** Reviews run on `ROBOTHOR_PR_REVIEW_MODEL` (`opus`,
 the CLI alias that tracks the newest Opus) at `ROBOTHOR_PR_REVIEW_EFFORT`
@@ -149,8 +160,8 @@ pull request's head with Read, Grep, Glob and read-only `git`, and no network
 (the host's `claude` login or a `claude setup-token` token) nothing is billed
 per review, and the figure only paces usage against the plan's limits. The review guidelines are the instance's
 own file when `ROBOTHOR_PR_REVIEW_GUIDELINES_PATH` names a readable one, else
-the `pr-review` skill (twelve lenses, severities, verify-or-drop, a
-completeness pass, re-review rules); either way the prompt adds the operating
+the `pr-review` skill (a short brief: what counts as a blocker or high issue,
+what is not a finding, verify-or-drop, the re-review finish line); either way the prompt adds the operating
 notes (real tools, output fields, the verdict rule) and the repository's own
 `.github/review-guidelines.md`, `CLAUDE.md` or `AGENTS.md` read from the
 **base** branch (`origin/<base>`), when present — a pull request cannot

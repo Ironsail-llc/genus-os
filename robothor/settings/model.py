@@ -3324,9 +3324,7 @@ class PrReviewSettings(SettingsGroup):
         1500,
         "ROBOTHOR_PR_REVIEW_DEEP_LINES",
         "Changed lines (additions plus deletions) from which a review goes deep: "
-        "ROBOTHOR_PR_REVIEW_DEEP_EFFORT, four explicit sequential lens passes, and a "
-        "completeness pass in the same session when the first round used under 60% of "
-        "its turns.",
+        "ROBOTHOR_PR_REVIEW_DEEP_EFFORT and a full read of the diff before the result.",
         restart_required=False,
         since="unreleased",
     )

@@ -187,21 +187,6 @@ async def _ticket_key(
 
 # ── prepare ─────────────────────────────────────────────────────────────
 
-#: The second round a deep review gets when its first used under 60% of its
-#: turns: same session, so it re-checks rather than starts over.
-COMPLETENESS_PASS = (
-    "Completeness pass. Before answering again: (1) name the lens groups you spent the "
-    "least time on and walk them again over the whole diff; (2) for every behaviour this "
-    "pull request changes, check the tests: is there one, does CI run it, would it fail if "
-    "the change were reverted, and does a test on the base branch break or stop checking "
-    "anything once this merges; (3) re-read every claim, runbook step and command in the "
-    "PR description and every point in <pr_discussion> against the code; (4) re-check the "
-    "GitHub state section; (5) re-check each finding's severity against the severity "
-    "rules: anything that can move money twice, lose or corrupt data, expose another "
-    "tenant's data or break the base branch on merge is at least major, whatever its "
-    "reach. Add what you missed, drop what you can now disprove, and return the FULL "
-    "structured result again: every finding, not only new ones."
-)
 _EFFORT_RANK = ("low", "medium", "high", "xhigh", "max")
 _CANDIDATES_MAX = 5
 
@@ -469,11 +454,9 @@ async def prepare(
         deep=deep,
         ticket_candidates=candidates,
         stacked_on=stacked_on,
+        round_number=len(row.review_ids) + 1,
     )
     acceptance: dict[str, Any] = {"require_commit": False}
-    if deep:
-        acceptance["second_pass"] = COMPLETENESS_PASS
-        acceptance["second_pass_below_turns"] = max(1, int(cfg.review_max_turns * 0.6))
     start_args: dict[str, Any] = {
         "task": build_review_prompt(guidelines, ctx),
         "repo_path": str(path),
@@ -923,6 +906,15 @@ async def _post(
         require_ticket=cfg.require_ticket,
         ticket_key=context.get("ticket"),
     )
+    # Only blocker and major findings are posted, whatever the model wrote:
+    # minors and nits drew a fresh round of churn on every push.
+    issues = [i for i in decision.issues if is_blocking(i)]
+    if len(issues) < len(decision.issues):
+        logger.info(
+            "pr_review %s: dropped %d non-blocking findings",
+            row.key,
+            len(decision.issues) - len(issues),
+        )
     pending = row.last_review.get("pending") or {}
     done: dict[str, Any] = dict(pending.get("done") or {})
 
@@ -948,7 +940,7 @@ async def _post(
                 "number": row.number,
                 "verdict": decision.verdict,
                 "summary": str(output.get("summary") or ""),
-                "issues": decision.issues,
+                "issues": issues,
                 "commit_id": head,
                 "prior_issues": prior_for_body,
                 "footer_meta": dict(context.get("footer_meta") or {}),
@@ -956,10 +948,8 @@ async def _post(
         )
         if posted.get("error"):
             return await _fail(cfg, store, chat, row, f"posting failed: {posted['error']}")
-        ids = map_comment_ids(decision.issues, posted)
-        recorded = [
-            {**issue, "comment_id": cid} for issue, cid in zip(decision.issues, ids, strict=True)
-        ]
+        ids = map_comment_ids(issues, posted)
+        recorded = [{**issue, "comment_id": cid} for issue, cid in zip(issues, ids, strict=True)]
         row.last_review = _record(
             "review",
             {
