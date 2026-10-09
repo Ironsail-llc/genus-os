@@ -169,6 +169,8 @@ class ReviewContext:
     ticket_candidates: tuple[dict[str, Any], ...] = ()
     #: The default branch, when the PR is stacked on another branch ("" otherwise).
     stacked_on: str = ""
+    #: Which review of this pull request this is (1 = the first).
+    round_number: int = 1
 
 
 def _operating_notes(c: ReviewContext) -> list[str]:
@@ -191,10 +193,11 @@ def _operating_notes(c: ReviewContext) -> list[str]:
         "or unchanged lines (new-file numbering), LEFT side for removed lines (old-file "
         "numbering). If a finding is not tied to a changed line, set line to null; it will "
         "go in the review body.",
-        "- Put every finding in issues, including minor ones and nits, each with its "
-        "severity (blocker, major, minor, nit). The service posts blocker and major "
-        "findings as inline comments and lists everything else in a non-blocking section "
-        "of the review body, so do not repeat findings in the summary.",
+        "- Report only blocker and major findings that this pull request introduces. "
+        "Behaviour already on the base branch is not a finding (at most one summary line "
+        "suggesting a follow-up), and neither is style, naming or polish. The service "
+        "posts only blocker and major findings and drops anything else, so do not repeat "
+        "findings in the summary.",
         "- The service decides the posted verdict from your findings: any blocker or major "
         "finding, or a previous one you do not report resolved, is never approved. Assign "
         "severities honestly; propose APPROVE only when nothing blocking remains.",
@@ -384,12 +387,8 @@ def _depth_lines(c: ReviewContext) -> list[str]:
         ]
     if c.deep:
         return [
-            f"Depth: deep — {c.changed_lines} changed lines. Do the lens-group passes as "
-            "separate, sequential passes, each a fresh read of the whole diff with only its "
-            "lenses, keeping a running findings list: pass 1 lenses `1 3 12`, pass 2 `2 5 6`, "
-            "pass 3 `4 8 9`, pass 4 `7 10 11`. Do not write the result until all four are done "
-            "and every finding is verified. Then do the completeness pass. End the summary "
-            "with one line naming the passes you made."
+            f"Depth: deep — {c.changed_lines} changed lines. Read the whole diff before "
+            "writing the result, and verify every finding."
         ]
     return []
 
@@ -444,20 +443,39 @@ def build_review_prompt(guidelines: Guidelines | str, c: ReviewContext) -> str:
     summary = (c.previous_summary or "(none)")[:_PREVIOUS_SUMMARY_MAX]
     parts += [
         "",
-        f"This is a RE-REVIEW. The previous review covered {since}. Focus on:",
+        f"This is a RE-REVIEW, round {c.round_number} of reviewing this pull request. The "
+        f"previous review covered {since}. Focus on:",
         f"1. The changes since {since}.",
         "2. Whether each issue from the previous review is resolved: re-read the code at "
         "its location and report EVERY previous issue in prior_issues with its comment_id "
-        "exactly as given (null when it has none) and a status of resolved, "
+        "exactly as given (null when it has none) and a status of resolved, accepted, "
         "partially_resolved or unresolved. A previous blocker or major you leave out, or "
-        "do not report resolved, still blocks the merge.",
+        "do not report resolved or accepted, still blocks the merge.",
         '3. The replies on each previous finding\'s thread (its "replies"). When the author '
         'answered it ("out of scope", "not needed", "intended") and the reason holds '
         "for this PR, report it as accepted with a note acknowledging their reason; the note "
         "is posted on that thread. When the reason does not hold, keep it unresolved and say "
         "why in the note. Never ignore a reply.",
-        "Only raise new issues on code outside the incremental diff if the new changes make "
-        "them relevant. Do not re-raise a previous issue as a new one.",
+        "",
+        "Finish line — the goal of a re-review is to get this pull request to APPROVE:",
+        '- A deferral to a named follow-up ticket, or "out of scope", is accepted, unless '
+        "this pull request itself introduces money moving twice, data loss, cross-tenant "
+        "exposure or a security hole.",
+        "- partially_resolved names only what is left of the original defect, at the places "
+        "the original finding named. Never widen a previous finding to new files or new "
+        "surfaces, and never re-raise it as a new issue.",
+        "- Raise new issues only in the changes since the last review, and only blocker or "
+        "major ones. Code an earlier round reviewed and did not flag is settled.",
+        "- If an earlier finding of yours was wrong, mark it resolved and say so. Do not "
+        "replace it with a different blocker.",
+        *(
+            [
+                "- This pull request was already approved. Report a new issue only if it is "
+                "severity blocker and in the changes since the approval; otherwise approve."
+            ]
+            if c.previous_verdict.strip().upper() == "APPROVE"
+            else []
+        ),
         "",
         f"Previous verdict: {c.previous_verdict or 'unknown'}",
         "Previous review summary:",

@@ -3,7 +3,7 @@
 The description, labels, linked issues, what other reviewers already said,
 whether it merges and what CI says about its head — all fetched by prepare,
 redacted and size-capped, and framed as data. Large pull requests get a
-deeper effort, explicit lens passes and a completeness pass.
+deeper effort. Re-reviews carry the finish-line rules.
 """
 
 from __future__ import annotations
@@ -218,10 +218,43 @@ def test_prompt_states_unknown_github_state_plainly():
     assert "Merge state: unknown" in task
 
 
-def test_deep_prompt_requires_sequential_lens_passes():
+def test_deep_prompt_asks_for_a_full_read_not_lens_passes():
     task = build_review_prompt("g", _ctx(depth="full", deep=True, changed_lines=2400))
     assert "Depth: deep" in task and "2400 changed lines" in task
-    assert "1 3 12" in task and "7 10 11" in task
+    assert "lens" not in task.lower()
+
+
+def test_prompt_asks_only_for_blocking_findings_this_pr_introduces():
+    task = build_review_prompt("g", _ctx())
+    assert "including minor ones and nits" not in task
+    assert "only blocker and major findings" in task
+    assert "already on the base branch" in task
+
+
+def test_a_rereview_has_a_finish_line():
+    task = build_review_prompt(
+        "g",
+        _ctx(
+            mode="incremental",
+            since_sha="0" * 40,
+            round_number=4,
+            previous_issues=[{"comment_id": 77, "severity": "major", "title": "x"}],
+        ),
+    )
+    assert "round 4 of reviewing this pull request" in task
+    assert "Finish line" in task
+    assert "follow-up ticket" in task  # a deferral is accepted
+    assert "never widen" in task.lower()  # partial resolution stays on the original defect
+    assert "get this pull request to APPROVE" in task
+
+
+def test_a_rereview_after_an_approval_reports_only_blockers():
+    task = build_review_prompt(
+        "g",
+        _ctx(mode="incremental", since_sha="0" * 40, previous_verdict="APPROVE", round_number=2),
+    )
+    assert "already approved" in task
+    assert "severity blocker" in task
 
 
 def test_ticket_candidates_are_offered_when_no_key_is_found():
@@ -380,10 +413,8 @@ async def test_prepare_goes_deep_on_a_large_pull_request(tmp_path):
     assert result["deep"] is True
     assert args["effort"] == "xhigh"
     assert "Depth: deep" in args["task"]
-    acceptance = args["acceptance"]
-    assert "completeness pass" in acceptance["second_pass"].lower()
-    assert acceptance["second_pass_below_turns"] == 48  # 60% of 80
-    assert args["max_rounds"] >= 2
+    # No second "completeness" round: it re-hunted and fed the endless threads.
+    assert not args["acceptance"].get("second_pass")
 
 
 async def test_deep_never_lowers_a_higher_configured_effort(tmp_path):

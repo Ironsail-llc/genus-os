@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
 
 from robothor.engine.skills import _parse_skill_file
@@ -18,7 +17,7 @@ def test_frontmatter_parses():
     assert defn.name == "pr-review"
     assert defn.description
     assert defn.output_format == "json"
-    assert "The twelve lenses" in defn.content
+    assert "blockers and high issues" in defn.content
 
 
 def test_skill_schema_is_the_code_schema():
@@ -29,21 +28,21 @@ def test_meta_marks_it_platform():
     assert json.loads((SKILL_DIR / "meta.json").read_text()) == {"origin": "platform"}
 
 
-def test_every_lens_and_rule_is_present():
+def test_the_brief_is_short_and_has_a_finish_line():
     text = (SKILL_DIR / "SKILL.md").read_text()
-    for n in range(1, 13):
-        assert re.search(rf"^{n}\. \*\*", text, re.MULTILINE), f"lens {n} missing"
+    assert len(text.splitlines()) < 150  # a brief, not a manual
     for phrase in (
+        "Not a finding",
         "Verify every finding",
-        "Completeness pass",
-        "Re-reviewing",
-        "300 changed lines",
         "Severity floor",
-        "words-match-code sweep",
         "Read the GitHub state first",
+        "Re-reviewing: the finish line",
+        "follow-up ticket",
     ):
         assert phrase in text
-    for severity in ("blocker", "major", "minor", "nit"):
+    for gone in ("twelve lenses", "Completeness pass", "words-match-code sweep"):
+        assert gone not in text
+    for severity in ("blocker", "major"):
         assert f"**{severity}**" in text
 
 

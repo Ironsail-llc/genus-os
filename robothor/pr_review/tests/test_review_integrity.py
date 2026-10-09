@@ -49,7 +49,7 @@ async def test_same_line_nit_cannot_mask_a_blocker(env):
     row = await env["store"].get(TENANT, REPO, 7)
     recorded = {i["title"]: (i["severity"], i["comment_id"]) for i in row.last_review["issues"]}
     assert recorded["bug"] == ("blocker", 9000)
-    assert recorded["style"] == ("nit", None)
+    assert "style" not in recorded  # nits are never posted or recorded
 
     env["github"].prs[(REPO, 7)]["head"]["sha"] = SHA2
     row.status = "reviewing"
@@ -71,7 +71,8 @@ async def test_two_blockers_on_one_line_get_their_own_comment_ids(env):
 
 
 async def test_comment_ids_follow_posting_order_not_issue_order(env):
-    # Nits come first in the model's list; only blocking findings are posted inline.
+    # A nit comes first in the model's list; it is dropped, and only blocking
+    # findings with a line are posted inline.
     out = _output(
         "REQUEST_CHANGES",
         [_issue("nit", 1, "n"), _issue("major", 5, "m"), _issue("blocker", None, "body-only")],
@@ -79,7 +80,7 @@ async def test_comment_ids_follow_posting_order_not_issue_order(env):
     await _finalize(env, FakeJob(result={"structured_output": out}))
     row = await env["store"].get(TENANT, REPO, 7)
     ids = {i["title"]: i["comment_id"] for i in row.last_review["issues"]}
-    assert ids == {"n": None, "m": 9000, "body-only": None}
+    assert ids == {"m": 9000, "body-only": None}
 
 
 async def test_approval_with_every_prior_blocker_resolved_resolves_our_threads(env):

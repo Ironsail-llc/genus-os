@@ -139,6 +139,27 @@ async def test_model_approve_with_a_blocker_posts_request_changes(env):
     )
 
 
+async def test_only_blocking_findings_are_posted(env):
+    issues = [_issue("major", title="m"), _issue("minor", line=4), _issue("nit", line=5)]
+    job = FakeJob(result={"structured_output": _output("REQUEST_CHANGES", issues)})
+    await _finalize(env, job)
+    posted = env["poster"].reviews[0]
+    assert [i["severity"] for i in posted["issues"]] == ["major"]
+    row = await env["store"].get(TENANT, REPO, 7)
+    assert [i["severity"] for i in row.last_review["issues"]] == ["major"]
+
+
+async def test_minor_findings_alone_approve_with_nothing_posted(env):
+    job = FakeJob(
+        result={"structured_output": _output("COMMENT", [_issue("minor"), _issue("nit")])}
+    )
+    result = await _finalize(env, job)
+    posted = env["poster"].reviews[0]
+    assert posted["verdict"] == "APPROVE"
+    assert posted["issues"] == []
+    assert result["verdict"] == "APPROVE"
+
+
 async def test_the_review_footer_names_the_model_effort_and_guidelines(env):
     job = FakeJob(result={"structured_output": _output("APPROVE", []), "model": "claude-opus-5-5"})
     job.effort = "high"  # type: ignore[attr-defined]
@@ -324,6 +345,7 @@ async def test_prepare_incremental_lists_previous_findings(env, tmp_path):
         "verdict": "REQUEST_CHANGES",
         "issues": [{**_issue("major"), "comment_id": 77}],
     }
+    row.review_ids = [400, 401]
     await env["store"].save(row)
 
     async def fake_checkout(dest, **kw):
@@ -349,6 +371,7 @@ async def test_prepare_incremental_lists_previous_findings(env, tmp_path):
     task = start.calls[0]["task"]
     assert "RE-REVIEW" in task and '"comment_id": 77' in task
     assert f"git diff {'0' * 40}..HEAD" in task
+    assert "round 3 of reviewing this pull request" in task
 
 
 async def test_prepare_skips_an_already_reviewed_head(env):

@@ -74,7 +74,7 @@ class ReviewerConfig:
     review_effort: str = "high"
     review_max_turns: int = 80
     #: Changed lines (additions + deletions) from which a review goes deep: a
-    #: higher effort, explicit sequential lens passes and a completeness pass.
+    #: higher effort and a full read of the diff before the result.
     deep_lines: int = 1500
     deep_effort: str = "xhigh"
     review_round_timeout_s: float = 1800.0
