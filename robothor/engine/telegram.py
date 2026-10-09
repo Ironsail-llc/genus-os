@@ -15,7 +15,6 @@ import asyncio
 import contextlib
 import html
 import logging
-import re
 import subprocess
 import time
 from datetime import UTC, datetime
@@ -33,6 +32,7 @@ from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    InputRichMessage,
     Message,
 )
 
@@ -44,13 +44,17 @@ from robothor.engine.chat_store import (
     build_user_extras,
     save_exchange_async,
 )
-from robothor.engine.chunking import (
-    TELEGRAM_MAX_MESSAGE_LENGTH,
-    split_telegram_message,
-)
+from robothor.engine.chunking import TELEGRAM_MAX_MESSAGE_LENGTH
 from robothor.engine.delivery import set_telegram_sender
 from robothor.engine.models import TriggerType
 from robothor.engine.task_registry import get_task_registry
+from robothor.engine.telegram_format import (
+    SentMessages,
+    TelegramChunk,
+    needs_rich_message,
+    rich_payload,
+    telegram_chunks,
+)
 from robothor.sanitize import sanitize_preview
 
 if TYPE_CHECKING:
@@ -123,28 +127,6 @@ def _format_checklist_html(todos: list[dict[str, str]]) -> str:
     from robothor.engine.todolist import TodoList
 
     return TodoList.format_for_telegram(todos)
-
-
-def _md_to_html(text: str) -> str:
-    """Best-effort Markdown → Telegram HTML conversion.
-
-    Handles: **bold**, *italic*, `code`, ```code blocks```, [links](url).
-    Escapes raw HTML first so user content is safe.
-    """
-    # Escape any existing HTML entities in the source text
-    text = html.escape(text)
-    # Code blocks (``` ... ```)
-    text = re.sub(r"```(\w*)\n(.*?)```", r"<pre>\2</pre>", text, flags=re.DOTALL)
-    # Inline code
-    text = re.sub(r"`([^`]+)`", r"<code>\1</code>", text)
-    # Bold (**text** or __text__)
-    text = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", text)
-    text = re.sub(r"__(.+?)__", r"<b>\1</b>", text)
-    # Italic (*text* or _text_) — careful not to match inside URLs or words with underscores
-    text = re.sub(r"(?<!\w)\*([^*]+?)\*(?!\w)", r"<i>\1</i>", text)
-    # Markdown-style links
-    text = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r'<a href="\2">\1</a>', text)
-    return text
 
 
 class TelegramBot(
@@ -1803,66 +1785,81 @@ class TelegramBot(
         logger.error("Telegram flood control: all %d retries exhausted", max_retries)
         raise last_exc  # type: ignore[misc]
 
-    async def send_message(self, chat_id: str, text: str, **_ignored: Any) -> list[Any]:
-        """Send a message to a Telegram chat, splitting if needed.
+    async def send_message(self, chat_id: str, text: str, **_ignored: Any) -> SentMessages:
+        """Send Markdown to a Telegram chat, rendered for a phone.
 
-        Never raises: a chunk that fails as HTML is retried as plain text,
-        and a chunk that fails both is logged and **omitted from the
-        result**. The returned list therefore holds one Message per chunk
-        that actually reached Telegram and is SHORTER than the chunk count
-        when sends failed (empty when they all did) — it is the only
-        evidence of delivery, which is why ``delivery._deliver_telegram``
-        compares its length against ``split_telegram_message`` rather than
-        assuming a send succeeded.
+        A body holding a table goes out as ONE Bot API 10.1 rich message,
+        which draws the table natively. Everything else — and a rich message
+        Telegram refuses — is rendered to Telegram HTML by
+        ``telegram_format.telegram_chunks`` and sent one chunk per message.
+
+        Never raises: a chunk Telegram refuses as HTML is resent as its plain
+        twin (tags stripped, links ``label (url)``) — never raw Markdown — and
+        a chunk that fails both is logged and **omitted from the result**.
+        The returned list holds one Message per message that reached Telegram;
+        its ``expected`` is how many were meant to, so
+        ``channels.telegram`` can tell a complete send from a partial one.
 
         Args:
             chat_id: Target Telegram chat id.
-            text: Message body; split on ``MAX_MESSAGE_LENGTH``.
+            text: Message body, Markdown.
 
         Returns:
-            The Message objects Telegram acknowledged, in send order, so
-            callers (the channel bus) can record platform message_ids for
-            reply-to resolution.
+            The acknowledged Message objects, in send order, so callers (the
+            channel bus) can record platform message_ids for reply-to
+            resolution.
         """
         if not text:
-            return []
+            return SentMessages()
 
-        sent: list[Any] = []
+        if needs_rich_message(text):
+            try:
+                rich = await self._retry_on_flood(
+                    lambda: self.bot.send_rich_message(
+                        chat_id=int(chat_id),
+                        rich_message=InputRichMessage(**rich_payload(text)),
+                    )
+                )
+                return SentMessages([rich], expected=1)
+            except Exception as e:
+                logger.warning("Telegram rich message refused, sending as HTML: %s", e)
+
         chunks = self._split_message(text)
+        sent = SentMessages(expected=len(chunks))
         for chunk in chunks:
-            html_chunk = _md_to_html(chunk)
             result: Any = None
             try:
                 result = await self._retry_on_flood(
-                    lambda c=html_chunk: self.bot.send_message(
+                    lambda c=chunk: self.bot.send_message(
                         chat_id=int(chat_id),
-                        text=c,
+                        text=c.html,
                         parse_mode=ParseMode.HTML,
                     )
                 )
-            except Exception:
+            except Exception as e:
+                logger.warning("Telegram refused HTML chunk, sending plain: %s", e)
                 try:
                     result = await self._retry_on_flood(
                         lambda c=chunk: self.bot.send_message(
                             chat_id=int(chat_id),
-                            text=c,
+                            text=c.plain,
                             parse_mode=None,
                         )
                     )
-                except Exception as e:
-                    logger.error("Failed to send Telegram message: %s", e)
+                except Exception as e2:
+                    logger.error("Failed to send Telegram message: %s", e2)
             if result is not None:
                 sent.append(result)
         return sent
 
-    def _split_message(self, text: str) -> list[str]:
-        """Split text into chunks that fit Telegram's limit.
+    def _split_message(self, text: str) -> list[TelegramChunk]:
+        """Render and split ``text`` into the messages Telegram will receive.
 
-        Delegates to ``robothor.engine.chunking.split_telegram_message`` so
-        the delivery layer can predict the chunk count with the exact same
-        algorithm (see that module's docstring).
+        Delegates to ``telegram_format.telegram_chunks`` so the delivery
+        layer's ``planned_message_count`` predicts the count with the exact
+        same algorithm.
         """
-        return split_telegram_message(text, MAX_MESSAGE_LENGTH)
+        return telegram_chunks(text)
 
     async def start_polling(self) -> None:
         """Start the bot in long-polling mode."""

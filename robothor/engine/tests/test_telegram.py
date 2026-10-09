@@ -86,47 +86,27 @@ class TestChatHistory:
 
 
 class TestMessageSplitting:
-    def test_short_message_not_split(self, bot):
-        """Messages under limit are not split."""
-        chunks = bot._split_message("Hello world")
-        assert len(chunks) == 1
-        assert chunks[0] == "Hello world"
+    """The bot sends what ``telegram_format.telegram_chunks`` renders."""
 
-    def test_long_message_split(self, bot):
-        """Messages over limit are split into chunks."""
-        long_text = "x" * (MAX_MESSAGE_LENGTH + 100)
-        chunks = bot._split_message(long_text)
-        assert len(chunks) == 2
-        assert len(chunks[0]) <= MAX_MESSAGE_LENGTH
+    def test_short_message_not_split(self, bot):
+        chunks = bot._split_message("Hello world")
+        assert [c.html for c in chunks] == ["Hello world"]
+
+    def test_long_message_split_within_budget(self, bot):
+        from robothor.engine.telegram_format import TELEGRAM_CHUNK_LIMIT
+
+        chunks = bot._split_message("x" * (MAX_MESSAGE_LENGTH * 3 + 500))
+        assert len(chunks) == 4
+        assert all(len(c.html) <= TELEGRAM_CHUNK_LIMIT for c in chunks)
 
     def test_split_at_newline(self, bot):
-        """Prefers splitting at newlines."""
-        # Create text with newlines at strategic positions
-        line = "a" * 100 + "\n"
-        text = line * 50  # 50 lines * 101 chars = 5050 chars
+        text = ("a" * 100 + "\n\n") * 50
         chunks = bot._split_message(text)
         assert len(chunks) >= 2
-        # Each chunk should end with a complete line
-        assert chunks[0].endswith("\n") or len(chunks[0]) <= MAX_MESSAGE_LENGTH
+        assert all(c.html.endswith("a") for c in chunks)
 
     def test_empty_message(self, bot):
-        """Empty message returns single empty chunk."""
-        chunks = bot._split_message("")
-        assert chunks == [""]
-
-    def test_exact_limit(self, bot):
-        """Message at exactly the limit is not split."""
-        text = "x" * MAX_MESSAGE_LENGTH
-        chunks = bot._split_message(text)
-        assert len(chunks) == 1
-
-    def test_very_long_message(self, bot):
-        """Very long messages are split into multiple chunks."""
-        text = "x" * (MAX_MESSAGE_LENGTH * 3 + 500)
-        chunks = bot._split_message(text)
-        assert len(chunks) == 4
-        for chunk in chunks:
-            assert len(chunk) <= MAX_MESSAGE_LENGTH
+        assert bot._split_message("") == []
 
     @pytest.mark.parametrize(
         "text",
@@ -134,21 +114,16 @@ class TestMessageSplitting:
             "Hello world",
             "",
             "x" * MAX_MESSAGE_LENGTH,
-            "x" * (MAX_MESSAGE_LENGTH * 3 + 500),
             ("a" * 100 + "\n") * 50,
             "*Agent*\n\n" + "y" * (MAX_MESSAGE_LENGTH * 2 + 7),
         ],
     )
-    def test_matches_shared_chunker(self, bot, text):
-        """The bot's splitter and the shared chunker must never drift.
+    def test_matches_planned_count(self, bot, text):
+        """The delivery layer predicts the count with ``planned_message_count``;
+        if it and the sender disagree, delivery reports confident nonsense."""
+        from robothor.engine.telegram_format import planned_message_count
 
-        ``delivery.py`` predicts the chunk count with
-        ``split_telegram_message`` to tell a complete send from a partial
-        one; if the two disagree, delivery reports confident nonsense.
-        """
-        from robothor.engine.chunking import split_telegram_message
-
-        assert bot._split_message(text) == split_telegram_message(text)
+        assert len(bot._split_message(text)) == planned_message_count(text)
 
 
 class TestSendMessage:
@@ -172,6 +147,50 @@ class TestSendMessage:
         bot.bot.send_message.side_effect = [Exception("Bad markdown"), None]
         await bot.send_message("12345", "Hello *bad markdown")
         assert bot.bot.send_message.call_count == 2
+
+
+class TestSendRendering:
+    """Live, 2026-10-08: the operator could not read main's replies — pipe
+    tables and raw Markdown reached the phone."""
+
+    @pytest.mark.asyncio
+    async def test_markdown_is_rendered_as_html(self, bot):
+        await bot.send_message("12345", "## Plan\n\n- **one**\n- two")
+        kwargs = bot.bot.send_message.call_args.kwargs
+        assert kwargs["text"] == "<b>Plan</b>\n\n• <b>one</b>\n• two"
+        assert kwargs["parse_mode"] == "HTML"
+
+    @pytest.mark.asyncio
+    async def test_refused_html_falls_back_to_clean_plain_text(self, bot):
+        bot.bot.send_message.side_effect = [Exception("can't parse entities"), MagicMock()]
+        await bot.send_message("12345", "## Plan\n\n- **one** [site](https://example.com)")
+        last = bot.bot.send_message.call_args.kwargs
+        assert last["parse_mode"] is None
+        assert last["text"] == "Plan\n\n• one site (https://example.com)"
+
+    @pytest.mark.asyncio
+    async def test_a_table_goes_out_as_one_rich_message(self, bot):
+        rich = MagicMock(message_id=7)
+        bot.bot.send_rich_message = AsyncMock(return_value=rich)
+        sent = await bot.send_message("12345", "Pick:\n\n| a | b |\n|---|---|\n| 1 | 2 |")
+        assert sent == [rich]
+        assert sent.expected == 1
+        payload = bot.bot.send_rich_message.call_args.kwargs["rich_message"]
+        assert "| a | b |" in payload.markdown
+        bot.bot.send_message.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_a_refused_rich_message_falls_back_to_cards(self, bot):
+        bot.bot.send_rich_message = AsyncMock(side_effect=Exception("RICH_MESSAGE_INVALID"))
+        sent = await bot.send_message("12345", "| a | b |\n|---|---|\n| Row | 2 |")
+        assert bot.bot.send_message.call_args.kwargs["text"] == "<b>Row</b>\nb: 2"
+        assert sent.expected == 1 and len(sent) == 1
+
+    @pytest.mark.asyncio
+    async def test_expected_counts_the_chunks_a_partial_send_planned(self, bot):
+        bot.bot.send_message.side_effect = [MagicMock(), Exception("x"), Exception("x")]
+        sent = await bot.send_message("12345", "y" * 6000)
+        assert sent.expected == 2 and len(sent) == 1
 
 
 class TestConcurrentHistory:

@@ -1285,6 +1285,13 @@ class ChannelSettings(SettingsGroup):
         "@name of the Telegram bot, shown on the dashboard so an operator can "
         "find the right conversation.",
     )
+    telegram_rich_messages: bool = declare(
+        True,
+        "ROBOTHOR_TELEGRAM_RICH_MESSAGES",
+        "Send a Telegram reply that holds a table as a Bot API 10.1 rich "
+        "message, so the table is drawn natively. Off, or refused by Telegram, "
+        "the table goes out as one card per row instead.",
+    )
     slack_bot_token: str = declare(
         "",
         "ROBOTHOR_SLACK_BOT_TOKEN",
