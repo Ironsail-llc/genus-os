@@ -1,3 +1,9 @@
+## [1.108.2](https://github.com/Ironsail-llc/genus-os/compare/v1.108.1...v1.108.2) (2026-10-09)
+
+### Bug Fixes
+
+* **pr-review:** review for blockers and highs, with a finish line on re-review ([#673](https://github.com/Ironsail-llc/genus-os/issues/673)) ([f182f89](https://github.com/Ironsail-llc/genus-os/commit/f182f89429fa5067ef65e0417f55189ebdbe907e)), closes [#2196](https://github.com/Ironsail-llc/genus-os/issues/2196) [#2143](https://github.com/Ironsail-llc/genus-os/issues/2143) [#812](https://github.com/Ironsail-llc/genus-os/issues/812)
+
 ## [1.108.1](https://github.com/Ironsail-llc/genus-os/compare/v1.108.0...v1.108.1) (2026-10-09)
 
 ### Bug Fixes
