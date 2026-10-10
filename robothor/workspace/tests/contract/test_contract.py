@@ -218,7 +218,9 @@ async def test_created_event_is_verified_on_the_calendar_it_landed_on(workspace_
 
     env = workspace_env
     created = await env.call("gws_calendar_create", dict(MEETING))
-    assert created["calendar"]["kind"] == "operator"
+    # A meeting with a guest is organized by the assistant, on its own calendar
+    # — and the read-back must look THERE, not at the operator's.
+    assert created["calendar"]["kind"] == "own"
     ctx = ToolContext(agent_id="main", run_id="run-contract", tenant_id=TENANT)
     checked = await verify_tool_result("gws_calendar_create", dict(MEETING), dict(created), ctx)
     assert "verification_failed" not in checked, checked
@@ -232,7 +234,7 @@ async def test_created_event_is_verified_on_the_calendar_it_landed_on(workspace_
 async def test_calendar_lifecycle_each_step_read_back(workspace_env) -> None:
     env = workspace_env
 
-    created = await env.call("gws_calendar_create", dict(MEETING))
+    created = await env.call("gws_calendar_create", {**MEETING, "calendar": "operator"})
     assert "error" not in created, created
     assert created["calendar"]["kind"] == "operator"
     assert created["attendees_notified"] == [BOB]
@@ -373,4 +375,5 @@ async def test_crm_rows_carry_the_provider_and_its_ids(workspace_env) -> None:
     legacy = created["id"] if env.capabilities["provider"] == "google" else None
     assert google_id == legacy
     participants = env.crm_rows("calendar_event_participant")
-    assert [p[4] for p in participants] == [BOB]
+    # The assistant organizes a meeting with a guest; the operator is invited.
+    assert [p[4] for p in participants] == [BOB, OPERATOR]

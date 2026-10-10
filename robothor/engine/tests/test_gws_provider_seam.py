@@ -184,9 +184,23 @@ def test_calendar_calls_go_through_the_provider(fake_ws: Workspace) -> None:
     )
     assert updated["status"] == "updated"
     operator = CalendarRef("alice@example.com", "operator", mailbox="alice@example.com")
-    assert [c[0] for c in cal.calls] == ["list", "list", "create", "delete", "get", "patch", "get"]
-    assert cal.calls[0][1] == CalendarRef("me-mailbox", "own", mailbox="agent@example.com")
-    assert all(c[1] == operator for c in cal.calls[1:])
+    own = CalendarRef("me-mailbox", "own", mailbox="agent@example.com")
+    # delete and update each probe the assistant's own calendar for an event it
+    # organizes first (`get` on own); this one is not there, so both stay on
+    # the operator's.
+    assert [(c[0], c[1].kind) for c in cal.calls] == [
+        ("list", "own"),
+        ("list", "operator"),
+        ("create", "operator"),
+        ("get", "own"),
+        ("delete", "operator"),
+        ("get", "own"),
+        ("get", "operator"),
+        ("patch", "operator"),
+        ("get", "operator"),
+    ]
+    assert cal.calls[0][1] == own
+    assert all(c[1] in (own, operator) for c in cal.calls)
 
 
 async def test_dark_provider_is_refused_before_any_guard(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -3,7 +3,13 @@
     "event_id": "meeting",
     "summary": "New title"
   },
-  "calendar_requests": [],
+  "calendar_requests": [
+    {
+      "calendar_id": "primary",
+      "event_id": "meeting",
+      "method": "GET"
+    }
+  ],
   "context": {
     "is_benchmark": false,
     "run_id": "run-golden",

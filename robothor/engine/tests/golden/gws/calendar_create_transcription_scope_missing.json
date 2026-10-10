@@ -31,6 +31,9 @@
                 "responseStatus": "needsAction"
               }
             ],
+            "conferenceData": {
+              "conferenceId": "abc-defg-hij"
+            },
             "creator": {
               "email": "agent@example.com"
             },
@@ -38,7 +41,7 @@
             "end": {
               "dateTime": "2026-10-09T15:00:00-04:00"
             },
-            "hangoutLink": "https://meet.example.test/abc-defg-hij",
+            "hangoutLink": "https://meet.google.com/abc-defg-hij",
             "htmlLink": "https://calendar.example.test/evt-new",
             "id": "evt-new",
             "location": "Room 4",
@@ -193,6 +196,19 @@
         "sendUpdates": "all"
       },
       "timeout": 30
+    },
+    {
+      "argv": [
+        "meet",
+        "spaces",
+        "get",
+        "--params",
+        "{\"name\": \"spaces/abc-defg-hij\"}"
+      ],
+      "params": {
+        "name": "spaces/abc-defg-hij"
+      },
+      "timeout": 30
     }
   ],
   "result": {
@@ -214,6 +230,9 @@
       "id": "primary",
       "kind": "own"
     },
+    "conferenceData": {
+      "conferenceId": "abc-defg-hij"
+    },
     "creator": {
       "email": "agent@example.com"
     },
@@ -221,7 +240,7 @@
     "end": {
       "dateTime": "2026-10-09T15:00:00-04:00"
     },
-    "hangoutLink": "https://meet.example.test/abc-defg-hij",
+    "hangoutLink": "https://meet.google.com/abc-defg-hij",
     "htmlLink": "https://calendar.example.test/evt-new",
     "id": "evt-new",
     "invitations_requested": true,
@@ -235,9 +254,10 @@
       "dateTime": "2026-10-09T14:00:00-04:00"
     },
     "status": "confirmed",
-    "summary": "Quarterly review"
+    "summary": "Quarterly review",
+    "transcription": "not_enabled: Request had insufficient authentication scopes."
   },
-  "scenario": "calendar_create_dedup_miss_different_start",
+  "scenario": "calendar_create_transcription_scope_missing",
   "scheduling_policy_lookups": [],
   "tool": "gws_calendar_create"
 }

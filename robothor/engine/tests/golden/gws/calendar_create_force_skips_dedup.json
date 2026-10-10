@@ -26,6 +26,10 @@
               {
                 "email": "bob@example.com",
                 "responseStatus": "needsAction"
+              },
+              {
+                "email": "alice@example.com",
+                "responseStatus": "needsAction"
               }
             ],
             "creator": {
@@ -40,7 +44,7 @@
             "id": "evt-new",
             "location": "Room 4",
             "organizer": {
-              "email": "alice@example.com",
+              "email": "primary",
               "self": true
             },
             "start": {
@@ -64,7 +68,7 @@
           "Room 4",
           "2026-10-09T14:00:00-04:00",
           "2026-10-09T15:00:00-04:00",
-          "alice@example.com",
+          "primary",
           "https://calendar.example.test/evt-new",
           "confirmed"
         ],
@@ -101,6 +105,19 @@
         "sql": "INSERT INTO timeline_activity (tenant_id, person_id, occurred_at, activity_type, source_table, source_id, channel, title, snippet) VALUES (%s, %s, %s, 'calendar_event', 'calendar_event', %s, 'calendar', %s, %s) ON CONFLICT (tenant_id, source_table, source_id) DO NOTHING"
       },
       {
+        "params": [
+          "tenant-default",
+          "crm-event-1",
+          null,
+          "attendee",
+          "alice@example.com",
+          null,
+          "needsAction",
+          false
+        ],
+        "sql": "INSERT INTO calendar_event_participant (tenant_id, event_id, person_id, role, email, display_name, response_status, organizer) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"
+      },
+      {
         "commit": true
       }
     ]
@@ -108,6 +125,7 @@
   "dnc_lookups": [
     {
       "addresses": [
+        "alice@example.com",
         "bob@example.com"
       ],
       "tenant_id": "tenant-a"
@@ -121,14 +139,17 @@
         "events",
         "insert",
         "--params",
-        "{\"calendarId\": \"alice@example.com\", \"conferenceDataVersion\": 1, \"sendUpdates\": \"all\"}",
+        "{\"calendarId\": \"primary\", \"conferenceDataVersion\": 1, \"sendUpdates\": \"all\"}",
         "--json",
-        "{\"summary\": \"Quarterly review\", \"start\": {\"dateTime\": \"2026-10-09T14:00:00-04:00\"}, \"end\": {\"dateTime\": \"2026-10-09T15:00:00-04:00\"}, \"description\": \"Numbers and next steps\", \"location\": \"Room 4\", \"attendees\": [{\"email\": \"bob@example.com\"}], \"conferenceData\": {\"createRequest\": {\"requestId\": \"robothor-Quarterly-review-2026-10-09\", \"conferenceSolutionKey\": {\"type\": \"hangoutsMeet\"}}}}"
+        "{\"summary\": \"Quarterly review\", \"start\": {\"dateTime\": \"2026-10-09T14:00:00-04:00\"}, \"end\": {\"dateTime\": \"2026-10-09T15:00:00-04:00\"}, \"description\": \"Numbers and next steps\", \"location\": \"Room 4\", \"attendees\": [{\"email\": \"bob@example.com\"}, {\"email\": \"alice@example.com\"}], \"conferenceData\": {\"createRequest\": {\"requestId\": \"robothor-Quarterly-review-2026-10-09\", \"conferenceSolutionKey\": {\"type\": \"hangoutsMeet\"}}}}"
       ],
       "json": {
         "attendees": [
           {
             "email": "bob@example.com"
+          },
+          {
+            "email": "alice@example.com"
           }
         ],
         "conferenceData": {
@@ -150,7 +171,7 @@
         "summary": "Quarterly review"
       },
       "params": {
-        "calendarId": "alice@example.com",
+        "calendarId": "primary",
         "conferenceDataVersion": 1,
         "sendUpdates": "all"
       },
@@ -162,14 +183,19 @@
       {
         "email": "bob@example.com",
         "responseStatus": "needsAction"
+      },
+      {
+        "email": "alice@example.com",
+        "responseStatus": "needsAction"
       }
     ],
     "attendees_notified": [
-      "bob@example.com"
+      "bob@example.com",
+      "alice@example.com"
     ],
     "calendar": {
-      "id": "alice@example.com",
-      "kind": "operator"
+      "id": "primary",
+      "kind": "own"
     },
     "creator": {
       "email": "agent@example.com"
@@ -184,7 +210,7 @@
     "invitations_requested": true,
     "location": "Room 4",
     "organizer": {
-      "email": "alice@example.com",
+      "email": "primary",
       "self": true
     },
     "send_updates": "all",

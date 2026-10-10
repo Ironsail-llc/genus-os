@@ -33,7 +33,7 @@ than asking Gmail.
 The calendar read-back uses the calendar the create wrote to: an explicit
 `calendar_id`, else the `calendar` block the create reports. It used to read
 `calendar_id or "primary"`, and `primary` is the assistant's own calendar, so
-an event created on the operator's calendar (the default) was looked for in
+an event created on the operator's calendar (the default for a guest-less event) was looked for in
 the wrong place and recorded unverified. On Microsoft 365 the provider
 resolves the block's kind (`own` → the assistant mailbox, `operator` → the
 owner mailbox). Characterization tests

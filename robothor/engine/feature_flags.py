@@ -810,6 +810,19 @@ def calendar_send_updates() -> str:
     return "all"
 
 
+def calendar_meet_artifacts_enabled() -> bool:
+    """Turn Meet transcription + smart notes on for meetings the assistant organizes.
+
+    ``ROBOTHOR_CALENDAR_MEET_ARTIFACTS``, default ON. When the assistant books
+    a meeting with guests it is the organizer, and the notes and transcript it
+    needs to follow the meeting up only exist if they were generated. Off skips
+    the Meet REST call entirely. The call is best-effort either way: a missing
+    ``meetings.space.settings`` scope is a note in the result, never a failed
+    booking.
+    """
+    return _env_bool("ROBOTHOR_CALENDAR_MEET_ARTIFACTS", default=True)
+
+
 def benchmark_sandbox_mode() -> EnforcementMode:
     """Rollout mode for seeded benchmark fixtures + sandbox CRM writes.
 

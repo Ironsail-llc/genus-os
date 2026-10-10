@@ -798,3 +798,11 @@ class GraphCalendar:
             return {"method": "cancel", "cancellation_sent_to": guests}
         await graph.delete(path)
         return {"method": "delete"}
+
+    async def enable_meeting_artifacts(self, event: dict[str, Any]) -> dict[str, Any] | None:
+        """No-op: Teams transcription follows the tenant's meeting policy.
+
+        The Google provider turns Meet transcription on per meeting; Graph has
+        no equivalent per-event switch the assistant can set at booking time.
+        """
+        return None

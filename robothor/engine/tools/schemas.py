@@ -2378,12 +2378,12 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
         "function": {
             "name": "gws_calendar_create",
             "description": (
-                "Use this only to put a NEW event on the OPERATOR's calendar, which is "
-                "where it goes by default — pass calendar='own' for your own, which the "
-                "operator never sees. Emails the attendees. Returns the event plus "
-                "`calendar` (whose it is), `invitations_requested` and `htmlLink` — report "
-                'those, not just success; or {"status": "deduped"}, having created '
-                "nothing, when one already exists."
+                "Use this only to put a NEW event on a calendar. With guests it goes on YOUR "
+                "calendar (you organize and own the notes/transcript; the operator is "
+                "invited); with none, on the OPERATOR's. calendar='operator' or "
+                "calendar='own' forces one. Emails the attendees. Returns the event, "
+                "`calendar` (whose), `invitations_requested` and `htmlLink` — report "
+                'those; or {"status": "deduped"} if it exists.'
             ),
             "parameters": {
                 "type": "object",
@@ -2400,8 +2400,7 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
                     },
                     "calendar": {
                         "type": "string",
-                        "description": "Whose calendar: 'operator' (the operator's own calendar — the default, and what 'my calendar' means when the operator says it) or 'own' (YOUR calendar, the assistant's account). Anything the operator attends belongs on the operator's calendar; 'primary' is your own and they will never see it.",
-                        "default": "operator",
+                        "description": "Whose calendar. Omit it and the guest list decides: with any guest other than the operator, YOUR own calendar (you organize, the operator is invited, you own the notes/transcript); with no guests, the operator's own calendar. calendar='operator' forces the operator's calendar (they organize; you are not on it). calendar='own' forces YOUR calendar, the assistant's account; the operator is invited to anything there.",
                         "enum": ["operator", "own"],
                     },
                     "calendar_id": {

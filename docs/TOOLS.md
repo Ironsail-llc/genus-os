@@ -101,9 +101,31 @@ Every calendar tool takes a `calendar` parameter:
 
 | Value | Calendar | When |
 |---|---|---|
-| `operator` | The operator's own calendar, resolved from `~/.robothor/owner.yaml` | **The default.** Anything the operator attends, plans or needs to see. |
-| `own` | `primary` — the assistant's account | Only when the event is genuinely the assistant's own. Must be said out loud. |
+| `operator` | The operator's own calendar, resolved from `~/.robothor/owner.yaml` | **The default** for reads, edits and guest-less events (itineraries, holds, personal blocks). Forces the operator's calendar on a create. |
+| `own` | `primary` — the assistant's account | **The default for a meeting with guests** (see below). Otherwise only when the event is genuinely the assistant's own. |
 | (`calendar_id`) | An explicit id, overriding `calendar` | A third, shared calendar. |
+
+**The assistant organizes the meetings it books.** When `gws_calendar_create`
+gets neither `calendar` nor `calendar_id` and the event has at least one guest
+other than the operator, it goes on the assistant's own calendar: the assistant
+is the organizer, the operator is invited (and screened against do-not-contact
+like everyone else), and invitations go out. The reason is ownership of what the
+meeting produces: booked on the operator's calendar, a call's Google Meet notes
+and transcript belonged to the operator and the assistant, which booked the
+call to follow it up, could not read them. A guest-less event still goes on the
+operator's calendar with nobody invited. Edits and cancels with no `calendar`
+argument follow the organizer: if the event is on the assistant's calendar and
+the assistant organizes it, that is where `gws_calendar_update`,
+`gws_calendar_add_attendees` and `gws_calendar_delete` act.
+
+**Transcription for those meetings.** After a Google Meet is created on the
+assistant's calendar, the Google provider turns on automatic transcription and
+smart notes for the meeting space (Meet REST API v2, `spaces.patch`). It needs
+the `https://www.googleapis.com/auth/meetings.space.settings` OAuth scope on
+the assistant's Google credential. Without it the booking still succeeds and
+the result carries `"transcription": "not_enabled: <reason>"`. The flag
+`ROBOTHOR_CALENDAR_MEET_ARTIFACTS` (default on) turns the call off. Microsoft
+365 follows the tenant's Teams meeting policy instead; nothing is called.
 
 And every calendar result now carries the facts needed to report it honestly:
 

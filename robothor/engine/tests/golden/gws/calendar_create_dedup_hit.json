@@ -22,6 +22,7 @@
   "dnc_lookups": [
     {
       "addresses": [
+        "alice@example.com",
         "bob@example.com"
       ],
       "tenant_id": "tenant-a"
@@ -35,10 +36,10 @@
         "events",
         "list",
         "--params",
-        "{\"calendarId\": \"alice@example.com\", \"timeMin\": \"2026-09-25T14:00:00-04:00\", \"timeMax\": \"2026-10-23T14:00:00-04:00\", \"singleEvents\": true, \"orderBy\": \"startTime\", \"maxResults\": 250}"
+        "{\"calendarId\": \"primary\", \"timeMin\": \"2026-09-25T14:00:00-04:00\", \"timeMax\": \"2026-10-23T14:00:00-04:00\", \"singleEvents\": true, \"orderBy\": \"startTime\", \"maxResults\": 250}"
       ],
       "params": {
-        "calendarId": "alice@example.com",
+        "calendarId": "primary",
         "maxResults": 250,
         "orderBy": "startTime",
         "singleEvents": true,
@@ -50,8 +51,8 @@
   ],
   "result": {
     "calendar": {
-      "id": "alice@example.com",
-      "kind": "operator"
+      "id": "primary",
+      "kind": "own"
     },
     "existing_event_id": "evt-dup",
     "htmlLink": "https://calendar.example.test/evt-dup",

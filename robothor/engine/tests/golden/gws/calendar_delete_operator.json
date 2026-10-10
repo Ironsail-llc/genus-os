@@ -2,7 +2,13 @@
   "args": {
     "event_id": "evt-existing"
   },
-  "calendar_requests": [],
+  "calendar_requests": [
+    {
+      "calendar_id": "primary",
+      "event_id": "evt-existing",
+      "method": "GET"
+    }
+  ],
   "context": {
     "is_benchmark": false,
     "run_id": "run-golden",

@@ -130,6 +130,7 @@ async def test_mail_send_and_calendar_create_in_one_workspace(env: Env) -> None:
             "end": "2026-10-09T15:00:00-04:00",
             "attendees": [BOB],
             "with_meet": False,
+            "calendar": "operator",
         },
     )
     assert "error" not in event, event

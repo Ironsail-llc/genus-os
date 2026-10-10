@@ -162,6 +162,8 @@ async def test_create_invites_and_writes_through_with_the_immutable_id(env: Env)
             "end": "2026-10-09T15:00:00-04:00",
             "attendees": [GUEST],
             "with_meet": False,
+            # Explicit: a meeting with a guest now defaults to the assistant.
+            "calendar": "operator",
         },
     )
     assert "error" not in out, out
@@ -202,6 +204,80 @@ async def test_create_with_meet_makes_a_teams_meeting(env: Env) -> None:
     )
 
 
+async def test_a_meeting_with_guests_is_organized_by_the_assistant_mailbox(env: Env) -> None:
+    """Provider-neutral default: a meeting with a guest and no calendar argument
+    goes on the ASSISTANT's calendar, so it owns the meeting and its notes; the
+    operator is invited. No Meet artifacts call on Microsoft 365 (no-op)."""
+    out = await env.call(
+        "gws_calendar_create",
+        {
+            "summary": "Intro",
+            "start": "2026-10-09T14:00:00-04:00",
+            "end": "2026-10-09T14:30:00-04:00",
+            "attendees": [GUEST],
+        },
+    )
+    assert "error" not in out, out
+    assert out["calendar"] == {"kind": "own", "id": ASSISTANT}
+    (post,) = env.requests("POST", f"/users/{ASSISTANT}/calendar/events")
+    sent = json.loads(post.content)
+    assert [a["emailAddress"]["address"] for a in sent["attendees"]] == [GUEST, OWNER]
+    assert env.requests("POST", f"/users/{OWNER}/calendar/events") == []
+    assert "transcription" not in out
+
+
+async def test_follow_ups_on_a_meeting_the_assistant_organizes_reach_its_calendar(
+    env: Env,
+) -> None:
+    """Book, then edit, then cancel — with no calendar argument anywhere. The
+    meeting lives on the assistant's calendar, so the edits must too; the
+    operator-calendar default used to send them to a mailbox that does not
+    have that event id."""
+    created = await env.call(
+        "gws_calendar_create",
+        {
+            "summary": "Intro",
+            "start": "2026-10-09T14:00:00-04:00",
+            "end": "2026-10-09T14:30:00-04:00",
+            "attendees": [GUEST],
+            "with_meet": False,
+        },
+    )
+    assert "error" not in created, created
+    updated = await env.call(
+        "gws_calendar_update", {"event_id": created["id"], "location": "Room 4"}
+    )
+    assert "error" not in updated, updated
+    assert updated["calendar"] == {"kind": "own", "id": ASSISTANT}
+    assert env.requests("PATCH", f"/users/{ASSISTANT}/events/.*")
+    deleted = await env.call("gws_calendar_delete", {"event_id": created["id"]})
+    assert "error" not in deleted, deleted
+    assert deleted["calendar"] == {"kind": "own", "id": ASSISTANT}
+
+
+async def test_an_edit_of_an_operator_event_still_targets_the_operator(env: Env) -> None:
+    seeded = env.meeting(OWNER, subject="Theirs")
+    updated = await env.call("gws_calendar_update", {"event_id": seeded["id"], "location": "Hall"})
+    assert "error" not in updated, updated
+    assert updated["calendar"] == {"kind": "operator", "id": OWNER}
+
+
+async def test_a_guestless_event_stays_on_the_operator_mailbox(env: Env) -> None:
+    out = await env.call(
+        "gws_calendar_create",
+        {
+            "summary": "Flight",
+            "start": "2026-10-09T14:00:00-04:00",
+            "end": "2026-10-09T16:00:00-04:00",
+            "with_meet": False,
+        },
+    )
+    assert "error" not in out, out
+    assert out["calendar"] == {"kind": "operator", "id": OWNER}
+    (post,) = env.requests("POST", f"/users/{OWNER}/calendar/events")
+    assert "attendees" not in json.loads(post.content) or not json.loads(post.content)["attendees"]
+
+
 async def test_duplicate_is_deduped_without_a_write(env: Env) -> None:
     seeded = env.meeting(OWNER, subject="Planning")
     out = await env.call(
@@ -211,6 +287,7 @@ async def test_duplicate_is_deduped_without_a_write(env: Env) -> None:
             "start": "2026-10-08T10:00:00-04:00",
             "end": "2026-10-08T10:30:00-04:00",
             "attendees": [GUEST],
+            "calendar": "operator",
         },
     )
     assert out["status"] == "deduped"
@@ -228,6 +305,7 @@ async def test_force_bypasses_dedup(env: Env) -> None:
             "start": "2026-10-08T10:00:00-04:00",
             "end": "2026-10-08T10:30:00-04:00",
             "attendees": [GUEST],
+            "calendar": "operator",
             "force": True,
             "with_meet": False,
         },

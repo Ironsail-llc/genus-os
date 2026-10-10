@@ -22,6 +22,7 @@
   "dnc_lookups": [
     {
       "addresses": [
+        "alice@example.com",
         "bob@example.com"
       ],
       "tenant_id": "tenant-a"

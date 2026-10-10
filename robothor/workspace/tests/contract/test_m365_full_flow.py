@@ -67,6 +67,10 @@ async def test_an_ordinary_day_on_microsoft_365(m365_env: WorkspaceEnv) -> None:
         "end": "2026-10-09T15:00:00-04:00",
         "attendees": [BOB, CAROL],
         "with_meet": True,
+        # Explicit: this flow follows a meeting on the operator's calendar. The
+        # default for a meeting with guests is the assistant's own (see
+        # test_gws_calendar_assistant_organizes.py).
+        "calendar": "operator",
     }
     created = await env.call("gws_calendar_create", dict(meeting))
     assert "error" not in created, created

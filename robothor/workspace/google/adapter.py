@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -39,11 +40,55 @@ if TYPE_CHECKING:
         MailQuery,
     )
 
-__all__ = ["GoogleCalendar", "GoogleCalendarSync", "GoogleMail", "GoogleMailSync"]
+__all__ = [
+    "GoogleCalendar",
+    "GoogleCalendarSync",
+    "GoogleMail",
+    "GoogleMailSync",
+    "meet_code_of",
+]
 
 #: The assistant's own calendar, in Google's words: whichever account gws is
 #: signed in as. Named once, here; the handlers say ``CalendarRef``.
 GOOGLE_OWN_CALENDAR = "primary"
+
+#: A Google Meet meeting code: ``abc-mnop-xyz`` (lowercase letter groups).
+_MEET_CODE_RE = re.compile(r"[a-z]+(?:-[a-z]+)+")
+_MEET_LINK_RE = re.compile(r"https://meet\.google\.com/([a-z]+(?:-[a-z]+)+)(?:[/?#].*)?")
+
+#: Meet REST v2 ``SpaceConfig`` fields turned on for a meeting the assistant
+#: organizes. Exact leaf paths rather than ``config.artifactConfig``: a parent
+#: mask would also reset the recording setting nobody asked to change.
+_MEET_ARTIFACT_MASK = ",".join(
+    (
+        "config.artifactConfig.transcriptionConfig.autoTranscriptionGeneration",
+        "config.artifactConfig.smartNotesConfig.autoSmartNotesGeneration",
+    )
+)
+_MEET_ARTIFACT_BODY = {
+    "config": {
+        "artifactConfig": {
+            "transcriptionConfig": {"autoTranscriptionGeneration": "ON"},
+            "smartNotesConfig": {"autoSmartNotesGeneration": "ON"},
+        }
+    }
+}
+
+
+def meet_code_of(event: dict[str, Any]) -> str:
+    """The Meet meeting code of an inserted event, or ``""`` when it has none.
+
+    ``conferenceData.conferenceId`` of a ``hangoutsMeet`` conference is the
+    meeting code; ``hangoutLink`` carries it too when the id is absent.
+    """
+    conference = event.get("conferenceData") or {}
+    if isinstance(conference, dict):
+        cid = str(conference.get("conferenceId") or "").strip()
+        if _MEET_CODE_RE.fullmatch(cid):
+            return cid
+    match = _MEET_LINK_RE.fullmatch(str(event.get("hangoutLink") or "").strip())
+    return match.group(1) if match else ""
+
 
 #: EventQuery key -> Calendar v3 parameter. The caller's key ORDER is kept.
 _EVENT_QUERY_PARAMS = {
@@ -209,6 +254,40 @@ class GoogleCalendarSync:
         params = {"calendarId": ref.calendar_id, "eventId": event_id, "sendUpdates": send_updates}
         return _gws(["calendar", "events", "delete", "--params", json.dumps(params)])
 
+    def enable_meeting_artifacts(self, event: dict[str, Any]) -> dict[str, Any] | None:
+        """Turn on auto transcription + smart notes for the event's Meet space.
+
+        Meet REST v2 through the gws CLI. A meeting code is only an ALIAS for
+        ``spaces.get``, so the space is read first for its real name, then
+        patched. Needs the ``meetings.space.settings`` OAuth scope. Returns
+        ``None`` when the event has no Meet, ``{"enabled": True}`` on success,
+        or the CLI's ``{"error", ...}`` dict. The caller treats all of it as
+        best-effort: the booking already happened.
+        """
+        code = meet_code_of(event)
+        if not code:
+            return None
+        space = _gws(["meet", "spaces", "get", "--params", json.dumps({"name": f"spaces/{code}"})])
+        if not isinstance(space, dict) or space.get("error"):
+            return space if isinstance(space, dict) else {"error": "unexpected Meet response"}
+        name = str(space.get("name") or "")
+        if not name.startswith("spaces/"):
+            return {"error": "Meet returned no space name"}
+        patched = _gws(
+            [
+                "meet",
+                "spaces",
+                "patch",
+                "--params",
+                json.dumps({"name": name, "updateMask": _MEET_ARTIFACT_MASK}),
+                "--json",
+                json.dumps(_MEET_ARTIFACT_BODY),
+            ]
+        )
+        if not isinstance(patched, dict) or patched.get("error"):
+            return patched if isinstance(patched, dict) else {"error": "unexpected Meet response"}
+        return {"enabled": True}
+
     @contextmanager
     def session(self) -> Iterator[_GoogleCalendarSession]:
         from robothor.engine import calendar_attendees
@@ -348,3 +427,6 @@ class GoogleCalendar:
         return await asyncio.to_thread(
             self.blocking.delete, ref, event_id, send_updates=send_updates
         )
+
+    async def enable_meeting_artifacts(self, event: dict[str, Any]) -> dict[str, Any] | None:
+        return await asyncio.to_thread(self.blocking.enable_meeting_artifacts, event)
