@@ -140,7 +140,9 @@ class TestTheItineraryFailure:
         gets the two facts it needs to report truthfully."""
         out = _create(attendees=["bob@example.com"])
 
-        assert out["calendar"] == {"kind": "operator", "id": OPERATOR_EMAIL}
+        # A meeting with a guest is the assistant's to organize (operator
+        # invited); test_gws_calendar_assistant_organizes.py has that rule.
+        assert out["calendar"] == {"kind": "own", "id": "primary"}
         assert out["invitations_requested"] is True
         assert out["htmlLink"] == "https://calendar.example.com/event?eid=evt-1"
 
@@ -259,7 +261,7 @@ class TestTheHandlerOnlyClaimsWhatItKnows:
         RSVP to their own itinerary and mail them once per leg — ten emails for
         a ten-leg trip. The auto-add existed because the default used to be
         this account's calendar, where it was the only way they saw the event."""
-        _create(attendees=["bob@example.com"])
+        _create(calendar="operator", attendees=["bob@example.com"])
         body = _insert(recorder)["body"]
 
         assert [a["email"] for a in body["attendees"]] == ["bob@example.com"]
@@ -816,7 +818,12 @@ class TestSchemas:
 
         params = get_engine_schemas()[tool]["function"]["parameters"]["properties"]
         assert params["calendar"]["enum"] == ["operator", "own"]
-        assert params["calendar"]["default"] == "operator"
+        if tool == "gws_calendar_create":
+            # No single default: the guest list decides (a meeting with guests
+            # is the assistant's, a guest-less event the operator's).
+            assert "default" not in params["calendar"]
+        else:
+            assert params["calendar"]["default"] == "operator"
 
     @pytest.mark.parametrize(
         "tool", ["gws_calendar_create", "gws_calendar_list", "gws_calendar_delete"]

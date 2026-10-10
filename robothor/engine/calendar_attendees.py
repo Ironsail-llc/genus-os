@@ -453,6 +453,33 @@ def _plan_times(
     return out
 
 
+def invalid_update(
+    *,
+    add: Iterable[str] = (),
+    remove: Iterable[str] = (),
+    start: str | None = None,
+    end: str | None = None,
+) -> dict[str, Any] | None:
+    """The error for a request no calendar could apply, or ``None``.
+
+    Pure: checked before anything is read, so a malformed edit reaches no
+    provider at all (the handler calls it before resolving the calendar).
+    """
+    clash = sorted(set(_unique(add)) & set(_unique(remove)))
+    if clash:
+        return {"error": f"Cannot both add and remove {', '.join(clash)}"}
+    hint = "an RFC3339 date-time (2026-10-09T14:00:00-04:00) or, for all-day, a date (2026-10-09)"
+    start_kind = _kind(start) if start is not None else None
+    end_kind = _kind(end) if end is not None else None
+    if start is not None and start_kind is None:
+        return {"error": f"start must be {hint}"}
+    if end is not None and end_kind is None:
+        return {"error": f"end must be {hint}"}
+    if start_kind and end_kind and start_kind != end_kind:
+        return {"error": "start and end must both be dates (all-day) or both date-times"}
+    return None
+
+
 def update_event(
     calendar: CalendarRef | str,
     event_id: str,
@@ -477,19 +504,10 @@ def update_event(
     calendar_id = as_calendar_ref(calendar).calendar_id
     to_add = _unique(add)
     to_remove = _unique(remove)
-    clash = sorted(set(to_add) & set(to_remove))
-    if clash:
-        return {"error": f"Cannot both add and remove {', '.join(clash)}"}
+    invalid = invalid_update(add=to_add, remove=to_remove, start=start, end=end)
+    if invalid is not None:
+        return invalid
     texts = {k: v for k, v in (fields or {}).items() if k in TEXT_FIELDS}
-    hint = "an RFC3339 date-time (2026-10-09T14:00:00-04:00) or, for all-day, a date (2026-10-09)"
-    start_kind = _kind(start) if start is not None else None
-    end_kind = _kind(end) if end is not None else None
-    if start is not None and start_kind is None:
-        return {"error": f"start must be {hint}"}
-    if end is not None and end_kind is None:
-        return {"error": f"end must be {hint}"}
-    if start_kind and end_kind and start_kind != end_kind:
-        return {"error": "start and end must both be dates (all-day) or both date-times"}
 
     def plan(before: dict[str, Any]) -> dict[str, Any] | Plan:
         existing = deepcopy(before.get("attendees", []))

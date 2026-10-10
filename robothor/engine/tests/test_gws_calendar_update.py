@@ -244,7 +244,10 @@ def test_a_conflicting_edit_is_re_read_and_merged_once(cal: FakeCalendar) -> Non
     cal.failure = {"error": "conflict", "status_code": 412}
     out = _call("gws_calendar_update", {"event_id": "meeting", "summary": "New"})
     assert "error" in out
-    assert [c[0] for c in cal.calls] == ["GET", "PATCH", "GET", "PATCH"]
+    # The first GET is the organizer probe of the assistant's own calendar;
+    # this event is organized by someone else, so the edit stays on the default.
+    assert [(c[0], c[1]["calendar_id"]) for c in cal.calls][0] == ("GET", "primary")
+    assert [c[0] for c in cal.calls[1:]] == ["GET", "PATCH", "GET", "PATCH"]
 
 
 def test_own_calendar_and_explicit_id_are_honoured(cal: FakeCalendar) -> None:

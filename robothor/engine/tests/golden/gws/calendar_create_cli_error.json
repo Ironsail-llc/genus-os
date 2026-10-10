@@ -33,6 +33,7 @@
   "dnc_lookups": [
     {
       "addresses": [
+        "alice@example.com",
         "bob@example.com"
       ],
       "tenant_id": "tenant-a"
@@ -46,14 +47,17 @@
         "events",
         "insert",
         "--params",
-        "{\"calendarId\": \"alice@example.com\", \"conferenceDataVersion\": 1, \"sendUpdates\": \"all\"}",
+        "{\"calendarId\": \"primary\", \"conferenceDataVersion\": 1, \"sendUpdates\": \"all\"}",
         "--json",
-        "{\"summary\": \"Quarterly review\", \"start\": {\"dateTime\": \"2026-10-09T14:00:00-04:00\"}, \"end\": {\"dateTime\": \"2026-10-09T15:00:00-04:00\"}, \"description\": \"Numbers and next steps\", \"location\": \"Room 4\", \"attendees\": [{\"email\": \"bob@example.com\"}], \"conferenceData\": {\"createRequest\": {\"requestId\": \"robothor-Quarterly-review-2026-10-09\", \"conferenceSolutionKey\": {\"type\": \"hangoutsMeet\"}}}}"
+        "{\"summary\": \"Quarterly review\", \"start\": {\"dateTime\": \"2026-10-09T14:00:00-04:00\"}, \"end\": {\"dateTime\": \"2026-10-09T15:00:00-04:00\"}, \"description\": \"Numbers and next steps\", \"location\": \"Room 4\", \"attendees\": [{\"email\": \"bob@example.com\"}, {\"email\": \"alice@example.com\"}], \"conferenceData\": {\"createRequest\": {\"requestId\": \"robothor-Quarterly-review-2026-10-09\", \"conferenceSolutionKey\": {\"type\": \"hangoutsMeet\"}}}}"
       ],
       "json": {
         "attendees": [
           {
             "email": "bob@example.com"
+          },
+          {
+            "email": "alice@example.com"
           }
         ],
         "conferenceData": {
@@ -75,7 +79,7 @@
         "summary": "Quarterly review"
       },
       "params": {
-        "calendarId": "alice@example.com",
+        "calendarId": "primary",
         "conferenceDataVersion": 1,
         "sendUpdates": "all"
       },

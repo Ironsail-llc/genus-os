@@ -237,7 +237,7 @@
     "status": "confirmed",
     "summary": "Quarterly review"
   },
-  "scenario": "calendar_create_dedup_miss_different_start",
+  "scenario": "calendar_create_meeting_defaults_to_own",
   "scheduling_policy_lookups": [],
   "tool": "gws_calendar_create"
 }

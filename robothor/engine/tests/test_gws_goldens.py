@@ -901,7 +901,53 @@ CALENDAR_SCENARIOS = [
         {"time_min": "2026-10-08T00:00:00Z", "calendar": "primary"},
     ),
     Scenario("calendar_list_missing_time_min", "gws_calendar_list", {}),
-    Scenario("calendar_create_operator", "gws_calendar_create", CREATE_ARGS, CREATE_ROUTER),
+    Scenario(
+        "calendar_create_operator",
+        "gws_calendar_create",
+        {**CREATE_ARGS, "calendar": "operator"},
+        CREATE_ROUTER,
+    ),
+    # No calendar argument and a guest: the assistant organizes, operator invited.
+    Scenario(
+        "calendar_create_meeting_defaults_to_own",
+        "gws_calendar_create",
+        CREATE_ARGS,
+        CREATE_ROUTER,
+    ),
+    # A real Meet link on the assistant's calendar: transcription + smart notes on.
+    Scenario(
+        "calendar_create_own_turns_on_transcription",
+        "gws_calendar_create",
+        CREATE_ARGS,
+        {
+            **CREATE_ROUTER,
+            "calendar events insert": lambda params, body: {
+                **_insert_echo(params, body),
+                "hangoutLink": "https://meet.google.com/abc-defg-hij",
+                "conferenceData": {"conferenceId": "abc-defg-hij"},
+            },
+            "meet spaces get": {"name": "spaces/space-1", "meetingCode": "abc-defg-hij"},
+            "meet spaces patch": {"name": "spaces/space-1"},
+        },
+    ),
+    # The credential lacks meetings.space.settings: the booking stands, with a note.
+    Scenario(
+        "calendar_create_transcription_scope_missing",
+        "gws_calendar_create",
+        CREATE_ARGS,
+        {
+            **CREATE_ROUTER,
+            "calendar events insert": lambda params, body: {
+                **_insert_echo(params, body),
+                "hangoutLink": "https://meet.google.com/abc-defg-hij",
+                "conferenceData": {"conferenceId": "abc-defg-hij"},
+            },
+            "meet spaces get": {
+                "error": "Request had insufficient authentication scopes.",
+                "hint": "permission",
+            },
+        },
+    ),
     Scenario(
         "calendar_create_own_adds_operator",
         "gws_calendar_create",

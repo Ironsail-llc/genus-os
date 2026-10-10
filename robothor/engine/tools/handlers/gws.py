@@ -706,6 +706,16 @@ def _resolve_calendar_ref(args: dict[str, Any]) -> CalendarRef:
 
     The provider names the calendars (``resolve``): for Google, "own" is
     ``primary``, the signed-in account's calendar.
+
+    What changed since (2026-10): this is still every calendar tool's default,
+    but ``gws_calendar_create`` now goes through
+    :func:`_resolve_create_calendar_ref` first, and a MEETING — an event with a
+    guest other than the operator — lands on the assistant's own calendar with
+    the operator invited. The assistant must own the meeting and its
+    notes/transcript; on the operator's calendar the Meet transcript was the
+    operator's and the assistant could not read it. Edits and cancels follow
+    the organizer through :func:`_resolve_existing_event_ref`. Guest-less events
+    (the itinerary above) still default here.
     """
     explicit = str(args.get("calendar_id") or "").strip()
     owner_email = _operator_calendar_address()
@@ -734,6 +744,81 @@ def _resolve_calendar_ref(args: dict[str, Any]) -> CalendarRef:
     return _calendar().resolve("own")
 
 
+def _has_guests(args: dict[str, Any], owner_email: str) -> bool:
+    """Does the event invite anyone other than the operator?"""
+    for entry in args.get("attendees") or []:
+        addr = str(entry or "").strip().lower()
+        if addr and addr != owner_email:
+            return True
+    return False
+
+
+def _resolve_create_calendar_ref(args: dict[str, Any]) -> CalendarRef:
+    """Which calendar ``gws_calendar_create`` writes. A meeting is the assistant's.
+
+    :func:`_resolve_calendar_ref` defaults to the operator's calendar, and for
+    an itinerary leg, a hold or a personal block that is still right (the
+    2026-09-16 fix). For a MEETING it was wrong: the assistant booked a call
+    with two outside guests on the operator's calendar, the operator was the
+    organizer, and the Google Meet notes and transcript were the operator's —
+    the assistant, which booked the call in order to follow it up, could not
+    read them. The assistant must own the meeting and its notes/transcript.
+
+    So when neither ``calendar`` nor ``calendar_id`` is given AND the event has
+    at least one guest other than the operator, it goes on the assistant's own
+    calendar (the assistant organizes) and :func:`_recipients_for` invites the
+    operator. Everything else is :func:`_resolve_calendar_ref` unchanged: an
+    explicit choice always wins, a guest-less event stays on the operator's
+    calendar with nobody invited, and with no operator configured the answer
+    was already ``own``. Provider-neutral: the provider resolves "own".
+    """
+    explicit_id = str(args.get("calendar_id") or "").strip()
+    raw = args.get("calendar")
+    if explicit_id or not (raw is None or raw == ""):
+        return _resolve_calendar_ref(args)
+    owner_email = _operator_calendar_address()
+    if owner_email and _has_guests(args, owner_email):
+        return _calendar().resolve("own")
+    return _resolve_calendar_ref(args)
+
+
+def _resolve_existing_event_ref(args: dict[str, Any], event_id: str) -> CalendarRef:
+    """Which calendar an edit or a cancel of ``event_id`` targets.
+
+    The other half of :func:`_resolve_create_calendar_ref`. A meeting the
+    assistant organizes lives on the assistant's calendar, and the operator
+    holds only an attendee's copy of it — so the operator-calendar default sent
+    "add a guest to the meeting you just booked" to a copy the organizer's
+    change never reaches (Microsoft 365: a different id, so not found at all).
+
+    So with no explicit ``calendar`` / ``calendar_id``, the assistant's own
+    calendar is read first, and used only when the event is there AND the
+    assistant is its organizer. Anything else — not found, an invitation the
+    assistant merely attends, a read error — falls through to
+    :func:`_resolve_calendar_ref` unchanged.
+    """
+    default = _resolve_calendar_ref(args)
+    explicit_id = str(args.get("calendar_id") or "").strip()
+    raw = args.get("calendar")
+    if explicit_id or not (raw is None or raw == "") or default.kind == "own":
+        return default
+    try:
+        cal = _calendar()
+        own = cal.resolve("own")
+        with cal.session() as api:
+            event = api.get(own, event_id)
+    except Exception:  # noqa: BLE001 - the probe is best-effort; the default stands
+        logger.debug("own-calendar probe for %s failed", event_id, exc_info=True)
+        return default
+    if (
+        isinstance(event, dict)
+        and "error" not in event
+        and (event.get("organizer") or {}).get("self") is True
+    ):
+        return own
+    return default
+
+
 def _recipients_for(args: dict[str, Any], calendar_kind: str) -> list[str]:
     """Every address the insert will invite, in order, deduplicated.
 
@@ -743,7 +828,10 @@ def _recipients_for(args: dict[str, Any], calendar_kind: str) -> list[str]:
     them to RSVP to it and mailed them once per leg — ten emails for a ten-leg
     trip. That auto-add existed because the default used to be this account's
     `primary` calendar, where being an attendee was the only way the operator
-    learned the event existed. The default is now theirs.
+    learned the event existed. The default is now theirs for a guest-less
+    event; a meeting with guests defaults back to the assistant's calendar
+    (:func:`_resolve_create_calendar_ref`), and this auto-add is what puts the
+    operator on it.
 
     One function, because the do-not-contact screen and the insert have to
     agree about who gets mail. They did not: the screen ran on the caller's
@@ -1874,9 +1962,13 @@ def _calendar_create(
 ) -> dict[str, Any]:
     """Put an event on a calendar and tell the attendees.
 
-    Defaults to the OPERATOR's calendar and passes ``sendUpdates``: the two
-    things whose absence let an itinerary be created on the assistant's own
-    calendar, with the operator as an attendee, and nobody told.
+    Passes ``sendUpdates``, and picks the calendar with
+    :func:`_resolve_create_calendar_ref`: a guest-less event (an itinerary leg)
+    goes on the OPERATOR's calendar — its absence let an itinerary be created on
+    the assistant's own calendar with nobody told (2026-09-16) — while a meeting
+    with guests is organized by the ASSISTANT, operator invited, so the
+    assistant owns the meeting and its notes/transcript (changed after a booked
+    call's transcript turned out to be the operator's and unreadable).
     """
     summary = args.get("summary", "")
     start = args.get("start", "")
@@ -1889,7 +1981,7 @@ def _calendar_create(
     # has reached the CLI at this point, so a bad `calendar` still refuses
     # before any read or write.
     try:
-        ref = _resolve_calendar_ref(args)
+        ref = _resolve_create_calendar_ref(args)
     except _InvalidCalendarError as bad:
         return bad.as_result()
     calendar_id, calendar_kind = ref.calendar_id, ref.kind
@@ -2038,7 +2130,42 @@ def _calendar_create(
         # means absent.
         if send_updates == "all" and attendees:
             cal_result["attendees_notified"] = [a["email"] for a in attendees]
+        if with_meet and calendar_kind == "own":
+            note = _enable_meeting_artifacts(cal_result)
+            if note:
+                cal_result["transcription"] = note
     return cal_result
+
+
+def _enable_meeting_artifacts(created: dict[str, Any]) -> str:
+    """Turn transcription and smart notes on for a meeting the assistant organizes.
+
+    Best-effort by construction: the booking already happened and must stand,
+    so every failure — a missing ``meetings.space.settings`` scope, an API
+    error, an exception — becomes a one-line note in the result and a warning
+    in the log, never an error and never a retry. Returns ``""`` when there is
+    nothing to report (flag off, no conference, or a provider with no such
+    call — Microsoft 365 is a no-op).
+    """
+    from robothor.engine.feature_flags import calendar_meet_artifacts_enabled
+
+    try:
+        if not calendar_meet_artifacts_enabled():
+            return ""
+        enable = getattr(_calendar(), "enable_meeting_artifacts", None)
+        if enable is None:
+            return ""
+        outcome = enable(created)
+    except Exception as exc:  # noqa: BLE001 - never lose the booking over this
+        logger.warning("gws_calendar_create: meeting artifacts call failed: %s", exc)
+        return f"not_enabled: {str(exc)[:200] or type(exc).__name__}"
+    if not isinstance(outcome, dict) or not outcome:
+        return ""
+    if outcome.get("error"):
+        reason = " ".join(str(outcome["error"]).split())[:200]
+        logger.warning("gws_calendar_create: transcription not enabled: %s", reason)
+        return f"not_enabled: {reason}"
+    return "enabled" if outcome.get("enabled") else ""
 
 
 def _calendar_delete(args: dict[str, Any]) -> dict[str, Any]:
@@ -2047,7 +2174,7 @@ def _calendar_delete(args: dict[str, Any]) -> dict[str, Any]:
     if not event_id:
         return {"error": "event_id is required"}
     try:
-        ref = _resolve_calendar_ref(args)
+        ref = _resolve_existing_event_ref(args, str(event_id))
     except _InvalidCalendarError as bad:
         return bad.as_result()
     # A cancellation nobody is told about is not a cancellation: the attendees
@@ -2122,7 +2249,7 @@ def _calendar_update(
     was asked for into what is there (existing guests and their RSVPs are kept
     whole), writes it conditionally on the version read, and reads it back.
     """
-    from robothor.engine.calendar_attendees import TEXT_FIELDS, update_event
+    from robothor.engine.calendar_attendees import TEXT_FIELDS, invalid_update, update_event
 
     event_id = args.get("event_id")
     if not isinstance(event_id, str) or not event_id.strip():
@@ -2162,8 +2289,12 @@ def _calendar_update(
     refusal = _no_auto_refusal(add)
     if refusal is not None:
         return refusal
+    # Before the organizer probe: a request no calendar could apply reads nothing.
+    invalid = invalid_update(add=add, remove=remove, start=times["start"], end=times["end"])
+    if invalid is not None:
+        return invalid
     try:
-        ref = _resolve_calendar_ref(args)
+        ref = _resolve_existing_event_ref(args, event_id.strip())
     except _InvalidCalendarError as bad_calendar:
         return bad_calendar.as_result()
     result = update_event(

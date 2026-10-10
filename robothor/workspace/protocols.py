@@ -145,6 +145,14 @@ class CalendarProvider(Protocol):
         self, ref: CalendarRef, event_id: str, *, send_updates: str
     ) -> dict[str, Any]: ...
 
+    async def enable_meeting_artifacts(self, event: dict[str, Any]) -> dict[str, Any] | None:
+        """Best-effort: auto transcription/notes on for a meeting the assistant organizes.
+
+        ``None`` when the provider has no such control or the event has no
+        meeting; ``{"enabled": True}`` on success; ``{"error", ...}`` otherwise.
+        """
+        ...
+
 
 class CalendarSession(Protocol):
     """One authenticated connection for a read / write / read-back sequence."""
@@ -191,6 +199,7 @@ class BlockingCalendar(Protocol):
         send_updates: str | None,
     ) -> dict[str, Any]: ...
     def delete(self, ref: CalendarRef, event_id: str, *, send_updates: str) -> dict[str, Any]: ...
+    def enable_meeting_artifacts(self, event: dict[str, Any]) -> dict[str, Any] | None: ...
     def session(self) -> AbstractContextManager[CalendarSession]: ...
 
 

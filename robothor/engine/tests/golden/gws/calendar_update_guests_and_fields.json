@@ -13,6 +13,11 @@
   },
   "calendar_requests": [
     {
+      "calendar_id": "primary",
+      "event_id": "meeting",
+      "method": "GET"
+    },
+    {
       "calendar_id": "alice@example.com",
       "event_id": "meeting",
       "method": "GET"

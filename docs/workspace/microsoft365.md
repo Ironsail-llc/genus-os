@@ -348,8 +348,10 @@ cancellation check right before a write. A blocked call sends nothing to
 Graph.
 
 **Which calendar.** `calendar="own"` is the assistant mailbox's default
-calendar (`/users/{assistant}/calendar`). `calendar="operator"` (the default)
-is the owner mailbox's (`/users/{owner}/calendar`), using
+calendar (`/users/{assistant}/calendar`); a create with no calendar argument
+and a guest other than the operator goes there too, with the operator invited
+(the assistant organizes the meetings it books). `calendar="operator"` (the
+default otherwise) is the owner mailbox's (`/users/{owner}/calendar`), using
 `ROBOTHOR_M365_OWNER_MAILBOX` when set and the owner.yaml address otherwise.
 An explicit `calendar_id` that is an address is that mailbox's default
 calendar; any other id is a calendar in the assistant's mailbox

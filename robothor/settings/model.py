@@ -1710,6 +1710,14 @@ class FlagSettings(SettingsGroup):
         "is how an operator came to be an attendee of a trip he never saw.",
         governed=True,
     )
+    calendar_meet_artifacts: bool = declare(
+        True,
+        "ROBOTHOR_CALENDAR_MEET_ARTIFACTS",
+        "Turn Google Meet transcription and smart notes on for meetings the "
+        "assistant organizes, so it can read them afterwards. Best-effort: "
+        "needs the meetings.space.settings OAuth scope, and a failure is a "
+        "note on the booking, never a failed booking.",
+    )
     curator_apply: bool = declare(
         False,
         "ROBOTHOR_CURATOR_APPLY",

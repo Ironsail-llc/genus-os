@@ -211,9 +211,9 @@ TOOL_HINTS: dict[str, ToolHint] = {
     "gws_calendar_create": ToolHint(
         keywords=(*_CALENDAR, "book", "invite", "attendee", "invitation", "arrange", "set"),
         when_to_use=(
-            "Use this only to put a NEW event on the OPERATOR's calendar, which is where "
-            "it goes by default — pass calendar='own' for your own, which the operator "
-            "never sees."
+            "Use this only to put a NEW event on a calendar. With guests it goes on YOUR "
+            "calendar (you organize and own the notes/transcript; the operator is "
+            "invited); with none, on the OPERATOR's."
         ),
     ),
     "gws_calendar_delete": ToolHint(

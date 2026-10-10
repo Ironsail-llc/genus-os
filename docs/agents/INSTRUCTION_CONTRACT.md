@@ -106,7 +106,11 @@ So, in an instruction file:
   operator's.** Never the assistant's.
 * **`primary` is the assistant's own calendar.** Anything the operator is meant
   to see goes to the operator's calendar — the calendar tools default there, and
-  reaching the assistant's own takes an explicit `calendar: "own"`.
+  reaching the assistant's own takes an explicit `calendar: "own"`. The one
+  exception: a meeting the assistant books with guests is organized by the
+  assistant on its own calendar with the operator invited, so the assistant owns
+  the meeting's notes and transcript. `calendar: "operator"` forces the
+  operator's calendar.
 * **A result is only "done for the operator" when it landed in the operator's
   account.** An event on the assistant's calendar with the operator as an
   attendee and no invitation sent is not a scheduled meeting; it is a private
