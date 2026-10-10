@@ -504,6 +504,22 @@ def _spawn_options(v2: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _normalized_tags(raw: Any) -> list[str]:
+    """A manifest tag list, lower-cased and stripped; blanks dropped.
+
+    A bare string is one tag, not a sequence of characters.
+    """
+    if raw is None:
+        return []
+    items = [raw] if isinstance(raw, str) else raw if isinstance(raw, list | tuple) else []
+    out: list[str] = []
+    for item in items:
+        tag = str(item).strip().lower()
+        if tag and tag not in out:
+            out.append(tag)
+    return out
+
+
 def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
     """Convert a YAML manifest dict to an AgentConfig."""
     model = manifest.get("model", {})
@@ -733,6 +749,7 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
         human_approval_tools=v2.get("human_approval_tools", []),
         human_approval_timeout=int(v2.get("human_approval_timeout", 300)),
         human_approval_fail_open=bool(v2.get("human_approval_fail_open", False)),
+        requires_human_tags=_normalized_tags(v2.get("requires_human_tags", [])),
     )
 
     # ── Continuous mode overrides — raise caps for sustained multi-hour runs ──

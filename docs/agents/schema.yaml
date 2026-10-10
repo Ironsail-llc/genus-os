@@ -616,6 +616,14 @@ optional:
       type: boolean
       default: false
       description: Run the tool anyway when an approval request times out.
+    requires_human_tags:
+      type: list[string]
+      default: []
+      description: >
+        Opt-in. Reserve requiresHuman for tasks tagged with one of these
+        (case-insensitive), e.g. [payment, refund, wire, contract]. The engine's
+        create_task/update_task refuse requiresHuman=true on any other task and
+        tell the agent to do the work itself. Empty or absent = unrestricted.
     mcp_servers:
       type: list[string]
       default: []

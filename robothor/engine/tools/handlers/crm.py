@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import TYPE_CHECKING, Any, cast
 
 from robothor.constants import SANDBOX_DENIAL_PREFIX
@@ -12,6 +13,8 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from robothor.engine.tools.dispatch import ToolContext
+
+logger = logging.getLogger(__name__)
 
 HANDLERS: dict[str, Any] = {}
 
@@ -434,6 +437,71 @@ async def _delete_note(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]
     return {"success": ok, "id": args["id"]}
 
 
+# ── requires_human floor (opt-in, v2.requires_human_tags) ──
+#
+# Agents parked their own work on the operator by filing tasks with
+# requiresHuman=true — a red build, "file the fix as a PR", "optimize agent X".
+# An instance that wants only money-moving or signature work to wait on a
+# person lists those tags in the agent's manifest; these two tools then refuse
+# the flag on any other task, with an error the model can act on. Enforced
+# here because create_task/update_task are the boundary every engine agent
+# crosses. The MCP server (robothor.api.mcp) carries no authenticated agent
+# identity — createdByAgent is self-declared — so it stays unrestricted.
+
+
+def requires_human_tags(agent_id: str) -> tuple[str, ...]:
+    """The agent's ``v2.requires_human_tags``, or ``()`` when unrestricted.
+
+    A seam: the suite replaces it so handlers run without a manifest directory.
+    Read from the merged manifest (fleet ``_defaults.yaml`` included), so an
+    instance can enable the floor fleet-wide in one place. An unreadable or
+    missing manifest is treated as the default — no restriction — because the
+    floor is opt-in and absence of evidence is not an opt-in.
+    """
+    if not agent_id:
+        return ()
+    try:
+        from robothor.engine.config import EngineConfig, load_agent_config
+
+        cfg = load_agent_config(agent_id, EngineConfig.from_env().manifest_dir)
+    except Exception as exc:  # noqa: BLE001 - an unreadable manifest is "not opted in"
+        logger.warning("requires_human_tags: manifest for %s unreadable: %s", agent_id, exc)
+        return ()
+    if cfg is None:
+        return ()
+    return tuple(cfg.requires_human_tags)
+
+
+def _task_tags(raw: Any) -> set[str]:
+    """A task's tags as a lower-cased set. Tolerates a comma-separated string."""
+    if raw is None:
+        return set()
+    items = raw.split(",") if isinstance(raw, str) else raw if isinstance(raw, list | tuple) else []
+    return {str(t).strip().lower() for t in items if str(t).strip()}
+
+
+def _requires_human_error(allowed: tuple[str, ...]) -> dict[str, Any]:
+    reserved = ", ".join(allowed)
+    return {
+        "error": (
+            f"requires_human is reserved for tasks tagged {reserved} (money or signature). "
+            "This is yours to do: do it, or assign it to an agent that can."
+        ),
+        "guard": "requires_human_tags",
+        "retryable": False,
+    }
+
+
+def requires_human_denial(ctx: ToolContext, tags: Any) -> dict[str, Any] | None:
+    """``None`` when this agent may set requires_human on a task with ``tags``."""
+    allowed = requires_human_tags(ctx.agent_id)
+    if not allowed:
+        return None
+    if _task_tags(tags) & {a.lower() for a in allowed}:
+        return None
+    return _requires_human_error(allowed)
+
+
 # ── Tasks ──
 
 
@@ -443,6 +511,11 @@ async def _create_task(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]
 
     from robothor.crm.dal import create_task, find_task_by_dedup_key
     from robothor.engine.runtime.task_recovery import task_options
+
+    if args.get("requiresHuman"):
+        denial = requires_human_denial(ctx, args.get("tags"))
+        if denial is not None:
+            return denial
 
     # Server-side dedup: check for existing task with any known dedup key
     body_text = args.get("body") or ""
@@ -594,6 +667,18 @@ async def _update_task(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]
         "requiresHuman": "requires_human",
     }
     kwargs = {dal_key: args[k] for k, dal_key in field_map.items() if k in args and k != "id"}
+    if kwargs.get("requires_human") and requires_human_tags(ctx.agent_id):
+        # Flipping an existing task onto a person: judge the tags the task
+        # will carry after this call — the ones sent now, else its current ones.
+        tags = kwargs.get("tags")
+        if tags is None:
+            from robothor.crm.dal import get_task
+
+            current = await asyncio.to_thread(get_task, tid, tenant_id=ctx.tenant_id)
+            tags = (current or {}).get("tags")
+        denial = requires_human_denial(ctx, tags)
+        if denial is not None:
+            return denial
     # Author attribution for task history: context override > agent_id.
     changed_by = ctx.task_author_override or ctx.agent_id
     ok = await asyncio.to_thread(
