@@ -377,6 +377,11 @@ consequence_for() {
             echo "The restore drill did not complete — nothing has proven the backups reconstitute a database, and the RTO number in the runbook is now unmeasured" ;;
         *guardrail-watch*)
             echo "The daily guardrail watch is down — drop-in and host-script drift, flag soak deadlines and instance manifest validity are all unchecked" ;;
+        # Garmin health sync (cron, every 15 min). A real failure means the
+        # sleep/HR/steps/HRV feed stops and the briefing + wind-down health
+        # section goes blank -- not urgent, the next tick retries.
+        *health.sync*)
+            echo "Garmin health data is not syncing — the sleep/HR/steps/HRV feed stops and the briefing + wind-down health section goes blank; the next 15-minute tick retries" ;;
         *)
             echo "(no consequence mapped — add one in send_failure_alert.sh)" ;;
     esac

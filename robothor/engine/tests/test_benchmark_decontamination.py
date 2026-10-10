@@ -835,7 +835,7 @@ class TestTheRunbookAuditQueriesActuallyWork:
         assert rows == []
 
 
-class TestTheRlsWideningHasExactlyThreeCallers:
+class TestTheRlsWideningHasExactlyFourCallers:
     """``read_every_tenant_in_transaction`` relaxes RLS for its transaction.
 
     It exists because the benchmark spend break-out cannot see the graded
@@ -845,13 +845,14 @@ class TestTheRlsWideningHasExactlyThreeCallers:
     kind of helper that acquires callers: each one is another query that can
     read every tenant's rows, and nothing else in the tree announces it.
 
-    So the caller set is pinned. Adding a fourth call site reds this test and
+    So the caller set is pinned. Adding a fifth call site reds this test and
     forces the question to be asked out loud.
     """
 
     EXPECTED_CALLERS: set[str] = {
         "robothor/engine/analytics.py::_benchmark_spend",
         "robothor/engine/analytics.py::get_fleet_health",
+        "robothor/engine/detectors.py::check_tool_outage",
         "robothor/engine/tracking.py::get_agent_stats",
     }
 
