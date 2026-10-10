@@ -517,6 +517,12 @@ class AgentConfig:
     # armed, so it is the one per-agent bypass of the whole mechanism.
     # `genus doctor --category agents` reports it.
     human_approval_fail_open: bool = False
+    # Opt-in floor on what this agent may park on a person. When non-empty,
+    # the engine's create_task/update_task tools refuse `requiresHuman: true`
+    # on a task whose tags include none of these (lower-cased; match is
+    # case-insensitive). Empty — the default — leaves the flag unrestricted.
+    # See robothor/engine/tools/handlers/crm.py::requires_human_denial.
+    requires_human_tags: list[str] = field(default_factory=list)
 
     # ── Config validation ──
     validation_warnings: list[str] = field(default_factory=list)

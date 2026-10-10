@@ -1245,6 +1245,34 @@ anywhere. `calendar.operator_calendar_writable` is `required`: an instance that
 cannot write the operator's calendar will silently do the wrong thing every
 time.
 
+### Reserving `requiresHuman` for money and signatures
+
+`create_task` and `update_task` accept `requiresHuman: true`, which parks the
+task on the operator. Left alone, agents use it for work they should do
+themselves: a red build, "file the fix as a PR", "optimize agent X". An
+instance that wants only money-moving or signature work to wait on a person
+opts each agent in (or the whole fleet, via `_defaults.yaml`):
+
+```yaml
+v2:
+  requires_human_tags: [payment, refund, wire, contract]
+```
+
+With the key set, both tools refuse `requiresHuman: true` on a task whose tags
+include none of those (case-insensitive), and return an error instead of
+silently dropping the flag, so the model acts on it:
+
+> requires_human is reserved for tasks tagged payment, refund, wire, contract
+> (money or signature). This is yours to do: do it, or assign it to an agent
+> that can.
+
+`update_task` judges the tags the task will carry after the call: the `tags`
+sent in the same call, else the task's current tags. Clearing the flag is never
+refused. Absent or empty = the platform default, no restriction. The floor is
+enforced in the engine's tool handlers, which every agent run crosses; the
+`robothor-memory` MCP server used by the operator's own Claude sessions has no
+authenticated agent identity and stays unrestricted.
+
 ---
 
 ## Limits
