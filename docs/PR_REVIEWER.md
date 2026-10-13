@@ -392,6 +392,13 @@ retries are spent.
   at once on a new head, and on the same head after
   `ROBOTHOR_PR_REVIEW_RETRY_COOLDOWN_MINUTES` (default 60), at most 3 attempts
   per head; the author can always reply "re-review" in the Chat thread.
+  **A prepare that fails before its job starts** (a fetch error, GitHub
+  erroring, the job refusing to start) fails the row the same way, so it is
+  never left `queued` with no task; a checkout or job-start failure is
+  transient and retried after 5 minutes. Git work on one repository's clone
+  (fetch, merge check, the job's worktree) runs one review at a time, so two
+  reviews of one repository never race on its refs; different repositories
+  run in parallel.
   **A posting failure never pays for a second review:** when the review was
   written and only the post failed, the intake retries after 5 minutes (not
   the full cooldown, since nothing is re-reviewed), the retry's

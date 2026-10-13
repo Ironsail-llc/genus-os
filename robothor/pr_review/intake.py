@@ -80,6 +80,11 @@ MAX_ATTEMPTS = 3
 #: re-reviewed, so it costs nothing to retry soon. GitHub's 500s cleared within
 #: minutes (2026-10-06/07); the hour a fresh review waits left PRs unreviewed.
 POST_RETRY_COOLDOWN = timedelta(minutes=5)
+#: How a prepare that failed before binding a job starts its row's ``error``.
+#: Both are transient — two fetches of one clone racing, a busy worktree — so
+#: they are retried on the short cooldown too.
+CHECKOUT_FAILED = "checkout failed:"
+START_FAILED = "claude_code_start failed:"
 _DRAFT_NOTE = "draft: waiting until it is ready for review"
 #: Re-read this much before the cursor: Chat's createTime filter is strict and
 #: clocks are not; per-message dedupe makes the overlap free.
@@ -165,6 +170,12 @@ def post_only(row: PrReviewRow) -> bool:
     """Whether a failed row holds a written review that only failed to post."""
     pending = row.last_review.get("pending") or {}
     return bool(row.job_id) and pending.get("job_id") == row.job_id
+
+
+def quick_retry(row: PrReviewRow) -> bool:
+    """Whether a failed row is retried on the short cooldown: a written review
+    that only failed to post, or a prepare that failed for a passing reason."""
+    return post_only(row) or row.error.startswith((CHECKOUT_FAILED, START_FAILED))
 
 
 def _raise_trigger(row: PrReviewRow, trigger: str, now: datetime | None = None) -> bool:
@@ -621,7 +632,7 @@ class Intake:
                 continue
             new_head = bool(row.head_sha and row.queued_sha and row.head_sha != row.queued_sha)
             cooldown = (
-                min(POST_RETRY_COOLDOWN, review_cooldown) if post_only(row) else review_cooldown
+                min(POST_RETRY_COOLDOWN, review_cooldown) if quick_retry(row) else review_cooldown
             )
             cooled = row.failed_at is None or row.failed_at <= self.now - cooldown
             if (new_head or (row.attempts < MAX_ATTEMPTS and cooled)) and _raise_trigger(
