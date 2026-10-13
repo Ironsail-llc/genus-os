@@ -38,11 +38,14 @@ person who posted the link** is classified by keyword: "re-review", "ptal",
 acknowledgement ("thanks", 👍) or a reviewer's status line ("#12: Approved",
 "#12: Comments/change request", "changes requested" — including another
 review bot's) does nothing; a message of nothing but the pull request's
-links (or `#12`) is a re-review request — reposting the links is how teams ask
-for another look; anything negated or unclear ("not fixed yet", "will push
-later", "is this fixed?") gets a reply in its thread — `#12: Want a re-review?
-Reply "re-review".` — and files nothing. No request is dropped without a
-word. In a thread that posted several pull requests, a reply that names some
+links (or `#12`, separated by commas, semicolons or "and") is a re-review
+request — reposting the links is how teams ask for another look. Only
+pull-request links and numbers are set aside: whatever else the message says
+(`#12 👍`, `#12?`, `#12 approved`, another URL) is read like any reply.
+Anything negated or unclear ("not fixed yet", "will push later", "is this
+fixed?") gets one question in its thread — `#12, #13: Want a re-review? Reply
+"re-review".`, naming every pull request it covers — and files nothing. No
+request is dropped without a word. In a thread that posted several pull requests, a reply that names some
 of them ("12 is ready for re-review", "#12", a link) re-reviews only those.
 A **new top-level message** linking a pull request that is already tracked
 ("re-review <link>", or the link alone, from anyone) is a re-review request
@@ -367,9 +370,19 @@ retries are spent.
 - A review whose run died after prepare (engine restart, run timeout) is
   picked up again: `pr_review_work` takes `IN_PROGRESS` review tasks as well
   as new ones, and `pr_review_prepare` hands it the job already bound, so a
-  restart never pays for a second review. If the task was lost, the intake
-  finds the bound job finished for 10 minutes with nobody finalizing it, puts
-  the task back to `TODO` and counts it in `queued_tasks`.
+  restart never pays for a second review. The intake counts every review in
+  flight in `queued_tasks` (and `in_flight_tasks`), so the next tick's worker
+  resumes it at once; a run still attending it makes that one return
+  `skipped: running`. If the task was lost, the intake finds the bound job
+  finished for 10 minutes with nobody finalizing it and puts the task back
+  to `TODO`.
+- A job that keeps answering "still running" at once — this engine holds no
+  live runner for it (HA, a failed resume, an orphan row) — is polled every
+  30 s, not in a loop, and after 5 minutes its task is handed back
+  `IN_PROGRESS` (outcome `unfinished`) for the orphan path.
+- A task the CRM refuses to start or resolve is reported in the run's
+  `task_errors` and that outcome's `error`; the review itself is never
+  posted twice (finalize returns `already_posted`).
 - `pr_reviews` holds one row per pull request: `status` is `pending`,
   `queued`, `reviewing`, `posting`, `approved`, `changes_requested`,
   `commented`, `failed`, `skipped` or `closed`; `job_id` is the review job

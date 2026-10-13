@@ -20,7 +20,13 @@ mid-run starts as soon as a slot frees. No new task is taken after
 ``take_for_s``; work still in flight at ``deadline_s`` is left as it is — its
 task stays ``IN_PROGRESS`` and the next run takes it again, where
 ``prepare`` hands back the job already bound, so a cut-short run never pays
-for a second review.
+for a second review. A job that answers "still running" at once — this
+engine holds no live runner for it — is looked at every ``poll_s``, never in
+a loop, and after ``stalled_s`` its task is handed back the same way.
+
+**CRM errors.** A task the CRM refuses to start is not reviewed; one it
+refuses to resolve keeps its outcome, with ``error`` saying so (the review is
+never posted twice: finalize returns ``already_posted``).
 
 **Digest.** A non-empty ``digest`` from finalize (a posted review with the
 Telegram digest on, or a review the operator asked for) goes to ``notify`` as
@@ -60,6 +66,10 @@ TAKE_FOR_SECONDS = 45 * 60
 #: workflow's 3300 s tool step and its 3600 s timeout.
 DEADLINE_SECONDS = 54 * 60
 POLL_SECONDS = 30.0
+#: How long a job may keep answering "still running" at once — the sign this
+#: engine holds no live runner for it (HA, a failed resume, an orphan row) —
+#: before its task is handed back, ``IN_PROGRESS``, to the orphan path.
+STALLED_SECONDS = 300.0
 #: One wait call; the loop re-checks the deadline between them.
 _WAIT_CHUNK = 300.0
 _RUNNING_JOB = frozenset({"queued", "running"})
@@ -82,6 +92,9 @@ class Outcome:
     verdict: str = ""
     review_url: str = ""
     resolution: str = ""
+    #: A CRM write that failed (the task may still be open); the review itself
+    #: is never re-posted for it — finalize returns ``already_posted``.
+    error: str = ""
 
 
 def parse_task(task: dict[str, Any]) -> tuple[str, int] | None:
@@ -108,6 +121,8 @@ class _Run:
         notify: Notify | None,
         deadline: float,
         clock: Callable[[], float],
+        poll_s: float,
+        stalled_s: float,
     ) -> None:
         self.cfg = cfg
         self.queue = queue
@@ -117,17 +132,48 @@ class _Run:
         self.notify = notify
         self.deadline = deadline
         self.clock = clock
+        self.poll_s = poll_s
+        self.stalled_s = stalled_s
         self.digest: list[str] = []
 
     async def resolve(self, out: Outcome, resolution: str) -> Outcome:
         out.resolution = resolution
-        await self.queue.resolve(out.task_id, resolution)
+        try:
+            await self.queue.resolve(out.task_id, resolution)
+        except Exception as exc:  # noqa: BLE001 - surfaced; the outcome stands
+            out.error = f"task not resolved: {_short(exc)}"
+            logger.warning("pr_review_work %s: %s", out.task_id, out.error)
         return out
+
+    async def wait_for(self, job_id: str) -> str:
+        """The job's final status, or "" when it is still running at the
+        deadline, or "stalled" when this engine is not running it."""
+        status, stalled_since = "queued", None
+        while status in _RUNNING_JOB:
+            left = self.deadline - self.clock()
+            if left <= 0:
+                return ""
+            chunk = min(left, _WAIT_CHUNK)
+            asked = self.clock()
+            status = await self.wait(job_id, chunk)
+            if status not in _RUNNING_JOB or self.clock() - asked >= chunk / 2:
+                stalled_since = None
+                continue
+            # Back at once and still running: no live runner here. Pace the
+            # next look instead of spinning, and hand it back if it persists.
+            stalled_since = stalled_since if stalled_since is not None else asked
+            if self.clock() - stalled_since >= self.stalled_s:
+                return "stalled"
+            await asyncio.sleep(max(0.0, min(self.poll_s, self.deadline - self.clock())))
+        return status
 
     async def one(self, task: dict[str, Any]) -> Outcome:
         task_id = str(task["id"])
         if str(task.get("status") or "TODO") != "IN_PROGRESS":
-            await self.queue.start(task_id)  # a task resolves only from IN_PROGRESS
+            try:
+                await self.queue.start(task_id)  # a task resolves only from IN_PROGRESS
+            except Exception as exc:  # noqa: BLE001 - not this run's to take
+                return Outcome(task_id, "", "not_started", error=f"task not started: {exc}")
         parsed = parse_task(task)
         if parsed is None:
             out = Outcome(task_id, "", "unreadable")
@@ -148,15 +194,17 @@ class _Run:
             error = prepared.get("error") or "no job id"
             return await self.resolve(out, f"Prepare failed: {_short(error)}")
         if not prepared.get("resumed"):
-            status = "queued"
-            while status in _RUNNING_JOB:
-                left = self.deadline - self.clock()
-                if left <= 0:
-                    # Left IN_PROGRESS: the next run takes it, and prepare
-                    # hands back this job instead of starting another.
-                    out.status = "unfinished"
-                    return out
-                status = await self.wait(job_id, min(left, _WAIT_CHUNK))
+            ended = await self.wait_for(job_id)
+            if ended in ("", "stalled"):
+                # Left IN_PROGRESS: the next run takes it, and prepare hands
+                # back this job instead of starting another.
+                out.status = "unfinished"
+                out.resolution = (
+                    "job has no runner in this engine; left for the orphan path"
+                    if ended == "stalled"
+                    else "deadline reached; the next run finishes it"
+                )
+                return out
         done = await self.finalize(repo, number, job_id)
         digest = str(done.get("digest") or "")
         if digest:
@@ -192,11 +240,14 @@ async def work(
     take_for_s: float = TAKE_FOR_SECONDS,
     deadline_s: float = DEADLINE_SECONDS,
     poll_s: float = POLL_SECONDS,
+    stalled_s: float = STALLED_SECONDS,
     clock: Callable[[], float] = time.monotonic,
 ) -> dict[str, Any]:
     """Drain the open review tasks, ``cfg.workers`` at a time; the run's outcomes."""
     started = clock()
-    run = _Run(cfg, queue, prepare, wait, finalize, notify, started + deadline_s, clock)
+    run = _Run(
+        cfg, queue, prepare, wait, finalize, notify, started + deadline_s, clock, poll_s, stalled_s
+    )
     running: dict[asyncio.Task[Outcome], str] = {}
     seen: set[str] = set()
     outcomes: list[Outcome] = []
@@ -236,6 +287,7 @@ async def work(
         "processed": len(outcomes),
         "posted": sum(1 for o in outcomes if o.status == "posted"),
         "unfinished": sum(1 for o in outcomes if o.status in ("unfinished", "error")),
+        "task_errors": [f"{o.task_id}: {o.error}" for o in outcomes if o.error],
         "outcomes": [asdict(o) for o in outcomes],
         "digest": run.digest,
         "elapsed_s": round(clock() - started, 1),

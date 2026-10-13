@@ -11,6 +11,8 @@ import asyncio
 import contextlib
 from typing import Any
 
+import pytest
+
 from robothor.pr_review.config import ReviewerConfig
 from robothor.pr_review.tests.fakes import REPO, FakeQueue, review_task
 from robothor.pr_review.worker import parse_task, work
@@ -295,3 +297,84 @@ async def test_the_crm_queue_lists_the_agents_open_review_tasks_oldest_first(mon
     await queue.resolve("old", "APPROVE: u")
     assert calls["resolve"][0] == ("old", "APPROVE: u")
     assert calls["resolve"][1]["agent_id"] == "pr-reviewer"
+
+
+async def test_the_crm_queue_raises_when_the_crm_refuses(monkeypatch):
+    from robothor.crm import dal
+    from robothor.pr_review.tasks import CrmTaskQueue
+
+    monkeypatch.setattr(dal, "update_task", lambda *a, **kw: {"error": "bad transition"})
+    monkeypatch.setattr(dal, "resolve_task", lambda *a, **kw: {"error": "Cannot resolve"})
+    queue = CrmTaskQueue("tenant-a", "pr-reviewer")
+    with pytest.raises(RuntimeError, match="bad transition"):
+        await queue.start("t1")
+    with pytest.raises(RuntimeError, match="Cannot resolve"):
+        await queue.resolve("t1", "APPROVE: u")
+    monkeypatch.setattr(dal, "resolve_task", lambda *a, **kw: False)
+    with pytest.raises(RuntimeError, match="not found"):
+        await queue.resolve("t1", "APPROVE: u")
+
+
+# ── A job this engine is not running ───────────────────────────────────
+# CodingJobManager.wait returns at once, still running, when this engine holds
+# no live task for the job (HA, a failed resume, an orphan row). The worker
+# called it back to back until its deadline: 1.3M calls in 2 s with a fake.
+
+
+class NoRunner(Reviews):
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls = 0
+
+    async def wait(self, job_id: str, timeout: float) -> str:
+        self.calls += 1
+        return "running"
+
+
+async def test_a_wait_that_returns_at_once_is_paced_not_spun():
+    queue = FakeQueue([review_task("t1", 1)])
+    reviews = NoRunner()
+    result = await _work(queue, reviews, poll_s=0.02, deadline_s=0.3, stalled_s=10)
+    assert reviews.calls <= 20  # one per poll interval, not millions
+    assert result["outcomes"][0]["status"] == "unfinished"
+
+
+async def test_a_job_with_no_runner_here_is_handed_back_early():
+    queue = FakeQueue([review_task("t1", 1)])
+    reviews = NoRunner()
+    result = await _work(queue, reviews, poll_s=0.01, deadline_s=60, stalled_s=0.1)
+    out = result["outcomes"][0]
+    assert out["status"] == "unfinished" and "no runner" in out["resolution"]
+    assert queue.resolved == {}  # left IN_PROGRESS for the orphan path
+    assert result["elapsed_s"] < 5
+
+
+# ── The CRM refusing a write ──────────────────────────────────────────
+
+
+class RefusingQueue(FakeQueue):
+    async def resolve(self, task_id: str, resolution: str) -> None:
+        raise RuntimeError("Cannot resolve from TODO")
+
+
+async def test_a_refused_resolve_is_surfaced_in_the_outcome():
+    queue = RefusingQueue([review_task("t1", 1)])
+    reviews = Reviews()
+    result = await _work(queue, reviews)
+    out = result["outcomes"][0]
+    assert out["status"] == "posted"  # the review itself went out, once
+    assert "task not resolved" in out["error"] and "Cannot resolve" in out["error"]
+    assert reviews.finalized == [(REPO, 1, "job-1")]
+    assert result["task_errors"] == [f"t1: {out['error']}"]
+
+
+async def test_a_refused_start_reviews_nothing():
+    class NoStart(FakeQueue):
+        async def start(self, task_id: str) -> None:
+            raise RuntimeError("start t1: bad transition")
+
+    reviews = Reviews()
+    result = await _work(NoStart([review_task("t1", 1)]), reviews)
+    assert reviews.prepared == []
+    assert result["outcomes"][0]["status"] == "not_started"
+    assert "bad transition" in result["outcomes"][0]["error"]

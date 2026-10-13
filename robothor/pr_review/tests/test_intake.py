@@ -366,9 +366,22 @@ async def test_a_job_still_attended_is_not_resumable(env, state):
     cfg, _ = await _orphan(env)
     jobs = _Jobs(**({"job-1": state} if state else {}))
     counts = await _count(env, cfg, jobs)
-    assert counts["resumable_tasks"] == 0 and counts["queued_tasks"] == 0
+    assert counts["resumable_tasks"] == 0
     await _run(env, cfg, job_state=jobs)
     assert env["tasks"].reopened == []
+
+
+async def test_a_review_in_flight_wakes_the_worker_at_once(env):
+    # Review feedback on #677: a worker run that hit its deadline leaves its
+    # task IN_PROGRESS and the row reviewing; counting it only after the job
+    # ended plus ORPHAN_GRACE left it 10+ minutes. Counted now, the next tick's
+    # pr_review_work resumes it (a run still in progress returns skipped:
+    # running, so nothing runs twice).
+    cfg, _ = await _orphan(env)
+    jobs = _Jobs(**{"job-1": ("running", None)})
+    counts = await _count(env, cfg, jobs)
+    assert counts["in_flight_tasks"] == 1
+    assert counts["queued_tasks"] == 1
 
 
 async def test_without_a_job_lookup_nothing_is_resumable(env):
@@ -614,6 +627,40 @@ async def test_a_reply_naming_one_pr_of_a_multi_pr_thread_rereviews_only_that_on
     env["chat"].post("8 is ready for re-review", reply=True, time="2026-10-05T10:05:00.000000Z")
     await _run(env)
     assert [t["spec"].row.number for t in env["tasks"].created[2:]] == [8]
+
+
+async def _thread_of_five(env):
+    links = " ".join(f"https://github.com/{REPO}/pull/{n}" for n in range(1, 6))
+    for n in range(1, 6):
+        env["github"].add(make_pr(n, SHA1))
+    env["chat"].post(f"five for review {links}")
+    await _run(env, _cfg(max_concurrent=10))
+    for n in range(1, 6):
+        await _finish(env, n)
+
+
+async def test_one_ambiguous_reply_in_a_thread_of_five_asks_once(env):
+    await _thread_of_five(env)
+    before = len(env["chat"].replies)
+    env["chat"].post("not fixed yet", reply=True, time="2026-10-05T10:05:00.000000Z")
+    summary = await _run(env)
+    asked = env["chat"].replies[before:]
+    assert len(asked) == 1
+    assert asked[0][2].endswith('Want a re-review? Reply "re-review".')
+    assert all(f"#{n}" in asked[0][2] for n in range(1, 6))
+    assert summary["tasks_created"] == 0
+    rows = [await env["store"].get(TENANT, REPO, n) for n in range(1, 6)]
+    assert all(r.pending_trigger == "" for r in rows)
+
+
+async def test_one_ambiguous_repost_of_five_links_asks_once(env):
+    await _thread_of_five(env)
+    before = len(env["chat"].replies)
+    links = " ".join(f"https://github.com/{REPO}/pull/{n}" for n in range(1, 6))
+    env["chat"].post(f"will push later {links}", thread=T2, time="2026-10-05T10:05:00Z")
+    await _run(env)
+    asked = env["chat"].replies[before:]
+    assert len(asked) == 1 and asked[0][1] == T2
 
 
 async def test_a_reply_naming_no_pr_rereviews_the_whole_thread(env):

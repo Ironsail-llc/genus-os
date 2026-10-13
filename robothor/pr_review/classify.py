@@ -140,13 +140,21 @@ _NEGATION = [
 ]
 _QUESTION = re.compile(r"\?\s*$")
 
-# What a links-only message is made of: Chat's ``<url|label>`` links, bare
-# URLs, ``owner/repo#123`` and ``#123``. Whatever survives these is words.
-_LINK_PARTS = [
-    re.compile(r"<https?://[^>]*>"),
-    re.compile(r"https?://\S+"),
+# References to a pull request, stripped before a reply is read: Chat's
+# ``<url|label>`` form of a pull-request link, a bare pull-request link,
+# ``owner/repo#123``, ``#123`` and a bare number. Nothing else is stripped —
+# another URL, an emoji or a "?" is part of what the reply says.
+_PR_LINK = r"https?://(?:www\.)?github\.com/[\w.-]+/[\w.-]+/pull/\d+"
+_PR_REFS = [
+    re.compile(rf"<{_PR_LINK}[^>]*>", re.IGNORECASE),
+    re.compile(rf"{_PR_LINK}[^\s>|]*", re.IGNORECASE),
     re.compile(r"(?:[\w.-]+/[\w.-]+)?#\d+\b"),
 ]
+_BARE_NUMBER = re.compile(r"(?<![\w/.-])\d+\b")
+# What may sit between references in a links-only message.
+_SEPARATORS = re.compile(r"[\s,;]+|\band\b", re.IGNORECASE)
+# Left at the front once the reference is gone ("<link|#12>: Approved").
+_LEADING = re.compile(r"^[\s:,;\-\u2013\u2014]+")
 
 # Replies that clearly ask for nothing.
 _ACKNOWLEDGEMENT = re.compile(
@@ -177,11 +185,12 @@ def classify_rereview(text: str) -> Intent:
     t = (text or "").strip()
     if not t:
         return "other"
-    body = _PR_PREFIX.sub("", t)
+    body, named = _strip_refs(t)
+    if named and not _SEPARATORS.sub("", body):
+        return "rereview"  # nothing but the pull requests: asking again
+    body = _LEADING.sub("", _PR_PREFIX.sub("", body))
     if _STATUS_REPORT.match(body):
         return "other"
-    if _links_only(t):
-        return "rereview"
     request = any(p.search(body) for p in _REQUEST)
     status = bool(_STATUS.search(body))
     hedged = any(n.search(body) for n in _NEGATION)
@@ -197,13 +206,13 @@ def classify_rereview(text: str) -> Intent:
     return "ambiguous"
 
 
-def _links_only(text: str) -> bool:
-    """Whether ``text`` names a pull request and says nothing else."""
+def _strip_refs(text: str) -> tuple[str, int]:
+    """``text`` without its pull-request references, and how many it named."""
     rest, named = text, 0
-    for part in _LINK_PARTS:
+    for part in _PR_REFS:
         rest, found = part.subn(" ", rest)
         named += found
-    return bool(named) and not re.search(r"\w", rest)
+    return _BARE_NUMBER.sub(" ", rest).strip(), named
 
 
 _NUMBER_RE = re.compile(r"(?<![\w/.-])#?(\d{1,7})\b")

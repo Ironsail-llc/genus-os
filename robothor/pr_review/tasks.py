@@ -170,12 +170,22 @@ class CrmTaskQueue:
     async def list_open(self) -> list[dict[str, Any]]:
         return await asyncio.to_thread(self._list_open)
 
+    @staticmethod
+    def _check(result: Any, what: str, task_id: str) -> None:
+        """The DAL answers a refusal with ``{"error": ...}`` and a miss with
+        False, rather than raising: raise, so the worker can say so."""
+        if isinstance(result, dict) and result.get("error"):
+            raise RuntimeError(f"{what} {task_id}: {result['error']}")
+        if result is False:
+            raise RuntimeError(f"{what} {task_id}: task not found")
+
     def _start(self, task_id: str) -> None:
         from robothor.crm.dal import update_task
 
-        update_task(
+        result = update_task(
             task_id, changed_by=self.agent_id, tenant_id=self.tenant_id, status="IN_PROGRESS"
         )
+        self._check(result, "start", task_id)
 
     async def start(self, task_id: str) -> None:
         await asyncio.to_thread(self._start, task_id)
@@ -183,7 +193,8 @@ class CrmTaskQueue:
     def _resolve(self, task_id: str, resolution: str) -> None:
         from robothor.crm.dal import resolve_task
 
-        resolve_task(task_id, resolution, agent_id=self.agent_id, tenant_id=self.tenant_id)
+        result = resolve_task(task_id, resolution, agent_id=self.agent_id, tenant_id=self.tenant_id)
+        self._check(result, "resolve", task_id)
 
     async def resolve(self, task_id: str, resolution: str) -> None:
         await asyncio.to_thread(self._resolve, task_id, resolution)

@@ -158,3 +158,42 @@ def test_a_link_with_hedging_words_stays_ambiguous():
 def test_a_status_line_naming_the_pr_stays_other():
     assert classify_rereview("#12: Approved") == "other"
     assert classify_rereview("👍") == "other"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "https://github.com/acme/widgets/pull/12 and https://github.com/acme/widgets/pull/13",
+        "https://github.com/acme/widgets/pull/12; https://github.com/acme/widgets/pull/13",
+        "#12, #13 and #14",
+        "acme/widgets#12",
+    ],
+)
+def test_several_links_and_their_separators_are_still_a_request(text):
+    assert classify_rereview(text) == "rereview"
+
+
+# Review feedback on the links-only rule: it stripped every URL and any
+# non-word character, so an emoji or a "?" beside a PR number, or a CI link,
+# read as a re-review request. Only pull-request links, #N and bare numbers
+# are stripped; whatever is left is classified like any other reply.
+@pytest.mark.parametrize(
+    "text",
+    [
+        "#12 👍",
+        "#12 ✅",
+        "#12 🙏",
+        "<https://github.com/acme/widgets/pull/12|#12>: Approved",
+        "#12 approved",
+    ],
+)
+def test_a_pr_number_with_an_acknowledgement_or_verdict_is_other(text):
+    assert classify_rereview(text) == "other"
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["#12 ❌", "#12?", "🚢 #12", "https://ci.example.com/build/55"],
+)
+def test_a_pr_number_with_anything_else_is_not_a_request(text):
+    assert classify_rereview(text) != "rereview"

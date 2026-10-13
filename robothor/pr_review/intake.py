@@ -327,12 +327,15 @@ class Intake:
         pending = await self.store.list_pending(self.tenant_id)
         resumable = await self._resumable(active)
         self.summary["open_tasks"] = len(active)
-        # Every task waiting for the agent — the run workflow's wake condition.
-        # A resumable review counts: no run is attending it, and nothing else
-        # would wake one before the stale timeout fails it.
-        self.summary["queued_tasks"] = sum(1 for r in active if r.status == "queued") + len(
-            resumable
-        )
+        # Every task the review worker has to take — the run workflow's wake
+        # condition. A review in flight counts too: its task is IN_PROGRESS,
+        # and when the run attending it ended (its deadline, a restart) the
+        # next tick's worker resumes it at once instead of after the job ends
+        # plus ORPHAN_GRACE. A run still attending it makes the new one return
+        # skipped: running, so nothing is reviewed twice.
+        in_flight = sum(1 for r in active if r.status in ("reviewing", "posting"))
+        self.summary["in_flight_tasks"] = in_flight
+        self.summary["queued_tasks"] = sum(1 for r in active if r.status == "queued") + in_flight
         self.summary["resumable_tasks"] = len(resumable)
         self.summary["pending"] = len(pending)
         return self.summary
@@ -504,6 +507,7 @@ class Intake:
         if not found:
             return "ignored", "no allowed pull-request link"
         claimed = 0
+        unclear: list[PrReviewRow] = []
         for pr in found:
             row = await self.store.get(self.tenant_id, pr.repo_full, pr.number)
             if row is None:
@@ -522,8 +526,7 @@ class Intake:
             row.chat_poster = sender
             if repost:
                 if classify_rereview(message_search_text(message)) == "ambiguous":
-                    await self.store.save(row)
-                    await self._ask(row)
+                    unclear.append(row)
                 elif _raise_trigger(row, "rereview", self._when(message)):
                     self.summary["triggers"] += 1
                     if row.status in ACTIVE_STATUSES:
@@ -533,6 +536,7 @@ class Intake:
                 self.summary["triggers"] += 1
             await self.store.save(row)
             claimed += 1
+        await self._ask(unclear)
         if claimed and self.chat is not None and self.cfg.claim_reaction:
             await self.chat.react(str(message.get("name") or ""), self.cfg.claim_reaction)
         return ("pr", f"claimed {claimed}") if claimed else ("ignored", "already tracked")
@@ -555,8 +559,7 @@ class Intake:
         if intent == "other":
             return "reply", "not a re-review request"
         if intent == "ambiguous":
-            for row in rows:
-                await self._ask(row)
+            await self._ask(rows)
             return "reply", f"asked x{len(rows)}"
         raised = 0
         for row in rows:
@@ -574,18 +577,22 @@ class Intake:
         """When a Chat request was made: the message's own time, else now."""
         return parse_chat_time(str(message.get("createTime") or "")) or self.now
 
-    async def _ask(self, row: PrReviewRow) -> None:
-        """Answer a reply the keyword check could not read: ask, file nothing."""
+    async def _ask(self, rows: list[PrReviewRow]) -> None:
+        """Answer a message the keyword check could not read: ask once in its
+        thread, naming every pull request it covers, and file nothing."""
+        if not rows:
+            return
         self.summary["asked"] = self.summary.get("asked", 0) + 1
-        await self._say(row, ASK_REPLY)
+        await self._say(rows[0], ASK_REPLY, also=rows[1:])
 
-    async def _say(self, row: PrReviewRow, text: str) -> None:
+    async def _say(
+        self, row: PrReviewRow, text: str, also: list[PrReviewRow] | None = None
+    ) -> None:
         if not (self.chat and row.chat_space and row.chat_thread):
             return
+        named = ", ".join(f"<{r.url}|#{r.number}>" for r in [row, *(also or [])])
         try:
-            name = await self.chat.reply(
-                row.chat_space, row.chat_thread, f"<{row.url}|#{row.number}>: {text}"
-            )
+            name = await self.chat.reply(row.chat_space, row.chat_thread, f"{named}: {text}")
         except Exception as exc:  # noqa: BLE001 - an announcement is not the review
             self._error(f"chat reply {row.key}", exc)
             return
