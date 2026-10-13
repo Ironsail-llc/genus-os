@@ -3,18 +3,22 @@
 # Install beside pr-review-intake.yaml (copy to docs/workflows/, exclude
 # locally). See docs/PR_REVIEWER.md.
 #
-# Wakes the pr-reviewer agent only when a review task is waiting, so an idle
-# instance spends nothing on a model. The first step is the intake tool with
-# count_only: true — it reads the queue and changes nothing. Only the
-# pr-review-intake workflow dispatches (under a per-tenant lock), so the two
-# crons can never file the same review twice. The engine never runs the agent
-# twice at once, so a tick that lands during a long review is skipped, not
-# stacked.
+# Runs the queued reviews only when a review task is waiting. The first step
+# is the intake tool with count_only: true — it reads the queue and changes
+# nothing. Only the pr-review-intake workflow dispatches (under a per-tenant
+# lock), so the two crons can never file the same review twice.
+#
+# The review step is a tool, not an agent: pr_review_work runs up to
+# ROBOTHOR_PR_REVIEW_WORKERS reviews at once (3 by default) with no model —
+# prepare, the Claude Code job, finalize, resolve. It re-reads the queue every
+# 30 s while a review is in flight, takes no new task after 45 minutes and
+# returns inside its 3300 s step; the next tick carries on. One run per tenant
+# at a time: a tick that lands during a run returns skipped: running.
 
 id: pr-review-run
 name: PR Review Run
-description: Run the pr-reviewer agent when a pr-review task is queued
-version: "2026-10-05"
+description: Run the queued pull-request reviews, several at once, when a pr-review task is waiting
+version: "2026-10-13"
 
 triggers:
   - type: cron
@@ -22,7 +26,6 @@ triggers:
     timezone: UTC
   - type: manual
 
-# Above one review: Claude Code's run plus the agent's own steps.
 timeout_seconds: 3600
 
 steps:
@@ -44,11 +47,9 @@ steps:
         goto: done
 
   - id: review
-    type: agent
-    agent_id: pr-reviewer
-    message: >
-      Review run. Process your open pr-review tasks one at a time, oldest first,
-      following your instructions exactly.
+    type: tool
+    tool_name: pr_review_work
+    tool_timeout_seconds: 3300
     on_failure: abort
 
   - id: done

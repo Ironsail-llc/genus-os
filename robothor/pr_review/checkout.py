@@ -5,6 +5,13 @@ job with ``base_ref=<head sha>``), so the clone must hold the head commit and th
 branch for ``git merge-base``. The GitHub token reaches git only through
 ``GIT_CONFIG_*`` environment variables as an ``http.extraHeader``: it is
 never written to ``.git/config`` and never appears in an argv.
+
+**One writer per clone.** Reviews run in parallel, and two of one repository
+fetching into its clone at once fail ("cannot lock ref
+'refs/remotes/origin/main'"). Everything that writes into a clone — the
+fetch, ``merge-tree``'s objects, the review job's ``git worktree add`` —
+holds :func:`clone_lock` for that clone; different repositories never wait
+on each other.
 """
 
 from __future__ import annotations
@@ -16,7 +23,7 @@ import os
 import re
 from pathlib import Path
 
-__all__ = ["CheckoutError", "ensure_checkout", "read_at"]
+__all__ = ["CheckoutError", "clone_lock", "ensure_checkout", "read_at"]
 
 _TIMEOUT_S = 300.0
 _SHA_RE = re.compile(r"^[0-9a-f]{7,64}$")
@@ -25,6 +32,18 @@ _REF_RE = re.compile(r"^[A-Za-z0-9._/-]+$")
 
 class CheckoutError(RuntimeError):
     pass
+
+
+_CLONE_LOCKS: dict[str, asyncio.Lock] = {}
+
+
+def clone_lock(path: Path | str) -> asyncio.Lock:
+    """The lock that serializes git writes into the clone at ``path``."""
+    key = str(Path(path).expanduser().resolve())
+    lock = _CLONE_LOCKS.get(key)
+    if lock is None:
+        lock = _CLONE_LOCKS[key] = asyncio.Lock()
+    return lock
 
 
 def _git_env(token: str) -> dict[str, str]:
@@ -92,6 +111,19 @@ async def ensure_checkout(
     if remote_url.startswith("-"):
         raise CheckoutError("remote url may not start with '-'")
     dest = Path(dest)
+    async with clone_lock(dest):
+        return await _fetch(dest, number, head_sha, base_branch, remote_url, token, also_fetch)
+
+
+async def _fetch(
+    dest: Path,
+    number: int,
+    head_sha: str,
+    base_branch: str,
+    remote_url: str,
+    token: str,
+    also_fetch: tuple[str, ...],
+) -> Path:
     if not (dest / ".git").exists():
         dest.parent.mkdir(parents=True, exist_ok=True)
         await _git(
@@ -135,16 +167,17 @@ async def merge_conflicts(repo: Path, base: str, head: str) -> list[str] | None:
     if base.startswith("-") or head.startswith("-"):
         return None
     try:
-        code, out = await _git(
-            Path(repo),
-            "merge-tree",
-            "--write-tree",
-            "--name-only",
-            "--no-messages",
-            base,
-            head,
-            check=False,
-        )
+        async with clone_lock(repo):
+            code, out = await _git(
+                Path(repo),
+                "merge-tree",
+                "--write-tree",
+                "--name-only",
+                "--no-messages",
+                base,
+                head,
+                check=False,
+            )
     except (CheckoutError, OSError):
         return None
     lines = out.splitlines()
