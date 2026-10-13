@@ -1402,6 +1402,48 @@ _PR_REVIEW_SCHEMAS: dict[str, dict[str, Any]] = {
             },
         },
     },
+    "pr_review_work": {
+        "type": "function",
+        "function": {
+            "name": "pr_review_work",
+            "description": (
+                "Run the queued pr-review tasks: up to ROBOTHOR_PR_REVIEW_WORKERS at once, "
+                "oldest first, each through pr_review_prepare, the review job and "
+                "pr_review_finalize, then resolves the task with the review URL. No model. "
+                "Normally run by the pr-review-run workflow; takes no new task after 45 "
+                "minutes and returns per-task outcomes."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    "pr_review_status": {
+        "type": "function",
+        "function": {
+            "name": "pr_review_status",
+            "description": (
+                "Use this when asked how pull-request reviews are going, where a pull "
+                "request's review is, or for a review report. Read-only, no model. Returns "
+                "now (reviews in flight, the queue in order, free slots), the window's "
+                "reviews by verdict, request-to-answer latency (median, p90), failures and "
+                "retries, problems (stuck, out of retries, dropped requests, an old queue) "
+                "and alerts — one line per problem, empty when all is well. pr=<url or "
+                "owner/repo#N> adds that pull request's state and history."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "since_hours": {
+                        "type": "number",
+                        "description": "The report window in hours (default 24; 168 for a week)",
+                    },
+                    "pr": {
+                        "type": "string",
+                        "description": "One pull request (URL or owner/repo#N) to report on",
+                    },
+                },
+            },
+        },
+    },
 }
 
 

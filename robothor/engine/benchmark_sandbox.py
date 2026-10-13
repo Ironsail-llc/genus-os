@@ -148,10 +148,13 @@ EXTERNAL_SIDE_EFFECT_TOOLS: frozenset[str] = frozenset(
         "claude_code_wait",
         "claude_code_followup",
         "claude_code_cancel",
-        # The pr-reviewer suite: polls a chat space, files tasks, posts reviews.
+        # The pr-reviewer suite: polls a chat space, files tasks, posts reviews
+        # (pr_review_status only reads, but it reads the live review state).
         "pr_review_intake",
         "pr_review_prepare",
         "pr_review_finalize",
+        "pr_review_work",
+        "pr_review_status",
         # Anything that drives a machine or a camera.
         "browser",
         "browser_navigate",

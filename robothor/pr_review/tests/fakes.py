@@ -150,3 +150,35 @@ class FakeTasks:
             {"id": task_id, "title": spec.title, "body": task_body(spec), "spec": spec}
         )
         return task_id
+
+
+def review_task(
+    task_id: str, number: int, repo: str = REPO, status: str = "TODO"
+) -> dict[str, Any]:
+    """A CRM review task as the DAL returns it (only the fields the worker reads)."""
+    return {
+        "id": task_id,
+        "status": status,
+        "body": f"Review pull request {repo}#{number}.\n\nrepo: {repo}\nnumber: {number}\n",
+    }
+
+
+class FakeQueue:
+    """The open pr-review tasks, oldest first, and what the worker did to them."""
+
+    def __init__(self, tasks: list[dict[str, Any]] | None = None) -> None:
+        self.tasks: list[dict[str, Any]] = list(tasks or [])
+        self.started: list[str] = []
+        self.resolved: dict[str, str] = {}
+
+    async def list_open(self) -> list[dict[str, Any]]:
+        return [t for t in self.tasks if t["id"] not in self.resolved]
+
+    async def start(self, task_id: str) -> None:
+        self.started.append(task_id)
+        for t in self.tasks:
+            if t["id"] == task_id:
+                t["status"] = "IN_PROGRESS"
+
+    async def resolve(self, task_id: str, resolution: str) -> None:
+        self.resolved[task_id] = resolution

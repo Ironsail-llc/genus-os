@@ -6,9 +6,10 @@ acknowledgement ("thanks", "👍") or a reviewer's verdict reported in the
 thread ("#123: Approved", "changes requested") — including another review
 bot's status lines — and ``ambiguous`` for everything it cannot decide: a
 negated or hedged request ("not fixed yet", "will push later") or a plain
-question. The intake
-never calls a model; an ambiguous reply is handed to the reviewer agent to
-decide, as a task.
+question. A message of nothing but pull-request links (or ``#123``) is a
+request: reposting the links is how a team asks for another look. The intake
+never calls a model; it asks the author of an ambiguous reply, in the thread,
+to say "re-review".
 """
 
 from __future__ import annotations
@@ -139,6 +140,14 @@ _NEGATION = [
 ]
 _QUESTION = re.compile(r"\?\s*$")
 
+# What a links-only message is made of: Chat's ``<url|label>`` links, bare
+# URLs, ``owner/repo#123`` and ``#123``. Whatever survives these is words.
+_LINK_PARTS = [
+    re.compile(r"<https?://[^>]*>"),
+    re.compile(r"https?://\S+"),
+    re.compile(r"(?:[\w.-]+/[\w.-]+)?#\d+\b"),
+]
+
 # Replies that clearly ask for nothing.
 _ACKNOWLEDGEMENT = re.compile(
     r"^\s*(?:thanks?|thank you|thx|ty|ok(?:ay)?|k|cool|nice|great|got it|will do|on it|"
@@ -171,6 +180,8 @@ def classify_rereview(text: str) -> Intent:
     body = _PR_PREFIX.sub("", t)
     if _STATUS_REPORT.match(body):
         return "other"
+    if _links_only(t):
+        return "rereview"
     request = any(p.search(body) for p in _REQUEST)
     status = bool(_STATUS.search(body))
     hedged = any(n.search(body) for n in _NEGATION)
@@ -184,6 +195,15 @@ def classify_rereview(text: str) -> Intent:
     if _ACKNOWLEDGEMENT.match(body):
         return "other"
     return "ambiguous"
+
+
+def _links_only(text: str) -> bool:
+    """Whether ``text`` names a pull request and says nothing else."""
+    rest, named = text, 0
+    for part in _LINK_PARTS:
+        rest, found = part.subn(" ", rest)
+        named += found
+    return bool(named) and not re.search(r"\w", rest)
 
 
 _NUMBER_RE = re.compile(r"(?<![\w/.-])#?(\d{1,7})\b")

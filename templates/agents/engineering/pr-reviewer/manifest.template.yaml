@@ -12,8 +12,12 @@ escalates_to: {{ escalates_to }}
 tags_produced: []
 tags_consumed: [pr-review]
 
-# No cron of its own: the pr-review-run workflow (templates/workflows/) wakes
-# this agent only when the intake has queued a review task.
+# No cron of its own, and no longer woken: the pr-review-run workflow
+# (templates/workflows/) runs the queued reviews itself with pr_review_work,
+# several at once and with no model. The agent stays installed because the
+# review jobs start under its id — the engine hands GITHUB_TOKEN to a job only
+# for an agent whose own manifest names it (`secrets:` below) — and the review
+# tasks are assigned to it.
 schedule:
   cron: ""
   timezone: {{ timezone }}
@@ -21,10 +25,10 @@ schedule:
   max_iterations: 40
   session_target: isolated
 
-# `none` keeps the agent silent. For the Telegram digest set
-# ROBOTHOR_PR_REVIEW_TELEGRAM_DIGEST=true and install with delivery_mode=announce.
-# line_filter: only the digest lines pr_review_finalize writes are delivered,
-# never the model's narration; a run with no digest stays silent.
+# `none` keeps the agent silent. The Telegram digest no longer goes through
+# this delivery: pr_review_work sends finalize's digest lines itself when
+# ROBOTHOR_PR_REVIEW_TELEGRAM_DIGEST=true. line_filter applies only to a run of
+# this agent by hand: the digest lines get through, the model's narration not.
 delivery:
   mode: {{ delivery_mode }}
   channel: telegram

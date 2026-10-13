@@ -15,15 +15,25 @@
   never handles the verdict, so it cannot post one unchecked. It posts
   through the GitHub review handlers directly, so the agent needs none of the
   ``github_*`` review-write tools.
+* ``pr_review_work`` — the review worker the pr-review-run workflow calls:
+  drains the open review tasks, ``ROBOTHOR_PR_REVIEW_WORKERS`` at once, each
+  through prepare -> wait -> finalize -> resolve, with no model. Review jobs
+  start as the reviewer agent (``ROBOTHOR_PR_REVIEW_AGENT``), whose manifest
+  names GITHUB_TOKEN — never as the workflow, which names nothing. Finalize's
+  digest lines go to the operator's Telegram as they arrive.
+* ``pr_review_status`` — read-only report: what is in flight and queued, the
+  window's verdicts, latency, failures and problems, or one pull request.
 
-All three are opt-in (``OPT_IN_TOOLS``), are external side effects, and
-refuse a benchmark run. The logic lives in :mod:`robothor.pr_review`.
+All five are opt-in (``OPT_IN_TOOLS``) and refuse a benchmark run. The logic
+lives in :mod:`robothor.pr_review`.
 """
 
 from __future__ import annotations
 
+import dataclasses
+import logging
 import re
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -31,8 +41,14 @@ if TYPE_CHECKING:
     from robothor.pr_review.clients import ChatClient, GitHubPort
     from robothor.pr_review.store import PrReviewStore
     from robothor.pr_review.tasks import TaskSink
+    from robothor.pr_review.worker import TaskQueue
+
+logger = logging.getLogger(__name__)
 
 HANDLERS: dict[str, Any] = {}
+
+#: Tenants with a pr_review_work run in this process: one at a time each.
+_WORKING: set[str] = set()
 
 SKILL_NAME = "pr-review"
 
@@ -73,6 +89,55 @@ def _tasks(tenant_id: str) -> TaskSink:
     from robothor.pr_review.tasks import CrmTaskSink
 
     return CrmTaskSink(tenant_id)
+
+
+def _task_queue(tenant_id: str, agent_id: str) -> TaskQueue:
+    from robothor.pr_review.tasks import CrmTaskQueue
+
+    return CrmTaskQueue(tenant_id, agent_id)
+
+
+def _review_tasks(tenant_id: str, agent_id: str) -> Any:
+    """Every review task, open or resolved, newest first (for pr_review_status)."""
+
+    async def lister() -> list[dict[str, Any]]:
+        import asyncio
+
+        from robothor.crm.dal import list_tasks
+        from robothor.pr_review.tasks import TASK_TAG
+
+        found: list[dict[str, Any]] = await asyncio.to_thread(
+            list_tasks,
+            assigned_to_agent=agent_id,
+            tags=[TASK_TAG],
+            exclude_resolved=False,
+            include_snoozed=True,
+            limit=2000,
+            tenant_id=tenant_id,
+        )
+        return found
+
+    return lister
+
+
+def _telegram_notify() -> Any:
+    """Send one line to the operator's Telegram, or None when there is no sender."""
+    from robothor.engine.delivery import get_telegram_sender
+
+    sender = get_telegram_sender()
+    if sender is None:
+        return None
+    from robothor.engine.config import EngineConfig
+
+    chat_id = EngineConfig.from_env().default_chat_id
+    if not chat_id:
+        return None
+
+    async def notify(line: str) -> None:
+        if not await sender(chat_id, line):
+            logger.warning("pr_review digest: Telegram accepted none of %r", line[:80])
+
+    return notify
 
 
 def _job_state(tenant_id: str) -> Any:
@@ -316,6 +381,90 @@ async def _finalize(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     )
 
 
+async def _work(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    if ctx.is_benchmark:
+        return _refusal("pr_review_work")
+    from robothor.pr_review.config import load_config
+    from robothor.pr_review.worker import work
+
+    cfg = load_config()
+    if not cfg.configured:
+        return {"configured": False, "processed": 0}
+    if ctx.tenant_id in _WORKING:
+        return {"skipped": "running", "processed": 0}
+    # The jobs start as the reviewer agent: grant_github hands Claude Code the
+    # token only for an agent whose own manifest names it, and the workflow's
+    # own id ("workflow:<id>") names nothing.
+    review_ctx = dataclasses.replace(ctx, agent_id=cfg.agent_id)
+
+    async def prepare(repo: str, number: int) -> dict[str, Any]:
+        return await _prepare({"repo": repo, "number": number}, review_ctx)
+
+    async def wait(job_id: str, timeout_s: float) -> str:
+        from robothor.engine.coding.jobs import get_manager
+
+        job = await get_manager().wait(job_id, ctx.tenant_id, timeout_s=timeout_s)
+        return str(job.status) if job is not None else ""
+
+    async def finalize(repo: str, number: int, job_id: str) -> dict[str, Any]:
+        return await _finalize({"repo": repo, "number": number, "job_id": job_id}, review_ctx)
+
+    _WORKING.add(ctx.tenant_id)
+    try:
+        return await work(
+            cfg,
+            _task_queue(ctx.tenant_id, cfg.agent_id),
+            prepare=prepare,
+            wait=wait,
+            finalize=finalize,
+            notify=_telegram_notify(),
+        )
+    finally:
+        _WORKING.discard(ctx.tenant_id)
+
+
+async def _status(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    if ctx.is_benchmark:
+        return _refusal("pr_review_status")
+    from robothor.pr_review.config import load_config
+    from robothor.pr_review.report import status_report
+
+    cfg = load_config()
+    if not cfg.configured:
+        return {"configured": False, "note": "the pull-request reviewer is not set up"}
+    try:
+        hours = float(args.get("since_hours") or 24)
+        if not 0 < hours <= 24 * 31:
+            raise ValueError
+    except (TypeError, ValueError):
+        return {"error": "since_hours must be a number of hours from 1 to 744"}
+
+    async def job_lookup(job_id: str) -> tuple[str, datetime | None] | None:
+        from robothor.engine.coding.jobs import get_manager
+
+        job = await get_manager().get(job_id, ctx.tenant_id)
+        if job is None:
+            return None
+        started = datetime.fromisoformat(str(job.created_at)) if job.created_at else None
+        if started is not None and started.tzinfo is None:
+            started = started.replace(tzinfo=UTC)
+        return str(job.status), started
+
+    now = datetime.now(UTC)
+    return await status_report(
+        cfg,
+        _store(),
+        ctx.tenant_id,
+        list_tasks=_review_tasks(ctx.tenant_id, cfg.agent_id),
+        job_lookup=job_lookup,
+        now=now,
+        since=now - timedelta(hours=hours),
+        pr=str(args.get("pr") or "").strip(),
+    )
+
+
 HANDLERS["pr_review_intake"] = _intake
 HANDLERS["pr_review_prepare"] = _prepare
 HANDLERS["pr_review_finalize"] = _finalize
+HANDLERS["pr_review_work"] = _work
+HANDLERS["pr_review_status"] = _status

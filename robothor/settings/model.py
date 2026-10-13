@@ -3362,8 +3362,8 @@ class PrReviewSettings(SettingsGroup):
     telegram_digest: bool = declare(
         False,
         "ROBOTHOR_PR_REVIEW_TELEGRAM_DIGEST",
-        "pr_review_finalize returns a one-line digest per posted review for the agent to "
-        "deliver; the agent's delivery must announce on Telegram for it to arrive.",
+        "pr_review_work sends a one-line Telegram digest per posted review (and per "
+        "failure on a pull request with no Chat thread) to ROBOTHOR_TELEGRAM_CHAT_ID.",
         restart_required=False,
         since="unreleased",
     )
@@ -3393,10 +3393,28 @@ class PrReviewSettings(SettingsGroup):
         since="unreleased",
     )
     max_concurrent: int = declare(
-        2,
+        6,
         "ROBOTHOR_PR_REVIEW_MAX_CONCURRENT",
         "Review tasks the intake keeps open at once; further pull requests wait and are "
-        "queued on a later poll.",
+        "queued on a later poll. Above ROBOTHOR_PR_REVIEW_WORKERS, so the next review is "
+        "ready the moment a worker frees.",
+        restart_required=False,
+        since="unreleased",
+    )
+    workers: int = declare(
+        3,
+        "ROBOTHOR_PR_REVIEW_WORKERS",
+        "Reviews pr_review_work runs at once. Each is a Claude Code job, so "
+        "ROBOTHOR_CODING_MAX_CONCURRENT must be at least this (one more leaves a slot "
+        "for other coding work), or the extra reviews wait as queued jobs.",
+        restart_required=False,
+        since="unreleased",
+    )
+    status_file: str = declare(
+        "",
+        "ROBOTHOR_PR_REVIEW_STATUS_FILE",
+        "Markdown file pr_review_work rewrites after each run with what it reviewed. "
+        "Empty means <workspace>/brain/memory/pr-reviewer-status.md.",
         restart_required=False,
         since="unreleased",
     )

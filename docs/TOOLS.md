@@ -511,7 +511,7 @@ though it has the same author.
 
 ### pr-reviewer suite (`pr_review_*`)
 
-Three opt-in tools that hold the deterministic halves of the pr-reviewer agent
+Five opt-in tools that run the pull-request reviewer without a model
 (docs/PR_REVIEWER.md). They are refused on a benchmark run.
 
 | Tool | Purpose |
@@ -519,6 +519,8 @@ Three opt-in tools that hold the deterministic halves of the pr-reviewer agent
 | `pr_review_intake` | Poll the configured repositories (`ROBOTHOR_PR_REVIEW_REPOS`), pull requests requesting `ROBOTHOR_PR_REVIEW_BOT_LOGIN`'s review, and the Chat spaces (`ROBOTHOR_PR_REVIEW_CHAT_SPACE`, comma-separated); claim new links with a reaction; file one `pr-review` CRM task per pull-request head. No model; one run per tenant at a time (a concurrent run returns `skipped: locked`). `count_only: true` only reports the queue (the `pr-review-run` workflow). Returns counts including `open_tasks` and `queued_tasks`. Run by the `pr-review-intake` workflow. |
 | `pr_review_prepare` | Fetch the head into a local clone, build the review prompt (repository rules read from the base branch) and start the read-only Claude Code review job itself; returns its `job_id`, bound to the pull request. `skip: true` means nothing to review; `already_started: true` returns the job a previous call started; `resumed: true` returns a finished job whose post failed, to finalize again without a new review. |
 | `pr_review_finalize` | For the `job_id` prepare bound, and no other: read the job's structured output from the job itself, validate and redact it, recompute the verdict, post through the `github_create_review` handler (once — a repeat call returns the posted review), reply on our previous threads, resolve our own threads on approval, announce in the Chat thread and record the state. Returns `review_url`. `dismiss: true` closes an ambiguous re-review request that was not one. |
+| `pr_review_work` | The review worker: take the open `pr-review` tasks oldest first, up to `ROBOTHOR_PR_REVIEW_WORKERS` (3) at once, and run each through `pr_review_prepare`, the job and `pr_review_finalize`, then resolve it with `<VERDICT>: <review_url>` or `<status>: <error>`. Jobs start as `ROBOTHOR_PR_REVIEW_AGENT`, whose manifest names `GITHUB_TOKEN`. Re-reads the queue every 30 s, takes nothing new after 45 min, returns per-task `outcomes`, sends finalize's digest lines to Telegram and rewrites the status file. Run by the `pr-review-run` workflow. |
+| `pr_review_status` | Read-only report, no model: `now` (in flight, the queue in order, free slots), the `window` (`since_hours`, 24 by default: reviews by verdict, request-to-answer latency median and p90, failures, retries, "No changes?" and "Want a re-review?" replies), `problems` (stuck reviews, failures out of retries, dropped requests, the oldest queued request) and `alerts`, one line each, empty when all is well. `pr=` adds one pull request's state and history. |
 
 **Choosing.** A pr-reviewer agent never calls `github_create_review` itself:
 `pr_review_finalize` is the only path that applies the policy (any blocker or
@@ -526,6 +528,8 @@ major means `REQUEST_CHANGES`, or `COMMENT` with
 `ROBOTHOR_PR_REVIEW_BLOCKING_EVENT=COMMENT`; `APPROVE` only when the model
 approved and nothing blocking remains; the optional ticket rule). Use the
 `github_*` review tools directly only for a one-off review outside the suite.
+For "how are reviews going?" or "where is #123?", call `pr_review_status`; to
+queue or re-queue one pull request, `pr_review_intake(pr=...)`.
 
 ### Vision: `view_image` and `analyze_image`
 
