@@ -351,6 +351,19 @@ async def test_status_wires_the_store_tasks_and_jobs():
     await store.save(
         PrReviewRow(tenant_id="test-tenant", repo=REPO, number=7, status="reviewing", job_id="j1")
     )
+    # A merged PR whose newer head was never reviewed: checked on GitHub, dropped.
+    await store.save(
+        PrReviewRow(
+            tenant_id="test-tenant",
+            repo=REPO,
+            number=9,
+            status="approved",
+            head_sha="2" * 40,
+            last_reviewed_sha="1" * 40,
+        )
+    )
+    github = FakeGitHub()
+    github.add(make_pr(9, "2" * 40, state="closed"))
     resolved = datetime.now(UTC) - timedelta(minutes=5)
     tasks = [
         {
@@ -372,9 +385,12 @@ async def test_status_wires_the_store_tasks_and_jobs():
         patch("robothor.pr_review.config.load_config", return_value=cfg),
         patch.object(pr_review, "_store", return_value=store),
         patch.object(pr_review, "_review_tasks", return_value=AsyncMock(return_value=tasks)),
+        patch.object(pr_review, "_github", return_value=github),
         patch("robothor.engine.coding.jobs.get_manager", return_value=manager),
     ):
         report = await pr_review._status({"since_hours": 48}, _CTX)
+    assert report["problems"]["dropped_requests"] == []
+    assert (await store.get("test-tenant", REPO, 9)).status == "closed"
     assert report["now"]["in_flight"][0]["job_status"] == "running"
     assert report["now"]["free_slots"] == 2
     assert report["window"]["posted"] == {"APPROVE": 1}

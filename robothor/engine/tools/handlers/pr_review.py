@@ -460,6 +460,9 @@ async def _status(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         now=now,
         since=now - timedelta(hours=hours),
         pr=str(args.get("pr") or "").strip(),
+        # Dropped-request candidates are checked against the PR's state: a
+        # merged one is left out (and its row closed), never alerted on.
+        github=_github(),
     )
 
 

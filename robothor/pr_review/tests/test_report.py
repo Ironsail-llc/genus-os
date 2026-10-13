@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from robothor.pr_review.config import ReviewerConfig
 from robothor.pr_review.report import status_report
 from robothor.pr_review.store import MemoryStore, PrReviewRow
-from robothor.pr_review.tests.fakes import REPO
+from robothor.pr_review.tests.fakes import REPO, FakeGitHub, make_pr
 
 TENANT = "test-tenant"
 NOW = datetime(2026, 10, 13, 12, 0, tzinfo=UTC)
@@ -163,9 +163,90 @@ async def test_a_dropped_request_is_flagged():
     )
     # Reviewed at its head: fine.
     await _row(store, 7, status="approved", head_sha="1" * 40, last_reviewed_sha="1" * 40)
-    report = await _report(store)
+    github = FakeGitHub()
+    github.add(make_pr(5, "2" * 40))
+    report = await _report(store, github=github)
     assert [d["pr"] for d in report["problems"]["dropped_requests"]] == [f"{REPO}#5"]
+    assert report["problems"]["dropped_requests"][0]["verified"] is True
     assert any("#5" in a for a in report["alerts"])
+
+
+# Live QA on #677: rows whose newer head was never reviewed keep their verdict
+# status after the pull request merges, and nothing polls them again (watch
+# repos off) — the heartbeat would have alerted on four merged PRs forever.
+
+
+async def _dropped_row(store, n):
+    await _row(store, n, status="approved", head_sha="2" * 40, last_reviewed_sha="1" * 40)
+
+
+async def test_a_merged_or_closed_candidate_is_excluded_and_its_row_closed():
+    store = MemoryStore()
+    for n in (5, 6, 7):
+        await _dropped_row(store, n)
+    github = FakeGitHub()
+    github.add(make_pr(5, "2" * 40))  # still open
+    github.add(make_pr(6, "2" * 40, state="closed"))  # merged or closed
+    # 7: gone from GitHub
+    report = await _report(store, github=github)
+    assert [d["pr"] for d in report["problems"]["dropped_requests"]] == [f"{REPO}#5"]
+    assert not any("#6" in a or "#7" in a for a in report["alerts"])
+    assert (await store.get(TENANT, REPO, 6)).status == "closed"
+    assert (await store.get(TENANT, REPO, 7)).status == "closed"
+    assert (await store.get(TENANT, REPO, 5)).status == "approved"
+    # Closed rows are never checked again.
+    again = await _report(store, github=github)
+    assert [d["pr"] for d in again["problems"]["dropped_requests"]] == [f"{REPO}#5"]
+
+
+async def test_without_github_candidates_are_unverified_and_raise_no_alert():
+    store = MemoryStore()
+    await _dropped_row(store, 5)
+    report = await _report(store)
+    [dropped] = report["problems"]["dropped_requests"]
+    assert dropped["pr"] == f"{REPO}#5" and dropped["verified"] is False
+    assert report["alerts"] == []
+    assert (await store.get(TENANT, REPO, 5)).status == "approved"
+
+
+async def test_a_failing_github_check_leaves_the_candidate_unverified():
+    store = MemoryStore()
+    await _dropped_row(store, 5)
+    github = FakeGitHub()
+
+    async def boom(repo, number):
+        raise RuntimeError("502")
+
+    github.get_pr = boom  # type: ignore[method-assign]
+    report = await _report(store, github=github)
+    assert report["problems"]["dropped_requests"][0]["verified"] is False
+    assert report["alerts"] == []
+
+
+async def test_github_checks_are_capped_per_call():
+    from robothor.pr_review.report import MAX_STATE_CHECKS
+
+    store = MemoryStore()
+    total = MAX_STATE_CHECKS + 5
+    github = FakeGitHub()
+    for n in range(1, total + 1):
+        await _dropped_row(store, n)
+        github.add(make_pr(n, "2" * 40))
+    calls = 0
+    real = github.get_pr
+
+    async def counting(repo, number):
+        nonlocal calls
+        calls += 1
+        return await real(repo, number)
+
+    github.get_pr = counting  # type: ignore[method-assign]
+    report = await _report(store, github=github)
+    assert calls == MAX_STATE_CHECKS
+    dropped = report["problems"]["dropped_requests"]
+    assert len(dropped) == total
+    assert sum(1 for d in dropped if d["verified"]) == MAX_STATE_CHECKS
+    assert len([a for a in report["alerts"] if "newer head" in a]) == MAX_STATE_CHECKS
 
 
 async def test_stuck_reviews_retries_run_out_and_an_old_queue_raise_alerts():

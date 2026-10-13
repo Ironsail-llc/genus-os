@@ -428,7 +428,10 @@ coding jobs in flight:
   out of retries, a dropped request (a reviewed pull request with a newer
   head that was never reviewed and nothing queued for it), and a queued
   request older than 30 minutes. `alerts` is one line per problem and empty
-  when all is well;
+  when all is well. Each dropped-request candidate is checked on GitHub (up
+  to 20 per call): one that is merged or closed is left out and its row
+  closed, so it is never checked again; one that could not be checked is
+  listed with `verified: false` and raises no alert;
 - **`pr=`** — one pull request's state, links and review history.
 
 Main opts into it: the operator can ask "how are reviews going?", "where is

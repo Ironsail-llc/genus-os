@@ -25,6 +25,7 @@ task resolved. A task filed before that line existed counts from its creation.
 
 from __future__ import annotations
 
+import logging
 import math
 import re
 import statistics
@@ -43,7 +44,9 @@ if TYPE_CHECKING:
     #: ``job_id -> (status, started_at)``, or None when the job is gone.
     JobLookup = Callable[[str], Awaitable[tuple[str, datetime | None] | None]]
 
-__all__ = ["DEFAULT_WINDOW", "QUEUE_ALERT", "STUCK_AFTER", "status_report"]
+__all__ = ["DEFAULT_WINDOW", "MAX_STATE_CHECKS", "QUEUE_ALERT", "STUCK_AFTER", "status_report"]
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_WINDOW = timedelta(hours=24)
 #: A review takes 3–8 minutes; one in flight this long is stuck (or the stale
@@ -51,6 +54,8 @@ DEFAULT_WINDOW = timedelta(hours=24)
 STUCK_AFTER = timedelta(hours=1)
 #: The oldest queued request waiting longer than this is worth a word.
 QUEUE_ALERT = timedelta(minutes=30)
+#: GitHub look-ups of dropped-request candidates per report.
+MAX_STATE_CHECKS = 20
 _VERDICT_RE = re.compile(r"^(APPROVE|REQUEST_CHANGES|COMMENT):\s")
 _FAILURE_RE = re.compile(r"^(?:failed|stale|Prepare failed|Finalize failed):", re.IGNORECASE)
 _PR_RE = re.compile(r"^prReview:\s*(\S+?)#(\d+)@", re.MULTILINE)
@@ -175,22 +180,53 @@ def _queued(rows: list[PrReviewRow], now: datetime) -> list[dict[str, Any]]:
     ]
 
 
-def _dropped(rows: list[PrReviewRow]) -> list[dict[str, Any]]:
-    """Reviewed, a newer head seen since, and nothing queued for it."""
-    return [
-        {
-            "pr": r.key,
-            "url": r.url,
-            "reviewed_sha": r.last_reviewed_sha[:12],
-            "head_sha": r.head_sha[:12],
-        }
-        for r in rows
-        if r.status in FINAL_STATUSES
-        and r.last_reviewed_sha
-        and r.head_sha
-        and r.head_sha != r.last_reviewed_sha
-        and not r.pending_trigger
-    ]
+async def _dropped(
+    store: PrReviewStore, rows: list[PrReviewRow], github: Any | None
+) -> list[dict[str, Any]]:
+    """Reviewed, a newer head seen since, and nothing queued for it — on an
+    open pull request.
+
+    A row keeps its verdict status after its pull request merges, and with
+    ``watch_repos`` off nothing polls it again, so each candidate's state is
+    checked on GitHub (at most :data:`MAX_STATE_CHECKS` per call). One that is
+    no longer open is left out and its row closed, so it is never checked
+    again. A candidate that could not be checked (no GitHub, an error, over
+    the cap) is listed with ``verified: false`` and raises no alert.
+    """
+    out: list[dict[str, Any]] = []
+    checks = 0
+    for r in rows:
+        if not (
+            r.status in FINAL_STATUSES
+            and r.last_reviewed_sha
+            and r.head_sha
+            and r.head_sha != r.last_reviewed_sha
+            and not r.pending_trigger
+        ):
+            continue
+        verified = False
+        if github is not None and checks < MAX_STATE_CHECKS:
+            checks += 1
+            try:
+                pr = await github.get_pr(r.repo, r.number)
+            except Exception as exc:  # noqa: BLE001 - listed unverified, never alerted
+                logger.info("pr_review_status: state of %s unknown: %s", r.key, exc)
+            else:
+                if pr is None or str(pr.get("state") or "") != "open":
+                    r.status = "closed"
+                    await store.save(r)
+                    continue
+                verified = True
+        out.append(
+            {
+                "pr": r.key,
+                "url": r.url,
+                "reviewed_sha": r.last_reviewed_sha[:12],
+                "head_sha": r.head_sha[:12],
+                "verified": verified,
+            }
+        )
+    return out
 
 
 def _one_pr(rows: list[PrReviewRow], tasks: list[dict[str, Any]], pr: str) -> dict[str, Any]:
@@ -244,6 +280,7 @@ async def status_report(
     now: datetime | None = None,
     since: datetime | None = None,
     pr: str = "",
+    github: Any | None = None,
 ) -> dict[str, Any]:
     now = now or datetime.now(UTC)
     since = since or now - DEFAULT_WINDOW
@@ -259,7 +296,7 @@ async def status_report(
         for r in rows
         if r.status == "failed" and r.attempts >= MAX_ATTEMPTS
     ]
-    dropped = _dropped(rows)
+    dropped = await _dropped(store, rows, github)
     oldest = max((q["waiting_minutes"] for q in queued), default=0.0)
 
     alerts = [f"{r['pr']} has been {r['status']} for {r['running_minutes']:.0f} min" for r in stuck]
@@ -267,6 +304,7 @@ async def status_report(
     alerts += [
         f"{r['pr']} has a newer head ({r['head_sha'][:7]}) than its review and nothing queued"
         for r in dropped
+        if r["verified"]
     ]
     if oldest > _minutes(QUEUE_ALERT):
         alerts.append(f"the oldest queued review has waited {oldest:.0f} min")
