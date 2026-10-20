@@ -62,7 +62,7 @@ env:
 jobs:
   local:
     name: fresh install (local substrate)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     services:
       postgres:
@@ -278,7 +278,7 @@ jobs:
 
   compose:
     name: fresh install (compose substrate)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     env:
       GENUS_IMAGE_TAG: pr-gate
@@ -527,7 +527,7 @@ jobs:
 
   install-sh:
     name: fresh install (the one-line installer)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     env:
       # NOT 11434: the compose stack publishes its own Ollama container there.

@@ -1,0 +1,24 @@
+name: Runner labels
+
+on:
+  pull_request:
+    paths: ['.github/workflows/**']
+  push:
+    branches: [main]
+    paths: ['.github/workflows/**']
+
+permissions:
+  contents: read
+
+jobs:
+  pinned-runners:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      # Floating label silently moves to a new OS image (RD-2286).
+      - name: Fail on floating runner label
+        run: |
+          if grep -rnP --include='*.yml' --include='*.yaml' 'ubuntu-''latest(?![-\w])' .github/workflows; then
+            echo "::error::Floating runner label found. Pin ubuntu-24.04, or ubuntu-26.04 for new workflows (RD-2286)."
+            exit 1
+          fi
