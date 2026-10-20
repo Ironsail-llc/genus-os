@@ -903,7 +903,7 @@ async def _post(
         prior_issues=output.get("prior_issues") or [],
         prior_severities=prior_severities,
         blocking_event=cfg.blocking_event,
-        require_ticket=cfg.require_ticket,
+        require_ticket=cfg.requires_ticket(row.repo),
         ticket_key=context.get("ticket"),
     )
     # Only blocker and major findings are posted, whatever the model wrote:

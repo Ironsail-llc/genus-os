@@ -6,16 +6,22 @@ anywhere in here; every decision is a rule.
 **Sources.**
 
 1. GitHub — every open, non-draft pull request in the configured repositories
-   (``watch_repos``), plus pull requests requesting the bot login's review —
-   in the configured repositories only (a request from a fork or any other
-   repository the token can read is ignored). A
+   (``watch_repos``), plus every pull request requesting the bot login's
+   review, in any repository the token can read: someone asking for the
+   review is the invitation, and the configured list only names what is
+   watched proactively. A requested pull request the token cannot read is
+   logged and listed under ``unreadable`` in the summary, never dropped
+   silently. A
    pull request whose head differs from the head we last reviewed (and from the
    head a task was already filed for) gets a trigger.
 2. Google Chat — messages in the configured space since the stored cursor. A
-   top-level message linking a pull request in an allowed repository claims it
-   (reaction) and triggers an initial review. A thread reply from the person
-   who posted the link is classified by :func:`classify_rereview`: a clear
-   request triggers a re-review; an ambiguous one is handed to the agent as a
+   top-level message linking a pull request claims it (reaction) and triggers
+   an initial review when the link is to a configured repository, to another
+   repository of a configured repository's owner, or to a pull request already
+   tracked (requested on GitHub or by the operator). A link to anyone else's
+   project — an upstream fix mentioned in passing — is not a request. A
+   thread reply from the person who posted the link is classified by
+   :func:`classify_rereview`: a clear request triggers a re-review; an ambiguous one is handed to the agent as a
    task to decide; a reviewer's status line ("#12: Approved") does nothing. In
    a thread that posted several pull requests, a reply naming some of them
    ("12 is ready for re-review") re-reviews only those. Every message is
@@ -49,9 +55,9 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Literal
 
 from robothor.pr_review.classify import (
+    MatchedPr,
     classify_rereview,
     extract_pr_refs,
-    match_allowed_prs,
     mentioned_numbers,
     message_search_text,
 )
@@ -209,12 +215,38 @@ class Intake:
             "stale": 0,
             "retries": 0,
             "errors": [],
+            "unreadable": [],
         }
 
     def _error(self, where: str, exc: BaseException | str) -> None:
         msg = f"{where}: {exc}"[:_ERROR_MAX]
         logger.warning("pr_review intake %s", msg)
         self.summary["errors"].append(msg)
+
+    def _unreadable(self, repo: str, number: int) -> None:
+        """A requested pull request GitHub would not show: say so, once per intake."""
+        ref = f"{repo}#{number}"
+        if ref in self.summary["unreadable"]:
+            return
+        logger.warning(
+            "pr_review intake: %s was requested but GitHub returned nothing "
+            "(not found, or the token cannot read it); not reviewing it",
+            ref,
+        )
+        self.summary["unreadable"].append(ref)
+
+    async def _lookup(self, repo: str, number: int) -> tuple[str, dict[str, Any] | None]:
+        """``(repo, pull request)``: the repo in its configured casing when
+        listed, else in GitHub's own casing (``base.repo.full_name``), so the
+        row and the clone directory never follow how someone typed it."""
+        assert self.github is not None
+        found = await self.github.get_pr(repo, number)
+        configured = self.cfg.configured_repo(repo)
+        if configured is not None:
+            return configured, found
+        base_repo = ((found or {}).get("base") or {}).get("repo") or {}
+        full_name = str(base_repo.get("full_name") or "")
+        return (full_name if "/" in full_name else repo), found
 
     def _new_row(self, repo: str, number: int, source: str) -> PrReviewRow:
         return PrReviewRow(
@@ -262,17 +294,18 @@ class Intake:
         if parsed is None:
             return {"error": f"not a pull request: {pr!r} (use a URL or owner/repo#N)"}
         repo, number = parsed
-        configured = next((r for r in self.cfg.repos if r.lower() == repo.lower()), None)
-        if configured is None:
-            return {"error": f"{repo} is not in ROBOTHOR_PR_REVIEW_REPOS; not reviewing it"}
         if self.github is None:
             return {"error": "GITHUB_TOKEN not configured"}
         async with self.store.intake_lock(self.tenant_id) as held:
             if not held:
                 return {"skipped": "locked", "note": "an intake run is in progress; ask again"}
-            found = await self.github.get_pr(configured, number)
+            # Any repository the token can read: the operator asking is the request.
+            configured, found = await self._lookup(repo, number)
             if found is None:
-                return {"error": f"{configured}#{number} not found on GitHub"}
+                self._unreadable(repo, number)
+                return {
+                    "error": f"{repo}#{number} not found on GitHub, or the token cannot read it"
+                }
             row = await self.store.get(self.tenant_id, configured, number)
             if row is None:
                 row = self._new_row(configured, number, "operator")
@@ -389,15 +422,20 @@ class Intake:
             except Exception as exc:  # noqa: BLE001
                 self._error("github review-requested search", exc)
                 requested = []
+            # Asking the bot for its review is the invitation, in any
+            # repository: the configured list is only what is watched.
             for repo, number in requested:
-                if (repo.lower(), number) in candidates or not self.cfg.allows_repo(repo):
+                if (repo.lower(), number) in candidates:
                     continue
                 try:
-                    found = await self.github.get_pr(repo, number)
+                    canonical, found = await self._lookup(repo, number)
                 except Exception as exc:  # noqa: BLE001
                     self._error(f"github get {repo}#{number}", exc)
                     continue
-                candidates[(repo.lower(), number)] = (repo, "review_request", found)
+                if found is None:
+                    self._unreadable(repo, number)
+                    continue
+                candidates[(canonical.lower(), number)] = (canonical, "review_request", found)
 
         for (_key, number), (repo, source, pr) in candidates.items():
             if not pr or pr.get("draft") or str(pr.get("state") or "open") != "open":
@@ -491,7 +529,7 @@ class Intake:
     async def _handle_top_level(
         self, message: dict[str, Any], thread: str, sender: str, space: str
     ) -> tuple[str, str]:
-        found = match_allowed_prs(message_search_text(message), self.cfg.repos)
+        found = await self._chat_prs(message_search_text(message))
         if not found:
             return "ignored", "no allowed pull-request link"
         claimed = 0
@@ -526,6 +564,37 @@ class Intake:
         if claimed and self.chat is not None and self.cfg.claim_reaction:
             await self.chat.react(str(message.get("name") or ""), self.cfg.claim_reaction)
         return ("pr", f"claimed {claimed}") if claimed else ("ignored", "already tracked")
+
+    async def _chat_prs(self, text: str) -> list[MatchedPr]:
+        """The pull-request links in a review-space message that ask for a review.
+
+        A configured repository, another repository of a configured owner, or
+        a pull request already tracked. A link to anyone else's project is a
+        mention, not a request: posting a review there is never wanted.
+        """
+        out: list[MatchedPr] = []
+        for ref in extract_pr_refs(text):
+            repo = f"{ref.owner}/{ref.repo}"
+            configured = self.cfg.configured_repo(repo)
+            if configured is not None:
+                out.append(MatchedPr(repo_full=configured, number=ref.number))
+                continue
+            row = await self.store.get(self.tenant_id, repo, ref.number)
+            if row is not None:
+                out.append(MatchedPr(repo_full=row.repo, number=ref.number))
+                continue
+            if self.github is None or not self.cfg.lists_owner(repo):
+                continue
+            try:
+                canonical, found = await self._lookup(repo, ref.number)
+            except Exception as exc:  # noqa: BLE001 - the other links still count
+                self._error(f"github get {repo}#{ref.number}", exc)
+                continue
+            if found is None:
+                self._unreadable(repo, ref.number)
+                continue
+            out.append(MatchedPr(repo_full=canonical, number=ref.number))
+        return out
 
     async def _handle_reply(
         self, message: dict[str, Any], thread: str, sender: str
@@ -644,15 +713,18 @@ class Intake:
         if parsed is None:
             return {"error": f"not a pull request: {pr!r} (use a URL or owner/repo#N)"}
         repo, number = parsed
-        configured = next((r for r in self.cfg.repos if r.lower() == repo.lower()), None)
-        if configured is None:
-            return {"error": f"{repo} is not in ROBOTHOR_PR_REVIEW_REPOS"}
         async with self.store.intake_lock(self.tenant_id) as held:
             if not held:
                 return {"skipped": "locked", "note": "an intake run is in progress; ask again"}
-            row = await self.store.get(self.tenant_id, configured, number)
+            row = await self.store.get(self.tenant_id, repo, number)
             if row is None:
-                row = self._new_row(configured, number, "operator")
+                canonical = self.cfg.configured_repo(repo)
+                if canonical is None and self.github is not None:
+                    try:
+                        canonical, _found = await self._lookup(repo, number)
+                    except Exception as exc:  # noqa: BLE001 - stopping needs no GitHub
+                        self._error(f"github get {repo}#{number}", exc)
+                row = self._new_row(canonical or repo, number, "operator")
             was = row.status
             row.status = "closed"
             row.error = OPERATOR_SKIP_NOTE
