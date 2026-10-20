@@ -1338,8 +1338,9 @@ _PR_REVIEW_SCHEMAS: dict[str, dict[str, Any]] = {
                     "pr": {
                         "type": "string",
                         "description": (
-                            "Review this one pull request now (URL or owner/repo#N, a "
-                            "configured repository only). Returns requested.status; call "
+                            "Review this one pull request now (URL or owner/repo#N, any "
+                            "repository the GitHub token can read). Returns "
+                            "requested.status; call "
                             "again later with the same pr for requested.review_url"
                         ),
                     },

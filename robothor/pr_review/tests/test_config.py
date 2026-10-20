@@ -26,3 +26,18 @@ def test_default_clone_root_follows_the_workspace(monkeypatch, tmp_path):
     assert cfg.clone_dir("acme/widgets") == Path(
         tmp_path / "ws" / ".genus" / "pr-review" / "repos" / "acme" / "widgets"
     )
+
+
+def test_requires_ticket_only_where_there_are_prefixes_to_match():
+    from robothor.pr_review.config import ReviewerConfig
+
+    cfg = ReviewerConfig(
+        repos=("acme/widgets",),
+        require_ticket=True,
+        ticket_prefixes=("ABC",),
+        repo_ticket_prefixes=(("other/tools", "TOOL"),),
+    )
+    assert cfg.requires_ticket("Acme/Widgets")  # listed: unchanged
+    assert cfg.requires_ticket("other/tools")  # its own prefixes
+    assert not cfg.requires_ticket("other/gadgets")  # neither: nothing to match
+    assert not ReviewerConfig(repos=("acme/widgets",)).requires_ticket("acme/widgets")

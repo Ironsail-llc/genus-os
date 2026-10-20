@@ -256,6 +256,23 @@ async def test_ticket_in_a_commit_trailer_satisfies_the_rule(env):
     assert (await _finalize(env, job, cfg))["verdict"] == "APPROVE"
 
 
+async def test_ticket_rule_skips_an_unlisted_repo_without_its_own_prefixes(env):
+    # Reviewed on request, not watched: there are no prefixes to match it to.
+    job = FakeJob(result={"structured_output": _output("APPROVE", [])})
+    cfg = ReviewerConfig(repos=("acme/other",), require_ticket=True, ticket_prefixes=("ABC",))
+    result = await _finalize(env, job, cfg)
+    assert result["verdict"] == "APPROVE"
+    assert not any("[no-ticket]" in i["title"] for i in env["poster"].reviews[0]["issues"])
+
+
+async def test_ticket_rule_holds_for_an_unlisted_repo_with_its_own_prefixes(env):
+    job = FakeJob(result={"structured_output": _output("APPROVE", [])})
+    cfg = ReviewerConfig(
+        repos=("acme/other",), require_ticket=True, repo_ticket_prefixes=((REPO, "XYZ"),)
+    )
+    assert (await _finalize(env, job, cfg))["verdict"] == "REQUEST_CHANGES"
+
+
 async def test_blocking_event_comment(env):
     job = FakeJob(result={"structured_output": _output("APPROVE", [_issue("major")])})
     cfg = ReviewerConfig(repos=(REPO,), blocking_event="COMMENT")

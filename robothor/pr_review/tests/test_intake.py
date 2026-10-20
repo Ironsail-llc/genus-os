@@ -82,10 +82,52 @@ async def test_top_level_link_claims_and_creates_one_task(env):
     assert row.chat_poster == "users/alice"
 
 
-async def test_links_to_other_repos_are_ignored(env):
+async def test_links_to_other_owners_repos_are_ignored(env):
+    # A link to someone else's project mentioned in the review space (an
+    # upstream fix, a reference) is not a request to review it there.
+    env["github"].add(make_pr(1, SHA1, repo="other/repo"), repo="other/repo")
     env["chat"].post("see https://github.com/other/repo/pull/1")
     summary = await _run(env)
     assert summary["tasks_created"] == 0
+    assert env["chat"].reactions == []
+
+
+async def test_a_link_to_an_unlisted_repo_of_a_listed_owner_is_claimed(env):
+    env["github"].add(make_pr(5, SHA1, repo="Acme/Gadgets"), repo="Acme/Gadgets")
+    msg = env["chat"].post("please review https://github.com/acme/gadgets/pull/5")
+    summary = await _run(env)
+    assert summary["tasks_created"] == 1
+    assert env["chat"].reactions == [(msg["name"], "\U0001f440")]
+    row = await env["store"].get(TENANT, "acme/gadgets", 5)
+    assert row.repo == "Acme/Gadgets" and row.chat_thread
+
+
+async def test_a_link_to_a_tracked_pr_in_any_repo_is_claimed(env):
+    # Requested on GitHub first, so it is tracked; a re-review link for it in
+    # the review space is honoured like any other tracked pull request.
+    env["github"].add(make_pr(5, SHA1, repo="other/gadgets"), repo="other/gadgets")
+    env["github"].requested = [("other/gadgets", 5)]
+    cfg = _cfg(bot_login="review-bot")
+    await _run(env, cfg)
+    row = await env["store"].get(TENANT, "other/gadgets", 5)
+    row.status, row.last_reviewed_sha = "changes_requested", SHA1
+    await env["store"].save(row)
+    env["github"].add(make_pr(5, SHA2, repo="other/gadgets"), repo="other/gadgets")
+    env["github"].requested = []
+    msg = env["chat"].post(
+        "re-review https://github.com/other/gadgets/pull/5", time="2026-10-05T10:20:00.000000Z"
+    )
+    summary = await _run(env, cfg)
+    assert summary["tasks_created"] == 1
+    assert (msg["name"], "\U0001f440") in env["chat"].reactions
+
+
+async def test_an_unreadable_chat_link_is_logged(env, caplog):
+    env["chat"].post("please review https://github.com/acme/secret/pull/9")
+    with caplog.at_level("WARNING", logger="robothor.pr_review.intake"):
+        summary = await _run(env)
+    assert summary["unreadable"] == ["acme/secret#9"]
+    assert any("acme/secret#9" in r.getMessage() for r in caplog.records)
     assert env["chat"].reactions == []
 
 
@@ -244,15 +286,43 @@ async def test_max_concurrent_defers_the_rest(env):
     assert summary["tasks_created"] == 2 and summary["deferred"] == 1
 
 
-async def test_review_requested_only_from_configured_repos(env):
-    # A review request from a fork or any repository the token can read is not
-    # an invitation to clone it and run Claude Code over it.
-    env["github"].add(make_pr(5, SHA1, repo="acme/gadgets"), repo="acme/gadgets")
+async def test_a_review_request_on_an_unlisted_repo_is_reviewed(env):
+    # Someone asked the bot for its review: that is the invitation, whatever
+    # ROBOTHOR_PR_REVIEW_REPOS lists (it names the repos watched proactively).
+    env["github"].add(make_pr(5, SHA1, repo="other/gadgets"), repo="other/gadgets")
     env["github"].add(make_pr(6, SHA2))
-    env["github"].requested = [("acme/gadgets", 5), (REPO, 6)]
+    env["github"].requested = [("other/gadgets", 5), (REPO, 6)]
     summary = await _run(env, _cfg(bot_login="review-bot", chat_space=""))
-    assert summary["tasks_created"] == 1
-    assert env["tasks"].created[0]["spec"].row.number == 6
+    assert summary["tasks_created"] == 2
+    assert sorted(t["spec"].row.number for t in env["tasks"].created) == [5, 6]
+    row = await env["store"].get(TENANT, "other/gadgets", 5)
+    assert row.source == "review_request" and row.status == "queued"
+
+
+async def test_a_review_request_uses_githubs_casing_for_the_repo(env):
+    env["github"].add(make_pr(5, SHA1, repo="Other/Gadgets"), repo="Other/Gadgets")
+    env["github"].requested = [("other/GADGETS", 5)]
+    await _run(env, _cfg(bot_login="review-bot", chat_space=""))
+    row = await env["store"].get(TENANT, "other/gadgets", 5)
+    assert row.repo == "Other/Gadgets"
+    assert row.url == "https://github.com/Other/Gadgets/pull/5"
+
+
+async def test_a_listed_repo_keeps_its_configured_casing(env):
+    env["github"].add(make_pr(6, SHA2))
+    env["github"].requested = [(REPO.upper(), 6)]
+    await _run(env, _cfg(bot_login="review-bot", chat_space=""))
+    assert (await env["store"].get(TENANT, REPO, 6)).repo == REPO
+
+
+async def test_an_unreadable_requested_pr_is_logged_not_dropped(env, caplog):
+    env["github"].requested = [("other/secret", 9)]
+    with caplog.at_level("WARNING", logger="robothor.pr_review.intake"):
+        summary = await _run(env, _cfg(bot_login="review-bot", chat_space=""))
+    assert summary["unreadable"] == ["other/secret#9"]
+    lines = [r.getMessage() for r in caplog.records if "other/secret#9" in r.getMessage()]
+    assert len(lines) == 1
+    assert summary["tasks_created"] == 0
 
 
 async def test_one_failing_repo_does_not_stop_the_others(env):
@@ -436,10 +506,35 @@ async def test_the_operator_can_stop_reviews_of_one_pull_request(env):
     assert again["requested"]["status"] == "queued"
 
 
-async def test_skip_refuses_an_unknown_or_unconfigured_pull_request(env):
-    cfg = _cfg(chat_space="")
-    assert "error" in await _intake(env, cfg).skip("other/repo#1")
-    assert "error" in await _intake(env, cfg).skip("not a pr")
+async def test_skip_refuses_what_is_not_a_pull_request(env):
+    assert "error" in await _intake(env, _cfg(chat_space="")).skip("not a pr")
+
+
+async def test_skip_works_for_an_unlisted_repo(env):
+    env["github"].add(make_pr(5, SHA1, repo="Other/Gadgets"), repo="Other/Gadgets")
+    cfg = _cfg(chat_space="", bot_login="review-bot")
+    result = await _intake(env, cfg).skip("other/gadgets#5")
+    assert result["skipped"]["status"] == "closed"
+    row = await env["store"].get(TENANT, "other/gadgets", 5)
+    assert row.repo == "Other/Gadgets" and row.status == "closed"
+    # A later review request does not reopen what the operator stopped.
+    env["github"].requested = [("other/gadgets", 5)]
+    summary = await _run(env, cfg)
+    assert summary["tasks_created"] == 0
+
+
+async def test_the_operator_can_request_a_review_on_an_unlisted_repo(env):
+    env["github"].add(make_pr(5, SHA1, repo="Other/Gadgets"), repo="Other/Gadgets")
+    out = await _intake(env, _cfg(chat_space="")).request("other/gadgets#5")
+    assert out["requested"]["status"] == "queued"
+    assert out["requested"]["pr"].lower() == "other/gadgets#5"
+    assert (await env["store"].get(TENANT, "other/gadgets", 5)).repo == "Other/Gadgets"
+
+
+async def test_an_operator_request_for_an_unreadable_pr_says_so(env):
+    out = await _intake(env, _cfg(chat_space="")).request("other/secret#9")
+    assert "not found" in out["error"] and "other/secret#9" in out["error"]
+    assert env["tasks"].created == []
 
 
 async def test_not_configured_runs_nothing(env):

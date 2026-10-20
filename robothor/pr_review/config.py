@@ -94,7 +94,33 @@ class ReviewerConfig:
         return bool(self.repos or self.bot_login or self.chat_space)
 
     def allows_repo(self, repo: str) -> bool:
-        return repo.lower() in {r.lower() for r in self.repos}
+        """Whether ``repo`` is listed: watched proactively, with its prefixes.
+
+        Not a gate on explicit requests — a pull request the bot is asked to
+        review is reviewed in any repository its token can read.
+        """
+        return self.configured_repo(repo) is not None
+
+    def configured_repo(self, repo: str) -> str | None:
+        """``repo`` in its configured casing, or None when it is not listed."""
+        return next((r for r in self.repos if r.lower() == repo.lower()), None)
+
+    def lists_owner(self, repo: str) -> bool:
+        """Whether ``repo``'s owner also owns a listed repository."""
+        owner = repo.split("/", 1)[0].lower()
+        return any(r.split("/", 1)[0].lower() == owner for r in self.repos)
+
+    def requires_ticket(self, repo: str) -> bool:
+        """Whether the ticket rule applies to ``repo``.
+
+        A repository reviewed only because someone asked, with no prefixes of
+        its own, has nothing to match a ticket key against, so the rule
+        does not block it.
+        """
+        if not self.require_ticket:
+            return False
+        own = any(r.lower() == repo.lower() for r, _ in self.repo_ticket_prefixes)
+        return own or self.allows_repo(repo)
 
     def prefixes_for(self, repo: str) -> tuple[str, ...]:
         """The ticket prefixes for ``repo``: its own, else the global ones."""

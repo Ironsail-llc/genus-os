@@ -3247,10 +3247,13 @@ class PrReviewSettings(SettingsGroup):
     repos: str = declare(
         "",
         "ROBOTHOR_PR_REVIEW_REPOS",
-        "Comma-separated owner/repo list the pr-reviewer may review. Pull-request links "
-        "posted in the Chat space count only for these repositories. An entry may carry "
-        "its ticket prefix as owner/repo:PREFIX (another review bot's ALLOWED_REPOS "
-        "format). Empty disables the repository sources.",
+        "Comma-separated owner/repo list the pr-reviewer watches (with "
+        "ROBOTHOR_PR_REVIEW_WATCH_REPOS) and its ticket prefixes. Not a limit on "
+        "requests: a pull request requesting the bot login's review, asked for by the "
+        "operator, or linked in the Chat space is reviewed in any repository the token "
+        "can read (a Chat link counts for these repositories, other repositories of "
+        "their owners, and pull requests already tracked). An entry may carry its ticket "
+        "prefix as owner/repo:PREFIX (another review bot's ALLOWED_REPOS format).",
         restart_required=False,
         since="unreleased",
     )
@@ -3371,7 +3374,9 @@ class PrReviewSettings(SettingsGroup):
         False,
         "ROBOTHOR_PR_REVIEW_REQUIRE_TICKET",
         "A pull request with no ticket key in its title, branch, description or commit "
-        "messages gets a blocking [no-ticket] finding and is never approved.",
+        "messages gets a blocking [no-ticket] finding and is never approved. Applies to "
+        "the repositories in ROBOTHOR_PR_REVIEW_REPOS and those with their own prefix; "
+        "one reviewed only on request, with no prefix of its own, is not blocked.",
         restart_required=False,
         since="unreleased",
     )

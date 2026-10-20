@@ -32,16 +32,19 @@ async def test_intake_with_a_pr_queues_just_that_pr_without_polling():
     assert chat.list_calls == []
 
 
-async def test_intake_with_a_pr_outside_the_repos_is_refused():
+async def test_intake_with_a_pr_outside_the_repos_is_reviewed():
+    github, tasks = FakeGitHub(), FakeTasks()
+    github.add(make_pr(1, "1" * 40, repo="other/x"), repo="other/x")
     cfg = ReviewerConfig(repos=(REPO,))
     with (
         patch("robothor.pr_review.config.load_config", return_value=cfg),
         patch.object(pr_review, "_store", return_value=MemoryStore()),
-        patch.object(pr_review, "_github", return_value=FakeGitHub()),
-        patch.object(pr_review, "_tasks", return_value=FakeTasks()),
+        patch.object(pr_review, "_github", return_value=github),
+        patch.object(pr_review, "_tasks", return_value=tasks),
     ):
         result = await pr_review._intake({"pr": "https://github.com/other/x/pull/1"}, _OWNER)
-    assert "error" in result
+    assert result["requested"]["status"] == "queued"
+    assert [t["spec"].row.repo for t in tasks.created] == ["other/x"]
 
 
 def test_the_intake_schema_offers_pr():

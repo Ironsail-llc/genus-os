@@ -28,7 +28,7 @@ def make_pr(
         "user": {"login": author},
         "labels": [{"name": label} for label in labels],
         "head": {"sha": head, "ref": "feature"},
-        "base": {"sha": "0" * 40, "ref": "main"},
+        "base": {"sha": "0" * 40, "ref": "main", "repo": {"full_name": repo}},
         "html_url": f"https://github.com/{repo}/pull/{number}",
     }
 
@@ -58,7 +58,11 @@ class FakeGitHub:
         return list(self.requested)
 
     async def get_pr(self, repo: str, number: int) -> dict[str, Any] | None:
-        return self.prs.get((repo, number))
+        # GitHub resolves owner/repo case-insensitively.
+        for (r, n), pr in self.prs.items():
+            if n == number and r.lower() == repo.lower():
+                return pr
+        return None
 
     async def list_files(self, repo: str, number: int) -> list[dict[str, Any]]:
         return self.files.get((repo, number), [])
