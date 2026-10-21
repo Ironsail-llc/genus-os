@@ -139,9 +139,27 @@ jobs:
             --directory "$RUNNER_TEMP/bin" kube-linter
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
 
+      # Hook-free copies for kube-linter only. Helm hook Pods (chart tests) are
+      # ephemeral and never part of a release's steady state, and subchart test
+      # hooks hardcode their pod spec with no resources — not something this
+      # chart's values can fix. kubeconform above still schema-validates the
+      # full render, hooks included.
+      - name: Render hook-free templates for kube-linter
+        run: |
+          mkdir -p _nohooks
+          for env in staging production local; do
+            helm template gos helm/genus-os \
+              --namespace genus \
+              --no-hooks \
+              --values helm/genus-os/values.yaml \
+              --values "helm/genus-os/values-$env.yaml" \
+              --set dashboard.ingress.host=genus-os.example.invalid \
+              > "_nohooks/$env.yaml"
+          done
+
       - name: kube-linter (best practices)
         run: |
-          for f in _rendered/*.yaml; do
+          for f in _nohooks/*.yaml; do
             echo "→ $f"
             kube-linter lint "$f"
           done
