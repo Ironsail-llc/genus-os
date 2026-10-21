@@ -236,9 +236,30 @@ valkey:
       # turns write-refusal into an OOMKill.
       memory: 1536Mi
 
-  # Export Valkey metrics, matching n8n-valkey.
+  # The subchart's init container renders the config and the ACL file. Left
+  # unset it has no CPU request and no memory limit, which kube-linter rejects
+  # (unset-cpu-requirements / unset-memory-requirements).
+  initResources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      cpu: 100m
+      memory: 128Mi
+
+  # Export Valkey metrics for scraping.
   metrics:
     enabled: true
+    exporter:
+      # Unset, the sidecar has no CPU request and no memory limit, which
+      # kube-linter rejects (unset-cpu-requirements/unset-memory-requirements).
+      resources:
+        requests:
+          cpu: 10m
+          memory: 32Mi
+        limits:
+          cpu: 100m
+          memory: 64Mi
 
   # Tag subchart PODS with our part-of label so the NetworkPolicy's default-deny
   # + intra-chart allow cover them. NetworkPolicy.spec.podSelector matches pod
