@@ -183,7 +183,30 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache: "pip"
-      - run: pip install -e ".[dev,api,vision,tui]" opencv-python-headless
+      # Install the set uv.lock pins — the same resolution Dockerfile.python
+      # ships. `pip install -e` re-resolves on every run, so an upstream release
+      # can turn this job red with no commit touching the repo. That is what
+      # happened: litellm drifted 1.92.2 (locked) -> 1.106.2 (resolved), which
+      # both reorganized its model catalog (breaking the registry-drift test
+      # against values that still match the shipped version) and added a proxy
+      # MCP module importing `mcp.types` unconditionally, so every provider call
+      # raised APIConnectionError. Testing the locked set means CI exercises
+      # what production runs.
+      - name: Install the locked dependency set
+        run: |
+          pip install uv==0.11.21
+          # --output-file, not a shell redirect: uv colorizes the comment
+          # lines it writes, and the ANSI escapes make `uv pip install -r`
+          # fail with "Unexpected '', expected ... the start of a requirement".
+          uv export --frozen --no-emit-project --no-hashes \
+            --extra dev --extra api --extra vision --extra tui \
+            --output-file /tmp/requirements.txt
+          uv pip install --system -r /tmp/requirements.txt
+          # The project itself, without re-resolving what the lock just pinned.
+          uv pip install --system --no-deps -e .
+          # Not a declared dependency: the headless OpenCV build CI needs in
+          # place of the GUI wheel that `vision` would pull.
+          uv pip install --system opencv-python-headless
       - name: Run the complete Python unit suite
         run: >-
           pytest tests/ robothor/
