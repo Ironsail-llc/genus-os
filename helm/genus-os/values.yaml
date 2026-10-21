@@ -173,11 +173,11 @@ redis:
 # Valkey, never Redis, and never Bitnami — org policy. Subchart values are
 # passed straight through to the official valkey-io chart pinned in Chart.yaml.
 #
-# ONE VALKEY PER APP. This instance belongs to genus-os. Other apps in the
-# namespace run their own (impetus-one-valkey, ec-valhalla-mso-valkey) — do not
-# point another app at this one. Sharing would mean sharing the ACL `default`
-# user's `~* &* +@all` grant over the whole keyspace, and a noisy neighbour
-# filling memory under `noeviction` would start refusing genus-os writes.
+# ONE VALKEY PER DEPLOYMENT. This instance belongs to this release; any other
+# application sharing the namespace should run its own rather than point at
+# this one. Sharing would mean sharing the ACL `default` user's `~* &* +@all`
+# grant over the whole keyspace, and a neighbour filling memory under
+# `noeviction` would start refusing this instance's writes.
 #
 # With the standard releaseName `genus-os`, the subchart's Service is
 # `genus-os-valkey` — which is what genus-os.redisHost derives.
