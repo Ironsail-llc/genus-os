@@ -260,6 +260,20 @@ valkey:
         limits:
           cpu: 100m
           memory: 64Mi
+      # The chart hardens its own Valkey containers but leaves the exporter's
+      # securityContext empty in this version (upstream hardens it by default
+      # only in the unreleased 1.0). Mirror the chart's `securityContext` so the
+      # sidecar is not the weak spot in an otherwise restricted pod, and so
+      # kube-linter's no-read-only-root-fs check passes. The exporter only
+      # scrapes over the network and writes nothing to disk.
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop:
+            - ALL
+        readOnlyRootFilesystem: true
+        runAsNonRoot: true
+        runAsUser: 1000
 
   # Tag subchart PODS with our part-of label so the NetworkPolicy's default-deny
   # + intra-chart allow cover them. NetworkPolicy.spec.podSelector matches pod
