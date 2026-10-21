@@ -43,6 +43,8 @@ jobs:
         # reviewed lock instead of re-resolving versions like `update`.
         run: |
           helm repo add groundhog2k https://groundhog2k.github.io/helm-charts/
+          # Official valkey-io chart repo — the per-app cache subchart.
+          helm repo add valkey https://valkey.io/valkey-helm/
           helm dependency build helm/genus-os
 
       - name: helm lint

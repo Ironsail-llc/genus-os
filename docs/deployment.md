@@ -567,8 +567,8 @@ then on the door is the sign-in page; a forgotten password is
 
 ## Helm
 
-The chart is `helm/genus-os`. It brings its own PostgreSQL and Redis
-subcharts (`postgres.enabled`, `redis.enabled`) so a cluster with neither can
+The chart is `helm/genus-os`. It brings its own PostgreSQL and Valkey
+subcharts (`postgres.enabled`, `valkey.enabled`) so a cluster with neither can
 still render, and splits secret material into independently rotatable classes —
 database, cache, signing, SSO/OIDC, dashboard, provider — with per-component
 references enforced. The dashboard and the migration job cannot request the
