@@ -56,7 +56,7 @@ tests:
       networkPolicy.enabled: true
       networkPolicy.egress.enabled: true
       postgres.enabled: false
-      redis.enabled: false
+      valkey.enabled: false
     documentSelector:
       path: metadata.name
       value: gos-genus-os-dashboard-internal-egress
