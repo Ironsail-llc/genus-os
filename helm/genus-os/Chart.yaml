@@ -32,7 +32,12 @@ dependencies:
     version: "1.6.3"
     repository: "https://groundhog2k.github.io/helm-charts/"
     condition: postgres.enabled
-  - name: redis
-    version: "2.3.3"
-    repository: "https://groundhog2k.github.io/helm-charts/"
-    condition: redis.enabled
+  # Valkey, never Redis, and never Bitnami (org policy). Official valkey-io
+  # chart. Pinned to a cut release: the chart's `main` carries unreleased 1.0
+  # breaking renames (valkeyConfig -> extraConfig, dataStorage -> persistence,
+  # env -> extraEnv) that hard-fail at render, plus unreleased Sentinel HA.
+  # Re-pin only together with a values migration per the chart's UPGRADE.md.
+  - name: valkey
+    version: "0.12.0"
+    repository: "https://valkey.io/valkey-helm/"
+    condition: valkey.enabled
