@@ -59,7 +59,22 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      - run: pip install -e ".[dev,api,vision,tui]" opencv-python-headless
+      # Same locked install as ci.yml's `test` matrix. This gate runs its own
+      # copy of the unit suite, so re-resolving here reintroduces exactly the
+      # drift that fix(ci) removed there: pip picks a newer litellm than
+      # uv.lock pins and the shipped image runs, and the model-catalog drift
+      # test plus every provider call fail against a catalog we do not ship.
+      - name: Install the locked dependency set
+        run: |
+          pip install uv==0.11.21
+          # --output-file, not a shell redirect: uv colorizes the comment lines
+          # it writes and the ANSI escapes make `uv pip install -r` fail.
+          uv export --frozen --no-emit-project --no-hashes \
+            --extra dev --extra api --extra vision --extra tui \
+            --output-file /tmp/requirements.txt
+          uv pip install --system -r /tmp/requirements.txt
+          uv pip install --system --no-deps -e .
+          uv pip install --system opencv-python-headless
       - run: pip install -r crm/bridge/requirements.txt
       - name: Verify Python source and complete unit suite
         run: |
