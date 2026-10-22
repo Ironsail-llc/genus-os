@@ -66,7 +66,12 @@ jobs:
       # test plus every provider call fail against a catalog we do not ship.
       - name: Install the locked dependency set
         run: |
-          pip install uv==0.11.21
+          # 0.13.4, not an older pin: `pip install uv` puts uv in the same
+          # environment the gate's pip-audit step later scans, so uv's own
+          # version has to be non-vulnerable (0.11.21 carries
+          # PYSEC-2026-4321). Verified that 0.13.4 reads this lock and exports
+          # byte-identically to the version the pins were generated with.
+          pip install uv==0.13.4
           # --output-file, not a shell redirect: uv colorizes the comment lines
           # it writes and the ANSI escapes make `uv pip install -r` fail.
           uv export --frozen --no-emit-project --no-hashes \
