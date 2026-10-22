@@ -72,9 +72,17 @@ jobs:
           uv export --frozen --no-emit-project --no-hashes \
             --extra dev --extra api --extra vision --extra tui \
             --output-file /tmp/requirements.txt
-          uv pip install --system -r /tmp/requirements.txt
+          # opencv-python-headless is not a declared dependency — it is the
+          # headless wheel CI needs in place of the GUI one `vision` pulls — so
+          # it is resolved TOGETHER with the pins. Installed as a separate step
+          # it dragged numpy to 2.5.x, past the deliberate `numpy<2` constraint
+          # for Python < 3.13, which broke mypy: numpy 2 stubs use PEP 695
+          # `type` statements and mypy rejects those at the configured
+          # python_version = 3.11. Resolved jointly, the pin holds numpy at
+          # 1.26.4 and opencv lands on 4.11.0.86.
+          uv pip install --system -r /tmp/requirements.txt opencv-python-headless
+          # The project itself, without re-resolving what the lock just pinned.
           uv pip install --system --no-deps -e .
-          uv pip install --system opencv-python-headless
       - run: pip install -r crm/bridge/requirements.txt
       - name: Verify Python source and complete unit suite
         run: |
