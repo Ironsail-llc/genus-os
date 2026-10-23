@@ -59,7 +59,35 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      - run: pip install -e ".[dev,api,vision,tui]" opencv-python-headless
+      # Same locked install as ci.yml's `test` matrix. This gate runs its own
+      # copy of the unit suite, so re-resolving here reintroduces exactly the
+      # drift that fix(ci) removed there: pip picks a newer litellm than
+      # uv.lock pins and the shipped image runs, and the model-catalog drift
+      # test plus every provider call fail against a catalog we do not ship.
+      - name: Install the locked dependency set
+        run: |
+          # 0.13.4, not an older pin: `pip install uv` puts uv in the same
+          # environment the gate's pip-audit step later scans, so uv's own
+          # version has to be non-vulnerable (0.11.21 carries
+          # PYSEC-2026-4321). Verified that 0.13.4 reads this lock and exports
+          # byte-identically to the version the pins were generated with.
+          pip install uv==0.13.4
+          # --output-file, not a shell redirect: uv colorizes the comment lines
+          # it writes and the ANSI escapes make `uv pip install -r` fail.
+          uv export --frozen --no-emit-project --no-hashes \
+            --extra dev --extra api --extra vision --extra tui \
+            --output-file /tmp/requirements.txt
+          # opencv-python-headless is not a declared dependency — it is the
+          # headless wheel CI needs in place of the GUI one `vision` pulls — so
+          # it is resolved TOGETHER with the pins. Installed as a separate step
+          # it dragged numpy to 2.5.x, past the deliberate `numpy<2` constraint
+          # for Python < 3.13, which broke mypy: numpy 2 stubs use PEP 695
+          # `type` statements and mypy rejects those at the configured
+          # python_version = 3.11. Resolved jointly, the pin holds numpy at
+          # 1.26.4 and opencv lands on 4.11.0.86.
+          uv pip install --system -r /tmp/requirements.txt opencv-python-headless
+          # The project itself, without re-resolving what the lock just pinned.
+          uv pip install --system --no-deps -e .
       - run: pip install -r crm/bridge/requirements.txt
       - name: Verify Python source and complete unit suite
         run: |
@@ -120,8 +148,22 @@ jobs:
           # repository VARIABLE GENUS_ALLOW_DEPLOYMENT_LAG=true for the
           # recovery release, then unset it — the default keeps the
           # no-lag invariant enforced.
+          #
+          # Only consulted on release runs. On a pull request the deployment
+          # tags are compared against the base branch instead of the version,
+          # so a hand-edit is still caught but somebody else's stalled release
+          # cannot block every PR (it has deadlocked this repo twice: v1.57.0
+          # and v1.108.2). The script documents the split.
           GENUS_ALLOW_DEPLOYMENT_LAG: ${{ vars.GENUS_ALLOW_DEPLOYMENT_LAG || 'false' }}
-        run: node scripts/check-version-consistency.js
+          BASE_REF: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.ref || '' }}
+        run: |
+          if [ -n "$BASE_REF" ]; then
+            # Fetched explicitly rather than relying on fetch-depth: the
+            # checkout above takes only the PR head.
+            git fetch --no-tags --quiet origin "$BASE_REF"
+            export GENUS_VERSION_BASELINE_REF=FETCH_HEAD
+          fi
+          node scripts/check-version-consistency.js
       # npm audit gate: named-allowlist policy, not a blanket exception. A
       # high/critical advisory must either be absent or have its GHSA id
       # explicitly tracked -- id, package, and a reviewed reason -- in
