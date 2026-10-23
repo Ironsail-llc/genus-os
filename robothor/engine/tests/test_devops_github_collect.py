@@ -224,9 +224,7 @@ class TestReviews:
     @pytest.mark.asyncio
     async def test_reviews_found_on_unmerged_prs_beyond_fifty(self):
         fake = FakeGitHub()
-        fake.pulls_all = [
-            _pr(i, "alice-gh", merged_at=None, state="open") for i in range(1, 76)
-        ]
+        fake.pulls_all = [_pr(i, "alice-gh", merged_at=None, state="open") for i in range(1, 76)]
         for i in range(1, 76):
             fake.reviews[i] = [_review("bob-gh", "APPROVED", IN)]
         out = await _run(fake)
@@ -246,12 +244,24 @@ class TestCommits:
     async def test_merge_commits_excluded_and_unlinked_grouped_by_email(self):
         fake = FakeGitHub()
         fake.commits = [
-            {"sha": "a", "author": {"login": "alice-gh"}, "parents": [{}],
-             "commit": {"author": {"email": "a@example.com"}}},
-            {"sha": "b", "author": {"login": "alice-gh"}, "parents": [{}, {}],
-             "commit": {"author": {"email": "a@example.com"}}},
-            {"sha": "c", "author": None, "parents": [{}],
-             "commit": {"author": {"email": "ghost@example.com"}}},
+            {
+                "sha": "a",
+                "author": {"login": "alice-gh"},
+                "parents": [{}],
+                "commit": {"author": {"email": "a@example.com"}},
+            },
+            {
+                "sha": "b",
+                "author": {"login": "alice-gh"},
+                "parents": [{}, {}],
+                "commit": {"author": {"email": "a@example.com"}},
+            },
+            {
+                "sha": "c",
+                "author": None,
+                "parents": [{}],
+                "commit": {"author": {"email": "ghost@example.com"}},
+            },
         ]
         out = await _run(fake)
         commits = out["repos"][REPO]["commits"]

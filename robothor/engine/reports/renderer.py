@@ -62,11 +62,63 @@ def render_report(report_type: str, data: dict[str, Any]) -> dict[str, Any]:
 
 
 def render_devops_report(data: dict[str, Any]) -> dict[str, Any]:
-    """Render the devops weekly report (convenience wrapper)."""
+    """Render the devops weekly report.
+
+    ``data`` is either a context from
+    :func:`robothor.engine.reports.devops_report.build_report_context`, or a
+    ``people.json`` aggregate with the analyst narrative under ``analyst``
+    (built into a context here). Every number shown comes from the aggregate.
+    """
+    from robothor.engine.reports.devops_report import build_report_context
+
+    if "role_groups" not in data:
+        if "members" not in data:
+            return {
+                "error": "report_data must be the people.json aggregate (with optional "
+                "'analyst' narrative) or a built report context"
+            }
+        data = build_report_context(data, data.get("analyst"))
     result = render_report("devops_weekly", data)
     if "error" not in result:
         result["subject"] = f"Dev Team Operations Report — {period_label(data.get('period'))}"
+        result["plain_summary"] = devops_plain_summary(data)
     return result
+
+
+def _fmt(v: Any) -> str:
+    return "n/a" if v is None else str(v)
+
+
+def devops_plain_summary(ctx: dict[str, Any]) -> str:
+    """Plain-text digest of a devops report context (Telegram, logs)."""
+    team = ctx.get("team") or {}
+    lines = [f"Dev Team Ops Report — {period_label(ctx.get('period'))}", ""]
+    lines.append(f"PRs merged: {_fmt(team.get('prs_merged'))}")
+    lines.append(f"Commits: {_fmt(team.get('commits'))}")
+    lines.append(f"Tickets resolved: {_fmt(team.get('tickets_resolved'))}")
+    lines.append(f"Reviews given: {_fmt(team.get('reviews_given'))}")
+    lines.append(f"Merged without review: {_fmt(team.get('merged_without_review'))}")
+    summary = (ctx.get("narrative") or {}).get("summary")
+    if summary:
+        lines += ["", summary]
+    bottlenecks = (ctx.get("narrative") or {}).get("bottlenecks") or []
+    if bottlenecks:
+        lines += ["", "Bottlenecks:"]
+        lines += [f"  {i}. {b.get('text', '')}" for i, b in enumerate(bottlenecks, 1)]
+    dq = ctx.get("data_quality") or {}
+    flags = []
+    if dq.get("unavailable_metrics"):
+        flags.append(f"{len(dq['unavailable_metrics'])} metric(s) unavailable")
+    if dq.get("outside_roster"):
+        flags.append(f"{len(dq['outside_roster'])} active handle(s) not on the roster")
+    if dq.get("no_activity"):
+        flags.append(f"{len(dq['no_activity'])} roster member(s) with no activity")
+    if dq.get("usage_unavailable"):
+        flags.append("Claude usage unavailable")
+    if flags:
+        lines += ["", "Data quality: " + "; ".join(flags)]
+    lines += ["", "Full HTML report sent via email."]
+    return "\n".join(lines)
 
 
 def _build_plain_summary(report_type: str, data: dict[str, Any]) -> str:

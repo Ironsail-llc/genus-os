@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 import tempfile
 from datetime import UTC, datetime
@@ -34,12 +33,11 @@ from robothor.engine.reports.claude_usage_hr import (
     pdf_to_text,
 )
 from robothor.engine.reports.devops_periods import report_window, window_block
-from robothor.engine.reports.devops_team import runs_dir, week_run_dir, workspace
+from robothor.engine.reports.devops_team import env_list, runs_dir, week_run_dir, workspace
 
 
 def _senders() -> list[str]:
-    raw = os.environ.get("DEVOPS_USAGE_REPORT_SENDERS", "")
-    return [s.strip() for s in raw.split(",") if s.strip()]
+    return env_list("DEVOPS_USAGE_REPORT_SENDERS")
 
 
 def _ingest(args: argparse.Namespace) -> tuple[dict, bytes | None]:
@@ -64,7 +62,9 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--week-start", help="YYYY-MM-DD (any day of the week); default last week")
     ap.add_argument("--runs-dir", type=Path, help="override $DEVOPS_RUNS_DIR")
-    ap.add_argument("--archive-dir", type=Path, help="default $ROBOTHOR_WORKSPACE/local/devops/claude_usage")
+    ap.add_argument(
+        "--archive-dir", type=Path, help="default $ROBOTHOR_WORKSPACE/local/devops/claude_usage"
+    )
     src = ap.add_mutually_exclusive_group()
     src.add_argument("--message-id", help="ingest this Gmail message id")
     src.add_argument("--pdf", type=Path, help="parse this local PDF")

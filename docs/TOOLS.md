@@ -1115,6 +1115,26 @@ the native workflow runner IS that role; its gate is the handler's
 service-workflow identity check. See
 [Native sales intelligence](SALES_INTELLIGENCE.md).
 
+### Dev-team metrics: `github_*`, `jira_search`, `render_devops_report`
+
+These are the interactive tools; the weekly report itself is built by
+deterministic scripts (see [Dev team report](DEVOPS_REPORT.md)), and its
+numbers never come from an agent.
+
+- `github_pr_stats` returns `merged_total` (every PR the search found) next to
+  the per-author counts, and lists any PR whose detail fetch failed in
+  `detail_fetch_failures` with `incomplete: true` — a failed fetch is never a
+  silently smaller count.
+- `github_review_stats` counts only reviews **submitted** inside the `days`
+  window, never self-reviews or pending reviews, over every PR updated in the
+  window (open or closed). A PR whose reviews could not be read is listed in
+  `review_fetch_failures` with `incomplete: true`.
+- `jira_search` pages: pass a result's `next_page_token` back as
+  `next_page_token` until `is_last` is true. One call returns at most 100.
+- `render_devops_report` takes the week's `people.json` aggregate with the
+  analyst's narrative under `analyst`; the old free-form analyst report is
+  refused.
+
 ### Everything else
 
 The full registry is large and changes with the release; `tool_search` over the

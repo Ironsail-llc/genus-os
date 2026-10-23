@@ -22,13 +22,14 @@ from __future__ import annotations
 
 import base64
 import json
-import os
 import re
 import subprocess
-from collections.abc import Callable
 from datetime import datetime
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+    from pathlib import Path
 
 SUBJECT_HINT = "Claude Usage Report"
 LOOKBACK_DAYS = 10
@@ -140,7 +141,9 @@ def derive_row(cells: dict[str, str]) -> dict[str, Any]:
     """Validated output row from raw cell text. Raises :class:`UsageParseError`."""
     dev_text = " ".join((cells.get("developer") or "").split())
     m = _DEV_ACCT.match(dev_text)
-    developer, account = (m.group("name").strip(), f"Acct {m.group('n')}") if m else (dev_text, None)
+    developer, account = (
+        (m.group("name").strip(), f"Acct {m.group('n')}") if m else (dev_text, None)
+    )
     if cells.get("account") and account is None:
         account = str(cells["account"]).strip()
         if account.isdigit():
@@ -162,7 +165,8 @@ def derive_row(cells: dict[str, str]) -> dict[str, Any]:
     if fable:
         fable_pct = _pct(fable)
         fable_hit = bool(
-            (fable_pct is not None and fable_pct >= 100) or re.search(r"limit", fable, re.I)
+            (fable_pct is not None and fable_pct >= 100)
+            or re.search(r"limit", fable, re.IGNORECASE)
         )
     else:
         fm = re.search(r"fable\s*(\d{1,3})\s*%", note, re.IGNORECASE)
@@ -195,7 +199,9 @@ def _report_meta(text: str) -> dict[str, Any]:
     date = None
     for m in _DATE.finditer(head):
         try:
-            date = datetime.strptime(f"{m.group(1)[:3]} {m.group(2)} {m.group(3)}", "%b %d %Y")
+            date = datetime.strptime(  # noqa: DTZ007 - a calendar date, no time of day
+                f"{m.group(1)[:3]} {m.group(2)} {m.group(3)}", "%b %d %Y"
+            )
             break
         except ValueError:
             continue
@@ -279,7 +285,9 @@ _LLM_PROMPT = (
 
 
 def _default_llm() -> Callable[[str], list[dict[str, Any]]] | None:
-    model = os.environ.get("DEVOPS_USAGE_LLM_MODEL", "").strip()
+    from robothor.engine.reports.devops_team import devops_env
+
+    model = devops_env("DEVOPS_USAGE_LLM_MODEL")
     if not model:
         return None
 
@@ -300,7 +308,7 @@ def _default_llm() -> Callable[[str], list[dict[str, Any]]] | None:
             )
         )
         content = resp.choices[0].message.content or ""
-        m = re.search(r"\[.*\]", content, re.S)
+        m = re.search(r"\[.*\]", content, re.DOTALL)
         data = json.loads(m.group(0) if m else content)
         if not isinstance(data, list):
             raise UsageParseError("LLM did not return a JSON array")
@@ -344,10 +352,14 @@ def extract_usage(
 # ── Fetch (gws CLI) ────────────────────────────────────────────────────
 
 
-def _gws(run: Callable[..., dict[str, Any]], args: list[str], params: dict[str, Any]) -> dict:
+def _gws(
+    run: Callable[..., dict[str, Any]], args: list[str], params: dict[str, Any]
+) -> dict[str, Any]:
     result = run([*args, "--params", json.dumps(params)], timeout=60)
     if not isinstance(result, dict) or result.get("error"):
-        raise RuntimeError(f"gws {' '.join(args[2:])}: {result.get('error') if isinstance(result, dict) else result}")
+        raise RuntimeError(
+            f"gws {' '.join(args[2:])}: {result.get('error') if isinstance(result, dict) else result}"
+        )
     return result
 
 
@@ -356,9 +368,9 @@ def _find_pdf_part(payload: dict[str, Any]) -> dict[str, Any] | None:
     while stack:
         part = stack.pop()
         name = (part.get("filename") or "").lower()
-        if name.endswith(".pdf") or part.get("mimeType") == "application/pdf":
-            if (part.get("body") or {}).get("attachmentId"):
-                return part
+        is_pdf = name.endswith(".pdf") or part.get("mimeType") == "application/pdf"
+        if is_pdf and (part.get("body") or {}).get("attachmentId"):
+            return part
         stack.extend(part.get("parts") or [])
     return None
 
@@ -374,7 +386,9 @@ def fetch_latest_report(
     Raises LookupError when no matching email with a PDF exists.
     """
     if run is None:
-        from robothor.engine.tools.handlers.gws import run_gws as run
+        from robothor.engine.tools.handlers.gws import run_gws
+
+        run = run_gws
     if message_id:
         ids = [message_id]
     else:

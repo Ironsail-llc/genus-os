@@ -12,7 +12,7 @@ the JIRA account TZ must be America/New_York for exact alignment.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -107,7 +107,7 @@ def report_window(
     backfills and re-runs.
     """
     if week_start:
-        day = datetime.strptime(week_start, "%Y-%m-%d").date()
+        day = date.fromisoformat(week_start)
         monday = day - timedelta(days=day.weekday())
         start = datetime.combine(monday, datetime.min.time(), tzinfo=ET)
         end = datetime.combine(monday + timedelta(days=7), datetime.min.time(), tzinfo=ET)

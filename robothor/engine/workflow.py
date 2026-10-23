@@ -1196,9 +1196,19 @@ class WorkflowEngine:
         result.tool_output = tool_result
         result.output_text = str(tool_result)
 
+        exit_code = tool_result.get("exit_code") if isinstance(tool_result, dict) else None
         if isinstance(tool_result, dict) and tool_result.get("error"):
             result.status = WorkflowStepStatus.FAILED
             result.error_message = str(tool_result["error"])
+        elif isinstance(exit_code, int) and not isinstance(exit_code, bool) and exit_code != 0:
+            # exec reports a failed command in exit_code, not in "error". A
+            # crashed script is a failed step (then skipped/aborted per
+            # on_failure), never "completed".
+            stderr = str(tool_result.get("stderr") or "").strip()
+            result.status = WorkflowStepStatus.FAILED
+            result.error_message = f"exit code {exit_code}" + (
+                f": {stderr[-500:]}" if stderr else ""
+            )
         else:
             result.status = WorkflowStepStatus.COMPLETED
 

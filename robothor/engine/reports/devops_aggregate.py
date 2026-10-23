@@ -15,9 +15,10 @@ and ``usage.json`` (:mod:`claude_usage_hr`) — plus up to three earlier
 from __future__ import annotations
 
 from statistics import median
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from robothor.engine.reports.devops_team import Member, Team
+if TYPE_CHECKING:
+    from robothor.engine.reports.devops_team import Member, Team
 
 #: Per-member metrics, in report order. Each maps to the collector metric(s)
 #: it depends on, as ("github"|"jira", metric) pairs.
@@ -240,9 +241,7 @@ def aggregate_people(
     by_usage_name: dict[str, list[dict[str, Any]]] = {}
     for row in usage_rows:
         by_usage_name.setdefault(str(row.get("developer", "")).casefold(), []).append(row)
-    roster_usage_names = {
-        m.usage_name.casefold() for m in team.active_members if m.usage_name
-    }
+    roster_usage_names = {m.usage_name.casefold() for m in team.active_members if m.usage_name}
     unmatched = sorted(
         {
             str(r.get("developer", ""))
@@ -255,9 +254,7 @@ def aggregate_people(
     hist = list(history or [])[-3:]
     while len(hist) < 3:
         hist.insert(0, None)
-    hist_rows = [
-        {m["id"]: m for m in (h or {}).get("members", [])} if h else {} for h in hist
-    ]
+    hist_rows = [{m["id"]: m for m in (h or {}).get("members", [])} if h else {} for h in hist]
 
     members_out: list[dict[str, Any]] = []
     no_activity: list[dict[str, Any]] = []
@@ -265,8 +262,8 @@ def aggregate_people(
         a = acc[member.id]
         metrics: dict[str, Any] = {}
         reasons: dict[str, str] = {}
-        for metric, sources in METRIC_SOURCES.items():
-            missing = [unavailable[s] for s in sources if s in unavailable]
+        for metric, deps in METRIC_SOURCES.items():
+            missing = [unavailable[s] for s in deps if s in unavailable]
             if missing:
                 metrics[metric] = None
                 reasons[metric] = missing[0]
@@ -275,7 +272,9 @@ def aggregate_people(
             else:
                 metrics[metric] = a[metric]
         metrics["tickets_by_type"] = (
-            None if metrics["tickets_resolved"] is None else dict(sorted(a["tickets_by_type"].items()))
+            None
+            if metrics["tickets_resolved"] is None
+            else dict(sorted(a["tickets_by_type"].items()))
         )
         trend = {
             metric: [
@@ -292,7 +291,9 @@ def aggregate_people(
             "metrics": metrics,
             "unavailable": reasons,
             "trend": trend,
-            "usage": by_usage_name.get(member.usage_name.casefold(), []) if member.usage_name else [],
+            "usage": by_usage_name.get(member.usage_name.casefold(), [])
+            if member.usage_name
+            else [],
             "usage_name": member.usage_name,
         }
         known = [metrics[k] for k in ACTIVITY_METRICS if metrics[k] is not None]
@@ -348,9 +349,7 @@ def aggregate_people(
         "period": (github or {}).get("period") or (jira or {}).get("period") or {},
         "sources": sources,
         "unavailable_metrics": {f"{s}.{m}": r for (s, m), r in sorted(unavailable.items())},
-        "roles": [
-            {"key": r.key, "title": r.title, "focus": r.focus} for r in team.roles.values()
-        ],
+        "roles": [{"key": r.key, "title": r.title, "focus": r.focus} for r in team.roles.values()],
         "members": members_out,
         "team": team_totals,
         "outside_roster": outside_list,

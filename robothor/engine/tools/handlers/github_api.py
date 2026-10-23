@@ -505,9 +505,7 @@ async def _github_review_stats(args: dict[str, Any], ctx: ToolContext) -> dict[s
                 max_pages=5,
             )
 
-            recent_prs = [
-                pr for pr in prs if datetime.fromisoformat(pr["updated_at"]) >= since
-            ]
+            recent_prs = [pr for pr in prs if datetime.fromisoformat(pr["updated_at"]) >= since]
 
             reviewer_stats: dict[str, dict[str, Any]] = {}
             fetch_failures: list[dict[str, Any]] = []

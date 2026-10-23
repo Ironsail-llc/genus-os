@@ -21,7 +21,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import os
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -30,15 +29,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from robothor.engine.reports.devops_github import collect_github
 from robothor.engine.reports.devops_periods import report_window, window_block
-from robothor.engine.reports.devops_team import runs_dir, week_run_dir
+from robothor.engine.reports.devops_team import env_list, runs_dir, week_run_dir
 
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "brain" / "memory" / "devops-config.json"
 
 
 def load_repos() -> list[str]:
-    env_val = os.environ.get("DEVOPS_GITHUB_REPOS", "")
+    env_val = env_list("DEVOPS_GITHUB_REPOS")
     if env_val:
-        return [r.strip() for r in env_val.split(",") if r.strip()]
+        return env_val
     if CONFIG_PATH.exists():
         cfg = json.loads(CONFIG_PATH.read_text()).get("github", {})
         org = cfg.get("org", "")

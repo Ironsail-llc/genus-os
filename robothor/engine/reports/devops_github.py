@@ -26,11 +26,13 @@ from __future__ import annotations
 import asyncio
 import fnmatch
 import time
-from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Sequence
 
 GITHUB_API = "https://api.github.com"
 
@@ -82,7 +84,7 @@ def is_excluded_path(path: str) -> bool:
 def _ts(value: str | None) -> datetime | None:
     if not value:
         return None
-    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    return datetime.fromisoformat(value)
 
 
 class FetchError(Exception):

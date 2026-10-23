@@ -160,18 +160,32 @@ def parse_team(raw: Any) -> Team:
     return Team(roles=roles, members=members, bots_excluded=bots, _index=index)
 
 
+def devops_env(name: str, default: str = "") -> str:
+    """The one reader of the report's environment settings (``DEVOPS_*``, workspace).
+
+    The report's scripts run standalone, outside the engine's settings object;
+    funnelling every read through here keeps them to a single call site.
+    """
+    return os.environ.get(name, default).strip()
+
+
+def env_list(name: str) -> list[str]:
+    """A comma-separated environment setting as a list."""
+    return [v.strip() for v in devops_env(name).split(",") if v.strip()]
+
+
 def workspace() -> Path:
-    env = os.environ.get("ROBOTHOR_WORKSPACE")
+    env = devops_env("ROBOTHOR_WORKSPACE")
     return Path(env) if env else Path.home() / "robothor"
 
 
 def team_file_path() -> Path:
-    env = os.environ.get("DEVOPS_TEAM_FILE")
+    env = devops_env("DEVOPS_TEAM_FILE")
     return Path(env) if env else workspace() / "local" / "devops" / "team.yaml"
 
 
 def runs_dir() -> Path:
-    env = os.environ.get("DEVOPS_RUNS_DIR")
+    env = devops_env("DEVOPS_RUNS_DIR")
     return Path(env) if env else workspace() / "local" / "devops" / "runs"
 
 

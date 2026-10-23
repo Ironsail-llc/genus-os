@@ -67,6 +67,7 @@ def test_writes_people_json_with_trend(tmp_path: Path):
     # no jira.json -> tickets unavailable, not zero
     assert alice["metrics"]["tickets_resolved"] is None
     assert people["period"]["week_start"] == "2026-05-11"
+    assert (runs / "latest" / "people.json").exists()
 
 
 def test_missing_team_file_fails(tmp_path: Path):

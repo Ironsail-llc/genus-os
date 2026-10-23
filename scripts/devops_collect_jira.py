@@ -22,7 +22,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import os
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -31,7 +30,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from robothor.engine.reports.devops_periods import report_window, window_block
-from robothor.engine.reports.devops_team import runs_dir, week_run_dir
+from robothor.engine.reports.devops_team import env_list, runs_dir, week_run_dir
 from robothor.engine.tools.dispatch import ToolContext
 from robothor.engine.tools.handlers.jira import _jira_search
 
@@ -44,16 +43,18 @@ STALE_LIST = 10
 
 
 def load_projects() -> list[str]:
-    env_val = os.environ.get("DEVOPS_JIRA_PROJECTS", "")
+    env_val = env_list("DEVOPS_JIRA_PROJECTS")
     if env_val:
-        return [p.strip() for p in env_val.split(",") if p.strip()]
+        return env_val
     if CONFIG_PATH.exists():
         cfg = json.loads(CONFIG_PATH.read_text())
         return list(cfg.get("jira", {}).get("active_projects", []))
     return []
 
 
-async def _search_all(search, jql: str, *, limit: int | None = None) -> tuple[list[dict], str | None]:
+async def _search_all(
+    search, jql: str, *, limit: int | None = None
+) -> tuple[list[dict], str | None]:
     """Every issue for ``jql`` (or the first ``limit``). Returns (issues, error)."""
     issues: list[dict] = []
     token: str | None = None

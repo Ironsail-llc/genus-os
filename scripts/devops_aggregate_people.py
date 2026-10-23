@@ -5,7 +5,8 @@ Reads ``github.json``, ``jira.json`` and ``usage.json`` from
 ``$DEVOPS_RUNS_DIR/<week-start>/`` (any may be missing: the metrics it feeds
 become "unavailable", never zero), the team roster from ``$DEVOPS_TEAM_FILE``,
 and the three previous weeks' ``people.json`` for trends. Writes
-``people.json`` next to them.
+``people.json`` next to them, and points ``$DEVOPS_RUNS_DIR/latest`` at that
+week so the analyst agent reads and writes fixed paths.
 
 Rows exist only for active roster members. Exits 1 when the team file is
 missing or invalid — without a roster there is no honest table to build.
@@ -16,7 +17,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from datetime import datetime, timedelta
+from datetime import date, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -35,6 +36,17 @@ def _read(path: Path) -> dict | None:
         print(f"unreadable {path}: {e}", file=sys.stderr)
         return None
     return data if isinstance(data, dict) else None
+
+
+def _point_latest(base: Path, run: Path) -> None:
+    """``<runs>/latest`` -> this week, so the analyst agent has a fixed path."""
+    link = base / "latest"
+    try:
+        if link.is_symlink() or link.exists():
+            link.unlink()
+        link.symlink_to(run.name)
+    except OSError as e:
+        print(f"could not update {link}: {e}", file=sys.stderr)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -59,7 +71,7 @@ def main(argv: list[str] | None = None) -> int:
     jira = _read(run / "jira.json")
     usage = _read(run / "usage.json")
 
-    monday = datetime.strptime(period["week_start"], "%Y-%m-%d")
+    monday = date.fromisoformat(period["week_start"])
     history = [
         _read(base / (monday - timedelta(days=7 * k)).strftime("%Y-%m-%d") / "people.json")
         for k in (3, 2, 1)
@@ -69,6 +81,10 @@ def main(argv: list[str] | None = None) -> int:
     people["period"] = period
     out = run / "people.json"
     out.write_text(json.dumps(people, indent=2, default=str))
+    # A narrative written against an earlier table no longer describes this
+    # one; the analyst step writes a fresh one (or the report says it is missing).
+    (run / "analyst.json").unlink(missing_ok=True)
+    _point_latest(base, run)
 
     dq = people["data_quality"]
     print(

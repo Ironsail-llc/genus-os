@@ -1,7 +1,17 @@
 id: devops-report-pipeline
 name: Dev Team Operations Report Pipeline
-description: Weekly — collect JIRA/GitHub data, analyze, render, email stakeholders, post Telegram summary.
-version: "2026-04-22"
+description: Weekly — collect JIRA/GitHub/Claude-usage facts for last week, build the deterministic people table, add analyst narrative, render, email, post a Telegram digest.
+version: "2026-10-23"
+
+# Every step works on one report week: the previous ISO week (Mon 00:00 to
+# Mon 00:00, America/New_York). Intermediate files live in
+# $DEVOPS_RUNS_DIR/<week-start>/ (default $ROBOTHOR_WORKSPACE/local/devops/runs),
+# never /tmp — the engine runs with PrivateTmp, so /tmp files were invisible
+# afterwards. $DEVOPS_RUNS_DIR/latest points at the current week.
+#
+# Instance env (daemon environment): DEVOPS_TEAM_FILE (team roster YAML),
+# DEVOPS_USAGE_REPORT_SENDERS, DEVOPS_REPORT_RECIPIENTS, optionally
+# DEVOPS_RUNS_DIR and DEVOPS_USAGE_LLM_MODEL. See docs/DEVOPS_REPORT.md.
 
 triggers:
   - type: cron
@@ -10,43 +20,54 @@ triggers:
   - type: manual
 
 # Must EXCEED one agent step's whole model-chain allowance — see
-# email-pipeline.yaml for the arithmetic. 1800 was exactly the floor, which is
-# not headroom: the floor bills the models after the primary a single attempt
-# each, and any one of them retrying puts the step over.
+# email-pipeline.yaml for the arithmetic.
 timeout_seconds: 2400
 
 steps:
   - id: collect-jira
+    # Non-zero exit = some query failed. The JSON is still written and the
+    # affected metrics render as "unavailable", so the run continues.
     type: tool
     tool_name: exec
+    tool_timeout_seconds: 300
     tool_args:
       # Project list is instance config; inlined here (workflow YAML is instance
-      # territory) so scripts/ stays platform-clean. Mirror of jira.active_projects
-      # in brain/memory/devops-config.json — keep in sync when adding projects.
+      # territory) so scripts/ stays platform-clean.
       command: >-
         cd ~/robothor &&
         DEVOPS_JIRA_PROJECTS='VV,RD,I1,IM,IEC,CRI,OO,PRAC'
         venv/bin/python scripts/devops_collect_jira.py
-      timeout: 60
-    on_failure: abort
+      timeout: 300
+    on_failure: skip
 
   - id: collect-github
+    # Core REST only (no Search API), every page, one window. Non-zero exit =
+    # a repo/endpoint failed after retries; recorded, never reported as zero.
     type: tool
     tool_name: exec
+    tool_timeout_seconds: 900
     tool_args:
-      # Mirror of github.active_repos in brain/memory/devops-config.json.
       command: >-
         cd ~/robothor &&
         DEVOPS_GITHUB_REPOS='ironsail-llc/impetus-one,ironsail-llc/impetusrx,ironsail-llc/ec-valhalla-mso,ironsail-llc/united-pharmacy-api,ironsail-llc/genus-os,ironsail-llc/ec-valhalla-vitality-storefront'
         venv/bin/python scripts/devops_collect_github.py
-      timeout: 120
-    on_failure: abort
+      timeout: 900
+    on_failure: skip
+
+  - id: collect-claude-usage
+    # Newest HR "Claude Usage Report" email (PDF) from DEVOPS_USAGE_REPORT_SENDERS
+    # within 10 days -> usage.json + archive. Unavailable is reported, not fatal.
+    type: tool
+    tool_name: exec
+    tool_timeout_seconds: 180
+    tool_args:
+      command: "cd ~/robothor && venv/bin/python scripts/devops_claude_usage.py"
+      timeout: 180
+    on_failure: skip
 
   - id: aggregate-people
-    # Deterministic per-person rollup: joins every author/assignee/reviewer
-    # handle to a CRM person via contact_identifiers, surfaces unresolved
-    # handles, roster engineers with zero activity, and bot authors. Writes
-    # /tmp/devops_people_rollup.json for the analyst to narrate.
+    # Deterministic people table from the team roster file: every number in
+    # the report comes from people.json.
     type: tool
     tool_name: exec
     tool_args:
@@ -54,65 +75,45 @@ steps:
       timeout: 60
     on_failure: abort
 
-  - id: collect-claude-usage
-    # Pulls the latest weekly Claude Usage Report email from
-    # <USAGE_REPORT_SENDER> (the 'Claude Usage Interceptor' automation),
-    # parses it, archives to local/devops/claude_usage_reports/, and
-    # writes /tmp/devops_claude_usage.json for the analyst. Skip on
-    # failure — Claude adoption metrics are nice-to-have, not blocking.
-    type: tool
-    tool_name: exec
-    tool_args:
-      command: "cd ~/robothor && venv/bin/python scripts/claude_usage_report.py"
-      timeout: 30
-    on_failure: skip
-
   - id: analyze
     type: agent
     agent_id: devops-analyst
     message: >
-      Weekly analysis run. Pre-collected data is waiting for you:
-        - JIRA:          /tmp/devops_jira_data.json
-        - GitHub:        /tmp/devops_github_data.json
-        - People roll:   /tmp/devops_people_rollup.json    (deterministic per-person totals)
-        - Claude usage:  /tmp/devops_claude_usage.json     (weekly adoption; may be unavailable)
-
-      Follow your instruction file end-to-end. Write the structured report to
-      /tmp/devops_report.json AND to the devops_latest_report memory block.
-      Do NOT call jira_* or github_* tools — those are blocked for a reason.
-      Do NOT call resolve_identities — the rollup file already has every
-      person joined to CRM. Your job is narration, not joining.
-      Your output_text should be a short status line; downstream agents handle
-      email and Telegram delivery.
-    on_failure: abort
+      Weekly narrative run. Read local/devops/runs/latest/people.json (the
+      deterministic table: members, roles with how each is judged, team totals,
+      Claude usage, data_quality). Write ONLY this JSON to
+      local/devops/runs/latest/analyst.json:
+      {"summary": "...", "per_person": {"<member id>": "one short note"},
+       "bottlenecks": ["..."], "si_vs_output": "..."}.
+      Never restate a number unless it is exactly the table's value; notes
+      with mismatching numbers are withheld from the report. Do not produce
+      tables, counts or roles — the renderer takes all of those from
+      people.json. Do NOT call jira_* or github_* tools.
+    on_failure: skip   # the report renders without narrative and says so
 
   - id: render-html
     type: tool
     tool_name: exec
     tool_args:
       command: "cd ~/robothor && venv/bin/python scripts/devops_render_report.py"
-      timeout: 30
+      timeout: 60
     on_failure: abort
 
   - id: dispatch-emails
-    # Deterministic fan-out: reads recipients from devops_report_recipients
-    # memory block, looks up each person's email via crm_people, sends the
-    # pre-rendered HTML via gws CLI. No LLM — just a loop.
+    # ONE message, all recipients in To:. DEVOPS_REPORT_RECIPIENTS (comma list)
+    # wins over the devops_report_recipients memory block. Non-zero exit when
+    # any recipient could not be resolved.
     type: tool
     tool_name: exec
     tool_args:
       command: "cd ~/robothor && venv/bin/python scripts/devops_send_emails.py"
       timeout: 120
-    on_failure: skip   # Email is secondary; Telegram is the primary channel.
+    on_failure: skip
 
   - id: post-telegram
-    # Deterministic send: reads /tmp/devops_report.json, formats the plain-text
-    # report, posts to Philip's chat via Telegram Bot API. No LLM needed for a
-    # formatter. Env (ROBOTHOR_TELEGRAM_BOT_TOKEN + ROBOTHOR_TELEGRAM_CHAT_ID)
-    # is inherited from the daemon process.
     type: tool
     tool_name: exec
     tool_args:
       command: "cd ~/robothor && venv/bin/python scripts/devops_send_telegram.py"
       timeout: 30
-    on_failure: abort
+    on_failure: skip

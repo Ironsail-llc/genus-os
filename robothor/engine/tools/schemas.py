@@ -3635,7 +3635,13 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
                 "type": "object",
                 "properties": {
                     "report_data": {
-                        "description": "Structured report data with keys: period, executive_summary, jira, github, people, bottlenecks",
+                        "description": (
+                            "The deterministic people.json aggregate of one report week "
+                            "(period, roles, members, team, usage, data_quality, ...), "
+                            "optionally with the analyst narrative under 'analyst': "
+                            "{summary, per_person: {member_id: note}, bottlenecks, "
+                            "si_vs_output}. Numbers are only ever taken from the aggregate."
+                        ),
                     },
                 },
                 "required": ["report_data"],
