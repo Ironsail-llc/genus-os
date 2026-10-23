@@ -203,3 +203,23 @@ def test_ticket_claim_may_match_shipped_or_jira_closed():
     assert _note_ok("shipped 5 tickets", member)
     assert _note_ok("closed 2 tickets in JIRA", member)
     assert not _note_ok("shipped 7 tickets", member)
+
+
+def test_ticket_claims_may_cite_in_progress_and_trend_values():
+    from robothor.engine.reports.devops_report import _note_ok
+
+    member = {
+        "metrics": {
+            "tickets_resolved": 27,
+            "tickets_shipped": 12,
+            "in_progress": 53,
+            "prs_merged": 13,
+        },
+        "trend": {"tickets_resolved": [None, 56, 50], "prs_merged": [8, 31, None]},
+    }
+    assert _note_ok(
+        "27 tickets resolved versus 56 and 50 tickets before; 53 tickets in progress", member
+    )
+    assert _note_ok("13 PRs merged, down from 31 PRs", member)
+    assert not _note_ok("41 tickets resolved", member)
+    assert not _note_ok("12 PRs merged", member)
