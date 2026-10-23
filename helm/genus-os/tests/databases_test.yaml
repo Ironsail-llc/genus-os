@@ -13,14 +13,14 @@ tests:
             value: gos-postgres
         documentIndex: 0
 
-  - it: redis-host helper points at the subchart Service name by default
+  - it: cache-host helper points at the valkey subchart Service name by default
     template: engine/workload.yaml
     asserts:
       - contains:
           path: spec.template.spec.containers[0].env
           content:
             name: ROBOTHOR_REDIS_HOST
-            value: gos-redis
+            value: gos-valkey
         documentIndex: 0
 
   - it: ROBOTHOR_DB_* not in explicit env when postgres.enabled=false
@@ -50,10 +50,13 @@ tests:
           any: true
         documentIndex: 0
 
-  - it: ROBOTHOR_REDIS_* not in explicit env when redis.enabled=false
+  - it: ROBOTHOR_REDIS_* not in explicit env when valkey.enabled=false
+    # External cache — chart drops the explicit env block so the VSO-
+    # materialized `cache` Secret can supply HOST/PORT/PASSWORD without being
+    # shadowed (explicit `env:` wins over `envFrom:` in k8s).
     template: engine/workload.yaml
     set:
-      redis.enabled: false
+      valkey.enabled: false
     asserts:
       - notContains:
           path: spec.template.spec.containers[0].env
@@ -83,3 +86,15 @@ tests:
     asserts:
       - notExists:
           path: spec.template.spec.initContainers
+
+  - it: explicit redis.host overrides the derived valkey Service name
+    template: engine/workload.yaml
+    set:
+      redis.host: cache.example.internal
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ROBOTHOR_REDIS_HOST
+            value: cache.example.internal
+        documentIndex: 0

@@ -1,0 +1,25 @@
+{{/*
+Render-time invariants. Emits no objects: it exists so that a configuration
+which would fail silently at runtime fails loudly at `helm template` instead.
+*/}}
+
+{{/*
+The Valkey ACL password and the Python clients' ROBOTHOR_REDIS_PASSWORD must
+resolve to the same Secret, and the subchart cannot call this chart's fullname
+helper — so values.yaml derives the name with a `tpl` expression over
+.Release.Name. Verify it still agrees with the name this chart actually creates.
+Re-rendered here in the parent context, which shares .Release.Name.
+*/}}
+{{- if .Values.valkey.enabled }}
+{{- $auth := .Values.valkey.auth | default dict }}
+{{- if $auth.enabled }}
+{{- $want := printf "%s-cache" (include "genus-os.fullname" .) }}
+{{- $got := tpl ($auth.usersExistingSecret | default "" | toString) . | trim }}
+{{- if ne $got $want }}
+{{- /* Single line on purpose: helm-unittest matches failedTemplate messages
+     by equality, and a multi-line message matches differently across plugin
+     versions (0.6 vs 0.8), so the assertion would pass locally and fail in CI. */}}
+{{- fail (printf "valkey.auth.usersExistingSecret resolves to %q but this chart creates the cache Secret as %q — the Valkey pod would mount a Secret that does not exist and sit in CreateContainerConfigError, which neither helm lint nor helm unittest can see. This usually means nameOverride or fullnameOverride is set, so the derived expression in values.yaml no longer matches; drop the override or set valkey.auth.usersExistingSecret to %q." $got $want $want) }}
+{{- end }}
+{{- end }}
+{{- end }}
