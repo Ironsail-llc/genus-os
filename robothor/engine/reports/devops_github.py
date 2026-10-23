@@ -63,6 +63,21 @@ EXCLUDED_PATH_GLOBS: tuple[str, ...] = (
 METRICS = ("prs", "lines", "commits", "reviews", "stale")
 STALE_DAYS = 14
 _RETRYABLE = {403, 429, 500, 502, 503, 504}
+#: Indirection so tests can drive the clock without real sleeps.
+_sleep = asyncio.sleep
+_epoch = time.time
+
+
+def _rate_limit_reset(resp: httpx.Response) -> float | None:
+    """Epoch seconds when the exhausted primary (hourly) quota resets, else None."""
+    if resp.status_code not in (403, 429):
+        return None
+    if resp.headers.get("x-ratelimit-remaining") != "0":
+        return None
+    reset = resp.headers.get("x-ratelimit-reset", "")
+    return float(reset) if reset.isdigit() else None
+
+
 _REVIEW_STATES = {"APPROVED", "CHANGES_REQUESTED", "COMMENTED", "DISMISSED"}
 
 
@@ -106,8 +121,12 @@ class _Fetcher:
         concurrency: int,
         retry_delays: Sequence[float],
         retry_budget: float,
+        max_rate_wait: float = 0.0,
     ) -> None:
         self.client = client
+        # The token's hourly quota is shared with other GitHub users of the
+        # same account; waiting out a reset beats reporting the week empty.
+        self.rate_deadline = _epoch() + max_rate_wait
         self.headers = headers
         self.sem = asyncio.Semaphore(concurrency)
         self.delays = tuple(retry_delays)
@@ -124,6 +143,10 @@ class _Fetcher:
                     resp = await self.client.get(url, headers=self.headers, params=params)
                 if resp.status_code < 400:
                     return resp
+                reset = _rate_limit_reset(resp)
+                if reset is not None and reset + 2 <= self.rate_deadline:
+                    await _sleep(max(reset + 2 - _epoch(), 1.0))
+                    continue
                 status = resp.status_code
                 try:
                     message = str(resp.json().get("message", ""))[:200]
@@ -141,7 +164,7 @@ class _Fetcher:
             if retry_after and retry_after.isdigit():
                 delay = max(delay, min(float(retry_after), 30.0))
             attempt += 1
-            await asyncio.sleep(delay)
+            await _sleep(delay)
 
     async def get_json(self, url: str, params: dict[str, Any] | None = None) -> Any:
         return (await self._get(url, params)).json()
@@ -417,6 +440,7 @@ async def collect_github(
     concurrency: int = 6,
     retry_delays: Sequence[float] = (2.0, 5.0, 10.0),
     retry_budget: float = 120.0,
+    max_rate_wait: float = 0.0,
 ) -> dict[str, Any]:
     """Collect the week's facts for every repo. Never raises on a GitHub error."""
     f = _Fetcher(
@@ -425,6 +449,7 @@ async def collect_github(
         concurrency=concurrency,
         retry_delays=retry_delays,
         retry_budget=retry_budget,
+        max_rate_wait=max_rate_wait,
     )
     now = now or datetime.now(UTC)
     results = await asyncio.gather(*[_collect_repo(f, r, start, end, now) for r in repos])

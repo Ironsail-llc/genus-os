@@ -36,6 +36,8 @@ with a private `/tmp`, so files there could not be inspected after a run.
 | `DEVOPS_RUNS_DIR` | Root of the per-week run directories (see above) |
 | `DEVOPS_GITHUB_REPOS` | Comma-separated `owner/repo` list |
 | `DEVOPS_JIRA_PROJECTS` | Comma-separated JIRA project keys |
+| `DEVOPS_GITHUB_TOKEN` (secret) | Optional. A GitHub token used only by the report collector. Recommended when the shared `GITHUB_TOKEN` also serves busy agents (e.g. the PR reviewer), whose traffic can exhaust its hourly quota |
+| `DEVOPS_GITHUB_MAX_RATE_WAIT` | Optional, default 600. Seconds the GitHub collector may wait for an exhausted hourly API quota to reset (the token is often shared with other agents) before recording the affected metrics as unavailable |
 | `DEVOPS_JIRA_DONE_STATUSES` | Optional. Statuses that mean delivered while the issue stays unresolved (e.g. a final "Deployed" column). Entering one in the week counts as closed; such issues are not "in progress" or backlog |
 | `DEVOPS_USAGE_REPORT_SENDERS` | Comma-separated sender addresses of the HR usage email |
 | `DEVOPS_USAGE_LLM_MODEL` | Optional. A model used once when the usage PDF cannot be parsed deterministically |

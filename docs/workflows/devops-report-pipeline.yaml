@@ -21,7 +21,7 @@ triggers:
 
 # Must EXCEED one agent step's whole model-chain allowance — see
 # email-pipeline.yaml for the arithmetic.
-timeout_seconds: 2400
+timeout_seconds: 3000
 
 steps:
   - id: collect-jira
@@ -45,6 +45,8 @@ steps:
     # a repo/endpoint failed after retries; recorded, never reported as zero.
     type: tool
     tool_name: exec
+    # Up to 10 min of it may be waiting out an exhausted hourly API quota
+    # (DEVOPS_GITHUB_MAX_RATE_WAIT); exec calls are capped at 900s.
     tool_timeout_seconds: 900
     tool_args:
       command: >-

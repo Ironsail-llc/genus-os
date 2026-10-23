@@ -65,7 +65,9 @@ class FakeGitHub:
         self.calls.append(path)
         statuses = self.fail.get(path)
         if statuses:
-            return httpx.Response(statuses.pop(0), json={"message": "boom"})
+            st = statuses.pop(0)
+            st, hdrs = st if isinstance(st, tuple) else (st, {})
+            return httpx.Response(st, json={"message": "boom"}, headers=hdrs)
         q = parse_qs(urlparse(str(request.url)).query)
         base = f"/repos/{REPO}"
         if path == base:
@@ -176,6 +178,49 @@ class TestMergedPrs:
         out = await _run(fake)
         assert out["errors"] == []
         assert out["complete"] is True
+
+
+class TestPrimaryRateLimit:
+    """The hourly quota is shared with other GitHub users of the same token:
+    when it runs out, wait for the reset instead of reporting the week empty."""
+
+    @staticmethod
+    def _limited(reset_in: float, now: float = 1_000_000.0):
+        return (403, {"x-ratelimit-remaining": "0", "x-ratelimit-reset": str(int(now + reset_in))})
+
+    @pytest.mark.asyncio
+    async def test_waits_for_reset_beyond_the_retry_count(self, monkeypatch):
+        import robothor.engine.reports.devops_github as mod
+
+        slept: list[float] = []
+
+        async def fake_sleep(s):
+            slept.append(s)
+
+        monkeypatch.setattr(mod, "_sleep", fake_sleep)
+        monkeypatch.setattr(mod, "_epoch", lambda: 1_000_000.0)
+        fake = FakeGitHub()
+        fake.pulls_all = [_pr(1, "alice-gh")]
+        fake.fail[f"/repos/{REPO}/pulls/1"] = [self._limited(600)] * 5
+        out = await _run(fake, max_rate_wait=1800)
+        assert out["errors"] == []
+        assert any(s >= 600 for s in slept)
+
+    @pytest.mark.asyncio
+    async def test_reset_too_far_away_is_an_error(self, monkeypatch):
+        import robothor.engine.reports.devops_github as mod
+
+        async def fake_sleep(s):
+            return None
+
+        monkeypatch.setattr(mod, "_sleep", fake_sleep)
+        monkeypatch.setattr(mod, "_epoch", lambda: 1_000_000.0)
+        fake = FakeGitHub()
+        fake.pulls_all = [_pr(1, "alice-gh")]
+        fake.fail[f"/repos/{REPO}/pulls/1"] = [self._limited(7200)] * 5
+        out = await _run(fake, max_rate_wait=1800)
+        assert out["complete"] is False
+        assert out["errors"][0]["status"] == 403
 
 
 class TestFailures:

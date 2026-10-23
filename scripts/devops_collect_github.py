@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -51,8 +52,11 @@ async def _collect(repos: list[str], start: datetime, end: datetime) -> dict:
     import httpx
 
     from robothor.engine.tools.handlers.github_api import _get_token, _headers
+    from robothor.secrets import get_secret
 
-    token = _get_token()
+    # A token of its own keeps the report off a quota other agents (the PR
+    # reviewer) can exhaust; falls back to the shared GitHub credential.
+    token = get_secret("DEVOPS_GITHUB_TOKEN") or _get_token()
     if not token:
         return {
             "repos": {},
@@ -62,7 +66,14 @@ async def _collect(repos: list[str], start: datetime, end: datetime) -> dict:
             "complete": False,
         }
     async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
-        return await collect_github(repos, start, end, client=client, headers=_headers(token))
+        return await collect_github(
+            repos,
+            start,
+            end,
+            client=client,
+            headers=_headers(token),
+            max_rate_wait=float(os.environ.get("DEVOPS_GITHUB_MAX_RATE_WAIT", "600")),
+        )
 
 
 def main(argv: list[str] | None = None) -> int:
