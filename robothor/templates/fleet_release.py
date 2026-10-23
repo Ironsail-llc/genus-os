@@ -88,8 +88,7 @@ def _read(root: Path, path: str) -> bytes:
 
 
 def _contracts(root: Path, spec: ReleaseSpec) -> dict[str, Any]:
-    from apscheduler.triggers.cron import CronTrigger
-
+    from robothor.engine.crontab import cron_trigger
     from robothor.engine.manifest_schema import validate
     from robothor.engine.workflow import parse_workflow
     from robothor.plugins.manifest import parse_manifest
@@ -148,7 +147,7 @@ def _contracts(root: Path, spec: ReleaseSpec) -> dict[str, Any]:
             steps.extend(step.parallel_steps)
         for trigger in workflow.triggers:
             if trigger.type == "cron":
-                CronTrigger.from_crontab(trigger.cron, timezone=trigger.timezone)
+                cron_trigger(trigger.cron, timezone=trigger.timezone)
         workflows[workflow.id] = workflow
     for path in spec.plugins:
         with tempfile.TemporaryDirectory(prefix="genus-release-wheel-") as folder:

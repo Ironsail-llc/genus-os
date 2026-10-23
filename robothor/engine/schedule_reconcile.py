@@ -26,9 +26,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from apscheduler.triggers.cron import CronTrigger
+from robothor.engine.crontab import cron_trigger
 
 if TYPE_CHECKING:
+    from apscheduler.triggers.cron import CronTrigger
+
     from robothor.engine.config import ManifestScan
     from robothor.engine.models import AgentConfig
 
@@ -192,7 +194,7 @@ def _cron_spec(
         kind=kind,
         agent_id=agent.id,
         name=name,
-        trigger=CronTrigger.from_crontab(cron_expr, timezone=timezone),
+        trigger=cron_trigger(cron_expr, timezone=timezone),
         cron_expr=cron_expr,
         misfire_grace_time=misfire_grace_time,
         enabled=agent.schedule_enabled,
