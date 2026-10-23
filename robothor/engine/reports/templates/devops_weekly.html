@@ -228,7 +228,7 @@
 
   {% for b in bottlenecks %}
   <div style="margin-bottom:12px;padding:12px 16px;background:{% if b.severity == 'high' %}#ffebe6{% else %}#fffae6{% endif %};border-left:4px solid {% if b.severity == 'high' %}#de350b{% else %}#ff8b00{% endif %};border-radius:0 4px 4px 0;">
-    <p style="margin:0;font-size:13px;font-weight:600;color:#172b4d;">{{ loop.index }}. {{ b.text }}</p>
+    <p style="margin:0;font-size:13px;font-weight:600;color:#172b4d;">{{ loop.index }}. {{ b.text or b.description }}</p>
     {% if b.recommendation %}
     <p style="margin:6px 0 0;font-size:12px;color:#6b778c;">&#x2192; {{ b.recommendation }}</p>
     {% endif %}

@@ -49,20 +49,44 @@ def _load_recipients() -> list[dict]:
 
 
 def _lookup_email(person_id: str) -> str | None:
-    """Return the primary email for a CRM person_id, or None."""
+    """Return a deliverable email for a CRM person_id, or None.
+
+    Two-step resolution, because crm_people.email is NULL for most of the
+    current devops_report_recipients block (the real addresses live in
+    contact_identifiers):
+      1. crm_people.email - live row first, then any row (a soft-deleted
+         duplicate still carries the person's real address).
+      2. contact_identifiers, channel='email'. That channel is polluted
+         (bare display names and CRM hashes are stored there too), so the
+         identifier itself must look like an address.
+    """
     from robothor.db.connection import get_connection
 
     with get_connection() as conn, conn.cursor() as cur:
         cur.execute(
             """SELECT email FROM crm_people
-               WHERE id = %s AND deleted_at IS NULL""",
+               WHERE id = %s AND email IS NOT NULL
+               ORDER BY deleted_at NULLS FIRST
+               LIMIT 1""",
             (person_id,),
+        )
+        row = cur.fetchone()
+        if row:
+            email = row[0] if not isinstance(row, dict) else row["email"]
+            if email:
+                return email
+        cur.execute(
+            """SELECT identifier FROM contact_identifiers
+               WHERE person_id = %s AND channel = 'email' AND identifier LIKE %s
+               ORDER BY created_at DESC
+               LIMIT 1""",
+            (person_id, "%@%.%"),
         )
         row = cur.fetchone()
     if not row:
         return None
-    email = row[0] if not isinstance(row, dict) else row["email"]
-    return email or None
+    ident = row[0] if not isinstance(row, dict) else row["identifier"]
+    return ident or None
 
 
 def _send_html(to: str, subject: str, html_body: str) -> dict:
@@ -126,7 +150,7 @@ def main() -> int:
             continue
         email = _lookup_email(pid)
         if not email:
-            failed.append((name, f"no email in crm_people (id={pid})"))
+            failed.append((name, f"no email resolvable via crm_people or contact_identifiers (id={pid})"))
             continue
         try:
             _send_html(email, subject, html_body)

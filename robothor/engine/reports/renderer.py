@@ -89,7 +89,7 @@ def _build_plain_summary(report_type: str, data: dict[str, Any]) -> str:
     if bottlenecks:
         lines.append("Bottlenecks:")
         for i, b in enumerate(bottlenecks, 1):
-            text = b.get("text", "") if isinstance(b, dict) else str(b)
+            text = (b.get("text") or b.get("description") or "") if isinstance(b, dict) else str(b)
             lines.append(f"  {i}. {text}")
         lines.append("")
 

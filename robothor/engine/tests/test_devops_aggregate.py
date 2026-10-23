@@ -538,3 +538,38 @@ class TestAggregatePeople:
             == result["totals"]["current_week"]["prs_merged_human"]
         )
         assert result["totals"]["current_week"]["prs_merged_human"] == 5
+
+    def test_sentinels_and_agent_bot_not_counted_as_unresolved(self):
+        """JIRA 'Unassigned', GitHub 'unknown' and the agent's own bot account
+        stay visible as provisional rows but must NOT inflate the
+        unresolved-handle count (they are known non-people)."""
+        github_data = {
+            "period": _PERIOD,
+            "repos": {
+                "acme-erp": {
+                    **_empty_repo(),
+                    "pr_stats_current_week": {
+                        "authors": {"robothor-bot": 4, "unknown": 2, "real-dev": 1},
+                        "merged_count": 7,
+                        "merged_by": {},
+                    },
+                }
+            },
+        }
+        jira_data = {
+            "period": _PERIOD,
+            "projects": {
+                "I1": {
+                    "resolved_current_week": {"count": 0, "by_assignee": {}, "by_type": {}},
+                    "resolved_last_week": {"count": 0, "by_assignee": {}, "by_type": {}},
+                    "in_progress": {"count": 3, "by_assignee": {"Unassigned": 3}},
+                }
+            },
+        }
+        dal = FakeDAL(identities={}, roster=[])
+        result = aggregate_people(github_data, jira_data, dal)
+
+        unresolved_ids = {u["identifier"] for u in result["unresolved_handles"]}
+        assert unresolved_ids == {"real-dev"}
+        names = {p["name"] for p in result["people"]}
+        assert {"robothor-bot", "unknown", "Unassigned", "real-dev"} <= names

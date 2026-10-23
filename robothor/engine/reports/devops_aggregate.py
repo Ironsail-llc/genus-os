@@ -27,6 +27,12 @@ _BOT_LOGIN_BASENAMES = frozenset(
 )
 
 
+# Handles that are known non-people: JIRA/GitHub sentinels and the agent's own
+# bot account. They remain visible as provisional rows (activity is never
+# silently dropped) but are NOT counted as unresolved handles needing a CRM link.
+_NON_PERSON_IDENTIFIERS = frozenset({"unknown", "unassigned", "robothor-bot"})
+
+
 def _is_bot_login(login: str) -> bool:
     if not login:
         return False
@@ -383,6 +389,10 @@ def aggregate_people(
                 **totals,
             }
         )
+        if ident.strip().lower() in _NON_PERSON_IDENTIFIERS:
+            # Known non-person (sentinel / agent bot): keep the provisional row
+            # for visibility, but do not flag it as a handle needing a CRM link.
+            continue
         unresolved.append(
             {
                 "channel": ch,

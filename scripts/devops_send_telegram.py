@@ -93,7 +93,7 @@ def format_report(data: dict) -> str:
         lines.append("")
         lines.append("⚠ What needs attention")
         for b in bottlenecks:
-            text = b.get("text", "")
+            text = b.get("text") or b.get("description", "")
             rec = b.get("recommendation", "")
             lines.append(f"  ● {text}")
             if rec:
