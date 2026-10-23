@@ -3678,7 +3678,13 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
                 "type": "object",
                 "properties": {
                     "report_data": {
-                        "description": "Structured report data with keys: period, executive_summary, jira, github, people, bottlenecks",
+                        "description": (
+                            "The deterministic people.json aggregate of one report week "
+                            "(period, roles, members, team, usage, data_quality, ...), "
+                            "optionally with the analyst narrative under 'analyst': "
+                            "{summary, per_person: {member_id: note}, bottlenecks, "
+                            "si_vs_output}. Numbers are only ever taken from the aggregate."
+                        ),
                     },
                 },
                 "required": ["report_data"],
@@ -3699,7 +3705,14 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
                     "jql": {"type": "string", "description": "JQL query string"},
                     "max_results": {
                         "type": "integer",
-                        "description": "Max results (default 50, max 100)",
+                        "description": "Max results per page (default 50, max 100)",
+                    },
+                    "next_page_token": {
+                        "type": "string",
+                        "description": (
+                            "Token from a previous result's next_page_token, to fetch the "
+                            "next page (is_last=false means more pages exist)"
+                        ),
                     },
                 },
                 "required": ["jql"],

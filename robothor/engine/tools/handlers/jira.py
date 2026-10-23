@@ -197,6 +197,9 @@ async def _jira_search(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]
         return {"error": "jql is required"}
 
     max_results = min(args.get("max_results", 50), 100)
+    body: dict[str, Any] = {"jql": jql, "maxResults": max_results}
+    if args.get("next_page_token"):
+        body["nextPageToken"] = args["next_page_token"]
 
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
@@ -204,8 +207,7 @@ async def _jira_search(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]
                 f"{base_url}/rest/api/3/search/jql",
                 headers=_headers(auth),
                 json={
-                    "jql": jql,
-                    "maxResults": max_results,
+                    **body,
                     "fields": [
                         "summary",
                         "status",
@@ -241,6 +243,7 @@ async def _jira_search(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]
         "count": len(issues),
         "total": data.get("total", len(issues)),
         "is_last": data.get("isLast", True),
+        "next_page_token": data.get("nextPageToken"),
     }
 
 

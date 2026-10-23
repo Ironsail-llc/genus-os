@@ -1,211 +1,118 @@
 #!/usr/bin/env python3
-"""Deterministic GitHub data collection for the devops report pipeline.
+"""Collect one report week of GitHub facts for the devops report pipeline.
 
-Collects PR stats, review stats, and open PRs for configured repos.
-Writes structured JSON to /tmp/devops_github_data.json.
+Writes ``$DEVOPS_RUNS_DIR/<week-start>/github.json`` (default runs dir:
+``$ROBOTHOR_WORKSPACE/local/devops/runs``). The week is the previous ISO week
+in America/New_York unless ``--week-start YYYY-MM-DD`` names another.
 
-Called by the devops-report-pipeline workflow as a tool step (no LLM needed).
+Repos: ``DEVOPS_GITHUB_REPOS`` (comma-separated owner/repo), else
+``brain/memory/devops-config.json`` → ``github.org`` + ``github.active_repos``.
 
-Configuration (in priority order):
-  1. DEVOPS_GITHUB_REPOS env var (comma-separated owner/repo — for CI/tests)
-  2. brain/memory/devops-config.json → github.org + github.active_repos (canonical for prod)
+Exit status: 0 when every repo and endpoint answered; 1 when anything failed
+after retries. The JSON is written either way, with ``errors`` and each
+repo's ``unavailable`` map, so the report can render "incomplete" instead of
+reporting a failed fetch as zero activity.
+
+See robothor/engine/reports/devops_github.py for what is collected.
 """
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import json
+import os
 import sys
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
-# Add project root to path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import os
+from robothor.engine.reports.devops_github import collect_github
+from robothor.engine.reports.devops_periods import report_window, window_block
+from robothor.engine.reports.devops_team import env_list, runs_dir, week_run_dir
 
-from robothor.engine.reports.devops_periods import ET, period_block, week_windows_github
-from robothor.engine.tools.dispatch import ToolContext
-from robothor.engine.tools.handlers.github_api import (
-    _github_list_prs,
-    _github_pr_stats,
-    _github_review_stats,
-)
-
-OUTPUT_PATH = Path("/tmp/devops_github_data.json")
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "brain" / "memory" / "devops-config.json"
 
 
-def _load_repos() -> list[str]:
-    env_val = os.environ.get("DEVOPS_GITHUB_REPOS", "")
+def load_repos() -> list[str]:
+    env_val = env_list("DEVOPS_GITHUB_REPOS")
     if env_val:
-        return [r.strip() for r in env_val.split(",") if r.strip()]
+        return env_val
     if CONFIG_PATH.exists():
         cfg = json.loads(CONFIG_PATH.read_text()).get("github", {})
         org = cfg.get("org", "")
         active = cfg.get("active_repos", [])
-        if not org or not active:
-            return []
-        return [f"{org}/{repo}" for repo in active]
+        if org and active:
+            return [f"{org}/{repo}" for repo in active]
     return []
 
 
-REPOS: list[str] = _load_repos()
-CTX = ToolContext(agent_id="devops-manager")
+async def _collect(repos: list[str], start: datetime, end: datetime) -> dict:
+    import httpx
 
+    from robothor.engine.tools.handlers.github_api import _get_token, _headers
+    from robothor.secrets import get_secret
 
-async def _collect_repo(repo: str, now: datetime) -> tuple[str, dict, list, list]:
-    """Collect data for a single repo. Returns (short_name, repo_data, stale_prs, errors)."""
-    short = repo.split("/")[-1]
-    repo_data: dict = {}
-    stale: list = []
-    errors: list = []
-
-    current_week_since, last_week_since, last_week_until = week_windows_github(now)
-
-    # --- Current week PR stats (Monday → now) ---
-    result = await _github_pr_stats({"repo": repo, "since": current_week_since}, CTX)
-    if "error" in result:
-        errors.append(f"{short}/pr_stats_current_week: {result['error']}")
-    else:
-        repo_data["pr_stats_current_week"] = {
-            "merged_count": result.get("merged_count", 0),
-            "avg_cycle_time_hours": result.get("avg_cycle_time_hours", 0),
-            "median_cycle_time_hours": result.get("median_cycle_time_hours", 0),
-            "authors": result.get("authors", {}),
-            "merged_by": result.get("merged_by", {}),
+    # A token of its own keeps the report off a quota other agents (the PR
+    # reviewer) can exhaust; falls back to the shared GitHub credential.
+    token = get_secret("DEVOPS_GITHUB_TOKEN") or _get_token()
+    if not token:
+        return {
+            "repos": {},
+            "errors": [
+                {"repo": "*", "endpoint": "auth", "status": None, "message": "GITHUB_TOKEN not set"}
+            ],
+            "complete": False,
         }
-
-    # --- Last week PR stats (last Monday → this Monday, exclusive) ---
-    result = await _github_pr_stats(
-        {
-            "repo": repo,
-            "since": last_week_since,
-            "until": last_week_until,
-        },
-        CTX,
-    )
-    if "error" in result:
-        errors.append(f"{short}/pr_stats_last_week: {result['error']}")
-    else:
-        repo_data["pr_stats_last_week"] = {
-            "merged_count": result.get("merged_count", 0),
-            "avg_cycle_time_hours": result.get("avg_cycle_time_hours", 0),
-            "median_cycle_time_hours": result.get("median_cycle_time_hours", 0),
-            "authors": result.get("authors", {}),
-            "merged_by": result.get("merged_by", {}),
-        }
-
-    # --- Review stats (30-day, unchanged) ---
-    result = await _github_review_stats({"repo": repo, "days": 30}, CTX)
-    if "error" in result:
-        errors.append(f"{short}/review_stats: {result['error']}")
-    else:
-        reviewers = [
-            {
-                "reviewer": r["reviewer"],
-                "reviews_given": r["reviews_given"],
-                "approvals": r["approvals"],
-                "changes_requested": r["changes_requested"],
-                "avg_turnaround_hours": r.get("avg_turnaround_hours"),
-            }
-            for r in result.get("reviewers", [])
-            if not r["reviewer"].endswith("[bot]")
-        ]
-        repo_data["review_stats"] = {
-            "prs_analyzed": result.get("prs_analyzed", 0),
-            "reviewers": reviewers,
-        }
-
-    # --- Stale open PRs ---
-    result = await _github_list_prs(
-        {"repo": repo, "state": "open", "per_page": 50, "max_pages": 1}, CTX
-    )
-    if "error" not in result:
-        for pr in result.get("pull_requests", []):
-            if pr.get("draft"):
-                continue
-            created = datetime.fromisoformat(pr["created_at"])
-            age_days = (now - created).total_seconds() / 86400
-            if age_days > 7:
-                stale.append(
-                    {
-                        "repo": short,
-                        "number": pr["number"],
-                        "title": pr["title"][:60],
-                        "author": pr["author"],
-                        "age_days": round(age_days, 1),
-                        "is_bot": pr["author"].endswith("[bot]")
-                        or pr["author"] == "dependabot[bot]",
-                    }
-                )
-
-    return short, repo_data, stale, errors
-
-
-async def collect() -> dict:
-    now = datetime.now(ET)
-    data: dict = {
-        "period": period_block(now),
-        "repos": {},
-        "totals": {"merged": 0, "reviews": 0},
-        "stale_prs": [],
-        "errors": [],
-    }
-
-    # Run all repos concurrently
-    results = await asyncio.gather(*[_collect_repo(repo, now) for repo in REPOS])
-
-    for short, repo_data, stale, errors in results:
-        if repo_data:
-            data["repos"][short] = repo_data
-            data["totals"]["merged"] += repo_data.get("pr_stats_current_week", {}).get(
-                "merged_count", 0
-            )
-            data["totals"]["reviews"] += sum(
-                r["reviews_given"] for r in repo_data.get("review_stats", {}).get("reviewers", [])
-            )
-        data["stale_prs"].extend(stale)
-        data["errors"].extend(errors)
-
-    data["stale_prs"].sort(key=lambda p: -p["age_days"])
-    return data
-
-
-def main() -> int:
-    if not REPOS:
-        print(
-            f"No GitHub repos configured. Set DEVOPS_GITHUB_REPOS env var "
-            f"or populate github.org + github.active_repos in {CONFIG_PATH}.",
-            flush=True,
+    async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+        return await collect_github(
+            repos,
+            start,
+            end,
+            client=client,
+            headers=_headers(token),
+            max_rate_wait=float(os.environ.get("DEVOPS_GITHUB_MAX_RATE_WAIT", "600")),
         )
-        OUTPUT_PATH.write_text(
-            json.dumps(
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("--week-start", help="YYYY-MM-DD (any day of the week); default last week")
+    ap.add_argument("--runs-dir", type=Path, help="override $DEVOPS_RUNS_DIR")
+    args = ap.parse_args(argv)
+
+    start, end = report_window(week_start=args.week_start)
+    period = window_block(start, end)
+    out_path = week_run_dir(period["week_start"], args.runs_dir or runs_dir()) / "github.json"
+
+    repos = load_repos()
+    if repos:
+        print(f"Collecting GitHub for {len(repos)} repos, {period['report_label']}...", flush=True)
+        data = asyncio.run(_collect(repos, start, end))
+    else:
+        data = {
+            "repos": {},
+            "errors": [
                 {
-                    "repos": {},
-                    "totals": {"merged": 0, "reviews": 0},
-                    "stale_prs": [],
-                    "errors": [
-                        f"No GitHub repos configured (env DEVOPS_GITHUB_REPOS empty "
-                        f"and {CONFIG_PATH} missing or has no github.active_repos)."
-                    ],
+                    "repo": "*",
+                    "endpoint": "config",
+                    "status": None,
+                    "message": "no repos configured (DEVOPS_GITHUB_REPOS)",
                 }
-            )
-        )
-        return 0
-    print("Collecting GitHub data...", flush=True)
-    result = asyncio.run(collect())
+            ],
+            "complete": False,
+        }
+    data["period"] = period
+    data["collected_at"] = datetime.now(UTC).isoformat()
+    out_path.write_text(json.dumps(data, indent=2))
 
-    OUTPUT_PATH.write_text(json.dumps(result, indent=2))
-    merged = result["totals"]["merged"]
-    repos = len(result["repos"])
-    stale = len(result["stale_prs"])
-    errors = len(result["errors"])
-    print(
-        f"Done: {merged} merged PRs across {repos} repos, {stale} stale PRs, {errors} errors → {OUTPUT_PATH}"
-    )
-
-    return 1 if errors and not repos else 0
+    merged = sum(len(r["merged_prs"]) for r in data["repos"].values())
+    reviews = sum(len(r["reviews"]) for r in data["repos"].values())
+    print(f"{merged} merged PRs, {reviews} reviews, {len(data['errors'])} errors -> {out_path}")
+    for e in data["errors"]:
+        print(f"  ERROR {e['repo']} {e['endpoint']} {e['status']}: {e['message']}", file=sys.stderr)
+    return 0 if data["complete"] else 1
 
 
 if __name__ == "__main__":
