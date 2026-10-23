@@ -1,0 +1,79 @@
+Claude Usage Report — Week of October 19–23, 2026
+
+
+  Claude Usage Report
+    Oct 23, 2026
+
+  Reporting Period: October 19–23, 2026 · Prepared by: HR
+
+
+  Executive Snapshot
+       Generic snapshot paragraph: one account reached 99% of its weekly limit and another
+       was captured mid-cycle at 40%. These sentences mention percentages on purpose.
+
+
+  Weekly Usage Overview
+
+    Developer /              Plan         Weekly Usage   Current   Weekly      Status / Key Note
+    Account                                              Session   Reset
+
+    Alice – Acct 1           Max          ⚠️ 99%         0%        Tue 10:00   Near Limit. Claude warned of
+                             20x                                   PM          exhaustion before reset.
+
+    Alice – Acct 2           Max          64% — after    100%      Wed 1:00    Prior Limit Hit / Free Reset Used
+                             20x          free reset               PM          (developer-reported). 64% is
+                                                                               HR's post-reset reading.
+
+    Dana – Acct 1            Max          69%            6%        Tue 10:00   Fable Limit Reached (Fable
+                             20x                                   PM          100%).
+
+    Dana – Acct 2            Max          59%            6%        Tue 11:00   Fable Limit Reached (Fable
+                             20x                                   AM          100%). Capture timing vs. reset
+                                                                               unverified.
+
+    Carlos – Acct 1          Max          28%            4%        Thu 9:00    On Track.
+                             5x                                    AM
+
+
+                                                                                                            Page 1 of 3
+
+Claude Usage Report — Week of October 19–23, 2026
+
+
+    Developer /              Plan         Weekly Usage   Current      Weekly      Status / Key Note
+    Account                                              Session      Reset
+
+    Edward – Acct 1          Max          72%            2%           Thu 3:00    On Track.
+                             20x                                      PM
+
+    Fatima – Acct            Max          ⚠️ 79% — In    18%          Sun 10:00   Projected Early Exhaustion
+    1                        5x           progress                    PM          (Friday afternoon).
+
+    Gina Lee –               Max          60%            24%          Thu 2:00    Pre-Reset Capture.
+    Acct 1                   5x                                       AM
+
+    Harriet – Acct           Max          4% — POST-     26%          Wed 6:00    Post-Reset — Prior Cycle
+    1                        5x           RESET                       PM          Unavailable.
+
+
+  🔴    = limit reached (developer-reported) ·              ⚠️   = near-limit or projected warning. Fable is a
+  separate weekly limit and is not included in Weekly Usage. Current Session is a short-term
+  limit, separate from the weekly plan limit.
+
+
+  Key Observations
+       Generic observations paragraph. Alice and Dana are mentioned with 100% and 59% here
+       to prove narrative text outside the table is never parsed as a row.
+
+
+                                                                                                               Page 2 of 3
+
+Claude Usage Report — Week of October 19–23, 2026
+
+
+  Reset & Capture Note
+      Generic capture note.
+
+
+                                                                                        Page 3 of 3
+
