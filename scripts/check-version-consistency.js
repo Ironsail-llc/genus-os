@@ -193,7 +193,11 @@ if (mismatches.length > 0) {
   // pointed production at a v1.108.2 image that was never published.
   const recovery = lagging
     ? `\n\nCheck whether the image for ${authoritative} was actually published:` +
-      "\n  gh api orgs/Ironsail-llc/packages/container/genus-os%2Fpython/versions" +
+      // Owner read from the environment rather than written in: this is a
+      // public platform repo and must not name one deployment's org.
+      // GITHUB_REPOSITORY is "owner/name" under Actions.
+      `\n  gh api orgs/${(process.env.GITHUB_REPOSITORY || "<owner>/<repo>").split("/")[0]}` +
+      "/packages/container/<image>/versions" +
       " --jq '[.[].metadata.container.tags[]?]|unique'" +
       "\n\nIf it IS there, the promotion was lost in transit. Recover with:" +
       `\n  node scripts/promote-release-values.js ${authoritative}` +
