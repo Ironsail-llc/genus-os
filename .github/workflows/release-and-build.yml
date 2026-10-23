@@ -148,8 +148,22 @@ jobs:
           # repository VARIABLE GENUS_ALLOW_DEPLOYMENT_LAG=true for the
           # recovery release, then unset it — the default keeps the
           # no-lag invariant enforced.
+          #
+          # Only consulted on release runs. On a pull request the deployment
+          # tags are compared against the base branch instead of the version,
+          # so a hand-edit is still caught but somebody else's stalled release
+          # cannot block every PR (it has deadlocked this repo twice: v1.57.0
+          # and v1.108.2). The script documents the split.
           GENUS_ALLOW_DEPLOYMENT_LAG: ${{ vars.GENUS_ALLOW_DEPLOYMENT_LAG || 'false' }}
-        run: node scripts/check-version-consistency.js
+          BASE_REF: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.ref || '' }}
+        run: |
+          if [ -n "$BASE_REF" ]; then
+            # Fetched explicitly rather than relying on fetch-depth: the
+            # checkout above takes only the PR head.
+            git fetch --no-tags --quiet origin "$BASE_REF"
+            export GENUS_VERSION_BASELINE_REF=FETCH_HEAD
+          fi
+          node scripts/check-version-consistency.js
       # npm audit gate: named-allowlist policy, not a blanket exception. A
       # high/critical advisory must either be absent or have its GHSA id
       # explicitly tracked -- id, package, and a reviewed reason -- in
