@@ -173,6 +173,92 @@ class _Fetcher:
         return items
 
 
+def _line_counts(files: list[dict[str, Any]]) -> dict[str, int]:
+    """Gross and filtered (generated/lockfiles excluded) line changes of a PR's files."""
+    add = dele = add_all = del_all = 0
+    for fl in files:
+        a, d = int(fl.get("additions") or 0), int(fl.get("deletions") or 0)
+        add_all += a
+        del_all += d
+        if not is_excluded_path(fl.get("filename") or ""):
+            add += a
+            dele += d
+    return {
+        "additions": add_all,
+        "deletions": del_all,
+        "lines_added": add,
+        "lines_deleted": dele,
+        "excluded_lines": (add_all - add) + (del_all - dele),
+    }
+
+
+def _reviews_in_window(
+    pr: dict[str, Any], raw: list[dict[str, Any]], start: datetime, end: datetime
+) -> list[dict[str, Any]]:
+    """Reviews on ``pr`` submitted in [start, end); self-reviews and pending excluded.
+
+    ``turnaround_h`` is set only on the reviewer's first review of the PR.
+    """
+    author = (pr.get("user") or {}).get("login", "")
+    created = _ts(pr.get("created_at"))
+    valid = []
+    for r in raw:
+        login = (r.get("user") or {}).get("login", "")
+        when = _ts(r.get("submitted_at"))
+        if r.get("state") in _REVIEW_STATES and login and when is not None:
+            valid.append((login, when, r))
+    first: dict[str, datetime] = {}
+    for login, when, _ in valid:
+        if login not in first or when < first[login]:
+            first[login] = when
+    out = []
+    for login, when, r in valid:
+        if login == author or not (start <= when < end):
+            continue
+        turnaround = None
+        if first[login] == when and created is not None:
+            turnaround = round((when - created).total_seconds() / 3600, 1)
+        out.append(
+            {
+                "pr": pr["number"],
+                "pr_author": author,
+                "reviewer": login,
+                "state": r.get("state"),
+                "submitted_at": r.get("submitted_at"),
+                "turnaround_h": turnaround,
+            }
+        )
+    return out
+
+
+def _reviewer_logins(raw: list[dict[str, Any]], author: str) -> list[str]:
+    """Everyone but the author who reviewed the PR, at any time."""
+    return sorted(
+        {
+            (r.get("user") or {}).get("login", "")
+            for r in raw
+            if r.get("state") in _REVIEW_STATES
+            and (r.get("user") or {}).get("login") not in (None, "", author)
+        }
+    )
+
+
+def _commit_counts(items: list[dict[str, Any]]) -> dict[str, dict[str, int]]:
+    """Non-merge commits by login; unlinked ones by author email."""
+    by_login: dict[str, int] = {}
+    unlinked: dict[str, int] = {}
+    for c in items:
+        if len(c.get("parents") or []) > 1:
+            continue
+        login = (c.get("author") or {}).get("login")
+        if login:
+            by_login[login] = by_login.get(login, 0) + 1
+        else:
+            email = ((c.get("commit") or {}).get("author") or {}).get("email") or "unknown"
+            unlinked[email] = unlinked.get(email, 0) + 1
+    return {"by_login": by_login, "unlinked": unlinked}
+
+
 async def _collect_repo(
     f: _Fetcher, repo: str, start: datetime, end: datetime, now: datetime
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -260,21 +346,7 @@ async def _collect_repo(
             except FetchError as e:
                 fail(("lines",), e)
                 return rec
-            add = dele = add_all = del_all = 0
-            for fl in files:
-                a, d = int(fl.get("additions") or 0), int(fl.get("deletions") or 0)
-                add_all += a
-                del_all += d
-                if not is_excluded_path(fl.get("filename") or ""):
-                    add += a
-                    dele += d
-            rec.update(
-                additions=add_all,
-                deletions=del_all,
-                lines_added=add,
-                lines_deleted=dele,
-                excluded_lines=(add_all - add) + (del_all - dele),
-            )
+            rec.update(_line_counts(files))
             if rec["changed_files"] is None:
                 rec["changed_files"] = len(files)
             return rec
@@ -285,55 +357,12 @@ async def _collect_repo(
         merged_recs = results[: len(merged)]
 
         for pr in touched:
-            n = pr["number"]
-            raw = reviews_by_pr.get(n)
-            if raw is None:
-                continue
-            author = (pr.get("user") or {}).get("login", "")
-            created = _ts(pr.get("created_at"))
-            first: dict[str, datetime] = {}
-            for r in raw:
-                login = (r.get("user") or {}).get("login", "")
-                when = _ts(r.get("submitted_at"))
-                if r.get("state") not in _REVIEW_STATES or not login or when is None:
-                    continue
-                if login not in first or when < first[login]:
-                    first[login] = when
-            for r in raw:
-                login = (r.get("user") or {}).get("login", "")
-                when = _ts(r.get("submitted_at"))
-                state = r.get("state")
-                if state not in _REVIEW_STATES or not login or when is None:
-                    continue
-                if login == author or not (start <= when < end):
-                    continue
-                turnaround = None
-                if first.get(login) == when and created is not None:
-                    turnaround = round((when - created).total_seconds() / 3600, 1)
-                out["reviews"].append(
-                    {
-                        "pr": n,
-                        "pr_author": author,
-                        "reviewer": login,
-                        "state": state,
-                        "submitted_at": r.get("submitted_at"),
-                        "turnaround_h": turnaround,
-                    }
-                )
+            raw = reviews_by_pr.get(pr["number"])
+            if raw is not None:
+                out["reviews"].extend(_reviews_in_window(pr, raw, start, end))
         for rec in merged_recs:
             raw = reviews_by_pr.get(rec["number"])
-            rec["reviewers"] = (
-                None
-                if raw is None
-                else sorted(
-                    {
-                        (r.get("user") or {}).get("login", "")
-                        for r in raw
-                        if r.get("state") in _REVIEW_STATES
-                        and (r.get("user") or {}).get("login") not in (None, "", rec["author"])
-                    }
-                )
-            )
+            rec["reviewers"] = None if raw is None else _reviewer_logins(raw, rec["author"])
         out["merged_prs"] = sorted(merged_recs, key=lambda p: p["number"])
 
     async def commits() -> None:
@@ -350,18 +379,7 @@ async def _collect_repo(
         except FetchError as e:
             fail(("commits",), e)
             return
-        by_login: dict[str, int] = {}
-        unlinked: dict[str, int] = {}
-        for c in items:
-            if len(c.get("parents") or []) > 1:
-                continue
-            login = (c.get("author") or {}).get("login")
-            if login:
-                by_login[login] = by_login.get(login, 0) + 1
-            else:
-                email = ((c.get("commit") or {}).get("author") or {}).get("email") or "unknown"
-                unlinked[email] = unlinked.get(email, 0) + 1
-        out["commits"] = {"by_login": by_login, "unlinked": unlinked}
+        out["commits"] = _commit_counts(items)
 
     async def stale() -> None:
         try:

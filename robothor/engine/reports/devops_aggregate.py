@@ -103,6 +103,129 @@ def _blank() -> dict[str, Any]:
     }
 
 
+class _Tally:
+    """Per-member counters plus everything that is not a roster member's."""
+
+    def __init__(self, team: Team) -> None:
+        self.team = team
+        self.acc: dict[str, dict[str, Any]] = {m.id: _blank() for m in team.active_members}
+        self.outside: dict[tuple[str, str], dict[str, Any]] = {}
+        self.bots: dict[str, dict[str, int]] = {}
+        self.merged_without_review: list[dict[str, Any]] = []
+        self.stale_all: list[dict[str, Any]] = []
+        self.all_prs_merged = 0
+
+    def owner(self, channel: str, handle: str) -> Member | None:
+        m = self.team.member_for(channel, handle)
+        return m if m is not None and m.active else None
+
+    def bump_outside(self, source: str, handle: str, metric: str, n: int = 1) -> None:
+        if source == "github" and self.team.is_bot(handle):
+            b = self.bots.setdefault(handle, {"prs_merged": 0, "commits": 0, "reviews": 0})
+            b[metric] = b.get(metric, 0) + n
+            return
+        entry = self.outside.setdefault(
+            (source, handle), {"handle": handle, "source": source, "counts": {}}
+        )
+        m = self.team.member_for("jira" if source == "jira" else "github", handle)
+        if m is not None and not m.active:
+            entry["note"] = f"inactive roster member {m.id}"
+        entry["counts"][metric] = entry["counts"].get(metric, 0) + n
+
+    def add_github(self, github: dict[str, Any] | None) -> None:
+        for repo, rd in ((github or {}).get("repos") or {}).items():
+            short = repo.split("/")[-1]
+            for pr in rd.get("merged_prs") or []:
+                author = pr.get("author") or ""
+                m = self.owner("github", author)
+                if not self.team.is_bot(author):
+                    self.all_prs_merged += 1
+                if m is None:
+                    self.bump_outside("github", author, "prs_merged")
+                else:
+                    a = self.acc[m.id]
+                    a["prs_merged"] += 1
+                    a["lines_added"] += pr.get("lines_added") or 0
+                    a["lines_deleted"] += pr.get("lines_deleted") or 0
+                reviewers = pr.get("reviewers")
+                if reviewers is not None and not self.team.is_bot(author):
+                    human = [r for r in reviewers if r != author and not self.team.is_bot(r)]
+                    if not human:
+                        self.merged_without_review.append(
+                            {
+                                "repo": short,
+                                "number": pr.get("number"),
+                                "title": pr.get("title", ""),
+                                "author": m.name if m else author,
+                            }
+                        )
+                        if m is not None:
+                            self.acc[m.id]["merged_without_review"] += 1
+            for rv in rd.get("reviews") or []:
+                reviewer = rv.get("reviewer") or ""
+                m = self.owner("github", reviewer)
+                state = rv.get("state")
+                if m is None:
+                    self.bump_outside("github", reviewer, "reviews")
+                else:
+                    a = self.acc[m.id]
+                    a["reviews_given"] += 1
+                    if state == "APPROVED":
+                        a["reviews_approved"] += 1
+                    elif state == "CHANGES_REQUESTED":
+                        a["reviews_changes_requested"] += 1
+                    elif state == "COMMENTED":
+                        a["reviews_commented"] += 1
+                    if isinstance(rv.get("turnaround_h"), int | float):
+                        a["turnarounds"].append(float(rv["turnaround_h"]))
+                if state == "CHANGES_REQUESTED":
+                    am = self.owner("github", rv.get("pr_author") or "")
+                    if am is not None:
+                        self.acc[am.id]["changes_requested_received"] += 1
+            commits = rd.get("commits") or {}
+            for login, n in (commits.get("by_login") or {}).items():
+                m = self.owner("github", login)
+                if m is None:
+                    self.bump_outside("github", login, "commits", n)
+                else:
+                    self.acc[m.id]["commits"] += n
+            for email, n in (commits.get("unlinked") or {}).items():
+                self.bump_outside("git-email", email, "commits", n)
+            for sp in rd.get("stale_prs") or []:
+                m = self.owner("github", sp.get("author") or "")
+                if self.team.is_bot(sp.get("author") or ""):
+                    continue
+                self.stale_all.append(
+                    {**sp, "repo": short, "author": m.name if m else sp.get("author")}
+                )
+                if m is not None:
+                    self.acc[m.id]["stale_prs"] += 1
+
+    def add_jira(self, jira: dict[str, Any] | None) -> None:
+        for pd in ((jira or {}).get("projects") or {}).values():
+            for issue in pd.get("resolved") or []:
+                name = issue.get("assignee") or ""
+                if name.strip().lower() in _JIRA_SENTINELS:
+                    continue
+                m = self.owner("jira", name)
+                if m is None:
+                    self.bump_outside("jira", name, "tickets_resolved")
+                    continue
+                a = self.acc[m.id]
+                a["tickets_resolved"] += 1
+                t = issue.get("type") or "Other"
+                a["tickets_by_type"][t] = a["tickets_by_type"].get(t, 0) + 1
+            for issue in pd.get("in_progress") or []:
+                name = issue.get("assignee") or ""
+                if name.strip().lower() in _JIRA_SENTINELS:
+                    continue
+                m = self.owner("jira", name)
+                if m is None:
+                    self.bump_outside("jira", name, "in_progress")
+                else:
+                    self.acc[m.id]["in_progress"] += 1
+
+
 def aggregate_people(
     team: Team,
     github: dict[str, Any] | None,
@@ -118,122 +241,12 @@ def aggregate_people(
     those weeks' values in the same order.
     """
     unavailable = _unavailable_sources(github, jira)
-    acc: dict[str, dict[str, Any]] = {m.id: _blank() for m in team.active_members}
-    outside: dict[tuple[str, str], dict[str, Any]] = {}
-    bots: dict[str, dict[str, int]] = {}
-    merged_without_review: list[dict[str, Any]] = []
-    stale_all: list[dict[str, Any]] = []
-    all_prs_merged = 0
-
-    def owner(channel: str, handle: str) -> Member | None:
-        m = team.member_for(channel, handle)
-        return m if m is not None and m.active else None
-
-    def bump_outside(source: str, handle: str, metric: str, n: int = 1) -> None:
-        if channel_is_bot(source, handle):
-            b = bots.setdefault(handle, {"prs_merged": 0, "commits": 0, "reviews": 0})
-            b[metric] = b.get(metric, 0) + n
-            return
-        key = (source, handle)
-        entry = outside.setdefault(key, {"handle": handle, "source": source, "counts": {}})
-        m = team.member_for("jira" if source == "jira" else "github", handle)
-        if m is not None and not m.active:
-            entry["note"] = f"inactive roster member {m.id}"
-        entry["counts"][metric] = entry["counts"].get(metric, 0) + n
-
-    def channel_is_bot(source: str, handle: str) -> bool:
-        return source == "github" and team.is_bot(handle)
-
-    # ── GitHub ──
-    for repo, rd in ((github or {}).get("repos") or {}).items():
-        short = repo.split("/")[-1]
-        for pr in rd.get("merged_prs") or []:
-            author = pr.get("author") or ""
-            m = owner("github", author)
-            if not team.is_bot(author):
-                all_prs_merged += 1
-            if m is None:
-                bump_outside("github", author, "prs_merged")
-            else:
-                a = acc[m.id]
-                a["prs_merged"] += 1
-                a["lines_added"] += pr.get("lines_added") or 0
-                a["lines_deleted"] += pr.get("lines_deleted") or 0
-            reviewers = pr.get("reviewers")
-            if reviewers is not None and not team.is_bot(author):
-                human = [r for r in reviewers if r != author and not team.is_bot(r)]
-                if not human:
-                    merged_without_review.append(
-                        {
-                            "repo": short,
-                            "number": pr.get("number"),
-                            "title": pr.get("title", ""),
-                            "author": m.name if m else author,
-                        }
-                    )
-                    if m is not None:
-                        acc[m.id]["merged_without_review"] += 1
-        for rv in rd.get("reviews") or []:
-            reviewer = rv.get("reviewer") or ""
-            m = owner("github", reviewer)
-            state = rv.get("state")
-            if m is None:
-                bump_outside("github", reviewer, "reviews")
-            else:
-                a = acc[m.id]
-                a["reviews_given"] += 1
-                if state == "APPROVED":
-                    a["reviews_approved"] += 1
-                elif state == "CHANGES_REQUESTED":
-                    a["reviews_changes_requested"] += 1
-                elif state == "COMMENTED":
-                    a["reviews_commented"] += 1
-                if isinstance(rv.get("turnaround_h"), int | float):
-                    a["turnarounds"].append(float(rv["turnaround_h"]))
-            if state == "CHANGES_REQUESTED":
-                am = owner("github", rv.get("pr_author") or "")
-                if am is not None:
-                    acc[am.id]["changes_requested_received"] += 1
-        commits = rd.get("commits") or {}
-        for login, n in (commits.get("by_login") or {}).items():
-            m = owner("github", login)
-            if m is None:
-                bump_outside("github", login, "commits", n)
-            else:
-                acc[m.id]["commits"] += n
-        for email, n in (commits.get("unlinked") or {}).items():
-            bump_outside("git-email", email, "commits", n)
-        for sp in rd.get("stale_prs") or []:
-            m = owner("github", sp.get("author") or "")
-            if team.is_bot(sp.get("author") or ""):
-                continue
-            stale_all.append({**sp, "repo": short, "author": m.name if m else sp.get("author")})
-            if m is not None:
-                acc[m.id]["stale_prs"] += 1
-
-    # ── JIRA ──
-    for pd in ((jira or {}).get("projects") or {}).values():
-        for issue in pd.get("resolved") or []:
-            name = issue.get("assignee") or ""
-            if name.strip().lower() in _JIRA_SENTINELS:
-                continue
-            m = owner("jira", name)
-            if m is None:
-                bump_outside("jira", name, "tickets_resolved")
-                continue
-            a = acc[m.id]
-            a["tickets_resolved"] += 1
-            t = issue.get("type") or "Other"
-            a["tickets_by_type"][t] = a["tickets_by_type"].get(t, 0) + 1
-        for issue in pd.get("in_progress") or []:
-            name = issue.get("assignee") or ""
-            if name.strip().lower() in _JIRA_SENTINELS:
-                continue
-            m = owner("jira", name)
-            if m is None:
-                bump_outside("jira", name, "in_progress")
-            else:
-                acc[m.id]["in_progress"] += 1
+    tally = _Tally(team)
+    tally.add_github(github)
+    tally.add_jira(jira)
+    acc, outside, bots = tally.acc, tally.outside, tally.bots
+    merged_without_review, stale_all = tally.merged_without_review, tally.stale_all
+    all_prs_merged = tally.all_prs_merged
 
     # ── Usage ──
     usage = usage or {"available": False, "reason": "usage collection did not run"}
