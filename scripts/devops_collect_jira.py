@@ -1,38 +1,49 @@
 #!/usr/bin/env python3
-"""Deterministic JIRA data collection for the devops report pipeline.
+"""Collect one report week of JIRA facts for the devops report pipeline.
 
-Collects resolved tickets, open backlog, stale tickets, and in-progress work
-across configured JIRA projects. Writes structured JSON to /tmp/devops_jira_data.json.
+Writes ``$DEVOPS_RUNS_DIR/<week-start>/jira.json``: per project, every issue
+resolved in the week (assignee + issue type, fully paginated — no 100-ticket
+cap), issues currently in progress, the open-backlog size, and the oldest
+stale tickets. Same week as the GitHub collector: the previous ISO week in
+America/New_York, or ``--week-start YYYY-MM-DD``.
 
-Called by the devops-report-pipeline workflow as a tool step (no LLM needed).
+Projects: ``DEVOPS_JIRA_PROJECTS`` (comma-separated), else
+``brain/memory/devops-config.json`` → ``jira.active_projects``.
 
-Configuration (in priority order):
-  1. DEVOPS_JIRA_PROJECTS env var (comma-separated — for CI/tests)
-  2. brain/memory/devops-config.json → jira.active_projects (canonical for prod)
+JQL bare dates are evaluated in the JIRA account's profile timezone; set it to
+America/New_York for exact alignment with the GitHub window.
+
+Exit status 1 when any query failed; the JSON is written regardless, with the
+failed query named in ``errors`` and the project's ``unavailable`` map.
 """
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import json
+import os
 import sys
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
-# Add project root to path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import os
-
-from robothor.engine.reports.devops_periods import ET, period_block, week_windows_jira
+from robothor.engine.reports.devops_periods import report_window, window_block
+from robothor.engine.reports.devops_team import runs_dir, week_run_dir
 from robothor.engine.tools.dispatch import ToolContext
 from robothor.engine.tools.handlers.jira import _jira_search
 
-OUTPUT_PATH = Path("/tmp/devops_jira_data.json")
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "brain" / "memory" / "devops-config.json"
+CTX = ToolContext(agent_id="devops-manager")
+PAGE_SIZE = 100
+#: Safety stop for a runaway query (10,000 issues). Hitting it is reported.
+MAX_PAGES = 100
+STALE_LIST = 10
 
 
-def _load_projects() -> list[str]:
+def load_projects() -> list[str]:
     env_val = os.environ.get("DEVOPS_JIRA_PROJECTS", "")
     if env_val:
         return [p.strip() for p in env_val.split(",") if p.strip()]
@@ -42,157 +53,111 @@ def _load_projects() -> list[str]:
     return []
 
 
-PROJECTS: list[str] = _load_projects()
-CTX = ToolContext(agent_id="devops-manager")
+async def _search_all(search, jql: str, *, limit: int | None = None) -> tuple[list[dict], str | None]:
+    """Every issue for ``jql`` (or the first ``limit``). Returns (issues, error)."""
+    issues: list[dict] = []
+    token: str | None = None
+    for _ in range(MAX_PAGES):
+        args: dict[str, Any] = {"jql": jql, "max_results": min(PAGE_SIZE, limit or PAGE_SIZE)}
+        if token:
+            args["next_page_token"] = token
+        result = await search(args, CTX)
+        if "error" in result:
+            return issues, str(result["error"])
+        issues.extend(result.get("issues") or [])
+        if limit and len(issues) >= limit:
+            return issues[:limit], None
+        token = result.get("next_page_token")
+        if result.get("is_last", True) or not token:
+            return issues, None
+    return issues, f"stopped after {MAX_PAGES} pages ({len(issues)} issues); result truncated"
 
 
-def _aggregate_issues(issues: list[dict]) -> dict:
-    """Aggregate issues by assignee and type."""
-    by_assignee: dict[str, int] = {}
-    by_type: dict[str, int] = {}
-    for i in issues:
-        a = i.get("assignee", "Unassigned")
-        by_assignee[a] = by_assignee.get(a, 0) + 1
-        t = i.get("issue_type", "?")
-        by_type[t] = by_type.get(t, 0) + 1
-    return {"count": len(issues), "by_assignee": by_assignee, "by_type": by_type}
-
-
-async def collect() -> dict:
-    now = datetime.now(ET)
-    # JQL bare-date semantics are evaluated in the JIRA account's profile
-    # timezone — for exact alignment the account TZ must be America/New_York.
-    data: dict = {
-        "period": period_block(now),
-        "projects": {},
-        "totals": {"resolved": 0, "stale": 0},
-        "errors": [],
+def _slim(i: dict) -> dict:
+    return {
+        "key": i.get("key", ""),
+        "assignee": i.get("assignee") or "Unassigned",
+        "type": i.get("issue_type") or "Other",
+        "status": i.get("status", ""),
+        "summary": (i.get("summary") or "")[:100],
     }
-    current_week_start, last_week_start, last_week_end = week_windows_jira(now)
 
-    for proj in PROJECTS:
-        proj_data: dict = {}
 
-        # --- Current week resolved tickets ---
-        result = await _jira_search(
-            {
-                "jql": f"project = {proj} AND resolved >= {current_week_start} ORDER BY resolved DESC",
-                "max_results": 100,
-            },
-            CTX,
-        )
-        if "error" in result:
-            data["errors"].append(f"{proj}/resolved_current_week: {result['error']}")
-            continue
+async def collect_jira(projects: list[str], start: str, end: str, search=None) -> dict:
+    search = search or _jira_search
+    data: dict[str, Any] = {"projects": {}, "errors": []}
 
-        proj_data["resolved_current_week"] = _aggregate_issues(result.get("issues", []))
-        data["totals"]["resolved"] += proj_data["resolved_current_week"]["count"]
+    for proj in projects:
+        pd: dict[str, Any] = {
+            "resolved": [],
+            "in_progress": [],
+            "open_count": None,
+            "stale": [],
+            "unavailable": {},
+        }
+        queries = {
+            "resolved": (
+                f'project = "{proj}" AND resolved >= "{start}" AND resolved < "{end}" '
+                "ORDER BY resolved DESC",
+                None,
+            ),
+            "in_progress": (f"project = \"{proj}\" AND statusCategory = 'In Progress'", None),
+            "open": (f'project = "{proj}" AND resolution = Unresolved', None),
+            "stale": (
+                f'project = "{proj}" AND resolution = Unresolved AND updated <= -14d '
+                "ORDER BY updated ASC",
+                STALE_LIST,
+            ),
+        }
+        for name, (jql, limit) in queries.items():
+            issues, err = await _search_all(search, jql, limit=limit)
+            if err:
+                data["errors"].append({"project": proj, "query": name, "message": err})
+                pd["unavailable"][name] = err
+                if name == "open":
+                    continue
+            if name == "open":
+                pd["open_count"] = len(issues)
+            else:
+                pd[name] = [_slim(i) for i in issues]
+        data["projects"][proj] = pd
 
-        # --- Last week resolved tickets ---
-        result = await _jira_search(
-            {
-                "jql": f"project = {proj} AND resolved >= {last_week_start} AND resolved < {last_week_end} ORDER BY resolved DESC",
-                "max_results": 100,
-            },
-            CTX,
-        )
-        if "error" in result:
-            data["errors"].append(f"{proj}/resolved_last_week: {result['error']}")
-        else:
-            proj_data["resolved_last_week"] = _aggregate_issues(result.get("issues", []))
-
-        # Open backlog (no date filter — correct, leave alone)
-        open_result = await _jira_search(
-            {"jql": f"project = {proj} AND resolution = Unresolved", "max_results": 100},
-            CTX,
-        )
-        if "error" not in open_result:
-            open_issues = open_result.get("issues", [])
-            by_status: dict[str, int] = {}
-            for i in open_issues:
-                s = i.get("status", "?")
-                by_status[s] = by_status.get(s, 0) + 1
-            proj_data["open"] = {
-                "count": len(open_issues),
-                "is_last": open_result.get("is_last", True),
-                "by_status": by_status,
-            }
-
-        # Stale tickets (open, no update in 14+ days)
-        stale_result = await _jira_search(
-            {
-                "jql": f"project = {proj} AND resolution = Unresolved AND updated <= -14d ORDER BY updated ASC",
-                "max_results": 10,
-            },
-            CTX,
-        )
-        if "error" not in stale_result:
-            stale_issues = stale_result.get("issues", [])
-            proj_data["stale"] = [
-                {
-                    "key": i["key"],
-                    "status": i["status"],
-                    "assignee": i["assignee"],
-                    "summary": i["summary"][:60],
-                }
-                for i in stale_issues
-            ]
-            data["totals"]["stale"] += len(stale_issues)
-
-        # In progress
-        wip_result = await _jira_search(
-            {"jql": f"project = {proj} AND statusCategory = 'In Progress'", "max_results": 20},
-            CTX,
-        )
-        if "error" not in wip_result:
-            wip_issues = wip_result.get("issues", [])
-            wip_by_assignee: dict[str, int] = {}
-            for i in wip_issues:
-                a = i.get("assignee", "Unassigned")
-                wip_by_assignee[a] = wip_by_assignee.get(a, 0) + 1
-            proj_data["in_progress"] = {
-                "count": len(wip_issues),
-                "by_assignee": wip_by_assignee,
-            }
-
-        if proj_data:
-            data["projects"][proj] = proj_data
-
+    data["complete"] = not data["errors"]
     return data
 
 
-def main() -> int:
-    if not PROJECTS:
-        print(
-            f"No JIRA projects configured. Set DEVOPS_JIRA_PROJECTS env var "
-            f"or populate jira.active_projects in {CONFIG_PATH}.",
-            flush=True,
-        )
-        OUTPUT_PATH.write_text(
-            json.dumps(
-                {
-                    "projects": {},
-                    "totals": {"resolved": 0, "stale": 0},
-                    "errors": [
-                        f"No JIRA projects configured (env DEVOPS_JIRA_PROJECTS empty "
-                        f"and {CONFIG_PATH} missing or has no jira.active_projects)."
-                    ],
-                }
-            )
-        )
-        return 0
-    print("Collecting JIRA data...", flush=True)
-    result = asyncio.run(collect())
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("--week-start", help="YYYY-MM-DD (any day of the week); default last week")
+    ap.add_argument("--runs-dir", type=Path, help="override $DEVOPS_RUNS_DIR")
+    args = ap.parse_args(argv)
 
-    OUTPUT_PATH.write_text(json.dumps(result, indent=2))
-    total = result["totals"]["resolved"]
-    projects = len(result["projects"])
-    errors = len(result["errors"])
-    print(
-        f"Done: {total} resolved tickets across {projects} projects, {errors} errors → {OUTPUT_PATH}"
-    )
+    start, end = report_window(week_start=args.week_start)
+    period = window_block(start, end)
+    out_path = week_run_dir(period["week_start"], args.runs_dir or runs_dir()) / "jira.json"
 
-    return 1 if errors and not projects else 0
+    projects = load_projects()
+    if projects:
+        data = asyncio.run(
+            collect_jira(projects, period["week_start"], end.strftime("%Y-%m-%d"), _jira_search)
+        )
+    else:
+        data = {
+            "projects": {},
+            "errors": [
+                {"project": "*", "query": "config", "message": "no projects (DEVOPS_JIRA_PROJECTS)"}
+            ],
+            "complete": False,
+        }
+    data["period"] = period
+    data["collected_at"] = datetime.now(UTC).isoformat()
+    out_path.write_text(json.dumps(data, indent=2))
+
+    resolved = sum(len(p["resolved"]) for p in data["projects"].values())
+    print(f"{resolved} resolved tickets, {len(data['errors'])} errors -> {out_path}")
+    for e in data["errors"]:
+        print(f"  ERROR {e['project']} {e['query']}: {e['message']}", file=sys.stderr)
+    return 0 if data["complete"] else 1
 
 
 if __name__ == "__main__":

@@ -113,3 +113,31 @@ class TestPeriodLabel:
 
     def test_empty_string_falls_back(self):
         assert period_label("") == "this week"
+
+
+class TestReportWindow:
+    """One window for every collector: the previous ISO week, ET midnights."""
+
+    def test_default_is_previous_iso_week(self):
+        from robothor.engine.reports.devops_periods import report_window
+
+        now = datetime(2026, 5, 18, 9, 0, tzinfo=ET)
+        start, end = report_window(now)
+        assert start.isoformat() == "2026-05-11T00:00:00-04:00"
+        assert end.isoformat() == "2026-05-18T00:00:00-04:00"
+
+    def test_explicit_week_start_snaps_to_monday(self):
+        from robothor.engine.reports.devops_periods import report_window
+
+        start, end = report_window(week_start="2026-05-13")
+        assert start.isoformat() == "2026-05-11T00:00:00-04:00"
+        assert end.isoformat() == "2026-05-18T00:00:00-04:00"
+
+    def test_window_block_labels_the_week(self):
+        from robothor.engine.reports.devops_periods import report_window, window_block
+
+        start, end = report_window(week_start="2026-05-11")
+        block = window_block(start, end)
+        assert block["week_start"] == "2026-05-11"
+        assert period_label(block) == "Week of 2026-05-11"
+        assert block["start_utc"] == "2026-05-11T04:00:00+00:00"

@@ -1,99 +1,81 @@
 #!/usr/bin/env python3
-"""Deterministic per-person aggregation step of the devops report pipeline.
+"""Build the deterministic people table for one devops report week.
 
-Reads /tmp/devops_github_data.json + /tmp/devops_jira_data.json, joins all
-author/assignee/reviewer handles to CRM people via contact_identifiers, and
-writes /tmp/devops_people_rollup.json. Anomalies (unresolved handles,
-roster engineers with zero activity, bot authors) are surfaced as separate
-top-level lists — nothing is silently dropped.
+Reads ``github.json``, ``jira.json`` and ``usage.json`` from
+``$DEVOPS_RUNS_DIR/<week-start>/`` (any may be missing: the metrics it feeds
+become "unavailable", never zero), the team roster from ``$DEVOPS_TEAM_FILE``,
+and the three previous weeks' ``people.json`` for trends. Writes
+``people.json`` next to them.
 
-Called by the devops-report-pipeline workflow between the collectors and
-the analyst. The analyst narrates this output; it no longer attempts to
-build per-person rollups from raw collector data.
+Rows exist only for active roster members. Exits 1 when the team file is
+missing or invalid — without a roster there is no honest table to build.
 """
 
 from __future__ import annotations
 
+import argparse
 import json
-import os
 import sys
+from datetime import datetime, timedelta
 from pathlib import Path
 
-# Add project root to path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from robothor.constants import DEFAULT_TENANT
-from robothor.engine.reports.devops_aggregate import (
-    PostgresAggregateDAL,
-    aggregate_people,
-)
-
-GITHUB_IN = Path("/tmp/devops_github_data.json")
-JIRA_IN = Path("/tmp/devops_jira_data.json")
-OUT = Path("/tmp/devops_people_rollup.json")
-CONFIG = Path(__file__).resolve().parent.parent / "brain" / "memory" / "devops-config.json"
+from robothor.engine.reports.devops_aggregate import aggregate_people
+from robothor.engine.reports.devops_periods import report_window, window_block
+from robothor.engine.reports.devops_team import TeamFileError, load_team, runs_dir, week_run_dir
 
 
-def _load_engineering_role_keywords() -> list[str] | None:
-    """Read `engineering_roles` from devops-config.json if present.
-
-    Returning None tells aggregate_people to use its defaults
-    (Engineer / Developer / SRE / DevOps).
-    """
-    if not CONFIG.exists():
+def _read(path: Path) -> dict | None:
+    if not path.exists():
         return None
     try:
-        cfg = json.loads(CONFIG.read_text())
-    except Exception:
+        data = json.loads(path.read_text())
+    except json.JSONDecodeError as e:
+        print(f"unreadable {path}: {e}", file=sys.stderr)
         return None
-    raw = cfg.get("engineering_roles")
-    if isinstance(raw, list) and all(isinstance(x, str) for x in raw):
-        return raw
-    return None
+    return data if isinstance(data, dict) else None
 
 
-def main() -> int:
-    if not GITHUB_IN.exists():
-        print(f"missing input: {GITHUB_IN}", file=sys.stderr)
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("--week-start", help="YYYY-MM-DD (any day of the week); default last week")
+    ap.add_argument("--runs-dir", type=Path, help="override $DEVOPS_RUNS_DIR")
+    ap.add_argument("--team-file", type=Path, help="override $DEVOPS_TEAM_FILE")
+    args = ap.parse_args(argv)
+
+    start, end = report_window(week_start=args.week_start)
+    period = window_block(start, end)
+    base = args.runs_dir or runs_dir()
+    run = week_run_dir(period["week_start"], base)
+
+    try:
+        team = load_team(args.team_file)
+    except TeamFileError as e:
+        print(f"team file error: {e}", file=sys.stderr)
         return 1
-    if not JIRA_IN.exists():
-        print(f"missing input: {JIRA_IN}", file=sys.stderr)
-        return 1
 
-    github_data = json.loads(GITHUB_IN.read_text())
-    jira_data = json.loads(JIRA_IN.read_text())
+    github = _read(run / "github.json")
+    jira = _read(run / "jira.json")
+    usage = _read(run / "usage.json")
 
-    tenant_id = os.environ.get("ROBOTHOR_DEFAULT_TENANT", DEFAULT_TENANT)
-    engineer_keywords = _load_engineering_role_keywords()
+    monday = datetime.strptime(period["week_start"], "%Y-%m-%d")
+    history = [
+        _read(base / (monday - timedelta(days=7 * k)).strftime("%Y-%m-%d") / "people.json")
+        for k in (3, 2, 1)
+    ]
 
-    from robothor.db.connection import get_connection
+    people = aggregate_people(team, github, jira, usage, history=history)
+    people["period"] = period
+    out = run / "people.json"
+    out.write_text(json.dumps(people, indent=2, default=str))
 
-    with get_connection() as conn:
-        dal = PostgresAggregateDAL(conn, tenant_id)
-        rollup = aggregate_people(
-            github_data,
-            jira_data,
-            dal,
-            engineer_role_keywords=engineer_keywords,
-        )
-
-    OUT.write_text(json.dumps(rollup, indent=2, default=str))
-
-    n_people = len(rollup["people"])
-    n_missing = len(rollup["missing_from_roster"])
-    n_unres = len(rollup["unresolved_handles"])
-    n_bots = len(rollup["bots_filtered"])
+    dq = people["data_quality"]
     print(
-        f"Rollup: {n_people} people active, {n_missing} on roster with no activity, "
-        f"{n_unres} unresolved handles, {n_bots} bot authors → {OUT}"
+        f"{len(people['members'])} roster rows, {len(dq['outside_roster'])} outside-roster "
+        f"handles, {len(dq['no_activity'])} members with no activity, "
+        f"{len(dq['unavailable_metrics'])} unavailable metrics -> {out}"
     )
-    if n_unres:
-        print("Unresolved handles (need contact_identifiers rows):", file=sys.stderr)
-        for u in rollup["unresolved_handles"][:10]:
-            print(
-                f"  - {u['channel']}: {u['identifier']} ({u['occurrences']} occurrences)",
-                file=sys.stderr,
-            )
     return 0
 
 

@@ -95,3 +95,38 @@ def period_label(period: Any) -> str:
     if isinstance(period, str) and period.strip():
         return period
     return "this week"
+
+
+def report_window(
+    now: datetime | None = None, *, week_start: str | None = None
+) -> tuple[datetime, datetime]:
+    """The one window every devops collector uses: [Mon 00:00, next Mon 00:00) ET.
+
+    Default is the previous ISO week relative to ``now``. ``week_start``
+    (YYYY-MM-DD, any day of the wanted week) selects a specific week, for
+    backfills and re-runs.
+    """
+    if week_start:
+        day = datetime.strptime(week_start, "%Y-%m-%d").date()
+        monday = day - timedelta(days=day.weekday())
+        start = datetime.combine(monday, datetime.min.time(), tzinfo=ET)
+        end = datetime.combine(monday + timedelta(days=7), datetime.min.time(), tzinfo=ET)
+        return start, end
+    current, last = _et_monday_boundaries(now or datetime.now(ET))
+    return last, current
+
+
+def window_block(start: datetime, end: datetime) -> dict[str, Any]:
+    """Period metadata for a report window, stamped into every run file."""
+    return {
+        "tz": "America/New_York",
+        "week_start": start.strftime("%Y-%m-%d"),
+        "week_end": (end - timedelta(days=1)).strftime("%Y-%m-%d"),
+        "start_et": start.isoformat(),
+        "end_et": end.isoformat(),
+        "start_utc": start.astimezone(UTC).isoformat(),
+        "end_utc": end.astimezone(UTC).isoformat(),
+        "last_week_start_et": start.isoformat(),
+        "last_week_end_et": end.isoformat(),
+        "report_label": f"Week of {start.strftime('%Y-%m-%d')}",
+    }

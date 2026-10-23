@@ -1,575 +1,269 @@
-"""Tests for the deterministic per-person aggregation step of the devops report."""
+"""Tests for the deterministic people table of the devops weekly report."""
 
 from __future__ import annotations
 
+import copy
 from typing import Any
 
+import pytest
+
 from robothor.engine.reports.devops_aggregate import aggregate_people
+from robothor.engine.reports.devops_team import parse_team
+
+PERIOD = {"week_start": "2026-05-11", "report_label": "Week of 2026-05-11"}
+REPO = "acme/widgets"
 
 
-class FakeDAL:
-    """In-memory stand-in for the CRM/identity database."""
+def _team():
+    return parse_team(
+        {
+            "roles": {
+                "senior": {"title": "Senior Engineer", "focus": "Architecture"},
+                "ai_reviewer": {"title": "AI Reviewer", "focus": "Reviews"},
+            },
+            "members": [
+                {
+                    "id": "alice",
+                    "name": "Alice Example",
+                    "role": "senior",
+                    "github": ["alice-gh", "alice-alt"],
+                    "jira": ["Alice Example"],
+                    "usage_name": "Alice",
+                },
+                {
+                    "id": "bob",
+                    "name": "Bob Example",
+                    "role": "senior",
+                    "github": ["bob-gh"],
+                    "jira": ["Bob Example"],
+                    "usage_name": "Bob",
+                },
+                {
+                    "id": "reviewer",
+                    "name": "Review Agent",
+                    "role": "ai_reviewer",
+                    "github": ["review-agent[bot]"],
+                },
+                {
+                    "id": "carol",
+                    "name": "Carol Former",
+                    "role": "senior",
+                    "github": ["carol-gh"],
+                    "active": False,
+                },
+            ],
+            "bots_excluded": ["dependabot[bot]"],
+        }
+    )
 
-    def __init__(
-        self,
-        identities: dict[tuple[str, str], str],
-        roster: list[dict[str, Any]],
-    ) -> None:
-        self._idents = identities
-        self._roster = roster
 
-    def resolve_handles(self, items: set[tuple[str, str]]) -> dict[tuple[str, str], str]:
-        return {k: self._idents[k] for k in items if k in self._idents}
-
-    def get_roster(self) -> list[dict[str, Any]]:
-        return list(self._roster)
-
-
-_PERIOD = {
-    "tz": "America/New_York",
-    "current_week_start_et": "2026-05-18T00:00:00-04:00",
-    "last_week_start_et": "2026-05-11T00:00:00-04:00",
-    "last_week_end_et": "2026-05-18T00:00:00-04:00",
-    "generated_at_et": "2026-05-18T09:00:00-04:00",
-}
-
-
-def _empty_repo() -> dict[str, Any]:
+def _merged(n, author, *, added=10, deleted=2, reviewers=("bob-gh",)):
     return {
-        "pr_stats_current_week": {
-            "authors": {},
-            "merged_count": 0,
-            "merged_by": {},
-        },
-        "pr_stats_last_week": {
-            "authors": {},
-            "merged_count": 0,
-            "merged_by": {},
+        "number": n,
+        "title": f"PR {n}",
+        "author": author,
+        "base": "main",
+        "merged_by": author,
+        "lines_added": added,
+        "lines_deleted": deleted,
+        "reviewers": list(reviewers) if reviewers is not None else None,
+    }
+
+
+def _review(reviewer, state, pr_author="alice-gh", turnaround=None, pr=1):
+    return {
+        "pr": pr,
+        "pr_author": pr_author,
+        "reviewer": reviewer,
+        "state": state,
+        "turnaround_h": turnaround,
+    }
+
+
+def _github() -> dict[str, Any]:
+    return {
+        "period": PERIOD,
+        "complete": True,
+        "errors": [],
+        "repos": {
+            REPO: {
+                "unavailable": {},
+                "merged_prs": [
+                    _merged(1, "alice-gh"),
+                    _merged(2, "alice-alt", added=5, deleted=5),
+                    _merged(3, "dependabot[bot]", reviewers=[]),
+                    _merged(4, "mallory-gh", reviewers=["dependabot[bot]"]),
+                    _merged(5, "carol-gh"),
+                ],
+                "reviews": [
+                    _review("bob-gh", "APPROVED", turnaround=2.0),
+                    _review("bob-gh", "CHANGES_REQUESTED", turnaround=6.0, pr=2),
+                    _review("bob-gh", "COMMENTED", turnaround=None, pr=2),
+                    _review("review-agent[bot]", "COMMENTED", turnaround=1.0),
+                ],
+                "commits": {
+                    "by_login": {"alice-gh": 3, "alice-alt": 1, "dependabot[bot]": 2},
+                    "unlinked": {"ghost@example.com": 1},
+                },
+                "stale_prs": [{"number": 9, "title": "Old", "author": "bob-gh", "age_days": 20}],
+            }
         },
     }
 
 
-def _empty_project() -> dict[str, Any]:
+def _jira() -> dict[str, Any]:
     return {
-        "resolved_current_week": {"count": 0, "by_assignee": {}, "by_type": {}},
-        "resolved_last_week": {"count": 0, "by_assignee": {}, "by_type": {}},
-        "in_progress": {"count": 0, "by_assignee": {}},
+        "period": PERIOD,
+        "complete": True,
+        "errors": [],
+        "projects": {
+            "ENG": {
+                "resolved": [
+                    {"key": "ENG-1", "assignee": "Alice Example", "type": "Bug"},
+                    {"key": "ENG-2", "assignee": "Alice Example", "type": "Story"},
+                    {"key": "ENG-3", "assignee": "Dan Outsider", "type": "Task"},
+                ],
+                "in_progress": [{"key": "ENG-4", "assignee": "Bob Example", "type": "Story"}],
+            }
+        },
     }
 
 
-class TestAggregatePeople:
-    def test_merges_two_github_handles_into_one_person(self):
-        github_data = {
-            "period": _PERIOD,
-            "repos": {
-                "acme-erp": {
-                    **_empty_repo(),
-                    "pr_stats_current_week": {
-                        "authors": {"alice-dev": 2, "alice-personal": 1},
-                        "merged_count": 3,
-                        "merged_by": {},
-                    },
-                    "pr_stats_last_week": {
-                        "authors": {"alice-dev": 2},
-                        "merged_count": 2,
-                        "merged_by": {},
-                    },
-                }
-            },
-        }
-        jira_data = {"period": _PERIOD, "projects": {}}
-        dal = FakeDAL(
-            identities={
-                ("github", "alice-dev"): "p1",
-                ("github", "alice-personal"): "p1",
-            },
-            roster=[
-                {
-                    "id": "p1",
-                    "name": "Alice Developer",
-                    "email": "alice@example.com",
-                    "job_title": "Engineer",
-                    "identities": [
-                        ("github", "alice-dev"),
-                        ("github", "alice-personal"),
-                    ],
-                }
-            ],
+def _usage() -> dict[str, Any]:
+    return {
+        "available": True,
+        "report_date": "2026-05-15",
+        "rows": [
+            {"developer": "Alice", "account": "Acct 1", "weekly_pct": 80, "reading": "completed"},
+            {"developer": "Bob", "account": "Acct 1", "weekly_pct": 5, "reading": "post_reset"},
+            {"developer": "Zed", "account": "Acct 1", "weekly_pct": 50, "reading": "completed"},
+        ],
+    }
+
+
+def _member(out, mid):
+    return next(m for m in out["members"] if m["id"] == mid)
+
+
+class TestRosterMapping:
+    def test_multiple_handles_sum_into_one_person(self):
+        out = aggregate_people(_team(), _github(), _jira(), _usage())
+        alice = _member(out, "alice")["metrics"]
+        assert alice["prs_merged"] == 2
+        assert alice["commits"] == 4
+        assert alice["lines_added"] == 15
+        assert alice["lines_deleted"] == 7
+        assert alice["tickets_resolved"] == 2
+        assert alice["tickets_by_type"] == {"Bug": 1, "Story": 1}
+        assert alice["changes_requested_received"] == 1
+
+    def test_rows_only_for_active_roster_members(self):
+        out = aggregate_people(_team(), _github(), _jira(), _usage())
+        assert [m["id"] for m in out["members"]] == ["alice", "bob", "reviewer"]
+
+    def test_non_roster_activity_goes_to_outside_roster(self):
+        out = aggregate_people(_team(), _github(), _jira(), _usage())
+        handles = {(o["source"], o["handle"]) for o in out["outside_roster"]}
+        assert ("github", "mallory-gh") in handles
+        assert ("jira", "Dan Outsider") in handles
+        assert ("git-email", "ghost@example.com") in handles
+        assert ("github", "carol-gh") in handles  # inactive member: not a row
+        assert not any(o["handle"] == "dependabot[bot]" for o in out["outside_roster"])
+
+    def test_bots_only_on_bots_line(self):
+        out = aggregate_people(_team(), _github(), _jira(), _usage())
+        bots = {b["handle"]: b for b in out["bots"]}
+        assert bots["dependabot[bot]"]["prs_merged"] == 1
+        assert bots["dependabot[bot]"]["commits"] == 2
+
+    def test_roster_ai_member_is_counted(self):
+        out = aggregate_people(_team(), _github(), _jira(), _usage())
+        reviewer = _member(out, "reviewer")
+        assert reviewer["metrics"]["reviews_given"] == 1
+        assert reviewer["role_title"] == "AI Reviewer"
+
+    def test_review_breakdown_and_median_turnaround(self):
+        out = aggregate_people(_team(), _github(), _jira(), _usage())
+        bob = _member(out, "bob")["metrics"]
+        assert bob["reviews_given"] == 3
+        assert bob["reviews_approved"] == 1
+        assert bob["reviews_changes_requested"] == 1
+        assert bob["reviews_commented"] == 1
+        assert bob["review_turnaround_median_h"] == 4.0
+        assert bob["stale_prs"] == 1
+        assert bob["in_progress"] == 1
+
+    def test_merged_without_human_review(self):
+        out = aggregate_people(_team(), _github(), _jira(), _usage())
+        nums = {p["number"] for p in out["merged_without_review"]}
+        # PR 4's only reviewer is a bot; bot-authored PR 3 is not listed
+        assert nums == {4}
+
+    def test_member_with_no_activity_is_flagged(self):
+        gh = _github()
+        gh["repos"][REPO]["reviews"] = [
+            r for r in gh["repos"][REPO]["reviews"] if r["reviewer"] != "review-agent[bot]"
+        ]
+        out = aggregate_people(_team(), gh, _jira(), _usage())
+        assert [m["id"] for m in out["no_activity"]] == ["reviewer"]
+
+
+class TestUnavailable:
+    def test_failed_repo_metric_is_null_with_reason_not_zero(self):
+        gh = _github()
+        gh["repos"][REPO]["unavailable"] = {"commits": "/commits: 502 boom"}
+        gh["complete"] = False
+        out = aggregate_people(_team(), gh, _jira(), _usage())
+        alice = _member(out, "alice")
+        assert alice["metrics"]["commits"] is None
+        assert "502" in alice["unavailable"]["commits"]
+        assert alice["metrics"]["prs_merged"] == 2
+        assert out["team"]["commits"] is None
+
+    def test_missing_github_file_nulls_every_github_metric(self):
+        out = aggregate_people(_team(), None, _jira(), _usage())
+        alice = _member(out, "alice")
+        assert alice["metrics"]["prs_merged"] is None
+        assert alice["metrics"]["tickets_resolved"] == 2
+        assert out["sources"]["github"]["available"] is False
+
+    def test_jira_project_failure_nulls_tickets(self):
+        jira = _jira()
+        jira["errors"] = [{"project": "ENG", "query": "resolved", "message": "401"}]
+        jira["projects"]["ENG"]["unavailable"] = {"resolved": "401"}
+        out = aggregate_people(_team(), _github(), jira, _usage())
+        assert _member(out, "alice")["metrics"]["tickets_resolved"] is None
+
+
+class TestUsageJoin:
+    def test_usage_rows_join_by_usage_name(self):
+        out = aggregate_people(_team(), _github(), _jira(), _usage())
+        assert _member(out, "alice")["usage"][0]["weekly_pct"] == 80
+        assert out["usage"]["unmatched"] == ["Zed"]
+
+    def test_partial_readings_listed(self):
+        out = aggregate_people(_team(), _github(), _jira(), _usage())
+        partial = out["data_quality"]["partial_usage"]
+        assert [(p["developer"], p["reading"]) for p in partial] == [("Bob", "post_reset")]
+
+    def test_usage_unavailable_is_carried(self):
+        out = aggregate_people(
+            _team(), _github(), _jira(), {"available": False, "reason": "no email"}
         )
-        result = aggregate_people(github_data, jira_data, dal)
+        assert out["usage"]["available"] is False
+        assert out["usage"]["reason"] == "no email"
 
-        assert len(result["people"]) == 1
-        alice = result["people"][0]
-        assert alice["person_id"] == "p1"
-        assert alice["current_week"]["prs_merged"] == 3
-        assert alice["last_week"]["prs_merged"] == 2
-        assert sorted(alice["github_handles"]) == ["alice-dev", "alice-personal"]
-        assert "acme-erp" in alice["repos_touched"]
-        assert result["unresolved_handles"] == []
-        assert result["missing_from_roster"] == []
 
-    def test_unresolved_github_handle_surfaces(self):
-        github_data = {
-            "period": _PERIOD,
-            "repos": {
-                "acme-erp": {
-                    **_empty_repo(),
-                    "pr_stats_current_week": {
-                        "authors": {"newhire-dev": 2},
-                        "merged_count": 2,
-                        "merged_by": {},
-                    },
-                }
-            },
-        }
-        jira_data = {"period": _PERIOD, "projects": {}}
-        dal = FakeDAL(identities={}, roster=[])
+class TestTrend:
+    def test_prior_weeks_included_per_metric(self):
+        prior = aggregate_people(_team(), _github(), _jira(), _usage())
+        older = copy.deepcopy(prior)
+        _member(older, "alice")["metrics"]["prs_merged"] = 7
+        out = aggregate_people(_team(), _github(), _jira(), _usage(), history=[None, older, prior])
+        assert _member(out, "alice")["trend"]["prs_merged"] == [None, 7, 2]
 
-        result = aggregate_people(github_data, jira_data, dal)
 
-        # newhire-dev now appears as a provisional row, NOT dropped
-        assert len(result["people"]) == 1
-        prov = result["people"][0]
-        assert prov["resolved"] is False
-        assert prov["name"] == "newhire-dev"
-        assert prov["current_week"]["prs_merged"] == 2
-
-        # Still surfaced for CRM-linking
-        assert len(result["unresolved_handles"]) == 1
-        unresolved = result["unresolved_handles"][0]
-        assert unresolved["channel"] == "github"
-        assert unresolved["identifier"] == "newhire-dev"
-        assert unresolved["occurrences"] == 2
-        assert any(s.startswith("acme-erp/") for s in unresolved["sources"])
-
-    def test_bot_authors_routed_to_bots_filtered_not_unresolved(self):
-        github_data = {
-            "period": _PERIOD,
-            "repos": {
-                "acme-erp": {
-                    **_empty_repo(),
-                    "pr_stats_current_week": {
-                        "authors": {},
-                        "merged_count": 0,
-                        "merged_by": {},
-                        "bot_authors": {"dependabot[bot]": 5, "renovate[bot]": 2},
-                        "bot_merged_count": 7,
-                    },
-                }
-            },
-        }
-        jira_data = {"period": _PERIOD, "projects": {}}
-        dal = FakeDAL(identities={}, roster=[])
-
-        result = aggregate_people(github_data, jira_data, dal)
-
-        bots = {b["identifier"]: b for b in result["bots_filtered"]}
-        assert bots["dependabot[bot]"]["merged_count"] == 5
-        assert bots["renovate[bot]"]["merged_count"] == 2
-        # Bots must NOT show up as unresolved (they're known non-people)
-        assert result["unresolved_handles"] == []
-
-    def test_roster_engineer_with_zero_activity_listed(self):
-        github_data = {"period": _PERIOD, "repos": {}}
-        jira_data = {"period": _PERIOD, "projects": {}}
-        dal = FakeDAL(
-            identities={},
-            roster=[
-                {
-                    "id": "p2",
-                    "name": "Bob Smith",
-                    "email": "bob@example.com",
-                    "job_title": "Engineer",
-                    "identities": [("github", "bob-dev")],
-                }
-            ],
-        )
-
-        result = aggregate_people(github_data, jira_data, dal)
-
-        assert result["people"] == []
-        assert len(result["missing_from_roster"]) == 1
-        assert result["missing_from_roster"][0]["name"] == "Bob Smith"
-        assert result["missing_from_roster"][0]["person_id"] == "p2"
-
-    def test_jira_resolved_attributed_to_person(self):
-        github_data = {"period": _PERIOD, "repos": {}}
-        jira_data = {
-            "period": _PERIOD,
-            "projects": {
-                "I1": {
-                    "resolved_current_week": {
-                        "count": 2,
-                        "by_assignee": {"Alice Developer": 2},
-                        "by_type": {},
-                    },
-                    "resolved_last_week": {
-                        "count": 1,
-                        "by_assignee": {"Alice Developer": 1},
-                        "by_type": {},
-                    },
-                    "in_progress": {
-                        "count": 1,
-                        "by_assignee": {"Alice Developer": 1},
-                    },
-                }
-            },
-        }
-        dal = FakeDAL(
-            identities={("jira_display_name", "Alice Developer"): "p1"},
-            roster=[
-                {
-                    "id": "p1",
-                    "name": "Alice Developer",
-                    "email": "alice@example.com",
-                    "job_title": "Engineer",
-                    "identities": [("jira_display_name", "Alice Developer")],
-                }
-            ],
-        )
-
-        result = aggregate_people(github_data, jira_data, dal)
-
-        assert len(result["people"]) == 1
-        alice = result["people"][0]
-        assert alice["current_week"]["tickets_resolved"] == 2
-        assert alice["last_week"]["tickets_resolved"] == 1
-        assert alice["in_progress_tickets"] == 1
-
-    def test_reviewer_only_person_appears_with_reviews(self):
-        github_data = {
-            "period": _PERIOD,
-            "repos": {
-                "acme-erp": {
-                    **_empty_repo(),
-                    "review_stats": {
-                        "prs_analyzed": 10,
-                        "reviewers": [
-                            {
-                                "reviewer": "charlie-rev",
-                                "reviews_given": 5,
-                                "approvals": 4,
-                                "changes_requested": 1,
-                                "avg_turnaround_hours": 8.0,
-                            }
-                        ],
-                    },
-                }
-            },
-        }
-        jira_data = {"period": _PERIOD, "projects": {}}
-        dal = FakeDAL(
-            identities={("github", "charlie-rev"): "p3"},
-            roster=[
-                {
-                    "id": "p3",
-                    "name": "Charlie Reviewer",
-                    "email": "charlie@example.com",
-                    "job_title": "Engineer",
-                    "identities": [("github", "charlie-rev")],
-                }
-            ],
-        )
-
-        result = aggregate_people(github_data, jira_data, dal)
-
-        assert len(result["people"]) == 1
-        charlie = result["people"][0]
-        assert charlie["reviews_30d"]["reviews_given"] == 5
-        assert charlie["reviews_30d"]["approvals"] == 4
-
-    def test_period_block_passes_through(self):
-        github_data = {"period": _PERIOD, "repos": {}}
-        jira_data = {"period": _PERIOD, "projects": {}}
-        dal = FakeDAL(identities={}, roster=[])
-
-        result = aggregate_people(github_data, jira_data, dal)
-
-        assert result["period"] == _PERIOD
-
-    def test_unresolved_handle_appears_as_provisional_person(self):
-        """Activity from unresolved handles must still appear in `people`,
-        flagged with resolved=False. Linking later just upgrades the row."""
-        github_data = {
-            "period": _PERIOD,
-            "repos": {
-                "storefront": {
-                    **_empty_repo(),
-                    "pr_stats_current_week": {
-                        "authors": {"slivas": 7},
-                        "merged_count": 7,
-                        "merged_by": {},
-                    },
-                    "pr_stats_last_week": {
-                        "authors": {"slivas": 5},
-                        "merged_count": 5,
-                        "merged_by": {},
-                    },
-                }
-            },
-        }
-        jira_data = {"period": _PERIOD, "projects": {}}
-        dal = FakeDAL(identities={}, roster=[])
-
-        result = aggregate_people(github_data, jira_data, dal)
-
-        # slivas appears in people with resolved=False
-        assert len(result["people"]) == 1
-        row = result["people"][0]
-        assert row["resolved"] is False
-        assert row["person_id"] is None
-        assert row["name"] == "slivas"
-        assert row["github_handles"] == ["slivas"]
-        assert row["current_week"]["prs_merged"] == 7
-        assert row["last_week"]["prs_merged"] == 5
-        assert "storefront" in row["repos_touched"]
-
-        # Still surfaced in unresolved_handles so operator can link
-        assert any(u["identifier"] == "slivas" for u in result["unresolved_handles"])
-
-        # Totals INCLUDE provisional activity
-        assert result["totals"]["current_week"]["prs_merged_human"] == 7
-        assert result["totals"]["last_week"]["prs_merged_human"] == 5
-
-    def test_resolved_people_marked_resolved_true(self):
-        github_data = {
-            "period": _PERIOD,
-            "repos": {
-                "repo-a": {
-                    **_empty_repo(),
-                    "pr_stats_current_week": {
-                        "authors": {"alice-dev": 3},
-                        "merged_count": 3,
-                        "merged_by": {},
-                    },
-                }
-            },
-        }
-        jira_data = {"period": _PERIOD, "projects": {}}
-        dal = FakeDAL(
-            identities={("github", "alice-dev"): "p1"},
-            roster=[
-                {
-                    "id": "p1",
-                    "name": "Alice",
-                    "email": "alice@example.com",
-                    "job_title": "Engineer",
-                    "identities": [("github", "alice-dev")],
-                }
-            ],
-        )
-
-        result = aggregate_people(github_data, jira_data, dal)
-        assert len(result["people"]) == 1
-        assert result["people"][0]["resolved"] is True
-        assert result["people"][0]["person_id"] == "p1"
-
-    def test_missing_from_roster_only_flags_engineers(self):
-        """QA/PM with github handle but no PR activity must NOT be flagged
-        as absent engineers — they aren't expected to merge PRs."""
-        github_data = {"period": _PERIOD, "repos": {}}
-        jira_data = {"period": _PERIOD, "projects": {}}
-        dal = FakeDAL(
-            identities={},
-            roster=[
-                {
-                    "id": "p-eng",
-                    "name": "Engineer Idle",
-                    "email": "engineer@example.com",
-                    "job_title": "Senior Developer",
-                    "identities": [("github", "eng-idle")],
-                },
-                {
-                    "id": "p-qa",
-                    "name": "QA Person",
-                    "email": "qa@example.com",
-                    "job_title": "QA Engineer",
-                    "identities": [("github", "qa-handle")],
-                },
-                {
-                    "id": "p-pm",
-                    "name": "PM Person",
-                    "email": "pm@example.com",
-                    "job_title": "Product Manager",
-                    "identities": [("github", "pm-handle")],
-                },
-                {
-                    "id": "p-rep",
-                    "name": "Rep Person",
-                    "email": "rep@example.com",
-                    "job_title": "Representative",
-                    "identities": [("github", "rep-handle")],
-                },
-            ],
-        )
-
-        # Default keywords match Developer/Engineer (case-insensitive)
-        result = aggregate_people(
-            github_data,
-            jira_data,
-            dal,
-            engineer_role_keywords=["Developer", "Engineer"],
-        )
-
-        names = {m["name"] for m in result["missing_from_roster"]}
-        # Real engineer → flagged
-        assert "Engineer Idle" in names
-        # "QA Engineer" matches "Engineer" → flagged as expected
-        assert "QA Person" in names
-        # PM and Representative → NOT flagged
-        assert "PM Person" not in names
-        assert "Rep Person" not in names
-
-    def test_missing_from_roster_strict_keyword_match(self):
-        """With strict keyword set, QA shouldn't get caught by 'Engineer'."""
-        github_data = {"period": _PERIOD, "repos": {}}
-        jira_data = {"period": _PERIOD, "projects": {}}
-        dal = FakeDAL(
-            identities={},
-            roster=[
-                {
-                    "id": "p-qa",
-                    "name": "QA Person",
-                    "email": "qa@example.com",
-                    "job_title": "QA",
-                    "identities": [("github", "qa-handle")],
-                },
-                {
-                    "id": "p-eng",
-                    "name": "Engineer Idle",
-                    "email": "engineer@example.com",
-                    "job_title": "Senior Developer",
-                    "identities": [("github", "eng-idle")],
-                },
-            ],
-        )
-        result = aggregate_people(
-            github_data,
-            jira_data,
-            dal,
-            engineer_role_keywords=["Developer"],
-        )
-        names = {m["name"] for m in result["missing_from_roster"]}
-        assert "Engineer Idle" in names
-        assert "QA Person" not in names
-
-    def test_unassigned_jira_surfaces_as_provisional(self):
-        """`Unassigned` JIRA sentinel is included so unassigned-ticket
-        totals are visible, not silently dropped."""
-        github_data = {"period": _PERIOD, "repos": {}}
-        jira_data = {
-            "period": _PERIOD,
-            "projects": {
-                "I1": {
-                    "resolved_current_week": {
-                        "count": 0,
-                        "by_assignee": {},
-                        "by_type": {},
-                    },
-                    "resolved_last_week": {
-                        "count": 0,
-                        "by_assignee": {},
-                        "by_type": {},
-                    },
-                    "in_progress": {
-                        "count": 15,
-                        "by_assignee": {"Unassigned": 15},
-                    },
-                }
-            },
-        }
-        dal = FakeDAL(identities={}, roster=[])
-        result = aggregate_people(github_data, jira_data, dal)
-
-        names = {p["name"] for p in result["people"]}
-        assert "Unassigned" in names
-        unassigned = next(p for p in result["people"] if p["name"] == "Unassigned")
-        assert unassigned["resolved"] is False
-        assert unassigned["in_progress_tickets"] == 15
-
-    def test_totals_match_per_person_sum(self):
-        """Sum of per-person PRs/tickets must equal the totals-minus-bots."""
-        github_data = {
-            "period": _PERIOD,
-            "repos": {
-                "acme-erp": {
-                    **_empty_repo(),
-                    "pr_stats_current_week": {
-                        "authors": {"alice-dev": 3, "bob-dev": 2},
-                        "merged_count": 5,
-                        "merged_by": {},
-                    },
-                    "pr_stats_last_week": {
-                        "authors": {"alice-dev": 1},
-                        "merged_count": 1,
-                        "merged_by": {},
-                    },
-                }
-            },
-        }
-        jira_data = {"period": _PERIOD, "projects": {}}
-        dal = FakeDAL(
-            identities={
-                ("github", "alice-dev"): "p1",
-                ("github", "bob-dev"): "p2",
-            },
-            roster=[
-                {
-                    "id": "p1",
-                    "name": "Alice",
-                    "email": "alice@example.com",
-                    "job_title": "Engineer",
-                    "identities": [("github", "alice-dev")],
-                },
-                {
-                    "id": "p2",
-                    "name": "Bob",
-                    "email": "bob@example.com",
-                    "job_title": "Engineer",
-                    "identities": [("github", "bob-dev")],
-                },
-            ],
-        )
-
-        result = aggregate_people(github_data, jira_data, dal)
-
-        assert (
-            sum(p["current_week"]["prs_merged"] for p in result["people"])
-            == result["totals"]["current_week"]["prs_merged_human"]
-        )
-        assert result["totals"]["current_week"]["prs_merged_human"] == 5
-
-    def test_sentinels_and_agent_bot_not_counted_as_unresolved(self):
-        """JIRA 'Unassigned', GitHub 'unknown' and the agent's own bot account
-        stay visible as provisional rows but must NOT inflate the
-        unresolved-handle count (they are known non-people)."""
-        github_data = {
-            "period": _PERIOD,
-            "repos": {
-                "acme-erp": {
-                    **_empty_repo(),
-                    "pr_stats_current_week": {
-                        "authors": {"robothor-bot": 4, "unknown": 2, "real-dev": 1},
-                        "merged_count": 7,
-                        "merged_by": {},
-                    },
-                }
-            },
-        }
-        jira_data = {
-            "period": _PERIOD,
-            "projects": {
-                "I1": {
-                    "resolved_current_week": {"count": 0, "by_assignee": {}, "by_type": {}},
-                    "resolved_last_week": {"count": 0, "by_assignee": {}, "by_type": {}},
-                    "in_progress": {"count": 3, "by_assignee": {"Unassigned": 3}},
-                }
-            },
-        }
-        dal = FakeDAL(identities={}, roster=[])
-        result = aggregate_people(github_data, jira_data, dal)
-
-        unresolved_ids = {u["identifier"] for u in result["unresolved_handles"]}
-        assert unresolved_ids == {"real-dev"}
-        names = {p["name"] for p in result["people"]}
-        assert {"robothor-bot", "unknown", "Unassigned", "real-dev"} <= names
+@pytest.mark.parametrize("key", ["prs_merged", "commits", "tickets_resolved"])
+def test_team_totals(key):
+    out = aggregate_people(_team(), _github(), _jira(), _usage())
+    assert out["team"][key] == sum(m["metrics"][key] or 0 for m in out["members"])
