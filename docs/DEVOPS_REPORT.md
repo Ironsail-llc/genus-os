@@ -147,7 +147,9 @@ this file.
 
 The guard (`check_narrative` in `robothor/engine/reports/devops_report.py`)
 checks every number in a note that names a unit: PRs, commits, reviews,
-tickets or %. The number must equal the member's value in the table. A note
+tickets or %. The number must equal the member's value in the table, or one
+of the prior weeks in that member's trend. A ticket count may be tickets
+shipped, tickets closed in JIRA, or tickets in progress. A note
 fails the check if a number differs or if it gives a number for a metric that
 is unavailable. A failed note is dropped and the report shows *narrative
 withheld: numbers didn't match data*. A missing or broken `analyst.json` never

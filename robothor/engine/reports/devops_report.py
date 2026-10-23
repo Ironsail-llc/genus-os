@@ -43,8 +43,8 @@ _UNIT_METRIC = {
     "commits": "commits",
     "review": "reviews_given",
     "reviews": "reviews_given",
-    "ticket": ("tickets_shipped", "tickets_resolved"),
-    "tickets": ("tickets_shipped", "tickets_resolved"),
+    "ticket": ("tickets_shipped", "tickets_resolved", "in_progress"),
+    "tickets": ("tickets_shipped", "tickets_resolved", "in_progress"),
 }
 TABLE_METRICS = (
     "tickets_shipped",
@@ -77,7 +77,11 @@ def _note_ok(note: str, member: dict[str, Any]) -> bool:
                 return False
             continue
         keys = _UNIT_METRIC[unit]
-        actual = [metrics.get(k) for k in ((keys,) if isinstance(keys, str) else keys)]
+        keys = (keys,) if isinstance(keys, str) else keys
+        # This week's value or one of the prior weeks shown in the trend.
+        trend = member.get("trend") or {}
+        actual = [metrics.get(k) for k in keys]
+        actual += [v for k in keys for v in (trend.get(k) or [])]
         if not any(isinstance(a, int | float) and float(a) == value for a in actual):
             return False
     return True
