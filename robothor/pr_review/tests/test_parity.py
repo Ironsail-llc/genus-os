@@ -474,10 +474,10 @@ async def test_an_on_demand_request_for_a_threadless_row_reports_via_the_digest(
     assert (await store.get(TENANT, REPO, 7)).source == "operator"
 
 
-async def test_an_on_demand_request_refuses_other_repositories():
+async def test_an_on_demand_request_refuses_what_github_cannot_show():
     store, github, chat, tasks = MemoryStore(), FakeGitHub(), FakeChat(), FakeTasks()
-    out = await _intake(store, github, chat, tasks).request("https://github.com/evil/x/pull/1")
-    assert "not in ROBOTHOR_PR_REVIEW_REPOS" in out["error"]
+    out = await _intake(store, github, chat, tasks).request("https://github.com/other/x/pull/1")
+    assert "not found" in out["error"]
     out = await _intake(store, github, chat, tasks).request("not a pr")
     assert "error" in out
     assert tasks.created == []
