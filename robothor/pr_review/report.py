@@ -92,10 +92,18 @@ def _task_pr(task: dict[str, Any]) -> str:
     return f"{found.group(1)}#{found.group(2)}".lower() if found else ""
 
 
+#: How many posted reviews the window lists; the rest are counted, not listed.
+REVIEW_LIST_LIMIT = 50
+
+
 def _window(
-    tasks: list[dict[str, Any]], messages: list[dict[str, Any]], since: datetime
+    tasks: list[dict[str, Any]],
+    messages: list[dict[str, Any]],
+    since: datetime,
+    titles: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     posted: dict[str, int] = {}
+    reviews: list[dict[str, Any]] = []
     latencies: list[float] = []
     failures = retries = 0
     for task in tasks:
@@ -109,16 +117,31 @@ def _window(
         verdict = _VERDICT_RE.match(resolution)
         if verdict:
             posted[verdict.group(1)] = posted.get(verdict.group(1), 0) + 1
+            pr = _task_pr(task)
+            reviews.append(
+                {
+                    "pr": pr,
+                    "title": (titles or {}).get(pr, ""),
+                    "verdict": verdict.group(1),
+                    "url": resolution[verdict.end() :].strip(),
+                    "at": resolved.isoformat(),
+                }
+            )
             start = _time(fields.get("requested_at")) or _time(task.get("createdAt"))
             if start is not None and start <= resolved:
                 latencies.append(_minutes(resolved - start))
         elif _FAILURE_RE.match(resolution):
             failures += 1
     replies = [str(m.get("outcome") or "") for m in messages]
+    reviews.sort(key=lambda rv: rv["at"], reverse=True)
     return {
         "since": since.isoformat(),
         "reviews_posted": sum(posted.values()),
         "posted": posted,
+        # Which pull requests, so "what did you review today?" is answerable
+        # from here on request — the per-review Telegram line is off by default.
+        "reviews": reviews[:REVIEW_LIST_LIMIT],
+        "reviews_not_listed": max(0, len(reviews) - REVIEW_LIST_LIMIT),
         "latency_minutes": {
             "median": round(statistics.median(latencies), 1) if latencies else None,
             "p90": _p90(latencies) if latencies else None,
@@ -316,7 +339,7 @@ async def status_report(
             "free_slots": max(0, cfg.workers - len(in_flight)),
             "workers": cfg.workers,
         },
-        "window": _window(tasks, messages, since),
+        "window": _window(tasks, messages, since, {r.key.lower(): r.title for r in rows}),
         "problems": {
             "stuck": stuck,
             "gave_up": gave_up,

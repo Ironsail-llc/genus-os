@@ -452,7 +452,10 @@ coding jobs in flight:
   message's time, the poll that saw a new head, or the operator's ask — to
   the moment the review was posted and its task resolved); failures and
   retries; how many requests were answered "No changes?" or "Want a
-  re-review?";
+  re-review?"; and `reviews`, each posted review newest first (pull request,
+  title, verdict, link, time), up to 50, with `reviews_not_listed` counting
+  the rest — so "what did you review today?" is answered on request instead
+  of by a Telegram line per review;
 - **problems** and **alerts** — a review in flight over an hour, a failure
   out of retries, a dropped request (a reviewed pull request with a newer
   head that was never reviewed and nothing queued for it), and a queued
