@@ -310,3 +310,63 @@ async def test_one_pr_shows_its_state_and_history():
 async def test_an_unknown_pr_says_so():
     report = await _report(MemoryStore(), pr=f"{REPO}#99")
     assert "not tracked" in report["pr"]["error"]
+
+
+async def test_window_lists_each_posted_review_newest_first_with_its_link():
+    store = MemoryStore()
+    await _row(store, 1, title="Fix the billing sync")
+    tasks = [
+        _task(
+            1,
+            created=NOW - timedelta(hours=3),
+            resolved=NOW - timedelta(hours=3),
+            resolution=f"REQUEST_CHANGES: https://github.com/{REPO}/pull/1#r1",
+        ),
+        _task(
+            1,
+            created=NOW - timedelta(hours=1),
+            resolved=NOW - timedelta(hours=1),
+            resolution=f"APPROVE: https://github.com/{REPO}/pull/1#r2",
+        ),
+        # A failure is not a posted review, and one outside the window is left out.
+        _task(2, created=NOW, resolved=NOW, resolution="failed: boom"),
+        _task(
+            3,
+            created=NOW - timedelta(days=3),
+            resolved=NOW - timedelta(days=3),
+            resolution="APPROVE: https://example.com/old",
+        ),
+    ]
+    reviews = (await _report(store, tasks))["window"]["reviews"]
+    assert reviews == [
+        {
+            "pr": f"{REPO}#1".lower(),
+            "title": "Fix the billing sync",
+            "verdict": "APPROVE",
+            "url": f"https://github.com/{REPO}/pull/1#r2",
+            "at": (NOW - timedelta(hours=1)).isoformat(),
+        },
+        {
+            "pr": f"{REPO}#1".lower(),
+            "title": "Fix the billing sync",
+            "verdict": "REQUEST_CHANGES",
+            "url": f"https://github.com/{REPO}/pull/1#r1",
+            "at": (NOW - timedelta(hours=3)).isoformat(),
+        },
+    ]
+
+
+async def test_window_review_list_is_capped_and_says_how_many_it_left_out():
+    tasks = [
+        _task(
+            n,
+            created=NOW - timedelta(minutes=n),
+            resolved=NOW - timedelta(minutes=n),
+            resolution=f"APPROVE: https://example.com/{n}",
+        )
+        for n in range(1, 61)
+    ]
+    window = (await _report(MemoryStore(), tasks))["window"]
+    assert len(window["reviews"]) == 50
+    assert window["reviews"][0]["url"] == "https://example.com/1"
+    assert window["reviews_not_listed"] == 10
