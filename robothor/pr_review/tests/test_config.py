@@ -58,3 +58,18 @@ def test_the_status_file_defaults_into_the_workspace_memory(monkeypatch, tmp_pat
     finally:
         monkeypatch.delenv("ROBOTHOR_WORKSPACE")
         reset_settings()
+
+
+def test_requires_ticket_only_where_there_are_prefixes_to_match():
+    from robothor.pr_review.config import ReviewerConfig
+
+    cfg = ReviewerConfig(
+        repos=("acme/widgets",),
+        require_ticket=True,
+        ticket_prefixes=("ABC",),
+        repo_ticket_prefixes=(("other/tools", "TOOL"),),
+    )
+    assert cfg.requires_ticket("Acme/Widgets")  # listed: unchanged
+    assert cfg.requires_ticket("other/tools")  # its own prefixes
+    assert not cfg.requires_ticket("other/gadgets")  # neither: nothing to match
+    assert not ReviewerConfig(repos=("acme/widgets",)).requires_ticket("acme/widgets")

@@ -30,9 +30,26 @@ cron */2  pr-review-run workflow ── count_only: queued? ──► pr_review_
 any time  pr_review_status (read-only) → in flight, queue order, latency, alerts
 ```
 
+**What it reviews.** Anything it is asked to review, in any repository its
+`GITHUB_TOKEN` can read: a pull request requesting
+`ROBOTHOR_PR_REVIEW_BOT_LOGIN`'s review, one the operator asks for with
+`pr_review_intake(pr=...)`, or one linked in a review Chat space.
+`ROBOTHOR_PR_REVIEW_REPOS` is not a limit on requests: it lists the
+repositories watched proactively (`ROBOTHOR_PR_REVIEW_WATCH_REPOS`) and their
+ticket prefixes. A requested pull request the token cannot read (404, no
+access) is logged as a warning and listed under `unreadable` in the intake
+result, never dropped silently. A row and its clone directory use the
+repository's casing as configured, or GitHub's own (`base.repo.full_name`)
+for one not listed — never how someone typed it.
+
 **Intake is deterministic.** `pr_review_intake` never calls a model. A
-top-level Chat message linking a pull request in an allowed repository claims
-it with a reaction and queues an initial review. A thread reply **from the
+top-level Chat message linking a pull request claims it with a reaction and
+queues an initial review when the link is to a listed repository, another
+repository of a listed repository's owner, or a pull request already tracked
+(requested on GitHub or by the operator). A link to anyone else's project — an
+upstream fix or a reference mentioned in passing — is a mention, not a request,
+and is ignored: a review posted there is never wanted. Bot messages and the
+reviewer's own messages are never requests. A thread reply **from the
 person who posted the link** is classified by keyword: "re-review", "ptal",
 "fixed", "pushed", "can you re-review?" and similar queue a re-review; an
 acknowledgement ("thanks", 👍) or a reviewer's status line ("#12: Approved",
@@ -216,6 +233,11 @@ directly. `owner` and `admin` keep everything. Migration 151 adds
 description or commit messages (trailers included), using the repository's
 prefix from `owner/repo:PREFIX` entries in `ROBOTHOR_PR_REVIEW_REPOS` or
 `_TICKET_PREFIXES` (bare `PREFIX` entries apply to every other repository).
+With `ROBOTHOR_PR_REVIEW_REQUIRE_TICKET` on, the blocking `[no-ticket]`
+finding applies to listed repositories and to any with an `owner/repo:PREFIX`
+entry of its own; a repository reviewed only because someone asked, with no
+prefix of its own, is not blocked for a missing ticket (a key matching the
+bare prefixes is still linked).
 It fetches the issue through the Jira integration (`jira_get_issue` with
 `include_text`, no model; `JIRA_BASE_URL`, `JIRA_USER_EMAIL`, `JIRA_API_TOKEN`)
 and puts its summary, status, description and acceptance criteria — redacted,
@@ -225,8 +247,8 @@ fails, the prompt says so and forbids inventing criteria.
 
 **Asking for a review.** Main opts into `pr_review_intake`: when the operator
 asks it to review a pull request it calls `pr_review_intake(pr="<url or
-owner/repo#N>")`, which queues that one pull request (configured repositories
-only) for the pr-reviewer and returns `requested.status`; calling it again
+owner/repo#N>")`, which queues that one pull request (any repository the
+token can read) for the pr-reviewer and returns `requested.status`; calling it again
 reports `requested.review_url` once the review is posted. Such a review has no
 Chat thread; its finalize result carries a Telegram digest line, which
 `pr_review_work` sends to `ROBOTHOR_TELEGRAM_CHAT_ID`. Main runs as `owner`
@@ -268,7 +290,7 @@ never left running.
 
    | Setting | What to set |
    |---|---|
-   | `ROBOTHOR_PR_REVIEW_REPOS` | `owner/repo,owner/other` — the repositories it may review; `owner/repo:PREFIX` also sets that repository's ticket prefix |
+   | `ROBOTHOR_PR_REVIEW_REPOS` | `owner/repo,owner/other` — the repositories it watches and their ticket prefixes (`owner/repo:PREFIX`); requested reviews are done in any repository the token can read |
    | `ROBOTHOR_PR_REVIEW_WATCH_REPOS` | `false` (default) reviews only pull requests posted in Chat or requesting the bot; `true` reviews every open pull request in the repos |
    | `ROBOTHOR_PR_REVIEW_CHAT_SPACE` | `spaces/…` to watch and announce in — comma-separated for several review channels, each watched the same way, every answer going back to the space the PR was posted in; empty for GitHub only |
    | `ROBOTHOR_PR_REVIEW_CHAT_SELF_USERS` | the `users/…` the gws CLI posts as, so its own messages are never requests |
