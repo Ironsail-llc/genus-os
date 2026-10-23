@@ -29,13 +29,21 @@ import logging
 import re
 from typing import TYPE_CHECKING, Any, Literal, Protocol
 
-from robothor.pr_review.checkout import ensure_checkout, merge_conflicts, read_at
+from robothor.pr_review.checkout import (
+    CheckoutError,
+    clone_lock,
+    ensure_checkout,
+    merge_conflicts,
+    read_at,
+)
 from robothor.pr_review.context import checks as check_list
 from robothor.pr_review.context import discussion as discussion_items
 from robothor.pr_review.context import linked_issues, pr_description, thread_replies
 from robothor.pr_review.intake import (
+    CHECKOUT_FAILED,
     MAX_ATTEMPTS,
     POST_RETRY_COOLDOWN,
+    START_FAILED,
     post_only,
     replies_pending,
 )
@@ -326,6 +334,51 @@ async def prepare(
     tenant_id: str,
     repo: str,
     number: int,
+    **kw: Any,
+) -> dict[str, Any]:
+    """Start the review job for a queued pull request (see :func:`_prepare`).
+
+    A prepare that fails before a job is bound — a fetch that could not lock a
+    ref, GitHub erroring, the job refusing to start — fails the row like any
+    review (``attempts + 1``, ``failed_at``), so the intake's retry picks it
+    up. Left ``queued`` with its task resolved, it sat until the stale expiry
+    and a request for it was refused as "already queued" (2026-10-13). A row
+    another prepare or finalize holds is never touched.
+    """
+    try:
+        result = await _prepare(cfg, store, tenant_id, repo, number, **kw)
+    except CheckoutError as exc:
+        result = {"error": f"{CHECKOUT_FAILED} {exc}"}
+    except Exception as exc:  # noqa: BLE001 - recorded on the row, retried by the intake
+        logger.warning("pr_review prepare %s#%s raised: %s", repo, number, exc)
+        result = {"error": f"prepare failed: {type(exc).__name__}: {exc}"}
+    if result.get("error"):
+        await _fail_unbound(store, tenant_id, repo, number, str(result["error"]))
+    return result
+
+
+async def _fail_unbound(
+    store: PrReviewStore, tenant_id: str, repo: str, number: int, reason: str
+) -> None:
+    from datetime import UTC, datetime
+
+    failed = await store.transition(
+        tenant_id, repo, number, from_statuses=("queued",), to_status="failed"
+    )
+    if failed is None:
+        return
+    failed.error = _redact(reason)[:_ERROR_MAX]
+    failed.attempts += 1
+    failed.failed_at = datetime.now(UTC)
+    await store.save(failed)
+
+
+async def _prepare(
+    cfg: ReviewerConfig,
+    store: PrReviewStore,
+    tenant_id: str,
+    repo: str,
+    number: int,
     *,
     github: GitHubPort,
     skill_text: str,
@@ -491,7 +544,20 @@ async def prepare(
         if current and current.status == "reviewing" and current.job_id:
             return _bound(current, current.queued_sha or head)
         return {"error": "another prepare holds this pull request; try again shortly"}
-    started = await start_job(start_args)
+    try:
+        # git worktree add writes into the shared clone: one writer at a time.
+        async with clone_lock(path):
+            started = await start_job(start_args)
+    except Exception:
+        await store.transition(
+            tenant_id,
+            row.repo,
+            number,
+            from_statuses=("reviewing",),
+            to_status=previous_status,
+            job_id="",
+        )
+        raise
     job_id = str(started.get("job_id") or "")
     if started.get("error") or not job_id:
         await store.transition(
@@ -502,7 +568,7 @@ async def prepare(
             to_status=previous_status,
             job_id="",
         )
-        return {"error": f"claude_code_start failed: {started.get('error') or 'no job id'}"}
+        return {"error": f"{START_FAILED} {started.get('error') or 'no job id'}"}
     claimed.job_id = job_id
     claimed.head_sha = head
     claimed.queued_sha = head

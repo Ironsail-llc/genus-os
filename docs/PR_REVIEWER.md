@@ -11,19 +11,23 @@ off until an instance configures it.
 ```
 cron */2  pr-review-intake workflow ── pr_review_intake ──┐  (no model, one run
           GitHub: open PRs in configured repos            │   per tenant: lock)
-                  + PRs in them requesting the bot        ├─► one CRM task per PR head
-          Chat:   PR links (claim 👀), "ptal" replies     │   tag pr-review → pr-reviewer
-                                                          ┘
-cron */2  pr-review-run workflow ── count_only: queued? ──► pr-reviewer agent (cheap model)
+                  + PRs in them requesting the bot        ├─► one CRM task per PR head,
+          Chat:   PR links (claim 👀), "ptal" replies,    │   in request order
+                  the links reposted                      ┘   tag pr-review → pr-reviewer
+cron */2  pr-review-run workflow ── count_only: queued? ──► pr_review_work (no model)
+          up to ROBOTHOR_PR_REVIEW_WORKERS (3) tasks at once, oldest first; each:
             pr_review_prepare  → clone fetched to the head, review prompt, rules from
                                  the BASE branch; starts the read-only review job
-                                 (mode=review) itself and binds its job_id
-            claude_code_wait
+                                 (mode=review, as the pr-reviewer agent) and binds it
+            wait for the job
             pr_review_finalize → only the bound job, once: validate → redact →
                                  recompute verdict → post → reply on previous
                                  threads → resolve own threads on APPROVE →
-                                 announce in Chat → record state
-            resolve_task       ← evidence: the review URL
+                                 announce in Chat → record state → Telegram digest
+            resolve the task   ← evidence: <VERDICT>: <review URL>
+          the queue is re-read every 30 s, so a new task starts as a slot frees
+
+any time  pr_review_status (read-only) → in flight, queue order, latency, alerts
 ```
 
 **What it reviews.** Anything it is asked to review, in any repository its
@@ -50,9 +54,15 @@ person who posted the link** is classified by keyword: "re-review", "ptal",
 "fixed", "pushed", "can you re-review?" and similar queue a re-review; an
 acknowledgement ("thanks", 👍) or a reviewer's status line ("#12: Approved",
 "#12: Comments/change request", "changes requested" — including another
-review bot's) does nothing; anything negated or unclear ("not fixed yet",
-"will push later", "is this fixed?") is handed to the agent as a task to
-decide. In a thread that posted several pull requests, a reply that names some
+review bot's) does nothing; a message of nothing but the pull request's
+links (or `#12`, separated by commas, semicolons or "and") is a re-review
+request — reposting the links is how teams ask for another look. Only
+pull-request links and numbers are set aside: whatever else the message says
+(`#12 👍`, `#12?`, `#12 approved`, another URL) is read like any reply.
+Anything negated or unclear ("not fixed yet", "will push later", "is this
+fixed?") gets one question in its thread — `#12, #13: Want a re-review? Reply
+"re-review".`, naming every pull request it covers — and files nothing. No
+request is dropped without a word. In a thread that posted several pull requests, a reply that names some
 of them ("12 is ready for re-review", "#12", a link) re-reviews only those.
 A **new top-level message** linking a pull request that is already tracked
 ("re-review <link>", or the link alone, from anyone) is a re-review request
@@ -67,8 +77,10 @@ restarts.
 
 **One task per head.** A new head SHA, or a re-review request, files at most
 one CRM task, deduplicated by repo + number + SHA, up to
-`ROBOTHOR_PR_REVIEW_MAX_CONCURRENT` open at once. A request that arrives
-while a review runs waits for it. A re-review covers only what changed since
+`ROBOTHOR_PR_REVIEW_MAX_CONCURRENT` (6) open at once, in the order the
+requests were made (`requested_at`: the Chat message's own time, or when a
+poll saw the new head; touching a row never moves it back). A request that
+arrives while a review runs waits for it. A re-review covers only what changed since
 the last reviewed SHA, unless history was rewritten (force-push, rebase), in
 which case it is a full review again. Lockfile-only changes (matched by file
 name or suffix: `yarn.lock`, `*.snap`, `*.min.js`) and dependency-bot pull
@@ -184,6 +196,23 @@ notes (real tools, output fields, the verdict rule) and the repository's own
 **base** branch (`origin/<base>`), when present — a pull request cannot
 rewrite the rules it is reviewed against.
 
+**Three reviews at once, no model in the loop.** `pr_review_work` runs the
+queued tasks — up to `ROBOTHOR_PR_REVIEW_WORKERS` (3) at a time, oldest
+first — through the steps the pr-reviewer agent's brief lists, unchanged:
+mark the task in progress, `pr_review_prepare`, wait for the job,
+`pr_review_finalize`, resolve the task with `<VERDICT>: <review URL>` or
+`<status>: <error>` (a `skip` with its reason, a failed prepare with
+`Prepare failed: …`). It re-reads the queue every 30 s while a review is in
+flight, so a request filed mid-run starts as soon as a slot frees; it takes
+no new task after 45 minutes and returns inside its 3300 s workflow step, and
+the next tick carries on. One run per tenant at a time. Each review is a
+Claude Code job, so `ROBOTHOR_CODING_MAX_CONCURRENT` must be at least the
+worker count (one more leaves a slot for other coding work), or the extra
+reviews wait as queued jobs. Review jobs start under the pr-reviewer agent's
+id (`ROBOTHOR_PR_REVIEW_AGENT`): the engine hands a job `GITHUB_TOKEN` only
+for an agent whose own manifest names it, and the workflow's id names
+nothing. That is why the agent stays installed although nothing wakes it.
+
 **Who may call what.** The pr-reviewer agent's `tools_allowed` is eleven
 tools — its task queue (`list_my_tasks`, `get_task`, `update_task`,
 `resolve_task`), `claude_code_status/_wait/_cancel`,
@@ -196,7 +225,9 @@ callers are denied `github_create_review`, `github_reply_review_comment`,
 `pr_review_*` tools; `service` — the role every unattended run dispatches as,
 including both workflows and the pr-reviewer agent step — is denied only the
 three `github_*` review-write tools, because finalize calls their handlers
-directly. `owner` and `admin` keep everything.
+directly. `owner` and `admin` keep everything. Migration 151 adds
+`pr_review_work` and `pr_review_status` to the `user`/`member` denies;
+`service` (the run workflow, main's heartbeat) keeps both.
 
 **The linked ticket.** prepare finds a ticket key in the title, branch,
 description or commit messages (trailers included), using the repository's
@@ -219,9 +250,9 @@ asks it to review a pull request it calls `pr_review_intake(pr="<url or
 owner/repo#N>")`, which queues that one pull request (any repository the
 token can read) for the pr-reviewer and returns `requested.status`; calling it again
 reports `requested.review_url` once the review is posted. Such a review has no
-Chat thread; its finalize result carries a Telegram digest line, which reaches
-Telegram when the pr-reviewer is installed with `delivery_mode=announce`. Main
-runs as `owner` on Telegram, which migration 146 leaves allowed.
+Chat thread; its finalize result carries a Telegram digest line, which
+`pr_review_work` sends to `ROBOTHOR_TELEGRAM_CHAT_ID`. Main runs as `owner`
+on Telegram, which migration 146 leaves allowed.
 
 **Stopping reviews of one pull request.** `pr_review_intake(pr="<url or
 owner/repo#N>", action="skip")` closes its row, clears any queued trigger and
@@ -233,7 +264,8 @@ not killed (`claude_code_cancel` stops it), but its result is never posted. A
 
 **Timeouts.** `claude_code_wait` enforces its own wait (up to 1800 s), so the
 registry gives it 1830 s; `pr_review_prepare` and `pr_review_finalize` get the
-600 s long-running floor. A git clone or fetch that is cancelled is killed,
+600 s long-running floor; `pr_review_work` returns by its own 54-minute
+deadline, so the registry gives it that plus 30 s. A git clone or fetch that is cancelled is killed,
 never left running.
 
 ## Enabling it on an instance
@@ -243,11 +275,12 @@ never left running.
    vault for the account the reviews should come from; it needs read access
    to the repositories and permission to review pull requests.
 2. **Install the agent.** `genus agent install pr-reviewer` (catalog
-   department `engineering`). For a Telegram digest of each review, install it
-   with `delivery_mode=announce` and set `ROBOTHOR_PR_REVIEW_TELEGRAM_DIGEST=true`.
-   The manifest's `delivery.line_filter` passes only the digest lines
-   (`PR review …`); a run with no digest sends nothing, whatever the model
-   writes.
+   department `engineering`). Nothing wakes it — `pr_review_work` runs the
+   reviews — but the review jobs start under its id and its manifest names
+   `GITHUB_TOKEN`, and the review tasks are assigned to it. For a Telegram
+   digest of each review set `ROBOTHOR_PR_REVIEW_TELEGRAM_DIGEST=true`:
+   `pr_review_work` sends each `PR review …` line to
+   `ROBOTHOR_TELEGRAM_CHAT_ID` as the review is posted.
 3. **Install the workflows.** Copy `templates/workflows/pr-review-intake.yaml`
    and `templates/workflows/pr-review-run.yaml` into the instance's
    `docs/workflows/`, and exclude them from git locally (append both paths to
@@ -265,14 +298,23 @@ never left running.
    | `ROBOTHOR_PR_REVIEW_REQUIRE_TICKET` / `_TICKET_PREFIXES` | the optional ticket rule; prefixes as `owner/repo:PREFIX` or bare `PREFIX` |
    | `ROBOTHOR_PR_REVIEW_GUIDELINES_PATH` | the team's own review guidelines (see [parity](#parity-with-an-existing-review-bot)) |
    | `ROBOTHOR_PR_REVIEW_MODEL` | `opus` (default): the CLI alias, which each Claude Code update points at the newest Opus. Never pin a dated model id here; the model actually used is named in every review footer |
+   | `ROBOTHOR_PR_REVIEW_WORKERS` | reviews run at once (3) |
+   | `ROBOTHOR_PR_REVIEW_MAX_CONCURRENT` | review tasks kept open (6): more than the workers, so the next review is ready the moment one frees |
+   | `ROBOTHOR_CODING_MAX_CONCURRENT` | Claude Code jobs per tenant (2 by default): set it to at least the worker count, one more to keep a slot for other coding work (4 for 3 workers) |
 
    [Settings](reference/configuration.md#pr_review) lists every
    `ROBOTHOR_PR_REVIEW_*` value. If `ROBOTHOR_CODING_REPO_ROOTS` is set, it
    must include the clone root (`ROBOTHOR_PR_REVIEW_CLONE_ROOT`, default
    `<workspace>/.genus/pr-review/repos`).
 5. **Apply migrations 145** (`pr_reviews`, `pr_review_messages`,
-   `pr_review_cursors`), **146** (tool permissions) **and 147** (per-job
-   Claude Code limits on `coding_jobs`) and restart the engine.
+   `pr_review_cursors`), **146** (tool permissions), **147** (per-job
+   Claude Code limits on `coding_jobs`), **150** (`requested_at`, the queue's
+   order) **and 151** (permissions for `pr_review_work` and
+   `pr_review_status`) and restart the engine.
+6. **Let main watch it.** Add `pr_review_status` to main's `tools_opt_in`
+   beside `pr_review_intake`, so it can answer "how are reviews going?" and
+   its heartbeat can raise the report's `alerts` (see
+   [Monitoring](#monitoring)).
 
 **Cutover from another review bot.** Never run the suite on the same
 repositories as another automated reviewer: both would claim the same links
@@ -340,12 +382,29 @@ retries are spent.
   `chat_errors`, `open_tasks`, `queued_tasks`, `resumable_tasks`, `errors`) in
   each workflow run, or `{"skipped": "locked"}` when another intake run holds
   the tenant's lock.
-- A review whose agent run died after prepare (engine restart, run timeout)
-  is **resumable** once its bound job has been finished for 10 minutes with
-  nobody finalizing it: the intake puts its task back to `TODO` and counts it
-  in `queued_tasks`, so the run workflow wakes the agent, and
-  `pr_review_prepare` hands that run the job already bound. The agent also
-  resumes its own `IN_PROGRESS` review tasks before taking new ones.
+- `pr_review_work` returns `processed`, `posted`, `unfinished`, the
+  `digest` lines and per-task `outcomes` (`pr`, `status`, `verdict`,
+  `review_url`, `resolution`) in each run's step output, or
+  `{"skipped": "running"}` while another run holds the tenant. It rewrites
+  `ROBOTHOR_PR_REVIEW_STATUS_FILE` (default
+  `<workspace>/brain/memory/pr-reviewer-status.md`) after each run that did
+  something.
+- A review whose run died after prepare (engine restart, run timeout) is
+  picked up again: `pr_review_work` takes `IN_PROGRESS` review tasks as well
+  as new ones, and `pr_review_prepare` hands it the job already bound, so a
+  restart never pays for a second review. The intake counts every review in
+  flight in `queued_tasks` (and `in_flight_tasks`), so the next tick's worker
+  resumes it at once; a run still attending it makes that one return
+  `skipped: running`. If the task was lost, the intake finds the bound job
+  finished for 10 minutes with nobody finalizing it and puts the task back
+  to `TODO`.
+- A job that keeps answering "still running" at once — this engine holds no
+  live runner for it (HA, a failed resume, an orphan row) — is polled every
+  30 s, not in a loop, and after 5 minutes its task is handed back
+  `IN_PROGRESS` (outcome `unfinished`) for the orphan path.
+- A task the CRM refuses to start or resolve is reported in the run's
+  `task_errors` and that outcome's `error`; the review itself is never
+  posted twice (finalize returns `already_posted`).
 - `pr_reviews` holds one row per pull request: `status` is `pending`,
   `queued`, `reviewing`, `posting`, `approved`, `changes_requested`,
   `commented`, `failed`, `skipped` or `closed`; `job_id` is the review job
@@ -355,6 +414,13 @@ retries are spent.
   at once on a new head, and on the same head after
   `ROBOTHOR_PR_REVIEW_RETRY_COOLDOWN_MINUTES` (default 60), at most 3 attempts
   per head; the author can always reply "re-review" in the Chat thread.
+  **A prepare that fails before its job starts** (a fetch error, GitHub
+  erroring, the job refusing to start) fails the row the same way, so it is
+  never left `queued` with no task; a checkout or job-start failure is
+  transient and retried after 5 minutes. Git work on one repository's clone
+  (fetch, merge check, the job's worktree) runs one review at a time, so two
+  reviews of one repository never race on its refs; different repositories
+  run in parallel.
   **A posting failure never pays for a second review:** when the review was
   written and only the post failed, the intake retries after 5 minutes (not
   the full cooldown, since nothing is re-reviewed), the retry's
@@ -371,3 +437,35 @@ retries are spent.
   `transient: true`. A
   failure on a pull request with no Chat thread is reported in the Telegram
   digest when `ROBOTHOR_PR_REVIEW_TELEGRAM_DIGEST` is on.
+
+## Monitoring
+
+`pr_review_status` is the reviewer's report, read-only and with no model. It
+answers from `pr_reviews`, the `pr-review` tasks, `pr_review_messages` and the
+coding jobs in flight:
+
+- **now** — each review in flight (how long, its job's status), the queue in
+  the order it will run (filed tasks, then requests still waiting for one),
+  and free worker slots;
+- **window** (`since_hours`, 24 by default) — reviews posted by verdict; the
+  time from request to answer, median and p90 (from the request — the Chat
+  message's time, the poll that saw a new head, or the operator's ask — to
+  the moment the review was posted and its task resolved); failures and
+  retries; how many requests were answered "No changes?" or "Want a
+  re-review?";
+- **problems** and **alerts** — a review in flight over an hour, a failure
+  out of retries, a dropped request (a reviewed pull request with a newer
+  head that was never reviewed and nothing queued for it), and a queued
+  request older than 30 minutes. `alerts` is one line per problem and empty
+  when all is well. Each dropped-request candidate is checked on GitHub (up
+  to 20 per call): one that is merged or closed is left out and its row
+  closed, so it is never checked again; one that could not be checked is
+  listed with `verified: false` and raises no alert;
+- **`pr=`** — one pull request's state, links and review history.
+
+Main opts into it: the operator can ask "how are reviews going?", "where is
+#123?" or "give me the week's review report" (`since_hours=168`), and main can
+re-queue what it finds with `pr_review_intake(pr=...)`. On an instance that
+wants it watched, main's heartbeat calls `pr_review_status` and says something
+only when `alerts` is not empty — the decision-only practice — plus, if the
+instance's `HEARTBEAT.md` asks for it, a short daily summary.

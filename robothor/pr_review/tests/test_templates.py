@@ -122,14 +122,20 @@ def test_intake_workflow_is_one_tool_step():
     assert step.type == WorkflowStepType.TOOL and step.tool_name == "pr_review_intake"
 
 
-def test_run_workflow_wakes_the_agent_only_when_queued():
+def test_run_workflow_runs_the_worker_only_when_queued():
+    from robothor.engine.tool_timeouts import resolve_tool_timeout
     from robothor.engine.workflow import _eval_condition, _render_template
 
     wf = parse_workflow(yaml.safe_load((WORKFLOWS / "pr-review-run.yaml").read_text()))
     queue, cond, review, done = wf.steps
     # Counting only: the run workflow never dispatches; only the intake does.
     assert queue.tool_name == "pr_review_intake" and queue.tool_args == {"count_only": True}
-    assert review.agent_id == "pr-reviewer"
+    # The deterministic worker, not the agent: several reviews at once, no model.
+    assert review.type == WorkflowStepType.TOOL and review.tool_name == "pr_review_work"
+    assert review.tool_timeout_seconds == 3300
+    # The worker returns by its own deadline, inside the step and the workflow.
+    assert resolve_tool_timeout("pr_review_work", 120) <= review.tool_timeout_seconds
+    assert review.tool_timeout_seconds < wf.timeout_seconds
 
     def branch(tool_output: dict) -> str:
         ctx = {"steps": {"queue": {"tool_output": tool_output}}}
