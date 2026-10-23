@@ -188,13 +188,20 @@ valkey:
   # at the chart's own `cache` Secret, so the server and the Python clients read
   # the identical ROBOTHOR_REDIS_PASSWORD and cannot drift on rotation.
   #
-  # INVARIANT: this must equal `{{ include "genus-os.fullname" . }}-cache`.
-  # With releaseName `genus-os` that is `genus-os-cache`. If you change
-  # releaseName, nameOverride or fullnameOverride, update this too — the
-  # subchart cannot call the parent's fullname helper.
+  # The subchart runs `tpl` over this field, so it is DERIVED rather than
+  # written out: the expression below reproduces genus-os.fullname using
+  # .Release.Name, which the subchart shares with the parent. A literal would
+  # only be correct for one release name — under any other the chart creates
+  # `{fullname}-cache` while the pod mounts the literal, and the pod sits in
+  # CreateContainerConfigError with nothing failing in lint or unittest.
+  #
+  # templates/validate.yaml fails the render if this ever stops matching the
+  # parent's fullname (setting nameOverride or fullnameOverride breaks it).
   auth:
     enabled: true
-    usersExistingSecret: genus-os-cache
+    usersExistingSecret: >-
+      {{ if contains "genus-os" .Release.Name }}{{ .Release.Name }}{{ else
+      }}{{ .Release.Name }}-genus-os{{ end }}-cache
     aclUsers:
       default:
         permissions: "~* &* +@all"
@@ -247,9 +254,21 @@ valkey:
       cpu: 100m
       memory: 128Mi
 
-  # Export Valkey metrics for scraping.
+  # OFF by default, deliberately. The exporter sidecar listens on 9121, but
+  # `networkPolicy.enabled: true` renders default-deny ingress and the only rule
+  # for these pods admits the cache port from the Python services — nothing
+  # admits 9121. Enabled without a matching rule it costs a container and
+  # delivers no metrics.
+  #
+  # To turn it on: add an ingress rule admitting 9121 from whatever scrapes this
+  # deployment (its namespace and pod labels are deployment-specific, so they do
+  # not belong in this chart), then set metrics.enabled here. Worth doing —
+  # `used_memory / maxmemory` is the signal that matters, because `noeviction`
+  # means a full cache refuses event-bus writes rather than evicting.
+  #
+  # Resources and securityContext below are kept ready for that.
   metrics:
-    enabled: true
+    enabled: false
     exporter:
       # Unset, the sidecar has no CPU request and no memory limit, which
       # kube-linter rejects (unset-cpu-requirements/unset-memory-requirements).
