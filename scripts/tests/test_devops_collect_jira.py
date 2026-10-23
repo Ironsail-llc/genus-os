@@ -101,3 +101,31 @@ def test_main_writes_json_and_exits_nonzero_on_error(tmp_path, monkeypatch):
     data = json.loads((tmp_path / "2026-05-11" / "jira.json").read_text())
     assert data["errors"]
     assert data["period"]["week_start"] == "2026-05-11"
+
+
+@pytest.mark.asyncio
+async def test_done_statuses_count_as_delivered_and_leave_in_progress():
+    """A workflow whose 'done' is a status (e.g. Deployed) rather than a resolution."""
+    mod = _load()
+    fake = FakeSearch({"resolved": [_issue(1)]})
+    await mod.collect_jira(
+        ["ENG"], "2026-05-11", "2026-05-18", fake, done_statuses=["Deployed", "Shipped"]
+    )
+    resolved_jql = next(j for j in fake.jqls if "resolved >=" in j)
+    assert 'status CHANGED TO ("Deployed", "Shipped") DURING ("2026-05-11", "2026-05-18")' in (
+        resolved_jql
+    )
+    # resolved later after being deployed in an earlier week is not counted twice
+    assert 'NOT status WAS IN ("Deployed", "Shipped") BEFORE "2026-05-11"' in resolved_jql
+    in_progress_jql = next(j for j in fake.jqls if "statusCategory" in j)
+    assert 'status NOT IN ("Deployed", "Shipped")' in in_progress_jql
+    open_jql = next(j for j in fake.jqls if "resolution = Unresolved" in j and "updated" not in j)
+    assert 'status NOT IN ("Deployed", "Shipped")' in open_jql
+
+
+@pytest.mark.asyncio
+async def test_without_done_statuses_queries_are_resolution_only():
+    mod = _load()
+    fake = FakeSearch({})
+    await mod.collect_jira(["ENG"], "2026-05-11", "2026-05-18", fake)
+    assert not any("CHANGED TO" in j or "NOT IN" in j for j in fake.jqls)

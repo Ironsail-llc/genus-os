@@ -14,6 +14,7 @@ and ``usage.json`` (:mod:`claude_usage_hr`) — plus up to three earlier
 
 from __future__ import annotations
 
+import re
 from statistics import median
 from typing import TYPE_CHECKING, Any
 
@@ -24,6 +25,7 @@ if TYPE_CHECKING:
 #: it depends on, as ("github"|"jira", metric) pairs.
 METRIC_SOURCES: dict[str, tuple[tuple[str, str], ...]] = {
     "tickets_resolved": (("jira", "resolved"),),
+    "tickets_shipped": (("github", "prs"),),
     "in_progress": (("jira", "in_progress"),),
     "prs_merged": (("github", "prs"),),
     "commits": (("github", "commits"),),
@@ -87,6 +89,8 @@ def _blank() -> dict[str, Any]:
     return {
         "tickets_resolved": 0,
         "tickets_by_type": {},
+        "tickets_shipped": 0,
+        "ticket_keys": set(),
         "in_progress": 0,
         "prs_merged": 0,
         "commits": 0,
@@ -106,8 +110,10 @@ def _blank() -> dict[str, Any]:
 class _Tally:
     """Per-member counters plus everything that is not a roster member's."""
 
-    def __init__(self, team: Team) -> None:
+    def __init__(self, team: Team, project_keys: list[str] | None = None) -> None:
         self.team = team
+        keys = "|".join(re.escape(k) for k in project_keys or [])
+        self.ticket_re = re.compile(rf"\b(?:{keys})-\d+\b") if keys else None
         self.acc: dict[str, dict[str, Any]] = {m.id: _blank() for m in team.active_members}
         self.outside: dict[tuple[str, str], dict[str, Any]] = {}
         self.bots: dict[str, dict[str, int]] = {}
@@ -147,6 +153,9 @@ class _Tally:
                     a["prs_merged"] += 1
                     a["lines_added"] += pr.get("lines_added") or 0
                     a["lines_deleted"] += pr.get("lines_deleted") or 0
+                    if self.ticket_re is not None:
+                        a["ticket_keys"].update(self.ticket_re.findall(pr.get("title") or ""))
+                        a["tickets_shipped"] = len(a["ticket_keys"])
                 reviewers = pr.get("reviewers")
                 if reviewers is not None and not self.team.is_bot(author):
                     human = [r for r in reviewers if r != author and not self.team.is_bot(r)]
@@ -241,7 +250,7 @@ def aggregate_people(
     those weeks' values in the same order.
     """
     unavailable = _unavailable_sources(github, jira)
-    tally = _Tally(team)
+    tally = _Tally(team, list(((jira or {}).get("projects") or {}).keys()))
     tally.add_github(github)
     tally.add_jira(jira)
     acc, outside, bots = tally.acc, tally.outside, tally.bots

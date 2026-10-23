@@ -194,3 +194,12 @@ class TestRender:
         ctx = build_report_context(people, _analyst())
         alice = ctx["role_groups"][0]["members"][0]
         assert alice["arrows"]["prs_merged"] == "up"
+
+
+def test_ticket_claim_may_match_shipped_or_jira_closed():
+    from robothor.engine.reports.devops_report import _note_ok
+
+    member = {"metrics": {"tickets_resolved": 2, "tickets_shipped": 5}}
+    assert _note_ok("shipped 5 tickets", member)
+    assert _note_ok("closed 2 tickets in JIRA", member)
+    assert not _note_ok("shipped 7 tickets", member)

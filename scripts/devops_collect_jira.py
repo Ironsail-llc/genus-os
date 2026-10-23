@@ -7,6 +7,10 @@ cap), issues currently in progress, the open-backlog size, and the oldest
 stale tickets. Same week as the GitHub collector: the previous ISO week in
 America/New_York, or ``--week-start YYYY-MM-DD``.
 
+Delivered = resolved in the week, or moved into one of
+``DEVOPS_JIRA_DONE_STATUSES`` (comma-separated, e.g. a "Deployed" column on a
+board that leaves shipped issues unresolved) in the week.
+
 Projects: ``DEVOPS_JIRA_PROJECTS`` (comma-separated), else
 ``brain/memory/devops-config.json`` → ``jira.active_projects``.
 
@@ -84,9 +88,32 @@ def _slim(i: dict) -> dict:
     }
 
 
-async def collect_jira(projects: list[str], start: str, end: str, search=None) -> dict:
+def _quoted(names: list[str]) -> str:
+    return ", ".join(f'"{n}"' for n in names)
+
+
+async def collect_jira(
+    projects: list[str],
+    start: str,
+    end: str,
+    search=None,
+    *,
+    done_statuses: list[str] | None = None,
+) -> dict:
+    """``done_statuses``: statuses that mean delivered even while the issue is
+    unresolved (a board whose last column is e.g. "Deployed"). Entering one in
+    the week counts as delivered, and such issues are not "in progress"."""
     search = search or _jira_search
     data: dict[str, Any] = {"projects": {}, "errors": []}
+    done = _quoted(done_statuses) if done_statuses else ""
+    delivered = f'resolved >= "{start}" AND resolved < "{end}"'
+    not_done = ""
+    if done:
+        delivered = (
+            f'(({delivered} AND NOT status WAS IN ({done}) BEFORE "{start}") '
+            f'OR status CHANGED TO ({done}) DURING ("{start}", "{end}"))'
+        )
+        not_done = f" AND status NOT IN ({done})"
 
     for proj in projects:
         pd: dict[str, Any] = {
@@ -98,14 +125,16 @@ async def collect_jira(projects: list[str], start: str, end: str, search=None) -
         }
         queries = {
             "resolved": (
-                f'project = "{proj}" AND resolved >= "{start}" AND resolved < "{end}" '
-                "ORDER BY resolved DESC",
+                f'project = "{proj}" AND {delivered} ORDER BY updated DESC',
                 None,
             ),
-            "in_progress": (f"project = \"{proj}\" AND statusCategory = 'In Progress'", None),
-            "open": (f'project = "{proj}" AND resolution = Unresolved', None),
+            "in_progress": (
+                f"project = \"{proj}\" AND statusCategory = 'In Progress'{not_done}",
+                None,
+            ),
+            "open": (f'project = "{proj}" AND resolution = Unresolved{not_done}', None),
             "stale": (
-                f'project = "{proj}" AND resolution = Unresolved AND updated <= -14d '
+                f'project = "{proj}" AND resolution = Unresolved{not_done} AND updated <= -14d '
                 "ORDER BY updated ASC",
                 STALE_LIST,
             ),
@@ -140,7 +169,13 @@ def main(argv: list[str] | None = None) -> int:
     projects = load_projects()
     if projects:
         data = asyncio.run(
-            collect_jira(projects, period["week_start"], end.strftime("%Y-%m-%d"), _jira_search)
+            collect_jira(
+                projects,
+                period["week_start"],
+                end.strftime("%Y-%m-%d"),
+                _jira_search,
+                done_statuses=env_list("DEVOPS_JIRA_DONE_STATUSES"),
+            )
         )
     else:
         data = {

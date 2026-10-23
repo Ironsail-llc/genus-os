@@ -36,6 +36,7 @@ with a private `/tmp`, so files there could not be inspected after a run.
 | `DEVOPS_RUNS_DIR` | Root of the per-week run directories (see above) |
 | `DEVOPS_GITHUB_REPOS` | Comma-separated `owner/repo` list |
 | `DEVOPS_JIRA_PROJECTS` | Comma-separated JIRA project keys |
+| `DEVOPS_JIRA_DONE_STATUSES` | Optional. Statuses that mean delivered while the issue stays unresolved (e.g. a final "Deployed" column). Entering one in the week counts as closed; such issues are not "in progress" or backlog |
 | `DEVOPS_USAGE_REPORT_SENDERS` | Comma-separated sender addresses of the HR usage email |
 | `DEVOPS_USAGE_LLM_MODEL` | Optional. A model used once when the usage PDF cannot be parsed deterministically |
 | `DEVOPS_REPORT_RECIPIENTS` | Comma-separated email addresses. When set, used instead of the `devops_report_recipients` memory block |
@@ -78,7 +79,8 @@ a member id repeats. Other handles are handled like this:
 
 | Metric | Source and rule |
 |---|---|
-| Tickets resolved | JIRA issues resolved in the week, by assignee, split by issue type. All pages are read. |
+| Tickets shipped | Distinct ticket keys (of the configured JIRA projects) in the titles of the person's PRs merged in the week. Credits the developer even when the JIRA assignee has moved on to QA or a PM. |
+| Tickets closed in JIRA | JIRA issues resolved (or moved into a `DEVOPS_JIRA_DONE_STATUSES` status) in the week, by current assignee, split by issue type. All pages are read. |
 | PRs merged | PRs merged in the week into any base branch, by author |
 | Lines +/− | Line changes from each merged PR's files. Lockfiles, generated, vendored and minified files are left out (`EXCLUDED_PATH_GLOBS` in `robothor/engine/reports/devops_github.py`). |
 | Commits | Non-merge commits on the default branch in the week |
@@ -157,8 +159,11 @@ blocks the report.
   email strings, `{"email": ...}` entries, or `{"name", "person_id"}` entries,
   which are looked up in the CRM. The script exits 1 if any recipient cannot be
   resolved. The recipients that were resolved still get the report.
-- **Telegram.** `scripts/devops_send_telegram.py` posts a digest of the team
-  totals and the data-quality flags.
+- **Telegram.** The shipped workflow does not post to Telegram: the
+  operator's chat is a conversation with the main agent, which reads
+  `$DEVOPS_RUNS_DIR/latest/report.json` and mentions what matters in its next
+  scheduled update. `scripts/devops_send_telegram.py` remains for instances
+  that want a digest step; it posts the team totals and the data-quality flags.
 
 ## Step status
 

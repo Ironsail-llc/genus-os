@@ -267,3 +267,28 @@ class TestTrend:
 def test_team_totals(key):
     out = aggregate_people(_team(), _github(), _jira(), _usage())
     assert out["team"][key] == sum(m["metrics"][key] or 0 for m in out["members"])
+
+
+class TestTicketsShipped:
+    """Tickets a person shipped = distinct ticket keys in their merged PR titles.
+
+    JIRA assignee often moves to QA/PM before an issue closes, so the JIRA
+    count alone under-credits the developer who did the work.
+    """
+
+    def test_distinct_project_keys_in_merged_pr_titles(self):
+        gh = _github()
+        prs = gh["repos"][REPO]["merged_prs"]
+        prs[0]["title"] = "feat(ENG-7, ENG-8): two tickets"
+        prs[1]["title"] = "fix(ENG-7): same ticket again"
+        prs[4]["title"] = "OTHER-1 not a tracked project"
+        out = aggregate_people(_team(), gh, _jira(), _usage())
+        assert _member(out, "alice")["metrics"]["tickets_shipped"] == 2
+        assert _member(out, "bob")["metrics"]["tickets_shipped"] == 0
+        assert out["team"]["tickets_shipped"] == 2
+
+    def test_unavailable_when_github_prs_unavailable(self):
+        gh = _github()
+        gh["repos"][REPO]["unavailable"] = {"prs": "HTTP 500"}
+        out = aggregate_people(_team(), gh, _jira(), _usage())
+        assert _member(out, "alice")["metrics"]["tickets_shipped"] is None

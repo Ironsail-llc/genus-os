@@ -79,7 +79,7 @@
     {% for label, value in [
       ("PRs merged", team.prs_merged),
       ("Commits", team.commits),
-      ("Tickets resolved", team.tickets_resolved),
+      ("Tickets shipped", team.tickets_shipped),
       ("Reviews given", team.reviews_given),
       ("Merged w/o review", team.merged_without_review),
       ("Stale PRs", team.stale_prs),
@@ -113,7 +113,7 @@
   <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;font-size:12px;">
     <tr style="background:#f4f5f7;">
       <th align="left" style="padding:6px;border-bottom:2px solid #dfe1e6;">Name</th>
-      <th align="right" style="padding:6px;border-bottom:2px solid #dfe1e6;">Tickets</th>
+      <th align="right" style="padding:6px;border-bottom:2px solid #dfe1e6;">Tickets shipped</th>
       <th align="right" style="padding:6px;border-bottom:2px solid #dfe1e6;">PRs</th>
       <th align="right" style="padding:6px;border-bottom:2px solid #dfe1e6;">Commits</th>
       <th align="right" style="padding:6px;border-bottom:2px solid #dfe1e6;">Lines +/&minus;</th>
@@ -125,7 +125,7 @@
     {% for m in g.members %}{% set x = m.metrics %}
     <tr>
       <td style="padding:6px;border-bottom:1px solid #f4f5f7;" valign="top"><strong>{{ m.name }}</strong>{% if m.no_activity %}<br><span style="color:#de350b;font-size:10px;">no activity</span>{% endif %}</td>
-      <td align="right" style="padding:6px;border-bottom:1px solid #f4f5f7;" valign="top">{{ num(x.tickets_resolved) }}{{ arrow(m.arrows.tickets_resolved) }}{% if x.tickets_by_type %}<div style="font-size:10px;color:#6b778c;">{% for t, n in x.tickets_by_type.items() %}{{ n }} {{ t }}{% if not loop.last %}, {% endif %}{% endfor %}</div>{% endif %}{% if x.in_progress %}<div style="font-size:10px;color:#6b778c;">{{ x.in_progress }} in progress</div>{% endif %}</td>
+      <td align="right" style="padding:6px;border-bottom:1px solid #f4f5f7;" valign="top">{{ num(x.tickets_shipped) }}{{ arrow(m.arrows.tickets_shipped) }}<div style="font-size:10px;color:#6b778c;">{{ num(x.tickets_resolved) }} closed in JIRA{% if x.tickets_by_type %} ({% for t, n in x.tickets_by_type.items() %}{{ n }} {{ t }}{% if not loop.last %}, {% endif %}{% endfor %}){% endif %}</div>{% if x.in_progress %}<div style="font-size:10px;color:#6b778c;">{{ x.in_progress }} in progress</div>{% endif %}</td>
       <td align="right" style="padding:6px;border-bottom:1px solid #f4f5f7;" valign="top">{{ num(x.prs_merged) }}{{ arrow(m.arrows.prs_merged) }}{{ trend(m, 'prs_merged') }}</td>
       <td align="right" style="padding:6px;border-bottom:1px solid #f4f5f7;" valign="top">{{ num(x.commits) }}{{ arrow(m.arrows.commits) }}{{ trend(m, 'commits') }}</td>
       <td align="right" style="padding:6px;border-bottom:1px solid #f4f5f7;" valign="top">{% if x.lines_added is none %}{{ num(none) }}{% else %}<span style="color:#00875a;">+{{ x.lines_added }}</span> <span style="color:#de350b;">&minus;{{ x.lines_deleted }}</span>{% endif %}</td>

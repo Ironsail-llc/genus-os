@@ -95,7 +95,8 @@ def devops_plain_summary(ctx: dict[str, Any]) -> str:
     lines = [f"Dev Team Ops Report — {period_label(ctx.get('period'))}", ""]
     lines.append(f"PRs merged: {_fmt(team.get('prs_merged'))}")
     lines.append(f"Commits: {_fmt(team.get('commits'))}")
-    lines.append(f"Tickets resolved: {_fmt(team.get('tickets_resolved'))}")
+    lines.append(f"Tickets shipped: {_fmt(team.get('tickets_shipped'))}")
+    lines.append(f"Tickets closed in JIRA: {_fmt(team.get('tickets_resolved'))}")
     lines.append(f"Reviews given: {_fmt(team.get('reviews_given'))}")
     lines.append(f"Merged without review: {_fmt(team.get('merged_without_review'))}")
     summary = (ctx.get("narrative") or {}).get("summary")

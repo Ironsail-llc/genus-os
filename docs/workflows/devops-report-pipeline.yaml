@@ -1,6 +1,6 @@
 id: devops-report-pipeline
 name: Dev Team Operations Report Pipeline
-description: Weekly — collect JIRA/GitHub/Claude-usage facts for last week, build the deterministic people table, add analyst narrative, render, email, post a Telegram digest.
+description: Weekly — collect JIRA/GitHub/Claude-usage facts for last week, build the deterministic people table, add analyst narrative, render, email.
 version: "2026-10-23"
 
 # Every step works on one report week: the previous ISO week (Mon 00:00 to
@@ -35,7 +35,7 @@ steps:
       # territory) so scripts/ stays platform-clean.
       command: >-
         cd ~/robothor &&
-        DEVOPS_JIRA_PROJECTS='VV,RD,I1,IM,IEC,CRI,OO,PRAC'
+        DEVOPS_JIRA_PROJECTS='RD,VE,I1'
         venv/bin/python scripts/devops_collect_jira.py
       timeout: 300
     on_failure: skip
@@ -49,7 +49,7 @@ steps:
     tool_args:
       command: >-
         cd ~/robothor &&
-        DEVOPS_GITHUB_REPOS='ironsail-llc/impetus-one,ironsail-llc/impetusrx,ironsail-llc/ec-valhalla-mso,ironsail-llc/united-pharmacy-api,ironsail-llc/genus-os,ironsail-llc/ec-valhalla-vitality-storefront'
+        DEVOPS_GITHUB_REPOS='ironsail-llc/impetus-one,ironsail-llc/ec-valhalla-mso,ironsail-llc/ec-valhalla-vitality-storefront,ironsail-llc/genus-os,ironsail-llc/aws-infrastucture,ironsail-llc/ecommerce-operator,ironsail-llc/watchtower,ironsail-llc/genus-helpdesk,ironsail-llc/impetus-ecommerce'
         venv/bin/python scripts/devops_collect_github.py
       timeout: 900
     on_failure: skip
@@ -110,10 +110,6 @@ steps:
       timeout: 120
     on_failure: skip
 
-  - id: post-telegram
-    type: tool
-    tool_name: exec
-    tool_args:
-      command: "cd ~/robothor && venv/bin/python scripts/devops_send_telegram.py"
-      timeout: 30
-    on_failure: skip
+  # No Telegram post: the operator's chat is a conversation, not a feed. The
+  # main agent reads local/devops/runs/latest/report.json and mentions what
+  # matters in its next scheduled update.

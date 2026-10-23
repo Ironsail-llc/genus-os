@@ -43,10 +43,11 @@ _UNIT_METRIC = {
     "commits": "commits",
     "review": "reviews_given",
     "reviews": "reviews_given",
-    "ticket": "tickets_resolved",
-    "tickets": "tickets_resolved",
+    "ticket": ("tickets_shipped", "tickets_resolved"),
+    "tickets": ("tickets_shipped", "tickets_resolved"),
 }
 TABLE_METRICS = (
+    "tickets_shipped",
     "tickets_resolved",
     "in_progress",
     "prs_merged",
@@ -75,8 +76,9 @@ def _note_ok(note: str, member: dict[str, Any]) -> bool:
             if value not in pcts:
                 return False
             continue
-        actual = metrics.get(_UNIT_METRIC[unit])
-        if not isinstance(actual, int | float) or float(actual) != value:
+        keys = _UNIT_METRIC[unit]
+        actual = [metrics.get(k) for k in ((keys,) if isinstance(keys, str) else keys)]
+        if not any(isinstance(a, int | float) and float(a) == value for a in actual):
             return False
     return True
 
