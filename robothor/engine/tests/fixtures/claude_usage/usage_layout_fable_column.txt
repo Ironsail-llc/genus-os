@@ -1,0 +1,92 @@
+Claude Usage Report — Week of October 12–16, 2026
+
+
+  Claude Usage Report
+    Oct 15, 2026        ·
+
+  Week of October 12–16, 2026 · Captured: October 13–15, 2026 (post-reset and in-progress
+  readings noted)
+
+
+  Executive Snapshot
+       Generic snapshot paragraph: one account reached 99% of its weekly limit and another
+       was captured mid-cycle at 40%. These sentences mention percentages on purpose.
+
+
+  Weekly Usage
+
+    Developer /             Plan      Weekly Usage   Current   Fable           Weekly      Status / Key Note
+    Account                                          Session                   Reset
+
+    Alice – Acct            Max       🔴 100% —       0%        4%              Tue 10:00   Captured Oct. 13. New
+    1                       20x       LIMIT HIT                                PM          messages unavailable
+                                                                                           until reset.
+
+    Alice – Acct            Max       🔴 100% —       0%        90%             Wed 1:00    Captured Oct. 14. New
+    2                       20x       LIMIT HIT                                PM          messages unavailable
+                                                                                           until reset. Full reset
+                                                                                           available (expires Oct.
+                                                                                           22).
+
+    Dana – Acct             Max       65%            6%        98%             Wed         Captured Oct. 13,
+    1                       20x                                                10:00 AM    before reset. On track.
+                                                                                           Full reset available
+                                                                                           (expires Oct. 22).
+
+    Dana – Acct             Max       54%            0%        100% — Fable    Tue 11:00   Captured Oct. 13,
+    2                       20x                                limit reached   PM          before reset. Main
+                                                                                           weekly usage on track.
+
+
+                                                                                                               Page 1 of 3
+
+Claude Usage Report — Week of October 12–16, 2026
+
+
+    Developer /          Plan         Weekly Usage   Current   Fable   Weekly      Status / Key Note
+    Account                                          Session           Reset
+
+    Carlos –             Max          2% — POST-     3%        0%      Thu 9:00    Captured Oct. 15, after
+    Acct 1               5x           RESET                            AM          reset. Prior-cycle usage
+                                                                                   not captured.
+
+    Edward –             Max          15% — POST-    18%       0%      Thu 3:00    Captured Oct. 15, after
+    Acct 1               20x          RESET                            AM          reset. Prior-cycle usage
+                                                                                   not captured.
+
+    Fatima –             Max          ⚠️ 68% — IN    2%        0%      Sun 10:00   Captured Oct. 15.
+    Acct 1               5x           PROGRESS                         PM          Usage warning:
+                                                                                   projected to run out
+                                                                                   Saturday morning,
+                                                                                   before reset.
+
+    Gina Lee –           Max          78%            12%       0%      Wed 2:00    Captured Oct. 14,
+    Acct 1               5x                                            PM          before reset. On track.
+
+    Harriet –            Max          6% — POST-     21%       0%      Wed 6:00    Captured Oct. 15, after
+    Acct 1               5x           RESET                            PM          reset. Prior-cycle usage
+                                                                                   not captured.
+
+
+  🔴  = weekly limit reached ·                   ⚠️
+                                 = projected limit warning. Fable is a separate weekly limit
+  and is not included in Weekly Usage. Current Session is a short-term limit, separate from
+  the weekly plan limit.
+
+
+  Key Observations
+       Generic observations paragraph. Alice and Dana are mentioned with 100% and 59% here
+       to prove narrative text outside the table is never parsed as a row.
+
+
+                                                                                                       Page 2 of 3
+
+Claude Usage Report — Week of October 12–16, 2026
+
+
+  Reset & Capture Note
+      Generic capture note.
+
+
+                                                                                     Page 3 of 3
+

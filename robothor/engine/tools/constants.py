@@ -57,7 +57,15 @@ CLAUDE_CODE_TOOLS = frozenset(
 )
 
 # pr-reviewer suite (robothor/pr_review/). Opt-in: listed in OPT_IN_TOOLS.
-PR_REVIEW_TOOLS = frozenset({"pr_review_intake", "pr_review_prepare", "pr_review_finalize"})
+PR_REVIEW_TOOLS = frozenset(
+    {
+        "pr_review_intake",
+        "pr_review_prepare",
+        "pr_review_finalize",
+        "pr_review_work",
+        "pr_review_status",
+    }
+)
 
 # ── Workspace tool families (mail, calendar, chat) ──────────────────────
 #

@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-473 settings in 17 groups.
+475 settings in 17 groups.
 
 ## autonomy
 
@@ -93,7 +93,7 @@ Host paths for the isolated personal browser service and clients.
 | `ROBOTHOR_PR_REVIEW_DEEP_LINES` | int | `1500` | no | no | unreleased | Changed lines (additions plus deletions) from which a review goes deep: ROBOTHOR_PR_REVIEW_DEEP_EFFORT and a full read of the diff before the result. |
 | `ROBOTHOR_PR_REVIEW_EFFORT` | str | `high` | no | no | unreleased | Claude Code --effort for review jobs: low, medium, high, xhigh or max. Empty leaves the CLI's default. |
 | `ROBOTHOR_PR_REVIEW_GUIDELINES_PATH` | str | _(empty)_ | no | no | unreleased | Instance review-guidelines file (e.g. <workspace>/brain/pr-review-guidelines.md). When set and readable, its content replaces the pr-review skill's generic guidelines in every review prompt; re-read for every review. |
-| `ROBOTHOR_PR_REVIEW_MAX_CONCURRENT` | int | `2` | no | no | unreleased | Review tasks the intake keeps open at once; further pull requests wait and are queued on a later poll. |
+| `ROBOTHOR_PR_REVIEW_MAX_CONCURRENT` | int | `6` | no | no | unreleased | Review tasks the intake keeps open at once; further pull requests wait and are queued on a later poll. Above ROBOTHOR_PR_REVIEW_WORKERS, so the next review is ready the moment a worker frees. |
 | `ROBOTHOR_PR_REVIEW_MAX_TURNS` | int | `80` | no | no | unreleased | Claude Code turns one review round may take (--max-turns). |
 | `ROBOTHOR_PR_REVIEW_MODEL` | str | `opus` | no | no | unreleased | Claude Code model alias for review jobs. The default `opus` is the CLI's alias, which each Claude Code update points at the newest Opus; never pin a dated model id here. Empty uses ROBOTHOR_CLAUDE_CODE_MODEL. The model actually used is named in each review's footer. |
 | `ROBOTHOR_PR_REVIEW_REPOS` | str | _(empty)_ | no | no | unreleased | Comma-separated owner/repo list the pr-reviewer watches (with ROBOTHOR_PR_REVIEW_WATCH_REPOS) and its ticket prefixes. Not a limit on requests: a pull request requesting the bot login's review, asked for by the operator, or linked in the Chat space is reviewed in any repository the token can read (a Chat link counts for these repositories, other repositories of their owners, and pull requests already tracked). An entry may carry its ticket prefix as owner/repo:PREFIX (another review bot's ALLOWED_REPOS format). |
@@ -102,9 +102,11 @@ Host paths for the isolated personal browser service and clients.
 | `ROBOTHOR_PR_REVIEW_ROUND_TIMEOUT` | float | `1800.0` | no | no | unreleased | Seconds one review round may run before Claude Code is killed. |
 | `ROBOTHOR_PR_REVIEW_SKIP_LABELS` | str | _(empty)_ | no | no | unreleased | Comma-separated pull-request labels that skip the review entirely. Empty (the default) skips by label never: anyone who can label a pull request could otherwise switch its review off. |
 | `ROBOTHOR_PR_REVIEW_STALE_AFTER_MINUTES` | int | `180` | no | no | unreleased | A review queued or running this long without being finalized is marked failed, so a lost task never holds a concurrency slot forever. |
-| `ROBOTHOR_PR_REVIEW_TELEGRAM_DIGEST` | bool | `false` | no | no | unreleased | pr_review_finalize returns a one-line digest per posted review for the agent to deliver; the agent's delivery must announce on Telegram for it to arrive. |
+| `ROBOTHOR_PR_REVIEW_STATUS_FILE` | str | _(empty)_ | no | no | unreleased | Markdown file pr_review_work rewrites after each run with what it reviewed. Empty means <workspace>/brain/memory/pr-reviewer-status.md. |
+| `ROBOTHOR_PR_REVIEW_TELEGRAM_DIGEST` | bool | `false` | no | no | unreleased | pr_review_work sends a one-line Telegram digest per posted review (and per failure on a pull request with no Chat thread) to ROBOTHOR_TELEGRAM_CHAT_ID. |
 | `ROBOTHOR_PR_REVIEW_TICKET_PREFIXES` | str | _(empty)_ | no | no | unreleased | Ticket key prefixes the reviewer links pull requests to: owner/repo:PREFIX entries apply to that repository, bare PREFIX entries (e.g. ABC) to every repository without its own, comma-separated. Empty accepts any uppercase KEY-123. |
 | `ROBOTHOR_PR_REVIEW_WATCH_REPOS` | bool | `false` | no | no | unreleased | Review every open, non-draft pull request in the configured repositories, and re-review when its head moves. False reviews only pull requests posted in the Chat space or that request the bot login's review. |
+| `ROBOTHOR_PR_REVIEW_WORKERS` | int | `3` | no | no | unreleased | Reviews pr_review_work runs at once. Each is a Claude Code job, so ROBOTHOR_CODING_MAX_CONCURRENT must be at least this (one more leaves a slot for other coding work), or the extra reviews wait as queued jobs. |
 
 ## workspace
 

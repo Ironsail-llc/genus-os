@@ -172,3 +172,5 @@ crm/140_chat_approval_receipts.sql
 crm/141_runtime_effects.sql
 crm/142_goal_effect_lookup.sql
 crm/149_workspace_sync_state.sql
+crm/150_pr_review_requested_at.sql
+crm/151_pr_review_work_denies.sql

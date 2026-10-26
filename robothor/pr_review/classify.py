@@ -6,9 +6,10 @@ acknowledgement ("thanks", "👍") or a reviewer's verdict reported in the
 thread ("#123: Approved", "changes requested") — including another review
 bot's status lines — and ``ambiguous`` for everything it cannot decide: a
 negated or hedged request ("not fixed yet", "will push later") or a plain
-question. The intake
-never calls a model; an ambiguous reply is handed to the reviewer agent to
-decide, as a task.
+question. A message of nothing but pull-request links (or ``#123``) is a
+request: reposting the links is how a team asks for another look. The intake
+never calls a model; it asks the author of an ambiguous reply, in the thread,
+to say "re-review".
 """
 
 from __future__ import annotations
@@ -139,6 +140,22 @@ _NEGATION = [
 ]
 _QUESTION = re.compile(r"\?\s*$")
 
+# References to a pull request, stripped before a reply is read: Chat's
+# ``<url|label>`` form of a pull-request link, a bare pull-request link,
+# ``owner/repo#123``, ``#123`` and a bare number. Nothing else is stripped —
+# another URL, an emoji or a "?" is part of what the reply says.
+_PR_LINK = r"https?://(?:www\.)?github\.com/[\w.-]+/[\w.-]+/pull/\d+"
+_PR_REFS = [
+    re.compile(rf"<{_PR_LINK}[^>]*>", re.IGNORECASE),
+    re.compile(rf"{_PR_LINK}[^\s>|]*", re.IGNORECASE),
+    re.compile(r"(?:[\w.-]+/[\w.-]+)?#\d+\b"),
+]
+_BARE_NUMBER = re.compile(r"(?<![\w/.-])\d+\b")
+# What may sit between references in a links-only message.
+_SEPARATORS = re.compile(r"[\s,;]+|\band\b", re.IGNORECASE)
+# Left at the front once the reference is gone ("<link|#12>: Approved").
+_LEADING = re.compile(r"^[\s:,;\-\u2013\u2014]+")
+
 # Replies that clearly ask for nothing.
 _ACKNOWLEDGEMENT = re.compile(
     r"^\s*(?:thanks?|thank you|thx|ty|ok(?:ay)?|k|cool|nice|great|got it|will do|on it|"
@@ -168,7 +185,10 @@ def classify_rereview(text: str) -> Intent:
     t = (text or "").strip()
     if not t:
         return "other"
-    body = _PR_PREFIX.sub("", t)
+    body, named = _strip_refs(t)
+    if named and not _SEPARATORS.sub("", body):
+        return "rereview"  # nothing but the pull requests: asking again
+    body = _LEADING.sub("", _PR_PREFIX.sub("", body))
     if _STATUS_REPORT.match(body):
         return "other"
     request = any(p.search(body) for p in _REQUEST)
@@ -184,6 +204,15 @@ def classify_rereview(text: str) -> Intent:
     if _ACKNOWLEDGEMENT.match(body):
         return "other"
     return "ambiguous"
+
+
+def _strip_refs(text: str) -> tuple[str, int]:
+    """``text`` without its pull-request references, and how many it named."""
+    rest, named = text, 0
+    for part in _PR_REFS:
+        rest, found = part.subn(" ", rest)
+        named += found
+    return _BARE_NUMBER.sub(" ", rest).strip(), named
 
 
 _NUMBER_RE = re.compile(r"(?<![\w/.-])#?(\d{1,7})\b")

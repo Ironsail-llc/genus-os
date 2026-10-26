@@ -1,156 +1,101 @@
 #!/usr/bin/env python3
-"""Deterministic Telegram delivery for the devops-report-pipeline.
+"""Post a short devops report digest to Telegram (deterministic, no LLM).
 
-Reads /tmp/devops_report.json, formats it as a plain-text weekly report
-using a fixed template (no LLM), and sends it directly to the Robothor
-Telegram chat via the Bot API.
+Reads ``report.json`` (the rendered context written by
+devops_render_report.py) from ``$DEVOPS_RUNS_DIR/<week-start>/``. Every number
+comes from the aggregate's team totals; a metric that was unavailable prints
+as ``n/a``. Robust to either a list or a count wherever a collection is
+expected — an earlier analyst-shaped JSON turned lists into ints and crashed
+this step every week.
 
-Required env:
-  ROBOTHOR_TELEGRAM_BOT_TOKEN  — bot token
-  ROBOTHOR_TELEGRAM_CHAT_ID    — target chat (Philip's DM by default)
-
-Called by the workflow as step 6 (post-telegram). Exits non-zero on any
-failure; the workflow's on_failure: abort kicks in.
+Required env: ROBOTHOR_TELEGRAM_BOT_TOKEN, ROBOTHOR_TELEGRAM_CHAT_ID.
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import sys
 import urllib.error
-import urllib.parse
 import urllib.request
 from pathlib import Path
+from typing import Any
 
-IN_PATH = Path("/tmp/devops_report.json")
-TELEGRAM_MAX_CHARS = 4000  # Leave slack under 4096 limit
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from robothor.engine.reports.devops_periods import period_label, report_window, window_block
+from robothor.engine.reports.devops_team import runs_dir, week_run_dir
 
-def _period_label(period) -> str:
-    """Normalize the report period (period_block dict OR string) to a label.
-
-    Mirrors robothor.engine.reports.devops_periods.period_label. Inlined to
-    keep this delivery script pure-stdlib and standalone (no robothor import,
-    no sys.path bootstrap — the test loads it via importlib).
-    """
-    if isinstance(period, dict):
-        label = period.get("report_label")
-        if label:
-            return str(label)
-        start = period.get("last_week_start_et")
-        if isinstance(start, str) and start:
-            return f"Week of {start[:10]}"
-        return "this week"
-    if isinstance(period, str) and period.strip():
-        return period
-    return "this week"
+TELEGRAM_MAX_CHARS = 4000  # Leave slack under the 4096 limit
 
 
-def format_report(data: dict) -> str:
-    """Format the structured JSON as a plain-text Telegram message.
+def _count(v: Any) -> int:
+    """A collection's size or an int as given; anything else counts as 0."""
+    if isinstance(v, bool):
+        return int(v)
+    if isinstance(v, int):
+        return v
+    if isinstance(v, (list, dict, tuple, set)):
+        return len(v)
+    if isinstance(v, str):
+        return 1 if v.strip() else 0
+    return 0
 
-    Primary window is last_week (the completed full week). The executive
-    summary flat fields already carry last_week data. If current_week
-    data is present in the period block, we show it as a footnote labeled
-    "Mon only" — never as a WoW comparison.
-    """
-    es = data.get("executive_summary", {})
-    lw = es.get("last_week", {})
 
-    # Flat fields (from analyst) carry last_week totals
-    tickets = es.get("tickets_resolved", lw.get("tickets_resolved", 0))
-    prs = es.get("prs_merged", lw.get("prs_merged", 0))
-    throughput = es.get("throughput_rate", "")
-    trend = es.get("trend", "")
+def _fmt(v: Any) -> str:
+    return "n/a" if v is None else str(v)
 
-    lines: list[str] = []
-    lines.append(f"Dev Team Ops Report — {_period_label(data.get('period'))}")
-    lines.append("")
 
-    # Key numbers — last_week (completed full week)
-    lines.append(f"▸ Tickets resolved: {tickets}")
-    lines.append(f"▸ PRs merged: {prs}")
-    if throughput:
-        lines.append(f"▸ Throughput: {throughput}")
-    if trend:
-        lines.append(f"▸ Trend: {trend}")
+def format_report(ctx: dict) -> str:
+    team = ctx.get("team") if isinstance(ctx.get("team"), dict) else {}
+    lines = [f"Dev Team Ops Report — {period_label(ctx.get('period'))}", ""]
+    for label, key in (
+        ("PRs merged", "prs_merged"),
+        ("Commits", "commits"),
+        ("Tickets resolved", "tickets_resolved"),
+        ("Reviews given", "reviews_given"),
+        ("Merged without review", "merged_without_review"),
+    ):
+        lines.append(f"▸ {label}: {_fmt(team.get(key))}")
+    if ctx.get("open_backlog") is not None:
+        lines.append(f"▸ Open backlog: {ctx['open_backlog']}")
 
-    review_cov = data.get("github", {}).get("review_coverage")
-    total_reviews = data.get("github", {}).get("total_reviews")
-    if review_cov is not None:
-        flag = " ⚠" if review_cov < 30 else ""
-        lines.append(f"▸ Review coverage: {review_cov}%{flag} ({total_reviews} reviews)")
-    if es.get("open_backlog") not in (None, ""):
-        lines.append(f"▸ Open backlog: {es['open_backlog']}")
+    narrative = ctx.get("narrative") if isinstance(ctx.get("narrative"), dict) else {}
+    if isinstance(narrative.get("summary"), str) and narrative["summary"].strip():
+        lines += ["", narrative["summary"].strip()]
+    bottlenecks = narrative.get("bottlenecks")
+    items = []
+    for b in bottlenecks if isinstance(bottlenecks, list) else []:
+        if isinstance(b, str):
+            items.append((1, b))
+        elif isinstance(b, dict):
+            text = b.get("text") or b.get("description") or ""
+            if text:
+                items.append((0 if b.get("severity") == "high" else 1, str(text)))
+    if items:
+        lines += ["", "⚠ What needs attention"]
+        lines += [f"  ● {t}" for _, t in sorted(items, key=lambda x: x[0])[:5]]
 
-    # Bottlenecks (show high severity first, up to 5)
-    bottlenecks = sorted(
-        data.get("bottlenecks", []),
-        key=lambda b: 0 if b.get("severity") == "high" else 1,
-    )[:5]
-    if bottlenecks:
-        lines.append("")
-        lines.append("⚠ What needs attention")
-        for b in bottlenecks:
-            text = b.get("text", "")
-            rec = b.get("recommendation", "")
-            lines.append(f"  ● {text}")
-            if rec:
-                lines.append(f"      → {rec}")
+    dq = ctx.get("data_quality") if isinstance(ctx.get("data_quality"), dict) else {}
+    flags = []
+    for key, text in (
+        ("unavailable_metrics", "metric(s) unavailable"),
+        ("outside_roster", "active handle(s) not on the roster"),
+        ("no_activity", "roster member(s) with no activity"),
+        ("narrative_withheld", "note(s) withheld — numbers didn't match"),
+    ):
+        n = _count(dq.get(key))
+        if n:
+            flags.append(f"{n} {text}")
+    if dq.get("usage_unavailable"):
+        flags.append("Claude usage unavailable")
+    if flags:
+        lines += ["", "⚠ Report quality: " + "; ".join(flags) + " (see email)"]
 
-    # Personnel highlights — curate to the 4-5 most important reads
-    analysis = data.get("personnel_analysis", [])
-    # Prioritize: those with concerns > those without; keep first 5
-    with_concerns = [p for p in analysis if p.get("concerns")]
-    without = [p for p in analysis if not p.get("concerns")]
-    highlights = (with_concerns + without)[:5]
-    if highlights:
-        lines.append("")
-        lines.append("● Personnel highlights")
-        for p in highlights:
-            name = p.get("name", "?")
-            snap_bits = []
-            if p.get("concerns"):
-                snap_bits.append(p["concerns"])
-            elif p.get("strengths"):
-                snap_bits.append(p["strengths"])
-            if p.get("coaching"):
-                snap_bits.append(f"→ {p['coaching']}")
-            summary = " ".join(snap_bits) if snap_bits else p.get("snapshot", "")
-            lines.append(f"  ● {name}: {summary}")
-
-    # Top stale items
-    stale = data.get("jira", {}).get("stale_tickets", [])[:3]
-    if stale:
-        lines.append("")
-        lines.append("▸ Top stale JIRA")
-        lines.extend(
-            f"  ● {t.get('key', '?')} ({t.get('assignee', '?')}): {t.get('summary', '')}"
-            for t in stale
-        )
-
-    # Data quality flags — let the team see when the pipeline missed something
-    dq = data.get("data_quality") or {}
-    unresolved = dq.get("unresolved_handles") or []
-    missing = dq.get("missing_from_roster") or []
-    if unresolved or missing:
-        bits = []
-        if unresolved:
-            bits.append(f"{len(unresolved)} unresolved handle(s)")
-        if missing:
-            bits.append(f"{len(missing)} engineer(s) absent")
-        lines.append("")
-        lines.append(f"⚠ Report quality: {', '.join(bits)} (see email panel)")
-
-    lines.append("")
-    lines.append(
-        "Full HTML report emailed to stakeholders. Full data in devops_latest_report memory block — ask me to unpack any section."
-    )
-
+    lines += ["", "Full HTML report emailed to stakeholders."]
     message = "\n".join(lines)
     if len(message) > TELEGRAM_MAX_CHARS:
-        # Trim from the middle of personnel highlights if needed
         message = message[: TELEGRAM_MAX_CHARS - 20] + "\n\n[truncated]"
     return message
 
@@ -167,35 +112,37 @@ def send_telegram(token: str, chat_id: str, text: str) -> dict:
         raise RuntimeError(f"Telegram API {e.code}: {body}") from e
 
 
-def main() -> int:
-    if not IN_PATH.exists():
-        print(f"Input missing: {IN_PATH}", file=sys.stderr)
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("--week-start", help="YYYY-MM-DD (any day of the week); default last week")
+    ap.add_argument("--runs-dir", type=Path, help="override $DEVOPS_RUNS_DIR")
+    args = ap.parse_args(argv)
+
+    start, end = report_window(week_start=args.week_start)
+    period = window_block(start, end)
+    in_path = week_run_dir(period["week_start"], args.runs_dir or runs_dir()) / "report.json"
+    if not in_path.exists():
+        print(f"Input missing: {in_path}", file=sys.stderr)
         return 1
 
     token = os.environ.get("ROBOTHOR_TELEGRAM_BOT_TOKEN", "").strip()
     chat_id = os.environ.get("ROBOTHOR_TELEGRAM_CHAT_ID", "").strip()
-    if not token:
-        print("ROBOTHOR_TELEGRAM_BOT_TOKEN not set", file=sys.stderr)
-        return 2
-    if not chat_id:
-        print("ROBOTHOR_TELEGRAM_CHAT_ID not set", file=sys.stderr)
+    if not token or not chat_id:
+        print("ROBOTHOR_TELEGRAM_BOT_TOKEN / ROBOTHOR_TELEGRAM_CHAT_ID not set", file=sys.stderr)
         return 2
 
     try:
-        data = json.loads(IN_PATH.read_text())
+        ctx = json.loads(in_path.read_text())
     except json.JSONDecodeError as e:
         print(f"Report JSON invalid: {e}", file=sys.stderr)
         return 1
 
-    message = format_report(data)
+    message = format_report(ctx if isinstance(ctx, dict) else {})
     result = send_telegram(token, chat_id, message)
-
     if not result.get("ok"):
         print(f"Telegram send failed: {result}", file=sys.stderr)
         return 3
-
-    msg_id = result.get("result", {}).get("message_id", "?")
-    print(f"Sent {len(message)} char message to chat {chat_id} (msg_id={msg_id})")
+    print(f"Sent {len(message)} char digest to chat {chat_id}")
     return 0
 
 

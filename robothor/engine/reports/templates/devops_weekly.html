@@ -1,247 +1,220 @@
+{#- Devops weekly report. Context: robothor.engine.reports.devops_report.build_report_context.
+    Every number below comes from the deterministic aggregate (people.json);
+    the analyst only supplies narrative text. -#}
+{%- macro num(v) -%}{% if v is none %}<span style="color:#a5adba;">n/a</span>{% else %}{{ v }}{% endif %}{%- endmacro -%}
+{%- macro arrow(a) -%}{% if a == 'up' %}<span style="color:#00875a;font-size:10px;">&#9650;</span>{% elif a == 'down' %}<span style="color:#de350b;font-size:10px;">&#9660;</span>{% endif %}{%- endmacro -%}
+{%- macro trend(m, key) -%}{% set t = m.trend[key] if m.trend and key in m.trend else [] %}{% if t and t | select('ne', none) | list %}<div style="font-size:10px;color:#a5adba;">{% for v in t %}{{ '·' if v is none else v }}{% if not loop.last %} / {% endif %}{% endfor %}</div>{% endif %}{%- endmacro -%}
 <!DOCTYPE html>
 <html>
-<head><meta charset="utf-8"></head>
-<body style="margin:0;padding:0;background:#f4f5f7;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#172b4d;">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#f4f5f7;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#172b4d;">
 <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f5f7;padding:20px 0;">
 <tr><td align="center">
-<table width="680" cellpadding="0" cellspacing="0" style="background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.12);">
+<table width="760" cellpadding="0" cellspacing="0" style="max-width:760px;width:100%;background:#ffffff;border-radius:8px;overflow:hidden;">
 
 <!-- Header -->
-<tr><td style="background:#0052cc;padding:24px 32px;">
-  <h1 style="margin:0;color:#fff;font-size:22px;font-weight:600;">Dev Team Operations Report</h1>
-  <p style="margin:6px 0 0;color:#b3d4ff;font-size:14px;">{{ period_label }} &middot; Generated {{ generated_at }}</p>
+<tr><td style="background:#0052cc;padding:24px 28px;">
+  <h1 style="margin:0;color:#ffffff;font-size:22px;font-weight:600;">Dev Team Operations Report</h1>
+  <p style="margin:6px 0 0;color:#deebff;font-size:14px;">
+    {{ period_label }}{% if period.week_start and period.week_end %} &middot; {{ period.week_start }} to {{ period.week_end }} (America/New_York){% endif %}
+  </p>
+  <p style="margin:4px 0 0;color:#b3d4ff;font-size:12px;">Generated {{ generated_at }}</p>
 </td></tr>
 
-<!-- Report Quality (only shown when anomalies exist) -->
-{% if data_quality and (data_quality.unresolved_handles or data_quality.missing_from_roster) %}
-<tr><td style="padding:16px 32px;background:#fffae6;border-bottom:1px solid #ffe0b2;">
-  <h2 style="margin:0 0 8px;font-size:13px;color:#bf6500;text-transform:uppercase;letter-spacing:0.5px;">&#9888; Report Quality</h2>
-  {% if data_quality.unresolved_handles %}
-  <p style="margin:0 0 6px;font-size:12px;color:#172b4d;">
-    <strong>{{ data_quality.unresolved_handles | length }} unresolved handle(s)</strong>
-    — activity from these handles was excluded because no CRM person is linked. Add a <code>contact_identifiers</code> row to fix.
-  </p>
-  <ul style="margin:0 0 8px 16px;padding:0;font-size:12px;color:#6b778c;">
-    {% for u in data_quality.unresolved_handles[:8] %}
-    <li>{{ u.channel }}: <code>{{ u.identifier }}</code> ({{ u.occurrences }} occurrence{{ 's' if u.occurrences != 1 else '' }})</li>
-    {% endfor %}
+<!-- Data quality -->
+{% set dq = data_quality %}
+{% if dq.has_issues %}
+<tr><td style="padding:16px 28px;background:#fffae6;border-bottom:1px solid #ffe0b2;">
+  <h2 style="margin:0 0 8px;font-size:13px;color:#974f0c;text-transform:uppercase;letter-spacing:0.5px;">&#9888; Data quality</h2>
+  <ul style="margin:0;padding:0 0 0 18px;font-size:12px;line-height:1.5;color:#172b4d;">
+    {% if dq.unavailable_metrics %}
+    <li><strong>Unavailable metrics</strong> (shown as n/a, never as 0):
+      {% for k, reason in dq.unavailable_metrics.items() %}<br><code>{{ k }}</code> — {{ reason }}{% endfor %}
+    </li>
+    {% endif %}
+    {% if dq.github_errors %}
+    <li><strong>{{ dq.github_errors | length }} GitHub error(s)</strong>:
+      {% for e in dq.github_errors[:10] %}<br>{{ e.repo }} {{ e.endpoint }} {{ e.status or '' }} {{ e.message }}{% endfor %}
+      {% if dq.github_errors | length > 10 %}<br>… and {{ dq.github_errors | length - 10 }} more{% endif %}
+    </li>
+    {% endif %}
+    {% if dq.jira_errors %}
+    <li><strong>{{ dq.jira_errors | length }} JIRA error(s)</strong>:
+      {% for e in dq.jira_errors[:10] %}<br>{{ e.project }} {{ e.query }}: {{ e.message }}{% endfor %}
+    </li>
+    {% endif %}
+    {% if dq.outside_roster %}
+    <li><strong>Active but not on the team roster</strong> (not counted in any person's row):
+      {% for o in dq.outside_roster[:12] %}<br>{{ o.source }}: <code>{{ o.handle }}</code>{% if o.note %} ({{ o.note }}){% endif %} — {% for k, v in o.counts.items() %}{{ v }} {{ k | replace('_', ' ') }}{% if not loop.last %}, {% endif %}{% endfor %}{% endfor %}
+      {% if dq.outside_roster | length > 12 %}<br>… and {{ dq.outside_roster | length - 12 }} more{% endif %}
+    </li>
+    {% endif %}
+    {% if dq.no_activity %}
+    <li><strong>Roster members with no recorded activity</strong>:
+      {% for m in dq.no_activity %}{{ m.name }} ({{ m.role_title }}){% if not loop.last %}, {% endif %}{% endfor %}
+    </li>
+    {% endif %}
+    {% if dq.usage_unavailable %}
+    <li><strong>Claude usage unavailable</strong>: {{ dq.usage_unavailable }}</li>
+    {% endif %}
+    {% if dq.partial_usage %}
+    <li><strong>Partial usage readings</strong> (not completed-cycle totals):
+      {% for p in dq.partial_usage %}{{ p.developer }} {{ p.account or '' }} — {{ p.reading | replace('_', '-') }}{% if not loop.last %}; {% endif %}{% endfor %}
+    </li>
+    {% endif %}
+    {% if dq.narrative_withheld %}
+    <li><strong>Narrative withheld</strong> for {{ dq.narrative_withheld | join(', ') }}: numbers didn't match data.</li>
+    {% endif %}
+    {% if dq.narrative_error %}
+    <li><strong>{{ dq.narrative_error | capitalize }}</strong>. Numbers below are unaffected.</li>
+    {% endif %}
   </ul>
-  {% endif %}
-  {% if data_quality.missing_from_roster %}
-  <p style="margin:0 0 6px;font-size:12px;color:#172b4d;">
-    <strong>{{ data_quality.missing_from_roster | length }} engineer(s) on roster with no activity</strong> this period:
-  </p>
-  <ul style="margin:0 0 0 16px;padding:0;font-size:12px;color:#6b778c;">
-    {% for m in data_quality.missing_from_roster[:8] %}
-    <li>{{ m.name }}{% if m.job_title %} <span style="color:#a5adba;">({{ m.job_title }})</span>{% endif %}</li>
-    {% endfor %}
-  </ul>
-  {% endif %}
 </td></tr>
 {% endif %}
 
-<!-- Executive Summary -->
-<tr><td style="padding:24px 32px;">
-  <h2 style="margin:0 0 16px;font-size:16px;color:#0052cc;text-transform:uppercase;letter-spacing:0.5px;">Executive Summary</h2>
-  <table width="100%" cellpadding="0" cellspacing="0">
-  <tr>
-    {% for card in [
-      ("Tickets Resolved", executive_summary.tickets_resolved),
-      ("PRs Merged", executive_summary.prs_merged),
-      ("PR/Ticket Ratio", executive_summary.pr_to_ticket_ratio),
-      ("Open Backlog", executive_summary.open_backlog)
+<!-- Team summary -->
+<tr><td style="padding:22px 28px 8px;">
+  <h2 style="margin:0 0 12px;font-size:15px;color:#0052cc;text-transform:uppercase;letter-spacing:0.5px;">Team summary</h2>
+  <table width="100%" cellpadding="0" cellspacing="0"><tr>
+    {% for label, value in [
+      ("PRs merged", team.prs_merged),
+      ("Commits", team.commits),
+      ("Tickets shipped", team.tickets_shipped),
+      ("Reviews given", team.reviews_given),
+      ("Merged w/o review", team.merged_without_review),
+      ("Stale PRs", team.stale_prs),
     ] %}
-    <td width="25%" style="padding:8px;">
-      <div style="background:#f4f5f7;border-radius:6px;padding:16px;text-align:center;">
-        <div style="font-size:28px;font-weight:700;color:#172b4d;">{{ card[1] }}</div>
-        <div style="font-size:11px;color:#6b778c;margin-top:4px;text-transform:uppercase;">{{ card[0] }}</div>
+    <td width="16%" style="padding:4px;" valign="top">
+      <div style="background:#f4f5f7;border-radius:6px;padding:12px 6px;text-align:center;">
+        <div style="font-size:22px;font-weight:700;color:#172b4d;">{{ num(value) }}</div>
+        <div style="font-size:10px;color:#6b778c;margin-top:4px;text-transform:uppercase;">{{ label }}</div>
       </div>
     </td>
     {% endfor %}
-  </tr>
-  </table>
-  {% if executive_summary.throughput_rate %}
-  <p style="margin:12px 0 0;font-size:13px;color:#6b778c;">Throughput: {{ executive_summary.throughput_rate }}</p>
-  {% endif %}
-  {% if executive_summary.trend %}
-  <p style="margin:4px 0 0;font-size:13px;color:#6b778c;">Trend: {{ executive_summary.trend }}</p>
-  {% endif %}
-</td></tr>
-
-<!-- JIRA Section -->
-{% if jira and jira.resolved %}
-<tr><td style="padding:0 32px 24px;">
-  <h2 style="margin:0 0 12px;font-size:16px;color:#0052cc;text-transform:uppercase;letter-spacing:0.5px;">JIRA Ticket Analysis</h2>
-
-  <table width="100%" cellpadding="6" cellspacing="0" style="border-collapse:collapse;font-size:13px;">
-  <thead>
-    <tr style="background:#f4f5f7;">
-      <th style="text-align:left;padding:8px;border-bottom:2px solid #dfe1e6;">Project</th>
-      <th style="text-align:right;padding:8px;border-bottom:2px solid #dfe1e6;">Resolved</th>
-      <th style="text-align:left;padding:8px;border-bottom:2px solid #dfe1e6;">Types</th>
-      <th style="text-align:left;padding:8px;border-bottom:2px solid #dfe1e6;">Top Contributors</th>
-    </tr>
-  </thead>
-  <tbody>
-    {% for row in jira.resolved %}
-    <tr>
-      <td style="padding:8px;border-bottom:1px solid #ebecf0;font-weight:600;">{{ row.project }}</td>
-      <td style="padding:8px;border-bottom:1px solid #ebecf0;text-align:right;">{{ row.count }}</td>
-      <td style="padding:8px;border-bottom:1px solid #ebecf0;">{{ row.types }}</td>
-      <td style="padding:8px;border-bottom:1px solid #ebecf0;">{{ row.top_contributors }}</td>
-    </tr>
-    {% endfor %}
-  </tbody>
-  </table>
-
-  {% if jira.stale_tickets %}
-  <p style="margin:12px 0 4px;font-size:13px;font-weight:600;color:#de350b;">&#9888; {{ jira.stale_tickets | length }}+ Stale Tickets (open, no updates 14+ days)</p>
-  <table width="100%" cellpadding="4" cellspacing="0" style="border-collapse:collapse;font-size:12px;">
-    {% for t in jira.stale_tickets[:10] %}
-    <tr>
-      <td style="padding:4px 8px;color:#0052cc;font-weight:500;">{{ t.key }}</td>
-      <td style="padding:4px 8px;">{{ t.status }}</td>
-      <td style="padding:4px 8px;">{{ t.assignee }}</td>
-      <td style="padding:4px 8px;color:#6b778c;">{{ t.summary }}</td>
-    </tr>
-    {% endfor %}
-  </table>
-  {% endif %}
-</td></tr>
-{% endif %}
-
-<!-- GitHub Section -->
-{% if github and github.repo_stats %}
-<tr><td style="padding:0 32px 24px;">
-  <h2 style="margin:0 0 12px;font-size:16px;color:#0052cc;text-transform:uppercase;letter-spacing:0.5px;">GitHub PR Metrics</h2>
-
-  <table width="100%" cellpadding="6" cellspacing="0" style="border-collapse:collapse;font-size:13px;">
-  <thead>
-    <tr style="background:#f4f5f7;">
-      <th style="text-align:left;padding:8px;border-bottom:2px solid #dfe1e6;">Repo</th>
-      <th style="text-align:right;padding:8px;border-bottom:2px solid #dfe1e6;">Merged</th>
-      <th style="text-align:right;padding:8px;border-bottom:2px solid #dfe1e6;">Avg Cycle</th>
-      <th style="text-align:right;padding:8px;border-bottom:2px solid #dfe1e6;">Median</th>
-    </tr>
-  </thead>
-  <tbody>
-    {% for repo in github.repo_stats %}
-    <tr>
-      <td style="padding:8px;border-bottom:1px solid #ebecf0;font-weight:500;">{{ repo.name }}</td>
-      <td style="padding:8px;border-bottom:1px solid #ebecf0;text-align:right;">{{ repo.merged }}</td>
-      <td style="padding:8px;border-bottom:1px solid #ebecf0;text-align:right;{% if repo.avg_cycle_hours and repo.avg_cycle_hours > 48 %}color:#de350b;font-weight:700;{% endif %}">{{ repo.avg_cycle }}</td>
-      <td style="padding:8px;border-bottom:1px solid #ebecf0;text-align:right;">{{ repo.median_cycle }}</td>
-    </tr>
-    {% endfor %}
-    <tr style="background:#f4f5f7;font-weight:700;">
-      <td style="padding:8px;">TOTAL</td>
-      <td style="padding:8px;text-align:right;">{{ github.total_merged }}</td>
-      <td style="padding:8px;"></td>
-      <td style="padding:8px;"></td>
-    </tr>
-  </tbody>
-  </table>
-
-  {% if github.review_coverage is defined %}
-  <p style="margin:12px 0 4px;font-size:13px;">
-    Code Review Coverage:
-    <span style="font-weight:700;{% if github.review_coverage < 30 %}color:#de350b;{% elif github.review_coverage < 70 %}color:#ff8b00;{% else %}color:#00875a;{% endif %}">
-      {{ github.review_coverage }}%
-    </span>
-    ({{ github.total_reviews }} reviews / {{ github.total_merged }} PRs)
+  </tr></table>
+  <p style="margin:8px 4px 0;font-size:12px;color:#6b778c;">
+    Roster of {{ team.members }} &middot; lines +{{ num(team.lines_added) }} / &minus;{{ num(team.lines_deleted) }} (lockfiles and generated files excluded)
+    {% if team.all_prs_merged_non_bot is not none %} &middot; {{ team.all_prs_merged_non_bot }} non-bot PRs merged in total, including people outside the roster{% endif %}
+    {% if open_backlog is not none %} &middot; open JIRA backlog {{ open_backlog }}{% endif %}
+    {% if bots %} &middot; bots (not counted): {% for b in bots %}{{ b.handle }} {{ b.prs_merged }} PR{{ '' if b.prs_merged == 1 else 's' }}{% if not loop.last %}, {% endif %}{% endfor %}{% endif %}
   </p>
-  {% endif %}
-
-  {% if github.no_review_repos %}
-  <p style="margin:8px 0 0;font-size:12px;color:#de350b;">&#9888; Repos with no human code reviews: {{ github.no_review_repos | join(', ') }}</p>
+  {% if narrative.summary %}
+  <p style="margin:14px 4px 0;font-size:14px;line-height:1.5;color:#172b4d;">{{ narrative.summary }}</p>
   {% endif %}
 </td></tr>
-{% endif %}
 
-<!-- Individual Productivity -->
-{% if people %}
-<tr><td style="padding:0 32px 24px;">
-  <h2 style="margin:0 0 12px;font-size:16px;color:#0052cc;text-transform:uppercase;letter-spacing:0.5px;">Individual Productivity</h2>
-
-  <table width="100%" cellpadding="6" cellspacing="0" style="border-collapse:collapse;font-size:13px;">
-  <thead>
+<!-- People -->
+<tr><td style="padding:18px 28px 8px;">
+  <h2 style="margin:0 0 4px;font-size:15px;color:#0052cc;text-transform:uppercase;letter-spacing:0.5px;">People</h2>
+  <p style="margin:0 0 10px;font-size:11px;color:#6b778c;">&#9650;/&#9660; versus last week; small figures are the three prior weeks, oldest first. Reviews: approved / changes requested / commented.</p>
+  {% for g in role_groups %}
+  <h3 style="margin:14px 0 2px;font-size:13px;color:#172b4d;">{{ g.title }}</h3>
+  {% if g.focus %}<p style="margin:0 0 6px;font-size:11px;color:#6b778c;">Judged on: {{ g.focus }}</p>{% endif %}
+  <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;font-size:12px;">
     <tr style="background:#f4f5f7;">
-      <th style="text-align:left;padding:8px;border-bottom:2px solid #dfe1e6;">Name</th>
-      <th style="text-align:right;padding:8px;border-bottom:2px solid #dfe1e6;">Tickets</th>
-      <th style="text-align:right;padding:8px;border-bottom:2px solid #dfe1e6;">PRs</th>
-      <th style="text-align:right;padding:8px;border-bottom:2px solid #dfe1e6;">Reviews</th>
-      <th style="text-align:right;padding:8px;border-bottom:2px solid #dfe1e6;">PR/Ticket</th>
+      <th align="left" style="padding:6px;border-bottom:2px solid #dfe1e6;">Name</th>
+      <th align="right" style="padding:6px;border-bottom:2px solid #dfe1e6;">Tickets shipped</th>
+      <th align="right" style="padding:6px;border-bottom:2px solid #dfe1e6;">PRs</th>
+      <th align="right" style="padding:6px;border-bottom:2px solid #dfe1e6;">Commits</th>
+      <th align="right" style="padding:6px;border-bottom:2px solid #dfe1e6;">Lines +/&minus;</th>
+      <th align="right" style="padding:6px;border-bottom:2px solid #dfe1e6;">Reviews</th>
+      <th align="right" style="padding:6px;border-bottom:2px solid #dfe1e6;">Review TAT</th>
+      <th align="right" style="padding:6px;border-bottom:2px solid #dfe1e6;">CR recv'd</th>
+      <th align="right" style="padding:6px;border-bottom:2px solid #dfe1e6;">Stale</th>
     </tr>
-  </thead>
-  <tbody>
-    {% for p in people %}
+    {% for m in g.members %}{% set x = m.metrics %}
     <tr>
-      <td style="padding:8px;border-bottom:1px solid #ebecf0;font-weight:500;">{{ p.name }}{% if p.note %} <span style="font-size:11px;color:#6b778c;">({{ p.note }})</span>{% endif %}{% if p.resolved is defined and not p.resolved %} <span style="font-size:10px;padding:1px 6px;border-radius:8px;background:#fffae6;color:#bf6500;border:1px solid #ffe0b2;">unlinked</span>{% endif %}</td>
-      <td style="padding:8px;border-bottom:1px solid #ebecf0;text-align:right;">{{ p.tickets }}</td>
-      <td style="padding:8px;border-bottom:1px solid #ebecf0;text-align:right;">{{ p.prs }}</td>
-      <td style="padding:8px;border-bottom:1px solid #ebecf0;text-align:right;">{{ p.reviews }}</td>
-      <td style="padding:8px;border-bottom:1px solid #ebecf0;text-align:right;">{{ p.pr_per_ticket }}</td>
+      <td style="padding:6px;border-bottom:1px solid #f4f5f7;" valign="top"><strong>{{ m.name }}</strong>{% if m.no_activity %}<br><span style="color:#de350b;font-size:10px;">no activity</span>{% endif %}</td>
+      <td align="right" style="padding:6px;border-bottom:1px solid #f4f5f7;" valign="top">{{ num(x.tickets_shipped) }}{{ arrow(m.arrows.tickets_shipped) }}<div style="font-size:10px;color:#6b778c;">{{ num(x.tickets_resolved) }} closed in JIRA{% if x.tickets_by_type %} ({% for t, n in x.tickets_by_type.items() %}{{ n }} {{ t }}{% if not loop.last %}, {% endif %}{% endfor %}){% endif %}</div>{% if x.in_progress %}<div style="font-size:10px;color:#6b778c;">{{ x.in_progress }} in progress</div>{% endif %}</td>
+      <td align="right" style="padding:6px;border-bottom:1px solid #f4f5f7;" valign="top">{{ num(x.prs_merged) }}{{ arrow(m.arrows.prs_merged) }}{{ trend(m, 'prs_merged') }}</td>
+      <td align="right" style="padding:6px;border-bottom:1px solid #f4f5f7;" valign="top">{{ num(x.commits) }}{{ arrow(m.arrows.commits) }}{{ trend(m, 'commits') }}</td>
+      <td align="right" style="padding:6px;border-bottom:1px solid #f4f5f7;" valign="top">{% if x.lines_added is none %}{{ num(none) }}{% else %}<span style="color:#00875a;">+{{ x.lines_added }}</span> <span style="color:#de350b;">&minus;{{ x.lines_deleted }}</span>{% endif %}</td>
+      <td align="right" style="padding:6px;border-bottom:1px solid #f4f5f7;" valign="top">{{ num(x.reviews_given) }}{{ arrow(m.arrows.reviews_given) }}{% if x.reviews_given %}<div style="font-size:10px;color:#6b778c;">{{ x.reviews_approved }} / {{ x.reviews_changes_requested }} / {{ x.reviews_commented }}</div>{% endif %}{{ trend(m, 'reviews_given') }}</td>
+      <td align="right" style="padding:6px;border-bottom:1px solid #f4f5f7;" valign="top">{% if x.review_turnaround_median_h is none %}<span style="color:#a5adba;">&mdash;</span>{% else %}{{ x.review_turnaround_median_h }}h{% endif %}</td>
+      <td align="right" style="padding:6px;border-bottom:1px solid #f4f5f7;" valign="top">{{ num(x.changes_requested_received) }}</td>
+      <td align="right" style="padding:6px;border-bottom:1px solid #f4f5f7;" valign="top">{{ num(x.stale_prs) }}</td>
     </tr>
     {% endfor %}
-  </tbody>
   </table>
-</td></tr>
-{% endif %}
-
-<!-- Personnel Review — DevOps manager's strategic read per contributor -->
-{% if personnel_analysis %}
-<tr><td style="padding:0 32px 24px;">
-  <h2 style="margin:0 0 4px;font-size:16px;color:#0052cc;text-transform:uppercase;letter-spacing:0.5px;">Personnel Review</h2>
-  <p style="margin:0 0 16px;font-size:12px;color:#6b778c;font-style:italic;">Strategic read per contributor — what's working, what to coach on.</p>
-
-  {% for p in personnel_analysis %}
-  <div style="margin-bottom:16px;padding:14px 18px;background:#fafbfc;border:1px solid #dfe1e6;border-radius:6px;">
-    <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px;">
-      <p style="margin:0;font-size:14px;font-weight:700;color:#172b4d;">
-        {{ p.name }}{% if p.role %} <span style="font-size:12px;font-weight:400;color:#6b778c;">&middot; {{ p.role }}</span>{% endif %}
-      </p>
-      {% if p.trend %}
-      <span style="font-size:11px;padding:2px 8px;border-radius:10px;background:{% if 'up' in p.trend or 'improv' in p.trend %}#e3fcef;color:#006644{% elif 'down' in p.trend or 'declin' in p.trend %}#ffebe6;color:#bf2600{% else %}#deebff;color:#0747a6{% endif %};text-transform:uppercase;font-weight:600;letter-spacing:0.3px;">{{ p.trend }}</span>
-      {% endif %}
-    </div>
-    {% if p.snapshot %}
-    <p style="margin:0 0 10px;font-size:12px;color:#6b778c;">{{ p.snapshot }}</p>
-    {% endif %}
-    {% if p.strengths %}
-    <p style="margin:0 0 6px;font-size:13px;color:#172b4d;"><span style="color:#00875a;font-weight:700;">&#10004; Strengths:</span> {{ p.strengths }}</p>
-    {% endif %}
-    {% if p.concerns %}
-    <p style="margin:0 0 6px;font-size:13px;color:#172b4d;"><span style="color:#de350b;font-weight:700;">&#9888; Concerns:</span> {{ p.concerns }}</p>
-    {% endif %}
-    {% if p.coaching %}
-    <p style="margin:0;font-size:13px;color:#172b4d;"><span style="color:#0052cc;font-weight:700;">&#x2192; Coaching:</span> {{ p.coaching }}</p>
-    {% endif %}
-  </div>
   {% endfor %}
 </td></tr>
-{% endif %}
+
+<!-- Claude usage -->
+<tr><td style="padding:18px 28px 8px;">
+  <h2 style="margin:0 0 4px;font-size:15px;color:#0052cc;text-transform:uppercase;letter-spacing:0.5px;">Claude usage</h2>
+  {% if usage.available %}
+  <p style="margin:0 0 10px;font-size:11px;color:#6b778c;">HR report{% if usage.report_date %} dated {{ usage.report_date }}{% endif %}{% if usage.period %} ({{ usage.period }}){% endif %}. Weekly % is the plan's weekly limit; the Fable limit is separate and not included in it.</p>
+  <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;font-size:12px;">
+    <tr style="background:#f4f5f7;">
+      <th align="left" style="padding:6px;border-bottom:2px solid #dfe1e6;">Developer / account</th>
+      <th align="left" style="padding:6px;border-bottom:2px solid #dfe1e6;">Plan</th>
+      <th align="right" style="padding:6px;border-bottom:2px solid #dfe1e6;">Weekly</th>
+      <th align="left" style="padding:6px;border-bottom:2px solid #dfe1e6;">Reading</th>
+      <th align="left" style="padding:6px;border-bottom:2px solid #dfe1e6;">Weekly limit</th>
+      <th align="left" style="padding:6px;border-bottom:2px solid #dfe1e6;">Fable limit</th>
+    </tr>
+    {% for r in usage.rows %}
+    <tr>
+      <td style="padding:6px;border-bottom:1px solid #f4f5f7;">{{ r.member or r.developer }}{% if r.account %} &middot; {{ r.account }}{% endif %}</td>
+      <td style="padding:6px;border-bottom:1px solid #f4f5f7;">{{ r.plan or '' }}</td>
+      <td align="right" style="padding:6px;border-bottom:1px solid #f4f5f7;"><strong>{{ r.weekly_pct }}%</strong></td>
+      <td style="padding:6px;border-bottom:1px solid #f4f5f7;">{% if r.reading == 'completed' %}completed cycle{% else %}<span style="background:#fffae6;color:#974f0c;padding:1px 6px;border-radius:3px;">partial: {{ r.reading | replace('_', '-') }}</span>{% endif %}</td>
+      <td style="padding:6px;border-bottom:1px solid #f4f5f7;">{% if r.limit_status == 'hit' %}<span style="color:#de350b;font-weight:600;">hit</span>{% elif r.limit_status == 'projected' %}<span style="color:#ff8b00;">projected to run out</span>{% elif r.limit_status == 'near' %}<span style="color:#ff8b00;">near</span>{% else %}ok{% endif %}</td>
+      <td style="padding:6px;border-bottom:1px solid #f4f5f7;">{% if r.fable_limit_hit %}<span style="color:#de350b;">reached</span>{% elif r.fable_pct is not none %}{{ r.fable_pct }}%{% else %}&mdash;{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% if usage.unmatched %}<p style="margin:6px 0 0;font-size:11px;color:#6b778c;">Not on the roster (no usage_name match): {{ usage.unmatched | join(', ') }}</p>{% endif %}
+  {% if usage.missing_for_members %}<p style="margin:4px 0 0;font-size:11px;color:#6b778c;">Roster members missing from the HR report: {{ usage.missing_for_members | join(', ') }}</p>{% endif %}
+  {% else %}
+  <p style="margin:0;font-size:12px;color:#974f0c;">Unavailable: {{ usage.reason or 'no usage data' }}</p>
+  {% endif %}
+  {% if narrative.si_vs_output %}
+  <h3 style="margin:16px 0 4px;font-size:13px;color:#172b4d;">SI use vs output</h3>
+  <p style="margin:0;font-size:13px;line-height:1.5;">{{ narrative.si_vs_output }}</p>
+  {% endif %}
+</td></tr>
+
+<!-- Per-person notes -->
+<tr><td style="padding:18px 28px 8px;">
+  <h2 style="margin:0 0 10px;font-size:15px;color:#0052cc;text-transform:uppercase;letter-spacing:0.5px;">Per-person notes</h2>
+  {% if data_quality.narrative_error %}
+  <p style="margin:0;font-size:12px;color:#6b778c;">{{ data_quality.narrative_error | capitalize }}.</p>
+  {% endif %}
+  {% for g in role_groups %}{% for m in g.members %}{% if m.note or m.note_withheld %}
+  <p style="margin:0 0 8px;font-size:13px;line-height:1.5;"><strong>{{ m.name }}</strong> <span style="color:#6b778c;font-size:11px;">({{ g.title }})</span> &mdash;
+    {% if m.note_withheld %}<em style="color:#974f0c;">{{ withheld_text }}</em>{% else %}{{ m.note }}{% endif %}</p>
+  {% endif %}{% endfor %}{% endfor %}
+</td></tr>
 
 <!-- Bottlenecks -->
-{% if bottlenecks %}
-<tr><td style="padding:0 32px 24px;">
-  <h2 style="margin:0 0 12px;font-size:16px;color:#de350b;text-transform:uppercase;letter-spacing:0.5px;">Bottlenecks &amp; Recommendations</h2>
-
-  {% for b in bottlenecks %}
-  <div style="margin-bottom:12px;padding:12px 16px;background:{% if b.severity == 'high' %}#ffebe6{% else %}#fffae6{% endif %};border-left:4px solid {% if b.severity == 'high' %}#de350b{% else %}#ff8b00{% endif %};border-radius:0 4px 4px 0;">
-    <p style="margin:0;font-size:13px;font-weight:600;color:#172b4d;">{{ loop.index }}. {{ b.text }}</p>
-    {% if b.recommendation %}
-    <p style="margin:6px 0 0;font-size:12px;color:#6b778c;">&#x2192; {{ b.recommendation }}</p>
-    {% endif %}
+{% if narrative.bottlenecks or merged_without_review or stale_prs %}
+<tr><td style="padding:18px 28px 8px;">
+  <h2 style="margin:0 0 10px;font-size:15px;color:#0052cc;text-transform:uppercase;letter-spacing:0.5px;">Bottlenecks</h2>
+  {% for b in narrative.bottlenecks %}
+  <div style="margin-bottom:10px;padding:10px 14px;background:{% if b.severity == 'high' %}#ffebe6{% else %}#fffae6{% endif %};border-left:4px solid {% if b.severity == 'high' %}#de350b{% else %}#ff8b00{% endif %};">
+    <p style="margin:0;font-size:13px;font-weight:600;">{{ loop.index }}. {{ b.text }}</p>
+    {% if b.recommendation %}<p style="margin:4px 0 0;font-size:12px;color:#6b778c;">&rarr; {{ b.recommendation }}</p>{% endif %}
   </div>
   {% endfor %}
+  {% if merged_without_review %}
+  <p style="margin:10px 0 4px;font-size:12px;font-weight:600;">Merged without a human review ({{ merged_without_review | length }})</p>
+  <ul style="margin:0;padding:0 0 0 18px;font-size:12px;color:#172b4d;">
+    {% for p in merged_without_review[:15] %}<li>{{ p.repo }}#{{ p.number }} {{ p.title }} &mdash; {{ p.author }}</li>{% endfor %}
+    {% if merged_without_review | length > 15 %}<li>… and {{ merged_without_review | length - 15 }} more</li>{% endif %}
+  </ul>
+  {% endif %}
+  {% if stale_prs %}
+  <p style="margin:10px 0 4px;font-size:12px;font-weight:600;">Open PRs older than 14 days ({{ stale_prs | length }})</p>
+  <ul style="margin:0;padding:0 0 0 18px;font-size:12px;color:#172b4d;">
+    {% for p in stale_prs[:10] %}<li>{{ p.repo }}#{{ p.number }} {{ p.title }} &mdash; {{ p.author }}, {{ p.age_days }} days</li>{% endfor %}
+  </ul>
+  {% endif %}
 </td></tr>
 {% endif %}
 
-<!-- Footer -->
-<tr><td style="padding:16px 32px;background:#f4f5f7;border-top:1px solid #dfe1e6;">
-  <p style="margin:0;font-size:11px;color:#6b778c;text-align:center;">
-    {{ footer_text | default("Automated report — DevOps Manager") }}
-  </p>
+<tr><td style="padding:16px 28px 22px;border-top:1px solid #dfe1e6;">
+  <p style="margin:0;font-size:11px;color:#a5adba;">Numbers are computed deterministically from GitHub, JIRA and the HR usage report for the stated week; the narrative is written by an analyst agent and checked against those numbers.</p>
 </td></tr>
 
 </table>

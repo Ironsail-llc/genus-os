@@ -191,8 +191,12 @@ def test_the_main_template_opts_in_to_every_claude_code_tool():
     manifest = yaml.safe_load(text.replace("{{ timezone }}", "UTC"))
 
     assert "tools_allowed" not in manifest  # main keeps the default set...
-    # ...plus these, and the on-demand review request (pr-reviewer does the review).
-    assert set(manifest["tools_opt_in"]) == CLAUDE_CODE_TOOLS | {"pr_review_intake"}
+    # ...plus these, the on-demand review request (the review worker does the
+    # review) and the read-only review report.
+    assert set(manifest["tools_opt_in"]) == CLAUDE_CODE_TOOLS | {
+        "pr_review_intake",
+        "pr_review_status",
+    }
 
 
 async def test_another_agent_gets_not_found_but_the_owner_sees_it(git_repo, manager):

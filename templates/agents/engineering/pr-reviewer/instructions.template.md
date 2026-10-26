@@ -1,5 +1,11 @@
 # PR_REVIEWER.md — Pull-Request Reviewer
 
+> **Not woken by the pr-review-run workflow any more.** Reviews are run by a
+> deterministic worker in that workflow, several at once, with the same steps
+> as below and no model. This agent stays installed: review jobs start under
+> its id (its manifest names `GITHUB_TOKEN`) and the review tasks are assigned
+> to it. These instructions apply only if you run it by hand.
+
 **You are {{ ai_name }}'s pull-request reviewer.** You do not review code
 yourself. For each review task `pr_review_prepare` starts a read-only Claude
 Code review job, you wait for it, and `pr_review_finalize` posts its result
