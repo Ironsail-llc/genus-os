@@ -202,6 +202,12 @@ valkey:
   # templates/validate.yaml fails the render if this ever stops matching the
   # parent's fullname (setting nameOverride or fullnameOverride breaks it).
   auth:
+    # On by default. NOTE the failure mode if you supply the Secret yourself:
+    # the subchart hashes whatever it reads, so ROBOTHOR_REDIS_PASSWORD="" is
+    # written as `user default on #<sha256 of "">` while clients with an empty
+    # password send no AUTH — every connection fails NOAUTH and nothing fails
+    # at install. Supply a real password, or set `enabled: false` (what
+    # values-local.yaml does) if you want an unauthenticated local cache.
     enabled: true
     usersExistingSecret: >-
       {{ if contains "genus-os" .Release.Name }}{{ .Release.Name }}{{ else

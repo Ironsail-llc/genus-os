@@ -636,8 +636,14 @@ upgrade are gone.
    `redis.podLabels` configured the old subchart and now do nothing; size,
    resources and server settings live under `valkey.*` (`valkey.dataStorage`,
    `valkey.resources`, `valkey.initResources`, `valkey.valkeyConfig`).
-3. Upgrade, then confirm `helm test` passes.
-4. The old Redis claim is left in place and never migrated. Once the new cache
+3. Convert `global.imagePullSecrets` to a list of names. It is now
+   `- ghcr-credentials`, not `- name: ghcr-credentials`: the chart's own
+   templates add the `name:` wrapper, so a values file still passing maps
+   renders `name: map[name:ghcr-credentials]` on every first-party pod and
+   pulls from a private registry fail. (The old shape was unusable by any
+   standard subchart, which is why it changed.)
+4. Upgrade, then confirm `helm test` passes.
+5. The old Redis claim is left in place and never migrated. Once the new cache
    is healthy, find it with `kubectl get pvc -n <namespace>` (the one named
    after `{release}-redis`) and delete it.
 
