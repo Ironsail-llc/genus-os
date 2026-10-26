@@ -1,96 +1,89 @@
 #!/usr/bin/env python3
-"""Deterministic render step for the devops-report-pipeline workflow.
+"""Render the devops weekly report for one week's run directory.
 
-Reads /tmp/devops_report.json (produced by the devops-analyst agent),
-calls robothor.engine.reports.renderer.render_devops_report, and writes:
+Reads from ``$DEVOPS_RUNS_DIR/<week-start>/``:
 
-  /tmp/devops_report.html       — full HTML email body
-  /tmp/devops_report_meta.json  — {subject, plain_summary, period}
+  people.json   — the deterministic aggregate (required; every number comes from it)
+  analyst.json  — the analyst's narrative (optional; checked by the narrative guard)
+  jira.json     — for the open-backlog figure (optional)
 
-The emailer agent reads both files and fans out to stakeholders.
+Writes ``report.html`` (email body), ``report.json`` (the rendered context,
+read by the Telegram step) and ``meta.json`` ({subject, plain_summary,
+period}) next to them. A missing or contradictory narrative never blocks the
+report: the guard withholds the note and the report says so.
 
-Exits non-zero on any failure so the workflow's on_failure: abort kicks in.
+Exit 1 only when people.json is missing or rendering fails.
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import sys
 from pathlib import Path
 
-# Add project root to path so robothor.engine imports work
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from robothor.engine.reports.devops_periods import report_window, window_block
+from robothor.engine.reports.devops_report import build_report_context
+from robothor.engine.reports.devops_team import runs_dir, week_run_dir
 from robothor.engine.reports.renderer import render_devops_report
 
-IN_PATH = Path("/tmp/devops_report.json")
-HTML_OUT = Path("/tmp/devops_report.html")
-META_OUT = Path("/tmp/devops_report_meta.json")
 
-# Freshness window: analyst must have written the JSON within this many seconds.
-# Prevents a pipeline with a crashed analyst from silently reusing a stale report.
-MAX_AGE_SECONDS = 1800  # 30 minutes
+def _read(path: Path) -> dict | None:
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text())
+    except json.JSONDecodeError as e:
+        print(f"ignoring unreadable {path.name}: {e}", file=sys.stderr)
+        return None
+    return data if isinstance(data, dict) else None
 
 
-def main() -> int:
-    # Defensive: remove any stale outputs from prior runs before we validate.
-    # This ensures downstream steps (emailer, reporter) can't read a stale file
-    # if we fail and return non-zero — their read_file will error clearly.
-    for p in (HTML_OUT, META_OUT):
-        if p.exists():
-            p.unlink()
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("--week-start", help="YYYY-MM-DD (any day of the week); default last week")
+    ap.add_argument("--runs-dir", type=Path, help="override $DEVOPS_RUNS_DIR")
+    args = ap.parse_args(argv)
 
-    if not IN_PATH.exists():
-        print(f"Input missing: {IN_PATH}", file=sys.stderr)
-        return 1
+    start, end = report_window(week_start=args.week_start)
+    period = window_block(start, end)
+    run = week_run_dir(period["week_start"], args.runs_dir or runs_dir())
+    for name in ("report.html", "report.json", "meta.json"):
+        (run / name).unlink(missing_ok=True)
 
-    import time
-
-    age = time.time() - IN_PATH.stat().st_mtime
-    if age > MAX_AGE_SECONDS:
+    people = _read(run / "people.json")
+    if people is None:
         print(
-            f"Input stale: {IN_PATH} is {int(age)}s old (> {MAX_AGE_SECONDS}s)",
-            file=sys.stderr,
+            f"missing {run / 'people.json'} — run devops_aggregate_people.py first", file=sys.stderr
         )
         return 1
+    analyst = _read(run / "analyst.json")
+    ctx = build_report_context(people, analyst, jira=_read(run / "jira.json"))
 
-    try:
-        data = json.loads(IN_PATH.read_text())
-    except json.JSONDecodeError as e:
-        print(f"Input JSON invalid: {e}", file=sys.stderr)
-        return 1
-
-    required = [
-        "period",
-        "executive_summary",
-        "jira",
-        "github",
-        "people",
-        "bottlenecks",
-    ]
-    missing = [k for k in required if k not in data]
-    if missing:
-        print(f"Report JSON missing required keys: {missing}", file=sys.stderr)
-        return 1
-
-    rendered = render_devops_report(data)
+    rendered = render_devops_report(ctx)
     if "error" in rendered:
-        print(f"Render failed: {rendered['error']}", file=sys.stderr)
+        print(f"render failed: {rendered['error']}", file=sys.stderr)
         return 1
 
-    HTML_OUT.write_text(rendered["html"])
-    META_OUT.write_text(
+    (run / "report.html").write_text(rendered["html"])
+    (run / "report.json").write_text(json.dumps(ctx, indent=2, default=str, ensure_ascii=False))
+    (run / "meta.json").write_text(
         json.dumps(
             {
                 "subject": rendered["subject"],
                 "plain_summary": rendered["plain_summary"],
-                "period": data.get("period", ""),
+                "period": ctx.get("period"),
             },
             indent=2,
+            ensure_ascii=False,
         )
     )
+    withheld = ctx["data_quality"].get("narrative_withheld") or []
     print(
-        f"Rendered {len(rendered['html'])} char HTML → {HTML_OUT} (subject: {rendered['subject']})"
+        f"Rendered {len(rendered['html'])} chars -> {run / 'report.html'} "
+        f"(subject: {rendered['subject']}; narrative withheld for {len(withheld)})"
     )
     return 0
 

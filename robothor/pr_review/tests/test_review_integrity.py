@@ -253,7 +253,8 @@ async def test_a_second_prepare_returns_the_running_job(env, tmp_path):
     assert len(start.calls) == 1 and second["already_started"] is True
 
 
-async def test_a_failed_start_leaves_the_row_queued(env, tmp_path):
+async def test_a_failed_start_fails_the_row_and_binds_no_job(env, tmp_path):
+    # It used to stay queued, which wedged it once its task was resolved (#677 QA).
     await _queued(env)
 
     async def refuse(args):
@@ -262,4 +263,4 @@ async def test_a_failed_start_leaves_the_row_queued(env, tmp_path):
     result = await _prepare(env, tmp_path, start=refuse)
     assert "ROBOTHOR_CODING_REPO_ROOTS" in result["error"]
     row = await env["store"].get(TENANT, REPO, 7)
-    assert row.status == "queued" and row.job_id == ""
+    assert row.status == "failed" and row.job_id == "" and row.attempts == 1

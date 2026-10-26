@@ -19,7 +19,8 @@ CRM tasks.
 - Checks and resolves its own task queue every turn.
 - Tracks open threads in `brain/memory/main-status.md`.
 - Hands pull-request review requests to the pr-reviewer suite with
-  `pr_review_intake(pr=...)` and reports the posted review's link.
+  `pr_review_intake(pr=...)` and reports the posted review's link; answers
+  "how are reviews going?" from `pr_review_status`.
 
 ## Variables
 

@@ -8,6 +8,7 @@ helper spawning / backoff / replanning → run continuation.
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -154,8 +155,8 @@ class TestScenario2RateLimitBackoff:
         # Disable planning to keep mock_completion predictable
         spawn_agent_config.planning_enabled = False
         spawn_agent_config.model_fallbacks = []
-        # Large hard timeout so a loaded CI runner can't trip the wall-clock
-        # asyncio.timeout (the 30s fixture default flaked under parallel 3.x jobs).
+        # Large hard timeout so a loaded CI runner cannot trip the run's own
+        # wall-clock asyncio.timeout.
         spawn_agent_config.timeout_seconds = 3600
 
         call_count = 0
@@ -182,25 +183,30 @@ class TestScenario2RateLimitBackoff:
 
         mock_spawn = AsyncMock()
 
-        import asyncio as _asyncio
-
-        _real_sleep = _asyncio.sleep
-
-        async def _yielding_sleep(*_args, **_kwargs):
-            # Yield to the event loop instead of blocking. Patching asyncio.sleep
-            # module-wide also neutralizes the runner's stall-watchdog tick
-            # (`await asyncio.sleep(...)`); returning instantly turns that loop into
-            # a busy-loop that starves the agent coroutine and times out under
-            # Python 3.13's scheduler. Yielding keeps the loop fair on all versions.
-            await _real_sleep(0)
+        # Patch the backoff where it lives — the `asyncio` reference inside
+        # error_actions, which uses it for nothing but this one sleep — so the
+        # 429 retry does not actually wait.
+        #
+        # This test used to patch `asyncio.sleep` module-wide instead, and that
+        # is what made it flaky: the runner paces its progress watchdog with
+        # `while not progress_stop.is_set(): await asyncio.sleep(5)`, so a
+        # globally instant sleep turns that into a busy loop spinning against
+        # the agent coroutine, and the whole test blew the 30s pytest-timeout
+        # whenever the runner was loaded (seen on 3.11 and 3.13 alike). The
+        # global patch also bought nothing: the watchdog is cancelled in
+        # deep_worker's `finally`, so its real 5s tick costs the test no time,
+        # and the other six tests in this file already run against the real
+        # asyncio.sleep without trouble.
+        backoff_sleep = AsyncMock()
 
         with patch("robothor.engine.runner.create_run"):
             with patch("robothor.engine.runner.update_run"):
                 with patch("robothor.engine.run_finalizer.create_step"):
                     with patch("litellm.acompletion", side_effect=mock_completion):
-                        with patch.object(
-                            _asyncio, "sleep", new=AsyncMock(side_effect=_yielding_sleep)
-                        ) as mock_sleep:
+                        with patch(
+                            "robothor.engine.error_actions.asyncio",
+                            SimpleNamespace(sleep=backoff_sleep),
+                        ):
                             runner._spawn_recovery_helper = mock_spawn
                             run = await runner.execute(
                                 "test-agent",
@@ -209,8 +215,8 @@ class TestScenario2RateLimitBackoff:
                             )
 
         assert run.status == RunStatus.COMPLETED
-        # Sleep was called for backoff
-        mock_sleep.assert_called()
+        # The backoff remedy actually slept
+        backoff_sleep.assert_called()
         # No helper spawned for rate limits
         mock_spawn.assert_not_called()
 

@@ -87,6 +87,7 @@ exclude_docs: |
   !/features/runtime-recovery.md
   !/TOOLS.md
   !/PR_REVIEWER.md
+  !/DEVOPS_REPORT.md
   !/AUTONOMOUS_EXECUTION.md
   !/SALES_INTELLIGENCE.md
   !/PLUGINS.md
@@ -146,6 +147,7 @@ nav:
       - Engine recovery: features/runtime-recovery.md
       - Tools: TOOLS.md
       - PR reviewer: PR_REVIEWER.md
+      - Dev team report: DEVOPS_REPORT.md
       - Personal autonomy: AUTONOMOUS_EXECUTION.md
       - Sales intelligence: SALES_INTELLIGENCE.md
       - Plugins: PLUGINS.md

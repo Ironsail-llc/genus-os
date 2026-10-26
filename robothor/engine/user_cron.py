@@ -58,9 +58,9 @@ def compute_next_run(schedule: dict[str, Any], after: datetime) -> datetime | No
         # The request was late, not wrong.
         return max(after, fire_at)
     if kind == "cron":
-        from apscheduler.triggers.cron import CronTrigger
+        from robothor.engine.crontab import cron_trigger
 
-        trigger = CronTrigger.from_crontab(str(schedule["expression"]))
+        trigger = cron_trigger(str(schedule["expression"]))
         return cast("datetime | None", trigger.get_next_fire_time(None, after))
     return None
 

@@ -329,6 +329,7 @@ async def _github_pr_stats(args: dict[str, Any], ctx: ToolContext) -> dict[str, 
                     "message": "No merged PRs in this period",
                 }
             sem = asyncio.Semaphore(8)
+            failed: list[int] = []
 
             async def _fetch_detail(num: int) -> dict[str, Any] | None:
                 async with sem:
@@ -340,6 +341,9 @@ async def _github_pr_stats(args: dict[str, Any], ctx: ToolContext) -> dict[str, 
                         data: dict[str, Any] = resp.json()
                         return data
                     except Exception:
+                        # Never dropped silently: a PR the search said was
+                        # merged but whose detail failed is reported below.
+                        failed.append(num)
                         return None
 
             details = await asyncio.gather(*[_fetch_detail(n) for n in numbers])
@@ -387,6 +391,9 @@ async def _github_pr_stats(args: dict[str, Any], ctx: ToolContext) -> dict[str, 
     return {
         "repo": repo,
         "period": period,
+        "merged_total": len(numbers),
+        "detail_fetch_failures": sorted(failed),
+        "incomplete": bool(failed),
         "merged_count": len(human_prs),
         "bot_merged_count": sum(bot_authors.values()),
         "bot_authors": bot_authors,
@@ -488,40 +495,43 @@ async def _github_review_stats(args: dict[str, Any], ctx: ToolContext) -> dict[s
 
     try:
         async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
-            # Get recent closed PRs
+            # Every PR (open or closed) updated since the window start: a review
+            # submission bumps updated_at, so this is the full candidate set.
             prs = await _paginate(
                 client,
                 f"{_GITHUB_API}/repos/{repo}/pulls",
                 _headers(token),
-                {"state": "closed", "sort": "updated", "direction": "desc", "per_page": 50},
-                max_pages=3,
+                {"state": "all", "sort": "updated", "direction": "desc", "per_page": 100},
+                max_pages=5,
             )
 
-            # Filter to date range
-            recent_prs = []
-            for pr in prs:
-                updated = datetime.fromisoformat(pr["updated_at"])
-                if updated >= since.replace(tzinfo=UTC):
-                    recent_prs.append(pr)
+            recent_prs = [pr for pr in prs if datetime.fromisoformat(pr["updated_at"]) >= since]
 
-            # Gather reviews for each PR
             reviewer_stats: dict[str, dict[str, Any]] = {}
+            fetch_failures: list[dict[str, Any]] = []
 
-            for pr in recent_prs[:50]:  # Cap to avoid rate limits
+            for pr in recent_prs:
                 resp = await client.get(
                     f"{_GITHUB_API}/repos/{repo}/pulls/{pr['number']}/reviews",
                     headers=_headers(token),
                 )
                 if resp.status_code != 200:
+                    fetch_failures.append({"pr": pr["number"], "status": resp.status_code})
                     continue
                 reviews = resp.json()
 
                 pr_created = datetime.fromisoformat(pr["created_at"])
+                pr_author = (pr.get("user") or {}).get("login", "")
 
                 for review in reviews:
                     reviewer = (review.get("user") or {}).get("login", "unknown")
                     submitted = review.get("submitted_at", "")
                     state = review.get("state", "")
+                    if not submitted or state == "PENDING" or reviewer == pr_author:
+                        continue
+                    reviewed_at = datetime.fromisoformat(submitted)
+                    if reviewed_at < since:
+                        continue
 
                     if reviewer not in reviewer_stats:
                         reviewer_stats[reviewer] = {
@@ -541,11 +551,9 @@ async def _github_review_stats(args: dict[str, Any], ctx: ToolContext) -> dict[s
                     elif state == "COMMENTED":
                         stats["comments"] += 1
 
-                    if submitted:
-                        reviewed_at = datetime.fromisoformat(submitted)
-                        turnaround = (reviewed_at - pr_created).total_seconds() / 3600
-                        if turnaround > 0:
-                            stats["turnaround_hours"].append(turnaround)
+                    turnaround = (reviewed_at - pr_created).total_seconds() / 3600
+                    if turnaround > 0:
+                        stats["turnaround_hours"].append(turnaround)
     except httpx.HTTPStatusError as e:
         return {"error": f"GitHub API error: {e.response.status_code}"}
     except Exception as e:
@@ -573,6 +581,8 @@ async def _github_review_stats(args: dict[str, Any], ctx: ToolContext) -> dict[s
         "days": days,
         "prs_analyzed": len(recent_prs),
         "reviewers": reviewers,
+        "review_fetch_failures": fetch_failures,
+        "incomplete": bool(fetch_failures),
     }
 
 

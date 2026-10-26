@@ -278,8 +278,10 @@ def check_cron(manifest: dict[str, Any]) -> CheckResult:
     if CronTrigger is None:
         return result.skip("APScheduler not available for validation")
 
+    from robothor.engine.crontab import cron_trigger
+
     try:
-        CronTrigger.from_crontab(cron_expr)
+        cron_trigger(cron_expr)
     except Exception as e:
         return result.fail(f"Invalid cron expression '{cron_expr}': {e}")
     return result

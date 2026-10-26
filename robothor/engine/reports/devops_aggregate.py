@@ -1,464 +1,403 @@
-"""Deterministic per-person aggregation for the DevOps weekly report.
+"""Deterministic people table for the devops weekly report.
 
-Given the JSON outputs of `devops_collect_github.py` + `devops_collect_jira.py`,
-join every author/assignee/reviewer handle to a CRM person via
-`contact_identifiers`, sum per-person totals, and surface anomalies so the
-report's "Report Quality" panel can show what was missed.
+Every number in the report comes from here, never from the analyst LLM.
+Rows exist ONLY for active members of the team file
+(:mod:`robothor.engine.reports.devops_team`); activity from any other handle
+is listed under ``outside_roster`` (or ``bots``) and never becomes a person.
 
-Designed as a pure function plus a thin DAL protocol — both are easily
-unit-testable without a live database.
+Inputs are the run files of one report week — ``github.json``
+(:mod:`devops_github`), ``jira.json`` (``scripts/devops_collect_jira.py``)
+and ``usage.json`` (:mod:`claude_usage_hr`) — plus up to three earlier
+``people.json`` files for the trend. A metric whose source was unavailable is
+``None`` with a reason in the member's ``unavailable`` map, never 0.
 """
 
 from __future__ import annotations
 
-from typing import Any, Protocol
+import re
+from statistics import median
+from typing import TYPE_CHECKING, Any
 
-_BOT_LOGIN_BASENAMES = frozenset(
-    {
-        "dependabot",
-        "renovate",
-        "github-actions",
-        "release-please",
-        "pre-commit-ci",
-        "codecov",
-        "codecov-commenter",
-        "semantic-release",
-    }
+if TYPE_CHECKING:
+    from robothor.engine.reports.devops_team import Member, Team
+
+#: Per-member metrics, in report order. Each maps to the collector metric(s)
+#: it depends on, as ("github"|"jira", metric) pairs.
+METRIC_SOURCES: dict[str, tuple[tuple[str, str], ...]] = {
+    "tickets_resolved": (("jira", "resolved"),),
+    "tickets_shipped": (("github", "prs"),),
+    "in_progress": (("jira", "in_progress"),),
+    "prs_merged": (("github", "prs"),),
+    "commits": (("github", "commits"),),
+    "lines_added": (("github", "lines"),),
+    "lines_deleted": (("github", "lines"),),
+    "reviews_given": (("github", "reviews"),),
+    "reviews_approved": (("github", "reviews"),),
+    "reviews_changes_requested": (("github", "reviews"),),
+    "reviews_commented": (("github", "reviews"),),
+    "review_turnaround_median_h": (("github", "reviews"),),
+    "changes_requested_received": (("github", "reviews"),),
+    "merged_without_review": (("github", "prs"), ("github", "reviews")),
+    "stale_prs": (("github", "stale"),),
+}
+METRICS = tuple(METRIC_SOURCES)
+#: Metrics that count as "activity" for the no-activity flag.
+ACTIVITY_METRICS = (
+    "tickets_resolved",
+    "in_progress",
+    "prs_merged",
+    "commits",
+    "reviews_given",
 )
+#: Metrics summed into team totals (medians are not summable).
+SUMMABLE = tuple(m for m in METRICS if m != "review_turnaround_median_h")
+
+_JIRA_SENTINELS = frozenset({"", "unassigned", "unknown"})
 
 
-def _is_bot_login(login: str) -> bool:
-    if not login:
-        return False
-    if login.endswith("[bot]"):
-        return True
-    return login.lower() in _BOT_LOGIN_BASENAMES
+def _unavailable_sources(
+    github: dict[str, Any] | None, jira: dict[str, Any] | None
+) -> dict[tuple[str, str], str]:
+    """(source, metric) -> reason, for every collector metric that is not whole."""
+    out: dict[tuple[str, str], str] = {}
+    if github is None:
+        for m in ("prs", "lines", "commits", "reviews", "stale"):
+            out[("github", m)] = "GitHub collection did not run"
+    else:
+        for repo, rd in (github.get("repos") or {}).items():
+            for m, reason in (rd.get("unavailable") or {}).items():
+                out.setdefault(("github", m), f"{repo}: {reason}")
+        if not github.get("repos") and github.get("errors"):
+            msg = github["errors"][0].get("message", "no repos collected")
+            for m in ("prs", "lines", "commits", "reviews", "stale"):
+                out.setdefault(("github", m), msg)
+    if jira is None:
+        for m in ("resolved", "in_progress"):
+            out[("jira", m)] = "JIRA collection did not run"
+    else:
+        for proj, pd in (jira.get("projects") or {}).items():
+            for m, reason in (pd.get("unavailable") or {}).items():
+                out.setdefault(("jira", m), f"{proj}: {reason}")
+        for e in jira.get("errors") or []:
+            q = e.get("query", "")
+            if q in ("resolved", "in_progress"):
+                out.setdefault(("jira", q), f"{e.get('project', '')}: {e.get('message', '')}")
+    return out
 
 
-class AggregateDAL(Protocol):
-    def resolve_handles(self, items: set[tuple[str, str]]) -> dict[tuple[str, str], str]:
-        """Return person_id for each (channel, identifier) that resolves; omit misses."""
-        ...
-
-    def get_roster(self) -> list[dict[str, Any]]:
-        """Return canonical engineering roster.
-
-        Each entry has: id, name, email, job_title, identities=[(channel, identifier), ...].
-        """
-        ...
-
-
-class PostgresAggregateDAL:
-    """Real DAL backed by the CRM Postgres database."""
-
-    def __init__(self, conn: Any, tenant_id: str) -> None:
-        self._conn = conn
-        self._tenant_id = tenant_id
-
-    def resolve_handles(self, items: set[tuple[str, str]]) -> dict[tuple[str, str], str]:
-        if not items:
-            return {}
-        channels = list({c for c, _ in items})
-        identifiers = list({i for _, i in items})
-        with self._conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT ci.channel, ci.identifier, ci.person_id::text
-                FROM contact_identifiers ci
-                JOIN crm_people p ON p.id = ci.person_id
-                WHERE ci.tenant_id = %s
-                  AND ci.channel = ANY(%s)
-                  AND ci.identifier = ANY(%s)
-                  AND ci.person_id IS NOT NULL
-                  AND p.deleted_at IS NULL
-                """,
-                (self._tenant_id, channels, identifiers),
-            )
-            rows = cur.fetchall()
-        return {(r[0], r[1]): r[2] for r in rows if (r[0], r[1]) in items}
-
-    def get_roster(self) -> list[dict[str, Any]]:
-        with self._conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT DISTINCT
-                    p.id::text,
-                    COALESCE(NULLIF(TRIM(CONCAT_WS(' ', p.first_name, p.last_name)), ''), p.email),
-                    p.email,
-                    p.job_title
-                FROM crm_people p
-                JOIN contact_identifiers ci ON ci.person_id = p.id
-                WHERE p.deleted_at IS NULL
-                  AND p.tenant_id = %s
-                  AND ci.tenant_id = %s
-                  AND ci.channel IN ('github', 'jira_display_name')
-                """,
-                (self._tenant_id, self._tenant_id),
-            )
-            people = cur.fetchall()
-
-            if not people:
-                return []
-
-            cur.execute(
-                """
-                SELECT person_id::text, channel, identifier
-                FROM contact_identifiers
-                WHERE tenant_id = %s
-                  AND person_id = ANY(%s::uuid[])
-                  AND channel IN ('github', 'jira_display_name')
-                """,
-                (self._tenant_id, [p[0] for p in people]),
-            )
-            id_rows = cur.fetchall()
-
-        by_person: dict[str, list[tuple[str, str]]] = {}
-        for pid, ch, ident in id_rows:
-            by_person.setdefault(pid, []).append((ch, ident))
-
-        return [
-            {
-                "id": pid,
-                "name": name,
-                "email": email or "",
-                "job_title": job_title or "",
-                "identities": by_person.get(pid, []),
-            }
-            for pid, name, email, job_title in people
-        ]
-
-
-def _collect_handles(
-    github_data: dict[str, Any], jira_data: dict[str, Any]
-) -> dict[tuple[str, str], dict[str, Any]]:
-    """Walk the collector outputs, returning every handle observed.
-
-    Returns a dict keyed by (channel, identifier), each value holding:
-        occurrences: int
-        sources: set[str]  — "<repo>/authors", "<project>/by_assignee", etc.
-        is_bot: bool
-        per_repo: set[str]  — repos touched (for repos_touched aggregation)
-    """
-    seen: dict[tuple[str, str], dict[str, Any]] = {}
-
-    def _bump(channel: str, ident: str, source: str, count: int) -> None:
-        key = (channel, ident)
-        entry = seen.setdefault(
-            key,
-            {
-                "occurrences": 0,
-                "sources": set(),
-                "is_bot": _is_bot_login(ident) if channel == "github" else False,
-            },
-        )
-        entry["occurrences"] += count
-        entry["sources"].add(source)
-
-    # GitHub authors / merged_by / reviewers — across both weekly windows
-    for repo, repo_data in (github_data.get("repos") or {}).items():
-        for week_key in ("pr_stats_current_week", "pr_stats_last_week"):
-            stats = repo_data.get(week_key) or {}
-            for login, n in (stats.get("authors") or {}).items():
-                _bump("github", login, f"{repo}/{week_key}/authors", n)
-            for login, n in (stats.get("merged_by") or {}).items():
-                _bump("github", login, f"{repo}/{week_key}/merged_by", n)
-            for login, n in (stats.get("bot_authors") or {}).items():
-                _bump("github", login, f"{repo}/{week_key}/bot_authors", n)
-        for r in (repo_data.get("review_stats") or {}).get("reviewers", []):
-            login = r.get("reviewer")
-            n = r.get("reviews_given", 0)
-            if login:
-                _bump("github", login, f"{repo}/reviewers", n)
-
-    # JIRA assignees — across both weekly windows + in-progress
-    for project, proj_data in (jira_data.get("projects") or {}).items():
-        for week_key in ("resolved_current_week", "resolved_last_week"):
-            agg = proj_data.get(week_key) or {}
-            for name, n in (agg.get("by_assignee") or {}).items():
-                _bump("jira_display_name", name, f"{project}/{week_key}", n)
-        wip = proj_data.get("in_progress") or {}
-        for name, n in (wip.get("by_assignee") or {}).items():
-            _bump("jira_display_name", name, f"{project}/in_progress", n)
-
-    return seen
-
-
-def _person_totals(
-    person_id: str,
-    handles: dict[tuple[str, str], dict[str, Any]],
-    handle_to_person: dict[tuple[str, str], str],
-    github_data: dict[str, Any],
-    jira_data: dict[str, Any],
-) -> dict[str, Any]:
-    """Sum activity for a single person across all their resolved handles."""
-    my_keys = {k for k, p in handle_to_person.items() if p == person_id}
-    my_github = {ident for (ch, ident) in my_keys if ch == "github"}
-    my_jira = {ident for (ch, ident) in my_keys if ch == "jira_display_name"}
-
-    prs_current = 0
-    prs_last = 0
-    repos_touched: set[str] = set()
-    reviews_given = 0
-    approvals = 0
-    changes_requested = 0
-    turnaround_hours: list[float] = []
-
-    for repo, repo_data in (github_data.get("repos") or {}).items():
-        cw = (repo_data.get("pr_stats_current_week") or {}).get("authors") or {}
-        lw = (repo_data.get("pr_stats_last_week") or {}).get("authors") or {}
-        touched = False
-        for h in my_github:
-            if h in cw:
-                prs_current += cw[h]
-                touched = True
-            if h in lw:
-                prs_last += lw[h]
-                touched = True
-        for r in (repo_data.get("review_stats") or {}).get("reviewers", []):
-            if r.get("reviewer") in my_github:
-                reviews_given += r.get("reviews_given", 0)
-                approvals += r.get("approvals", 0)
-                changes_requested += r.get("changes_requested", 0)
-                t = r.get("avg_turnaround_hours")
-                if isinstance(t, int | float):
-                    turnaround_hours.append(float(t))
-                touched = True
-        if touched:
-            repos_touched.add(repo)
-
-    tickets_current = 0
-    tickets_last = 0
-    in_progress_tickets = 0
-    for proj_data in (jira_data.get("projects") or {}).values():
-        cw = (proj_data.get("resolved_current_week") or {}).get("by_assignee") or {}
-        lw = (proj_data.get("resolved_last_week") or {}).get("by_assignee") or {}
-        wip = (proj_data.get("in_progress") or {}).get("by_assignee") or {}
-        for j in my_jira:
-            tickets_current += cw.get(j, 0)
-            tickets_last += lw.get(j, 0)
-            in_progress_tickets += wip.get(j, 0)
-
-    avg_turnaround = (
-        round(sum(turnaround_hours) / len(turnaround_hours), 1) if turnaround_hours else None
-    )
-
+def _blank() -> dict[str, Any]:
     return {
-        "current_week": {
-            "prs_merged": prs_current,
-            "tickets_resolved": tickets_current,
-        },
-        "last_week": {
-            "prs_merged": prs_last,
-            "tickets_resolved": tickets_last,
-        },
-        "reviews_30d": {
-            "reviews_given": reviews_given,
-            "approvals": approvals,
-            "changes_requested": changes_requested,
-            "avg_turnaround_hours": avg_turnaround,
-        },
-        "in_progress_tickets": in_progress_tickets,
-        "repos_touched": sorted(repos_touched),
-        "github_handles": sorted(my_github),
-        "jira_handles": sorted(my_jira),
+        "tickets_resolved": 0,
+        "tickets_by_type": {},
+        "tickets_shipped": 0,
+        "ticket_keys": set(),
+        "in_progress": 0,
+        "prs_merged": 0,
+        "commits": 0,
+        "lines_added": 0,
+        "lines_deleted": 0,
+        "reviews_given": 0,
+        "reviews_approved": 0,
+        "reviews_changes_requested": 0,
+        "reviews_commented": 0,
+        "turnarounds": [],
+        "changes_requested_received": 0,
+        "merged_without_review": 0,
+        "stale_prs": 0,
     }
 
 
-def _provisional_totals(
-    channel: str,
-    identifier: str,
-    github_data: dict[str, Any],
-    jira_data: dict[str, Any],
-) -> dict[str, Any]:
-    """Activity totals for a single unresolved handle (no CRM person yet)."""
-    fake_pid = f"__provisional__::{channel}::{identifier}"
-    handle_to_person = {(channel, identifier): fake_pid}
-    return _person_totals(fake_pid, {}, handle_to_person, github_data, jira_data)
+class _Tally:
+    """Per-member counters plus everything that is not a roster member's."""
 
+    def __init__(self, team: Team, project_keys: list[str] | None = None) -> None:
+        self.team = team
+        keys = "|".join(re.escape(k) for k in project_keys or [])
+        self.ticket_re = re.compile(rf"\b(?:{keys})-\d+\b") if keys else None
+        self.acc: dict[str, dict[str, Any]] = {m.id: _blank() for m in team.active_members}
+        self.outside: dict[tuple[str, str], dict[str, Any]] = {}
+        self.bots: dict[str, dict[str, int]] = {}
+        self.merged_without_review: list[dict[str, Any]] = []
+        self.stale_all: list[dict[str, Any]] = []
+        self.all_prs_merged = 0
 
-_DEFAULT_ENGINEER_ROLE_KEYWORDS: tuple[str, ...] = (
-    "Engineer",
-    "Developer",
-    "SRE",
-    "DevOps",
-)
+    def owner(self, channel: str, handle: str) -> Member | None:
+        m = self.team.member_for(channel, handle)
+        return m if m is not None and m.active else None
 
+    def bump_outside(self, source: str, handle: str, metric: str, n: int = 1) -> None:
+        if source == "github" and self.team.is_bot(handle):
+            b = self.bots.setdefault(handle, {"prs_merged": 0, "commits": 0, "reviews": 0})
+            b[metric] = b.get(metric, 0) + n
+            return
+        entry = self.outside.setdefault(
+            (source, handle), {"handle": handle, "source": source, "counts": {}}
+        )
+        m = self.team.member_for("jira" if source == "jira" else "github", handle)
+        if m is not None and not m.active:
+            entry["note"] = f"inactive roster member {m.id}"
+        entry["counts"][metric] = entry["counts"].get(metric, 0) + n
 
-def _is_engineer(job_title: str, keywords: tuple[str, ...] | list[str]) -> bool:
-    if not job_title:
-        return False
-    t = job_title.lower()
-    return any(k.lower() in t for k in keywords)
+    def add_github(self, github: dict[str, Any] | None) -> None:
+        for repo, rd in ((github or {}).get("repos") or {}).items():
+            short = repo.split("/")[-1]
+            for pr in rd.get("merged_prs") or []:
+                author = pr.get("author") or ""
+                m = self.owner("github", author)
+                if not self.team.is_bot(author):
+                    self.all_prs_merged += 1
+                if m is None:
+                    self.bump_outside("github", author, "prs_merged")
+                else:
+                    a = self.acc[m.id]
+                    a["prs_merged"] += 1
+                    a["lines_added"] += pr.get("lines_added") or 0
+                    a["lines_deleted"] += pr.get("lines_deleted") or 0
+                    if self.ticket_re is not None:
+                        a["ticket_keys"].update(self.ticket_re.findall(pr.get("title") or ""))
+                        a["tickets_shipped"] = len(a["ticket_keys"])
+                reviewers = pr.get("reviewers")
+                if reviewers is not None and not self.team.is_bot(author):
+                    human = [r for r in reviewers if r != author and not self.team.is_bot(r)]
+                    if not human:
+                        self.merged_without_review.append(
+                            {
+                                "repo": short,
+                                "number": pr.get("number"),
+                                "title": pr.get("title", ""),
+                                "author": m.name if m else author,
+                            }
+                        )
+                        if m is not None:
+                            self.acc[m.id]["merged_without_review"] += 1
+            for rv in rd.get("reviews") or []:
+                reviewer = rv.get("reviewer") or ""
+                m = self.owner("github", reviewer)
+                state = rv.get("state")
+                if m is None:
+                    self.bump_outside("github", reviewer, "reviews")
+                else:
+                    a = self.acc[m.id]
+                    a["reviews_given"] += 1
+                    if state == "APPROVED":
+                        a["reviews_approved"] += 1
+                    elif state == "CHANGES_REQUESTED":
+                        a["reviews_changes_requested"] += 1
+                    elif state == "COMMENTED":
+                        a["reviews_commented"] += 1
+                    if isinstance(rv.get("turnaround_h"), int | float):
+                        a["turnarounds"].append(float(rv["turnaround_h"]))
+                if state == "CHANGES_REQUESTED":
+                    am = self.owner("github", rv.get("pr_author") or "")
+                    if am is not None:
+                        self.acc[am.id]["changes_requested_received"] += 1
+            commits = rd.get("commits") or {}
+            for login, n in (commits.get("by_login") or {}).items():
+                m = self.owner("github", login)
+                if m is None:
+                    self.bump_outside("github", login, "commits", n)
+                else:
+                    self.acc[m.id]["commits"] += n
+            for email, n in (commits.get("unlinked") or {}).items():
+                self.bump_outside("git-email", email, "commits", n)
+            for sp in rd.get("stale_prs") or []:
+                m = self.owner("github", sp.get("author") or "")
+                if self.team.is_bot(sp.get("author") or ""):
+                    continue
+                self.stale_all.append(
+                    {**sp, "repo": short, "author": m.name if m else sp.get("author")}
+                )
+                if m is not None:
+                    self.acc[m.id]["stale_prs"] += 1
+
+    def add_jira(self, jira: dict[str, Any] | None) -> None:
+        for pd in ((jira or {}).get("projects") or {}).values():
+            for issue in pd.get("resolved") or []:
+                name = issue.get("assignee") or ""
+                if name.strip().lower() in _JIRA_SENTINELS:
+                    continue
+                m = self.owner("jira", name)
+                if m is None:
+                    self.bump_outside("jira", name, "tickets_resolved")
+                    continue
+                a = self.acc[m.id]
+                a["tickets_resolved"] += 1
+                t = issue.get("type") or "Other"
+                a["tickets_by_type"][t] = a["tickets_by_type"].get(t, 0) + 1
+            for issue in pd.get("in_progress") or []:
+                name = issue.get("assignee") or ""
+                if name.strip().lower() in _JIRA_SENTINELS:
+                    continue
+                m = self.owner("jira", name)
+                if m is None:
+                    self.bump_outside("jira", name, "in_progress")
+                else:
+                    self.acc[m.id]["in_progress"] += 1
 
 
 def aggregate_people(
-    github_data: dict[str, Any],
-    jira_data: dict[str, Any],
-    dal: AggregateDAL,
+    team: Team,
+    github: dict[str, Any] | None,
+    jira: dict[str, Any] | None,
+    usage: dict[str, Any] | None = None,
     *,
-    engineer_role_keywords: list[str] | tuple[str, ...] | None = None,
+    history: list[dict[str, Any] | None] | None = None,
 ) -> dict[str, Any]:
-    """Build the per-person rollup for the devops report.
+    """Build ``people.json`` for one report week.
 
-    Resolved CRM people appear with `resolved: True`. Unresolved handles
-    (new hires, contractors, JIRA sentinels like 'Unassigned') appear as
-    provisional rows with `resolved: False` so their activity is never
-    silently dropped — they're also surfaced in `unresolved_handles` so
-    the operator knows which handles still need `contact_identifiers`
-    rows.
-
-    `missing_from_roster` is narrowed to roster members whose `job_title`
-    matches one of `engineer_role_keywords` (default: Engineer / Developer
-    / SRE / DevOps). QA / PM / stakeholders who have github handles for
-    permissions but aren't expected to merge PRs don't appear there.
-
-    Sort order: primary sort by last_week activity (the completed full
-    week), not current_week (which is always a partial day at Monday 9 AM
-    report time).
+    ``history`` is up to three earlier ``people.json`` dicts, oldest first
+    (``None`` for a week with no file); each member's ``trend[metric]`` lists
+    those weeks' values in the same order.
     """
-    keywords = (
-        tuple(engineer_role_keywords)
-        if engineer_role_keywords is not None
-        else _DEFAULT_ENGINEER_ROLE_KEYWORDS
+    unavailable = _unavailable_sources(github, jira)
+    tally = _Tally(team, list(((jira or {}).get("projects") or {}).keys()))
+    tally.add_github(github)
+    tally.add_jira(jira)
+    acc, outside, bots = tally.acc, tally.outside, tally.bots
+    merged_without_review, stale_all = tally.merged_without_review, tally.stale_all
+    all_prs_merged = tally.all_prs_merged
+
+    # ── Usage ──
+    usage = usage or {"available": False, "reason": "usage collection did not run"}
+    usage_rows = (usage.get("rows") or []) if usage.get("available") else []
+    by_usage_name: dict[str, list[dict[str, Any]]] = {}
+    for row in usage_rows:
+        by_usage_name.setdefault(str(row.get("developer", "")).casefold(), []).append(row)
+    roster_usage_names = {m.usage_name.casefold() for m in team.active_members if m.usage_name}
+    unmatched = sorted(
+        {
+            str(r.get("developer", ""))
+            for r in usage_rows
+            if str(r.get("developer", "")).casefold() not in roster_usage_names
+        }
     )
-    handles = _collect_handles(github_data, jira_data)
 
-    # Partition out bots before resolving — they will never be people.
-    non_bot_handles = {k for k, v in handles.items() if not v["is_bot"]}
+    # ── Rows ──
+    hist = list(history or [])[-3:]
+    while len(hist) < 3:
+        hist.insert(0, None)
+    hist_rows = [{m["id"]: m for m in (h or {}).get("members", [])} if h else {} for h in hist]
 
-    handle_to_person = dal.resolve_handles(non_bot_handles)
-    resolved_keys = set(handle_to_person.keys())
-
-    # Roster: anyone the CRM knows has a github/jira handle is an "expected"
-    # engineer; missing entirely from this run → missing_from_roster.
-    roster = dal.get_roster()
-    roster_by_id = {p["id"]: p for p in roster}
-
-    # Resolved CRM people with activity
-    seen_person_ids: set[str] = set()
-    people: list[dict[str, Any]] = []
-    for pid, person in roster_by_id.items():
-        if pid not in set(handle_to_person.values()):
-            continue
-        totals = _person_totals(pid, handles, handle_to_person, github_data, jira_data)
-        if (
-            totals["current_week"]["prs_merged"] == 0
-            and totals["last_week"]["prs_merged"] == 0
-            and totals["current_week"]["tickets_resolved"] == 0
-            and totals["last_week"]["tickets_resolved"] == 0
-            and totals["reviews_30d"]["reviews_given"] == 0
-            and totals["in_progress_tickets"] == 0
-        ):
-            # Resolved but no activity → falls through to missing_from_roster
-            continue
-        people.append(
-            {
-                "person_id": pid,
-                "name": person.get("name", ""),
-                "email": person.get("email", ""),
-                "job_title": person.get("job_title", ""),
-                "resolved": True,
-                **totals,
-            }
+    members_out: list[dict[str, Any]] = []
+    no_activity: list[dict[str, Any]] = []
+    for member in team.active_members:
+        a = acc[member.id]
+        metrics: dict[str, Any] = {}
+        reasons: dict[str, str] = {}
+        for metric, deps in METRIC_SOURCES.items():
+            missing = [unavailable[s] for s in deps if s in unavailable]
+            if missing:
+                metrics[metric] = None
+                reasons[metric] = missing[0]
+            elif metric == "review_turnaround_median_h":
+                metrics[metric] = round(median(a["turnarounds"]), 1) if a["turnarounds"] else None
+            else:
+                metrics[metric] = a[metric]
+        metrics["tickets_by_type"] = (
+            None
+            if metrics["tickets_resolved"] is None
+            else dict(sorted(a["tickets_by_type"].items()))
         )
-        seen_person_ids.add(pid)
+        trend = {
+            metric: [
+                ((hr.get(member.id) or {}).get("metrics") or {}).get(metric) for hr in hist_rows
+            ]
+            for metric in METRICS
+        }
+        role = team.roles[member.role]
+        row = {
+            "id": member.id,
+            "name": member.name,
+            "role": member.role,
+            "role_title": role.title,
+            "metrics": metrics,
+            "unavailable": reasons,
+            "trend": trend,
+            "usage": by_usage_name.get(member.usage_name.casefold(), [])
+            if member.usage_name
+            else [],
+            "usage_name": member.usage_name,
+        }
+        known = [metrics[k] for k in ACTIVITY_METRICS if metrics[k] is not None]
+        row["no_activity"] = bool(known) and all(v == 0 for v in known)
+        if row["no_activity"]:
+            no_activity.append({"id": member.id, "name": member.name, "role_title": role.title})
+        members_out.append(row)
 
-    # Provisional rows for unresolved (non-bot) handles — include them so
-    # the report covers ALL observed work, even if CRM hasn't caught up.
-    unresolved = []
-    for (ch, ident), info in handles.items():
-        if info["is_bot"]:
-            continue
-        if (ch, ident) in resolved_keys:
-            continue
-        totals = _provisional_totals(ch, ident, github_data, jira_data)
-        people.append(
-            {
-                "person_id": None,
-                "name": ident,
-                "email": "",
-                "job_title": "",
-                "resolved": False,
-                "unresolved_channel": ch,
-                **totals,
-            }
-        )
-        unresolved.append(
-            {
-                "channel": ch,
-                "identifier": ident,
-                "occurrences": info["occurrences"],
-                "sources": sorted(info["sources"]),
-            }
-        )
+    team_totals: dict[str, Any] = {}
+    for metric in SUMMABLE:
+        vals = [r["metrics"][metric] for r in members_out]
+        team_totals[metric] = None if any(v is None for v in vals) else sum(vals)
+    team_totals["all_prs_merged_non_bot"] = (
+        None if ("github", "prs") in unavailable else all_prs_merged
+    )
+    team_totals["members"] = len(members_out)
 
-    # Missing from roster (on roster, no activity this period).
-    # Narrowed to engineering roles — QA/PM/stakeholders with github
-    # handles aren't expected to merge PRs in normal course.
-    missing = []
-    for pid, person in roster_by_id.items():
-        if pid in seen_person_ids:
-            continue
-        if not _is_engineer(person.get("job_title", ""), keywords):
-            continue
-        missing.append(
-            {
-                "person_id": pid,
-                "name": person.get("name", ""),
-                "job_title": person.get("job_title", ""),
-                "reason": "expected on roster, no activity this period",
-            }
-        )
+    partial_usage = [
+        {
+            "developer": r.get("developer"),
+            "account": r.get("account"),
+            "reading": r.get("reading"),
+        }
+        for r in usage_rows
+        if r.get("reading") not in (None, "completed")
+    ]
+    missing_usage = [
+        m.name
+        for m in team.active_members
+        if m.usage_name and m.usage_name.casefold() not in by_usage_name and usage.get("available")
+    ]
 
-    # Bots: surface them so they're visible, not silently dropped.
-    bot_rows: dict[str, dict[str, Any]] = {}
-    for repo, repo_data in (github_data.get("repos") or {}).items():
-        for week in ("pr_stats_current_week", "pr_stats_last_week"):
-            for login, count in ((repo_data.get(week) or {}).get("bot_authors") or {}).items():
-                row = bot_rows.setdefault(
-                    login,
-                    {
-                        "channel": "github",
-                        "identifier": login,
-                        "merged_count": 0,
-                        "repos": set(),
-                    },
-                )
-                row["merged_count"] += count
-                row["repos"].add(repo)
-    bots_filtered = [{**row, "repos": sorted(row["repos"])} for row in bot_rows.values()]
-
-    # Totals — sum of resolved per-person figures, by week.
-    totals = {
-        "current_week": {
-            "prs_merged_human": sum(p["current_week"]["prs_merged"] for p in people),
-            "tickets_resolved": sum(p["current_week"]["tickets_resolved"] for p in people),
+    sources = {
+        "github": {
+            "available": github is not None and bool((github or {}).get("repos")),
+            "complete": bool(github and github.get("complete")),
+            "errors": list((github or {}).get("errors") or []),
         },
-        "last_week": {
-            "prs_merged_human": sum(p["last_week"]["prs_merged"] for p in people),
-            "tickets_resolved": sum(p["last_week"]["tickets_resolved"] for p in people),
+        "jira": {
+            "available": jira is not None,
+            "complete": bool(jira and jira.get("complete", not jira.get("errors"))),
+            "errors": list((jira or {}).get("errors") or []),
         },
-        "people_active": len(people),
-        "people_missing": len(missing),
-        "unresolved_handle_count": len(unresolved),
-        "bots_filtered_count": sum(b["merged_count"] for b in bots_filtered),
+        "usage": {
+            "available": bool(usage.get("available")),
+            "reason": usage.get("reason"),
+        },
     }
-
+    outside_list = sorted(
+        outside.values(), key=lambda o: (-sum(o["counts"].values()), o["source"], o["handle"])
+    )
     return {
-        "period": github_data.get("period") or jira_data.get("period") or {},
-        "people": sorted(
-            people,
-            # Primary sort: last_week activity (completed full week).
-            # current_week is always partial at Monday 9 AM report time.
-            key=lambda p: (
-                -(p["last_week"]["prs_merged"] + p["last_week"]["tickets_resolved"]),
-                p["name"],
-            ),
-        ),
-        "missing_from_roster": sorted(missing, key=lambda m: m["name"]),
-        "unresolved_handles": sorted(
-            unresolved, key=lambda u: (-u["occurrences"], u["identifier"])
-        ),
-        "bots_filtered": sorted(bots_filtered, key=lambda b: -b["merged_count"]),
-        "totals": totals,
+        "period": (github or {}).get("period") or (jira or {}).get("period") or {},
+        "sources": sources,
+        "unavailable_metrics": {f"{s}.{m}": r for (s, m), r in sorted(unavailable.items())},
+        "roles": [{"key": r.key, "title": r.title, "focus": r.focus} for r in team.roles.values()],
+        "members": members_out,
+        "team": team_totals,
+        "outside_roster": outside_list,
+        "bots": [
+            {"handle": h, **counts}
+            for h, counts in sorted(bots.items(), key=lambda kv: -sum(kv[1].values()))
+        ],
+        "no_activity": no_activity,
+        "merged_without_review": merged_without_review,
+        "stale_prs": sorted(stale_all, key=lambda p: -(p.get("age_days") or 0)),
+        "usage": {
+            "available": bool(usage.get("available")),
+            "reason": usage.get("reason"),
+            "report_date": usage.get("report_date"),
+            "period": usage.get("period"),
+            "rows": usage_rows,
+            "unmatched": unmatched,
+            "missing_for_members": missing_usage,
+        },
+        "data_quality": {
+            "github_errors": sources["github"]["errors"],
+            "jira_errors": sources["jira"]["errors"],
+            "unavailable_metrics": {f"{s}.{m}": r for (s, m), r in sorted(unavailable.items())},
+            "outside_roster": outside_list,
+            "no_activity": no_activity,
+            "partial_usage": partial_usage,
+            "usage_unavailable": None if usage.get("available") else usage.get("reason"),
+        },
     }
