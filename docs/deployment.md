@@ -359,8 +359,8 @@ database connect on the LLM hot path.
 
 ### Model providers
 
-Agents name their models in the fleet's `docs/agents/_defaults.yaml` (`model:
-primary` and `fallbacks`) and in each manifest; the engine dials whatever those
+Agents name their models in the instance's `docs/agents/_defaults.yaml` (`model:
+primary` and `fallbacks`, instance data) and in each manifest; the engine dials whatever those
 name, and the credential for each provider comes from the environment. Set one
 key per provider you use and name none you do not: a provider whose key is
 absent is simply never tried.
