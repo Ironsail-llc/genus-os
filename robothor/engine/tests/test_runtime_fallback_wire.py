@@ -52,7 +52,22 @@ async def test_native_fallback_wire_preserves_deadline_and_single_effect(
     # Keep the configured retry count while removing jitter from this contract.
     monkeypatch.setattr("robothor.engine.llm_client.TRANSIENT_RETRY_JITTER_MIN", 0.0)
     monkeypatch.setattr("robothor.engine.llm_client.TRANSIENT_RETRY_JITTER_MAX", 0.0)
-    deadline = datetime.now(UTC) + timedelta(seconds=0.5 if expire else 10)
+    # The expiring case needs enough real time for the synthetic 503 retry
+    # phase to finish before the final call hangs, because the assertions below
+    # require every retry payload to have landed first. 0.5s was too tight: the
+    # window is armed once at run start (deadlines._execute_window ->
+    # asyncio.timeout) and then fires wherever execution happens to be, so on a
+    # loaded runner — three matrix legs in parallel — four litellm calls could
+    # consume it and the payload list came back short. Seen on 3.11 and 3.13 on
+    # pull requests touching no Python at all.
+    #
+    # The retry delay is already zero here (the jitter patched above IS the
+    # delay, llm_client.py:707), so what remains is litellm's per-call overhead,
+    # which the test cannot remove. Headroom is the only lever.
+    #
+    # Keep it generous but small: the expiring case takes this long to run,
+    # since the final call waits forever and the timeout is what ends it.
+    deadline = datetime.now(UTC) + timedelta(seconds=5 if expire else 10)
     context = ExecutionContext(
         engine.config.tenant_id, "fixture-owner", "fixture-request", deadline=deadline
     )
