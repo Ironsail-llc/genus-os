@@ -2527,6 +2527,18 @@ class SubstrateSettings(SettingsGroup):
         "trails the released one. An escape hatch for a deliberate hold, not "
         "a way to stop noticing that a promotion was lost.",
     )
+    version_baseline_ref: str = declare(
+        "",
+        "GENUS_VERSION_BASELINE_REF",
+        "Git ref the version-consistency check compares the deployment tags "
+        "against on a pull request (the base branch, fetched by the release "
+        "workflow). Empty means a release run: the tags are compared against "
+        "the version the repository claims instead. Read by "
+        "scripts/check-version-consistency.js only.",
+        since="unreleased",
+        restart_required=False,
+        restart_units=(),
+    )
     installer_version: str = declare(
         "",
         "GENUS_VERSION",

@@ -212,7 +212,12 @@ _MODEL_REGISTRY: dict[str, ModelLimits] = {
     ),
     # GLM-5 via OpenRouter
     "openrouter/z-ai/glm-5": ModelLimits(
-        max_input_tokens=204_800,
+        # 202,752 (198 x 1024) is what litellm's shipped catalog reports.
+        # CORRECTED 2026-10-22 from 204,800, which carried no source comment —
+        # unlike glm-5.2 below, which cites the OpenRouter endpoint it came
+        # from. With nothing backing the larger figure, the catalog wins, and
+        # the smaller window is the conservative direction for a limit anyway.
+        max_input_tokens=202_752,
         max_output_tokens=65_536,
         default_output_tokens=8_192,
         input_cost_per_token=0.000_000_8,  # $0.80/M
