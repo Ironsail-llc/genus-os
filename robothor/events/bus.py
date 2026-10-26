@@ -75,9 +75,6 @@ MAXLEN = int(os.environ.get("EVENT_BUS_MAXLEN", "10000"))
 # Redis connection singleton
 _redis_client = None
 
-# The destination when nothing is configured — production.
-DEFAULT_REDIS_URL = "redis://localhost:6379/0"
-
 # The one namespace tests may publish onto. Same default as the ``redis_url``
 # fixture in tests/conftest_integration.py, so integration tests that take a
 # real Redis and unit tests that go through the bus agree on where "test" is.
@@ -165,6 +162,25 @@ def _namespace_from_url(url: str) -> str:
     return _namespace(parsed.hostname, port, (parsed.path or "").lstrip("/") or "0")
 
 
+def resolve_redis_url() -> str:
+    """The Redis URL the bus connects to.
+
+    ``REDIS_URL``, when set, is an explicit override. Otherwise the URL is the
+    one :class:`robothor.config.RedisConfig` composes from the declared
+    ``ROBOTHOR_REDIS_HOST`` / ``_PORT`` / ``_DB`` / ``_PASSWORD`` settings —
+    the same settings every other Redis client in the engine (event hooks,
+    leases, webhooks, the readiness check) is built from. Reading only
+    ``REDIS_URL`` left the bus on ``localhost:6379`` wherever the cache is
+    configured through those settings, while everything else connected.
+    """
+    explicit = os.environ.get("REDIS_URL")
+    if explicit:
+        return explicit
+    from robothor.config import get_config
+
+    return get_config().redis.url
+
+
 def event_bus_namespace(client: Any = None) -> str:
     """The Redis destination that would actually receive a write.
 
@@ -176,7 +192,8 @@ def event_bus_namespace(client: Any = None) -> str:
     connection instead of trusting the resolved config.
 
     Test doubles have no real connection pool and write nowhere, so they fall
-    back to ``REDIS_URL``, which is then the only real destination in play.
+    back to :func:`resolve_redis_url`, which is then the only real destination
+    in play.
     """
     pool = getattr(client, "connection_pool", None)
     kwargs = getattr(pool, "connection_kwargs", None)
@@ -185,7 +202,7 @@ def event_bus_namespace(client: Any = None) -> str:
         if path:
             return f"unix:{path}/{kwargs.get('db', 0)}"
         return _namespace(kwargs.get("host"), kwargs.get("port"), kwargs.get("db", 0))
-    return _namespace_from_url(os.environ.get("REDIS_URL", DEFAULT_REDIS_URL))
+    return _namespace_from_url(resolve_redis_url())
 
 
 def _allowed_namespaces() -> set[str]:
@@ -237,7 +254,8 @@ def _get_redis() -> Any:
     """Get or create Redis connection. Returns None on failure.
 
     Raises:
-        EventBusGuardError: under pytest, when ``REDIS_URL`` names a namespace
+        EventBusGuardError: under pytest, when the resolved URL (see
+            :func:`resolve_redis_url`) names a namespace
             that is not on the test allowlist. The check sits deliberately
             *outside* the ``try`` below, so that no Redis client is ever built
             for an off-allowlist destination — the handler below exists to
@@ -255,7 +273,7 @@ def _get_redis() -> Any:
         except Exception:
             _redis_client = None
 
-    redis_url = os.environ.get("REDIS_URL", DEFAULT_REDIS_URL)
+    redis_url = resolve_redis_url()
     assert_test_event_bus(_namespace_from_url(redis_url))
 
     try:
@@ -370,7 +388,7 @@ def publish(
             return None
 
         # The emit boundary, and the check that matters. _get_redis() vetted
-        # REDIS_URL, but set_redis_client() is public: a test can inject a
+        # the resolved URL, but set_redis_client() is public: a test can inject a
         # client built from any DSN and never touch the env var. Vet the
         # destination that would actually receive the XADD. Every producer in
         # the codebase reaches Redis through this function, so covering it
