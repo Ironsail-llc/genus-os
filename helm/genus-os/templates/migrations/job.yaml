@@ -2,7 +2,8 @@
 # Migration Job — runs as a NORMAL release resource (no helm hooks).
 # App pods block on this Job's `status.conditions[type=Complete]` via a
 # `wait-for-migrations` initContainer in _python_workload.tpl.
-# Pattern: https://github.com/Ironsail-llc/aws-infrastucture/blob/main/docs/helm-db-migrations.md
+# The name hashes the image and every rendered container input (see
+# genus-os.migrationJobName), because the pod template is immutable.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -20,12 +21,13 @@ metadata:
     # life of the release. A TTL deletes the object out from under them, and
     # any pod created afterwards -- node rotation, reschedule, scale-up --
     # waits forever on something that no longer exists. That is not
-    # hypothetical: it stranded every genus-os pod in ironsail-staging for
-    # 20+ days and blocked a Kubernetes 1.35 node rotation (RD-1466).
+    # hypothetical: it once stranded every pod of a release for weeks and
+    # blocked a node rotation.
     #
     # The cleanup the check is protecting against does not apply either. The
-    # Job name is content-addressed on global.imageTag, so Helm/ArgoCD prunes
-    # the previous release's Job on the next sync. Jobs do not accumulate.
+    # Job name is content-addressed on the image and the Job's rendered
+    # environment, so Helm/ArgoCD prunes the previous Job on the next sync.
+    # Jobs do not accumulate.
     #
     # Set migrations.ttlSecondsAfterFinished to re-enable the TTL, and this
     # annotation disappears with it.
@@ -33,7 +35,7 @@ metadata:
       App pods poll this Job by name for the life of the release; a TTL
       deletes it and strands every pod created afterwards. Cleanup is handled
       by Helm/ArgoCD pruning, since the Job name is content-addressed on the
-      image tag.
+      image and the Job's rendered environment.
   {{- end }}
   labels:
     {{- include "genus-os.labels" (dict "root" . "component" "migrations") | nindent 4 }}
@@ -41,8 +43,8 @@ spec:
   backoffLimit: {{ .Values.migrations.backoffLimit }}
   activeDeadlineSeconds: {{ .Values.migrations.activeDeadlineSeconds }}
   {{- with .Values.migrations.ttlSecondsAfterFinished }}
-  # OFF by default. The Job name is content-addressed on global.imageTag, so
-  # Helm/ArgoCD already prunes the previous release's Job on the next sync --
+  # OFF by default. The Job name is content-addressed on the image and the
+  # Job's environment, so Helm/ArgoCD already prunes the previous Job --
   # a TTL adds no cleanup value, but it DOES delete the object that every app
   # pod's wait-for-migrations initContainer polls. Any pod (re)created after
   # the TTL fires -- a node rotation, a reschedule, a scale-up -- then blocks

@@ -220,6 +220,11 @@ history. Upgrade safeguards preserve legacy memory tables as archives and
 require a 30-day replacement-data gate plus a full-row archive before removing
 legacy score columns.
 
+The Job's name hashes its image, command, resources and rendered environment
+(including the database CA bundle). A Job's pod template is immutable, so any
+change to those produces a new Job that runs once; an upgrade that changes
+none of them keeps the completed Job and does not re-run it.
+
 The chain requires PostgreSQL extensions `vector`, `uuid-ossp`, `citext`, and
 `pgcrypto`. Managed services must pre-provision them or grant the migration
 identity sufficient extension permission. Before rollout, run the full chain

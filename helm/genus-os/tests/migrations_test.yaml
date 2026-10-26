@@ -16,7 +16,8 @@ tests:
       - notExists:
           path: metadata.annotations["helm.sh/hook-delete-policy"]
 
-  - it: Job name is content-addressed on imageTag
+  # Contents of the hash: tests/migration_job_name_test.yaml.
+  - it: Job name is content-addressed
     template: migrations/job.yaml
     set:
       global.imageTag: v1.4.0
@@ -116,14 +117,23 @@ tests:
     asserts:
       - isKind:
           of: Role
-      - contains:
-          path: rules
-          content:
-            apiGroups: ["batch"]
-            resources: ["jobs"]
-            verbs: ["get"]
-            resourceNames:
-              - gos-genus-os-migrate-908f5ee7
+      - equal:
+          path: rules[0].apiGroups
+          value: ["batch"]
+      - equal:
+          path: rules[0].resources
+          value: ["jobs"]
+      - equal:
+          path: rules[0].verbs
+          value: ["get"]
+      # The name hashes the Job's rendered inputs, so match its shape rather
+      # than a literal that every environment change would invalidate.
+      - lengthEqual:
+          path: rules[0].resourceNames
+          count: 1
+      - matchRegex:
+          path: rules[0].resourceNames[0]
+          pattern: "^gos-genus-os-migrate-[a-f0-9]{8}$"
 
   - it: RoleBinding targets separate Python ServiceAccounts
     template: migrations/rbac.yaml

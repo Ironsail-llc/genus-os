@@ -692,6 +692,12 @@ production the chart refuses to render `verify-ca` or `verify-full` without
 Leave it empty elsewhere to keep libpq's default `~/.postgresql/root.crt`
 lookup.
 
+Changing the bundle, or anything else the migration Job carries (its image,
+command, resources or shared environment), gives the Job a new name: the next
+sync runs migrations once with the new settings instead of failing on an
+immutable Job, and a sync that changes none of them leaves the completed Job
+alone.
+
 ## Production Checklist
 
 - [ ] Set a strong `ROBOTHOR_DB_PASSWORD`
