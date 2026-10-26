@@ -45,6 +45,24 @@ every call fail with `UnsupportedParamsError` until the library ships an update.
 every thinking model in the registry, unconditionally; the test suite asserts it
 for each such entry. Register the model here and it works the same day.
 
+### OpenAI reasoning models
+
+A reasoning model on the OpenAI API itself (`openai/gpt-5…`, an o-series model,
+or the same id without the `openai/` prefix) takes a different request shape.
+The engine sends it `reasoning_effort` instead of the `thinking` block, which the
+client library refuses for OpenAI, and sends no `temperature`, which OpenAI
+rejects for these models. The effort follows the agent's own reasoning-effort
+setting: `low`, `medium` and `high` pass through, `max` becomes `xhigh` only
+where the library's catalog says the model offers it (otherwise `high`), and the
+re-ask after a reasoning-only reply uses `low`. The model is recognised as
+reasoning from its registry entry or, failing that, the library's catalog, so a
+model with no entry still gets the right shape. OpenRouter's `openrouter/openai/…`
+routes and `codex/…` are unaffected.
+
+OpenAI accepts at most 128 tools on one request. An agent with broad tool access
+can exceed that; deferred tool loading (`ROBOTHOR_RIP_16_ENABLED`) keeps the
+advertised set small.
+
 ## Where models are chosen
 
 | Surface | Source |
