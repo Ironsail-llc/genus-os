@@ -142,8 +142,10 @@ jobs:
       # harness decides the project's competitive numbers and scripts/ holds
       # the backup and release machinery — neither is less load-bearing than
       # the package.
-      - run: ruff check robothor/ bench/ scripts/
-      - run: ruff format --check robothor/ bench/ scripts/
+      # crm/bridge/ is included deliberately: the release gate used to be the
+      # only thing linting it, and this job is now lint's single home.
+      - run: ruff check robothor/ bench/ scripts/ crm/bridge/
+      - run: ruff format --check robothor/ bench/ scripts/ crm/bridge/
       # The shell in scripts/ is release and backup machinery, and the
       # installer in particular is piped straight into bash from a URL. It was
       # outside every gate: ruff cannot read shell, and nothing else looked.

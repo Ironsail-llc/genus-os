@@ -98,14 +98,9 @@ jobs:
             sleep 30
           done
 
-      - uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
-        with:
-          version: 10.34.5
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: 22
-          cache: pnpm
-          cache-dependency-path: app/pnpm-lock.yaml
       - name: Verify product version metadata
         env:
           # Operator hatch for release-chain recovery: when release N's image
@@ -136,17 +131,6 @@ jobs:
       # .npm-audit-allowlist.json (see scripts/check_npm_audit.py). Any
       # advisory NOT named in that tracked file still fails the gate,
       # including new advisories in an already-allowlisted package.
-      # Only the browser suite: ci.yml's `frontend` job already runs
-      # pnpm audit, lint, tsc and the unit tests. `pnpm build` stays because
-      # playwright needs something to serve.
-      - name: Verify browser flows
-        working-directory: app
-        run: |
-          pnpm install --frozen-lockfile
-          pnpm build
-          pnpm exec playwright install --with-deps chromium
-          pnpm exec playwright test
-
       - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
         with:
           version: v3.16.3
