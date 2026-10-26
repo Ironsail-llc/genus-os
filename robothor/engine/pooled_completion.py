@@ -34,12 +34,16 @@ async def acompletion(*, model: str, **kwargs: Any) -> Any:
     import litellm
 
     from robothor.engine.key_pool import api_key_for_model
+    from robothor.engine.llm_client import drop_unsupported_sampling
     from robothor.engine.provider_routing import apply_provider_order
     from robothor.engine.request_budget import RequestBudgetError, bounded_completion
 
     # Auxiliary calls have no LLMClient kwargs builder. Preserve the owning
     # agent's reviewed route before budget quotation and credential admission.
     apply_provider_order(model, kwargs)
+    # Compaction, planning and verification pass a temperature an OpenAI
+    # reasoning model rejects; this is their one shared path to the provider.
+    drop_unsupported_sampling(model, kwargs)
     key = api_key_for_model(model)
     if key and "api_key" not in kwargs:
         kwargs["api_key"] = key

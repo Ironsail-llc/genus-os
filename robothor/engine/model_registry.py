@@ -457,7 +457,41 @@ _MODEL_REGISTRY: dict[str, ModelLimits] = {
         status="deprecated",
         replaced_by="openrouter/google/gemini-3.1-pro-preview",
     ),
+    # Gemini 3.8 Flash on Vertex AI. Figures from litellm's catalog
+    # (2026-10). supports_thinking stays False although the catalog says it
+    # reasons: the engine has always sent this route no thinking block and it
+    # answers that way; switching on Anthropic-style `thinking` for Vertex is a
+    # separate, measured change.
+    "vertex_ai/gemini-3.8-flash": ModelLimits(
+        max_input_tokens=1_048_576,
+        max_output_tokens=65_536,
+        default_output_tokens=16_384,
+        input_cost_per_token=0.000_000_75,  # $0.75/M
+        output_cost_per_token=0.000_003_75,  # $3.75/M
+        cache_read_cost_per_token=0.000_000_075,  # $0.075/M
+        ttft_hint_ms=1000,
+        accepts_images=True,
+    ),
+    # GPT-5.6 Luna on the OpenAI API. Figures from litellm's catalog (2026-10).
+    # A reasoning model: llm_client sends it `reasoning_effort`, never the
+    # Anthropic `thinking` block, and no `temperature`.
+    "openai/gpt-5.6-luna": ModelLimits(
+        max_input_tokens=922_000,
+        max_output_tokens=128_000,
+        default_output_tokens=16_384,
+        input_cost_per_token=0.000_000_2,  # $0.20/M
+        output_cost_per_token=0.000_001_2,  # $1.20/M
+        cache_write_cost_per_token=0.000_000_25,  # $0.25/M
+        cache_read_cost_per_token=0.000_000_02,  # $0.02/M
+        supports_thinking=True,
+        ttft_hint_ms=2000,
+        accepts_images=True,
+    ),
 }
+
+# OpenAI reports the bare id back on a response, and cost accounting looks the
+# response id up; _registry_candidates does not strip the `openai/` prefix.
+_MODEL_REGISTRY["gpt-5.6-luna"] = _MODEL_REGISTRY["openai/gpt-5.6-luna"]
 
 # Conservative fallback for unknown models
 _FALLBACK = ModelLimits(

@@ -31,6 +31,7 @@ import json
 import logging
 import math
 import random
+import re
 import time
 import time as _time
 from collections.abc import Awaitable, Callable  # noqa: TC003
@@ -613,9 +614,96 @@ def thinking_kwargs_for_call(
     """
     from robothor.engine.model_registry import get_model_limits
 
+    if is_openai_reasoning_model(model):
+        return {"reasoning_effort": _openai_reasoning_effort(model, reduced=reduced)}
     if not get_model_limits(model).supports_thinking:
         return {}
     return _thinking_kwargs(model, max_tokens, reduced=reduced)
+
+
+#: The agent's reasoning-effort rung in OpenAI's vocabulary. ``max`` asks for
+#: ``xhigh`` only where litellm's catalog says the model offers it.
+_OPENAI_EFFORT: dict[str, str] = {
+    "low": "low",
+    "medium": "medium",
+    "high": "high",
+    "max": "high",
+}
+
+
+_OPENAI_BARE_ID = re.compile(r"^(gpt-\d|o\d)")
+
+
+def _is_openai_direct(model: str) -> bool:
+    """True for the OpenAI API itself: ``openai/…`` or a bare id litellm routes there.
+
+    Deliberately narrow. ``openrouter/openai/…`` speaks OpenRouter's dialect
+    and ``codex/…`` has its own adapter; neither is changed here.
+    """
+    if model.startswith("openai/"):
+        return True
+    if "/" in model:
+        return False
+    # A bare id newer than litellm's bundled catalog is not routable by it, so
+    # OpenAI's own naming answers first and the catalog covers the rest.
+    if _OPENAI_BARE_ID.match(model):
+        return True
+    try:
+        return bool(litellm.get_llm_provider(model)[1] == "openai")
+    except Exception:  # noqa: BLE001 - an id litellm cannot route is not OpenAI's
+        return False
+
+
+def is_openai_reasoning_model(model: str) -> bool:
+    """A model on the OpenAI API that reasons (GPT-5 family, o-series).
+
+    Such a model takes ``reasoning_effort``, refuses the Anthropic-style
+    ``thinking`` block (litellm raises before the request leaves the process),
+    refuses tool calls without an effort, and rejects a sampling
+    ``temperature``. Reasoning support is read from the curated registry first
+    and then litellm's catalog, so a model with no registry row is still
+    recognised — that gap is how a GPT-5 fallback came to fail every call.
+    """
+    if not _is_openai_direct(model):
+        return False
+    from robothor.engine.model_registry import get_model_limits
+
+    if get_model_limits(model).supports_thinking:
+        return True
+    try:
+        return bool(litellm.supports_reasoning(model=model))
+    except Exception:  # noqa: BLE001 - unknown to the catalog means not known to reason
+        return False
+
+
+def _openai_reasoning_effort(model: str, *, reduced: bool = False) -> str:
+    """``reasoning_effort`` for one OpenAI call, from the running agent's own rung.
+
+    ``reduced`` is the re-ask after a reasoning-only reply, mirroring
+    ``_thinking_budget``: always the lowest rung.
+    """
+    from robothor.engine.model_registry import current_reasoning_effort
+
+    if reduced:
+        return "low"
+    rung = (current_reasoning_effort() or "medium").strip().lower()
+    if rung == "max":
+        bare = model.removeprefix("openai/")
+        if (litellm.model_cost.get(bare) or {}).get("supports_xhigh_reasoning_effort"):
+            return "xhigh"
+    return _OPENAI_EFFORT.get(rung, "medium")
+
+
+def drop_unsupported_sampling(model: str, kwargs: dict[str, Any]) -> dict[str, Any]:
+    """Remove ``temperature`` from a call to an OpenAI reasoning model, in place.
+
+    GPT-5-family reasoning calls reject any sampling temperature, and every
+    engine call site passes one (0.3 for agents, 0.1 for compaction and
+    planning). Every other model keeps its temperature untouched.
+    """
+    if "temperature" in kwargs and is_openai_reasoning_model(model):
+        kwargs.pop("temperature")
+    return kwargs
 
 
 #: Shortest attempt worth dialling. A model whose shared allowance has less
@@ -1246,10 +1334,13 @@ async def llm_call(
 
     async def _attempt() -> Any:
         model = kwargs["model"]
+        # A copy: the chain walk reuses ``kwargs`` for the next model, which
+        # may well want the temperature this one cannot take.
+        call_kwargs = drop_unsupported_sampling(model, dict(kwargs))
         t0 = _time.monotonic()
         try:
             call = codex_acompletion if is_codex_model(model) else litellm.acompletion
-            resp = await asyncio.wait_for(bounded_completion(call, **kwargs), timeout=timeout)
+            resp = await asyncio.wait_for(bounded_completion(call, **call_kwargs), timeout=timeout)
             LLM_CALLS_TOTAL.labels(model=model, status="success").inc()
             LLM_CALL_DURATION.labels(model=model).observe(_time.monotonic() - t0)
             usage = getattr(resp, "usage", None)
@@ -2077,6 +2168,7 @@ class LLMClient:
         kwargs.update(
             thinking_kwargs_for_call(model, kwargs["max_tokens"], reduced=thinking_reduced)
         )
+        drop_unsupported_sampling(model, kwargs)
         from robothor.engine.provider_routing import apply_provider_order
 
         apply_provider_order(model, kwargs)
