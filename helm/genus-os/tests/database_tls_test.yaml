@@ -1,0 +1,195 @@
+suite: database CA bundle (database.tls)
+release:
+  name: gos
+  namespace: genus
+tests:
+  # ─── Default: nothing mounted, libpq's own root.crt lookup applies ─────────
+  - it: no CA bundle is mounted by default (engine)
+    template: engine/workload.yaml
+    documentIndex: 0
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: PGSSLROOTCERT
+          any: true
+      - notContains:
+          path: spec.template.spec.volumes
+          content:
+            name: db-ca
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: db-ca
+          any: true
+
+  - it: no CA bundle is mounted by default (migrations Job)
+    template: migrations/job.yaml
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: PGSSLROOTCERT
+          any: true
+      - notContains:
+          path: spec.template.spec.volumes
+          content:
+            name: db-ca
+          any: true
+
+  # ─── caConfigMap set: every database client mounts it read-only ────────────
+  - it: engine mounts the CA ConfigMap and points libpq at it
+    template: engine/workload.yaml
+    documentIndex: 0
+    set:
+      database.tls.caConfigMap: db-ca-bundle
+    asserts: &caMounted
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: PGSSLROOTCERT
+            value: /etc/genus/db-ca/ca.pem
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: db-ca
+            mountPath: /etc/genus/db-ca
+            readOnly: true
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: db-ca
+            configMap:
+              name: db-ca-bundle
+              items:
+                - key: ca.pem
+                  path: ca.pem
+
+  - it: bridge mounts the CA ConfigMap and points libpq at it
+    template: bridge/workload.yaml
+    documentIndex: 0
+    set:
+      database.tls.caConfigMap: db-ca-bundle
+    asserts: *caMounted
+
+  - it: orchestrator mounts the CA ConfigMap and points libpq at it
+    template: orchestrator/workload.yaml
+    documentIndex: 0
+    set:
+      database.tls.caConfigMap: db-ca-bundle
+    asserts: *caMounted
+
+  - it: migrations Job mounts the CA ConfigMap and points libpq at it
+    template: migrations/job.yaml
+    set:
+      database.tls.caConfigMap: db-ca-bundle
+    asserts: *caMounted
+
+  - it: caKey selects the ConfigMap key and the file name
+    template: migrations/job.yaml
+    set:
+      database.tls.caConfigMap: db-ca-bundle
+      database.tls.caKey: rds-global-bundle.pem
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: PGSSLROOTCERT
+            value: /etc/genus/db-ca/rds-global-bundle.pem
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: db-ca
+            configMap:
+              name: db-ca-bundle
+              items:
+                - key: rds-global-bundle.pem
+                  path: rds-global-bundle.pem
+
+  - it: dashboard never mounts the database CA (it has no database access)
+    template: dashboard/deployment.yaml
+    set:
+      database.tls.caConfigMap: db-ca-bundle
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: PGSSLROOTCERT
+          any: true
+
+  # ─── Render-time guard for the hardened environments ───────────────────────
+  - it: staging with verify-full and no CA bundle fails to render
+    template: validate-database.yaml
+    set:
+      global.environment: staging
+      database.sslMode: verify-full
+      database.tls.caConfigMap: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: 'database.sslMode is "verify-full" in staging, but database.tls.caConfigMap is empty: libpq would look for a root.crt that does not exist and every database connection would fail. Set database.tls.caConfigMap to a ConfigMap holding the CA bundle that signs the database server certificate.'
+
+  - it: production with verify-ca and no CA bundle fails to render
+    template: validate-database.yaml
+    set:
+      global.environment: production
+      database.sslMode: verify-ca
+    asserts:
+      - failedTemplate:
+          errorMessage: 'database.sslMode is "verify-ca" in production, but database.tls.caConfigMap is empty: libpq would look for a root.crt that does not exist and every database connection would fail. Set database.tls.caConfigMap to a ConfigMap holding the CA bundle that signs the database server certificate.'
+
+  - it: production with verify-full and a CA bundle renders
+    template: validate-database.yaml
+    set:
+      networkPolicy.enabled: true
+      networkPolicy.egress.enabled: true
+      global.environment: production
+      database.sslMode: verify-full
+      database.tls.caConfigMap: db-ca-bundle
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: a non-verifying sslMode needs no CA bundle
+    template: validate-database.yaml
+    set:
+      networkPolicy.enabled: true
+      networkPolicy.egress.enabled: true
+      global.environment: production
+      database.sslMode: require
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: local environments may use verify-full with libpq's default lookup
+    template: validate-database.yaml
+    set:
+      global.environment: development
+      database.sslMode: verify-full
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # ─── The hardened layer-2 values files ship a CA bundle with verify-full ───
+  - it: values-production points every database client at the CA bundle
+    values:
+      - ../values-production.yaml
+    template: migrations/job.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: PGSSLROOTCERT
+            value: /etc/genus/db-ca/ca.pem
+
+  - it: values-staging points every database client at the CA bundle
+    values:
+      - ../values-staging.yaml
+    template: engine/workload.yaml
+    documentIndex: 0
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: PGSSLROOTCERT
+            value: /etc/genus/db-ca/ca.pem

@@ -125,6 +125,19 @@ database:
   name: robothor_memory
   user: robothor
   sslMode: prefer
+  tls:
+    # Name of a ConfigMap in the release namespace holding the CA bundle
+    # (PEM) that signs the database server's certificate. Empty: no bundle
+    # is mounted and libpq's default root.crt lookup applies.
+    #
+    # When set, engine, bridge, orchestrator and the migrations Job mount
+    # the key read-only at /etc/genus/db-ca/<caKey> and export
+    # PGSSLROOTCERT pointing at it. Required in staging/production whenever
+    # sslMode is verify-ca or verify-full: a managed Postgres presents a
+    # private CA that no default trust store holds, and the chart refuses to
+    # render a configuration that could never connect.
+    caConfigMap: ""
+    caKey: ca.pem
 
 # ─── Instance workspace ──────────────────────────────────────────────────────
 # The workspace contains the entity's manifests, instructions, memory, and

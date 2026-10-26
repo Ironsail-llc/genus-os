@@ -281,3 +281,42 @@ timeoutSeconds: {{ $cfg.timeoutSeconds | default 1 }}
 failureThreshold: {{ $cfg.failureThreshold | default 3 }}
 {{- end -}}
 {{- end -}}
+
+{{/*
+Database CA bundle (database.tls). Every component that opens a database
+connection includes all three: the env var, the read-only mount and the
+volume. libpq reads PGSSLROOTCERT for verify-ca/verify-full, so no code
+change is needed in the services. Each renders nothing when
+database.tls.caConfigMap is empty.
+*/}}
+{{- define "genus-os.dbCaDir" -}}/etc/genus/db-ca{{- end -}}
+
+{{- define "genus-os.dbCaEnv" -}}
+{{- $tls := .Values.database.tls | default dict -}}
+{{- if $tls.caConfigMap }}
+- name: PGSSLROOTCERT
+  value: {{ printf "%s/%s" (include "genus-os.dbCaDir" .) ($tls.caKey | default "ca.pem") | quote }}
+{{- end }}
+{{- end -}}
+
+{{- define "genus-os.dbCaVolumeMount" -}}
+{{- $tls := .Values.database.tls | default dict -}}
+{{- if $tls.caConfigMap }}
+- name: db-ca
+  mountPath: {{ include "genus-os.dbCaDir" . }}
+  readOnly: true
+{{- end }}
+{{- end -}}
+
+{{- define "genus-os.dbCaVolume" -}}
+{{- $tls := .Values.database.tls | default dict -}}
+{{- if $tls.caConfigMap }}
+{{- $key := $tls.caKey | default "ca.pem" }}
+- name: db-ca
+  configMap:
+    name: {{ $tls.caConfigMap }}
+    items:
+      - key: {{ $key }}
+        path: {{ $key }}
+{{- end }}
+{{- end -}}

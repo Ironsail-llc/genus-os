@@ -228,9 +228,22 @@ encrypted snapshot, and rehearse restore. The migration chain is forward-only;
 rolling back an image does not reverse schema or external side effects.
 
 Production and staging set PostgreSQL `sslmode=verify-full`; the database
-endpoint must present a certificate trusted by the container's CA bundle. Their
-NetworkPolicies default-deny ingress and egress, then rebuild only the declared
-component graph. In-chart PostgreSQL/Redis are selected by pod labels. Managed
+endpoint must present a certificate signed by a CA the clients trust. Supply
+that CA as a ConfigMap and name it in `database.tls`:
+
+| Value | Default | Meaning |
+|-------|---------|---------|
+| `database.tls.caConfigMap` | `""` | ConfigMap in the release namespace holding the PEM CA bundle that signs the database server certificate. Empty: nothing is mounted and libpq's default `root.crt` lookup applies. |
+| `database.tls.caKey` | `ca.pem` | Key in that ConfigMap. |
+
+When set, engine, bridge, orchestrator and the migration Job mount the key
+read-only at `/etc/genus/db-ca/<caKey>` and set `PGSSLROOTCERT` to it. In
+staging/production, `sslMode: verify-ca` or `verify-full` without
+`caConfigMap` fails at render time. See
+[Trusting the database's CA](../../docs/deployment.md#trusting-the-databases-ca).
+
+Production and staging NetworkPolicies default-deny ingress and egress, then
+rebuild only the declared component graph. In-chart PostgreSQL/Redis are selected by pod labels. Managed
 database, Redis, Ollama, HTTPS API, or egress-proxy access requires exact CIDRs
 and ports in Layer 3:
 

@@ -662,6 +662,36 @@ genus agent install --preset standard
 calendar watch and briefings, `full` is the whole catalogue. `genus init
 --preset NAME` does it during an install.
 
+### Trusting the database's CA
+
+Staging and production connect to PostgreSQL with `sslmode=verify-full`, so
+every client has to trust the CA that signed the database server's
+certificate. A managed Postgres usually presents a private CA that is in no
+default trust store, and without it libpq fails with `root.crt does not
+exist` before the first query. Put the CA bundle (PEM) in a ConfigMap in the
+release namespace and name it in the values:
+
+```yaml
+database:
+  sslMode: verify-full
+  tls:
+    caConfigMap: genus-os-db-ca   # ConfigMap in the release namespace
+    caKey: ca.pem                 # key inside it holding the PEM bundle
+```
+
+```bash
+kubectl -n <namespace> create configmap genus-os-db-ca --from-file=ca.pem=./db-ca.pem
+```
+
+The engine, bridge, orchestrator and the migration Job then mount that key
+read-only under `/etc/genus/db-ca/` and set `PGSSLROOTCERT` to it; the
+dashboard has no database access and gets nothing. A CA bundle is public
+material, which is why it is a ConfigMap and not a Secret. In staging and
+production the chart refuses to render `verify-ca` or `verify-full` without
+`database.tls.caConfigMap`, rather than ship a release that cannot connect.
+Leave it empty elsewhere to keep libpq's default `~/.postgresql/root.crt`
+lookup.
+
 ## Production Checklist
 
 - [ ] Set a strong `ROBOTHOR_DB_PASSWORD`

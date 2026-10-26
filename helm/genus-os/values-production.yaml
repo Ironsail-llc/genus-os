@@ -16,6 +16,11 @@ redis:
   enabled: false
 database:
   sslMode: verify-full
+  tls:
+    # verify-full needs the CA that signs the managed database's certificate.
+    # The deployment supplies this ConfigMap in the release namespace; the
+    # chart refuses to render verify-full here without it.
+    caConfigMap: genus-os-db-ca
 workspace:
   allowEmptyFleet: false
   minAgentCount: 1
