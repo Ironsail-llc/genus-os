@@ -130,6 +130,23 @@ database:
   name: robothor_memory
   user: robothor
   sslMode: prefer
+  tls:
+    # Name of a ConfigMap in the release namespace holding the CA bundle
+    # (PEM) that signs the database server's certificate. Empty: no bundle
+    # is mounted and libpq's default root.crt lookup applies.
+    #
+    # When set, engine, bridge, orchestrator and the migrations Job mount
+    # the key read-only at /etc/genus/db-ca/<caKey> and export
+    # PGSSLROOTCERT pointing at it. Required in EVERY environment whenever
+    # sslMode is verify-ca or verify-full: a managed Postgres presents a
+    # private CA that no default trust store holds, and the chart refuses to
+    # render a configuration that could never connect.
+    caConfigMap: ""
+    caKey: ca.pem
+    # Explicit opt-out of the check above, for an environment whose image or
+    # home directory really provides libpq's default ~/.postgresql/root.crt.
+    # Leave false unless you have verified that file exists in the pods.
+    allowDefaultTrustStore: false
 
 # ─── Instance workspace ──────────────────────────────────────────────────────
 # The workspace contains the entity's manifests, instructions, memory, and
@@ -576,10 +593,17 @@ dashboard:
       enabled: true
       path: /api/live
       initialDelaySeconds: 20
+      # /api/live is process-only; 3 s absorbs a GC pause or a busy event
+      # loop without masking a hung process for long.
+      timeoutSeconds: 3
     readiness:
       enabled: true
       path: /api/ready
       initialDelaySeconds: 5
+      # /api/ready checks each backend and can wait ~5 s on one that is
+      # unreachable; a shorter timeout fails the probe before the check
+      # can report.
+      timeoutSeconds: 6
   podDisruptionBudget:
     enabled: true
     minAvailable: 1

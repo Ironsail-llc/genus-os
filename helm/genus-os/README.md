@@ -220,6 +220,15 @@ history. Upgrade safeguards preserve legacy memory tables as archives and
 require a 30-day replacement-data gate plus a full-row archive before removing
 legacy score columns.
 
+The Job's name hashes its whole rendered pod template: image, command,
+resources, environment, `database.tls`, labels (so every chart or app version
+bump), ServiceAccount, security context, scheduling and pull secrets. A Job's
+pod template is immutable, so any change there produces a new Job that runs
+once; an upgrade that changes none of it keeps the completed Job and does not
+re-run it. Rotating the CA inside its ConfigMap changes no part of the
+template, so it does not rename the Job: kubelet refreshes the mounted file
+and libpq reads it on the next connection.
+
 The chain requires PostgreSQL extensions `vector`, `uuid-ossp`, `citext`, and
 `pgcrypto`. Managed services must pre-provision them or grant the migration
 identity sufficient extension permission. Before rollout, run the full chain
@@ -228,9 +237,24 @@ encrypted snapshot, and rehearse restore. The migration chain is forward-only;
 rolling back an image does not reverse schema or external side effects.
 
 Production and staging set PostgreSQL `sslmode=verify-full`; the database
-endpoint must present a certificate trusted by the container's CA bundle. Their
-NetworkPolicies default-deny ingress and egress, then rebuild only the declared
-component graph. In-chart PostgreSQL/Redis are selected by pod labels. Managed
+endpoint must present a certificate signed by a CA the clients trust. Supply
+that CA as a ConfigMap and name it in `database.tls`:
+
+| Value | Default | Meaning |
+|-------|---------|---------|
+| `database.tls.caConfigMap` | `""` | ConfigMap in the release namespace holding the PEM CA bundle that signs the database server certificate. Empty: nothing is mounted and libpq's default `root.crt` lookup applies. |
+| `database.tls.caKey` | `ca.pem` | Key in that ConfigMap. |
+| `database.tls.allowDefaultTrustStore` | `false` | Explicit opt-out of the render-time check below, for an environment whose pods really provide libpq's default `root.crt`. |
+
+When set, engine, bridge, orchestrator and the migration Job mount the key
+read-only at `/etc/genus/db-ca/<caKey>` and set `PGSSLROOTCERT` to it. In any
+environment, `sslMode: verify-ca` or `verify-full` without `caConfigMap` fails
+at render time unless `allowDefaultTrustStore: true` says the default trust
+store is intended. The check never depends on the environment's name. See
+[Trusting the database's CA](../../docs/deployment.md#trusting-the-databases-ca).
+
+Production and staging NetworkPolicies default-deny ingress and egress, then
+rebuild only the declared component graph. In-chart PostgreSQL/Redis are selected by pod labels. Managed
 database, Redis, Ollama, HTTPS API, or egress-proxy access requires exact CIDRs
 and ports in Layer 3:
 

@@ -2,7 +2,8 @@
 # Migration Job — runs as a NORMAL release resource (no helm hooks).
 # App pods block on this Job's `status.conditions[type=Complete]` via a
 # `wait-for-migrations` initContainer in _python_workload.tpl.
-# Pattern: https://github.com/Ironsail-llc/aws-infrastucture/blob/main/docs/helm-db-migrations.md
+# The name hashes the whole rendered pod template (see
+# genus-os.migrationJobName), because the pod template is immutable.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -20,12 +21,13 @@ metadata:
     # life of the release. A TTL deletes the object out from under them, and
     # any pod created afterwards -- node rotation, reschedule, scale-up --
     # waits forever on something that no longer exists. That is not
-    # hypothetical: it stranded every genus-os pod in ironsail-staging for
-    # 20+ days and blocked a Kubernetes 1.35 node rotation (RD-1466).
+    # hypothetical: it once stranded every pod of a release for weeks and
+    # blocked a node rotation.
     #
     # The cleanup the check is protecting against does not apply either. The
-    # Job name is content-addressed on global.imageTag, so Helm/ArgoCD prunes
-    # the previous release's Job on the next sync. Jobs do not accumulate.
+    # Job name is content-addressed on the Job's rendered pod template, so
+    # Helm/ArgoCD prunes the previous Job on the next sync.
+    # Jobs do not accumulate.
     #
     # Set migrations.ttlSecondsAfterFinished to re-enable the TTL, and this
     # annotation disappears with it.
@@ -33,7 +35,7 @@ metadata:
       App pods poll this Job by name for the life of the release; a TTL
       deletes it and strands every pod created afterwards. Cleanup is handled
       by Helm/ArgoCD pruning, since the Job name is content-addressed on the
-      image tag.
+      Job's rendered pod template.
   {{- end }}
   labels:
     {{- include "genus-os.labels" (dict "root" . "component" "migrations") | nindent 4 }}
@@ -41,78 +43,13 @@ spec:
   backoffLimit: {{ .Values.migrations.backoffLimit }}
   activeDeadlineSeconds: {{ .Values.migrations.activeDeadlineSeconds }}
   {{- with .Values.migrations.ttlSecondsAfterFinished }}
-  # OFF by default. The Job name is content-addressed on global.imageTag, so
-  # Helm/ArgoCD already prunes the previous release's Job on the next sync --
+  # OFF by default. The Job name is content-addressed on the rendered pod
+  # template, so Helm/ArgoCD already prunes the previous Job --
   # a TTL adds no cleanup value, but it DOES delete the object that every app
   # pod's wait-for-migrations initContainer polls. Any pod (re)created after
   # the TTL fires -- a node rotation, a reschedule, a scale-up -- then blocks
   # forever on a Job that no longer exists.
   ttlSecondsAfterFinished: {{ . }}
   {{- end }}
-  template:
-    metadata:
-      labels:
-        {{- include "genus-os.labels" (dict "root" . "component" "migrations") | nindent 8 }}
-    spec:
-      serviceAccountName: {{ include "genus-os.serviceAccountName" (dict "root" . "component" "migrations") }}
-      automountServiceAccountToken: false
-      restartPolicy: Never
-      {{- with .Values.global.imagePullSecrets }}
-      imagePullSecrets:
-        {{- range . }}
-        - name: {{ . }}
-        {{- end }}
-      {{- end }}
-      securityContext:
-        {{- toYaml .Values.global.podSecurityContext | nindent 8 }}
-      {{- $ns := include "genus-os.nodeSelector" (dict "root" . "component" "migrations") }}
-      {{- if $ns | trim }}
-      nodeSelector:
-        {{- $ns | nindent 8 }}
-      {{- end }}
-      {{- $tols := include "genus-os.tolerations" (dict "root" . "component" "migrations") }}
-      {{- if $tols | trim }}
-      tolerations:
-        {{- $tols | nindent 8 }}
-      {{- end }}
-      {{- if .Values.postgres.enabled }}
-      initContainers:
-        - name: wait-for-postgres
-          image: "{{ .Values.postgres.image.registry }}/{{ .Values.postgres.image.repository }}:{{ .Values.postgres.image.tag }}"
-          command:
-            - sh
-            - -c
-            - |
-              until pg_isready -h {{ include "genus-os.postgresHost" . }} -p {{ .Values.database.port }} -U {{ .Values.database.user }}; do
-                echo "Waiting for postgres..."
-                sleep 2
-              done
-          securityContext:
-            {{- toYaml .Values.global.securityContext | nindent 12 }}
-          volumeMounts:
-            - name: tmp
-              mountPath: /tmp
-          resources:
-            {{- toYaml .Values.global.initContainerResources | nindent 12 }}
-      {{- end }}
-      containers:
-        - name: migrate
-          image: {{ include "genus-os.image" (dict "root" . "component" "migrations") }}
-          imagePullPolicy: {{ include "genus-os.imagePullPolicy" (dict "root" . "component" "migrations") }}
-          securityContext:
-            {{- toYaml .Values.global.securityContext | nindent 12 }}
-          command:
-            {{- toYaml .Values.migrations.command | nindent 12 }}
-          env:
-            {{- include "genus-os.commonEnv" . | nindent 12 }}
-          envFrom:
-            {{- include "genus-os.envFromSecret" (dict "root" . "component" "migrations") | nindent 12 }}
-          volumeMounts:
-            - name: tmp
-              mountPath: /tmp
-          resources:
-            {{- toYaml .Values.migrations.resources | nindent 12 }}
-      volumes:
-        - name: tmp
-          emptyDir: {}
+  template:{{ include "genus-os.migrationsPodTemplate" . }}
 {{- end }}

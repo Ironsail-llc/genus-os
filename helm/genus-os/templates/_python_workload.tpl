@@ -178,6 +178,7 @@ spec:
               protocol: TCP
           env:
             {{- include "genus-os.commonEnv" $root | nindent 12 }}
+            {{- with include "genus-os.dbCaEnv" $root | trim }}{{ . | nindent 12 }}{{- end }}
             {{- range $k, $v := $componentEnv }}
             - name: {{ $k }}
               value: {{ $v | quote }}
@@ -204,6 +205,7 @@ spec:
               mountPath: /tmp
             - name: runtime-cache
               mountPath: /app/.cache
+            {{- with include "genus-os.dbCaVolumeMount" $root | trim }}{{ . | nindent 12 }}{{- end }}
           resources:
             {{- toYaml $cv.resources | nindent 12 }}
       volumes:
@@ -227,6 +229,7 @@ spec:
           emptyDir: {}
         - name: runtime-cache
           emptyDir: {}
+        {{- with include "genus-os.dbCaVolume" $root | trim }}{{ . | nindent 8 }}{{- end }}
         {{- if $root.Values.migrations.enabled }}
         - name: migration-api-token
           projected:
