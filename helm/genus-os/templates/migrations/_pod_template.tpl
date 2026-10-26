@@ -20,7 +20,9 @@ include the name too).
       restartPolicy: Never
       {{- with .Values.global.imagePullSecrets }}
       imagePullSecrets:
-        {{- toYaml . | nindent 8 }}
+        {{- range . }}
+        - name: {{ . }}
+        {{- end }}
       {{- end }}
       securityContext:
         {{- toYaml .Values.global.podSecurityContext | nindent 8 }}

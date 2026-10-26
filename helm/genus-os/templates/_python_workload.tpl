@@ -82,7 +82,9 @@ spec:
       automountServiceAccountToken: false
       {{- with $root.Values.global.imagePullSecrets }}
       imagePullSecrets:
-        {{- toYaml . | nindent 8 }}
+        {{- range . }}
+        - name: {{ . }}
+        {{- end }}
       {{- end }}
       securityContext:
         {{- toYaml $root.Values.global.podSecurityContext | nindent 8 }}

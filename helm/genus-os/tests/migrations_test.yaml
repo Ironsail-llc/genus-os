@@ -91,7 +91,7 @@ tests:
     template: migrations/job.yaml
     set:
       global.imagePullSecrets:
-        - name: ghcr-pull-secret
+        - ghcr-pull-secret
     asserts:
       - contains:
           path: spec.template.spec.imagePullSecrets

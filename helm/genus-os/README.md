@@ -304,8 +304,14 @@ helm install gos helm/genus-os \
 # never combine them into one broad local Secret. At minimum:
 kubectl -n genus create secret generic gos-genus-os-database \
   --from-literal=ROBOTHOR_DB_PASSWORD=devpass
+# Must be NON-EMPTY while valkey.auth.enabled is true (the default). The
+# subchart hashes whatever it finds, so an empty value becomes
+# `user default on #<sha256 of "">` in the ACL while clients with an empty
+# password send no AUTH at all — every connection then fails NOAUTH, with
+# nothing failing at install time. Either set a real value here or turn the
+# server's auth off with `valkey.auth.enabled: false`, as values-local.yaml does.
 kubectl -n genus create secret generic gos-genus-os-cache \
-  --from-literal=ROBOTHOR_REDIS_PASSWORD=""
+  --from-literal=ROBOTHOR_REDIS_PASSWORD='local-only-cache-password'
 kubectl -n genus create secret generic gos-genus-os-auth-signing \
   --from-literal=GENUS_AUTH_SIGNING_KEY='local-only-32-byte-minimum-key-value'
 # Create the remaining component-specific Secrets named in `secretRefs` with
