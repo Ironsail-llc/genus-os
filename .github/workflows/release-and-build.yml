@@ -212,8 +212,13 @@ jobs:
             --values helm/genus-os/values.yaml \
             --values helm/genus-os/values-production.yaml
           helm unittest helm/genus-os --strict
+          # Hook-free render for kube-linter, as helm.yml does. Helm hook Pods
+          # (chart tests) are ephemeral and never part of a release's steady
+          # state, and the valkey subchart's test hook hardcodes a pod spec
+          # with no resources, which this chart's values cannot fix.
           helm template gos helm/genus-os \
             --namespace genus \
+            --no-hooks \
             --values helm/genus-os/values.yaml \
             --values helm/genus-os/values-production.yaml \
             > /tmp/genus-production.yaml
