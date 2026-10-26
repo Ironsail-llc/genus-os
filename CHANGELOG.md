@@ -1,3 +1,13 @@
+## [1.109.1](https://github.com/Ironsail-llc/genus-os/compare/v1.109.0...v1.109.1) (2026-10-26)
+
+### Bug Fixes
+
+* **app:** patch two CRITICAL advisories blocking the dashboard image ([#701](https://github.com/Ironsail-llc/genus-os/issues/701)) ([a0a6b58](https://github.com/Ironsail-llc/genus-os/commit/a0a6b5804971a88d603864bfacfea44563d36d4a))
+
+### Documentation
+
+* say that this repository is public, and that the boundary covers prose ([#685](https://github.com/Ironsail-llc/genus-os/issues/685)) ([da377cf](https://github.com/Ironsail-llc/genus-os/commit/da377cfb12a41920724bd7b13d11bcf23c00815f)), closes [#682](https://github.com/Ironsail-llc/genus-os/issues/682)
+
 ## [1.109.0](https://github.com/Ironsail-llc/genus-os/compare/v1.108.2...v1.109.0) (2026-10-26)
 
 ### Features
