@@ -6,29 +6,33 @@ Genus OS is a deterministic AI agent platform. Users deploy instances with their
 
 This is the most important concept in the codebase. Getting it wrong leaks personal data into git.
 
-| Layer | Location | Tracked | Purpose |
-|-------|----------|---------|---------|
-| **Platform** | `robothor/`, `crm/`, `infra/`, `app/`, `docs/*.md` | Yes | Core engine, tools, migrations, dashboard |
-| **Instance** | `brain/`, `docs/agents/*.yaml`, `local/`, `.robothor/` | No | Identity, agent configs, memory, secrets |
+| Layer        | Location                                               | Tracked | Purpose                                   |
+| ------------ | ------------------------------------------------------ | ------- | ----------------------------------------- |
+| **Platform** | `robothor/`, `crm/`, `infra/`, `app/`, `docs/*.md`     | Yes     | Core engine, tools, migrations, dashboard |
+| **Instance** | `brain/`, `docs/agents/*.yaml`, `local/`, `.robothor/` | No      | Identity, agent configs, memory, secrets  |
 
 **The rule**: Platform code must never contain instance-specific data — no personal names, email addresses, domains, phone numbers, home addresses, hardcoded tenant IDs, or absolute paths. Use environment variables and constants instead.
 
+**This repository is public**, so the boundary covers deployment detail as well as personal data, and prose as well as files — commit messages, pull request bodies and release notes are all published, and the leak hooks scan only changed files. See [Platform vs Instance](docs/PLATFORM_INSTANCE.md#this-repository-is-public).
+
 ### What goes where
 
-| I want to... | Put it in... | Why |
-|--------------|-------------|-----|
-| Add a new engine tool | `robothor/engine/tools/` | Platform — all instances get it |
-| Configure my agent fleet | `docs/agents/*.yaml` + `brain/agents/*.md` | Instance — survives upgrades |
-| Add a platform guardrail | Root `CLAUDE.md` (this file) | Platform — ships to everyone |
-| Add a personal rule for Claude | `brain/CLAUDE.md` | Instance — only your machine |
-| Write test fixtures | Use generic names (Alice, Bob, agent@example.com) | Platform — no personal data |
-| Reference the operator | Say "the operator" not a personal name | Platform — works for any user |
-| Set a tenant ID default | `os.environ.get("ROBOTHOR_DEFAULT_TENANT", "default")` | Platform — env var, not hardcoded |
-| Reference workspace path | `os.environ.get("ROBOTHOR_WORKSPACE", ...)` | Platform — never `/home/username` |
+| I want to...                                                              | Put it in...                                           | Why                               |
+| ------------------------------------------------------------------------- | ------------------------------------------------------ | --------------------------------- |
+| Add a new engine tool                                                     | `robothor/engine/tools/`                               | Platform — all instances get it   |
+| Configure my agent fleet                                                  | `docs/agents/*.yaml` + `brain/agents/*.md`             | Instance — survives upgrades      |
+| Add a platform guardrail                                                  | Root `CLAUDE.md` (this file)                           | Platform — ships to everyone      |
+| Add a personal rule for Claude                                            | `brain/CLAUDE.md`                                      | Instance — only your machine      |
+| Write test fixtures                                                       | Use generic names (Alice, Bob, agent@example.com)      | Platform — no personal data       |
+| Reference the operator                                                    | Say "the operator" not a personal name                 | Platform — works for any user     |
+| Mention a deployment host, namespace, GitOps app, secret path or issue id | Describe it generically, or name the values key        | Platform — this repo is public    |
+| Set a tenant ID default                                                   | `os.environ.get("ROBOTHOR_DEFAULT_TENANT", "default")` | Platform — env var, not hardcoded |
+| Reference workspace path                                                  | `os.environ.get("ROBOTHOR_WORKSPACE", ...)`            | Platform — never `/home/username` |
 
 ### How Claude Code sees both layers
 
 Claude Code reads every `CLAUDE.md` in the directory tree. So:
+
 - `CLAUDE.md` (this file) — platform rules, always loaded
 - `brain/CLAUDE.md` — instance rules, loaded if present, gitignored
 - `robothor/engine/CLAUDE.md` — subsystem rules, tracked
@@ -62,11 +66,11 @@ These come from production experience running the first Genus OS instance:
 
 - **`main` is the only release branch.** Squash-merge only — the PR title becomes the commit on `main`, so it must parse as a Conventional Commit. The `PR Title` check enforces this; merge button stays disabled otherwise.
 - **No release on merge?** The `Release Preview` sticky PR comment tells you in advance whether your PR will trigger a release. `chore:` / `docs:` (non-README) / `style:` / `test:` / `ci:` / `build:` do **not** bump versions. Change the type to `feat:` / `fix:` / `perf:` if a deploy is expected.
-- **Production:** semantic-release on `main` produces a `vX.Y.Z` tag, GitHub Release, CHANGELOG bump, and updates `helm/genus-os/values-production.yaml`. ArgoCD syncs `ironsail-production-genus-os`.
-- **Staging is label-driven, single slot.** Add the `deploy-staging` label to a PR → builds image `pr-N-sha-<short>`, commits the bump to `helm/genus-os/values-staging.yaml` on `main` (with `[skip ci]`), syncs `ironsail-staging-genus-os`. Removing the label or merging the PR resets staging to the latest `vX.Y.Z`. If another PR currently holds staging, the deploy is refused with a comment — unlabel the other PR first.
+- **Production:** semantic-release on `main` produces a `vX.Y.Z` tag, GitHub Release, CHANGELOG bump, and updates `helm/genus-os/values-production.yaml`. ArgoCD syncs the production Application.
+- **Staging is label-driven, single slot.** Add the `deploy-staging` label to a PR → builds image `pr-N-sha-<short>`, commits the bump to `helm/genus-os/values-staging.yaml` on `main` (with `[skip ci]`), syncs the staging Application. Removing the label or merging the PR resets staging to the latest `vX.Y.Z`. If another PR currently holds staging, the deploy is refused with a comment — unlabel the other PR first.
 - **`git log helm/genus-os/values-staging.yaml`** is the staging deploy ledger. **`git tag --list 'v*'`** on `main` is the production release ledger.
 - **Image tags:** GHCR, no `:latest`. Production pins exact `vX.Y.Z`; staging pins `pr-N-sha-<short>`.
-- **Full conventions:** [`aws-infrastucture/docs/app-release-and-deploy.md`](https://github.com/Ironsail-llc/aws-infrastucture/blob/main/docs/app-release-and-deploy.md). New-app onboarding: `setup-app-ci` skill in the infra repo.
+- **Full conventions** live with the deployment, not here — see your infrastructure repo's release-and-deploy doc. This repo owns the chart and the pipeline; it does not describe any one deployment.
 
 ## Quick Reference
 
