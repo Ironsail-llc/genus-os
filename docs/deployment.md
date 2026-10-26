@@ -357,6 +357,29 @@ an unreachable credential store reads as an empty one. An unreadable vault sits
 out five minutes before it is probed again, rather than putting a synchronous
 database connect on the LLM hot path.
 
+### Model providers
+
+Agents name their models in the instance's `docs/agents/_defaults.yaml` (`model:
+primary` and `fallbacks`, instance data) and in each manifest; the engine dials whatever those
+name, and the credential for each provider comes from the environment. Set one
+key per provider you use and name none you do not: a provider whose key is
+absent is simply never tried.
+
+| Models | Environment |
+|---|---|
+| `openai/*` | `OPENAI_API_KEY`; `OPENAI_API_BASE` when the key belongs to a regional project (for example a US data-residency key, which `api.openai.com` rejects) |
+| `anthropic/*` | `ANTHROPIC_API_KEY` |
+| `openrouter/*` | `OPENROUTER_API_KEY` |
+| `gemini/*` | `GEMINI_API_KEY` (the Gemini Developer API, not Vertex) |
+| `vertex_ai/*` | `VERTEXAI_CREDENTIALS` holding the service-account JSON itself (or a path to it), `VERTEXAI_PROJECT`, and `VERTEXAI_LOCATION`: a region such as `us-central1`, or the `us` / `eu` multi-region; `global` processes requests in any location, so a residency commitment usually rules it out |
+
+Vertex AI is the Gemini surface covered by Google Cloud's enterprise terms; the
+service account needs the Vertex AI User role on the project. The engine-wide
+settings whose defaults name a provider (`ROBOTHOR_LAST_RESORT_MODEL`,
+`ROBOTHOR_RLM_ROOT_MODEL`, `ROBOTHOR_RLM_SUB_MODEL`, `ROBOTHOR_VISION_REMOTE_MODEL`)
+are listed in the [configuration reference](reference/configuration.md); point
+them at a provider you have a key for, or the first run that reaches one fails.
+
 ## Preparing the dependencies by hand
 
 The `local` substrate needs PostgreSQL and Redis running before `genus init`
