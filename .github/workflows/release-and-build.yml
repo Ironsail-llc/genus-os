@@ -33,104 +33,58 @@ jobs:
       (github.event_name == 'pull_request'
         && github.event.action != 'closed')
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: pgvector/pgvector:pg16
-        env:
-          POSTGRES_USER: robothor
-          POSTGRES_PASSWORD: robothor
-          POSTGRES_DB: robothor_release_gate
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
 
-      - name: Verify workflow actions are immutably pinned
-        run: python3 scripts/check_workflow_action_pins.py
-
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
-        with:
-          python-version: "3.12"
-          cache: pip
-      # Same locked install as ci.yml's `test` matrix. This gate runs its own
-      # copy of the unit suite, so re-resolving here reintroduces exactly the
-      # drift that fix(ci) removed there: pip picks a newer litellm than
-      # uv.lock pins and the shipped image runs, and the model-catalog drift
-      # test plus every provider call fail against a catalog we do not ship.
-      - name: Install the locked dependency set
-        run: |
-          # 0.13.4, not an older pin: `pip install uv` puts uv in the same
-          # environment the gate's pip-audit step later scans, so uv's own
-          # version has to be non-vulnerable (0.11.21 carries
-          # PYSEC-2026-4321). Verified that 0.13.4 reads this lock and exports
-          # byte-identically to the version the pins were generated with.
-          pip install uv==0.13.4
-          # --output-file, not a shell redirect: uv colorizes the comment lines
-          # it writes and the ANSI escapes make `uv pip install -r` fail.
-          uv export --frozen --no-emit-project --no-hashes \
-            --extra dev --extra api --extra vision --extra tui \
-            --output-file /tmp/requirements.txt
-          # opencv-python-headless is not a declared dependency — it is the
-          # headless wheel CI needs in place of the GUI one `vision` pulls — so
-          # it is resolved TOGETHER with the pins. Installed as a separate step
-          # it dragged numpy to 2.5.x, past the deliberate `numpy<2` constraint
-          # for Python < 3.13, which broke mypy: numpy 2 stubs use PEP 695
-          # `type` statements and mypy rejects those at the configured
-          # python_version = 3.11. Resolved jointly, the pin holds numpy at
-          # 1.26.4 and opencv lands on 4.11.0.86.
-          uv pip install --system -r /tmp/requirements.txt opencv-python-headless
-          # The project itself, without re-resolving what the lock just pinned.
-          uv pip install --system --no-deps -e .
-      - run: pip install -r crm/bridge/requirements.txt
-      - name: Verify Python source and complete unit suite
-        run: |
-          ruff check robothor/ crm/bridge/
-          ruff format --check robothor/ crm/bridge/
-          mypy robothor/ --ignore-missing-imports
-          pytest tests/ robothor/ -m "not integration and not llm and not slow and not e2e" --cov=robothor --cov-fail-under=60
-          pytest crm/bridge/tests/ -m "not integration and not slow and not e2e"
-          python scripts/validate_agents.py --ci
-
-      - name: Verify canonical migrations against PostgreSQL
+      # ci.yml owns ruff, mypy, the unit matrix across three Python versions,
+      # the bridge suite, validate-agents, the integration suite, pip-audit,
+      # gitleaks, the npm allowlist and the action-pin check. It triggers on the
+      # same push and pull_request as this workflow, with no path filter, so it
+      # has already run them against this exact commit.
+      #
+      # This gate used to re-run all of it, serially, in one job: ~40 minutes of
+      # duplicate compute on every pull request and every release, and the long
+      # pole on both. It asserts the result instead. Nothing stopped being
+      # checked — the checks have one home, and this job fails if that home
+      # reports anything other than success for this SHA.
+      - name: Require CI to have passed this commit
         env:
-          PGPASSWORD: robothor
-          ROBOTHOR_TEST_DB_DSN: "dbname=robothor_release_gate user=robothor password=robothor host=localhost port=5432"
-          ROBOTHOR_DB_HOST: 127.0.0.1
-          ROBOTHOR_DB_PORT: "5432"
-          ROBOTHOR_DB_NAME: robothor_release_gate
-          ROBOTHOR_DB_USER: robothor
-          ROBOTHOR_DB_PASSWORD: robothor
-          # The pytest DB guard (robothor/db/connection.py assert_test_database)
-          # only opens non-*_test databases that are explicitly allowed.
-          ROBOTHOR_TEST_DB_ALLOW: robothor_release_gate
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
         run: |
-          python -m robothor.cli migrate
-          python -m robothor.cli migrate --check
-          pytest tests/integration/ -m integration
-
-      - name: Audit Python dependencies
-        run: |
-          pip install pip-audit==2.10.1
-          pip-audit
-
-      - name: Scan repository history for secrets
-        run: |
-          mkdir -p "$RUNNER_TEMP/bin"
-          archive="$RUNNER_TEMP/gitleaks.tar.gz"
-          curl --fail --show-error --location --output "$archive" \
-            https://github.com/gitleaks/gitleaks/releases/download/v8.24.3/gitleaks_8.24.3_linux_x64.tar.gz
-          echo "9991e0b2903da4c8f6122b5c3186448b927a5da4deef1fe45271c3793f4ee29c  $archive" \
-            | sha256sum --check --strict
-          tar --extract --gzip --file "$archive" \
-            --directory "$RUNNER_TEMP/bin" gitleaks
-          "$RUNNER_TEMP/bin/gitleaks" detect --source . --verbose
+          deadline=$(( SECONDS + 3600 ))
+          while :; do
+            read -r status conclusion <<<"$(
+              gh run list --commit "$SHA" --workflow ci.yml --limit 1 \
+                --json status,conclusion \
+                --jq '.[0] | "\(.status // "missing") \(.conclusion // "pending")"'
+            )"
+            case "$status" in
+              completed)
+                if [ "$conclusion" = "success" ]; then
+                  echo "CI succeeded for $SHA."
+                  exit 0
+                fi
+                echo "::error::CI concluded '$conclusion' for $SHA — the release stops here."
+                exit 1
+                ;;
+              missing)
+                # Fail closed. A gate that passes because it could not find the
+                # run it depends on is not a gate.
+                if [ "$SECONDS" -gt "$(( deadline - 3300 ))" ]; then
+                  echo "::error::No ci.yml run found for $SHA after 5 minutes."
+                  exit 1
+                fi
+                ;;
+            esac
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::error::CI for $SHA still '$status' after 60 minutes."
+              exit 1
+            fi
+            sleep 30
+          done
 
       - uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
         with:
@@ -170,23 +124,13 @@ jobs:
       # .npm-audit-allowlist.json (see scripts/check_npm_audit.py). Any
       # advisory NOT named in that tracked file still fails the gate,
       # including new advisories in an already-allowlisted package.
-      - name: Audit release-tooling lock
-        run: |
-          npm audit --package-lock-only --audit-level=high --json > /tmp/npm-audit.json || true
-          python3 scripts/check_npm_audit.py /tmp/npm-audit.json
-      - name: Verify dashboard and browser flows
+      # Only the browser suite: ci.yml's `frontend` job already runs
+      # pnpm audit, lint, tsc and the unit tests. `pnpm build` stays because
+      # playwright needs something to serve.
+      - name: Verify browser flows
         working-directory: app
         run: |
           pnpm install --frozen-lockfile
-          # Legacy npm audit endpoints were retired 2026-07 (HTTP 410 Gone) and
-          # pnpm 10.x still queries them, so `pnpm audit` fails unconditionally — a
-          # dead-endpoint error, not a finding. Keep it visible but non-blocking
-          # until a working advisory source is wired up (see follow-up). The npm
-          # audit above still runs against the working bulk endpoint.
-          pnpm audit --audit-level=high || echo "::warning::pnpm audit skipped — npm audit endpoint retired (HTTP 410); dependency scan gap tracked as follow-up"
-          pnpm lint
-          pnpm exec tsc --noEmit
-          pnpm test
           pnpm build
           pnpm exec playwright install --with-deps chromium
           pnpm exec playwright test
