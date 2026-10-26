@@ -716,11 +716,22 @@ kubectl -n <namespace> create configmap genus-os-db-ca --from-file=ca.pem=./db-c
 The engine, bridge, orchestrator and the migration Job then mount that key
 read-only under `/etc/genus/db-ca/` and set `PGSSLROOTCERT` to it; the
 dashboard has no database access and gets nothing. A CA bundle is public
-material, which is why it is a ConfigMap and not a Secret. In staging and
-production the chart refuses to render `verify-ca` or `verify-full` without
-`database.tls.caConfigMap`, rather than ship a release that cannot connect.
-Leave it empty elsewhere to keep libpq's default `~/.postgresql/root.crt`
-lookup.
+material, which is why it is a ConfigMap and not a Secret.
+
+The chart refuses to render `verify-ca` or `verify-full` without
+`database.tls.caConfigMap` in any environment, rather than ship a release that
+passes CI and render and then cannot connect. The check looks at the TLS
+settings, not the environment's name, so a new environment is covered without
+anyone remembering to add it. If an environment really relies on libpq's
+default `~/.postgresql/root.crt` lookup (the image or a mounted home directory
+provides that file), say so explicitly:
+
+```yaml
+database:
+  sslMode: verify-full
+  tls:
+    allowDefaultTrustStore: true   # pods provide ~/.postgresql/root.crt
+```
 
 Changing `database.tls` (the ConfigMap name or key), or anything else in the
 migration Job's pod template (image, environment, labels, scheduling), gives

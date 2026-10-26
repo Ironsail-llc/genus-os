@@ -56,7 +56,7 @@ tests:
     template: migrations/job.yaml
     set:
       <<: *baseline
-      database.sslMode: verify-full
+      database.sslMode: require
     asserts:
       - notEqual: *notBaseline
 

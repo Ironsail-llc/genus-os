@@ -118,7 +118,9 @@ tests:
             name: PGSSLROOTCERT
           any: true
 
-  # ─── Render-time guard for the hardened environments ───────────────────────
+  # ─── Render-time guard: verify-* needs a CA, in every environment ─────────
+  # The guard keys off the TLS settings, not the environment's name, so a new
+  # environment cannot silently drop out of it.
   - it: staging with verify-full and no CA bundle fails to render
     template: validate-database.yaml
     set:
@@ -127,7 +129,7 @@ tests:
       database.tls.caConfigMap: ""
     asserts:
       - failedTemplate:
-          errorMessage: 'database.sslMode is "verify-full" in staging, but database.tls.caConfigMap is empty: libpq would look for a root.crt that does not exist and every database connection would fail. Set database.tls.caConfigMap to a ConfigMap holding the CA bundle that signs the database server certificate.'
+          errorMessage: "database.sslMode is \"verify-full\" (global.environment \"staging\") but database.tls.caConfigMap is empty: libpq would look for a root.crt that does not exist and every database connection would fail. Set database.tls.caConfigMap to a ConfigMap holding the CA bundle that signs the database server certificate, or set database.tls.allowDefaultTrustStore: true if this environment really relies on libpq's default root.crt lookup."
 
   - it: production with verify-ca and no CA bundle fails to render
     template: validate-database.yaml
@@ -136,7 +138,24 @@ tests:
       database.sslMode: verify-ca
     asserts:
       - failedTemplate:
-          errorMessage: 'database.sslMode is "verify-ca" in production, but database.tls.caConfigMap is empty: libpq would look for a root.crt that does not exist and every database connection would fail. Set database.tls.caConfigMap to a ConfigMap holding the CA bundle that signs the database server certificate.'
+          errorMessage: "database.sslMode is \"verify-ca\" (global.environment \"production\") but database.tls.caConfigMap is empty: libpq would look for a root.crt that does not exist and every database connection would fail. Set database.tls.caConfigMap to a ConfigMap holding the CA bundle that signs the database server certificate, or set database.tls.allowDefaultTrustStore: true if this environment really relies on libpq's default root.crt lookup."
+
+  - it: an environment outside any name list still fails without a CA bundle
+    template: validate-database.yaml
+    set:
+      global.environment: qa-eu
+      database.sslMode: verify-full
+    asserts:
+      - failedTemplate:
+          errorMessage: "database.sslMode is \"verify-full\" (global.environment \"qa-eu\") but database.tls.caConfigMap is empty: libpq would look for a root.crt that does not exist and every database connection would fail. Set database.tls.caConfigMap to a ConfigMap holding the CA bundle that signs the database server certificate, or set database.tls.allowDefaultTrustStore: true if this environment really relies on libpq's default root.crt lookup."
+
+  - it: the chart default environment fails too
+    template: validate-database.yaml
+    set:
+      database.sslMode: verify-full
+    asserts:
+      - failedTemplate:
+          errorMessage: "database.sslMode is \"verify-full\" (global.environment \"development\") but database.tls.caConfigMap is empty: libpq would look for a root.crt that does not exist and every database connection would fail. Set database.tls.caConfigMap to a ConfigMap holding the CA bundle that signs the database server certificate, or set database.tls.allowDefaultTrustStore: true if this environment really relies on libpq's default root.crt lookup."
 
   - it: production with verify-full and a CA bundle renders
     template: validate-database.yaml
@@ -161,11 +180,33 @@ tests:
       - hasDocuments:
           count: 0
 
-  - it: local environments may use verify-full with libpq's default lookup
+  - it: allowDefaultTrustStore opts out explicitly, keeping libpq's root.crt lookup
     template: validate-database.yaml
     set:
-      global.environment: development
+      global.environment: qa-eu
       database.sslMode: verify-full
+      database.tls.allowDefaultTrustStore: true
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: the opt-out mounts nothing
+    template: engine/workload.yaml
+    documentIndex: 0
+    set:
+      database.sslMode: verify-full
+      database.tls.allowDefaultTrustStore: true
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: PGSSLROOTCERT
+          any: true
+
+  - it: values-local renders without a CA bundle
+    values:
+      - ../values-local.yaml
+    template: validate-database.yaml
     asserts:
       - hasDocuments:
           count: 0

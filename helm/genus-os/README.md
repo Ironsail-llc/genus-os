@@ -244,11 +244,13 @@ that CA as a ConfigMap and name it in `database.tls`:
 |-------|---------|---------|
 | `database.tls.caConfigMap` | `""` | ConfigMap in the release namespace holding the PEM CA bundle that signs the database server certificate. Empty: nothing is mounted and libpq's default `root.crt` lookup applies. |
 | `database.tls.caKey` | `ca.pem` | Key in that ConfigMap. |
+| `database.tls.allowDefaultTrustStore` | `false` | Explicit opt-out of the render-time check below, for an environment whose pods really provide libpq's default `root.crt`. |
 
 When set, engine, bridge, orchestrator and the migration Job mount the key
-read-only at `/etc/genus/db-ca/<caKey>` and set `PGSSLROOTCERT` to it. In
-staging/production, `sslMode: verify-ca` or `verify-full` without
-`caConfigMap` fails at render time. See
+read-only at `/etc/genus/db-ca/<caKey>` and set `PGSSLROOTCERT` to it. In any
+environment, `sslMode: verify-ca` or `verify-full` without `caConfigMap` fails
+at render time unless `allowDefaultTrustStore: true` says the default trust
+store is intended. The check never depends on the environment's name. See
 [Trusting the database's CA](../../docs/deployment.md#trusting-the-databases-ca).
 
 Production and staging NetworkPolicies default-deny ingress and egress, then

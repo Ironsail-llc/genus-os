@@ -137,12 +137,16 @@ database:
     #
     # When set, engine, bridge, orchestrator and the migrations Job mount
     # the key read-only at /etc/genus/db-ca/<caKey> and export
-    # PGSSLROOTCERT pointing at it. Required in staging/production whenever
+    # PGSSLROOTCERT pointing at it. Required in EVERY environment whenever
     # sslMode is verify-ca or verify-full: a managed Postgres presents a
     # private CA that no default trust store holds, and the chart refuses to
     # render a configuration that could never connect.
     caConfigMap: ""
     caKey: ca.pem
+    # Explicit opt-out of the check above, for an environment whose image or
+    # home directory really provides libpq's default ~/.postgresql/root.crt.
+    # Leave false unless you have verified that file exists in the pods.
+    allowDefaultTrustStore: false
 
 # ─── Instance workspace ──────────────────────────────────────────────────────
 # The workspace contains the entity's manifests, instructions, memory, and
