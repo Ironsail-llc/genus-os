@@ -471,10 +471,17 @@ dashboard:
       enabled: true
       path: /api/live
       initialDelaySeconds: 20
+      # /api/live is process-only; 3 s absorbs a GC pause or a busy event
+      # loop without masking a hung process for long.
+      timeoutSeconds: 3
     readiness:
       enabled: true
       path: /api/ready
       initialDelaySeconds: 5
+      # /api/ready checks each backend and can wait ~5 s on one that is
+      # unreachable; a shorter timeout fails the probe before the check
+      # can report.
+      timeoutSeconds: 6
   podDisruptionBudget:
     enabled: true
     minAvailable: 1
