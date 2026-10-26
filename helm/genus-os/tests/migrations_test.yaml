@@ -49,6 +49,12 @@ tests:
     template: migrations/job.yaml
     set:
       migrations.secretRefs: [database, auth-signing]
+      # The app workloads render the Job name too, which hashes the Job's pod
+      # template, so they would raise the same error first. Disable them to
+      # attribute it to the Job.
+      engine.enabled: false
+      bridge.enabled: false
+      orchestrator.enabled: false
     asserts:
       - failedTemplate:
           errorMessage: 'migrations.secretRefs is DB-only and forbids secret class "auth-signing"'

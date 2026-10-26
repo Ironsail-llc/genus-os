@@ -692,11 +692,13 @@ production the chart refuses to render `verify-ca` or `verify-full` without
 Leave it empty elsewhere to keep libpq's default `~/.postgresql/root.crt`
 lookup.
 
-Changing the bundle, or anything else the migration Job carries (its image,
-command, resources or shared environment), gives the Job a new name: the next
-sync runs migrations once with the new settings instead of failing on an
-immutable Job, and a sync that changes none of them leaves the completed Job
-alone.
+Changing `database.tls` (the ConfigMap name or key), or anything else in the
+migration Job's pod template (image, environment, labels, scheduling), gives
+the Job a new name: the next sync runs migrations once with the new settings
+instead of failing on an immutable Job, and a sync that changes none of it
+leaves the completed Job alone. Rotating the CA inside the existing ConfigMap
+needs no rename and no restart: kubelet refreshes the mounted file and libpq
+reads it on each new connection.
 
 ## Production Checklist
 

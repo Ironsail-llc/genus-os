@@ -88,30 +88,22 @@ to .component). Image repo is .Values.global.registry + "/" + repository.
 {{- end -}}
 
 {{/*
-Migration Job name: <fullname>-migrate-<hash>. Job, RBAC and every
-wait-for-migrations initContainer compute it from the same values, so they
-always agree.
+Migration Job name: <fullname>-migrate-<hash of the rendered pod template>.
+Job, RBAC and every wait-for-migrations initContainer compute it from the same
+values, so they always agree.
 
-A Job's pod template is immutable. Hashing only the image tag meant that a
-change to anything else the Job carries -- the shared environment (auth
-flags, sslmode, deploy breadcrumbs), the database CA bundle, the command or
-the resources -- kept the name, so the upgrade failed with "field is
-immutable" and left the release half-applied. The hash therefore covers the
-image and the rendered container inputs: any change yields a new Job that
-runs once, while an unchanged release keeps its completed Job and is not
-re-run. The previous Job is pruned on the next sync.
+A Job's pod template is immutable. The name used to hash only the image tag,
+so a change to anything else in the template -- the shared environment, the
+database CA mount, the chart/app version labels, the ServiceAccount, security
+context, scheduling or pull secrets -- kept the name, and the upgrade failed
+with "field is immutable", leaving the release half-applied. Hashing the whole
+rendered template (genus-os.migrationsPodTemplate, in migrations/job.yaml)
+means any such change yields a new Job that runs once, while an unchanged
+release keeps its completed Job and is not re-run. The previous Job is pruned
+on the next sync.
 */}}
 {{- define "genus-os.migrationJobName" -}}
-{{- $inputs := list
-      (include "genus-os.image" (dict "root" . "component" "migrations"))
-      (include "genus-os.imagePullPolicy" (dict "root" . "component" "migrations"))
-      (toJson .Values.migrations.command)
-      (toJson .Values.migrations.resources)
-      (include "genus-os.commonEnv" .)
-      (include "genus-os.dbCaEnv" .)
-      (include "genus-os.dbCaVolume" .)
-      (toJson .Values.migrations.secretRefs) -}}
-{{- printf "%s-migrate-%s" (include "genus-os.fullname" .) (join "\n" $inputs | sha256sum | trunc 8) -}}
+{{- printf "%s-migrate-%s" (include "genus-os.fullname" .) (include "genus-os.migrationsPodTemplate" . | sha256sum | trunc 8) -}}
 {{- end -}}
 
 {{/* Workspace PVC name (created by this chart or supplied by the operator). */}}

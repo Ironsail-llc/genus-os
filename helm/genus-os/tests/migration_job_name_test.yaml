@@ -2,10 +2,15 @@ suite: migration Job name follows everything immutable in the Job
 release:
   name: gos
   namespace: genus
+# Pinned: the chart and app versions land in the pod template's labels, so the
+# baseline below must not move with every release's version bump.
+chart:
+  version: 1.0.0
+  appVersion: 1.0.0
 # A Job's pod template is immutable. If any of it changes while the name stays
 # the same, the upgrade fails with "field is immutable" and the release is left
-# half-applied. The name therefore hashes the image AND the rendered
-# environment, so every such change produces a new Job that runs once.
+# half-applied. The name therefore hashes the whole rendered pod template, so
+# every such change produces a new Job that runs once.
 tests:
   - it: name is not derived from the image tag alone
     template: migrations/job.yaml
@@ -35,7 +40,7 @@ tests:
     asserts:
       - equal:
           path: metadata.name
-          value: &baselineName gos-genus-os-migrate-6a6e874c
+          value: &baselineName gos-genus-os-migrate-021eda63
 
   - it: changing an auth flag renames the Job
     template: migrations/job.yaml
@@ -76,6 +81,68 @@ tests:
     set:
       <<: *baseline
       migrations.command: ["python", "-m", "robothor.cli", "migrate", "--check"]
+    asserts:
+      - notEqual: *notBaseline
+
+  - it: a chart version bump renames the Job (helm.sh/chart label)
+    template: migrations/job.yaml
+    chart:
+      version: 1.0.1
+    set:
+      <<: *baseline
+    asserts:
+      - notEqual: *notBaseline
+
+  - it: an app version bump renames the Job (app.kubernetes.io/version label)
+    template: migrations/job.yaml
+    chart:
+      appVersion: 1.0.1
+    set:
+      <<: *baseline
+    asserts:
+      - notEqual: *notBaseline
+
+  - it: changing the ServiceAccount renames the Job
+    template: migrations/job.yaml
+    set:
+      <<: *baseline
+      serviceAccount.create: false
+      serviceAccount.names.migrations: migrations-sa
+    asserts:
+      - notEqual: *notBaseline
+
+  - it: changing the container security context renames the Job
+    template: migrations/job.yaml
+    set:
+      <<: *baseline
+      global.securityContext.runAsUser: 12345
+    asserts:
+      - notEqual: *notBaseline
+
+  - it: changing a node selector renames the Job
+    template: migrations/job.yaml
+    set:
+      <<: *baseline
+      global.nodeSelector.pool: migrations
+    asserts:
+      - notEqual: *notBaseline
+
+  - it: changing tolerations renames the Job
+    template: migrations/job.yaml
+    set:
+      <<: *baseline
+      migrations.tolerations:
+        - key: dedicated
+          operator: Exists
+          effect: NoSchedule
+    asserts:
+      - notEqual: *notBaseline
+
+  - it: changing pull secrets renames the Job
+    template: migrations/job.yaml
+    set:
+      <<: *baseline
+      global.imagePullSecrets: []
     asserts:
       - notEqual: *notBaseline
 

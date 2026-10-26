@@ -220,10 +220,14 @@ history. Upgrade safeguards preserve legacy memory tables as archives and
 require a 30-day replacement-data gate plus a full-row archive before removing
 legacy score columns.
 
-The Job's name hashes its image, command, resources and rendered environment
-(including the database CA bundle). A Job's pod template is immutable, so any
-change to those produces a new Job that runs once; an upgrade that changes
-none of them keeps the completed Job and does not re-run it.
+The Job's name hashes its whole rendered pod template: image, command,
+resources, environment, `database.tls`, labels (so every chart or app version
+bump), ServiceAccount, security context, scheduling and pull secrets. A Job's
+pod template is immutable, so any change there produces a new Job that runs
+once; an upgrade that changes none of it keeps the completed Job and does not
+re-run it. Rotating the CA inside its ConfigMap changes no part of the
+template, so it does not rename the Job: kubelet refreshes the mounted file
+and libpq reads it on the next connection.
 
 The chain requires PostgreSQL extensions `vector`, `uuid-ossp`, `citext`, and
 `pgcrypto`. Managed services must pre-provision them or grant the migration
