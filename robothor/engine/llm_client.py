@@ -694,6 +694,47 @@ def _openai_reasoning_effort(model: str, *, reduced: bool = False) -> str:
     return _OPENAI_EFFORT.get(rung, "medium")
 
 
+#: Extra completion room a short auxiliary call (planner, verifier) gets on a
+#: reasoning model. Reasoning tokens count against ``max_tokens``: a 300-token
+#: verifier cap on a reasoning model came back ``finish_reason=length`` with no
+#: content at all. A ceiling is billed only for what is used.
+REASONING_ANSWER_HEADROOM = 8_192
+
+_GEMINI_THINKING_ID = re.compile(r"gemini-(2\.5|[3-9])")
+
+
+def _is_gemini_thinking_model(model: str) -> bool:
+    """Gemini 2.5 and later think by default, catalogued or not."""
+    from robothor.engine.model_registry import get_model_limits, is_gemini_route
+
+    if not is_gemini_route(model):
+        return False
+    if _GEMINI_THINKING_ID.search(model) or get_model_limits(model).supports_thinking:
+        return True
+    try:
+        return bool(litellm.supports_reasoning(model=model))
+    except Exception:  # noqa: BLE001 - unknown to the catalog means not known to reason
+        return False
+
+
+def short_answer_kwargs(model: str, answer_tokens: int) -> dict[str, Any]:
+    """``max_tokens`` (and the effort) for a short JSON answer from ``model``.
+
+    For an OpenAI reasoning model: ``reasoning_effort="low"`` plus headroom.
+    For a Gemini thinking model: headroom only — litellm's bundled catalog
+    may not know the model reasons and then refuses any reasoning parameter,
+    so the ceiling is what moves. Every other model: ``answer_tokens``.
+    """
+    if is_openai_reasoning_model(model):
+        return {
+            "max_tokens": answer_tokens + REASONING_ANSWER_HEADROOM,
+            "reasoning_effort": "low",
+        }
+    if _is_gemini_thinking_model(model):
+        return {"max_tokens": answer_tokens + REASONING_ANSWER_HEADROOM}
+    return {"max_tokens": answer_tokens}
+
+
 def drop_unsupported_sampling(model: str, kwargs: dict[str, Any]) -> dict[str, Any]:
     """Remove ``temperature`` from a call to an OpenAI reasoning model, in place.
 
@@ -1877,9 +1918,16 @@ class LLMClient:
         was needed most. Normalizing here, *before* the guard, keeps the context
         in the conversation and leaves a legitimate user turn at the tail.
 
-        Non-anthropic models are returned untouched (same list object), so their
+        Gemini (``gemini/``, ``vertex_ai/gemini…``) hoists system turns into
+        ``system_instruction`` the same way and refuses a request that then
+        ends on the model turn ("Requests ending with a model turn are not
+        supported") — which is what a verification retry, ending
+        ``[assistant, developer]``, used to send. It gets the same rewrite.
+
+        Other models are returned untouched (same list object), so their
         payloads stay byte-identical.
         """
+        from robothor.engine.model_registry import is_gemini_route
         from robothor.engine.session import ENGINE_CONTEXT_ROLE
 
         marker_text = ENGINE_CONTEXT_PREFIX.strip()
@@ -1897,7 +1945,7 @@ class LLMClient:
         # and identity turns, folded next to the user text without a name on
         # them. Behavioural rule 6 then made the agent report its own engine
         # as an attacker. Only the ROLE rewrite stays Anthropic-specific.
-        to_user = LLMClient._is_anthropic_family(model)
+        to_user = LLMClient._is_anthropic_family(model) or is_gemini_route(model)
         marker = ENGINE_CONTEXT_PREFIX.strip()
         normalized: list[dict[str, Any]] = []
         converted = 0

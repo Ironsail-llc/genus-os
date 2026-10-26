@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any
 # resolve the provider key from the environment, which on 2026-08-27 meant
 # this path kept hammering a credential the pool had already retired and
 # could not rotate to a spare. No-op for unpooled providers.
+from robothor.engine.llm_client import short_answer_kwargs
 from robothor.engine.pooled_completion import acompletion as pooled_acompletion
 from robothor.engine.sanitize import sanitize_log
 
@@ -146,7 +147,8 @@ async def generate_plan(
 ) -> PlanResult:
     """Generate an execution plan via a separate LLM call.
 
-    Uses JSON mode, max 500 tokens, cheap model. Non-fatal — returns
+    Uses JSON mode, a 500-token answer (plus reasoning headroom on a
+    reasoning model, see ``short_answer_kwargs``), cheap model. Non-fatal — returns
     a default PlanResult on any failure.
     """
     prompt = PLANNING_PROMPT.format(
@@ -163,7 +165,7 @@ async def generate_plan(
                 model=m,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1,
-                max_tokens=500,
+                **short_answer_kwargs(m, 500),
                 response_format={"type": "json_object"},
             )
             content = response.choices[0].message.content
@@ -291,7 +293,7 @@ async def replan(
                 model=m,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1,
-                max_tokens=500,
+                **short_answer_kwargs(m, 500),
                 response_format={"type": "json_object"},
             )
             content = response.choices[0].message.content

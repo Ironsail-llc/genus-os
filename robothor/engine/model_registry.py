@@ -471,6 +471,9 @@ _MODEL_REGISTRY: dict[str, ModelLimits] = {
         cache_read_cost_per_token=0.000_000_075,  # $0.075/M
         ttft_hint_ms=1000,
         accepts_images=True,
+        # The catalog says it caches prompts, but a marker here becomes Gemini
+        # explicit caching, which Vertex refuses on every agent call.
+        supports_cache_control=False,
     ),
     # GPT-5.6 Luna on the OpenAI API. Figures from litellm's catalog (2026-10).
     # A reasoning model: llm_client sends it `reasoning_effort`, never the
@@ -898,10 +901,15 @@ def supports_cache_control(model_id: str) -> bool:
        caching, but OpenRouter's transport doesn't accept our content-block
        format for it. (Historically documented at the old gate's call site in
        ``llm_client.py``; this is now the single source of truth.)
-    3. litellm's bundled ``supports_prompt_caching`` — safe against unmapped
+    3. Gemini on Google's own routes (``gemini/``, ``vertex_ai/gemini…``)
+       defaults to False. litellm turns a ``cache_control`` marker there into
+       Gemini *explicit* context caching, which the API refuses below 4,096
+       tokens and always alongside tools or a system instruction — every
+       agent call. Gemini caches implicitly; it needs no marker.
+    4. litellm's bundled ``supports_prompt_caching`` — safe against unmapped
        custom providers (e.g. ``codex/*``, a subscription provider litellm
        doesn't catalog; it reports False rather than raising).
-    4. Default False.
+    5. Default False.
 
     Deliberately NO ``anthropic/``-prefix fallback: litellm returns False
     both for models explicitly marked unsupported and for ids it simply
@@ -919,7 +927,19 @@ def supports_cache_control(model_id: str) -> bool:
     if model_id.startswith("openrouter/"):
         return False
 
+    if is_gemini_route(model_id):
+        return False
+
     return _cache_control_from_litellm(model_id)
+
+
+def is_gemini_route(model_id: str) -> bool:
+    """A Gemini model on Google's own routes (``gemini/…``, ``vertex_ai/gemini…``).
+
+    Not ``openrouter/google/…``, which speaks OpenRouter's dialect, and not
+    Anthropic models served through ``vertex_ai/``.
+    """
+    return model_id.startswith("gemini/") or model_id.startswith("vertex_ai/gemini")
 
 
 @lru_cache(maxsize=256)
