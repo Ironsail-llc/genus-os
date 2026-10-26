@@ -69,6 +69,18 @@ jobs:
       # On main there is nothing to supersede a commit (cancellation is
       # disabled there, see ci.yml's concurrency) and no merge button to gate,
       # so this is the only place the assertion is both needed and reliable.
+      #
+      # workflow_dispatch is deliberately NOT gated, and that is a real
+      # trade-off rather than an oversight. A dispatch usually targets main's
+      # tip, which after any release is a bot commit carrying [skip ci]
+      # (semantic-release, promote-release.sh, the staging bump and reset) —
+      # ci.yml never runs for those, so there would be no conclusion to assert
+      # and every manual rebuild would fail on a missing run. The cost is that
+      # a dispatched build is verified only by the two checks below, where
+      # before this change the gate re-ran the suite against it. Dispatch is a
+      # deliberate human action on an already-released commit, so that is the
+      # better side of the trade; a dispatch of something genuinely unverified
+      # should be a pull request instead.
       - name: Require CI to have passed this commit
         if: github.event_name == 'push'
         env:
