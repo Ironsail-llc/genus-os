@@ -1,3 +1,21 @@
+## [1.109.0](https://github.com/Ironsail-llc/genus-os/compare/v1.108.2...v1.109.0) (2026-10-26)
+
+### Features
+
+* **pr-review:** pr_review_status lists each posted review with its link ([#684](https://github.com/Ironsail-llc/genus-os/issues/684)) ([1faf922](https://github.com/Ironsail-llc/genus-os/commit/1faf9224de9a05e7c03343cf163603ea3801daee))
+* **tasks:** opt-in guard reserving requires_human for money and signature work ([#675](https://github.com/Ironsail-llc/genus-os/issues/675)) ([fe7defb](https://github.com/Ironsail-llc/genus-os/commit/fe7defbc949db1ebfe21c9456961b1d76aa0d4c3))
+
+### Bug Fixes
+
+* **calendar:** the assistant organizes the meetings it books and turns transcription on ([#676](https://github.com/Ironsail-llc/genus-os/issues/676)) ([e455a4c](https://github.com/Ironsail-llc/genus-os/commit/e455a4cbafb520d52da6d8d57402bff0a0985f07)), closes [#579](https://github.com/Ironsail-llc/genus-os/issues/579)
+* **ci:** cap litellm below 1.105.3 so completions work without mcp ([#691](https://github.com/Ironsail-llc/genus-os/issues/691)) ([6b2cdb2](https://github.com/Ironsail-llc/genus-os/commit/6b2cdb25325ba5d364fe4881eb758100df99e9d5))
+* **ci:** test the locked dependency set and rescope the version gate ([#686](https://github.com/Ironsail-llc/genus-os/issues/686)) ([58f28f9](https://github.com/Ironsail-llc/genus-os/commit/58f28f9401501f849f4e13b90a00ce3e3e48f367)), closes [#682](https://github.com/Ironsail-llc/genus-os/issues/682) [#675](https://github.com/Ironsail-llc/genus-os/issues/675) [#676](https://github.com/Ironsail-llc/genus-os/issues/676) [#681](https://github.com/Ironsail-llc/genus-os/issues/681) [#682](https://github.com/Ironsail-llc/genus-os/issues/682)
+* **devops-report:** deterministic weekly metrics, HR Claude-usage ingest, honest failures ([#688](https://github.com/Ironsail-llc/genus-os/issues/688)) ([2664321](https://github.com/Ironsail-llc/genus-os/commit/266432164685d50e76dfc66c04743b73c544b20e))
+* **devops-report:** guard accepts trend and in-progress values a note cites ([#690](https://github.com/Ironsail-llc/genus-os/issues/690)) ([5bc67a6](https://github.com/Ironsail-llc/genus-os/commit/5bc67a6b878c3d65802a9038fcdfad54778d56d4))
+* **pr-review:** review any pull request the bot is asked to review ([#681](https://github.com/Ironsail-llc/genus-os/issues/681)) ([b5cfb71](https://github.com/Ironsail-llc/genus-os/commit/b5cfb71f2dc530f2e7049ba440c694edd8075524))
+* **pr-review:** review three at once and never drop a re-review request ([#677](https://github.com/Ironsail-llc/genus-os/issues/677)) ([cb5d5e2](https://github.com/Ironsail-llc/genus-os/commit/cb5d5e21c9f7357934683f0a5582b4433358547d))
+* **scheduler:** crontab weekday numbers follow crontab (0/7 = Sunday) ([#689](https://github.com/Ironsail-llc/genus-os/issues/689)) ([e5b1c30](https://github.com/Ironsail-llc/genus-os/commit/e5b1c307c8272a6ab8eca4505e446d805ec3e1a5))
+
 ## [1.108.2](https://github.com/Ironsail-llc/genus-os/compare/v1.108.1...v1.108.2) (2026-10-09)
 
 ### Bug Fixes
