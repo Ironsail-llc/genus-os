@@ -567,8 +567,8 @@ then on the door is the sign-in page; a forgotten password is
 
 ## Helm
 
-The chart is `helm/genus-os`. It brings its own PostgreSQL and Redis
-subcharts (`postgres.enabled`, `redis.enabled`) so a cluster with neither can
+The chart is `helm/genus-os`. It brings its own PostgreSQL and Valkey
+subcharts (`postgres.enabled`, `valkey.enabled`) so a cluster with neither can
 still render, and splits secret material into independently rotatable classes —
 database, cache, signing, SSO/OIDC, dashboard, provider — with per-component
 references enforced. The dashboard and the migration job cannot request the
@@ -616,6 +616,36 @@ and an infrastructure repository may layer a fourth file on top — it may narro
 a secret class or a NetworkPolicy, never collapse one. An upgrade is
 `helm upgrade` with the same values; the release tag in
 `values-production.yaml` is what semantic-release bumps and ArgoCD syncs.
+
+### Upgrading the cache to Valkey
+
+The bundled cache is now Valkey from the official valkey-io subchart, not the
+groundhog2k Redis StatefulSet. The toggles still work: `redis.enabled` (or the
+canonical `valkey.enabled`) deploys it, and `redis.host` and `redis.port` keep
+their meaning. But on `helm upgrade` an instance that ran the bundled Redis
+gets a new `{release}-valkey` workload with a new, empty volume. Nothing is
+copied across, so the event bus's streams start empty: consumer-group offsets,
+pending (unacknowledged) entries and the dead-letter queue from before the
+upgrade are gone.
+
+1. Let the bus drain before upgrading: stop new work, wait until every
+   consumer group has acknowledged its pending entries, and deal with anything
+   left in the dead-letter queue.
+2. Move any server overrides. `redis.image`, `redis.storage`,
+   `redis.resources`, `redis.initResources`, `redis.customLabels` and
+   `redis.podLabels` configured the old subchart and now do nothing; size,
+   resources and server settings live under `valkey.*` (`valkey.dataStorage`,
+   `valkey.resources`, `valkey.initResources`, `valkey.valkeyConfig`).
+3. Convert `global.imagePullSecrets` to a list of names. It is now
+   `- ghcr-credentials`, not `- name: ghcr-credentials`: the chart's own
+   templates add the `name:` wrapper, so a values file still passing maps
+   renders `name: map[name:ghcr-credentials]` on every first-party pod and
+   pulls from a private registry fail. (The old shape was unusable by any
+   standard subchart, which is why it changed.)
+4. Upgrade, then confirm `helm test` passes.
+5. The old Redis claim is left in place and never migrated. Once the new cache
+   is healthy, find it with `kubectl get pvc -n <namespace>` (the one named
+   after `{release}-redis`) and delete it.
 
 ### Why `/ready` waits for an agent manifest
 
