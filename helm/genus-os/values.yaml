@@ -166,6 +166,11 @@ workspace:
 # genus-os.redisHost helper. Set it to a hostname only to point at a cache this
 # chart does not deploy.
 redis:
+  # The cache toggle. Named `redis` for continuity: values files written against
+  # the old Redis subchart keep working unchanged, and the env vars the app reads
+  # are ROBOTHOR_REDIS_* either way because Valkey speaks RESP. `valkey.enabled`
+  # is the canonical name and overrides this when set — see Chart.yaml.
+  enabled: true
   host: ""
   port: 6379
 
@@ -182,7 +187,6 @@ redis:
 # With the standard releaseName `genus-os`, the subchart's Service is
 # `genus-os-valkey` — which is what genus-os.redisHost derives.
 valkey:
-  enabled: true
 
   # ACL auth. The password is NOT a second copy: `usersExistingSecret` points
   # at the chart's own `cache` Secret, so the server and the Python clients read

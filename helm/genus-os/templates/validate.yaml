@@ -10,7 +10,7 @@ helper — so values.yaml derives the name with a `tpl` expression over
 .Release.Name. Verify it still agrees with the name this chart actually creates.
 Re-rendered here in the parent context, which shares .Release.Name.
 */}}
-{{- if .Values.valkey.enabled }}
+{{- if eq (include "genus-os.cacheEnabled" .) "true" }}
 {{- $auth := .Values.valkey.auth | default dict }}
 {{- if $auth.enabled }}
 {{- $want := printf "%s-cache" (include "genus-os.fullname" .) }}

@@ -40,4 +40,10 @@ dependencies:
   - name: valkey
     version: "0.12.0"
     repository: "https://valkey.io/valkey-helm/"
-    condition: valkey.enabled
+    # Two paths, first-existing wins (Helm semantics). `valkey.enabled` is
+    # canonical; `redis.enabled` is kept working so values files written against
+    # the Redis subchart keep their meaning — the toggle still means "deploy the
+    # cache this chart ships", it is just Valkey now. values.yaml therefore does
+    # NOT define valkey.enabled: defining it would make the first path always
+    # exist and the alias dead.
+    condition: valkey.enabled,redis.enabled

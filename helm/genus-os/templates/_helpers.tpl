@@ -117,6 +117,22 @@ Otherwise honor the explicit database.host (RDS, CloudNativePG, etc).
 {{- end -}}
 
 {{/*
+Is the in-chart cache deployed? Mirrors the Chart.yaml dependency condition
+`valkey.enabled,redis.enabled` exactly: `valkey.enabled` when it is set,
+otherwise `redis.enabled`. Helm evaluates that condition itself for the
+subchart; the templates here have to agree with it or the chart would render
+client wiring for a server it did not deploy (or the reverse).
+*/}}
+{{- define "genus-os.cacheEnabled" -}}
+{{- $valkey := .Values.valkey | default dict -}}
+{{- if hasKey $valkey "enabled" -}}
+{{- $valkey.enabled -}}
+{{- else -}}
+{{- (.Values.redis | default dict).enabled | default false -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 Cache host resolution. An explicit `redis.host` always wins; otherwise this
 matches the valkey-io subchart's Service, `{release}-valkey`. Only consulted
 when valkey.enabled — see the gate in genus-os.commonEnv.
@@ -170,7 +186,7 @@ the Service name. When valkey.enabled is false the cache is external and
 ROBOTHOR_REDIS_HOST/PORT come from the `cache` Secret via envFrom, where the
 environment's vault.secrets.cache.path is authoritative.
 */ -}}
-{{- if .Values.valkey.enabled }}
+{{- if eq (include "genus-os.cacheEnabled" .) "true" }}
 - name: ROBOTHOR_REDIS_HOST
   value: {{ include "genus-os.redisHost" . | quote }}
 - name: ROBOTHOR_REDIS_PORT
