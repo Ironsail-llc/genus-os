@@ -117,14 +117,31 @@ Otherwise honor the explicit database.host (RDS, CloudNativePG, etc).
 {{- end -}}
 
 {{/*
-Redis host resolution. Matches the groundhog2k/redis subchart Service:
-`{release}-redis` when redis.enabled and redis.host is empty.
+Is the in-chart cache deployed? Mirrors the Chart.yaml dependency condition
+`valkey.enabled,redis.enabled` exactly: `valkey.enabled` when it is set,
+otherwise `redis.enabled`. Helm evaluates that condition itself for the
+subchart; the templates here have to agree with it or the chart would render
+client wiring for a server it did not deploy (or the reverse).
+*/}}
+{{- define "genus-os.cacheEnabled" -}}
+{{- $valkey := .Values.valkey | default dict -}}
+{{- if hasKey $valkey "enabled" -}}
+{{- $valkey.enabled -}}
+{{- else -}}
+{{- (.Values.redis | default dict).enabled | default false -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Cache host resolution. An explicit `redis.host` always wins; otherwise this
+matches the valkey-io subchart's Service, `{release}-valkey`. Only consulted
+when valkey.enabled — see the gate in genus-os.commonEnv.
 */}}
 {{- define "genus-os.redisHost" -}}
-{{- if and .Values.redis.enabled (eq .Values.redis.host "") -}}
-{{- printf "%s-redis" .Release.Name -}}
-{{- else -}}
+{{- if ne (.Values.redis.host | default "") "" -}}
 {{- .Values.redis.host -}}
+{{- else -}}
+{{- printf "%s-valkey" .Release.Name -}}
 {{- end -}}
 {{- end -}}
 
@@ -162,7 +179,14 @@ here when the values are wrong would mask the Vault values silently.
 - name: ROBOTHOR_DB_SSLMODE
   value: {{ .Values.database.sslMode | quote }}
 {{- end }}
-{{- if .Values.redis.enabled }}
+{{- /*
+Same rule as the DB above: render the cache host/port explicitly ONLY when the
+in-chart valkey subchart is deployed, because only then can the chart compute
+the Service name. When valkey.enabled is false the cache is external and
+ROBOTHOR_REDIS_HOST/PORT come from the `cache` Secret via envFrom, where the
+environment's vault.secrets.cache.path is authoritative.
+*/ -}}
+{{- if eq (include "genus-os.cacheEnabled" .) "true" }}
 - name: ROBOTHOR_REDIS_HOST
   value: {{ include "genus-os.redisHost" . | quote }}
 - name: ROBOTHOR_REDIS_PORT

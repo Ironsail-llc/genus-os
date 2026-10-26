@@ -205,13 +205,20 @@ jobs:
           mkdir -p "$plugin_dir"
           tar --extract --gzip --file "$archive" --directory "$plugin_dir"
           helm repo add groundhog2k https://groundhog2k.github.io/helm-charts/
+          # Official valkey-io chart repo — the per-app cache subchart.
+          helm repo add valkey https://valkey.io/valkey-helm/
           helm dependency build helm/genus-os
           helm lint helm/genus-os --strict \
             --values helm/genus-os/values.yaml \
             --values helm/genus-os/values-production.yaml
           helm unittest helm/genus-os --strict
+          # Hook-free render for kube-linter, as helm.yml does. Helm hook Pods
+          # (chart tests) are ephemeral and never part of a release's steady
+          # state, and the valkey subchart's test hook hardcodes a pod spec
+          # with no resources, which this chart's values cannot fix.
           helm template gos helm/genus-os \
             --namespace genus \
+            --no-hooks \
             --values helm/genus-os/values.yaml \
             --values helm/genus-os/values-production.yaml \
             > /tmp/genus-production.yaml
@@ -619,6 +626,8 @@ jobs:
       - name: helm dependency build
         run: |
           helm repo add groundhog2k https://groundhog2k.github.io/helm-charts/
+          # Official valkey-io chart repo — the per-app cache subchart.
+          helm repo add valkey https://valkey.io/valkey-helm/
           helm dependency build helm/genus-os
 
       - name: Log in to GHCR
