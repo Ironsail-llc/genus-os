@@ -1,3 +1,13 @@
+## [1.110.0](https://github.com/Ironsail-llc/genus-os/compare/v1.109.1...v1.110.0) (2026-10-26)
+
+### Features
+
+* **helm:** replace the Redis subchart with per-app Valkey ([#687](https://github.com/Ironsail-llc/genus-os/issues/687)) ([efbdd35](https://github.com/Ironsail-llc/genus-os/commit/efbdd3572d8d7c15e153a6a39db8cfda607be87b)), closes [#682](https://github.com/Ironsail-llc/genus-os/issues/682) [#686](https://github.com/Ironsail-llc/genus-os/issues/686)
+
+### Bug Fixes
+
+* **tests:** stop the fallback-wire test racing its own deadline ([#705](https://github.com/Ironsail-llc/genus-os/issues/705)) ([106efb2](https://github.com/Ironsail-llc/genus-os/commit/106efb29f3d1880266433311d94baa5ae67c6e26)), closes [#687](https://github.com/Ironsail-llc/genus-os/issues/687)
+
 ## [1.109.1](https://github.com/Ironsail-llc/genus-os/compare/v1.109.0...v1.109.1) (2026-10-26)
 
 ### Bug Fixes
