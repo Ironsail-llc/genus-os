@@ -1,3 +1,11 @@
+## [1.110.1](https://github.com/Ironsail-llc/genus-os/compare/v1.110.0...v1.110.1) (2026-10-26)
+
+### Bug Fixes
+
+* **engine:** send reasoning_effort, not temperature, to OpenAI reasoners ([#707](https://github.com/Ironsail-llc/genus-os/issues/707)) ([d51bc69](https://github.com/Ironsail-llc/genus-os/commit/d51bc6966d23643c508fd89adfbf9e7b594f09ec))
+* **engine:** ship google-auth so vertex_ai models can authenticate ([#699](https://github.com/Ironsail-llc/genus-os/issues/699)) ([b8e58da](https://github.com/Ironsail-llc/genus-os/commit/b8e58da48489ed301437cb3711566168e89ca79f))
+* **helm:** mount DB CA bundle, env-hash migration Job, probe timeouts ([#706](https://github.com/Ironsail-llc/genus-os/issues/706)) ([afd4ac4](https://github.com/Ironsail-llc/genus-os/commit/afd4ac47f6da1f0870cac77ef4614d52dcea0460))
+
 ## [1.110.0](https://github.com/Ironsail-llc/genus-os/compare/v1.109.1...v1.110.0) (2026-10-26)
 
 ### Features
