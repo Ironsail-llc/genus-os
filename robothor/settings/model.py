@@ -458,7 +458,13 @@ class DatabaseSettings(SettingsGroup):
 
 
 class RedisSettings(SettingsGroup):
-    """Redis connection and the event-bus streams it carries."""
+    """Redis connection and the event-bus streams it carries.
+
+    Every Redis client in the engine, the event bus included, connects with
+    these settings. The bus also honours ``REDIS_URL`` as an explicit override:
+    set, it wins for the bus alone; unset, the bus composes its URL from host,
+    port, db and password here (password percent-encoded).
+    """
 
     host: str = declare("127.0.0.1", "ROBOTHOR_REDIS_HOST", "Redis host.")
     port: int = declare(6379, "ROBOTHOR_REDIS_PORT", "Redis TCP port.")

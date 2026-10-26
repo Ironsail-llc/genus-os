@@ -236,6 +236,17 @@ consumer = MyConsumer()
 consumer.run()  # Blocks, handles signals for graceful shutdown
 ```
 
+## Connection
+
+The bus connects with the same Redis settings as the rest of the engine:
+`ROBOTHOR_REDIS_HOST`, `ROBOTHOR_REDIS_PORT`, `ROBOTHOR_REDIS_DB` and
+`ROBOTHOR_REDIS_PASSWORD` (the password is percent-encoded into the URL, so any
+character is safe). `REDIS_URL`, when set, is an explicit override that wins
+for the bus alone; leave it unset unless the bus must reach a different server
+from everything else. Under pytest the resolved destination, whichever way it
+was reached, must be the test namespace (`ROBOTHOR_TEST_REDIS_URL`) or listed
+in `ROBOTHOR_EVENT_BUS_ALLOW`.
+
 ## Feature Flag
 
 Disable the event bus entirely by setting `EVENT_BUS_ENABLED=false`. All publish calls return `None`, subscribe calls return immediately. Useful for testing or minimal deployments without Redis.

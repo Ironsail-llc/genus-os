@@ -299,3 +299,77 @@ class TestEventBusGuard:
         """
         namespace = _namespace_from_url(os.environ["REDIS_URL"])
         assert namespace in _allowed_namespaces()
+
+
+class TestRedisUrlResolution:
+    """Without ``REDIS_URL`` the bus must follow the declared ``ROBOTHOR_REDIS_*``.
+
+    Every other Redis client in the engine (hooks, leases, teams, webhooks,
+    the readiness check) is built from those settings. A bus that read only
+    ``REDIS_URL`` fell back to ``localhost:6379`` on any substrate that
+    configures the cache through the settings, so hooks connected while the
+    bus retried a refused connection forever.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _fresh_config(self, monkeypatch):
+        from robothor.config import reset_config
+
+        monkeypatch.delenv("REDIS_URL", raising=False)
+        monkeypatch.delenv("ROBOTHOR_REDIS_DB", raising=False)
+        monkeypatch.setenv("ROBOTHOR_REDIS_HOST", "cache.example.test")
+        monkeypatch.setenv("ROBOTHOR_REDIS_PORT", "6379")
+        monkeypatch.setenv("ROBOTHOR_REDIS_PASSWORD", "pw")
+        reset_config()
+        yield
+        reset_config()
+
+    def test_unset_redis_url_follows_redis_settings(self):
+        assert bus.resolve_redis_url() == "redis://:pw@cache.example.test:6379/0"
+
+    def test_settings_db_is_honoured(self, monkeypatch):
+        from robothor.config import reset_config
+
+        monkeypatch.setenv("ROBOTHOR_REDIS_DB", "4")
+        reset_config()
+        assert bus.resolve_redis_url() == "redis://:pw@cache.example.test:6379/4"
+
+    def test_password_is_url_encoded(self, monkeypatch):
+        import redis
+
+        from robothor.config import reset_config
+
+        monkeypatch.setenv("ROBOTHOR_REDIS_PASSWORD", "p@ss:w/rd#1")
+        reset_config()
+        url = bus.resolve_redis_url()
+        assert url == "redis://:p%40ss%3Aw%2Frd%231@cache.example.test:6379/0"
+        kwargs = redis.connection.parse_url(url)
+        assert kwargs["password"] == "p@ss:w/rd#1"
+        assert kwargs["host"] == "cache.example.test"
+
+    def test_explicit_redis_url_wins(self, monkeypatch):
+        monkeypatch.setenv("REDIS_URL", TEST_URL)
+        assert bus.resolve_redis_url() == TEST_URL
+
+    def test_get_redis_connects_to_resolved_settings_url(self, monkeypatch):
+        """The connection, not just the helper, follows the settings."""
+        monkeypatch.setenv("ROBOTHOR_EVENT_BUS_ALLOW", "cache.example.test:6379/0")
+        reset_client()
+        with patch("redis.Redis.from_url") as from_url:
+            from_url.return_value = MagicMock()
+            _get_redis()
+        from_url.assert_called_once_with(
+            "redis://:pw@cache.example.test:6379/0", decode_responses=True
+        )
+
+    def test_guard_refuses_settings_resolved_live_namespace(self):
+        """Under pytest the settings-derived destination is vetted like REDIS_URL."""
+        reset_client()
+        with patch("redis.Redis.from_url") as from_url:
+            with pytest.raises(EventBusGuardError) as exc:
+                _get_redis()
+        from_url.assert_not_called()
+        assert "cache.example.test:6379/0" in str(exc.value)
+
+    def test_test_double_namespace_falls_back_to_resolved_url(self):
+        assert bus.event_bus_namespace(object()) == "cache.example.test:6379/0"
