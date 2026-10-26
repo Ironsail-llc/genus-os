@@ -9,7 +9,13 @@ on:
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # Cancel superseded runs on a pull request — a new push makes the old one
+  # irrelevant. Never on main: every commit there is permanently in history and
+  # has to stay verified. Two merges landing seconds apart used to cancel the
+  # earlier commit's run, leaving it unverified with nothing to say so — and the
+  # release gate now asserts this workflow's conclusion for the commit being
+  # released, so a cancelled run would block a release over code that is fine.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   security:

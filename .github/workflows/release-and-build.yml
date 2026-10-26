@@ -75,7 +75,11 @@ jobs:
                   echo "CI succeeded for $SHA."
                   exit 0
                 fi
-                echo "::error::CI concluded '$conclusion' for $SHA — the release stops here."
+                if [ "$conclusion" = "cancelled" ]; then
+                  echo "::error::CI for $SHA was cancelled, so this commit is unverified. Re-run the CI workflow for it, then re-run this job. (ci.yml no longer cancels main runs; a cancelled one here predates that change or was cancelled by hand.)"
+                else
+                  echo "::error::CI concluded '$conclusion' for $SHA — the release stops here."
+                fi
                 exit 1
                 ;;
               missing)
