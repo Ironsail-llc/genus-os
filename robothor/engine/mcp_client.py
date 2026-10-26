@@ -5,7 +5,9 @@ Supports two transports:
 * **stdio** — subprocess communicating via JSON-RPC 2.0 over stdin/stdout
   with Content-Length framing per the MCP specification.
 * **HTTP** — JSON-RPC 2.0 POST to an ``/_mcp`` endpoint with Bearer token
-  auth and MCP-Session-Id tracking.
+  auth and MCP-Session-Id tracking. The bearer token is either a static
+  header or minted per OAuth 2.0 client_credentials (``auth`` on the config,
+  see ``oauth_client_credentials.py``).
 
 Business adapters (see ``adapters.py``) use this module to talk to external
 MCP servers so their tools are available as first-class agent tools.
@@ -18,6 +20,14 @@ import json
 import logging
 from dataclasses import dataclass, field
 from typing import Any
+
+import httpx
+
+from robothor.engine.oauth_client_credentials import (
+    OAuthClientCredentials,
+    OAuthClientCredentialsTokenSource,
+    OAuthTokenError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +55,9 @@ class McpServerConfig:
     # HTTP transport
     url: str = ""
     headers: dict[str, str] = field(default_factory=dict)
+    # Optional OAuth client_credentials grant (http only). The minted token is
+    # sent as ``Authorization: Bearer`` and overrides a static one in headers.
+    auth: OAuthClientCredentials | None = None
     # Common
     timeout_seconds: int = 30
     # "legacy" (default, today's 2024-11-05 handshake+session behavior) or
@@ -230,23 +243,35 @@ class McpClientSession:
 class McpHttpSession:
     """Manages a single HTTP-based MCP server connection.
 
-    Supports Bearer token auth, MCP-Session-Id tracking, and auto-recovery
-    on session expiration.
+    Supports Bearer token auth (static or OAuth client_credentials),
+    MCP-Session-Id tracking, and auto-recovery on session expiration.
+
+    *transport* is the httpx transport seam, for tests; it serves both the MCP
+    endpoint and the token endpoint.
     """
 
-    def __init__(self, config: McpServerConfig) -> None:
+    def __init__(
+        self,
+        config: McpServerConfig,
+        *,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
         self.config = config
         self._session_id: str | None = None
         self._initialized = False
         self._request_id: int = 0
+        self._transport = transport
+        self._token_source = (
+            OAuthClientCredentialsTokenSource(config.auth, transport=transport)
+            if config.auth is not None
+            else None
+        )
 
     def _next_id(self) -> int:
         self._request_id += 1
         return self._request_id
 
     async def _send(self, message: dict[str, Any]) -> dict[str, Any]:
-        import httpx
-
         headers = {
             "Content-Type": "application/json",
             **self.config.headers,
@@ -258,8 +283,19 @@ class McpHttpSession:
         elif self._session_id:
             headers["Mcp-Session-Id"] = self._session_id
 
-        async with httpx.AsyncClient(timeout=float(self.config.timeout_seconds)) as client:
-            r = await client.post(self.config.url, headers=headers, json=message)
+        try:
+            r = await self._post(headers, message)
+            if r.status_code == 401 and self._token_source is not None:
+                # One recovery: the server may have revoked or rotated the
+                # token before its expiry. A second 401 is a real refusal.
+                logger.info(
+                    "MCP server '%s' answered 401; re-minting the token once", self.config.name
+                )
+                self._token_source.forget()
+                r = await self._post(headers, message)
+        except OAuthTokenError as exc:
+            logger.warning("MCP server '%s': %s", self.config.name, exc)
+            return {"error": f"MCP server '{self.config.name}' authentication failed: {exc}"}
 
         if not self.config.stateless and (sid := r.headers.get("Mcp-Session-Id")):
             self._session_id = sid
@@ -272,6 +308,15 @@ class McpHttpSession:
             return json.loads(text)  # type: ignore[no-any-return]
         except (json.JSONDecodeError, ValueError):
             return {"error": f"Unexpected response ({r.status_code}): {text[:200]}"}
+
+    async def _post(self, headers: dict[str, str], message: dict[str, Any]) -> httpx.Response:
+        request_headers = dict(headers)
+        if self._token_source is not None:
+            request_headers["Authorization"] = f"Bearer {await self._token_source.token()}"
+        async with httpx.AsyncClient(
+            timeout=float(self.config.timeout_seconds), transport=self._transport
+        ) as client:
+            return await client.post(self.config.url, headers=request_headers, json=message)
 
     async def start(self) -> None:
         """No-op for HTTP — connection is stateless per-request."""
@@ -493,6 +538,7 @@ def register_adapter(adapter: Any) -> None:
                 name=adapter.name,
                 url=adapter.url,
                 headers=dict(adapter.headers),
+                auth=getattr(adapter, "auth", None),
                 timeout_seconds=adapter.timeout_seconds,
                 protocol=protocol,
             )
