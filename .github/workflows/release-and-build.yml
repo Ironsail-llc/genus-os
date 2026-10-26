@@ -57,7 +57,20 @@ jobs:
       # pole on both. It asserts the result instead. Nothing stopped being
       # checked — the checks have one home, and this job fails if that home
       # reports anything other than success for this SHA.
+      # Release runs only. On a pull request this assertion is both unnecessary
+      # and unsound: branch protection already requires the named CI contexts
+      # before the merge button unlocks, and PR runs are cancelled on purpose
+      # when a new push supersedes them — so a burst of pushes leaves the head
+      # commit's run `cancelled` and this step would fail a pull request for
+      # doing nothing wrong. That is exactly what happened on this PR: three
+      # pushes in quick succession, ci run for the head concluded `cancelled`,
+      # gate red.
+      #
+      # On main there is nothing to supersede a commit (cancellation is
+      # disabled there, see ci.yml's concurrency) and no merge button to gate,
+      # so this is the only place the assertion is both needed and reliable.
       - name: Require CI to have passed this commit
+        if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ github.token }}
           SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
