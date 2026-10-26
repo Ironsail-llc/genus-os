@@ -205,6 +205,8 @@ jobs:
           mkdir -p "$plugin_dir"
           tar --extract --gzip --file "$archive" --directory "$plugin_dir"
           helm repo add groundhog2k https://groundhog2k.github.io/helm-charts/
+          # Official valkey-io chart repo — the per-app cache subchart.
+          helm repo add valkey https://valkey.io/valkey-helm/
           helm dependency build helm/genus-os
           helm lint helm/genus-os --strict \
             --values helm/genus-os/values.yaml \
@@ -619,6 +621,8 @@ jobs:
       - name: helm dependency build
         run: |
           helm repo add groundhog2k https://groundhog2k.github.io/helm-charts/
+          # Official valkey-io chart repo — the per-app cache subchart.
+          helm repo add valkey https://valkey.io/valkey-helm/
           helm dependency build helm/genus-os
 
       - name: Log in to GHCR
