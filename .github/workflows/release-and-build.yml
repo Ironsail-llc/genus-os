@@ -145,6 +145,9 @@ jobs:
           mkdir -p "$plugin_dir"
           tar --extract --gzip --file "$archive" --directory "$plugin_dir"
           helm repo add groundhog2k https://groundhog2k.github.io/helm-charts/
+          # The chart's cache subchart comes from here; `dependency build`
+          # fails on an unregistered repository.
+          helm repo add valkey https://valkey.io/valkey-helm/
           helm dependency build helm/genus-os
           helm lint helm/genus-os --strict \
             --values helm/genus-os/values.yaml \
@@ -155,6 +158,16 @@ jobs:
             --values helm/genus-os/values.yaml \
             --values helm/genus-os/values-production.yaml \
             > /tmp/genus-production.yaml
+          # Hook-free copy for kube-linter only: a subchart's test-hook Pod
+          # hardcodes its spec with no resource limits and is never part of a
+          # release's steady state. helm lint and the full render above still
+          # see everything.
+          helm template gos helm/genus-os \
+            --namespace genus \
+            --no-hooks \
+            --values helm/genus-os/values.yaml \
+            --values helm/genus-os/values-production.yaml \
+            > /tmp/genus-production-nohooks.yaml
           curl --fail --show-error --location \
             --output "$RUNNER_TEMP/kube-linter.tar.gz" \
             https://github.com/stackrox/kube-linter/releases/download/v0.7.4/kube-linter-linux.tar.gz
@@ -162,7 +175,7 @@ jobs:
             | sha256sum --check --strict
           tar --extract --gzip --file "$RUNNER_TEMP/kube-linter.tar.gz" \
             --directory "$RUNNER_TEMP" kube-linter
-          "$RUNNER_TEMP/kube-linter" lint /tmp/genus-production.yaml
+          "$RUNNER_TEMP/kube-linter" lint /tmp/genus-production-nohooks.yaml
 
   release:
     name: Semantic Release
@@ -559,6 +572,9 @@ jobs:
       - name: helm dependency build
         run: |
           helm repo add groundhog2k https://groundhog2k.github.io/helm-charts/
+          # The chart's cache subchart comes from here; `dependency build`
+          # fails on an unregistered repository.
+          helm repo add valkey https://valkey.io/valkey-helm/
           helm dependency build helm/genus-os
 
       - name: Log in to GHCR
