@@ -46,10 +46,21 @@ dependencies = [
     "requests~=2.31",
     "pyyaml~=6.0",
     # Floor pins past the LiteLLM SQL-injection advisory (GHSA-vh4m-vp44-3rgq,
-    # fixed in 1.61.17). No upper cap below 2.0: litellm 1.84+ relaxed its
-    # transitive aiohttp pin again, so the latest 1.x (1.87.0) resolves cleanly
-    # with aiohttp>=3.13.4. The 1.84 floor also clears later 2026 advisories.
-    "litellm>=1.84.0,<2.0",
+    # fixed in 1.61.17); the 1.84 floor also clears later 2026 advisories.
+    # Ceiling below 1.105.3, for two releases that broke us (main's CI went red
+    # on 2026-10-20 and nothing released until this cap):
+    # * 1.106.0 imports the `mcp` package on every completion call
+    #   (main.completion -> responses.mcp -> proxy mcp_server.catalog ->
+    #   `from mcp.types import ...`) without declaring it, so a core install
+    #   cannot make a single LLM call: "No module named 'mcp'".
+    # * 1.105.3 dropped the openrouter/anthropic/* rows from its bundled
+    #   catalog; claude-sonnet-4.6 and claude-opus-4.7 then resolve through a
+    #   family wildcard to a 200,000 window. OpenRouter serves both at
+    #   1,000,000 (api/v1/models, 2026-10-23); test_model_registry_drift
+    #   catches the disagreement.
+    # The host venv runs 1.97.0. Raise the ceiling only after the fresh-install
+    # gate and the drift test pass on the new release.
+    "litellm>=1.84.0,<1.105.3",
     "aiohttp>=3.14.3",
     # `view_image` decodes and downscales before an image reaches a model.
     # A core dependency, not an extra: an agent that cannot look at a picture

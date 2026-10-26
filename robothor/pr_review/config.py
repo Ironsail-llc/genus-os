@@ -66,7 +66,13 @@ class ReviewerConfig:
     #: ``(owner/repo, PREFIX)`` pairs from ``owner/repo:PREFIX`` entries.
     repo_ticket_prefixes: tuple[tuple[str, str], ...] = ()
     blocking_event: str = "REQUEST_CHANGES"
-    max_concurrent: int = 2
+    #: Review tasks the intake keeps open; more than ``workers`` so the next
+    #: review is ready the moment a worker frees.
+    max_concurrent: int = 6
+    #: Reviews pr_review_work runs at once.
+    workers: int = 3
+    #: Where pr_review_work writes its status; empty writes none.
+    status_file: str = ""
     agent_id: str = "pr-reviewer"
     clone_root: str = ""
     review_model: str = "opus"
@@ -144,11 +150,10 @@ def load_config() -> ReviewerConfig:
 
     settings = get_settings()
     s = settings.pr_review
-    clone_root = s.clone_root.strip()
-    if not clone_root:
-        workspace = settings.paths.workspace.strip()
-        base = Path(workspace).expanduser() if workspace else Path.home() / "robothor"
-        clone_root = str(base / ".genus" / "pr-review" / "repos")
+    workspace = settings.paths.workspace.strip()
+    base = Path(workspace).expanduser() if workspace else Path.home() / "robothor"
+    clone_root = s.clone_root.strip() or str(base / ".genus" / "pr-review" / "repos")
+    status_file = s.status_file.strip() or str(base / "brain" / "memory" / "pr-reviewer-status.md")
     repos, per_repo, global_prefixes = parse_repo_specs(s.repos, s.ticket_prefixes)
     effort = s.review_effort.strip().lower()
     return ReviewerConfig(
@@ -165,6 +170,8 @@ def load_config() -> ReviewerConfig:
         repo_ticket_prefixes=per_repo,
         blocking_event=s.blocking_event.strip().upper() or "REQUEST_CHANGES",
         max_concurrent=max(1, int(s.max_concurrent)),
+        workers=max(1, int(s.workers)),
+        status_file=status_file,
         agent_id=s.agent_id.strip() or "pr-reviewer",
         clone_root=clone_root,
         review_model=s.review_model.strip(),

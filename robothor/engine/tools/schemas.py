@@ -1403,6 +1403,49 @@ _PR_REVIEW_SCHEMAS: dict[str, dict[str, Any]] = {
             },
         },
     },
+    "pr_review_work": {
+        "type": "function",
+        "function": {
+            "name": "pr_review_work",
+            "description": (
+                "Run the queued pr-review tasks: up to ROBOTHOR_PR_REVIEW_WORKERS at once, "
+                "oldest first, each through pr_review_prepare, the review job and "
+                "pr_review_finalize, then resolves the task with the review URL. No model. "
+                "Normally run by the pr-review-run workflow; takes no new task after 45 "
+                "minutes and returns per-task outcomes."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    "pr_review_status": {
+        "type": "function",
+        "function": {
+            "name": "pr_review_status",
+            "description": (
+                "Use this when asked how pull-request reviews are going, where a pull "
+                "request's review is, or for a review report. Read-only, no model. Returns "
+                "now (reviews in flight, the queue in order, free slots), the window's "
+                "reviews by verdict and each posted review (pull request, title, verdict, link, "
+                "time; newest 50), request-to-answer latency (median, p90), failures and "
+                "retries, problems (stuck, out of retries, dropped requests, an old queue) "
+                "and alerts — one line per problem, empty when all is well. pr=<url or "
+                "owner/repo#N> adds that pull request's state and history."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "since_hours": {
+                        "type": "number",
+                        "description": "The report window in hours (default 24; 168 for a week)",
+                    },
+                    "pr": {
+                        "type": "string",
+                        "description": "One pull request (URL or owner/repo#N) to report on",
+                    },
+                },
+            },
+        },
+    },
 }
 
 
@@ -3635,7 +3678,13 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
                 "type": "object",
                 "properties": {
                     "report_data": {
-                        "description": "Structured report data with keys: period, executive_summary, jira, github, people, bottlenecks",
+                        "description": (
+                            "The deterministic people.json aggregate of one report week "
+                            "(period, roles, members, team, usage, data_quality, ...), "
+                            "optionally with the analyst narrative under 'analyst': "
+                            "{summary, per_person: {member_id: note}, bottlenecks, "
+                            "si_vs_output}. Numbers are only ever taken from the aggregate."
+                        ),
                     },
                 },
                 "required": ["report_data"],
@@ -3656,7 +3705,14 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
                     "jql": {"type": "string", "description": "JQL query string"},
                     "max_results": {
                         "type": "integer",
-                        "description": "Max results (default 50, max 100)",
+                        "description": "Max results per page (default 50, max 100)",
+                    },
+                    "next_page_token": {
+                        "type": "string",
+                        "description": (
+                            "Token from a previous result's next_page_token, to fetch the "
+                            "next page (is_last=false means more pages exist)"
+                        ),
                     },
                 },
                 "required": ["jql"],

@@ -75,6 +75,8 @@ async def test_top_level_link_claims_and_creates_one_task(env):
         "depth: full",
         "chat_thread: spaces/AAAA/threads/t1",
         f"prReview: {REPO}#7@{SHA1}",
+        # The Chat message's own time: where pr_review_status's latency starts.
+        "requested_at: 2026-10-05T10:00:00+00:00",
     ):
         assert line in body
     row = await env["store"].get(TENANT, REPO, 7)
@@ -167,17 +169,39 @@ async def test_rereview_from_someone_else_is_ignored(env):
     assert summary["tasks_created"] == 0
 
 
-async def test_negated_reply_is_handed_to_the_agent_as_ambiguous(env):
+async def test_an_ambiguous_reply_is_asked_in_its_thread_and_files_no_task(env):
+    # No model decides it any more, and it is never dropped without a word.
     env["github"].add(make_pr(7, SHA1))
     env["chat"].post(f"review {URL}")
     await _run(env)
     await _finish(env)
     env["github"].add(make_pr(7, SHA2))
     env["chat"].post("not fixed yet", reply=True, time="2026-10-05T10:05:00.000000Z")
+    summary = await _run(env)
+    assert summary["tasks_created"] == 0 and len(env["tasks"].created) == 1
+    assert env["chat"].replies[-1][2] == f'<{URL}|#7>: Want a re-review? Reply "re-review".'
+    row = await env["store"].get(TENANT, REPO, 7)
+    assert row.pending_trigger == "" and row.trigger_text == ""
+    # Asked once; the next tick does not ask again.
     await _run(env)
-    task = env["tasks"].created[-1]
-    assert "trigger: ambiguous" in task["body"]
-    assert "<reply>not fixed yet</reply>" in task["body"]
+    assert len(env["chat"].replies) == 1
+
+
+async def test_an_ambiguous_repost_is_asked_in_its_new_thread(env):
+    env["github"].add(make_pr(7, SHA1))
+    env["chat"].post(f"review {URL}")
+    await _run(env)
+    await _finish(env)
+    env["github"].add(make_pr(7, SHA2))
+    env["chat"].post(
+        f"will push later {URL}", thread="spaces/AAAA/threads/t9", time="2026-10-05T10:05:00Z"
+    )
+    summary = await _run(env)
+    assert summary["tasks_created"] == 0
+    assert env["chat"].replies[-1][1:] == (
+        "spaces/AAAA/threads/t9",
+        f'<{URL}|#7>: Want a re-review? Reply "re-review".',
+    )
 
 
 async def test_acknowledgement_reply_triggers_nothing(env):
@@ -412,9 +436,22 @@ async def test_a_job_still_attended_is_not_resumable(env, state):
     cfg, _ = await _orphan(env)
     jobs = _Jobs(**({"job-1": state} if state else {}))
     counts = await _count(env, cfg, jobs)
-    assert counts["resumable_tasks"] == 0 and counts["queued_tasks"] == 0
+    assert counts["resumable_tasks"] == 0
     await _run(env, cfg, job_state=jobs)
     assert env["tasks"].reopened == []
+
+
+async def test_a_review_in_flight_wakes_the_worker_at_once(env):
+    # Review feedback on #677: a worker run that hit its deadline leaves its
+    # task IN_PROGRESS and the row reviewing; counting it only after the job
+    # ended plus ORPHAN_GRACE left it 10+ minutes. Counted now, the next tick's
+    # pr_review_work resumes it (a run still in progress returns skipped:
+    # running, so nothing runs twice).
+    cfg, _ = await _orphan(env)
+    jobs = _Jobs(**{"job-1": ("running", None)})
+    counts = await _count(env, cfg, jobs)
+    assert counts["in_flight_tasks"] == 1
+    assert counts["queued_tasks"] == 1
 
 
 async def test_without_a_job_lookup_nothing_is_resumable(env):
@@ -467,9 +504,12 @@ async def test_pg_store_list_pending_excludes_closed_rows(monkeypatch):
 
     seen = []
     store = PgStore()
-    monkeypatch.setattr(store, "_select", lambda tenant, where, params: seen.append(where) or [])
+    monkeypatch.setattr(
+        store, "_select", lambda tenant, where, params, order: seen.append((where, order)) or []
+    )
     assert await store.list_pending(TENANT) == []
-    assert "pending_trigger <> ''" in seen[0] and "status <> 'closed'" in seen[0]
+    assert "pending_trigger <> ''" in seen[0][0] and "status <> 'closed'" in seen[0][0]
+    assert seen[0][1] == "requested_at NULLS LAST, updated_at"
 
 
 async def test_dispatch_clears_the_trigger_of_a_closed_row(env):
@@ -684,6 +724,40 @@ async def test_a_reply_naming_one_pr_of_a_multi_pr_thread_rereviews_only_that_on
     assert [t["spec"].row.number for t in env["tasks"].created[2:]] == [8]
 
 
+async def _thread_of_five(env):
+    links = " ".join(f"https://github.com/{REPO}/pull/{n}" for n in range(1, 6))
+    for n in range(1, 6):
+        env["github"].add(make_pr(n, SHA1))
+    env["chat"].post(f"five for review {links}")
+    await _run(env, _cfg(max_concurrent=10))
+    for n in range(1, 6):
+        await _finish(env, n)
+
+
+async def test_one_ambiguous_reply_in_a_thread_of_five_asks_once(env):
+    await _thread_of_five(env)
+    before = len(env["chat"].replies)
+    env["chat"].post("not fixed yet", reply=True, time="2026-10-05T10:05:00.000000Z")
+    summary = await _run(env)
+    asked = env["chat"].replies[before:]
+    assert len(asked) == 1
+    assert asked[0][2].endswith('Want a re-review? Reply "re-review".')
+    assert all(f"#{n}" in asked[0][2] for n in range(1, 6))
+    assert summary["tasks_created"] == 0
+    rows = [await env["store"].get(TENANT, REPO, n) for n in range(1, 6)]
+    assert all(r.pending_trigger == "" for r in rows)
+
+
+async def test_one_ambiguous_repost_of_five_links_asks_once(env):
+    await _thread_of_five(env)
+    before = len(env["chat"].replies)
+    links = " ".join(f"https://github.com/{REPO}/pull/{n}" for n in range(1, 6))
+    env["chat"].post(f"will push later {links}", thread=T2, time="2026-10-05T10:05:00Z")
+    await _run(env)
+    asked = env["chat"].replies[before:]
+    assert len(asked) == 1 and asked[0][1] == T2
+
+
 async def test_a_reply_naming_no_pr_rereviews_the_whole_thread(env):
     await _thread_of_two(env)
     env["chat"].post("updated, ready for re-review", reply=True, time="2026-10-05T10:05:00.000000Z")
@@ -750,6 +824,16 @@ async def test_a_plain_repost_of_a_reviewed_pr_is_a_request_too(env):
     env["chat"].post(URL, thread=T2, time=LATER)
     summary = await _run(env)
     assert summary["tasks_created"] == 1
+    assert "trigger: rereview" in env["tasks"].created[-1]["body"]
+
+
+async def test_a_plain_repost_without_new_commits_gets_no_changes(env):
+    # 2026-10-13: these were dismissed by the agent with no reply at all.
+    await _reviewed(env)
+    env["chat"].post(URL, thread=T2, time=LATER)
+    summary = await _run(env)
+    assert summary["tasks_created"] == 0
+    assert env["chat"].replies[-1][1:] == (T2, f"<{URL}|#7>: No changes?")
 
 
 async def test_a_new_message_while_a_review_runs_says_so_in_its_thread(env):
@@ -893,3 +977,41 @@ async def test_each_space_keeps_its_own_cursor_and_the_first_keeps_the_old_one(e
     assert summary["tasks_created"] == 1  # only the new space's message; the old one was seen
     assert await env["store"].get(TENANT, REPO, 7) is None
     assert await env["store"].get_cursor(TENANT, f"chat:{B}")
+
+
+# ── Queue order ─────────────────────────────────────────────────────────
+# list_pending sorted by updated_at, which moves whenever a row is touched for
+# any reason: a request could lose its place to a newer one. It is ordered by
+# when the request was made.
+
+
+async def test_a_request_keeps_its_place_when_its_row_is_touched(env):
+    env["github"].add(make_pr(7, SHA1))
+    env["github"].add(make_pr(8, SHA1))
+    env["chat"].post(f"review {URL}", time="2026-10-05T10:01:00.000000Z")
+    env["chat"].post(
+        f"review https://github.com/{REPO}/pull/8",
+        thread="spaces/AAAA/threads/t8",
+        time="2026-10-05T10:02:00.000000Z",
+    )
+    cfg = _cfg(max_concurrent=0)  # hold everything in the queue
+    await _run(env, cfg, now=NOW)
+    first = await env["store"].get(TENANT, REPO, 7)
+    assert first.requested_at is not None
+    first.title = "touched after #8 was requested"
+    await env["store"].save(first)
+    pending = await env["store"].list_pending(TENANT)
+    assert [r.number for r in pending] == [7, 8]
+    await _run(env, _cfg(max_concurrent=1), now=NOW + timedelta(minutes=1))
+    assert [t["spec"].row.number for t in env["tasks"].created] == [7]
+
+
+async def test_requested_at_is_set_when_a_trigger_is_raised_and_kept_on_later_touches(env):
+    from robothor.pr_review.intake import _raise_trigger
+
+    row = PrReviewRow(tenant_id=TENANT, repo=REPO, number=7)
+    assert _raise_trigger(row, "new_head", NOW)
+    assert row.requested_at == NOW
+    # A stronger request on a row already waiting keeps the original time.
+    assert _raise_trigger(row, "rereview", NOW + timedelta(minutes=5))
+    assert row.requested_at == NOW

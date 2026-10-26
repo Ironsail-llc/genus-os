@@ -525,6 +525,10 @@ TOOL_HINTS: dict[str, ToolHint] = {
     "pr_review_finalize": ToolHint(
         keywords=(*_PR, "review", "finalize", "post", "verdict", "result")
     ),
+    "pr_review_work": ToolHint(keywords=(*_PR, "review", "worker", "run", "queue", "drain")),
+    "pr_review_status": ToolHint(
+        keywords=(*_PR, "review", "status", "report", "queue", "latency", "stuck", "how")
+    ),
 }
 
 
