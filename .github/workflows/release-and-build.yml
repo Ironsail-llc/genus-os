@@ -33,6 +33,14 @@ jobs:
       (github.event_name == 'pull_request'
         && github.event.action != 'closed')
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # `Require CI to have passed this commit` reads the Actions API via
+      # `gh run list`. The workflow-level grant is contents:read, under which
+      # that call returns nothing — and this gate fails closed on "no run
+      # found", so without this it would fail every time rather than pass
+      # blindly.
+      actions: read
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
