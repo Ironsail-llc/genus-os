@@ -61,7 +61,20 @@ jobs:
           cache: "pip"
       - run: pip install --upgrade pip
       - run: pip install pip-audit==2.10.1
-      - run: pip install -e ".[api]"
+      # Audit the set the image ships (Dockerfile.python: `uv export --frozen
+      # --extra api --extra federation`), not a fresh resolution. `pip install
+      # -e ".[api]"` re-resolved litellm to the newest allowed release, whose
+      # `filelock<4` pin dragged filelock down to a version carrying three
+      # advisories the locked set (filelock 4.x) does not ship. That failed
+      # this job on every branch with no commit touching the repo.
+      - name: Install the locked runtime set
+        run: |
+          pip install uv==0.13.4
+          uv export --frozen --no-emit-project --no-hashes \
+            --extra api --extra federation \
+            --output-file /tmp/requirements.txt
+          uv pip install --system -r /tmp/requirements.txt
+          uv pip install --system --no-deps -e .
       # No standing advisory exceptions: a newly reported dependency issue
       # must fail the gate and receive an explicit, reviewed remediation.
       - run: pip-audit
