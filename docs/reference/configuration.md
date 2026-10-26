@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-475 settings in 17 groups.
+476 settings in 17 groups.
 
 ## autonomy
 
@@ -501,6 +501,7 @@ Where and how the instance runs: host accounts, federation, backups.
 | `GENUS_SNAPSHOT_REPOSITORY` | str | _(empty)_ | `robothor-engine`, `robothor-bridge` | no | legacy | Default repository `genus snapshot` reads and writes when --repository is not given. |
 | `GENUS_URL` | str | _(empty)_ | `robothor-engine`, `robothor-bridge` | no | legacy | Base URL the release workflow smoke-tests after a deploy, calling /api/live and /api/ready on it. |
 | `GENUS_VERSION` | str | _(empty)_ | no | no | unreleased | Release the one-line installer (scripts/install.sh) installs when --version is not given. Empty asks the GitHub releases API, and falls back to the version the script was stamped with at release time. Read by the installer only; nothing in the running platform resolves its own version from the environment. |
+| `GENUS_VERSION_BASELINE_REF` | str | _(empty)_ | no | no | unreleased | Git ref the version-consistency check compares the deployment tags against on a pull request (the base branch, fetched by the release workflow). Empty means a release run: the tags are compared against the version the repository claims instead. Read by scripts/check-version-consistency.js only. |
 | `ROBOTHOR_BACKUP_GROUP` | str | _(empty)_ | `robothor-engine`, `robothor-bridge` | no | legacy | Which backup group a templated base-backup unit instance handles. |
 | `ROBOTHOR_BOOT_LOOP_LIMIT` | int | `3` | `robothor-engine`, `robothor-bridge` | no | legacy | Restarts within the boot-loop window before the guard stops restarting and pages instead. |
 | `ROBOTHOR_BOOT_LOOP_WINDOW` | int | `900` | `robothor-engine`, `robothor-bridge` | no | legacy | Seconds the boot-loop counter spans. |
