@@ -14,7 +14,7 @@ npm ci                             # commitlint for the commit-msg hook
 
 ```bash
 # Fast unit suite, off any real database (use while developing)
-pytest -m "not slow and not llm and not e2e and not integration"
+pytest tests/ robothor/ -m "not slow and not llm and not e2e and not integration"
 
 # What CI runs for the Python unit suite
 pytest tests/ robothor/ -m "not integration and not llm and not slow and not e2e" --cov=robothor --cov-fail-under=60
@@ -24,9 +24,10 @@ pytest robothor/memory/tests/ -v
 pytest robothor/engine/tests/test_<feature>.py -v
 pytest robothor/engine/tests/test_<feature>.py -k "<name>" -v
 
-# Bridge, and integration tests (need Postgres + Redis)
+# Bridge, and integration tests (need Postgres + Redis), as CI runs them
 pytest crm/bridge/tests/ -m "not integration and not slow and not e2e"
-pytest -m integration
+pytest tests/ robothor/ -m "integration and not llm" -v
+pytest crm/ -m "integration and not llm" -v
 ```
 
 ## Static Analysis

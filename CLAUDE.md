@@ -8,7 +8,7 @@ Genus OS is a deterministic AI agent platform. Users deploy instances with their
 
 ```bash
 pip install -e ".[dev]" && pre-commit install                  # once
-pytest -m "not slow and not llm and not e2e and not integration"   # fast unit baseline
+pytest tests/ robothor/ -m "not slow and not llm and not e2e and not integration"   # fast unit baseline
 ruff check robothor/ bench/ scripts/ && mypy robothor/ --ignore-missing-imports
 ```
 
@@ -110,7 +110,7 @@ Every task is documented in the project's Jira, not in a file in this repo:
 **BEFORE starting:** a ticket with the objective, approach, files to modify, and success criteria.
 **AFTER completing:** a comment on the ticket with what changed, tests added, PR links, and status.
 
-Docs in this repo still change with the code (rule 9). A PR without a ticket is blocked by the review bot.
+Docs in this repo still change with the code (rule 9). A PR without a ticket can be blocked when the review bot's ticket requirement is on.
 
 ## Reviews and Merging
 
