@@ -34,7 +34,7 @@ not here: a flag belongs to one command, a setting to the whole instance.
 
 List installed plugins, record them, and enable or disable one.
 
-Usage: `genus plugin {list,info,enable,disable,sync,install,remove,doctor}`
+Usage: `genus plugin {list,info,enable,disable,sync,install,remove,new,doctor}`
 
 ### `genus plugin list`
 
@@ -114,6 +114,20 @@ Usage: `genus plugin remove <name> [--force]`
 | Flag | Takes | Default | Description |
 | --- | --- | --- | --- |
 | `--force` | — | off | Remove even when the lockfile has no record that this platform installed it |
+
+### `genus plugin new`
+
+Scaffold a plugin repository: a tool, an agent, tests and CI.
+
+Usage: `genus plugin new <name> [--dir DIR]`
+
+| Argument | Required | Description |
+| --- | --- | --- |
+| `name` | yes | Plugin name, e.g. example-agent (also the agent id) |
+
+| Flag | Takes | Default | Description |
+| --- | --- | --- | --- |
+| `--dir` | `DIR` | — | Where to write it (default: ./<name>) |
 
 ### `genus plugin doctor`
 

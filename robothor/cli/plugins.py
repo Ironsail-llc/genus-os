@@ -30,7 +30,13 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:  # pragma: no cover - typing only
     import argparse
 
-__all__ = ["cmd_plugin", "cmd_plugin_install", "cmd_plugin_list", "cmd_plugin_remove"]
+__all__ = [
+    "cmd_plugin",
+    "cmd_plugin_install",
+    "cmd_plugin_list",
+    "cmd_plugin_new",
+    "cmd_plugin_remove",
+]
 
 #: Printed by every verb that writes the lockfile. The engine re-reads it on
 #: SIGHUP (``robothor/engine/daemon.py``) or on ``POST /api/plugins/reload``.
@@ -463,6 +469,28 @@ def cmd_plugin_remove(name: str, *, force: bool = False) -> int:
     return 0
 
 
+def cmd_plugin_new(name: str, directory: str | None = None) -> int:
+    """Scaffold a plugin repository, or refuse with the reason on stderr."""
+    from robothor.plugins.scaffold import ScaffoldError, scaffold
+
+    try:
+        root = scaffold(name, directory)
+    except ScaffoldError as exc:
+        print(f"genus plugin new: {exc}", file=sys.stderr)
+        return 2
+    except OSError as exc:
+        print(
+            f"genus plugin new: could not write the scaffold "
+            f"({type(exc).__name__}: {exc.strerror or exc}).",
+            file=sys.stderr,
+        )
+        return 2
+    print(f"created {name} in {root}")
+    print("  next: cd into it, `pip install '.[test]' && pytest`, then `python -m build --wheel`")
+    print("  the layout is described in its CLAUDE.md")
+    return 0
+
+
 def cmd_plugin_doctor(as_json: bool = False) -> int:
     """The ``plugins`` category of ``genus doctor``, under its own verb."""
     from robothor.doctor.context import DoctorContext
@@ -501,6 +529,8 @@ def cmd_plugin(args: argparse.Namespace) -> int:
         return cmd_plugin_remove(name, force=bool(getattr(args, "force", False)))
     if command == "info":
         return cmd_plugin_info(name)
+    if command == "new":
+        return cmd_plugin_new(name, getattr(args, "dir", None))
     if command in ("enable", "disable"):
         return _set_enabled(name, command == "enable")
     return cmd_plugin_list()

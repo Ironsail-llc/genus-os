@@ -256,6 +256,11 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Remove even when the lockfile has no record that this platform installed it",
     )
+    plugin_new = plugin_sub.add_parser(
+        "new", help="Scaffold a plugin repository: a tool, an agent, tests and CI"
+    )
+    plugin_new.add_argument("name", help="Plugin name, e.g. example-agent (also the agent id)")
+    plugin_new.add_argument("--dir", default=None, help="Where to write it (default: ./<name>)")
     plugin_doctor = plugin_sub.add_parser("doctor", help="The plugins category of `genus doctor`")
     plugin_doctor.add_argument("--json", action="store_true", help="Machine-readable output")
     init_parser = subparsers.add_parser("init", help="Interactive setup wizard")

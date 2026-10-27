@@ -4,6 +4,24 @@ Genus discovers extensions through Python entry points. There is no registry
 to publish to and no package format to learn: if `pip` can install it, Genus
 can load it.
 
+## Starting a plugin
+
+```bash
+genus plugin new example-agent            # writes ./example-agent
+genus plugin new example-agent --dir ~/src/example-agent
+```
+
+`genus plugin new <name>` writes a plugin repository that builds a correct
+wheel as-is: a `pyproject.toml` publishing `genus.tools` and `genus.schemas`
+entry points with `genus-plugin.yaml`, `agents/` and `workflows/` as package
+data; `src/<package>/genus-plugin.yaml` declaring the example tool by name and
+by entry point, plus the agent; one example tool handler and its schema; an
+agent template bundle under `src/<package>/agents/<name>/`; contract tests; a
+GitHub Actions workflow that runs them, builds the wheel and prints its
+sha256; and a `CLAUDE.md` describing the layout. `<name>` is also the agent id,
+so it follows the agent id rule (lowercase letters, digits, hyphens). It never
+writes into a directory that is not empty.
+
 ## A tool plugin
 
 ```toml
