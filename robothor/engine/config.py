@@ -538,6 +538,8 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
                     stream=h["stream"],
                     event_type=h["event_type"],
                     message=h.get("message", ""),
+                    include_payload=bool(h.get("include_payload", False)),
+                    requeue_if_busy=bool(h.get("requeue_if_busy", False)),
                 )
             )
         else:
