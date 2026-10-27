@@ -87,10 +87,64 @@ def test_the_ci_workflow_tests_builds_and_hashes(tmp_path) -> None:
     assert "sha256sum" in steps
 
 
-@pytest.mark.parametrize("bad", ["Example", "a_b", "-x", "x" * 70, "../x", ""])
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "Example",
+        "a_b",
+        "-x",
+        "x" * 70,
+        "../x",
+        "",
+        "2fa-sync",  # leading digit: `2fa_sync` is not a Python identifier
+        "1password",
+        "123",
+        "class",  # a keyword: `import class` is a SyntaxError
+        "import",
+        "global",
+    ],
+)
 def test_a_bad_name_is_refused(tmp_path, bad) -> None:
     with pytest.raises(scaffold.ScaffoldError):
         scaffold.scaffold(bad, tmp_path / "out")
+
+
+def test_the_refusal_says_what_a_name_must_be(tmp_path) -> None:
+    with pytest.raises(scaffold.ScaffoldError) as excinfo:
+        scaffold.scaffold("2fa-sync", tmp_path / "out")
+    assert "start with a letter" in str(excinfo.value)
+    assert not (tmp_path / "out").exists()
+
+
+@pytest.mark.parametrize("name", ["yes", "no", "on", "off", "true", "null"])
+def test_a_name_yaml_would_retype_still_scaffolds_a_valid_declaration(tmp_path, name) -> None:
+    """Unquoted, `id: yes` is a boolean and the bundle's id check fails."""
+    root = scaffold.scaffold(name, tmp_path / name)
+    package = root / "src" / name
+    manifest = yaml.safe_load((package / "genus-plugin.yaml").read_text())
+    assert manifest["name"] == name
+    declared = assets.parse((package / "genus-plugin.yaml").read_text(), package)
+    assert [a.agent_id for a in declared.agents] == [name]
+
+
+def test_a_failed_write_leaves_nothing_behind(tmp_path, monkeypatch) -> None:
+    from pathlib import Path
+
+    real = Path.write_text
+    calls = {"n": 0}
+
+    def flaky(self, *args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 3:
+            raise OSError(28, "No space left on device")
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", flaky)
+    with pytest.raises(OSError):
+        scaffold.scaffold(NAME, tmp_path / NAME)
+    monkeypatch.setattr(Path, "write_text", real)
+    assert not (tmp_path / NAME).exists()
+    assert scaffold.scaffold(NAME, tmp_path / NAME).is_dir()  # a re-run just works
 
 
 def test_a_non_empty_directory_is_refused(tmp_path) -> None:

@@ -123,7 +123,7 @@ Usage: `genus plugin new <name> [--dir DIR]`
 
 | Argument | Required | Description |
 | --- | --- | --- |
-| `name` | yes | Plugin name, e.g. example-agent (also the agent id) |
+| `name` | yes | Plugin name, e.g. example-agent: also the agent id and package name |
 
 | Flag | Takes | Default | Description |
 | --- | --- | --- | --- |

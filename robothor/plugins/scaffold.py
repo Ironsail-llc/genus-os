@@ -19,6 +19,8 @@ Everything generated is generic: the plugin's own name and nothing else.
 
 from __future__ import annotations
 
+import keyword
+import shutil
 from pathlib import Path
 
 from robothor.templates.safety import TemplateSecurityError, validate_identifier
@@ -78,18 +80,18 @@ where = ["src"]
 _MANIFEST = """\
 # What this plugin contributes, read from the packaging layer BEFORE the module
 # is imported. Keep it in step with PLUGIN in __init__.py.
-name: {name}
+name: "{name}"
 contract_version: 1
 handlers:
-  - {tool}
+  - "{tool}"
 schemas:
-  - {tool}
+  - "{tool}"
 # Entry-point names, declared separately from contribution names.
 entry_points:
   genus.tools:
-    - {pkg}
+    - "{pkg}"
   genus.schemas:
-    - {pkg}
+    - "{pkg}"
 
 # Workspace files, as paths relative to this file. `genus plugin install` and
 # `genus plugin sync` write them; `genus plugin remove` retires them.
@@ -144,8 +146,8 @@ PLUGIN = {{
 '''
 
 _AGENT_MANIFEST = """\
-id: {name}
-name: {title}
+id: "{name}"
+name: "{title}"
 description: Replace with what this agent does
 version: "0.1.0"
 department: custom
@@ -156,7 +158,7 @@ schedule:
 delivery:
   mode: none
 tools_allowed:
-  - {tool}
+  - "{tool}"
 """
 
 _INSTRUCTIONS = """\
@@ -328,24 +330,46 @@ def _files(name: str) -> dict[str, str]:
 def scaffold(name: str, directory: str | Path | None = None) -> Path:
     """Write a new plugin repository for *name*; return its root.
 
-    *name* is the distribution name and the agent id, so it follows the agent
-    id rule: lowercase letters, digits and hyphens. *directory* defaults to
+    *name* is the distribution name, the agent id and -- hyphens as
+    underscores -- the Python package, so it must satisfy all three: the agent
+    id rule, a leading letter, and a package name that is a non-keyword
+    identifier. *directory* defaults to
     ``./<name>`` and must not exist or be empty -- nothing is ever overwritten.
     """
+    refusal = (
+        f"{name!r} is not a usable plugin name. It becomes the distribution name, the "
+        "agent id and (with hyphens as underscores) the Python package, so it must "
+        "start with a letter, use only lowercase letters, digits and hyphens (at most "
+        "64), and not be a Python keyword."
+    )
     try:
         name = validate_identifier(name, label="plugin name")
     except TemplateSecurityError as exc:
-        raise ScaffoldError(
-            f"{name!r} is not a usable plugin name: use 1-64 lowercase letters, digits "
-            "or hyphens, starting with a letter or digit."
-        ) from exc
+        raise ScaffoldError(refusal) from exc
+    package = package_name(name)
+    if not name[0].isalpha() or not package.isidentifier() or keyword.iskeyword(package):
+        raise ScaffoldError(refusal)
     root = Path(directory) if directory is not None else Path.cwd() / name
     if root.is_symlink() or (root.exists() and not root.is_dir()):
         raise ScaffoldError(f"{root} exists and is not a directory.")
     if root.is_dir() and any(root.iterdir()):
         raise ScaffoldError(f"{root} is not empty; nothing was written.")
-    for relative, text in _files(name).items():
-        path = root / relative
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text, encoding="utf-8")
+    existed = root.is_dir()
+    try:
+        for relative, text in _files(name).items():
+            path = root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, encoding="utf-8")
+    except BaseException:
+        # Leave nothing half-written: a partial tree would make the re-run
+        # refuse the directory as not empty.
+        if existed:
+            for child in root.iterdir():
+                if child.is_dir() and not child.is_symlink():
+                    shutil.rmtree(child, ignore_errors=True)
+                else:
+                    child.unlink(missing_ok=True)
+        else:
+            shutil.rmtree(root, ignore_errors=True)
+        raise
     return root
