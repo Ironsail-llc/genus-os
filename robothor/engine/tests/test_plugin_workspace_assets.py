@@ -1031,3 +1031,94 @@ def test_retire_reports_a_patched_manifest_it_cannot_parse(ws) -> None:
     report = assets.retire(DIST)
     assert any("main" in w for w in report.warnings)
     assert (ws / "docs" / "agents" / "retired" / "desk-monitor.yaml").is_file()
+
+
+# ---------------------------------------------------------------------------
+# second review: adoption is not ownership; installed.yaml errors
+# ---------------------------------------------------------------------------
+
+_SHARED = _HEAD + "files:\n  - src: extra/main.md\n    dest: brain/TOOLS.md\n"
+
+
+def _ledger(ws: Path) -> dict:
+    return yaml.safe_load((ws / ".robothor" / "plugin-assets.yaml").read_text())["plugins"]
+
+
+def test_an_adopted_shared_file_is_recorded_as_adopted_and_never_removed(ws, capsys) -> None:
+    (ws / "brain" / "TOOLS.md").write_text(_PERSONA)
+    assert _install(ws, manifest=_SHARED, extra={"example_agent/extra/main.md": _PERSONA}) == 0
+    assert _ledger(ws)[DIST]["files"]["brain/TOOLS.md"]["adopted"] is True
+    assert cmd_plugin(_args("remove", name=DIST)) == 0
+    assert (ws / "brain" / "TOOLS.md").read_text() == _PERSONA
+    assert "brain/TOOLS.md" in capsys.readouterr().out
+
+
+def test_adoption_does_not_let_a_later_release_replace_a_shared_file(ws, capsys) -> None:
+    (ws / "brain" / "TOOLS.md").write_text(_PERSONA)
+    assert _install(ws, manifest=_SHARED, extra={"example_agent/extra/main.md": _PERSONA}) == 0
+    pip = installer._run_pip
+    pip.calls.clear()
+    changed = {"example_agent/extra/main.md": "# a different TOOLS.md\n"}
+    assert _install(ws, version="1.1.0", manifest=_SHARED, extra=changed) == 2
+    assert "brain/TOOLS.md" in capsys.readouterr().err
+    assert pip.calls == []
+    assert (ws / "brain" / "TOOLS.md").read_text() == _PERSONA
+
+
+def test_the_transition_adopts_main_md_and_remove_leaves_it_with_the_backup(ws, capsys) -> None:
+    """The infra installer copied the persona and made its own backup before
+    sync ran. Sync adopts the copy; remove leaves both and says so."""
+    main_md = ws / "brain" / "agents" / "main.md"
+    main_md.write_text(_PERSONA)
+    backup = main_md.with_name(f"main.md.pre-{DIST}")
+    backup.write_text("the operator's main\n")
+    assert (
+        _install(ws, manifest=_PERSONA_MANIFEST, extra={"example_agent/extra/main.md": _PERSONA})
+        == 0
+    )
+    assert _ledger(ws)[DIST]["files"]["brain/agents/main.md"]["adopted"] is True
+    capsys.readouterr()
+    assert cmd_plugin(_args("remove", name=DIST)) == 0
+    out = capsys.readouterr().out
+    assert main_md.read_text() == _PERSONA
+    assert backup.read_text() == "the operator's main\n"
+    assert "brain/agents/main.md" in out and backup.name in out
+
+
+def test_an_adopted_agent_file_may_be_upgraded_with_a_backup(ws) -> None:
+    """brain/agents/<patched id> stays replaceable: the next release's bytes
+    are written, and the adopted original is kept as the backup."""
+    main_md = ws / "brain" / "agents" / "main.md"
+    main_md.write_text(_PERSONA)
+    assert (
+        _install(ws, manifest=_PERSONA_MANIFEST, extra={"example_agent/extra/main.md": _PERSONA})
+        == 0
+    )
+    newer = {"example_agent/extra/main.md": "# Main, release two\n"}
+    assert _install(ws, version="1.1.0", manifest=_PERSONA_MANIFEST, extra=newer) == 0
+    assert main_md.read_text() == "# Main, release two\n"
+    assert main_md.with_name(f"main.md.pre-{DIST}").read_text() == _PERSONA
+    assert "adopted" not in _ledger(ws)[DIST]["files"]["brain/agents/main.md"]
+
+
+@pytest.mark.parametrize("broken", ["agents: [unclosed\n", "agents: [a, b]\n"])
+def test_remove_with_a_malformed_installed_yaml_deletes_nothing(
+    ws, plugin_dir, capsys, broken
+) -> None:
+    assert cmd_plugin(_args("sync")) == 0
+    installed = ws / ".robothor" / "installed.yaml"
+    good = installed.read_text()
+    installed.write_text(broken)
+    assert cmd_plugin(_args("remove", name=DIST)) == 2
+    err = capsys.readouterr().err
+    assert "installed.yaml" in err and "Traceback" not in err
+    assert any(plugin_dir.iterdir())
+    assert lockfile.read_lockfile().row(DIST) is not None
+    installed.write_text(good)
+    assert cmd_plugin(_args("remove", name=DIST)) == 0
+
+
+def test_the_refusal_for_a_hand_copied_agent_says_to_move_its_instructions(ws, capsys) -> None:
+    (ws / "docs" / "agents" / "desk-monitor.yaml").write_text("id: desk-monitor\n")
+    assert _install(ws) == 2
+    assert "brain/agents/desk-monitor.md" in capsys.readouterr().err

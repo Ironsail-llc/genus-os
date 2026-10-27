@@ -634,7 +634,14 @@ def plan(
         raise AssetError(f"installed.yaml is not readable ({type(exc).__name__}).") from exc
     mine = f"plugin:{dist}"
     own_ledger = ledger.get(dist) if isinstance(ledger.get(dist), dict) else {}
-    own_files = set((own_ledger or {}).get("files") or {})
+    # A file this plugin ADOPTED (it was already there with the same bytes) is
+    # not one it wrote: it stays subject to the shared-file rule, so a later
+    # release with different bytes is judged as replacing someone else's file.
+    own_files = {
+        dest
+        for dest, recorded in ((own_ledger or {}).get("files") or {}).items()
+        if not (isinstance(recorded, dict) and recorded.get("adopted"))
+    }
     declared_for = {a.agent_id for a in assets.agents} | {p.agent for p in assets.patches}
 
     lines: list[str] = []
@@ -656,7 +663,14 @@ def plan(
             raise AssetError(
                 f"docs/agents/{agent.agent_id}.yaml already exists and is not this "
                 f"plugin's, so agent {agent.agent_id!r} will not be installed over it. "
-                "Retire or rename the existing agent first."
+                "Retire or rename the existing agent first"
+                + (
+                    f", and move its instruction file ({agent.instruction}) aside too: "
+                    "once no manifest claims it, the template installer will not "
+                    "write over it either."
+                    if agent.instruction
+                    else "."
+                )
             )
         lines.append(f"agent    {agent.agent_id} -> docs/agents/{agent.agent_id}.yaml")
 
@@ -906,12 +920,19 @@ def _write_file(
             "and sync again to take the plugin's version."
         )
         return previous
-    backup = previous.get("backup") if previous else None
-    if previous is None and target.exists() and target.read_bytes() != data:
+    adopted = bool(previous and previous.get("adopted"))
+    if target.is_file() and target.read_bytes() == data:
+        if previous is None or adopted:
+            # Already in place with these bytes (an installer copied it first):
+            # adopted, not written. The plugin did not create it, so remove
+            # will leave it and plan keeps judging it as someone else's file.
+            return {"sha256": hashlib.sha256(data).hexdigest(), "backup": None, "adopted": True}
+        return previous
+    backup = previous.get("backup") if previous and not adopted else None
+    if (previous is None or adopted) and target.exists():
         backup = _backup_once(target, dist, root)
-    if not target.exists() or target.read_bytes() != data:
-        _write_atomically(target, data)
-        report.lines.append(f"wrote    {item.dest}")
+    _write_atomically(target, data)
+    report.lines.append(f"wrote    {item.dest}")
     return {"sha256": hashlib.sha256(data).hexdigest(), "backup": backup}
 
 
@@ -1052,10 +1073,16 @@ def _remove_file(
     except AssetError as exc:
         report.warnings.append(f"{dest}: left in place ({exc})")
         return
+    backup = _backup_path(target, dist)
+    if recorded.get("adopted"):
+        # It was there before the plugin; it is not the plugin's to delete,
+        # and neither is a backup some other installer made of it.
+        kept = f"; {backup.name} kept" if backup.is_file() else ""
+        report.lines.append(f"left     {dest} (was in place before the plugin{kept})")
+        return
     if target.is_file() and _sha256(target) != recorded.get("sha256"):
         report.warnings.append(f"{dest}: edited since the plugin wrote it; left in place")
         return
-    backup = _backup_path(target, dist)
     if recorded.get("backup") and backup.is_file() and not backup.is_symlink():
         _touch(target)
         _touch(backup)
@@ -1072,7 +1099,7 @@ def _undo(entry: dict[str, Any], dist: str, root: Path, instance: Path, report: 
     for agent_id in entry.get("agents") or []:
         try:
             _retire_agent(validate_identifier(agent_id), dist, root, instance, report)
-        except (TemplateSecurityError, OSError) as exc:
+        except (TemplateSecurityError, OSError, ValueError, yaml.YAMLError) as exc:
             report.warnings.append(f"agent {agent_id}: not retired ({exc})")
     for dest, recorded in (entry.get("files") or {}).items():
         _remove_file(dest, recorded or {}, dist, root, report)
@@ -1104,10 +1131,21 @@ def check_retire(
     ``remove`` calls this BEFORE it deletes the package: once the files are
     gone, a failure here would leave nothing to re-run against.
     """
+    from robothor.templates.instance import InstanceConfig
+
     root = workspace if workspace is not None else default_workspace_root()
     instance = _instance_dir(Path(root), instance_dir)
-    if Path(root).is_dir() and instance.is_dir():
-        read_ledger(instance)
+    if not (Path(root).is_dir() and instance.is_dir()):
+        return
+    entry = read_ledger(instance).get(canonical(dist))
+    if isinstance(entry, dict) and entry.get("agents"):
+        try:
+            InstanceConfig(instance).installed_agents  # noqa: B018 - parse it now
+        except (ValueError, yaml.YAMLError) as exc:
+            raise AssetError(
+                ".robothor/installed.yaml is not readable, so this plugin's agents "
+                "cannot be retired; repair it and run the remove again."
+            ) from exc
 
 
 def retire(dist: str, *, workspace: Path | None = None, instance_dir: Path | None = None) -> Report:

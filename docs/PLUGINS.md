@@ -450,8 +450,14 @@ instruction-file check already applies to agents.
 * **Any other existing `brain/` file** the plugin did not write is refused in
   `overwrite` mode — `brain/TOOLS.md` and `brain/AGENTS.md` cannot be replaced —
   unless an agent the plugin ships or patches claims it as `instruction_file`.
-  `if_missing` may seed one where it is absent. A file that already holds the
-  plugin's exact bytes is adopted, not refused.
+  `if_missing` may seed one where it is absent.
+* **Adopted files.** A destination that already holds the plugin's exact bytes
+  — an installer copied it first — is *adopted*: recorded with
+  `adopted: true`, not written, and not the plugin's. A later release with
+  different bytes is judged as replacing someone else's file (refused for a
+  shared `brain/` file; written with a `.pre-<distribution>` backup where the
+  rules allow it), and `remove` leaves an adopted file, and any backup beside
+  it, in place.
 * **Files** another plugin wrote are refused.
 * **Patch keys.** Each patched key (agent plus dotted key, prefix-aware) is
   recorded per plugin; a second plugin that sets or deletes a key another
@@ -508,9 +514,15 @@ files stay as they were, and sync exits `0`: the lockfile part, which every
 other plugin depends on, did succeed.
 
 Sync is idempotent, and safe to run after another tool has already copied the
-same files or applied the same patch: identical content is not rewritten and
-not backed up, a patch whose values are already present changes nothing, and
-an existing backup is never overwritten.
+same files or applied the same patch: identical content is adopted rather than
+rewritten or backed up, a patch whose values are already present changes
+nothing, and an existing backup is never overwritten.
+
+**Agent manifests are the exception.** A plugin agent whose
+`docs/agents/<id>.yaml` was copied by hand is refused — the plugin never takes
+over a manifest it does not own — and the whole plugin is skipped until it is
+resolved. Move the copied manifest **and** its instruction file
+(`brain/agents/<id>.md`) aside, then sync: the refusal names both.
 
 **`genus plugin remove`** retires what the plugin wrote, from the record in
 `.robothor/plugin-assets.yaml` (the wheel's patch files are gone by then):
@@ -521,6 +533,7 @@ an existing backup is never overwritten.
 * each workflow and file it wrote is deleted, unless it has been edited since,
   in which case it is left and named in the output;
 * a file it overwrote is put back from its backup;
+* a file it adopted is left where it is, with any backup beside it;
 * each patch's `remove:` section is applied to its agent.
 
 A distribution in `ROBOTHOR_PLUGIN_DIR` is removed **without `--force`**, even
