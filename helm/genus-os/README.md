@@ -214,12 +214,14 @@ older integrations.
 ## Extra volumes
 
 Each Python workload can mount additional volumes, rendered verbatim with
-`toYaml` after the chart's own:
+`toYaml` into the same lists as the chart's own. The order within a list is
+not part of the contract (on the engine they follow `workspace`), so refer to
+entries by `name`, not by position:
 
 | Value | Default | Meaning |
 |-------|---------|---------|
-| `engine.extraVolumes` | `[]` | Raw Kubernetes `volume` objects appended to the engine pod's `spec.volumes`. |
-| `engine.extraVolumeMounts` | `[]` | Raw Kubernetes `volumeMount` objects appended to the engine container's `volumeMounts`. |
+| `engine.extraVolumes` | `[]` | Raw Kubernetes `volume` objects added to the engine pod's `spec.volumes`. |
+| `engine.extraVolumeMounts` | `[]` | Raw Kubernetes `volumeMount` objects added to the engine container's `volumeMounts`. |
 | `bridge.extraVolumes` / `bridge.extraVolumeMounts` | `[]` | The same, for the bridge. |
 | `orchestrator.extraVolumes` / `orchestrator.extraVolumeMounts` | `[]` | The same, for the orchestrator. |
 

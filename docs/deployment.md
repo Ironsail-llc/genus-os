@@ -768,8 +768,8 @@ reads it on each new connection.
 
 The engine, bridge and orchestrator each take `extraVolumes` and
 `extraVolumeMounts`: lists of raw Kubernetes `volume` and `volumeMount`
-objects that the chart renders verbatim into that component's pod, after its
-own. A typical use is giving a plugin's state directory its own
+objects that the chart renders verbatim into that component's pod, alongside
+its own. A typical use is giving a plugin's state directory its own
 PersistentVolumeClaim, separate from the workspace:
 
 ```yaml
