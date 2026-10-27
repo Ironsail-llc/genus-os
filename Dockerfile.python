@@ -42,6 +42,32 @@ COPY --from=ghcr.io/astral-sh/uv:0.5.11 /uv /uvx /usr/local/bin/
 
 WORKDIR /app
 
+# ─── gws — Google Workspace CLI behind the gws_* tools ───────────────────────
+# The release tarball, not the npm package: the package's postinstall only
+# downloads this same binary, and the runtime image stays free of Node. The
+# version and both checksums are pinned here; the upstream .sha256 is not
+# trusted at build time. Bump all three together.
+FROM base AS gws
+
+ARG GWS_VERSION=0.22.5
+ARG GWS_SHA256_AMD64=de78ecdbd2f1a84cca0063a7ecbc440240fc14b6ebccbb17f4646b792a8c5c1f
+ARG GWS_SHA256_ARM64=94490295d9580e1e88574e715a0a162991747d12d62f8c7b8dcc8268b6c1cea0
+ARG TARGETARCH
+
+RUN set -eu; \
+    case "$TARGETARCH" in \
+        amd64) arch=x86_64;  sum="$GWS_SHA256_AMD64" ;; \
+        arm64) arch=aarch64; sum="$GWS_SHA256_ARM64" ;; \
+        *) echo "gws: unsupported arch $TARGETARCH" >&2; exit 1 ;; \
+    esac; \
+    tarball="google-workspace-cli-${arch}-unknown-linux-gnu.tar.gz"; \
+    curl -fsSL -o "/tmp/$tarball" \
+        "https://github.com/googleworkspace/cli/releases/download/v${GWS_VERSION}/$tarball"; \
+    echo "$sum  /tmp/$tarball" | sha256sum -c -; \
+    mkdir /tmp/gws && tar -xzf "/tmp/$tarball" -C /tmp/gws; \
+    install -m 0755 "$(find /tmp/gws -type f -name gws | head -n1)" /usr/local/bin/gws; \
+    /usr/local/bin/gws --version
+
 # ─── build-deps — compile toolchain + resolved venv ──────────────────────────
 FROM base AS build-deps
 
@@ -90,6 +116,7 @@ COPY crm /app/crm
 COPY infra/migrations /app/infra/migrations
 COPY templates /app/templates
 COPY conftest.py hatch_build.py /app/
+COPY --from=gws /usr/local/bin/gws /usr/local/bin/gws
 
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install --no-deps -e .
@@ -118,6 +145,7 @@ RUN groupadd -r app && useradd -r -g app -u 1000 -d /app -s /usr/sbin/nologin ap
 
 COPY --from=prod-builder --chown=app:app /opt/venv /opt/venv
 COPY --from=prod-builder --chown=app:app /app /app
+COPY --from=gws /usr/local/bin/gws /usr/local/bin/gws
 
 USER app
 
