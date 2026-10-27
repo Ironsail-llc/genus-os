@@ -71,7 +71,9 @@ def _bundle_entry(
 
     data = path.read_bytes()
     with tempfile.TemporaryDirectory(prefix="genus-index-bundle-") as unpacked:
-        destination = Path(unpacked)
+        # Resolved: the platform temp root may run through a symlink (macOS:
+        # /var -> /private/var), and the containment checks refuse an aliased root.
+        destination = Path(unpacked).resolve(strict=True)
         try:
             from robothor.templates.hub_client import HubClient
 

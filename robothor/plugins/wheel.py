@@ -144,6 +144,11 @@ def extract_wheel(data: bytes, destination: Path) -> dict[str, int]:
     if len(data) > MAX_WHEEL_BYTES:
         raise WheelError(f"The wheel is too large ({len(data)} bytes > {MAX_WHEEL_BYTES}).")
     destination.mkdir(parents=True, exist_ok=True)
+    # Canonicalise the caller's own staging directory once, up front. The
+    # containment helper refuses a root reached through a symlink, and the
+    # platform temp dir often is one (macOS: /var -> /private/var). Members
+    # are still checked against this real root, so nothing is loosened.
+    destination = destination.resolve(strict=True)
 
     import io
 
@@ -347,5 +352,7 @@ def open_wheel(path: Path, destination: Path) -> WheelContents:
         raise WheelError(
             f"The wheel {path.name} could not be read ({type(exc).__name__})."
         ) from exc
+    destination.mkdir(parents=True, exist_ok=True)
+    destination = destination.resolve(strict=True)
     modes = extract_wheel(data, destination)
     return read_wheel(destination, modes=modes)

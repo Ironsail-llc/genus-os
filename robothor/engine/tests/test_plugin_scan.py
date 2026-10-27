@@ -117,6 +117,53 @@ def test_a_wheel_reads_its_own_metadata_and_entry_points(tmp_path) -> None:
     assert contents.manifest_sha256 == hashlib.sha256(_MANIFEST.encode()).hexdigest()
 
 
+def test_a_wheel_extracts_when_the_destination_runs_through_a_symlink(tmp_path) -> None:
+    """The default macOS temp dir sits under ``/var``, a symlink to ``/private/var``.
+
+    The destination is the caller's own staging directory, so an alias in its
+    ancestry is not hostile: the wheel must still extract, and every member
+    must still land inside the real directory.
+    """
+    path = _build_wheel(tmp_path)
+    real = tmp_path / "real"
+    real.mkdir()
+    alias = tmp_path / "alias"
+    alias.symlink_to(real, target_is_directory=True)
+
+    contents = wheel.open_wheel(path, alias / "x")
+
+    assert contents.name == "acme-tools"
+    assert (real / "x" / "acme_tools" / "__init__.py").is_file()
+    assert contents.root == (real / "x").resolve()
+
+
+def test_extract_wheel_accepts_a_destination_reached_through_a_symlink(tmp_path) -> None:
+    path = _build_wheel(tmp_path)
+    real = tmp_path / "real"
+    real.mkdir()
+    alias = tmp_path / "alias"
+    alias.symlink_to(real, target_is_directory=True)
+
+    wheel.extract_wheel(path.read_bytes(), alias / "x")
+
+    assert (real / "x" / "acme_tools-1.2.3.dist-info" / "METADATA").is_file()
+
+
+def test_a_symlinked_destination_still_refuses_an_escaping_member(tmp_path) -> None:
+    path = tmp_path / "evil-1.0-py3-none-any.whl"
+    with zipfile.ZipFile(path, "w") as zf:
+        zf.writestr("../escaped.py", "x = 1\n")
+    real = tmp_path / "real"
+    real.mkdir()
+    alias = tmp_path / "alias"
+    alias.symlink_to(real, target_is_directory=True)
+
+    with pytest.raises(wheel.WheelError):
+        wheel.open_wheel(path, alias / "x")
+    assert not (real / "escaped.py").exists()
+    assert not (tmp_path / "escaped.py").exists()
+
+
 def test_a_wheel_member_that_escapes_its_root_is_refused(tmp_path) -> None:
     path = tmp_path / "evil-1.0-py3-none-any.whl"
     with zipfile.ZipFile(path, "w") as zf:
