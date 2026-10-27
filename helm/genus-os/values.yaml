@@ -431,6 +431,14 @@ engine:
   env:
     ROBOTHOR_APPROVAL_FAILCLOSED_ENABLED: "1"
     ROBOTHOR_APPROVAL_MODE: observe
+  # Additional volumes for this component's pod, as lists of raw Kubernetes
+  # objects rendered verbatim with toYaml: `extraVolumes` entries go into
+  # spec.volumes (e.g. a persistentVolumeClaim for a plugin's state directory)
+  # and `extraVolumeMounts` entries into the container's volumeMounts. Each
+  # mount's `name` must match a volume; names must not collide with the
+  # chart's own (workspace, tmp, runtime-cache, db-ca, migration-api-token).
+  extraVolumes: []
+  extraVolumeMounts: []
   resources:
     requests:
       cpu: 500m
@@ -482,6 +490,9 @@ bridge:
     tls: []
     annotations: {}
   env: {}
+  # Additional volumes and mounts; see engine.extraVolumes.
+  extraVolumes: []
+  extraVolumeMounts: []
   resources:
     requests:
       cpu: 250m
@@ -526,6 +537,9 @@ orchestrator:
     tls: []
     annotations: {}
   env: {}
+  # Additional volumes and mounts; see engine.extraVolumes.
+  extraVolumes: []
+  extraVolumeMounts: []
   resources:
     requests:
       cpu: 250m

@@ -764,6 +764,33 @@ leaves the completed Job alone. Rotating the CA inside the existing ConfigMap
 needs no rename and no restart: kubelet refreshes the mounted file and libpq
 reads it on each new connection.
 
+### Mounting an extra volume
+
+The engine, bridge and orchestrator each take `extraVolumes` and
+`extraVolumeMounts`: lists of raw Kubernetes `volume` and `volumeMount`
+objects that the chart renders verbatim into that component's pod, after its
+own. A typical use is giving a plugin's state directory its own
+PersistentVolumeClaim, separate from the workspace:
+
+```yaml
+engine:
+  extraVolumes:
+    - name: plugin-state
+      persistentVolumeClaim:
+        claimName: plugin-state     # a PVC you create in the release namespace
+  extraVolumeMounts:
+    - name: plugin-state
+      mountPath: /var/lib/plugin-state
+```
+
+Each mount's `name` must match a volume in the same component, and must not
+reuse a name the chart already gives its own volumes (`workspace`, `tmp`,
+`runtime-cache`, `db-ca`, `migration-api-token`). The chart does not create the
+claim. The engine runs one replica with the `Recreate` strategy, so a
+`ReadWriteOnce` claim is safe there; the bridge and orchestrator run several
+replicas with rolling updates, so give them a `ReadWriteMany` claim or a
+per-pod volume such as `emptyDir`.
+
 ## Production Checklist
 
 - [ ] Set a strong `ROBOTHOR_DB_PASSWORD`
