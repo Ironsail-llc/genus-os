@@ -65,8 +65,16 @@ The Python dependency gate runs `pip-audit` without standing advisory
 exceptions. Dependency floors are raised when a fix is available, and any new
 advisory fails CI and release builds until it is remediated. If an advisory
 cannot be fixed immediately, its temporary, time-bounded disposition must be
-documented here and approved through security review; there are currently no
-such exceptions.
+documented here and approved through security review. The exceptions in force
+are listed below; an entry past its expiry date must be removed or renewed
+through the same review, never left in place.
+
+### Current exceptions
+
+| Advisory | Package | Why it does not apply | Expires | Tracking | Approved |
+|---|---|---|---|---|---|
+| GHSA-7hp6-4w63-5g45 (CVE-2026-114612) | litellm 1.92.2 (locked) | Privilege escalation in the litellm proxy server through reuse of its salt key. This project imports litellm as a completion library only: no `litellm[proxy]` extra, no `litellm.proxy` import, no proxy process in any image, chart or workflow. | 2026-11-10 | [#723](https://github.com/Ironsail-llc/genus-os/issues/723): bump litellm to a patched release (1.100.4, 1.101.3, 1.102.2 or 1.103.1 and later) and remove the ignore from both `pip-audit` gates | Repository owner, 2026-10-27 |
+| GHSA-g5ff-637f-6q2m | litellm 1.92.2 (locked) | Arbitrary local file read by an authenticated litellm proxy user through the proxy's `/utils/transform_request` endpoint. Same reasoning: the proxy server, its endpoints and its user accounts do not exist in this project. | 2026-11-10 | [#723](https://github.com/Ironsail-llc/genus-os/issues/723): the same bump clears it (fixed in 1.95.0 and later) | Repository owner, 2026-10-27 |
 
 ## Scope
 
