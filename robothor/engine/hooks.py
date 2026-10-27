@@ -15,6 +15,7 @@ import contextlib
 import json
 import logging
 import os
+import re
 from typing import TYPE_CHECKING, Any
 
 import yaml
@@ -149,9 +150,12 @@ def build_event_triggers(manifest_dir: Any) -> dict[str, list[dict[str, Any]]]:
     return dict(_LEGACY_EVENT_TRIGGERS)
 
 
+_BOUNDARY_CLOSE = re.compile(r"</\s*(untrusted_content)", re.IGNORECASE)
+
+
 def _neutralise_boundary(text: str) -> str:
     """Stop external text from closing the untrusted-content boundary early."""
-    return text.replace("</untrusted_content", "<\\/untrusted_content")
+    return _BOUNDARY_CLOSE.sub(r"<\\/\1", text)
 
 
 def _format_event_block(stream: str, event_type: str, envelope: dict[str, Any]) -> str:
