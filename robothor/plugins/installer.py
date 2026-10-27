@@ -848,28 +848,47 @@ def remove(
     lock = lockfile.read_lockfile(lock_path)
     row = lock.row(name)
     in_plugin_dir = _plugin_dir_distribution(name)
+    # Gone from the platform-owned plugin directory and from the path: a
+    # previous remove that deleted the package and stopped before dropping the
+    # row. Finishing it needs no pip (the image has none) and no --force.
+    gone = (
+        in_plugin_dir is None
+        and bool(_plugin_target_dir())
+        and row is not None
+        and not _distribution_present(name)
+    )
+    platform_owned = in_plugin_dir is not None or gone
     if row is None and not force and in_plugin_dir is None:
         raise InstallError(
             f"Nothing in the lockfile records {name!r}. Run `genus plugin list` to "
             "see what is installed, or `genus plugin remove --force` if you are "
             "sure the distribution is there."
         )
-    if row is not None and row.source is None and not force and in_plugin_dir is None:
+    if row is not None and row.source is None and not force and not platform_owned:
         raise InstallError(
             f"{name} is recorded but this platform did not install it — there is no "
             "source on its lockfile row, so it was installed by hand. Uninstall it "
             "the same way, or re-run with --force."
         )
 
+    # Everything that can refuse runs BEFORE anything is deleted, so a refusal
+    # leaves the plugin, its row and its workspace files exactly as they were.
+    from robothor.plugins import assets
+
+    try:
+        assets.check_retire(name)
+    except (assets.AssetError, OSError) as exc:
+        raise InstallError(f"{name} was not removed: {exc}") from exc
+
     note = ""
     if in_plugin_dir is not None:
         deleted = _delete_from_plugin_dir(in_plugin_dir)
         result: Any = SimpleNamespace(returncode=0, stdout="", stderr="")
         note = f"deleted {deleted} file(s) from the plugin directory"
-    elif row is None and force and not _distribution_present(name):
-        # Nothing for pip to do: the distribution is gone and so is its row.
-        # This is how the workspace files of a plugin that disappeared since
-        # the last sync are retired -- sync reports them and leaves them.
+    elif gone or (row is None and force and not _distribution_present(name)):
+        # Nothing for pip to do: the distribution is not installed. This is how
+        # the workspace files of a plugin that disappeared since the last sync
+        # are retired -- sync reports them and leaves them.
         result = SimpleNamespace(returncode=0, stdout="", stderr="")
         note = "the distribution was not installed; its workspace files were retired"
     else:
@@ -890,8 +909,6 @@ def remove(
 
     # From the ledger, not the wheel: pip has just deleted the patch files
     # that said how to undo themselves.
-    from robothor.plugins import assets
-
     try:
         report = assets.retire(name)
     except (assets.AssetError, OSError) as exc:

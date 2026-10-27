@@ -123,9 +123,10 @@ def _wheel(
     description: str = "Watches the example desk",
     manifest: str = _MANIFEST,
     extra: dict[str, str] | None = None,
+    dist: str = DIST,
 ) -> bytes:
-    pkg = "example_agent"
-    info = f"example_agent-{version}.dist-info"
+    pkg = dist.replace("-", "_")
+    info = f"{pkg}-{version}.dist-info"
     members = {
         f"{pkg}/__init__.py": _CODE,
         f"{pkg}/genus-plugin.yaml": manifest,
@@ -139,9 +140,9 @@ def _wheel(
         f"{pkg}/extra/webhooks.yaml": "channels: []\n",
         f"{pkg}/extra/NOTES.md": "notes from the plugin\n",
         f"{info}/METADATA": (
-            f"Metadata-Version: 2.1\nName: {DIST}\nVersion: {version}\nSummary: Example\n"
+            f"Metadata-Version: 2.1\nName: {dist}\nVersion: {version}\nSummary: Example\n"
         ),
-        f"{info}/entry_points.txt": "[genus.tools]\nexample = example_agent:PLUGIN\n",
+        f"{info}/entry_points.txt": f"[genus.tools]\nexample = {pkg}:PLUGIN\n",
     }
     members.update(extra or {})
     with zipfile.ZipFile(path, "w") as zf:
@@ -197,7 +198,8 @@ def _args(command, **kw):
 
 def _install(ws: Path, **wheel_kw) -> int:
     version = wheel_kw.get("version", "1.0.0")
-    path = ws.parent / f"example_agent-{version}-py3-none-any.whl"
+    pkg = wheel_kw.get("dist", DIST).replace("-", "_")
+    path = ws.parent / f"{pkg}-{version}-py3-none-any.whl"
     data = _wheel(path, **wheel_kw)
     return cmd_plugin(_args("install", name=str(path), sha256=hashlib.sha256(data).hexdigest()))
 
@@ -781,3 +783,251 @@ def test_a_non_editable_dist_does_not_look_beside_the_package(tmp_path, monkeypa
             return None
 
     assert read_manifest_text(_Plain()) is None
+
+
+# ---------------------------------------------------------------------------
+# review findings: ownership, conflicts, operator edits, malformed YAML
+# ---------------------------------------------------------------------------
+
+_HEAD = (
+    "name: example-agent\ncontract_version: 1\nhandlers:\n  - example_probe\n"
+    "entry_points:\n  genus.tools:\n    - example\n"
+)
+_PERSONA = "# Main, as this plugin's persona\n"
+_PERSONA_MANIFEST = _HEAD + (
+    "patches:\n  - agent: main\n    file: patches/main.patch.yaml\n"
+    "files:\n  - src: extra/main.md\n    dest: brain/agents/main.md\n"
+)
+
+
+def test_a_plugin_may_replace_the_instructions_of_an_agent_it_patches(ws, capsys) -> None:
+    """The persona case: patch `main` AND ship brain/agents/main.md. Both are
+    declared in the manifest, so the intent is reviewable."""
+    (ws / "brain" / "agents" / "main.md").write_text("the operator's main\n")
+    code = _install(ws, manifest=_PERSONA_MANIFEST, extra={"example_agent/extra/main.md": _PERSONA})
+    assert code == 0, capsys.readouterr().err
+    assert (ws / "brain" / "agents" / "main.md").read_text() == _PERSONA
+    assert (ws / "brain" / "agents" / f"main.md.pre-{DIST}").read_text() == "the operator's main\n"
+
+
+@pytest.mark.parametrize(
+    "dest",
+    ["brain/agents/main.md", "brain/agents/helper/notes.md", "brain/agents/nobody.md"],
+)
+def test_another_agents_brain_files_are_refused(ws, capsys, dest) -> None:
+    """brain/agents/<id> belongs to <id>: only its own plugin, or one that
+    declares a patch for it, may write there -- existing or not."""
+    manifest = _HEAD + f"files:\n  - src: extra/main.md\n    dest: {dest}\n    mode: if_missing\n"
+    pip = installer._run_pip
+    assert _install(ws, manifest=manifest, extra={"example_agent/extra/main.md": _PERSONA}) == 2
+    assert "agent" in capsys.readouterr().err
+    assert pip.calls == []
+
+
+def test_a_shared_brain_file_is_never_overwritten(ws, capsys) -> None:
+    (ws / "brain" / "TOOLS.md").write_text("the platform's tools\n")
+    manifest = _HEAD + "files:\n  - src: extra/main.md\n    dest: brain/TOOLS.md\n"
+    pip = installer._run_pip
+    assert _install(ws, manifest=manifest, extra={"example_agent/extra/main.md": _PERSONA}) == 2
+    assert "brain/TOOLS.md" in capsys.readouterr().err
+    assert pip.calls == []
+    assert (ws / "brain" / "TOOLS.md").read_text() == "the platform's tools\n"
+
+
+def test_a_shared_brain_file_may_be_seeded_if_missing(ws) -> None:
+    manifest = (
+        _HEAD + "files:\n  - src: extra/main.md\n    dest: brain/TOOLS.md\n    mode: if_missing\n"
+    )
+    (ws / "brain" / "TOOLS.md").write_text("the platform's tools\n")
+    assert _install(ws, manifest=manifest, extra={"example_agent/extra/main.md": _PERSONA}) == 0
+    assert (ws / "brain" / "TOOLS.md").read_text() == "the platform's tools\n"
+
+
+def test_an_identical_brain_file_already_in_place_is_adopted(ws) -> None:
+    """The transition: an installer copied the same bytes before sync ran."""
+    (ws / "brain" / "TOOLS.md").write_text(_PERSONA)
+    manifest = _HEAD + "files:\n  - src: extra/main.md\n    dest: brain/TOOLS.md\n"
+    assert _install(ws, manifest=manifest, extra={"example_agent/extra/main.md": _PERSONA}) == 0
+    assert not (ws / "brain" / f"TOOLS.md.pre-{DIST}").exists()
+
+
+def test_dry_run_names_patches_and_brain_overwrites(ws, capsys) -> None:
+    (ws / "brain" / "agents" / "main.md").write_text("the operator's main\n")
+    path = ws.parent / "example_agent-1.0.0-py3-none-any.whl"
+    data = _wheel(path, manifest=_PERSONA_MANIFEST, extra={"example_agent/extra/main.md": _PERSONA})
+    code = cmd_plugin(
+        _args("install", name=str(path), sha256=hashlib.sha256(data).hexdigest(), dry_run=True)
+    )
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "patch    docs/agents/main.yaml" in out
+    assert "brain/agents/main.md (replaces an existing file" in out
+
+
+def test_the_scan_reviews_a_wheel_that_patches_or_writes_brain(tmp_path) -> None:
+    from robothor.plugins import scan
+    from robothor.plugins.wheel import open_wheel
+
+    path = tmp_path / "example_agent-1.0.0-py3-none-any.whl"
+    _wheel(
+        path,
+        manifest=_PERSONA_MANIFEST,
+        extra={"example_agent/extra/main.md": _PERSONA},
+    )
+    # strip the agent bundle's prompt file so only the new rule can raise review
+    contents = open_wheel(path, tmp_path / "u")
+    (contents.root / "example_agent/agents/desk-monitor/instructions.template.md").unlink()
+    result = scan.scan_wheel(contents)
+    assert result.verdict == scan.REVIEW
+    assert any("patches" in r and "brain/agents/main.md" in r for r in result.reasons)
+
+
+def test_an_agent_id_that_exists_unrecorded_is_refused(ws, capsys) -> None:
+    """Never take over (or later retire) a manifest the plugin does not own,
+    recorded in installed.yaml or not."""
+    (ws / "docs" / "agents" / "desk-monitor.yaml").write_text("id: desk-monitor\n# hand-made\n")
+    pip = installer._run_pip
+    assert _install(ws) == 2
+    assert "desk-monitor" in capsys.readouterr().err
+    assert pip.calls == []
+    assert (ws / "docs" / "agents" / "desk-monitor.yaml").read_text().endswith("# hand-made\n")
+
+
+def test_a_plugin_cannot_ship_an_agent_called_main(ws, capsys) -> None:
+    bundle = "example_agent/agents/main"
+    manifest = _HEAD + "agents:\n  - agents/main\n"
+    extra = {
+        f"{bundle}/manifest.template.yaml": (
+            "id: main\nname: Main\ndescription: x\nversion: '1'\ndepartment: custom\n"
+            "instruction_file: brain/agents/plugin-main.md\n"
+        ),
+        f"{bundle}/instructions.template.md": "# not main\n",
+    }
+    assert _install(ws, manifest=manifest, extra=extra) == 2
+    assert (ws / "docs" / "agents" / "main.yaml").read_text() == _MAIN
+
+
+def test_remove_never_retires_an_agent_it_does_not_own(ws) -> None:
+    from robothor.plugins import assets
+
+    assert _install(ws) == 0
+    # the record is somebody else's now
+    from robothor.templates.instance import InstanceConfig
+
+    InstanceConfig.load(ws / ".robothor").record_remove("desk-monitor")
+    report = assets.retire(DIST)
+    assert (ws / "docs" / "agents" / "desk-monitor.yaml").is_file()
+    assert any("desk-monitor" in w for w in report.warnings)
+
+
+_OTHER = "other-agent"
+
+
+def _other_manifest(patch: str) -> tuple[str, dict[str, str]]:
+    manifest = (
+        f"name: {_OTHER}\ncontract_version: 1\nhandlers:\n  - other_probe\n"
+        "patches:\n  - agent: main\n    file: patches/main.patch.yaml\n"
+    )
+    return manifest, {"other_agent/patches/main.patch.yaml": patch}
+
+
+def test_a_second_plugin_patching_the_same_key_is_refused(ws, capsys) -> None:
+    assert _install(ws) == 0
+    manifest, extra = _other_manifest("install:\n  set:\n    tools_allowed: [other_probe]\n")
+    assert _install(ws, dist=_OTHER, manifest=manifest, extra=extra) == 2
+    err = capsys.readouterr().err
+    assert "tools_allowed" in err and DIST in err and _OTHER in err
+    assert yaml.safe_load((ws / "docs" / "agents" / "main.yaml").read_text())["tools_allowed"] == [
+        "example_probe"
+    ]
+
+
+def test_a_nested_key_under_another_plugins_key_conflicts(ws, capsys) -> None:
+    assert _install(ws) == 0
+    manifest, extra = _other_manifest("install:\n  delete:\n    - schedule\n")
+    assert _install(ws, dist=_OTHER, manifest=manifest, extra=extra) == 2
+    assert "schedule" in capsys.readouterr().err
+
+
+def test_patches_to_different_keys_coexist(ws) -> None:
+    assert _install(ws) == 0
+    manifest, extra = _other_manifest("install:\n  set:\n    description: patched by other\n")
+    assert _install(ws, dist=_OTHER, manifest=manifest, extra=extra) == 0
+    data = yaml.safe_load((ws / "docs" / "agents" / "main.yaml").read_text())
+    assert data["description"] == "patched by other"
+    assert data["tools_allowed"] == ["example_probe"]
+
+
+def test_an_unchanged_reapply_does_not_touch_the_patched_manifest(ws) -> None:
+    assert _install(ws) == 0
+    main = ws / "docs" / "agents" / "main.yaml"
+    before = (main.read_bytes(), main.stat().st_mtime_ns)
+    assert _install(ws) == 0
+    assert (main.read_bytes(), main.stat().st_mtime_ns) == before
+
+
+def test_sync_does_not_revert_an_operator_edit(ws, hand_installed, capsys) -> None:
+    assert cmd_plugin(_args("sync")) == 0
+    webhooks = ws / "docs" / "webhooks.yaml"
+    webhooks.write_text("channels: [operator]\n")
+    capsys.readouterr()
+    assert cmd_plugin(_args("sync")) == 0
+    out = capsys.readouterr().out
+    assert webhooks.read_text() == "channels: [operator]\n"
+    assert "docs/webhooks.yaml" in out and "edited" in out
+    # delete it, sync, and the plugin's version is back
+    webhooks.unlink()
+    assert cmd_plugin(_args("sync")) == 0
+    assert webhooks.read_text() == "channels: []\n"
+
+
+def test_a_malformed_ledger_is_a_sentence_not_a_traceback(ws, hand_installed, capsys) -> None:
+    assert cmd_plugin(_args("sync")) == 0
+    (ws / ".robothor" / "plugin-assets.yaml").write_text("plugins: [unclosed\n")
+    capsys.readouterr()
+    assert cmd_plugin(_args("sync")) == 0
+    captured = capsys.readouterr()
+    assert "plugin-assets.yaml" in captured.out + captured.err
+    assert "Traceback" not in captured.err
+
+
+def test_remove_with_a_malformed_ledger_deletes_nothing_and_reruns_cleanly(
+    ws, plugin_dir, capsys
+) -> None:
+    assert cmd_plugin(_args("sync")) == 0
+    ledger = ws / ".robothor" / "plugin-assets.yaml"
+    good = ledger.read_text()
+    ledger.write_text("plugins: [unclosed\n")
+    pip = installer._run_pip
+    assert cmd_plugin(_args("remove", name=DIST)) == 2
+    err = capsys.readouterr().err
+    assert "plugin-assets.yaml" in err and "Traceback" not in err
+    assert any(plugin_dir.iterdir())  # nothing deleted
+    assert lockfile.read_lockfile().row(DIST) is not None
+    ledger.write_text(good)
+    assert cmd_plugin(_args("remove", name=DIST)) == 0
+    assert pip.calls == []
+    assert (ws / "docs" / "agents" / "retired" / "desk-monitor.yaml").is_file()
+
+
+def test_remove_converges_after_the_package_is_already_gone(ws, plugin_dir, capsys) -> None:
+    """A remove that deleted the package but stopped before dropping the row
+    is finished by running it again -- no pip, no --force."""
+    assert cmd_plugin(_args("sync")) == 0
+    for path in sorted(plugin_dir.rglob("*"), reverse=True):
+        path.unlink() if path.is_file() else path.rmdir()
+    pip = installer._run_pip
+    assert cmd_plugin(_args("remove", name=DIST)) == 0, capsys.readouterr().err
+    assert pip.calls == []
+    assert lockfile.read_lockfile().row(DIST) is None
+    assert (ws / "docs" / "agents" / "retired" / "desk-monitor.yaml").is_file()
+
+
+def test_retire_reports_a_patched_manifest_it_cannot_parse(ws) -> None:
+    from robothor.plugins import assets
+
+    assert _install(ws) == 0
+    (ws / "docs" / "agents" / "main.yaml").write_text("id: main\nschedule: [unclosed\n")
+    report = assets.retire(DIST)
+    assert any("main" in w for w in report.warnings)
+    assert (ws / "docs" / "agents" / "retired" / "desk-monitor.yaml").is_file()

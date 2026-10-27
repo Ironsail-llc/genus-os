@@ -1131,6 +1131,10 @@ def scan_wheel(contents: WheelContents, *, scan_prompts: bool = False) -> ScanRe
             f"instruction channel; prompt screening here is {prompt_scan}."
         )
 
+    workspace_reason = _workspace_review(contents.manifest_text)
+    if workspace_reason:
+        review.append(workspace_reason)
+
     verdict = BLOCKED if blocked else (REVIEW if review else SAFE)
     return ScanResult(
         verdict=verdict,
@@ -1139,6 +1143,45 @@ def scan_wheel(contents: WheelContents, *, scan_prompts: bool = False) -> ScanRe
         files_scanned=len(sources),
         prompt_files=tuple(prompt_files),
         members_accounted=members,
+    )
+
+
+def _workspace_review(manifest_text: str) -> str:
+    """A ``review`` reason when the manifest edits agents or writes ``brain/``.
+
+    A patch changes an agent the plugin does not own, and a ``brain/`` file is
+    text a model reads; neither is visible to the per-member rules above (an
+    ``extra/main.md`` is an inert ``.md`` asset by its name). Both are declared
+    in the manifest, so this is where they are read.
+    """
+    try:
+        import yaml
+
+        data = yaml.safe_load(manifest_text or "") or {}
+    except Exception:  # noqa: BLE001 - an unreadable manifest is judged elsewhere
+        return ""
+    if not isinstance(data, dict):
+        return ""
+    patched = sorted(
+        str(p.get("agent"))
+        for p in data.get("patches") or []
+        if isinstance(p, dict) and p.get("agent")
+    )
+    brain = sorted(
+        str(f.get("dest"))
+        for f in data.get("files") or []
+        if isinstance(f, dict) and str(f.get("dest") or "").startswith("brain/")
+    )
+    if not patched and not brain:
+        return ""
+    parts = []
+    if patched:
+        parts.append(f"patches agent(s) it does not own ({', '.join(patched)})")
+    if brain:
+        parts.append(f"writes brain/ files a model reads ({', '.join(brain)})")
+    return (
+        "The manifest " + " and ".join(parts) + ". Both change what an existing agent "
+        "is told or allowed to do; read the patch and file contents before accepting."
     )
 
 
