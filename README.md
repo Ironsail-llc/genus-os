@@ -97,6 +97,11 @@ genus doctor --json
 Prerequisites, the container substrate, the setup wizard and what to do when
 the doctor is red: **[docs/quickstart.md](docs/quickstart.md)**.
 
+> **Why "robothor"?** It is the platform's original name. It survives where
+> existing installs depend on it: the Python package (`robothor`), a CLI alias
+> for `genus`, and the `ROBOTHOR_*` environment variables. It is not a separate
+> product.
+
 `genus init` checks everything before it writes anything — prerequisites, the
 database, and a real one-token completion against the provider you choose. If a
 required check fails, nothing is written and it exits 1 naming the check, so
