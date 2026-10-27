@@ -201,6 +201,9 @@ spec:
               mountPath: {{ $root.Values.workspace.mountPath | quote }}
               readOnly: {{ or $root.Values.workspace.readOnly (ne $root.Values.workspace.configMap.name "") }}
             {{- end }}
+            {{- with $cv.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
             - name: tmp
               mountPath: /tmp
             - name: runtime-cache
@@ -224,6 +227,9 @@ spec:
           {{- else }}
           emptyDir: {}
           {{- end }}
+        {{- end }}
+        {{- with $cv.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
         {{- end }}
         - name: tmp
           emptyDir: {}

@@ -1,0 +1,127 @@
+suite: extra volumes and mounts
+release:
+  name: gos
+  namespace: genus
+tests:
+  - it: renders the engine's extra mount and volume verbatim
+    template: engine/workload.yaml
+    documentIndex: 0
+    set:
+      engine.extraVolumes:
+        - name: plugin-state
+          persistentVolumeClaim:
+            claimName: plugin-state
+      engine.extraVolumeMounts:
+        - name: plugin-state
+          mountPath: /var/lib/plugin-state
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: plugin-state
+            persistentVolumeClaim:
+              claimName: plugin-state
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: plugin-state
+            mountPath: /var/lib/plugin-state
+      # The workspace stays first and the extras follow it.
+      - equal:
+          path: spec.template.spec.containers[0].volumeMounts[0].name
+          value: workspace
+      - equal:
+          path: spec.template.spec.containers[0].volumeMounts[1].name
+          value: plugin-state
+      - equal:
+          path: spec.template.spec.volumes[0].name
+          value: workspace
+      - equal:
+          path: spec.template.spec.volumes[1].name
+          value: plugin-state
+
+  - it: renders nothing extra by default
+    template: engine/workload.yaml
+    documentIndex: 0
+    asserts:
+      - notContains:
+          path: spec.template.spec.volumes
+          content:
+            name: plugin-state
+          any: true
+      - equal:
+          path: spec.template.spec.containers[0].volumeMounts[1].name
+          value: tmp
+      - equal:
+          path: spec.template.spec.volumes[1].name
+          value: tmp
+
+  - it: keeps one component's extras out of the others
+    template: bridge/workload.yaml
+    documentIndex: 0
+    set:
+      engine.extraVolumes:
+        - name: plugin-state
+          emptyDir: {}
+      engine.extraVolumeMounts:
+        - name: plugin-state
+          mountPath: /var/lib/plugin-state
+    asserts:
+      - notContains:
+          path: spec.template.spec.volumes
+          content:
+            name: plugin-state
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: plugin-state
+          any: true
+
+  - it: gives the bridge its own extras
+    template: bridge/workload.yaml
+    documentIndex: 0
+    set:
+      bridge.extraVolumes:
+        - name: bridge-extra
+          configMap:
+            name: bridge-extra
+      bridge.extraVolumeMounts:
+        - name: bridge-extra
+          mountPath: /etc/bridge-extra
+          readOnly: true
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: bridge-extra
+            configMap:
+              name: bridge-extra
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: bridge-extra
+            mountPath: /etc/bridge-extra
+            readOnly: true
+
+  - it: gives the orchestrator its own extras
+    template: orchestrator/workload.yaml
+    documentIndex: 0
+    set:
+      orchestrator.extraVolumes:
+        - name: orchestrator-extra
+          emptyDir: {}
+      orchestrator.extraVolumeMounts:
+        - name: orchestrator-extra
+          mountPath: /var/cache/orchestrator-extra
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: orchestrator-extra
+            emptyDir: {}
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: orchestrator-extra
+            mountPath: /var/cache/orchestrator-extra

@@ -211,6 +211,36 @@ ready.
 configuration. Legacy `/health` and `/liveness` endpoints remain available for
 older integrations.
 
+## Extra volumes
+
+Each Python workload can mount additional volumes, rendered verbatim with
+`toYaml` into the same lists as the chart's own. The order within a list is
+not part of the contract (on the engine they follow `workspace`), so refer to
+entries by `name`, not by position:
+
+| Value | Default | Meaning |
+|-------|---------|---------|
+| `engine.extraVolumes` | `[]` | Raw Kubernetes `volume` objects added to the engine pod's `spec.volumes`. |
+| `engine.extraVolumeMounts` | `[]` | Raw Kubernetes `volumeMount` objects added to the engine container's `volumeMounts`. |
+| `bridge.extraVolumes` / `bridge.extraVolumeMounts` | `[]` | The same, for the bridge. |
+| `orchestrator.extraVolumes` / `orchestrator.extraVolumeMounts` | `[]` | The same, for the orchestrator. |
+
+```yaml
+engine:
+  extraVolumes:
+    - name: plugin-state
+      persistentVolumeClaim:
+        claimName: plugin-state
+  extraVolumeMounts:
+    - name: plugin-state
+      mountPath: /var/lib/plugin-state
+```
+
+Names must not collide with the chart's own volumes (`workspace`, `tmp`,
+`runtime-cache`, `db-ca`, `migration-api-token`), and the chart does not create
+the claim. The bridge and orchestrator run several replicas with rolling
+updates, so a `ReadWriteOnce` claim belongs on the single-replica engine only.
+
 ## Database migration prerequisites
 
 The migration Job uses the sole packaged, checksummed migration manifest
