@@ -426,10 +426,10 @@ example_agent = ["genus-plugin.yaml", "agents/**/*", "workflows/*", "patches/*",
 
 | key | what it is | what happens to it |
 |---|---|---|
-| `agents` | a directory laid out like `templates/agents/core/main`: `manifest.template.yaml`, `instructions.template.md`, optional `setup.yaml` and `SKILL.md` | rendered by the agent-template installer — the same code as `genus agent install` — into `docs/agents/<id>.yaml` and the instruction file under `brain/`, and recorded in `.robothor/installed.yaml` with `source: plugin:<distribution>`. With no `setup.yaml`, the agent id is the directory name and the version is the plugin's. `.robothor/overrides/<id>.yaml` applies exactly as it does to any template |
+| `agents` | a directory laid out like `templates/agents/core/main`: `manifest.template.yaml`, `instructions.template.md`, optional `setup.yaml` and `SKILL.md` | rendered by the agent-template installer — the same code as `genus agent install` — into `docs/agents/<id>.yaml` and the instruction file under the instance's `brain/`, and recorded in `.robothor/installed.yaml` with `source: plugin:<distribution>`. With no `setup.yaml`, the agent id is the directory name and the version is the plugin's. `.robothor/overrides/<id>.yaml` applies exactly as it does to any template |
 | `workflows` | a file | copied to `docs/workflows/<basename>` |
 | `patches` | `agent:` an agent id the plugin does **not** ship, `file:` a YAML file with top-level `install:` and `remove:` sections | each section has `set:` — a deep merge for mappings; any other value, lists included, replaces — and `delete:`, a list of keys, dotted for nested ones. `set` runs before `delete`. A patch may not touch `id`. A patch whose target agent does not exist is skipped with a warning. **A list replaces**: `set: {tools_allowed: [x]}` on an agent with no `tools_allowed` (which means every non-opt-in tool) narrows it to `x` |
-| `files` | `src`, `dest`, `mode` (`overwrite`, the default, or `if_missing`) | `dest` must be under `brain/`, `docs/workflows/` or `docs/hooks/`, or be exactly `docs/webhooks.yaml`. `if_missing` never replaces a file that exists. `brain/` has ownership rules, below |
+| `files` | `src`, `dest`, `mode` (`overwrite`, the default, or `if_missing`) | `dest` must be under `brain/`, `docs/workflows/` or `docs/hooks/`, or be exactly `docs/webhooks.yaml`. `if_missing` never replaces a file that exists. `brain/` has ownership rules, below (all of these are instance paths) |
 
 ### Ownership
 
@@ -464,15 +464,15 @@ instruction-file check already applies to agents.
   exception; `if_missing` may seed one, and identical bytes are adopted (and
   stay protected). `docs/webhooks.yaml` stays overwritable — with a backup —
   and the plan marks it `[engine-loaded config]`.
-* **Any other existing `brain/` file** the plugin did not write is refused in
-  `overwrite` mode — `brain/TOOLS.md` and `brain/AGENTS.md` cannot be replaced —
+* **Any other existing `brain/` file** on the instance the plugin did not write is refused in
+  `overwrite` mode — the instance's `brain/TOOLS.md` and `brain/AGENTS.md` cannot be replaced —
   unless an agent the plugin ships or patches claims it as `instruction_file`.
   `if_missing` may seed one where it is absent.
 * **Adopted files.** A destination that already holds the plugin's exact bytes
   — an installer copied it first — is *adopted*: recorded with
   `adopted: true`, not written, and not the plugin's. A later release with
   different bytes is judged as replacing someone else's file (refused for a
-  shared `brain/` file; written with a `.pre-<distribution>` backup where the
+  shared instance `brain/` file; written with a `.pre-<distribution>` backup where the
   rules allow it), and `remove` leaves an adopted file, and any backup beside
   it, in place.
 * **Files** another plugin wrote are refused.
@@ -611,7 +611,7 @@ its comments are lost; the `.pre-<distribution>` backup is the original.
 
 A wheel whose manifest declares **any** workspace asset is graded `review`,
 never `safe`, with one reason per kind, read from the declaration normalised
-the way the installer reads it (`./brain/x` is `brain/x`):
+the way the installer reads it (`./brain/x` is `brain/x`, an instance path):
 
 | declared | why it is `review` |
 |---|---|
@@ -619,7 +619,7 @@ the way the installer reads it (`./brain/x` is `brain/x`):
 | `workflows`, `files` → `docs/workflows/` | the engine runs them |
 | `files` → `docs/hooks/` | the engine executes them |
 | `files` → `docs/webhooks.yaml` | configuration the engine loads |
-| `files` → `brain/` | text a model reads |
+| `files` → `brain/` (instance) | text a model reads |
 | `patches` | they change an agent the plugin does not own |
 
 A packaged `.yaml` is otherwise inert data to the scan, which is why the
