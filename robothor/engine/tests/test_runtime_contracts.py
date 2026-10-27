@@ -123,9 +123,15 @@ def test_usage_is_idempotent_unknown_stays_charged_and_overruns_are_visible():
     with pytest.raises(ValueError, match="redispatch"):
         budget.reserve("one", 30)
     budget.reserve("two", 50)
-    with pytest.raises(ValueError, match="exceeded"):
-        budget.settle("two", 90)
+    # A single call reporting more than the heuristic bound it reserved is
+    # RECORDED, not raised (task f227bd47): the bound is
+    # context_fit.estimate_for(), an estimate, not a provider contract. The true
+    # usage still lands in _charges, so the overrun is visible via charged();
+    # the cumulative check in reserve() remains the hard stop.
+    budget.settle("two", 90)
     assert budget.charged == 120
+    with pytest.raises(ValueError, match="shared budget exhausted"):
+        budget.reserve("three", 1)
 
 
 async def test_goal_provider_attempts_share_reservations_and_unknown_usage_is_retained(monkeypatch):
@@ -250,3 +256,67 @@ async def test_goal_admission_prices_input_in_tokens_not_bytes():
     )
     provider.assert_awaited_once()
     assert provider.call_args.kwargs["max_tokens"] == 4096
+
+
+async def test_goal_lease_refusal_is_an_admission_error_not_a_provider_fault():
+    """A ledger that has stopped authorizing spend must not read as a model fault.
+
+    ``DurableAttemptBudget`` raises a bare ``ValueError`` once the goal lease
+    lapses. The model-fallback loop cannot tell that from a provider fault, so it
+    retries the whole chain and opens a breaker per rung; on 2026-10-24 one
+    lapsed lease tripped four breakers and escalated "check the provider
+    key/account" for a key that was never the problem. The refusal has to arrive
+    as a ``RequestBudgetError`` -- the run's hard stop, which the loop re-raises
+    without blaming a model -- so no rung is advanced and no provider is called.
+    """
+    from types import SimpleNamespace
+
+    from robothor.engine.request_budget import RequestBudgetError
+    from robothor.engine.runtime.provider_budget import goal_completion
+
+    refusal = "goal lease no longer authorizes provider spending"
+    ledger = SimpleNamespace(
+        value_async=AsyncMock(side_effect=ValueError(refusal)),
+        reserve_async=AsyncMock(),
+        settle_async=AsyncMock(),
+    )
+    provider = AsyncMock(return_value={"usage": {"total_tokens": 100}})
+    with pytest.raises(RequestBudgetError, match="goal lease no longer authorizes"):
+        await goal_completion(provider, {"messages": [], "max_tokens": 100}, ledger)
+    provider.assert_not_awaited()
+    ledger.reserve_async.assert_not_awaited()
+
+
+async def test_goal_lease_lapsing_after_admission_is_also_an_admission_error():
+    """The lease can lapse between the admission read and the durable reserve.
+
+    ``reserve_provider_usage`` writes under the same lease, so it raises the
+    same bare ``ValueError``; it must translate too, or the refusal leaks to the
+    fallback loop from the later call site instead of the earlier one.
+    """
+    from types import SimpleNamespace
+
+    from robothor.engine.request_budget import RequestBudgetError
+    from robothor.engine.runtime.provider_budget import goal_completion
+
+    from robothor.goals.runtime import binding
+
+    ledger = SimpleNamespace(
+        value_async=AsyncMock(side_effect=lambda name: 20_000 if name == "limit" else 0),
+        reserve_async=AsyncMock(),
+        settle_async=AsyncMock(),
+    )
+    provider = AsyncMock(return_value={"usage": {"total_tokens": 100}})
+    token = binding.set(
+        SimpleNamespace(tenant="tenant", goal_id="goal", attempt="attempt")
+    )
+    try:
+        with patch(
+            "robothor.goals.store.reserve_provider_usage",
+            side_effect=ValueError("goal lease no longer authorizes provider spending"),
+        ):
+            with pytest.raises(RequestBudgetError, match="goal lease no longer authorizes"):
+                await goal_completion(provider, {"messages": [], "max_tokens": 100}, ledger)
+    finally:
+        binding.reset(token)
+    provider.assert_not_awaited()

@@ -26,7 +26,7 @@ class SharedBudget:
         with self._lock:
             if call_id in self._charges:
                 raise ValueError("provider call already reserved; do not redispatch")
-            if self._overrun or sum(self._charges.values()) + maximum > self.limit:
+            if sum(self._charges.values()) + maximum > self.limit:
                 raise ValueError("shared budget exhausted")
             self._charges[call_id] = maximum
 
@@ -44,6 +44,14 @@ class SharedBudget:
             self._settled[call_id] = actual
             self._charges[call_id] = actual
             if actual > reserved:
+                # A single call reporting more than its ESTIMATED bound is
+                # tokenizer variance, not a provider contract violation: the
+                # bound is context_fit.estimate_for(), a heuristic, and a real
+                # provider tokenizer can legitimately exceed it. Record the
+                # overrun, but do NOT poison the budget and do NOT raise --
+                # _charges[call_id] already holds the true usage, so the
+                # cumulative check in reserve() remains a correct hard stop.
+                # Latching here (and raising) blocked goals at 1-21% of budget
+                # spent with the misleading "shared budget exhausted" message;
+                # see task f227bd47.
                 self._overrun = True
-                # Retain the true overrun; it must never be reported as compliance.
-                raise ValueError("provider exceeded reserved bound")
