@@ -322,6 +322,25 @@ def _agent_id(bundle: Path, src: str) -> tuple[str, str]:
     return agent_id, str(instruction) if isinstance(instruction, str) else ""
 
 
+#: Agent ids no plugin may ship, whatever the workspace holds: the operator's
+#: main agent always, plus the core department of the platform's template
+#: catalog. A plugin changes one of these only through ``patches:``, which is
+#: declared, reviewed (the scan grades it ``review``) and conflict-tracked.
+ALWAYS_RESERVED = frozenset({"main"})
+
+
+def reserved_agent_ids() -> frozenset[str]:
+    """``main`` plus every agent in the template catalog's ``core`` department."""
+    try:
+        from robothor.templates.catalog import Catalog
+
+        core = Catalog().get_department_agents("core")
+    except Exception as exc:  # noqa: BLE001 - no catalog still reserves main
+        logger.debug("Template catalog unavailable for reserved ids (%s)", type(exc).__name__)
+        core = []
+    return ALWAYS_RESERVED | {str(agent) for agent in core}
+
+
 def _patch_section(raw: Any, where: str) -> dict[str, Any]:
     if raw is None:
         return {"set": {}, "delete": []}
@@ -368,6 +387,13 @@ def parse(manifest_text: str | None, base: Path) -> PluginAssets:
             AgentDecl(src=str(src), agent_id=agent_id, bundle=bundle, instruction=instruction)
         )
     ids = [a.agent_id for a in agents]
+    reserved = sorted(set(ids) & reserved_agent_ids())
+    if reserved:
+        raise AssetError(
+            f"Agent id {', '.join(map(repr, reserved))} is reserved for the platform, so a "
+            "plugin may not ship it (or adopt an existing copy). Change it through "
+            "`patches:` instead."
+        )
     if len(ids) != len(set(ids)):
         raise AssetError(f"{MANIFEST_NAME} declares the same agent twice.")
 
@@ -899,8 +925,19 @@ def _render(agent: AgentDecl, dist: str, version: str, root: Path, instance: Pat
                 source="plugin",
                 source_ref=dist,
             )
-        except (TemplateSecurityError, FileNotFoundError, ValueError, OSError) as exc:
-            raise AssetError(f"agent {agent.agent_id}: {exc}") from exc
+        except (
+            TemplateSecurityError,
+            FileNotFoundError,
+            ValueError,
+            OSError,
+            AttributeError,
+            yaml.YAMLError,
+        ) as exc:
+            # A malformed config.yaml, overrides file or _defaults.yaml: one
+            # plugin's sentence, never a traceback that aborts the whole sync.
+            raise AssetError(
+                f"agent {agent.agent_id}: could not render it ({type(exc).__name__}: {exc})"
+            ) from exc
         text = (scratch / "docs" / "agents" / f"{agent.agent_id}.yaml").read_text(encoding="utf-8")
         instruction = None
         if agent.instruction:

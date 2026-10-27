@@ -98,6 +98,8 @@ class InstanceConfig:
         installed_path = self._path("installed.yaml", label="install registry path")
         if installed_path.exists():
             data = yaml.safe_load(installed_path.read_text()) or {}
+            if not isinstance(data, dict):
+                raise ValueError("Invalid installed agent registry: expected a mapping")
             agents = data.get("agents", {})
             if not isinstance(agents, dict):
                 raise ValueError("Invalid installed agent registry: agents must be a mapping")

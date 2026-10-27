@@ -1236,3 +1236,79 @@ def test_the_production_transition_ends_with_the_agent_owned_by_the_plugin(
         if p.is_file()
     }
     assert again == snapshot
+
+
+# ---------------------------------------------------------------------------
+# third review: reserved ids, render errors, installed.yaml shape
+# ---------------------------------------------------------------------------
+
+
+def _ship(agent_id: str, manifest_text: str, instructions: str) -> tuple[str, dict[str, str]]:
+    bundle = f"example_agent/agents/{agent_id}"
+    return _HEAD + f"agents:\n  - agents/{agent_id}\n", {
+        f"{bundle}/manifest.template.yaml": manifest_text,
+        f"{bundle}/instructions.template.md": instructions,
+    }
+
+
+def test_an_identical_copy_of_main_is_never_adopted(ws, capsys) -> None:
+    """`main` is reserved: a plugin changes it through `patches`, with review
+    friction and conflict tracking -- never by shipping a matching bundle."""
+    main_md = "# Main\n"
+    (ws / "brain" / "agents" / "main.md").write_text(main_md)
+    (ws / "docs" / "agents" / "main.yaml").write_text(
+        "id: main\nname: Main\ninstruction_file: brain/agents/main.md\n"
+    )
+    manifest, extra = _ship(
+        "main", "id: main\nname: Main\ninstruction_file: brain/agents/main.md\n", main_md
+    )
+    pip = installer._run_pip
+    assert _install(ws, manifest=manifest, extra=extra) == 2
+    err = capsys.readouterr().err
+    assert "reserved" in err and "patches" in err
+    assert pip.calls == []
+    assert "main" not in (_installed(ws) if (ws / ".robothor" / "installed.yaml").exists() else {})
+
+
+def test_a_core_catalog_id_is_reserved(ws, capsys) -> None:
+    from robothor.plugins import assets
+
+    assert "concierge" in assets.reserved_agent_ids()
+    manifest, extra = _ship(
+        "concierge",
+        "id: concierge\nname: C\ndescription: x\nversion: '1'\ndepartment: custom\n"
+        "instruction_file: brain/agents/concierge.md\n",
+        "# C\n",
+    )
+    assert _install(ws, manifest=manifest, extra=extra) == 2
+    assert "concierge" in capsys.readouterr().err
+
+
+def test_a_malformed_instance_config_is_a_sentence_during_the_adoption_check(ws, capsys) -> None:
+    _hand_copy(ws)
+    (ws / ".robothor").mkdir(exist_ok=True)
+    (ws / ".robothor" / "config.yaml").write_text("instance: [unclosed\n")
+    assert _install(ws) == 2
+    err = capsys.readouterr().err
+    assert "desk-monitor" in err and "Traceback" not in err
+
+
+def test_a_malformed_instance_config_does_not_abort_sync(ws, hand_installed, capsys) -> None:
+    _hand_copy(ws)
+    (ws / ".robothor").mkdir(exist_ok=True)
+    (ws / ".robothor" / "config.yaml").write_text("instance: [unclosed\n")
+    assert cmd_plugin(_args("sync")) == 0
+    captured = capsys.readouterr()
+    assert DIST in captured.out and "Traceback" not in captured.err
+
+
+@pytest.mark.parametrize("shape", ["- a\n- b\n", "just a string\n"])
+def test_remove_with_a_non_mapping_installed_yaml_is_a_sentence(
+    ws, plugin_dir, capsys, shape
+) -> None:
+    assert cmd_plugin(_args("sync")) == 0
+    (ws / ".robothor" / "installed.yaml").write_text(shape)
+    assert cmd_plugin(_args("remove", name=DIST)) == 2
+    err = capsys.readouterr().err
+    assert "installed.yaml" in err and "Traceback" not in err
+    assert any(plugin_dir.iterdir())

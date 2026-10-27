@@ -437,6 +437,10 @@ A plugin only ever writes what is its own, or what its manifest says, in
 reviewable form, it means to change — the rule the template installer's
 instruction-file check already applies to agents.
 
+* **Reserved ids.** No plugin may ship an agent called `main`, or any agent
+  in the template catalog's `core` department (today `main` and `concierge`) —
+  not even an exact copy of one. Change those through `patches:`, which the
+  scan grades `review` and which is conflict-tracked between plugins.
 * **Agents.** An agent id whose `docs/agents/<id>.yaml` already exists is
   refused unless `.robothor/installed.yaml` records it as this plugin's — with
   one exception. An **unrecorded** manifest whose parsed data equals what the
@@ -594,6 +598,10 @@ wheel that carries agents `review`. So does a manifest that declares `patches`
 or `files` under `brain/`: both change what an existing agent is told or
 allowed to do. `genus plugin install` needs `--accept-review` for either.
 `genus plugin sync` runs no scan; the ownership rules above are what bound it.
+
+Adopting a hand-copied agent does not raise the verdict further: whether a copy
+exists is a fact about the workspace, not the wheel, every wheel that ships an
+agent is already `review`, and the agents that matter most are reserved.
 
 ## Disabling and the lockfile
 
