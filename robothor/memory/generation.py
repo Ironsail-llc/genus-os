@@ -22,13 +22,13 @@ Configuration (read at call time, not import time):
 
 Failure policy (audit lesson: silent fallbacks hide primary-model death):
 
-- 429/503 → retry up to ``REMOTE_RATE_LIMIT_MAX_ATTEMPTS`` attempts with
+- 429/500/502/503/504 → retry up to ``REMOTE_RATE_LIMIT_MAX_ATTEMPTS`` attempts with
   jittered exponential backoff, honoring a finite ``Retry-After`` (each
   sleep capped at 20s, total sleep budget 45s — memory writes tolerate
   latency; incident 2026-08-19: a nightly batch abandoned remote in 20s
   because every 429 fell back after a single attempt).
 - Timeouts / network errors → one retry, then fallback.
-- Any other error (4xx included) → fail fast.
+- Any other error (4xx, or a 5xx outside the retryable set) → fail fast.
 - Remote abandoned → fall back to local Ollama, log a WARNING containing
   ``MEMORY_GENERATION_REMOTE_FALLBACK`` and increment
   ``remote_fallback_count``. Never silent, and never before retries are
@@ -170,7 +170,7 @@ REMOTE_BACKOFF_JITTER_FRACTION = 0.25
 # provider rate limits instead of triggering a 429 storm.
 DEFAULT_MIN_INTERVAL_S = 1.5
 
-_RETRYABLE_STATUS_CODES = frozenset({429, 503})
+_RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
 
 # Same transport-failure taxonomy as robothor.llm.ollama: timeouts,
 # connect/read/write resets, and the server hanging up mid-response.
@@ -722,7 +722,7 @@ async def _openrouter_chat_with_retry(
         except httpx.HTTPStatusError as e:
             status = e.response.status_code
             if status not in _RETRYABLE_STATUS_CODES:
-                raise  # deterministic 4xx/5xx — fail fast to fallback
+                raise  # not in the retryable set — fail fast to fallback
             rate_limit_attempts += 1
             if rate_limit_attempts >= REMOTE_RATE_LIMIT_MAX_ATTEMPTS:
                 raise

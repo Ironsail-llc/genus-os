@@ -680,9 +680,18 @@ def check_tool_outage(
         One dict per outage: tool_name, total, failures, failure_rate,
         error_type (dominant), outage_days, last_success_at, severity.
     """
-    from robothor.db.connection import get_connection
+    from robothor.db.connection import get_connection, read_every_tenant_in_transaction
 
     with get_connection() as conn:
+        # Deliberately widened: benchmark runs write to the
+        # benchmark-sandbox tenant, so RLS hides them from a
+        # production-scoped read.  Without this the LEFT JOIN to
+        # agent_runs returns NULL and both benchmark-exclusion
+        # filters silently pass, leaking every sandbox event into
+        # results as a false-positive experiment_status outage.
+        # See robothor/engine/analytics.py::_benchmark_spend for the
+        # same widening on the spend queries.
+        read_every_tenant_in_transaction(conn)
         cur = conn.cursor(cursor_factory=RealDictCursor)
         cur.execute(
             """
