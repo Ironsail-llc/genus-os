@@ -807,6 +807,31 @@ def test_a_local_wheel_installs_and_records_a_wheel_source(tmp_path) -> None:
     assert pip.calls[0][-1] == "acme-tools==1.2.3"
 
 
+def test_a_local_wheel_installs_when_the_temp_dir_runs_through_a_symlink(
+    tmp_path, monkeypatch
+) -> None:
+    """The default macOS temp dir sits under /var, a symlink to /private/var."""
+    import tempfile
+
+    real = tmp_path / "real-tmp"
+    real.mkdir()
+    alias = tmp_path / "alias-tmp"
+    alias.symlink_to(real, target_is_directory=True)
+    monkeypatch.setattr(tempfile, "tempdir", str(alias))
+    data = _wheel_bytes()
+    path = tmp_path / "acme_tools-1.2.3-py3-none-any.whl"
+    path.write_bytes(data)
+
+    outcome = installer.install(
+        str(path),
+        sha256=hashlib.sha256(data).hexdigest(),
+        lock_path=tmp_path / "plugins.lock",
+        pip=_Pip(),
+    )
+
+    assert outcome.installed is True
+
+
 def test_a_wheel_path_that_does_not_exist_is_a_sentence(tmp_path) -> None:
     with pytest.raises(installer.InstallError) as excinfo:
         installer.install(

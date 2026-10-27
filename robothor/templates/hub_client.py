@@ -337,7 +337,9 @@ class HubClient:
         # caller-owned root (or the platform temporary root).
         destination: Path
         if dest_dir is None:
-            destination = Path(tempfile.mkdtemp(prefix="robothor-hub-"))
+            # The platform temp root may sit behind a symlink (macOS: /var ->
+            # /private/var); resolve it so the containment checks see a real root.
+            destination = Path(tempfile.mkdtemp(prefix="robothor-hub-")).resolve(strict=True)
         else:
             parent = _prepare_destination_root(dest_dir)
             destination = Path(tempfile.mkdtemp(prefix=".robothor-hub-", dir=parent))

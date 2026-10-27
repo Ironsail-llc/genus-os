@@ -425,7 +425,9 @@ def install(
 
     checkpoint("it started")
     with tempfile.TemporaryDirectory(prefix="genus-plugin-") as staging_name:
-        staging = Path(staging_name)
+        # Resolved: the platform temp root may run through a symlink (macOS:
+        # /var -> /private/var), and the extractor refuses an aliased root.
+        staging = Path(staging_name).resolve(strict=True)
         if _looks_like_wheel(spec):
             plan_base, data, filename = _resolve_wheel(spec, sha256=sha256, client=client)
         else:

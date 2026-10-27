@@ -117,6 +117,62 @@ def test_a_wheel_reads_its_own_metadata_and_entry_points(tmp_path) -> None:
     assert contents.manifest_sha256 == hashlib.sha256(_MANIFEST.encode()).hexdigest()
 
 
+def _aliased_dir(tmp_path: Path) -> tuple[Path, Path]:
+    """``(real, alias)`` where ``alias`` is a symlink to ``real``."""
+    real = tmp_path / "real"
+    real.mkdir()
+    alias = tmp_path / "alias"
+    alias.symlink_to(real, target_is_directory=True)
+    return real, alias
+
+
+def test_open_wheel_refuses_a_destination_the_caller_did_not_resolve(tmp_path) -> None:
+    """The extractor does not follow an aliased root on the caller's behalf.
+
+    A caller that stages under a symlinked temp root (macOS: /var ->
+    /private/var) resolves that directory itself; see the installer, the
+    index builder and the runtime asset check.
+    """
+    path = _build_wheel(tmp_path)
+    real, alias = _aliased_dir(tmp_path)
+
+    with pytest.raises(wheel.WheelError):
+        wheel.open_wheel(path, alias / "x")
+    assert not (real / "x" / "acme_tools").exists()
+
+
+def test_extract_wheel_refuses_a_destination_running_through_a_symlink(tmp_path) -> None:
+    path = _build_wheel(tmp_path)
+    real, alias = _aliased_dir(tmp_path)
+
+    with pytest.raises(wheel.WheelError):
+        wheel.extract_wheel(path.read_bytes(), alias / "x")
+    assert not (real / "x" / "acme_tools").exists()
+
+
+def test_a_destination_the_caller_resolved_extracts(tmp_path) -> None:
+    path = _build_wheel(tmp_path)
+    real, alias = _aliased_dir(tmp_path)
+    (alias / "x").mkdir()
+
+    contents = wheel.open_wheel(path, (alias / "x").resolve())
+
+    assert contents.name == "acme-tools"
+    assert (real / "x" / "acme_tools" / "__init__.py").is_file()
+
+
+def test_a_symlinked_destination_still_refuses_an_escaping_member(tmp_path) -> None:
+    path = tmp_path / "evil-1.0-py3-none-any.whl"
+    with zipfile.ZipFile(path, "w") as zf:
+        zf.writestr("../escaped.py", "x = 1\n")
+    real, alias = _aliased_dir(tmp_path)
+
+    with pytest.raises(wheel.WheelError):
+        wheel.open_wheel(path, alias / "x")
+    assert not (real / "escaped.py").exists()
+    assert not (tmp_path / "escaped.py").exists()
+
+
 def test_a_wheel_member_that_escapes_its_root_is_refused(tmp_path) -> None:
     path = tmp_path / "evil-1.0-py3-none-any.whl"
     with zipfile.ZipFile(path, "w") as zf:

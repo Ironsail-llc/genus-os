@@ -161,6 +161,28 @@ def test_download_rejects_symlinked_destination_ancestor(
     assert list(outside.iterdir()) == []
 
 
+def test_download_to_default_temp_dir_behind_a_symlink(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """With no ``dest_dir`` the platform temp dir is used, and on macOS that
+    path runs through ``/var`` -> ``/private/var``. It must still extract."""
+
+    import tempfile
+
+    content = _archive(("bundle/setup.yaml", b"agent_id: bundle\n", None))
+    client, _ = _client_with_download(monkeypatch, content)
+    real = tmp_path / "real-tmp"
+    real.mkdir()
+    alias = tmp_path / "alias-tmp"
+    alias.symlink_to(real, target_is_directory=True)
+    monkeypatch.setattr(tempfile, "tempdir", str(alias))
+
+    bundle = client.download_bundle("bundle", expected_sha256=hashlib.sha256(content).hexdigest())
+
+    assert (bundle / "setup.yaml").read_bytes() == b"agent_id: bundle\n"
+    assert bundle.resolve().is_relative_to(real.resolve())
+
+
 def test_download_extracts_verified_regular_bundle(
     monkeypatch: pytest.MonkeyPatch, tmp_path
 ) -> None:
