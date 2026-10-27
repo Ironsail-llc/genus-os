@@ -68,12 +68,16 @@ test = ["pytest>=8", "PyYAML>=6"]
 [tool.setuptools.packages.find]
 where = ["src"]
 
+# Every directory genus-plugin.yaml may point into. A path the manifest names
+# that is not package data is missing from the wheel, and sync refuses it.
 [tool.setuptools.package-data]
 {pkg} = [
     "genus-plugin.yaml",
     "agents/*/*.yaml",
     "agents/*/*.md",
     "workflows/*.yaml",
+    "patches/*.yaml",
+    "files/**/*",
 ]
 """
 
@@ -103,7 +107,7 @@ agents:
 #   - agent: main
 #     file: patches/main.patch.yaml
 # files:                           # brain/**, docs/workflows/**, docs/hooks/**, docs/webhooks.yaml
-#   - src: extra/notes.md
+#   - src: files/notes.md
 #     dest: brain/{name}/notes.md
 #     mode: if_missing
 """
@@ -254,7 +258,9 @@ A Genus OS plugin. Docs: `docs/PLUGINS.md` in the Genus OS repository.
 ## Rules
 
 - Every path in `genus-plugin.yaml` is relative to that file and must be
-  package data (`[tool.setuptools.package-data]` in `pyproject.toml`).
+  package data. `pyproject.toml` already covers `agents/`, `workflows/`,
+  `patches/` and `files/`; put new files there, or add the directory to
+  `[tool.setuptools.package-data]`.
 - A new tool: handler + schema in `PLUGIN`, its name under `handlers` and
   `schemas` in the manifest. Name tools `{pkg}_*` so they never shadow a built-in.
 - A new agent: a bundle under `agents/`, listed under `agents:`. Its
@@ -349,6 +355,14 @@ def scaffold(name: str, directory: str | Path | None = None) -> Path:
     package = package_name(name)
     if not name[0].isalpha() or not package.isidentifier() or keyword.iskeyword(package):
         raise ScaffoldError(refusal)
+    from robothor.plugins.assets import reserved_agent_ids
+
+    if name in reserved_agent_ids():
+        raise ScaffoldError(
+            f"{name!r} is a reserved agent id: the platform refuses a plugin that ships "
+            "it. Pick another name; a plugin changes a reserved agent through "
+            "`patches:` instead."
+        )
     root = Path(directory) if directory is not None else Path.cwd() / name
     if root.is_symlink() or (root.exists() and not root.is_dir()):
         raise ScaffoldError(f"{root} exists and is not a directory.")

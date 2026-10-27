@@ -243,3 +243,58 @@ def test_the_scaffold_s_own_tests_pass(tmp_path) -> None:
         env=env,
     )
     assert done.returncode == 0, done.stdout + done.stderr
+
+
+@pytest.mark.parametrize("reserved", ["main", "concierge"])
+def test_a_reserved_agent_id_is_refused(tmp_path, reserved) -> None:
+    """The platform refuses these at install, so the scaffold must not make one."""
+    with pytest.raises(scaffold.ScaffoldError) as excinfo:
+        scaffold.scaffold(reserved, tmp_path / reserved)
+    assert "reserved" in str(excinfo.value)
+    assert not (tmp_path / reserved).exists()
+
+
+def test_every_directory_the_manifest_documents_is_package_data(tmp_path) -> None:
+    import tomllib
+
+    root = scaffold.scaffold(NAME, tmp_path / NAME)
+    data = tomllib.loads((root / "pyproject.toml").read_text())["tool"]["setuptools"][
+        "package-data"
+    ][PKG]
+    manifest = (root / "src" / PKG / "genus-plugin.yaml").read_text()
+    for directory in ("agents/", "workflows/", "patches/", "files/"):
+        assert any(p.startswith(directory) for p in data), directory
+        assert directory in manifest, directory
+
+
+def test_a_scaffold_with_a_patch_and_a_file_builds_and_plans(tmp_path) -> None:
+    """Uncomment the documented patch and file, build, and the wheel carries
+    them and the workspace planner accepts the declaration."""
+    from robothor.plugins.wheel import open_wheel
+
+    root = scaffold.scaffold(NAME, tmp_path / NAME)
+    package = root / "src" / PKG
+    (package / "patches").mkdir()
+    (package / "patches" / "main.patch.yaml").write_text(
+        "install:\n  set:\n    description: patched\nremove:\n  delete: [description]\n"
+    )
+    (package / "files").mkdir()
+    (package / "files" / "notes.md").write_text("notes\n")
+    manifest = package / "genus-plugin.yaml"
+    manifest.write_text(
+        manifest.read_text()
+        + "patches:\n  - agent: main\n    file: patches/main.patch.yaml\n"
+        + f"files:\n  - src: files/notes.md\n    dest: brain/{NAME}/notes.md\n    mode: if_missing\n"
+    )
+    contents = open_wheel(_build_wheel(root, tmp_path / "dist"), tmp_path / "unpacked")
+    members = {p.relative_to(contents.root).as_posix() for p in contents.root.rglob("*")}
+    assert f"{PKG}/patches/main.patch.yaml" in members
+    assert f"{PKG}/files/notes.md" in members
+
+    workspace = tmp_path / "ws"
+    (workspace / "docs" / "agents").mkdir(parents=True)
+    (workspace / "docs" / "agents" / "main.yaml").write_text("id: main\nname: Main\n")
+    declared = assets.declaration_from_wheel(contents)
+    lines = assets.plan(declared, NAME, workspace=workspace)
+    assert any("docs/agents/main.yaml" in line for line in lines)
+    assert any(f"brain/{NAME}/notes.md" in line for line in lines)
