@@ -242,6 +242,20 @@ optional:
       message:
         type: string
         description: Initial prompt sent to agent when triggered
+      include_payload:
+        type: boolean
+        default: false
+        description: >-
+          Append the event to the message — its type, delivery id ("-" when the
+          event has none) and payload as compact JSON in a fenced json block,
+          cut at 8000 characters with a "…[truncated]" marker.
+      requeue_if_busy:
+        type: boolean
+        default: false
+        description: >-
+          When the agent is already running, treat the event as a failed attempt
+          so the hook retry path re-adds it after a short pause (up to 3 retries,
+          then the stream's dead-letter queue). Default drops the event.
   streams:
     read:
       type: list[string]

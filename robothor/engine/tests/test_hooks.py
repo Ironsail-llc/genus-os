@@ -581,3 +581,164 @@ class TestBuildEventTriggers:
 
         triggers = build_event_triggers(agents_dir)
         assert triggers == _LEGACY_EVENT_TRIGGERS
+
+
+class TestHookEventPayload:
+    """include_payload appends the event to the trigger message."""
+
+    def _hooks(self, engine_config, **trigger_extra):
+        hooks = EventHooks(engine_config, MagicMock())
+        hooks._event_triggers = {
+            "platform": [
+                {
+                    "event_type": "platform.order.created",
+                    "agent_id": "order-desk",
+                    "message": "An order arrived.",
+                    **trigger_extra,
+                }
+            ]
+        }
+        hooks._prefixed_to_bare = {f"{STREAM_PREFIX}platform": "platform"}
+        hooks.runner.execute = AsyncMock(return_value=_make_run("completed"))
+        return hooks
+
+    async def _fire(self, hooks, data, redis=None):
+        redis = redis or AsyncMock()
+        with (
+            patch("robothor.engine.hooks.try_acquire", return_value=True),
+            patch("robothor.engine.hooks.release"),
+            patch("robothor.engine.hooks.deliver", new_callable=AsyncMock),
+            patch("robothor.engine.config.load_agent_config", return_value=None),
+        ):
+            await hooks._handle_event(f"{STREAM_PREFIX}platform", b"1-0", data, redis, "engine")
+        return hooks.runner.execute.call_args.kwargs["message"]
+
+    @pytest.mark.asyncio
+    async def test_message_unchanged_by_default(self, engine_config):
+        hooks = self._hooks(engine_config)
+        data = {b"type": b"platform.order.created", b"payload": b'{"id": 1}'}
+        assert await self._fire(hooks, data) == "An order arrived."
+
+    @pytest.mark.asyncio
+    async def test_payload_appended(self, engine_config):
+        hooks = self._hooks(engine_config, include_payload=True)
+        data = {
+            b"type": b"platform.order.created",
+            b"delivery_id": b"dlv-1",
+            b"payload": b'{"id": 1, "items": [1, 2]}',
+        }
+        message = await self._fire(hooks, data)
+        assert message == (
+            "An order arrived."
+            "\n\nEvent: platform.order.created\nDelivery: dlv-1\nPayload:\n"
+            '```json\n{"id":1,"items":[1,2]}\n```'
+        )
+
+    @pytest.mark.asyncio
+    async def test_payload_without_delivery_id_uses_dash(self, engine_config):
+        hooks = self._hooks(engine_config, include_payload=True)
+        data = {b"type": b"platform.order.created", b"payload": b'{"id": 1}'}
+        message = await self._fire(hooks, data)
+        assert "\nDelivery: -\n" in message
+
+    @pytest.mark.asyncio
+    async def test_large_payload_truncated(self, engine_config):
+        import json
+
+        hooks = self._hooks(engine_config, include_payload=True)
+        big = json.dumps({"blob": "x" * 20000}).encode()
+        data = {b"type": b"platform.order.created", b"payload": big}
+        message = await self._fire(hooks, data)
+        body = message.split("```json\n", 1)[1].rsplit("\n```", 1)[0]
+        assert body.endswith("…[truncated]")
+        assert len(body) == 8000 + len("…[truncated]")
+
+
+class TestRequeueIfBusy:
+    """requeue_if_busy turns a dedup-lock miss into a retried attempt."""
+
+    def _hooks(self, engine_config, requeue: bool):
+        hooks = EventHooks(engine_config, MagicMock())
+        trigger = {
+            "event_type": "platform.order.created",
+            "agent_id": "order-desk",
+            "message": "m",
+        }
+        if requeue:
+            trigger["requeue_if_busy"] = True
+        hooks._event_triggers = {"platform": [trigger]}
+        hooks._prefixed_to_bare = {f"{STREAM_PREFIX}platform": "platform"}
+        hooks.runner.execute = AsyncMock()
+        return hooks
+
+    @pytest.mark.asyncio
+    async def test_busy_event_dropped_by_default(self, engine_config):
+        hooks = self._hooks(engine_config, requeue=False)
+        redis = AsyncMock()
+        data = {b"type": b"platform.order.created"}
+        with patch("robothor.engine.hooks.try_acquire", return_value=False):
+            await hooks._handle_event(f"{STREAM_PREFIX}platform", b"1-0", data, redis, "engine")
+        redis.xadd.assert_not_called()
+        redis.xack.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_busy_event_requeued(self, engine_config):
+        hooks = self._hooks(engine_config, requeue=True)
+        redis = AsyncMock()
+        data = {b"type": b"platform.order.created", b"payload": b"{}"}
+        with (
+            patch("robothor.engine.hooks.try_acquire", return_value=False),
+            patch("robothor.engine.hooks.asyncio.sleep", new_callable=AsyncMock) as sleep,
+        ):
+            await hooks._handle_event(f"{STREAM_PREFIX}platform", b"1-0", data, redis, "engine")
+        hooks.runner.execute.assert_not_called()
+        sleep.assert_awaited_once_with(2)
+        stream, retry = redis.xadd.call_args.args[:2]
+        assert stream == f"{STREAM_PREFIX}platform"
+        assert retry["_retry_count"] == "1"
+        assert retry["type"] == "platform.order.created"
+        redis.xack.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_busy_requeue_exhausted_goes_to_dlq(self, engine_config):
+        hooks = self._hooks(engine_config, requeue=True)
+        redis = AsyncMock()
+        data = {b"type": b"platform.order.created", b"_retry_count": b"3"}
+        with (
+            patch("robothor.engine.hooks.try_acquire", return_value=False),
+            patch("robothor.engine.hooks.asyncio.sleep", new_callable=AsyncMock),
+        ):
+            await hooks._handle_event(f"{STREAM_PREFIX}platform", b"1-0", data, redis, "engine")
+        assert redis.xadd.call_args.args[0] == f"{STREAM_PREFIX}platform:dlq"
+
+
+class TestHookOptionsFromManifest:
+    def test_flags_flow_into_triggers(self, tmp_path):
+        agents_dir = tmp_path / "agents"
+        agents_dir.mkdir()
+        (agents_dir / "order-desk.yaml").write_text(
+            yaml.dump(
+                {
+                    "id": "order-desk",
+                    "name": "Order Desk",
+                    "description": "Test",
+                    "version": "2026-10-27",
+                    "department": "custom",
+                    "hooks": [
+                        {
+                            "stream": "platform",
+                            "event_type": "platform.order.created",
+                            "message": "m",
+                            "include_payload": True,
+                            "requeue_if_busy": True,
+                        },
+                        {"stream": "platform", "event_type": "platform.other", "message": "n"},
+                    ],
+                }
+            )
+        )
+        triggers = build_event_triggers(agents_dir)["platform"]
+        assert triggers[0]["include_payload"] is True
+        assert triggers[0]["requeue_if_busy"] is True
+        assert triggers[1]["include_payload"] is False
+        assert triggers[1]["requeue_if_busy"] is False

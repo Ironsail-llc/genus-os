@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 import os
 from typing import TYPE_CHECKING, Any
@@ -24,6 +25,13 @@ from robothor.engine.models import TriggerType
 from robothor.engine.task_registry import get_task_registry
 
 MAX_RETRIES = 3
+
+# Pause before re-adding an event whose agent was busy, so a long run does not
+# turn the retry budget into a tight loop.
+BUSY_REQUEUE_DELAY_SECONDS = 2
+
+# Cap on the payload text an ``include_payload`` hook appends to its message.
+MAX_PAYLOAD_CHARS = 8000
 
 # Must match event_bus.STREAM_PREFIX — publishers write to these keys
 STREAM_PREFIX = "robothor:events:"
@@ -92,6 +100,8 @@ def build_event_triggers(manifest_dir: Any) -> dict[str, list[dict[str, Any]]]:
                 "event_type": hook.event_type,
                 "agent_id": config.id,
                 "message": hook.message,
+                "include_payload": hook.include_payload,
+                "requeue_if_busy": hook.requeue_if_busy,
             }
             triggers.setdefault(hook.stream, []).append(entry)
 
@@ -130,6 +140,19 @@ def build_event_triggers(manifest_dir: Any) -> dict[str, list[dict[str, Any]]]:
     # Fallback: no manifests define hooks yet
     logger.info("No manifest hooks found, using legacy event triggers")
     return dict(_LEGACY_EVENT_TRIGGERS)
+
+
+def _format_event_block(event_type: str, envelope: dict[str, Any]) -> str:
+    """Render the event for a hook message: type, delivery id and compact JSON payload."""
+    raw = envelope.get("payload", "")
+    try:
+        text = json.dumps(json.loads(raw), separators=(",", ":"), ensure_ascii=False)
+    except (TypeError, ValueError):
+        text = str(raw)
+    if len(text) > MAX_PAYLOAD_CHARS:
+        text = text[:MAX_PAYLOAD_CHARS] + "…[truncated]"
+    delivery_id = envelope.get("delivery_id") or "-"
+    return f"\n\nEvent: {event_type}\nDelivery: {delivery_id}\nPayload:\n```json\n{text}\n```"
 
 
 # Module-level reference for backward compatibility with tests
@@ -251,6 +274,7 @@ class EventHooks:
         triggers = self._event_triggers.get(bare_stream, [])
 
         failed = False
+        requeued_busy = False
         for trigger in triggers:
             if event_type and trigger.get("event_type") != event_type:
                 continue
@@ -259,7 +283,12 @@ class EventHooks:
 
             # Dedup: skip if agent is already running (shared with scheduler)
             if not await try_acquire(agent_id):
-                logger.debug("Skipping %s — already running", agent_id)
+                if trigger.get("requeue_if_busy"):
+                    logger.info("Requeueing %s:%s — %s busy", bare_stream, event_type, agent_id)
+                    failed = True
+                    requeued_busy = True
+                else:
+                    logger.debug("Skipping %s — already running", agent_id)
                 continue
 
             try:
@@ -269,6 +298,8 @@ class EventHooks:
 
                 # Warmup is handled centrally by runner.execute()
                 message = trigger["message"]
+                if trigger.get("include_payload"):
+                    message += _format_event_block(event_type, decoded)
 
                 run = await self.runner.execute(
                     agent_id=agent_id,
@@ -336,6 +367,8 @@ class EventHooks:
                 try:
                     retry_data = dict(decoded)
                     retry_data["_retry_count"] = str(retry_count + 1)
+                    if requeued_busy:
+                        await asyncio.sleep(BUSY_REQUEUE_DELAY_SECONDS)
                     await redis_client.xadd(stream, retry_data)
                     logger.info(
                         "Retrying %s:%s (attempt %d/%d)",

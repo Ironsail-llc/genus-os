@@ -119,6 +119,32 @@ msg_id = publish("crm", "crm.create", {
 
 Publish is fire-and-forget. If Redis is down, the call returns `None` and logs a warning. Services should not depend on publish success for correctness.
 
+## Webhook ingress
+
+External services reach the bus through `POST /api/webhooks/{channel}`
+(`robothor/engine/webhooks.py`). Channels are defined in
+`$ROBOTHOR_WORKSPACE/docs/webhooks.yaml`; each names the stream it publishes
+to, the environment variable that holds its signing secret, and how the event
+type is derived. A request is checked in this order: signature, rate limit,
+JSON body, delivery id, then published.
+
+| Field | Default | Meaning |
+|-------|---------|---------|
+| `signature_scheme` | `hmac_hex` | `hmac_hex`: hex HMAC-SHA256 of the raw body (an optional `sha256=` prefix is accepted). `stripe_t_v1`: a header of the form `t=<unix seconds>,v1=<hex>[,v1=<hex>...]`, valid when the timestamp is within the tolerance and some `v1` equals HMAC-SHA256 of `"<t>."` followed by the raw body. |
+| `signature_header` | _(unset)_ | Read the signature from this header only. Unset tries `X-Hub-Signature-256`, `X-Signature-256` and `X-Webhook-Signature`, in that order. |
+| `timestamp_tolerance_seconds` | `300` | `stripe_t_v1` only: how far `t` may be from the receiver's clock, either way. |
+| `delivery_id_header` | _(unset)_ | When set and present, the id is recorded in Redis for 24 hours (`robothor:webhook:delivery:<channel>:<id>`). A repeat answers `200 {"status": "duplicate"}` and is not published again. If Redis cannot be reached the request is refused with `503`, as the rate limiter refuses it, so the sender retries. |
+
+A bad, stale or malformed signature answers `401 {"error": "Invalid
+signature"}` whatever the scheme; the reason is logged, the secret never is.
+
+A webhook event's envelope carries `event_type` (the same value as `type`) and,
+when the channel has a delivery id header, `delivery_id`, next to `payload`. An
+agent hook with `include_payload: true` gets both, plus the payload, appended
+to its trigger message; `requeue_if_busy: true` retries an event that arrived
+while the agent was already running instead of dropping it. Both are
+documented with the other hook fields in `docs/agents/schema.yaml`.
+
 ## Subscribing
 
 ```python
