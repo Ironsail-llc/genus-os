@@ -941,7 +941,16 @@ def test_the_plan_json_can_include_the_command_for_the_cli(registry_fixture) -> 
 def test_the_plan_json_shape_is_what_the_ui_reads(registry_fixture) -> None:
     outcome = _install(registry_fixture, dry_run=True)
     payload = outcome.as_json()
-    assert set(payload) == {"plan", "installed", "dry_run", "row", "reload_hint", "note"}
+    assert set(payload) == {
+        "plan",
+        "installed",
+        "dry_run",
+        "row",
+        "reload_hint",
+        "note",
+        "workspace",
+        "warnings",
+    }
     assert set(payload["plan"]) == {
         "name",
         "version",
@@ -959,4 +968,5 @@ def test_the_plan_json_shape_is_what_the_ui_reads(registry_fixture) -> None:
         "summary",
         "files_scanned",
         "members_accounted",
+        "workspace",
     }

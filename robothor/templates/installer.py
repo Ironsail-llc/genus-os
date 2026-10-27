@@ -215,8 +215,15 @@ def install(
         repo_root = _find_repo_root()
     repo_root = repo_root.resolve(strict=True)
 
-    if source not in {"local", "hub", "bundle"}:
+    if source not in {"local", "hub", "bundle", "plugin"}:
         raise TemplateSecurityError(f"Unsupported agent install source: {source}")
+    if source == "plugin":
+        # An agent a plugin distribution ships. Recorded as ``plugin:<dist>``
+        # so ``genus plugin remove`` can tell its own agents from everyone
+        # else's; the distribution name is the durable provenance.
+        from robothor.templates.instance import validate_plugin_source
+
+        source_ref = validate_plugin_source(source_ref)
     if source == "hub":
         source_ref = validate_identifier(source_ref, label="hub bundle slug")
         source_sha256 = validate_sha256(source_sha256, label="hub bundle SHA-256")
@@ -401,7 +408,12 @@ def install(
 
     # Record installation
     recorded_source = str(bundle)
-    if source in {"hub", "bundle"}:
+    recorded_kind = source
+    if source == "plugin":
+        assert source_ref is not None
+        recorded_source = source_ref
+        recorded_kind = f"plugin:{source_ref}"
+    elif source in {"hub", "bundle"}:
         # Never the on-disk path. For a hub install that path is a temporary
         # download; for a bundle install it is the staging copy the caller is
         # about to delete. The strict ID is the only durable thing either has.
@@ -409,7 +421,7 @@ def install(
         recorded_source = source_ref
     instance.record_install(
         agent_id=agent_id,
-        source=source,
+        source=recorded_kind,
         source_path=recorded_source,
         version=version,
         variables=context,
