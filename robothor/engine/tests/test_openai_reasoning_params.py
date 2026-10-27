@@ -140,10 +140,20 @@ async def test_openai_non_reasoning_model_is_left_alone(captured):
     ("effort", "expected"),
     [("low", "low"), ("medium", "medium"), ("high", "high"), ("max", "high")],
 )
-async def test_agent_reasoning_effort_reaches_openai(captured, effort, expected):
-    """``max`` is ``high`` unless the catalog says the model offers ``xhigh``:
-    the bundled catalog the engine runs on does not know this model, and
-    litellm refuses ``xhigh`` for a model it cannot vouch for."""
+async def test_agent_reasoning_effort_reaches_openai(captured, monkeypatch, effort, expected):
+    """``max`` is ``high`` unless the catalog says the model offers ``xhigh``,
+    because litellm refuses ``xhigh`` for a model it cannot vouch for.
+
+    The catalog row is pinned here rather than read from the bundled one: the
+    bundled catalog changes with the litellm release (1.92.2 did not know
+    gpt-5.6-luna; 1.100.4 lists it with xhigh), and this test is about the
+    fallback, not about one release's catalog. The xhigh side is
+    ``test_max_asks_for_xhigh_where_the_catalog_offers_it``."""
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "gpt-5.6-luna",
+        {"litellm_provider": "openai", "supports_xhigh_reasoning_effort": False},
+    )
     set_reasoning_effort(effort)
     assert (await _sent(OPENAI_MODEL, captured))["reasoning_effort"] == expected
 
