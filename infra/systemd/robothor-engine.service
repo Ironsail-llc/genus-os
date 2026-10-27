@@ -44,7 +44,12 @@ RestartSec=5
 # inside this with margin — robothor/engine/shutdown_budget.py, and a test that
 # reads this line. Past it systemd SIGKILLs and files result 'timeout' (a page).
 TimeoutStopSec=15
-KillMode=control-group
+# mixed: SIGTERM reaches the daemon alone, which cancels its Claude Code jobs
+# so the next engine resumes them. Under control-group the `claude -p`
+# children died with it, each round ended "no result" first, and every job
+# in flight was charged its whole budget and failed. The cgroup is still
+# SIGKILLed once the daemon exits.
+KillMode=mixed
 Environment=ROBOTHOR_ENGINE_PORT=18800
 
 # ── Containment ──────────────────────────────────────────────────────────────

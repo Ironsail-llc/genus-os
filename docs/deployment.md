@@ -258,15 +258,17 @@ the unit rather than assuming:
 | | engine | bridge | orchestrator | app |
 |---|---|---|---|---|
 | `Restart=` | `always` | `always` | `on-failure` | `always` |
-| `KillMode=` | `control-group` | `control-group` | `mixed` | `control-group` |
+| `KillMode=` | `mixed` | `control-group` | `mixed` | `control-group` |
 | `NoNewPrivileges` / `ProtectSystem=strict` / `PrivateTmp` | yes | yes | — | — |
 | `EnvironmentFile=/etc/robothor/robothor.env` | yes | yes | via drop-ins | yes |
 | `EnvironmentFile=-/run/robothor/secrets.env` | yes | yes | yes | yes |
 | `Requires=robothor-secrets.service` | yes | yes | yes | yes |
 
-The orchestrator's `KillMode=mixed` is the one exception the unit explains for
-itself: it sends `SIGTERM` to uvicorn directly rather than to the whole cgroup,
-because under the default mode every stop timed out. Its `Restart=on-failure`
+The orchestrator's `KillMode=mixed` sends `SIGTERM` to uvicorn directly rather
+than to the whole cgroup, because under the default mode every stop timed out.
+The engine's does the same so the daemon, not systemd, stops its Claude Code
+jobs: it parks them for the next engine to resume, where a cgroup-wide `SIGTERM`
+killed them mid-round and failed them as over budget. Its `Restart=on-failure`
 carries no rationale anywhere in the tree — the observable difference is simply
 that a **clean** exit is not restarted there, where the other three restart
 whatever the exit status. Its `restart-forever.conf` drop-in also sets

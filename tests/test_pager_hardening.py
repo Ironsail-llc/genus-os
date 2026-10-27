@@ -676,6 +676,13 @@ class TestShutdownAndBootPathTemplates:
         # SIGKILL after the 90s stop timeout on every shutdown.
         assert "KillMode=mixed" in unit_text("robothor-orchestrator.service")
 
+    def test_engine_stop_leaves_claude_code_jobs_for_the_daemon_to_park(self):
+        # Under control-group a stop SIGTERMed every `claude -p` child with the
+        # engine: the round ended "no result, exit 143" before the daemon could
+        # cancel it for resume, so the job was charged its whole remaining
+        # budget and failed "budget exhausted" on every restart.
+        assert "KillMode=mixed" in unit_text("robothor-engine.service")
+
     def test_xvfb_orders_after_the_gpu_driver(self):
         # Xvfb segfaulted on the first start of 3-of-3 recent boots (racing
         # NVIDIA driver init); the second start 5s later always succeeded.
