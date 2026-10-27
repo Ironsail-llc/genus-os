@@ -153,6 +153,13 @@ async def _fetch(
     )
     code, _ = await _git(dest, "cat-file", "-e", f"{head_sha}^{{commit}}", check=False)
     if code != 0:
+        # GitHub moves refs/pull/N/head asynchronously (and not at all once the
+        # PR closes), so the API's head can be ahead of it: ask for the commit.
+        await _git(
+            dest, "fetch", "--quiet", "--no-tags", "origin", head_sha, token=token, check=False
+        )
+        code, _ = await _git(dest, "cat-file", "-e", f"{head_sha}^{{commit}}", check=False)
+    if code != 0:
         raise CheckoutError(f"head {head_sha[:12]} not found after fetching pull/{number}/head")
     return dest
 

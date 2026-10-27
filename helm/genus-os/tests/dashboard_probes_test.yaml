@@ -1,0 +1,29 @@
+suite: dashboard probe timeouts
+release:
+  name: gos
+  namespace: genus
+# /api/ready checks each backend and can wait ~5 s on one that is unreachable.
+# The implicit 1 s timeout turned a slow-but-healthy check into a failed probe.
+tests:
+  - it: readiness allows a full backend check, liveness stays short
+    template: dashboard/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.timeoutSeconds
+          value: 6
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.timeoutSeconds
+          value: 3
+
+  - it: an environment can override both timeouts
+    template: dashboard/deployment.yaml
+    set:
+      dashboard.probes.readiness.timeoutSeconds: 10
+      dashboard.probes.liveness.timeoutSeconds: 2
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.timeoutSeconds
+          value: 10
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.timeoutSeconds
+          value: 2

@@ -1195,7 +1195,7 @@ wheels = [
 
 [[package]]
 name = "genusos"
-version = "1.109.1"
+version = "1.112.0"
 source = { editable = "." }
 dependencies = [
     { name = "aiogram" },
@@ -1203,6 +1203,7 @@ dependencies = [
     { name = "apscheduler" },
     { name = "croniter" },
     { name = "cryptography" },
+    { name = "google-auth" },
     { name = "html2text" },
     { name = "httpcore" },
     { name = "httpx" },
@@ -1308,6 +1309,7 @@ requires-dist = [
     { name = "cryptography", specifier = ">=50.0.0" },
     { name = "fastapi", marker = "extra == 'api'", specifier = ">=0.139" },
     { name = "genusos", extras = ["api", "vision", "rlm", "tui", "channels", "federation", "mcp", "browser", "autonomy", "dev"], marker = "extra == 'all'" },
+    { name = "google-auth", specifier = ">=2.40,<3" },
     { name = "html2text", specifier = "~=2024.2" },
     { name = "httpcore", specifier = "~=1.0" },
     { name = "httpx", specifier = "~=0.27" },

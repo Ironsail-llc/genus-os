@@ -89,6 +89,26 @@ async def test_unknown_head_is_an_error(tmp_path, remote):
         )
 
 
+async def test_a_stale_pull_ref_falls_back_to_fetching_the_head_by_sha(tmp_path, remote):
+    # GitHub moves refs/pull/N/head asynchronously, and stops moving it once a
+    # PR closes: the API's head sha can be an hour ahead of the ref.
+    bare, head, _base = remote
+    dest = tmp_path / "c"
+    await ensure_checkout(
+        dest, number=7, head_sha=head, base_branch="main", remote_url=str(bare), token=""
+    )
+    work = tmp_path / "work"  # a new commit lands on the branch; the ref stays put
+    (work / "a.py").write_text("x = 2\n")
+    _git(work, "commit", "-qam", "follow-up")
+    new_head = _git(work, "rev-parse", "HEAD")
+    _git(work, "push", "-q", str(bare), "feature")
+    _git(bare, "config", "uploadpack.allowReachableSHA1InWant", "true")  # as GitHub
+    await ensure_checkout(
+        dest, number=7, head_sha=new_head, base_branch="main", remote_url=str(bare), token=""
+    )
+    assert _git(dest, "rev-parse", f"{new_head}^{{commit}}") == new_head
+
+
 async def test_rejects_option_like_refs(tmp_path, remote):
     bare, head, _ = remote
     with pytest.raises(CheckoutError):

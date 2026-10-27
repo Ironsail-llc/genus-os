@@ -7,7 +7,7 @@
 # released `vX.Y.Z` on PR close / unlabel.
 
 global:
-  imageTag: "v1.109.1"
+  imageTag: "v1.112.0"
   environment: staging
   authEnforce: true
   deployedFromPR: ""
@@ -15,10 +15,21 @@ global:
 # Cloud env — never run the in-cluster subcharts. RDS supplies Postgres.
 postgres:
   enabled: false
-redis:
-  enabled: false
+# Cache: in-cluster Valkey from the chart's own subchart, one per deployment.
+# Deliberately not a managed cache service: the pinned chart has no Sentinel,
+# so a single managed node would buy failover the chart cannot yet express
+# anyway, and a dedicated instance keeps the ACL grant and the memory budget
+# scoped to this release. Host is derived as {release}-valkey; the ACL password
+# is the same ROBOTHOR_REDIS_PASSWORD the clients read.
+valkey:
+  enabled: true
 database:
   sslMode: verify-full
+  tls:
+    # verify-full needs the CA that signs the managed database's certificate.
+    # The deployment supplies this ConfigMap in the release namespace; the
+    # chart refuses to render verify-full here without it.
+    caConfigMap: genus-os-db-ca
 workspace:
   allowEmptyFleet: false
   minAgentCount: 1

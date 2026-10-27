@@ -21,6 +21,7 @@ if TYPE_CHECKING:
 # resolve the provider key from the environment, which on 2026-08-27 meant
 # this path kept hammering a credential the pool had already retired and
 # could not rotate to a spare. No-op for unpooled providers.
+from robothor.engine.llm_client import short_answer_kwargs
 from robothor.engine.pooled_completion import acompletion as pooled_acompletion
 from robothor.engine.sanitize import sanitize_log
 
@@ -94,7 +95,7 @@ async def verify_output(
                 model=m,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1,
-                max_tokens=300,
+                **short_answer_kwargs(m, 300),
                 response_format={"type": "json_object"},
             )
             content = response.choices[0].message.content

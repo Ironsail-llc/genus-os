@@ -82,7 +82,9 @@ spec:
       automountServiceAccountToken: false
       {{- with $root.Values.global.imagePullSecrets }}
       imagePullSecrets:
-        {{- toYaml . | nindent 8 }}
+        {{- range . }}
+        - name: {{ . }}
+        {{- end }}
       {{- end }}
       securityContext:
         {{- toYaml $root.Values.global.podSecurityContext | nindent 8 }}
@@ -176,6 +178,7 @@ spec:
               protocol: TCP
           env:
             {{- include "genus-os.commonEnv" $root | nindent 12 }}
+            {{- with include "genus-os.dbCaEnv" $root | trim }}{{ . | nindent 12 }}{{- end }}
             {{- range $k, $v := $componentEnv }}
             - name: {{ $k }}
               value: {{ $v | quote }}
@@ -198,10 +201,14 @@ spec:
               mountPath: {{ $root.Values.workspace.mountPath | quote }}
               readOnly: {{ or $root.Values.workspace.readOnly (ne $root.Values.workspace.configMap.name "") }}
             {{- end }}
+            {{- with $cv.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
             - name: tmp
               mountPath: /tmp
             - name: runtime-cache
               mountPath: /app/.cache
+            {{- with include "genus-os.dbCaVolumeMount" $root | trim }}{{ . | nindent 12 }}{{- end }}
           resources:
             {{- toYaml $cv.resources | nindent 12 }}
       volumes:
@@ -221,10 +228,14 @@ spec:
           emptyDir: {}
           {{- end }}
         {{- end }}
+        {{- with $cv.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
         - name: tmp
           emptyDir: {}
         - name: runtime-cache
           emptyDir: {}
+        {{- with include "genus-os.dbCaVolume" $root | trim }}{{ . | nindent 8 }}{{- end }}
         {{- if $root.Values.migrations.enabled }}
         - name: migration-api-token
           projected:

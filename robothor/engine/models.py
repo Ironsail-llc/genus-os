@@ -113,6 +113,10 @@ class AgentHook:
     stream: str  # Redis Stream name (e.g., "email", "calendar")
     event_type: str  # Event type filter (e.g., "email.new")
     message: str = ""  # Initial prompt sent to agent when triggered
+    # Append the event type, delivery id and JSON payload to the message
+    include_payload: bool = False
+    # When the agent is already running, retry the event instead of dropping it
+    requeue_if_busy: bool = False
 
 
 @dataclass

@@ -258,15 +258,17 @@ the unit rather than assuming:
 | | engine | bridge | orchestrator | app |
 |---|---|---|---|---|
 | `Restart=` | `always` | `always` | `on-failure` | `always` |
-| `KillMode=` | `control-group` | `control-group` | `mixed` | `control-group` |
+| `KillMode=` | `mixed` | `control-group` | `mixed` | `control-group` |
 | `NoNewPrivileges` / `ProtectSystem=strict` / `PrivateTmp` | yes | yes | — | — |
 | `EnvironmentFile=/etc/robothor/robothor.env` | yes | yes | via drop-ins | yes |
 | `EnvironmentFile=-/run/robothor/secrets.env` | yes | yes | yes | yes |
 | `Requires=robothor-secrets.service` | yes | yes | yes | yes |
 
-The orchestrator's `KillMode=mixed` is the one exception the unit explains for
-itself: it sends `SIGTERM` to uvicorn directly rather than to the whole cgroup,
-because under the default mode every stop timed out. Its `Restart=on-failure`
+The orchestrator's `KillMode=mixed` sends `SIGTERM` to uvicorn directly rather
+than to the whole cgroup, because under the default mode every stop timed out.
+The engine's does the same so the daemon, not systemd, stops its Claude Code
+jobs: it parks them for the next engine to resume, where a cgroup-wide `SIGTERM`
+killed them mid-round and failed them as over budget. Its `Restart=on-failure`
 carries no rationale anywhere in the tree — the observable difference is simply
 that a **clean** exit is not restarted there, where the other three restart
 whatever the exit status. Its `restart-forever.conf` drop-in also sets
@@ -356,6 +358,29 @@ be read, so nothing can say whether it holds the key. Collapsing the two is how
 an unreachable credential store reads as an empty one. An unreadable vault sits
 out five minutes before it is probed again, rather than putting a synchronous
 database connect on the LLM hot path.
+
+### Model providers
+
+Agents name their models in the instance's `docs/agents/_defaults.yaml` (`model:
+primary` and `fallbacks`, instance data) and in each manifest; the engine dials whatever those
+name, and the credential for each provider comes from the environment. Set one
+key per provider you use and name none you do not: a provider whose key is
+absent is simply never tried.
+
+| Models | Environment |
+|---|---|
+| `openai/*` | `OPENAI_API_KEY`; `OPENAI_API_BASE` when the key belongs to a regional project (for example a US data-residency key, which `api.openai.com` rejects) |
+| `anthropic/*` | `ANTHROPIC_API_KEY` |
+| `openrouter/*` | `OPENROUTER_API_KEY` |
+| `gemini/*` | `GEMINI_API_KEY` (the Gemini Developer API, not Vertex) |
+| `vertex_ai/*` | `VERTEXAI_CREDENTIALS` holding the service-account JSON itself (or a path to it), `VERTEXAI_PROJECT`, and `VERTEXAI_LOCATION`: a region such as `us-central1`, or the `us` / `eu` multi-region; `global` processes requests in any location, so a residency commitment usually rules it out |
+
+Vertex AI is the Gemini surface covered by Google Cloud's enterprise terms; the
+service account needs the Vertex AI User role on the project. The engine-wide
+settings whose defaults name a provider (`ROBOTHOR_LAST_RESORT_MODEL`,
+`ROBOTHOR_RLM_ROOT_MODEL`, `ROBOTHOR_RLM_SUB_MODEL`, `ROBOTHOR_VISION_REMOTE_MODEL`)
+are listed in the [configuration reference](reference/configuration.md); point
+them at a provider you have a key for, or the first run that reaches one fails.
 
 ## Preparing the dependencies by hand
 
@@ -567,8 +592,8 @@ then on the door is the sign-in page; a forgotten password is
 
 ## Helm
 
-The chart is `helm/genus-os`. It brings its own PostgreSQL and Redis
-subcharts (`postgres.enabled`, `redis.enabled`) so a cluster with neither can
+The chart is `helm/genus-os`. It brings its own PostgreSQL and Valkey
+subcharts (`postgres.enabled`, `valkey.enabled`) so a cluster with neither can
 still render, and splits secret material into independently rotatable classes —
 database, cache, signing, SSO/OIDC, dashboard, provider — with per-component
 references enforced. The dashboard and the migration job cannot request the
@@ -617,6 +642,36 @@ a secret class or a NetworkPolicy, never collapse one. An upgrade is
 `helm upgrade` with the same values; the release tag in
 `values-production.yaml` is what semantic-release bumps and ArgoCD syncs.
 
+### Upgrading the cache to Valkey
+
+The bundled cache is now Valkey from the official valkey-io subchart, not the
+groundhog2k Redis StatefulSet. The toggles still work: `redis.enabled` (or the
+canonical `valkey.enabled`) deploys it, and `redis.host` and `redis.port` keep
+their meaning. But on `helm upgrade` an instance that ran the bundled Redis
+gets a new `{release}-valkey` workload with a new, empty volume. Nothing is
+copied across, so the event bus's streams start empty: consumer-group offsets,
+pending (unacknowledged) entries and the dead-letter queue from before the
+upgrade are gone.
+
+1. Let the bus drain before upgrading: stop new work, wait until every
+   consumer group has acknowledged its pending entries, and deal with anything
+   left in the dead-letter queue.
+2. Move any server overrides. `redis.image`, `redis.storage`,
+   `redis.resources`, `redis.initResources`, `redis.customLabels` and
+   `redis.podLabels` configured the old subchart and now do nothing; size,
+   resources and server settings live under `valkey.*` (`valkey.dataStorage`,
+   `valkey.resources`, `valkey.initResources`, `valkey.valkeyConfig`).
+3. Convert `global.imagePullSecrets` to a list of names. It is now
+   `- ghcr-credentials`, not `- name: ghcr-credentials`: the chart's own
+   templates add the `name:` wrapper, so a values file still passing maps
+   renders `name: map[name:ghcr-credentials]` on every first-party pod and
+   pulls from a private registry fail. (The old shape was unusable by any
+   standard subchart, which is why it changed.)
+4. Upgrade, then confirm `helm test` passes.
+5. The old Redis claim is left in place and never migrated. Once the new cache
+   is healthy, find it with `kubectl get pvc -n <namespace>` (the one named
+   after `{release}-redis`) and delete it.
+
 ### Why `/ready` waits for an agent manifest
 
 Production sets three values that the chart turns into engine environment
@@ -661,6 +716,82 @@ genus agent install --preset standard
 `standard` adds email triage,
 calendar watch and briefings, `full` is the whole catalogue. `genus init
 --preset NAME` does it during an install.
+
+### Trusting the database's CA
+
+Staging and production connect to PostgreSQL with `sslmode=verify-full`, so
+every client has to trust the CA that signed the database server's
+certificate. A managed Postgres usually presents a private CA that is in no
+default trust store, and without it libpq fails with `root.crt does not
+exist` before the first query. Put the CA bundle (PEM) in a ConfigMap in the
+release namespace and name it in the values:
+
+```yaml
+database:
+  sslMode: verify-full
+  tls:
+    caConfigMap: genus-os-db-ca   # ConfigMap in the release namespace
+    caKey: ca.pem                 # key inside it holding the PEM bundle
+```
+
+```bash
+kubectl -n <namespace> create configmap genus-os-db-ca --from-file=ca.pem=./db-ca.pem
+```
+
+The engine, bridge, orchestrator and the migration Job then mount that key
+read-only under `/etc/genus/db-ca/` and set `PGSSLROOTCERT` to it; the
+dashboard has no database access and gets nothing. A CA bundle is public
+material, which is why it is a ConfigMap and not a Secret.
+
+The chart refuses to render `verify-ca` or `verify-full` without
+`database.tls.caConfigMap` in any environment, rather than ship a release that
+passes CI and render and then cannot connect. The check looks at the TLS
+settings, not the environment's name, so a new environment is covered without
+anyone remembering to add it. If an environment really relies on libpq's
+default `~/.postgresql/root.crt` lookup (the image or a mounted home directory
+provides that file), say so explicitly:
+
+```yaml
+database:
+  sslMode: verify-full
+  tls:
+    allowDefaultTrustStore: true   # pods provide ~/.postgresql/root.crt
+```
+
+Changing `database.tls` (the ConfigMap name or key), or anything else in the
+migration Job's pod template (image, environment, labels, scheduling), gives
+the Job a new name: the next sync runs migrations once with the new settings
+instead of failing on an immutable Job, and a sync that changes none of it
+leaves the completed Job alone. Rotating the CA inside the existing ConfigMap
+needs no rename and no restart: kubelet refreshes the mounted file and libpq
+reads it on each new connection.
+
+### Mounting an extra volume
+
+The engine, bridge and orchestrator each take `extraVolumes` and
+`extraVolumeMounts`: lists of raw Kubernetes `volume` and `volumeMount`
+objects that the chart renders verbatim into that component's pod, alongside
+its own. A typical use is giving a plugin's state directory its own
+PersistentVolumeClaim, separate from the workspace:
+
+```yaml
+engine:
+  extraVolumes:
+    - name: plugin-state
+      persistentVolumeClaim:
+        claimName: plugin-state     # a PVC you create in the release namespace
+  extraVolumeMounts:
+    - name: plugin-state
+      mountPath: /var/lib/plugin-state
+```
+
+Each mount's `name` must match a volume in the same component, and must not
+reuse a name the chart already gives its own volumes (`workspace`, `tmp`,
+`runtime-cache`, `db-ca`, `migration-api-token`). The chart does not create the
+claim. The engine runs one replica with the `Recreate` strategy, so a
+`ReadWriteOnce` claim is safe there; the bridge and orchestrator run several
+replicas with rolling updates, so give them a `ReadWriteMany` claim or a
+per-pod volume such as `emptyDir`.
 
 ## Production Checklist
 

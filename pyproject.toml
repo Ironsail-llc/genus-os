@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "genusos"
-version = "1.109.1"
+version = "1.112.0"
 description = "Self-hosted AI agent operating system: deterministic engine, plugin-style skills and connectors, multi-tenant CRM and memory. Everything is a plugin."
 readme = "PYPI_README.md"
 license = "MIT"
@@ -61,6 +61,14 @@ dependencies = [
     # The host venv runs 1.97.0. Raise the ceiling only after the fresh-install
     # gate and the drift test pass on the new release.
     "litellm>=1.84.0,<1.105.3",
+    # litellm authenticates `vertex_ai/*` models with a Google service account
+    # through google-auth, but declares it only inside its `google` extra,
+    # which drags in all of google-cloud-aiplatform. Core, not an extra: an
+    # instance whose fleet runs on Vertex AI (VERTEXAI_CREDENTIALS, the
+    # service-account JSON) otherwise fails every call with "Google Cloud SDK
+    # not found" while the OpenAI and OpenRouter paths work, and nothing in
+    # the image build or the doctor says why.
+    "google-auth>=2.40,<3",
     "aiohttp>=3.14.3",
     # `view_image` decodes and downscales before an image reaches a model.
     # A core dependency, not an extra: an agent that cannot look at a picture

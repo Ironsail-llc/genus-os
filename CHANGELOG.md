@@ -1,3 +1,43 @@
+## [1.112.0](https://github.com/Ironsail-llc/genus-os/compare/v1.111.0...v1.112.0) (2026-10-27)
+
+### Features
+
+* **engine:** per-channel webhook signature schemes and hook event payloads ([#711](https://github.com/Ironsail-llc/genus-os/issues/711)) ([379fa66](https://github.com/Ironsail-llc/genus-os/commit/379fa667106bf78e6e364c0bbc25fc1777127470))
+
+### Bug Fixes
+
+* **pr-review:** survive engine restarts and fetch heads the pull ref lags ([#719](https://github.com/Ironsail-llc/genus-os/issues/719)) ([44b5676](https://github.com/Ironsail-llc/genus-os/commit/44b56763dcbf4d0af8c24b23987fa12ba43c4e46))
+
+## [1.111.0](https://github.com/Ironsail-llc/genus-os/compare/v1.110.2...v1.111.0) (2026-10-27)
+
+### Features
+
+* **helm:** extra volumes and mounts for the python workloads ([#710](https://github.com/Ironsail-llc/genus-os/issues/710)) ([c21a3a6](https://github.com/Ironsail-llc/genus-os/commit/c21a3a698f6af4a8aef347f4986973cf53a306ba))
+
+## [1.110.2](https://github.com/Ironsail-llc/genus-os/compare/v1.110.1...v1.110.2) (2026-10-27)
+
+### Bug Fixes
+
+* **engine:** resolve the event bus redis url from redis settings ([#708](https://github.com/Ironsail-llc/genus-os/issues/708)) ([711e6c7](https://github.com/Ironsail-llc/genus-os/commit/711e6c746cef69f614744cd0d4503beafd612276))
+
+## [1.110.1](https://github.com/Ironsail-llc/genus-os/compare/v1.110.0...v1.110.1) (2026-10-26)
+
+### Bug Fixes
+
+* **engine:** send reasoning_effort, not temperature, to OpenAI reasoners ([#707](https://github.com/Ironsail-llc/genus-os/issues/707)) ([d51bc69](https://github.com/Ironsail-llc/genus-os/commit/d51bc6966d23643c508fd89adfbf9e7b594f09ec))
+* **engine:** ship google-auth so vertex_ai models can authenticate ([#699](https://github.com/Ironsail-llc/genus-os/issues/699)) ([b8e58da](https://github.com/Ironsail-llc/genus-os/commit/b8e58da48489ed301437cb3711566168e89ca79f))
+* **helm:** mount DB CA bundle, env-hash migration Job, probe timeouts ([#706](https://github.com/Ironsail-llc/genus-os/issues/706)) ([afd4ac4](https://github.com/Ironsail-llc/genus-os/commit/afd4ac47f6da1f0870cac77ef4614d52dcea0460))
+
+## [1.110.0](https://github.com/Ironsail-llc/genus-os/compare/v1.109.1...v1.110.0) (2026-10-26)
+
+### Features
+
+* **helm:** replace the Redis subchart with per-app Valkey ([#687](https://github.com/Ironsail-llc/genus-os/issues/687)) ([efbdd35](https://github.com/Ironsail-llc/genus-os/commit/efbdd3572d8d7c15e153a6a39db8cfda607be87b)), closes [#682](https://github.com/Ironsail-llc/genus-os/issues/682) [#686](https://github.com/Ironsail-llc/genus-os/issues/686)
+
+### Bug Fixes
+
+* **tests:** stop the fallback-wire test racing its own deadline ([#705](https://github.com/Ironsail-llc/genus-os/issues/705)) ([106efb2](https://github.com/Ironsail-llc/genus-os/commit/106efb29f3d1880266433311d94baa5ae67c6e26)), closes [#687](https://github.com/Ironsail-llc/genus-os/issues/687)
+
 ## [1.109.1](https://github.com/Ironsail-llc/genus-os/compare/v1.109.0...v1.109.1) (2026-10-26)
 
 ### Bug Fixes

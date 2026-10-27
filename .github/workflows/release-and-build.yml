@@ -170,16 +170,20 @@ jobs:
           mkdir -p "$plugin_dir"
           tar --extract --gzip --file "$archive" --directory "$plugin_dir"
           helm repo add groundhog2k https://groundhog2k.github.io/helm-charts/
-          # The chart's cache subchart comes from here; `dependency build`
-          # fails on an unregistered repository.
+          # Official valkey-io chart repo — the per-app cache subchart.
           helm repo add valkey https://valkey.io/valkey-helm/
           helm dependency build helm/genus-os
           helm lint helm/genus-os --strict \
             --values helm/genus-os/values.yaml \
             --values helm/genus-os/values-production.yaml
           helm unittest helm/genus-os --strict
+          # Hook-free render for kube-linter, as helm.yml does. Helm hook Pods
+          # (chart tests) are ephemeral and never part of a release's steady
+          # state, and the valkey subchart's test hook hardcodes a pod spec
+          # with no resources, which this chart's values cannot fix.
           helm template gos helm/genus-os \
             --namespace genus \
+            --no-hooks \
             --values helm/genus-os/values.yaml \
             --values helm/genus-os/values-production.yaml \
             > /tmp/genus-production.yaml
@@ -597,8 +601,7 @@ jobs:
       - name: helm dependency build
         run: |
           helm repo add groundhog2k https://groundhog2k.github.io/helm-charts/
-          # The chart's cache subchart comes from here; `dependency build`
-          # fails on an unregistered repository.
+          # Official valkey-io chart repo — the per-app cache subchart.
           helm repo add valkey https://valkey.io/valkey-helm/
           helm dependency build helm/genus-os
 
@@ -738,7 +741,7 @@ jobs:
         run: |
           set -e
           argocd app terminate-op ironsail-production-genus-os --grpc-web || true
-          argocd app sync ironsail-production-genus-os --grpc-web --retry-limit 2
+          argocd app sync ironsail-production-genus-os --grpc-web --prune --retry-limit 2
           argocd app wait ironsail-production-genus-os --grpc-web --health --timeout 900
 
       - name: Smoke-test live and ready endpoints
@@ -774,7 +777,7 @@ jobs:
           fi
 
           if [ "$git_rollback" = "true" ]; then
-            argocd app sync ironsail-production-genus-os --grpc-web --retry-limit 2
+            argocd app sync ironsail-production-genus-os --grpc-web --prune --retry-limit 2
           else
             echo "GitOps rollback failed; applying an emergency ArgoCD rollback." >&2
             argocd app rollback ironsail-production-genus-os --grpc-web
@@ -903,7 +906,7 @@ jobs:
         run: |
           set -e
           argocd app terminate-op ironsail-staging-genus-os --grpc-web || true
-          argocd app sync ironsail-staging-genus-os --grpc-web --retry-limit 2
+          argocd app sync ironsail-staging-genus-os --grpc-web --prune --retry-limit 2
           argocd app wait ironsail-staging-genus-os --grpc-web --health --timeout 900
 
       - name: Sticky deploy-success comment
@@ -1000,7 +1003,7 @@ jobs:
           ARGOCD_SERVER: ${{ vars.ARGOCD_SERVER }}
           ARGOCD_AUTH_TOKEN: ${{ secrets.ARGOCD_TOKEN }}
         run: |
-          argocd app sync ironsail-staging-genus-os --grpc-web --retry-limit 2 || true
+          argocd app sync ironsail-staging-genus-os --grpc-web --prune --retry-limit 2 || true
           argocd app wait ironsail-staging-genus-os --grpc-web --health --timeout 900 || true
 
       - name: Sticky released-the-slot comment

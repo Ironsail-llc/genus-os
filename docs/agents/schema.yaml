@@ -242,6 +242,27 @@ optional:
       message:
         type: string
         description: Initial prompt sent to agent when triggered
+      include_payload:
+        type: boolean
+        default: false
+        description: >-
+          Append the event to the message — its type, delivery id ("-" when the
+          event has none) and payload as compact JSON in a fenced json block,
+          cut at 8000 characters with a "…[truncated]" marker. The block is
+          wrapped in <untrusted_content source="hook:<stream>"> because webhook
+          payloads are written by an external sender and may carry free text
+          aimed at the model. Hook runs are unattended and keep the agent's
+          full toolset, so give an agent that sets this a narrow tool list.
+      requeue_if_busy:
+        type: boolean
+        default: false
+        description: >-
+          When the agent is already running, re-add the event for this agent
+          only (other hooks and workflows on the event do not run again) after
+          5 seconds, without holding up the consumer. Retried up to 60 times,
+          about five minutes, on a budget separate from failed-run retries,
+          then parked in the stream's dead-letter queue, which nothing drains
+          automatically. Default drops the event.
   streams:
     read:
       type: list[string]

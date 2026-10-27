@@ -16,6 +16,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import quote
 
 
 def _env_file_path() -> Path | None:
@@ -200,7 +201,8 @@ class RedisConfig:
 
     @property
     def url(self) -> str:
-        auth = f":{self.password}@" if self.password else ""
+        """The connection URL, password percent-encoded so any character survives."""
+        auth = f":{quote(self.password, safe='')}@" if self.password else ""
         return f"redis://{auth}{self.host}:{self.port}/{self.db}"
 
 

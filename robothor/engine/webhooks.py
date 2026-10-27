@@ -1,7 +1,12 @@
 """Webhook ingress — receive external events and publish to Redis event bus.
 
 External services POST to /api/webhooks/{channel} with an HMAC-SHA256 signature.
-The payload is normalized and published to the appropriate Redis stream.
+Each channel picks its signature scheme: ``hmac_hex`` (hex digest of the raw
+body, GitHub-style) or ``stripe_t_v1`` (``t=<unix>,v1=<hex>`` over
+``"<t>." + body`` with a timestamp window). A channel may also name a delivery
+id header, in which case a replayed delivery is answered as a duplicate and
+not re-published. The payload is normalized and published to the appropriate
+Redis stream.
 Agents pick up events via the existing EventHooks system.
 """
 
@@ -28,6 +33,14 @@ logger = logging.getLogger(__name__)
 # Must match hooks.py / event_bus.py
 STREAM_PREFIX = "robothor:events:"
 
+SIGNATURE_SCHEMES = ("hmac_hex", "stripe_t_v1")
+
+# Headers tried in order when a channel names no signature_header.
+DEFAULT_SIGNATURE_HEADERS = ("X-Hub-Signature-256", "X-Signature-256", "X-Webhook-Signature")
+
+# How long a delivery id is remembered for replay detection.
+DELIVERY_ID_TTL_SECONDS = 86400
+
 
 @dataclass
 class WebhookChannel:
@@ -41,6 +54,14 @@ class WebhookChannel:
     event_type_prefix: str = ""
     enabled: bool = True
     rate_limit_per_min: int = 60
+    # When set, the signature is read from this header only.
+    signature_header: str = ""
+    # One of SIGNATURE_SCHEMES.
+    signature_scheme: str = "hmac_hex"
+    # stripe_t_v1 only: how far the signed timestamp may drift from now.
+    timestamp_tolerance_seconds: int = 300
+    # When set and present on a request, replays of the same id are dropped.
+    delivery_id_header: str = ""
 
 
 @dataclass
@@ -73,7 +94,18 @@ def load_webhook_config(path: str | Path) -> WebhookConfig:
             event_type_prefix=raw.get("event_type_prefix", ""),
             enabled=raw.get("enabled", True),
             rate_limit_per_min=int(raw.get("rate_limit_per_min", 60)),
+            signature_header=raw.get("signature_header", "") or "",
+            signature_scheme=raw.get("signature_scheme", "hmac_hex") or "hmac_hex",
+            timestamp_tolerance_seconds=int(raw.get("timestamp_tolerance_seconds", 300)),
+            delivery_id_header=raw.get("delivery_id_header", "") or "",
         )
+        if channels[name].signature_scheme not in SIGNATURE_SCHEMES:
+            logger.warning(
+                "Webhook channel '%s' has unknown signature_scheme %r; every request will be "
+                "rejected",
+                name,
+                channels[name].signature_scheme,
+            )
 
     return WebhookConfig(channels=channels)
 
@@ -95,7 +127,71 @@ def _verify_hmac(payload_bytes: bytes, signature: str, secret: str) -> bool:
         hashlib.sha256,
     ).hexdigest()
 
+    if not signature.isascii():
+        return False
     return hmac.compare_digest(expected, signature)
+
+
+def _verify_stripe_t_v1(
+    payload_bytes: bytes,
+    header: str,
+    secret: str,
+    tolerance_seconds: int,
+    now: float | None = None,
+) -> tuple[bool, str]:
+    """Verify a ``t=<unix seconds>,v1=<hex>[,v1=<hex>...]`` signature.
+
+    The signed content is ``f"{t}."`` followed by the raw body. Valid when the
+    timestamp is within ``tolerance_seconds`` of now and any ``v1`` matches.
+    Returns ``(ok, reason)``; the reason never contains the secret.
+    """
+    if not header or not secret:
+        return False, "missing signature or secret"
+
+    timestamp: int | None = None
+    candidates: list[str] = []
+    for part in header.split(","):
+        key, sep, value = part.strip().partition("=")
+        if not sep:
+            continue
+        if key == "t":
+            # Unix seconds; bounded so the float comparison below cannot overflow
+            if not (value.isascii() and value.isdigit() and len(value) <= 12):
+                return False, "malformed timestamp"
+            timestamp = int(value)
+        elif key == "v1" and value and value.isascii():
+            candidates.append(value)
+
+    if timestamp is None or not candidates:
+        return False, "malformed signature header"
+
+    current = time.time() if now is None else now
+    if abs(current - timestamp) > tolerance_seconds:
+        return False, f"timestamp outside tolerance ({tolerance_seconds}s)"
+
+    expected = hmac.new(
+        secret.encode("utf-8"),
+        f"{timestamp}.".encode() + payload_bytes,
+        hashlib.sha256,
+    ).hexdigest()
+    if any(hmac.compare_digest(expected, c) for c in candidates):
+        return True, ""
+    return False, "no v1 signature matched"
+
+
+def _verify_signature(
+    channel: WebhookChannel, payload_bytes: bytes, signature: str, secret: str
+) -> tuple[bool, str]:
+    """Dispatch to the channel's signature scheme. Returns ``(ok, reason)``."""
+    if channel.signature_scheme == "hmac_hex":
+        if _verify_hmac(payload_bytes, signature, secret):
+            return True, ""
+        return False, "missing signature" if not signature else "hmac mismatch"
+    if channel.signature_scheme == "stripe_t_v1":
+        return _verify_stripe_t_v1(
+            payload_bytes, signature, secret, channel.timestamp_tolerance_seconds
+        )
+    return False, f"unknown signature scheme {channel.signature_scheme!r}"
 
 
 # ── Channel stats (in-memory, reset on restart) ────────────────────
@@ -189,10 +285,50 @@ async def _check_rate_limit(channel: WebhookChannel) -> bool:
         return False
 
 
-async def _publish_to_stream(stream: str, event_type: str, payload: dict[str, Any]) -> str:
+def _delivery_key(channel: WebhookChannel, delivery_id: str) -> str:
+    return f"robothor:webhook:delivery:{channel.name}:{delivery_id}"
+
+
+async def _claim_delivery(channel: WebhookChannel, delivery_id: str) -> bool | None:
+    """Record a delivery id; ``True`` when first seen, ``False`` for a replay.
+
+    Returns ``None`` when Redis is unavailable — the caller fails closed, as
+    the rate limiter does.
+    """
+    try:
+        r = await _get_async_redis()
+        if r is None:
+            logger.warning("Delivery check: Redis unavailable, rejecting request")
+            return None
+        claimed = await r.set(
+            _delivery_key(channel, delivery_id), 1, nx=True, ex=DELIVERY_ID_TTL_SECONDS
+        )
+        return bool(claimed)
+    except Exception as e:
+        logger.warning("Delivery check failed (rejecting): %s", e)
+        return None
+
+
+async def _release_delivery(channel: WebhookChannel, delivery_id: str) -> None:
+    """Forget a claimed delivery id so the sender's retry is accepted."""
+    try:
+        r = await _get_async_redis()
+        if r is not None:
+            await r.delete(_delivery_key(channel, delivery_id))
+    except Exception as e:
+        logger.warning("Failed to release delivery id: %s", e)
+
+
+async def _publish_to_stream(
+    stream: str,
+    event_type: str,
+    payload: dict[str, Any],
+    *,
+    delivery_id: str = "",
+) -> str:
     """Publish a webhook event to a Redis stream.
 
-    Returns the event ID.
+    Returns the event ID, or ``""`` when the event could not be published.
     """
     event_id = str(uuid.uuid4())
     envelope: dict[str, str] = {
@@ -201,19 +337,24 @@ async def _publish_to_stream(stream: str, event_type: str, payload: dict[str, An
         "type": event_type,
         "source": "webhook",
         "actor": "external",
+        "event_type": event_type,
         "payload": json.dumps(payload),
     }
+    if delivery_id:
+        envelope["delivery_id"] = delivery_id
 
     try:
         r = await _get_async_redis()
         if r is None:
-            return event_id
+            logger.error("Failed to publish webhook event: Redis unavailable")
+            return ""
 
         stream_key = f"{STREAM_PREFIX}{stream}"
         await r.xadd(stream_key, envelope, maxlen=10000)
         logger.info("Published webhook event %s to %s", event_id, stream_key)
     except Exception as e:
         logger.error("Failed to publish webhook event: %s", e)
+        return ""
 
     return event_id
 
@@ -271,11 +412,13 @@ def get_webhook_router(config: WebhookConfig | None = None) -> APIRouter:
 
         # Verify HMAC signature
         secret = os.getenv(ch.secret_env, "")
-        signature = (
-            request.headers.get("X-Hub-Signature-256", "")
-            or request.headers.get("X-Signature-256", "")
-            or request.headers.get("X-Webhook-Signature", "")
-        )
+        if ch.signature_header:
+            signature = request.headers.get(ch.signature_header, "")
+        else:
+            signature = next(
+                (v for h in DEFAULT_SIGNATURE_HEADERS if (v := request.headers.get(h, ""))),
+                "",
+            )
 
         if not secret:
             # Secret env var not set — reject to prevent unauthenticated ingress
@@ -288,7 +431,9 @@ def get_webhook_router(config: WebhookConfig | None = None) -> APIRouter:
                 status_code=503,
             )
 
-        if not _verify_hmac(body, signature, secret):
+        ok, reason = _verify_signature(ch, body, signature, secret)
+        if not ok:
+            logger.warning("Webhook signature rejected for channel '%s': %s", ch.name, reason)
             return JSONResponse(
                 {"error": "Invalid signature"},
                 status_code=401,
@@ -323,8 +468,32 @@ def get_webhook_router(config: WebhookConfig | None = None) -> APIRouter:
         elif ch.event_type_prefix:
             event_type = ch.event_type_prefix.rstrip(".")
 
+        # Delivery idempotency: a replayed delivery id is acknowledged, not re-published
+        delivery_id = ""
+        if ch.delivery_id_header:
+            delivery_id = request.headers.get(ch.delivery_id_header, "").strip()
+        if delivery_id:
+            claimed = await _claim_delivery(ch, delivery_id)
+            if claimed is None:
+                return JSONResponse(
+                    {"error": "Delivery check unavailable"},
+                    status_code=503,
+                )
+            if not claimed:
+                logger.info("Duplicate webhook delivery on channel '%s'", ch.name)
+                return JSONResponse({"status": "duplicate"}, status_code=200)
+
         # Publish to Redis
-        event_id = await _publish_to_stream(ch.stream, event_type, payload)
+        event_id = await _publish_to_stream(ch.stream, event_type, payload, delivery_id=delivery_id)
+        if not event_id:
+            # Ask the sender to retry; a claimed delivery id is released so the
+            # retry is not answered as a duplicate
+            if delivery_id:
+                await _release_delivery(ch, delivery_id)
+            return JSONResponse(
+                {"error": "Event could not be published"},
+                status_code=503,
+            )
 
         # Record stats
         _record_received(channel)

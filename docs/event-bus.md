@@ -119,6 +119,40 @@ msg_id = publish("crm", "crm.create", {
 
 Publish is fire-and-forget. If Redis is down, the call returns `None` and logs a warning. Services should not depend on publish success for correctness.
 
+## Webhook ingress
+
+External services reach the bus through `POST /api/webhooks/{channel}`
+(`robothor/engine/webhooks.py`). Channels are defined in
+`$ROBOTHOR_WORKSPACE/docs/webhooks.yaml`; each names the stream it publishes
+to, the environment variable that holds its signing secret, and how the event
+type is derived. A request is checked in this order: signature, rate limit,
+JSON body, delivery id, then published.
+
+| Field | Default | Meaning |
+|-------|---------|---------|
+| `signature_scheme` | `hmac_hex` | `hmac_hex`: hex HMAC-SHA256 of the raw body (an optional `sha256=` prefix is accepted). `stripe_t_v1`: a header of the form `t=<unix seconds>,v1=<hex>[,v1=<hex>...]`, valid when the timestamp is within the tolerance and some `v1` equals HMAC-SHA256 of `"<t>."` followed by the raw body. |
+| `signature_header` | _(unset)_ | Read the signature from this header only. Unset tries `X-Hub-Signature-256`, `X-Signature-256` and `X-Webhook-Signature`, in that order. |
+| `timestamp_tolerance_seconds` | `300` | `stripe_t_v1` only: how far `t` may be from the receiver's clock, either way. |
+| `delivery_id_header` | _(unset)_ | When set and present, the id is recorded in Redis for 24 hours (`robothor:webhook:delivery:<channel>:<id>`). A repeat answers `200 {"status": "duplicate"}` and is not published again. If Redis cannot be reached the request is refused with `503`, as the rate limiter refuses it, so the sender retries. |
+
+A bad, stale or malformed signature answers `401 {"error": "Invalid
+signature"}` whatever the scheme; the reason is logged, the secret never is.
+
+The delivery id is a redelivery filter, not replay protection: it is not
+covered by the signature, so a captured request resent under another id is
+caught only by the `stripe_t_v1` timestamp window. If the event cannot be
+written to the stream the request answers `503` so the sender retries; a
+claimed delivery id is released first.
+
+A webhook event's envelope carries `event_type` (the same value as `type`) and,
+when the channel has a delivery id header, `delivery_id`, next to `payload`. An
+agent hook with `include_payload: true` gets both, plus the payload, appended
+to its trigger message, inside an `<untrusted_content>` boundary since the
+sender is external. `requeue_if_busy: true` re-adds an event that arrived
+while the agent was already running, for that agent only, every 5 seconds for
+up to about five minutes before it is parked in `<stream>:dlq`. Both are
+documented with the other hook fields in `docs/agents/schema.yaml`.
+
 ## Subscribing
 
 ```python
@@ -235,6 +269,17 @@ class MyConsumer(BaseConsumer):
 consumer = MyConsumer()
 consumer.run()  # Blocks, handles signals for graceful shutdown
 ```
+
+## Connection
+
+The bus connects with the same Redis settings as the rest of the engine:
+`ROBOTHOR_REDIS_HOST`, `ROBOTHOR_REDIS_PORT`, `ROBOTHOR_REDIS_DB` and
+`ROBOTHOR_REDIS_PASSWORD` (the password is percent-encoded into the URL, so any
+character is safe). `REDIS_URL`, when set, is an explicit override that wins
+for the bus alone; leave it unset unless the bus must reach a different server
+from everything else. Under pytest the resolved destination, whichever way it
+was reached, must be the test namespace (`ROBOTHOR_TEST_REDIS_URL`) or listed
+in `ROBOTHOR_EVENT_BUS_ALLOW`.
 
 ## Feature Flag
 

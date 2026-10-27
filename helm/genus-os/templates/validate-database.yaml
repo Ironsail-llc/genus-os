@@ -1,0 +1,19 @@
+{{/*
+Render-time check for database TLS. Emits no objects.
+
+verify-ca and verify-full need a CA bundle the client trusts. A managed
+Postgres presents a private CA that is in no default trust store, so the chart
+refuses to render verify-* without database.tls.caConfigMap: libpq would look
+for a root.crt that does not exist and every service, plus the migration Job,
+would fail to connect -- after CI and render had both passed.
+
+The check keys off the TLS settings, never off the environment's name, so a
+new environment cannot silently drop out of it. The one legitimate exception,
+an environment whose image or home directory really provides libpq's default
+root.crt, must say so explicitly with database.tls.allowDefaultTrustStore.
+*/}}
+{{- $tls := .Values.database.tls | default dict }}
+{{- if and (has .Values.database.sslMode (list "verify-ca" "verify-full")) (not $tls.caConfigMap) (not $tls.allowDefaultTrustStore) }}
+{{- /* Single line on purpose: helm-unittest matches failedTemplate messages by equality. */}}
+{{- fail (printf "database.sslMode is %q (global.environment %q) but database.tls.caConfigMap is empty: libpq would look for a root.crt that does not exist and every database connection would fail. Set database.tls.caConfigMap to a ConfigMap holding the CA bundle that signs the database server certificate, or set database.tls.allowDefaultTrustStore: true if this environment really relies on libpq's default root.crt lookup." .Values.database.sslMode (toString .Values.global.environment)) }}
+{{- end }}

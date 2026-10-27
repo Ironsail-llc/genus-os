@@ -88,12 +88,22 @@ to .component). Image repo is .Values.global.registry + "/" + repository.
 {{- end -}}
 
 {{/*
-Migration Job name. Includes a hash of imageTag so each release gets a
-fresh Job and the wait-for-migrations initContainer can reliably compute
-the same name. See aws-infrastucture/docs/helm-db-migrations.md.
+Migration Job name: <fullname>-migrate-<hash of the rendered pod template>.
+Job, RBAC and every wait-for-migrations initContainer compute it from the same
+values, so they always agree.
+
+A Job's pod template is immutable. The name used to hash only the image tag,
+so a change to anything else in the template -- the shared environment, the
+database CA mount, the chart/app version labels, the ServiceAccount, security
+context, scheduling or pull secrets -- kept the name, and the upgrade failed
+with "field is immutable", leaving the release half-applied. Hashing the whole
+rendered template (genus-os.migrationsPodTemplate, in migrations/job.yaml)
+means any such change yields a new Job that runs once, while an unchanged
+release keeps its completed Job and is not re-run. The previous Job is pruned
+on the next sync.
 */}}
 {{- define "genus-os.migrationJobName" -}}
-{{- printf "%s-migrate-%s" (include "genus-os.fullname" .) (.Values.global.imageTag | sha256sum | trunc 8) -}}
+{{- printf "%s-migrate-%s" (include "genus-os.fullname" .) (include "genus-os.migrationsPodTemplate" . | sha256sum | trunc 8) -}}
 {{- end -}}
 
 {{/* Workspace PVC name (created by this chart or supplied by the operator). */}}
@@ -117,14 +127,31 @@ Otherwise honor the explicit database.host (RDS, CloudNativePG, etc).
 {{- end -}}
 
 {{/*
-Redis host resolution. Matches the groundhog2k/redis subchart Service:
-`{release}-redis` when redis.enabled and redis.host is empty.
+Is the in-chart cache deployed? Mirrors the Chart.yaml dependency condition
+`valkey.enabled,redis.enabled` exactly: `valkey.enabled` when it is set,
+otherwise `redis.enabled`. Helm evaluates that condition itself for the
+subchart; the templates here have to agree with it or the chart would render
+client wiring for a server it did not deploy (or the reverse).
+*/}}
+{{- define "genus-os.cacheEnabled" -}}
+{{- $valkey := .Values.valkey | default dict -}}
+{{- if hasKey $valkey "enabled" -}}
+{{- $valkey.enabled -}}
+{{- else -}}
+{{- (.Values.redis | default dict).enabled | default false -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Cache host resolution. An explicit `redis.host` always wins; otherwise this
+matches the valkey-io subchart's Service, `{release}-valkey`. Only consulted
+when valkey.enabled — see the gate in genus-os.commonEnv.
 */}}
 {{- define "genus-os.redisHost" -}}
-{{- if and .Values.redis.enabled (eq .Values.redis.host "") -}}
-{{- printf "%s-redis" .Release.Name -}}
-{{- else -}}
+{{- if ne (.Values.redis.host | default "") "" -}}
 {{- .Values.redis.host -}}
+{{- else -}}
+{{- printf "%s-valkey" .Release.Name -}}
 {{- end -}}
 {{- end -}}
 
@@ -162,7 +189,14 @@ here when the values are wrong would mask the Vault values silently.
 - name: ROBOTHOR_DB_SSLMODE
   value: {{ .Values.database.sslMode | quote }}
 {{- end }}
-{{- if .Values.redis.enabled }}
+{{- /*
+Same rule as the DB above: render the cache host/port explicitly ONLY when the
+in-chart valkey subchart is deployed, because only then can the chart compute
+the Service name. When valkey.enabled is false the cache is external and
+ROBOTHOR_REDIS_HOST/PORT come from the `cache` Secret via envFrom, where the
+environment's vault.secrets.cache.path is authoritative.
+*/ -}}
+{{- if eq (include "genus-os.cacheEnabled" .) "true" }}
 - name: ROBOTHOR_REDIS_HOST
   value: {{ include "genus-os.redisHost" . | quote }}
 - name: ROBOTHOR_REDIS_PORT
@@ -280,4 +314,43 @@ periodSeconds: {{ $cfg.periodSeconds | default 10 }}
 timeoutSeconds: {{ $cfg.timeoutSeconds | default 1 }}
 failureThreshold: {{ $cfg.failureThreshold | default 3 }}
 {{- end -}}
+{{- end -}}
+
+{{/*
+Database CA bundle (database.tls). Every component that opens a database
+connection includes all three: the env var, the read-only mount and the
+volume. libpq reads PGSSLROOTCERT for verify-ca/verify-full, so no code
+change is needed in the services. Each renders nothing when
+database.tls.caConfigMap is empty.
+*/}}
+{{- define "genus-os.dbCaDir" -}}/etc/genus/db-ca{{- end -}}
+
+{{- define "genus-os.dbCaEnv" -}}
+{{- $tls := .Values.database.tls | default dict -}}
+{{- if $tls.caConfigMap }}
+- name: PGSSLROOTCERT
+  value: {{ printf "%s/%s" (include "genus-os.dbCaDir" .) ($tls.caKey | default "ca.pem") | quote }}
+{{- end }}
+{{- end -}}
+
+{{- define "genus-os.dbCaVolumeMount" -}}
+{{- $tls := .Values.database.tls | default dict -}}
+{{- if $tls.caConfigMap }}
+- name: db-ca
+  mountPath: {{ include "genus-os.dbCaDir" . }}
+  readOnly: true
+{{- end }}
+{{- end -}}
+
+{{- define "genus-os.dbCaVolume" -}}
+{{- $tls := .Values.database.tls | default dict -}}
+{{- if $tls.caConfigMap }}
+{{- $key := $tls.caKey | default "ca.pem" }}
+- name: db-ca
+  configMap:
+    name: {{ $tls.caConfigMap }}
+    items:
+      - key: {{ $key }}
+        path: {{ $key }}
+{{- end }}
 {{- end -}}
