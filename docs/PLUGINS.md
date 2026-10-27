@@ -470,6 +470,10 @@ instruction-file check already applies to agents.
   once as `.pre-<distribution>`; `remove` retires it like any plugin agent.
   Recorded elsewhere, or different in any way (`main`, an operator-edited
   copy), it is somebody else's: never overwritten, never retired.
+* **A plugin agent's instruction file** must be its own:
+  `brain/agents/<id>.md`, or a file under `brain/agents/<id>/`. Any other
+  `instruction_file` (the instance's `brain/TOOLS.md`, another agent's file) is
+  refused before pip runs, even when the bytes there are identical.
 * **`brain/agents/<id>.md` and `brain/agents/<id>/…`** belong to agent `<id>`.
   A `files:` entry may write there only when `<id>` is one of the plugin's own
   `agents`, or an agent it declares a `patch` for. That is how a plugin turns

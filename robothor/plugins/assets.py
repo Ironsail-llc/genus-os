@@ -320,7 +320,25 @@ def _agent_id(bundle: Path, src: str) -> tuple[str, str]:
             f"installs as {agent_id!r}."
         )
     instruction = setup.get("instruction_file_path") or manifest.get("instruction_file") or ""
-    return agent_id, str(instruction) if isinstance(instruction, str) else ""
+    instruction = str(instruction) if isinstance(instruction, str) else ""
+    if instruction:
+        # The agent's own brain path only -- the rule `files:` follows. Pointed
+        # at a shared file (brain/TOOLS.md) or another agent's, an identical
+        # copy would be taken over, and a later release would overwrite it.
+        try:
+            normal = safe_relative_path(instruction, label="instruction file").as_posix()
+        except TemplateSecurityError as exc:
+            raise AssetError(f"{src}: {exc}") from exc
+        if normal != f"brain/agents/{agent_id}.md" and not normal.startswith(
+            f"brain/agents/{agent_id}/"
+        ):
+            raise AssetError(
+                f"{src}: instruction file {instruction} is not this agent's own. A plugin "
+                f"agent's instruction file must be brain/agents/{agent_id}.md or under "
+                f"brain/agents/{agent_id}/."
+            )
+        instruction = normal
+    return agent_id, instruction
 
 
 #: Agent ids no plugin may ship, whatever the workspace holds: the operator's

@@ -1662,3 +1662,63 @@ def test_another_plugins_patch_on_a_plugin_agent_is_not_an_operator_edit(ws, cap
     data = yaml.safe_load((ws / _DESK_YAML).read_text())
     assert data["description"] == "Watches the desk, better"
     assert "edited" not in out
+
+
+def _instruction_at(path: str) -> dict[str, str]:
+    """Wheel members that point desk-monitor's instruction file at *path*."""
+    pkg = DIST.replace("-", "_")
+    return {
+        f"{pkg}/agents/desk-monitor/setup.yaml": _SETUP.replace(_DESK_MD, path),
+        f"{pkg}/agents/desk-monitor/manifest.template.yaml": _AGENT_MANIFEST.format(
+            description="Watches the example desk"
+        ).replace(_DESK_MD, path),
+    }
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "brain/TOOLS.md",
+        "brain/agents/main.md",
+        "brain/agents/other-agent/notes.md",
+        "brain/agents/desk-monitor.txt",
+    ],
+)
+def test_an_instruction_file_outside_the_agents_own_brain_path_is_refused_before_pip(
+    ws, capsys, path
+) -> None:
+    shared = ws / "brain" / "TOOLS.md"
+    shared.write_text(_INSTRUCTIONS)  # identical bytes are no licence either
+    pip = installer._run_pip
+    assert _install(ws, extra=_instruction_at(path)) == 2
+    err = capsys.readouterr().err
+    assert path in err and "brain/agents/desk-monitor" in err
+    assert pip.calls == []
+    assert shared.read_text() == _INSTRUCTIONS
+    assert not (ws / _DESK_YAML).exists()
+
+
+def test_an_instruction_file_under_the_agents_own_directory_is_allowed(ws, capsys) -> None:
+    path = "brain/agents/desk-monitor/persona.md"
+    assert _install(ws, extra=_instruction_at(path)) == 0, capsys.readouterr().err
+    assert (ws / path).read_text() == _INSTRUCTIONS
+
+
+def test_an_identical_unrecorded_instruction_file_is_taken_over_and_later_upgraded(
+    ws, capsys
+) -> None:
+    """The take-over branch: the agent's own instruction file is already there
+    with exactly the plugin's bytes and no record of whose it is."""
+    (ws / _DESK_MD).write_text(_INSTRUCTIONS)
+    path = ws.parent / f"{DIST.replace('-', '_')}-1.0.0-py3-none-any.whl"
+    sha = hashlib.sha256(_wheel(path)).hexdigest()
+    assert cmd_plugin(_args("install", name=str(path), sha256=sha, dry_run=True)) == 0
+    assert f"adopts the identical {_DESK_MD}" in capsys.readouterr().out
+    assert _install(ws) == 0, capsys.readouterr().err
+    assert (ws / _DESK_MD).read_text() == _INSTRUCTIONS
+    assert _installed(ws)["desk-monitor"]["source"] == f"plugin:{DIST}"
+    newer = "# Desk Monitor\n\nRelease two.\n"
+    pkg = DIST.replace("-", "_")
+    extra = {f"{pkg}/agents/desk-monitor/instructions.template.md": newer}
+    assert _install(ws, version="1.1.0", extra=extra) == 0
+    assert (ws / _DESK_MD).read_text() == newer
