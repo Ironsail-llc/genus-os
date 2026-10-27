@@ -125,6 +125,7 @@ Docs in this repo still change with the code (rule 9). A PR without a ticket can
 
 - **PR title:** `type(scope): description (KEY-N)` — scope is a subsystem (`engine`, `crm`, `helm`, `app`, `ci`), never the ticket. Subject 1–72 characters, key included. It becomes the squash commit on `main`.
 - **Commit subjects** on the branch end with the same `(KEY-N)`. The key appears nowhere else: not in code, docs, tests, fragments or the PR body.
+- The subject starts lowercase: commitlint rejects sentence case (`Add …`, `CI's …`) in branch commits.
 - Asked to commit without a type? Infer it: bug fix → `fix`, feature → `feat`, tests only → `test`.
 
 ## Operator Best Practices
