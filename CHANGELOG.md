@@ -1,3 +1,9 @@
+## [1.111.0](https://github.com/Ironsail-llc/genus-os/compare/v1.110.2...v1.111.0) (2026-10-27)
+
+### Features
+
+* **helm:** extra volumes and mounts for the python workloads ([#710](https://github.com/Ironsail-llc/genus-os/issues/710)) ([c21a3a6](https://github.com/Ironsail-llc/genus-os/commit/c21a3a698f6af4a8aef347f4986973cf53a306ba))
+
 ## [1.110.2](https://github.com/Ironsail-llc/genus-os/compare/v1.110.1...v1.110.2) (2026-10-27)
 
 ### Bug Fixes
