@@ -47,6 +47,7 @@ from __future__ import annotations
 import contextvars
 import copy
 import hashlib
+import json
 import logging
 import os
 import pathlib
@@ -560,10 +561,10 @@ def _ledger_path(instance_dir: Path) -> Path:
     return contained_path(instance_dir, LEDGER_NAME, label="plugin asset ledger")
 
 
-def read_ledger(instance_dir: Path) -> dict[str, Any]:
+def _ledger_document(instance_dir: Path) -> dict[str, Any]:
     path = _ledger_path(instance_dir)
     if not path.exists():
-        return {}
+        return {"plugins": {}}
     try:
         data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     except (yaml.YAMLError, UnicodeDecodeError) as exc:
@@ -574,11 +575,36 @@ def read_ledger(instance_dir: Path) -> dict[str, Any]:
     plugins = data.get("plugins") if isinstance(data, dict) else None
     if not isinstance(plugins, dict):
         raise AssetError(f"The plugin asset ledger (.robothor/{LEDGER_NAME}) is not readable.")
+    return data
+
+
+def read_ledger(instance_dir: Path) -> dict[str, Any]:
+    """Each plugin's record of what it wrote, keyed by canonical distribution."""
+    plugins: dict[str, Any] = _ledger_document(instance_dir)["plugins"]
     return plugins
 
 
-def _write_ledger(instance_dir: Path, plugins: dict[str, Any]) -> None:
-    text = yaml.safe_dump({"plugins": plugins}, default_flow_style=False, sort_keys=True)
+def read_retired(instance_dir: Path) -> dict[str, Any]:
+    """Instruction files a retired plugin agent left behind, keyed by path.
+
+    Retire leaves ``brain/agents/<id>.md`` in place (the Helm's convention), so
+    a later install of the same plugin finds a file no manifest claims. This
+    remembers whose it was and the sha256 the plugin last wrote, so that
+    reinstall can take it back -- and keep it, if the operator has edited it.
+    """
+    retired = _ledger_document(instance_dir).get("retired")
+    return retired if isinstance(retired, dict) else {}
+
+
+def _write_ledger(
+    instance_dir: Path, plugins: dict[str, Any], retired: dict[str, Any] | None = None
+) -> None:
+    if retired is None:
+        retired = read_retired(instance_dir)
+    document: dict[str, Any] = {"plugins": plugins}
+    if retired:
+        document["retired"] = retired
+    text = yaml.safe_dump(document, default_flow_style=False, sort_keys=True)
     path = _ledger_path(instance_dir)
     if path.is_file() and path.read_bytes() == text.encode("utf-8"):
         return
@@ -588,6 +614,74 @@ def _write_ledger(instance_dir: Path, plugins: dict[str, Any]) -> None:
 # ---------------------------------------------------------------------------
 # plan
 # ---------------------------------------------------------------------------
+
+
+def _manifest_fingerprint(data: dict[str, Any]) -> dict[str, str]:
+    """A sha256 per top-level key of a parsed agent manifest.
+
+    Per key, not one hash for the file, so that keys some plugin's patch
+    manages can be left out of the comparison: another plugin patching this
+    plugin's agent is not an operator edit.
+    """
+    return {
+        str(key): hashlib.sha256(
+            json.dumps(value, sort_keys=True, default=str).encode("utf-8")
+        ).hexdigest()
+        for key, value in data.items()
+    }
+
+
+def _text_sha(text: str | None) -> str | None:
+    return None if text is None else hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _patched_keys(ledger: dict[str, Any], agent_id: str, patches: tuple[Any, ...]) -> set[str]:
+    """The top-level manifest keys any plugin's patch manages on *agent_id*."""
+    keys: set[str] = set()
+    for entry in ledger.values():
+        if not isinstance(entry, dict):
+            continue
+        for recorded in entry.get("patches") or []:
+            if isinstance(recorded, dict) and recorded.get("agent") == agent_id:
+                keys.update(str(k).split(".", 1)[0] for k in recorded.get("keys") or [])
+    for patch in patches:
+        if patch.agent == agent_id:
+            keys.update(
+                k.split(".", 1)[0] for k in patch_keys(patch.install) | patch_keys(patch.remove)
+            )
+    return keys
+
+
+def _manifest_edited(path: Path, recorded: Any, ignore: set[str]) -> bool:
+    """Whether the operator changed the manifest since the plugin last wrote it."""
+    if not isinstance(recorded, dict) or not path.is_file() or path.is_symlink():
+        return False
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except (yaml.YAMLError, UnicodeDecodeError):
+        return True
+    if not isinstance(data, dict):
+        return True
+    current = _manifest_fingerprint(data)
+
+    def kept(fingerprint: dict[str, Any]) -> dict[str, Any]:
+        return {k: v for k, v in fingerprint.items() if k not in ignore}
+
+    return kept(current) != kept(recorded)
+
+
+def _reclaimable(
+    retired: dict[str, Any], instruction: str, dist: str, agent_id: str
+) -> dict[str, Any] | None:
+    """The retired record that lets *dist* take back *instruction*, if any."""
+    record = retired.get(instruction)
+    if (
+        isinstance(record, dict)
+        and record.get("plugin") == dist
+        and record.get("agent") == agent_id
+    ):
+        return record
+    return None
 
 
 def _brain_agent(dest: str) -> str | None:
@@ -617,6 +711,52 @@ def patch_keys(section: dict[str, Any]) -> set[str]:
 
 def _overlaps(a: str, b: str) -> bool:
     return a == b or a.startswith(b + ".") or b.startswith(a + ".")
+
+
+def _leftover_instruction(
+    agent: AgentDecl,
+    dist: str,
+    version: str,
+    root: Path,
+    instance: Path,
+    retired: dict[str, Any],
+) -> str:
+    """Judge an instruction file already on disk for an agent not yet installed.
+
+    Retire leaves the instruction file where it was, so removing a plugin and
+    installing it again finds one no manifest claims -- which the template
+    installer refuses. It is this plugin's to take back when the retired record
+    says this plugin wrote it for this agent, or when it holds exactly the bytes
+    the plugin renders. Anything else is somebody else's file, refused here,
+    before pip runs. Returns the plan line's suffix.
+    """
+    from robothor.templates.installer import _instruction_owner
+
+    assert agent.instruction is not None
+    try:
+        path = workspace_path(
+            root, agent.instruction, allowed_prefix="brain", label="instruction file"
+        )
+    except TemplateSecurityError as exc:
+        raise AssetError(f"agent {agent.agent_id}: {exc}") from exc
+    if not path.exists():
+        return ""
+    if _instruction_owner(root, path) is None:
+        if _reclaimable(retired, agent.instruction, dist, agent.agent_id) is not None:
+            return f" (takes back its retired {agent.instruction})"
+        rendered = _render(agent, dist, version, root, instance).instruction
+        if (
+            rendered is not None
+            and path.is_file()
+            and not path.is_symlink()
+            and path.read_bytes() == rendered.encode("utf-8")
+        ):
+            return f" (adopts the identical {agent.instruction})"
+    raise AssetError(
+        f"{agent.instruction} already exists and is not this plugin's: no record shows "
+        "the plugin wrote it, and it differs from what the plugin renders. Agent "
+        f"{agent.agent_id!r} will not be installed over it; move that file aside first."
+    )
 
 
 def plan(
@@ -660,6 +800,7 @@ def plan(
     root = _workspace(workspace)
     instance = _instance_dir(root, instance_dir)
     ledger = read_ledger(instance) if instance.is_dir() else {}
+    retired = read_retired(instance) if instance.is_dir() else {}
     try:
         installed = InstanceConfig(instance).installed_agents if instance.is_dir() else {}
     except (ValueError, yaml.YAMLError) as exc:
@@ -711,7 +852,10 @@ def plan(
                     else "."
                 )
             )
-        lines.append(f"agent    {agent.agent_id} -> docs/agents/{agent.agent_id}.yaml")
+        suffix = ""
+        if record is None and agent.instruction:
+            suffix = _leftover_instruction(agent, dist, version, root, instance, retired)
+        lines.append(f"agent    {agent.agent_id} -> docs/agents/{agent.agent_id}.yaml{suffix}")
 
     others = {
         dest: owner
@@ -962,13 +1106,35 @@ def _render(agent: AgentDecl, dist: str, version: str, root: Path, instance: Pat
     return Rendered(text, data if isinstance(data, dict) else {}, instruction)
 
 
-def _matches(agent: AgentDecl, rendered: Rendered, root: Path, *, exact: bool) -> bool:
+def _matches(
+    agent: AgentDecl,
+    rendered: Rendered,
+    root: Path,
+    *,
+    exact: bool,
+    only: str | None = None,
+) -> bool:
     """Whether the workspace already holds what *rendered* would write.
 
     ``exact`` compares the manifest's bytes (a file the plugin wrote itself);
     otherwise its parsed DATA, so a hand copy with other comments, quoting or
     key order still matches. The instruction file is always compared by bytes.
+    ``only`` ("manifest" or "instruction") limits the check to one of the two.
     """
+    if only != "instruction" and not _manifest_matches(agent, rendered, root, exact=exact):
+        return False
+    if only == "manifest":
+        return True
+    if agent.instruction and rendered.instruction is not None:
+        instruction = root / agent.instruction
+        if not instruction.is_file() or instruction.is_symlink():
+            return False
+        if instruction.read_text(encoding="utf-8") != rendered.instruction:
+            return False
+    return True
+
+
+def _manifest_matches(agent: AgentDecl, rendered: Rendered, root: Path, *, exact: bool) -> bool:
     manifest = root / "docs" / "agents" / f"{agent.agent_id}.yaml"
     if not manifest.is_file() or manifest.is_symlink():
         return False
@@ -981,12 +1147,6 @@ def _matches(agent: AgentDecl, rendered: Rendered, root: Path, *, exact: bool) -
             if (yaml.safe_load(text) or {}) != rendered.manifest:
                 return False
         except yaml.YAMLError:
-            return False
-    if agent.instruction and rendered.instruction is not None:
-        instruction = root / agent.instruction
-        if not instruction.is_file() or instruction.is_symlink():
-            return False
-        if instruction.read_text(encoding="utf-8") != rendered.instruction:
             return False
     return True
 
@@ -1017,9 +1177,23 @@ def _install_agent(
     root: Path,
     instance: Path,
     report: Report,
-) -> None:
-    """Render one agent. :func:`plan` has already refused any manifest that is
-    not this plugin's, so this only ever writes the plugin's own agent."""
+    *,
+    previous: dict[str, Any] | None = None,
+    retired: dict[str, Any] | None = None,
+    patched: set[str] | None = None,
+) -> dict[str, Any]:
+    """Render one agent; return what the ledger records of what it wrote.
+
+    :func:`plan` has already refused any manifest, or leftover instruction file,
+    that is not this plugin's, so this only ever writes the plugin's own agent.
+
+    *previous* is the ledger's record of what the plugin last wrote for this
+    agent: a file the operator has changed since then is left in place with a
+    warning -- the rule ``files:`` follows -- while an unedited one takes the
+    new release. Manifest keys in *patched* belong to some plugin's patch and
+    are not an operator edit. *retired* is :func:`read_retired`, for an agent
+    being installed again after a remove.
+    """
     from robothor.templates.installer import install
 
     manifest = workspace_path(
@@ -1041,21 +1215,78 @@ def _install_agent(
     record = InstanceConfig.load(instance).installed_agents.get(agent.agent_id)
     adopted = isinstance(record, dict) and bool(record.get("adopted"))
     rendered = _render(agent, dist, version, root, instance)
+    written: dict[str, Any] = {
+        "manifest": _manifest_fingerprint(rendered.manifest),
+        "instruction_file": agent.instruction,
+        "instruction": _text_sha(rendered.instruction),
+    }
     if record is None and manifest.exists():
         # plan() only lets this through when the data matched: adopt the copy.
         _mark_adopted(agent, dist, version, instance)
         report.lines.append(f"adopted  {agent.agent_id} (the existing copy matches the plugin's)")
-        return
-    if _matches(agent, rendered, root, exact=not adopted):
-        return  # already what an install would write: nothing to do
+        return written
+
+    # What the plugin last wrote: the ledger for an agent it has, the retired
+    # record for one it is installing again after a remove.
+    last = previous if isinstance(previous, dict) and record is not None else {}
+    last_instruction = last.get("instruction")
+    if record is None and agent.instruction:
+        reclaim = _reclaimable(retired or {}, agent.instruction, dist, agent.agent_id)
+        last_instruction = reclaim.get("sha256") if reclaim else None
+
+    keep: dict[Path, bytes] = {}
+    edited: list[str] = []
+    if record is not None and _manifest_edited(manifest, last.get("manifest"), patched or set()):
+        keep[manifest] = manifest.read_bytes()
+        edited.append(f"docs/agents/{agent.agent_id}.yaml")
+    leftover = (
+        instruction is not None
+        and rendered.instruction is not None
+        and instruction.is_file()
+        and not instruction.is_symlink()
+    )
+    if leftover:
+        assert instruction is not None and rendered.instruction is not None
+        current = instruction.read_bytes()
+        if (
+            current != rendered.instruction.encode("utf-8")
+            and last_instruction is not None
+            and hashlib.sha256(current).hexdigest() != last_instruction
+        ):
+            keep[instruction] = current
+            assert agent.instruction is not None
+            edited.append(agent.instruction)
+    for relative in edited:
+        report.warnings.append(
+            f"{relative}: edited since the plugin wrote it; left in place. Delete it "
+            "and sync again to take the plugin's version."
+        )
+
+    manifest_same = manifest in keep or (
+        manifest.is_file() and _matches(agent, rendered, root, exact=not adopted, only="manifest")
+    )
+    instruction_same = (
+        instruction is None
+        or rendered.instruction is None
+        or instruction in keep
+        or _matches(agent, rendered, root, exact=True, only="instruction")
+    )
+    if manifest_same and instruction_same:
+        return written  # already what an install would write: nothing to do
     if adopted:
         # The first write over an adopted copy keeps it, once.
         for path in (manifest, instruction):
-            if path is not None and path.is_file():
+            if path is not None and path.is_file() and path not in keep:
                 _backup_once(path, dist, root)
     for path in (manifest, instruction, instance / "installed.yaml"):
         if path is not None:
             _touch(path)
+    if instruction is not None and instruction.is_file() and not manifest.is_file():
+        # No manifest claims the instruction file (a retired agent's, or the
+        # operator deleted the manifest), so the template installer would
+        # refuse it. plan() vetted it as this plugin's; clear the way. Its
+        # bytes are restored below when it is being kept.
+        instruction.unlink()
     with tempfile.TemporaryDirectory(prefix="genus-plugin-agent-") as scratch:
         # Resolved: the template installer refuses a bundle path that runs
         # through a symlink, and the default macOS temp dir does (/var ->
@@ -1072,6 +1303,8 @@ def _install_agent(
             )
         except (TemplateSecurityError, FileNotFoundError, ValueError, OSError) as exc:
             raise AssetError(f"agent {agent.agent_id}: {exc}") from exc
+    for path, data in keep.items():
+        _write_atomically(path, data)
     _engine_would_load(manifest, agent.agent_id)
     # Only facts this module owns reach the report: the id and the plugin's
     # version, never values from the install result. That result carries the
@@ -1085,6 +1318,7 @@ def _install_agent(
             f"{agent.agent_id}: {findings} advisory validation finding(s); see them with "
             f"`python scripts/validate_agents.py --agent {agent.agent_id}`"
         )
+    return written
 
 
 def _write_file(
@@ -1159,21 +1393,43 @@ def apply(
     root = _workspace(workspace)
     instance = _instance_dir(root, instance_dir)
     ledger = read_ledger(instance)
+    retired = read_retired(instance)
     found = ledger.get(dist)
     previous: dict[str, Any] = found if isinstance(found, dict) else {}
     before_agents = set(previous.get("agents") or [])
+    before_agent_files = previous.get("agent_files")
+    if not isinstance(before_agent_files, dict):
+        before_agent_files = {}
     before_files: dict[str, Any] = dict(previous.get("files") or {})
     before_patches = {
         p.get("agent"): p for p in previous.get("patches") or [] if isinstance(p, dict)
     }
 
-    entry: dict[str, Any] = {"version": version, "agents": [], "files": {}, "patches": []}
+    entry: dict[str, Any] = {
+        "version": version,
+        "agents": [],
+        "agent_files": {},
+        "files": {},
+        "patches": [],
+    }
     journal: dict[Path, bytes | None] = {}
     token = _JOURNAL.set(journal)
     try:
         for agent in assets.agents:
-            _install_agent(agent, dist, version, root, instance, report)
+            entry["agent_files"][agent.agent_id] = _install_agent(
+                agent,
+                dist,
+                version,
+                root,
+                instance,
+                report,
+                previous=before_agent_files.get(agent.agent_id),
+                retired=retired,
+                patched=_patched_keys(ledger, agent.agent_id, assets.patches),
+            )
             entry["agents"].append(agent.agent_id)
+            if agent.instruction and _reclaimable(retired, agent.instruction, dist, agent.agent_id):
+                retired.pop(agent.instruction)  # taken back: no longer retired
         for item in assets.files:
             recorded = _write_file(item, dist, root, before_files.get(item.dest), report)
             if recorded is not None:
@@ -1208,16 +1464,19 @@ def apply(
         patched = {x["agent"] for x in entry["patches"]}
         stale = {
             "agents": sorted(before_agents - set(entry["agents"])),
+            "agent_files": before_agent_files,
             "files": {k: v for k, v in before_files.items() if k not in entry["files"]},
             "patches": [p for a, p in before_patches.items() if a not in patched],
         }
-        _undo(stale, dist, root, instance, report)
+        _undo(stale, dist, root, instance, report, retired)
 
+        if not entry["agent_files"]:
+            del entry["agent_files"]
         if entry["agents"] or entry["files"] or entry["patches"]:
             ledger[dist] = entry
         else:
             ledger.pop(dist, None)
-        _write_ledger(instance, ledger)
+        _write_ledger(instance, ledger, retired)
     except Exception as exc:
         _rollback(journal)
         if isinstance(exc, AssetError):
@@ -1233,7 +1492,18 @@ def apply(
 # ---------------------------------------------------------------------------
 
 
-def _retire_agent(agent_id: str, dist: str, root: Path, instance: Path, report: Report) -> None:
+def _retire_agent(
+    agent_id: str,
+    dist: str,
+    root: Path,
+    instance: Path,
+    report: Report,
+    written: Any = None,
+    retired: dict[str, Any] | None = None,
+) -> None:
+    """Retire one agent. *written* is the ledger's record of what the plugin
+    wrote for it; the instruction file it leaves behind goes into *retired*, so
+    installing the plugin again can take it back."""
     from robothor.templates.instance import InstanceConfig
 
     config = InstanceConfig.load(instance)
@@ -1256,8 +1526,34 @@ def _retire_agent(agent_id: str, dist: str, root: Path, instance: Path, report: 
         _touch(config.installed_path)
         manifest.replace(target)
         report.lines.append(f"retired  {agent_id} -> docs/agents/retired/{agent_id}.yaml")
+    if retired is not None:
+        _remember_instruction(agent_id, dist, root, record, written, retired)
     _touch(config.installed_path)
     config.record_remove(agent_id)
+
+
+def _remember_instruction(
+    agent_id: str,
+    dist: str,
+    root: Path,
+    record: dict[str, Any],
+    written: Any,
+    retired: dict[str, Any],
+) -> None:
+    """Record the instruction file a retired agent leaves behind, and its sha256
+    as the plugin last wrote it (or as it is now, when the ledger predates that)."""
+    written = written if isinstance(written, dict) else {}
+    relative = written.get("instruction_file") or record.get("instruction_path")
+    if not isinstance(relative, str) or not relative:
+        return
+    try:
+        path = workspace_path(root, relative, allowed_prefix="brain", label="instruction file")
+    except TemplateSecurityError:
+        return
+    if not path.is_file() or path.is_symlink():
+        return
+    sha = written.get("instruction") or _sha256(path)
+    retired[relative] = {"plugin": dist, "agent": agent_id, "sha256": sha}
 
 
 def _remove_file(
@@ -1301,10 +1597,28 @@ def _why(exc: BaseException) -> str:
     return type(exc).__name__
 
 
-def _undo(entry: dict[str, Any], dist: str, root: Path, instance: Path, report: Report) -> None:
+def _undo(
+    entry: dict[str, Any],
+    dist: str,
+    root: Path,
+    instance: Path,
+    report: Report,
+    retired: dict[str, Any] | None = None,
+) -> None:
+    agent_files = entry.get("agent_files")
+    if not isinstance(agent_files, dict):
+        agent_files = {}
     for agent_id in entry.get("agents") or []:
         try:
-            _retire_agent(validate_identifier(agent_id), dist, root, instance, report)
+            _retire_agent(
+                validate_identifier(agent_id),
+                dist,
+                root,
+                instance,
+                report,
+                agent_files.get(agent_id),
+                retired,
+            )
         except (TemplateSecurityError, OSError, ValueError, yaml.YAMLError) as exc:
             report.warnings.append(f"agent {agent_id}: not retired ({type(exc).__name__})")
     for dest, recorded in (entry.get("files") or {}).items():
@@ -1366,12 +1680,13 @@ def retire(dist: str, *, workspace: Path | None = None, instance_dir: Path | Non
     if not instance.is_dir():
         return report
     ledger = read_ledger(instance)
+    retired = read_retired(instance)
     entry = ledger.get(dist)
     if not isinstance(entry, dict):
         return report
-    _undo(entry, dist, root, instance, report)
+    _undo(entry, dist, root, instance, report, retired)
     ledger.pop(dist, None)
-    _write_ledger(instance, ledger)
+    _write_ledger(instance, ledger, retired)
     return report
 
 

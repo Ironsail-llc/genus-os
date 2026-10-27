@@ -1527,3 +1527,138 @@ def test_the_plan_marks_webhooks_as_engine_loaded_config(ws, capsys) -> None:
     assert any(
         "docs/webhooks.yaml" in line and "engine-loaded" in line for line in out.splitlines()
     )
+
+
+# ---------------------------------------------------------------------------
+# reinstall after remove, and operator edits to a plugin agent
+# ---------------------------------------------------------------------------
+
+_DESK_MD = "brain/agents/desk-monitor.md"
+_DESK_YAML = "docs/agents/desk-monitor.yaml"
+_EDITED_MD = "# Desk Monitor\n\nThe operator's own wording.\n"
+
+
+def test_remove_then_install_then_sync_reclaims_the_unedited_instruction_file(
+    ws, hand_installed, capsys
+) -> None:
+    assert _install(ws) == 0
+    assert cmd_plugin(_args("remove", name=DIST)) == 0, capsys.readouterr().err
+    assert (ws / _DESK_MD).read_text() == _INSTRUCTIONS  # retire leaves it
+
+    assert _install(ws) == 0, capsys.readouterr().err
+    assert (ws / _DESK_YAML).is_file()
+    assert (ws / _DESK_MD).read_text() == _INSTRUCTIONS
+    assert _installed(ws)["desk-monitor"]["source"] == f"plugin:{DIST}"
+    assert cmd_plugin(_args("sync", strict=True)) == 0, capsys.readouterr().err
+
+
+def test_remove_then_install_then_sync_keeps_an_edited_instruction_file(
+    ws, hand_installed, capsys
+) -> None:
+    assert _install(ws) == 0
+    assert cmd_plugin(_args("remove", name=DIST)) == 0
+    (ws / _DESK_MD).write_text(_EDITED_MD)
+    capsys.readouterr()
+
+    assert _install(ws) == 0, capsys.readouterr().err
+    out = capsys.readouterr().out
+    assert (ws / _DESK_YAML).is_file()
+    assert (ws / _DESK_MD).read_text() == _EDITED_MD
+    assert _DESK_MD in out and "edited" in out
+
+    assert cmd_plugin(_args("sync", strict=True)) == 0, capsys.readouterr().err
+    assert (ws / _DESK_MD).read_text() == _EDITED_MD
+    # delete it, sync, and the plugin's version is back
+    (ws / _DESK_MD).unlink()
+    assert cmd_plugin(_args("sync")) == 0
+    assert (ws / _DESK_MD).read_text() == _INSTRUCTIONS
+
+
+def test_an_upgrade_that_drops_an_agent_then_ships_it_again_reinstalls_it(ws, capsys) -> None:
+    assert _install(ws) == 0
+    without = _MANIFEST.replace("agents:\n  - agents/desk-monitor\n", "")
+    assert _install(ws, version="1.1.0", manifest=without) == 0
+    assert not (ws / _DESK_YAML).exists()
+    assert _install(ws, version="1.2.0") == 0, capsys.readouterr().err
+    assert (ws / _DESK_YAML).is_file()
+    assert (ws / _DESK_MD).read_text() == _INSTRUCTIONS
+
+
+def test_a_foreign_instruction_file_is_refused_before_pip(ws, capsys) -> None:
+    (ws / _DESK_MD).write_text("# Somebody else's agent\n\nNot the plugin's.\n")
+    pip = installer._run_pip
+    assert _install(ws) != 0
+    err = capsys.readouterr().err
+    assert _DESK_MD in err
+    assert pip.calls == []
+    assert (ws / _DESK_MD).read_text() == "# Somebody else's agent\n\nNot the plugin's.\n"
+    assert not (ws / _DESK_YAML).exists()
+
+
+def test_another_plugins_retired_instruction_file_is_not_reclaimed(ws, capsys) -> None:
+    other_dist = "desk-rival"
+    assert _install(ws, dist=other_dist) == 0
+    assert cmd_plugin(_args("remove", name=other_dist)) == 0
+    # the rival's retired record does not hand its (since edited) file to us
+    (ws / _DESK_MD).write_text(_EDITED_MD)
+    capsys.readouterr()
+    assert _install(ws) != 0
+    assert _DESK_MD in capsys.readouterr().err
+    assert (ws / _DESK_MD).read_text() == _EDITED_MD
+
+
+def test_sync_keeps_an_operator_edit_to_the_instruction_file(ws, hand_installed, capsys) -> None:
+    assert cmd_plugin(_args("sync")) == 0
+    (ws / _DESK_MD).write_text(_EDITED_MD)
+    capsys.readouterr()
+    assert cmd_plugin(_args("sync", strict=True)) == 0
+    out = capsys.readouterr().out
+    assert (ws / _DESK_MD).read_text() == _EDITED_MD
+    assert _DESK_MD in out and "edited" in out
+    (ws / _DESK_MD).unlink()
+    assert cmd_plugin(_args("sync")) == 0
+    assert (ws / _DESK_MD).read_text() == _INSTRUCTIONS
+
+
+def test_sync_keeps_an_operator_edit_to_the_agent_manifest(ws, hand_installed, capsys) -> None:
+    assert cmd_plugin(_args("sync")) == 0
+    manifest = ws / _DESK_YAML
+    edited = manifest.read_text().replace("delivery:\n  mode: none", "delivery:\n  mode: inbox")
+    assert edited != manifest.read_text()
+    manifest.write_text(edited)
+    capsys.readouterr()
+    assert cmd_plugin(_args("sync", strict=True)) == 0
+    out = capsys.readouterr().out
+    assert manifest.read_text() == edited
+    assert _DESK_YAML in out and "edited" in out
+    manifest.unlink()
+    assert cmd_plugin(_args("sync")) == 0
+    assert yaml.safe_load(manifest.read_text())["delivery"]["mode"] == "none"
+
+
+def test_an_upgrade_updates_the_unedited_manifest_and_keeps_the_edited_instructions(
+    ws, capsys
+) -> None:
+    assert _install(ws) == 0
+    (ws / _DESK_MD).write_text(_EDITED_MD)
+    assert _install(ws, version="1.1.0", description="Watches the desk, better") == 0
+    data = yaml.safe_load((ws / _DESK_YAML).read_text())
+    assert data["description"] == "Watches the desk, better"
+    assert (ws / _DESK_MD).read_text() == _EDITED_MD
+
+
+def test_another_plugins_patch_on_a_plugin_agent_is_not_an_operator_edit(ws, capsys) -> None:
+    """A second plugin patching this plugin's agent must not freeze it."""
+    assert _install(ws) == 0
+    manifest = (
+        f"name: {_OTHER}\ncontract_version: 1\nhandlers:\n  - other_probe\n"
+        "patches:\n  - agent: desk-monitor\n    file: patches/desk.patch.yaml\n"
+    )
+    extra = {"other_agent/patches/desk.patch.yaml": "install:\n  set:\n    model: patched\n"}
+    assert _install(ws, dist=_OTHER, manifest=manifest, extra=extra) == 0
+    capsys.readouterr()
+    assert _install(ws, version="1.1.0", description="Watches the desk, better") == 0
+    out = capsys.readouterr().out
+    data = yaml.safe_load((ws / _DESK_YAML).read_text())
+    assert data["description"] == "Watches the desk, better"
+    assert "edited" not in out

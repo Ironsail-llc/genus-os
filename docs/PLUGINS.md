@@ -498,8 +498,13 @@ instruction-file check already applies to agents.
   recorded per plugin; a second plugin that sets or deletes a key another
   plugin already patches is refused, naming both.
 * **Operator edits.** A file the plugin wrote and the operator has since edited
-  is left alone by sync (with a warning) and by remove. To take the plugin's
-  version, delete the file and sync again.
+  is left alone by sync (with a warning) and by remove. That covers a plugin
+  agent's manifest and instruction file as well as `files:` and `workflows:`:
+  the ledger records what the plugin last wrote, so an edited one is kept while
+  an unedited one still takes a new release. A manifest key some plugin's
+  patch manages is not an operator edit. A kept edit is a warning, so
+  `sync --strict` does not fail on it. To take the plugin's version, delete the
+  file and sync again.
 
 ### Refusals
 
@@ -574,8 +579,13 @@ a second sync touches no file.
 `.robothor/plugin-assets.yaml` (the wheel's patch files are gone by then):
 
 * each agent's manifest moves to `docs/agents/retired/<id>.yaml` — the same
-  retire the Helm does; nothing is unlinked, the instruction file stays, and
-  re-instating an agent is a `mv` back — and its `installed.yaml` record goes;
+  retire the Helm does; nothing is unlinked, the instruction file stays — and
+  its `installed.yaml` record goes. The ledger remembers the instruction file
+  it left behind, so installing the same plugin again (or a release that ships
+  the agent again) takes it back: an unedited file gets the plugin's version,
+  and one the operator edited is kept, with a warning. An instruction file no
+  record ties to this plugin, with bytes other than the plugin renders, is
+  refused before pip runs;
 * each workflow and file it wrote is deleted, unless it has been edited since,
   in which case it is left and named in the output;
 * a file it overwrote is put back from its backup;
