@@ -1,3 +1,9 @@
+## [1.110.2](https://github.com/Ironsail-llc/genus-os/compare/v1.110.1...v1.110.2) (2026-10-27)
+
+### Bug Fixes
+
+* **engine:** resolve the event bus redis url from redis settings ([#708](https://github.com/Ironsail-llc/genus-os/issues/708)) ([711e6c7](https://github.com/Ironsail-llc/genus-os/commit/711e6c746cef69f614744cd0d4503beafd612276))
+
 ## [1.110.1](https://github.com/Ironsail-llc/genus-os/compare/v1.110.0...v1.110.1) (2026-10-26)
 
 ### Bug Fixes
