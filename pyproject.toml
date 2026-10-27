@@ -60,7 +60,11 @@ dependencies = [
     #   catches the disagreement.
     # The host venv runs 1.97.0. Raise the ceiling only after the fresh-install
     # gate and the drift test pass on the new release.
-    "litellm>=1.84.0,<1.105.3",
+    # Floor at 1.100.4, the first release on its line carrying the fix for
+    # CVE-2026-114612 (also fixed in 1.101.3, 1.102.2, 1.103.1). Anything
+    # older fails pip-audit in the `security` gate, so a fresh resolve must
+    # not be able to pick it.
+    "litellm>=1.100.4,<1.105.3",
     # litellm authenticates `vertex_ai/*` models with a Google service account
     # through google-auth, but declares it only inside its `google` extra,
     # which drags in all of google-cloud-aiplatform. Core, not an extra: an
