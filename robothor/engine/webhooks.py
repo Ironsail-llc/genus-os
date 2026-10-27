@@ -127,6 +127,8 @@ def _verify_hmac(payload_bytes: bytes, signature: str, secret: str) -> bool:
         hashlib.sha256,
     ).hexdigest()
 
+    if not signature.isascii():
+        return False
     return hmac.compare_digest(expected, signature)
 
 
@@ -153,11 +155,11 @@ def _verify_stripe_t_v1(
         if not sep:
             continue
         if key == "t":
-            try:
-                timestamp = int(value)
-            except ValueError:
+            # Unix seconds; bounded so the float comparison below cannot overflow
+            if not (value.isascii() and value.isdigit() and len(value) <= 12):
                 return False, "malformed timestamp"
-        elif key == "v1" and value:
+            timestamp = int(value)
+        elif key == "v1" and value and value.isascii():
             candidates.append(value)
 
     if timestamp is None or not candidates:

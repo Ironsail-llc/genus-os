@@ -349,7 +349,17 @@ class TestVerifyStripeTV1:
 
     @pytest.mark.parametrize(
         "header",
-        ["", "garbage", "t=abc,v1=deadbeef", "t=1700000000", "v1=deadbeef", "t=,v1="],
+        [
+            "",
+            "garbage",
+            "t=abc,v1=deadbeef",
+            "t=1700000000",
+            "v1=deadbeef",
+            "t=,v1=",
+            "t=1" + "0" * 400 + ",v1=deadbeef",  # would overflow float conversion
+            "t=-5,v1=deadbeef",
+            "t=1700000000,v1=\xe9",  # non-ASCII candidate
+        ],
     )
     def test_malformed(self, header):
         ok, _ = _verify_stripe_t_v1(self.body, header, PLATFORM_SECRET, 300, now=1_700_000_000)
@@ -606,3 +616,23 @@ def test_failed_publish_is_503_and_not_counted(mock_publish, mock_rate, client):
     )
     assert resp.status_code == 503
     assert "github" not in _channel_stats
+
+
+def test_verify_hmac_non_ascii_signature_is_rejected_not_raised():
+    assert _verify_hmac(b"data", "sha256=\xe9", "secret") is False
+
+
+@patch.dict("os.environ", {"TEST_PLATFORM_SECRET": PLATFORM_SECRET})
+@patch("robothor.engine.webhooks._check_rate_limit", new_callable=AsyncMock, return_value=True)
+@patch("robothor.engine.webhooks._publish_to_stream", new_callable=AsyncMock)
+def test_oversized_timestamp_is_401_not_500(mock_publish, mock_rate, platform_client):
+    payload = b'{"type": "x"}'
+    resp = platform_client.post(
+        "/api/webhooks/platform",
+        content=payload,
+        headers={
+            "Content-Type": "application/json",
+            "X-Platform-Signature": "t=1" + "0" * 400 + ",v1=deadbeef",
+        },
+    )
+    assert resp.status_code == 401
