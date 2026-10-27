@@ -1057,7 +1057,10 @@ def _install_agent(
         if path is not None:
             _touch(path)
     with tempfile.TemporaryDirectory(prefix="genus-plugin-agent-") as scratch:
-        staging = _stage_agent(agent, version, Path(scratch))
+        # Resolved: the template installer refuses a bundle path that runs
+        # through a symlink, and the default macOS temp dir does (/var ->
+        # /private/var).
+        staging = _stage_agent(agent, version, Path(scratch).resolve())
         try:
             result = install(
                 staging,

@@ -214,6 +214,22 @@ def _installed(ws: Path) -> dict:
 # ---------------------------------------------------------------------------
 
 
+def test_install_renders_the_agent_when_the_temp_dir_runs_through_a_symlink(
+    ws, tmp_path, monkeypatch, capsys
+) -> None:
+    """The default macOS temp dir sits under /var, a symlink to /private/var."""
+    import tempfile
+
+    real = tmp_path / "real-tmp"
+    real.mkdir()
+    alias = tmp_path / "alias-tmp"
+    alias.symlink_to(real, target_is_directory=True)
+    monkeypatch.setattr(tempfile, "tempdir", str(alias))
+
+    assert _install(ws) == 0, capsys.readouterr().err
+    assert (ws / "docs" / "agents" / "desk-monitor.yaml").is_file()
+
+
 def test_install_renders_the_agent_and_records_its_source(ws, capsys) -> None:
     assert _install(ws) == 0, capsys.readouterr().err
     manifest = yaml.safe_load((ws / "docs" / "agents" / "desk-monitor.yaml").read_text())
