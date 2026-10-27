@@ -37,7 +37,12 @@ from pathlib import PurePosixPath
 from typing import TYPE_CHECKING
 
 from robothor.plugins.manifest import MANIFEST_NAME
-from robothor.templates.safety import TemplateSecurityError, contained_path, safe_relative_path
+from robothor.templates.safety import (
+    TemplateSecurityError,
+    contained_path,
+    safe_relative_path,
+    trusted_directory,
+)
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from pathlib import Path
@@ -140,15 +145,23 @@ def extract_wheel(data: bytes, destination: Path) -> dict[str, int]:
     and only then is a single byte written. A validate-as-you-go loop leaves a
     partially written tree behind when the tenth member turns out to be the
     hostile one.
+
+    *destination* is the caller's own staging directory and must not run
+    through a symlink; it is refused, not followed. Resolve a directory made
+    under the platform temp root before passing it in.
     """
     if len(data) > MAX_WHEEL_BYTES:
         raise WheelError(f"The wheel is too large ({len(data)} bytes > {MAX_WHEEL_BYTES}).")
     destination.mkdir(parents=True, exist_ok=True)
-    # Canonicalise the caller's own staging directory once, up front. The
-    # containment helper refuses a root reached through a symlink, and the
-    # platform temp dir often is one (macOS: /var -> /private/var). Members
-    # are still checked against this real root, so nothing is loosened.
-    destination = destination.resolve(strict=True)
+    # The root itself must not run through a symlink: an aliased root is
+    # refused, never followed. A caller staging under the platform temp dir
+    # (macOS: /var -> /private/var) resolves its own directory before calling.
+    try:
+        trusted_directory(destination, label="wheel extraction root")
+    except TemplateSecurityError as exc:
+        raise WheelError(
+            "The wheel extraction directory runs through a symlink; resolve it before extracting."
+        ) from exc
 
     import io
 
@@ -352,7 +365,5 @@ def open_wheel(path: Path, destination: Path) -> WheelContents:
         raise WheelError(
             f"The wheel {path.name} could not be read ({type(exc).__name__})."
         ) from exc
-    destination.mkdir(parents=True, exist_ok=True)
-    destination = destination.resolve(strict=True)
     modes = extract_wheel(data, destination)
     return read_wheel(destination, modes=modes)
