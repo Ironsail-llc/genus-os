@@ -1312,3 +1312,18 @@ def test_remove_with_a_non_mapping_installed_yaml_is_a_sentence(
     err = capsys.readouterr().err
     assert "installed.yaml" in err and "Traceback" not in err
     assert any(plugin_dir.iterdir())
+
+
+def test_the_report_carries_no_rendered_values_or_validation_text(ws, capsys, monkeypatch) -> None:
+    """Report lines are ids, paths and counts: the install result's variable
+    context and the validators' environment-derived text never reach print."""
+    monkeypatch.setenv("EXAMPLE_TOKEN", "do-not-print-me")
+    overrides = ws / ".robothor" / "overrides"
+    overrides.mkdir(parents=True)
+    (overrides / "desk-monitor.yaml").write_text('cron_expr: "5 4 * * *"\nnote: do-not-print-me\n')
+    assert _install(ws) == 0
+    out = capsys.readouterr().out
+    assert "do-not-print-me" not in out
+    assert "5 4 * * *" not in out
+    assert "FAIL --" not in out
+    assert "advisory validation finding" in out

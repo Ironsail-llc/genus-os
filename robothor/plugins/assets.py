@@ -1056,9 +1056,18 @@ def _install_agent(
         except (TemplateSecurityError, FileNotFoundError, ValueError, OSError) as exc:
             raise AssetError(f"agent {agent.agent_id}: {exc}") from exc
     _engine_would_load(manifest, agent.agent_id)
-    report.lines.append(f"agent    {agent.agent_id} {result.get('version', '')}".rstrip())
-    for message in [*result.get("validation", []), *result.get("chain_validation", [])]:
-        report.warnings.append(f"{agent.agent_id}: {message}")
+    # Only facts this module owns reach the report: the id and the plugin's
+    # version, never values from the install result. That result carries the
+    # rendered variable context (instance config, operator overrides) and
+    # validation text built from environment lookups (check L, secret_refs);
+    # none of it belongs on an operator's terminal or in a CI log.
+    report.lines.append(f"agent    {agent.agent_id} {version}")
+    findings = len(result.get("validation") or []) + len(result.get("chain_validation") or [])
+    if findings:
+        report.warnings.append(
+            f"{agent.agent_id}: {findings} advisory validation finding(s); see them with "
+            f"`python scripts/validate_agents.py --agent {agent.agent_id}`"
+        )
 
 
 def _write_file(
