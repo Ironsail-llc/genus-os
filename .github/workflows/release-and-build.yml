@@ -116,11 +116,14 @@ jobs:
           pytest tests/integration/ -m integration
 
       - name: Audit Python dependencies
+        # One time-bounded exception, recorded under "Dependency Advisory
+        # Policy" in SECURITY.md and tracked in #723 (expires 2026-11-10):
         # GHSA-7hp6-4w63-5g45 (CVE-2026-114612) is a privilege escalation in
         # the litellm *proxy server* (reuse of its salt key across domains).
         # This project imports litellm as a completion library and never runs
-        # the proxy, so the advisory does not apply. Drop the ignore when
-        # litellm moves to a fixed release (>= 1.103.1 within the current cap).
+        # the proxy, so the advisory does not apply. The CI `security` job
+        # carries the same ignore; change both together. Drop it once litellm
+        # moves to a patched release (1.100.4, 1.101.3, 1.102.2, 1.103.1+).
         run: |
           pip install pip-audit==2.10.1
           pip-audit --ignore-vuln GHSA-7hp6-4w63-5g45
