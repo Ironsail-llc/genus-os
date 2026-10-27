@@ -1249,13 +1249,16 @@ def _remove_file(
     try:
         target = _dest(root, dest)
     except AssetError as exc:
-        report.warnings.append(f"{dest}: left in place ({exc})")
+        report.warnings.append(f"{dest}: left in place ({type(exc).__name__})")
         return
     backup = _backup_path(target, dist)
     if recorded.get("adopted"):
         # It was there before the plugin; it is not the plugin's to delete,
         # and neither is a backup some other installer made of it.
-        kept = f"; {backup.name} kept" if backup.is_file() else ""
+        # Report text is built from the DECLARED relative `dest` and the
+        # distribution name only, never from a resolved path.
+        declared_backup = f"{pathlib.PurePosixPath(dest).name}.pre-{dist}"
+        kept = f"; its backup {declared_backup} kept" if backup.is_file() else ""
         report.lines.append(f"left     {dest} (was in place before the plugin{kept})")
         return
     if target.is_file() and _sha256(target) != recorded.get("sha256"):
@@ -1273,12 +1276,20 @@ def _remove_file(
         report.lines.append(f"removed  {dest}")
 
 
+def _why(exc: BaseException) -> str:
+    """A fixed phrase for a report line, never the exception's own text (which
+    can carry a resolved path)."""
+    if isinstance(exc, AssetError):
+        return "its manifest is not valid YAML, or the patch is malformed"
+    return type(exc).__name__
+
+
 def _undo(entry: dict[str, Any], dist: str, root: Path, instance: Path, report: Report) -> None:
     for agent_id in entry.get("agents") or []:
         try:
             _retire_agent(validate_identifier(agent_id), dist, root, instance, report)
         except (TemplateSecurityError, OSError, ValueError, yaml.YAMLError) as exc:
-            report.warnings.append(f"agent {agent_id}: not retired ({exc})")
+            report.warnings.append(f"agent {agent_id}: not retired ({type(exc).__name__})")
     for dest, recorded in (entry.get("files") or {}).items():
         _remove_file(dest, recorded or {}, dist, root, report)
     for patch in entry.get("patches") or []:
@@ -1292,13 +1303,13 @@ def _undo(entry: dict[str, Any], dist: str, root: Path, instance: Path, report: 
             )
             section = _patch_section(patch.get("remove"), "ledger remove")
         except (TemplateSecurityError, AssetError) as exc:
-            report.warnings.append(f"patch for {agent!r}: not undone ({exc})")
+            report.warnings.append(f"patch for {agent!r}: not undone ({_why(exc)})")
             continue
         try:
             if target.is_file() and _patch_manifest(target, section):
                 report.lines.append(f"unpatched docs/agents/{agent}.yaml")
         except (AssetError, OSError) as exc:
-            report.warnings.append(f"patch for {agent!r}: not undone ({exc})")
+            report.warnings.append(f"patch for {agent!r}: not undone ({_why(exc)})")
 
 
 def check_retire(
