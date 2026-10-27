@@ -1,3 +1,13 @@
+## [1.112.0](https://github.com/Ironsail-llc/genus-os/compare/v1.111.0...v1.112.0) (2026-10-27)
+
+### Features
+
+* **engine:** per-channel webhook signature schemes and hook event payloads ([#711](https://github.com/Ironsail-llc/genus-os/issues/711)) ([379fa66](https://github.com/Ironsail-llc/genus-os/commit/379fa667106bf78e6e364c0bbc25fc1777127470))
+
+### Bug Fixes
+
+* **pr-review:** survive engine restarts and fetch heads the pull ref lags ([#719](https://github.com/Ironsail-llc/genus-os/issues/719)) ([44b5676](https://github.com/Ironsail-llc/genus-os/commit/44b56763dcbf4d0af8c24b23987fa12ba43c4e46))
+
 ## [1.111.0](https://github.com/Ironsail-llc/genus-os/compare/v1.110.2...v1.111.0) (2026-10-27)
 
 ### Features
