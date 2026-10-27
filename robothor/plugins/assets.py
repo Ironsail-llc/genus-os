@@ -1,0 +1,1070 @@
+"""Workspace files a plugin ships: agents, workflows, manifest patches, files.
+
+A plugin's ``genus-plugin.yaml`` may declare, as paths relative to the
+directory that holds it (package data inside the wheel)::
+
+    agents:            # agent template bundles, laid out like templates/agents/core/main
+      - agents/desk-monitor
+    workflows:         # copied to <workspace>/docs/workflows/<basename>
+      - workflows/example-pass.yaml
+    patches:           # edit an EXISTING agent manifest the plugin does not own
+      - agent: main
+        file: patches/main.patch.yaml
+    files:             # other workspace files, inside an allowlist
+      - src: extra/webhooks.yaml
+        dest: docs/webhooks.yaml
+        mode: overwrite          # or if_missing
+
+The declaration lives in the manifest -- which ``manifest_sha256`` already
+covers -- rather than in code, so a registry can read it without importing
+anything and the bytes the index signed are the bytes that decide what is
+written.
+
+Three operations, each called by ``genus plugin install`` / ``sync`` /
+``remove``:
+
+* :func:`plan` -- every refusal, before pip runs: unsafe paths, a destination
+  outside the allowlist or reached through a symlink, a missing source, an
+  agent somebody else installed, a file another plugin owns.
+* :func:`apply` -- render agents through the agent-template installer (so
+  ``.robothor/overrides/<id>.yaml`` and post-install validation apply exactly
+  as they do for ``genus agent install``), copy workflows and files, apply each
+  patch's ``install:`` section. Idempotent. The first time a plugin overwrites
+  a file it did not create, the original is kept as ``<dst>.pre-<plugin>``.
+* :func:`retire` -- move the plugin's agent manifests to
+  ``docs/agents/retired/`` (the Helm's retire convention: nothing is unlinked
+  and the instruction file stays), delete the workflows and files it wrote
+  unless the operator has edited them since, put back what it overwrote, and
+  apply each patch's ``remove:`` section.
+
+What the plugin wrote is recorded in ``.robothor/plugin-assets.yaml`` -- the
+ledger :func:`retire` works from, because by the time a plugin is removed pip
+has already deleted the patch files that said how to undo themselves.
+"""
+
+from __future__ import annotations
+
+import contextvars
+import copy
+import hashlib
+import logging
+import os
+import pathlib
+import shutil
+import tempfile
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+from robothor.plugins.manifest import ASSET_KEYS, MANIFEST_NAME
+from robothor.templates.safety import (
+    TemplateSecurityError,
+    contained_path,
+    default_workspace_root,
+    safe_relative_path,
+    trusted_directory,
+    validate_identifier,
+    workspace_path,
+)
+
+logger = logging.getLogger(__name__)
+
+__all__ = [
+    "AssetError",
+    "PluginAssets",
+    "apply",
+    "declaration_from_distribution",
+    "declaration_from_wheel",
+    "parse",
+    "plan",
+    "retire",
+    "sync_installed",
+]
+
+#: The ledger, beside ``installed.yaml`` in the instance directory.
+LEDGER_NAME = "plugin-assets.yaml"
+
+#: Where a ``files:`` entry may write. A prefix entry admits everything under
+#: it; ``docs/webhooks.yaml`` is the one exact file. ``docs/agents/`` is NOT
+#: here: an agent arrives through ``agents:`` and the template installer, or
+#: changes through ``patches:``, never as a raw file copy.
+FILE_PREFIXES = ("brain", "docs/workflows", "docs/hooks")
+FILE_EXACT = ("docs/webhooks.yaml",)
+
+#: The modes a ``files:`` entry may ask for.
+MODES = ("overwrite", "if_missing")
+
+#: Top-level manifest keys a patch may not touch: renaming an agent by patch
+#: would orphan every record that names it.
+_PROTECTED_KEYS = frozenset({"id"})
+
+
+class AssetError(ValueError):
+    """A refusal, in the sentence the operator gets told."""
+
+
+@dataclass(frozen=True)
+class AgentDecl:
+    src: str
+    agent_id: str
+    bundle: Path
+    #: Workspace-relative instruction path the template declares, if any.
+    instruction: str = ""
+
+
+@dataclass(frozen=True)
+class FileDecl:
+    src: str
+    dest: str
+    mode: str
+    source: Path
+    kind: str = "file"  # "workflow" or "file"
+
+
+@dataclass(frozen=True)
+class PatchDecl:
+    agent: str
+    src: str
+    install: dict[str, Any]
+    remove: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class PluginAssets:
+    """One plugin's declaration, parsed and checked against its own package."""
+
+    agents: tuple[AgentDecl, ...] = ()
+    files: tuple[FileDecl, ...] = ()
+    patches: tuple[PatchDecl, ...] = ()
+
+    @property
+    def empty(self) -> bool:
+        return not (self.agents or self.files or self.patches)
+
+
+@dataclass
+class Report:
+    """What one apply or retire did, as lines an operator reads."""
+
+    lines: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# names and paths
+# ---------------------------------------------------------------------------
+
+
+def canonical(name: str) -> str:
+    """PEP 503 normalisation: the ledger key and the ``plugin:<dist>`` source."""
+    from packaging.utils import canonicalize_name
+
+    return str(canonicalize_name(name))
+
+
+def _workspace(workspace: Path | None) -> Path:
+    root = workspace if workspace is not None else default_workspace_root()
+    try:
+        return trusted_directory(root, label="workspace root")
+    except TemplateSecurityError as exc:
+        raise AssetError(
+            "This plugin ships workspace files, but the workspace does not resolve to an "
+            "existing directory (set ROBOTHOR_WORKSPACE)."
+        ) from exc
+
+
+def _instance_dir(workspace: Path, instance_dir: Path | None) -> Path:
+    return instance_dir if instance_dir is not None else workspace / ".robothor"
+
+
+def _dest(workspace: Path, relative: str) -> Path:
+    """A ``files:``/``workflows:`` destination, inside the allowlist, no symlinks."""
+    parsed = _check_dest_shape(relative)
+    prefix = (
+        str(pathlib.PurePosixPath(parsed).parent)
+        if parsed in FILE_EXACT
+        else next(p for p in FILE_PREFIXES if parsed.startswith(p + "/"))
+    )
+    try:
+        return workspace_path(workspace, parsed, allowed_prefix=prefix, label="destination")
+    except TemplateSecurityError as exc:
+        raise AssetError(f"{relative!r}: {exc}") from exc
+
+
+def _source(base: Path, relative: object, *, want_dir: bool = False) -> Path:
+    """A package-relative path inside the plugin, regular and not a symlink."""
+    try:
+        path = contained_path(base, relative, label="plugin path")
+    except TemplateSecurityError as exc:
+        raise AssetError(f"{relative!r}: {exc}") from exc
+    if want_dir and not path.is_dir():
+        raise AssetError(f"{relative!r} is not a directory in the plugin package.")
+    if not want_dir and not path.is_file():
+        raise AssetError(f"{relative!r} is not a file in the plugin package.")
+    return path
+
+
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+#: The journal of the apply in progress, if any. Every write site calls
+#: :func:`_touch` first, so a plugin whose apply fails part-way is put back
+#: exactly as it was -- one plugin's broken agent never leaves half of its
+#: files new and half old, and never stops the next plugin's sync.
+_JOURNAL: contextvars.ContextVar[dict[Path, bytes | None] | None] = contextvars.ContextVar(
+    "plugin_asset_journal", default=None
+)
+
+
+def _touch(path: Path) -> None:
+    """Remember *path*'s bytes (or its absence) before the first write to it."""
+    journal = _JOURNAL.get()
+    if journal is None or path in journal:
+        return
+    journal[path] = path.read_bytes() if path.is_file() and not path.is_symlink() else None
+
+
+def _rollback(journal: dict[Path, bytes | None]) -> None:
+    for path, original in reversed(list(journal.items())):
+        try:
+            if original is None:
+                if path.is_file() and not path.is_symlink():
+                    path.unlink()
+            else:
+                _write_atomically(path, original)
+        except OSError as exc:  # pragma: no cover - best effort, and said so
+            logger.warning("Could not restore %s after a failed apply: %s", path.name, exc)
+
+
+def _write_atomically(path: Path, data: bytes) -> None:
+    _touch(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(data)
+        Path(tmp).replace(path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
+
+def _backup_path(path: Path, dist: str) -> Path:
+    return path.with_name(f"{path.name}.pre-{dist}")
+
+
+def _backup_once(path: Path, dist: str, workspace: Path) -> str | None:
+    """Copy *path* to ``<path>.pre-<dist>`` unless that copy already exists."""
+    if not path.exists():
+        return None
+    backup = _backup_path(path, dist)
+    if backup.is_symlink():
+        raise AssetError(f"Refusing to back up over a symlink: {backup.name}")
+    if not backup.exists():
+        _touch(backup)
+        shutil.copy2(path, backup)
+    return backup.relative_to(workspace).as_posix()
+
+
+# ---------------------------------------------------------------------------
+# parse
+# ---------------------------------------------------------------------------
+
+
+def _list(data: dict[str, Any], key: str) -> list[Any]:
+    value = data.get(key)
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise AssetError(f"{MANIFEST_NAME}: `{key}` must be a list.")
+    return value
+
+
+def _agent_id(bundle: Path, src: str) -> tuple[str, str]:
+    """The id the template installer will use, checked against the template."""
+    from robothor.templates.bundle_installer import BundleInstallError, read_manifest_template
+
+    setup: dict[str, Any] = {}
+    setup_path = bundle / "setup.yaml"
+    if setup_path.is_file() and not setup_path.is_symlink():
+        loaded = yaml.safe_load(setup_path.read_text(encoding="utf-8")) or {}
+        if not isinstance(loaded, dict):
+            raise AssetError(f"{src}/setup.yaml is not a YAML mapping.")
+        setup = loaded
+    try:
+        agent_id = validate_identifier(setup.get("agent_id", bundle.name), label="agent ID")
+    except TemplateSecurityError as exc:
+        raise AssetError(f"{src}: {exc}") from exc
+    template = bundle / "manifest.template.yaml"
+    if not template.is_file() or template.is_symlink():
+        raise AssetError(f"{src} has no manifest.template.yaml.")
+    defaults = {
+        k: v.get("default") if isinstance(v, dict) else v
+        for k, v in (setup.get("variables") or {}).items()
+    }
+    try:
+        manifest = read_manifest_template(template.read_text(encoding="utf-8"), defaults)
+    except BundleInstallError as exc:
+        raise AssetError(f"{src}: {exc}") from exc
+    declared = manifest.get("id")
+    if declared != agent_id:
+        raise AssetError(
+            f"{src}: manifest.template.yaml declares id {declared!r}, but the bundle "
+            f"installs as {agent_id!r}."
+        )
+    instruction = setup.get("instruction_file_path") or manifest.get("instruction_file") or ""
+    return agent_id, str(instruction) if isinstance(instruction, str) else ""
+
+
+def _patch_section(raw: Any, where: str) -> dict[str, Any]:
+    if raw is None:
+        return {"set": {}, "delete": []}
+    if not isinstance(raw, dict) or set(raw) - {"set", "delete"}:
+        raise AssetError(f"{where} must be a mapping with only `set:` and `delete:`.")
+    to_set = raw.get("set") or {}
+    to_delete = raw.get("delete") or []
+    if not isinstance(to_set, dict):
+        raise AssetError(f"{where}.set must be a mapping.")
+    if not isinstance(to_delete, list) or not all(
+        isinstance(k, str) and k and all(k.split(".")) for k in to_delete
+    ):
+        raise AssetError(f"{where}.delete must be a list of keys (dotted for nested).")
+    touched = {str(k) for k in to_set} | {k.split(".")[0] for k in to_delete}
+    if touched & _PROTECTED_KEYS:
+        raise AssetError(f"{where} may not change an agent's `id`.")
+    return {"set": to_set, "delete": list(to_delete)}
+
+
+def parse(manifest_text: str | None, base: Path) -> PluginAssets:
+    """The declaration in *manifest_text*, every path checked against *base*.
+
+    *base* is the directory holding ``genus-plugin.yaml``; every declared path
+    is relative to it and must stay inside it.
+    """
+    if not manifest_text:
+        return PluginAssets()
+    try:
+        data = yaml.safe_load(manifest_text) or {}
+    except yaml.YAMLError as exc:
+        raise AssetError(f"{MANIFEST_NAME} is not valid YAML ({type(exc).__name__}).") from exc
+    if not isinstance(data, dict) or not any(data.get(k) for k in ASSET_KEYS):
+        return PluginAssets()
+    try:
+        base = trusted_directory(base, label="plugin package")
+    except TemplateSecurityError as exc:
+        raise AssetError(str(exc)) from exc
+
+    agents: list[AgentDecl] = []
+    for src in _list(data, "agents"):
+        bundle = _source(base, src, want_dir=True)
+        agent_id, instruction = _agent_id(bundle, str(src))
+        agents.append(
+            AgentDecl(src=str(src), agent_id=agent_id, bundle=bundle, instruction=instruction)
+        )
+    ids = [a.agent_id for a in agents]
+    if len(ids) != len(set(ids)):
+        raise AssetError(f"{MANIFEST_NAME} declares the same agent twice.")
+
+    files: list[FileDecl] = []
+    for src in _list(data, "workflows"):
+        source = _source(base, src)
+        files.append(
+            FileDecl(
+                src=str(src),
+                dest=f"docs/workflows/{source.name}",
+                mode="overwrite",
+                source=source,
+                kind="workflow",
+            )
+        )
+    for entry in _list(data, "files"):
+        if not isinstance(entry, dict) or set(entry) - {"src", "dest", "mode"}:
+            raise AssetError("Each `files:` entry is a mapping of src, dest and mode.")
+        mode = entry.get("mode", "overwrite")
+        if mode not in MODES:
+            raise AssetError(f"`files:` mode {mode!r} is not one of {', '.join(MODES)}.")
+        dest = entry.get("dest")
+        if not isinstance(dest, str):
+            raise AssetError("Each `files:` entry needs a `dest`.")
+        safe_dest = _check_dest_shape(dest)
+        files.append(
+            FileDecl(
+                src=str(entry.get("src")),
+                dest=safe_dest,
+                mode=mode,
+                source=_source(base, entry.get("src")),
+            )
+        )
+    dests = [f.dest for f in files]
+    if len(dests) != len(set(dests)):
+        raise AssetError(f"{MANIFEST_NAME} writes the same destination twice.")
+
+    patches: list[PatchDecl] = []
+    for entry in _list(data, "patches"):
+        if not isinstance(entry, dict) or set(entry) - {"agent", "file"}:
+            raise AssetError("Each `patches:` entry is a mapping of agent and file.")
+        try:
+            agent = validate_identifier(entry.get("agent"), label="patched agent ID")
+        except TemplateSecurityError as exc:
+            raise AssetError(str(exc)) from exc
+        if agent in ids:
+            raise AssetError(
+                f"A patch edits an agent the plugin does not own; {agent!r} is one of its own."
+            )
+        path = _source(base, entry.get("file"))
+        try:
+            body = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        except yaml.YAMLError as exc:
+            raise AssetError(f"{entry.get('file')} is not valid YAML.") from exc
+        if not isinstance(body, dict) or set(body) - {"install", "remove"}:
+            raise AssetError(
+                f"{entry.get('file')} must be a mapping with `install:` and `remove:` sections."
+            )
+        patches.append(
+            PatchDecl(
+                agent=agent,
+                src=str(entry.get("file")),
+                install=_patch_section(body.get("install"), f"{entry.get('file')}: install"),
+                remove=_patch_section(body.get("remove"), f"{entry.get('file')}: remove"),
+            )
+        )
+    return PluginAssets(agents=tuple(agents), files=tuple(files), patches=tuple(patches))
+
+
+def _check_dest_shape(dest: str) -> str:
+    """The allowlist check that needs no workspace, so ``parse`` can refuse early."""
+    try:
+        parsed = safe_relative_path(dest, label="destination").as_posix()
+    except TemplateSecurityError as exc:
+        raise AssetError(f"{dest!r}: {exc}") from exc
+    if parsed not in FILE_EXACT and not any(parsed.startswith(p + "/") for p in FILE_PREFIXES):
+        allowed = ", ".join([*(p + "/**" for p in FILE_PREFIXES), *FILE_EXACT])
+        raise AssetError(f"{dest!r} is outside the paths a plugin may write ({allowed}).")
+    return parsed
+
+
+# ---------------------------------------------------------------------------
+# where the declaration comes from
+# ---------------------------------------------------------------------------
+
+
+def declaration_from_wheel(contents: Any) -> PluginAssets:
+    """The declaration in an extracted, reviewed wheel."""
+    if not contents.manifest_text or not contents.manifest_candidates:
+        return PluginAssets()
+    base = contents.root / pathlib.PurePosixPath(contents.manifest_candidates[0]).parent
+    return parse(contents.manifest_text, base)
+
+
+def declaration_from_distribution(dist: Any) -> PluginAssets:
+    """The declaration in an installed distribution, read without importing it.
+
+    The manifest file is located by the loader's own rule (``.dist-info`` first,
+    then the distribution's file list) and its text must equal what
+    :func:`robothor.plugins.manifest.read_manifest_text` returns -- the bytes
+    the lockfile hashed -- or nothing is applied.
+    """
+    from robothor.plugins.manifest import read_manifest_text
+
+    text = read_manifest_text(dist)
+    if not text:
+        return PluginAssets()
+    candidates = [
+        f for f in (dist.files or ()) if pathlib.PurePosixPath(str(f)).name == MANIFEST_NAME
+    ]
+    candidates.sort(
+        key=lambda f: not str(pathlib.PurePosixPath(str(f)).parent).endswith(".dist-info")
+    )
+    if candidates:
+        located = Path(str(dist.locate_file(candidates[0])))
+    else:
+        from robothor.plugins.manifest import editable_manifest_path
+
+        editable = editable_manifest_path(dist)
+        if editable is None:
+            return PluginAssets() if not _mentions_assets(text) else _unlocatable()
+        located = editable
+    try:
+        if located.is_symlink() or located.read_text(encoding="utf-8") != text:
+            raise AssetError(
+                f"The installed {MANIFEST_NAME} could not be matched to the declaration "
+                "the lockfile hashed; refusing to write its workspace files."
+            )
+    except OSError as exc:
+        raise AssetError(f"The installed {MANIFEST_NAME} could not be read.") from exc
+    return parse(text, located.parent)
+
+
+def _mentions_assets(text: str) -> bool:
+    try:
+        data = yaml.safe_load(text) or {}
+    except yaml.YAMLError:
+        return False
+    return isinstance(data, dict) and any(data.get(k) for k in ASSET_KEYS)
+
+
+def _unlocatable() -> PluginAssets:
+    raise AssetError(
+        f"The distribution's {MANIFEST_NAME} declares workspace files but cannot be "
+        "located on disk, so its package-relative paths cannot be resolved."
+    )
+
+
+# ---------------------------------------------------------------------------
+# the ledger
+# ---------------------------------------------------------------------------
+
+
+def _ledger_path(instance_dir: Path) -> Path:
+    instance_dir.mkdir(parents=True, exist_ok=True)
+    return contained_path(instance_dir, LEDGER_NAME, label="plugin asset ledger")
+
+
+def read_ledger(instance_dir: Path) -> dict[str, Any]:
+    path = _ledger_path(instance_dir)
+    if not path.exists():
+        return {}
+    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    plugins = data.get("plugins") if isinstance(data, dict) else None
+    if not isinstance(plugins, dict):
+        raise AssetError(f"The plugin asset ledger ({LEDGER_NAME}) is not readable.")
+    return plugins
+
+
+def _write_ledger(instance_dir: Path, plugins: dict[str, Any]) -> None:
+    text = yaml.safe_dump({"plugins": plugins}, default_flow_style=False, sort_keys=True)
+    _write_atomically(_ledger_path(instance_dir), text.encode("utf-8"))
+
+
+# ---------------------------------------------------------------------------
+# plan
+# ---------------------------------------------------------------------------
+
+
+def plan(
+    assets: PluginAssets,
+    dist: str,
+    *,
+    workspace: Path | None = None,
+    instance_dir: Path | None = None,
+) -> tuple[str, ...]:
+    """What :func:`apply` would write, or an :class:`AssetError`. Writes nothing."""
+    if assets.empty:
+        return ()
+    from robothor.templates.instance import InstanceConfig
+
+    dist = canonical(dist)
+    root = _workspace(workspace)
+    instance = _instance_dir(root, instance_dir)
+    ledger = read_ledger(instance) if instance.is_dir() else {}
+    installed = InstanceConfig(instance).installed_agents if instance.is_dir() else {}
+    mine = f"plugin:{dist}"
+
+    lines: list[str] = []
+    for agent in assets.agents:
+        record = installed.get(agent.agent_id)
+        if isinstance(record, dict) and record.get("source") != mine:
+            raise AssetError(
+                f"Agent {agent.agent_id!r} is already installed from "
+                f"{record.get('source')!r}; this plugin will not take it over. Remove "
+                "or rename that agent first."
+            )
+        lines.append(f"agent    {agent.agent_id} -> docs/agents/{agent.agent_id}.yaml")
+
+    others = {
+        dest: owner
+        for owner, entry in ledger.items()
+        if owner != dist and isinstance(entry, dict)
+        for dest in (entry.get("files") or {})
+    }
+    for item in assets.files:
+        _dest(root, item.dest)  # allowlist and symlink refusals
+        if item.dest in others:
+            raise AssetError(f"{item.dest} is owned by the plugin {others[item.dest]!r}.")
+        label = "workflow" if item.kind == "workflow" else "file    "
+        suffix = " (if missing)" if item.mode == "if_missing" else ""
+        lines.append(f"{label} {item.dest}{suffix}")
+
+    for patch in assets.patches:
+        try:
+            workspace_path(
+                root,
+                f"docs/agents/{patch.agent}.yaml",
+                allowed_prefix="docs/agents",
+                label="patched manifest",
+            )
+        except TemplateSecurityError as exc:
+            raise AssetError(str(exc)) from exc
+        lines.append(f"patch    docs/agents/{patch.agent}.yaml")
+    return tuple(lines)
+
+
+# ---------------------------------------------------------------------------
+# patches
+# ---------------------------------------------------------------------------
+
+
+def _merge(target: Any, changes: dict[str, Any]) -> None:
+    """Deep merge for mappings; any other value, lists included, replaces."""
+    for key, value in changes.items():
+        current = target.get(key) if hasattr(target, "get") else None
+        if isinstance(value, dict) and isinstance(current, dict):
+            _merge(current, value)
+        else:
+            target[key] = copy.deepcopy(value)
+
+
+def _delete(target: Any, dotted: str) -> None:
+    *parents, leaf = dotted.split(".")
+    node = target
+    for part in parents:
+        node = node.get(part) if isinstance(node, dict) else None
+        if node is None:
+            return
+    if isinstance(node, dict) and leaf in node:
+        del node[leaf]
+
+
+def _edit(document: Any, section: dict[str, Any]) -> None:
+    _merge(document, section.get("set") or {})
+    for key in section.get("delete") or []:
+        _delete(document, key)
+
+
+def _patch_would_change(path: Path, section: dict[str, Any]) -> bool:
+    """Whether *section* changes *path*. A patch already applied -- by an
+    earlier sync, or by an installer that ran first -- changes nothing."""
+    before = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    if not isinstance(before, dict):
+        raise AssetError(f"{path.name} is not a YAML mapping; it was not patched.")
+    after = copy.deepcopy(before)
+    _edit(after, section)
+    return after != before
+
+
+def _patch_manifest(path: Path, section: dict[str, Any]) -> bool:
+    """Apply one section to *path* in place. True when the file changed."""
+    # The comment-preserving round trip `genus agent` already uses (ruamel.yaml
+    # when it is importable, PyYAML otherwise), imported rather than copied.
+    from robothor.cli.agent import _load_manifest, _save_manifest
+
+    if not _patch_would_change(path, section):
+        return False
+    _touch(path)
+    document, handler = _load_manifest(path)
+    _edit(document, section)
+    _save_manifest(path, document, handler)
+    return True
+
+
+# ---------------------------------------------------------------------------
+# apply
+# ---------------------------------------------------------------------------
+
+
+def _stage_agent(agent: AgentDecl, version: str, into: Path) -> Path:
+    """A private copy of the bundle, with a setup.yaml if the plugin shipped none."""
+    staging = into / agent.agent_id
+    staging.mkdir()
+    for member in agent.bundle.iterdir():
+        if member.is_file() and not member.is_symlink():
+            shutil.copyfile(member, staging / member.name)
+    if not (staging / "setup.yaml").exists():
+        (staging / "setup.yaml").write_text(
+            yaml.safe_dump({"agent_id": agent.agent_id, "version": version, "variables": {}}),
+            encoding="utf-8",
+        )
+    return staging
+
+
+def _engine_would_load(path: Path, agent_id: str) -> None:
+    """Refuse a rendered manifest the engine itself would refuse at load.
+
+    The engine's own gate (``robothor.engine.config._enforce_manifest_schema``),
+    so its mode decides: under ``enforce`` a schema error refuses the agent,
+    on the other rungs it is reported by the engine as it always was. The
+    template installer's checks A-R stay advisory, as they are for ``genus
+    agent install`` -- they cannot see plugin tools, and they run before the
+    instruction file exists.
+    """
+    try:
+        from robothor.engine.config import _enforce_manifest_schema
+        from robothor.engine.manifest_schema import ManifestSchemaError
+    except Exception as exc:  # noqa: BLE001 - no engine on the path is a normal state
+        logger.debug("Engine schema gate unavailable (%s)", type(exc).__name__)
+        return
+    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    try:
+        _enforce_manifest_schema(data, manifest_dir=path.parent)
+    except ManifestSchemaError as exc:
+        raise AssetError(f"agent {agent_id}: the engine would refuse it ({exc})") from exc
+
+
+def _install_agent(
+    agent: AgentDecl,
+    dist: str,
+    version: str,
+    root: Path,
+    instance: Path,
+    first_time: bool,
+    report: Report,
+) -> None:
+    from robothor.templates.installer import install
+
+    manifest = workspace_path(
+        root,
+        f"docs/agents/{agent.agent_id}.yaml",
+        allowed_prefix="docs/agents",
+        label="agent manifest",
+    )
+    instruction = None
+    if agent.instruction:
+        try:
+            instruction = workspace_path(
+                root, agent.instruction, allowed_prefix="brain", label="instruction file"
+            )
+        except TemplateSecurityError as exc:
+            raise AssetError(f"agent {agent.agent_id}: {exc}") from exc
+    owned = [p for p in (manifest, instruction, instance / "installed.yaml") if p is not None]
+    before = {p: (p.read_bytes() if p.is_file() else None) for p in owned}
+    for path in owned:
+        _touch(path)
+    with tempfile.TemporaryDirectory(prefix="genus-plugin-agent-") as scratch:
+        staging = _stage_agent(agent, version, Path(scratch))
+        try:
+            result = install(
+                staging,
+                auto_yes=True,
+                instance_dir=instance,
+                repo_root=root,
+                source="plugin",
+                source_ref=dist,
+            )
+        except (TemplateSecurityError, FileNotFoundError, ValueError, OSError) as exc:
+            raise AssetError(f"agent {agent.agent_id}: {exc}") from exc
+    _engine_would_load(manifest, agent.agent_id)
+    # A hand-copied agent the plugin is now taking over is kept as
+    # ``<dst>.pre-<plugin>`` -- the first time, and only if rendering changed it.
+    if first_time:
+        for written in (manifest, instruction):
+            old = before.get(written) if written is not None else None
+            if written is None or old is None or written.read_bytes() == old:
+                continue
+            backup = _backup_path(written, dist)
+            if not backup.exists() and not backup.is_symlink():
+                _touch(backup)
+                _write_atomically(backup, old)
+    report.lines.append(f"agent    {agent.agent_id} {result.get('version', '')}".rstrip())
+    for message in [*result.get("validation", []), *result.get("chain_validation", [])]:
+        report.warnings.append(f"{agent.agent_id}: {message}")
+
+
+def _write_file(
+    item: FileDecl, dist: str, root: Path, previous: dict[str, Any] | None, report: Report
+) -> dict[str, Any] | None:
+    """Write one file; return its ledger entry, or None when it is not ours.
+
+    Identical content is a no-op with no backup -- which is what makes running
+    after an installer that already copied the same file safe -- and an
+    existing ``<dst>.pre-<plugin>`` is never overwritten.
+    """
+    target = _dest(root, item.dest)
+    data = item.source.read_bytes()
+    if item.mode == "if_missing" and target.exists():
+        if previous is None:
+            report.lines.append(f"kept     {item.dest} (exists; if_missing)")
+        return previous
+    backup = previous.get("backup") if previous else None
+    if previous is None and target.exists() and target.read_bytes() != data:
+        backup = _backup_once(target, dist, root)
+    if not target.exists() or target.read_bytes() != data:
+        _write_atomically(target, data)
+        report.lines.append(f"wrote    {item.dest}")
+    return {"sha256": hashlib.sha256(data).hexdigest(), "backup": backup}
+
+
+def apply(
+    assets: PluginAssets,
+    dist: str,
+    version: str,
+    *,
+    workspace: Path | None = None,
+    instance_dir: Path | None = None,
+) -> Report:
+    """Write the declared workspace files. Idempotent; see the module docstring.
+
+    All or nothing per plugin: on any failure every file this call touched is
+    restored and the ledger is left as it was, then the :class:`AssetError`
+    propagates. A caller looping over plugins (``sync``) reports it and moves
+    on to the next one.
+    """
+    dist = canonical(dist)
+    report = Report()
+    if assets.empty:
+        # Nothing declared now; only an upgrade that dropped everything it
+        # used to ship has anything to do, and that needs a ledger entry.
+        raw = workspace if workspace is not None else default_workspace_root()
+        instance = _instance_dir(Path(raw), instance_dir)
+        if not instance.is_dir() or dist not in read_ledger(instance):
+            return report
+    plan(assets, dist, workspace=workspace, instance_dir=instance_dir)
+    root = _workspace(workspace)
+    instance = _instance_dir(root, instance_dir)
+    ledger = read_ledger(instance)
+    found = ledger.get(dist)
+    previous: dict[str, Any] = found if isinstance(found, dict) else {}
+    before_agents = set(previous.get("agents") or [])
+    before_files: dict[str, Any] = dict(previous.get("files") or {})
+    before_patches = {
+        p.get("agent"): p for p in previous.get("patches") or [] if isinstance(p, dict)
+    }
+
+    entry: dict[str, Any] = {"version": version, "agents": [], "files": {}, "patches": []}
+    journal: dict[Path, bytes | None] = {}
+    token = _JOURNAL.set(journal)
+    try:
+        for agent in assets.agents:
+            _install_agent(
+                agent, dist, version, root, instance, agent.agent_id not in before_agents, report
+            )
+            entry["agents"].append(agent.agent_id)
+        for item in assets.files:
+            recorded = _write_file(item, dist, root, before_files.get(item.dest), report)
+            if recorded is not None:
+                entry["files"][item.dest] = recorded
+        for patch in assets.patches:
+            target = workspace_path(
+                root,
+                f"docs/agents/{patch.agent}.yaml",
+                allowed_prefix="docs/agents",
+                label="patched manifest",
+            )
+            if not target.is_file():
+                report.warnings.append(
+                    f"patch for {patch.agent!r} skipped: docs/agents/{patch.agent}.yaml "
+                    "does not exist"
+                )
+                continue
+            if _patch_would_change(target, patch.install):
+                if patch.agent not in before_patches:
+                    _backup_once(target, dist, root)
+                _patch_manifest(target, patch.install)
+                report.lines.append(f"patched  docs/agents/{patch.agent}.yaml")
+            entry["patches"].append({"agent": patch.agent, "remove": patch.remove})
+
+        # What an upgrade stopped shipping is retired like a removal would.
+        patched = {x["agent"] for x in entry["patches"]}
+        stale = {
+            "agents": sorted(before_agents - set(entry["agents"])),
+            "files": {k: v for k, v in before_files.items() if k not in entry["files"]},
+            "patches": [p for a, p in before_patches.items() if a not in patched],
+        }
+        _undo(stale, dist, root, instance, report)
+
+        if entry["agents"] or entry["files"] or entry["patches"]:
+            ledger[dist] = entry
+        else:
+            ledger.pop(dist, None)
+        _write_ledger(instance, ledger)
+    except Exception as exc:
+        _rollback(journal)
+        if isinstance(exc, AssetError):
+            raise
+        raise AssetError(f"{type(exc).__name__}: {exc}") from exc
+    finally:
+        _JOURNAL.reset(token)
+    return report
+
+
+# ---------------------------------------------------------------------------
+# retire
+# ---------------------------------------------------------------------------
+
+
+def _retire_agent(agent_id: str, dist: str, root: Path, instance: Path, report: Report) -> None:
+    from robothor.templates.instance import InstanceConfig
+
+    config = InstanceConfig.load(instance)
+    record = config.installed_agents.get(agent_id)
+    if isinstance(record, dict) and record.get("source") != f"plugin:{dist}":
+        report.warnings.append(
+            f"agent {agent_id} is now installed from {record.get('source')!r}; left alone"
+        )
+        return
+    agents_dir = root / "docs" / "agents"
+    manifest = workspace_path(
+        root, f"docs/agents/{agent_id}.yaml", allowed_prefix="docs/agents", label="agent manifest"
+    )
+    if manifest.is_file() and not manifest.is_symlink():
+        (agents_dir / "retired").mkdir(parents=True, exist_ok=True)
+        target = contained_path(agents_dir, f"retired/{agent_id}.yaml", label="retired manifest")
+        _touch(manifest)
+        _touch(target)
+        _touch(config.installed_path)
+        manifest.replace(target)
+        report.lines.append(f"retired  {agent_id} -> docs/agents/retired/{agent_id}.yaml")
+    _touch(config.installed_path)
+    config.record_remove(agent_id)
+
+
+def _remove_file(
+    dest: str, recorded: dict[str, Any], dist: str, root: Path, report: Report
+) -> None:
+    try:
+        target = _dest(root, dest)
+    except AssetError as exc:
+        report.warnings.append(f"{dest}: left in place ({exc})")
+        return
+    if target.is_file() and _sha256(target) != recorded.get("sha256"):
+        report.warnings.append(f"{dest}: edited since the plugin wrote it; left in place")
+        return
+    backup = _backup_path(target, dist)
+    if recorded.get("backup") and backup.is_file() and not backup.is_symlink():
+        _touch(target)
+        _touch(backup)
+        backup.replace(target)
+        report.lines.append(f"restored {dest}")
+        return
+    if target.is_file():
+        _touch(target)
+        target.unlink()
+        report.lines.append(f"removed  {dest}")
+
+
+def _undo(entry: dict[str, Any], dist: str, root: Path, instance: Path, report: Report) -> None:
+    for agent_id in entry.get("agents") or []:
+        try:
+            _retire_agent(validate_identifier(agent_id), dist, root, instance, report)
+        except (TemplateSecurityError, OSError) as exc:
+            report.warnings.append(f"agent {agent_id}: not retired ({exc})")
+    for dest, recorded in (entry.get("files") or {}).items():
+        _remove_file(dest, recorded or {}, dist, root, report)
+    for patch in entry.get("patches") or []:
+        agent = patch.get("agent") if isinstance(patch, dict) else None
+        try:
+            target = workspace_path(
+                root,
+                f"docs/agents/{validate_identifier(agent)}.yaml",
+                allowed_prefix="docs/agents",
+                label="patched manifest",
+            )
+            section = _patch_section(patch.get("remove"), "ledger remove")
+        except (TemplateSecurityError, AssetError) as exc:
+            report.warnings.append(f"patch for {agent!r}: not undone ({exc})")
+            continue
+        if target.is_file() and _patch_manifest(target, section):
+            report.lines.append(f"unpatched docs/agents/{agent}.yaml")
+
+
+def retire(dist: str, *, workspace: Path | None = None, instance_dir: Path | None = None) -> Report:
+    """Undo what :func:`apply` recorded for *dist*. Needs no wheel."""
+    dist = canonical(dist)
+    report = Report()
+    root_raw = workspace if workspace is not None else default_workspace_root()
+    if not Path(root_raw).is_dir():
+        return report
+    root = _workspace(root_raw)
+    instance = _instance_dir(root, instance_dir)
+    if not instance.is_dir():
+        return report
+    ledger = read_ledger(instance)
+    entry = ledger.get(dist)
+    if not isinstance(entry, dict):
+        return report
+    _undo(entry, dist, root, instance, report)
+    ledger.pop(dist, None)
+    _write_ledger(instance, ledger)
+    return report
+
+
+# ---------------------------------------------------------------------------
+# sync
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class SyncedPlugin:
+    name: str
+    report: Report | None = None
+    skipped: str = ""
+    #: True for a plugin the ledger remembers that is no longer installed.
+    orphaned: bool = False
+
+
+#: What sync says about a plugin that has disappeared since the last sync.
+ORPHAN_NOTE = (
+    "no longer installed; its agents and files were left in place. Run "
+    "`genus plugin remove --force {name}` to retire them"
+)
+
+
+def sync_installed(
+    distributions: dict[str, Any] | None = None,
+    *,
+    lock_path: Path | None = None,
+    workspace: Path | None = None,
+    instance_dir: Path | None = None,
+) -> list[SyncedPlugin]:
+    """Apply every installed plugin's workspace files, under the loader's gate.
+
+    This is the whole install path for a plugin put on the path by hand
+    (``pip install --no-deps --target <plugin dir> <wheel>``, then ``genus
+    plugin sync``), so it does everything ``genus plugin install`` does to the
+    workspace, from the installed copy.
+
+    * **The loader's gate, not a second one.** A distribution the loader would
+      refuse to import -- disabled, or its manifest drifted from the recorded
+      row -- gets nothing written. A distribution with no manifest declares
+      nothing, which is the only thing ``enforce`` changes for workspace files:
+      in every mode, nothing undeclared is ever written.
+    * **One plugin at a time.** A plugin whose apply fails is rolled back to
+      what it had and reported; the rest still sync.
+    * **A plugin that disappeared is reported, not retired.** Discovery reads
+      the interpreter's path; a sync run from an environment that is missing
+      the plugin directory would otherwise retire the whole plugin fleet. The
+      report names the command that retires them on purpose.
+    """
+    from robothor.plugins import lockfile
+
+    found = lockfile.installed_distributions() if distributions is None else distributions
+    lock = lockfile.read_lockfile(lock_path)
+    results: list[SyncedPlugin] = []
+    for name, dist in sorted(found.items()):
+        try:
+            declared = declaration_from_distribution(dist)
+        except AssetError as exc:
+            results.append(SyncedPlugin(name, skipped=str(exc)))
+            continue
+        refusal = lockfile.refusal_for(dist, lock)
+        if refusal is not None:
+            if not declared.empty:
+                results.append(SyncedPlugin(name, skipped=refusal))
+            continue
+        try:
+            report = apply(
+                declared,
+                name,
+                str(getattr(dist, "version", "") or ""),
+                workspace=workspace,
+                instance_dir=instance_dir,
+            )
+        except (AssetError, OSError) as exc:
+            results.append(
+                SyncedPlugin(name, skipped=f"{exc} (its previous files were left as they were)")
+            )
+            continue
+        if report.lines or report.warnings:
+            results.append(SyncedPlugin(name, report=report))
+
+    raw = workspace if workspace is not None else default_workspace_root()
+    instance = _instance_dir(Path(raw), instance_dir)
+    if instance.is_dir():
+        present = {canonical(n) for n in found}
+        results.extend(
+            SyncedPlugin(gone, skipped=ORPHAN_NOTE.format(name=gone), orphaned=True)
+            for gone in sorted(set(read_ledger(instance)) - present)
+        )
+    return results

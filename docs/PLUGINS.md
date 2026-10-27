@@ -380,12 +380,161 @@ installer could not have been installed at all without a manifest the index had
 pinned; letting it through `observe` would mean nothing compared declared names
 to actual surface at any stage.
 
-> **Editable installs (`pip install -e .`) cannot ship a manifest.** They expose
-> only a `.pth` shim to the packaging layer, so the file is invisible to it and
-> `enforce` will refuse the plugin. This is a real limitation of development
-> mode, not something to work around by importing the package to find its own
-> manifest — that would defeat the entire point. Use a normal install to test
-> under `enforce`.
+> **Editable installs (`pip install -e .`).** Their file list carries no
+> package files, only a path shim, so the manifest beside the package is not in
+> it. For a distribution whose `direct_url.json` says `editable`, and only for
+> one, Genus locates the package through its import spec
+> (`importlib.util.find_spec` on the entry point's top-level package, which
+> finds the directory without executing anything) and reads the manifest from
+> there. This is a development convenience; test under `enforce` with a real
+> wheel before you publish.
+
+## Shipping agents, workflows and workspace files
+
+A plugin can carry agents, workflows, edits to an existing agent, and a few
+other workspace files. They are declared in the same `genus-plugin.yaml` — so
+`manifest_sha256` covers them, and a registry reads them without importing
+anything — as paths **relative to the directory that holds
+`genus-plugin.yaml`**, shipped as package data:
+
+```yaml
+# example_agent/genus-plugin.yaml
+name: example-agent
+contract_version: 1
+handlers:
+  - example_probe
+entry_points:
+  genus.tools:
+    - example
+agents:            # agent template bundles
+  - agents/desk-monitor
+workflows:         # copied to <workspace>/docs/workflows/<basename>
+  - workflows/example-pass.yaml
+patches:           # edit an EXISTING agent the plugin does not own
+  - agent: main
+    file: patches/main.patch.yaml
+files:             # other workspace files, inside an allowlist
+  - src: extra/webhooks.yaml
+    dest: docs/webhooks.yaml
+    mode: overwrite          # or if_missing
+```
+
+```toml
+[tool.setuptools.package-data]
+example_agent = ["genus-plugin.yaml", "agents/**/*", "workflows/*", "patches/*", "extra/*"]
+```
+
+| key | what it is | what happens to it |
+|---|---|---|
+| `agents` | a directory laid out like `templates/agents/core/main`: `manifest.template.yaml`, `instructions.template.md`, optional `setup.yaml` and `SKILL.md` | rendered by the agent-template installer — the same code as `genus agent install` — into `docs/agents/<id>.yaml` and the instruction file under `brain/`, and recorded in `.robothor/installed.yaml` with `source: plugin:<distribution>`. With no `setup.yaml`, the agent id is the directory name and the version is the plugin's. `.robothor/overrides/<id>.yaml` applies exactly as it does to any template |
+| `workflows` | a file | copied to `docs/workflows/<basename>` |
+| `patches` | `agent:` an agent id the plugin does **not** ship, `file:` a YAML file with top-level `install:` and `remove:` sections | each section has `set:` — a deep merge for mappings; any other value, lists included, replaces — and `delete:`, a list of keys, dotted for nested ones. `set` runs before `delete`. A patch may not touch `id`. A patch whose target agent does not exist is skipped with a warning |
+| `files` | `src`, `dest`, `mode` (`overwrite`, the default, or `if_missing`) | `dest` must be under `brain/`, `docs/workflows/` or `docs/hooks/`, or be exactly `docs/webhooks.yaml`. `if_missing` never replaces a file that exists |
+
+### Refusals
+
+Taken before anything is written — for `genus plugin install`, before pip runs:
+an absolute path or one with `..`; a source outside the plugin's package; a
+destination outside the allowlist, or reached through a symlink anywhere on its
+way; a `manifest.template.yaml` whose `id` is not the bundle's agent id; an
+agent already installed from another source (`genus agent install`, the hub,
+another plugin); a file another plugin owns; a malformed patch.
+
+A rendered agent the engine itself would refuse at load — its manifest schema
+under `ROBOTHOR_MANIFEST_SCHEMA_MODE=enforce` — is refused too. The template
+installer's checks A–R are **reported, not enforced**, as they are for `genus
+agent install`: they cannot see plugin tools, which are not in the static
+registry.
+
+Everything one plugin writes in one run is applied **all or nothing**. A
+failure part-way restores every file that run touched and leaves the record of
+the previous run in place.
+
+### Install, sync and remove
+
+**`genus plugin install`** writes them from the reviewed wheel, after pip and
+after the lockfile row. `--dry-run` lists them under `workspace`.
+
+**`genus plugin sync`** writes them for **every installed distribution that
+declares them**, from the installed copy. This is the whole install path for a
+plugin put on the import path by hand, which is how a container image without
+pip gets its plugins:
+
+```bash
+uv pip install --no-deps --target "$ROBOTHOR_PLUGIN_DIR" ./example_agent-1.0.0-py3-none-any.whl
+genus plugin sync
+```
+
+Sync applies the loader's own gate and nothing stricter: a plugin the loader
+would refuse to import — disabled, or a manifest that no longer matches its
+lockfile row — gets nothing written. In every manifest mode, `enforce`
+included, a plugin the loader would load gets its declared files: its Python
+already runs inside the engine, so letting it write declared, allowlisted
+workspace files adds no privilege, and nothing undeclared is ever written.
+
+One plugin failing does not stop the others. It is reported, its previous
+files stay as they were, and sync exits `0`: the lockfile part, which every
+other plugin depends on, did succeed.
+
+Sync is idempotent, and safe to run after another tool has already copied the
+same files or applied the same patch: identical content is not rewritten and
+not backed up, a patch whose values are already present changes nothing, and
+an existing backup is never overwritten.
+
+**`genus plugin remove`** retires what the plugin wrote, from the record in
+`.robothor/plugin-assets.yaml` (the wheel's patch files are gone by then):
+
+* each agent's manifest moves to `docs/agents/retired/<id>.yaml` — the same
+  retire the Helm does; nothing is unlinked, the instruction file stays, and
+  re-instating an agent is a `mv` back — and its `installed.yaml` record goes;
+* each workflow and file it wrote is deleted, unless it has been edited since,
+  in which case it is left and named in the output;
+* a file it overwrote is put back from its backup;
+* each patch's `remove:` section is applied to its agent.
+
+A distribution in `ROBOTHOR_PLUGIN_DIR` is removed **without `--force`**, even
+one only `sync` recorded: that directory belongs to the platform. Its files are
+deleted from that directory using its own `RECORD` (pip is not involved — it
+cannot see a `--target` install, and the engine image does not ship it), so the
+next `sync` does not find it again.
+
+**A plugin that disappeared** — no longer on the import path at the next
+`sync` — is **reported, not retired**. Discovery reads the interpreter's path,
+and a sync run from a shell missing the plugin directory would otherwise retire
+every plugin's agents at once. Retire one on purpose with:
+
+```bash
+genus plugin remove --force example-agent
+```
+
+which, for a distribution that is no longer installed, skips pip and retires
+its workspace files.
+
+### Upgrades and backups
+
+Upgrading re-renders the agents from the new templates with the operator's
+`.robothor/overrides/<id>.yaml` applied, so a new release updates the agent and
+keeps the operator's settings. Anything the new release no longer declares is
+retired as a removal would. A patch is re-applied from the new `install:`
+section; a key an older release set and the new one does not mention stays
+until the plugin is removed.
+
+The first time a plugin overwrites a file it did not create — a hand-copied
+agent manifest or instruction file, a `files:` destination, an agent it
+patches — the original is kept beside it as `<file>.pre-<distribution>`. Only
+once, only when the content actually changes, and an existing backup is never
+replaced.
+
+Patches go through the same comment-preserving round trip `genus agent` uses,
+which keeps comments only when `ruamel.yaml` is installed (the platform does
+not depend on it). Without it the patched manifest is rewritten by PyYAML and
+its comments are lost; the `.pre-<distribution>` backup is the original.
+
+### Scan verdict
+
+`instructions.template.md` is text a model reads, so the static scan marks a
+wheel that carries agents `review`: `genus plugin install` needs
+`--accept-review` for it.
 
 ## Disabling and the lockfile
 

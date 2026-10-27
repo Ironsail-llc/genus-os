@@ -294,6 +294,7 @@ def cmd_plugin_sync(force: bool = False) -> int:
         print(f"  {row.name} {row.version or '-'}  {mark}  {flag}  verdict={row.verdict}")
     for gone in result.removed:
         print(f"  {gone}  dropped — no longer installed")
+    _sync_workspace()
     if result.added or result.updated or result.removed:
         print(f"\n{_RELOAD_HINT}")
     return 0
@@ -324,9 +325,44 @@ def _print_plan(plan: Any, *, would: bool) -> None:
     )
     for reason in plan.reasons:
         print(f"      - {reason}")
+    if getattr(plan, "workspace", ()):
+        print("  workspace")
+        for line in plan.workspace:
+            print(f"      {line}")
     if would:
         print("\n  would run:")
         print("    " + " ".join(plan.pip_command))
+
+
+def _print_workspace(lines: Any, warnings: Any) -> None:
+    """What a verb wrote to the workspace, and what it refused to touch."""
+    if lines:
+        print("\nworkspace:")
+        for line in lines:
+            print(f"  {line}")
+    if warnings:
+        print("\nworkspace warnings:")
+        for line in warnings:
+            print(f"  {line}")
+
+
+def _sync_workspace() -> None:
+    """Write every installed plugin's declared workspace files, after the lockfile."""
+    from robothor.plugins import assets
+
+    try:
+        results = assets.sync_installed()
+    except (assets.AssetError, OSError) as exc:
+        print(f"\nworkspace: not synced ({exc})", file=sys.stderr)
+        return
+    for item in results:
+        if item.orphaned:
+            print(f"\n{item.name}: {item.skipped}")
+        elif item.skipped:
+            print(f"\n{item.name}: workspace files not written — {item.skipped}")
+        elif item.report is not None and (item.report.lines or item.report.warnings):
+            print(f"\n{item.name}:")
+            _print_workspace(item.report.lines, item.report.warnings)
 
 
 def cmd_plugin_install(
@@ -371,6 +407,7 @@ def cmd_plugin_install(
     if outcome.dry_run:
         print("\nnothing was downloaded into place and nothing was recorded (--dry-run)")
         return 0
+    _print_workspace(outcome.workspace, outcome.warnings)
     if outcome.note:
         print(f"\nnote: {outcome.note}")
     print(f"\ninstalled {outcome.plan.name} {outcome.plan.version} — {_RELOAD_HINT}")
@@ -398,6 +435,7 @@ def cmd_plugin_remove(name: str, *, force: bool = False) -> int:
         return 2
     if result.get("note"):
         print(f"note: {result['note']}")
+    _print_workspace(result.get("workspace") or (), result.get("warnings") or ())
     if not result.get("row_dropped"):
         print(f"{name}: no lockfile row to drop")
     print(f"removed {name} — {_RELOAD_HINT}")
