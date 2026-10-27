@@ -436,9 +436,19 @@ engine:
   # spec.volumes (e.g. a persistentVolumeClaim for a plugin's state directory)
   # and `extraVolumeMounts` entries into the container's volumeMounts. Each
   # mount's `name` must match a volume; names must not collide with the
-  # chart's own (workspace, tmp, runtime-cache, db-ca, migration-api-token).
+  # chart's own (workspace, tmp, runtime-cache, db-ca, migration-api-token,
+  # google-workspace).
   extraVolumes: []
   extraVolumeMounts: []
+  # Google Workspace credentials for the gws_* tools (mail, calendar, chat).
+  # When enabled, the `engine-google` Secret's `credentials.json` key (an
+  # authorized-user OAuth file) is mounted read-only at /etc/genus/gws and
+  # GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE points at it. Declare
+  # vault.secrets.engine-google in the environment layer. The class is a file
+  # mount only: engine.secretRefs refuses it, so the refresh token never
+  # becomes an environment variable. See the chart README.
+  googleWorkspace:
+    enabled: false
   resources:
     requests:
       cpu: 500m

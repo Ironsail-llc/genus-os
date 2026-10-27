@@ -64,7 +64,7 @@ about those.
 | CLI | Install | Purpose |
 |-----|---------|---------|
 | `gog` | Go binary (`go install`) | Legacy Google Workspace CLI (Gmail, Calendar) — used via `exec` tool |
-| `gws` | `npm install -g @googleworkspace/cli` | Google Workspace CLI v0.8+ — native engine tools (`gws_*`), MCP server for Claude Code |
+| `gws` | `npm install -g @googleworkspace/cli` on a host; baked into the container image at a pinned version (`Dockerfile.python`) | Google Workspace CLI v0.8+ — native engine tools (`gws_*`), MCP server for Claude Code. In Kubernetes its credentials come from `engine.googleWorkspace` (chart README) |
 | `gh` | `apt install gh` | GitHub CLI — used by `create_pull_request` tool |
 | `nlm` | `pip install notebooklm-cli` | NotebookLM CLI — research notebooks |
 

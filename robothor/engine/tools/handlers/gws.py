@@ -1607,9 +1607,19 @@ _GWS_SILENT_HINT = (
 )
 
 
+#: gws tags some failures with their class (`error[auth]: ...`). The tag is the
+#: CLI's own verdict, so it wins over the words that follow it: a missing
+#: credentials FILE "does not exist", which the needles above read as a
+#: missing message id.
+_GWS_TAGGED_HINTS = {"error[auth]": "auth: gws is not signed in"}
+
+
 def _classify_gws_failure(returncode: int, stdout: str, stderr: str) -> str:
     """A reason for a failed gws call, from whatever text it produced."""
     haystack = f"{stderr}\n{stdout}".lower()
+    for tag, hint in _GWS_TAGGED_HINTS.items():
+        if tag in haystack:
+            return hint
     for needles, hint in _GWS_ERROR_HINTS:
         if any(needle in haystack for needle in needles):
             return hint
