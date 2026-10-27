@@ -458,6 +458,12 @@ instruction-file check already applies to agents.
   `main` into its persona: a patch for `main` plus
   `{src: files/main.md, dest: brain/agents/main.md}`; the original is kept as
   `main.md.pre-<distribution>`.
+* **`docs/hooks/`** is executed by the engine (a `command` hook runs shell), and
+  `docs/hooks/global.yaml` carries the platform's own hooks. An existing file
+  there that the plugin did not write is refused in `overwrite` mode, with no
+  exception; `if_missing` may seed one, and identical bytes are adopted (and
+  stay protected). `docs/webhooks.yaml` stays overwritable — with a backup —
+  and the plan marks it `[engine-loaded config]`.
 * **Any other existing `brain/` file** the plugin did not write is refused in
   `overwrite` mode — `brain/TOOLS.md` and `brain/AGENTS.md` cannot be replaced —
   unless an agent the plugin ships or patches claims it as `instruction_file`.
@@ -603,11 +609,23 @@ its comments are lost; the `.pre-<distribution>` backup is the original.
 
 ### Scan verdict
 
-`instructions.template.md` is text a model reads, so the static scan marks a
-wheel that carries agents `review`. So does a manifest that declares `patches`
-or `files` under `brain/`: both change what an existing agent is told or
-allowed to do. `genus plugin install` needs `--accept-review` for either.
-`genus plugin sync` runs no scan; the ownership rules above are what bound it.
+A wheel whose manifest declares **any** workspace asset is graded `review`,
+never `safe`, with one reason per kind, read from the declaration normalised
+the way the installer reads it (`./brain/x` is `brain/x`):
+
+| declared | why it is `review` |
+|---|---|
+| `agents` | a rendered manifest can declare lifecycle hooks, including `command` hooks the engine runs as shell |
+| `workflows`, `files` → `docs/workflows/` | the engine runs them |
+| `files` → `docs/hooks/` | the engine executes them |
+| `files` → `docs/webhooks.yaml` | configuration the engine loads |
+| `files` → `brain/` | text a model reads |
+| `patches` | they change an agent the plugin does not own |
+
+A packaged `.yaml` is otherwise inert data to the scan, which is why the
+declaration, not the member list, is what it reads here. `genus plugin install`
+needs `--accept-review` for any of these. `genus plugin sync` runs no scan; the
+ownership rules above are what bound it.
 
 Adopting a hand-copied agent does not raise the verdict further: whether a copy
 exists is a fact about the workspace, not the wheel, every wheel that ships an

@@ -641,6 +641,8 @@ def plan(
     * a destination another plugin's ledger owns is refused;
     * a ``brain/agents/<id>`` destination is refused at parse unless ``<id>``
       is one of this plugin's agents or an agent it declares a patch for;
+    * any EXISTING ``docs/hooks/`` file this plugin did not write is refused
+      in ``overwrite`` mode -- the engine executes hooks -- with no exception;
     * any other EXISTING ``brain/`` file this plugin did not write is refused in
       ``overwrite`` mode -- ``if_missing`` only -- so ``brain/TOOLS.md`` and
       the like cannot be replaced. The same spirit as the template installer's
@@ -737,10 +739,22 @@ def plan(
                     "agent it ships or patches; declare it `mode: if_missing` to seed "
                     "it only where it is absent."
                 )
+        if replaces and item.dest.startswith("docs/hooks/"):
+            # The engine EXECUTES hooks (a `command` hook runs shell), and
+            # global.yaml carries the platform's own: the shared-file rule.
+            raise AssetError(
+                f"{item.dest} already exists and this plugin did not write it. A plugin "
+                "never replaces an existing docs/hooks/ file; declare it `mode: "
+                "if_missing` to seed it only where it is absent."
+            )
         label = "workflow" if item.kind == "workflow" else "file    "
         suffix = " (if missing)" if item.mode == "if_missing" else ""
         if replaces:
             suffix = f" (replaces an existing file; the original is kept as .pre-{dist})"
+        if item.dest == "docs/webhooks.yaml":
+            suffix += " [engine-loaded config]"
+        elif item.dest.startswith("docs/hooks/"):
+            suffix += " [hooks the engine executes]"
         lines.append(f"{label} {item.dest}{suffix}")
 
     claimed: dict[tuple[str, str], str] = {}

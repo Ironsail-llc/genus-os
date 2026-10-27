@@ -880,7 +880,8 @@ def test_the_scan_reviews_a_wheel_that_patches_or_writes_brain(tmp_path) -> None
     (contents.root / "example_agent/agents/desk-monitor/instructions.template.md").unlink()
     result = scan.scan_wheel(contents)
     assert result.verdict == scan.REVIEW
-    assert any("patches" in r and "brain/agents/main.md" in r for r in result.reasons)
+    assert any("patches" in r and "main" in r for r in result.reasons)
+    assert any("brain/agents/main.md" in r for r in result.reasons)
 
 
 def test_an_agent_id_that_exists_unrecorded_is_refused(ws, capsys) -> None:
@@ -1381,3 +1382,132 @@ def test_strict_is_a_real_flag() -> None:
 
     args = build_parser().parse_args(["plugin", "sync", "--strict"])
     assert args.strict is True
+
+
+# ---------------------------------------------------------------------------
+# scan: any workspace asset is review; hooks are shared files
+# ---------------------------------------------------------------------------
+
+
+def _scan(tmp_path: Path, manifest: str, extra: dict[str, str] | None = None, drop=()):
+    from robothor.plugins import scan
+    from robothor.plugins.wheel import open_wheel
+
+    path = tmp_path / "example_agent-1.0.0-py3-none-any.whl"
+    _wheel(path, manifest=manifest, extra=extra)
+    contents = open_wheel(path, tmp_path / "u")
+    for relative in drop:
+        (contents.root / relative).unlink()
+    return scan.scan_wheel(contents)
+
+
+def test_an_agent_bundle_without_instructions_is_review(tmp_path) -> None:
+    """manifest.template.yaml is not prompt text, but a rendered manifest can
+    declare lifecycle hooks that run shell commands."""
+    from robothor.plugins import scan
+
+    result = _scan(
+        tmp_path,
+        _HEAD + "agents:\n  - agents/desk-monitor\n",
+        drop=("example_agent/agents/desk-monitor/instructions.template.md",),
+    )
+    assert result.verdict == scan.REVIEW
+    assert any("desk-monitor" in r and "hook" in r for r in result.reasons)
+
+
+def test_a_workflow_is_review(tmp_path) -> None:
+    from robothor.plugins import scan
+
+    result = _scan(
+        tmp_path,
+        _HEAD + "workflows:\n  - workflows/example-pass.yaml\n",
+        drop=("example_agent/agents/desk-monitor/instructions.template.md",),
+    )
+    assert result.verdict == scan.REVIEW
+    assert any("example-pass.yaml" in r for r in result.reasons)
+
+
+def test_files_into_docs_hooks_are_review(tmp_path) -> None:
+    from robothor.plugins import scan
+
+    result = _scan(
+        tmp_path,
+        _HEAD + "files:\n  - src: extra/webhooks.yaml\n    dest: docs/hooks/extra.yaml\n",
+        drop=("example_agent/agents/desk-monitor/instructions.template.md",),
+    )
+    assert result.verdict == scan.REVIEW
+    assert any("docs/hooks/extra.yaml" in r and "execute" in r for r in result.reasons)
+
+
+def test_a_dot_slash_brain_dest_is_normalised_and_review(tmp_path) -> None:
+    from robothor.plugins import scan
+
+    result = _scan(
+        tmp_path,
+        _HEAD + "files:\n  - src: extra/NOTES.md\n    dest: ./brain/example-agent/NOTES.md\n",
+        drop=("example_agent/agents/desk-monitor/instructions.template.md",),
+    )
+    assert result.verdict == scan.REVIEW
+    assert any("brain/example-agent/NOTES.md" in r and "./" not in r for r in result.reasons)
+
+
+def test_a_wheel_without_workspace_assets_can_still_be_safe(tmp_path) -> None:
+    from robothor.plugins import scan
+
+    result = _scan(
+        tmp_path,
+        _HEAD,
+        drop=("example_agent/agents/desk-monitor/instructions.template.md",),
+    )
+    assert result.verdict == scan.SAFE, result.reasons
+
+
+_HOOKS = _HEAD + "files:\n  - src: extra/hooks.yaml\n    dest: docs/hooks/global.yaml\n"
+
+
+def test_an_existing_global_hooks_file_is_never_replaced(ws, capsys) -> None:
+    hooks = ws / "docs" / "hooks"
+    hooks.mkdir(parents=True)
+    (hooks / "global.yaml").write_text("hooks: [platform]\n")
+    pip = installer._run_pip
+    assert (
+        _install(ws, manifest=_HOOKS, extra={"example_agent/extra/hooks.yaml": "hooks: []\n"}) == 2
+    )
+    assert "docs/hooks/global.yaml" in capsys.readouterr().err
+    assert pip.calls == []
+    assert (hooks / "global.yaml").read_text() == "hooks: [platform]\n"
+
+
+def test_a_hooks_file_may_be_seeded_if_missing(ws) -> None:
+    manifest = _HOOKS + "    mode: if_missing\n"
+    hooks = ws / "docs" / "hooks"
+    hooks.mkdir(parents=True)
+    (hooks / "global.yaml").write_text("hooks: [platform]\n")
+    extra = {"example_agent/extra/hooks.yaml": "hooks: []\n"}
+    assert _install(ws, manifest=manifest, extra=extra) == 0
+    assert (hooks / "global.yaml").read_text() == "hooks: [platform]\n"
+
+
+def test_an_identical_hooks_file_is_adopted_and_stays_protected(ws, capsys) -> None:
+    hooks = ws / "docs" / "hooks"
+    hooks.mkdir(parents=True)
+    (hooks / "global.yaml").write_text("hooks: []\n")
+    assert (
+        _install(ws, manifest=_HOOKS, extra={"example_agent/extra/hooks.yaml": "hooks: []\n"}) == 0
+    )
+    assert _ledger(ws)[DIST]["files"]["docs/hooks/global.yaml"]["adopted"] is True
+    changed = {"example_agent/extra/hooks.yaml": "hooks: [plugin]\n"}
+    assert _install(ws, version="1.1.0", manifest=_HOOKS, extra=changed) == 2
+    assert (hooks / "global.yaml").read_text() == "hooks: []\n"
+
+
+def test_the_plan_marks_webhooks_as_engine_loaded_config(ws, capsys) -> None:
+    path = ws.parent / "example_agent-1.0.0-py3-none-any.whl"
+    data = _wheel(path)
+    cmd_plugin(
+        _args("install", name=str(path), sha256=hashlib.sha256(data).hexdigest(), dry_run=True)
+    )
+    out = capsys.readouterr().out
+    assert any(
+        "docs/webhooks.yaml" in line and "engine-loaded" in line for line in out.splitlines()
+    )
