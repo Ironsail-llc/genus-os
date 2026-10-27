@@ -238,7 +238,7 @@ def _set_enabled(name: str, enabled: bool) -> int:
     return 0
 
 
-def cmd_plugin_sync(force: bool = False) -> int:
+def cmd_plugin_sync(force: bool = False, strict: bool = False) -> int:
     """Record every installed plugin distribution in the lockfile."""
     from robothor.plugins.lockfile import sync
 
@@ -294,9 +294,18 @@ def cmd_plugin_sync(force: bool = False) -> int:
         print(f"  {row.name} {row.version or '-'}  {mark}  {flag}  verdict={row.verdict}")
     for gone in result.removed:
         print(f"  {gone}  dropped — no longer installed")
-    _sync_workspace()
+    refused = _sync_workspace()
     if result.added or result.updated or result.removed:
         print(f"\n{_RELOAD_HINT}")
+    if strict and refused:
+        # The lockfile, and every other plugin's files, were still written:
+        # --strict changes only what the exit code says.
+        print(
+            "genus plugin sync --strict: workspace files were refused or failed for "
+            + ", ".join(refused),
+            file=sys.stderr,
+        )
+        return EXIT_WORKSPACE_REFUSED
     return 0
 
 
@@ -346,15 +355,26 @@ def _print_workspace(lines: Any, warnings: Any) -> None:
             print(f"  {line}")
 
 
-def _sync_workspace() -> None:
-    """Write every installed plugin's declared workspace files, after the lockfile."""
+#: ``genus plugin sync --strict`` when the lockfile was written but at least one
+#: plugin's workspace files were refused or failed. Distinct from 2 (the sync
+#: itself could not run) so a deploy job can tell the two apart.
+EXIT_WORKSPACE_REFUSED = 3
+
+
+def _sync_workspace() -> list[str]:
+    """Write every installed plugin's declared workspace files, after the lockfile.
+
+    Returns the names whose apply was refused or failed (``["workspace"]`` when
+    the whole step could not run), which only ``--strict`` turns into an exit
+    code.
+    """
     from robothor.plugins import assets
 
     try:
         results = assets.sync_installed()
     except (assets.AssetError, OSError) as exc:
         print(f"\nworkspace: not synced ({exc})", file=sys.stderr)
-        return
+        return ["workspace"]
     for item in results:
         if item.orphaned:
             print(f"\n{item.name}: {item.skipped}")
@@ -363,6 +383,7 @@ def _sync_workspace() -> None:
         elif item.report is not None and (item.report.lines or item.report.warnings):
             print(f"\n{item.name}:")
             _print_workspace(item.report.lines, item.report.warnings)
+    return [item.name for item in results if item.failed]
 
 
 def cmd_plugin_install(
@@ -461,7 +482,9 @@ def cmd_plugin(args: argparse.Namespace) -> int:
     if command == "list":
         return cmd_plugin_list()
     if command == "sync":
-        return cmd_plugin_sync(bool(getattr(args, "force", False)))
+        return cmd_plugin_sync(
+            bool(getattr(args, "force", False)), strict=bool(getattr(args, "strict", False))
+        )
     if command == "doctor":
         return cmd_plugin_doctor(bool(getattr(args, "json", False)))
     name = str(getattr(args, "name", "") or "").strip()

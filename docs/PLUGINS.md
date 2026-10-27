@@ -524,6 +524,16 @@ One plugin failing does not stop the others. It is reported, its previous
 files stay as they were, and sync exits `0`: the lockfile part, which every
 other plugin depends on, did succeed.
 
+A deploy job that needs to know uses **`genus plugin sync --strict`**: it does
+exactly the same work, and exits `3` when any plugin's workspace files were
+refused or failed (an unreadable `.robothor/plugin-assets.yaml` included),
+naming them on stderr. A disabled plugin and one that has disappeared are not
+failures. `2` still means the sync itself could not run.
+
+```bash
+genus plugin sync --strict || { rc=$?; [ "$rc" -eq 3 ] && echo "a plugin's files were refused"; exit "$rc"; }
+```
+
 Sync is idempotent, and safe to run after another tool has already copied the
 same files or applied the same patch: identical content is adopted rather than
 rewritten or backed up, a patch whose values are already present changes

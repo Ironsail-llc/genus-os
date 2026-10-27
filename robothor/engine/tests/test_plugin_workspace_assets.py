@@ -191,6 +191,7 @@ def _args(command, **kw):
         "sha256": None,
         "scan_prompts": False,
         "force": False,
+        "strict": False,
     }
     defaults.update(kw)
     return argparse.Namespace(plugin_command=command, **defaults)
@@ -1327,3 +1328,56 @@ def test_the_report_carries_no_rendered_values_or_validation_text(ws, capsys, mo
     assert "5 4 * * *" not in out
     assert "FAIL --" not in out
     assert "advisory validation finding" in out
+
+
+# ---------------------------------------------------------------------------
+# sync --strict: a refused workspace apply is visible in the exit code
+# ---------------------------------------------------------------------------
+
+
+def test_sync_strict_exits_3_when_a_plugin_is_refused_and_still_syncs_the_rest(
+    ws, tmp_path, capsys, monkeypatch
+) -> None:
+    good = _site_distribution(tmp_path, _wheel(tmp_path / "x.whl"))
+    broken = _broken_distribution(tmp_path, ws)
+    found = {DIST: good, "broken-agent": broken}
+    monkeypatch.setattr(lockfile, "installed_distributions", lambda: found)
+    monkeypatch.setattr(lockfile, "entry_point_groups", lambda: {})
+
+    assert cmd_plugin(_args("sync", strict=True)) == 3
+    assert "broken-agent" in capsys.readouterr().err
+    assert (ws / "docs" / "agents" / "desk-monitor.yaml").is_file()  # the others still synced
+
+
+def test_sync_without_strict_still_exits_0_on_a_refusal(ws, tmp_path, monkeypatch) -> None:
+    broken = _broken_distribution(tmp_path, ws)
+    monkeypatch.setattr(lockfile, "installed_distributions", lambda: {"broken-agent": broken})
+    monkeypatch.setattr(lockfile, "entry_point_groups", lambda: {})
+    assert cmd_plugin(_args("sync")) == 0
+
+
+def test_sync_strict_is_0_when_everything_applied(ws, hand_installed) -> None:
+    assert cmd_plugin(_args("sync", strict=True)) == 0
+
+
+def test_sync_strict_does_not_count_a_disabled_plugin_or_an_orphan(
+    ws, hand_installed, monkeypatch
+) -> None:
+    assert cmd_plugin(_args("sync")) == 0
+    lockfile.set_enabled(DIST, False)
+    assert cmd_plugin(_args("sync", strict=True)) == 0
+    monkeypatch.setattr(lockfile, "installed_distributions", lambda: {})
+    assert cmd_plugin(_args("sync", strict=True)) == 0
+
+
+def test_sync_strict_counts_an_unreadable_ledger(ws, hand_installed) -> None:
+    assert cmd_plugin(_args("sync")) == 0
+    (ws / ".robothor" / "plugin-assets.yaml").write_text("plugins: [unclosed\n")
+    assert cmd_plugin(_args("sync", strict=True)) == 3
+
+
+def test_strict_is_a_real_flag() -> None:
+    from robothor.cli import _build_parser as build_parser
+
+    args = build_parser().parse_args(["plugin", "sync", "--strict"])
+    assert args.strict is True

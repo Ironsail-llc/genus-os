@@ -208,6 +208,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Rebuild even when the existing lockfile cannot be read, accepting "
         "the loss of every disable it recorded",
     )
+    plugin_sync.add_argument(
+        "--strict",
+        action="store_true",
+        help="Exit 3 when any plugin's workspace files were refused or failed "
+        "(the others are still synced)",
+    )
     plugin_install = plugin_sub.add_parser(
         "install", help="Install a plugin from a signed index, or an offline wheel"
     )

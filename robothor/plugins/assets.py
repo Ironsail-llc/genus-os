@@ -1370,6 +1370,9 @@ class SyncedPlugin:
     skipped: str = ""
     #: True for a plugin the ledger remembers that is no longer installed.
     orphaned: bool = False
+    #: True when the plugin's workspace apply was refused or failed -- not for
+    #: a deliberate skip (disabled) or an orphan. What ``sync --strict`` counts.
+    failed: bool = False
 
 
 #: What sync says about a plugin that has disappeared since the last sync.
@@ -1417,7 +1420,7 @@ def sync_installed(
         try:
             declared = declaration_from_distribution(dist)
         except AssetError as exc:
-            results.append(SyncedPlugin(name, skipped=str(exc)))
+            results.append(SyncedPlugin(name, skipped=str(exc), failed=True))
             continue
         refusal = lockfile.refusal_for(dist, lock)
         if refusal is not None:
@@ -1434,7 +1437,11 @@ def sync_installed(
             )
         except (AssetError, OSError) as exc:
             results.append(
-                SyncedPlugin(name, skipped=f"{exc} (its previous files were left as they were)")
+                SyncedPlugin(
+                    name,
+                    skipped=f"{exc} (its previous files were left as they were)",
+                    failed=True,
+                )
             )
             continue
         if report.lines or report.warnings:
