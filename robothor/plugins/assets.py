@@ -599,15 +599,19 @@ def plan(
     *,
     workspace: Path | None = None,
     instance_dir: Path | None = None,
+    version: str = "0.0.0",
 ) -> tuple[str, ...]:
     """What :func:`apply` would write, or an :class:`AssetError`. Writes nothing.
 
     The ownership rules, all checked here, before anything is written:
 
     * an agent id whose manifest already exists is refused unless
-      ``installed.yaml`` records it as this plugin's -- recorded elsewhere or
-      not recorded at all, it is somebody else's and is never overwritten or
-      later retired;
+      ``installed.yaml`` records it as this plugin's -- or, unrecorded, its
+      parsed data equals what this plugin's bundle renders here and its
+      instruction file has the same bytes, in which case it is ADOPTED (a
+      hand copy of exactly this agent is safe to hand over). Recorded
+      elsewhere, or different, it is somebody else's and is never overwritten
+      or later retired;
     * a destination another plugin's ledger owns is refused;
     * a ``brain/agents/<id>`` destination is refused at parse unless ``<id>``
       is one of this plugin's agents or an agent it declares a patch for;
@@ -660,9 +664,16 @@ def plan(
                 "or rename that agent first."
             )
         if record is None and manifest.exists():
+            if _matches(agent, _render(agent, dist, version, root, instance), root, exact=False):
+                lines.append(
+                    f"agent    {agent.agent_id} -> docs/agents/{agent.agent_id}.yaml "
+                    "(adopts the existing copy: its data matches)"
+                )
+                continue
             raise AssetError(
-                f"docs/agents/{agent.agent_id}.yaml already exists and is not this "
-                f"plugin's, so agent {agent.agent_id!r} will not be installed over it. "
+                f"docs/agents/{agent.agent_id}.yaml already exists, is not this plugin's, "
+                "and does not match what the plugin renders (or its instruction file "
+                f"differs), so agent {agent.agent_id!r} will not be installed over it. "
                 "Retire or rename the existing agent first"
                 + (
                     f", and move its instruction file ({agent.instruction}) aside too: "
@@ -844,6 +855,110 @@ def _engine_would_load(path: Path, agent_id: str) -> None:
         raise AssetError(f"agent {agent_id}: the engine would refuse it ({exc})") from exc
 
 
+@dataclass(frozen=True)
+class Rendered:
+    """What one agent bundle renders to on THIS instance, without writing it."""
+
+    manifest_text: str
+    manifest: dict[str, Any]
+    instruction: str | None
+
+
+def _render(agent: AgentDecl, dist: str, version: str, root: Path, instance: Path) -> Rendered:
+    """Render *agent* exactly as :func:`_install_agent` would, into a scratch tree.
+
+    The same template installer, the same ``_defaults.yaml`` (the workspace's,
+    when it has one), the instance's ``config.yaml`` and the agent's
+    ``overrides/<id>.yaml`` -- so the result is what an install would write,
+    and the workspace is not touched.
+    """
+    from robothor.templates.installer import install
+
+    with tempfile.TemporaryDirectory(prefix="genus-plugin-render-") as raw:
+        scratch = Path(raw).resolve()
+        (scratch / "docs" / "agents").mkdir(parents=True)
+        (scratch / "brain").mkdir()
+        defaults = root / "templates" / "agents" / "_defaults.yaml"
+        if defaults.is_file() and not defaults.is_symlink():
+            (scratch / "templates" / "agents").mkdir(parents=True)
+            shutil.copyfile(defaults, scratch / "templates" / "agents" / "_defaults.yaml")
+        scratch_instance = scratch / ".robothor"
+        (scratch_instance / "overrides").mkdir(parents=True)
+        for relative in ("config.yaml", f"overrides/{agent.agent_id}.yaml"):
+            source = instance / relative
+            if source.is_file() and not source.is_symlink():
+                shutil.copyfile(source, scratch_instance / relative)
+        (scratch / "bundle").mkdir()
+        staging = _stage_agent(agent, version, scratch / "bundle")
+        try:
+            install(
+                staging,
+                auto_yes=True,
+                instance_dir=scratch_instance,
+                repo_root=scratch,
+                source="plugin",
+                source_ref=dist,
+            )
+        except (TemplateSecurityError, FileNotFoundError, ValueError, OSError) as exc:
+            raise AssetError(f"agent {agent.agent_id}: {exc}") from exc
+        text = (scratch / "docs" / "agents" / f"{agent.agent_id}.yaml").read_text(encoding="utf-8")
+        instruction = None
+        if agent.instruction:
+            rendered = scratch / agent.instruction
+            if rendered.is_file():
+                instruction = rendered.read_text(encoding="utf-8")
+    data = yaml.safe_load(text) or {}
+    return Rendered(text, data if isinstance(data, dict) else {}, instruction)
+
+
+def _matches(agent: AgentDecl, rendered: Rendered, root: Path, *, exact: bool) -> bool:
+    """Whether the workspace already holds what *rendered* would write.
+
+    ``exact`` compares the manifest's bytes (a file the plugin wrote itself);
+    otherwise its parsed DATA, so a hand copy with other comments, quoting or
+    key order still matches. The instruction file is always compared by bytes.
+    """
+    manifest = root / "docs" / "agents" / f"{agent.agent_id}.yaml"
+    if not manifest.is_file() or manifest.is_symlink():
+        return False
+    text = manifest.read_text(encoding="utf-8")
+    if exact:
+        if text != rendered.manifest_text:
+            return False
+    else:
+        try:
+            if (yaml.safe_load(text) or {}) != rendered.manifest:
+                return False
+        except yaml.YAMLError:
+            return False
+    if agent.instruction and rendered.instruction is not None:
+        instruction = root / agent.instruction
+        if not instruction.is_file() or instruction.is_symlink():
+            return False
+        if instruction.read_text(encoding="utf-8") != rendered.instruction:
+            return False
+    return True
+
+
+def _mark_adopted(agent: AgentDecl, dist: str, version: str, instance: Path) -> None:
+    from robothor.templates.instance import InstanceConfig
+
+    config = InstanceConfig.load(instance)
+    _touch(config.installed_path)
+    config.record_install(
+        agent_id=agent.agent_id,
+        source=f"plugin:{dist}",
+        source_path=dist,
+        version=version,
+        variables={},
+        manifest_path=f"docs/agents/{agent.agent_id}.yaml",
+        instruction_path=agent.instruction,
+    )
+    agents = config.installed_agents
+    agents[agent.agent_id]["adopted"] = True
+    config._save_installed(agents)
+
+
 def _install_agent(
     agent: AgentDecl,
     dist: str,
@@ -870,6 +985,23 @@ def _install_agent(
             )
         except TemplateSecurityError as exc:
             raise AssetError(f"agent {agent.agent_id}: {exc}") from exc
+    from robothor.templates.instance import InstanceConfig
+
+    record = InstanceConfig.load(instance).installed_agents.get(agent.agent_id)
+    adopted = isinstance(record, dict) and bool(record.get("adopted"))
+    rendered = _render(agent, dist, version, root, instance)
+    if record is None and manifest.exists():
+        # plan() only lets this through when the data matched: adopt the copy.
+        _mark_adopted(agent, dist, version, instance)
+        report.lines.append(f"adopted  {agent.agent_id} (the existing copy matches the plugin's)")
+        return
+    if _matches(agent, rendered, root, exact=not adopted):
+        return  # already what an install would write: nothing to do
+    if adopted:
+        # The first write over an adopted copy keeps it, once.
+        for path in (manifest, instruction):
+            if path is not None and path.is_file():
+                _backup_once(path, dist, root)
     for path in (manifest, instruction, instance / "installed.yaml"):
         if path is not None:
             _touch(path)
@@ -960,7 +1092,7 @@ def apply(
         instance = _instance_dir(Path(raw), instance_dir)
         if not instance.is_dir() or dist not in read_ledger(instance):
             return report
-    plan(assets, dist, workspace=workspace, instance_dir=instance_dir)
+    plan(assets, dist, workspace=workspace, instance_dir=instance_dir, version=version)
     root = _workspace(workspace)
     instance = _instance_dir(root, instance_dir)
     ledger = read_ledger(instance)

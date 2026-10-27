@@ -438,9 +438,16 @@ reviewable form, it means to change — the rule the template installer's
 instruction-file check already applies to agents.
 
 * **Agents.** An agent id whose `docs/agents/<id>.yaml` already exists is
-  refused unless `.robothor/installed.yaml` records it as this plugin's.
-  Installed from elsewhere or not recorded at all (`main` usually is not), it
-  is somebody else's: never overwritten, never retired.
+  refused unless `.robothor/installed.yaml` records it as this plugin's — with
+  one exception. An **unrecorded** manifest whose parsed data equals what the
+  plugin's bundle renders on this instance (comments, quoting and key order may
+  differ), and whose instruction file has the same bytes, is a hand copy of
+  exactly this agent: it is *adopted* — recorded as `source: plugin:<dist>` with
+  `adopted: true`, and left byte-for-byte as it is. The next release that
+  renders something different writes the plugin's version and keeps the copy
+  once as `.pre-<distribution>`; `remove` retires it like any plugin agent.
+  Recorded elsewhere, or different in any way (`main`, an operator-edited
+  copy), it is somebody else's: never overwritten, never retired.
 * **`brain/agents/<id>.md` and `brain/agents/<id>/…`** belong to agent `<id>`.
   A `files:` entry may write there only when `<id>` is one of the plugin's own
   `agents`, or an agent it declares a `patch` for. That is how a plugin turns
@@ -518,11 +525,12 @@ same files or applied the same patch: identical content is adopted rather than
 rewritten or backed up, a patch whose values are already present changes
 nothing, and an existing backup is never overwritten.
 
-**Agent manifests are the exception.** A plugin agent whose
-`docs/agents/<id>.yaml` was copied by hand is refused — the plugin never takes
-over a manifest it does not own — and the whole plugin is skipped until it is
-resolved. Move the copied manifest **and** its instruction file
-(`brain/agents/<id>.md`) aside, then sync: the refusal names both.
+A hand-copied agent manifest is adopted when its data matches (see
+Ownership). One that differs is refused, and the whole plugin is skipped until
+it is resolved: move the copied manifest **and** its instruction file
+(`brain/agents/<id>.md`) aside, then sync — the refusal names both. An agent
+the plugin already wrote is not re-rendered onto disk when nothing changed, so
+a second sync touches no file.
 
 **`genus plugin remove`** retires what the plugin wrote, from the record in
 `.robothor/plugin-assets.yaml` (the wheel's patch files are gone by then):

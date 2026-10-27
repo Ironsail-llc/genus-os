@@ -1122,3 +1122,117 @@ def test_the_refusal_for_a_hand_copied_agent_says_to_move_its_instructions(ws, c
     (ws / "docs" / "agents" / "desk-monitor.yaml").write_text("id: desk-monitor\n")
     assert _install(ws) == 2
     assert "brain/agents/desk-monitor.md" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
+# adopting a hand-copied agent whose data equals what the bundle renders
+# ---------------------------------------------------------------------------
+
+#: What desk-monitor renders to, written the way a person copying it might:
+#: other key order, other quoting, comments. Same DATA, different bytes.
+_HAND_COPY = """\
+# copied onto this workspace by hand before the plugin existed
+id: desk-monitor
+department: custom
+name: "Desk Monitor"
+version: '1.0.0'
+description: Watches the example desk   # what it does
+instruction_file: brain/agents/desk-monitor.md
+delivery: {mode: none}
+schedule:
+  timezone: UTC
+  cron: '0 * * * *'
+"""
+
+
+def _hand_copy(ws: Path, manifest: str = _HAND_COPY, instructions: str = _INSTRUCTIONS) -> None:
+    (ws / "docs" / "agents" / "desk-monitor.yaml").write_text(manifest)
+    (ws / "brain" / "agents" / "desk-monitor.md").write_text(instructions)
+
+
+def test_an_identical_hand_copy_is_adopted_not_rewritten(ws, capsys) -> None:
+    _hand_copy(ws)
+    assert _install(ws) == 0, capsys.readouterr().err
+    manifest = ws / "docs" / "agents" / "desk-monitor.yaml"
+    assert manifest.read_text() == _HAND_COPY  # adopted: the copy is kept as it is
+    record = _installed(ws)["desk-monitor"]
+    assert record["source"] == f"plugin:{DIST}"
+    assert record["adopted"] is True
+    assert not manifest.with_name(f"desk-monitor.yaml.pre-{DIST}").exists()
+
+
+def test_a_second_run_after_adoption_is_a_no_op(ws) -> None:
+    _hand_copy(ws)
+    assert _install(ws) == 0
+    manifest = ws / "docs" / "agents" / "desk-monitor.yaml"
+    before = (manifest.read_bytes(), manifest.stat().st_mtime_ns)
+    assert _install(ws) == 0
+    assert (manifest.read_bytes(), manifest.stat().st_mtime_ns) == before
+    assert _installed(ws)["desk-monitor"]["adopted"] is True
+
+
+def test_a_hand_copy_with_different_data_is_still_refused(ws, capsys) -> None:
+    _hand_copy(ws, manifest=_HAND_COPY.replace("Watches the example desk", "Edited by hand"))
+    assert _install(ws) == 2
+    assert "brain/agents/desk-monitor.md" in capsys.readouterr().err
+    assert "desk-monitor" not in (
+        _installed(ws) if (ws / ".robothor" / "installed.yaml").exists() else {}
+    )
+
+
+def test_a_hand_copy_with_different_instructions_is_refused(ws, capsys) -> None:
+    _hand_copy(ws, instructions="# Somebody's own instructions\n")
+    assert _install(ws) == 2
+    assert "desk-monitor" in capsys.readouterr().err
+    assert (ws / "brain" / "agents" / "desk-monitor.md").read_text() == (
+        "# Somebody's own instructions\n"
+    )
+
+
+def test_an_upgrade_after_adoption_writes_the_plugin_version_with_one_backup(ws) -> None:
+    _hand_copy(ws)
+    assert _install(ws) == 0
+    assert _install(ws, version="1.1.0", description="Watches the desk, better") == 0
+    manifest = ws / "docs" / "agents" / "desk-monitor.yaml"
+    assert yaml.safe_load(manifest.read_text())["description"] == "Watches the desk, better"
+    backup = manifest.with_name(f"desk-monitor.yaml.pre-{DIST}")
+    assert backup.read_text() == _HAND_COPY
+    assert "adopted" not in _installed(ws)["desk-monitor"]
+    assert _install(ws, version="1.2.0", description="Third") == 0
+    assert backup.read_text() == _HAND_COPY  # once
+
+
+def test_remove_retires_an_adopted_agent_like_any_plugin_agent(ws) -> None:
+    _hand_copy(ws)
+    assert _install(ws) == 0
+    assert cmd_plugin(_args("remove", name=DIST)) == 0
+    assert (ws / "docs" / "agents" / "retired" / "desk-monitor.yaml").read_text() == _HAND_COPY
+    assert "desk-monitor" not in _installed(ws)
+
+
+def test_the_production_transition_ends_with_the_agent_owned_by_the_plugin(
+    ws, hand_installed, capsys
+) -> None:
+    """The infra installer copies the plugin's files (agent included) by hand,
+    then calls sync. Sync adopts everything; a second sync changes nothing."""
+    _hand_copy(ws)
+    (ws / "docs" / "workflows").mkdir(parents=True)
+    (ws / "docs" / "workflows" / "example-pass.yaml").write_text(_WORKFLOW)
+    (ws / "docs" / "webhooks.yaml").write_text("channels: []\n")
+
+    assert cmd_plugin(_args("sync")) == 0, capsys.readouterr().err
+    assert _installed(ws)["desk-monitor"]["source"] == f"plugin:{DIST}"
+    files = _ledger(ws)[DIST]["files"]
+    assert files["docs/webhooks.yaml"]["adopted"] is True
+    snapshot = {
+        p.relative_to(ws).as_posix(): (p.read_bytes(), p.stat().st_mtime_ns)
+        for p in sorted(ws.rglob("*"))
+        if p.is_file()
+    }
+    assert cmd_plugin(_args("sync")) == 0
+    again = {
+        p.relative_to(ws).as_posix(): (p.read_bytes(), p.stat().st_mtime_ns)
+        for p in sorted(ws.rglob("*"))
+        if p.is_file()
+    }
+    assert again == snapshot

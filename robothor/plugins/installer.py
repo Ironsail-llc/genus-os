@@ -528,7 +528,7 @@ def _plan_workspace(contents: Any, dist_name: str) -> tuple[Any, tuple[str, ...]
 
     try:
         declared = assets.declaration_from_wheel(contents)
-        return declared, assets.plan(declared, dist_name)
+        return declared, assets.plan(declared, dist_name, version=contents.version)
     except assets.AssetError as exc:
         raise InstallError(f"{dist_name}: {exc}") from exc
 
