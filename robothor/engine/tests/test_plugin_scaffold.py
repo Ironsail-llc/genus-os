@@ -217,8 +217,9 @@ def test_the_scaffold_builds_a_wheel_whose_manifest_declares_the_agent(tmp_path)
 
 
 def test_the_built_wheel_passes_the_install_scan(tmp_path) -> None:
-    """``review``, not ``blocked``: agent instructions are prompt text, which
-    is exactly what review is for. Nothing in the scaffold is refused."""
+    """``review``, not ``blocked``: agent instructions are prompt text and a
+    declared agent can carry hooks, which is exactly what review is for.
+    Nothing in the scaffold is refused."""
     from robothor.plugins import scan
     from robothor.plugins.wheel import open_wheel
 
@@ -226,7 +227,10 @@ def test_the_built_wheel_passes_the_install_scan(tmp_path) -> None:
     contents = open_wheel(_build_wheel(root, tmp_path / "dist"), tmp_path / "unpacked")
     result = scan.scan_wheel(contents)
     assert result.verdict == scan.REVIEW, result.reasons
-    assert all("prompt text" in reason for reason in result.reasons)
+    # The two expected reasons: prompt text, and a declared agent.
+    assert any("prompt text" in reason for reason in result.reasons)
+    assert any(NAME in reason and "hook" in reason for reason in result.reasons)
+    assert len(result.reasons) == 2, result.reasons
 
 
 def test_the_scaffold_s_own_tests_pass(tmp_path) -> None:

@@ -282,8 +282,8 @@ genus plugin install dist/*.whl --sha256 <hex> --accept-review
 # or: pip install --no-deps --target "$ROBOTHOR_PLUGIN_DIR" dist/*.whl && genus plugin sync
 ```
 
-Agent instructions are text a model reads, so the install scan grades the
-wheel `review`; `--accept-review` is the operator saying they read them.
+A wheel that ships an agent (or any workspace file) is graded `review` by the
+install scan; `--accept-review` is the operator saying they read it.
 """
 
 _README = """\
