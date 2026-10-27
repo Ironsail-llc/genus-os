@@ -138,11 +138,19 @@ JSON body, delivery id, then published.
 A bad, stale or malformed signature answers `401 {"error": "Invalid
 signature"}` whatever the scheme; the reason is logged, the secret never is.
 
+The delivery id is a redelivery filter, not replay protection: it is not
+covered by the signature, so a captured request resent under another id is
+caught only by the `stripe_t_v1` timestamp window. If the event cannot be
+written to the stream the request answers `503` so the sender retries; a
+claimed delivery id is released first.
+
 A webhook event's envelope carries `event_type` (the same value as `type`) and,
 when the channel has a delivery id header, `delivery_id`, next to `payload`. An
 agent hook with `include_payload: true` gets both, plus the payload, appended
-to its trigger message; `requeue_if_busy: true` retries an event that arrived
-while the agent was already running instead of dropping it. Both are
+to its trigger message, inside an `<untrusted_content>` boundary since the
+sender is external. `requeue_if_busy: true` re-adds an event that arrived
+while the agent was already running, for that agent only, every 5 seconds for
+up to about five minutes before it is parked in `<stream>:dlq`. Both are
 documented with the other hook fields in `docs/agents/schema.yaml`.
 
 ## Subscribing

@@ -587,3 +587,22 @@ async def test_publish_envelope_omits_unknown_delivery_id():
         await _publish_to_stream("webhook", "x", {"id": 1})
     envelope = redis.xadd.call_args.args[1]
     assert "delivery_id" not in envelope
+
+
+@patch.dict("os.environ", {"TEST_WEBHOOK_SECRET": "mysecret"})
+@patch("robothor.engine.webhooks._check_rate_limit", new_callable=AsyncMock, return_value=True)
+@patch("robothor.engine.webhooks._publish_to_stream", new_callable=AsyncMock, return_value="")
+def test_failed_publish_is_503_and_not_counted(mock_publish, mock_rate, client):
+    """Without a delivery id too: the sender is asked to retry, stats are untouched."""
+    payload = json.dumps({"action": "push"}).encode()
+    resp = client.post(
+        "/api/webhooks/github",
+        content=payload,
+        headers={
+            "Content-Type": "application/json",
+            "X-Hub-Signature-256": _sign(payload, "mysecret"),
+            "X-GitHub-Event": "push",
+        },
+    )
+    assert resp.status_code == 503
+    assert "github" not in _channel_stats

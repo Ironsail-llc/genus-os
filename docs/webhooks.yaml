@@ -17,7 +17,9 @@ channels:
     rate_limit_per_min: 100
 
   # A platform that signs Stripe-style: `t=<unix seconds>,v1=<hex>` over
-  # "<t>." + raw body, with a delivery id header for replay protection.
+  # "<t>." + raw body, with a delivery id header so redelivered events are
+  # dropped. The delivery id is not signed: the timestamp window is what limits
+  # replays of a captured request.
   # platform:
   #   stream: platform
   #   secret_env: PLATFORM_WEBHOOK_SECRET

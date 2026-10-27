@@ -483,9 +483,11 @@ def get_webhook_router(config: WebhookConfig | None = None) -> APIRouter:
 
         # Publish to Redis
         event_id = await _publish_to_stream(ch.stream, event_type, payload, delivery_id=delivery_id)
-        if not event_id and delivery_id:
-            # Let the sender's retry through rather than answer it as a duplicate
-            await _release_delivery(ch, delivery_id)
+        if not event_id:
+            # Ask the sender to retry; a claimed delivery id is released so the
+            # retry is not answered as a duplicate
+            if delivery_id:
+                await _release_delivery(ch, delivery_id)
             return JSONResponse(
                 {"error": "Event could not be published"},
                 status_code=503,
