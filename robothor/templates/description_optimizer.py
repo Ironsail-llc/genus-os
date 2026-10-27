@@ -1,7 +1,7 @@
 """Hub-ready metadata optimization for agent template bundles.
 
 Ensures agents produce quality SKILL.md and programmatic.json for
-programmaticresources.com and agent hub discovery.
+programmaticresources.io and agent hub discovery.
 """
 
 from __future__ import annotations
