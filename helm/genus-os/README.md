@@ -255,6 +255,15 @@ tools use it to tell the assistant's own address apart from the people on a
 thread. Check from the pod with
 `gws gmail users getProfile --params '{"userId":"me"}'`.
 
+**Egress.** `gws` calls `oauth2.googleapis.com` (token refresh),
+`gmail.googleapis.com` and `www.googleapis.com` (Calendar, Chat) on 443,
+directly unless `HTTPS_PROXY` is set in the engine's environment. Under
+default-deny egress, the Layer-3 HTTPS rules in the `networkPolicy.egress`
+values (or the proxy's allowlist) must cover those hosts, or every
+`gws_*` call ends in the `timeout` hint. A `Mail service not enabled` error
+instead means the mailbox has no Gmail license in the Workspace admin console;
+the credentials are fine and start working once Gmail is on.
+
 ## Extra volumes
 
 Each Python workload can mount additional volumes, rendered verbatim with
