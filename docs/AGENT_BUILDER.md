@@ -158,6 +158,39 @@ steps:
 Branches may be any step type except `condition`, `approval`, and nested
 `parallel` — flow control stays at the top level, enforced at load.
 
+#### Triggered by an event
+
+A `hook` trigger runs the workflow when a matching event lands on a stream,
+including one published by a [webhook](event-bus.md#webhook-ingress). The
+event is in the run's context as `event`: `event.type`, `event.stream`,
+`event.id`, `event.delivery_id` (empty when the sender gave none) and
+`event.payload`, parsed when it is JSON. Steps template it like any other
+context value. Only one run of a workflow is in flight at a time; by default
+an event that arrives while it is running is dropped. `requeue_if_busy: true`
+re-adds it for this workflow every 5 seconds, for up to about five minutes,
+before parking it in `<stream>:dlq`.
+
+```yaml
+id: order-events
+triggers:
+  - type: hook
+    stream: platform
+    event_type: platform.order.created
+    requeue_if_busy: true
+
+steps:
+  - id: handle
+    type: tool
+    tool_name: order_handle
+    tool_args:
+      order_id: "{{ event.payload.data.order.id }}"
+      delivery_id: "{{ event.delivery_id }}"
+    retry_count: 1
+```
+
+The payload comes from outside: a tool that receives it validates what it
+is given.
+
 #### Asking a human mid-workflow
 
 An `approval` step suspends the run until a person decides. The run stops

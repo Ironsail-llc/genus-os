@@ -153,6 +153,11 @@ while the agent was already running, for that agent only, every 5 seconds for
 up to about five minutes before it is parked in `<stream>:dlq`. Both are
 documented with the other hook fields in `docs/agents/schema.yaml`.
 
+A workflow with a `hook` trigger gets the event as its run's `event` context
+(`type`, `stream`, `id`, `delivery_id` and the parsed `payload`), so its steps
+can template it, and its trigger takes the same `requeue_if_busy` option. See
+[Agent Builder](AGENT_BUILDER.md#triggered-by-an-event).
+
 ## Subscribing
 
 ```python
