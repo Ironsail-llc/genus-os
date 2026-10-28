@@ -197,6 +197,12 @@ JIRA_TOOLS = frozenset(
     }
 )
 
+# Settings tools (GEN-42): the owner's assistant reads and changes the
+# instance's declared settings through robothor.settings.operator — the same
+# functions `genus config` and the bridge call. Owner-only in the handler and
+# in RBAC (migration 152).
+CONFIG_TOOLS = frozenset({"config_get", "config_set"})
+
 # GitHub REST API tools (dev team operations)
 GITHUB_API_TOOLS = frozenset(
     {
@@ -369,6 +375,8 @@ READONLY_TOOLS: frozenset[str] = frozenset(
         "get_stats",
         # Memory write-status probe (read-only)
         "memory_write_status",
+        # Settings read (GEN-42): value, source, restart flag; secrets masked.
+        "config_get",
         # Vault read-only tools
         "vault_get",
         "vault_list",

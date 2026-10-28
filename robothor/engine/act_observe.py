@@ -180,6 +180,7 @@ _CHANGE_SUFFIXES: tuple[str, ...] = (
     "_modify",
     "_push",
     "_commit",
+    "_set",  # vault_set, config_set
 )
 
 #: And the ones whose name says nothing either way.
@@ -188,7 +189,6 @@ CHANGE_TOOLS: frozenset[str] = frozenset(
         "browser",
         "make_call",
         "mcp_call_tool",
-        "vault_set",
         "vault_delete",
         "federation_trigger",
     }

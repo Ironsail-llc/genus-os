@@ -1139,6 +1139,53 @@ numbers never come from an agent.
   analyst's narrative under `analyst`; the old free-form analyst report is
   refused.
 
+### The instance's own settings: `config_get`, `config_set`, and reading an env file
+
+The operator's assistant can read and change the instance's declared settings
+without `exec`. Both tools call the same `robothor.settings.operator` functions
+as `genus config` and the dashboard, so every surface gives the same answer.
+
+- `config_get` takes `key` (one setting, e.g. `ROBOTHOR_LOG_LEVEL`) or `prefix`
+  (every setting whose name starts with it, at most 100). It returns the
+  effective value, its `source` (default, `config.yaml`, environment, runtime
+  flag), the description, and whether a change needs a restart. A secret
+  comes back as `<set, b2:…>` or `<unset>`, never as its value.
+- `config_set` takes `key`, `value` and optionally `apply`. The value is
+  checked against the setting's declared type and written where the setting
+  lives: `config.yaml`, or the flag store for a governed flag. The reply lists
+  the units that need a restart, and warns when an environment variable will
+  keep winning over `config.yaml`. A credential is refused, and the refusal
+  does not echo it back; store credentials with `vault_set`. `apply=true` runs
+  `genus config set --apply` through the authenticated host-exec service,
+  because the engine process cannot write `/etc`. That writes the systemd
+  drop-in and schedules the restart 15 s out. The host-exec service is only
+  available to the verified owner on a top-level main run. Anywhere else,
+  `apply=true` returns an error saying it needs host exec.
+- Both tools are **owner-only**. The handler requires a verified identity with
+  role `owner` in the run's tenant and refuses benchmark runs. RBAC also
+  denies both tools to every other role (migration 152).
+
+**Which to use.** For "what is X set to and why", use `config_get`. Use
+`read_file` on the env file only to see the file itself. A plain dotenv
+file (`.env`, `.env.local`, `robothor.env`, `connectors.env`, and the instance
+env file `ROBOTHOR_ENV_FILE`) is no longer refused to the owner: a verified
+owner identity in the run's own tenant, outside a benchmark run, the same
+rule as `config_get`. Every other caller (sub-agents, cron and service runs,
+other roles, benchmarks) still gets the refusal. For the owner it comes back with every
+key and every non-secret value visible, and every secret value masked as
+`****` plus its last four characters, or `****` alone for a short value. A
+value counts as secret when its key says so (a declared secret setting, or
+a name holding `TOKEN`, `SECRET`, `PASSWORD`, `KEY`, `AUTH`, `COOKIE`,
+`PRIVATE`, `DSN` …) or when the value looks like a credential (vendor token
+shapes, a URL carrying `user:password@`). These checks use the shared
+redactors. A comment is shown only when it is a commented-out `KEY=VALUE`
+line, masked by the same rules; any other comment text is replaced by
+`# [comment hidden]`, since free text can hold a credential no rule
+recognises. SOPS-encrypted files, `secrets*` files, key files (`*.pem`,
+`id_rsa` …), files under secret directories, and any body that is not plain
+`KEY=VALUE` lines are still refused. `exec` checks are unchanged:
+`cat robothor.env` is still refused.
+
 ### Everything else
 
 The full registry is large and changes with the release; `tool_search` over the

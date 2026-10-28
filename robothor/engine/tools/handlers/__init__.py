@@ -7,6 +7,7 @@ from robothor.engine.tools.handlers import (  # noqa: F401
     benchmark,
     browser,
     claude_code,
+    config_tools,
     crm,
     desktop,
     devops_metrics,

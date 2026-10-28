@@ -552,6 +552,67 @@ _ATTACHMENT_SCHEMAS: dict[str, dict[str, Any]] = {
 }
 
 
+#: The settings tools (GEN-42), outside ``get_engine_schemas`` for the same
+#: size-ratchet reason as the vault cluster below. Owner-only; see
+#: ``handlers/config_tools.py``.
+_CONFIG_SCHEMAS: dict[str, dict[str, Any]] = {
+    "config_get": {
+        "type": "function",
+        "function": {
+            "name": "config_get",
+            "description": (
+                "Read this instance's own settings: the effective value, where it comes "
+                "from (default, config.yaml, environment, runtime flag), its "
+                "description, and whether changing it needs a restart. Pass `key` for "
+                "one setting (its environment variable name, e.g. ROBOTHOR_LOG_LEVEL) "
+                "or `prefix` to list every setting whose name starts with it. Secret "
+                "values are never returned: they show as <set, fingerprint> or <unset>. "
+                "Owner only."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "key": {"type": "string", "description": "Exact setting name"},
+                    "prefix": {
+                        "type": "string",
+                        "description": "List settings whose name starts with this",
+                    },
+                },
+            },
+        },
+    },
+    "config_set": {
+        "type": "function",
+        "function": {
+            "name": "config_set",
+            "description": (
+                "Change one of this instance's settings, exactly as `genus config set` "
+                "does: the value is validated against the setting's declared type and "
+                "written to config.yaml (or the live flag store for a governed flag). "
+                "The reply says which services need a restart. Credentials are refused "
+                "-- store those with vault_set. apply=true also changes the value where "
+                "the running service actually reads it (a systemd drop-in) and "
+                "schedules the restart 15 s later; that needs host exec and is only "
+                "available to the verified owner's top-level run. Owner only."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "key": {"type": "string", "description": "Setting name (env var)"},
+                    "value": {"type": "string", "description": "New value, as text"},
+                    "apply": {
+                        "type": "boolean",
+                        "description": "Apply where the service reads it and restart",
+                        "default": False,
+                    },
+                },
+                "required": ["key", "value"],
+            },
+        },
+    },
+}
+
+
 #: The secrets vault's four tools, as one cluster.
 #:
 #: Lifted out of ``get_engine_schemas`` when ``vault_test`` was added: the
@@ -1781,7 +1842,7 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
         },
     }
 
-    schemas.update(_VAULT_SCHEMAS)
+    schemas.update(_VAULT_SCHEMAS | _CONFIG_SCHEMAS)
 
     # ── Knowledge Vault (verbatim memory store; RIP 12) ──
     # Distinct from the secrets vault above. Stores reference data the agent
