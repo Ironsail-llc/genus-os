@@ -9,6 +9,8 @@ import pytest
 from robothor.engine.hooks import (
     BUSY_REQUEUE_DELAY_SECONDS,
     MAX_BUSY_REQUEUES,
+    REPLAY_MAX_AGE_SECONDS,
+    REPLAY_MAX_DELIVERIES,
     STREAM_PREFIX,
     EventHooks,
 )
@@ -65,9 +67,6 @@ async def _fire(hooks, data, redis=None):
         with patch("robothor.engine.hooks.asyncio.sleep", new_callable=AsyncMock) as sleep:
             for coro in spawned:
                 await coro
-            # A requeue spawned while running a workflow task
-            for c in registry.spawn.call_args_list[len(spawned) :]:
-                await c.args[0]
     return redis, registry, sleep
 
 
@@ -101,6 +100,13 @@ class TestEventReachesTheWorkflow:
         event = hooks.workflow_engine.execute.call_args.kwargs["initial_context"]["event"]
         assert event["payload"] == "not json"
         assert event["delivery_id"] == ""
+
+    def test_a_missing_optional_field_renders_empty_without_a_warning(self, caplog):
+        context = {"steps": {}, "event": {"payload": {"data": {"ticket": {"id": "t-42"}}}}}
+        with caplog.at_level("WARNING", logger="robothor.engine.workflow"):
+            rendered = _render_template("{{ event.payload.data.message.senderType }}", context)
+        assert rendered == ""
+        assert not [r for r in caplog.records if "Template eval failed" in r.getMessage()]
 
     def test_step_args_can_template_the_event(self):
         context = {"steps": {}, "event": {"payload": {"data": {"ticket": {"id": "t-42"}}}}}
@@ -343,22 +349,83 @@ class TestDurabilityAndLimits:
     def _patches():
         return TestConsumerLoopNotBlocked._patches()
 
+    @staticmethod
+    def _pending_redis(entries, claimed):
+        """Redis with ``entries`` (id, deliveries) pending and ``claimed`` id -> data on XCLAIM."""
+        redis = AsyncMock()
+        pending = [
+            {"message_id": mid, "times_delivered": n, "consumer": b"engine-test"}
+            for mid, n in entries
+        ]
+        redis.xpending_range = AsyncMock(side_effect=[pending, []])
+
+        async def xclaim(stream, group, consumer, min_idle_time, message_ids):
+            return [(m, claimed[m]) for m in message_ids if claimed.get(m)]
+
+        redis.xclaim = AsyncMock(side_effect=xclaim)
+        return redis
+
+    @staticmethod
+    def _id(seconds_ago: float) -> bytes:
+        import time
+
+        return f"{int((time.time() - seconds_ago) * 1000)}-0".encode()
+
     @pytest.mark.asyncio
-    async def test_start_replays_this_consumers_pending_entries(self, engine_config):
+    async def test_start_replays_a_recent_pending_entry(self, engine_config):
         hooks = EventHooks(engine_config, MagicMock())
         hooks._dispatch = AsyncMock()
-        redis = AsyncMock()
-        page = [(STREAM.encode(), [(b"1-0", {b"type": EVENT.encode()}), (b"2-0", {})])]
-        redis.xreadgroup = AsyncMock(side_effect=[page, [(STREAM.encode(), [])]])
+        fresh = self._id(60)
+        redis = self._pending_redis([(fresh, 1)], {fresh: {b"type": EVENT.encode()}})
         await hooks._replay_pending(redis, "engine", "engine-test", [STREAM])
-
-        first, second = redis.xreadgroup.call_args_list
-        assert first.args[2] == {STREAM: "0"}
-        assert second.args[2] == {STREAM: "2-0"}  # pages on from the last id seen
         hooks._dispatch.assert_awaited_once()
-        assert hooks._dispatch.call_args.args[:2] == (STREAM, b"1-0")
-        # An entry whose data is gone (trimmed) is acknowledged, not replayed
-        redis.xack.assert_awaited_once_with(STREAM, "engine", b"2-0")
+        assert hooks._dispatch.call_args.args[:2] == (STREAM, fresh)
+        assert redis.xpending_range.call_args_list[0].kwargs["consumername"] == "engine-test"
+
+    @pytest.mark.asyncio
+    async def test_a_stale_pending_entry_is_dead_lettered_not_replayed(self, engine_config):
+        hooks = EventHooks(engine_config, MagicMock())
+        hooks._dispatch = AsyncMock()
+        old = self._id(REPLAY_MAX_AGE_SECONDS + 600)
+        redis = self._pending_redis([(old, 1)], {old: {b"type": EVENT.encode()}})
+        await hooks._replay_pending(redis, "engine", "engine-test", [STREAM])
+        hooks._dispatch.assert_not_awaited()
+        assert redis.xadd.call_args.args[0] == f"{STREAM}:dlq"
+        redis.xack.assert_awaited_once_with(STREAM, "engine", old)
+
+    @pytest.mark.asyncio
+    async def test_an_entry_delivered_too_often_is_dead_lettered(self, engine_config):
+        hooks = EventHooks(engine_config, MagicMock())
+        hooks._dispatch = AsyncMock()
+        poison = self._id(60)
+        redis = self._pending_redis(
+            [(poison, REPLAY_MAX_DELIVERIES)], {poison: {b"type": EVENT.encode()}}
+        )
+        await hooks._replay_pending(redis, "engine", "engine-test", [STREAM])
+        hooks._dispatch.assert_not_awaited()
+        assert redis.xadd.call_args.args[0] == f"{STREAM}:dlq"
+        redis.xack.assert_awaited_once_with(STREAM, "engine", poison)
+
+    @pytest.mark.asyncio
+    async def test_a_trimmed_pending_entry_is_acknowledged(self, engine_config):
+        hooks = EventHooks(engine_config, MagicMock())
+        hooks._dispatch = AsyncMock()
+        gone = self._id(60)
+        redis = self._pending_redis([(gone, 1)], {})
+        await hooks._replay_pending(redis, "engine", "engine-test", [STREAM])
+        hooks._dispatch.assert_not_awaited()
+        redis.xack.assert_awaited_once_with(STREAM, "engine", gone)
+
+    @pytest.mark.asyncio
+    async def test_no_replay_under_ha(self, engine_config, monkeypatch):
+        monkeypatch.setenv("ROBOTHOR_HA_LEADER_ENABLED", "true")
+        hooks = EventHooks(engine_config, MagicMock())
+        hooks._dispatch = AsyncMock()
+        fresh = self._id(60)
+        redis = self._pending_redis([(fresh, 1)], {fresh: {b"type": EVENT.encode()}})
+        await hooks._replay_pending(redis, "engine", "engine-test", [STREAM])
+        hooks._dispatch.assert_not_awaited()
+        redis.xpending_range.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_stop_waits_for_in_flight_events_then_leaves_the_rest_pending(
