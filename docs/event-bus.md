@@ -157,8 +157,12 @@ side by side, and one agent's hook runs take turns. Hook agent runs share the
 fleet's `max_concurrent_agents` limit. A long run holds up only later events
 for the same agent, unless 100 of them pile up, when the consumer waits. An
 event read but not yet acknowledged when the engine stops or crashes stays
-pending in Redis and is handled again at the next start, so a handler may see
-an event twice and should be idempotent. Both are
+pending in Redis and is handled again at the next start if it is under an hour
+old and has been tried fewer than three times; otherwise it goes to
+`<stream>:dlq`. A handler may therefore see an event twice and should be
+idempotent. Under HA (`ROBOTHOR_HA_LEADER_ENABLED`) the replicas share one
+consumer name, so nothing is replayed at start, and a crashed replica's
+entries stay pending. Both are
 documented with the other hook fields in `docs/agents/schema.yaml`.
 
 A workflow with a `hook` trigger gets the event as its run's `event` context
