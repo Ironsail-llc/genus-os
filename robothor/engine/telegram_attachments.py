@@ -349,13 +349,27 @@ class TelegramAttachmentsMixin:
         suffix = PurePath(media.name).suffix.lower()
         extract = attachments.extractable(suffix, media.mime)
         if extract is not None and media.kind != "image":
-            whole = (
-                await _extract_pdf_text(raw)
-                if extract == "pdf"
-                else raw.decode("utf-8", errors="replace")
-            )
+            if extract == "text":
+                whole = raw.decode("utf-8", errors="replace")
+                noted.text_total_chars = len(whole)
+                noted.text = whole[: attachments.TEXT_EXTRACT_CHARS]
+                return
+            # A document is extracted only as far as the cap: the parse runs
+            # on a thread nothing can cancel. Text cut there carries its own
+            # stopped-early note, so it is not sliced again.
+            if extract == "pdf":
+                whole = await _extract_pdf_text(raw, max_chars=attachments.TEXT_EXTRACT_CHARS)
+            else:
+                from robothor.engine import file_extract
+
+                whole = await asyncio.to_thread(
+                    file_extract.describe_bytes,
+                    raw,
+                    extract,
+                    max_chars=attachments.TEXT_EXTRACT_CHARS,
+                )
             noted.text_total_chars = len(whole)
-            noted.text = whole[: attachments.TEXT_EXTRACT_CHARS]
+            noted.text = whole
             return
 
         if media.kind != "image":
@@ -649,23 +663,14 @@ class TelegramAttachmentsMixin:
         )
 
 
-async def _extract_pdf_text(raw_bytes: bytes) -> str:
-    """Best-effort text extraction from a PDF."""
-    try:
-        import io
+async def _extract_pdf_text(raw_bytes: bytes, *, max_chars: int | None = None) -> str:
+    """Best-effort text extraction from a PDF, via the shared extractor.
 
-        import pypdf
+    Never raises: a missing library or a corrupt file becomes a bracketed note
+    the agent can read, and the file itself is already saved.
+    """
+    from robothor.engine import file_extract
 
-        reader = pypdf.PdfReader(io.BytesIO(raw_bytes))
-        pages = []
-        for i, page in enumerate(reader.pages):
-            text = page.extract_text() or ""
-            if text.strip():
-                pages.append(f"[Page {i + 1}]\n{text}")
-        if pages:
-            return "\n\n".join(pages)
-        return "[PDF: no extractable text (may be image-based)]"
-    except ImportError:
-        return "[PDF file — install pypdf for text extraction]"
-    except Exception as e:
-        return f"[PDF text extraction failed: {e}]"
+    return await asyncio.to_thread(
+        file_extract.describe_bytes, raw_bytes, "pdf", max_chars=max_chars
+    )

@@ -11,6 +11,7 @@ from robothor.engine.exec_spill import shape_exec_result
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from pathlib import Path
 
     from robothor.engine.tools.dispatch import ToolContext
 
@@ -346,13 +347,63 @@ async def _read_file(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 
         if is_inbox_secret(path, workspace=ctx.workspace or None):
             return {"error": refusal_for(path)}
-        try:
-            content = path.read_text()
-            return {"content": content[:50000], "path": str(path), "chars": len(content)}
-        except Exception as e:
-            return {"error": f"Failed to read file: {e}"}
+        return _read_any(path)
 
     return await asyncio.to_thread(_run)
+
+
+#: Characters of a file's text returned to the model, extracted or not.
+_READ_FILE_CHARS = 50_000
+
+#: Bytes sniffed for a NUL before a file of unknown type is decoded as text.
+_BINARY_SNIFF_BYTES = 8192
+
+
+def _read_any(path: Path) -> dict[str, Any]:
+    """Text for a text file, extracted text for a document, a note otherwise.
+
+    Called only after the secret-path refusals above: nothing here may run on
+    a file those would refuse.
+    """
+    from robothor.engine import attachments, file_extract
+
+    try:
+        doc_kind = file_extract.document_kind(path.suffix)
+        if doc_kind is not None:
+            if not path.is_file():
+                return {"error": f"Failed to read file: no such file: {path}"}
+            try:
+                text = file_extract.extract_path(path, doc_kind, max_chars=_READ_FILE_CHARS)
+            except file_extract.ExtractionError as e:
+                return {"error": f"Failed to read {doc_kind} file: {e}"}
+            out: dict[str, Any] = {
+                "content": text if file_extract.STOPPED_EARLY in text else text[:_READ_FILE_CHARS],
+                "path": str(path),
+                "chars": len(text),
+                "format": doc_kind,
+            }
+            if file_extract.STOPPED_EARLY in text:
+                # Extraction stopped at the cap: the true length is unknown.
+                out["truncated"] = True
+            return out
+        if attachments.kind_for("", path.name) == "image" and path.is_file():
+            return {
+                "path": str(path),
+                "image": True,
+                "size": path.stat().st_size,
+                "message": "This is an image. Call view_image with this path to look at it.",
+            }
+        with path.open("rb") as fh:
+            sample = fh.read(_BINARY_SNIFF_BYTES)
+        if file_extract.looks_binary(sample):
+            return file_extract.binary_summary(path)
+        try:
+            content = path.read_text()
+        except UnicodeDecodeError:
+            return file_extract.binary_summary(path)
+        return {"content": content[:_READ_FILE_CHARS], "path": str(path), "chars": len(content)}
+    except Exception as e:
+        return {"error": f"Failed to read file: {e}"}
 
 
 @_handler("list_directory")

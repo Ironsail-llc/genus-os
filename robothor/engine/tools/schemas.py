@@ -1461,7 +1461,12 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
         "type": "function",
         "function": {
             "name": "read_file",
-            "description": "Read the contents of a file.",
+            "description": (
+                "Read the contents of a file. Text files come back as-is; PDF, "
+                "Word (.docx), Excel (.xlsx) and PowerPoint (.pptx) files come "
+                "back as extracted text. For an image, call view_image instead; "
+                "any other binary file returns its size and type."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
