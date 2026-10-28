@@ -342,6 +342,52 @@ database.tls.caConfigMap is empty.
 {{- end }}
 {{- end -}}
 
+{{/*
+Google Workspace credentials (engine.googleWorkspace). The engine's gws_*
+tools shell out to the gws CLI, which reads an authorized-user credentials
+file. The `engine-google` Secret class is mounted as that file and never
+reaches envFrom, so the refresh token does not become an environment variable.
+The CLI rewrites a token cache next to its config; the root filesystem is
+read-only, so the config dir sits on the writable runtime-cache emptyDir.
+The mount is optional: a Secret that has not synced yet leaves the gws tools
+reporting an auth error instead of holding the engine in ContainerCreating.
+Engine only; each renders nothing when engine.googleWorkspace.enabled is false.
+*/}}
+{{- define "genus-os.googleWorkspaceDir" -}}/etc/genus/gws{{- end -}}
+
+{{- define "genus-os.googleWorkspaceEnv" -}}
+{{- if (.Values.engine.googleWorkspace | default dict).enabled }}
+{{- if and .Values.vault.enabled (not (hasKey .Values.vault.secrets "engine-google")) -}}
+{{- fail "engine.googleWorkspace.enabled requires vault.secrets.engine-google (a Vault path holding credentials.json)" -}}
+{{- end }}
+- name: GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE
+  value: {{ printf "%s/credentials.json" (include "genus-os.googleWorkspaceDir" .) | quote }}
+- name: GOOGLE_WORKSPACE_CLI_CONFIG_DIR
+  value: "/app/.cache/gws"
+{{- end }}
+{{- end -}}
+
+{{- define "genus-os.googleWorkspaceVolumeMount" -}}
+{{- if (.Values.engine.googleWorkspace | default dict).enabled }}
+- name: google-workspace
+  mountPath: {{ include "genus-os.googleWorkspaceDir" . }}
+  readOnly: true
+{{- end }}
+{{- end -}}
+
+{{- define "genus-os.googleWorkspaceVolume" -}}
+{{- if (.Values.engine.googleWorkspace | default dict).enabled }}
+- name: google-workspace
+  secret:
+    secretName: {{ include "genus-os.fullname" . }}-engine-google
+    defaultMode: 0400
+    optional: true
+    items:
+      - key: credentials.json
+        path: credentials.json
+{{- end }}
+{{- end -}}
+
 {{- define "genus-os.dbCaVolume" -}}
 {{- $tls := .Values.database.tls | default dict -}}
 {{- if $tls.caConfigMap }}

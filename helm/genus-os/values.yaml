@@ -436,9 +436,19 @@ engine:
   # spec.volumes (e.g. a persistentVolumeClaim for a plugin's state directory)
   # and `extraVolumeMounts` entries into the container's volumeMounts. Each
   # mount's `name` must match a volume; names must not collide with the
-  # chart's own (workspace, tmp, runtime-cache, db-ca, migration-api-token).
+  # chart's own (workspace, tmp, runtime-cache, db-ca, migration-api-token,
+  # google-workspace).
   extraVolumes: []
   extraVolumeMounts: []
+  # Google Workspace credentials for the gws_* tools (mail, calendar, chat).
+  # When enabled, the `engine-google` Secret's `credentials.json` key (an
+  # authorized-user OAuth file) is mounted read-only at /etc/genus/gws and
+  # GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE points at it. Declare
+  # vault.secrets.engine-google in the environment layer. The class is a file
+  # mount only: engine.secretRefs refuses it, so the refresh token never
+  # becomes an environment variable. See the chart README.
+  googleWorkspace:
+    enabled: false
   resources:
     requests:
       cpu: 500m
@@ -585,6 +595,9 @@ dashboard:
   env:
     NEXT_PUBLIC_OWNER_NAME: "there"
     NEXT_PUBLIC_AI_NAME: "Robothor"
+    # Marketplace host behind the Browse and per-agent links. Matches the
+    # CLI's PROGRAMMATIC_RESOURCES_URL default; a trailing slash is dropped.
+    NEXT_PUBLIC_PROGRAMMATIC_RESOURCES_URL: "https://programmaticresources.io"
     # AUTH_URL is the dashboard's PUBLIC origin and its source is
     # dashboard.ingress.host above — set it to "https://<that host>". It is
     # left unset here because the host is layer 3's to provide.

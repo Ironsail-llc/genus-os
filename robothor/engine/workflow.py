@@ -131,6 +131,8 @@ def _eval_node(node: Any, ctx: dict[str, Any]) -> Any:  # noqa: PLR0911
         if node.attr.startswith("_"):
             raise ValueError("private attribute access blocked")
         obj = _eval_node(node.value, ctx)
+        if obj is None:
+            return None  # an optional field that is absent: render it empty
         return obj.get(node.attr) if isinstance(obj, dict) else getattr(obj, node.attr)
     if isinstance(node, _ast.Subscript):
         return _eval_node(node.value, ctx)[_eval_node(node.slice, ctx)]
@@ -230,6 +232,7 @@ def parse_workflow(data: dict[str, Any]) -> WorkflowDef:
             event_type=t.get("event_type", ""),
             cron=t.get("cron", ""),
             timezone=t.get("timezone", "America/New_York"),
+            requeue_if_busy=bool(t.get("requeue_if_busy", False)),
         )
         for t in data.get("triggers", [])
     ]

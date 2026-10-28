@@ -81,14 +81,9 @@ jobs:
             --output-file /tmp/requirements.txt
           uv pip install --system -r /tmp/requirements.txt
           uv pip install --system --no-deps -e .
-      # A newly reported dependency issue must fail the gate and receive an
-      # explicit, reviewed remediation. Two time-bounded exceptions, recorded
-      # under "Dependency Advisory Policy" in SECURITY.md and tracked in #723
-      # (expire 2026-11-10): GHSA-7hp6-4w63-5g45 and GHSA-g5ff-637f-6q2m are
-      # both in the litellm *proxy server*, which this project never runs. The
-      # production release gate (release-and-build.yml) carries the same
-      # ignores; change both together.
-      - run: pip-audit --ignore-vuln GHSA-7hp6-4w63-5g45 --ignore-vuln GHSA-g5ff-637f-6q2m
+      # No standing advisory exceptions: a newly reported dependency issue
+      # must fail the gate and receive an explicit, reviewed remediation.
+      - run: pip-audit
       # Documentation gates, siblings of the instance-data gate above. Two
       # things fix their position in this job. They need the package
       # importable -- check_doc_commands parses each quoted command with the

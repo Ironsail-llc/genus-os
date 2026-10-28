@@ -94,7 +94,7 @@ describe them generically instead:
 | Instead of                                      | Write                                                   |
 | ----------------------------------------------- | ------------------------------------------------------- |
 | Another application's name from the same estate | "another application in the same namespace"             |
-| An issue-tracker id (`ABC-1234`)                | the behaviour, and why it changed                       |
+| An issue-tracker id (`ABC-1234`)                | the behaviour, and why it changed (the one exception: the ticket key at the end of a PR title and commit subject, see `CLAUDE.md`) |
 | A deployment hostname                           | `<dashboard-host>`, or the values key that sets it      |
 | A cluster namespace or GitOps application name  | "the deployment namespace", "the deploying application" |
 | A secret-store path or database endpoint        | the values key, or the secret class name                |

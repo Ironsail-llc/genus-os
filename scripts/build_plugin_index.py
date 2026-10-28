@@ -71,7 +71,9 @@ def _bundle_entry(
 
     data = path.read_bytes()
     with tempfile.TemporaryDirectory(prefix="genus-index-bundle-") as unpacked:
-        destination = Path(unpacked)
+        # Resolved: the platform temp root may run through a symlink (macOS:
+        # /var -> /private/var), and the containment checks refuse an aliased root.
+        destination = Path(unpacked).resolve(strict=True)
         try:
             from robothor.templates.hub_client import HubClient
 
@@ -132,7 +134,9 @@ def _entry(path: Path, *, base_url: str, yanked: dict[str, str]) -> tuple[dict[s
     """One index entry, read entirely out of the wheel. Returns (entry, verdict)."""
     data = path.read_bytes()
     with tempfile.TemporaryDirectory(prefix="genus-index-") as unpacked:
-        contents = wheel.open_wheel(path, Path(unpacked) / "w")
+        # Resolved: the platform temp root may run through a symlink (macOS:
+        # /var -> /private/var), and the extractor refuses an aliased root.
+        contents = wheel.open_wheel(path, Path(unpacked).resolve(strict=True) / "w")
         if not contents.manifest_text:
             raise wheel.WheelError(
                 f"{path.name} ships no {MANIFEST_NAME}, so nothing declares what it "

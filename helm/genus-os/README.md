@@ -129,6 +129,7 @@ boundary. Keep them limited to these classes:
 | `engine-providers` | LLM, delivery, and tool-provider tokens required by Engine only — including `BRAVE_SEARCH_API_KEY`, which `web_search` prefers over scraped engines (from a datacenter IP most of those are blocked, so in-cluster this key is the reliable path) |
 | `bridge-integrations` | Bridge webhook/integration tokens only |
 | `orchestrator-providers` | retrieval/reranking provider tokens required by Orchestrator only |
+| `engine-google` | `credentials.json` only: an authorized-user OAuth file (`type`, `client_id`, `client_secret`, `refresh_token`) for the `gws_*` tools. Engine only, and only as a file mount through `engine.googleWorkspace`: `engine.secretRefs` refuses it, so the refresh token never becomes an environment variable. Declare it only where `engine.googleWorkspace.enabled` is on. |
 
 Never put raw PAN/CVV, customer payment data, JWT signing material, database
 credentials, or provider tokens into a dashboard-readable path. Owner/entity
@@ -211,6 +212,62 @@ ready.
 configuration. Legacy `/health` and `/liveness` endpoints remain available for
 older integrations.
 
+## Google Workspace credentials
+
+The engine's mail, calendar and chat tools (`gws_*`) run the `gws` CLI, which
+the image ships at a pinned version (`Dockerfile.python`, the `gws` stage). The
+CLI needs an authorized-user OAuth file for the mailbox the assistant uses:
+
+| Value | Default | Meaning |
+|-------|---------|---------|
+| `engine.googleWorkspace.enabled` | `false` | Mount the `engine-google` Secret's `credentials.json` read-only at `/etc/genus/gws/` and set `GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE` to it. `GOOGLE_WORKSPACE_CLI_CONFIG_DIR` goes to `/app/.cache/gws`, on the writable `runtime-cache` volume, because the CLI rewrites a token cache and the root filesystem is read-only. |
+
+```yaml
+vault:
+  secrets:
+    engine-google: {path: genus-os/production/engine-google}
+engine:
+  googleWorkspace:
+    enabled: true
+```
+
+Enabling it without `vault.secrets.engine-google` fails at template time. The
+mount itself is `optional`: until the Secret exists the engine starts normally
+and the `gws_*` tools return an `auth` error, so turning the switch on before
+the credentials are written cannot hold the engine in `ContainerCreating`. VSO
+restarts the engine when the credentials rotate.
+
+**Minting the file.** In a Google Cloud project owned by the Workspace, enable
+the Gmail API (and Calendar or Chat if those tools are used), set the OAuth
+consent screen to **Internal** (an External app in testing mode expires refresh
+tokens after seven days), and create an OAuth client of type *Desktop app*.
+Then, on a workstation, with the same `gws` version the image pins:
+
+```sh
+gws auth login            # sign in as the assistant's mailbox, grant the scopes
+gws auth export --unmasked > credentials.json
+vault kv put <mount>/<path>/engine-google credentials.json=@credentials.json
+rm credentials.json
+```
+
+Set `ROBOTHOR_AI_EMAIL` to the same mailbox in `engine-providers`: the reply
+tools use it to tell the assistant's own address apart from the people on a
+thread. Check from the pod with
+`gws gmail users getProfile --params '{"userId":"me"}'`.
+
+**Egress.** `gws` calls `oauth2.googleapis.com` (token refresh),
+`gmail.googleapis.com`, `www.googleapis.com` (Calendar) and
+`chat.googleapis.com` (Chat) on 443. It loads each API's discovery document
+from that same host and caches it under `GOOGLE_WORKSPACE_CLI_CONFIG_DIR`.
+`networkPolicy.egress.destinations.https` matches CIDRs, not hostnames, and
+Google's API ranges are large and move, so in practice put these hosts in the
+egress proxy's allowlist, set `HTTPS_PROXY` in `engine.env`, and allow the
+proxy's CIDR in `destinations.https`. A NetworkPolicy that drops the packets
+shows up as the `timeout` hint; a proxy that refuses a host usually answers at
+once and shows up as `auth` (a 403) or `unclassified`. A `Mail service not enabled` error
+instead means the mailbox has no Gmail license in the Workspace admin console;
+the credentials are fine and start working once Gmail is on.
+
 ## Extra volumes
 
 Each Python workload can mount additional volumes, rendered verbatim with
@@ -237,7 +294,7 @@ engine:
 ```
 
 Names must not collide with the chart's own volumes (`workspace`, `tmp`,
-`runtime-cache`, `db-ca`, `migration-api-token`), and the chart does not create
+`runtime-cache`, `db-ca`, `migration-api-token`, `google-workspace`), and the chart does not create
 the claim. The bridge and orchestrator run several replicas with rolling
 updates, so a `ReadWriteOnce` claim belongs on the single-replica engine only.
 

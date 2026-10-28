@@ -3,6 +3,8 @@
 import { useState, useEffect, useCallback } from "react";
 import { ExternalLink, Download, Trash2, RefreshCw, Package } from "lucide-react";
 
+import { useRuntimeConfig } from "@/components/runtime-config";
+
 interface InstalledAgent {
   agent_id: string;
   version: string;
@@ -19,9 +21,9 @@ interface MarketplaceViewProps {
 // Browser calls stay on the authenticated same-origin BFF. The BFF alone owns
 // the internal Bridge address and exchanges the signed-in caller's token.
 const BRIDGE_URL = "/api/bridge";
-const PR_URL = "https://programmaticresources.com";
 
 export function MarketplaceView({ visible }: MarketplaceViewProps) {
+  const { marketplaceUrl } = useRuntimeConfig();
   const [agents, setAgents] = useState<InstalledAgent[]>([]);
   const [loading, setLoading] = useState(false);
   const [installSlug, setInstallSlug] = useState("");
@@ -112,7 +114,7 @@ export function MarketplaceView({ visible }: MarketplaceViewProps) {
         <div className="flex items-center justify-between">
           <h2 className="text-lg font-semibold">Marketplace</h2>
           <a
-            href={`${PR_URL}/browse`}
+            href={`${marketplaceUrl}/browse`}
             target="_blank"
             rel="noopener noreferrer"
             className="inline-flex items-center gap-1.5 text-sm text-info hover:text-info/80"
@@ -215,7 +217,7 @@ export function MarketplaceView({ visible }: MarketplaceViewProps) {
                     <Trash2 className="w-3.5 h-3.5" />
                   </button>
                   <a
-                    href={`${PR_URL}/bundle/${agent.agent_id}`}
+                    href={`${marketplaceUrl}/bundle/${agent.agent_id}`}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="p-1.5 rounded hover:bg-accent"

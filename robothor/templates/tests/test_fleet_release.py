@@ -124,9 +124,22 @@ def test_existing_release_is_never_overwritten(source, tmp_path):
     assert (target / "keep.txt").read_text() == "existing"
 
 
+@pytest.mark.parametrize("symlinked_tmp", [False, True])
 @pytest.mark.parametrize("extra_declaration", [False, True])
-def test_plugin_surface_must_match_in_both_directions(source, tmp_path, extra_declaration):
+def test_plugin_surface_must_match_in_both_directions(
+    source, tmp_path, monkeypatch, extra_declaration, symlinked_tmp
+):
     from robothor.templates.fleet_release import ReleaseError, build_release
+
+    if symlinked_tmp:
+        # The default macOS temp dir sits under /var, a symlink to /private/var.
+        import tempfile
+
+        real = tmp_path / "real-tmp"
+        real.mkdir()
+        alias = tmp_path / "alias-tmp"
+        alias.symlink_to(real, target_is_directory=True)
+        monkeypatch.setattr(tempfile, "tempdir", str(alias))
 
     path = "adapter-1.0-py3-none-any.whl"
     declared = {"genus.services": ["adapter"]}

@@ -46,6 +46,11 @@ tests:
             name: NEXT_PUBLIC_AI_NAME
             value: "Robothor"
       - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: NEXT_PUBLIC_PROGRAMMATIC_RESOURCES_URL
+            value: "https://programmaticresources.io"
+      - contains:
           path: spec.template.spec.containers[0].envFrom
           content:
             secretRef:
