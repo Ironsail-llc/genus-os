@@ -256,11 +256,15 @@ thread. Check from the pod with
 `gws gmail users getProfile --params '{"userId":"me"}'`.
 
 **Egress.** `gws` calls `oauth2.googleapis.com` (token refresh),
-`gmail.googleapis.com` and `www.googleapis.com` (Calendar, Chat) on 443,
-directly unless `HTTPS_PROXY` is set in the engine's environment. Under
-default-deny egress, the Layer-3 HTTPS rules in the `networkPolicy.egress`
-values (or the proxy's allowlist) must cover those hosts, or every
-`gws_*` call ends in the `timeout` hint. A `Mail service not enabled` error
+`gmail.googleapis.com`, `www.googleapis.com` (Calendar) and
+`chat.googleapis.com` (Chat) on 443. It loads each API's discovery document
+from that same host and caches it under `GOOGLE_WORKSPACE_CLI_CONFIG_DIR`.
+`networkPolicy.egress.destinations.https` matches CIDRs, not hostnames, and
+Google's API ranges are large and move, so in practice put these hosts in the
+egress proxy's allowlist, set `HTTPS_PROXY` in `engine.env`, and allow the
+proxy's CIDR in `destinations.https`. A NetworkPolicy that drops the packets
+shows up as the `timeout` hint; a proxy that refuses a host usually answers at
+once and shows up as `auth` (a 403) or `unclassified`. A `Mail service not enabled` error
 instead means the mailbox has no Gmail license in the Workspace admin console;
 the credentials are fine and start working once Gmail is on.
 
