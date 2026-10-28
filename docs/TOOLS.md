@@ -1141,7 +1141,7 @@ numbers never come from an agent.
   Plain-text bodies become Atlassian Document Format, blank lines splitting
   paragraphs. They are opt-in (`OPT_IN_TOOLS`): an agent gets them only by
   naming them in `tools_allowed` or, on top of the default set, in
-  `tools_opt_in`. Migration 152 denies them to the `user` and `member` roles;
+  `tools_opt_in`. Migration 153 denies them to the `user` and `member` roles;
   `service` and the operator's roles keep them. Within those gates there is no
   project allow-list: the API token's Jira permissions decide. Issue and parent
   keys must look like `ABC-123` (or a numeric id) and project keys like `ABC`.

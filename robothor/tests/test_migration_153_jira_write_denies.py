@@ -1,4 +1,4 @@
-"""152: who may write to Jira as the instance's account.
+"""153: who may write to Jira as the instance's account.
 
 Humans other than the operator (``user``, ``member``) are denied the four
 Jira write tools, as 146 denies them the GitHub review writes. ``service``
@@ -17,7 +17,7 @@ import pytest
 pytestmark = pytest.mark.integration
 
 MIGRATIONS_DIR = Path(__file__).resolve().parents[2] / "crm" / "migrations"
-MIGRATION = "152_jira_write_tool_denies"
+MIGRATION = "153_jira_write_tool_denies"
 
 WRITES = ("jira_create_issue", "jira_add_comment", "jira_transition_issue", "jira_update_issue")
 

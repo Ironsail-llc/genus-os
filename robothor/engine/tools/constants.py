@@ -203,7 +203,7 @@ JIRA_TOOLS = frozenset(
 
 # JIRA write tools: they create, edit, comment on and move tickets as the
 # instance's account, so they are OPT_IN_TOOLS (below): offered only to a
-# manifest that names them. Migration 152 is the RBAC half.
+# manifest that names them. Migration 153 is the RBAC half.
 JIRA_WRITE_TOOLS = frozenset(
     {
         "jira_create_issue",
@@ -480,7 +480,7 @@ TOOLSEARCH_TOOLS = frozenset({"tool_search", "tool_describe", "tool_call"})
 # stop the reviewer agent that names them, so it waits for a dedicated role.
 #
 # The four JIRA write tools create, edit, comment on and transition tickets as
-# the instance's account; same rule. Migration 152 denies them to `user` and
+# the instance's account; same rule. Migration 153 denies them to `user` and
 # `member`; `service` keeps them, so an unattended agent that names them works.
 #
 # Spelled out rather than imported from robothor.sales so this module stays
