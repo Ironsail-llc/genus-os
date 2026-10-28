@@ -595,6 +595,9 @@ dashboard:
   env:
     NEXT_PUBLIC_OWNER_NAME: "there"
     NEXT_PUBLIC_AI_NAME: "Robothor"
+    # Marketplace host behind the Browse and per-agent links. Matches the
+    # CLI's PROGRAMMATIC_RESOURCES_URL default; a trailing slash is dropped.
+    NEXT_PUBLIC_PROGRAMMATIC_RESOURCES_URL: "https://programmaticresources.io"
     # AUTH_URL is the dashboard's PUBLIC origin and its source is
     # dashboard.ingress.host above — set it to "https://<that host>". It is
     # left unset here because the host is layer 3's to provide.

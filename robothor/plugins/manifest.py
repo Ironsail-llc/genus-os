@@ -29,6 +29,13 @@ logger = logging.getLogger(__name__)
 
 MANIFEST_NAME = "genus-plugin.yaml"
 
+#: Keys that declare WORKSPACE files the plugin ships (agents, workflows,
+#: manifest patches, other files), read by :mod:`robothor.plugins.assets`.
+#: They are lists, but they name no contribution, so they are kept out of
+#: ``declared`` -- the loader's enforce comparison must see exactly what it
+#: saw before these keys existed.
+ASSET_KEYS = ("agents", "workflows", "patches", "files")
+
 
 @dataclass(frozen=True)
 class PluginManifest:
@@ -102,7 +109,55 @@ def read_manifest_text(dist: Any) -> str | None:
                     break
         except Exception:  # noqa: BLE001
             raw = None
+    # 3. An EDITABLE install (local development only): its file list holds no
+    #    package files, so the manifest beside the package is found through the
+    #    package's import spec -- located, never imported.
+    if not raw:
+        located = editable_manifest_path(dist)
+        if located is not None:
+            try:
+                raw = located.read_text(encoding="utf-8")
+            except OSError:
+                raw = None
     return raw or None
+
+
+def editable_manifest_path(dist: Any) -> pathlib.Path | None:
+    """``genus-plugin.yaml`` beside an editable distribution's package, or None.
+
+    Only for a distribution whose ``direct_url.json`` says ``editable``; a
+    regular install is answered from its own metadata and file list alone.
+    ``importlib.util.find_spec`` on a top-level name resolves where the
+    package lives without executing it.
+    """
+    import importlib.util
+    import json
+
+    try:
+        info = json.loads(dist.read_text("direct_url.json") or "{}")
+    except Exception:  # noqa: BLE001 - no or unreadable direct_url.json: not editable
+        return None
+    if not (isinstance(info, dict) and (info.get("dir_info") or {}).get("editable")):
+        return None
+    try:
+        entry_points = list(dist.entry_points or ())
+    except Exception:  # noqa: BLE001
+        return None
+    for ep in entry_points:
+        if not str(getattr(ep, "group", "")).startswith("genus."):
+            continue
+        top = str(getattr(ep, "value", "")).split(":", 1)[0].split(".", 1)[0].strip()
+        if not top.isidentifier():
+            continue
+        try:
+            spec = importlib.util.find_spec(top)
+        except (ImportError, ValueError):
+            continue
+        for location in getattr(spec, "submodule_search_locations", None) or ():
+            candidate = pathlib.Path(location) / MANIFEST_NAME
+            if candidate.is_file() and not candidate.is_symlink():
+                return candidate
+    return None
 
 
 def read_manifest(dist: Any) -> PluginManifest | None:
@@ -131,7 +186,7 @@ def parse_manifest(raw: str | None) -> PluginManifest | None:
 
     declared: dict[str, set[str]] = {}
     for kind, value in data.items():
-        if kind in ("name", "contract_version", "entry_points"):
+        if kind in ("name", "contract_version", "entry_points", *ASSET_KEYS):
             continue
         if isinstance(value, list):
             declared[kind] = {str(v) for v in value if isinstance(v, str | int | float)}

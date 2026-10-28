@@ -70,6 +70,26 @@ def test_verifies_exact_installed_payload_without_importing_plugin(installed):
     assert receipt["payload_files_verified"] == 4
 
 
+def test_verifies_when_the_temp_dir_runs_through_a_symlink(installed, tmp_path, monkeypatch):
+    """The default macOS temp dir sits under /var, a symlink to /private/var."""
+    import tempfile
+
+    from robothor.plugins.installed import verify_installed_wheel
+
+    real = tmp_path / "real-tmp"
+    real.mkdir()
+    alias = tmp_path / "alias-tmp"
+    alias.symlink_to(real, target_is_directory=True)
+    monkeypatch.setattr(tempfile, "tempdir", str(alias))
+    wheel, digest, lock, distribution, _ = installed
+
+    receipt = verify_installed_wheel(
+        wheel, expected_digest=digest, lock_path=lock, distribution=distribution
+    )
+
+    assert receipt["name"] == "adapter"
+
+
 @pytest.mark.parametrize(
     "fault",
     ["code", "missing", "extra", "symlink", "version", "lock", "disabled", "wheel", "unlisted"],

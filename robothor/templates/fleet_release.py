@@ -151,7 +151,9 @@ def _contracts(root: Path, spec: ReleaseSpec) -> dict[str, Any]:
         workflows[workflow.id] = workflow
     for path in spec.plugins:
         with tempfile.TemporaryDirectory(prefix="genus-release-wheel-") as folder:
-            wheel = open_wheel(contained_path(root, path), Path(folder))
+            # Resolved: the platform temp root may run through a symlink (macOS:
+            # /var -> /private/var), and the extractor refuses an aliased root.
+            wheel = open_wheel(contained_path(root, path), Path(folder).resolve(strict=True))
             manifest = parse_manifest(wheel.manifest_text)
             if (
                 manifest is None

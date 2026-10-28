@@ -168,6 +168,31 @@ def test_it_builds_an_index_the_shipped_parser_verifies(tmp_path, wheel_dir, key
     assert index.key_id == KEY_ID
 
 
+def test_it_builds_when_the_temp_dir_runs_through_a_symlink(
+    tmp_path, wheel_dir, keys, monkeypatch
+) -> None:
+    """The default macOS temp dir sits under /var, a symlink to /private/var."""
+    import tempfile
+
+    _wheel(wheel_dir)
+    real = tmp_path / "real-tmp"
+    real.mkdir()
+    alias = tmp_path / "alias-tmp"
+    alias.symlink_to(real, target_is_directory=True)
+    monkeypatch.setattr(tempfile, "tempdir", str(alias))
+
+    code, out = _build(tmp_path, keys)
+
+    assert code == 0
+    index = registry.parse_index(
+        out.read_bytes(),
+        Path(str(out) + ".sig").read_bytes(),
+        keys=keys[1],
+        url="https://example.invalid/index.json",
+    )
+    assert [e.name for e in index.entries] == ["acme-tools"]
+
+
 def test_one_byte_changed_afterwards_no_longer_verifies(tmp_path, wheel_dir, keys) -> None:
     _wheel(wheel_dir)
     _, out = _build(tmp_path, keys)
