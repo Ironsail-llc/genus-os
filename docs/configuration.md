@@ -717,7 +717,7 @@ it. No mail is sent by any of this; the operator passes the invitation on.
 | `GET /api/users` | Every account in the tenant: id, address, display name, role, status, whether it is bound to an identity provider, whether MFA is enrolled, last sign-in. Never a password hash, an MFA secret or an IdP subject. |
 | `POST /api/users` | Creates the `user_accounts` row — **narrower than `genus user add`**, which also writes the CRM person, the tenant membership and the channel identifiers. `{"sso": true}` also arms a one-shot SSO binding grant and returns its id, expiry and issuer pin. |
 | `PATCH /api/users/{id}` | Role, display name, `status: active\|disabled`. |
-| `POST /api/users/{id}/binding-grant` | Arms a fresh one-hour binding grant for an existing account, pinned to the configured issuer when the appliance has exactly one. |
+| `POST /api/users/{id}/binding-grant` | Arms a fresh binding grant for an existing account (seven days unless `GENUS_INVITE_GRANT_TTL_SECONDS` says otherwise), pinned to the configured issuer when the appliance has exactly one. |
 | `GET /api/users/{id}/binding-grants` | Every grant armed for that account, live or spent. |
 
 **The owner role is not an ordinary role here.** Only an owner may grant or
