@@ -334,3 +334,99 @@ class TestBusyRequeueBackoff:
         data = {b"type": EVENT.encode(), b"_busy_requeue_count": b"35"}
         _redis, _registry, sleep = await _fire(hooks, data)
         sleep.assert_awaited_once_with(busy_requeue_delay(35))
+
+
+class TestDurabilityAndLimits:
+    """Events in flight survive a restart; hook agent runs respect the fleet's limit."""
+
+    @staticmethod
+    def _patches():
+        return TestConsumerLoopNotBlocked._patches()
+
+    @pytest.mark.asyncio
+    async def test_start_replays_this_consumers_pending_entries(self, engine_config):
+        hooks = EventHooks(engine_config, MagicMock())
+        hooks._dispatch = AsyncMock()
+        redis = AsyncMock()
+        page = [(STREAM.encode(), [(b"1-0", {b"type": EVENT.encode()}), (b"2-0", {})])]
+        redis.xreadgroup = AsyncMock(side_effect=[page, [(STREAM.encode(), [])]])
+        await hooks._replay_pending(redis, "engine", "engine-test", [STREAM])
+
+        first, second = redis.xreadgroup.call_args_list
+        assert first.args[2] == {STREAM: "0"}
+        assert second.args[2] == {STREAM: "2-0"}  # pages on from the last id seen
+        hooks._dispatch.assert_awaited_once()
+        assert hooks._dispatch.call_args.args[:2] == (STREAM, b"1-0")
+        # An entry whose data is gone (trimmed) is acknowledged, not replayed
+        redis.xack.assert_awaited_once_with(STREAM, "engine", b"2-0")
+
+    @pytest.mark.asyncio
+    async def test_stop_waits_for_in_flight_events_then_leaves_the_rest_pending(
+        self, engine_config
+    ):
+        import asyncio
+
+        hooks = EventHooks(engine_config, MagicMock())
+        finished = asyncio.Event()
+
+        async def quick():
+            await asyncio.sleep(0)
+            finished.set()
+
+        async def stuck():
+            await asyncio.Event().wait()
+
+        quick_task = asyncio.create_task(quick())
+        stuck_task = asyncio.create_task(stuck())
+        hooks._in_flight = {quick_task, stuck_task}
+        await hooks._stop_in_flight(timeout=0.05)
+        assert finished.is_set()
+        assert stuck_task.cancelled()
+
+    @pytest.mark.asyncio
+    async def test_hook_agent_runs_capped_by_max_concurrent_agents(self, engine_config):
+        import asyncio
+
+        gate = asyncio.Event()
+        started: list[str] = []
+        agents = [f"agent-{i}" for i in range(4)]
+        hooks = TestConsumerLoopNotBlocked._hooks(engine_config, agents)
+
+        async def execute(**kwargs):
+            started.append(kwargs["agent_id"])
+            await gate.wait()
+            return _run(RunStatus.COMPLETED)
+
+        hooks.runner.execute = AsyncMock(side_effect=execute)
+        p1, p2, p3, p4 = self._patches()
+        with p1, p2, p3, p4:
+            await hooks._dispatch(STREAM, b"1-0", {b"type": EVENT.encode()}, AsyncMock(), "g")
+            await asyncio.sleep(0.05)
+            assert len(started) == engine_config.max_concurrent_agents
+            gate.set()
+            await hooks.drain()
+        assert sorted(started) == agents
+
+    @pytest.mark.asyncio
+    async def test_agents_on_one_event_do_not_wait_for_each_other(self, engine_config):
+        import asyncio
+
+        gate = asyncio.Event()
+        ran: list[str] = []
+        hooks = TestConsumerLoopNotBlocked._hooks(engine_config, ["slow-agent", "quick-agent"])
+
+        async def execute(**kwargs):
+            if kwargs["agent_id"] == "slow-agent":
+                await gate.wait()
+            ran.append(kwargs["agent_id"])
+            return _run(RunStatus.COMPLETED)
+
+        hooks.runner.execute = AsyncMock(side_effect=execute)
+        p1, p2, p3, p4 = self._patches()
+        with p1, p2, p3, p4:
+            await hooks._dispatch(STREAM, b"1-0", {b"type": EVENT.encode()}, AsyncMock(), "g")
+            await asyncio.sleep(0.05)
+            assert ran == ["quick-agent"]
+            gate.set()
+            await hooks.drain()
+        assert ran == ["quick-agent", "slow-agent"]
