@@ -49,7 +49,7 @@ from urllib.parse import quote
 from robothor.events import contract
 from robothor.workspace.errors import NotFound, WorkspaceError
 from robothor.workspace.ingest.base import Ingestor, IngestReport, Publisher
-from robothor.workspace.ingest.crm import InteractionLogger, crm_key, interaction_payload
+from robothor.workspace.ingest.crm import InteractionLogger, log_new_mail
 from robothor.workspace.ingest.email_log import EmailLog, new_entry
 from robothor.workspace.ingest.state import SEEN_TTL, IngestStore, SyncState
 from robothor.workspace.microsoft.mail import ENVELOPE_FIELDS, gmail_envelope
@@ -379,30 +379,15 @@ class GraphMailIngestor(_GraphDeltaIngestor):
         return newest
 
     async def _log_to_crm(self, entries: list[dict[str, Any]], report: IngestReport) -> None:
-        """One CRM interaction per new message, before it is published.
-
-        Before, so a round that dies between the two re-publishes next round
-        without logging again (the ``crm:`` key is already seen). A CRM failure
-        is logged by type and never holds the message back from the pipeline.
-        """
-        if self.log_interaction is None or not entries:
-            return
-        keys = {str(e["id"]): crm_key(str(e["id"])) for e in entries}
-        done = await self._seen(list(keys.values()))
-        for entry in entries:
-            key = keys[str(entry["id"])]
-            payload = interaction_payload(entry)
-            if key in done or payload is None:
-                continue
-            try:
-                logged = await self.log_interaction(payload)
-            except Exception as exc:  # noqa: BLE001 - the CRM must never stop ingestion
-                logger.warning("microsoft365 mail CRM log deferred: %s", type(exc).__name__)
-                continue
-            if logged:
-                await self._mark([key])
-                entry["crmLoggedAt"] = self._now().isoformat()
-                report.crm_logged += 1
+        """One CRM interaction per new message, before it is published (:func:`log_new_mail`)."""
+        report.crm_logged += await log_new_mail(
+            entries,
+            log_interaction=self.log_interaction,
+            seen=self._seen,
+            mark=self._mark,
+            stamp=lambda: self._now().isoformat(),
+            label="microsoft365",
+        )
 
 
 class GraphCalendarIngestor(_GraphDeltaIngestor):

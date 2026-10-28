@@ -5,21 +5,29 @@ Each channel picks its signature scheme: ``hmac_hex`` (hex digest of the raw
 body, GitHub-style) or ``stripe_t_v1`` (``t=<unix>,v1=<hex>`` over
 ``"<t>." + body`` with a timestamp window). A channel may also name a delivery
 id header, in which case a replayed delivery is answered as a duplicate and
-not re-published. The payload is normalized and published to the appropriate
-Redis stream.
+not re-published. A ``google_oidc`` channel takes Google Cloud Pub/Sub push
+instead: the ``Authorization: Bearer`` ID token is verified against the
+channel's audience and service account, the Pub/Sub ``messageId`` is the
+delivery id, and the base64 ``message.data`` is decoded into the payload. The
+payload is normalized and published to the appropriate Redis stream.
 Agents pick up events via the existing EventHooks system.
 """
 
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import hashlib
 import hmac
 import json
 import logging
 import os
+import re
+import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -33,7 +41,7 @@ logger = logging.getLogger(__name__)
 # Must match hooks.py / event_bus.py
 STREAM_PREFIX = "robothor:events:"
 
-SIGNATURE_SCHEMES = ("hmac_hex", "stripe_t_v1")
+SIGNATURE_SCHEMES = ("hmac_hex", "stripe_t_v1", "google_oidc")
 
 # Headers tried in order when a channel names no signature_header.
 DEFAULT_SIGNATURE_HEADERS = ("X-Hub-Signature-256", "X-Signature-256", "X-Webhook-Signature")
@@ -62,6 +70,9 @@ class WebhookChannel:
     timestamp_tolerance_seconds: int = 300
     # When set and present on a request, replays of the same id are dropped.
     delivery_id_header: str = ""
+    # google_oidc only: the token's required audience and signing service account.
+    oidc_audience: str = ""
+    oidc_service_account: str = ""
 
 
 @dataclass
@@ -98,6 +109,8 @@ def load_webhook_config(path: str | Path) -> WebhookConfig:
             signature_scheme=raw.get("signature_scheme", "hmac_hex") or "hmac_hex",
             timestamp_tolerance_seconds=int(raw.get("timestamp_tolerance_seconds", 300)),
             delivery_id_header=raw.get("delivery_id_header", "") or "",
+            oidc_audience=str(raw.get("oidc_audience", "") or ""),
+            oidc_service_account=str(raw.get("oidc_service_account", "") or ""),
         )
         if channels[name].signature_scheme not in SIGNATURE_SCHEMES:
             logger.warning(
@@ -192,6 +205,151 @@ def _verify_signature(
             payload_bytes, signature, secret, channel.timestamp_tolerance_seconds
         )
     return False, f"unknown signature scheme {channel.signature_scheme!r}"
+
+
+#: google_oidc verification runs on its own small pool, never the default
+#: executor the rest of the engine's ``to_thread`` work shares.
+OIDC_MAX_WORKERS = 4
+OIDC_THREAD_PREFIX = "webhook-oidc"
+#: Timeout for fetching Google's signing certificates.
+OIDC_CERT_TIMEOUT_SECONDS = 5
+#: How long fetched certificates are reused. Google publishes a new key well
+#: before it signs with it, so a cached set stays valid across a rotation.
+OIDC_CERT_TTL_SECONDS = 1800
+#: Longest bearer token considered at all (a Google ID token is ~1 KB).
+MAX_OIDC_TOKEN_CHARS = 8192
+
+_JWT_SEGMENT = re.compile(r"[A-Za-z0-9_-]+")
+
+
+def _looks_like_jwt(token: str) -> bool:
+    """Three non-empty base64url segments, bounded in size: cheap, before any thread."""
+    if not token or len(token) > MAX_OIDC_TOKEN_CHARS:
+        return False
+    parts = token.split(".")
+    return len(parts) == 3 and all(_JWT_SEGMENT.fullmatch(p) for p in parts)
+
+
+class CachedCertsRequest:
+    """A google-auth transport that reuses a successful GET for ``ttl_seconds``.
+
+    google-auth fetches the signing certificates on every verification; this
+    answers a repeat GET of the same URL from memory and gives every real
+    fetch a short timeout. Failed fetches are not cached.
+    """
+
+    def __init__(
+        self,
+        inner: Any,
+        *,
+        ttl_seconds: float = OIDC_CERT_TTL_SECONDS,
+        clock: Any = time.monotonic,
+    ) -> None:
+        self._inner = inner
+        self._ttl = ttl_seconds
+        self._clock = clock
+        self._cache: dict[str, tuple[float, Any]] = {}
+        self._lock = threading.Lock()
+
+    def __call__(self, url: str, method: str = "GET", **kwargs: Any) -> Any:
+        if method.upper() != "GET":
+            kwargs["timeout"] = OIDC_CERT_TIMEOUT_SECONDS
+            return self._inner(url, method=method, **kwargs)
+        with self._lock:
+            hit = self._cache.get(url)
+            if hit is not None and self._clock() < hit[0]:
+                return hit[1]
+        kwargs["timeout"] = OIDC_CERT_TIMEOUT_SECONDS
+        response = self._inner(url, method=method, **kwargs)
+        if getattr(response, "status", None) == 200:
+            with self._lock:
+                self._cache[url] = (self._clock() + self._ttl, response)
+        return response
+
+
+_google_request: CachedCertsRequest | None = None
+_oidc_pool: ThreadPoolExecutor | None = None
+
+
+def _google_transport() -> CachedCertsRequest:
+    """One shared, certificate-caching google-auth transport."""
+    global _google_request
+    if _google_request is None:
+        from google.auth.transport.requests import Request
+
+        _google_request = CachedCertsRequest(Request())
+    return _google_request
+
+
+def _oidc_executor() -> ThreadPoolExecutor:
+    global _oidc_pool
+    if _oidc_pool is None:
+        _oidc_pool = ThreadPoolExecutor(
+            max_workers=OIDC_MAX_WORKERS, thread_name_prefix=OIDC_THREAD_PREFIX
+        )
+    return _oidc_pool
+
+
+def _bearer_token(authorization: str) -> str:
+    scheme, _, token = authorization.strip().partition(" ")
+    return token.strip() if scheme.lower() == "bearer" else ""
+
+
+def _check_google_oidc(channel: WebhookChannel, authorization: str) -> tuple[bool, str]:
+    """Verify a Pub/Sub push ``Authorization: Bearer <ID token>``. Blocking (cert fetch).
+
+    Valid when google-auth accepts the token for the channel's audience and
+    its ``email`` claim is the channel's service account, verified.
+    """
+    token = _bearer_token(authorization)
+    if not _looks_like_jwt(token):
+        return False, "missing or malformed bearer token"
+    try:
+        from google.oauth2 import id_token
+
+        claims = id_token.verify_oauth2_token(  # type: ignore[no-untyped-call]
+            token, _google_transport(), audience=channel.oidc_audience
+        )
+    except Exception as exc:  # noqa: BLE001 - any verifier failure is a rejection
+        return False, f"token rejected ({type(exc).__name__})"
+    if not isinstance(claims, dict):
+        return False, "token carried no claims"
+    email = str(claims.get("email") or "")
+    if email.lower() != channel.oidc_service_account.lower():
+        return False, "token is not from the configured service account"
+    if claims.get("email_verified") is not True:
+        return False, "token email is not verified"
+    return True, ""
+
+
+def _unwrap_pubsub(body: Any) -> tuple[dict[str, Any], str] | None:
+    """A Pub/Sub push envelope -> ``(payload, messageId)``; ``None`` when malformed.
+
+    The payload is ``message.data`` decoded (a JSON object's keys, or
+    ``{"data": <text>}``) plus ``pubsub``: the message id, publish time,
+    attributes and subscription.
+    """
+    if not isinstance(body, dict) or not isinstance(body.get("message"), dict):
+        return None
+    message = body["message"]
+    message_id = str(message.get("messageId") or message.get("message_id") or "")
+    try:
+        raw = base64.b64decode(str(message.get("data") or ""), validate=True)
+        text = raw.decode("utf-8")
+    except (binascii.Error, ValueError):
+        return None
+    try:
+        decoded = json.loads(text) if text else {}
+    except ValueError:
+        decoded = None
+    payload: dict[str, Any] = dict(decoded) if isinstance(decoded, dict) else {"data": text}
+    payload["pubsub"] = {
+        "message_id": message_id,
+        "publish_time": str(message.get("publishTime") or message.get("publish_time") or ""),
+        "attributes": message.get("attributes") or {},
+        "subscription": str(body.get("subscription") or ""),
+    }
+    return payload, message_id
 
 
 # ── Channel stats (in-memory, reset on restart) ────────────────────
@@ -359,6 +517,37 @@ async def _publish_to_stream(
     return event_id
 
 
+async def _authenticate_google_oidc(ch: WebhookChannel, request: Request) -> JSONResponse | None:
+    """Authenticate a Pub/Sub push; ``None`` when accepted, else the refusal.
+
+    Cheap refusals come first (configuration, rate limit, token shape): the
+    verifier costs a thread on :func:`_oidc_executor` and may fetch certs.
+    """
+    if not (ch.oidc_audience and ch.oidc_service_account):
+        logger.warning(
+            "Webhook channel rejected: oidc_audience/oidc_service_account not "
+            "configured for channel '%s'",
+            ch.name,
+        )
+        return JSONResponse(
+            {"error": "Channel not configured: OIDC audience or account not set"},
+            status_code=503,
+        )
+    if not await _check_rate_limit(ch):
+        return JSONResponse({"error": "Rate limit exceeded"}, status_code=429)
+    authorization = request.headers.get("authorization", "")
+    if not _looks_like_jwt(_bearer_token(authorization)):
+        logger.warning("Webhook token rejected for channel '%s': malformed", ch.name)
+        return JSONResponse({"error": "Invalid signature"}, status_code=401)
+    ok, reason = await asyncio.get_running_loop().run_in_executor(
+        _oidc_executor(), _check_google_oidc, ch, authorization
+    )
+    if not ok:
+        logger.warning("Webhook token rejected for channel '%s': %s", ch.name, reason)
+        return JSONResponse({"error": "Invalid signature"}, status_code=401)
+    return None
+
+
 def get_webhook_router(config: WebhookConfig | None = None) -> APIRouter:
     """Create a FastAPI APIRouter for webhook ingress.
 
@@ -410,9 +599,17 @@ def get_webhook_router(config: WebhookConfig | None = None) -> APIRouter:
                 status_code=413,
             )
 
+        oidc = ch.signature_scheme == "google_oidc"
+        if oidc:
+            refused = await _authenticate_google_oidc(ch, request)
+            if refused is not None:
+                return refused
+
         # Verify HMAC signature
-        secret = os.getenv(ch.secret_env, "")
-        if ch.signature_header:
+        secret = "" if oidc else os.getenv(ch.secret_env, "")
+        if oidc:
+            signature = ""
+        elif ch.signature_header:
             signature = request.headers.get(ch.signature_header, "")
         else:
             signature = next(
@@ -420,7 +617,7 @@ def get_webhook_router(config: WebhookConfig | None = None) -> APIRouter:
                 "",
             )
 
-        if not secret:
+        if not oidc and not secret:
             # Secret env var not set — reject to prevent unauthenticated ingress
             logger.warning(
                 "Webhook channel rejected: secret not configured for channel '%s'",
@@ -431,7 +628,7 @@ def get_webhook_router(config: WebhookConfig | None = None) -> APIRouter:
                 status_code=503,
             )
 
-        ok, reason = _verify_signature(ch, body, signature, secret)
+        ok, reason = (True, "") if oidc else _verify_signature(ch, body, signature, secret)
         if not ok:
             logger.warning("Webhook signature rejected for channel '%s': %s", ch.name, reason)
             return JSONResponse(
@@ -439,8 +636,8 @@ def get_webhook_router(config: WebhookConfig | None = None) -> APIRouter:
                 status_code=401,
             )
 
-        # Rate limiting
-        if not await _check_rate_limit(ch):
+        # Rate limiting (google_oidc channels were limited before verifying)
+        if not oidc and not await _check_rate_limit(ch):
             return JSONResponse(
                 {"error": "Rate limit exceeded"},
                 status_code=429,
@@ -454,6 +651,16 @@ def get_webhook_router(config: WebhookConfig | None = None) -> APIRouter:
                 {"error": "Invalid JSON payload"},
                 status_code=400,
             )
+
+        pubsub_message_id = ""
+        if oidc:
+            unwrapped = _unwrap_pubsub(payload)
+            if unwrapped is None:
+                return JSONResponse(
+                    {"error": "Invalid Pub/Sub push envelope"},
+                    status_code=400,
+                )
+            payload, pubsub_message_id = unwrapped
 
         # Extract event type
         event_type = ""
@@ -472,6 +679,8 @@ def get_webhook_router(config: WebhookConfig | None = None) -> APIRouter:
         delivery_id = ""
         if ch.delivery_id_header:
             delivery_id = request.headers.get(ch.delivery_id_header, "").strip()
+        if not delivery_id and pubsub_message_id:
+            delivery_id = pubsub_message_id
         if delivery_id:
             claimed = await _claim_delivery(ch, delivery_id)
             if claimed is None:

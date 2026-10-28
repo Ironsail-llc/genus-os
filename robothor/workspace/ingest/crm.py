@@ -16,6 +16,7 @@ retried round or a resync does not log it again.
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -25,8 +26,11 @@ __all__ = [
     "crm_key",
     "dal_interaction_logger",
     "interaction_payload",
+    "log_new_mail",
     "parse_sender",
 ]
+
+_logger = logging.getLogger(__name__)
 
 #: ``await log(payload)`` -> True when the CRM wrote the interaction.
 InteractionLogger = Callable[[dict[str, Any]], Awaitable[bool]]
@@ -100,3 +104,41 @@ def dal_interaction_logger(
         return bool(result.get("message_persisted"))
 
     return log
+
+
+async def log_new_mail(
+    entries: list[dict[str, Any]],
+    *,
+    log_interaction: InteractionLogger | None,
+    seen: Callable[[list[str]], Awaitable[set[str]]],
+    mark: Callable[[list[str]], Awaitable[None]],
+    stamp: Callable[[], str],
+    label: str,
+) -> int:
+    """One CRM interaction per new message, before it is published; the number logged.
+
+    Before, so a round that dies between the two re-publishes next round
+    without logging again (the ``crm:`` key is already seen). A CRM failure
+    is logged by type and never holds the message back from the pipeline.
+    ``label`` names the ingest in that log line.
+    """
+    if log_interaction is None or not entries:
+        return 0
+    keys = {str(e["id"]): crm_key(str(e["id"])) for e in entries}
+    done = await seen(list(keys.values()))
+    logged_count = 0
+    for entry in entries:
+        key = keys[str(entry["id"])]
+        payload = interaction_payload(entry)
+        if key in done or payload is None:
+            continue
+        try:
+            logged = await log_interaction(payload)
+        except Exception as exc:  # noqa: BLE001 - the CRM must never stop ingestion
+            _logger.warning("%s mail CRM log deferred: %s", label, type(exc).__name__)
+            continue
+        if logged:
+            await mark([key])
+            entry["crmLoggedAt"] = stamp()
+            logged_count += 1
+    return logged_count

@@ -203,7 +203,10 @@ On Google, the instance's own sync scripts poll Gmail and publish `email.new`
 on the event bus, which starts the email pipeline. On Microsoft 365 the
 platform does this itself: with `ROBOTHOR_WORKSPACE_PROVIDER=microsoft365` the
 engine runs an ingest worker (`robothor/workspace/ingest/`). On a Google
-instance the worker starts no task at all, so nothing is published twice.
+instance the worker starts no task at all, so nothing is published twice,
+unless Gmail push is switched on (`ROBOTHOR_GMAIL_PUSH_ENABLED`, see
+[Gmail push](../event-bus.md#gmail-push)), which replaces the sync script's
+mail half.
 With HA leader election on, only the leader replica ingests.
 
 Every `ROBOTHOR_M365_INGEST_INTERVAL_SECONDS` (default 60) one round runs:

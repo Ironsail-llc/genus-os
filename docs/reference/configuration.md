@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-476 settings in 17 groups.
+480 settings in 17 groups.
 
 ## autonomy
 
@@ -113,6 +113,10 @@ Host paths for the isolated personal browser service and clients.
 | Variable | Type | Default | Restart | Secret | Since | Description |
 | --- | --- | --- | --- | --- | --- | --- |
 | `ROBOTHOR_EMAIL_LOG_PATH` | str | _(empty)_ | `robothor-engine` | no | unreleased | The email-log.json the platform's mail ingest merges new messages into (the file the dashboards read). Empty means <workspace>/brain/memory/email-log.json. |
+| `ROBOTHOR_GMAIL_PUSH_ENABLED` | bool | `false` | `robothor-engine` | no | unreleased | Ingest the assistant's Gmail inbox on push when the workspace provider is google: a Pub/Sub push to the google_oidc webhook channel wakes one Gmail history round, which publishes email.new for each new unread inbox message, merges it into the email log and logs it to the CRM. Turn off the instance sync script's mail half first, or every message is published twice. Has no effect on microsoft365. |
+| `ROBOTHOR_GMAIL_PUSH_MAILBOX` | str | _(empty)_ | `robothor-engine` | no | unreleased | The Gmail address gws is signed in as, when Gmail push is on. Pushes for any other address are ignored. Empty means the address Gmail's profile reports at start. |
+| `ROBOTHOR_GMAIL_PUSH_STREAM` | str | `gmail` | `robothor-engine` | no | unreleased | The event-bus stream the google_oidc webhook channel for Gmail publishes to (its `stream:` in webhooks.yaml). The Gmail push consumer reads it. |
+| `ROBOTHOR_GMAIL_PUSH_TOPIC` | str | _(empty)_ | `robothor-engine` | no | unreleased | The Pub/Sub topic Gmail publishes inbox changes to (projects/<project>/topics/<topic>), when Gmail push is on. The engine calls Gmail's users.watch on it at start and daily. Empty means the watch is renewed elsewhere and the engine only consumes pushes. |
 | `ROBOTHOR_M365_ASSISTANT_MAILBOX` | str | _(empty)_ | `robothor-engine` | no | unreleased | The assistant's own Exchange Online mailbox (user principal name or SMTP address) when the workspace provider is microsoft365. Mail is sent from it and its inbox is read. |
 | `ROBOTHOR_M365_INGEST_INTERVAL_SECONDS` | int | `60` | `robothor-engine` | no | unreleased | Seconds between Microsoft 365 ingest rounds when the workspace provider is microsoft365: each round reads the assistant inbox's and the owner calendar's Graph delta, publishes email.new / calendar.* events for what is new and merges new mail into the email log. The doctor's ingest-freshness check allows three intervals. Has no effect on google, where the instance's own sync scripts publish these events. |
 | `ROBOTHOR_M365_OWNER_MAILBOX` | str | _(empty)_ | `robothor-engine` | no | unreleased | The operator's Exchange Online mailbox when the workspace provider is microsoft365. Its calendar is the one the assistant reads and edits for the operator. |

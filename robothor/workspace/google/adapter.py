@@ -178,6 +178,45 @@ class GoogleMailSync:
     def shape_message(self, raw: dict[str, Any], *, max_chars: int) -> dict[str, Any]:
         return gmail_parse._shape_message(raw, max_chars=max_chars)
 
+    # ── push ingest (robothor.workspace.ingest.google) ─────────────────
+
+    def get_profile(self) -> dict[str, Any]:
+        """``users.getProfile``: the signed-in address and the current ``historyId``."""
+        return _gws(["gmail", "users", "getProfile", "--params", json.dumps({"userId": "me"})])
+
+    def list_history(
+        self, start_history_id: str, *, page_token: str | None = None
+    ) -> dict[str, Any]:
+        """One page of ``users.history.list``: inbox additions after ``start_history_id``.
+
+        ``historyTypes`` is passed as a single string, not a list: the gws CLI
+        does not serialize array query parameters (see :meth:`get_thread`).
+        """
+        params: dict[str, Any] = {
+            "userId": "me",
+            "startHistoryId": str(start_history_id),
+            "historyTypes": "messageAdded",
+            "labelId": "INBOX",
+        }
+        if page_token:
+            params["pageToken"] = page_token
+        return _gws(["gmail", "users", "history", "list", "--params", json.dumps(params)])
+
+    def watch(self, topic: str, *, label_ids: list[str]) -> dict[str, Any]:
+        """``users.watch``: push changes to ``label_ids`` to the Pub/Sub ``topic``."""
+        body = {"topicName": topic, "labelIds": list(label_ids), "labelFilterBehavior": "include"}
+        return _gws(
+            [
+                "gmail",
+                "users",
+                "watch",
+                "--params",
+                json.dumps({"userId": "me"}),
+                "--json",
+                json.dumps(body),
+            ]
+        )
+
 
 class _GoogleCalendarSession:
     """One ``CalendarTransport`` (one token) for a read / write / read-back."""

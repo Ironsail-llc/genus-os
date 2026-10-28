@@ -8,6 +8,10 @@ noreply@anthropic.com
 # Test fixture safe domains (already excluded by SAFE_EMAIL_DOMAINS)
 # Listed here for documentation completeness
 
+# Google's own publisher for Gmail push notifications: a fixed, public address
+# every Gmail push setup grants on its Pub/Sub topic, not instance data.
+gmail-api-push@system.gserviceaccount.com
+
 # Documentation URLs and references
 linkedin.com/in/
 github.com/

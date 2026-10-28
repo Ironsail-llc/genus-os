@@ -133,10 +133,36 @@ JSON body, delivery id, then published.
 | `signature_scheme` | `hmac_hex` | `hmac_hex`: hex HMAC-SHA256 of the raw body (an optional `sha256=` prefix is accepted). `stripe_t_v1`: a header of the form `t=<unix seconds>,v1=<hex>[,v1=<hex>...]`, valid when the timestamp is within the tolerance and some `v1` equals HMAC-SHA256 of `"<t>."` followed by the raw body. |
 | `signature_header` | _(unset)_ | Read the signature from this header only. Unset tries `X-Hub-Signature-256`, `X-Signature-256` and `X-Webhook-Signature`, in that order. |
 | `timestamp_tolerance_seconds` | `300` | `stripe_t_v1` only: how far `t` may be from the receiver's clock, either way. |
+| `oidc_audience` | _(unset)_ | `google_oidc` only, required: the audience the push's ID token must carry (the push subscription's audience, usually this channel's URL). |
+| `oidc_service_account` | _(unset)_ | `google_oidc` only, required: the service account the push subscription signs as. The token's `email` claim must equal it and `email_verified` must be true. |
 | `delivery_id_header` | _(unset)_ | When set and present, the id is recorded in Redis for 24 hours (`robothor:webhook:delivery:<channel>:<id>`). A repeat answers `200 {"status": "duplicate"}` and is not published again. If Redis cannot be reached the request is refused with `503`, as the rate limiter refuses it, so the sender retries. |
 
 A bad, stale or malformed signature answers `401 {"error": "Invalid
 signature"}` whatever the scheme; the reason is logged, the secret never is.
+
+**`google_oidc`** is for Google Cloud Pub/Sub push subscriptions with
+authentication on. There is no shared secret, so `secret_env` is not used;
+instead the `Authorization: Bearer <ID token>` header is verified with
+google-auth (Google's signing certificates, the channel's `oidc_audience`),
+then the `email` claim is checked against `oidc_service_account`. A channel
+missing either field answers `503`, as an HMAC channel without its secret
+does. Because verification is the costly step, a `google_oidc` request is
+rate-limited first, and a bearer that is not a three-segment JWT is refused
+before any verification. Tokens are verified on a dedicated pool of four
+threads, and Google's signing certificates are reused for 30 minutes (fetched
+with a 5 second timeout). Since the rate limit counts requests before they
+are verified, a flood of forged tokens can spend a channel's budget. Real
+pushes are then answered `429`, which Pub/Sub retries with backoff, and the
+Gmail ingest works from its history cursor, so the first push that gets
+through catches up on everything. The body must be a Pub/Sub push envelope: `message.data` is
+base64-decoded and, when it is a JSON object, its keys become the published
+payload (otherwise `{"data": "<text>"}`), with a `pubsub` object beside them
+(`message_id`, `publish_time`, `attributes`, `subscription`). A body that is
+not an envelope, or data that is not base64, answers `400`. The Pub/Sub
+`messageId` is the delivery id unless the channel names a
+`delivery_id_header`, so Pub/Sub's at-least-once redeliveries are answered as
+duplicates. With no event type header or field, `event_type_prefix` is the
+event type (`gmail.push` below).
 
 The delivery id is a redelivery filter, not replay protection: it is not
 covered by the signature, so a captured request resent under another id is
@@ -170,6 +196,56 @@ A workflow with a `hook` trigger gets the event as its run's `event` context
 events), so its steps
 can template it, and its trigger takes the same `requeue_if_busy` option. See
 [Agent Builder](AGENT_BUILDER.md#triggered-by-an-event).
+
+## Gmail push
+
+A Google instance can ingest the assistant's Gmail on push instead of from a
+sync script (`robothor/workspace/ingest/gmail_push.py`,
+`robothor/workspace/ingest/google.py`). It is off by default.
+
+1. Gmail's `users.watch` sends a notification to a Pub/Sub topic whenever
+   the inbox changes. With `gmail_push_topic` set, the engine calls it at
+   start and daily (a watch lapses after seven days) and logs the expiration.
+2. A push subscription POSTs each notification to a `google_oidc` webhook
+   channel, which publishes `{emailAddress, historyId, pubsub}` to its stream
+   (`gmail_push_stream`, default `gmail`).
+3. The engine reads that stream as consumer group `gmail-push`. A push for
+   `gmail_push_mailbox` runs one round of the Gmail history ingestor: it
+   reads `users.history.list` (inbox additions) from the saved `historyId`
+   and publishes `email.new` (`provider: google`) for each new unread inbox
+   message, after merging it into `email-log.json` and logging it to the CRM.
+   A burst of pushes costs at most two rounds, the one in flight and one
+   more. The push's own `historyId` is not used; the saved cursor is.
+
+The first round, and a round whose cursor Gmail has expired (`404` from
+`history.list`), publish nothing and start again at the mailbox's current
+`historyId`, so old mail is never replayed. A message id is published once,
+whatever the rounds re-read; seen ids are purged after 45 days, hourly, as
+on Microsoft 365. With HA leader election on, only the leader watches and
+ingests.
+
+Setup, for the operator:
+
+1. In the Google Cloud project, create a Pub/Sub topic and grant
+   `gmail-api-push@system.gserviceaccount.com` the Pub/Sub Publisher role on
+   it.
+2. Create a service account for the push (it needs no roles of its own), and
+   a push subscription on the topic to
+   `https://<engine host>/api/webhooks/<channel>`, with authentication on:
+   that service account, and the endpoint URL as the audience.
+3. Add the channel to `$ROBOTHOR_WORKSPACE/docs/webhooks.yaml`
+   (`signature_scheme: google_oidc`, `oidc_audience`, `oidc_service_account`,
+   `stream`, `event_type_prefix: "gmail.push"`; see the commented example in
+   `docs/webhooks.yaml`).
+4. Set `ROBOTHOR_GMAIL_PUSH_ENABLED=true`, `ROBOTHOR_GMAIL_PUSH_TOPIC` to the
+   topic's full name (`projects/<project>/topics/<topic>`),
+   `ROBOTHOR_GMAIL_PUSH_MAILBOX` to the address gws is signed in as, and
+   `ROBOTHOR_GMAIL_PUSH_STREAM` if the channel's stream is not `gmail`. The
+   gws account needs a Gmail read scope. Restart the engine.
+5. Turn off the instance sync script's mail half (its `email.new`, email log
+   and CRM logging), or every message is published twice.
+
+The settings are in [Configuration](reference/configuration.md).
 
 ## Subscribing
 
