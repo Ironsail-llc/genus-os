@@ -307,3 +307,30 @@ class TestConsumerLoopNotBlocked:
             hooks.workflow_engine.execute.assert_awaited_once()
             gate.set()
             await hooks.drain()
+
+
+class TestBusyRequeueBackoff:
+    """A busy requeue backs off, so an event outlasts a long run instead of an hour's DLQ."""
+
+    def test_delay_starts_at_the_base_and_grows_to_a_cap(self):
+        from robothor.engine.hooks import busy_requeue_delay
+
+        delays = [busy_requeue_delay(n) for n in range(MAX_BUSY_REQUEUES)]
+        assert delays[0] == BUSY_REQUEUE_DELAY_SECONDS
+        assert delays == sorted(delays)
+        assert max(delays) == 60
+
+    def test_budget_outlasts_a_long_scheduled_run(self):
+        from robothor.engine.hooks import busy_requeue_delay
+
+        total = sum(busy_requeue_delay(n) for n in range(MAX_BUSY_REQUEUES))
+        assert 45 * 60 <= total <= 75 * 60
+
+    @pytest.mark.asyncio
+    async def test_requeue_waits_the_delay_for_its_count(self, engine_config):
+        from robothor.engine.hooks import busy_requeue_delay
+
+        hooks = _hooks(engine_config, _wf(requeue=True), status=RunStatus.SKIPPED)
+        data = {b"type": EVENT.encode(), b"_busy_requeue_count": b"35"}
+        _redis, _registry, sleep = await _fire(hooks, data)
+        sleep.assert_awaited_once_with(busy_requeue_delay(35))
