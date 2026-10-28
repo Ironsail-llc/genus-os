@@ -1,3 +1,13 @@
+## [1.115.0](https://github.com/Ironsail-llc/genus-os/compare/v1.114.0...v1.115.0) (2026-10-28)
+
+### Features
+
+* **engine:** hook-triggered workflows get the event and can requeue (GEN-36) ([#732](https://github.com/Ironsail-llc/genus-os/issues/732)) ([f405191](https://github.com/Ironsail-llc/genus-os/commit/f405191c306054bb70b91a26c93aeae05630c55a))
+
+### Documentation
+
+* **helm:** note the Google endpoints gws needs under default-deny egress ([#731](https://github.com/Ironsail-llc/genus-os/issues/731)) ([37b4d48](https://github.com/Ironsail-llc/genus-os/commit/37b4d4870b5541c846eddf6504f7e698ff9d0f40))
+
 ## [1.114.0](https://github.com/Ironsail-llc/genus-os/compare/v1.113.0...v1.114.0) (2026-10-28)
 
 ### Features
