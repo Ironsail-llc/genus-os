@@ -238,11 +238,13 @@ async def run(
             return timedelta(seconds=WATCH_RETRY_SECONDS)
         return timedelta(seconds=WATCH_RENEW_SECONDS)
 
-    async def purge() -> None:
+    async def purge() -> datetime:
+        """Drop seen ids past their retention; when the next purge is due."""
         try:
             await store.purge_seen(tenant_id, now() - SEEN_TTL)
         except Exception as exc:  # noqa: BLE001 - retried next interval
             logger.warning("gmail push ingest purge deferred: %s", type(exc).__name__)
+        return now() + timedelta(seconds=PURGE_EVERY_SECONDS)
 
     coalescer = RoundCoalescer(one_round)
     server = asyncio.create_task(coalescer.serve(), name="gmail-push-rounds")
@@ -260,8 +262,7 @@ async def run(
                 started = True
                 if topic:
                     next_watch = now() + await watch()
-                await purge()
-                next_purge = now() + timedelta(seconds=PURGE_EVERY_SECONDS)
+                next_purge = await purge()
                 try:
                     await one_round()  # the cursor exists before the first push is read
                 except Exception as exc:  # noqa: BLE001
@@ -278,8 +279,7 @@ async def run(
                 next_watch = now() + await watch()
                 coalescer.trigger()  # a reconciliation round with each renewal
             if next_purge is not None and now() >= next_purge:
-                await purge()
-                next_purge = now() + timedelta(seconds=PURGE_EVERY_SECONDS)
+                next_purge = await purge()
         await coalescer.settle()
     finally:
         server.cancel()

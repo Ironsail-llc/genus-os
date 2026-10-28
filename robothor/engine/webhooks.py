@@ -517,6 +517,37 @@ async def _publish_to_stream(
     return event_id
 
 
+async def _authenticate_google_oidc(ch: WebhookChannel, request: Request) -> JSONResponse | None:
+    """Authenticate a Pub/Sub push; ``None`` when accepted, else the refusal.
+
+    Cheap refusals come first (configuration, rate limit, token shape): the
+    verifier costs a thread on :func:`_oidc_executor` and may fetch certs.
+    """
+    if not (ch.oidc_audience and ch.oidc_service_account):
+        logger.warning(
+            "Webhook channel rejected: oidc_audience/oidc_service_account not "
+            "configured for channel '%s'",
+            ch.name,
+        )
+        return JSONResponse(
+            {"error": "Channel not configured: OIDC audience or account not set"},
+            status_code=503,
+        )
+    if not await _check_rate_limit(ch):
+        return JSONResponse({"error": "Rate limit exceeded"}, status_code=429)
+    authorization = request.headers.get("authorization", "")
+    if not _looks_like_jwt(_bearer_token(authorization)):
+        logger.warning("Webhook token rejected for channel '%s': malformed", ch.name)
+        return JSONResponse({"error": "Invalid signature"}, status_code=401)
+    ok, reason = await asyncio.get_running_loop().run_in_executor(
+        _oidc_executor(), _check_google_oidc, ch, authorization
+    )
+    if not ok:
+        logger.warning("Webhook token rejected for channel '%s': %s", ch.name, reason)
+        return JSONResponse({"error": "Invalid signature"}, status_code=401)
+    return None
+
+
 def get_webhook_router(config: WebhookConfig | None = None) -> APIRouter:
     """Create a FastAPI APIRouter for webhook ingress.
 
@@ -570,29 +601,9 @@ def get_webhook_router(config: WebhookConfig | None = None) -> APIRouter:
 
         oidc = ch.signature_scheme == "google_oidc"
         if oidc:
-            if not (ch.oidc_audience and ch.oidc_service_account):
-                logger.warning(
-                    "Webhook channel rejected: oidc_audience/oidc_service_account not "
-                    "configured for channel '%s'",
-                    ch.name,
-                )
-                return JSONResponse(
-                    {"error": "Channel not configured: OIDC audience or account not set"},
-                    status_code=503,
-                )
-            # Cheap refusals first: the verifier costs a thread and may fetch certs.
-            if not await _check_rate_limit(ch):
-                return JSONResponse({"error": "Rate limit exceeded"}, status_code=429)
-            authorization = request.headers.get("authorization", "")
-            if not _looks_like_jwt(_bearer_token(authorization)):
-                logger.warning("Webhook token rejected for channel '%s': malformed", ch.name)
-                return JSONResponse({"error": "Invalid signature"}, status_code=401)
-            ok, reason = await asyncio.get_running_loop().run_in_executor(
-                _oidc_executor(), _check_google_oidc, ch, authorization
-            )
-            if not ok:
-                logger.warning("Webhook token rejected for channel '%s': %s", ch.name, reason)
-                return JSONResponse({"error": "Invalid signature"}, status_code=401)
+            refused = await _authenticate_google_oidc(ch, request)
+            if refused is not None:
+                return refused
 
         # Verify HMAC signature
         secret = "" if oidc else os.getenv(ch.secret_env, "")
