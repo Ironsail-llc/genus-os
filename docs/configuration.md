@@ -707,7 +707,8 @@ What the settings do not tell you:
 accounts any more. Six operator-only Bridge routes, all scoped to the caller's
 own tenant — an account in another tenant answers 404, never 403. The Helm's
 **Settings › Users & roles** page is built on exactly these, and adds nothing of
-its own: it shows an SSO grant's expiry and issuer once, because a binding grant
+its own: an invite defaults to SSO when the instance has an identity provider,
+and it shows an SSO grant's expiry and issuer once, because a binding grant
 carries no secret to re-read — the first verified sign-in for that address spends
 it. No mail is sent by any of this; the operator passes the invitation on.
 
@@ -732,7 +733,9 @@ refresh token keeps working for up to thirty days. Changing the owner is
 
 Not here, and still `genus user` on the box: setting a password, resetting a
 second factor, and deleting an account. Nothing on this surface sends mail, so
-an invited person has to be told out of band.
+an invited person has to be told out of band: the page offers instructions to
+copy that send them to the dashboard to choose "Sign in with SSO", never to the
+identity provider's own address.
 
 ### The forwarded client address needs two allowlists to agree
 
