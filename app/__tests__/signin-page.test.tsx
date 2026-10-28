@@ -90,4 +90,17 @@ describe("the sign-in page", () => {
 
     expect(screen.queryByTestId("local-form")).not.toBeInTheDocument();
   });
+
+  it("explains a refused sign-in instead of showing a bare failure", async () => {
+    stubMethods({ local: false, oidc: ["https://idp.example.com"], cloudflare_access: false });
+
+    const element = await SignInPage({
+      searchParams: Promise.resolve({ error: "Configuration" }),
+    } as Parameters<typeof SignInPage>[0]);
+    render(element);
+
+    expect(
+      screen.getByText(/ask your administrator/i),
+    ).toBeInTheDocument();
+  });
 });

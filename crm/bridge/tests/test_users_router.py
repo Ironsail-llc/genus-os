@@ -394,6 +394,26 @@ def test_an_sso_invite_returns_no_grant_internals(operator, store):
     assert set(response.json()["grant"]) == {"id", "expires_at", "issuer"}
 
 
+def test_an_invite_grant_lasts_a_week_by_default(operator, store):
+    """An invite is handed over out of band, so the person signs in hours or days
+    later; a grant that dies in an hour sends every invitee to an operator."""
+    operator.post("/api/users", json={"email": "carol@example.com", "role": "member", "sso": True})
+
+    assert store.grants[0]["ttl_seconds"] == 7 * 24 * 3600
+
+
+def test_the_grant_lifetime_is_a_setting(operator, store, monkeypatch):
+    from robothor.settings import reset_settings
+
+    monkeypatch.setenv("GENUS_INVITE_GRANT_TTL_SECONDS", "86400")
+    reset_settings()
+
+    operator.post("/api/users", json={"email": "carol@example.com", "role": "member", "sso": True})
+    operator.post(f"/api/users/{MEMBER_ID}/binding-grant")
+
+    assert [g["ttl_seconds"] for g in store.grants] == [86400, 86400]
+
+
 def test_a_plain_invite_arms_no_grant(operator, store):
     operator.post("/api/users", json={"email": "carol@example.com", "role": "member"})
 
