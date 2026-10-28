@@ -167,8 +167,9 @@ event is in the run's context as `event`: `event.type`, `event.stream`,
 `event.payload`, parsed when it is JSON. Steps template it like any other
 context value. Only one run of a workflow is in flight at a time; by default
 an event that arrives while it is running is dropped. `requeue_if_busy: true`
-re-adds it for this workflow every 5 seconds, for up to about five minutes,
-before parking it in `<stream>:dlq`.
+re-adds it for this workflow after a pause that starts at 5 seconds and backs
+off to a minute, for up to about 50 minutes, before parking it in
+`<stream>:dlq`.
 
 ```yaml
 id: order-events

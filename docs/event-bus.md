@@ -149,8 +149,11 @@ when the channel has a delivery id header, `delivery_id`, next to `payload`. An
 agent hook with `include_payload: true` gets both, plus the payload, appended
 to its trigger message, inside an `<untrusted_content>` boundary since the
 sender is external. `requeue_if_busy: true` re-adds an event that arrived
-while the agent was already running, for that agent only, every 5 seconds for
-up to about five minutes before it is parked in `<stream>:dlq`. Both are
+while the agent was already running, for that agent only, after a pause that
+starts at 5 seconds and backs off to a minute, for up to about 50 minutes
+before it is parked in `<stream>:dlq`. Each event is handled off the consumer
+loop: one agent's hook runs take turns in arrival order, and a long run holds
+up no other agent, workflow or stream. Both are
 documented with the other hook fields in `docs/agents/schema.yaml`.
 
 A workflow with a `hook` trigger gets the event as its run's `event` context
