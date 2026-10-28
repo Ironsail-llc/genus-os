@@ -61,3 +61,41 @@ async def test_retry_that_yields_nothing_keeps_the_original_output(monkeypatch):
 
     assert out == "the report"
     assert session.messages[0]["content"].startswith("[VERIFICATION FAILED]")
+
+
+@pytest.mark.asyncio
+async def test_the_retry_loop_runs_with_the_session_registered(monkeypatch):
+    """The retry is a full tool loop, but it ran after the main loop had left the
+    session registry. Every tool that looks the live run up (host exec, the
+    owner gate, ask_user) then saw no session and refused: a verified owner's
+    env read passed on the first turn and was refused on the retry."""
+    from robothor.engine import run_lifecycle, session_registry, verifier
+
+    monkeypatch.setattr(
+        verifier,
+        "verify_output",
+        AsyncMock(return_value=VerificationResult(passed=False, issues=["x"])),
+    )
+    seen: list[object] = []
+    session = MagicMock()
+    session.run_id = "run-retry"
+    session.messages = []
+    session.run.steps = []
+    session.get_final_text.return_value = "retried"
+
+    async def loop(*args, **kwargs):
+        seen.append(session_registry.lookup("run-retry"))
+
+    lifecycle = run_lifecycle.RunLifecycleMixin.__new__(run_lifecycle.RunLifecycleMixin)
+    lifecycle._run_loop = loop
+    config = MagicMock()
+    config.verification_prompt = None
+    config.provider_order = {}
+
+    out = await run_lifecycle.RunLifecycleMixin._run_verification(
+        lifecycle, config, session, ["m"], [], "the report", None, None, on_status=None
+    )
+
+    assert out == "retried"
+    assert seen == [session]
+    assert session_registry.lookup("run-retry") is None
