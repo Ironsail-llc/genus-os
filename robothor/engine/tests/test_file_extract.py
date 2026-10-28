@@ -258,7 +258,9 @@ class TestReadFile:
 
     @pytest.mark.asyncio
     async def test_extracted_text_uses_the_same_cap(self, tmp_path, monkeypatch) -> None:
-        monkeypatch.setattr(file_extract, "extract_path", lambda _p, _k: "y" * 60_000)
+        monkeypatch.setattr(
+            file_extract, "extract_path", lambda _p, _k, max_chars=None: "y" * 60_000
+        )
         p = tmp_path / "huge.docx"
         p.write_bytes(b"PK")
         out = await read_file(p, tmp_path)
@@ -305,11 +307,13 @@ class TestReadFile:
 
     @pytest.mark.asyncio
     async def test_secret_path_is_still_refused(self, tmp_path) -> None:
-        p = tmp_path / ".env"
-        p.write_text("TOKEN=super-secret")
+        # A private key: refused outright, whatever happens to dotenv files.
+        p = tmp_path / "id_rsa"
+        p.write_text("-----BEGIN OPENSSH PRIVATE KEY-----\nsuper-secret\n")
         out = await read_file(p, tmp_path)
         assert "error" in out
         assert "super-secret" not in str(out)
+        assert "PRIVATE KEY" not in str(out)
 
 
 # ── Attachments ──────────────────────────────────────────────────────
@@ -337,3 +341,268 @@ class TestPdfHelper:
         from robothor.engine.telegram_attachments import _extract_pdf_text
 
         assert "Hello PDF world" in await _extract_pdf_text(make_pdf_bytes())
+
+
+# ── Review follow-ups: budget, .docm, pdftotext, nested content ──────
+
+
+class FakePage:
+    def __init__(self, text: str, visited: list[int], index: int) -> None:
+        self._text = text
+        self._visited = visited
+        self._index = index
+
+    def extract_text(self) -> str:
+        self._visited.append(self._index)
+        return self._text
+
+
+def fake_pdf_reader(monkeypatch, pages: list[str]) -> list[int]:
+    """Swap pypdf.PdfReader for one that records which pages were read."""
+    pypdf = pytest.importorskip("pypdf")
+    visited: list[int] = []
+
+    class Reader:
+        def __init__(self, _stream) -> None:
+            self.pages = [FakePage(t, visited, i) for i, t in enumerate(pages)]
+
+    monkeypatch.setattr(pypdf, "PdfReader", Reader)
+    return visited
+
+
+def make_docm_bytes(path: Path) -> bytes:
+    """A real macro-enabled Word package: a docx with the macro main type."""
+    import zipfile
+
+    make_docx(path)
+    out = io.BytesIO()
+    with zipfile.ZipFile(path) as src, zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as dst:
+        for item in src.infolist():
+            data = src.read(item.filename)
+            if item.filename == "[Content_Types].xml":
+                data = data.replace(
+                    b"application/vnd.openxmlformats-officedocument."
+                    b"wordprocessingml.document.main+xml",
+                    b"application/vnd.ms-word.document.macroEnabled.main+xml",
+                )
+            dst.writestr(item, data)
+    return out.getvalue()
+
+
+class TestBudget:
+    def test_pdf_stops_reading_pages_once_the_budget_is_reached(self, monkeypatch) -> None:
+        visited = fake_pdf_reader(monkeypatch, ["x" * 1_000] * 1_000)
+        text = file_extract.extract_bytes(b"%PDF", "pdf", max_chars=5_000)
+        assert len(visited) < 10
+        assert text.startswith("[Page 1]")
+        assert file_extract.STOPPED_EARLY in text
+
+    def test_pdf_without_a_budget_reads_everything(self, monkeypatch) -> None:
+        visited = fake_pdf_reader(monkeypatch, ["x" * 100] * 50)
+        text = file_extract.extract_bytes(b"%PDF", "pdf")
+        assert len(visited) == 50
+        assert file_extract.STOPPED_EARLY not in text
+
+    def test_a_document_that_fits_is_not_marked(self, monkeypatch) -> None:
+        fake_pdf_reader(monkeypatch, ["short"] * 3)
+        text = file_extract.extract_bytes(b"%PDF", "pdf", max_chars=5_000)
+        assert file_extract.STOPPED_EARLY not in text
+
+    def test_budgeted_text_is_cut_at_the_budget(self, monkeypatch) -> None:
+        fake_pdf_reader(monkeypatch, ["x" * 1_000] * 100)
+        text = file_extract.extract_bytes(b"%PDF", "pdf", max_chars=2_500)
+        body, _, note = text.partition("\n\n" + file_extract.STOPPED_EARLY)
+        assert len(body) == 2_500
+        assert note
+
+    def test_docx_stops_at_the_budget(self, tmp_path) -> None:
+        docx = pytest.importorskip("docx")
+        doc = docx.Document()
+        for i in range(400):
+            doc.add_paragraph(f"paragraph {i} " + "w" * 100)
+        doc.save(str(tmp_path / "long.docx"))
+        raw = (tmp_path / "long.docx").read_bytes()
+        text = file_extract.extract_bytes(raw, "docx", max_chars=1_000)
+        assert "paragraph 0 " in text
+        assert "paragraph 300 " not in text
+        assert file_extract.STOPPED_EARLY in text
+
+    def test_pptx_stops_at_the_budget(self, tmp_path) -> None:
+        pptx = pytest.importorskip("pptx")
+        prs = pptx.Presentation()
+        for i in range(60):
+            slide = prs.slides.add_slide(prs.slide_layouts[1])
+            slide.shapes.title.text = f"Title {i}"
+            slide.placeholders[1].text = "b" * 200
+        prs.save(str(tmp_path / "long.pptx"))
+        raw = (tmp_path / "long.pptx").read_bytes()
+        text = file_extract.extract_bytes(raw, "pptx", max_chars=1_000)
+        assert "Title 0" in text
+        assert "Title 50" not in text
+        assert file_extract.STOPPED_EARLY in text
+
+    def test_xlsx_stops_before_later_sheets(self, tmp_path) -> None:
+        openpyxl = pytest.importorskip("openpyxl")
+        wb = openpyxl.Workbook()
+        wb.active.title = "First"
+        for i in range(500):
+            wb.active.append([f"row{i}", "v" * 50])
+        wb.create_sheet("Last").append(["never reached"])
+        wb.save(str(tmp_path / "wide.xlsx"))
+        raw = (tmp_path / "wide.xlsx").read_bytes()
+        text = file_extract.extract_bytes(raw, "xlsx", max_chars=2_000)
+        assert "row0" in text
+        assert "row400" not in text
+        assert "never reached" not in text
+        assert file_extract.STOPPED_EARLY in text
+
+    @pytest.mark.asyncio
+    async def test_read_file_passes_its_cap(self, tmp_path, monkeypatch) -> None:
+        seen = {}
+
+        def fake(_p, _k, *, max_chars=None):
+            seen["max_chars"] = max_chars
+            return "text"
+
+        monkeypatch.setattr(file_extract, "extract_path", fake)
+        p = tmp_path / "a.docx"
+        p.write_bytes(b"PK")
+        await read_file(p, tmp_path)
+        assert seen["max_chars"] == 50_000
+
+    @pytest.mark.asyncio
+    async def test_read_file_says_when_it_stopped_early(self, tmp_path, monkeypatch) -> None:
+        fake_pdf_reader(monkeypatch, ["x" * 1_000] * 200)
+        p = tmp_path / "big.pdf"
+        p.write_bytes(b"%PDF")
+        out = await read_file(p, tmp_path)
+        assert out["truncated"] is True
+        assert file_extract.STOPPED_EARLY in out["content"]
+
+
+class TestDocm:
+    def test_python_docx_alone_refuses_a_docm(self, tmp_path) -> None:
+        docx = pytest.importorskip("docx")
+        with pytest.raises(ValueError, match="not a Word file"):
+            docx.Document(io.BytesIO(make_docm_bytes(tmp_path / "m.docx")))
+
+    def test_docm_is_read(self, tmp_path) -> None:
+        raw = make_docm_bytes(tmp_path / "m.docx")
+        assert file_extract.document_kind(".docm") == "docx"
+        text = file_extract.extract_bytes(raw, "docx")
+        assert "Quarterly plan for Alice" in text
+        assert "Bob\t1200" in text
+
+    def test_macro_office_mime_types_route(self) -> None:
+        assert (
+            file_extract.document_kind("", "application/vnd.ms-word.document.macroEnabled.12")
+            == "docx"
+        )
+        assert (
+            file_extract.document_kind(
+                "", "application/vnd.ms-powerpoint.presentation.macroEnabled.12"
+            )
+            == "pptx"
+        )
+
+
+class TestPdfFallback:
+    def _pdftotext(self, monkeypatch, stdout: bytes = b"from poppler", rc: int = 0) -> list:
+        calls: list = []
+        monkeypatch.setattr(file_extract.shutil, "which", lambda _n: "/usr/bin/pdftotext")
+
+        def run(argv, **_kw):
+            calls.append(argv)
+            return MagicMock(returncode=rc, stdout=stdout, stderr=b"boom")
+
+        monkeypatch.setattr(file_extract.subprocess, "run", run)
+        return calls
+
+    def _pypdf_raises(self, monkeypatch) -> None:
+        pypdf = pytest.importorskip("pypdf")
+
+        def broken(_stream):
+            raise ValueError("malformed xref")
+
+        monkeypatch.setattr(pypdf, "PdfReader", broken)
+
+    def test_falls_back_when_pypdf_raises(self, monkeypatch) -> None:
+        self._pypdf_raises(monkeypatch)
+        calls = self._pdftotext(monkeypatch)
+        assert file_extract.extract_bytes(b"%PDF", "pdf") == "from poppler"
+        assert calls
+
+    def test_falls_back_when_pypdf_finds_no_text(self, monkeypatch) -> None:
+        fake_pdf_reader(monkeypatch, ["", "  "])
+        calls = self._pdftotext(monkeypatch)
+        assert file_extract.extract_bytes(b"%PDF", "pdf") == "from poppler"
+        assert calls
+
+    def test_no_text_from_either_is_the_image_note(self, monkeypatch) -> None:
+        fake_pdf_reader(monkeypatch, [""])
+        self._pdftotext(monkeypatch, stdout=b"   ")
+        assert "no extractable text" in file_extract.extract_bytes(b"%PDF", "pdf")
+
+    def test_pypdf_raises_and_no_binary_is_pypdfs_error(self, monkeypatch) -> None:
+        self._pypdf_raises(monkeypatch)
+        monkeypatch.setattr(file_extract.shutil, "which", lambda _n: None)
+        with pytest.raises(file_extract.ExtractionError, match="malformed xref"):
+            file_extract.extract_bytes(b"%PDF", "pdf")
+
+    def test_no_text_and_no_binary_is_the_image_note(self, monkeypatch) -> None:
+        fake_pdf_reader(monkeypatch, [""])
+        monkeypatch.setattr(file_extract.shutil, "which", lambda _n: None)
+        assert "no extractable text" in file_extract.extract_bytes(b"%PDF", "pdf")
+
+    def test_both_failing_names_both(self, monkeypatch) -> None:
+        self._pypdf_raises(monkeypatch)
+        self._pdftotext(monkeypatch, rc=1)
+        with pytest.raises(file_extract.ExtractionError) as err:
+            file_extract.extract_bytes(b"%PDF", "pdf")
+        assert "malformed xref" in str(err.value)
+        assert "pdftotext" in str(err.value)
+
+    def test_pdftotext_output_respects_the_budget(self, monkeypatch) -> None:
+        self._pypdf_raises(monkeypatch)
+        self._pdftotext(monkeypatch, stdout=b"z" * 10_000)
+        text = file_extract.extract_bytes(b"%PDF", "pdf", max_chars=1_000)
+        assert text.startswith("z" * 1_000)
+        assert file_extract.STOPPED_EARLY in text
+
+
+class TestNestedContent:
+    def test_pptx_grouped_shapes_are_read(self, tmp_path) -> None:
+        pptx = pytest.importorskip("pptx")
+        from pptx.util import Inches
+
+        prs = pptx.Presentation()
+        slide = prs.slides.add_slide(prs.slide_layouts[6])
+        outer = slide.shapes.add_group_shape()
+        box = outer.shapes.add_textbox(Inches(1), Inches(1), Inches(2), Inches(1))
+        box.text_frame.text = "Grouped callout"
+        inner = outer.shapes.add_group_shape()
+        deep = inner.shapes.add_textbox(Inches(3), Inches(1), Inches(2), Inches(1))
+        deep.text_frame.text = "Nested deeper"
+        prs.save(str(tmp_path / "g.pptx"))
+        text = file_extract.extract_bytes((tmp_path / "g.pptx").read_bytes(), "pptx")
+        assert "Grouped callout" in text
+        assert "Nested deeper" in text
+
+    def test_docx_body_content_controls_are_read(self, tmp_path) -> None:
+        docx = pytest.importorskip("docx")
+        from docx.oxml import parse_xml
+        from docx.oxml.ns import nsdecls
+
+        doc = docx.Document()
+        doc.add_paragraph("Before the control")
+        sdt = parse_xml(
+            f"<w:sdt {nsdecls('w')}><w:sdtPr/><w:sdtContent>"
+            "<w:p><w:r><w:t>Cover page title</w:t></w:r></w:p>"
+            "</w:sdtContent></w:sdt>"
+        )
+        doc.element.body.insert(1, sdt)
+        doc.add_paragraph("After the control")
+        doc.save(str(tmp_path / "sdt.docx"))
+        text = file_extract.extract_bytes((tmp_path / "sdt.docx").read_bytes(), "docx")
+        assert "Cover page title" in text
+        assert text.index("Before") < text.index("Cover page") < text.index("After")

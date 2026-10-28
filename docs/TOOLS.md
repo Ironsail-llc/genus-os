@@ -1159,11 +1159,17 @@ agent's own allow-set is the authoritative answer. The families:
 ### `read_file` — documents, not just text
 
 `read_file` returns a text file as it is, and turns the common document formats
-into text: PDF (pypdf, falling back to the `pdftotext` command), Word `.docx`
-(paragraphs and tables in document order), Excel `.xlsx` (every sheet, rows
-tab-separated, capped per sheet) and PowerPoint `.pptx` (text per slide, with
-speaker notes). The 50,000-character cap and the `chars` total apply to
-extracted text too, and the result carries a `format` field. An image returns a
+into text: PDF (pypdf; the `pdftotext` command, when installed, is tried
+instead if pypdf is missing, raises on a malformed file or finds no text),
+Word `.docx` and macro-enabled `.docm` (paragraphs, tables and body-level
+content controls in document order; macros are never run), Excel `.xlsx` /
+`.xlsm` (every sheet, rows tab-separated, capped per sheet) and PowerPoint
+`.pptx` / `.pptm` (text per slide, including grouped shapes, with speaker
+notes). Extraction stops once the 50,000-character cap is reached, so a long
+document is not parsed whole: such a result ends with an
+`[... extraction stopped at ...]` note and carries `"truncated": true`, and its
+`chars` is the length returned, not the document's. The result carries a
+`format` field. An image returns a
 pointer to `view_image`; any other binary file returns its size and guessed MIME
 type instead of a decode error. Telegram attachments in these formats are
 extracted into the agent's first turn by the same code

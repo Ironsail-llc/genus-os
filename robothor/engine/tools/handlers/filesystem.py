@@ -373,15 +373,19 @@ def _read_any(path: Path) -> dict[str, Any]:
             if not path.is_file():
                 return {"error": f"Failed to read file: no such file: {path}"}
             try:
-                text = file_extract.extract_path(path, doc_kind)
+                text = file_extract.extract_path(path, doc_kind, max_chars=_READ_FILE_CHARS)
             except file_extract.ExtractionError as e:
                 return {"error": f"Failed to read {doc_kind} file: {e}"}
-            return {
-                "content": text[:_READ_FILE_CHARS],
+            out: dict[str, Any] = {
+                "content": text if file_extract.STOPPED_EARLY in text else text[:_READ_FILE_CHARS],
                 "path": str(path),
                 "chars": len(text),
                 "format": doc_kind,
             }
+            if file_extract.STOPPED_EARLY in text:
+                # Extraction stopped at the cap: the true length is unknown.
+                out["truncated"] = True
+            return out
         if attachments.kind_for("", path.name) == "image" and path.is_file():
             return {
                 "path": str(path),

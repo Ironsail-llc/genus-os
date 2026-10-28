@@ -129,7 +129,7 @@ def enqueued(bot) -> tuple[str, list[dict]]:
 class TestDocuments:
     @pytest.mark.asyncio
     async def test_a_pdf_gives_the_agent_the_text_and_the_path(self, bot, monkeypatch) -> None:
-        async def fake_pdf(raw):
+        async def fake_pdf(raw, *, max_chars=None):
             return "Q3 revenue was up"
 
         monkeypatch.setattr(
@@ -159,6 +159,26 @@ class TestDocuments:
         text, rows = enqueued(bot)
         assert "Board memo for Bob" in text
         assert rows[0]["path"] in text
+
+    @pytest.mark.asyncio
+    async def test_a_document_is_extracted_within_the_telegram_cap(self, bot) -> None:
+        """The intake passes its own cap, so a huge file is not parsed whole."""
+        from robothor.engine import file_extract
+
+        seen = {}
+
+        def fake(_raw, _kind, *, max_chars=None):
+            seen["max_chars"] = max_chars
+            return "deck text"
+
+        arm_download(bot, b"PK\x03\x04")
+        with patch.object(file_extract, "describe_bytes", fake):
+            await bot.handle_file(
+                message(document=document(name="deck.pptx", mime="", uid="AgACppt"))
+            )
+        assert seen["max_chars"] == attachments.TEXT_EXTRACT_CHARS
+        text, _ = enqueued(bot)
+        assert "deck text" in text
 
     @pytest.mark.asyncio
     async def test_a_zip_is_kept_and_the_agent_is_told_where(self, bot) -> None:
