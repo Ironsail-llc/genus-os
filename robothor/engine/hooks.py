@@ -28,11 +28,12 @@ from robothor.engine.task_registry import get_task_registry
 MAX_RETRIES = 3
 
 # A busy-agent requeue has its own budget, separate from MAX_RETRIES: being
-# busy is routine, not a failure. The re-add is delayed off the consumer loop,
-# so 60 x 5 s gives a run about five minutes to finish before the event is
-# parked in the stream's DLQ.
+# busy is routine, not a failure. The re-add is delayed off the consumer loop
+# and backs off from 5 s to a minute (busy_requeue_delay), so 80 tries give a
+# run about 50 minutes to finish before the event is parked in the stream's DLQ.
 BUSY_REQUEUE_DELAY_SECONDS = 5
-MAX_BUSY_REQUEUES = 60
+MAX_BUSY_REQUEUE_DELAY_SECONDS = 60
+MAX_BUSY_REQUEUES = 80
 
 # Retry copies name the agents they are for, so the agents that already
 # handled the event (and the workflows already dispatched) do not run again.
@@ -192,6 +193,11 @@ def _format_event_block(stream: str, event_type: str, envelope: dict[str, Any]) 
 # Module-level reference for backward compatibility with tests
 # Populated at import time from legacy; overridden at runtime by start()
 EVENT_TRIGGERS = dict(_LEGACY_EVENT_TRIGGERS)
+
+
+def busy_requeue_delay(count: int) -> int:
+    """Seconds before re-adding an event already requeued ``count`` times: doubles every 10."""
+    return int(min(BUSY_REQUEUE_DELAY_SECONDS * 2 ** (count // 10), MAX_BUSY_REQUEUE_DELAY_SECONDS))
 
 
 def _workflow_event(stream: str, envelope: dict[str, Any]) -> dict[str, Any]:
@@ -493,7 +499,9 @@ class EventHooks:
             if busy_count < MAX_BUSY_REQUEUES:
                 busy_data["_busy_requeue_count"] = str(busy_count + 1)
                 get_task_registry().spawn(
-                    self._delayed_requeue(redis_client, stream, busy_data),
+                    self._delayed_requeue(
+                        redis_client, stream, busy_data, busy_requeue_delay(busy_count)
+                    ),
                     name=f"hook-requeue:{bare_stream}:{event_type}",
                 )
             else:
@@ -517,9 +525,14 @@ class EventHooks:
             logger.warning("Failed to add to DLQ: %s", e)
 
     @staticmethod
-    async def _delayed_requeue(redis_client: Any, stream: str, data: dict[str, Any]) -> None:
+    async def _delayed_requeue(
+        redis_client: Any,
+        stream: str,
+        data: dict[str, Any],
+        delay: int = BUSY_REQUEUE_DELAY_SECONDS,
+    ) -> None:
         """Re-add a busy agent's event after a pause, without holding the consumer loop."""
-        await asyncio.sleep(BUSY_REQUEUE_DELAY_SECONDS)
+        await asyncio.sleep(delay)
         try:
             await redis_client.xadd(stream, data)
         except Exception as e:
@@ -617,7 +630,9 @@ class EventHooks:
         if busy_count < MAX_BUSY_REQUEUES:
             logger.info("Requeueing %s:%s — workflow %s busy", stream, event_type, workflow_id)
             busy_data["_busy_requeue_count"] = str(busy_count + 1)
-            await self._delayed_requeue(redis_client, prefixed_stream, busy_data)
+            await self._delayed_requeue(
+                redis_client, prefixed_stream, busy_data, busy_requeue_delay(busy_count)
+            )
         else:
             await self._dead_letter(redis_client, prefixed_stream, busy_data, event_type)
 
