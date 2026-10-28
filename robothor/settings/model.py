@@ -1615,6 +1615,15 @@ class AuthSettings(SettingsGroup):
         "raise it only for an install someone has to walk away from.",
         since="1.69.0",
     )
+    invite_grant_ttl_seconds: int = declare(
+        7 * 24 * 3600,
+        "GENUS_INVITE_GRANT_TTL_SECONDS",
+        "How long the one-shot SSO binding grant armed with an invite (or from "
+        "the Helm) stays usable. An invite is handed over out of band, so a "
+        "short window sends the invitee back to an operator. The grant is "
+        "still spent by one verified sign-in for exactly that address.",
+        since="1.117.0",
+    )
     trusted_proxies: str = declare(
         "",
         "GENUS_TRUSTED_PROXIES",
