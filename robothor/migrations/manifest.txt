@@ -174,3 +174,4 @@ crm/142_goal_effect_lookup.sql
 crm/149_workspace_sync_state.sql
 crm/150_pr_review_requested_at.sql
 crm/151_pr_review_work_denies.sql
+crm/152_jira_write_tool_denies.sql
