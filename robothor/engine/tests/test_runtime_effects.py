@@ -283,3 +283,50 @@ def test_effect_rows_obey_database_tenant_policy(effect_db):
         cur.execute("SELECT set_config('app.tenant_id',%s,true)", (ctx.tenant_id,))
         cur.execute("SELECT id FROM agent_runtime_effects WHERE id=%s", (record["id"],))
         assert str(cur.fetchone()[0]) == str(record["id"])
+
+
+def _uncertain(ctx, tool, args, *, run="worker"):
+    row = effects.begin(ctx, run, "main", tool, args)
+    assert effects.mark_dispatched(ctx, row["id"], run)
+    assert effects.finish(ctx, row["id"], run, uncertain=True)
+    return row
+
+
+def test_unverifiable_uncertainty_does_not_fence_the_tool_across_requests(effect_db):
+    """No verifier can ever settle an uncertain ``exec``, so a bare same-tool
+    fence would refuse every later ``exec`` by that principal forever."""
+    ctx = context()
+    _uncertain(ctx, "exec", {"command": "first"})
+    later = replace(ctx, request_id="later")
+    assert effects.begin(later, "worker", "main", "exec", {"command": "second"})["state"] == (
+        "prepared"
+    )
+
+
+def test_unverifiable_uncertainty_still_fences_its_own_request_and_identity(effect_db):
+    ctx = context()
+    _uncertain(ctx, "exec", {"command": "first"})
+    with pytest.raises(effects.EffectPendingError):
+        effects.begin(ctx, "worker", "main", "exec", {"command": "other, same request"})
+    with pytest.raises(effects.EffectPendingError):
+        effects.begin(
+            replace(ctx, request_id="later"), "worker", "main", "exec", {"command": "first"}
+        )
+
+
+def test_verifiable_uncertainty_keeps_the_cross_request_tool_fence(effect_db):
+    ctx = context()
+    _uncertain(ctx, "create_task", {"title": "first"})
+    with pytest.raises(effects.EffectPendingError):
+        effects.begin(
+            replace(ctx, request_id="later"), "worker", "main", "create_task", {"title": "second"}
+        )
+
+
+def test_readback_tools_are_the_registered_verifiers():
+    from robothor.engine.runtime import effect_recovery
+
+    assert frozenset({"create_task", "create_note"}) == effects.READBACK_TOOLS
+    assert effect_recovery.has_verifier("create_task")
+    assert effect_recovery.has_verifier("create_note")
+    assert not effect_recovery.has_verifier("exec")

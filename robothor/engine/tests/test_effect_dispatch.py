@@ -462,3 +462,16 @@ def test_tool_call_inherits_the_classification_of_what_it_wraps():
         assert is_read_only_call(name, {})
     for name in ("claude_code_start", "claude_code_followup", "claude_code_cancel"):
         assert not is_read_only_call(name, {})
+
+
+@pytest.mark.parametrize("tool", ["search_files", "wait_seconds"])
+async def test_read_only_utilities_are_never_journalled(gateway, effect_db, monkeypatch, tool):  # noqa: F811
+    """A search or a wait cut short changes nothing; journalling it as an
+    uncertain write fenced every later call of that tool."""
+    _, _, call = gateway
+    waits: list = []
+    hang, _ = _wait_handlers(waits)
+    monkeypatch.setattr(dispatch, "_get_handlers", lambda: {tool: hang})
+    with pytest.raises(TimeoutError):
+        await asyncio.wait_for(call(tool, {"pattern": "x", "seconds": 1}), 0.3)
+    assert _effect_rows(effect_db, tool) == []

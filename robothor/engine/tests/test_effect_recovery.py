@@ -99,3 +99,49 @@ def test_storage_failure_does_not_claim_resolution(monkeypatch, caplog):
     monkeypatch.setattr(effects, "get_connection", unavailable)
     assert sweep_terminal("synthetic-tenant") == 0
     assert "Terminal effect recovery deferred" in caplog.text
+
+
+def _uncertain(ctx, tool, args, run="worker"):
+    row = effects.begin(ctx, run, "main", tool, args)
+    assert effects.mark_dispatched(ctx, row["id"], run)
+    assert effects.finish(ctx, row["id"], run, uncertain=True)
+    return row
+
+
+def _age(effect_db, row, interval):  # noqa: F811
+    with effect_db() as conn, conn.cursor() as cur:
+        cur.execute(
+            "UPDATE agent_runtime_effects SET updated_at=now()-%s::interval WHERE id=%s",
+            (interval, row["id"]),
+        )
+
+
+def test_sweep_reconciles_day_old_unverifiable_uncertainty(effect_db, monkeypatch):  # noqa: F811
+    """Nothing can ever read back an ``exec``; after a day the sweep records an
+    unverified reconciliation so no tool can wedge indefinitely."""
+    from robothor.engine.runtime import note_recovery, task_recovery
+
+    monkeypatch.setattr(note_recovery, "sweep", lambda tenant: None)
+    monkeypatch.setattr(task_recovery, "sweep", lambda tenant: None)
+    ctx = context()
+    stale = _uncertain(ctx, "exec", {"command": "stale"})
+    young = _uncertain(replace(ctx, request_id="young"), "exec", {"command": "young"})
+    task = _uncertain(replace(ctx, request_id="task"), "create_task", {"title": "t"})
+    goal_ctx = replace(ctx, request_id="goal", goal_id="g", attempt_id="a")
+    goal = _uncertain(goal_ctx, "exec", {"command": "goal"})
+    for row in (stale, task, goal):
+        _age(effect_db, row, "25 hours")
+    _age(effect_db, young, "23 hours")
+
+    sweep_terminal(ctx.tenant_id)
+
+    settled = effects.read(ctx, stale["id"])
+    assert settled["state"] == "finished"
+    assert settled["resolution"]["source"] == "reconciled"
+    assert settled["resolution"]["actor"] == "system:effect-sweep"
+    assert settled["resolution"]["verified"] is False
+    assert effects.read(ctx, young["id"])["state"] == "uncertain"
+    assert effects.read(ctx, task["id"])["state"] == "uncertain"
+    assert effects.read(ctx, goal["id"])["state"] == "uncertain"
+    retry = replace(ctx, request_id="retry")
+    assert effects.begin(retry, "w", "main", "exec", {"command": "stale"})["state"] == "prepared"

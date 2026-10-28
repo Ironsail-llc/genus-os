@@ -47,6 +47,11 @@ class EffectScope(Protocol):
     def principal_id(self) -> str: ...
 
 
+# Tools whose uncertain effects a host-owned verifier can read back and settle
+# (task_recovery, note_recovery). Defined here, not in effect_recovery, because
+# begin() needs it and effect_recovery imports this module.
+READBACK_TOOLS: frozenset[str] = frozenset({"create_task", "create_note"})
+
 active_effect: ContextVar[dict[str, Any] | None] = ContextVar("active_effect", default=None)
 
 
@@ -110,11 +115,14 @@ def begin(
         confirmed = cur.fetchone()
         if confirmed:
             return dict(confirmed)
+        # The bare cross-request same-tool fence only holds for tools a verifier
+        # can settle. For any other tool nothing would ever clear it, so one
+        # uncertain call refused every later call of that tool, indefinitely.
         cur.execute(
             """SELECT id FROM agent_runtime_effects WHERE tenant_id=%s AND principal_id=%s
                AND (state IN ('prepared','dispatching','uncertain') AND fingerprint=%s
                  OR state='uncertain' AND (request_id=%s OR goal_id=%s OR budget_id=%s
-                   OR (goal_id IS NULL AND budget_id IS NULL AND tool_name=%s)))
+                   OR (goal_id IS NULL AND budget_id IS NULL AND tool_name=%s AND %s)))
                ORDER BY created_at LIMIT 1""",
             (
                 context.tenant_id,
@@ -124,6 +132,7 @@ def begin(
                 context.goal_id,
                 context.budget_id,
                 tool_name,
+                tool_name in READBACK_TOOLS,
             ),
         )
         pending = cur.fetchone()

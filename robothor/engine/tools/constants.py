@@ -295,6 +295,11 @@ READONLY_TOOLS: frozenset[str] = frozenset(
         # File/system
         "read_file",
         "list_directory",
+        # Regex over workspace file contents; opens files read-only.
+        "search_files",
+        # Sleeps up to 300s and returns; touches nothing. A wait cut short was
+        # journalled as an uncertain write and fenced every later wait.
+        "wait_seconds",
         # Looking at an image reads a file and mutates nothing. Asking a
         # vision model about a batch of them spends tokens, which is a cost
         # and not a side effect: nothing on this box or anywhere else changes.

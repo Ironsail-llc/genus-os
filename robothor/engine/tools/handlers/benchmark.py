@@ -211,8 +211,16 @@ _BENCHMARK_EXTRA_READS: frozenset[str] = frozenset(
 #: The Claude Code reads joined on 2026-10-05, when they were classified
 #: read-only: they read the operator's REAL coding jobs (and the handlers
 #: refuse a benchmark run anyway).
+#:
+#: ``search_files`` and ``wait_seconds`` joined when they were classified
+#: read-only: both were already excluded from the benchmark (see the
+#: comments in ``_BENCHMARK_EXCLUDED_TOOLS``), and classification does not
+#: change that.
 _BENCHMARK_WITHHELD_READS: frozenset[str] = frozenset(
-    DESKTOP_TOOLS | BENCHMARK_TOOLS | GWS_TOOLS | {"claude_code_status", "claude_code_wait"}
+    DESKTOP_TOOLS
+    | BENCHMARK_TOOLS
+    | GWS_TOOLS
+    | {"claude_code_status", "claude_code_wait", "search_files", "wait_seconds"}
 )
 
 
