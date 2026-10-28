@@ -25,6 +25,21 @@ from robothor.engine.secret_paths import is_secret_path
 from robothor.engine.tools.dispatch import ToolContext
 from robothor.engine.tools.handlers.filesystem import _read_file
 
+
+@pytest.fixture(autouse=True)
+def _top_level_run(monkeypatch):
+    """Every call here is the owner's own top-level run unless a test says otherwise."""
+    from types import SimpleNamespace
+
+    from robothor.engine import session_registry
+
+    monkeypatch.setattr(
+        session_registry,
+        "lookup",
+        lambda run_id: SimpleNamespace(run=SimpleNamespace(parent_run_id=None)),
+    )
+
+
 SECRET = [
     "/srv/app/.config/robothor/connectors.env",
     "/srv/app/robothor/.env",

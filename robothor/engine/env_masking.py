@@ -144,7 +144,7 @@ def _scrub_comment(line: str) -> str:
     Comments are free text, and free text is where an operator leaves
     ``# db pw is hunter2, rotate in Q3`` -- which no name or shape rule can
     recognise. So only a comment that parses as ONE assignment with a single
-    token (or quoted) value is shown; everything else becomes the placeholder.
+    token value (quoted or not) is shown; everything else becomes the placeholder.
     """
     body = line.lstrip().lstrip("#").strip()
     match = _LINE.match(body)
@@ -153,8 +153,9 @@ def _scrub_comment(line: str) -> str:
     key = match.group("key")
     raw = match.group("val").strip()
     value, quote = _unquote(raw)
-    if not quote and (raw[:1] in ("'", '"') or any(ch.isspace() for ch in value)):
-        # Prose after an ``=`` (``# note=the pw is ...``) or an unclosed quote.
+    if any(ch.isspace() for ch in value) or (not quote and raw[:1] in ("'", '"')):
+        # Prose after an ``=``, quoted or not (``# note="the pw is ..."``), or
+        # an unclosed quote. A commented-out setting with spaces is rare.
         return COMMENT_PLACEHOLDER
     if key_is_secret(key) or value_is_secret(value):
         shown = mask_value(value)

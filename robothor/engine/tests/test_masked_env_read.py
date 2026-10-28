@@ -11,6 +11,7 @@ everything else ``secret_paths`` refuses stay refused.
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 import pytest
@@ -22,6 +23,21 @@ from robothor.constants import DEFAULT_TENANT
 from robothor.engine.tools.dispatch import ToolContext
 from robothor.engine.tools.handlers.filesystem import HANDLERS
 from robothor.identity import IdentityContext
+
+
+@pytest.fixture(autouse=True)
+def _top_level_run(monkeypatch):
+    """Every call here is the owner's own top-level run unless a test says otherwise."""
+    from types import SimpleNamespace
+
+    from robothor.engine import session_registry
+
+    monkeypatch.setattr(
+        session_registry,
+        "lookup",
+        lambda run_id: SimpleNamespace(run=SimpleNamespace(parent_run_id=None)),
+    )
+
 
 _read_file = HANDLERS["read_file"]
 
@@ -303,3 +319,39 @@ class TestPathPredicate:
         from robothor.engine.secret_paths import is_maskable_dotenv_path
 
         assert not is_maskable_dotenv_path(path)
+
+
+class TestTopLevelOnly:
+    """A sub-agent spawned from the owner's chat inherits the owner's identity
+    for attribution; that is not authority to read the operator's settings."""
+
+    def test_a_spawned_run_with_the_owner_identity_is_refused(
+        self, env_file: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from robothor.engine import session_registry
+        from robothor.engine.secret_paths import refusal_for
+
+        child = SimpleNamespace(run=SimpleNamespace(parent_run_id="parent-run"))
+        monkeypatch.setattr(session_registry, "lookup", lambda run_id: child)
+        out = asyncio.run(_read_file({"path": str(env_file)}, _ctx(tmp_path)))
+        assert out == {"error": refusal_for(env_file)}
+
+    def test_a_run_the_registry_does_not_know_is_refused(
+        self, env_file: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from robothor.engine import session_registry
+
+        monkeypatch.setattr(session_registry, "lookup", lambda run_id: None)
+        out = asyncio.run(_read_file({"path": str(env_file)}, _ctx(tmp_path)))
+        assert "content" not in out
+
+
+class TestQuotedCommentProse:
+    def test_quoted_prose_in_a_commented_assignment_is_hidden(self, tmp_path: Path) -> None:
+        from robothor.engine.env_masking import COMMENT_PLACEHOLDER
+
+        f = tmp_path / ".env"
+        f.write_text('# NOTE="db pw is hunter2-prod"\nROBOTHOR_LOG_LEVEL=INFO\n')
+        content = _read(f, tmp_path)["content"]
+        assert "hunter2" not in content
+        assert COMMENT_PLACEHOLDER in content

@@ -22,6 +22,21 @@ import pytest
 from robothor.engine.tools.dispatch import ToolContext
 from robothor.identity import IdentityContext
 
+
+@pytest.fixture(autouse=True)
+def _top_level_run(monkeypatch):
+    """Every call here is the owner's own top-level run unless a test says otherwise."""
+    from types import SimpleNamespace
+
+    from robothor.engine import session_registry
+
+    monkeypatch.setattr(
+        session_registry,
+        "lookup",
+        lambda run_id: SimpleNamespace(run=SimpleNamespace(parent_run_id=None)),
+    )
+
+
 if TYPE_CHECKING:
     from pathlib import Path
 
