@@ -99,3 +99,20 @@ async def test_the_retry_loop_runs_with_the_session_registered(monkeypatch):
     assert out == "retried"
     assert seen == [session]
     assert session_registry.lookup("run-retry") is None
+
+
+def test_verification_runs_before_the_run_tears_down_its_sandbox():
+    """Read from source: a full ``execute`` needs a model and a container. The
+    retry is a tool loop; run after the teardown it had no watchdog, no
+    deferred allow-set and no sandbox, so a ``sandbox: docker`` agent's exec on
+    the retry fell through to the host. It must run before the teardown."""
+    from pathlib import Path
+
+    import robothor.engine.runner as runner_module
+
+    src = Path(runner_module.__file__).read_text(encoding="utf-8")
+    verify = src.index("await self._run_verification(")
+    teardown = src.index("await _fin.run(sandbox.stop(), \"sandbox_stop\")")
+    withdraw = src.index("withdraw_toolset(_toolset_tokens)")
+    assert verify < withdraw < teardown
+    assert src.count("await self._run_verification(") == 1

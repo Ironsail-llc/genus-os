@@ -1305,6 +1305,7 @@ class AgentRunner(
 
                 from robothor.engine.request_runtime import observe_request
 
+                verified, verified_output = False, None
                 try:
                     async with observe_request(session, on_status) as report_status:
                         await self._run_loop(
@@ -1346,6 +1347,33 @@ class AgentRunner(
                             session=session,
                             spawn_context=spawn_context,
                         )
+                    # ── [VERIFIER] Self-validation step ──
+                    # Inside the run's scope: its retry is a full tool loop and
+                    # needs the run's sandbox, deferred allow-set, watchdog and
+                    # hard timeout, all of which the finally below tears down.
+                    # An interrupted run skips it, and a host-rendered answer
+                    # such as a goal report is not re-verified.
+                    if (
+                        not session.was_interrupted
+                        and not host_rendered_output(session)
+                        and self._should_verify(agent_config, route, session)
+                    ):
+                        verified_output = await self._run_verification(
+                            agent_config,
+                            session,
+                            models,
+                            tool_schemas,
+                            session.get_final_text(),
+                            on_content,
+                            on_tool,
+                            max_iterations=max_iterations,
+                            route=route,
+                            plan_result=plan_result,
+                            trace=trace,
+                            on_status=on_status,
+                            on_stream_event=on_stream_event,
+                        )
+                        verified = True
                 finally:
                     with contextlib.suppress(Exception):
                         withdraw_toolset(_toolset_tokens)
@@ -1457,25 +1485,8 @@ class AgentRunner(
                 spawn_context=spawn_context,
             )
 
-        # ── [VERIFIER] Self-validation step ──
-        output_text = session.get_final_text()
-        # A host-rendered answer such as a goal report is not re-verified.
-        if not host_rendered_output(session) and self._should_verify(agent_config, route, session):
-            output_text = await self._run_verification(
-                agent_config,
-                session,
-                models,
-                tool_schemas,
-                output_text,
-                on_content,
-                on_tool,
-                max_iterations=max_iterations,
-                route=route,
-                plan_result=plan_result,
-                trace=trace,
-                on_status=on_status,
-                on_stream_event=on_stream_event,
-            )
+        # ── [VERIFIER] ran inside the run's scope, above ──
+        output_text = verified_output if verified else session.get_final_text()
 
         # ── [TELEMETRY] Publish run metrics ──
         self._publish_run_telemetry(trace, session.run)
