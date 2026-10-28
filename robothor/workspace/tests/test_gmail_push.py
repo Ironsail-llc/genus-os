@@ -321,3 +321,93 @@ async def test_push_settings_do_nothing_on_microsoft365(configure, monkeypatch) 
     tasks = worker.start_tasks("test-tenant")
     assert [t.get_name() for t in tasks] == ["m365-ingest"]
     await asyncio.gather(*tasks)
+
+
+# ── the seen set is purged, as on Microsoft 365 ───────────────────
+
+
+class CountingStore(MemoryIngestStore):
+    def __init__(self, **kw: Any) -> None:
+        super().__init__(**kw)
+        self.purges: list[datetime] = []
+
+    async def purge_seen(self, tenant_id: str, older_than: datetime) -> int:
+        self.purges.append(older_than)
+        return await super().purge_seen(tenant_id, older_than)
+
+
+async def test_run_purges_old_seen_ids_hourly() -> None:
+    from robothor.workspace.ingest.state import SEEN_TTL
+    from robothor.workspace.ingest.worker import PURGE_EVERY_SECONDS
+
+    start = datetime(2026, 3, 1, tzinfo=UTC)
+    now = [start]
+    store = CountingStore(now=lambda: now[0])
+    now[0] = start - timedelta(days=50)
+    await store.mark_seen("test-tenant", "google", ["mail:ancient"])
+    now[0] = start - timedelta(days=1)
+    await store.mark_seen("test-tenant", "google", ["mail:recent"])
+    now[0] = start
+
+    class Ticking:
+        async def read(self) -> list[dict[str, Any]]:
+            now[0] += timedelta(seconds=PURGE_EVERY_SECONDS / 2 + 1)
+            return []
+
+    await gmail_push.run(
+        "test-tenant",
+        mailbox=ME,
+        topic="",
+        gmail=FakeGmailHistory(history_id=100),
+        store=store,
+        publish=Recorder(),
+        source=Ticking(),
+        leader=lambda: True,
+        sleep=_no_sleep,
+        clock=lambda: now[0],
+        rounds=4,
+    )
+    # At start, then once per PURGE_EVERY_SECONDS: four half-interval reads -> two more.
+    assert len(store.purges) == 3
+    assert store.purges[0] == start - SEEN_TTL
+    remaining = {key[2] for key in store.seen_at}
+    assert "mail:ancient" not in remaining
+    assert "mail:recent" in remaining
+
+
+async def test_a_failing_purge_does_not_stop_the_loop() -> None:
+    class Broken(MemoryIngestStore):
+        async def purge_seen(self, tenant_id: str, older_than: datetime) -> int:
+            raise RuntimeError("db away")
+
+    source = ListSource([])
+    await gmail_push.run(
+        "test-tenant",
+        mailbox=ME,
+        topic="",
+        gmail=FakeGmailHistory(history_id=100),
+        store=Broken(),
+        publish=Recorder(),
+        source=source,
+        leader=lambda: True,
+        sleep=_no_sleep,
+        rounds=2,
+    )
+    assert source.reads == 2
+
+
+async def test_a_follower_does_not_purge() -> None:
+    store = CountingStore()
+    await gmail_push.run(
+        "test-tenant",
+        mailbox=ME,
+        topic="",
+        gmail=FakeGmailHistory(history_id=100),
+        store=store,
+        publish=Recorder(),
+        source=ListSource([]),
+        leader=lambda: False,
+        sleep=_no_sleep,
+        rounds=2,
+    )
+    assert store.purges == []
