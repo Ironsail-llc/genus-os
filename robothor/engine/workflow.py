@@ -206,7 +206,10 @@ def _render_template(template: str, context: dict[str, Any]) -> str:
         expr = match.group(1)
         try:
             result = _safe_eval(expr, context)
-            return str(result) if result is not None else ""
+            if result is None:
+                logger.debug("Template %r has no value: rendered empty", expr)
+                return ""
+            return str(result)
         except Exception as e:
             logger.warning("Template eval failed for '%s': %s", expr, e)
             return str(match.group(0))
