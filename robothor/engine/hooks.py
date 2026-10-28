@@ -22,7 +22,7 @@ import yaml
 
 from robothor.engine.dedup import release, try_acquire
 from robothor.engine.delivery import deliver
-from robothor.engine.models import TriggerType
+from robothor.engine.models import RunStatus, TriggerType
 from robothor.engine.task_registry import get_task_registry
 
 MAX_RETRIES = 3
@@ -37,6 +37,8 @@ MAX_BUSY_REQUEUES = 60
 # Retry copies name the agents they are for, so the agents that already
 # handled the event (and the workflows already dispatched) do not run again.
 RETRY_AGENTS_FIELD = "_retry_agents"
+# A busy workflow's requeued copy names the workflows it is for, and no agents.
+RETRY_WORKFLOWS_FIELD = "_retry_workflows"
 
 # Cap on the payload text an ``include_payload`` hook appends to its message.
 MAX_PAYLOAD_CHARS = 8000
@@ -188,6 +190,29 @@ def _format_event_block(stream: str, event_type: str, envelope: dict[str, Any]) 
 EVENT_TRIGGERS = dict(_LEGACY_EVENT_TRIGGERS)
 
 
+def _workflow_event(stream: str, envelope: dict[str, Any]) -> dict[str, Any]:
+    """The event as a workflow run's context: the payload parsed when it is JSON."""
+    raw = envelope.get("payload", "")
+    try:
+        payload: Any = json.loads(raw) if raw else {}
+    except (TypeError, ValueError):
+        payload = raw
+    return {
+        "id": envelope.get("id", ""),
+        "type": envelope.get("type", ""),
+        "stream": stream,
+        "delivery_id": envelope.get("delivery_id", ""),
+        "payload": payload,
+    }
+
+
+def _requeues_when_busy(wf: Any, stream: str, event_type: str) -> bool:
+    return any(
+        t.type == "hook" and t.stream == stream and t.event_type == event_type and t.requeue_if_busy
+        for t in wf.triggers
+    )
+
+
 class EventHooks:
     """Redis Stream consumer that triggers agent runs on events."""
 
@@ -301,8 +326,10 @@ class EventHooks:
         bare_stream = self._prefixed_to_bare.get(stream, stream)
         triggers = self._event_triggers.get(bare_stream, [])
 
-        # A retry copy is addressed to the agents that need another attempt
+        # A retry copy is addressed to the agents or workflows that need another attempt
         retry_agents = {a for a in decoded.get(RETRY_AGENTS_FIELD, "").split(",") if a}
+        retry_workflows = {w for w in decoded.get(RETRY_WORKFLOWS_FIELD, "").split(",") if w}
+        addressed = bool(retry_agents or retry_workflows)
 
         failed_agents: list[str] = []
         busy_agents: list[str] = []
@@ -311,7 +338,7 @@ class EventHooks:
                 continue
 
             agent_id = trigger["agent_id"]
-            if retry_agents and agent_id not in retry_agents:
+            if addressed and agent_id not in retry_agents:
                 continue
 
             # Dedup: skip if agent is already running (shared with scheduler)
@@ -377,11 +404,13 @@ class EventHooks:
 
         # Dispatch matching workflows (fire-and-forget, parallel to agents).
         # A retry copy addressed to agents was already dispatched once.
-        if self.workflow_engine and not retry_agents:
+        if self.workflow_engine and (not addressed or retry_workflows):
             matching_workflows = self.workflow_engine.get_workflows_for_event(
                 bare_stream, event_type
             )
             for wf in matching_workflows:
+                if retry_workflows and wf.id not in retry_workflows:
+                    continue
                 logger.info(
                     "Hook triggering workflow: %s via %s:%s",
                     wf.id,
@@ -389,7 +418,7 @@ class EventHooks:
                     event_type,
                 )
                 get_task_registry().spawn(
-                    self._run_workflow(wf.id, bare_stream, event_type),
+                    self._run_workflow(wf, bare_stream, event_type, decoded, redis_client, stream),
                     name=f"hook-workflow:{wf.id}:{bare_stream}:{event_type}",
                 )
 
@@ -501,13 +530,28 @@ class EventHooks:
         finally:
             await release(agent_id)
 
-    async def _run_workflow(self, workflow_id: str, stream: str, event_type: str) -> None:
-        """Execute a workflow triggered by an event (fire-and-forget)."""
+    async def _run_workflow(
+        self,
+        wf: Any,
+        stream: str,
+        event_type: str,
+        envelope: dict[str, Any],
+        redis_client: Any,
+        prefixed_stream: str,
+    ) -> None:
+        """Execute a workflow triggered by an event (fire-and-forget).
+
+        The event is the run's ``event`` context, so steps can template its
+        fields. A run skipped because the workflow was already running is
+        re-added for that workflow when its trigger sets ``requeue_if_busy``.
+        """
+        workflow_id = wf.id
         try:
-            await self.workflow_engine.execute(
+            run = await self.workflow_engine.execute(
                 workflow_id=workflow_id,
                 trigger_type="hook",
                 trigger_detail=f"{stream}:{event_type}",
+                initial_context={"event": _workflow_event(stream, envelope)},
                 user_id=f"service:workflow:{workflow_id}",
                 user_role="service",
             )
@@ -519,6 +563,19 @@ class EventHooks:
                 event_type,
                 e,
             )
+            return
+
+        if run.status != RunStatus.SKIPPED or not _requeues_when_busy(wf, stream, event_type):
+            return
+        busy_count = int(envelope.get("_busy_requeue_count", "0"))
+        busy_data = {k: v for k, v in envelope.items() if k != RETRY_AGENTS_FIELD}
+        busy_data[RETRY_WORKFLOWS_FIELD] = workflow_id
+        if busy_count < MAX_BUSY_REQUEUES:
+            logger.info("Requeueing %s:%s — workflow %s busy", stream, event_type, workflow_id)
+            busy_data["_busy_requeue_count"] = str(busy_count + 1)
+            await self._delayed_requeue(redis_client, prefixed_stream, busy_data)
+        else:
+            await self._dead_letter(redis_client, prefixed_stream, busy_data, event_type)
 
     async def _idle(self) -> None:
         """Idle loop when Redis is not available."""

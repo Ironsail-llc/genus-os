@@ -230,6 +230,7 @@ def parse_workflow(data: dict[str, Any]) -> WorkflowDef:
             event_type=t.get("event_type", ""),
             cron=t.get("cron", ""),
             timezone=t.get("timezone", "America/New_York"),
+            requeue_if_busy=bool(t.get("requeue_if_busy", False)),
         )
         for t in data.get("triggers", [])
     ]
