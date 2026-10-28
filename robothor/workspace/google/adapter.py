@@ -204,7 +204,7 @@ class GoogleMailSync:
 
     def watch(self, topic: str, *, label_ids: list[str]) -> dict[str, Any]:
         """``users.watch``: push changes to ``label_ids`` to the Pub/Sub ``topic``."""
-        body = {"topicName": topic, "labelIds": list(label_ids), "labelFilterBehavior": "INCLUDE"}
+        body = {"topicName": topic, "labelIds": list(label_ids), "labelFilterBehavior": "include"}
         return _gws(
             [
                 "gmail",
