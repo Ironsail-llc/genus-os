@@ -40,6 +40,10 @@ RETRY_AGENTS_FIELD = "_retry_agents"
 # A busy workflow's requeued copy names the workflows it is for, and no agents.
 RETRY_WORKFLOWS_FIELD = "_retry_workflows"
 
+# Events handled at once. Each event runs off the consumer loop, so a long
+# agent run holds up only later events for that same agent.
+MAX_IN_FLIGHT_EVENTS = 100
+
 # Cap on the payload text an ``include_payload`` hook appends to its message.
 MAX_PAYLOAD_CHARS = 8000
 
@@ -228,6 +232,39 @@ class EventHooks:
         self._stop_event = asyncio.Event()
         self._prefixed_to_bare: dict[str, str] = {}
         self._event_triggers: dict[str, list[dict[str, Any]]] = {}
+        self._in_flight: set[asyncio.Task[None]] = set()
+        self._slots = asyncio.Semaphore(MAX_IN_FLIGHT_EVENTS)
+        # One lane per agent: its hook runs take turns in arrival order.
+        self._agent_lanes: dict[str, asyncio.Lock] = {}
+
+    async def _dispatch(
+        self,
+        stream: str,
+        msg_id: Any,
+        data: dict[str, Any],
+        redis_client: Any,
+        group: str,
+    ) -> None:
+        """Handle one event off the consumer loop; waits only when too many are in flight."""
+        await self._slots.acquire()
+        task = asyncio.create_task(
+            self._handle_event(stream, msg_id, data, redis_client, group),
+            name=f"hook-event:{stream}:{msg_id!r}",
+        )
+        self._in_flight.add(task)
+
+        def _done(t: asyncio.Task[None]) -> None:
+            self._in_flight.discard(t)
+            self._slots.release()
+            if not t.cancelled() and t.exception() is not None:
+                logger.error("Event hook error: %s", t.exception())
+
+        task.add_done_callback(_done)
+
+    async def drain(self) -> None:
+        """Wait for every event in flight to finish."""
+        while self._in_flight:
+            await asyncio.gather(*list(self._in_flight), return_exceptions=True)
 
     async def start(self) -> None:
         """Start consuming Redis streams."""
@@ -293,7 +330,7 @@ class EventHooks:
                         stream_name.decode() if isinstance(stream_name, bytes) else stream_name
                     )
                     for msg_id, data in messages:
-                        await self._handle_event(stream_str, msg_id, data, r, consumer_group)
+                        await self._dispatch(stream_str, msg_id, data, r, consumer_group)
 
             except asyncio.CancelledError:
                 break
@@ -301,6 +338,9 @@ class EventHooks:
                 logger.error("Event hook error: %s", e, exc_info=True)
                 await asyncio.sleep(5)
 
+        for task in list(self._in_flight):
+            task.cancel()
+        await self.drain()
         await r.aclose()
 
     async def _handle_event(
@@ -331,78 +371,8 @@ class EventHooks:
         retry_workflows = {w for w in decoded.get(RETRY_WORKFLOWS_FIELD, "").split(",") if w}
         addressed = bool(retry_agents or retry_workflows)
 
-        failed_agents: list[str] = []
-        busy_agents: list[str] = []
-        for trigger in triggers:
-            if event_type and trigger.get("event_type") != event_type:
-                continue
-
-            agent_id = trigger["agent_id"]
-            if addressed and agent_id not in retry_agents:
-                continue
-
-            # Dedup: skip if agent is already running (shared with scheduler)
-            if not await try_acquire(agent_id):
-                if trigger.get("requeue_if_busy"):
-                    logger.info("Requeueing %s:%s — %s busy", bare_stream, event_type, agent_id)
-                    busy_agents.append(agent_id)
-                else:
-                    logger.debug("Skipping %s — already running", agent_id)
-                continue
-
-            try:
-                from robothor.engine.config import load_agent_config
-
-                agent_config = load_agent_config(agent_id, self.config.manifest_dir)
-
-                # Warmup is handled centrally by runner.execute()
-                message = trigger["message"]
-                if trigger.get("include_payload"):
-                    message += _format_event_block(bare_stream, event_type, decoded)
-
-                run = await self.runner.execute(
-                    agent_id=agent_id,
-                    message=message,
-                    trigger_type=TriggerType.HOOK,
-                    trigger_detail=f"{bare_stream}:{event_type}",
-                    agent_config=agent_config,
-                )
-
-                if agent_config:
-                    await deliver(agent_config, run)
-
-                if run.status.value in ("failed", "timeout"):
-                    failed_agents.append(agent_id)
-                elif (
-                    run.status.value == "completed"
-                    and agent_config
-                    and agent_config.downstream_agents
-                ):
-                    # Trigger downstream agents (fire-and-forget)
-                    for downstream_id in agent_config.downstream_agents:
-                        logger.info(
-                            "Hook triggering downstream agent: %s",
-                            downstream_id,
-                        )
-                        get_task_registry().spawn(
-                            self._trigger_downstream(downstream_id, bare_stream, event_type),
-                            name=f"hook-downstream:{downstream_id}:{bare_stream}:{event_type}",
-                        )
-
-                logger.info(
-                    "Hook complete: %s via %s:%s status=%s",
-                    agent_id,
-                    bare_stream,
-                    event_type,
-                    run.status.value,
-                )
-            except Exception as e:
-                logger.error("Hook execution failed for %s: %s", agent_id, e)
-                failed_agents.append(agent_id)
-            finally:
-                await release(agent_id)
-
-        # Dispatch matching workflows (fire-and-forget, parallel to agents).
+        # Dispatch matching workflows first, so the event's agent
+        # runs below never delay them (fire-and-forget).
         # A retry copy addressed to agents was already dispatched once.
         if self.workflow_engine and (not addressed or retry_workflows):
             matching_workflows = self.workflow_engine.get_workflows_for_event(
@@ -421,6 +391,80 @@ class EventHooks:
                     self._run_workflow(wf, bare_stream, event_type, decoded, redis_client, stream),
                     name=f"hook-workflow:{wf.id}:{bare_stream}:{event_type}",
                 )
+
+        failed_agents: list[str] = []
+        busy_agents: list[str] = []
+        for trigger in triggers:
+            if event_type and trigger.get("event_type") != event_type:
+                continue
+
+            agent_id = trigger["agent_id"]
+            if addressed and agent_id not in retry_agents:
+                continue
+
+            # Hook runs for one agent take turns, in arrival order; other
+            # agents, workflows and streams go on without waiting for them.
+            async with self._agent_lanes.setdefault(agent_id, asyncio.Lock()):
+                # Dedup: skip if agent is already running (shared with scheduler)
+                if not await try_acquire(agent_id):
+                    if trigger.get("requeue_if_busy"):
+                        logger.info("Requeueing %s:%s — %s busy", bare_stream, event_type, agent_id)
+                        busy_agents.append(agent_id)
+                    else:
+                        logger.debug("Skipping %s — already running", agent_id)
+                    continue
+
+                try:
+                    from robothor.engine.config import load_agent_config
+
+                    agent_config = load_agent_config(agent_id, self.config.manifest_dir)
+
+                    # Warmup is handled centrally by runner.execute()
+                    message = trigger["message"]
+                    if trigger.get("include_payload"):
+                        message += _format_event_block(bare_stream, event_type, decoded)
+
+                    run = await self.runner.execute(
+                        agent_id=agent_id,
+                        message=message,
+                        trigger_type=TriggerType.HOOK,
+                        trigger_detail=f"{bare_stream}:{event_type}",
+                        agent_config=agent_config,
+                    )
+
+                    if agent_config:
+                        await deliver(agent_config, run)
+
+                    if run.status.value in ("failed", "timeout"):
+                        failed_agents.append(agent_id)
+                    elif (
+                        run.status.value == "completed"
+                        and agent_config
+                        and agent_config.downstream_agents
+                    ):
+                        # Trigger downstream agents (fire-and-forget)
+                        for downstream_id in agent_config.downstream_agents:
+                            logger.info(
+                                "Hook triggering downstream agent: %s",
+                                downstream_id,
+                            )
+                            get_task_registry().spawn(
+                                self._trigger_downstream(downstream_id, bare_stream, event_type),
+                                name=f"hook-downstream:{downstream_id}:{bare_stream}:{event_type}",
+                            )
+
+                    logger.info(
+                        "Hook complete: %s via %s:%s status=%s",
+                        agent_id,
+                        bare_stream,
+                        event_type,
+                        run.status.value,
+                    )
+                except Exception as e:
+                    logger.error("Hook execution failed for %s: %s", agent_id, e)
+                    failed_agents.append(agent_id)
+                finally:
+                    await release(agent_id)
 
         # Retry failed runs; dead-letter once the budget is spent
         if failed_agents:
