@@ -152,8 +152,13 @@ sender is external. `requeue_if_busy: true` re-adds an event that arrived
 while the agent was already running, for that agent only, after a pause that
 starts at 5 seconds and backs off to a minute, for up to about 50 minutes
 before it is parked in `<stream>:dlq`. Each event is handled off the consumer
-loop: one agent's hook runs take turns in arrival order, and a long run holds
-up no other agent, workflow or stream. Both are
+loop, up to 100 at a time: the event's workflows start first, its agents run
+side by side, and one agent's hook runs take turns. Hook agent runs share the
+fleet's `max_concurrent_agents` limit. A long run holds up only later events
+for the same agent, unless 100 of them pile up, when the consumer waits. An
+event read but not yet acknowledged when the engine stops or crashes stays
+pending in Redis and is handled again at the next start, so a handler may see
+an event twice and should be idempotent. Both are
 documented with the other hook fields in `docs/agents/schema.yaml`.
 
 A workflow with a `hook` trigger gets the event as its run's `event` context
