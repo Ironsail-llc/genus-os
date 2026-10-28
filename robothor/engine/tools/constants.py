@@ -194,6 +194,22 @@ JIRA_TOOLS = frozenset(
         "jira_get_sprint",
         "jira_get_board_velocity",
         "jira_list_boards",
+        "jira_create_issue",
+        "jira_add_comment",
+        "jira_transition_issue",
+        "jira_update_issue",
+    }
+)
+
+# JIRA write tools: they create, edit, comment on and move tickets as the
+# instance's account, so they are OPT_IN_TOOLS (below): offered only to a
+# manifest that names them. Migration 153 is the RBAC half.
+JIRA_WRITE_TOOLS = frozenset(
+    {
+        "jira_create_issue",
+        "jira_add_comment",
+        "jira_transition_issue",
+        "jira_update_issue",
     }
 )
 
@@ -476,12 +492,17 @@ TOOLSEARCH_TOOLS = frozenset({"tool_search", "tool_describe", "tool_call"})
 # says so. Their RBAC half is NOT added yet: a `service`-role deny would also
 # stop the reviewer agent that names them, so it waits for a dedicated role.
 #
+# The four JIRA write tools create, edit, comment on and transition tickets as
+# the instance's account; same rule. Migration 153 denies them to `user` and
+# `member`; `service` keeps them, so an unattended agent that names them works.
+#
 # Spelled out rather than imported from robothor.sales so this module stays
 # import-light; test_opt_in_tools_are_not_default pins the two together.
 OPT_IN_TOOLS: frozenset[str] = frozenset(
     {
         "web_render",
         *GITHUB_REVIEW_WRITE_TOOLS,
+        *JIRA_WRITE_TOOLS,
         "sales_create_request",
         "sales_discover",
         "sales_get_context",

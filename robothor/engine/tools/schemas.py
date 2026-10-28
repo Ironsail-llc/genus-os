@@ -3858,6 +3858,99 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
             },
         },
     }
+    schemas["jira_create_issue"] = {
+        "type": "function",
+        "function": {
+            "name": "jira_create_issue",
+            "description": (
+                "Create a JIRA issue in any project the account can write to. Returns the "
+                "new key and its browse URL."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_key": {"type": "string", "description": "Project key, e.g. ABC"},
+                    "summary": {"type": "string", "description": "Issue title"},
+                    "description": {
+                        "type": "string",
+                        "description": "Plain text body; blank lines separate paragraphs",
+                    },
+                    "issue_type": {
+                        "type": "string",
+                        "description": "Task (default), Bug, Story, Epic or Sub-task",
+                    },
+                    "labels": {"type": "array", "items": {"type": "string"}},
+                    "parent_key": {
+                        "type": "string",
+                        "description": "Parent epic or issue key (optional)",
+                    },
+                    "priority": {"type": "string", "description": "Priority name (optional)"},
+                },
+                "required": ["project_key", "summary"],
+            },
+        },
+    }
+    schemas["jira_add_comment"] = {
+        "type": "function",
+        "function": {
+            "name": "jira_add_comment",
+            "description": "Add a comment to a JIRA issue.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "issue_key": {"type": "string", "description": "Issue key, e.g. ABC-123"},
+                    "body": {"type": "string", "description": "Plain text comment"},
+                },
+                "required": ["issue_key", "body"],
+            },
+        },
+    }
+    schemas["jira_transition_issue"] = {
+        "type": "function",
+        "function": {
+            "name": "jira_transition_issue",
+            "description": (
+                "Move a JIRA issue to a status, e.g. 'In Progress' or 'Done'. An unknown "
+                "status returns the statuses reachable from the current one."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "issue_key": {"type": "string", "description": "Issue key, e.g. ABC-123"},
+                    "status": {
+                        "type": "string",
+                        "description": "Target status or transition name",
+                    },
+                },
+                "required": ["issue_key", "status"],
+            },
+        },
+    }
+    schemas["jira_update_issue"] = {
+        "type": "function",
+        "function": {
+            "name": "jira_update_issue",
+            "description": "Edit a JIRA issue's summary, description, labels or priority.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "issue_key": {"type": "string", "description": "Issue key, e.g. ABC-123"},
+                    "summary": {"type": "string"},
+                    "description": {
+                        "type": "string",
+                        "description": "Plain text body; replaces the existing description",
+                    },
+                    "labels": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Replaces the existing labels",
+                    },
+                    "priority": {"type": "string"},
+                },
+                "required": ["issue_key"],
+            },
+        },
+    }
 
     # ── GitHub REST API tools ──
 
