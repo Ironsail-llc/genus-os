@@ -435,6 +435,7 @@ describe("UsersPage", () => {
     const grant = await screen.findByTestId(`user-grant-${MEMBER.id}`);
     expect(grant.textContent).toContain("https://idp.example.com");
     expect(grant.textContent).toContain("bob@example.com");
+    expect(grant.textContent).toContain(window.location.origin);
   });
 
   it("renders the grant refusal for an already-bound account verbatim", async () => {

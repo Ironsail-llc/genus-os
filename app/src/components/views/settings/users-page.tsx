@@ -108,14 +108,20 @@ function statusClass(status: string): string {
  * wrong twice: there is no code, and the thing that makes the grant safe is
  * that only a VERIFIED claim for that exact address can spend it.
  */
-export function signInInstructions(email: string, grant: BindingGrant): string {
-  const issuer = grant.issuer
-    ? `Sign in with ${grant.issuer}`
-    : "Sign in with this instance's identity provider";
+export function signInInstructions(
+  email: string,
+  grant: BindingGrant,
+  dashboard: string = window.location.origin
+): string {
+  // The grant's issuer is deliberately not here. It is the identity provider's
+  // identifier, and opening it shows that provider's metadata rather than a
+  // sign-in page: the sign-in starts from this dashboard, which sends the
+  // invitee on to the provider and back again.
   return (
-    `${issuer} using the address ${email}, before ${expiry(grant.expires_at)}. ` +
-    `There is no code to enter and nothing to copy: the first verified sign-in for that ` +
-    `address binds the account. After it expires, ask an operator to arm a new one.`
+    `Go to ${dashboard}, choose "Sign in with SSO" and sign in as ${email}, before ` +
+    `${expiry(grant.expires_at)}. There is no code to enter and nothing to copy: the first ` +
+    `verified sign-in for that address binds the account. After it expires, ask an operator ` +
+    `to arm a new one.`
   );
 }
 
@@ -136,6 +142,15 @@ export function UsersPage({ visible = true, role }: UsersPageProps) {
 
   const [inviteOpen, setInviteOpen] = useState(false);
   const [invite, setInvite] = useState<InviteForm>(EMPTY_INVITE);
+  /**
+   * Whether this instance has an identity provider, from the public
+   * `/api/auth/methods`. With one, an invite defaults to SSO: an invite without
+   * it is a placeholder nobody can sign in to until a password is set on the
+   * box, which is the wrong default for a team that signs in with SSO.
+   */
+  const [ssoDefault, setSsoDefault] = useState(false);
+  /** The operator ticked or unticked the box; a late default must not undo it. */
+  const [ssoChosen, setSsoChosen] = useState(false);
   const [inviting, setInviting] = useState(false);
   const [inviteError, setInviteError] = useState<string | null>(null);
   const [created, setCreated] = useState<{ account: Account; grant: BindingGrant | null } | null>(
@@ -193,6 +208,35 @@ export function UsersPage({ visible = true, role }: UsersPageProps) {
     if (!visible) return;
     void loadRoles();
   }, [visible, loadRoles]);
+
+  // An unreadable answer leaves the default off: inviting by SSO on an instance
+  // with no identity provider creates an account nobody can sign in to either.
+  useEffect(() => {
+    if (!visible) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch(`${BRIDGE}/api/auth/methods`);
+        if (!res.ok) return;
+        const body = (await res.json()) as { oidc?: unknown };
+        if (!cancelled && Array.isArray(body.oidc) && body.oidc.length > 0) setSsoDefault(true);
+      } catch {
+        // Same as an empty answer: no default, and the box still works.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [visible]);
+
+  useEffect(() => {
+    if (!ssoChosen) setInvite((prev) => ({ ...prev, sso: ssoDefault }));
+  }, [ssoDefault, ssoChosen]);
+
+  const freshInvite = useCallback(() => {
+    setSsoChosen(false);
+    setInvite({ ...EMPTY_INVITE, sso: ssoDefault });
+  }, [ssoDefault]);
 
   /**
    * The roles this caller may actually assign.
@@ -275,7 +319,7 @@ export function UsersPage({ visible = true, role }: UsersPageProps) {
       }
       setCreated({ account, grant: normalizeGrant(body.grant) });
       setCopied(false);
-      setInvite(EMPTY_INVITE);
+      freshInvite();
       setInviteOpen(false);
       reload();
     } catch {
@@ -400,7 +444,11 @@ export function UsersPage({ visible = true, role }: UsersPageProps) {
               data-testid="invite-sso"
               type="checkbox"
               checked={invite.sso}
-              onChange={(event) => setInvite((prev) => ({ ...prev, sso: event.target.checked }))}
+              onChange={(event) => {
+                const checked = event.target.checked;
+                setSsoChosen(true);
+                setInvite((prev) => ({ ...prev, sso: checked }));
+              }}
             />
             They sign in with the organisation&apos;s identity provider
           </label>
@@ -436,7 +484,7 @@ export function UsersPage({ visible = true, role }: UsersPageProps) {
               size="xs"
               data-testid="invite-cancel"
               onClick={() => {
-                setInvite(EMPTY_INVITE);
+                freshInvite();
                 setInviteOpen(false);
                 setInviteError(null);
               }}
@@ -464,6 +512,12 @@ export function UsersPage({ visible = true, role }: UsersPageProps) {
           <p className="text-xs text-muted-foreground">
             {signInInstructions(created.account.email, created.grant)}
           </p>
+          {created.grant.issuer ? (
+            <p className="text-[11px] text-muted-foreground">
+              Only a sign-in through <span className="font-mono">{created.grant.issuer}</span> can
+              use it. That is the identity provider&apos;s identifier, not a page to send them to.
+            </p>
+          ) : null}
           <p className="text-[11px] text-muted-foreground">
             This panel is shown once. Nothing here is a secret, but nothing here comes back either —
             arm a new grant from the row below if it is lost.
@@ -743,6 +797,12 @@ export function UsersPage({ visible = true, role }: UsersPageProps) {
                   <span className="text-xs text-foreground">
                     {signInInstructions(user.email, grant)}
                   </span>
+                  {grant.issuer ? (
+                    <span className="text-[11px] text-muted-foreground">
+                      Only a sign-in through <span className="font-mono">{grant.issuer}</span> can
+                      use it.
+                    </span>
+                  ) : null}
                   <div className="flex flex-wrap items-center gap-1.5">
                     <Button
                       variant="ghost"
