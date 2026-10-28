@@ -311,15 +311,23 @@ def kind_for(mime: str, name: str = "") -> str:
 
 
 def extractable(suffix: str, mime: str = "") -> str | None:
-    """``"text"``, ``"pdf"`` or None — what can be quoted into the first turn.
+    """What can be quoted into the first turn, or None.
 
-    Never decides on MIME alone: Telegram reports ``application/octet-stream``
-    for plenty of real text files, and reports ``text/plain`` for some that are
-    not. The suffix is the operator's own label for the file.
+    ``"text"`` for a file decoded as-is, or a document kind
+    (``"pdf"``, ``"docx"``, ``"xlsx"``, ``"pptx"``) that
+    :mod:`robothor.engine.file_extract` turns into text.
+
+    Never decides TEXT on MIME alone: Telegram reports
+    ``application/octet-stream`` for plenty of real text files, and reports
+    ``text/plain`` for some that are not. The suffix is the operator's own
+    label for the file. A document MIME type is specific enough to trust.
     """
+    from robothor.engine.file_extract import document_kind
+
     lowered = (suffix or "").lower()
-    if lowered == ".pdf" or (mime or "").strip().lower() == "application/pdf":
-        return "pdf"
+    doc = document_kind(lowered, mime)
+    if doc is not None:
+        return doc
     if lowered in TEXT_EXTENSIONS:
         return "text"
     return None

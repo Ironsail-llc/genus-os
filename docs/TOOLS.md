@@ -1156,6 +1156,19 @@ agent's own allow-set is the authoritative answer. The families:
 | Vision | `view_image`, `analyze_image` (image files — see above); `look`, `who_is_here` (a real camera) |
 | Desktop | `desktop_*` (a real screen) |
 
+### `read_file` — documents, not just text
+
+`read_file` returns a text file as it is, and turns the common document formats
+into text: PDF (pypdf, falling back to the `pdftotext` command), Word `.docx`
+(paragraphs and tables in document order), Excel `.xlsx` (every sheet, rows
+tab-separated, capped per sheet) and PowerPoint `.pptx` (text per slide, with
+speaker notes). The 50,000-character cap and the `chars` total apply to
+extracted text too, and the result carries a `format` field. An image returns a
+pointer to `view_image`; any other binary file returns its size and guessed MIME
+type instead of a decode error. Telegram attachments in these formats are
+extracted into the agent's first turn by the same code
+(`robothor/engine/file_extract.py`). Secret-path refusals run first, unchanged.
+
 ---
 
 ## How search ranks

@@ -349,11 +349,14 @@ class TelegramAttachmentsMixin:
         suffix = PurePath(media.name).suffix.lower()
         extract = attachments.extractable(suffix, media.mime)
         if extract is not None and media.kind != "image":
-            whole = (
-                await _extract_pdf_text(raw)
-                if extract == "pdf"
-                else raw.decode("utf-8", errors="replace")
-            )
+            if extract == "pdf":
+                whole = await _extract_pdf_text(raw)
+            elif extract == "text":
+                whole = raw.decode("utf-8", errors="replace")
+            else:
+                from robothor.engine import file_extract
+
+                whole = await asyncio.to_thread(file_extract.describe_bytes, raw, extract)
             noted.text_total_chars = len(whole)
             noted.text = whole[: attachments.TEXT_EXTRACT_CHARS]
             return
@@ -650,22 +653,11 @@ class TelegramAttachmentsMixin:
 
 
 async def _extract_pdf_text(raw_bytes: bytes) -> str:
-    """Best-effort text extraction from a PDF."""
-    try:
-        import io
+    """Best-effort text extraction from a PDF, via the shared extractor.
 
-        import pypdf
+    Never raises: a missing library or a corrupt file becomes a bracketed note
+    the agent can read, and the file itself is already saved.
+    """
+    from robothor.engine import file_extract
 
-        reader = pypdf.PdfReader(io.BytesIO(raw_bytes))
-        pages = []
-        for i, page in enumerate(reader.pages):
-            text = page.extract_text() or ""
-            if text.strip():
-                pages.append(f"[Page {i + 1}]\n{text}")
-        if pages:
-            return "\n\n".join(pages)
-        return "[PDF: no extractable text (may be image-based)]"
-    except ImportError:
-        return "[PDF file — install pypdf for text extraction]"
-    except Exception as e:
-        return f"[PDF text extraction failed: {e}]"
+    return await asyncio.to_thread(file_extract.describe_bytes, raw_bytes, "pdf")

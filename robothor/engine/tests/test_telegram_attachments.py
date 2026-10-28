@@ -146,6 +146,21 @@ class TestDocuments:
         assert rows[0]["path"] in text
 
     @pytest.mark.asyncio
+    async def test_a_word_document_gives_the_agent_its_text(self, bot, tmp_path) -> None:
+        docx = pytest.importorskip("docx")
+        doc = docx.Document()
+        doc.add_paragraph("Board memo for Bob")
+        doc.save(str(tmp_path / "memo.docx"))
+        arm_download(bot, (tmp_path / "memo.docx").read_bytes())
+        mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        await bot.handle_file(
+            message(document=document(name="memo.docx", mime=mime, uid="AgACdocx"))
+        )
+        text, rows = enqueued(bot)
+        assert "Board memo for Bob" in text
+        assert rows[0]["path"] in text
+
+    @pytest.mark.asyncio
     async def test_a_zip_is_kept_and_the_agent_is_told_where(self, bot) -> None:
         arm_download(bot, b"PK\x03\x04binary")
         await bot.handle_file(
