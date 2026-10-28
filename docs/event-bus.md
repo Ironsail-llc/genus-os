@@ -146,7 +146,11 @@ instead the `Authorization: Bearer <ID token>` header is verified with
 google-auth (Google's signing certificates, the channel's `oidc_audience`),
 then the `email` claim is checked against `oidc_service_account`. A channel
 missing either field answers `503`, as an HMAC channel without its secret
-does. The body must be a Pub/Sub push envelope: `message.data` is
+does. Because verification is the costly step, a `google_oidc` request is
+rate-limited first, and a bearer that is not a three-segment JWT is refused
+before any verification. Tokens are verified on a dedicated pool of four
+threads, and Google's signing certificates are reused for 30 minutes (fetched
+with a 5 second timeout). The body must be a Pub/Sub push envelope: `message.data` is
 base64-decoded and, when it is a JSON object, its keys become the published
 payload (otherwise `{"data": "<text>"}`), with a `pubsub` object beside them
 (`message_id`, `publish_time`, `attributes`, `subscription`). A body that is
@@ -212,8 +216,9 @@ sync script (`robothor/workspace/ingest/gmail_push.py`,
 The first round, and a round whose cursor Gmail has expired (`404` from
 `history.list`), publish nothing and start again at the mailbox's current
 `historyId`, so old mail is never replayed. A message id is published once,
-whatever the rounds re-read. With HA leader election on, only the leader
-watches and ingests.
+whatever the rounds re-read; seen ids are purged after 45 days, hourly, as
+on Microsoft 365. With HA leader election on, only the leader watches and
+ingests.
 
 Setup, for the operator:
 
