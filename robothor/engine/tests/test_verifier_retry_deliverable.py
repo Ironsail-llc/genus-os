@@ -112,7 +112,7 @@ def test_verification_runs_before_the_run_tears_down_its_sandbox():
 
     src = Path(runner_module.__file__).read_text(encoding="utf-8")
     verify = src.index("await self._run_verification(")
-    teardown = src.index("await _fin.run(sandbox.stop(), \"sandbox_stop\")")
+    teardown = src.index('await _fin.run(sandbox.stop(), "sandbox_stop")')
     withdraw = src.index("withdraw_toolset(_toolset_tokens)")
     assert verify < withdraw < teardown
     assert src.count("await self._run_verification(") == 1
