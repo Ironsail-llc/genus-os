@@ -707,7 +707,8 @@ What the settings do not tell you:
 accounts any more. Six operator-only Bridge routes, all scoped to the caller's
 own tenant — an account in another tenant answers 404, never 403. The Helm's
 **Settings › Users & roles** page is built on exactly these, and adds nothing of
-its own: it shows an SSO grant's expiry and issuer once, because a binding grant
+its own: an invite defaults to SSO when the instance has an identity provider,
+and it shows an SSO grant's expiry and issuer once, because a binding grant
 carries no secret to re-read — the first verified sign-in for that address spends
 it. No mail is sent by any of this; the operator passes the invitation on.
 
@@ -717,7 +718,7 @@ it. No mail is sent by any of this; the operator passes the invitation on.
 | `GET /api/users` | Every account in the tenant: id, address, display name, role, status, whether it is bound to an identity provider, whether MFA is enrolled, last sign-in. Never a password hash, an MFA secret or an IdP subject. |
 | `POST /api/users` | Creates the `user_accounts` row — **narrower than `genus user add`**, which also writes the CRM person, the tenant membership and the channel identifiers. `{"sso": true}` also arms a one-shot SSO binding grant and returns its id, expiry and issuer pin. |
 | `PATCH /api/users/{id}` | Role, display name, `status: active\|disabled`. |
-| `POST /api/users/{id}/binding-grant` | Arms a fresh one-hour binding grant for an existing account, pinned to the configured issuer when the appliance has exactly one. |
+| `POST /api/users/{id}/binding-grant` | Arms a fresh binding grant for an existing account (seven days unless `GENUS_INVITE_GRANT_TTL_SECONDS` says otherwise), pinned to the configured issuer when the appliance has exactly one. |
 | `GET /api/users/{id}/binding-grants` | Every grant armed for that account, live or spent. |
 
 **The owner role is not an ordinary role here.** Only an owner may grant or
@@ -732,7 +733,9 @@ refresh token keeps working for up to thirty days. Changing the owner is
 
 Not here, and still `genus user` on the box: setting a password, resetting a
 second factor, and deleting an account. Nothing on this surface sends mail, so
-an invited person has to be told out of band.
+an invited person has to be told out of band: the page offers instructions to
+copy that send them to the dashboard to choose "Sign in with SSO", never to the
+identity provider's own address.
 
 ### The forwarded client address needs two allowlists to agree
 

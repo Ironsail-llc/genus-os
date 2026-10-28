@@ -511,7 +511,7 @@ if (cfAccessEnabled()) {
 
 export const authConfig = {
   trustHost: true,
-  pages: { signIn: "/signin" },
+  pages: { signIn: "/signin", error: "/signin" },
   session: { strategy: "jwt" },
   providers,
   callbacks: {

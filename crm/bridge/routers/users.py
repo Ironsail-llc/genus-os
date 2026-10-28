@@ -67,14 +67,22 @@ logger = logging.getLogger(__name__)
 #: file boundary follows the feature, not the URL.
 router = APIRouter(tags=["users"])
 
-#: How long a binding grant armed from the Helm lives. The CLI's default is
-#: fifteen minutes, which assumes the operator is standing next to the person
-#: signing in. An invite is handed over out of band — this platform sends no
-#: invite mail — so fifteen minutes would mean re-arming it on nearly every
-#: use, and an operator who has to repeat a step eventually automates it badly.
-#: One hour, one shot, pinned to one address: consuming it still requires a
-#: VERIFIED SSO claim for exactly that email from an allowlisted issuer.
-BINDING_GRANT_TTL_SECONDS = 3600
+
+def _grant_ttl_seconds() -> int:
+    """How long a binding grant armed from the Helm lives.
+
+    The CLI's default is fifteen minutes, which assumes the operator is standing
+    next to the person signing in. An invite is handed over out of band — this
+    platform sends no invite mail — so a short window means re-arming it on
+    nearly every use, and an operator who has to repeat a step eventually
+    automates it badly. The window is ``GENUS_INVITE_GRANT_TTL_SECONDS``; the
+    grant is still one shot, pinned to one address, and spending it requires a
+    VERIFIED SSO claim for exactly that email from an allowlisted issuer.
+    """
+    from robothor.settings import get_settings
+
+    return get_settings().auth.invite_grant_ttl_seconds
+
 
 #: The one role that is not an ordinary role. It is the tenant's single
 #: administrative slot (migration 071's ``uq_user_accounts_owner``), the account
@@ -353,7 +361,7 @@ def _arm_grant(request: Request, email: str, tenant_id: str, actor: str) -> dict
         return accounts.create_binding_grant(
             tenant_id=tenant_id,
             email=email,
-            ttl_seconds=BINDING_GRANT_TTL_SECONDS,
+            ttl_seconds=_grant_ttl_seconds(),
             reason="armed from the Helm",
             created_by=actor,
             issuer=_issuer_pin(),
@@ -663,7 +671,7 @@ def arm_binding_grant(user_id: str, request: Request) -> JSONResponse:
         "user.binding_grant",
         action=target_id,
         grant_id=str(grant["id"]),
-        ttl_seconds=BINDING_GRANT_TTL_SECONDS,
+        ttl_seconds=_grant_ttl_seconds(),
     )
     return JSONResponse(content={"grant": _grant_payload(grant)}, status_code=201)
 
