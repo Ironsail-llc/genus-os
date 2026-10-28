@@ -1,7 +1,7 @@
 """
-Hub client — API client for programmaticresources.com.
+Hub client — API client for programmaticresources.io.
 
-Calls the programmaticresources.com API to search, download, and publish
+Calls the programmaticresources.io API to search, download, and publish
 agent template bundles.
 """
 
@@ -32,7 +32,7 @@ from robothor.templates.safety import (
 
 logger = logging.getLogger("robothor.hub")
 
-HUB_BASE_URL = os.getenv("PROGRAMMATIC_RESOURCES_URL", "https://programmaticresources.com")
+HUB_BASE_URL = os.getenv("PROGRAMMATIC_RESOURCES_URL", "https://programmaticresources.io")
 DEFAULT_TIMEOUT = 30.0
 MAX_RETRIES = 3
 RETRY_BACKOFF_BASE = 1.0  # seconds
@@ -337,7 +337,9 @@ class HubClient:
         # caller-owned root (or the platform temporary root).
         destination: Path
         if dest_dir is None:
-            destination = Path(tempfile.mkdtemp(prefix="robothor-hub-"))
+            # The platform temp root may sit behind a symlink (macOS: /var ->
+            # /private/var); resolve it so the containment checks see a real root.
+            destination = Path(tempfile.mkdtemp(prefix="robothor-hub-")).resolve(strict=True)
         else:
             parent = _prepare_destination_root(dest_dir)
             destination = Path(tempfile.mkdtemp(prefix=".robothor-hub-", dir=parent))

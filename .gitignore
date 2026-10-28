@@ -205,8 +205,10 @@ brain/.aider.chat.history.md
 
 # Personal business data (brain/memory/ covered above)
 
-# Claude Code artifacts
-.claude/
+# Claude Code artifacts. .claude/rules/ is tracked: it is the shared agent
+# instruction set CLAUDE.md loads (settings and local state stay ignored).
+**/.claude/*
+!/.claude/rules/
 .plan
 robothor.db
 # The bridge's local SQLite scratch DB, same class as robothor.db above: it is

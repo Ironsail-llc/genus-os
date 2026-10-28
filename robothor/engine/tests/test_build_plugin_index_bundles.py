@@ -80,7 +80,9 @@ def exported(tmp_path):
     return dist
 
 
-def _build(dist: Path, tmp_path: Path) -> tuple[int, str, Path]:
+def _build(
+    dist: Path, tmp_path: Path, *, env: dict[str, str] | None = None
+) -> tuple[int, str, Path]:
     key = _signing_key(tmp_path)
     out = tmp_path / "index.json"
     completed = subprocess.run(  # noqa: S603 - the script under test, with fixture paths
@@ -100,6 +102,7 @@ def _build(dist: Path, tmp_path: Path) -> tuple[int, str, Path]:
         capture_output=True,
         text=True,
         cwd=str(REPO_ROOT),
+        env=env,
         check=False,
     )
     return completed.returncode, completed.stdout + completed.stderr, out
@@ -118,6 +121,22 @@ def test_a_bundle_tarball_becomes_a_signed_agent_bundle_entry(exported, tmp_path
     assert entry["requires"]["plugins"] == ["genus-billing"]
     assert entry["artifacts"][0]["kind"] == "bundle"
     assert entry["artifacts"][0]["url"].endswith("agent-triage-bot-1.2.0.tar.gz")
+
+
+def test_a_bundle_builds_when_the_temp_dir_runs_through_a_symlink(exported, tmp_path):
+    """The default macOS TMPDIR sits under /var, a symlink to /private/var."""
+    import os
+
+    real = tmp_path / "real-tmp"
+    real.mkdir()
+    alias = tmp_path / "alias-tmp"
+    alias.symlink_to(real, target_is_directory=True)
+
+    code, output, out = _build(exported, tmp_path, env={**os.environ, "TMPDIR": str(alias)})
+
+    assert code == 0, output
+    entries = {e["name"]: e for e in json.loads(out.read_bytes())["plugins"]}
+    assert entries["triage-bot"]["kind"] == "agent-bundle"
 
 
 def test_the_index_it_writes_verifies_with_the_shipped_parser(exported, tmp_path):

@@ -867,7 +867,7 @@ def _cmd_agent_publish(args: argparse.Namespace) -> int:
         return 1
 
     print(f"Published: {bundle.get('name', '?')} ({bundle.get('slug', '?')})")
-    print(f"View at: https://programmaticresources.com/bundle/{bundle.get('slug', '')}")
+    print(f"View at: {hub.base_url}/bundle/{bundle.get('slug', '')}")
     return 0
 
 

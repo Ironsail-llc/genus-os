@@ -55,9 +55,10 @@ def test_assets_check_the_real_captured_source_identity(checkout):
         assets.verify(snapshot, root)
 
 
+@pytest.mark.parametrize("symlinked_tmp", [False, True])
 @pytest.mark.parametrize("replace_input", [False, True])
 def test_assets_verify_installed_service_origin_and_registry_identity(
-    checkout, installed, monkeypatch, replace_input
+    checkout, installed, monkeypatch, replace_input, symlinked_tmp, tmp_path
 ):
     import hashlib
     import importlib.util
@@ -88,6 +89,15 @@ def test_assets_verify_installed_service_origin_and_registry_identity(
     monkeypatch.setattr("importlib.metadata.distribution", lambda _: dist)
     monkeypatch.setattr("robothor.engine.services.get_service", lambda _: module.factory)
     assets = RuntimeAssets(SourceIdentity.capture(source), PluginBootIdentity.capture(lock))
+    if symlinked_tmp:
+        # The default macOS temp dir sits under /var, a symlink to /private/var.
+        import tempfile
+
+        real = tmp_path / "real-tmp"
+        real.mkdir()
+        alias = tmp_path / "alias-tmp"
+        alias.symlink_to(real, target_is_directory=True)
+        monkeypatch.setattr(tempfile, "tempdir", str(alias))
     if replace_input:
         from robothor.engine import runtime_assets
 
