@@ -162,8 +162,8 @@ old and has been tried fewer than three times; otherwise it goes to
 `<stream>:dlq`. A handler may therefore see an event twice and should be
 idempotent. Under HA (`ROBOTHOR_HA_LEADER_ENABLED`) the replicas share one
 consumer name, so nothing is replayed at start, and a crashed replica's
-entries stay pending. Both are
-documented with the other hook fields in `docs/agents/schema.yaml`.
+entries stay pending. `include_payload` and `requeue_if_busy` are documented
+with the other hook fields in `docs/agents/schema.yaml`.
 
 A workflow with a `hook` trigger gets the event as its run's `event` context
 (`type`, `stream`, `delivery_id`, the parsed `payload`, and `id` for webhook
