@@ -142,8 +142,12 @@ class TestReadFileRefuses:
     def _ctx(self, workspace: Path) -> ToolContext:
         return ToolContext(agent_id="agent-architect", workspace=str(workspace))
 
+    # A plain dotenv file (``.env``, ``robothor.env``) is no longer refused: it
+    # is returned with its credential values masked (GEN-42,
+    # test_masked_env_read.py). Every other secrets file still is.
+
     def test_a_secrets_file_is_refused_before_it_is_opened(self, tmp_path: Path) -> None:
-        env = tmp_path / ".env"
+        env = tmp_path / "secrets.env"
         env.write_text("ACME_API_KEY=Qx9v2LmT7pRz4Kd1wq\n")
         out = asyncio.run(_read_file({"path": str(env)}, self._ctx(tmp_path)))
         assert "error" in out
@@ -151,17 +155,24 @@ class TestReadFileRefuses:
         assert "Qx9v2LmT7pRz4Kd1wq" not in str(out)
         assert "secrets file" in out["error"]
 
+    def test_a_plain_dotenv_is_returned_masked(self, tmp_path: Path) -> None:
+        env = tmp_path / ".env"
+        env.write_text("ACME_API_KEY=Qx9v2LmT7pRz4Kd1wq\n")
+        out = asyncio.run(_read_file({"path": str(env)}, self._ctx(tmp_path)))
+        assert "Qx9v2LmT7pRz4Kd1wq" not in str(out)
+        assert out["content"] == "ACME_API_KEY=****d1wq\n"
+
     def test_a_relative_secrets_path_under_the_workspace_is_refused(self, tmp_path: Path) -> None:
         (tmp_path / "crm").mkdir()
-        (tmp_path / "crm" / ".env").write_text("X=1\n")
-        out = asyncio.run(_read_file({"path": "crm/.env"}, self._ctx(tmp_path)))
+        (tmp_path / "crm" / "credentials.json").write_text("{}\n")
+        out = asyncio.run(_read_file({"path": "crm/credentials.json"}, self._ctx(tmp_path)))
         assert "error" in out and "content" not in out
 
     def test_a_missing_secrets_file_is_still_refused_not_reported_missing(
         self, tmp_path: Path
     ) -> None:
         """The refusal must not leak whether the file exists."""
-        out = asyncio.run(_read_file({"path": str(tmp_path / "nope.env")}, self._ctx(tmp_path)))
+        out = asyncio.run(_read_file({"path": str(tmp_path / "nope.pem")}, self._ctx(tmp_path)))
         assert "secrets file" in out["error"]
 
     def test_an_ordinary_file_is_still_read(self, tmp_path: Path) -> None:

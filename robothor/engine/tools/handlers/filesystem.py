@@ -320,12 +320,58 @@ async def _search_files(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
     return await asyncio.to_thread(_run)
 
 
+#: A dotenv file larger than this is not an env file anyone wrote by hand.
+_MASKED_READ_MAX_BYTES = 1_000_000
+
+
+def _masked_dotenv_read(path: Any, ctx: ToolContext) -> dict[str, Any]:
+    """``read_file`` for a plain dotenv secrets path: keys shown, credentials masked.
+
+    Synchronous; the caller is already off the event loop. Anything the masker
+    cannot vouch for -- SOPS ciphertext, a body that is not ``KEY=VALUE``
+    lines, an oversized file -- is refused with the ordinary refusal text.
+    """
+    from robothor.engine.attachments import is_inbox_secret
+    from robothor.engine.env_masking import mask_dotenv
+    from robothor.engine.secret_paths import refusal_for
+
+    if is_inbox_secret(path, workspace=ctx.workspace or None):
+        return {"error": refusal_for(path)}
+    try:
+        if path.stat().st_size > _MASKED_READ_MAX_BYTES:
+            return {"error": refusal_for(path)}
+        text = path.read_text()
+    except Exception as e:
+        return {"error": f"Failed to read file: {e}"}
+    masked = mask_dotenv(text)
+    if masked is None:
+        return {
+            "error": refusal_for(path)
+            + " (It is not a plain KEY=VALUE file, so it cannot be shown masked.)"
+        }
+    return {
+        "content": masked[:50000],
+        "path": str(path),
+        "chars": len(masked),
+        "masked": True,
+        "note": (
+            "Secret values are masked as **** plus their last 4 characters. Use "
+            "config_get for a setting's effective value and source, and vault_get "
+            "for whether a credential is configured."
+        ),
+    }
+
+
 @_handler("read_file")
 async def _read_file(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from pathlib import Path
 
     def _run() -> dict[str, Any]:
-        from robothor.engine.secret_paths import is_secret_path, refusal_for
+        from robothor.engine.secret_paths import (
+            is_maskable_dotenv_path,
+            is_secret_path,
+            refusal_for,
+        )
 
         path = Path(args.get("path", "")).expanduser()
         if not path.is_absolute() and ctx.workspace:
@@ -333,8 +379,13 @@ async def _read_file(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         # Before touching the filesystem: the refusal must not reveal whether
         # the file exists, and a credential file is never opened for a model
         # (see robothor/engine/secret_paths.py for the live reads behind this).
+        # One exception: a plain dotenv file (the instance env file above all)
+        # is returned with every credential value masked, so the assistant can
+        # say what its own settings are (robothor/engine/env_masking.py).
         if is_secret_path(path):
-            return {"error": refusal_for(path)}
+            if not is_maskable_dotenv_path(path):
+                return {"error": refusal_for(path)}
+            return _masked_dotenv_read(path, ctx)
         # The same question for a file the OPERATOR sent over a channel.
         # `secret_paths` cannot answer it: the inbox stores a sanitised name and
         # `.env` sanitises to `env`, so the rules see nothing to object to. The
