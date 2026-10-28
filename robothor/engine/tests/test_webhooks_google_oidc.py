@@ -20,7 +20,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 AUDIENCE = "https://agent.example.com/api/webhooks/gmail"
-PUSH_SA = "push-sender@example.iam.gserviceaccount.com"
+PUSH_SA = "push-sender@example.com"
 
 YAML = textwrap.dedent(f"""\
     channels:
