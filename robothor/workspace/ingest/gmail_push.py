@@ -20,6 +20,9 @@ which reads everything the burst announced. The notification's ``historyId``
 is not used: the ingestor's saved cursor is the source of truth, so a lost or
 reordered push is caught up by the next one.
 
+Seen ids older than :data:`~robothor.workspace.ingest.state.SEEN_TTL` are
+purged at start and every ``PURGE_EVERY_SECONDS``, as on Microsoft 365.
+
 Leader-only, like the Microsoft 365 worker: with HA leader election on, only
 the scheduler leader watches, reads the stream and ingests. Off unless
 ``workspace_provider = google`` and ``gmail_push_enabled``.
@@ -35,6 +38,8 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Protocol
 
 from robothor.workspace.ingest.google import GmailHistoryApi, GmailHistoryIngestor
+from robothor.workspace.ingest.state import SEEN_TTL
+from robothor.workspace.ingest.worker import PURGE_EVERY_SECONDS
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -233,10 +238,17 @@ async def run(
             return timedelta(seconds=WATCH_RETRY_SECONDS)
         return timedelta(seconds=WATCH_RENEW_SECONDS)
 
+    async def purge() -> None:
+        try:
+            await store.purge_seen(tenant_id, now() - SEEN_TTL)
+        except Exception as exc:  # noqa: BLE001 - retried next interval
+            logger.warning("gmail push ingest purge deferred: %s", type(exc).__name__)
+
     coalescer = RoundCoalescer(one_round)
     server = asyncio.create_task(coalescer.serve(), name="gmail-push-rounds")
     started = False
     next_watch: datetime | None = None
+    next_purge: datetime | None = None
     done = 0
     try:
         while rounds is None or done < rounds:
@@ -248,6 +260,8 @@ async def run(
                 started = True
                 if topic:
                     next_watch = now() + await watch()
+                await purge()
+                next_purge = now() + timedelta(seconds=PURGE_EVERY_SECONDS)
                 try:
                     await one_round()  # the cursor exists before the first push is read
                 except Exception as exc:  # noqa: BLE001
@@ -263,6 +277,9 @@ async def run(
             if topic and next_watch is not None and now() >= next_watch:
                 next_watch = now() + await watch()
                 coalescer.trigger()  # a reconciliation round with each renewal
+            if next_purge is not None and now() >= next_purge:
+                await purge()
+                next_purge = now() + timedelta(seconds=PURGE_EVERY_SECONDS)
         await coalescer.settle()
     finally:
         server.cancel()
