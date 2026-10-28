@@ -1,3 +1,9 @@
+## [1.114.0](https://github.com/Ironsail-llc/genus-os/compare/v1.113.0...v1.114.0) (2026-10-28)
+
+### Features
+
+* **engine:** ship gws and Google Workspace creds (GEN-23) ([#729](https://github.com/Ironsail-llc/genus-os/issues/729)) ([baf133c](https://github.com/Ironsail-llc/genus-os/commit/baf133c3fc7405aa347e7471ef9b3d14b7933fcc)), closes [#726](https://github.com/Ironsail-llc/genus-os/issues/726) [#718](https://github.com/Ironsail-llc/genus-os/issues/718) [#720](https://github.com/Ironsail-llc/genus-os/issues/720) [#720](https://github.com/Ironsail-llc/genus-os/issues/720) [#721](https://github.com/Ironsail-llc/genus-os/issues/721)
+
 ## [1.113.0](https://github.com/Ironsail-llc/genus-os/compare/v1.112.0...v1.113.0) (2026-10-28)
 
 ### Features
