@@ -150,7 +150,11 @@ does. Because verification is the costly step, a `google_oidc` request is
 rate-limited first, and a bearer that is not a three-segment JWT is refused
 before any verification. Tokens are verified on a dedicated pool of four
 threads, and Google's signing certificates are reused for 30 minutes (fetched
-with a 5 second timeout). The body must be a Pub/Sub push envelope: `message.data` is
+with a 5 second timeout). Since the rate limit counts requests before they
+are verified, a flood of forged tokens can spend a channel's budget. Real
+pushes are then answered `429`, which Pub/Sub retries with backoff, and the
+Gmail ingest works from its history cursor, so the first push that gets
+through catches up on everything. The body must be a Pub/Sub push envelope: `message.data` is
 base64-decoded and, when it is a JSON object, its keys become the published
 payload (otherwise `{"data": "<text>"}`), with a `pubsub` object beside them
 (`message_id`, `publish_time`, `attributes`, `subscription`). A body that is
