@@ -2,9 +2,10 @@
 
 This step never retries a business action. Only a trusted provider verifier
 can settle a dispatched effect as applied or not applied. An uncertain effect
-for a tool with no verifier can never be read back, so once it is a day old
-the sweep records an unverified reconciliation (an audit entry, not evidence)
-instead of letting it wedge admission indefinitely.
+for a tool with no verifier can never be read back, so once it is older than
+``effects.UNCERTAIN_FENCE_WINDOW`` the sweep releases it as ``expired`` (an
+audit entry, not evidence, and not an operator decision) instead of letting it
+wedge admission indefinitely.
 """
 
 import logging
@@ -16,7 +17,7 @@ from robothor.engine.runtime import effects
 logger = logging.getLogger(__name__)
 
 SWEEP_ACTOR = "system:effect-sweep"
-UNVERIFIABLE_GRACE = "24 hours"
+UNVERIFIABLE_GRACE = effects.UNCERTAIN_FENCE_WINDOW
 
 
 def has_verifier(tool_name: str) -> bool:
@@ -25,9 +26,9 @@ def has_verifier(tool_name: str) -> bool:
 
 
 def reconcile_unverifiable(tenant_id: str) -> int:
-    """Attest day-old uncertain effects that no verifier could ever settle.
+    """Expire day-old uncertain effects that no verifier could ever settle.
 
-    Goal-owned effects are left alone (``attest`` refuses them): their family
+    Goal-owned effects are left alone (``expire`` refuses them): their family
     fence is reconciled by the goal machinery, not by elapsed time.
     """
     with tenant_scope(tenant_id), effects.get_connection() as conn, conn.cursor() as cur:
@@ -47,10 +48,10 @@ def reconcile_unverifiable(tenant_id: str) -> int:
             f"{tool_name} outcome unknown for over {UNVERIFIABLE_GRACE}; no readback "
             "verifier exists, released so later calls are not fenced indefinitely"
         )
-        if effects.attest(scope, identifier, actor=SWEEP_ACTOR, note=note):
+        if effects.expire(scope, identifier, actor=SWEEP_ACTOR, note=note):
             settled += 1
     if settled:
-        logger.info("Reconciled %d unverifiable uncertain effect(s)", settled)
+        logger.info("Expired %d unverifiable uncertain effect(s)", settled)
     return settled
 
 

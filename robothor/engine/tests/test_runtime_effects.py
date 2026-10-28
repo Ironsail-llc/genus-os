@@ -292,15 +292,64 @@ def _uncertain(ctx, tool, args, *, run="worker"):
     return row
 
 
-def test_unverifiable_uncertainty_does_not_fence_the_tool_across_requests(effect_db):
-    """No verifier can ever settle an uncertain ``exec``, so a bare same-tool
-    fence would refuse every later ``exec`` by that principal forever."""
+def _age(effect_db, row, interval):  # noqa: F811
+    with effect_db() as conn, conn.cursor() as cur:
+        cur.execute(
+            "UPDATE agent_runtime_effects SET updated_at=now()-%s::interval WHERE id=%s",
+            (interval, row["id"]),
+        )
+
+
+@pytest.mark.parametrize("tool", sorted(effects.HOST_LOCAL_TOOLS))
+def test_host_local_uncertainty_does_not_fence_the_tool_across_requests(effect_db, tool):  # noqa: F811
+    """No verifier can settle an uncertain ``exec``, and the agent can look at
+    the box itself, so a same-tool fence would only refuse every later ``exec``
+    by that principal until the sweep ran."""
     ctx = context()
-    _uncertain(ctx, "exec", {"command": "first"})
+    _uncertain(ctx, tool, {"command": "first"})
     later = replace(ctx, request_id="later")
-    assert effects.begin(later, "worker", "main", "exec", {"command": "second"})["state"] == (
+    assert effects.begin(later, "worker", "main", tool, {"command": "second"})["state"] == (
         "prepared"
     )
+
+
+@pytest.mark.parametrize("tool", ["gws_gmail_send", "gws_calendar_create", "update_person"])
+def test_outside_world_uncertainty_fences_the_tool_until_the_window_lapses(effect_db, tool):  # noqa: F811
+    """A timed-out send cannot be read back; a reworded "send that again" in a
+    new request must wait, but only for the bounded window, not for ever."""
+    ctx = context()
+    row = _uncertain(ctx, tool, {"body": "first wording"})
+    later = replace(ctx, request_id="later")
+    with pytest.raises(effects.EffectPendingError):
+        effects.begin(later, "worker", "main", tool, {"body": "reworded"})
+    _age(effect_db, row, "23 hours")
+    with pytest.raises(effects.EffectPendingError):
+        effects.begin(later, "worker", "main", tool, {"body": "reworded"})
+    _age(effect_db, row, "25 hours")
+    assert effects.begin(later, "worker", "main", tool, {"body": "reworded"})["state"] == (
+        "prepared"
+    )
+
+
+def test_lapsed_window_still_fences_the_identical_call(effect_db):  # noqa: F811
+    """Only the reworded-call fence is bounded; the same intent stays fenced."""
+    ctx = context()
+    row = _uncertain(ctx, "gws_gmail_send", {"body": "first"})
+    _age(effect_db, row, "25 hours")
+    with pytest.raises(effects.EffectPendingError):
+        effects.begin(
+            replace(ctx, request_id="later"), "worker", "main", "gws_gmail_send", {"body": "first"}
+        )
+
+
+def test_fence_window_is_the_sweep_threshold():
+    from robothor.engine.runtime import effect_recovery
+
+    assert effects.UNCERTAIN_FENCE_WINDOW == "24 hours"
+    assert effect_recovery.UNVERIFIABLE_GRACE is effects.UNCERTAIN_FENCE_WINDOW
+    assert not (effects.HOST_LOCAL_TOOLS & effects.READBACK_TOOLS)
+    assert {"exec", "execute_code", "browser", "write_file"} <= effects.HOST_LOCAL_TOOLS
+    assert "gws_gmail_send" not in effects.HOST_LOCAL_TOOLS
 
 
 def test_unverifiable_uncertainty_still_fences_its_own_request_and_identity(effect_db):
@@ -315,8 +364,10 @@ def test_unverifiable_uncertainty_still_fences_its_own_request_and_identity(effe
 
 
 def test_verifiable_uncertainty_keeps_the_cross_request_tool_fence(effect_db):
+    """A verifier settles these, so their fence is not bounded by age."""
     ctx = context()
-    _uncertain(ctx, "create_task", {"title": "first"})
+    row = _uncertain(ctx, "create_task", {"title": "first"})
+    _age(effect_db, row, "25 hours")
     with pytest.raises(effects.EffectPendingError):
         effects.begin(
             replace(ctx, request_id="later"), "worker", "main", "create_task", {"title": "second"}
