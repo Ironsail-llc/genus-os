@@ -24,10 +24,12 @@ const ERROR_MESSAGES: Record<string, string> = {
     "Cloudflare Access sign-in failed. Your identity was verified at the edge but the dashboard could not establish a session — check the bridge exchange and account binding.",
   CloudflareAccessUnavailable:
     "Cloudflare Access sign-in is not available for this request.",
-  // Auth.js reports any failure of the bridge exchange as `Configuration`. The
-  // usual cause is an account that is not set up for SSO yet, so say that.
+  // Auth.js reports every failure after the identity provider answers as
+  // `Configuration`: an account that is not set up for SSO yet, but also a
+  // secret mismatch or an unreachable bridge. The copy must not blame the
+  // account for what may be the server.
   Configuration:
-    "You signed in, but your account is not set up for sign-in yet. Ask your administrator to invite you again or to enable SSO for your address.",
+    "Your sign-in could not be completed. Your account may not be set up for SSO yet: ask your administrator to invite you again or to enable SSO for your address. If sign-in fails for everyone, the dashboard cannot reach its sign-in service.",
 };
 
 export default async function SignInPage({
