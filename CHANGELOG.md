@@ -1,3 +1,13 @@
+## [1.116.0](https://github.com/Ironsail-llc/genus-os/compare/v1.115.0...v1.116.0) (2026-10-28)
+
+### Features
+
+* **engine:** gmail push ingest via pub/sub (GEN-36) ([#734](https://github.com/Ironsail-llc/genus-os/issues/734)) ([873ae97](https://github.com/Ironsail-llc/genus-os/commit/873ae970ee4022edf7342943f6348e7fb2aa6f4e))
+
+### Bug Fixes
+
+* **engine:** log a template that renders empty, document bounded replay (GEN-36) ([#733](https://github.com/Ironsail-llc/genus-os/issues/733)) ([445b8a1](https://github.com/Ironsail-llc/genus-os/commit/445b8a1b19316863245728ed477675227a4f1308)), closes [#732](https://github.com/Ironsail-llc/genus-os/issues/732)
+
 ## [1.115.0](https://github.com/Ironsail-llc/genus-os/compare/v1.114.0...v1.115.0) (2026-10-28)
 
 ### Features
