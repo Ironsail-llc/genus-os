@@ -30,3 +30,15 @@ channels:
   #   event_type_field: type
   #   event_type_prefix: "platform."
   #   rate_limit_per_min: 120
+
+  # Google Cloud Pub/Sub push with authentication on (Gmail push ingest, see
+  # docs/event-bus.md "Gmail push"). No shared secret: the push's ID token is
+  # verified for this audience and service account. The Pub/Sub messageId is
+  # the delivery id; message.data is decoded into the payload.
+  # gmail:
+  #   stream: gmail                          # = ROBOTHOR_GMAIL_PUSH_STREAM
+  #   signature_scheme: google_oidc
+  #   oidc_audience: "https://agent.example.com/api/webhooks/gmail"
+  #   oidc_service_account: "gmail-push@example-project.iam.gserviceaccount.com"
+  #   event_type_prefix: "gmail.push"
+  #   rate_limit_per_min: 600
