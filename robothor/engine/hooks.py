@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import re
+import time
 from typing import TYPE_CHECKING, Any
 
 import yaml
@@ -48,6 +49,12 @@ MAX_IN_FLIGHT_EVENTS = 100
 # On stop, how long events in flight get to finish. The rest stay pending in
 # Redis and are replayed when the engine starts again.
 STOP_DRAIN_SECONDS = 20
+
+# What a start replays from this consumer's pending list: only entries younger
+# than this (older ones are stale) and delivered fewer times (a poison event
+# would otherwise come back on every start). Either way it is dead-lettered.
+REPLAY_MAX_AGE_SECONDS = 3600
+REPLAY_MAX_DELIVERIES = 3
 
 # Cap on the payload text an ``include_payload`` hook appends to its message.
 MAX_PAYLOAD_CHARS = 8000
@@ -276,24 +283,66 @@ class EventHooks:
     async def _replay_pending(
         self, redis_client: Any, group: str, consumer: str, streams: list[str]
     ) -> None:
-        """Re-handle the events this consumer read but never acknowledged (a restart or crash)."""
-        cursors = dict.fromkeys(streams, "0")
-        while cursors:
-            results = await redis_client.xreadgroup(group, consumer, dict(cursors), count=100)
-            done = set(cursors)
-            for stream_name, messages in results or []:
-                stream = stream_name.decode() if isinstance(stream_name, bytes) else stream_name
-                for msg_id, data in messages:
-                    cursors[stream] = msg_id.decode() if isinstance(msg_id, bytes) else msg_id
-                    done.discard(stream)
-                    if not data:
-                        # The entry was trimmed from the stream; nothing to replay.
-                        await redis_client.xack(stream, group, msg_id)
-                        continue
-                    logger.info("Replaying pending event %s on %s", msg_id, stream)
-                    await self._dispatch(stream, msg_id, data, redis_client, group)
-            for stream in done:
-                cursors.pop(stream, None)
+        """Re-handle recent events this consumer read but never acknowledged (a restart or crash).
+
+        Off under HA: replicas share the consumer name, so another live replica
+        may still hold these entries. Stale or repeatedly delivered entries are
+        dead-lettered instead of replayed.
+        """
+        from robothor.engine.leader import ha_leader_enabled
+
+        if ha_leader_enabled():
+            logger.info("HA enabled: pending hook events are not replayed at start")
+            return
+        now_ms = time.time() * 1000
+        for stream in streams:
+            low = "-"
+            while True:
+                entries = await redis_client.xpending_range(
+                    stream, group, min=low, max="+", count=100, consumername=consumer
+                )
+                if not entries:
+                    break
+                for entry in entries:
+                    msg_id = entry["message_id"]
+                    await self._replay_one(
+                        redis_client, stream, group, consumer, msg_id, entry, now_ms
+                    )
+                last = entries[-1]["message_id"]
+                low = "(" + (last.decode() if isinstance(last, bytes) else str(last))
+
+    async def _replay_one(
+        self,
+        redis_client: Any,
+        stream: str,
+        group: str,
+        consumer: str,
+        msg_id: Any,
+        entry: dict[str, Any],
+        now_ms: float,
+    ) -> None:
+        # Claiming it again returns its data and counts the delivery.
+        claimed = await redis_client.xclaim(
+            stream, group, consumer, min_idle_time=0, message_ids=[msg_id]
+        )
+        data = next((d for m, d in claimed or [] if d), None)
+        if not data:
+            await redis_client.xack(stream, group, msg_id)  # trimmed from the stream
+            return
+        text_id = msg_id.decode() if isinstance(msg_id, bytes) else str(msg_id)
+        age_s = (now_ms - int(text_id.split("-", 1)[0])) / 1000
+        if age_s > REPLAY_MAX_AGE_SECONDS or entry["times_delivered"] >= REPLAY_MAX_DELIVERIES:
+            decoded = {
+                (k.decode() if isinstance(k, bytes) else k): (
+                    v.decode() if isinstance(v, bytes) else v
+                )
+                for k, v in data.items()
+            }
+            await self._dead_letter(redis_client, stream, decoded, decoded.get("type", ""))
+            await redis_client.xack(stream, group, msg_id)
+            return
+        logger.info("Replaying pending event %s on %s", text_id, stream)
+        await self._dispatch(stream, msg_id, data, redis_client, group)
 
     async def _stop_in_flight(self, timeout: float = STOP_DRAIN_SECONDS) -> None:
         """Give events in flight ``timeout`` seconds, then cancel the rest (they stay pending)."""
