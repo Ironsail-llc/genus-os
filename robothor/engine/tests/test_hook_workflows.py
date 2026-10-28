@@ -504,4 +504,7 @@ class TestAbsentFieldIsVisible:
         context = {"steps": {}, "event": {"payload": {"data": {}}}}
         with caplog.at_level("DEBUG", logger="robothor.engine.workflow"):
             assert _render_template("{{ event.payload.data.message.id }}", context) == ""
-        assert any(r.levelname == "DEBUG" and "message" in r.getMessage() for r in caplog.records)
+        assert any(
+            r.levelname == "DEBUG" and "event.payload.data.message.id" in r.getMessage()
+            for r in caplog.records
+        )
