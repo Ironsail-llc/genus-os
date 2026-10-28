@@ -67,7 +67,7 @@ def test_watch_sends_topic_and_labels_in_the_body(rec: Recorder) -> None:
     assert body == {
         "topicName": "projects/example-project/topics/gmail",
         "labelIds": ["INBOX"],
-        "labelFilterBehavior": "INCLUDE",
+        "labelFilterBehavior": "include",  # the gws CLI validates the enum in lowercase
     }
 
 
