@@ -52,14 +52,17 @@ class EffectScope(Protocol):
 # begin() needs it and effect_recovery imports this module.
 READBACK_TOOLS: frozenset[str] = frozenset({"create_task", "create_note"})
 
-# Tools that act only on this host, where the agent can check the outcome
-# itself: list the directory, read the file back, look at the page again. A
-# reworded retry of one of these is the agent recovering, not a duplicate that
-# reaches a person, so an uncertain call never fences later calls of the tool
-# across requests (its own request and identical arguments stay fenced). Named
-# here rather than taken from benchmark_sandbox.EXTERNAL_SIDE_EFFECT_TOOLS:
-# that set is the benchmark's deny-list and deliberately includes exec and
-# file writes, the opposite classification.
+# Tools the agent drives directly and whose result it can usually check itself:
+# list the directory, read the file back, look at the page again. They are NOT
+# confined to this host -- a shell command can run `curl -X POST` or `gh pr
+# create`, and the browser can submit a form -- so exempting them is a trade-off,
+# not a proof of safety: an uncertain call never fences a reworded call of the
+# tool in a later request (its own request and identical arguments stay
+# fenced), and a duplicate outside effect is accepted to keep the assistant's
+# basic tools usable. Fencing them for the full window wedged an operator's
+# shell for two weeks. Named here rather than taken from
+# benchmark_sandbox.EXTERNAL_SIDE_EFFECT_TOOLS: that set is the benchmark's
+# deny-list and deliberately includes exec and file writes.
 HOST_LOCAL_TOOLS: frozenset[str] = frozenset({"exec", "execute_code", "browser", "write_file"})
 
 # How long an uncertain effect from a tool with no verifier fences a reworded

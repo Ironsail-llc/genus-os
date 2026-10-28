@@ -117,6 +117,19 @@ def value_is_secret(value: str) -> bool:
     return redact(value) != value or redact_secrets(value) != value
 
 
+#: A right-hand side split into its value and a same-line ``# comment``. A
+#: ``#`` only starts a comment after whitespace, as in dotenv.
+_INLINE_COMMENT = re.compile(r"""^(?P<val>"[^"]*"|'[^']*'|.*?)(?P<tail>\s+#.*)?$""", re.DOTALL)
+
+
+def _split_inline_comment(raw: str) -> tuple[str, bool]:
+    """``(value part, had a comment)`` for a raw right-hand side."""
+    match = _INLINE_COMMENT.match(raw.strip())
+    if match is None:  # pragma: no cover - the pattern matches any string
+        return raw, False
+    return match.group("val"), bool(match.group("tail"))
+
+
 def _unquote(raw: str) -> tuple[str, str]:
     """``(value, quote)`` for a raw right-hand side; an unquoted one is stripped."""
     text = raw.strip()
@@ -183,8 +196,10 @@ def mask_dotenv(text: str) -> str | None:
         if match is None:
             return None
         key = match.group("key")
-        raw = match.group("val")
+        raw, commented = _split_inline_comment(match.group("val"))
         value, quote = _unquote(raw)
+        # A same-line comment is free text, hidden like a whole-line one.
+        suffix = f" {COMMENT_PLACEHOLDER}" if commented else ""
         opening = raw.strip()[:1]
         if not quote and opening and opening in "\"'":
             # An opening quote with no closing one: a multi-line value whose
@@ -192,7 +207,11 @@ def mask_dotenv(text: str) -> str | None:
             return None
         if key_is_secret(key) or value_is_secret(value):
             shown = f"{quote}{mask_value(value)}{quote}" if value else raw.strip()
-            out.append(f"{match.group('lead')}{key}{match.group('sep')}{shown}{ending}")
+            out.append(f"{match.group('lead')}{key}{match.group('sep')}{shown}{suffix}{ending}")
+        elif commented:
+            out.append(
+                f"{match.group('lead')}{key}{match.group('sep')}{raw.strip()}{suffix}{ending}"
+            )
         else:
             out.append(line)
     return "".join(out)

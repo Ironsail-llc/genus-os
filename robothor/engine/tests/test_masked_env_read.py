@@ -355,3 +355,36 @@ class TestQuotedCommentProse:
         content = _read(f, tmp_path)["content"]
         assert "hunter2" not in content
         assert COMMENT_PLACEHOLDER in content
+
+
+class TestInlineComments:
+    """``KEY=value  # note`` is a comment on the same line; it is free text too."""
+
+    def _content(self, tmp_path: Path, body: str) -> str:
+        f = tmp_path / ".env"
+        f.write_text(body)
+        return _read(f, tmp_path)["content"]
+
+    def test_an_inline_comment_on_a_plain_setting_is_hidden(self, tmp_path: Path) -> None:
+        from robothor.engine.env_masking import COMMENT_PLACEHOLDER
+
+        content = self._content(tmp_path, "ROBOTHOR_LOG_LEVEL=INFO  # db pw is hunter2-prod\n")
+        assert "hunter2" not in content
+        assert content == f"ROBOTHOR_LOG_LEVEL=INFO {COMMENT_PLACEHOLDER}\n"
+
+    def test_an_inline_comment_after_a_quoted_value_is_hidden(self, tmp_path: Path) -> None:
+        from robothor.engine.env_masking import COMMENT_PLACEHOLDER
+
+        content = self._content(tmp_path, 'ROBOTHOR_LOG_LEVEL="INFO" # rotate hunter2\n')
+        assert "hunter2" not in content
+        assert content == f'ROBOTHOR_LOG_LEVEL="INFO" {COMMENT_PLACEHOLDER}\n'
+
+    def test_a_secret_with_an_inline_comment_is_masked_and_hidden(self, tmp_path: Path) -> None:
+        content = self._content(tmp_path, "API_TOKEN=abcdefghijklmnop1234 # old one was zz9\n")
+        assert "abcdefghijklmnop" not in content
+        assert "zz9" not in content
+        assert "1234" in content
+
+    def test_a_hash_inside_a_value_is_not_a_comment(self, tmp_path: Path) -> None:
+        content = self._content(tmp_path, "ROBOTHOR_CHANNEL=room#5\n")
+        assert content == "ROBOTHOR_CHANNEL=room#5\n"

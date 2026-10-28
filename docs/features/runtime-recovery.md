@@ -26,9 +26,11 @@ reworded call of the same tool in a later request depends on the tool:
 
 - **CRM tasks and notes** have a readback verifier, which settles the action
   by reading the stored record, so the block lasts until that happens.
-- **Shell commands, code runs, the browser and file writes** act only on the
-  host, where the agent can check the result itself, so they do not block
-  later calls.
+- **Shell commands, code runs, the browser and file writes** do not block
+  later calls. The agent can usually check their result itself, but they are
+  not confined to the host: a shell command or a browser form can reach the
+  outside world. Accepting a possible duplicate here is a deliberate trade-off
+  that keeps the assistant's basic tools usable.
 - **Every other tool** (mail, calendar, messages, other CRM writes) cannot be
   read back. A reworded "send that again" waits for reconciliation, but for
   24 hours at most. After that, housekeeping releases the action as
