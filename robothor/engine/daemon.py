@@ -622,10 +622,11 @@ def _cleanup_stale_runs(tenant_id: str | None = None) -> int:
 
 
 def _background_workers(tenant_id: str) -> list[asyncio.Task[Any]]:
-    """Calendar write recovery, plus the Microsoft 365 ingest.
+    """Calendar write recovery, plus the workspace ingest.
 
-    The ingest starts no task at all unless workspace_provider=microsoft365: a
-    Google instance's own sync scripts publish email.new / calendar.*.
+    The ingest starts no task unless workspace_provider=microsoft365, or the
+    provider is google with Gmail push switched on: otherwise a Google
+    instance's own sync scripts publish email.new / calendar.*.
     """
     from robothor.engine.calendar_recovery_worker import run as recover_calendar
 
@@ -637,7 +638,7 @@ def _background_workers(tenant_id: str) -> list[asyncio.Task[Any]]:
 
         tasks.extend(ingest_worker.start_tasks(tenant_id))
     except Exception as e:  # noqa: BLE001 - ingest must never keep the engine down
-        logger.warning("Microsoft 365 ingest not started: %s", type(e).__name__)
+        logger.warning("Workspace ingest not started: %s", type(e).__name__)
     return tasks
 
 

@@ -3550,6 +3550,38 @@ class WorkspaceSettings(SettingsGroup):
         "Has no effect on google, where the instance's own sync scripts publish these events.",
         since="unreleased",
     )
+    gmail_push_enabled: bool = declare(
+        False,
+        "ROBOTHOR_GMAIL_PUSH_ENABLED",
+        "Ingest the assistant's Gmail inbox on push when the workspace provider is google: a "
+        "Pub/Sub push to the google_oidc webhook channel wakes one Gmail history round, which "
+        "publishes email.new for each new unread inbox message, merges it into the email log "
+        "and logs it to the CRM. Turn off the instance sync script's mail half first, or every "
+        "message is published twice. Has no effect on microsoft365.",
+        since="unreleased",
+    )
+    gmail_push_mailbox: str = declare(
+        "",
+        "ROBOTHOR_GMAIL_PUSH_MAILBOX",
+        "The Gmail address gws is signed in as, when Gmail push is on. Pushes for any other "
+        "address are ignored. Empty means the address Gmail's profile reports at start.",
+        since="unreleased",
+    )
+    gmail_push_topic: str = declare(
+        "",
+        "ROBOTHOR_GMAIL_PUSH_TOPIC",
+        "The Pub/Sub topic Gmail publishes inbox changes to (projects/<project>/topics/<topic>), "
+        "when Gmail push is on. The engine calls Gmail's users.watch on it at start and daily. "
+        "Empty means the watch is renewed elsewhere and the engine only consumes pushes.",
+        since="unreleased",
+    )
+    gmail_push_stream: str = declare(
+        "gmail",
+        "ROBOTHOR_GMAIL_PUSH_STREAM",
+        "The event-bus stream the google_oidc webhook channel for Gmail publishes to (its "
+        "`stream:` in webhooks.yaml). The Gmail push consumer reads it.",
+        since="unreleased",
+    )
     workspace_email_log_path: str = declare(
         "",
         "ROBOTHOR_EMAIL_LOG_PATH",

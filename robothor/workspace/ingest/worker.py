@@ -274,11 +274,17 @@ async def run(
 
 
 def start_tasks(tenant_id: str) -> list[asyncio.Task[None]]:
-    """The daemon's ingest tasks: one on microsoft365, none on any other provider.
+    """The daemon's ingest tasks: one on microsoft365, one on google with Gmail push on.
 
     A daemon subsystem that returns ends the daemon, so the disabled case
-    starts no task rather than one that returns at once.
+    starts no task rather than one that returns at once. Gmail push
+    (:mod:`~robothor.workspace.ingest.gmail_push`) is off by default: a Google
+    instance's own sync scripts publish ``email.new`` until it is switched on.
     """
-    if not ingest_enabled():
-        return []
-    return [asyncio.create_task(run(tenant_id), name="m365-ingest")]
+    if ingest_enabled():
+        return [asyncio.create_task(run(tenant_id), name="m365-ingest")]
+    from robothor.workspace.ingest import gmail_push
+
+    if gmail_push.push_enabled():
+        return [asyncio.create_task(gmail_push.run_from_settings(tenant_id), name="gmail-push")]
+    return []
