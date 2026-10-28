@@ -19,7 +19,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { UsersPage } from "../users-page";
+import { signInInstructions, UsersPage } from "../users-page";
 
 const ROLES = {
   roles: [
@@ -60,6 +60,9 @@ const MEMBER = {
 
 const USERS = { users: [OWNER, MEMBER], count: 2 };
 
+/** `GET /api/auth/methods` on an instance with one identity provider. */
+const METHODS = { local: true, oidc: ["https://idp.example.com"], cloudflare_access: false };
+
 interface Call {
   url: string;
   method: string;
@@ -72,7 +75,11 @@ interface Bridge {
   reply: (fragment: string, status: number, body: unknown, method?: string) => void;
 }
 
-function mockBridge(users: unknown = USERS, roles: unknown = ROLES): Bridge {
+function mockBridge(
+  users: unknown = USERS,
+  roles: unknown = ROLES,
+  methods: unknown = METHODS
+): Bridge {
   const calls: Call[] = [];
   const overrides: Array<{ fragment: string; method?: string; status: number; body: unknown }> = [];
 
@@ -89,6 +96,7 @@ function mockBridge(users: unknown = USERS, roles: unknown = ROLES): Bridge {
     if (override) return answer(override.status, override.body);
 
     if (url.includes("/api/auth/roles")) return answer(200, roles);
+    if (url.includes("/api/auth/methods")) return answer(200, methods);
     if (url.includes("/binding-grant")) {
       return answer(201, {
         grant: {
@@ -150,6 +158,10 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
+
+function ssoBox(): HTMLInputElement {
+  return screen.getByTestId("invite-sso") as HTMLInputElement;
+}
 
 async function renderPage(props: Partial<React.ComponentProps<typeof UsersPage>> = {}) {
   render(<UsersPage visible role="owner" {...props} />);
@@ -216,7 +228,7 @@ describe("UsersPage", () => {
     });
     fireEvent.change(screen.getByTestId("invite-display-name"), { target: { value: "Carol" } });
     fireEvent.change(screen.getByTestId("invite-role"), { target: { value: "admin" } });
-    fireEvent.click(screen.getByTestId("invite-sso"));
+    await waitFor(() => expect(ssoBox().checked).toBe(true));
     fireEvent.click(screen.getByTestId("invite-submit"));
 
     await waitFor(() => expect(callsTo(bridge.calls, "/api/users")).toHaveLength(1));
@@ -236,10 +248,11 @@ describe("UsersPage", () => {
     fireEvent.change(screen.getByTestId("invite-email"), {
       target: { value: "carol@example.com" },
     });
-    fireEvent.click(screen.getByTestId("invite-sso"));
+    await waitFor(() => expect(ssoBox().checked).toBe(true));
     fireEvent.click(screen.getByTestId("invite-submit"));
 
     const grant = await screen.findByTestId("invite-grant");
+    // The issuer is a fact for the operator, not a place to send the invitee.
     expect(grant.textContent).toContain("https://idp.example.com");
     expect(grant.textContent).toContain("carol@example.com");
     expect(grant.textContent).toMatch(/sign in/i);
@@ -260,11 +273,71 @@ describe("UsersPage", () => {
     fireEvent.change(screen.getByTestId("invite-email"), {
       target: { value: "carol@example.com" },
     });
+    await waitFor(() => expect(ssoBox().checked).toBe(true));
+    fireEvent.click(screen.getByTestId("invite-sso"));
     fireEvent.click(screen.getByTestId("invite-submit"));
 
     const note = await screen.findByTestId("invite-created");
     expect(note.textContent).toContain("genus user set-password");
     expect(screen.queryByTestId("invite-grant")).toBeNull();
+  });
+
+  it("invites by SSO by default when the instance has an identity provider", async () => {
+    const bridge = mockBridge();
+    await renderPage();
+
+    fireEvent.click(screen.getByTestId("users-invite-open"));
+    fireEvent.change(screen.getByTestId("invite-email"), {
+      target: { value: "carol@example.com" },
+    });
+    await waitFor(() => expect(ssoBox().checked).toBe(true));
+    fireEvent.click(screen.getByTestId("invite-submit"));
+
+    await waitFor(() => expect(callsTo(bridge.calls, "/api/users")).toHaveLength(1));
+    expect(callsTo(bridge.calls, "/api/users")[0].body).toMatchObject({ sso: true });
+
+    // The next invite starts from the same default, not from a cleared box.
+    await screen.findByTestId("invite-grant");
+    fireEvent.click(screen.getByTestId("users-invite-open"));
+    await waitFor(() => expect(ssoBox().checked).toBe(true));
+  });
+
+  it("does not default to SSO on an instance without an identity provider", async () => {
+    const bridge = mockBridge(USERS, ROLES, { local: true, oidc: [], cloudflare_access: false });
+    await renderPage();
+
+    fireEvent.click(screen.getByTestId("users-invite-open"));
+    await waitFor(() => expect(callsTo(bridge.calls, "/api/auth/methods", "GET")).toHaveLength(1));
+    expect(ssoBox().checked).toBe(false);
+  });
+
+  it("keeps the operator's own choice when the sign-in methods arrive late", async () => {
+    mockBridge();
+    render(<UsersPage visible role="owner" />);
+
+    fireEvent.click(screen.getByTestId("users-invite-open"));
+    fireEvent.click(screen.getByTestId("invite-sso"));
+    fireEvent.click(screen.getByTestId("invite-sso"));
+    const chosen = ssoBox().checked;
+    await screen.findByTestId(`user-row-${MEMBER.id}`);
+    expect(ssoBox().checked).toBe(chosen);
+  });
+
+  it("tells the invitee to sign in on this dashboard, not at the identity provider's address", () => {
+    const text = signInInstructions(
+      "carol@example.com",
+      {
+        id: "55555555-5555-4555-8555-555555555555",
+        expires_at: "2026-06-15T13:00:00+00:00",
+        issuer: "https://idp.example.com",
+      },
+      "https://genus.example.com"
+    );
+    expect(text).toContain("https://genus.example.com");
+    expect(text).toMatch(/sign in with sso/i);
+    expect(text).toContain("carol@example.com");
+    // The issuer URL serves its realm's metadata, not a sign-in page.
+    expect(text).not.toContain("https://idp.example.com");
   });
 
   it("renders a duplicate-address refusal in the bridge's own words", async () => {
