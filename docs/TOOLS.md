@@ -1168,14 +1168,20 @@ as `genus config` and the dashboard, so every surface gives the same answer.
 **Which to use.** For "what is X set to and why", use `config_get`. Use
 `read_file` on the env file only to see the file itself. A plain dotenv
 file (`.env`, `.env.local`, `robothor.env`, `connectors.env`, and the instance
-env file `ROBOTHOR_ENV_FILE`) is no longer refused. It comes back with every
+env file `ROBOTHOR_ENV_FILE`) is no longer refused to the owner: a verified
+owner identity in the run's own tenant, outside a benchmark run, the same
+rule as `config_get`. Every other caller (sub-agents, cron and service runs,
+other roles, benchmarks) still gets the refusal. For the owner it comes back with every
 key and every non-secret value visible, and every secret value masked as
 `****` plus its last four characters, or `****` alone for a short value. A
 value counts as secret when its key says so (a declared secret setting, or
 a name holding `TOKEN`, `SECRET`, `PASSWORD`, `KEY`, `AUTH`, `COOKIE`,
 `PRIVATE`, `DSN` …) or when the value looks like a credential (vendor token
 shapes, a URL carrying `user:password@`). These checks use the shared
-redactors. SOPS-encrypted files, `secrets*` files, key files (`*.pem`,
+redactors. A comment is shown only when it is a commented-out `KEY=VALUE`
+line, masked by the same rules; any other comment text is replaced by
+`# [comment hidden]`, since free text can hold a credential no rule
+recognises. SOPS-encrypted files, `secrets*` files, key files (`*.pem`,
 `id_rsa` …), files under secret directories, and any body that is not plain
 `KEY=VALUE` lines are still refused. `exec` checks are unchanged:
 `cat robothor.env` is still refused.

@@ -142,9 +142,10 @@ class TestReadFileRefuses:
     def _ctx(self, workspace: Path) -> ToolContext:
         return ToolContext(agent_id="agent-architect", workspace=str(workspace))
 
-    # A plain dotenv file (``.env``, ``robothor.env``) is no longer refused: it
-    # is returned with its credential values masked (GEN-42,
-    # test_masked_env_read.py). Every other secrets file still is.
+    # A plain dotenv file (``.env``, ``robothor.env``) is no longer refused to
+    # the verified owner: it is returned with its credential values masked
+    # (GEN-42, test_masked_env_read.py). Every other caller, and every other
+    # secrets file, is still refused.
 
     def test_a_secrets_file_is_refused_before_it_is_opened(self, tmp_path: Path) -> None:
         env = tmp_path / "secrets.env"
@@ -155,10 +156,26 @@ class TestReadFileRefuses:
         assert "Qx9v2LmT7pRz4Kd1wq" not in str(out)
         assert "secrets file" in out["error"]
 
-    def test_a_plain_dotenv_is_returned_masked(self, tmp_path: Path) -> None:
+    def test_a_plain_dotenv_is_refused_to_a_non_owner(self, tmp_path: Path) -> None:
         env = tmp_path / ".env"
         env.write_text("ACME_API_KEY=Qx9v2LmT7pRz4Kd1wq\n")
         out = asyncio.run(_read_file({"path": str(env)}, self._ctx(tmp_path)))
+        assert "content" not in out
+        assert "Qx9v2LmT7pRz4Kd1wq" not in str(out)
+        assert "secrets file" in out["error"]
+
+    def test_a_plain_dotenv_is_returned_masked_to_the_owner(self, tmp_path: Path) -> None:
+        from robothor.identity import IdentityContext
+
+        env = tmp_path / ".env"
+        env.write_text("ACME_API_KEY=Qx9v2LmT7pRz4Kd1wq\n")
+        owner = IdentityContext(
+            tenant_id="test", channel="telegram", identifier="owner", verified=True, role="owner"
+        )
+        ctx = ToolContext(
+            agent_id="main", workspace=str(tmp_path), tenant_id="test", identity=owner
+        )
+        out = asyncio.run(_read_file({"path": str(env)}, ctx))
         assert "Qx9v2LmT7pRz4Kd1wq" not in str(out)
         assert out["content"] == "ACME_API_KEY=****d1wq\n"
 

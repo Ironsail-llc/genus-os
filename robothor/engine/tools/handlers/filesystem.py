@@ -380,10 +380,15 @@ async def _read_file(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         # the file exists, and a credential file is never opened for a model
         # (see robothor/engine/secret_paths.py for the live reads behind this).
         # One exception: a plain dotenv file (the instance env file above all)
-        # is returned with every credential value masked, so the assistant can
-        # say what its own settings are (robothor/engine/env_masking.py).
+        # is returned to the verified OWNER with every credential value masked,
+        # so the operator's assistant can say what its own settings are
+        # (robothor/engine/env_masking.py). The same owner rule as config_get:
+        # every other caller -- sub-agents, cron and service runs, other roles,
+        # benchmarks -- gets the plain refusal, as before GEN-42.
         if is_secret_path(path):
-            if not is_maskable_dotenv_path(path):
+            from robothor.engine.owner_gate import is_verified_owner
+
+            if not is_maskable_dotenv_path(path) or not is_verified_owner(ctx):
                 return {"error": refusal_for(path)}
             return _masked_dotenv_read(path, ctx)
         # The same question for a file the OPERATOR sent over a channel.

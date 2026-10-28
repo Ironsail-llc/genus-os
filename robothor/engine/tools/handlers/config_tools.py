@@ -60,14 +60,9 @@ def _handler(name: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
 
 def _owner_denial(ctx: ToolContext, tool: str) -> dict[str, Any] | None:
     """``None`` for the verified owner, else the refusal. Fails closed."""
-    identity = getattr(ctx, "identity", None)
-    if (
-        not getattr(ctx, "is_benchmark", False)
-        and identity is not None
-        and identity.verified
-        and identity.role == "owner"
-        and identity.tenant_id == ctx.tenant_id
-    ):
+    from robothor.engine.owner_gate import is_verified_owner
+
+    if is_verified_owner(ctx):
         return None
     return {
         "error": (
@@ -231,7 +226,9 @@ async def _set_apply(row: dict[str, Any], value: str, ctx: ToolContext) -> dict[
             ),
             "error_type": "host_exec_required",
         }
-    command = shlex.join(["genus", "config", "set", "--apply", "--json", row["env"], value])
+    # ``--`` ends the options: a value such as ``--fast`` or ``-x`` must reach
+    # argparse as the positional value, not as an unknown flag.
+    command = shlex.join(["genus", "config", "set", "--apply", "--json", "--", row["env"], value])
     result = await host_execution.execute(ctx, command, _APPLY_TIMEOUT, {})
     if result.get("error") and "stdout" not in result:
         return {"error": f"apply failed: {result['error']}", "key": row["env"]}

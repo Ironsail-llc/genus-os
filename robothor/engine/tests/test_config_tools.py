@@ -312,10 +312,40 @@ class TestConfigSetApply:
         assert out["applied"] is True
         assert out["restart_scheduled"] == ["genus-restart-1"]
         assert seen["command"] == (
-            "genus config set --apply --json ROBOTHOR_MAX_CONCURRENT_AGENTS 5"
+            "genus config set --apply --json -- ROBOTHOR_MAX_CONCURRENT_AGENTS 5"
         )
         # The engine did not write anything itself; the host did.
         assert not _config_path(tmp_path).exists()
+
+    def test_a_value_starting_with_a_dash_reaches_the_cli_as_a_value(self, monkeypatch):
+        """``--`` ends the options, so argparse cannot read ``--fast`` as a flag."""
+        import shlex
+
+        from robothor.cli import _build_parser
+        from robothor.engine import host_execution
+        from robothor.settings import operator
+
+        seen: dict = {}
+
+        async def fake_execute(ctx, command, timeout, env):
+            seen["command"] = command
+            return {"stdout": json.dumps({"applied": True, "errors": []}), "exit_code": 0}
+
+        monkeypatch.setattr(operator, "validate", lambda row, value: value)
+        monkeypatch.setattr(host_execution, "socket_path", lambda: "/run/x.sock")
+        monkeypatch.setattr(host_execution, "eligible", lambda ctx: True)
+        monkeypatch.setattr(host_execution, "execute", fake_execute)
+        out = _call(
+            "config_set",
+            {"key": "ROBOTHOR_MAX_CONCURRENT_AGENTS", "value": "--fast", "apply": True},
+        )
+        assert out["success"] is True, out
+        argv = shlex.split(seen["command"])
+        assert argv[0] == "genus"
+        parsed = _build_parser().parse_args(argv[1:])
+        assert parsed.name == "ROBOTHOR_MAX_CONCURRENT_AGENTS"
+        assert parsed.value == "--fast"
+        assert parsed.apply is True and parsed.json is True
 
     def test_apply_reports_host_errors(self, monkeypatch):
         from robothor.engine import host_execution

@@ -18,8 +18,10 @@ import pytest
 if TYPE_CHECKING:
     from pathlib import Path
 
+from robothor.constants import DEFAULT_TENANT
 from robothor.engine.tools.dispatch import ToolContext
 from robothor.engine.tools.handlers.filesystem import HANDLERS
+from robothor.identity import IdentityContext
 
 _read_file = HANDLERS["read_file"]
 
@@ -29,8 +31,23 @@ FAKE_PW = "Zr8qLm2Vx7Tn4Kp9"
 FAKE_DSN_PW = "s3cr3tPassw0rdXyz"
 
 
-def _ctx(workspace: Path) -> ToolContext:
-    return ToolContext(agent_id="main", workspace=str(workspace))
+def _owner_identity(tenant_id: str = DEFAULT_TENANT, **overrides) -> IdentityContext:
+    fields = {
+        "tenant_id": tenant_id,
+        "channel": "telegram",
+        "identifier": "owner",
+        "verified": True,
+        "role": "owner",
+    }
+    fields.update(overrides)
+    return IdentityContext(**fields)
+
+
+def _ctx(workspace: Path, **overrides) -> ToolContext:
+    """The owner's own run: the only caller the masked read is for."""
+    fields = {"agent_id": "main", "workspace": str(workspace), "identity": _owner_identity()}
+    fields.update(overrides)
+    return ToolContext(**fields)
 
 
 def _read(path: Path, workspace: Path) -> dict:
@@ -118,6 +135,95 @@ class TestMaskedDotenvRead:
         content = _read(f, tmp_path)["content"]
         assert FAKE_GH not in content
         assert "X=1" in content
+
+
+class TestOwnerOnly:
+    """The masked view is the operator's, exactly like ``config_get``.
+
+    ``read_file`` is open to every role with a ``*`` allow (service, user), so
+    without this gate every sub-agent, cron run and benchmark run would get
+    every key, every non-secret value and the tail of every secret.
+    """
+
+    def _assert_refused(self, out: dict, path: Path) -> None:
+        from robothor.engine.secret_paths import refusal_for
+
+        assert "content" not in out
+        assert out == {"error": refusal_for(path)}
+
+    def test_the_owner_gets_the_masked_content(self, env_file: Path, tmp_path: Path) -> None:
+        out = _read(env_file, tmp_path)
+        assert out.get("masked") is True
+        assert "ROBOTHOR_LOG_LEVEL=INFO" in out["content"]
+
+    def test_no_identity_is_refused(self, env_file: Path, tmp_path: Path) -> None:
+        out = asyncio.run(_read_file({"path": str(env_file)}, _ctx(tmp_path, identity=None)))
+        self._assert_refused(out, env_file)
+
+    def test_a_non_owner_is_refused(self, env_file: Path, tmp_path: Path) -> None:
+        ctx = _ctx(tmp_path, identity=_owner_identity(role="member"))
+        self._assert_refused(asyncio.run(_read_file({"path": str(env_file)}, ctx)), env_file)
+
+    def test_an_unverified_owner_claim_is_refused(self, env_file: Path, tmp_path: Path) -> None:
+        ctx = _ctx(tmp_path, identity=_owner_identity(verified=False))
+        self._assert_refused(asyncio.run(_read_file({"path": str(env_file)}, ctx)), env_file)
+
+    def test_an_owner_of_another_tenant_is_refused(self, env_file: Path, tmp_path: Path) -> None:
+        ctx = _ctx(tmp_path, identity=_owner_identity(tenant_id="elsewhere"))
+        self._assert_refused(asyncio.run(_read_file({"path": str(env_file)}, ctx)), env_file)
+
+    def test_a_benchmark_run_is_refused(self, env_file: Path, tmp_path: Path) -> None:
+        ctx = _ctx(tmp_path, is_benchmark=True)
+        self._assert_refused(asyncio.run(_read_file({"path": str(env_file)}, ctx)), env_file)
+
+    def test_the_refusal_does_not_reveal_whether_the_file_exists(self, tmp_path: Path) -> None:
+        missing = tmp_path / "robothor.env"
+        out = asyncio.run(_read_file({"path": str(missing)}, _ctx(tmp_path, identity=None)))
+        self._assert_refused(out, missing)
+
+
+class TestCommentScrub:
+    """A comment is free text, and free text is where operators leave passwords.
+
+    Only a comment that is a commented-out ``KEY=VALUE`` assignment is shown,
+    masked like a value; any other comment text is replaced by a placeholder.
+    """
+
+    def _content(self, tmp_path: Path, body: str) -> str:
+        f = tmp_path / ".env"
+        f.write_text(body)
+        return _read(f, tmp_path)["content"]
+
+    def test_a_free_text_comment_is_hidden(self, tmp_path: Path) -> None:
+        content = self._content(tmp_path, "# db pw is hunter2-prod, rotate in Q3\nX=1\n")
+        assert "hunter2" not in content
+        assert content == "# [comment hidden]\nX=1\n"
+
+    def test_a_comment_with_an_unknown_token_is_hidden(self, tmp_path: Path) -> None:
+        content = self._content(tmp_path, "# old token: 7f3a9c0b1d2e3f4a5b6c\nX=1\n")
+        assert "7f3a9c" not in content
+        assert "# [comment hidden]" in content
+
+    def test_a_commented_out_setting_is_shown(self, tmp_path: Path) -> None:
+        content = self._content(tmp_path, "# ROBOTHOR_LOG_LEVEL=DEBUG\n")
+        assert content == "# ROBOTHOR_LOG_LEVEL=DEBUG\n"
+
+    def test_a_commented_out_secret_is_masked(self, tmp_path: Path) -> None:
+        content = self._content(tmp_path, f"#GITHUB_TOKEN={FAKE_GH}\n")
+        assert FAKE_GH not in content
+        assert content == f"# GITHUB_TOKEN=****{FAKE_GH[-4:]}\n"
+
+    def test_a_credential_shaped_value_under_an_innocent_commented_name_is_masked(
+        self, tmp_path: Path
+    ) -> None:
+        content = self._content(tmp_path, f"# UPSTREAM={FAKE_GH}\n")
+        assert FAKE_GH not in content
+        assert content.startswith("# UPSTREAM=****")
+
+    def test_prose_after_an_equals_sign_is_hidden(self, tmp_path: Path) -> None:
+        content = self._content(tmp_path, "# note=the db pw is hunter2-prod\n")
+        assert "hunter2" not in content
+        assert content == "# [comment hidden]\n"
 
 
 class TestStillRefused:

@@ -111,7 +111,8 @@ like a credential. `--json` carries the same under `systemd`.
 
 The operator's assistant has the same verbs as tools: `config_get` and
 `config_set` (with `apply`, which runs through host exec). Both are owner-only.
-It can also `read_file` the instance env file, with the secret values masked.
+The owner's assistant can also `read_file` the instance env file, with the secret
+values masked; every other caller is refused.
 See [The instance's own settings](TOOLS.md#the-instances-own-settings-config_get-config_set-and-reading-an-env-file).
 
 `genus config set NAME VALUE` without `--apply` still writes `config.yaml`,

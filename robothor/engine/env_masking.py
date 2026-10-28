@@ -21,6 +21,11 @@ A value is secret when EITHER its key says so or the value does:
   :func:`robothor.engine.guardrails.redact_secrets` would change: vendor
   token shapes, ``sk-`` keys, a URL carrying ``user:password@``.
 
+Comments are free text and can hold a credential no rule recognises, so a
+comment is shown only when it is a commented-out ``KEY=VALUE`` assignment
+(masked by the same rules as a live one); any other comment text is replaced
+by ``# [comment hidden]``.
+
 Fails closed: a body that is not plain ``KEY=VALUE`` lines (a pasted PEM, a
 multi-line quoted value) or that is SOPS-encrypted (``ENC[...]`` values, a
 ``sops_*`` key) returns ``None``, and the caller refuses the read.
@@ -30,7 +35,14 @@ from __future__ import annotations
 
 import re
 
-__all__ = ["MASK", "key_is_secret", "mask_dotenv", "mask_value", "value_is_secret"]
+__all__ = [
+    "COMMENT_PLACEHOLDER",
+    "MASK",
+    "key_is_secret",
+    "mask_dotenv",
+    "mask_value",
+    "value_is_secret",
+]
 
 MASK = "****"
 
@@ -122,21 +134,33 @@ def _is_sops(text: str) -> bool:
     )
 
 
-def _scrub_comment(line: str) -> str:
-    """A comment can hold a commented-out credential; it gets the redactors."""
-    from robothor.engine.guardrails import redact_secrets
-    from robothor.secrets.redaction import redact
+#: What a comment that is not a commented-out assignment is shown as.
+COMMENT_PLACEHOLDER = "# [comment hidden]"
 
-    scrubbed = redact(str(redact_secrets(line)))
-    if scrubbed != line:
-        return scrubbed
-    # ``# old: GITHUB_TOKEN=...`` with a value no shape rule knows.
+
+def _scrub_comment(line: str) -> str:
+    """A commented-out ``KEY=VALUE`` masked like a live one; any other comment hidden.
+
+    Comments are free text, and free text is where an operator leaves
+    ``# db pw is hunter2, rotate in Q3`` -- which no name or shape rule can
+    recognise. So only a comment that parses as ONE assignment with a single
+    token (or quoted) value is shown; everything else becomes the placeholder.
+    """
     body = line.lstrip().lstrip("#").strip()
     match = _LINE.match(body)
-    if match and key_is_secret(match.group("key")):
-        value, quote = _unquote(match.group("val"))
-        return f"# {match.group('key')}={quote}{mask_value(value)}{quote}"
-    return line
+    if match is None:
+        return COMMENT_PLACEHOLDER
+    key = match.group("key")
+    raw = match.group("val").strip()
+    value, quote = _unquote(raw)
+    if not quote and (raw[:1] in ("'", '"') or any(ch.isspace() for ch in value)):
+        # Prose after an ``=`` (``# note=the pw is ...``) or an unclosed quote.
+        return COMMENT_PLACEHOLDER
+    if key_is_secret(key) or value_is_secret(value):
+        shown = mask_value(value)
+    else:
+        shown = value
+    return f"# {key}={quote}{shown}{quote}" if value else f"# {key}="
 
 
 def mask_dotenv(text: str) -> str | None:
