@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import json
 import textwrap
+import threading
 from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, patch
 
@@ -50,16 +51,18 @@ def _claims(**over: Any) -> dict[str, Any]:
 class FakeVerifier:
     """Stands in for ``google.oauth2.id_token.verify_oauth2_token``.
 
-    A token is the JSON of its claims; like the real one it raises
-    ``ValueError`` when the audience is not the one asked for.
+    A token is ``<header>.<base64url claims>.<signature>``; like the real one
+    it raises ``ValueError`` when the audience is not the one asked for.
     """
 
     def __init__(self) -> None:
         self.calls: list[tuple[str, str | None]] = []
+        self.threads: list[str] = []
 
     def __call__(self, token: str, request: Any, audience: str | None = None) -> dict[str, Any]:
         self.calls.append((token, audience))
-        claims: dict[str, Any] = json.loads(token)
+        self.threads.append(threading.current_thread().name)
+        claims: dict[str, Any] = json.loads(_unb64(token.split(".")[1]))
         if audience is not None and claims.get("aud") != audience:
             raise ValueError("Token has wrong audience")
         return claims
@@ -116,8 +119,21 @@ def redis():
         yield r
 
 
+def _b64(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+
+def _unb64(text: str) -> bytes:
+    return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
+
+
+def _jwt(claims: dict[str, Any]) -> str:
+    header = _b64(json.dumps({"alg": "RS256", "kid": "k1"}).encode())
+    return f"{header}.{_b64(json.dumps(claims).encode())}.{_b64(b'signature')}"
+
+
 def _bearer(claims: dict[str, Any]) -> dict[str, str]:
-    return {"Authorization": f"Bearer {json.dumps(claims)}", "Content-Type": "application/json"}
+    return {"Authorization": f"Bearer {_jwt(claims)}", "Content-Type": "application/json"}
 
 
 def test_config_loads_the_oidc_fields(tmp_path: Path) -> None:
@@ -257,3 +273,124 @@ def test_hmac_channels_still_need_their_secret(_publish, _rate, tmp_path: Path) 
     app.include_router(get_webhook_router(load_webhook_config(path)))
     resp = TestClient(app).post("/api/webhooks/plain", content=b"{}")
     assert resp.status_code == 503
+
+
+# ── cost before authentication ─────────────────────────────────────
+
+
+@patch("robothor.engine.webhooks._check_rate_limit", new_callable=AsyncMock, return_value=False)
+@patch("robothor.engine.webhooks._publish_to_stream", new_callable=AsyncMock)
+def test_an_over_limit_request_is_refused_before_verifying(
+    mock_publish, _rate, oidc_client, verifier, redis
+) -> None:
+    headers = {"Authorization": "Bearer x", "Content-Type": "application/json"}
+    resp = oidc_client.post("/api/webhooks/gmail", content=_push_body(), headers=headers)
+    assert resp.status_code == 429
+    assert verifier.calls == []
+    mock_publish.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "token",
+    ["x", "a.b", "a..c", "a.b.c.d", "a.b!.c", f"{'a' * 9000}.b.c"],
+    ids=["one-segment", "two-segments", "empty-segment", "four-segments", "bad-chars", "huge"],
+)
+@patch("robothor.engine.webhooks._check_rate_limit", new_callable=AsyncMock, return_value=True)
+@patch("robothor.engine.webhooks._publish_to_stream", new_callable=AsyncMock)
+def test_a_token_that_is_not_a_jwt_never_reaches_the_verifier(
+    mock_publish, _rate, token, oidc_client, verifier, redis
+) -> None:
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    with patch("asyncio.to_thread", side_effect=AssertionError("no thread for a malformed token")):
+        resp = oidc_client.post("/api/webhooks/gmail", content=_push_body(), headers=headers)
+    assert resp.status_code == 401
+    assert verifier.calls == []
+    mock_publish.assert_not_called()
+
+
+@patch("robothor.engine.webhooks._check_rate_limit", new_callable=AsyncMock, return_value=True)
+@patch("robothor.engine.webhooks._publish_to_stream", new_callable=AsyncMock, return_value="e-9")
+def test_verification_runs_on_its_own_bounded_executor(
+    _publish, _rate, oidc_client, verifier, redis
+) -> None:
+    from robothor.engine import webhooks
+
+    with patch("asyncio.to_thread", side_effect=AssertionError("not the default executor")):
+        resp = oidc_client.post(
+            "/api/webhooks/gmail", content=_push_body(), headers=_bearer(_claims())
+        )
+    assert resp.status_code == 200, resp.text
+    assert verifier.threads and verifier.threads[0].startswith(webhooks.OIDC_THREAD_PREFIX)
+    assert webhooks.OIDC_MAX_WORKERS <= 4
+
+
+# ── the certificate cache ──────────────────────────────────────────
+
+
+class FakeResponse:
+    def __init__(self, status: int = 200) -> None:
+        self.status = status
+        self.data = b"{}"
+        self.headers: dict[str, str] = {}
+
+
+class FakeTransport:
+    def __init__(self, status: int = 200) -> None:
+        self.calls: list[dict[str, Any]] = []
+        self.status = status
+
+    def __call__(self, url: str, method: str = "GET", **kwargs: Any) -> FakeResponse:
+        self.calls.append({"url": url, "method": method, **kwargs})
+        return FakeResponse(self.status)
+
+
+def test_certs_are_fetched_once_per_ttl_with_a_short_timeout() -> None:
+    from robothor.engine.webhooks import OIDC_CERT_TIMEOUT_SECONDS, CachedCertsRequest
+
+    now = [1000.0]
+    inner = FakeTransport()
+    request = CachedCertsRequest(inner, ttl_seconds=600, clock=lambda: now[0])
+    first = request("https://certs.example.com/", method="GET")
+    second = request("https://certs.example.com/", method="GET")
+    assert first.status == second.status == 200
+    assert len(inner.calls) == 1
+    assert inner.calls[0]["timeout"] == OIDC_CERT_TIMEOUT_SECONDS
+    assert OIDC_CERT_TIMEOUT_SECONDS <= 10
+
+    now[0] += 601
+    request("https://certs.example.com/", method="GET")
+    assert len(inner.calls) == 2
+
+
+def test_a_failed_cert_fetch_is_not_cached() -> None:
+    from robothor.engine.webhooks import CachedCertsRequest
+
+    inner = FakeTransport(status=503)
+    request = CachedCertsRequest(inner, ttl_seconds=600)
+    assert request("https://certs.example.com/", method="GET").status == 503
+    request("https://certs.example.com/", method="GET")
+    assert len(inner.calls) == 2
+
+
+def test_the_verifier_is_given_the_caching_request() -> None:
+    from robothor.engine import webhooks
+
+    seen: list[Any] = []
+
+    def capture(token: str, request: Any, audience: str | None = None) -> dict[str, Any]:
+        seen.append(request)
+        return _claims()
+
+    channel = webhooks.WebhookChannel(
+        name="gmail",
+        stream="gmail",
+        secret_env="",
+        signature_scheme="google_oidc",
+        oidc_audience=AUDIENCE,
+        oidc_service_account=PUSH_SA,
+    )
+    with patch("google.oauth2.id_token.verify_oauth2_token", capture):
+        webhooks._check_google_oidc(channel, f"Bearer {_jwt(_claims())}")
+        webhooks._check_google_oidc(channel, f"Bearer {_jwt(_claims())}")
+    assert isinstance(seen[0], webhooks.CachedCertsRequest)
+    assert seen[0] is seen[1]
