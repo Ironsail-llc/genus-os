@@ -497,3 +497,14 @@ class TestDurabilityAndLimits:
             gate.set()
             await hooks.drain()
         assert ran == ["quick-agent", "slow-agent"]
+
+
+class TestAbsentFieldIsVisible:
+    def test_an_absent_field_is_logged_at_debug(self, caplog):
+        context = {"steps": {}, "event": {"payload": {"data": {}}}}
+        with caplog.at_level("DEBUG", logger="robothor.engine.workflow"):
+            assert _render_template("{{ event.payload.data.message.id }}", context) == ""
+        assert any(
+            r.levelname == "DEBUG" and "event.payload.data.message.id" in r.getMessage()
+            for r in caplog.records
+        )
