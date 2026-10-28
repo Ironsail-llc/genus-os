@@ -179,6 +179,9 @@ spec:
           env:
             {{- include "genus-os.commonEnv" $root | nindent 12 }}
             {{- with include "genus-os.dbCaEnv" $root | trim }}{{ . | nindent 12 }}{{- end }}
+            {{- if eq $component "engine" }}
+            {{- with include "genus-os.googleWorkspaceEnv" $root | trim }}{{ . | nindent 12 }}{{- end }}
+            {{- end }}
             {{- range $k, $v := $componentEnv }}
             - name: {{ $k }}
               value: {{ $v | quote }}
@@ -209,6 +212,9 @@ spec:
             - name: runtime-cache
               mountPath: /app/.cache
             {{- with include "genus-os.dbCaVolumeMount" $root | trim }}{{ . | nindent 12 }}{{- end }}
+            {{- if eq $component "engine" }}
+            {{- with include "genus-os.googleWorkspaceVolumeMount" $root | trim }}{{ . | nindent 12 }}{{- end }}
+            {{- end }}
           resources:
             {{- toYaml $cv.resources | nindent 12 }}
       volumes:
@@ -236,6 +242,9 @@ spec:
         - name: runtime-cache
           emptyDir: {}
         {{- with include "genus-os.dbCaVolume" $root | trim }}{{ . | nindent 8 }}{{- end }}
+        {{- if eq $component "engine" }}
+        {{- with include "genus-os.googleWorkspaceVolume" $root | trim }}{{ . | nindent 8 }}{{- end }}
+        {{- end }}
         {{- if $root.Values.migrations.enabled }}
         - name: migration-api-token
           projected:

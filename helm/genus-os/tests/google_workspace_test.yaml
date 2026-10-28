@@ -1,0 +1,133 @@
+suite: engine Google Workspace credentials
+release:
+  name: gos
+  namespace: genus
+tests:
+  - it: mounts the credentials file read-only and points the gws CLI at it
+    template: engine/workload.yaml
+    documentIndex: 0
+    set:
+      vault.secrets.engine-google.path: genus-os/test/engine-google
+      engine.googleWorkspace.enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: google-workspace
+            secret:
+              secretName: gos-genus-os-engine-google
+              defaultMode: 0400
+              optional: true
+              items:
+                - key: credentials.json
+                  path: credentials.json
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: google-workspace
+            mountPath: /etc/genus/gws
+            readOnly: true
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE
+            value: /etc/genus/gws/credentials.json
+      # The CLI rewrites its token cache; the root filesystem is read-only, so
+      # the cache lives on the writable runtime-cache emptyDir.
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: GOOGLE_WORKSPACE_CLI_CONFIG_DIR
+            value: /app/.cache/gws
+
+  - it: never exposes the credentials as environment variables
+    template: engine/workload.yaml
+    documentIndex: 0
+    set:
+      vault.secrets.engine-google.path: genus-os/test/engine-google
+      engine.googleWorkspace.enabled: true
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].envFrom
+          content:
+            secretRef:
+              name: gos-genus-os-engine-google
+
+  - it: forbids the credentials class in engine.secretRefs
+    template: engine/workload.yaml
+    set:
+      vault.secrets.engine-google.path: genus-os/test/engine-google
+      engine.secretRefs: [database, cache, auth-signing, engine-providers, engine-google]
+    asserts:
+      - failedTemplate:
+          errorMessage: engine.secretRefs forbids secret class "engine-google"
+
+  - it: fails when enabled without a Vault path for the credentials
+    template: engine/workload.yaml
+    set:
+      engine.googleWorkspace.enabled: true
+    asserts:
+      - failedTemplate:
+          errorMessage: engine.googleWorkspace.enabled requires vault.secrets.engine-google (a Vault path holding credentials.json)
+
+  - it: allows an out-of-band Secret when Vault is off
+    template: engine/workload.yaml
+    documentIndex: 0
+    set:
+      vault.enabled: false
+      engine.googleWorkspace.enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: google-workspace
+            secret:
+              secretName: gos-genus-os-engine-google
+              defaultMode: 0400
+              optional: true
+              items:
+                - key: credentials.json
+                  path: credentials.json
+
+  - it: renders nothing by default
+    template: engine/workload.yaml
+    documentIndex: 0
+    asserts:
+      - notContains:
+          path: spec.template.spec.volumes
+          content:
+            name: google-workspace
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE
+          any: true
+
+  - it: keeps the credentials out of the bridge and orchestrator
+    template: bridge/workload.yaml
+    documentIndex: 0
+    set:
+      vault.secrets.engine-google.path: genus-os/test/engine-google
+      engine.googleWorkspace.enabled: true
+    asserts:
+      - notContains:
+          path: spec.template.spec.volumes
+          content:
+            name: google-workspace
+          any: true
+
+  - it: restarts the engine when the credentials rotate
+    template: vaultstaticsecret.yaml
+    set:
+      vault.secrets.engine-google.path: genus-os/test/engine-google
+      engine.googleWorkspace.enabled: true
+    asserts:
+      - contains:
+          path: spec.rolloutRestartTargets
+          content:
+            kind: Deployment
+            name: gos-genus-os-engine
+        documentSelector:
+          path: metadata.name
+          value: gos-genus-os-engine-google
