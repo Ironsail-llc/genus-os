@@ -23,8 +23,11 @@ import hmac
 import json
 import logging
 import os
+import re
+import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -204,17 +207,92 @@ def _verify_signature(
     return False, f"unknown signature scheme {channel.signature_scheme!r}"
 
 
-_google_request: Any = None
+#: google_oidc verification runs on its own small pool, never the default
+#: executor the rest of the engine's ``to_thread`` work shares.
+OIDC_MAX_WORKERS = 4
+OIDC_THREAD_PREFIX = "webhook-oidc"
+#: Timeout for fetching Google's signing certificates.
+OIDC_CERT_TIMEOUT_SECONDS = 5
+#: How long fetched certificates are reused. Google publishes a new key well
+#: before it signs with it, so a cached set stays valid across a rotation.
+OIDC_CERT_TTL_SECONDS = 1800
+#: Longest bearer token considered at all (a Google ID token is ~1 KB).
+MAX_OIDC_TOKEN_CHARS = 8192
+
+_JWT_SEGMENT = re.compile(r"[A-Za-z0-9_-]+")
 
 
-def _google_transport() -> Any:
-    """One shared google-auth HTTP transport (one connection pool for the cert fetch)."""
+def _looks_like_jwt(token: str) -> bool:
+    """Three non-empty base64url segments, bounded in size: cheap, before any thread."""
+    if not token or len(token) > MAX_OIDC_TOKEN_CHARS:
+        return False
+    parts = token.split(".")
+    return len(parts) == 3 and all(_JWT_SEGMENT.fullmatch(p) for p in parts)
+
+
+class CachedCertsRequest:
+    """A google-auth transport that reuses a successful GET for ``ttl_seconds``.
+
+    google-auth fetches the signing certificates on every verification; this
+    answers a repeat GET of the same URL from memory and gives every real
+    fetch a short timeout. Failed fetches are not cached.
+    """
+
+    def __init__(
+        self,
+        inner: Any,
+        *,
+        ttl_seconds: float = OIDC_CERT_TTL_SECONDS,
+        clock: Any = time.monotonic,
+    ) -> None:
+        self._inner = inner
+        self._ttl = ttl_seconds
+        self._clock = clock
+        self._cache: dict[str, tuple[float, Any]] = {}
+        self._lock = threading.Lock()
+
+    def __call__(self, url: str, method: str = "GET", **kwargs: Any) -> Any:
+        if method.upper() != "GET":
+            kwargs["timeout"] = OIDC_CERT_TIMEOUT_SECONDS
+            return self._inner(url, method=method, **kwargs)
+        with self._lock:
+            hit = self._cache.get(url)
+            if hit is not None and self._clock() < hit[0]:
+                return hit[1]
+        kwargs["timeout"] = OIDC_CERT_TIMEOUT_SECONDS
+        response = self._inner(url, method=method, **kwargs)
+        if getattr(response, "status", None) == 200:
+            with self._lock:
+                self._cache[url] = (self._clock() + self._ttl, response)
+        return response
+
+
+_google_request: CachedCertsRequest | None = None
+_oidc_pool: ThreadPoolExecutor | None = None
+
+
+def _google_transport() -> CachedCertsRequest:
+    """One shared, certificate-caching google-auth transport."""
     global _google_request
     if _google_request is None:
         from google.auth.transport.requests import Request
 
-        _google_request = Request()
+        _google_request = CachedCertsRequest(Request())
     return _google_request
+
+
+def _oidc_executor() -> ThreadPoolExecutor:
+    global _oidc_pool
+    if _oidc_pool is None:
+        _oidc_pool = ThreadPoolExecutor(
+            max_workers=OIDC_MAX_WORKERS, thread_name_prefix=OIDC_THREAD_PREFIX
+        )
+    return _oidc_pool
+
+
+def _bearer_token(authorization: str) -> str:
+    scheme, _, token = authorization.strip().partition(" ")
+    return token.strip() if scheme.lower() == "bearer" else ""
 
 
 def _check_google_oidc(channel: WebhookChannel, authorization: str) -> tuple[bool, str]:
@@ -223,14 +301,14 @@ def _check_google_oidc(channel: WebhookChannel, authorization: str) -> tuple[boo
     Valid when google-auth accepts the token for the channel's audience and
     its ``email`` claim is the channel's service account, verified.
     """
-    scheme, _, token = authorization.strip().partition(" ")
-    if scheme.lower() != "bearer" or not token.strip():
-        return False, "missing bearer token"
+    token = _bearer_token(authorization)
+    if not _looks_like_jwt(token):
+        return False, "missing or malformed bearer token"
     try:
         from google.oauth2 import id_token
 
         claims = id_token.verify_oauth2_token(  # type: ignore[no-untyped-call]
-            token.strip(), _google_transport(), audience=channel.oidc_audience
+            token, _google_transport(), audience=channel.oidc_audience
         )
     except Exception as exc:  # noqa: BLE001 - any verifier failure is a rejection
         return False, f"token rejected ({type(exc).__name__})"
@@ -502,8 +580,15 @@ def get_webhook_router(config: WebhookConfig | None = None) -> APIRouter:
                     {"error": "Channel not configured: OIDC audience or account not set"},
                     status_code=503,
                 )
-            ok, reason = await asyncio.to_thread(
-                _check_google_oidc, ch, request.headers.get("authorization", "")
+            # Cheap refusals first: the verifier costs a thread and may fetch certs.
+            if not await _check_rate_limit(ch):
+                return JSONResponse({"error": "Rate limit exceeded"}, status_code=429)
+            authorization = request.headers.get("authorization", "")
+            if not _looks_like_jwt(_bearer_token(authorization)):
+                logger.warning("Webhook token rejected for channel '%s': malformed", ch.name)
+                return JSONResponse({"error": "Invalid signature"}, status_code=401)
+            ok, reason = await asyncio.get_running_loop().run_in_executor(
+                _oidc_executor(), _check_google_oidc, ch, authorization
             )
             if not ok:
                 logger.warning("Webhook token rejected for channel '%s': %s", ch.name, reason)
@@ -540,8 +625,8 @@ def get_webhook_router(config: WebhookConfig | None = None) -> APIRouter:
                 status_code=401,
             )
 
-        # Rate limiting
-        if not await _check_rate_limit(ch):
+        # Rate limiting (google_oidc channels were limited before verifying)
+        if not oidc and not await _check_rate_limit(ch):
             return JSONResponse(
                 {"error": "Rate limit exceeded"},
                 status_code=429,
