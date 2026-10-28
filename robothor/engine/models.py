@@ -914,6 +914,7 @@ class WorkflowTriggerDef:
     event_type: str = ""
     cron: str = ""
     timezone: str = "America/New_York"
+    requeue_if_busy: bool = False  # hook only: re-add an event that found the workflow running
 
 
 @dataclass

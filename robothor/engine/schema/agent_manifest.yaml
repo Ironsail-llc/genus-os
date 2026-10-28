@@ -259,8 +259,9 @@ optional:
         description: >-
           When the agent is already running, re-add the event for this agent
           only (other hooks and workflows on the event do not run again) after
-          5 seconds, without holding up the consumer. Retried up to 60 times,
-          about five minutes, on a budget separate from failed-run retries,
+          a pause, without holding up the consumer. The pause starts at 5
+          seconds and doubles every 10 tries up to a minute; up to 80 tries,
+          about 50 minutes, on a budget separate from failed-run retries,
           then parked in the stream's dead-letter queue, which nothing drains
           automatically. Default drops the event.
   streams:
