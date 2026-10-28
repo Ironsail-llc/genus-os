@@ -162,7 +162,8 @@ an event twice and should be idempotent. Both are
 documented with the other hook fields in `docs/agents/schema.yaml`.
 
 A workflow with a `hook` trigger gets the event as its run's `event` context
-(`type`, `stream`, `id`, `delivery_id` and the parsed `payload`), so its steps
+(`type`, `stream`, `delivery_id`, the parsed `payload`, and `id` for webhook
+events), so its steps
 can template it, and its trigger takes the same `requeue_if_busy` option. See
 [Agent Builder](AGENT_BUILDER.md#triggered-by-an-event).
 

@@ -163,9 +163,12 @@ Branches may be any step type except `condition`, `approval`, and nested
 A `hook` trigger runs the workflow when a matching event lands on a stream,
 including one published by a [webhook](event-bus.md#webhook-ingress). The
 event is in the run's context as `event`: `event.type`, `event.stream`,
-`event.id`, `event.delivery_id` (empty when the sender gave none) and
-`event.payload`, parsed when it is JSON. Steps template it like any other
-context value. Only one run of a workflow is in flight at a time; by default
+`event.id` (set for webhook events only), `event.delivery_id` (empty when the
+sender gave none) and `event.payload`, parsed when it is JSON. Steps template
+it like any other context value; a field the event lacks, such as
+`{{ event.payload.data.message.id }}` when there is no `message`, renders
+empty. The event is stored with the run, as the rest of its context is, for as
+long as workflow runs are kept. Only one run of a workflow is in flight at a time; by default
 an event that arrives while it is running is dropped. `requeue_if_busy: true`
 re-adds it for this workflow after a pause that starts at 5 seconds and backs
 off to a minute, for up to about 50 minutes, before parking it in
