@@ -74,7 +74,7 @@ mailbox is empty when it is not.
 
 | You want | Use | What it is |
 |---|---|---|
-| Live email — what is in the mailbox right now | `gws_gmail_search`, then `gws_gmail_get` | The real Gmail account, through the `gws` CLI. The only tools that see an unread message. |
+| Live email — what is in the mailbox right now | `gws_gmail_search`, then `gws_gmail_get` (and `gws_gmail_get_attachment` to open a file attached to it) | The real Gmail account, through the `gws` CLI. The only tools that see an unread message. |
 | The CRM's record of past correspondence with a contact | `list_messages`, `get_conversation` | Ingested into the CRM by the email pipeline. Can be hours or days behind, and holds no unread state. |
 | The agent's own notification queue | `get_inbox`, `ack_notification` | Notifications other agents and the engine raised for this agent. Not email at all. |
 
@@ -367,7 +367,7 @@ engine unit, `.genus/` is gitignored, and the other writable home
 
 ### Google Workspace (`gws_*`)
 
-Eleven tools, all shelling out to the `gws` CLI with the instance's Workspace
+Fifteen tools, all shelling out to the `gws` CLI with the instance's Workspace
 credentials. Every one of them is refused on a benchmark run — reads included:
 a graded agent that can read the operator's mail can put the operator's mail in
 its answer.
@@ -375,7 +375,8 @@ its answer.
 | Tool | Returns |
 |---|---|
 | `gws_gmail_search` | One entry per matching message: `id`, `thread_id`, `date`, `from`, `to`, `subject`, `snippet`, `labels`. Already readable — you usually do not need `gws_gmail_get` after it. Drops results rather than letting them be cut (`truncated: true` says so). |
-| `gws_gmail_get` | Headers (`from`/`to`/`cc`/`date`/`subject`/`message_id`), `labels`, `snippet`, and a **decoded** `body_text` — plain text, never base64. Attachments listed by `filename`, `mime_type`, `size_bytes`, never inlined. `body_truncated` + `body_chars` when it had to cut. A `thread_id` returns every message in the thread, oldest first. |
+| `gws_gmail_get` | Headers (`from`/`to`/`cc`/`date`/`subject`/`message_id`), `labels`, `snippet`, and a **decoded** `body_text` — plain text, never base64. Attachments listed by `filename`, `mime_type`, `size_bytes` and `attachment_id`, never inlined. `body_truncated` + `body_chars` when it had to cut. A `thread_id` returns every message in the thread, oldest first. |
+| `gws_gmail_get_attachment` | Downloads one attachment (`message_id` + `attachment_id` from `gws_gmail_get`) and returns `path`, `filename`, `mime_type`, `size_bytes`, `format` and, for a PDF, Word, Excel, PowerPoint or text file, its `text` (up to 50,000 characters; `truncated` says if it was cut). An image returns its path to pass to `view_image`. See [Email attachments](#email-attachments). |
 | `gws_gmail_reply` | The sent message id and thread id. Threads correctly, replies to all original recipients, refuses a second reply on the same thread. **Use this, not `gws_gmail_send`, for anything that answers an existing thread.** |
 | `gws_gmail_send` | The sent message id and thread id. New conversations only. |
 | `gws_gmail_modify` | The message id and its labels after the change. Mark read/unread, archive, add or remove labels. |
@@ -388,6 +389,31 @@ its answer.
 | `gws_chat_send` | The created message's resource name. |
 | `gws_chat_list_spaces` | Each space's resource name and display name. |
 | `gws_chat_list_messages` | Each message's sender, time and text, newest last. |
+
+#### Email attachments
+
+`gws_gmail_get_attachment` works on either mailbox provider. On Gmail the
+`attachment_id` is the MIME part id (`"1"`, `"0.2"`): Gmail re-issues its own
+`attachmentId` on every read, so that one cannot be matched later; the raw
+`attachmentId` is accepted too. On Microsoft 365 it is the Graph attachment
+id. Only real files download: an Outlook attached message (`itemAttachment`)
+or cloud link (`referenceAttachment`) is refused with a sentence saying which
+it is.
+
+The file is kept exactly like a Telegram attachment, through the same code
+(`robothor/engine/attachments.py`): at
+`<workspace>/inbox/email/<provider>/<YYYY-MM-DD>/<id>-<name>`, owner-only,
+deduplicated per message and attachment, pruned with the rest of the inbox
+after `inbox_retention_days`. The 20 MB ceiling is checked against the size
+the provider reports before anything is downloaded, and against the bytes
+after. A file named like a credentials file (`.env`, `id_rsa`, ...) is saved
+under `secret/` and its contents are never returned — `read_file` and
+`send_file` refuse it too. Text comes from the same extractor `read_file` uses
+(see [`read_file`](#read_file-documents-not-just-text)).
+
+The tool writes only that local file and changes nothing in the mailbox, so it
+is classified read-only (plan mode may use it). Like every `gws_*` tool it is
+refused on a benchmark run.
 
 #### Errors
 

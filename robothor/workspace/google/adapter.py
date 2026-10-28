@@ -23,11 +23,14 @@ worker thread.
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import re
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, Literal
 
+from robothor.workspace.bridge import error_result
+from robothor.workspace.errors import attachment_too_large
 from robothor.workspace.google import gmail_parse
 from robothor.workspace.types import GOOGLE_CAPABILITIES, CalendarRef, Capabilities
 
@@ -51,6 +54,10 @@ __all__ = [
 #: The assistant's own calendar, in Google's words: whichever account gws is
 #: signed in as. Named once, here; the handlers say ``CalendarRef``.
 GOOGLE_OWN_CALENDAR = "primary"
+
+#: Seconds one ``attachments.get`` may take: up to 20 MB of base64 through the
+#: CLI's stdout, where 30 s is sized for a JSON message.
+_ATTACHMENT_TIMEOUT_S = 120
 
 #: A Google Meet meeting code: ``abc-mnop-xyz`` (lowercase letter groups).
 _MEET_CODE_RE = re.compile(r"[a-z]+(?:-[a-z]+)+")
@@ -169,6 +176,74 @@ class GoogleMailSync:
                 json.dumps(body),
             ]
         )
+
+    def get_attachment(
+        self, message_id: str, attachment_id: str, *, max_bytes: int | None = None
+    ) -> dict[str, Any]:
+        """``messages.get`` for the part (its name, type and size), then
+        ``messages.attachments.get`` for the bytes unless the part carries them.
+
+        The message is read first because ``attachments.get`` returns only the
+        size and the data, and because the id the listing hands out is the
+        part id: Gmail re-mints ``attachmentId`` on every read.
+        """
+        message = self.get_message(message_id, fmt="full")
+        if not isinstance(message, dict):
+            return {"error": "gws returned an unexpected shape for a message"}
+        if "error" in message:
+            return message
+        payload = message.get("payload") or {}
+        part = gmail_parse._find_attachment_part(payload, attachment_id)
+        if part is None:
+            listed = gmail_parse._extract_attachments(payload)
+            names = ", ".join(
+                f"{a['filename']} (attachment_id {a.get('attachment_id', '?')})" for a in listed
+            )
+            return {
+                "error": (
+                    f"message {message_id} has no attachment {attachment_id!r}; "
+                    + (f"it has: {names}" if names else "it has no attachments")
+                ),
+                "hint": "not_found: take attachment_id from gws_gmail_get's attachments list",
+            }
+        body = part.get("body") or {}
+        size = int(body.get("size") or 0)
+        if max_bytes is not None and size > max_bytes:
+            name = str(part.get("filename") or "")
+            return error_result(attachment_too_large(name, size, max_bytes))
+        data = str(body.get("data") or "")
+        if not data:
+            remote_id = str(body.get("attachmentId") or "")
+            if not remote_id:
+                return {"error": "this attachment part carries no data", "hint": "not_found"}
+            params = {"userId": "me", "messageId": message_id, "id": remote_id}
+            fetched = _gws(
+                [
+                    "gmail",
+                    "users",
+                    "messages",
+                    "attachments",
+                    "get",
+                    "--params",
+                    json.dumps(params),
+                ],
+                timeout=_ATTACHMENT_TIMEOUT_S,
+            )
+            if not isinstance(fetched, dict):
+                return {"error": "gws returned an unexpected shape for an attachment"}
+            if "error" in fetched:
+                return fetched
+            data = str(fetched.get("data") or "")
+        try:
+            raw = base64.urlsafe_b64decode(data + "=" * (-len(data) % 4))
+        except (ValueError, TypeError):
+            return {"error": "the attachment data is not valid base64url", "hint": "unparseable"}
+        return {
+            "filename": str(part.get("filename") or "attachment"),
+            "mime_type": str(part.get("mimeType") or ""),
+            "size_bytes": len(raw),
+            "data": raw,
+        }
 
     def shape_envelope(
         self, raw: dict[str, Any], *, max_header_chars: int | None = None
@@ -377,6 +452,13 @@ class GoogleMail:
     ) -> dict[str, Any]:
         return await asyncio.to_thread(
             self.blocking.modify, message_id, add_labels=add_labels, remove_labels=remove_labels
+        )
+
+    async def get_attachment(
+        self, message_id: str, attachment_id: str, *, max_bytes: int | None = None
+    ) -> dict[str, Any]:
+        return await asyncio.to_thread(
+            self.blocking.get_attachment, message_id, attachment_id, max_bytes=max_bytes
         )
 
     def shape_envelope(

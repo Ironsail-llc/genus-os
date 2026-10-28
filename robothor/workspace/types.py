@@ -52,6 +52,11 @@ class Attachment(TypedDict):
     filename: str
     mime_type: str
     size_bytes: int
+    #: What ``gws_gmail_get_attachment`` takes to download it: Gmail's MIME
+    #: part id (stable across fetches, unlike Gmail's ``attachmentId``, which
+    #: is re-minted on every read), or Microsoft Graph's attachment id. Absent
+    #: when the provider gave none.
+    attachment_id: NotRequired[str]
 
 
 #: The described-but-unread form of one message (``_shape_envelope``).

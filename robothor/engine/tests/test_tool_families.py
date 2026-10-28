@@ -132,6 +132,7 @@ _CAL_WRITES = {
 _ALL = {
     "gws_gmail_search",
     "gws_gmail_get",
+    "gws_gmail_get_attachment",
     "gws_gmail_reply",
     "gws_gmail_send",
     "gws_gmail_modify",
@@ -145,7 +146,7 @@ _ALL = {
 
 def test_families_hold_the_names_they_replaced() -> None:
     assert c.WORKSPACE_TOOLS == _ALL
-    assert {"gws_gmail_search", "gws_gmail_get"} == c.MAIL_READ_TOOLS
+    assert {"gws_gmail_search", "gws_gmail_get", "gws_gmail_get_attachment"} == c.MAIL_READ_TOOLS
     assert c.MAIL_SEND_TOOLS == _SEND
     assert _SEND | {"gws_gmail_modify"} == c.MAIL_WRITE_TOOLS
     assert {"gws_calendar_list"} == c.CALENDAR_READ_TOOLS
@@ -166,6 +167,7 @@ def _attr(module: str, name: str) -> object:
 _READS = {
     "gws_gmail_search",
     "gws_gmail_get",
+    "gws_gmail_get_attachment",
     "gws_calendar_list",
     "gws_chat_list_spaces",
     "gws_chat_list_messages",

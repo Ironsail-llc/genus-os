@@ -77,6 +77,19 @@ class MailProvider(Protocol):
         self, message_id: str, *, add_labels: Any, remove_labels: Any
     ) -> dict[str, Any]: ...
 
+    async def get_attachment(
+        self, message_id: str, attachment_id: str, *, max_bytes: int | None = None
+    ) -> dict[str, Any]:
+        """One attachment's bytes: ``{"filename", "mime_type", "size_bytes", "data"}``.
+
+        ``attachment_id`` is the one the message's listing carries
+        (:class:`~robothor.workspace.types.Attachment`). ``max_bytes`` is
+        enforced BEFORE the bytes are fetched wherever the provider learns the
+        size first; the caller still checks ``data`` itself. Only real files
+        are returned: an attached message or a cloud link is refused.
+        """
+        ...
+
     def shape_envelope(
         self, raw: dict[str, Any], *, max_header_chars: int | None = None
     ) -> dict[str, Any]:
@@ -179,6 +192,9 @@ class BlockingMail(Protocol):
     def send(self, raw: str, *, thread_id: str | None = None) -> dict[str, Any]: ...
     def reply(self, raw: str, *, thread_id: str) -> dict[str, Any]: ...
     def modify(self, message_id: str, *, add_labels: Any, remove_labels: Any) -> dict[str, Any]: ...
+    def get_attachment(
+        self, message_id: str, attachment_id: str, *, max_bytes: int | None = None
+    ) -> dict[str, Any]: ...
     def shape_envelope(
         self, raw: dict[str, Any], *, max_header_chars: int | None = None
     ) -> dict[str, Any]: ...

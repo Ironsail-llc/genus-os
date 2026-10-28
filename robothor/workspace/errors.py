@@ -83,3 +83,25 @@ class Unsupported(WorkspaceError):  # noqa: N818
 
 class AuthError(WorkspaceError):
     """Credentials are missing or were refused. Message carries a code, never a secret."""
+
+
+def _megabytes(size: int) -> str:
+    """``20 MB`` / ``20.4 MB``: rounded down, so an over-limit size never reads
+    as equal to the limit it broke."""
+    tenths = int(size * 10 / (1024 * 1024))
+    whole, frac = divmod(tenths, 10)
+    return f"{whole} MB" if frac == 0 else f"{whole}.{frac} MB"
+
+
+def attachment_too_large(name: str, size: int, limit: int) -> Unsupported:
+    """The refusal for an attachment over ``limit`` bytes, raised before download."""
+    which = f"“{name}”" if name else "That attachment"
+    cap = _megabytes(limit)
+    measured = _megabytes(size)
+    # "is 20 MB, over the 20 MB limit" contradicts itself; say the relation.
+    size_phrase = f"is larger than {cap}" if measured == cap else f"is {measured}"
+    return Unsupported(
+        f"{which} {size_phrase}, and email attachments are downloaded up to {cap}, so it "
+        "was not downloaded. Ask the sender for a link to it instead.",
+        code="too_large",
+    )

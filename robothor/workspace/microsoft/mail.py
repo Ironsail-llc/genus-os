@@ -49,7 +49,12 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
 
-from robothor.workspace.errors import NotFound, Unsupported, WorkspaceError
+from robothor.workspace.errors import (
+    NotFound,
+    Unsupported,
+    WorkspaceError,
+    attachment_too_large,
+)
 from robothor.workspace.google import gmail_parse
 from robothor.workspace.types import AllOf, AnyOf, MailQuery, QueryNode, Term
 
@@ -139,6 +144,22 @@ _SEARCH_FIELDS = (
     "hasAttachments",
     "categories",
 )
+#: A message's attachments, described but never their bytes. ``id`` is what
+#: ``get_attachment`` takes back.
+_EXPAND_ATTACHMENTS = "attachments($select=id,name,contentType,size,isInline)"
+#: The only attachment kind with bytes of its own. An ``itemAttachment`` is an
+#: attached message/event/contact; a ``referenceAttachment`` is a cloud link.
+_FILE_ATTACHMENT = "#microsoft.graph.fileAttachment"
+_NON_FILE_ATTACHMENTS = {
+    "#microsoft.graph.itemAttachment": (
+        "an attached message, event or contact, not a file; open the original "
+        "email with gws_gmail_get instead"
+    ),
+    "#microsoft.graph.referenceAttachment": (
+        "a link to a file in cloud storage, not a file attached to the email; "
+        "ask for the file itself or a shareable link"
+    ),
+}
 _PREFER_TEXT = 'outlook.body-content-type="text"'
 _EPOCH_FLOOR = "1900-01-01T00:00:00Z"
 _ADDRESS_RE = re.compile(r"^[^@\s]+@[^@\s]+$")
@@ -520,7 +541,10 @@ def _gmailize(message: dict[str, Any], folders: dict[str, str]) -> dict[str, Any
         {
             "filename": str(a.get("name") or "attachment"),
             "mimeType": str(a.get("contentType") or ""),
-            "body": {"size": int(a.get("size") or 0)},
+            # Graph's attachment id rides where Gmail keeps attachmentId, so the
+            # one shaper lists it (there is no Gmail part id to prefer here).
+            "body": {"size": int(a.get("size") or 0)}
+            | ({"attachmentId": str(a["id"])} if a.get("id") else {}),
         }
         for a in message.get("attachments") or []
         if isinstance(a, dict)
@@ -732,7 +756,7 @@ class GraphMail:
         params: dict[str, Any] = {"$select": ",".join(_FULL_FIELDS if full else _ENVELOPE_FIELDS)}
         headers = None
         if full:
-            params["$expand"] = "attachments($select=name,contentType,size,isInline)"
+            params["$expand"] = _EXPAND_ATTACHMENTS
             headers = {"Prefer": _PREFER_TEXT}
         message = await graph.get(self._message_path(message_id), params, headers=headers)
         return _gmailize(message, await self._folder_ids())
@@ -742,7 +766,7 @@ class GraphMail:
         extra: dict[str, Any] = {}
         if full:
             extra = {
-                "params": {"$expand": "attachments($select=name,contentType,size,isInline)"},
+                "params": {"$expand": _EXPAND_ATTACHMENTS},
                 "headers": {"Prefer": _PREFER_TEXT},
             }
         items = await self._conversation(
@@ -750,6 +774,43 @@ class GraphMail:
         )
         folders = await self._folder_ids()
         return {"id": thread_id, "messages": [_gmailize(m, folders) for m in items]}
+
+    async def get_attachment(
+        self, message_id: str, attachment_id: str, *, max_bytes: int | None = None
+    ) -> dict[str, Any]:
+        """``GET /messages/{id}/attachments/{aid}``: metadata first, then the bytes.
+
+        The first read selects no ``contentBytes``, so an attached message, a
+        cloud link or an oversized file is refused before anything large is
+        transferred. Only a ``fileAttachment`` carries bytes.
+        """
+        if not attachment_id or not attachment_id.strip():
+            raise NotFound("empty attachment id")
+        graph = await self._graph()
+        path = f"{self._message_path(message_id)}/attachments/{quote(attachment_id, safe='')}"
+        meta = await graph.get(path, {"$select": "id,name,contentType,size,isInline"})
+        name = str(meta.get("name") or "attachment")
+        kind = str(meta.get("@odata.type") or _FILE_ATTACHMENT)
+        if kind != _FILE_ATTACHMENT:
+            why = _NON_FILE_ATTACHMENTS.get(kind, f"a {kind.rsplit('.', 1)[-1]}, not a file")
+            raise Unsupported(f"“{name}” cannot be downloaded: it is {why}", code="not_a_file")
+        size = int(meta.get("size") or 0)
+        if max_bytes is not None and size > max_bytes:
+            raise attachment_too_large(name, size, max_bytes)
+        full = await graph.get(path)
+        content = full.get("contentBytes")
+        if not isinstance(content, str):
+            raise WorkspaceError(f"graph returned no contentBytes for “{name}”")
+        try:
+            data = base64.b64decode(content, validate=True)
+        except (ValueError, TypeError):
+            raise WorkspaceError(f"graph returned unreadable contentBytes for “{name}”") from None
+        return {
+            "filename": name,
+            "mime_type": str(meta.get("contentType") or full.get("contentType") or ""),
+            "size_bytes": len(data),
+            "data": data,
+        }
 
     # ── writes ──────────────────────────────────────────────────────────
 
