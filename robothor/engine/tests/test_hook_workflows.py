@@ -174,3 +174,136 @@ class TestTriggerParsing:
             }
         )
         assert [t.requeue_if_busy for t in wf.triggers] == [True, False]
+
+
+class TestConsumerLoopNotBlocked:
+    """A long agent run must not hold up other agents, workflows or streams."""
+
+    @staticmethod
+    def _hooks(engine_config, agents):
+        hooks = EventHooks(engine_config, MagicMock())
+        hooks._event_triggers = {
+            "platform": [{"event_type": EVENT, "agent_id": a, "message": "m"} for a in agents]
+        }
+        hooks._prefixed_to_bare = {STREAM: "platform"}
+        return hooks
+
+    @staticmethod
+    def _patches():
+        return (
+            patch("robothor.engine.hooks.try_acquire", new_callable=AsyncMock, return_value=True),
+            patch("robothor.engine.hooks.release", new_callable=AsyncMock),
+            patch("robothor.engine.hooks.deliver", new_callable=AsyncMock),
+            patch("robothor.engine.config.load_agent_config", return_value=None),
+        )
+
+    @pytest.mark.asyncio
+    async def test_dispatch_returns_before_the_agent_run_finishes(self, engine_config):
+        import asyncio
+
+        gate = asyncio.Event()
+        hooks = self._hooks(engine_config, ["slow-agent"])
+
+        async def execute(**kwargs):
+            await gate.wait()
+            return _run(RunStatus.COMPLETED)
+
+        hooks.runner.execute = AsyncMock(side_effect=execute)
+        redis = AsyncMock()
+        p1, p2, p3, p4 = self._patches()
+        with p1, p2, p3, p4:
+            await asyncio.wait_for(
+                hooks._dispatch(STREAM, b"1-0", {b"type": EVENT.encode()}, redis, "engine"), 1
+            )
+            redis.xack.assert_not_awaited()  # still in flight, not lost
+            gate.set()
+            await hooks.drain()
+        redis.xack.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_other_agent_runs_while_one_is_blocked(self, engine_config):
+        import asyncio
+
+        gate = asyncio.Event()
+        ran: list[str] = []
+        hooks = EventHooks(engine_config, MagicMock())
+        hooks._event_triggers = {
+            "platform": [{"event_type": EVENT, "agent_id": "slow-agent", "message": "m"}],
+            "other": [{"event_type": "other.ping", "agent_id": "quick-agent", "message": "m"}],
+        }
+        hooks._prefixed_to_bare = {STREAM: "platform", f"{STREAM_PREFIX}other": "other"}
+
+        async def execute(**kwargs):
+            if kwargs["agent_id"] == "slow-agent":
+                await gate.wait()
+            ran.append(kwargs["agent_id"])
+            return _run(RunStatus.COMPLETED)
+
+        hooks.runner.execute = AsyncMock(side_effect=execute)
+        p1, p2, p3, p4 = self._patches()
+        with p1, p2, p3, p4:
+            await hooks._dispatch(STREAM, b"1-0", {b"type": EVENT.encode()}, AsyncMock(), "g")
+            await hooks._dispatch(
+                f"{STREAM_PREFIX}other", b"2-0", {b"type": b"other.ping"}, AsyncMock(), "g"
+            )
+            for _ in range(50):
+                if ran:
+                    break
+                await asyncio.sleep(0.01)
+            assert ran == ["quick-agent"]
+            gate.set()
+            await hooks.drain()
+        assert ran == ["quick-agent", "slow-agent"]
+
+    @pytest.mark.asyncio
+    async def test_same_agent_events_wait_in_order_instead_of_dropping(self, engine_config):
+        import asyncio
+
+        gate = asyncio.Event()
+        seen: list[str] = []
+        hooks = self._hooks(engine_config, ["order-desk"])
+
+        async def execute(**kwargs):
+            seen.append(kwargs["message"])
+            if len(seen) == 1:
+                await gate.wait()
+            return _run(RunStatus.COMPLETED)
+
+        hooks.runner.execute = AsyncMock(side_effect=execute)
+        hooks._event_triggers["platform"][0]["include_payload"] = True
+        p1, p2, p3, p4 = self._patches()
+        with p1, p2, p3, p4:
+            for i in range(3):
+                data = {b"type": EVENT.encode(), b"payload": f'{{"n": {i}}}'.encode()}
+                await hooks._dispatch(STREAM, f"{i}-0".encode(), data, AsyncMock(), "g")
+            await asyncio.sleep(0.05)
+            assert len(seen) == 1  # the others wait their turn
+            gate.set()
+            await hooks.drain()
+        assert [f'"n":{i}' in m for i, m in enumerate(seen)] == [True, True, True]
+
+    @pytest.mark.asyncio
+    async def test_workflows_dispatched_before_the_events_agents_run(self, engine_config):
+        import asyncio
+
+        gate = asyncio.Event()
+        hooks = self._hooks(engine_config, ["slow-agent"])
+
+        async def execute(**kwargs):
+            await gate.wait()
+            return _run(RunStatus.COMPLETED)
+
+        hooks.runner.execute = AsyncMock(side_effect=execute)
+        hooks.workflow_engine = MagicMock()
+        hooks.workflow_engine.get_workflows_for_event.return_value = [_wf()]
+        hooks.workflow_engine.execute = AsyncMock(return_value=_run(RunStatus.COMPLETED))
+        p1, p2, p3, p4 = self._patches()
+        with p1, p2, p3, p4:
+            await hooks._dispatch(STREAM, b"1-0", {b"type": EVENT.encode()}, AsyncMock(), "g")
+            for _ in range(50):
+                if hooks.workflow_engine.execute.await_count:
+                    break
+                await asyncio.sleep(0.01)
+            hooks.workflow_engine.execute.assert_awaited_once()
+            gate.set()
+            await hooks.drain()
