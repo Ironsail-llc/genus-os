@@ -1,3 +1,9 @@
+## [1.113.0](https://github.com/Ironsail-llc/genus-os/compare/v1.112.0...v1.113.0) (2026-10-28)
+
+### Features
+
+* **plugins:** plugin agents, scaffold, cve bump, docs ([GO-22](https://ironsail.atlassian.net/browse/GO-22),[GO-29](https://ironsail.atlassian.net/browse/GO-29),[GO-30](https://ironsail.atlassian.net/browse/GO-30),[GO-32](https://ironsail.atlassian.net/browse/GO-32),GEN-3) ([#726](https://github.com/Ironsail-llc/genus-os/issues/726)) ([ea1afff](https://github.com/Ironsail-llc/genus-os/commit/ea1afff66404680533b51a3fb0cbf7086a3cb691)), closes [#714](https://github.com/Ironsail-llc/genus-os/issues/714) [#715](https://github.com/Ironsail-llc/genus-os/issues/715) [#713](https://github.com/Ironsail-llc/genus-os/issues/713) [#715](https://github.com/Ironsail-llc/genus-os/issues/715) [#716](https://github.com/Ironsail-llc/genus-os/issues/716)
+
 ## [1.112.0](https://github.com/Ironsail-llc/genus-os/compare/v1.111.0...v1.112.0) (2026-10-27)
 
 ### Features
