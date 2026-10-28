@@ -352,9 +352,15 @@ def is_inbox_secret(
     path: str | os.PathLike[str],
     *,
     workspace: str | Path | None = None,
-    channel: str = "telegram",
+    channel: str | None = None,
 ) -> bool:
     """Is *path* the inbox copy of a file that holds credentials?
+
+    ``channel`` narrows the answer to one channel's subtree; ``None`` (the
+    default, and what ``read_file`` / ``send_file`` / the browser pass) asks of
+    the whole ``<workspace>/inbox/`` tree. The default used to be
+    ``"telegram"``, which would have left an email attachment named ``.env``
+    — kept under ``inbox/email/.../secret/`` — readable by ``read_file``.
 
     Answered from the DIRECTORY, not the filename. The first version of this
     stripped the ``<file_unique_id>-`` prefix by splitting on the first ``-``
@@ -379,7 +385,12 @@ def is_inbox_secret(
     (``send_file`` has ``ctx.workspace``); otherwise settings answer.
     """
     resolved = Path(str(path)).expanduser().resolve(strict=False)
-    root = inbox_root(workspace, channel=channel).resolve(strict=False)
+    channel_root = (
+        inbox_root(workspace, channel=channel)
+        if channel is not None
+        else _workspace_root(workspace) / INBOX_DIRNAME
+    )
+    root = channel_root.resolve(strict=False)
     if root != resolved and root not in resolved.parents:
         return False
     # Relative to the channel root, so only the layout's own `secret/` segment

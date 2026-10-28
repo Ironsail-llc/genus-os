@@ -76,6 +76,7 @@ PR_REVIEW_TOOLS = frozenset(
 
 MAIL_SEARCH_TOOL = "gws_gmail_search"
 MAIL_GET_TOOL = "gws_gmail_get"
+MAIL_ATTACHMENT_TOOL = "gws_gmail_get_attachment"
 MAIL_SEND_TOOL = "gws_gmail_send"
 MAIL_REPLY_TOOL = "gws_gmail_reply"
 MAIL_MODIFY_TOOL = "gws_gmail_modify"
@@ -89,7 +90,7 @@ CHAT_SEND_TOOL = "gws_chat_send"
 CHAT_LIST_SPACES_TOOL = "gws_chat_list_spaces"
 CHAT_LIST_MESSAGES_TOOL = "gws_chat_list_messages"
 
-MAIL_READ_TOOLS: frozenset[str] = frozenset({MAIL_SEARCH_TOOL, MAIL_GET_TOOL})
+MAIL_READ_TOOLS: frozenset[str] = frozenset({MAIL_SEARCH_TOOL, MAIL_GET_TOOL, MAIL_ATTACHMENT_TOOL})
 #: Tools that put a message in someone's inbox.
 MAIL_SEND_TOOLS: frozenset[str] = frozenset({MAIL_SEND_TOOL, MAIL_REPLY_TOOL})
 MAIL_WRITE_TOOLS: frozenset[str] = MAIL_SEND_TOOLS | {MAIL_MODIFY_TOOL}

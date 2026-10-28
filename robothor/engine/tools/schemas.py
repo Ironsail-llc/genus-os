@@ -2260,9 +2260,9 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
                 "Use this when you already have a message or thread id and need the text "
                 "of the email itself. Returns headers (from/to/cc/date/subject/"
                 "message_id), labels, snippet and the DECODED body_text — plain text, "
-                "never base64 — with attachments listed by filename, size and type and "
-                "never inlined. Given a thread_id it returns every message in the thread, "
-                "oldest first."
+                "never base64 — with attachments listed (filename, size, type, "
+                "attachment_id), never inlined. Given a thread_id it returns every "
+                "message in the thread, oldest first."
             ),
             "parameters": {
                 "type": "object",
@@ -2283,6 +2283,34 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
                         "description": "Cap on decoded body characters per message. Defaults to a value that fits the engine's tool-output limit; a cut body says body_truncated: true and body_chars.",
                     },
                 },
+            },
+        },
+    }
+    schemas["gws_gmail_get_attachment"] = {
+        "type": "function",
+        "function": {
+            "name": "gws_gmail_get_attachment",
+            "description": (
+                "Use this to open or read a file attached to an email, once "
+                "gws_gmail_get has listed its attachment_id. Downloads it (up to 20 MB) "
+                "into the local inbox and returns path, filename, mime_type, size_bytes, "
+                "format and the text of a PDF, Word, Excel, PowerPoint or text file (up "
+                "to 50,000 chars; truncated says if cut). An image returns a path for "
+                "view_image."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "message_id": {
+                        "type": "string",
+                        "description": "The id of the message carrying the attachment",
+                    },
+                    "attachment_id": {
+                        "type": "string",
+                        "description": "The attachment's attachment_id from gws_gmail_get",
+                    },
+                },
+                "required": ["message_id", "attachment_id"],
             },
         },
     }

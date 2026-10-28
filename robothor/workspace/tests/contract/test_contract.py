@@ -307,6 +307,7 @@ async def test_cancellation_before_the_write_writes_nothing(workspace_env) -> No
 _PLAUSIBLE_ARGS: dict[str, dict[str, Any]] = {
     "gws_gmail_search": {"query": "from:bob@example.com"},
     "gws_gmail_get": {"message_id": "m1"},
+    "gws_gmail_get_attachment": {"message_id": "m1", "attachment_id": "1"},
     "gws_gmail_send": {"to": BOB, "subject": "s", "body": "b"},
     "gws_gmail_reply": {"thread_id": "t1", "body": "b"},
     "gws_gmail_modify": {"message_id": "m1", "add_labels": ["STARRED"]},
