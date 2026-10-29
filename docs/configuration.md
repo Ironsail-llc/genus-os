@@ -638,8 +638,10 @@ so it is declared `restart: no`: a new value applies as soon as the engine's
 settings are re-read.
 
 Each successful exchange is appended to the conversation's session history
-(trimmed to the platform's usual window), which is what gives a channel
-conversation memory; a refused or failed message appends nothing. A channel
+(trimmed to the platform's usual window) and saved through the same chat store
+the Helm uses, so a channel conversation is remembered across restarts; a
+refused or failed message records nothing. Ordering and the cap are per engine
+process: a deployment with several replicas orders and caps within each one. A channel
 can opt out per message, or hand the run only the last few turns, through
 `handle_message`'s `record_turn` and `history_limit` arguments
 ([Plugins](PLUGINS.md)).

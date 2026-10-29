@@ -300,8 +300,9 @@ accepting it.
 
 **Let the pipeline own ordering and memory.** `channels.inbound.handle_message`
 serialises messages that share a `session_key`, runs different keys
-concurrently up to `ROBOTHOR_CHANNEL_MAX_CONCURRENT_RUNS`, and appends each
-successful exchange to the session's history. So pick a `session_key` per
+concurrently up to `ROBOTHOR_CHANNEL_MAX_CONCURRENT_RUNS`, and records each
+successful exchange in the session's history and the chat store, so it is
+remembered across restarts. Ordering and the cap are per engine process. So pick a `session_key` per
 conversation (per visitor, for a public chat) and call it from as many
 concurrent handlers as you like. Pass `record_turn=False` for a message that
 should not be remembered, and `history_limit=N` to hand the run only the last
