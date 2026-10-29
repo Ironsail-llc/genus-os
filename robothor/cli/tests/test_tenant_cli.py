@@ -102,7 +102,9 @@ def test_set_domains_merges_into_existing_settings(capsys) -> None:
         "theme": "dark",
         "sso_domains": ["example.com", "other.example"],
     }
-    assert "example.com" in capsys.readouterr().out
+    assert capsys.readouterr().out == (
+        "Tenant 'acme-parent' SSO domains: example.com, other.example\n"
+    )
 
 
 def test_set_domains_with_no_domains_clears_the_claim() -> None:
@@ -125,8 +127,9 @@ def test_set_domains_reports_a_conflict(capsys) -> None:
     ):
         rc = cmd_tenant(_parse("set-domains", "acme-child-a", "example.com"))
     assert rc == 1
-    err = capsys.readouterr().err
-    assert "example.com" in err and "acme-parent" in err
+    assert capsys.readouterr().err == (
+        "Error: domain 'example.com' is already claimed by tenant 'acme-parent'\n"
+    )
 
 
 def test_set_domains_reports_a_malformed_domain(capsys) -> None:
@@ -161,7 +164,7 @@ def test_status_shows_sso_domains(capsys) -> None:
     ):
         assert cmd_tenant(_parse("status", "acme-parent")) == 0
     out = capsys.readouterr().out
-    assert "SSO domains" in out and "example.com, other.example" in out
+    assert "  SSO domains: example.com, other.example" in out.splitlines()
     # get_tenant returns the API shape (camelCase); status must read it.
     assert "Acme Parent" in out
 
@@ -248,7 +251,7 @@ def test_move_account_unknown_email_fails(capsys) -> None:
         )
     assert rc == 1
     mv.assert_not_called()
-    assert "bob@example.com" in capsys.readouterr().err
+    assert capsys.readouterr().err == "Error: no account for bob@example.com.\n"
 
 
 def test_move_account_from_that_matches_nothing_fails() -> None:

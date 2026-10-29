@@ -21,6 +21,7 @@ from robothor.db.connection import (
     read_every_tenant_in_transaction,
     unbound_scope,
 )
+from robothor.sanitize import sanitize_log
 
 logger = logging.getLogger(__name__)
 
@@ -349,9 +350,9 @@ def tenant_for_email(email: str) -> str:
         logger.error(
             "tenant_for_email: domain %s is claimed by %d tenants (%s); "
             "provisioning into the default tenant until the claim is fixed",
-            domain,
+            sanitize_log(domain),
             len(matches),
-            ", ".join(matches),
+            sanitize_log(", ".join(matches)),
         )
     return DEFAULT_TENANT
 

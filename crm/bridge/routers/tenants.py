@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from fastapi import APIRouter, Query, Request
@@ -16,6 +17,9 @@ from robothor.crm.dal import (
     update_tenant,
 )
 from robothor.crm.tenant_domains import InvalidSsoDomainError, SsoDomainConflictError
+from robothor.sanitize import sanitize_log
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/tenants", tags=["tenants"])
 
@@ -72,9 +76,17 @@ def _may_edit_tenant(request: Request, tenant_id: str) -> bool:
 
 
 def _domain_error(exc: ValueError) -> JSONResponse:
-    """409 for a domain another tenant claims, 422 for a malformed one."""
-    status = 409 if isinstance(exc, SsoDomainConflictError) else 422
-    return JSONResponse({"error": str(exc)}, status_code=status)
+    """409 for a domain another tenant claims, 422 for a malformed one.
+
+    A fixed message, never the exception text: which tenant holds a domain
+    is not this caller's to learn. The detail goes to the server log.
+    """
+    logger.info("tenant sso_domains refused: %s", sanitize_log(exc))
+    if isinstance(exc, SsoDomainConflictError):
+        return JSONResponse(
+            {"error": "an sso domain is already claimed by another tenant"}, status_code=409
+        )
+    return JSONResponse({"error": "invalid sso_domains"}, status_code=422)
 
 
 @router.get("")

@@ -86,7 +86,7 @@ async def test_patch_tenant_rejects_a_domain_another_tenant_claims(test_client):
             "/api/tenants/acme-child-a", json={"settings": {"sso_domains": ["example.com"]}}
         )
     assert res.status_code == 409
-    assert "example.com" in res.json()["error"]
+    assert res.json() == {"error": "an sso domain is already claimed by another tenant"}
 
 
 @pytest.mark.asyncio
@@ -99,6 +99,7 @@ async def test_patch_tenant_rejects_a_malformed_domain(test_client):
             "/api/tenants/acme-child-a", json={"settings": {"sso_domains": ["not a domain"]}}
         )
     assert res.status_code == 422
+    assert res.json() == {"error": "invalid sso_domains"}
 
 
 @pytest.mark.asyncio
