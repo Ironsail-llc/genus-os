@@ -1,10 +1,10 @@
 /**
  * Workflows, now the lower half of the Automations view.
  *
- * The claims are the ones the old `WorkflowsView` test made — it lists what has
- * run, it states the run-history limitation out loud, it does not touch the
- * bridge while hidden, and it has a loading and an empty state. Only the
- * component they are made about moved.
+ * It lists every workflow the bridge reports — including one defined in
+ * `docs/workflows/` that has never run, labelled with where it came from — it
+ * does not touch the bridge while hidden, and it has a loading and an empty
+ * state.
  */
 import { render, screen } from "@testing-library/react";
 import { describe, it, expect, vi, afterEach } from "vitest";
@@ -13,14 +13,36 @@ import { WorkflowsSection } from "../automations/workflows-section";
 afterEach(() => vi.restoreAllMocks());
 
 describe("WorkflowsSection", () => {
-  it("lists workflows and states the run-history limitation", async () => {
+  it("lists workflows, including one defined but never run, with where each came from", async () => {
     vi.spyOn(global, "fetch").mockResolvedValue({
       ok: true,
-      json: async () => [{ workflow_id: "intel", runs: 3, last_status: "completed", failures: 0 }],
+      json: async () => [
+        {
+          workflow_id: "intel",
+          runs: 3,
+          last_status: "completed",
+          failures: 0,
+          source: "workspace",
+        },
+        {
+          workflow_id: "desk-pass",
+          runs: 0,
+          last_status: null,
+          failures: 0,
+          source: "plugin:acme-desk",
+        },
+      ],
     } as Response);
     render(<WorkflowsSection visible />);
     expect(await screen.findByTestId("workflow-row-intel")).toBeTruthy();
-    expect(screen.getByTestId("workflows-section").textContent).toMatch(/run at least once/i);
+    const neverRun = screen.getByTestId("workflow-row-desk-pass");
+    expect(neverRun.textContent).toContain("never run");
+    expect(screen.getByTestId("workflow-source-desk-pass").textContent).toContain(
+      "plugin:acme-desk"
+    );
+    expect(screen.getByTestId("workflow-source-intel").textContent).toContain("workspace");
+    // The old caveat is gone: never-run workflows are listed now.
+    expect(screen.getByTestId("workflows-section").textContent).not.toMatch(/run at least once/i);
   });
 
   it("does not fetch when hidden", () => {
