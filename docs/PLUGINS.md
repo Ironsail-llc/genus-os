@@ -134,9 +134,11 @@ calls a person must check the same opt-out the email tools do.
 numbers, exactly as you passed them, that belong to a person marked do not
 contact. It compares the last ten digits, so a number written with a `+1`
 country code, brackets, spaces or dots matches the same ten digits written
-plainly; a number with fewer than ten digits matches nothing. It checks the
-person's primary number, their additional numbers and their SMS and voice
-identifiers. Drop every returned number before sending, and treat an
+plainly; a number with fewer than ten digits matches nothing. The match
+assumes NANP (US/Canada) numbers; an international deployment must normalise
+both sides to E.164 before calling (nine-digit national numbers never match).
+It checks the person's primary number, their additional numbers and their
+SMS and voice identifiers. Drop every returned number before sending, and treat an
 exception as a refusal: a lookup that failed is not a clean list.
 
 The knowledge-base tools (`kb_*`) are engine tools, not imports: an agent
