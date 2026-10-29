@@ -293,3 +293,41 @@ class TestOverview:
     def test_nothing_installed(self, workspace, monkeypatch, fake_registry) -> None:
         monkeypatch.setattr("robothor.plugins.inventory.inventory", lambda: ())
         assert _call()["plugins"] == []
+
+
+class TestNoValuesInLogsOrWarnings:
+    """A failure is reported by file and exception CLASS, never by its text."""
+
+    def test_an_unparseable_workflow_logs_its_file_and_class_only(self, workspace, caplog) -> None:
+        import logging
+
+        from robothor.plugins.overview import parse_workflow_file
+
+        path = workspace / "docs" / "workflows" / "bad.yaml"
+        _write(
+            path,
+            {
+                "id": "bad",
+                "steps": [{"id": "value-that-must-not-be-logged", "tool_timeout_seconds": 0}],
+            },
+        )
+        with caplog.at_level(logging.DEBUG, logger="robothor.plugins.overview"):
+            assert parse_workflow_file(path) is None
+        assert "bad.yaml" in caplog.text
+        assert "ValueError" in caplog.text
+        assert "value-that-must-not-be-logged" not in caplog.text
+        assert all(r.exc_info is None for r in caplog.records)
+
+    def test_a_ledger_os_error_does_not_echo_its_text(
+        self, workspace, monkeypatch, fake_loader, fake_registry
+    ) -> None:
+        ledger = workspace / ".robothor" / "plugin-assets.yaml"
+        _write(ledger, {"plugins": {}})
+
+        def refuse(_instance):
+            raise PermissionError("/home/alice/secret-path denied")
+
+        monkeypatch.setattr("robothor.plugins.overview.read_ledger", refuse)
+        warnings = _call()["warnings"]
+        assert any("PermissionError" in w for w in warnings)
+        assert not any("/home/alice" in w for w in warnings)
