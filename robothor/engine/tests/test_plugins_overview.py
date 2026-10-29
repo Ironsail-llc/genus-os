@@ -379,9 +379,7 @@ class TestRound2:
         from robothor.plugins.overview import workflow_sources, workspace_assets
 
         ledger = {
-            "plugins": {
-                "acme-desk": {"files": {"docs/workflows/legacy.yml": {"sha256": "0" * 64}}}
-            }
+            "plugins": {"acme-desk": {"files": {"docs/workflows/legacy.yml": {"sha256": "0" * 64}}}}
         }
         _write(workspace / ".robothor" / "plugin-assets.yaml", ledger)
         written = workspace_assets(workspace)["acme-desk"]

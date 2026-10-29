@@ -102,7 +102,14 @@ def plugin_listing() -> dict[str, Any]:
     from robothor.plugins.registry import configured_indexes
 
     lock = read_lockfile()
-    assets = workspace_assets()
+    assets_error: str | None = None
+    try:
+        assets = workspace_assets()
+    except Exception as exc:  # noqa: BLE001 - one unreadable file must not hide every plugin
+        # The class only: an OSError's text carries the absolute path.
+        logger.warning("plugin workspace assets could not be read (%s)", type(exc).__name__)
+        assets = {}
+        assets_error = f"The plugin workspace assets could not be read ({type(exc).__name__})."
     return {
         "generation": generation(),
         # The indexes this instance reads, in order, so an install form can
@@ -128,19 +135,25 @@ def plugin_listing() -> dict[str, Any]:
             # `Lockfile.problem` is built from the error class, not the file.
             "problem": lock.problem or None,
         },
-        "plugins": [_with_assets(row.as_json(), assets) for row in inventory()],
+        "plugins": [_with_assets(row.as_json(), assets, assets_error) for row in inventory()],
     }
 
 
-def _with_assets(row: dict[str, Any], assets: dict[str, dict[str, Any]]) -> dict[str, Any]:
+def _with_assets(
+    row: dict[str, Any], assets: dict[str, dict[str, Any]], error: str | None = None
+) -> dict[str, Any]:
     """Add what the plugin wrote into the workspace, from the asset ledger.
 
     Workspace-relative destinations only, never where the workspace is: the
-    same rule as the rest of this response.
+    same rule as the rest of this response. When the ledger could not be read
+    at all, the lists are empty and ``error`` says so, by exception class.
     """
     from robothor.plugins.overview import assets_for
 
-    row["assets"] = assets_for(assets, str(row.get("name") or ""))
+    written: dict[str, Any] = assets_for(assets, str(row.get("name") or ""))
+    if error:
+        written["error"] = error
+    row["assets"] = written
     return row
 
 
