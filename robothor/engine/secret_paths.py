@@ -527,16 +527,63 @@ def _changed_directories(segments: list[list[str]]) -> list[str]:
     return found
 
 
-def _relative_names_moved_key(candidate: str, shell_dirs: list[str], moved_names: set[str]) -> bool:
+#: Printers whose positional arguments are all FILES. A searcher's first
+#: positional argument is its pattern instead, so the bare-basename rule below
+#: must not read ``grep key config.yaml`` as printing a file called ``key``.
+_FILE_ONLY_PRINTERS = frozenset(
+    {
+        "cat",
+        "tac",
+        "head",
+        "tail",
+        "less",
+        "more",
+        "nl",
+        "strings",
+        "xxd",
+        "hexdump",
+        "od",
+        "base64",
+        "base32",
+    }
+)
+_SEARCHERS = frozenset({"grep", "egrep", "fgrep", "rg", "ag", "ack"})
+
+
+def _search_pattern_index(word: str, args: list[str]) -> int | None:
+    """Index in ``args`` of a searcher's positional PATTERN, or None.
+
+    None when the pattern was given with ``-e``/``--regexp``/``-f`` (then every
+    positional argument is a file), or when ``word`` is not a searcher.
+    """
+    if word not in _SEARCHERS:
+        return None
+    if any(a in ("-e", "--regexp", "-f", "--file") or a.startswith("--regexp=") for a in args):
+        return None
+    for index, arg in enumerate(args):
+        if not arg.startswith("-"):
+            return index
+    return None
+
+
+def _relative_names_moved_key(
+    candidate: str, shell_dirs: list[str], moved_names: set[str], *, file_only: bool
+) -> bool:
     """A RELATIVE printer argument that may be a moved key or salt.
 
     Refused when it resolves to one under any directory the command ``cd``s
-    into, and — because a script or a subshell can change directory where
-    this cannot see it — whenever its basename is the override file's own.
+    into. And — because a script or a subshell can change directory where this
+    cannot see it — when its basename is the override file's own, but only
+    where the argument is plainly a path: it contains a ``/``, a ``cd`` is
+    visible, or the printer takes nothing but files (``cat``, ``head``, ``xxd``
+    ...). So a SEARCH PATTERN spelled like the key (``grep key config.yaml``,
+    ``rg key src/``) is not refused; the caller skips a searcher's pattern
+    argument altogether.
     """
     if not moved_names or candidate.startswith(("/", "~")):
         return False
-    if Path(candidate).name in moved_names:
+    looks_like_a_path = "/" in candidate or bool(shell_dirs) or file_only
+    if looks_like_a_path and Path(candidate).name in moved_names:
         return True
     return any(is_secret_path(str(Path(directory) / candidate)) for directory in shell_dirs)
 
@@ -577,13 +624,15 @@ def exec_reads_secret(command: str) -> str | None:
         ):
             return f"refused: `{word}` prints the process environment, which holds credentials"
         if word in _PRINTERS:
-            for arg in args:
+            pattern_at = _search_pattern_index(word, args)
+            for index, arg in enumerate(args):
                 if arg.startswith("-"):
                     continue
                 candidate = arg.strip("'\"")
-                if is_secret_path(candidate) or _relative_names_moved_key(
-                    candidate, shell_dirs, moved_names
-                ):
+                moved = index != pattern_at and _relative_names_moved_key(
+                    candidate, shell_dirs, moved_names, file_only=word in _FILE_ONLY_PRINTERS
+                )
+                if is_secret_path(candidate) or moved:
                     return (
                         f"refused: `{word}` would print {PurePath(candidate).name}, a secrets "
                         "file. Credentials are supplied to tools by the platform; source the "
