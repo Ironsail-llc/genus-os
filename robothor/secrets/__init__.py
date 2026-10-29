@@ -124,7 +124,7 @@ class ResolvedSecret(NamedTuple):
 
 #: What the vault answered for a key, so a hot caller does not ask twice.
 #:
-#: Keyed by ``(tenant, vault_key or name)`` and holding ``(value, available)``
+#: Keyed by ``(binding, tenant, vault_key or name)`` and holding ``(value, available)``
 #: — the MISS is cached too, because ``build_exec_env`` resolves an unset grant
 #: on every ``exec`` and ``_remote_enabled`` asks about a provider that may not
 #: be configured, so remembering only hits would leave the common case paying
@@ -140,7 +140,14 @@ class ResolvedSecret(NamedTuple):
 #: reach this process. And a short TTL, for the writers that cannot: the CLI and
 #: the setup wizard are separate processes, and a cache with no TTL made every
 #: one of their writes invisible to a running engine until a restart.
-_vault_cache: dict[tuple[str, str], tuple[str | None, bool, float]] = {}
+#:
+#: ``binding`` is the tenant the vault's connection is RLS-bound to
+#: (:func:`robothor.db.connection.effective_tenant`). The same ``(tenant, key)``
+#: question has different answers under different bindings once RLS is on: a
+#: root-tenant hit served from here inside a child tenant's request would hand
+#: the child a credential the database itself refuses, and a child's miss would
+#: blank the root's next read.
+_vault_cache: dict[tuple[str, str, str], tuple[str | None, bool, float]] = {}
 
 #: How long a cached HIT is served. Short, because this process is not the only
 #: writer: ``genus vault set``, ``genus secrets migrate``, ``genus channel add``
@@ -182,6 +189,15 @@ def _clean(value: str | None) -> str | None:
     return stripped or None
 
 
+def _rls_binding() -> str:
+    """The tenant a vault connection opened now would be RLS-bound to."""
+    try:
+        from robothor.db.connection import effective_tenant
+    except Exception:  # noqa: BLE001 - no database layer means no binding
+        return ""
+    return effective_tenant()
+
+
 def _vault_read(
     name: str, vault_key: str | None, tenant_id: str, *, live: bool = False
 ) -> tuple[str | None, bool]:
@@ -196,7 +212,7 @@ def _vault_read(
     if not live and _vault_retry_after is not None and _clock() < _vault_retry_after:
         return None, False
 
-    cache_key = (tenant_id, vault_key or name)
+    cache_key = (_rls_binding(), tenant_id, vault_key or name)
     if not live:
         cached = _vault_cache.get(cache_key)
         if cached is not None:

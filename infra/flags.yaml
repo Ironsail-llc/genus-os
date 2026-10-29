@@ -947,3 +947,22 @@ flags:
       that fires it and (b) twenty real task specs read read-only from the
       benchmark checkout that produce nothing. Only after both does a promotion
       date belong here at all.
+
+  - name: GENUS_TENANT_SWITCH_MODE
+    owner: ops
+    mode: "off"
+    soak: >
+      NEW in 1.117.0. Lets a root-tenant owner or admin switch into a
+      descendant tenant through POST /api/auth/switch-tenant (the AssumeRole
+      pattern: the acting tenant is carried in the token, never in a header).
+      `off` refuses every switch with 403; `observe` runs the full validation,
+      logs `tenant.switch would-allow` / `would-deny` with both tenant ids and
+      still refuses; `enforce` issues the acting token, and only while
+      row-level security is genuinely enforcing (the inert-RLS gate shared with
+      federation; GENUS_TENANT_SWITCH_ALLOW_INERT_RLS is its escape hatch).
+
+      Inventoried here but NOT in GOVERNED_FLAGS: it is read by the BRIDGE
+      through robothor.settings, not by the engine through
+      robothor.engine.feature_flags, so a Controls row would be a switch that
+      writes a value nothing reads. See tests/test_flag_registry_single_source.py,
+      MANIFEST_ONLY_FLAGS, and docs/runbooks/GUARDRAIL_FLIPS.md for the ladder.

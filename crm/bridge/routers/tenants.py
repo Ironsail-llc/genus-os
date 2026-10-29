@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Query
+from typing import Any
+
+from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 from models import CreateTenantRequest, UpdateTenantRequest
 
+from robothor.crm import dal as crm_dal
 from robothor.crm.dal import (
     create_tenant,
     get_tenant,
@@ -40,6 +43,36 @@ def api_create_tenant(body: CreateTenantRequest):
     if tenant_id:
         return {"id": tenant_id, "displayName": body.displayName}
     return JSONResponse({"error": "failed to create tenant (may already exist)"}, status_code=409)
+
+
+@router.get("/accessible", response_model=None)
+def api_accessible_tenants(request: Request) -> list[dict[str, Any]] | JSONResponse:
+    """The tenants this human may act in: home first, then its descendants.
+
+    Rooted at the HOME tenant even while the caller is acting in a child, so
+    the picker always offers the way back. Owners and admins get descendants
+    to depth 3 (``resolve_accessible_tenants``); every other role gets only
+    its home. Declared before ``/{tenant_id}`` so it is not read as an id.
+    """
+    from robothor.engine.permissions import resolve_accessible_tenants
+
+    auth = getattr(request.state, "auth", None)
+    if auth is None or auth.is_service:
+        return JSONResponse({"error": "human user required"}, status_code=403)
+    home = auth.home_tenant_id
+    rows: list[dict[str, Any]] = []
+    for tenant_id in resolve_accessible_tenants(home, auth.role):
+        row = crm_dal.get_tenant(tenant_id) or {}
+        rows.append(
+            {
+                "id": tenant_id,
+                "display_name": row.get("displayName") or tenant_id,
+                "parent_tenant_id": row.get("parentTenantId"),
+                "is_home": tenant_id == home,
+            }
+        )
+    rows.sort(key=lambda r: not r["is_home"])  # stable: home first, order kept
+    return rows
 
 
 @router.get("/{tenant_id}")

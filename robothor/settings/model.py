@@ -1670,6 +1670,29 @@ class AuthSettings(SettingsGroup):
         "Role assigned to internal service callers. A fresh install with this "
         "unseeded denies every agent every tool.",
     )
+    tenant_switch_mode: str = declare(
+        "off",
+        "GENUS_TENANT_SWITCH_MODE",
+        "Whether a root-tenant owner or admin may switch into a descendant "
+        "tenant (POST /api/auth/switch-tenant). 'off' refuses every switch; "
+        "'observe' runs the full check, logs would-allow / would-deny and still "
+        "refuses; 'enforce' issues the acting token — and only while row-level "
+        "security is genuinely enforcing. Any other value reads as 'off'.",
+        aliases=("ROBOTHOR_TENANT_SWITCH_MODE",),
+        restart_units=("robothor-bridge",),
+        since="1.117.0",
+    )
+    tenant_switch_allow_inert_rls: bool = declare(
+        False,
+        "GENUS_TENANT_SWITCH_ALLOW_INERT_RLS",
+        "Let tenant switching issue tokens while row-level security is inert "
+        "(ROBOTHOR_RLS_ENABLED unset, or a superuser connection). A deliberate "
+        "escape hatch: without RLS the acting tenant is enforced only by each "
+        "query's own WHERE clause.",
+        aliases=("ROBOTHOR_TENANT_SWITCH_ALLOW_INERT_RLS",),
+        restart_units=("robothor-bridge",),
+        since="1.117.0",
+    )
 
 
 # ---------------------------------------------------------------------------

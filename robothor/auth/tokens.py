@@ -117,10 +117,21 @@ def signing_key() -> str:
             "(cached verdict; the vault is re-probed once per cooldown)"
         )
 
-    # live=True: the generate branch below acts on "missing", so the verdict
-    # must come from the vault NOW, not from a cooldown that may be sitting out
-    # a vault that has since recovered.
-    resolved = resolve_secret(_ENV_NAME, vault_key=_VAULT_KEY, live=True)
+    from robothor.constants import DEFAULT_TENANT
+    from robothor.db.connection import tenant_scope
+
+    # The signing key is the INSTANCE's, never a tenant's. The bridge binds
+    # each request to its token's tenant and the vault now follows that scope,
+    # so a first resolution inside a child tenant's request would otherwise
+    # find nothing (RLS hides the root row), generate, and rotate every live
+    # session. Pin both the row and the connection binding to the root tenant.
+    with tenant_scope(DEFAULT_TENANT):
+        # live=True: the generate branch below acts on "missing", so the
+        # verdict must come from the vault NOW, not from a cooldown that may be
+        # sitting out a vault that has since recovered.
+        resolved = resolve_secret(
+            _ENV_NAME, vault_key=_VAULT_KEY, tenant_id=DEFAULT_TENANT, live=True
+        )
     if resolved.value is not None:
         if len(resolved.value.encode("utf-8")) < 32:
             raise TokenError(
@@ -148,7 +159,8 @@ def signing_key() -> str:
     from robothor import vault
 
     key = secrets.token_urlsafe(48)
-    vault.set(_VAULT_KEY, key, category="auth")
+    with tenant_scope(DEFAULT_TENANT):
+        vault.set(_VAULT_KEY, key, category="auth", tenant_id=DEFAULT_TENANT)
     _signing_key_cache = key
     return key
 
@@ -170,6 +182,7 @@ def issue_access_token(
     audience: str = DEFAULT_AUDIENCE,
     scopes: Iterable[str] | None = None,
     agent_id: str | None = None,
+    home_tenant_id: str | None = None,
 ) -> str:
     """Mint a signed access JWT carrying a complete verified identity.
 
@@ -177,6 +190,12 @@ def issue_access_token(
     ``user_id`` for source compatibility).  Callers may select another
     audience for engine/orchestrator tokens, but verifiers must request that
     same audience explicitly.
+
+    ``home_tenant_id`` is the tenant the account belongs to; ``tenant_id`` is
+    the one the token ACTS in. They differ only for a token minted by
+    ``POST /api/auth/switch-tenant`` (the AssumeRole pattern), which then
+    carries ``act: true``. Every token carries ``home_tid``, defaulting to
+    ``tid``. A service token cannot act outside its own tenant.
     """
     if typ not in _TOKEN_TYPES:
         raise ValueError(f"unsupported token type: {typ}")
@@ -188,6 +207,10 @@ def issue_access_token(
         role = role or "service"
     elif agent_id is not None:
         raise ValueError("user tokens cannot carry agent_id")
+
+    home = home_tenant_id or tenant_id
+    if typ == "service" and home != tenant_id:
+        raise ValueError("service tokens cannot act in another tenant")
 
     normalized_scopes = _normalize_scopes(scopes or _default_scopes(typ, role))
     if not normalized_scopes:
@@ -208,6 +231,9 @@ def issue_access_token(
         "iat": now,
         "exp": now + ttl_seconds,
     }
+    claims["home_tid"] = home
+    if home != tenant_id:
+        claims["act"] = True
     if agent_id is not None:
         claims["agent_id"] = agent_id
     return str(jwt.encode(claims, signing_key(), algorithm=ALGORITHM))

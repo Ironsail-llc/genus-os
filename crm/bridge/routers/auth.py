@@ -29,6 +29,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool
 from robothor.auth import accounts, local_login, tokens
 from robothor.auth.deps import get_current_user
 from robothor.constants import DEFAULT_TENANT
+from robothor.db.connection import tenant_scope, unbound_scope
 
 from ._audit import audited
 
@@ -193,7 +194,18 @@ def sso_exchange(
     request: Request,
     x_bridge_auth: str | None = Header(None, alias="X-Bridge-Auth"),
 ) -> dict[str, Any] | JSONResponse:
-    """Exchange verified IdP claims (from the dashboard) for bridge tokens."""
+    """Exchange verified IdP claims (from the dashboard) for bridge tokens.
+
+    Runs unbound: the account may live in any tenant of the hierarchy, and
+    ``(issuer, subject)`` is unique platform-wide (see ``unbound_scope``).
+    """
+    with unbound_scope():
+        return _sso_exchange(body, request, x_bridge_auth)
+
+
+def _sso_exchange(
+    body: SsoExchangeRequest, request: Request, x_bridge_auth: str | None
+) -> dict[str, Any] | JSONResponse:
     if not _sso_secret_ok(x_bridge_auth):
         return JSONResponse({"error": "sso exchange not authorized"}, status_code=403)
     if not _oidc_issuer_allowed(body.issuer):
@@ -223,7 +235,17 @@ def sso_exchange(
 
 @router.post("/refresh", response_model=None)
 def refresh(body: RefreshRequest, request: Request) -> dict[str, Any] | JSONResponse:
-    """Rotate the refresh token and reissue an access token."""
+    """Rotate the refresh token and reissue an access token.
+
+    Unbound for the same reason as ``/sso``: the session names an account in
+    whichever tenant it belongs to. The new access token is a HOME token — a
+    switch into a child tenant does not survive a refresh.
+    """
+    with unbound_scope():
+        return _refresh(body, request)
+
+
+def _refresh(body: RefreshRequest, request: Request) -> dict[str, Any] | JSONResponse:
     h = tokens.hash_refresh_token(body.refresh_token)
     session = accounts.consume_active_session(h)
     if not session:
@@ -237,7 +259,8 @@ def refresh(body: RefreshRequest, request: Request) -> dict[str, Any] | JSONResp
 
 @router.post("/logout")
 def logout(body: LogoutRequest) -> dict[str, bool]:
-    revoked = accounts.revoke_session(tokens.hash_refresh_token(body.refresh_token))
+    with unbound_scope():
+        revoked = accounts.revoke_session(tokens.hash_refresh_token(body.refresh_token))
     return {"success": True, "revoked": revoked}
 
 
@@ -248,7 +271,10 @@ def me(request: Request) -> dict[str, Any] | JSONResponse:
         ctx = get_current_user(request)
     except Exception:
         return JSONResponse({"error": "authentication required"}, status_code=401)
-    account = accounts.get_account_by_id(ctx.user_id)
+    # The account lives in the HOME tenant; while acting in a child the
+    # request is bound to the child, where RLS would hide it.
+    with tenant_scope(ctx.home_tenant_id):
+        account = accounts.get_account_by_id(ctx.user_id)
     if not account or account.get("status") != "active":
         return JSONResponse({"error": "account not found"}, status_code=404)
     # Field-by-field, never `**account`: the row also carries password_hash and
@@ -261,6 +287,181 @@ def me(request: Request) -> dict[str, Any] | JSONResponse:
         "display_name": account["display_name"],
         "mfa_enabled": bool(account.get("mfa_enabled")),
         "mfa_setup_required": local_login.mfa_setup_required_for(account),
+    }
+
+
+# ── Tenant switching (AssumeRole) ────────────────────────────────────
+#
+# A root-tenant owner/admin may act in a descendant tenant. The acting tenant
+# is carried IN THE TOKEN (tid, with home_tid and act) and never in a header:
+# TenantMiddleware already refuses an X-Tenant-Id that disagrees with tid, and
+# TenantScopeMiddleware binds the request's RLS scope to it.
+
+_SWITCH_ROLES = frozenset({"owner", "admin"})
+_SWITCH_MODES = frozenset({"off", "observe", "enforce"})
+_SWITCH_OVERRIDE_ENV = "GENUS_TENANT_SWITCH_ALLOW_INERT_RLS"
+_SWITCH_CONTEXT = "switch tenants"
+_SWITCH_DISABLED = JSONResponse({"error": "tenant switching disabled"}, status_code=403)
+_SWITCH_DENIED = JSONResponse({"error": "tenant not accessible"}, status_code=403)
+_SWITCH_ROLE_DENIED = JSONResponse({"error": "role not authorized"}, status_code=403)
+
+
+class SwitchTenantRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    tenant: str = Field(min_length=1, max_length=255)
+
+
+def _tenant_switch_mode() -> str:
+    """off | observe | enforce. Anything unrecognised reads as off."""
+    mode = str(get_settings().auth.tenant_switch_mode or "").strip().lower()
+    return mode if mode in _SWITCH_MODES else "off"
+
+
+def _switch_denial(ctx: Any, target: str) -> str | None:
+    """Why this identity may not act in ``target``, or None.
+
+    Checked against the HOME tenant, never the acting one, so switching from
+    an already-switched token cannot walk sideways or upwards.
+    """
+    from robothor.engine.permissions import resolve_accessible_tenants
+
+    if ctx.role not in _SWITCH_ROLES:
+        return "role not authorized"
+    if target == ctx.home_tenant_id:
+        return None
+    if target not in resolve_accessible_tenants(ctx.home_tenant_id, ctx.role):
+        return "tenant not accessible"
+    return None
+
+
+def _account_denial(ctx: Any, account: dict[str, Any] | None) -> str | None:
+    """The account must still be active, still hold this role, still live at home.
+
+    Without this a 15-minute access token could renew itself forever by
+    switching, outliving a disabled account or a demotion.
+    """
+    if not account or account.get("status") != "active":
+        return "account inactive"
+    if account.get("role") != ctx.role or account.get("tenant_id") != ctx.home_tenant_id:
+        return "account changed"
+    return None
+
+
+def _rls_refusal() -> str | None:
+    """The inert-RLS gate shared with federation, or None when it passes."""
+    from robothor.federation.rls_gate import RLSInertError, fix_text, require_enforcing_rls
+
+    try:
+        require_enforcing_rls(
+            override_env=_SWITCH_OVERRIDE_ENV,
+            context=_SWITCH_CONTEXT,
+            override=bool(get_settings().auth.tenant_switch_allow_inert_rls),
+        )
+    except RLSInertError as exc:
+        # The reason goes to the journal; the caller gets the fixed fix text,
+        # never an exception string that might carry connection detail.
+        logger.error("tenant.switch refused: %s", exc)
+        return "tenant switching refused: row-level security is not enforcing. " + fix_text(
+            _SWITCH_OVERRIDE_ENV, _SWITCH_CONTEXT
+        )
+    return None
+
+
+@router.post("/switch-tenant", response_model=None)
+def switch_tenant(body: SwitchTenantRequest, request: Request) -> dict[str, Any] | JSONResponse:
+    """Issue an access token acting in a descendant tenant (or back at home).
+
+    Refused unless ``GENUS_TENANT_SWITCH_MODE=enforce``; ``observe`` runs every
+    check, logs what it would have done, and refuses. The refresh token is
+    untouched and keeps the home tenant, so the response carries no new one.
+    """
+    if _caller_is_service(request):
+        return _SERVICE_REFUSED
+    ctx = _verified_caller(request)
+    if ctx is None:
+        return JSONResponse({"error": "authentication required"}, status_code=401)
+    mode = _tenant_switch_mode()
+    if mode == "off":
+        return _SWITCH_DISABLED
+
+    home = ctx.home_tenant_id
+    target = body.tenant.strip()
+    with unbound_scope():
+        account = accounts.get_account_by_id(ctx.user_id)
+        denial = _switch_denial(ctx, target) or _account_denial(ctx, account)
+        refusal = None if denial else _rls_refusal()
+
+    if mode == "observe":
+        if denial:
+            logger.info(
+                "tenant.switch would-deny user=%s home=%s target=%s reason=%s",
+                ctx.user_id,
+                home,
+                target,
+                denial,
+            )
+        elif refusal:
+            logger.info(
+                "tenant.switch would-refuse user=%s home=%s target=%s: row-level "
+                "security is not enforcing",
+                ctx.user_id,
+                home,
+                target,
+            )
+        else:
+            logger.info(
+                "tenant.switch would-allow user=%s home=%s target=%s",
+                ctx.user_id,
+                home,
+                target,
+            )
+        return _SWITCH_DISABLED
+
+    if denial:
+        audited(
+            request,
+            "tenant.switch",
+            action=target,
+            status="denied",
+            reason=denial,
+            user_id=ctx.user_id,
+            home_tenant_id=home,
+            target_tenant_id=target,
+        )
+        return _SWITCH_ROLE_DENIED if denial == "role not authorized" else _SWITCH_DENIED
+    if refusal:
+        return JSONResponse({"error": refusal}, status_code=503)
+
+    access = tokens.issue_access_token(
+        ctx.user_id,
+        target,
+        ctx.role,
+        scopes=ctx.scopes,
+        home_tenant_id=home,
+    )
+    audited(
+        request,
+        "tenant.switch",
+        action=target,
+        user_id=ctx.user_id,
+        home_tenant_id=home,
+        target_tenant_id=target,
+        acting=target != home,
+    )
+    account = account or {}
+    return {
+        "access_token": access,
+        # The refresh token keeps the home tenant and is not rotated here.
+        "refresh_token": None,
+        "user": {
+            "id": ctx.user_id,
+            "email": str(account.get("email", "")),
+            "display_name": account.get("display_name"),
+            "role": ctx.role,
+            "tenant_id": target,
+            "home_tenant_id": home,
+        },
     }
 
 
@@ -590,14 +791,16 @@ def local_login_route(body: _LoginBody, request: Request) -> dict[str, Any] | JS
     if body is None or not _credential_lengths_ok(body):
         return _BAD_REQUEST
     ip = _client_ip(request)
-    result = local_login.authenticate(
-        DEFAULT_TENANT,
-        body["email"],
-        body["password"],
-        body.get("code"),
-        ip=ip,
-        user_agent=request.headers.get("user-agent"),
-    )
+    # Unbound, like /sso: the sign-in has no tenant until it has an account.
+    with unbound_scope():
+        result = local_login.authenticate(
+            DEFAULT_TENANT,
+            body["email"],
+            body["password"],
+            body.get("code"),
+            ip=ip,
+            user_agent=request.headers.get("user-agent"),
+        )
     # A failed sign-in needs a SUBJECT or the audit trail cannot answer "which
     # account was sprayed, from where" — the first question an incident asks.
     # It is a keyed hash, not the address: this log is exported to a SIEM, and
