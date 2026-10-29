@@ -501,6 +501,10 @@ TOOLSEARCH_TOOLS = frozenset({"tool_search", "tool_describe", "tool_call"})
 # the instance's account; same rule. Migration 153 denies them to `user` and
 # `member`; `service` keeps them, so an unattended agent that names them works.
 #
+# `run_workflow` starts any declared workflow, which can do anything its steps
+# do; the HTTP route it mirrors needs `engine:control`. Same rule again:
+# migration 157 denies it to `user` and `member`. Its two reads stay default.
+#
 # Spelled out rather than imported from robothor.sales so this module stays
 # import-light; test_opt_in_tools_are_not_default pins the two together.
 OPT_IN_TOOLS: frozenset[str] = frozenset(
@@ -520,6 +524,7 @@ OPT_IN_TOOLS: frozenset[str] = frozenset(
         "sales_research_parallel",
         *CLAUDE_CODE_TOOLS,
         *PR_REVIEW_TOOLS,
+        "run_workflow",
     }
 )
 
