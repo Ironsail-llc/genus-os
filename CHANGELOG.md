@@ -1,3 +1,9 @@
+## [1.116.2](https://github.com/Ironsail-llc/genus-os/compare/v1.116.1...v1.116.2) (2026-10-29)
+
+### Bug Fixes
+
+* **deps:** patch frontend advisories published 2026-10-28 ([#743](https://github.com/Ironsail-llc/genus-os/issues/743)) ([2afe2a2](https://github.com/Ironsail-llc/genus-os/commit/2afe2a2194afa26c6cea27df82b4207f2acab098))
+
 ## [1.116.1](https://github.com/Ironsail-llc/genus-os/compare/v1.116.0...v1.116.1) (2026-10-28)
 
 ### Bug Fixes
