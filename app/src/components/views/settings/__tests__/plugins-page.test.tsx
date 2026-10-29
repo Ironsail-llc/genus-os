@@ -398,6 +398,27 @@ describe("Settings › Plugins — agents and workflows", () => {
     expect(assets.textContent).toContain("none");
   });
 
+  it("says unavailable with the engine's reason, not none, when the assets could not be read", async () => {
+    const unreadable = {
+      ...WITH_ASSETS,
+      assets: {
+        agents: [],
+        workflows: [],
+        patches: [],
+        files: [],
+        error: "The plugin asset ledger (.robothor/plugin-assets.yaml) could not be read.",
+      },
+    };
+    mockBridge({ listings: [{ ...LISTING, plugins: [unreadable] }] });
+    render(<PluginsPage visible />);
+
+    const assets = await screen.findByTestId("plugin-assets-genus-weather");
+    expect(assets.textContent).toContain(
+      "unavailable: The plugin asset ledger (.robothor/plugin-assets.yaml) could not be read.",
+    );
+    expect(assets.textContent).not.toContain("none");
+  });
+
   it("an agent with no schedule says so rather than printing nothing", async () => {
     const unscheduled = {
       ...WITH_ASSETS,
