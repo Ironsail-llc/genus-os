@@ -6,8 +6,9 @@ body, GitHub-style), ``stripe_t_v1`` (``t=<unix>,v1=<hex>`` over
 ``"<t>." + body`` with a timestamp window) or ``hmac_ts_hex`` (hex digest of
 ``"<timestamp>." + body`` in the signature header, optionally ``sha256=``
 prefixed, with the integer unix-seconds timestamp in the channel's
-``timestamp_header`` and the same timestamp window). A channel may also name a
-delivery id header, in which case a replayed delivery is answered as a duplicate and
+``timestamp_header`` and the same timestamp window; the signed string uses the
+canonical integer, so a zero-padded timestamp fails the digest rather than
+passing). A channel may also name a delivery id header, in which case a replayed delivery is answered as a duplicate and
 not re-published. A ``google_oidc`` channel takes Google Cloud Pub/Sub push
 instead: the ``Authorization: Bearer`` ID token is verified against the
 channel's audience and service account, the Pub/Sub ``messageId`` is the
@@ -287,7 +288,9 @@ def _verify_hmac_ts_hex(
 
     ``timestamp`` is the value of the channel's timestamp header, in integer
     unix seconds (milliseconds are not accepted: they read as far in the
-    future). The signature may carry a ``sha256=`` prefix in any case. Returns
+    future). The signed string uses the canonical integer (``str(int(...))``),
+    not the raw header text, so a zero-padded timestamp fails safe as a bad
+    digest. The signature may carry a ``sha256=`` prefix in any case. Returns
     ``(ok, reason)``; the reason names the failed check, never the secret.
     """
     if not secret:
