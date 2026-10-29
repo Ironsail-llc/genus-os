@@ -1028,6 +1028,29 @@ class TestAnOwnerThatLosesTheGroupLetsItGo:
         assert [d[:2] for d in fake.deletes] == [(self.OWNER_KEY, PARENT)]
 
     @pytest.mark.asyncio
+    async def test_a_replica_that_never_claimed_does_not_delete_its_twins_claim(
+        self, engine_config, hierarchy
+    ):
+        """Two replicas of one root tenant: the record names them both. The one
+        that never held the group in its own process fails closed and must
+        leave the live replica's claim alone."""
+        fake = FakeStreams()
+        await fake.xgroup_create(STREAM, "engine")
+        fake.add(STREAM, _event(PARENT))
+        holder = EventHooks(_engine(engine_config, PARENT), runner=None)  # type: ignore[arg-type]
+        _Recorder().bind(holder)
+        await self._run(holder, fake, checks=2)
+        assert fake.keys[self.OWNER_KEY] == PARENT.encode()
+
+        hierarchy.down.add(PARENT)  # the twin starts while the database is down
+        twin = EventHooks(_engine(engine_config, PARENT), runner=None)  # type: ignore[arg-type]
+        _Recorder().bind(twin)
+        await self._run(twin, fake, checks=fake.xinfo_calls + 3)
+
+        assert fake.keys[self.OWNER_KEY] == PARENT.encode()
+        assert fake.deletes == []
+
+    @pytest.mark.asyncio
     async def test_a_non_owner_never_deletes_the_claim(self, engine_config, hierarchy):
         fake = FakeStreams()
         await fake.xgroup_create(STREAM, "engine")
