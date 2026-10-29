@@ -181,3 +181,41 @@ def test_the_strict_loader_still_raises_on_a_broken_drop_in(docs: Path) -> None:
     (dropins / "broken.yaml").write_text("channels: [unclosed\n")
     with pytest.raises(yaml.YAMLError):
         load_webhook_config(docs / "webhooks.yaml")
+
+
+@pytest.mark.parametrize(
+    "base",
+    [
+        "channels: [unclosed\n",  # does not parse
+        "channels:\n  github:\n    stream: github\n    rate_limit_per_min: lots\n",  # bad int
+    ],
+)
+def test_the_router_still_fails_loud_on_a_broken_base_file(
+    tmp_path: Path, monkeypatch, base
+) -> None:
+    """The base file is the operator's; only drop-ins are skipped."""
+    import yaml
+
+    workspace = tmp_path / "ws"
+    (workspace / "docs").mkdir(parents=True)
+    (workspace / "docs" / "webhooks.yaml").write_text(base)
+    monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(workspace))
+    with pytest.raises((ValueError, yaml.YAMLError)):
+        get_webhook_router()
+
+
+def test_the_router_skips_a_drop_in_channel_with_a_bad_number(
+    tmp_path: Path, monkeypatch, caplog
+) -> None:
+    workspace = tmp_path / "ws"
+    dropins = workspace / "docs" / "webhooks.d"
+    dropins.mkdir(parents=True)
+    (workspace / "docs" / "webhooks.yaml").write_text(_channel("github"))
+    (dropins / "alpha.yaml").write_text(
+        "channels:\n  alpha:\n    stream: alpha\n    timestamp_tolerance_seconds: soon\n"
+    )
+    monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(workspace))
+    with caplog.at_level("ERROR", logger="robothor.engine.webhooks"):
+        router = get_webhook_router()
+    assert router is not None
+    assert "alpha.yaml" in " ".join(r.getMessage() for r in caplog.records)

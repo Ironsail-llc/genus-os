@@ -2062,6 +2062,8 @@ _BASE_CHANNELS = "channels:\n  github:\n    stream: github\n    secret_env: GH_S
     [
         ("channels:\n  github:\n    stream: x\n", "github"),  # collides with the base file
         ("channels: [unclosed\n", "alpha-plugin.yaml"),  # does not parse
+        # a number the engine cannot read: the router would skip the channel
+        ("channels:\n  alpha:\n    rate_limit_per_min: lots\n", "rate_limit_per_min"),
     ],
 )
 def test_a_webhook_drop_in_that_would_break_the_channel_map_is_refused(
