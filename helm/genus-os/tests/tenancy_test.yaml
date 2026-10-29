@@ -1,0 +1,155 @@
+suite: tenant switching settings
+release:
+  name: gos
+  namespace: genus
+# The bridge issues the acting token and every engine enforces it, so all of
+# them must read the same switch mode. One values key feeds them all.
+set:
+  vaultKey.enabled: true
+  vault.secrets.vault-key.path: genus-os/test/vault-key
+tests:
+  # ─── Unset: nothing new (the code's own default, `off`, applies) ───────────
+  - it: renders no switch mode on the root engine by default
+    template: engine/workload.yaml
+    documentIndex: 0
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content: {name: GENUS_TENANT_SWITCH_MODE}
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content: {name: GENUS_TENANT_SWITCH_ALLOW_INERT_RLS}
+          any: true
+
+  - it: renders no switch mode on the bridge by default
+    template: bridge/workload.yaml
+    documentIndex: 0
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content: {name: GENUS_TENANT_SWITCH_MODE}
+          any: true
+
+  # ─── Set: the same value everywhere it is read ─────────────────────────────
+  - it: the bridge reads tenancy.switchMode
+    template: bridge/workload.yaml
+    documentIndex: 0
+    set:
+      tenancy.switchMode: observe
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: GENUS_TENANT_SWITCH_MODE, value: observe}
+
+  - it: the root engine reads tenancy.switchMode
+    template: engine/workload.yaml
+    documentIndex: 0
+    set:
+      tenancy.switchMode: observe
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: GENUS_TENANT_SWITCH_MODE, value: observe}
+
+  - it: every tenant cell reads tenancy.switchMode
+    template: engine/tenants.yaml
+    set:
+      tenancy.switchMode: enforce
+      tenants:
+        - id: acme-child-a
+        - id: acme-child-b
+    documentSelector:
+      path: kind
+      value: Deployment
+      matchMany: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: GENUS_TENANT_SWITCH_MODE, value: enforce}
+
+  - it: the orchestrator and dashboard never get it
+    template: orchestrator/workload.yaml
+    documentIndex: 0
+    set:
+      tenancy.switchMode: enforce
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content: {name: GENUS_TENANT_SWITCH_MODE}
+          any: true
+
+  - it: a component's own env still wins
+    template: bridge/workload.yaml
+    documentIndex: 0
+    set:
+      tenancy.switchMode: enforce
+      bridge.env.GENUS_TENANT_SWITCH_MODE: observe
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: GENUS_TENANT_SWITCH_MODE, value: observe}
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content: {name: GENUS_TENANT_SWITCH_MODE, value: enforce}
+
+  - it: a tenant cell's own env still wins
+    template: engine/tenants.yaml
+    set:
+      tenancy.switchMode: enforce
+      tenants:
+        - id: acme-child-a
+          env:
+            GENUS_TENANT_SWITCH_MODE: "off"
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: GENUS_TENANT_SWITCH_MODE, value: "off"}
+
+  # The code reads any value it does not know as `off`; a typo would silently
+  # disable switching, so it fails here instead.
+  - it: rejects an unknown switch mode
+    template: bridge/workload.yaml
+    set:
+      tenancy.switchMode: enforcing
+    asserts:
+      - failedTemplate:
+          errorPattern: "tenancy.switchMode must be one of off, observe, enforce"
+
+  # ─── The inert-RLS escape hatch ────────────────────────────────────────────
+  - it: passes allowInertRls to the bridge and every engine when set
+    template: engine/tenants.yaml
+    set:
+      tenancy.allowInertRls: true
+      tenants:
+        - id: acme-child-a
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: GENUS_TENANT_SWITCH_ALLOW_INERT_RLS, value: "true"}
+
+  - it: passes allowInertRls to the bridge when set
+    template: bridge/workload.yaml
+    documentIndex: 0
+    set:
+      tenancy.allowInertRls: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: GENUS_TENANT_SWITCH_ALLOW_INERT_RLS, value: "true"}
+
+  - it: an explicit false is rendered, not dropped
+    template: engine/workload.yaml
+    documentIndex: 0
+    set:
+      tenancy.allowInertRls: false
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: GENUS_TENANT_SWITCH_ALLOW_INERT_RLS, value: "false"}
