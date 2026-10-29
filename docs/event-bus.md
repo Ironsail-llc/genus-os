@@ -56,10 +56,24 @@ child engine's deployment must give it a group of its own, for example
 `engine-<tenant>`.
 
 A child engine left on the root's group would take about half of the root's
-events and drop them. Consumer names carry the tenant (`engine-<tenant>`), so
-before reading, an engine checks whether another tenant's engine has read its
-group in the last minute. If one has, it does not read, logs an ERROR naming
-`GENUS_EVENT_CONSUMER_GROUP`, and checks again every minute. Replicas of one
+events and drop them, so the engines on a group are not equals:
+
+- **The root group has an owner.** The first engine to read `engine` claims
+  it in Redis (`robothor:events:group-owner:engine`), but only when no other
+  tenant's engine is reading it and its own `ROBOTHOR_TENANT_ID` and
+  `ROBOTHOR_DEFAULT_TENANT` agree. The record never expires, and only the
+  owner reads `engine`, so the root never gives its group up to a child that
+  forgot its setting, even while the root is down. To hand the root group to
+  another tenant, delete the key.
+- **An engine always reads its own `engine-<tenant>` group.** On any other
+  group it reads only while no other tenant is reading.
+- **The engine that is not entitled to the group stops.** It logs an ERROR
+  telling it to set `GENUS_EVENT_CONSUMER_GROUP=engine-<tenant>`. The entitled
+  engine keeps reading and logs an ERROR naming the intruder.
+
+Consumer names carry the tenant (`engine-<tenant>`), and a consumer counts as
+reading if it read in the last minute. Every engine checks again every minute
+while it runs, so an engine that joins later is caught too. Replicas of one
 engine share a consumer name and are not affected.
 
 Every engine therefore sees every event, and acts only on those whose
