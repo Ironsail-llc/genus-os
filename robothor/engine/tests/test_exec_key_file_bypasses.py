@@ -158,3 +158,79 @@ def test_a_one_liner_reading_a_secret_file_by_name_is_refused() -> None:
 )
 def test_ordinary_commands_still_run(key, command) -> None:
     assert exec_reads_secret(command) is None
+
+
+# ── readers vs writers ───────────────────────────────────────────────
+#
+# A copy or archive tool READS its sources and WRITES its destination. Only the
+# read is this module's business: writing a file named like a secret is the
+# send gate's (see test_read_file_inbox_secret.py).
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cp notes.txt .env",
+        "cp .env.example .env",
+        "mv draft.txt server.key",
+        "install -m 600 template.txt .netrc",
+        "cp -t certs/ README.md",
+        "openssl genrsa -out server.key 2048",
+        "dd if=/dev/zero of=.env bs=1 count=0",
+        "tar czf secrets-backup.env notes/",
+        "zip credentials.json.zip notes.txt",
+    ],
+)
+def test_writing_a_secret_named_destination_is_allowed(command) -> None:
+    assert exec_reads_secret(command) is None
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cp .env notes.txt",
+        "mv ~/.ssh/id_rsa /tmp/x",
+        "cp -t /tmp .env",
+        "rsync -a .netrc backup/",
+        "openssl x509 -in server.pem -noout -text",
+        "tar czf out.tgz .env",
+        "zip out.zip credentials.json",
+    ],
+)
+def test_reading_a_secret_source_is_refused_as_a_read(command) -> None:
+    refused = exec_reads_secret(command)
+    assert refused
+    assert "would read" in refused, refused
+
+
+def test_a_printer_still_says_print() -> None:
+    refused = exec_reads_secret("cat .env")
+    assert refused and "would print" in refused
+
+
+# ── a relative override ──────────────────────────────────────────────
+
+
+@pytest.fixture
+def relative_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    for name in ENVS:
+        monkeypatch.delenv(name, raising=False)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(workspace))
+    monkeypatch.chdir(workspace)
+    monkeypatch.setenv("GENUS_VAULT_KEY_FILE", "instance-key")
+    return workspace
+
+
+@pytest.mark.parametrize(
+    "command", ["cat README.md", "ls notes.txt", "python3 x.py", "grep -rn vault ."]
+)
+def test_a_relative_override_does_not_refuse_everything(relative_override, command) -> None:
+    assert exec_reads_secret(command) is None
+
+
+def test_a_relative_override_still_refuses_the_key(relative_override) -> None:
+    assert exec_reads_secret("cat instance-key")
+    assert exec_reads_secret(f"cat {relative_override / 'instance-key'}")
+    assert exec_reads_secret("cat .vault-key")
