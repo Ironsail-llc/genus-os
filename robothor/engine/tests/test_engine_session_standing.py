@@ -120,3 +120,99 @@ def test_a_database_failure_is_not_a_sign_out(secure_engine):
     token = tokens.issue_access_token("human-1", config.tenant_id, "member")
     with patch("robothor.auth.accounts.get_account_by_id", side_effect=OSError("down")):
         assert _send(client, token).status_code == 200
+
+
+# ─── Acting tokens need tenant switching enforced ─────────────────────
+
+
+@pytest.fixture
+def switch_mode(monkeypatch):
+    from robothor.settings import reset_settings
+
+    def set_mode(value: str) -> None:
+        monkeypatch.setenv("GENUS_TENANT_SWITCH_MODE", value)
+        reset_settings()
+
+    yield set_mode
+    reset_settings()
+
+
+def _acting(config) -> str:
+    return tokens.issue_access_token(
+        "human-1", config.tenant_id, "admin", home_tenant_id="acme-parent"
+    )
+
+
+@pytest.mark.parametrize("value", ["off", "observe", ""])
+def test_an_acting_token_is_refused_unless_switching_is_enforced(secure_engine, switch_mode, value):
+    client, config = secure_engine
+    switch_mode(value)
+    with patch("robothor.auth.accounts.get_account_by_id", return_value=_account("acme-parent")):
+        response = _send(client, _acting(config))
+    assert response.status_code == 403
+    assert response.json() == {"error": "tenant switching disabled"}
+
+
+def test_an_acting_token_is_honoured_under_enforce(secure_engine, switch_mode):
+    client, config = secure_engine
+    switch_mode("enforce")
+    with patch("robothor.auth.accounts.get_account_by_id", return_value=_account("acme-parent")):
+        assert _send(client, _acting(config)).status_code == 200
+
+
+@pytest.mark.parametrize("value", ["off", "observe"])
+def test_a_home_token_is_unaffected(secure_engine, switch_mode, value):
+    client, config = secure_engine
+    switch_mode(value)
+    token = tokens.issue_access_token("human-1", config.tenant_id, "member")
+    with patch("robothor.auth.accounts.get_account_by_id", return_value=_account(config.tenant_id)):
+        assert _send(client, token).status_code == 200
+
+
+def test_a_service_token_is_unaffected(secure_engine, switch_mode):
+    client, config = secure_engine
+    switch_mode("off")
+    token = tokens.issue_service_token(
+        "dashboard-bff", config.tenant_id, audience="genus-engine", scopes=("engine:read",)
+    )
+    response = client.get(
+        "/chat/history?session_key=agent:main:primary",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+
+
+def test_the_ide_websocket_closes_4403_for_an_acting_token_with_switching_off(
+    secure_engine, switch_mode
+):
+    client, config = secure_engine
+    switch_mode("off")
+    with (
+        patch("robothor.auth.accounts.get_account_by_id", return_value=_account("acme-parent")),
+        pytest.raises(WebSocketDisconnect) as closed,
+        client.websocket_connect("/ide/ws", headers={"Authorization": f"Bearer {_acting(config)}"}),
+    ):
+        pass
+    assert closed.value.code == 4403
+
+
+def test_the_chat_router_mounted_alone_refuses_it_too(secure_engine, switch_mode, monkeypatch):
+    """The router's own dependency, without the app's middleware in front of it."""
+    from types import SimpleNamespace
+
+    from fastapi import HTTPException
+
+    from robothor.engine import chat
+
+    _client, config = secure_engine
+    switch_mode("off")
+    monkeypatch.setattr(chat, "_config", config)
+    request = SimpleNamespace(
+        state=SimpleNamespace(),
+        url=SimpleNamespace(path="/chat/send"),
+        method="POST",
+        headers={"authorization": f"Bearer {_acting(config)}"},
+    )
+    with pytest.raises(HTTPException) as refused:
+        chat._require_chat_auth(request)
+    assert refused.value.status_code == 403
