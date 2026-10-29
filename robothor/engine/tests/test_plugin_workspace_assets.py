@@ -1946,6 +1946,7 @@ def test_append_to_a_key_that_is_not_a_list_is_refused(ws, capsys) -> None:
     assert _install(ws, **_patcher(_ALPHA, "install:\n  append:\n    hooks:\n" + _HOOK_A)) == 2
     assert "hooks" in capsys.readouterr().err
     assert (ws / _MAIN_YAML).read_text() == _MAIN + "hooks: not-a-list\n"
+    assert installer._run_pip.calls == []  # refused at plan, before pip
 
 
 _FRAGMENT = "# Alpha\n\nWhen an email arrives, file it.\n"
@@ -2133,6 +2134,7 @@ def test_append_never_creates_an_allowlist_whose_absence_means_everything(ws, ca
     assert _install(ws, **_patcher(_ALPHA, patch)) == 2
     err = capsys.readouterr().err
     assert key in err and "absent" in err
+    assert installer._run_pip.calls == []  # refused at plan, before pip
     assert (ws / _MAIN_YAML).read_text() == _MAIN
 
 
@@ -2155,3 +2157,15 @@ def test_append_never_fills_an_empty_allowlist(ws, capsys) -> None:
     assert _install(ws, **_patcher(_ALPHA, patch)) == 2
     assert "tools_allowed" in capsys.readouterr().err
     assert _main(ws)["tools_allowed"] == []
+
+
+def test_removal_never_empties_a_tool_allowlist(ws, capsys) -> None:
+    """Detaching the last item would turn "only these tools" into "every tool"."""
+    from robothor.plugins import assets
+
+    (ws / _MAIN_YAML).write_text(_MAIN + "tools_allowed: [alpha_probe]\n")
+    patch = "install:\n  append:\n    tools_allowed: [alpha_probe]\n"
+    assert _install(ws, **_patcher(_ALPHA, patch)) == 0, capsys.readouterr().err
+    report = assets.retire(_ALPHA)
+    assert _main(ws)["tools_allowed"] == ["alpha_probe"]
+    assert any("tools_allowed" in w and "every tool" in w for w in report.warnings)
