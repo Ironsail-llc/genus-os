@@ -1,3 +1,13 @@
+## [1.116.1](https://github.com/Ironsail-llc/genus-os/compare/v1.116.0...v1.116.1) (2026-10-28)
+
+### Bug Fixes
+
+* **app:** invites default to SSO, last a week, explain refusals (GEN-52) ([#740](https://github.com/Ironsail-llc/genus-os/issues/740)) ([59689ce](https://github.com/Ironsail-llc/genus-os/commit/59689ce1273b6f47a445c88ab273498742536db4))
+
+### Performance Improvements
+
+* **ci:** stop the release gate re-running what CI already ran ([#704](https://github.com/Ironsail-llc/genus-os/issues/704)) ([242b88a](https://github.com/Ironsail-llc/genus-os/commit/242b88ad7e74513d712a00c80a0b89b35e91b160))
+
 ## [1.116.0](https://github.com/Ironsail-llc/genus-os/compare/v1.115.0...v1.116.0) (2026-10-28)
 
 ### Features

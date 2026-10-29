@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-480 settings in 17 groups.
+481 settings in 17 groups.
 
 ## autonomy
 
@@ -374,6 +374,7 @@ Who may reach the bridge and the dashboard, and how that is proven.
 | `GENUS_DASHBOARD_TRUSTED_PROXIES` | str | _(empty)_ | `robothor-bridge`, `robothor-app` | no | 1.69.0 | Comma-separated addresses or CIDR ranges the DASHBOARD treats as its own edge when reading X-Forwarded-For. It walks that list from the right and forwards the first hop that is not one of these as X-Client-IP. Empty trusts no hop and sends no header at all, so the bridge falls back to its peer address; prefer a /32 over a pod CIDR, which would cover every workload in the namespace. |
 | `GENUS_ENVIRONMENT` | str | _(empty)_ | `robothor-bridge`, `robothor-app` | no | legacy | Deployment environment. 'production' makes the auth preconditions hard requirements instead of warnings. Also read from `ROBOTHOR_ENVIRONMENT`. |
 | `GENUS_INSECURE_DEV_MODE` | bool | `false` | `robothor-bridge`, `robothor-app` | no | legacy | Skip authentication for local development. Rejected outright in a production environment or on any non-loopback bind address. |
+| `GENUS_INVITE_GRANT_TTL_SECONDS` | int | `604800` | `robothor-bridge`, `robothor-app` | no | 1.117.0 | How long the one-shot SSO binding grant armed with an invite (or from the Helm) stays usable. An invite is handed over out of band, so a short window sends the invitee back to an operator. The grant is still spent by one verified sign-in for exactly that address. |
 | `GENUS_LOCAL_LOGIN` | bool | `false` | `robothor-bridge`, `robothor-app` | no | 1.69.0 | Offer local email + password sign-in (bridge routes and the dashboard form). Off by default: a fresh instance must opt in. Owner MFA becomes mandatory when this is the only sign-in method. |
 | `GENUS_OIDC_ISSUERS` | str | _(empty)_ | `robothor-bridge`, `robothor-app` | no | legacy | Comma-separated OIDC issuer URLs whose tokens the bridge accepts. |
 | `GENUS_OWNER_MFA_REQUIRED` | bool | `true` | `robothor-bridge`, `robothor-app` | no | 1.69.0 | Tell an owner account with no second factor to enrol one while local login is on. Setting it false gives up the only compensating control for a public password endpoint: one argon2-verified password then becomes the entire authentication for the instance and its stored credentials, and the operator is never prompted. |

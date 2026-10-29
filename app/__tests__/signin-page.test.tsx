@@ -90,4 +90,20 @@ describe("the sign-in page", () => {
 
     expect(screen.queryByTestId("local-form")).not.toBeInTheDocument();
   });
+
+  it("explains a refused sign-in instead of showing a bare failure", async () => {
+    stubMethods({ local: false, oidc: ["https://idp.example.com"], cloudflare_access: false });
+
+    const element = await SignInPage({
+      searchParams: Promise.resolve({ error: "Configuration" }),
+    } as Parameters<typeof SignInPage>[0]);
+    render(element);
+
+    // Auth.js uses `Configuration` for server faults too, so the copy must
+    // offer the account as a possible cause without asserting it.
+    expect(screen.getByText(/ask your administrator/i)).toBeInTheDocument();
+    expect(screen.getByText(/may not be set up/i)).toBeInTheDocument();
+    expect(screen.getByText(/fails for everyone/i)).toBeInTheDocument();
+    expect(screen.queryByText(/not set up for sign-in yet/i)).not.toBeInTheDocument();
+  });
 });
