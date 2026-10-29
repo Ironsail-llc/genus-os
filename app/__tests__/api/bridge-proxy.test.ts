@@ -238,6 +238,10 @@ describe("Bridge Proxy vault denylist", () => {
     ["api/auth/switch-tenant", ["api", "auth", "switch-tenant"]],
     ["auth/switch-tenant", ["auth", "switch-tenant"]],
     ["api/AUTH/Switch-Tenant", ["api", "AUTH", "Switch-Tenant"]],
+    // The bridge decodes before it routes; so must the deny rule.
+    ["api/auth/switch%2Dtenant", ["api", "auth", "switch%2Dtenant"]],
+    ["api/auth/switch%252Dtenant", ["api", "auth", "switch%252Dtenant"]],
+    ["api//auth/switch-tenant", ["api", "", "auth", "switch-tenant"]],
   ])("refuses the bearer-minting %s and never forwards", async (path, segments) => {
     const res = await POST(makeRequest("POST", path, '{"tenant":"acme-child-a"}'), makeContext(segments));
 
