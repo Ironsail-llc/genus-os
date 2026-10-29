@@ -138,3 +138,29 @@ immediate page.
   on the next round. Delivery is at least once.
 - The key is never logged, printed or returned. A failure names only its
   class and HTTP status.
+
+## Dashboard
+
+The Helm's **Automations** view (`?v=workflows`) shows an **External: n8n**
+section below Workflows. It is operator-only and read-only: the bridge route
+`GET /api/integrations/n8n/workflows` reads what the poller last stored in
+`n8n_workflows`, `n8n_executions` and `n8n_sync_state` and never calls n8n on
+the request, so a slow or unreachable n8n cannot slow the dashboard. The section
+refreshes every 60 seconds while the view is on screen.
+
+Each row is one n8n workflow: its name, whether it is active, failed executions
+in the last 24 hours and the last 7 days, when it last failed, and a link that
+opens the workflow in n8n in a new tab. The badge in the header is the
+monitor's status:
+
+| Status | Meaning |
+|--------|---------|
+| OK (green) | The last poll succeeded and no workflow failed in the last 24 hours. |
+| Warn (amber) | A workflow failed in the last 24 hours, or the last poll recorded an error. |
+| Unknown (grey) | The poller has never succeeded, its last success is older than three poll intervals (`ROBOTHOR_N8N_POLL_SECONDS`), or the bridge could not read the tables. |
+
+When `ROBOTHOR_N8N_ENABLED` is off the section is a single line saying n8n
+monitoring is not configured. A workflow's recent executions, each with a link
+to the execution in n8n, are at
+`GET /api/integrations/n8n/workflows/{workflow_id}/executions?limit=20`
+(at most 100).
