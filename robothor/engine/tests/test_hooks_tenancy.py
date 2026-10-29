@@ -58,6 +58,8 @@ class FakeStreams:
         self.on_read: Any = None
         self.xinfo_calls = 0
         self.keys: dict[str, bytes] = {}
+        self.ttls: dict[str, int] = {}
+        self.expire_calls: list[tuple[str, int]] = []
         # (stream, group) -> [{"name": ..., "idle": ms}], as XINFO CONSUMERS reports
         self.consumers: dict[tuple[str, str], list[dict[str, Any]]] = {}
         self._seq = 0
@@ -125,11 +127,27 @@ class FakeStreams:
     async def get(self, key: str) -> bytes | None:
         return self.keys.get(key)
 
-    async def set(self, key: str, value: str, nx: bool = False, **kw: Any) -> bool | None:
+    async def set(
+        self, key: str, value: str, nx: bool = False, ex: int | None = None, **kw: Any
+    ) -> bool | None:
         if nx and key in self.keys:
             return None
         self.keys[key] = value.encode()
+        if ex is not None:
+            self.ttls[key] = ex
         return True
+
+    async def expire(self, key: str, seconds: int) -> bool:
+        self.expire_calls.append((key, seconds))
+        if key not in self.keys:
+            return False
+        self.ttls[key] = seconds
+        return True
+
+    def lapse(self, key: str) -> None:
+        """The key's TTL ran out."""
+        self.keys.pop(key, None)
+        self.ttls.pop(key, None)
 
     async def aclose(self) -> None:
         return None
@@ -665,3 +683,98 @@ class TestOnlyARootTenantHoldsTheRootGroup:
 
         assert fake.read_by == []
         assert any(OTHER_ROOT in m and self.OWNER_KEY in m for m in self._errors(caplog))
+
+
+class TestTheRootGroupVerdictIsNotForever:
+    """Neither the tree lookup nor the owner record outlives the facts behind it.
+
+    The tree is read again on every check, so a tenant row created or
+    re-parented later takes effect without a restart. The owner record
+    carries a TTL that the owning root refreshes on each check, so a dead or
+    re-parented owner's claim lapses and another root can take the group
+    within minutes; deleting the key stays the fast path.
+    """
+
+    OWNER_KEY = "robothor:events:group-owner:engine"
+    LEGACY = "acme-legacy"  # an install whose tenant has no crm_tenants row
+
+    @pytest.fixture(autouse=True)
+    def _agreeing_tenant_env(self, monkeypatch):
+        monkeypatch.delenv("ROBOTHOR_TENANT_ID", raising=False)
+
+    @pytest.mark.asyncio
+    async def test_a_no_row_tenant_that_later_gains_a_parent_stops_reading(
+        self, engine_config, hierarchy, caplog
+    ):
+        fake = FakeStreams()
+        await fake.xgroup_create(STREAM, "engine")
+        fake.add(STREAM, _event(self.LEGACY))
+        hooks = EventHooks(_engine(engine_config, self.LEGACY), runner=None)  # type: ignore[arg-type]
+        recorder = _Recorder()
+        recorder.bind(hooks)
+
+        def _reparented(reads: int) -> None:
+            if reads == 1:  # someone creates the row, under a parent
+                hierarchy.parents[self.LEGACY] = PARENT
+                fake.add(STREAM, _event(self.LEGACY))
+
+        fake.on_read = _reparented
+        fake.on_xinfo = lambda calls: hooks._stop_event.set() if calls >= 4 else None
+
+        with (
+            caplog.at_level(logging.WARNING, logger="robothor.engine.hooks"),
+            patch("robothor.engine.hooks.GROUP_RIVAL_RECHECK_SECONDS", 0),
+        ):
+            await _consume_until_idle(hooks, fake)
+
+        assert recorder.runs == [(self.LEGACY, self.LEGACY)], "it stops on the next check"
+        no_row = [
+            r for r in caplog.records if r.levelno == logging.WARNING and "no row" in r.getMessage()
+        ]
+        assert len(no_row) == 1, "treating a missing row as a root is said once, not every check"
+
+    @pytest.mark.asyncio
+    async def test_the_owner_record_has_a_ttl_and_the_owner_refreshes_it(self, engine_config):
+        fake = FakeStreams()
+        await fake.xgroup_create(STREAM, "engine")
+        fake.add(STREAM, _event(PARENT))
+        root = EventHooks(_engine(engine_config, PARENT), runner=None)  # type: ignore[arg-type]
+        _Recorder().bind(root)
+
+        def _nearly_lapsed(reads: int) -> None:
+            if reads == 1:
+                assert fake.ttls[self.OWNER_KEY] == 180, "the claim carries a TTL"
+                fake.ttls[self.OWNER_KEY] = 5
+
+        fake.on_read = _nearly_lapsed
+        fake.on_xinfo = lambda calls: root._stop_event.set() if calls >= 3 else None
+
+        with patch("robothor.engine.hooks.GROUP_RIVAL_RECHECK_SECONDS", 0):
+            await _consume_until_idle(root, fake)
+
+        assert (self.OWNER_KEY, 180) in fake.expire_calls
+        assert fake.ttls[self.OWNER_KEY] == 180, "the owner refreshed it on a later check"
+
+    @pytest.mark.asyncio
+    async def test_after_the_ttl_lapses_another_root_claims_it(self, engine_config):
+        fake = FakeStreams()
+        await fake.xgroup_create(STREAM, "engine")
+        fake.keys[self.OWNER_KEY] = OTHER_ROOT.encode()
+        fake.ttls[self.OWNER_KEY] = 180
+        fake.add(STREAM, _event(PARENT))
+        root = EventHooks(_engine(engine_config, PARENT), runner=None)  # type: ignore[arg-type]
+        recorder = _Recorder()
+        recorder.bind(root)
+
+        def _owner_gone(calls: int) -> None:
+            if calls == 2:  # the other root died; nobody refreshed its claim
+                assert fake.read_by == [], "it waited while the claim was live"
+                fake.lapse(self.OWNER_KEY)
+
+        fake.on_xinfo = _owner_gone
+
+        with patch("robothor.engine.hooks.GROUP_RIVAL_RECHECK_SECONDS", 0):
+            await _consume_until_idle(root, fake)
+
+        assert fake.keys[self.OWNER_KEY] == PARENT.encode()
+        assert recorder.runs == [(PARENT, PARENT)]
