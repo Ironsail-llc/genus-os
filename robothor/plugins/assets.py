@@ -8,7 +8,7 @@ directory that holds it (package data inside the wheel)::
     workflows:         # copied to <workspace>/docs/workflows/<basename>
       - workflows/example-pass.yaml
     patches:           # edit an EXISTING agent manifest the plugin does not own
-      - agent: main
+      - agent: main    # (set/delete own a key; append/detach add or take out list items)
         file: patches/main.patch.yaml
     files:             # other workspace files, inside an allowlist
       - src: extra/webhooks.yaml

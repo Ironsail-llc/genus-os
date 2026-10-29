@@ -446,8 +446,66 @@ example_agent = ["genus-plugin.yaml", "agents/**/*", "workflows/*", "patches/*",
 |---|---|---|
 | `agents` | a directory laid out like `templates/agents/core/main`: `manifest.template.yaml`, `instructions.template.md`, optional `setup.yaml` and `SKILL.md` | rendered by the agent-template installer — the same code as `genus agent install` — into `docs/agents/<id>.yaml` and the instruction file under the instance's `brain/`, and recorded in `.robothor/installed.yaml` with `source: plugin:<distribution>`. With no `setup.yaml`, the agent id is the directory name and the version is the plugin's. `.robothor/overrides/<id>.yaml` applies exactly as it does to any template |
 | `workflows` | a file | copied to `docs/workflows/<basename>` |
-| `patches` | `agent:` an agent id the plugin does **not** ship, `file:` a YAML file with top-level `install:` and `remove:` sections | each section has `set:` — a deep merge for mappings; any other value, lists included, replaces — and `delete:`, a list of keys, dotted for nested ones. `set` runs before `delete`. A patch may not touch `id`. A patch whose target agent does not exist is skipped with a warning. **A list replaces**: `set: {tools_allowed: [x]}` on an agent with no `tools_allowed` (which means every non-opt-in tool) narrows it to `x` |
-| `files` | `src`, `dest`, `mode` (`overwrite`, the default, or `if_missing`) | `dest` must be under `brain/`, `docs/workflows/` or `docs/hooks/`, or be exactly `docs/webhooks.yaml`. `if_missing` never replaces a file that exists. `brain/` has ownership rules, below (all of these are instance paths) |
+| `patches` | `agent:` an agent id the plugin does **not** ship, `file:` a YAML file with top-level `install:` and `remove:` sections | each section has `set:` — a deep merge for mappings; any other value, lists included, replaces — `delete:`, a list of keys, dotted for nested ones, and `append:` / `detach:`, which add or take out single list items (see [Composable patches](#composable-patches-append-and-detach)). The order is `set`, `append`, `delete`, `detach`. A patch may not touch `id`. A patch whose target agent does not exist is skipped with a warning. **A list replaces**: `set: {tools_allowed: [x]}` on an agent with no `tools_allowed` (which means every non-opt-in tool) narrows it to `x`; `append: {tools_allowed: [x]}` adds `x` to whatever is there |
+| `files` | `src`, `dest`, `mode` (`overwrite`, the default, or `if_missing`) | `dest` must be under `brain/`, `docs/workflows/` or `docs/hooks/`, be exactly `docs/webhooks.yaml`, or be one `<name>.yaml` directly in `docs/webhooks.d/`. `if_missing` never replaces a file that exists. `brain/` has ownership rules, below (all of these are instance paths) |
+
+### Composable patches: `append` and `detach`
+
+`set:` owns a key wholesale, so only one plugin can `set: hooks` on an agent.
+To let several plugins extend one agent — each giving `main` its own event
+hook, instruction fragment or webhook channel — a patch names list **items**
+instead:
+
+```yaml
+# example_agent/patches/main.patch.yaml
+install:
+  append:
+    hooks:
+      - stream: email
+        event_type: email.new
+        message: "A new email arrived; triage it."
+    bootstrap_files: [brain/agents/main.d/example-agent.md]
+    warmup.memory_blocks: [example_notes]
+remove:                 # optional: without a detach, remove takes back what install appended
+  detach:
+    hooks:
+      - {stream: email, event_type: email.new}
+```
+
+* **`append: {key: [items]}`** upserts each item into the list at `key` (dotted
+  for nested), creating the list — and any missing mapping above it — when it
+  is absent. A key that holds something other than a list is refused, and the
+  patch is not applied.
+* **Identity.** A `hooks` item is identified by its `(stream, event_type)` and
+  must have both; an item of any other list (`bootstrap_files`,
+  `warmup.memory_blocks`, `tools_allowed`, `tools_opt_in`, …) must be a scalar
+  and is identified by its value. An item already present with the same
+  identity is replaced in place, never duplicated, so a re-apply changes
+  nothing.
+* **`detach: {key: [items]}`** removes the entries whose identity matches and
+  leaves the rest; an identity that is not there is a no-op. A `hooks` item in
+  `detach` needs only `stream` and `event_type`.
+* **Remove.** `genus plugin remove` applies the `remove:` section; when it has
+  no `detach:`, the items the plugin last appended (recorded in the ledger) are
+  detached for it. An upgrade that stops appending an item detaches it too.
+  Detach removes every identity the plugin declared — including one that was
+  already in the list before the plugin was installed (the original manifest is
+  kept once as `.pre-<distribution>`).
+* **Claims.** The ledger records each appended item as `hooks[<stream>:<event_type>]`
+  or `<key>[<value>]`. Two plugins appending different items to the same list
+  coexist; two appending the same identity are refused, as is one plugin
+  appending to a list another `set`s or `delete`s (and the reverse).
+
+Two drop-in locations make the rest composable without a shared file:
+
+* **Instruction fragments:** ship `brain/agents/<agent>/…` or
+  `brain/agents/<agent>.d/<distribution>.md` as a `files:` entry (allowed for an
+  agent the plugin patches) and `append` it to the agent's `bootstrap_files`;
+  bootstrap files are read on every run.
+* **Webhook channels:** ship `docs/webhooks.d/<distribution>.yaml` (same shape
+  as `docs/webhooks.yaml`, a `channels:` mapping). The engine merges every
+  `*.yaml` there, in name order, after `docs/webhooks.yaml`; a channel name
+  declared twice is an error naming both files.
 
 ### Ownership
 
@@ -500,7 +558,9 @@ instruction-file check already applies to agents.
 * **Files** another plugin wrote are refused.
 * **Patch keys.** Each patched key (agent plus dotted key, prefix-aware) is
   recorded per plugin; a second plugin that sets or deletes a key another
-  plugin already patches is refused, naming both.
+  plugin already patches is refused, naming both. Appended list items are
+  claimed one by one, by identity (see
+  [Composable patches](#composable-patches-append-and-detach)).
 * **Operator edits.** A file the plugin wrote and the operator has since edited
   is left alone by sync (with a warning) and by remove. That covers a plugin
   agent's manifest and instruction file as well as `files:` and `workflows:`:
@@ -650,7 +710,7 @@ the way the installer reads it (`./brain/x` is `brain/x`, an instance path):
 | `agents` | a rendered manifest can declare lifecycle hooks, including `command` hooks the engine runs as shell |
 | `workflows`, `files` → `docs/workflows/` | the engine runs them |
 | `files` → `docs/hooks/` | the engine executes them |
-| `files` → `docs/webhooks.yaml` | configuration the engine loads |
+| `files` → `docs/webhooks.yaml`, `docs/webhooks.d/` (instance drop-ins) | configuration the engine loads |
 | `files` → `brain/` (instance) | text a model reads |
 | `patches` | they change an agent the plugin does not own |
 
