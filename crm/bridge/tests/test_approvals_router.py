@@ -178,8 +178,11 @@ def test_answering_a_question_writes_the_answer_and_audits_it(controls_client_as
 
 
 def test_a_question_already_answered_is_reported_not_faked(controls_client_as_operator):
+    # The row exists — it is this tenant's, and already answered — which is
+    # what separates "already answered" from "not yours" (a 404).
     with (
         patch("routers.approvals.answer_question", return_value=False),
+        patch("routers.approvals.get_question", return_value=_pending_question()),
         patch("routers._audit.log_event") as log_event,
     ):
         body = controls_client_as_operator.post(

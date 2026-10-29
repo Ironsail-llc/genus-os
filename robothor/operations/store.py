@@ -411,6 +411,28 @@ class Operations:
             raise Conflict("Draft key already bound to different content")
         return str(row["id"])
 
+    def list_review(self, *, limit: int = 100) -> list[dict[str, Any]]:
+        """Drafts still waiting on a human verdict: in review and not expired."""
+        with self.transaction() as cur:
+            cur.execute(
+                "SELECT id,kind,payload,created_at,expires_at FROM operation_actions "
+                "WHERE tenant_id=%s AND status='review' AND expires_at>now() "
+                "ORDER BY expires_at LIMIT %s",
+                (self.tenant, limit),
+            )
+            return [dict(row) for row in cur.fetchall()]
+
+    def get_action(self, action: str) -> dict[str, Any] | None:
+        """Read one action only within this tenant."""
+        with self.transaction() as cur:
+            cur.execute(
+                "SELECT id,kind,status,decided_by,decided_at,expires_at FROM operation_actions "
+                "WHERE tenant_id=%s AND id=%s",
+                (self.tenant, action),
+            )
+            row = cur.fetchone()
+            return dict(row) if row else None
+
     def decide(self, action: str, approved: bool, actor: str) -> None:
         """Persist a human decision. Caller must authenticate the actor before entry."""
         if not actor.startswith("operator:"):

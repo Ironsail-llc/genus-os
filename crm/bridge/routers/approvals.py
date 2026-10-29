@@ -1,7 +1,7 @@
 """What is waiting on a person, and how the Helm answers it.
 
-Three kinds of question converge here, and the reason this is one router rather
-than three endpoints is that the operator experiences them as one list — "things
+Four kinds of question converge here, and the reason this is one router rather
+than four endpoints is that the operator experiences them as one list — "things
 that are stuck on me" — while the mechanics underneath are genuinely different:
 
 ``workflow``
@@ -10,6 +10,11 @@ that are stuck on me" — while the mechanics underneath are genuinely different
 ``question``
     An ``agent_questions`` row, written by the ``ask_user`` tool. The answer is
     free text.
+``action``
+    An ``operation_actions`` row in ``review``: an exact effect an agent
+    proposed (a drafted email, say). The answer is a verdict, recorded by
+    ``Operations.decide`` with its own ``operation_audit`` row; an executor
+    claims it only once approved.
 ``escalation``
     An ``asyncio.Event`` inside the ENGINE process, with a coroutine parked on
     it. **The bridge cannot settle this by writing anything.** It is proxied to
@@ -18,7 +23,13 @@ that are stuck on me" — while the mechanics underneath are genuinely different
     written here instead would leave the agent waiting until its own timeout
     denied it, while the Helm showed a green tick.
 
-Every route asks ``require_operator`` first. Every *answer* — including one that
+The three durable kinds are tenant-local. Every route asks
+``require_tenant_operator`` first, which admits an owner or admin of the tenant
+the session acts in and returns that tenant; every store call then filters on it
+AND runs inside ``tenant_scope`` so row-level security binds the same tenant. An
+id that is not the acting tenant's is a 404 and settles nothing. An
+``escalation`` lives in the one engine process, which is not tenant-scoped, so
+it additionally needs the platform gate, ``require_operator``. Every *answer* — including one that
 is refused — also writes exactly one ``audited`` event, identifiers only, so the
 free-text answer never lands in the audit store that gets exported to a SIEM.
 The listing does not: it changes nothing, and a read that writes a row per poll
@@ -28,6 +39,7 @@ would bury the decisions in the same table an auditor is reading them from.
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 import uuid
 from typing import Any
@@ -36,19 +48,22 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from robothor.engine.agent_questions import answer_question, list_pending_questions
+from robothor.db.connection import tenant_scope
+from robothor.engine.agent_questions import answer_question, get_question, list_pending_questions
 from robothor.engine.approvals import (
     ApprovalDecision,
     decide_approval_by_id,
+    get_approval_by_id,
     list_pending_approvals,
 )
+from robothor.operations.store import Conflict, Operations
 from routers._audit import audited
 from routers._engine_client import engine_request
-from routers._operator import require_operator
+from routers._operator import TenantOperator, require_operator, require_tenant_operator
 
 router = APIRouter(prefix="/api/approvals", tags=["approvals"])
 
-KINDS = ("workflow", "question", "escalation")
+KINDS = ("workflow", "question", "action", "escalation")
 
 #: What may appear in the path segment this router hands to ``engine_request``.
 #: That function builds a URL out of it, and ``_checked_path`` refuses anything
@@ -64,7 +79,10 @@ _SAFE_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
 #: segment. Anything else reaches ``WHERE id = %s`` and raises
 #: ``InvalidTextRepresentation`` — a 500 with no audit row, because the
 #: exception escapes before :func:`audited` runs.
-_UUID_KINDS = frozenset({"question", "workflow"})
+_UUID_KINDS = frozenset({"question", "workflow", "action"})
+
+#: How much of a proposed action's payload the Inbox card shows as its detail.
+_ACTION_DETAIL_CHARS = 600
 
 
 class AnswerRequest(BaseModel):
@@ -80,8 +98,25 @@ def _iso(value: Any) -> Any:
     return value.isoformat() if hasattr(value, "isoformat") else value
 
 
-def _pending() -> list[dict]:
-    """Everything waiting on a person, newest deadline last.
+def _action_summary(kind: str, payload: Any) -> str:
+    """One line naming what the proposal would do, from the payload if it says."""
+    if isinstance(payload, dict):
+        for key in ("summary", "subject", "title"):
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                return f"{kind}: {value.strip()}"
+    return f"Proposed {kind}"
+
+
+def _action_detail(payload: Any) -> str:
+    text = json.dumps(payload, sort_keys=True, default=str)
+    if len(text) > _ACTION_DETAIL_CHARS:
+        return text[: _ACTION_DETAIL_CHARS - 1] + "…"
+    return text
+
+
+def _pending(tenant_id: str) -> list[dict]:
+    """Everything waiting on a person in ``tenant_id``, newest deadline last.
 
     Composed rather than unioned in SQL: the two tables have different columns
     for good reasons (``crm/migrations/117`` explains at length) and a view that
@@ -101,7 +136,7 @@ def _pending() -> list[dict]:
             "expires_at": _iso(row.expires_at),
             "created_at": _iso(row.created_at),
         }
-        for row in list_pending_approvals()
+        for row in list_pending_approvals(tenant_id=tenant_id)
     ]
     out.extend(
         {
@@ -115,7 +150,22 @@ def _pending() -> list[dict]:
             "expires_at": _iso(q.expires_at),
             "created_at": _iso(q.created_at),
         }
-        for q in list_pending_questions()
+        for q in list_pending_questions(tenant_id=tenant_id)
+    )
+    out.extend(
+        {
+            "kind": "action",
+            "id": str(row["id"]),
+            "run_id": "",
+            "agent_id": "",
+            "action_kind": row["kind"],
+            "question": _action_summary(row["kind"], row["payload"]),
+            "detail": _action_detail(row["payload"]),
+            "options": [],
+            "expires_at": _iso(row["expires_at"]),
+            "created_at": _iso(row["created_at"]),
+        }
+        for row in Operations(tenant_id).list_review()
     )
     out.sort(key=lambda item: str(item["expires_at"] or ""))
     return out
@@ -131,15 +181,19 @@ def list_approvals(request: Request) -> dict:
     over the run's own status stream (``approval_required``), which is where a
     prompt with a sub-minute life belongs.
     """
-    require_operator(request)
-    pending = _pending()
+    who = require_tenant_operator(request)
+    with tenant_scope(who.tenant_id):
+        pending = _pending(who.tenant_id)
     return {"count": len(pending), "pending": pending}
 
 
 @router.post("/{kind}/{approval_id}")
 async def answer_approval(kind: str, approval_id: str, request: Request) -> Any:
     """Answer one waiting question. ``kind`` decides where the answer goes."""
-    actor = require_operator(request)
+    who = require_tenant_operator(request)
+    if kind == "escalation":
+        # The engine holds escalations in RAM, in one process, with no tenant.
+        require_operator(request)
 
     if kind not in KINDS:
         return _refuse(request, kind, approval_id, 400, f"kind must be one of {KINDS}")
@@ -157,21 +211,35 @@ async def answer_approval(kind: str, approval_id: str, request: Request) -> Any:
     except Exception:  # noqa: BLE001 — a malformed body is the caller's error
         return _refuse(request, kind, approval_id, 400, "invalid request body")
 
-    if kind == "question":
-        return await _answer_question(request, approval_id, body, actor)
-    if kind == "workflow":
-        return await _decide_workflow(request, approval_id, body, actor)
-    return await _resolve_escalation(request, approval_id, body)
+    if kind == "escalation":
+        return await _resolve_escalation(request, approval_id, body)
+    with tenant_scope(who.tenant_id):
+        if kind == "question":
+            return await _answer_question(request, approval_id, body, who)
+        if kind == "workflow":
+            return await _decide_workflow(request, approval_id, body, who)
+        return await _decide_action(request, approval_id, body, who)
+
+
+def _not_found(request: Request, kind: str, item_id: str) -> JSONResponse:
+    """Not the acting tenant's (or nobody's). Indistinguishable on purpose."""
+    return _refuse(request, kind, item_id, 404, f"no such {kind} in this tenant")
 
 
 async def _answer_question(
-    request: Request, question_id: str, body: AnswerRequest, actor: str
+    request: Request, question_id: str, body: AnswerRequest, who: TenantOperator
 ) -> Any:
     answer = (body.answer or "").strip()
     if not answer:
         return _refuse(request, "question", question_id, 400, "answer is required")
 
-    settled = await asyncio.to_thread(answer_question, question_id, answer, answered_by=actor)
+    settled = await asyncio.to_thread(
+        answer_question, question_id, answer, answered_by=who.actor, tenant_id=who.tenant_id
+    )
+    if not settled and (
+        await asyncio.to_thread(get_question, question_id, tenant_id=who.tenant_id) is None
+    ):
+        return _not_found(request, "question", question_id)
     audited(
         request,
         "approval.answer",
@@ -179,6 +247,8 @@ async def _answer_question(
         status="ok" if settled else "error",
         kind="question",
         settled=settled,
+        decided_by=who.actor,
+        tenant_id=who.tenant_id,
     )
     if not settled:
         return {"settled": False, "message": "Already answered — nothing changed."}
@@ -186,15 +256,24 @@ async def _answer_question(
 
 
 async def _decide_workflow(
-    request: Request, approval_id: str, body: AnswerRequest, actor: str
+    request: Request, approval_id: str, body: AnswerRequest, who: TenantOperator
 ) -> Any:
     if body.approved is None:
         return _refuse(request, "workflow", approval_id, 400, "approved is required")
 
     decision = ApprovalDecision.APPROVED if body.approved else ApprovalDecision.REJECTED
     settled = await asyncio.to_thread(
-        decide_approval_by_id, approval_id, decision, decided_by=actor, note=body.note or ""
+        decide_approval_by_id,
+        approval_id,
+        decision,
+        decided_by=who.actor,
+        note=body.note or "",
+        tenant_id=who.tenant_id,
     )
+    if not settled and (
+        await asyncio.to_thread(get_approval_by_id, approval_id, tenant_id=who.tenant_id) is None
+    ):
+        return _not_found(request, "workflow", approval_id)
     audited(
         request,
         "approval.answer",
@@ -203,11 +282,49 @@ async def _decide_workflow(
         kind="workflow",
         decision=decision.value,
         settled=settled,
+        decided_by=who.actor,
+        tenant_id=who.tenant_id,
     )
     if not settled:
         return {"settled": False, "message": "Already decided — nothing changed."}
     # The run resumes on the engine's next approval-driver tick (≤1 min).
     return {"settled": True, "kind": "workflow", "id": approval_id, "decision": decision.value}
+
+
+async def _decide_action(
+    request: Request, action_id: str, body: AnswerRequest, who: TenantOperator
+) -> Any:
+    """Approve or reject a proposed action through the tenant's own ledger.
+
+    ``Operations.decide`` writes the verdict and an ``operation_audit`` row with
+    the actor and tenant in one transaction; this adds the bridge audit event.
+    """
+    if body.approved is None:
+        return _refuse(request, "action", action_id, 400, "approved is required")
+
+    ops = Operations(who.tenant_id)
+    try:
+        await asyncio.to_thread(ops.decide, action_id, bool(body.approved), who.actor)
+        settled = True
+    except Conflict:
+        settled = False
+        if await asyncio.to_thread(ops.get_action, action_id) is None:
+            return _not_found(request, "action", action_id)
+    decision = "approved" if body.approved else "rejected"
+    audited(
+        request,
+        "approval.answer",
+        action=action_id,
+        status="ok" if settled else "error",
+        kind="action",
+        decision=decision,
+        settled=settled,
+        decided_by=who.actor,
+        tenant_id=who.tenant_id,
+    )
+    if not settled:
+        return {"settled": False, "message": "Already decided or expired — nothing changed."}
+    return {"settled": True, "kind": "action", "id": action_id, "decision": decision}
 
 
 async def _resolve_escalation(request: Request, request_id: str, body: AnswerRequest) -> Any:
