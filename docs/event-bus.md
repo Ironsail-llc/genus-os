@@ -73,8 +73,11 @@ events and drop them, so the engines on a group are not equals:
   `ROBOTHOR_DEFAULT_TENANT` disagree. Only the owner reads `engine`. The
   claim has a 180-second TTL. The owner refreshes it from its own task every
   60 seconds, separately from the read loop, so a slow read cannot let it
-  lapse. A dead or re-parented owner's claim lapses, and another root takes the
-  group within minutes. To hand it over at once, delete the key.
+  lapse. An owner that is re-parented, or that fails closed after repeated
+  lookup failures, stops refreshing and deletes the key on its next check, but
+  only while the key still names its own tenant. A dead owner's claim lapses
+  within one TTL. Either way, another root then takes the group. To hand it
+  over at once, delete the key.
 - **An engine always reads its own `engine-<tenant>` group.** On any other
   group it reads only while no other tenant is reading.
 - **The engine that is not entitled to the group stops.** It logs an ERROR
