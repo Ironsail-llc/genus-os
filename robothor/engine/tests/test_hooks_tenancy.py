@@ -628,7 +628,9 @@ class TestOnlyARootTenantHoldsTheRootGroup:
         recorder.bind(root)
 
         def _db_back(calls: int) -> None:
-            if calls == 1:
+            # Each check reads XINFO before the tree, so the database returns
+            # at the start of the second check, after the first lookup failed.
+            if calls == 2:
                 assert self.OWNER_KEY not in fake.keys, "no claim without knowing the tree"
                 hierarchy.down.clear()
 

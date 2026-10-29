@@ -276,6 +276,9 @@ class EventHooks:
         self._agent_runs = asyncio.Semaphore(max(1, config.max_concurrent_agents))
         # Events another tenant's engine handles; read and acked, never run.
         self.foreign_events_dropped = 0
+        # This tenant's parent in crm_tenants, once read (None: a root).
+        self._parent: str | None = None
+        self._parent_known = False
 
     def _owns_event(self, decoded: dict[str, Any]) -> bool:
         """Whether this engine's tenant is the one the event belongs to.
@@ -336,14 +339,41 @@ class EventHooks:
                     rivals.add(name)
         return rivals
 
-    async def _root_group_owner(self, redis_client: Any, rivals: set[str]) -> str | None:
+    async def _parent_tenant(self) -> tuple[bool, str | None]:
+        """``(known, parent)`` for this engine's tenant in ``crm_tenants``.
+
+        Read once and kept. A tenant with no row has no parent, so it is a
+        root. When the tree cannot be read, ``known`` is False and nothing is
+        cached, so the next re-check asks again.
+        """
+        if self._parent_known:
+            return True, self._parent
+        try:
+            from robothor.crm import dal
+
+            row = await asyncio.to_thread(dal.get_tenant, self.config.tenant_id)
+        except Exception as e:
+            logger.warning(
+                "Cannot read tenant %r from the tenant tree (%s), so this engine will "
+                "not claim or read event consumer group %r. Checking again in %ds.",
+                self.config.tenant_id,
+                e,
+                ROOT_EVENT_GROUP,
+                GROUP_RIVAL_RECHECK_SECONDS,
+            )
+            return False, None
+        self._parent = (row or {}).get("parentTenantId") or None
+        self._parent_known = True
+        return True, self._parent
+
+    async def _root_group_owner(self, redis_client: Any) -> str | None:
         """The tenant that owns the root group, claiming it if nobody does.
 
-        An engine claims only when no other tenant is reading the group and
-        its own tenant variables agree: an engine whose ``ROBOTHOR_TENANT_ID``
-        differs from its ``ROBOTHOR_DEFAULT_TENANT`` is the documented shape
-        of a child, never the root. ``""`` means unclaimed; None means Redis
-        could not say.
+        Called only for a root of the tenant tree; the record breaks the tie
+        between roots. An engine whose ``ROBOTHOR_TENANT_ID`` differs from its
+        ``ROBOTHOR_DEFAULT_TENANT`` does not claim either: its connections and
+        its writes disagree about which tenant it is. ``""`` means unclaimed;
+        None means Redis could not say.
         """
         from robothor.constants import tenant_env_conflict
 
@@ -354,19 +384,74 @@ class EventHooks:
 
         try:
             owner = _text(await redis_client.get(ROOT_GROUP_OWNER_KEY))
-            if owner or rivals or tenant_env_conflict():
+            if owner or tenant_env_conflict():
                 return owner
             if await redis_client.set(ROOT_GROUP_OWNER_KEY, self.config.tenant_id, nx=True):
                 logger.info(
-                    "Tenant %r now owns event consumer group %r",
+                    "Tenant %r now owns event consumer group %r (Redis key %s)",
                     self.config.tenant_id,
                     ROOT_EVENT_GROUP,
+                    ROOT_GROUP_OWNER_KEY,
                 )
                 return self.config.tenant_id
             return _text(await redis_client.get(ROOT_GROUP_OWNER_KEY))
         except Exception as e:
             logger.warning("Could not read the owner of group %r: %s", ROOT_EVENT_GROUP, e)
             return None
+
+    async def _may_hold_root_group(self, redis_client: Any, rivals: set[str]) -> bool:
+        """Whether this engine may read the root group ``engine``. Logs why not.
+
+        Decided by the tenant tree, not by start order: only a tenant with no
+        parent may hold it, and among roots the recorded owner does. A child
+        on ``engine`` -- whatever its setting says -- stops and is told which
+        setting to give it instead.
+        """
+        tenant = self.config.tenant_id
+        known, parent = await self._parent_tenant()
+        if not known:
+            return False
+        if parent is not None:
+            logger.error(
+                "Event consumer group %r belongs to the root tenant, and tenant %r is "
+                "a child of %r, so this engine will not read it. Give it its own "
+                "group: GENUS_EVENT_CONSUMER_GROUP=engine-%s. Checking again in %ds.",
+                ROOT_EVENT_GROUP,
+                tenant,
+                parent,
+                tenant,
+                GROUP_RIVAL_RECHECK_SECONDS,
+            )
+            return False
+        owner = await self._root_group_owner(redis_client)
+        if owner == tenant or (owner is None and not rivals):
+            return True
+        if owner:
+            logger.error(
+                "Event consumer group %r is owned by tenant %r (consumer engine-%s), "
+                "recorded at Redis key %s, so this engine (tenant %r) will not read it. "
+                "If tenant %r should own the root group, delete that key; otherwise "
+                "give this engine its own group: GENUS_EVENT_CONSUMER_GROUP=engine-%s.",
+                ROOT_EVENT_GROUP,
+                owner,
+                owner,
+                ROOT_GROUP_OWNER_KEY,
+                tenant,
+                tenant,
+                tenant,
+            )
+        else:
+            logger.error(
+                "Tenant %r is a root tenant but will not claim event consumer group %r "
+                "(Redis key %s): %s",
+                tenant,
+                ROOT_EVENT_GROUP,
+                ROOT_GROUP_OWNER_KEY,
+                "its ROBOTHOR_TENANT_ID and ROBOTHOR_DEFAULT_TENANT disagree"
+                if owner == ""
+                else "the owner record could not be read while another tenant reads it",
+            )
+        return False
 
     async def _may_read_group(
         self, redis_client: Any, group: str, consumer: str, streams: list[str]
@@ -375,42 +460,41 @@ class EventHooks:
 
         Two tenants on one group split every stream between them, and each
         acks and drops the other's half, so those events are lost. The engines
-        are not equals: the root group belongs to its recorded owner and an
-        ``engine-<tenant>`` group to that tenant, so the engine that keeps
-        reading is the one configured for the group, and the one told to
-        change its setting is the one that is not.
+        are not equals: the root group belongs to a root of the tenant tree
+        (its recorded owner among several), and an ``engine-<tenant>`` group to
+        that tenant, so the engine that keeps reading is the one entitled to
+        the group, and the one told to change its setting is the one that is
+        not.
         """
         tenant = self.config.tenant_id
         rivals = await self._rival_consumers(redis_client, group, consumer, streams)
         if group == ROOT_EVENT_GROUP:
-            owner = await self._root_group_owner(redis_client, rivals)
-            rightful = owner == tenant or (owner is None and not rivals)
-        else:
-            rightful = group == f"engine-{tenant}" or not rivals
-        if rightful:
-            for rival in sorted(rivals):
-                logger.error(
-                    "Event consumer group %r belongs to tenant %r, but %s is also "
-                    "reading it and drops this tenant's events. Give that engine its "
-                    "own group: GENUS_EVENT_CONSUMER_GROUP=%s.",
-                    group,
-                    tenant,
-                    rival,
-                    rival,
-                )
-            return True
-        logger.error(
-            "Event consumer group %r is not this engine's (tenant %r)%s, so it will "
-            "not read it: two tenants on one group split the events and drop each "
-            "other's. Give this engine its own group, "
-            "GENUS_EVENT_CONSUMER_GROUP=engine-%s. Checking again in %ds.",
-            group,
-            tenant,
-            f"; {', '.join(sorted(rivals))} reading it" if rivals else "",
-            tenant,
-            GROUP_RIVAL_RECHECK_SECONDS,
-        )
-        return False
+            if not await self._may_hold_root_group(redis_client, rivals):
+                return False
+        elif group != f"engine-{tenant}" and rivals:
+            logger.error(
+                "Event consumer group %r is not this engine's (tenant %r) and %s "
+                "reading it, so it will not read it: two tenants on one group split "
+                "the events and drop each other's. Give this engine its own group, "
+                "GENUS_EVENT_CONSUMER_GROUP=engine-%s. Checking again in %ds.",
+                group,
+                tenant,
+                ", ".join(sorted(rivals)),
+                tenant,
+                GROUP_RIVAL_RECHECK_SECONDS,
+            )
+            return False
+        for rival in sorted(rivals):
+            logger.error(
+                "Event consumer group %r belongs to tenant %r, but %s is also "
+                "reading it and drops this tenant's events. Give that engine its "
+                "own group: GENUS_EVENT_CONSUMER_GROUP=%s.",
+                group,
+                tenant,
+                rival,
+                rival,
+            )
+        return True
 
     async def _replay_pending(
         self, redis_client: Any, group: str, consumer: str, streams: list[str]
