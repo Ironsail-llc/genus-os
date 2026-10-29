@@ -81,8 +81,19 @@ _SAFE_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
 #: exception escapes before :func:`audited` runs.
 _UUID_KINDS = frozenset({"question", "workflow", "action"})
 
-#: How much of a proposed action's payload the Inbox card shows as its detail.
-_ACTION_DETAIL_CHARS = 600
+#: Envelope fields a proposed action's card names above its body, in order.
+#: ``Approve`` authorizes the EXACT payload (``Operations.decide`` pins its
+#: hash), so whoever approves must see who it goes to and what it says, the
+#: same as in the Sales review. Strings are passed through; lists of ids are
+#: joined.
+_ENVELOPE_FIELDS = (
+    ("sender", "sender"),
+    ("recipient", "recipient"),
+    ("purpose", "purpose"),
+    ("subject", "subject"),
+    ("claims", "claim_ids"),
+    ("evidence", "evidence_ids"),
+)
 
 
 class AnswerRequest(BaseModel):
@@ -108,11 +119,29 @@ def _action_summary(kind: str, payload: Any) -> str:
     return f"Proposed {kind}"
 
 
+def _action_envelope(payload: Any) -> dict[str, str]:
+    """Who and what a proposal addresses, from whichever fields it carries."""
+    if not isinstance(payload, dict):
+        return {}
+    out: dict[str, str] = {}
+    for label, key in _ENVELOPE_FIELDS:
+        value = payload.get(key)
+        if isinstance(value, list):
+            value = ", ".join(str(v) for v in value)
+        if isinstance(value, str) and value.strip():
+            out[label] = value.strip()
+    return out
+
+
 def _action_detail(payload: Any) -> str:
-    text = json.dumps(payload, sort_keys=True, default=str)
-    if len(text) > _ACTION_DETAIL_CHARS:
-        return text[: _ACTION_DETAIL_CHARS - 1] + "…"
-    return text
+    """The proposal's whole content: its body if it has one, else the payload.
+
+    Never truncated. What is approved is the full payload, so a card that
+    showed a prefix would ask for a verdict on text nobody read.
+    """
+    if isinstance(payload, dict) and isinstance(payload.get("body"), str) and payload["body"]:
+        return str(payload["body"])
+    return json.dumps(payload, sort_keys=True, indent=2, default=str)
 
 
 def _pending(tenant_id: str) -> list[dict]:
@@ -161,6 +190,7 @@ def _pending(tenant_id: str) -> list[dict]:
             "action_kind": row["kind"],
             "question": _action_summary(row["kind"], row["payload"]),
             "detail": _action_detail(row["payload"]),
+            "envelope": _action_envelope(row["payload"]),
             "options": [],
             "expires_at": _iso(row["expires_at"]),
             "created_at": _iso(row["created_at"]),

@@ -1415,7 +1415,10 @@ posting `/api/admin/identities/reload`, best effort. Full rules, tables and CLI:
 **Answering from the Helm.** `GET /api/approvals` lists the three durable
 kinds; `POST /api/approvals/{kind}/{id}` answers one, with `kind` in
 `workflow`, `question`, `action` (an `operation_actions` row in `review`,
-decided through `Operations.decide`), `escalation`. The durable kinds are
+decided through `Operations.decide`), `escalation`. An `action` row carries
+its `envelope` (sender, recipient, purpose, subject, claims, evidence) and its
+whole body, never truncated: approving authorizes the exact payload, so the
+Inbox card shows all of it before Approve, as the Sales review does. The durable kinds are
 tenant-local: `require_tenant_operator` admits an owner or admin of the tenant
 the session acts in, every store call filters on that tenant and runs inside
 `tenant_scope` so RLS binds it too, and another tenant's id is a 404 that
