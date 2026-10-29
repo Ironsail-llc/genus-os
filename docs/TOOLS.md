@@ -566,7 +566,7 @@ With the monitor off they return `status: not_configured` and nothing else.
 
 | Tool | Purpose |
 |---|---|
-| `n8n_list_workflows` | The n8n workflows with `failures_24h`, `failures_7d`, `last_failure_at`, `last_error` and a link to each, as of the last poll, plus the section `status` (`ok`, `warn`, `unknown`) and `last_ok_at`. `active_only` (default true) hides switched-off workflows; `query` matches a name or tag, case-insensitive. |
+| `n8n_list_workflows` | The n8n workflows with `failures_24h`, `failures_7d`, `last_failure_at`, `last_error`, a link to each and `last_failure_url` (the newest failed execution, empty when there is none), as of the last poll, plus the section `status` (`ok`, `warn`, `unknown`) and `last_ok_at`. `active_only` (default true) hides switched-off workflows; `query` matches a name or tag, case-insensitive. |
 | `n8n_recent_failures` | Failed executions in the last `hours` (default 24, max 720), newest first, up to 100: workflow id and name, `error_message`, `mode`, start and stop times and a link to the execution in n8n. `workflow_id` narrows it to one workflow. |
 
 **Choosing.** These are about the operator's **n8n** automations, not Genus

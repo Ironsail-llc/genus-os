@@ -209,6 +209,7 @@ class MemoryN8nStore:
                     "failures_7d": sum(1 for r in runs if _at(r) >= week),
                     "last_failure_at": _at(runs[0]) if runs else None,
                     "last_error": runs[0].get("error_message") if runs else None,
+                    "last_failed_execution_id": runs[0]["execution_id"] if runs else None,
                 }
             )
         return sorted(out, key=lambda w: (str(w["name"]).lower(), w["workflow_id"]))
@@ -414,6 +415,8 @@ class PgN8nStore:
                 "COUNT(e.execution_id) FILTER (WHERE COALESCE(e.started_at, e.seen_at) >= %s), "
                 "MAX(COALESCE(e.started_at, e.seen_at)), "
                 "(SELECT l.error_message FROM n8n_executions l WHERE l.tenant_id = w.tenant_id "
+                f"AND l.workflow_id = w.workflow_id ORDER BY {_WHEN} DESC LIMIT 1), "
+                "(SELECT l.execution_id FROM n8n_executions l WHERE l.tenant_id = w.tenant_id "
                 f"AND l.workflow_id = w.workflow_id ORDER BY {_WHEN} DESC LIMIT 1) "
                 "FROM n8n_workflows w LEFT JOIN n8n_executions e "
                 "ON e.tenant_id = w.tenant_id AND e.workflow_id = w.workflow_id "
@@ -433,6 +436,7 @@ class PgN8nStore:
                 "failures_7d": int(r[6] or 0),
                 "last_failure_at": r[7],
                 "last_error": r[8],
+                "last_failed_execution_id": r[9],
             }
             for r in rows
         ]

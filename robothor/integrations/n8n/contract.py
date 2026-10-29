@@ -6,7 +6,8 @@ so a row means the same thing on the dashboard and in an agent's answer::
 
     workflows:  {status, base_url, last_poll_at, last_ok_at, last_error,
                  workflows: [{workflow_id, name, active, tags, failures_24h,
-                              failures_7d, last_failure_at, last_error, url}]}
+                              failures_7d, last_failure_at, last_error,
+                              last_failure_url, url}]}
     executions: {executions: [{execution_id, status, mode, started_at,
                                stopped_at, error_message, url}]}
 
@@ -84,6 +85,7 @@ def execution_url(base_url: str, workflow_id: str, execution_id: str) -> str:
 def workflow_row(row: Mapping[str, Any], base_url: str) -> dict[str, Any]:
     """One workflow as the contract shows it."""
     wid = str(row["workflow_id"])
+    failed_id = row.get("last_failed_execution_id")
     return {
         "workflow_id": wid,
         "name": row.get("name") or "",
@@ -93,6 +95,12 @@ def workflow_row(row: Mapping[str, Any], base_url: str) -> dict[str, Any]:
         "failures_7d": int(row.get("failures_7d") or 0),
         "last_failure_at": _iso(row.get("last_failure_at")),
         "last_error": row.get("last_error"),
+        # The newest failed execution, or "" when there is none or no base URL.
+        "last_failure_url": (
+            execution_url(base_url, wid, str(failed_id))
+            if failed_id and instance_root(base_url)
+            else ""
+        ),
         "url": workflow_url(base_url, wid),
     }
 
