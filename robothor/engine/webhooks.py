@@ -82,18 +82,50 @@ class WebhookConfig:
     channels: dict[str, WebhookChannel] = field(default_factory=dict)
 
 
+def _dropin_dir(path: Path) -> Path:
+    """``docs/webhooks.yaml`` -> ``docs/webhooks.d``."""
+    return path.with_name(f"{path.stem}.d")
+
+
+def _read_channels(path: Path) -> dict[str, Any]:
+    with path.open() as f:
+        data = yaml.safe_load(f) or {}
+    raw = data.get("channels") if isinstance(data, dict) else None
+    return raw if isinstance(raw, dict) else {}
+
+
 def load_webhook_config(path: str | Path) -> WebhookConfig:
-    """Load webhook channel definitions from a YAML file."""
+    """Load webhook channel definitions from a YAML file and its drop-ins.
+
+    Every ``*.yaml`` in the sibling ``<stem>.d/`` directory (``docs/webhooks.d/``
+    beside ``docs/webhooks.yaml``) is merged after the base file, in name
+    order, so a plugin can own a file of its own channels. A channel declared
+    twice -- in the base file and a drop-in, or in two drop-ins -- is a
+    ``ValueError`` naming both files. A missing directory is fine.
+    """
     path = Path(path)
-    if not path.exists():
+    dropins = _dropin_dir(path)
+    sources = sorted(dropins.glob("*.yaml")) if dropins.is_dir() else []
+    if path.exists():
+        sources.insert(0, path)
+    elif not sources:
         logger.warning("Webhook config not found: %s", path)
         return WebhookConfig()
 
-    with path.open() as f:
-        data = yaml.safe_load(f) or {}
+    declared: dict[str, Path] = {}
+    merged: dict[str, Any] = {}
+    for source in sources:
+        for name, raw in _read_channels(source).items():
+            if name in declared:
+                raise ValueError(
+                    f"Webhook channel {name!r} is declared in both {declared[name]} and "
+                    f"{source}; rename one of them."
+                )
+            declared[name] = source
+            merged[name] = raw
 
     channels: dict[str, WebhookChannel] = {}
-    for name, raw in (data.get("channels") or {}).items():
+    for name, raw in merged.items():
         if not isinstance(raw, dict):
             continue
         channels[name] = WebhookChannel(

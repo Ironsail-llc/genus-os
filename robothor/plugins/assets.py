@@ -360,11 +360,76 @@ def reserved_agent_ids() -> frozenset[str]:
     return ALWAYS_RESERVED | {str(agent) for agent in core}
 
 
+#: The list key whose items are identified by ``(stream, event_type)``; every
+#: other list an ``append:`` names holds scalars, identified by their value.
+_HOOKS_KEY = "hooks"
+
+
+def _identity(key: str, item: Any) -> tuple[Any, ...] | None:
+    """What makes *item* the same entry of list *key*, or None when it has none."""
+    if key == _HOOKS_KEY:
+        if isinstance(item, dict):
+            stream, event_type = item.get("stream"), item.get("event_type")
+            if isinstance(stream, str) and stream and isinstance(event_type, str) and event_type:
+                return ("hook", stream, event_type)
+        return None
+    if item is None or isinstance(item, (dict, list)):
+        return None
+    return ("value", item)
+
+
+def _claim(key: str, item: Any) -> str:
+    """The ledger key for one appended item: ``hooks[<stream>:<event_type>]``,
+    ``<key>[<value>]`` for a scalar."""
+    identity = _identity(key, item)
+    assert identity is not None
+    if identity[0] == "hook":
+        return f"{key}[{identity[1]}:{identity[2]}]"
+    return f"{key}[{identity[1]}]"
+
+
+def _split_claim(claim: str) -> tuple[str, str | None]:
+    """``hooks[a:b.c]`` -> ``("hooks", "a:b.c")``; a plain dotted key -> ``(key, None)``."""
+    if claim.endswith("]") and "[" in claim:
+        base, _, rest = claim.partition("[")
+        return base, rest[:-1]
+    return claim, None
+
+
+def _top_key(claim: str) -> str:
+    return _split_claim(claim)[0].split(".", 1)[0]
+
+
+def _list_section(raw: Any, where: str) -> dict[str, list[Any]]:
+    """An ``append:`` or ``detach:`` section: ``{dotted_key: [items]}``."""
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise AssetError(f"{where} must be a mapping of a key (dotted for nested) to a list.")
+    out: dict[str, list[Any]] = {}
+    for key, items in raw.items():
+        if not (isinstance(key, str) and key and all(key.split(".")) and not set(key) & {"[", "]"}):
+            raise AssetError(f"{where}: {key!r} is not a key (dotted for nested).")
+        if not isinstance(items, list):
+            raise AssetError(f"{where}.{key} must be a list.")
+        for item in items:
+            if _identity(key, item) is None:
+                if key == _HOOKS_KEY:
+                    raise AssetError(
+                        f"{where}.{key}: each hook needs a `stream` and an `event_type`."
+                    )
+                raise AssetError(f"{where}.{key}: each item must be a scalar value.")
+        out[key] = list(items)
+    return out
+
+
 def _patch_section(raw: Any, where: str) -> dict[str, Any]:
     if raw is None:
         return {"set": {}, "delete": []}
-    if not isinstance(raw, dict) or set(raw) - {"set", "delete"}:
-        raise AssetError(f"{where} must be a mapping with only `set:` and `delete:`.")
+    if not isinstance(raw, dict) or set(raw) - {"set", "delete", "append", "detach"}:
+        raise AssetError(
+            f"{where} must be a mapping with only `set:`, `append:`, `delete:` and `detach:`."
+        )
     to_set = raw.get("set") or {}
     to_delete = raw.get("delete") or []
     if not isinstance(to_set, dict):
@@ -373,10 +438,19 @@ def _patch_section(raw: Any, where: str) -> dict[str, Any]:
         isinstance(k, str) and k and all(k.split(".")) for k in to_delete
     ):
         raise AssetError(f"{where}.delete must be a list of keys (dotted for nested).")
-    touched = {str(k) for k in to_set} | {k.split(".")[0] for k in to_delete}
+    to_append = _list_section(raw.get("append"), f"{where}.append")
+    to_detach = _list_section(raw.get("detach"), f"{where}.detach")
+    touched = {str(k) for k in to_set} | {
+        k.split(".")[0] for k in [*to_delete, *to_append, *to_detach]
+    }
     if touched & _PROTECTED_KEYS:
         raise AssetError(f"{where} may not change an agent's `id`.")
-    return {"set": to_set, "delete": list(to_delete)}
+    section: dict[str, Any] = {"set": to_set, "delete": list(to_delete)}
+    if to_append:
+        section["append"] = to_append
+    if to_detach:
+        section["detach"] = to_detach
+    return section
 
 
 def parse(manifest_text: str | None, base: Path) -> PluginAssets:
@@ -661,12 +735,10 @@ def _patched_keys(ledger: dict[str, Any], agent_id: str, patches: tuple[Any, ...
             continue
         for recorded in entry.get("patches") or []:
             if isinstance(recorded, dict) and recorded.get("agent") == agent_id:
-                keys.update(str(k).split(".", 1)[0] for k in recorded.get("keys") or [])
+                keys.update(_top_key(str(k)) for k in recorded.get("keys") or [])
     for patch in patches:
         if patch.agent == agent_id:
-            keys.update(
-                k.split(".", 1)[0] for k in patch_keys(patch.install) | patch_keys(patch.remove)
-            )
+            keys.update(_top_key(k) for k in patch_keys(patch.install) | patch_keys(patch.remove))
     return keys
 
 
@@ -712,7 +784,10 @@ def _brain_agent(dest: str) -> str | None:
 
 def patch_keys(section: dict[str, Any]) -> set[str]:
     """The dotted keys a patch section sets or deletes. A mapping under
-    ``set`` is a deep merge, so its LEAVES are what it touches."""
+    ``set`` is a deep merge, so its LEAVES are what it touches. An item
+    ``append:`` or ``detach:`` names is claimed by its identity alone --
+    ``hooks[<stream>:<event_type>]``, ``<key>[<value>]`` -- so plugins adding
+    different items to one list do not collide."""
 
     def leaves(mapping: dict[str, Any], prefix: str) -> set[str]:
         out: set[str] = set()
@@ -724,11 +799,24 @@ def patch_keys(section: dict[str, Any]) -> set[str]:
                 out.add(dotted)
         return out
 
-    return leaves(section.get("set") or {}, "") | set(section.get("delete") or [])
+    items = {
+        _claim(key, item)
+        for part in ("append", "detach")
+        for key, listed in (section.get(part) or {}).items()
+        for item in listed
+    }
+    return leaves(section.get("set") or {}, "") | set(section.get("delete") or []) | items
 
 
 def _overlaps(a: str, b: str) -> bool:
-    return a == b or a.startswith(b + ".") or b.startswith(a + ".")
+    """Whether two claims touch the same thing. Two items of one list overlap
+    only when their identities are equal; an item overlaps whatever owns its
+    list (or a key above it) wholesale."""
+    a_key, a_item = _split_claim(a)
+    b_key, b_item = _split_claim(b)
+    if a_item is not None and b_item is not None and a_key == b_key:
+        return a_item == b_item
+    return a_key == b_key or a_key.startswith(b_key + ".") or b_key.startswith(a_key + ".")
 
 
 def _leftover_instruction(
@@ -976,10 +1064,64 @@ def _delete(target: Any, dotted: str) -> None:
         del node[leaf]
 
 
+def _list_at(target: Any, dotted: str, *, create: bool) -> list[Any] | None:
+    """The list at *dotted*, created (with any missing parents) when *create*."""
+    *parents, leaf = dotted.split(".")
+    node = target
+    for part in parents:
+        child = node.get(part)
+        if child is None:
+            if not create:
+                return None
+            child = node[part] = {}
+        if not isinstance(child, dict):
+            raise AssetError(f"`{dotted}` is not under a mapping; it was not patched.")
+        node = child
+    found = node.get(leaf)
+    if found is None:
+        if not create:
+            return None
+        found = node[leaf] = []
+    if not isinstance(found, list):
+        raise AssetError(f"`{dotted}` is not a list; it was not patched.")
+    return found
+
+
+def _append(target: Any, dotted: str, items: list[Any]) -> None:
+    """Upsert *items* into the list at *dotted*, matching by identity."""
+    current = _list_at(target, dotted, create=True)
+    assert current is not None
+    for item in items:
+        identity = _identity(dotted, item)
+        for index, existing in enumerate(current):
+            if _identity(dotted, existing) == identity:
+                if existing != item:
+                    current[index] = copy.deepcopy(item)
+                break
+        else:
+            current.append(copy.deepcopy(item))
+
+
+def _detach(target: Any, dotted: str, items: list[Any]) -> None:
+    """Remove the entries of the list at *dotted* whose identity *items* name."""
+    current = _list_at(target, dotted, create=False)
+    if current is None:
+        return
+    gone = {_identity(dotted, item) for item in items}
+    for index in reversed(range(len(current))):
+        if _identity(dotted, current[index]) in gone:
+            del current[index]
+
+
 def _edit(document: Any, section: dict[str, Any]) -> None:
+    """Apply one section: ``set``, then ``append``, then ``delete`` and ``detach``."""
     _merge(document, section.get("set") or {})
+    for key, items in (section.get("append") or {}).items():
+        _append(document, key, items)
     for key in section.get("delete") or []:
         _delete(document, key)
+    for key, items in (section.get("detach") or {}).items():
+        _detach(document, key, items)
 
 
 def _patch_would_change(path: Path, section: dict[str, Any]) -> bool:
@@ -1465,18 +1607,20 @@ def apply(
                     "does not exist"
                 )
                 continue
-            if _patch_would_change(target, patch.install):
+            section = _with_dropped(patch.install, before_patches.get(patch.agent))
+            if _patch_would_change(target, section):
                 if patch.agent not in before_patches:
                     _backup_once(target, dist, root)
-                _patch_manifest(target, patch.install)
+                _patch_manifest(target, section)
                 report.lines.append(f"patched  docs/agents/{patch.agent}.yaml")
-            entry["patches"].append(
-                {
-                    "agent": patch.agent,
-                    "keys": sorted(patch_keys(patch.install) | patch_keys(patch.remove)),
-                    "remove": patch.remove,
-                }
-            )
+            recorded = {
+                "agent": patch.agent,
+                "keys": sorted(patch_keys(patch.install) | patch_keys(patch.remove)),
+                "remove": patch.remove,
+            }
+            if patch.install.get("append"):
+                recorded["appended"] = patch.install["append"]
+            entry["patches"].append(recorded)
 
         # What an upgrade stopped shipping is retired like a removal would.
         patched = {x["agent"] for x in entry["patches"]}
@@ -1503,6 +1647,40 @@ def apply(
     finally:
         _JOURNAL.reset(token)
     return report
+
+
+def _with_dropped(install: dict[str, Any], previous: Any) -> dict[str, Any]:
+    """*install*, plus a ``detach`` of every item the plugin's last release
+    appended (the ledger's ``appended``) that this release no longer does."""
+    appended = previous.get("appended") if isinstance(previous, dict) else None
+    if not isinstance(appended, dict):
+        return install
+    now = install.get("append") or {}
+    dropped: dict[str, list[Any]] = {}
+    for key, items in appended.items():
+        if not isinstance(items, list):
+            continue
+        kept = {_identity(key, item) for item in now.get(key) or []}
+        gone = [i for i in items if _identity(key, i) is not None and _identity(key, i) not in kept]
+        if gone:
+            dropped[key] = gone
+    if not dropped:
+        return install
+    section = copy.deepcopy(install)
+    detach = section.setdefault("detach", {})
+    for key, items in dropped.items():
+        detach[key] = [*detach.get(key, []), *items]
+    return section
+
+
+def _removal(recorded: dict[str, Any]) -> dict[str, Any]:
+    """The section that undoes one recorded patch: its own ``remove:``, which
+    detaches what it appended unless it names its own ``detach:``."""
+    section = _patch_section(recorded.get("remove"), "ledger remove")
+    appended = recorded.get("appended")
+    if not section.get("detach") and appended:
+        section["detach"] = _list_section(appended, "ledger appended")
+    return section
 
 
 # ---------------------------------------------------------------------------
@@ -1650,7 +1828,7 @@ def _undo(
                 allowed_prefix="docs/agents",
                 label="patched manifest",
             )
-            section = _patch_section(patch.get("remove"), "ledger remove")
+            section = _removal(patch)
         except (TemplateSecurityError, AssetError) as exc:
             report.warnings.append(f"patch for {agent!r}: not undone ({_why(exc)})")
             continue
