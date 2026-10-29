@@ -1242,16 +1242,26 @@ chat, instead of asking the operator to open the dashboard.
   error_message}` once it has finished, `{status: "already_running"}` when a
   run of that workflow is in progress, and `{error: "unknown_workflow"}` for an
   id that is not loaded. With `wait_seconds: 0` it still waits about 2 seconds,
-  so a run refused at once is not reported as started.
+  so a run refused at once is not reported as started. A run that stops at an
+  approval step returns `awaiting_approval`; it goes on once someone decides
+  (`list_pending_approvals`). A workflow normally triggered by a hook gets only
+  `event.payload` when started this way: there is no `event.type` or
+  `event.stream`, so a step that reads either finds nothing there.
+  A caller whose tenant is not the engine's own gets
+  `{error: "workflow_tenant_mismatch", run_tenant}`, because the run would be
+  recorded under a tenant the caller cannot read.
 - `workflow_runs` takes `workflow_id` and `limit` (default 10, at most 50) and
   returns recent runs, newest first, with each step's status.
 
 The run is recorded with trigger type `agent` and trigger detail
 `agent:<agent id>:<agent run id>`. It runs as the user of the chat that asked
-for it. With no user (a scheduled or service run), it runs as
-`service:agent:<agent id>` with role `service`. Run history is always limited to
+for it. When the run has neither a user nor a role (a scheduled or service
+run), it runs as `service:agent:<agent id>` with role `service`. Run history is always limited to
 the caller's tenant. `list_workflows` and `workflow_runs` are read-only;
 `run_workflow` is not, and benchmark runs get none of the three.
+
+The three tools belong to no tool group. An agent with no `tools_allowed` list
+gets them; an agent with one must name each tool it should have.
 
 **Which to use.** Use `run_workflow` when the work is a workflow that is already
 declared: a fixed, repeatable pipeline with its own steps, timeout and run
