@@ -19,6 +19,8 @@ describe("engineUrlFor", () => {
     vi.stubEnv("ROBOTHOR_ENGINE_URL", ROOT);
     vi.stubEnv("GENUS_TENANT_ENGINE_URLS", "");
     vi.stubEnv("GENUS_TENANT_ENGINE_URL_TEMPLATE", "");
+    vi.stubEnv("ROBOTHOR_TENANT_ENGINE_URLS", "");
+    vi.stubEnv("ROBOTHOR_TENANT_ENGINE_URL_TEMPLATE", "");
     vi.stubEnv("ROBOTHOR_DEFAULT_TENANT", "");
   });
 
@@ -50,6 +52,39 @@ describe("engineUrlFor", () => {
     vi.stubEnv("GENUS_TENANT_ENGINE_URL_TEMPLATE", TEMPLATE);
 
     expect(engineUrlFor("acme-child-a")).toBe("http://genus-engine-acme-child-a:18800");
+  });
+
+  // The bridge's settings accept the older ROBOTHOR_ names too; the dashboard
+  // must route the same way whichever name an install uses.
+  it("reads ROBOTHOR_TENANT_ENGINE_URLS when the GENUS_ name is unset", () => {
+    vi.stubEnv(
+      "ROBOTHOR_TENANT_ENGINE_URLS",
+      JSON.stringify({ "acme-child-a": "http://alias-override.test:9000" }),
+    );
+
+    expect(engineUrlFor("acme-child-a")).toBe("http://alias-override.test:9000");
+  });
+
+  it("reads ROBOTHOR_TENANT_ENGINE_URL_TEMPLATE when the GENUS_ name is unset", () => {
+    vi.stubEnv("ROBOTHOR_TENANT_ENGINE_URL_TEMPLATE", "http://alias-engine-{tenant}:18800");
+
+    expect(engineUrlFor("acme-child-a")).toBe("http://alias-engine-acme-child-a:18800");
+  });
+
+  it("prefers the GENUS_ names over their ROBOTHOR_ aliases", () => {
+    vi.stubEnv(
+      "GENUS_TENANT_ENGINE_URLS",
+      JSON.stringify({ "acme-child-a": "http://override.test:9000" }),
+    );
+    vi.stubEnv(
+      "ROBOTHOR_TENANT_ENGINE_URLS",
+      JSON.stringify({ "acme-child-a": "http://alias-override.test:9000" }),
+    );
+    vi.stubEnv("GENUS_TENANT_ENGINE_URL_TEMPLATE", TEMPLATE);
+    vi.stubEnv("ROBOTHOR_TENANT_ENGINE_URL_TEMPLATE", "http://alias-engine-{tenant}:18800");
+
+    expect(engineUrlFor("acme-child-a")).toBe("http://override.test:9000");
+    expect(engineUrlFor("acme-child-b")).toBe("http://genus-engine-acme-child-b:18800");
   });
 
   it("falls back to ROBOTHOR_ENGINE_URL with neither override nor template", () => {
