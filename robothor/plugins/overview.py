@@ -124,14 +124,21 @@ def _installed_plugin_agents(root: Path, warnings: list[str]) -> dict[str, set[s
     path = root / ".robothor" / "installed.yaml"
     if not path.is_file():
         return {}
-    data = _read_yaml(path)
+    unreadable = "The installed agent registry (.robothor/installed.yaml) is not readable."
+    try:
+        # Read here rather than through ``_read_yaml``, which answers None for
+        # an empty file AND for a corrupted one; only the first is benign.
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, yaml.YAMLError):
+        warnings.append(unreadable)
+        return {}
     if data is None:
         return {}  # an empty file records nothing
     agents = data.get("agents") if isinstance(data, dict) else data
     if agents is None:
         return {}  # no `agents` key yet: nothing installed, not damage
     if not isinstance(agents, dict):
-        warnings.append("The installed agent registry (.robothor/installed.yaml) is not readable.")
+        warnings.append(unreadable)
         return {}
     owned: dict[str, set[str]] = {}
     for agent_id, record in agents.items():
