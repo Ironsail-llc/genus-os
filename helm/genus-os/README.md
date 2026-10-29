@@ -293,6 +293,13 @@ exist.
 - `workspace.configMap`: an immutable bundle, with
   `workspace.persistence.enabled: false` on that cell.
 
+**Removing a cell.** Removing an entry from `tenants:` deletes that cell's
+Deployment and Service but not its workspace. The chart-created PVC carries
+`helm.sh/resource-policy: keep`, so Helm leaves it behind, and adding the same
+`id` back later mounts the same workspace again. To discard it, delete it by
+hand once you no longer need its contents:
+`kubectl delete pvc <fullname>-workspace-<id> --namespace <namespace>`.
+
 ## Google Workspace credentials
 
 The engine's mail, calendar and chat tools (`gws_*`) run the `gws` CLI, which

@@ -87,10 +87,13 @@ metadata:
   name: {{ $claimName }}
   labels:
     {{- include "genus-os.labels" (dict "root" $root "component" "workspace" "tenant" $id) | nindent 4 }}
-  {{- with $persistence.annotations }}
   annotations:
+    {{- /* Dropping an entry from tenants: must not delete that tenant's
+           workspace. Helm leaves the claim behind; an operator deletes it. */}}
+    helm.sh/resource-policy: keep
+    {{- with omit ($persistence.annotations | default dict) "helm.sh/resource-policy" }}
     {{- toYaml . | nindent 4 }}
-  {{- end }}
+    {{- end }}
 spec:
   accessModes:
     {{- toYaml $persistence.accessModes | nindent 4 }}
