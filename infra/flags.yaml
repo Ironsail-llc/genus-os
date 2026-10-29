@@ -956,8 +956,8 @@ flags:
       descendant tenant through POST /api/auth/switch-tenant (the AssumeRole
       pattern: the acting tenant is carried in the token, never in a header).
       `off` refuses every switch with 403; `observe` runs the full validation,
-      logs `tenant.switch would-allow` / `would-deny` with both tenant ids and
-      still refuses; `enforce` issues the acting token, and only while
+      writes a `tenant.switch` audit row with status `would-allow` /
+      `would-deny` / `would-refuse` and both tenant ids, and still refuses; `enforce` issues the acting token, and only while
       row-level security is genuinely enforcing (the inert-RLS gate shared with
       federation; GENUS_TENANT_SWITCH_ALLOW_INERT_RLS is its escape hatch).
 

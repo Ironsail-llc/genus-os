@@ -1675,8 +1675,8 @@ class AuthSettings(SettingsGroup):
         "GENUS_TENANT_SWITCH_MODE",
         "Whether a root-tenant owner or admin may switch into a descendant "
         "tenant (POST /api/auth/switch-tenant). 'off' refuses every switch; "
-        "'observe' runs the full check, logs would-allow / would-deny and still "
-        "refuses; 'enforce' issues the acting token — and only while row-level "
+        "'observe' runs the full check, records a would-allow / would-deny "
+        "tenant.switch audit row and still refuses; 'enforce' issues the acting token — and only while row-level "
         "security is genuinely enforcing. Any other value reads as 'off'.",
         aliases=("ROBOTHOR_TENANT_SWITCH_MODE",),
         restart_units=("robothor-bridge",),

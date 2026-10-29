@@ -192,8 +192,11 @@ reach. The caller's own-account routes (`/me`, `/password`, `/mfa/*`) always
 run in the home tenant, where the account lives.
 
 `GENUS_TENANT_SWITCH_MODE` is `off` by default (every switch is refused);
-`observe` logs `tenant.switch would-allow` / `would-deny` / `would-refuse` and
-still refuses; `enforce` issues the token — **only while row-level security is
+`observe` runs the full check and still refuses, recording what it would have
+done as a `tenant.switch` audit row with status `would-allow`, `would-deny` or
+`would-refuse` and both tenant ids. Read those rows in the audit log —
+`GET /api/audit/events?event_type=tenant.switch` — rather than grepping logs
+(a WARNING line is written too); `enforce` issues the token — **only while row-level security is
 genuinely enforcing**. That check is the same gate federation activation uses
 (`robothor/federation/rls_gate.py`): it refuses with 503 when
 `ROBOTHOR_RLS_ENABLED` is unset or the connection is a superuser.
