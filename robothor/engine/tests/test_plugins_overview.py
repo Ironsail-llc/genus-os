@@ -296,9 +296,9 @@ class TestOverview:
 
 
 class TestNoValuesInLogsOrWarnings:
-    """A failure is reported by file and exception CLASS, never by its text."""
+    """A failure is reported by exception CLASS, never by its text or a workspace value."""
 
-    def test_an_unparseable_workflow_logs_its_file_and_class_only(self, workspace, caplog) -> None:
+    def test_an_unparseable_workflow_logs_its_class_only(self, workspace, caplog) -> None:
         import logging
 
         from robothor.plugins.overview import parse_workflow_file
@@ -313,8 +313,8 @@ class TestNoValuesInLogsOrWarnings:
         )
         with caplog.at_level(logging.DEBUG, logger="robothor.plugins.overview"):
             assert parse_workflow_file(path) is None
-        assert "bad.yaml" in caplog.text
         assert "ValueError" in caplog.text
+        assert "bad.yaml" not in caplog.text, "no workspace-derived value reaches a log line"
         assert "value-that-must-not-be-logged" not in caplog.text
         assert all(r.exc_info is None for r in caplog.records)
 
