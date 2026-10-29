@@ -2063,6 +2063,83 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
             },
         }
 
+    # ── Knowledge base (curated reference documents per collection) ──
+    _kb_collection = {
+        "type": "string",
+        "description": "Collection name, <plugin>/<topic> (e.g. helpdesk/policies)",
+    }
+    schemas["kb_search"] = {
+        "type": "function",
+        "function": {
+            "name": "kb_search",
+            "description": (
+                "Search a knowledge-base collection of curated reference documents "
+                "(policies, product docs, playbooks) — hybrid semantic + keyword. Use it "
+                "for reference material scoped to a collection; use search_memory for "
+                "facts you have remembered yourself. Returns matching chunks with "
+                "doc_id, title, text, score and source_uri."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "collection": _kb_collection,
+                    "query": {"type": "string", "description": "What to look for"},
+                    "limit": {"type": "integer", "default": 5, "description": "1..50"},
+                },
+                "required": ["collection", "query"],
+            },
+        },
+    }
+    schemas["kb_upsert_document"] = {
+        "type": "function",
+        "function": {
+            "name": "kb_upsert_document",
+            "description": (
+                "Add or replace a reference document in a knowledge-base collection. "
+                "Re-sending an identical document is a no-op (status unchanged); a "
+                "changed one replaces its chunks and bumps its version."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "collection": _kb_collection,
+                    "doc_id": {"type": "string", "description": "Stable id within the collection"},
+                    "title": {"type": "string"},
+                    "text": {"type": "string", "description": "The full document text"},
+                    "source_uri": {
+                        "type": "string",
+                        "description": "Where the document came from (optional)",
+                        "default": "",
+                    },
+                },
+                "required": ["collection", "doc_id", "title", "text"],
+            },
+        },
+    }
+    schemas["kb_delete_document"] = {
+        "type": "function",
+        "function": {
+            "name": "kb_delete_document",
+            "description": "Remove a document and its chunks from a knowledge-base collection.",
+            "parameters": {
+                "type": "object",
+                "properties": {"collection": _kb_collection, "doc_id": {"type": "string"}},
+                "required": ["collection", "doc_id"],
+            },
+        },
+    }
+    schemas["kb_list_collections"] = {
+        "type": "function",
+        "function": {
+            "name": "kb_list_collections",
+            "description": (
+                "List this tenant's knowledge-base collections with their document "
+                "and chunk counts and when each last changed."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    }
+
     # ── Intent memory (prospective objectives; RIP 14) ──
     if is_rip_enabled(14):
         schemas["intent_add"] = {
