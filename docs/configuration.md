@@ -642,6 +642,16 @@ whose words reach Telegram (an interactive Telegram turn, or a manifest with
 `delivery.mode: announce` to `channel: telegram`) are also told so in their
 engine-context turn, so the model writes for a phone in the first place.
 
+## Integrations
+
+The `integrations` group holds the settings for external systems the instance
+watches. Today that is one n8n instance: `ROBOTHOR_N8N_ENABLED`,
+`ROBOTHOR_N8N_BASE_URL`, `ROBOTHOR_N8N_API_KEY` (a secret, resolved from the
+vault first) and `ROBOTHOR_N8N_POLL_SECONDS`. All are off or empty by default.
+See [n8n monitoring](integrations/n8n.md) for setup, what is polled and what
+alerts, and the [settings reference](reference/configuration.md#integrations)
+for the full table.
+
 ## Plugins
 
 `ROBOTHOR_PLUGIN_LOCKFILE` points at the plugin lockfile — the record of which

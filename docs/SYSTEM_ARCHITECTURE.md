@@ -386,6 +386,9 @@ Two databases on the same instance:
 | `pr_reviews` | One row per (tenant, repo, pull request) for the pr-reviewer suite (migration 145): head we saw, head we last reviewed, head a task is queued for, the review job bound to it, status, pending trigger, retry state, Chat thread refs, our GitHub review ids (the only threads it resolves) and the last review's findings with their inline comment ids. Tenant RLS |
 | `pr_review_messages` | Each Google Chat message the pr-review intake handled, once, with what it did or the error it raised — a failing message is recorded and skipped, never retried. Tenant RLS |
 | `pr_review_cursors` | Where each Chat source's last intake poll stopped. Tenant RLS |
+| `n8n_workflows` | The external n8n instance's workflows as of the n8n monitor's latest listing (migration 156): name, active, tag names, n8n's own update time. A workflow deleted in n8n leaves on the next listing. Tenant RLS |
+| `n8n_executions` | Each failed n8n execution the monitor has seen: workflow, mode, start/stop, error message, and `alerted_at` once the main agent was notified, so each failure is notified once. Purged after 30 days. Tenant RLS |
+| `n8n_sync_state` | Per tenant: when the n8n monitor last polled and last succeeded, the last error class, and the workflow totals. The doctor's `n8n.poll_freshness` reads it. Tenant RLS |
 
 ### Canonical schema lifecycle
 

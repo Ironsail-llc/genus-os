@@ -557,6 +557,24 @@ approved and nothing blocking remains; the optional ticket rule). Use the
 For "how are reviews going?" or "where is #123?", call `pr_review_status`; to
 queue or re-queue one pull request, `pr_review_intake(pr=...)`.
 
+### n8n automations (`n8n_*`)
+
+Two read-only tools over the snapshot the n8n monitor keeps
+([n8n monitoring](integrations/n8n.md)). They answer from the database, so they
+cost no n8n call, still answer while n8n is down, and match the dashboard.
+With the monitor off they return `status: not_configured` and nothing else.
+
+| Tool | Purpose |
+|---|---|
+| `n8n_list_workflows` | The n8n workflows with `failures_24h`, `failures_7d`, `last_failure_at`, `last_error` and a link to each, as of the last poll, plus the section `status` (`ok`, `warn`, `unknown`) and `last_ok_at`. `active_only` (default true) hides switched-off workflows; `query` matches a name or tag, case-insensitive. |
+| `n8n_recent_failures` | Failed executions in the last `hours` (default 24, max 720), newest first, up to 100: workflow id and name, `error_message`, `mode`, start and stop times and a link to the execution in n8n. `workflow_id` narrows it to one workflow. |
+
+**Choosing.** These are about the operator's **n8n** automations, not Genus
+workflows (`docs/workflows/*.yaml`) or agent runs. When a `workflow_failure`
+notification carries `source: n8n`, answer from `n8n_recent_failures` and give
+the operator the execution link: the agent cannot rerun or edit an n8n
+workflow, and neither tool calls n8n.
+
 ### Vision: `view_image` and `analyze_image`
 
 Two tools, one rule:
@@ -1241,6 +1259,7 @@ agent's own allow-set is the authoritative answer. The families:
 | Sub-agents | `spawn_agent`, `spawn_agents` (only with `can_spawn_agents`) |
 | Vision | `view_image`, `analyze_image` (image files — see above); `look`, `who_is_here` (a real camera) |
 | Desktop | `desktop_*` (a real screen) |
+| n8n automations | `n8n_list_workflows`, `n8n_recent_failures` (the n8n monitor's snapshot — see above) |
 
 ### `read_file` — documents, not just text
 
