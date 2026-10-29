@@ -53,6 +53,7 @@ __all__ = [
     "FAILED_REPLY",
     "NO_OUTPUT_REPLY",
     "InboundResult",
+    "conversation_turn",
     "handle_message",
     "run_as",
 ]
@@ -118,8 +119,13 @@ _fleet: tuple[int, asyncio.AbstractEventLoop, asyncio.Semaphore] | None = None
 
 
 @contextlib.asynccontextmanager
-async def _conversation_turn(session_key: str) -> AsyncIterator[None]:
-    """Hold ``session_key``'s turn; different keys never wait on each other."""
+async def conversation_turn(session_key: str) -> AsyncIterator[None]:
+    """Hold ``session_key``'s turn; different keys never wait on each other.
+
+    Public so a channel's own commands that change a conversation's history
+    (Slack's ``/clear``) wait for a run in flight rather than racing its
+    write-back.
+    """
     lock = _session_locks.setdefault(session_key, asyncio.Lock())
     _session_waiters[session_key] = _session_waiters.get(session_key, 0) + 1
     try:
@@ -257,7 +263,7 @@ async def handle_message(
 
     # The conversation's turn outside, the fleet slot inside: a message queued
     # behind its own conversation must not hold a slot another visitor could use.
-    async with _conversation_turn(session_key):
+    async with conversation_turn(session_key):
         session = get_shared_session(session_key)
         history = list(session.history) if session.history else []
         if history_limit is not None:
