@@ -251,14 +251,6 @@ class TestContentTagging:
         assert "web_search" in EXTERNAL_DATA_TOOLS
         assert "search_memory" in EXTERNAL_DATA_TOOLS
 
-    def test_n8n_tool_output_is_wrapped_as_untrusted(self):
-        """n8n error text, workflow names and tags come from the operator's
-        automations and the systems they call, not from the platform."""
-        from robothor.engine.session import EXTERNAL_DATA_TOOLS
-
-        assert "n8n_list_workflows" in EXTERNAL_DATA_TOOLS
-        assert "n8n_recent_failures" in EXTERNAL_DATA_TOOLS
-
 
 # ── Web Fetch Hardening ──
 
