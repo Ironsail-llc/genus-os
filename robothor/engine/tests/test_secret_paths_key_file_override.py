@@ -129,3 +129,53 @@ async def test_read_file_refuses_the_override(mount, monkeypatch) -> None:
     ctx.workspace = str(mount.parent)
     out = await filesystem.HANDLERS["read_file"]({"path": str(mount / "key")}, ctx)
     assert "error" in out and "refused" in out["error"]
+
+
+# ── exec: a relative argument after a `cd` ────────────────────────────
+#
+# A printer argument is resolved against the ENGINE's working directory, not
+# the shell's, so `cd <mount> && cat key` named the key with a path the check
+# never saw.
+
+
+def test_cd_into_the_mount_then_cat_the_basename(mount, monkeypatch) -> None:
+    monkeypatch.setenv("GENUS_VAULT_KEY_FILE", str(mount / "key"))
+    assert exec_reads_secret(f"cd {mount} && cat key")
+    assert exec_reads_secret(f"cd {mount}; cat ./key")
+    assert exec_reads_secret(f"pushd {mount} >/dev/null; xxd fingerprint-salt")
+
+
+def test_cd_into_the_mount_then_head_a_guarded_name(mount, monkeypatch) -> None:
+    monkeypatch.setenv("GENUS_VAULT_KEY_FILE", str(mount / "key"))
+    assert exec_reads_secret(f"cd {mount}; head .vault-key")
+
+
+def test_the_override_basename_is_refused_relative_to_anywhere(mount, monkeypatch) -> None:
+    """Without a visible `cd` (a script, a subshell), the shell's directory is
+    unknown, so a relative argument with the override's basename is refused."""
+    monkeypatch.setenv("GENUS_VAULT_KEY_FILE", str(mount / "key"))
+    assert exec_reads_secret("cat key")
+    monkeypatch.setenv("GENUS_FINGERPRINT_SALT_FILE", str(mount / "fingerprint-salt"))
+    assert exec_reads_secret("base64 ./fingerprint-salt")
+
+
+def test_a_harmless_cd_and_cat_is_allowed(mount, monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("GENUS_VAULT_KEY_FILE", str(mount / "key"))
+    assert exec_reads_secret("cd /tmp && cat notes.txt") is None
+    assert exec_reads_secret(f"cd {tmp_path} && cat README") is None
+
+
+# ── the directory rule near the workspace ─────────────────────────────
+
+
+def test_a_key_in_an_ancestor_of_the_workspace_refuses_only_itself(monkeypatch, tmp_path) -> None:
+    for name in ENVS:
+        monkeypatch.delenv(name, raising=False)
+    root = tmp_path / "srv" / "genus"
+    workspace = root / "workspace"
+    workspace.mkdir(parents=True)
+    monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(workspace))
+    monkeypatch.setenv("GENUS_VAULT_KEY_FILE", str(root / "key"))
+    assert is_secret_path(root / "key")
+    assert not is_secret_path(workspace / "notes.txt")
+    assert not is_secret_path(root / "other-file")
