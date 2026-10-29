@@ -359,6 +359,25 @@ class TestAssets:
         raw = json.dumps(client.get("/api/admin/plugins").json())
         assert str(workspace) not in raw
 
+    @pytest.mark.parametrize(
+        ("record", "named"),
+        [("plugin-assets.yaml", "plugin-assets.yaml"), ("installed.yaml", "installed.yaml")],
+    )
+    def test_a_corrupt_record_is_logged_and_carried_on_every_row(
+        self, client, one_plugin, workspace, caplog, record, named
+    ):
+        import logging
+
+        (workspace / ".robothor" / record).write_text("plugins: [unclosed", encoding="utf-8")
+        with caplog.at_level(logging.WARNING, logger="robothor.engine.admin_plugins"):
+            response = client.get("/api/admin/plugins")
+        assert response.status_code == 200
+        row = response.json()["plugins"][0]
+        assert named in row["assets"]["error"]
+        assert named in caplog.text
+        assert str(workspace) not in response.text
+        assert str(workspace) not in caplog.text
+
     def test_an_asset_read_failure_does_not_take_the_listing_down(
         self, client, one_plugin, monkeypatch
     ):
