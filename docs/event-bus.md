@@ -30,11 +30,33 @@ Every message uses a standard envelope:
   "source": "email-sync",
   "actor": "robothor",
   "payload": "{\"from\": \"alice@example.com\", \"subject\": \"Meeting\"}",
-  "correlation_id": "trace-abc-123"
+  "correlation_id": "trace-abc-123",
+  "tenant_id": "default"
 }
 ```
 
 The `payload` field is a JSON string (Redis Streams require flat field values).
+
+`tenant_id` is the tenant the event belongs to. `publish()` stamps it when the
+caller passes none: the enclosing `tenant_scope`, else the process's
+`ROBOTHOR_DEFAULT_TENANT`. A service that acts for several tenants from one
+process (the bridge) passes `tenant_id=` on every call.
+
+## One engine per tenant
+
+Several engines (one per tenant) can share one Redis. Each reads the streams
+with a consumer group of its own, `GENUS_EVENT_CONSUMER_GROUP`, because Redis
+hands each stream entry to only one reader in a group: engines sharing a group
+would split the events between them. The root tenant's engine keeps the
+historical group `engine`, so its stream offsets survive the upgrade; each
+child engine uses `engine-<tenant>`.
+
+Every engine therefore sees every event, and acts only on those whose
+`tenant_id` is its own `ROBOTHOR_TENANT_ID`. The others are acknowledged and
+dropped (logged at DEBUG, counted in `EventHooks.foreign_events_dropped`). An
+event with no `tenant_id` was published before tagging and belongs to the
+root: only the engine on the `engine` group takes it. Retry and busy-requeue
+copies keep the original's tag, so they reach only the engine that wrote them.
 
 ## Email and calendar event contract
 
