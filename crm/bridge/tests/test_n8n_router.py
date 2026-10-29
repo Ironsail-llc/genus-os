@@ -185,7 +185,9 @@ def test_disabled_is_not_configured(controls_client_as_operator, monkeypatch, fa
     assert body["workflows"] == []
 
 
-def test_a_database_error_is_unknown_not_500(controls_client_as_operator, enabled, monkeypatch):
+def test_a_database_error_is_unknown_not_500(
+    controls_client_as_operator, enabled, monkeypatch, caplog
+):
     @contextmanager
     def boom(*args, **kwargs):
         raise RuntimeError("relation n8n_workflows does not exist")
@@ -196,8 +198,14 @@ def test_a_database_error_is_unknown_not_500(controls_client_as_operator, enable
     assert r.status_code == 200
     body = r.json()
     assert body["status"] == "unknown"
-    assert "does not exist" in body["last_error"]
+    # Named by class only: the exception's text stays in the server log.
+    assert body["last_error"] == "database_error: RuntimeError"
+    assert "does not exist" not in r.text
     assert body["workflows"] == []
+    assert any(
+        rec.levelname == "WARNING" and "does not exist" in rec.getMessage()
+        for rec in caplog.records
+    )
 
 
 @pytest.mark.parametrize(
@@ -293,7 +301,8 @@ def test_unreadable_settings_are_unknown_not_500(controls_client_as_operator, mo
     assert r.status_code == 200
     body = r.json()
     assert body["status"] == "unknown"
-    assert "often" in body["last_error"]
+    assert body["last_error"] == "settings_error: ValueError"
+    assert "often" not in r.text
     assert body["workflows"] == []
 
 
@@ -397,16 +406,22 @@ def test_a_poll_interval_under_the_floor_does_not_flap(
     assert body["status"] == "ok"
 
 
-def test_executions_db_error_is_named(controls_client_as_operator, enabled, monkeypatch):
+def test_executions_db_error_is_named(controls_client_as_operator, enabled, monkeypatch, caplog):
     @contextmanager
     def boom(*args, **kwargs):
         raise RuntimeError("connection refused")
         yield  # pragma: no cover
 
     monkeypatch.setattr(n8n, "get_connection", boom)
-    body = controls_client_as_operator.get("/api/integrations/n8n/workflows/wf1/executions").json()
+    r = controls_client_as_operator.get("/api/integrations/n8n/workflows/wf1/executions")
+    body = r.json()
     assert body["executions"] == []
-    assert "connection refused" in body["error"]
+    assert body["error"] == "database_error: RuntimeError"
+    assert "connection refused" not in r.text
+    assert any(
+        rec.levelname == "WARNING" and "connection refused" in rec.getMessage()
+        for rec in caplog.records
+    )
 
 
 def test_executions_without_an_error_carry_none(controls_client_as_operator, enabled, fake_db):
