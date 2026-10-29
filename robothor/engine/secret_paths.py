@@ -550,15 +550,28 @@ _FILE_ONLY_PRINTERS = frozenset(
 _SEARCHERS = frozenset({"grep", "egrep", "fgrep", "rg", "ag", "ack"})
 
 
+def _names_a_pattern(arg: str) -> bool:
+    """Whether ``arg`` supplies a search pattern (or a file of them) itself.
+
+    Every spelling: ``-e x`` / ``-f x``, attached ``-ex`` / ``-fx``, inside a
+    short-option cluster (``-rnex``), and ``--regexp[=x]`` / ``--file[=x]``.
+    Over-matching only treats one more argument as a file, which fails closed.
+    """
+    if arg in ("--regexp", "--file") or arg.startswith(("--regexp=", "--file=")):
+        return True
+    return arg.startswith("-") and not arg.startswith("--") and any(ch in "ef" for ch in arg[1:])
+
+
 def _search_pattern_index(word: str, args: list[str]) -> int | None:
     """Index in ``args`` of a searcher's positional PATTERN, or None.
 
-    None when the pattern was given with ``-e``/``--regexp``/``-f`` (then every
-    positional argument is a file), or when ``word`` is not a searcher.
+    None when the pattern was given by an option (``-e``, ``-f``,
+    ``--regexp``, ``--file``, in any spelling: then every positional argument is
+    a file), or when ``word`` is not a searcher.
     """
     if word not in _SEARCHERS:
         return None
-    if any(a in ("-e", "--regexp", "-f", "--file") or a.startswith("--regexp=") for a in args):
+    if any(_names_a_pattern(a) for a in args):
         return None
     for index, arg in enumerate(args):
         if not arg.startswith("-"):
