@@ -459,6 +459,10 @@ READONLY_TOOLS: frozenset[str] = frozenset(
         # then refused every later wait for that principal across runs.
         "claude_code_status",
         "claude_code_wait",
+        # Workflow status: definitions plus SELECT-only run history.
+        # `run_workflow` is deliberately NOT here — it starts a real run.
+        "list_workflows",
+        "workflow_runs",
     }
 )
 

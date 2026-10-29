@@ -315,7 +315,9 @@ async def test_workflow_runs_are_tenant_scoped_with_steps(engine: FakeEngine) ->
         ]
     )
     with _patch_db(db):
-        out = await _handlers()["workflow_runs"]({"workflow_id": "daily-report", "limit": 5}, _ctx())
+        out = await _handlers()["workflow_runs"](
+            {"workflow_id": "daily-report", "limit": 5}, _ctx()
+        )
 
     assert out["runs"] == [
         {
