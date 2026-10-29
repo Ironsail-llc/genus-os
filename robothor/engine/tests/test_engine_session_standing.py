@@ -187,13 +187,17 @@ def test_the_ide_websocket_closes_4403_for_an_acting_token_with_switching_off(
 ):
     client, config = secure_engine
     switch_mode("off")
+    # Accepted, then closed: the close arrives as the first thing received.
     with (
         patch("robothor.auth.accounts.get_account_by_id", return_value=_account("acme-parent")),
+        client.websocket_connect(
+            "/ide/ws", headers={"Authorization": f"Bearer {_acting(config)}"}
+        ) as websocket,
         pytest.raises(WebSocketDisconnect) as closed,
-        client.websocket_connect("/ide/ws", headers={"Authorization": f"Bearer {_acting(config)}"}),
     ):
-        pass
+        websocket.receive_text()
     assert closed.value.code == 4403
+    assert closed.value.reason == "tenant switching disabled"
 
 
 def test_the_chat_router_mounted_alone_refuses_it_too(secure_engine, switch_mode, monkeypatch):
