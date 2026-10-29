@@ -1,3 +1,9 @@
+## [1.117.0](https://github.com/Ironsail-llc/genus-os/compare/v1.116.2...v1.117.0) (2026-10-29)
+
+### Features
+
+* **engine:** unlock the assistant's tools, files, settings and jira (GEN-37) ([#741](https://github.com/Ironsail-llc/genus-os/issues/741)) ([a0a82bb](https://github.com/Ironsail-llc/genus-os/commit/a0a82bb964a643d1e8d3cd4b2b1281c15ad39af8)), closes [#742](https://github.com/Ironsail-llc/genus-os/issues/742) [#737](https://github.com/Ironsail-llc/genus-os/issues/737) [#735](https://github.com/Ironsail-llc/genus-os/issues/735) [#738](https://github.com/Ironsail-llc/genus-os/issues/738) [#736](https://github.com/Ironsail-llc/genus-os/issues/736) [#742](https://github.com/Ironsail-llc/genus-os/issues/742)
+
 ## [1.116.2](https://github.com/Ironsail-llc/genus-os/compare/v1.116.1...v1.116.2) (2026-10-29)
 
 ### Bug Fixes
