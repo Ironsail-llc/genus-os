@@ -39,7 +39,7 @@ from robothor.constants import DEFAULT_TENANT
 from robothor.engine.channels import access
 from robothor.engine.chat import get_shared_session
 from robothor.engine.chat_history import append_turn
-from robothor.engine.models import TriggerType
+from robothor.engine.models import RunStatus, TriggerType
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from collections.abc import AsyncIterator, Callable
@@ -220,9 +220,9 @@ async def handle_message(
             compatibility clause the gate cannot know about (Slack does). Left
             ``None``, the gate reads it.
         record_turn: append the exchange to the session's history after a
-            successful run and persist it through the chat store, so the
-            conversation remembers it across restarts. A refused or failed run
-            records nothing.
+            run that COMPLETED with output and persist it through the chat
+            store, so the conversation remembers it across restarts. A refused,
+            failed, timed-out or empty run records nothing.
         history_limit: hand the run only the last N turns (user + assistant
             pairs) of the session's history. ``None`` hands it all of it.
 
@@ -290,7 +290,11 @@ async def handle_message(
             )
 
         output = str(getattr(run, "output_text", "") or "")
-        if record_turn:
+        # Only a COMPLETED run with something to say is remembered. The runner
+        # reports most failures by RETURNING the run (failed, timeout,
+        # cancelled), and a timed-out run can carry partial text; recording
+        # either would teach the next turn an answer that was never given.
+        if record_turn and output and getattr(run, "status", None) == RunStatus.COMPLETED:
             # Guarded: this function never raises, and the answer is already
             # made — a history that could not be written loses memory, not it.
             try:

@@ -38,21 +38,42 @@ class SlackBot:
         self._handler = None
         self._started = False
 
-    async def _clear_session(self, channel: str) -> None:
-        """Empty a channel's conversation, cached AND stored.
+    async def _clear_session(self, channel: str, *, user_id: str) -> str:
+        """Empty a channel's conversation, cached AND stored; return the reply.
+
+        Gated by the same access decision a message takes, so a sender who could
+        not drive the agent here cannot wipe its memory either; a refusal comes
+        back as the reply (``""`` means send nothing, as on the message path).
 
         Stored too, because Slack turns are persisted and a restarted engine
         restores sessions from the store: clearing only the cache would hand
-        the history back after the next restart. Inside the conversation's
-        turn, so a run in flight finishes (and writes back) before the clear.
+        the history back after the next restart. Cleared under the tenant the
+        message path saves under — the sender's resolved tenant, else this
+        engine's. Inside the conversation's turn, so a run in flight finishes
+        (and writes back) before the clear.
         """
         from robothor.engine import chat, chat_store
+        from robothor.engine.channels import access
         from robothor.engine.channels.inbound import conversation_turn
+
+        decision = await access.evaluate(
+            "slack",
+            user_id,
+            tenant_id=self.config.tenant_id,
+            surface=self._surface({}, channel),
+            allowlist=lambda: self._authorized(user_id, channel),
+            mode=self._access_mode(),
+        )
+        if not decision.allowed:
+            return decision.refusal
+        identity = decision.identity
+        tenant_id = identity.tenant_id if identity else self.config.tenant_id
 
         session_key = f"agent:main:slack:{channel}"
         async with conversation_turn(session_key):
             chat.get_shared_session(session_key).history.clear()
-            await chat_store.clear_session_async(session_key, tenant_id=self.config.tenant_id)
+            await chat_store.clear_session_async(session_key, tenant_id=tenant_id)
+        return "Session cleared."
 
     @staticmethod
     def _allowed_users() -> set[str]:
@@ -174,8 +195,11 @@ class SlackBot:
         @app.command("/clear")  # type: ignore[untyped-decorator]
         async def handle_clear(ack: Any, respond: Any, command: dict[str, Any]) -> None:
             await ack()
-            await self._clear_session(command.get("channel_id", ""))
-            await respond("Session cleared.")
+            reply = await self._clear_session(
+                command.get("channel_id", ""), user_id=command.get("user_id", "")
+            )
+            if reply:
+                await respond(reply)
 
         # Register platform sender for delivery
         from robothor.engine.delivery import register_platform_sender
