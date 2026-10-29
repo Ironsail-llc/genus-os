@@ -325,9 +325,9 @@ class TestNoValuesInLogsOrWarnings:
         _write(ledger, {"plugins": {}})
 
         def refuse(_instance):
-            raise PermissionError("/home/alice/secret-path denied")
+            raise PermissionError("/srv/secret-path denied")
 
         monkeypatch.setattr("robothor.plugins.overview.read_ledger", refuse)
         warnings = _call()["warnings"]
         assert any("PermissionError" in w for w in warnings)
-        assert not any("/home/alice" in w for w in warnings)
+        assert not any("/srv/secret-path" in w for w in warnings)
