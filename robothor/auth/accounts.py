@@ -750,22 +750,25 @@ def revoke_user_sessions(user_id: str, *, except_refresh_hash: str | None = None
     password, which is exactly what the revocation is testing for.
     """
     with get_connection() as conn:
-        cur = conn.cursor()
-        if except_refresh_hash:
-            cur.execute(
-                "UPDATE user_sessions SET revoked_at = NOW() "
-                "WHERE user_id = %s AND revoked_at IS NULL AND refresh_token_hash <> %s",
-                (user_id, except_refresh_hash),
-            )
-        else:
-            cur.execute(
-                "UPDATE user_sessions SET revoked_at = NOW() "
-                "WHERE user_id = %s AND revoked_at IS NULL",
-                (user_id,),
-            )
-        revoked = int(cur.rowcount or 0)
+        revoked = _revoke_sessions(conn.cursor(), user_id, except_refresh_hash)
         conn.commit()
         return revoked
+
+
+def _revoke_sessions(cur: Any, user_id: str, except_refresh_hash: str | None = None) -> int:
+    """Revoke one account's live refresh sessions in the caller's transaction."""
+    if except_refresh_hash:
+        cur.execute(
+            "UPDATE user_sessions SET revoked_at = NOW() "
+            "WHERE user_id = %s AND revoked_at IS NULL AND refresh_token_hash <> %s",
+            (user_id, except_refresh_hash),
+        )
+    else:
+        cur.execute(
+            "UPDATE user_sessions SET revoked_at = NOW() WHERE user_id = %s AND revoked_at IS NULL",
+            (user_id,),
+        )
+    return int(cur.rowcount or 0)
 
 
 def revoke_session(refresh_token_hash: str) -> bool:
@@ -986,12 +989,7 @@ def move_account(
                     )
                 report.counts[table] = int(cur.rowcount or 0)
 
-            cur.execute(
-                "UPDATE user_sessions SET revoked_at = NOW() "
-                "WHERE user_id = %s AND revoked_at IS NULL",
-                (report.user_id,),
-            )
-            report.sessions_revoked = int(cur.rowcount or 0)
+            report.sessions_revoked = _revoke_sessions(cur, report.user_id)
 
             details = {
                 k: v for k, v in report.to_dict().items() if k not in ("audit_id", "dry_run")
