@@ -164,6 +164,19 @@ describe("normalizePending", () => {
     expect(rows[2].question).toBe("sales.email: Intro to Acme");
   });
 
+  it("keeps a proposal's envelope, and only its string fields", () => {
+    const [row] = normalizePending({
+      pending: [
+        {
+          kind: "action",
+          id: "44444444-4444-4444-8444-444444444444",
+          envelope: { sender: "agent@example.com", recipient: "bob@example.com", bad: 3 },
+        },
+      ],
+    });
+    expect(row.envelope).toEqual({ sender: "agent@example.com", recipient: "bob@example.com" });
+  });
+
   it("survives a body that is not the shape it promised", () => {
     expect(normalizePending(null)).toEqual([]);
     expect(normalizePending({ pending: "nope" })).toEqual([]);

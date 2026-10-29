@@ -18,6 +18,7 @@ Generic fixtures only: ``acme-child-a`` acts, ``acme-child-b`` is the neighbour.
 
 from __future__ import annotations
 
+import json
 import sys
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -182,6 +183,57 @@ def test_the_listing_includes_proposed_actions_in_review(child_admin, stores, op
     assert action["question"]
     assert action["options"] == []
     assert action["expires_at"]
+
+
+def _email_proposal(body: str) -> dict:
+    """The shape ``Sales.draft`` proposes: body first when keys are sorted."""
+    return {
+        "id": ACTION_ID,
+        "kind": "sales.email",
+        "payload": {
+            "body": body,
+            "claim_ids": ["claim-1"],
+            "contact_identity_hash": "h",
+            "evidence_ids": ["ev-1", "ev-2"],
+            "purpose": "introduction",
+            "recipient": "bob@example.com",
+            "sender": "agent@example.com",
+            "subject": "Intro to Acme",
+        },
+        "expires_at": _soon(hours=20),
+        "created_at": datetime.now(UTC),
+    }
+
+
+def test_a_proposed_email_shows_who_it_goes_to_and_its_whole_body(child_admin, stores, ops):
+    """Approve authorizes the exact payload, so the card must be able to show it."""
+    body_text = "Hello Bob,\n\n" + "A long paragraph about the proposal. " * 120
+    ops.review = [_email_proposal(body_text)]
+
+    listed = child_admin.get("/api/approvals").json()["pending"]
+    [action] = [item for item in listed if item["kind"] == "action"]
+
+    assert action["envelope"] == {
+        "sender": "agent@example.com",
+        "recipient": "bob@example.com",
+        "purpose": "introduction",
+        "subject": "Intro to Acme",
+        "claims": "claim-1",
+        "evidence": "ev-1, ev-2",
+    }
+    assert action["detail"] == body_text
+
+
+def test_a_proposal_without_a_body_shows_its_whole_payload(child_admin, stores, ops):
+    big = {"items": ["x" * 50] * 40}
+    ops.review = [{**_email_proposal(""), "kind": "crm.update", "payload": big}]
+
+    [action] = [
+        i for i in child_admin.get("/api/approvals").json()["pending"] if i["kind"] == "action"
+    ]
+
+    assert action["envelope"] == {}
+    assert json.loads(action["detail"]) == big
 
 
 @pytest.mark.parametrize("fixture", ["child_member", "child_viewer"])

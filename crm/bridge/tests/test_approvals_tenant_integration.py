@@ -89,6 +89,22 @@ def _action(tenant: str) -> str:
     )
 
 
+def _email(tenant: str, body: str) -> str:
+    from robothor.operations.store import Operations
+
+    return Operations(tenant).propose(
+        "sales.email",
+        f"draft-{uuid.uuid4()}",
+        {
+            "body": body,
+            "recipient": "bob@example.com",
+            "sender": "agent@example.com",
+            "purpose": "introduction",
+            "subject": "Intro to Acme",
+        },
+    )
+
+
 def _status(db_conn, table: str, row_id: str) -> tuple:
     who = "answered_by" if table == "agent_questions" else "decided_by"
     with db_conn.cursor() as cur:
@@ -106,6 +122,17 @@ def test_a_child_admin_lists_only_their_tenant(child_admin):
     assert mine <= listed
     assert not (theirs & listed)
     assert {item["kind"] for item in body["pending"]} >= {"workflow", "question", "action"}
+
+
+def test_a_listed_email_proposal_names_its_recipient_and_carries_its_whole_body(child_admin):
+    body = "Hello Bob,\n" + "More detail. " * 200
+    action = _email(CHILD, body)
+
+    [item] = [i for i in child_admin.get("/api/approvals").json()["pending"] if i["id"] == action]
+
+    assert item["envelope"]["recipient"] == "bob@example.com"
+    assert item["envelope"]["sender"] == "agent@example.com"
+    assert item["detail"] == body
 
 
 def test_a_child_admin_decides_their_workflow_approval(child_admin, db_conn):
