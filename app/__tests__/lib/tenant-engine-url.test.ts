@@ -1,8 +1,9 @@
 /**
- * Which engine a tenant's requests go to.
+ * Which engine a session's requests go to — the tenant in its token, whether
+ * a root admin is acting there or it is a child-tenant user's own home.
  *
- * Same order the bridge resolves it: an explicit per-tenant override, then a
- * template, then the single engine. The root tenant is never templated — it IS
+ * Three steps, the same three-step order the bridge adopts: an explicit
+ * per-tenant override, then a template, then the single engine. The root tenant is never templated — it IS
  * the engine `ROBOTHOR_ENGINE_URL` names, and a template that resolved it to
  * `…-engine-default` would point the operator's own home at a Service that
  * does not exist.

@@ -1038,16 +1038,19 @@ under the header until you return home. The bridge refuses unless
 [Tenant switching over the API](configuration.md#tenant-switching-over-the-api)),
 and the picker shows that refusal rather than switching. Because a refresh
 always hands back a home token, the dashboard re-enters the acting tenant after
-each refresh and, if that is refused, drops to home and says so. While acting,
-every engine call goes to that tenant's engine, resolved in the bridge's order:
-`GENUS_TENANT_ENGINE_URLS` (a JSON object `{"<tenant>": "<url>"}`), then
+each refresh and, if that is refused, drops to home and says so.
+
+Every engine call the dashboard makes goes to the engine of the tenant in the
+session's token — a root admin acting in a child tenant, and equally a user
+whose home is a child tenant, on every request. The URL is chosen in three
+steps: `GENUS_TENANT_ENGINE_URLS` (a JSON object `{"<tenant>": "<url>"}`), then
 `GENUS_TENANT_ENGINE_URL_TEMPLATE` (a URL containing the literal `{tenant}`),
 then `ROBOTHOR_ENGINE_URL`. Each of the first two also answers to its older
-alias, `ROBOTHOR_TENANT_ENGINE_URLS` and `ROBOTHOR_TENANT_ENGINE_URL_TEMPLATE`,
-exactly as the bridge does; the `GENUS_` name wins when both are set. The root
-tenant (`ROBOTHOR_DEFAULT_TENANT`, default
-`default`) always uses `ROBOTHOR_ENGINE_URL`, and a malformed override or
-template fails the request instead of falling back to the root engine.
+alias, `ROBOTHOR_TENANT_ENGINE_URLS` and `ROBOTHOR_TENANT_ENGINE_URL_TEMPLATE`;
+the `GENUS_` name wins when both are set. The root tenant
+(`ROBOTHOR_DEFAULT_TENANT`, default `default`) always uses
+`ROBOTHOR_ENGINE_URL`, and a malformed override or template fails the request
+instead of falling back to the root engine.
 
 ## Health Endpoints
 

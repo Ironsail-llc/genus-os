@@ -167,7 +167,7 @@ function rootTenant(): string {
   return process.env.ROBOTHOR_DEFAULT_TENANT?.trim() || "default";
 }
 
-/** A setting by its GENUS_ name, else its ROBOTHOR_ alias — the bridge's order. */
+/** A setting by its GENUS_ name, else its ROBOTHOR_ alias. */
 function settingWithAlias(name: string, alias: string): string | undefined {
   return process.env[name]?.trim() || process.env[alias]?.trim() || undefined;
 }
@@ -189,12 +189,13 @@ function tenantEngineOverride(tenant: string): string | undefined {
 }
 
 /**
- * The engine that serves `tenant`, resolved in the bridge's order:
- * `GENUS_TENANT_ENGINE_URLS` (JSON `{tenant: url}`), then
- * `GENUS_TENANT_ENGINE_URL_TEMPLATE` (literal `{tenant}` placeholder), then
- * `ROBOTHOR_ENGINE_URL`. Each of the first two also answers to its
- * `ROBOTHOR_TENANT_…` alias, the GENUS_ name winning. The root tenant (`ROBOTHOR_DEFAULT_TENANT`, default
- * `default`) — and no tenant at all — is always `ROBOTHOR_ENGINE_URL`.
+ * The engine that serves `tenant` (the token's `tid`: an acting tenant, or a
+ * child-tenant user's home), in three steps: `GENUS_TENANT_ENGINE_URLS`
+ * (JSON `{tenant: url}`), then `GENUS_TENANT_ENGINE_URL_TEMPLATE` (literal
+ * `{tenant}` placeholder), then `ROBOTHOR_ENGINE_URL`. Each of the first two
+ * also answers to its `ROBOTHOR_TENANT_…` alias, the GENUS_ name winning. The
+ * root tenant (`ROBOTHOR_DEFAULT_TENANT`, default `default`) — and no tenant
+ * at all — is always `ROBOTHOR_ENGINE_URL`.
  *
  * Read at call time, and fails closed: a misconfigured override or template
  * throws rather than sending a child tenant's session to the root engine.
