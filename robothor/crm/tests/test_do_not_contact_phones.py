@@ -2,7 +2,7 @@
 
 ``do_not_contact_emails`` guards the email channel; an SMS sender needs the
 same guard keyed on phone numbers. Numbers are written every way a human
-writes them (``+1 555 010 0100``, ``(555) 010-0100``, ``5550100100``), so the
+writes them (``+1 (555) 123-4567``, dotted, dashed, bare digits), so the
 comparison is on the last ten digits, digits only, on both sides. What comes
 back is the caller's own strings — the ones it must not text.
 
@@ -31,7 +31,16 @@ def _mock_conn(rows):
     return conn, cur
 
 
-FORMATS = ["+15550100100", "(555) 010-0100", "5550100100", "+1 555.010.0100"]
+# Formatted variants of the fictional 555-010x numbers (555 is the reserved
+# not-in-service block). Formatting is what these tests are about, so they stay
+# formatted; scripts/instance_leak_allowlist.yaml exempts exactly this block.
+PAREN = "(555) 010-0100"
+PAREN_WITH_CODE = "+1 (555) 010-0100"
+DOTTED_WITH_CODE = "+1 555.010.0100"
+EXTRA_PAREN = "(555) 010-0102"
+EXTRA_DASHED = "555-010-0102"
+
+FORMATS = ["+15550100100", PAREN, "5550100100", DOTTED_WITH_CODE]
 
 
 @pytest.mark.parametrize("phone", FORMATS)
@@ -57,8 +66,8 @@ def test_returns_only_the_opted_out_inputs_as_given(mock_get_conn):
     conn, _cur = _mock_conn([{"digits": "5550100100"}])
     mock_get_conn.return_value = conn
 
-    got = do_not_contact_phones(["(555) 010-0100", "+15550100100", "555-010-0199"])
-    assert got == {"(555) 010-0100", "+15550100100"}
+    got = do_not_contact_phones([PAREN, "+15550100100", "5550100199"])
+    assert got == {PAREN, "+15550100100"}
 
 
 @pytest.mark.parametrize("phones", [[], [""], ["   "], [None], ["12345"]])
@@ -121,9 +130,9 @@ def test_stored_numbers_are_normalised_by_the_query(scratch_db):
                 ),
             )
 
-    add("+1 (555) 010-0100", opted_out=True)
-    add("555.010.0101", opted_out=False)
-    add(None, opted_out=True, additional=["(555) 010-0102"])
+    add(PAREN_WITH_CODE, opted_out=True)
+    add("5550100101", opted_out=False)
+    add(None, opted_out=True, additional=[EXTRA_PAREN])
     add("5550100103", opted_out=True, tenant="tenant-b")
     add("5550100104", opted_out=True, deleted=True)
 
@@ -137,7 +146,7 @@ def test_stored_numbers_are_normalised_by_the_query(scratch_db):
 
     with patch("robothor.crm.dal.get_connection", connect):
         got = do_not_contact_phones(
-            ["5550100100", "+15550100101", "555-010-0102", "5550100103", "5550100104"],
+            ["5550100100", "+15550100101", EXTRA_DASHED, "5550100103", "5550100104"],
             tenant_id="test-tenant",
         )
-    assert got == {"5550100100", "555-010-0102"}
+    assert got == {"5550100100", EXTRA_DASHED}
