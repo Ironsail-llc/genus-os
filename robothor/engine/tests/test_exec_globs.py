@@ -93,3 +93,15 @@ def test_a_wildcard_matching_a_refused_file_on_disk_is_refused(workspace) -> Non
 )
 def test_ordinary_globs_still_run(workspace, command) -> None:
     assert exec_reads_secret(command) is None, command
+
+
+@pytest.mark.parametrize("command", ["cat c*.txt", "cp c*.py build/", "ls s*", "head s*.md"])
+def test_a_wildcard_that_merely_starts_like_a_secret_name_runs(workspace, command) -> None:
+    """`c` starts `credentials` and `s` starts `secrets`; neither pattern can
+    MATCH a secrets name, and nothing here expands to one."""
+    assert exec_reads_secret(command) is None, command
+
+
+def test_a_wildcard_that_expands_to_a_secret_file_is_refused(workspace) -> None:
+    (workspace / "credentials.json").write_text("{}")
+    assert exec_reads_secret("cat c*")
