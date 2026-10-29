@@ -277,3 +277,73 @@ def test_executions_db_error_is_empty_not_500(controls_client_as_operator, enabl
     r = controls_client_as_operator.get("/api/integrations/n8n/workflows/wf1/executions")
     assert r.status_code == 200
     assert r.json()["executions"] == []
+
+
+# --- configuration that cannot be read ---------------------------------------
+
+
+def _bad_settings():
+    raise ValueError("invalid literal for int() with base 10: 'often'")
+
+
+def test_unreadable_settings_are_unknown_not_500(controls_client_as_operator, monkeypatch, fake_db):
+    monkeypatch.setattr(n8n, "_n8n_settings", _bad_settings)
+    fake_db(n8n_sync_state=[_sync()], n8n_workflows=[_workflow()])
+    r = controls_client_as_operator.get("/api/integrations/n8n/workflows")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "unknown"
+    assert "often" in body["last_error"]
+    assert body["workflows"] == []
+
+
+def test_a_non_numeric_poll_interval_is_unknown_not_500(
+    controls_client_as_operator, monkeypatch, fake_db
+):
+    from types import SimpleNamespace
+
+    integrations = SimpleNamespace(n8n_enabled=True, n8n_base_url=BASE, n8n_poll_seconds="often")
+    monkeypatch.setattr(
+        "robothor.settings.get_settings", lambda: SimpleNamespace(integrations=integrations)
+    )
+    fake_db(n8n_sync_state=[_sync()], n8n_workflows=[_workflow()])
+    r = controls_client_as_operator.get("/api/integrations/n8n/workflows")
+    assert r.status_code == 200
+    assert r.json()["status"] == "unknown"
+
+
+def test_unreadable_settings_give_no_executions(controls_client_as_operator, monkeypatch, fake_db):
+    monkeypatch.setattr(n8n, "_n8n_settings", _bad_settings)
+    fake_db(n8n_executions=[{"execution_id": "ex1", "status": "error"}])
+    r = controls_client_as_operator.get("/api/integrations/n8n/workflows/wf1/executions")
+    assert r.status_code == 200
+    assert r.json()["executions"] == []
+
+
+# --- no base URL, or switched off --------------------------------------------
+
+
+def test_disabled_monitor_lists_no_executions(
+    controls_client_as_operator, monkeypatch, fake_db, calls
+):
+    monkeypatch.setattr(n8n, "_n8n_settings", lambda: (False, BASE, POLL))
+    fake_db(n8n_executions=[{"execution_id": "ex1", "status": "error"}])
+    r = controls_client_as_operator.get("/api/integrations/n8n/workflows/wf1/executions")
+    assert r.status_code == 200
+    assert r.json()["executions"] == []
+    assert calls == []
+
+
+def test_no_base_url_means_no_relative_links(controls_client_as_operator, monkeypatch, fake_db):
+    monkeypatch.setattr(n8n, "_n8n_settings", lambda: (True, "", POLL))
+    fake_db(
+        n8n_sync_state=[_sync()],
+        n8n_workflows=[_workflow()],
+        n8n_executions=[{"execution_id": "ex1", "status": "error"}],
+    )
+    [wf] = controls_client_as_operator.get("/api/integrations/n8n/workflows").json()["workflows"]
+    assert wf["url"] == ""
+    executions = controls_client_as_operator.get(
+        "/api/integrations/n8n/workflows/wf1/executions"
+    ).json()["executions"]
+    assert all(ex["url"] == "" for ex in executions)
