@@ -90,7 +90,7 @@ describe("engineUrlFor", () => {
     vi.stubEnv("GENUS_TENANT_ENGINE_URL_TEMPLATE", TEMPLATE);
 
     expect(() => engineUrlFor("evil.test/x?")).toThrow(/tenant/i);
-    expect(() => engineUrlFor("acme@other.test")).toThrow(/tenant/i);
+    expect(() => engineUrlFor("alice@example.com")).toThrow(/tenant/i);
   });
 
   it("refuses a malformed override map instead of quietly routing to root", () => {
