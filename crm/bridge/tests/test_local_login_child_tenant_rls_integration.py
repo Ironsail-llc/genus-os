@@ -109,3 +109,96 @@ async def test_an_unknown_address_is_refused(
 ):
     r = await _login(test_client, f"nobody-{uuid.uuid4().hex[:8]}@example.com")
     assert r.status_code == 401
+
+
+def _seed_passwordless(db_conn, tenant: str, email: str) -> str:
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO user_accounts (tenant_id, email, display_name, role, status) "
+            "VALUES (%s, %s, 'Alice', 'member', 'active') RETURNING id",
+            (tenant, email),
+        )
+        return str(cur.fetchone()[0])
+
+
+@pytest.mark.asyncio
+async def test_two_password_accounts_prefer_the_platform_tenants_with_a_log_line(
+    test_client,
+    db_conn,
+    tenants,  # noqa: F811 - the imported fixture
+    app_role,  # noqa: F811 - the imported fixture
+    caplog,
+):
+    email = f"dana-{uuid.uuid4().hex[:8]}@example.com"
+    root_id = _seed(db_conn, "default", email, role="member")
+    _seed(db_conn, tenants["a"], email)
+    r = await _login(test_client, email)
+    assert r.status_code == 200, r.text
+    assert r.json()["user"]["id"] == root_id
+    assert any("more than one tenant" in rec.getMessage() for rec in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_a_passwordless_duplicate_does_not_block_the_password_account(
+    test_client,
+    db_conn,
+    tenants,  # noqa: F811 - the imported fixture
+    app_role,  # noqa: F811 - the imported fixture
+):
+    email = f"erin-{uuid.uuid4().hex[:8]}@example.com"
+    user_id = _seed(db_conn, "default", email, role="member")
+    _seed_passwordless(db_conn, tenants["a"], email)
+    r = await _login(test_client, email)
+    assert r.status_code == 200, r.text
+    assert r.json()["user"]["id"] == user_id
+
+
+# ─── SSO with a claimed domain must not duplicate an unbound account ─────
+
+ISSUER = "https://idp.example.com"
+
+
+@pytest.mark.asyncio
+async def test_sso_refuses_rather_than_duplicating_an_unbound_account_elsewhere(
+    test_client,
+    db_conn,
+    tenants,  # noqa: F811 - the imported fixture
+    app_role,  # noqa: F811 - the imported fixture
+    monkeypatch,
+):
+    """A ``genus user add`` + ``set-password`` account in the platform tenant,
+    then its domain claimed by a child: the first SSO click must not create a
+    second account in the child (which would then also break the password
+    sign-in that worked before)."""
+    monkeypatch.setenv("GENUS_BRIDGE_SSO_SECRET", "dashboard-shared-secret")
+    monkeypatch.setenv("GENUS_OIDC_ISSUERS", ISSUER)
+    sfx = uuid.uuid4().hex[:8]
+    domain = f"claimed-{sfx}.example"
+    email = f"alice@{domain}"
+    user_id = _seed(db_conn, "default", email, role="member")
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "UPDATE crm_tenants SET settings = jsonb_build_object('sso_domains', "
+            "jsonb_build_array(%s::text)) WHERE id = %s",
+            (domain, tenants["a"]),
+        )
+
+    r = await test_client.post(
+        "/api/auth/sso",
+        json={
+            "issuer": ISSUER,
+            "subject": f"sub-{sfx}",
+            "email": email,
+            "email_verified": True,
+            "display_name": "Alice",
+        },
+        headers={"X-Bridge-Auth": "dashboard-shared-secret"},
+    )
+    assert r.status_code == 403, r.text
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT tenant_id FROM user_accounts WHERE email = %s", (email,))
+        assert [row[0] for row in cur.fetchall()] == ["default"]
+
+    login = await _login(test_client, email)
+    assert login.status_code == 200, login.text
+    assert login.json()["user"]["id"] == user_id
