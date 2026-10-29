@@ -1063,6 +1063,9 @@ class TestHTMLAndSender:
             "alice@example.com, bob@example.com",
             "alice@example.com\r\nBcc: bob@example.com",
             "Alice <alice@example.com",
+            "no-reply@b\u00fccher.example",
+            "r\u00e9c\u00e9piss\u00e9@example.com",
+            "A\udc80 <a@example.com>",
         ],
     )
     @pytest.mark.asyncio
