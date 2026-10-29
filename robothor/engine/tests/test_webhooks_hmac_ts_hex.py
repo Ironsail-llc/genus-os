@@ -68,6 +68,17 @@ def test_config_loads_timestamp_header(tmp_path: Path, caplog):
     assert "unknown signature_scheme" not in caplog.text
 
 
+@pytest.mark.parametrize(
+    ("raw", "expected"), [("  X-Desk-Ts  ", "X-Desk-Ts"), ("   ", "X-Webhook-Timestamp")]
+)
+def test_config_strips_timestamp_header(tmp_path: Path, raw, expected):
+    path = tmp_path / "webhooks.yaml"
+    path.write_text(
+        f'channels:\n  desk:\n    signature_scheme: hmac_ts_hex\n    timestamp_header: "{raw}"\n'
+    )
+    assert load_webhook_config(path).channels["desk"].timestamp_header == expected
+
+
 # ── verifier ───────────────────────────────────────────────────────
 
 
@@ -89,11 +100,22 @@ class TestVerifyHmacTsHex:
         assert ok is False
         assert "missing timestamp" in reason
 
-    @pytest.mark.parametrize("ts", ["abc", "1700000000.5", "-1700000000", "1" + "0" * 400, "١٧"])
+    @pytest.mark.parametrize(
+        "ts",
+        [
+            "abc",
+            "1700000000.5",
+            "-1700000000",
+            "+1700000000",
+            " 1700000000",
+            "1" + "0" * 400,
+            "١٧",
+        ],
+    )
     def test_malformed_timestamp(self, ts):
         ok, reason = self._verify(_digest(BODY, SECRET, ts), ts)
         assert ok is False
-        assert "timestamp" in reason
+        assert reason == "malformed timestamp"
 
     def test_milliseconds_are_not_seconds(self):
         """Seconds only: a millisecond timestamp reads as far in the future."""
@@ -126,14 +148,32 @@ class TestVerifyHmacTsHex:
         assert ok is False
         assert "bad digest" in reason
 
-    @pytest.mark.parametrize("sig", ["", "sha256=", "\xe9" * 64])
-    def test_missing_or_garbage_signature(self, sig):
-        ok, _ = self._verify(sig, str(NOW))
+    @pytest.mark.parametrize("sig", ["", "sha256=", "SHA256="])
+    def test_missing_signature(self, sig):
+        ok, reason = self._verify(sig, str(NOW))
         assert ok is False
+        assert reason == "missing signature"
+
+    @pytest.mark.parametrize(
+        "sig",
+        [
+            "\xe9" * 64,  # non-ASCII
+            "g" * 64,  # not hex
+            "a" * 63,  # too short
+            "a" * 65,  # too long
+            "sha256=" + "a" * 40,  # a SHA-1-sized digest
+            " " + "a" * 64,
+        ],
+    )
+    def test_malformed_signature(self, sig):
+        ok, reason = self._verify(sig, str(NOW))
+        assert ok is False
+        assert reason == "malformed signature"
 
     def test_missing_secret(self):
-        ok, _ = self._verify(_digest(BODY, SECRET, NOW), str(NOW), secret="")
+        ok, reason = self._verify(_digest(BODY, SECRET, NOW), str(NOW), secret="")
         assert ok is False
+        assert reason == "missing secret"
 
 
 # ── endpoint ───────────────────────────────────────────────────────
@@ -220,8 +260,9 @@ def test_endpoint_reads_default_timestamp_header(mock_publish, mock_rate, ts_cli
             },
             "missing timestamp",
         ),
+        (lambda p, ts: {"X-Desk-Timestamp": str(ts)}, "missing signature"),
     ],
-    ids=["no-timestamp", "stale", "wrong-secret", "wrong-timestamp-header"],
+    ids=["no-timestamp", "stale", "wrong-secret", "wrong-timestamp-header", "no-signature"],
 )
 def test_endpoint_refuses(mock_publish, mock_rate, make_headers, reason, ts_client, caplog):
     payload = json.dumps({"event": "ticket.created"}).encode()
