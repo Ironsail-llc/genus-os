@@ -111,19 +111,21 @@ object:
 ```python
 from robothor.plugins.state import PluginState
 
-state = PluginState("acme")                       # tenant defaults to the instance's
+state = PluginState("acme")             # tenant defaults to the instance's
 state.put("contact", "alice", {"stage": "lead"})
 state.put("seen", message_id, {}, ttl_seconds=86_400)
 state.get("contact", "alice")                     # {"stage": "lead"}, or None
 state.exists("seen", message_id)
-state.list("contact", prefix="a", limit=50)       # [{key, value, updated_at, expires_at}]
+state.list("contact", prefix="a", limit=50)
+# -> [{key, value, updated_at, expires_at}]
 state.delete("contact", "alice")
 ```
 
 Two plugins, or two tenants, using the same kind and key never see each
 other's rows. A row written with `ttl_seconds` disappears from `get`, `exists`
-and `list` the moment it expires, and the engine deletes expired rows hourly,
-so a cache needs no sweep of its own. `list` returns rows in key order; its
+and `list` the moment it expires. The engine deletes expired rows hourly for
+the instance's tenant; rows for other tenants need
+`PluginState.purge_expired()`. `list` returns rows in key order; its
 prefix is literal text, not a pattern. The calls are synchronous database
 queries: from an async handler, run them with `asyncio.to_thread`.
 
@@ -141,7 +143,8 @@ calls a person must check the same opt-out the email tools do.
 numbers, exactly as you passed them, that belong to a person marked do not
 contact. It compares the last ten digits, so a number written with a `+1`
 country code, brackets, spaces or dots matches the same ten digits written
-plainly, and it checks the person's primary number, their additional numbers and their SMS and voice
+plainly; a number with fewer than ten digits matches nothing. It checks the
+person's primary number, their additional numbers and their SMS and voice
 identifiers. Drop every returned number before sending, and treat an
 exception as a refusal: a lookup that failed is not a clean list.
 
