@@ -235,6 +235,18 @@ operator or auditor at home reads the whole appliance trail, untenanted rows
 and independent roots included (`_operator.audit_scope`); anyone else reads the
 acting tenant and, for an owner/admin, its descendants.
 
+### Tables exempt from row-level security
+
+`audit_log` has a `tenant_id` column and deliberately **no** `tenant_isolation`
+policy. It is the appliance-wide trail the platform's root reader sees whole,
+and RLS would make the bridge's per-request tenant binding hide every other
+tenant's rows (and every untenanted one) from that reader; per-tenant reads are
+scoped by explicit predicates instead. The exemption lives in one list,
+`robothor/db/rls_exemptions.py`, honoured by the migration guard
+(`tests/test_tenant_rls_coverage.py`), by `genus doctor`'s `db.rls_coverage`
+check, and by its `--fix`, which runs migration 120's loop minus the exempt
+tables. Do not add `tenant_isolation` to `audit_log` by hand.
+
 `GENUS_TENANT_SWITCH_MODE` is `off` by default (every switch is refused);
 `observe` runs the full check and still refuses, recording what it would have
 done as a `tenant.switch` audit row with status `would-allow`, `would-deny` or
