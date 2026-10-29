@@ -111,6 +111,7 @@ exclude_docs: |
   !/runbooks/INTERACTIVE_REQUEST_PERFORMANCE.md
   !/architecture.md
   !/memory-system.md
+  !/knowledge-base.md
   !/event-bus.md
   !/PLATFORM_INSTANCE.md
   !/READING_GUIDE.md
@@ -171,6 +172,7 @@ nav:
   - Architecture:
       - Overview: architecture.md
       - Memory System: memory-system.md
+      - Knowledge Base: knowledge-base.md
       - Event Bus: event-bus.md
       - Platform vs Instance: PLATFORM_INSTANCE.md
   - Releases:

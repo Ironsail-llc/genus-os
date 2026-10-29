@@ -1225,6 +1225,25 @@ recognises. SOPS-encrypted files, `secrets*` files, key files (`*.pem`,
 `KEY=VALUE` lines are still refused. `exec` checks are unchanged:
 `cat robothor.env` is still refused.
 
+### Knowledge base (`kb_*`)
+
+Curated reference documents, grouped in collections named `<plugin>/<topic>`
+(`helpdesk/policies`). Each tenant has its own collections.
+
+| Tool | Use |
+|---|---|
+| `kb_search` | Hybrid search (vector + keyword, RRF) within one `collection`. Returns chunks with `doc_id`, `title`, `text`, `score`, `source_uri`. Read-only. |
+| `kb_list_collections` | Which collections exist, with document and chunk counts. Read-only. |
+| `kb_upsert_document` | Add or replace a document. An identical re-send is `unchanged`; a changed one replaces its chunks and bumps `version`. |
+| `kb_delete_document` | Remove a document and its chunks. |
+
+**Which to use.** Use `kb_search` for curated reference documents scoped to a
+collection, and `search_memory` for the agent's own remembered facts.
+`kb_search` never returns memory facts, and `search_memory` never returns
+knowledge-base documents. The writes are refused in a benchmark run. How
+collections are named and how documents are versioned:
+[Knowledge Base](knowledge-base.md).
+
 ### Everything else
 
 The full registry is large and changes with the release; `tool_search` over the
@@ -1235,6 +1254,7 @@ agent's own allow-set is the authoritative answer. The families:
 | Files and shell | `read_file`, `write_file`, `list_directory`, `exec`, [`execute_code`](#execute_code-calling-tools-from-inside-python) |
 | Web | `web_fetch`, `web_render`, `web_search`, `browser` |
 | Memory | `search_memory`, `memory_block_read`, `memory_block_write`, `store_memory` |
+| Knowledge base | [`kb_search`, `kb_upsert_document`, `kb_delete_document`, `kb_list_collections`](#knowledge-base-kb_) |
 | CRM | `search_records`, `get_person`, `create_task`, `list_my_tasks`, `resolve_task` |
 | Notifications | `get_inbox`, `ack_notification`, `send_notification` |
 | Skills | `list_skills`, `invoke_skill` |
