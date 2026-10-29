@@ -20,6 +20,7 @@ def test_the_group_is_wired_into_the_root_settings() -> None:
     assert group.n8n_base_url == ""
     assert group.n8n_api_key == ""
     assert group.n8n_poll_seconds == 120
+    assert group.n8n_allow_insecure_http is False
 
 
 def test_env_names_and_flags() -> None:
@@ -28,6 +29,7 @@ def test_env_names_and_flags() -> None:
         "n8n_base_url": ("ROBOTHOR_N8N_BASE_URL", False, True),
         "n8n_api_key": ("ROBOTHOR_N8N_API_KEY", True, True),
         "n8n_poll_seconds": ("ROBOTHOR_N8N_POLL_SECONDS", False, False),
+        "n8n_allow_insecure_http": ("ROBOTHOR_N8N_ALLOW_INSECURE_HTTP", False, True),
     }
     for name, (env, secret, restart) in expected.items():
         extra = _field(name).json_schema_extra

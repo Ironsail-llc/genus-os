@@ -199,3 +199,87 @@ async def test_the_key_never_appears_in_the_client_repr_or_logs(caplog) -> None:
     assert KEY not in str(client)
     assert KEY not in caplog.text
     assert BASE in repr(client)
+
+
+@pytest.mark.parametrize(
+    "base",
+    [
+        "http://n8n.example.com",
+        "n8n.example.com",
+        "https://",
+        "ftp://n8n.example.com",
+        "https:///api/v1",
+        "",
+    ],
+)
+def test_a_base_url_that_is_not_https_with_a_host_is_refused(base: str) -> None:
+    with pytest.raises(N8nError) as caught:
+        N8nClient(base, KEY)
+    assert caught.value.kind == "not_configured"
+    assert "https" in str(caught.value)
+    assert KEY not in str(caught.value)
+
+
+@pytest.mark.parametrize(
+    "base", ["http://127.0.0.1:5678", "http://localhost:5678", "http://[::1]:5678"]
+)
+def test_plain_http_is_allowed_for_a_loopback_host(base: str) -> None:
+    assert N8nClient(base, KEY).base_url == base
+
+
+def test_plain_http_elsewhere_needs_the_explicit_escape_hatch() -> None:
+    client = N8nClient("http://n8n.internal.example.com", KEY, allow_insecure_http=True)
+    assert client.base_url == "http://n8n.internal.example.com"
+    with pytest.raises(N8nError):
+        N8nClient("ftp://n8n.internal.example.com", KEY, allow_insecure_http=True)
+
+
+async def test_an_oversized_execution_is_read_as_no_message_by_its_length() -> None:
+    from robothor.integrations.n8n.client import MAX_EXECUTION_BYTES
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"Content-Length": str(MAX_EXECUTION_BYTES + 1)},
+            content=b"{}",
+        )
+
+    async with _client(handler) as client:
+        assert await client.get_execution_error("42") is None
+
+
+async def test_an_oversized_streamed_execution_is_abandoned() -> None:
+    from robothor.integrations.n8n.client import MAX_EXECUTION_BYTES
+
+    sent = {"bytes": 0}
+
+    async def chunks():
+        chunk = b'{"data": "' + b"x" * (256 * 1024)
+        while sent["bytes"] < MAX_EXECUTION_BYTES * 4:
+            sent["bytes"] += len(chunk)
+            yield chunk
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=chunks())
+
+    async with _client(handler) as client:
+        assert await client.get_execution_error("42") is None
+    assert sent["bytes"] <= MAX_EXECUTION_BYTES + 512 * 1024
+
+
+async def test_a_long_error_message_is_cut_to_500_characters() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = {"data": {"resultData": {"error": {"message": "e" * 5000}}}}
+        return httpx.Response(200, json=body)
+
+    async with _client(handler) as client:
+        message = await client.get_execution_error("42")
+    assert message == "e" * 500
+
+
+async def test_a_non_numeric_execution_id_is_never_put_in_a_path() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("no request for a non-numeric id")
+
+    async with _client(handler) as client:
+        assert await client.get_execution_error("../workflows") is None

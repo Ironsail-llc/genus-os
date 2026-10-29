@@ -67,3 +67,29 @@ async def test_without_a_base_url_the_probe_cannot_be_aimed(base_url) -> None:
 
     outcome = await testers.probe("n8n", KEY, transport=httpx.MockTransport(handler))
     assert outcome.ok is False and outcome.error_class == "not_configured"
+
+
+async def test_an_insecure_base_url_is_never_dialled(base_url) -> None:
+    base_url("http://n8n.example.com")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("the key must not go out over plain http")
+
+    outcome = await testers.probe("n8n", KEY, transport=httpx.MockTransport(handler))
+    assert outcome.ok is False and outcome.error_class == "not_configured"
+
+
+async def test_the_escape_hatch_lets_an_internal_http_instance_be_probed(
+    base_url, monkeypatch
+) -> None:
+    monkeypatch.setenv("ROBOTHOR_N8N_ALLOW_INSECURE_HTTP", "true")
+    base_url("http://n8n.internal.example.com:5678")
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        return httpx.Response(200, json={"data": []})
+
+    outcome = await testers.probe("n8n", KEY, transport=httpx.MockTransport(handler))
+    assert outcome.ok is True
+    assert seen == ["http://n8n.internal.example.com:5678/api/v1/workflows?limit=1"]

@@ -92,7 +92,7 @@ def test_configured_fails_without_a_key(enabled, monkeypatch) -> None:
 
 
 def _client_for(handler):
-    return lambda _settings: N8nClient(BASE, KEY, transport=httpx.MockTransport(handler))
+    return lambda _settings, _tenant: N8nClient(BASE, KEY, transport=httpx.MockTransport(handler))
 
 
 def test_connection_passes_on_healthz_and_one_workflow(enabled, monkeypatch) -> None:
@@ -167,3 +167,44 @@ def test_freshness_reports_an_unreadable_table(enabled) -> None:
     result = _run("n8n.poll_freshness", make_ctx(db_factory=db))
     assert result.status == "fail"
     assert "RuntimeError" in result.detail
+
+
+def test_configured_fails_on_a_plain_http_base_url(settings, monkeypatch) -> None:
+    settings(ROBOTHOR_N8N_ENABLED="true", ROBOTHOR_N8N_BASE_URL="http://n8n.example.com")
+    monkeypatch.setattr(n8n_checks, "_key_source", lambda _tenant: "vault")
+    result = _run("n8n.configured")
+    assert result.status == "fail"
+    assert "https" in result.detail and "ROBOTHOR_N8N_ALLOW_INSECURE_HTTP" in result.detail
+
+
+def test_configured_accepts_plain_http_with_the_escape_hatch(settings, monkeypatch) -> None:
+    settings(
+        ROBOTHOR_N8N_ENABLED="true",
+        ROBOTHOR_N8N_BASE_URL="http://n8n.internal.example.com",
+        ROBOTHOR_N8N_ALLOW_INSECURE_HTTP="true",
+    )
+    monkeypatch.setattr(n8n_checks, "_key_source", lambda _tenant: "vault")
+    assert _run("n8n.configured").status == "pass"
+
+
+def test_the_key_is_checked_and_resolved_for_the_instance_tenant(settings, monkeypatch) -> None:
+    settings(
+        ROBOTHOR_N8N_ENABLED="true",
+        ROBOTHOR_N8N_BASE_URL=BASE,
+        ROBOTHOR_TENANT_ID="tenant-b",
+    )
+    sources: list[str] = []
+    clients: list[str] = []
+    monkeypatch.setattr(n8n_checks, "_key_source", lambda t: sources.append(t) or "vault")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"data": [], "status": "ok"})
+
+    def make(_settings, tenant_id):
+        clients.append(tenant_id)
+        return N8nClient(BASE, KEY, transport=httpx.MockTransport(handler))
+
+    monkeypatch.setattr(n8n_checks, "_make_client", make)
+    assert _run("n8n.configured").status == "pass"
+    assert _run("n8n.connection").status == "pass"
+    assert sources == ["tenant-b"] and clients == ["tenant-b"]
