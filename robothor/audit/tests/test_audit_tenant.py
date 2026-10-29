@@ -177,3 +177,50 @@ class TestOnPostgres:
             actor=marker, tenants=["acme-parent", "acme-child-a"], include_untenanted=True
         )
         assert sorted(e["action"] for e in root) == ["a", "n"]
+
+
+class TestTheRequestActor:
+    """A write that names no actor takes the request's, not ``robothor``."""
+
+    def _details(self, params):
+        details = params[4]
+        return getattr(details, "adapted", details) or {}
+
+    def test_a_write_with_no_actor_takes_the_requests(self):
+        from robothor.audit.logger import request_actor
+
+        conn, cursor = _mock_conn()
+        audit.set_connection_factory(lambda: conn)
+        with (
+            request_actor(
+                user_id="u-owner", home_tenant_id="acme-parent", tenant_id="acme-child-a"
+            ),
+            tenant_scope("acme-child-a"),
+        ):
+            audit.log_event("crm.create", "made a thing")
+        _sql, params = _insert_args(cursor)
+        assert params[2] == "u-owner"  # actor
+        assert params[9] == "u-owner"  # user_id
+        assert params[10] == "acme-child-a"  # tenant_id
+        assert self._details(params)["home_tenant_id"] == "acme-parent"
+
+    def test_an_explicit_actor_and_user_win(self):
+        from robothor.audit.logger import request_actor
+
+        conn, cursor = _mock_conn()
+        audit.set_connection_factory(lambda: conn)
+        with request_actor(
+            user_id="u-owner", home_tenant_id="acme-parent", tenant_id="acme-parent"
+        ):
+            audit.log_event("crm.create", "made a thing", actor="crm-steward", user_id="u-bob")
+        _sql, params = _insert_args(cursor)
+        assert params[2] == "crm-steward"
+        assert params[9] == "u-bob"
+
+    def test_outside_a_request_nothing_changes(self):
+        conn, cursor = _mock_conn()
+        audit.set_connection_factory(lambda: conn)
+        audit.log_event("crm.create", "made a thing")
+        _sql, params = _insert_args(cursor)
+        assert params[2] == "robothor"
+        assert params[9] == ""
