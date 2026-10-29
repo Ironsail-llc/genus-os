@@ -287,3 +287,29 @@ async def test_the_root_is_the_platform_tenant_not_the_default(test_client, monk
         test_client, "acme-child-b", {"parentTenantId": "acme-child-a"}, _bearer("acme-platform")
     )
     assert r.status_code == 200, r.text
+
+
+@pytest.mark.asyncio
+async def test_resending_the_current_parent_and_active_is_not_a_reshape(test_client):
+    """A form that PATCHes every field back with its stored value must not be
+    refused for a child admin: an unchanged parent or flag changes nothing."""
+    r, update = await _patch(
+        test_client,
+        "acme-child-a",
+        {"displayName": "Renamed", "parentTenantId": _root(), "active": True},
+        _bearer("acme-child-a"),
+    )
+    assert r.status_code == 200, r.text
+    assert update.call_args.kwargs.get("display_name") == "Renamed"
+
+
+@pytest.mark.asyncio
+async def test_a_changed_parent_alongside_a_rename_is_still_refused(test_client):
+    r, update = await _patch(
+        test_client,
+        "acme-child-a",
+        {"displayName": "Renamed", "parentTenantId": "acme-child-b"},
+        _bearer("acme-child-a"),
+    )
+    assert r.status_code == 403
+    update.assert_not_called()

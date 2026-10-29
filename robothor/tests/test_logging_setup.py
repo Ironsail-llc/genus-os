@@ -168,3 +168,22 @@ def test_httpx_request_lines_are_not_emitted_at_info(bare_root, monkeypatch) -> 
     assert "ABC-def_GHI" not in stream.getvalue()
     assert logging.getLogger("httpx").getEffectiveLevel() >= logging.WARNING
     assert logging.getLogger("httpcore").getEffectiveLevel() >= logging.WARNING
+
+
+def test_a_stdlib_record_renders_with_level_logger_and_timestamp(bare_root, monkeypatch) -> None:
+    import io
+    import json
+
+    from robothor.logging_setup import ensure_logging_configured
+
+    monkeypatch.setenv("ROBOTHOR_LOG_FORMAT", "json")
+    root = bare_root()
+    ensure_logging_configured()
+    stream = io.StringIO()
+    root.handlers[0].setStream(stream)  # type: ignore[attr-defined]
+    logging.getLogger("routers.auth").warning("tenant.switch %s", "would-allow")
+    line = json.loads(stream.getvalue().strip().splitlines()[-1])
+    assert line["event"] == "tenant.switch would-allow"
+    assert line["level"] == "warning"
+    assert line["logger"] == "routers.auth"
+    assert "timestamp" in line
