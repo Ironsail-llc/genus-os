@@ -90,6 +90,29 @@ def test_a_wrong_length_override_raises_naming_the_variable(tmp_path, monkeypatc
         get_master_key()
 
 
+def test_the_override_is_raw_bytes_not_base64(tmp_path, monkeypatch) -> None:
+    """The chart mounts the RAW 32 bytes (the secret sync decodes base64).
+    A file still holding the base64 text is 44 bytes and must be refused, not
+    decoded: two readers that disagree about the encoding hold two keys."""
+    import base64
+
+    from robothor.vault.crypto import get_master_key
+
+    encoded = base64.b64encode(KEY)
+    monkeypatch.setenv("GENUS_VAULT_KEY_FILE", str(_mounted(tmp_path, "key", encoded)))
+    with pytest.raises(ValueError, match="GENUS_VAULT_KEY_FILE"):
+        get_master_key()
+
+
+def test_the_override_is_read_byte_for_byte(tmp_path, monkeypatch) -> None:
+    """No stripping: a raw key may legitimately end in whitespace bytes."""
+    from robothor.vault.crypto import get_master_key
+
+    raw = bytes(range(31)) + b"\n"
+    monkeypatch.setenv("GENUS_VAULT_KEY_FILE", str(_mounted(tmp_path, "key", raw)))
+    assert get_master_key() == raw
+
+
 def test_init_under_an_override_validates_and_never_generates(tmp_path, monkeypatch) -> None:
     from robothor.vault.crypto import init_master_key
 
