@@ -213,6 +213,23 @@ def test_status_reads_blocks_and_runs_in_the_tenant_asked_about(capsys) -> None:
 # ─── move-account ────────────────────────────────────────────────────────
 
 
+def test_move_account_names_the_uid_when_there_is_no_user_name(monkeypatch) -> None:
+    import getpass
+    import os
+
+    def no_user() -> str:
+        raise OSError("No username set in the environment")
+
+    monkeypatch.setattr(getpass, "getuser", no_user)
+    with (
+        patch("robothor.auth.accounts.accounts_for_email", return_value=[ALICE_PARENT]),
+        patch("robothor.auth.accounts.move_account", return_value=_report()) as mv,
+    ):
+        argv = ("--email", "alice@example.com", "--to", "acme-child-a")
+        assert cmd_tenant(_parse("move-account", *argv)) == 0
+    assert mv.call_args.kwargs["actor"] == f"cli:uid{os.getuid()}"
+
+
 def test_move_account_moves_the_single_match(capsys) -> None:
     with (
         patch("robothor.auth.accounts.accounts_for_email", return_value=[ALICE_PARENT]),

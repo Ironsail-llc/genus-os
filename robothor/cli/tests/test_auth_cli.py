@@ -215,3 +215,26 @@ def test_auth_grants_shows_expired_state(capsys) -> None:
     with patch("robothor.auth.accounts.list_binding_grants", return_value=[expired]):
         assert cmd_auth(args) == 0
     assert "expired" in capsys.readouterr().out
+
+
+def test_grant_binding_names_the_uid_when_there_is_no_user_name(monkeypatch) -> None:
+    """A container with no passwd entry and no USER/LOGNAME: getuser() raises,
+    and the command must still arm the grant, recorded as cli:uid<n>."""
+    import getpass
+    import os
+
+    def no_user() -> str:
+        raise OSError("No username set in the environment")
+
+    monkeypatch.setattr(getpass, "getuser", no_user)
+    args = Namespace(
+        auth_command="grant-binding",
+        email="alice@example.com",
+        tenant=None,
+        ttl="15m",
+        reason="",
+        json_output=False,
+    )
+    with patch("robothor.auth.accounts.create_binding_grant", return_value=_GRANT) as create:
+        assert cmd_auth(args) == 0
+    assert create.call_args.kwargs["created_by"] == f"cli:uid{os.getuid()}"
