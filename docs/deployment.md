@@ -1025,6 +1025,27 @@ is reported as what it is: the engine ignores such a file entirely, so every
 plugin that was turned off is loading again. See
 [Disabling and the lockfile](PLUGINS.md#disabling-and-the-lockfile).
 
+### Acting in another tenant from the Helm
+
+A root-tenant owner or admin whose `GET /api/tenants/accessible` lists more
+than one tenant gets a **tenant picker** in the Helm's top bar; anyone with a
+single tenant never sees it. Picking a tenant calls the dashboard's
+`POST /api/session/switch-tenant`, which asks the bridge to switch and keeps
+the acting token inside the existing session cookie (the browser never holds
+it), then reloads the page; an **"Acting as … — Switch back"** banner stays
+under the header until you return home. The bridge refuses unless
+`GENUS_TENANT_SWITCH_MODE=enforce` (see
+[Tenant switching over the API](configuration.md#tenant-switching-over-the-api)),
+and the picker shows that refusal rather than switching. Because a refresh
+always hands back a home token, the dashboard re-enters the acting tenant after
+each refresh and, if that is refused, drops to home and says so. While acting,
+every engine call goes to that tenant's engine, resolved in the bridge's order:
+`GENUS_TENANT_ENGINE_URLS` (a JSON object `{"<tenant>": "<url>"}`), then
+`GENUS_TENANT_ENGINE_URL_TEMPLATE` (a URL containing the literal `{tenant}`),
+then `ROBOTHOR_ENGINE_URL`. The root tenant (`ROBOTHOR_DEFAULT_TENANT`, default
+`default`) always uses `ROBOTHOR_ENGINE_URL`, and a malformed override or
+template fails the request instead of falling back to the root engine.
+
 ## Health Endpoints
 
 | Service | Endpoint | Expected |
