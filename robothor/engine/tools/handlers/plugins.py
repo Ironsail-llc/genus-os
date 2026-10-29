@@ -56,7 +56,7 @@ def plugins_overview() -> dict[str, Any]:
     """Every installed plugin and what it contributes. Blocking; call off the loop."""
     from robothor.plugins.assets import canonical
     from robothor.plugins.inventory import inventory
-    from robothor.plugins.overview import empty_assets, workspace_assets
+    from robothor.plugins.overview import assets_for, workspace_assets
 
     warnings: list[str] = []
     assets = workspace_assets(warnings=warnings)
@@ -76,7 +76,7 @@ def plugins_overview() -> dict[str, Any]:
                     for name in _declared(row.manifest, _TOOLS_KEY)
                 ],
                 "checks": _declared(row.manifest, _CHECKS_KEY),
-                **{k: written.get(k, v) for k, v in empty_assets().items()},
+                **assets_for(assets, row.name),
             }
         )
     # A plugin that ships only workspace files publishes no entry point, so the
@@ -91,7 +91,7 @@ def plugins_overview() -> dict[str, Any]:
                 "state": "assets only",
                 "tools": [],
                 "checks": [],
-                **{k: written.get(k, v) for k, v in empty_assets().items()},
+                **assets_for(assets, key),
             }
         )
     result: dict[str, Any] = {"plugins": plugins}
