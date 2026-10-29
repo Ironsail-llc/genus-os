@@ -825,13 +825,19 @@ class MoveReport:
         return asdict(self)
 
 
-#: Tables that reference ``crm_people`` through rows the move itself carries
-#: (the account, its Telegram routing row, its face enrolment). Every OTHER
-#: tenant-scoped table that references the person is its CRM history.
-_PERSON_REFS_MOVED_WITH_ACCOUNT = frozenset({"user_accounts", "tenant_users", "face_identities"})
+#: Rows that reference ``crm_people`` but travel with the account, so are not
+#: history: per table, a predicate that excludes them (``None`` excludes the
+#: whole table). Every other row that references the person is its CRM history
+#: — including another account linked to the same person, and a face
+#: enrolment of the person that is not this account's.
+_PERSON_REFS_MOVED_WITH_ACCOUNT: dict[str, str | None] = {
+    "user_accounts": "id <> %(uid)s::uuid",
+    "tenant_users": None,  # moved by person_id, every row
+    "face_identities": "user_account_id IS DISTINCT FROM %(uid)s::uuid",
+}
 
 
-def _person_history(cur: Any, person_id: str, source: str) -> dict[str, int]:
+def _person_history(cur: Any, person_id: str, source: str, user_id: str) -> dict[str, int]:
     """Rows in the source tenant that reference the account's CRM contact.
 
     Found from the catalog, not a hand-kept list: every single-column foreign
@@ -856,14 +862,16 @@ def _person_history(cur: Any, person_id: str, source: str) -> dict[str, int]:
     refs = [(r["tbl"], r["col"]) for r in cur.fetchall()]
     history: dict[str, int] = {}
     for table, column in refs:
+        query = sql.SQL(
+            "SELECT COUNT(*) AS n FROM {} WHERE {} = %(person)s AND tenant_id = %(source)s"
+        ).format(sql.Identifier(table), sql.Identifier(column))
         if table in _PERSON_REFS_MOVED_WITH_ACCOUNT:
-            continue
-        cur.execute(
-            sql.SQL("SELECT COUNT(*) AS n FROM {} WHERE {} = %s AND tenant_id = %s").format(
-                sql.Identifier(table), sql.Identifier(column)
-            ),
-            (person_id, source),
-        )
+            exclusion = _PERSON_REFS_MOVED_WITH_ACCOUNT[table]
+            if exclusion is None:
+                continue
+            # A literal from the table above, never caller input.
+            query = query + sql.SQL(" AND " + exclusion)  # noqa: S608
+        cur.execute(query, {"person": person_id, "source": source, "uid": user_id})
         n = int(cur.fetchone()["n"])
         if n:
             history[table] = history.get(table, 0) + n
@@ -1047,7 +1055,7 @@ def move_account(
             old_person = str(account["person_id"]) if account.get("person_id") else None
             detach = bool(old_person) and detach_person
             if old_person and not detach:
-                history = _person_history(cur, old_person, source)
+                history = _person_history(cur, old_person, source, str(account["id"]))
                 if history:
                     listed = ", ".join(f"{t}={n}" for t, n in sorted(history.items()))
                     raise AccountMoveError(

@@ -144,7 +144,9 @@ audit log. If any step fails, none of it happened.
 If nothing else in the source tenant references that contact, it moves with
 the account. If notes, tasks, conversations, contact identifiers or any other
 tenant table do, the move is refused and the error lists each table and its
-count. That history belongs to the source tenant, and moving the contact would
+count. That includes a face enrolment of the person that is not this
+account's own, and another account linked to the same contact; the account's
+own enrolment and Telegram routing row move with it and do not count. That history belongs to the source tenant, and moving the contact would
 leave it pointing at someone the source can no longer see. Re-run with
 `--detach-person` to keep the history where it is. An account with no linked
 contact is unaffected either way.
