@@ -46,6 +46,7 @@ automatically, so it works with RLS enforcing.
 2. Create the child tenant (below).
 3. Add the child's engine cell to the deployment and let it sync.
 4. Store the child's connector credentials.
+4a. Add the child's people (see [Add people to a child](#add-people-to-a-child)).
 5. Move any account that already exists in the wrong tenant, BEFORE claiming
    its domain (see [Move an account](#move-an-account-to-another-tenant)).
 6. Claim the child's SSO domains, if its people sign in from their own domain.
@@ -62,7 +63,8 @@ genus tenant status acme-child-a
 `status` should show `Parent: acme-parent`. The command also seeds the child's
 memory blocks, in the child's scope. If an earlier run was interrupted after
 the tenant row was written, running the same command again seeds whatever is
-missing instead of refusing.
+missing instead of refusing. `genus tenant status acme-child-a` lists the
+seeded blocks, and the child's runs, reading them in the child's scope.
 
 ## Add the child's engine
 
@@ -81,6 +83,18 @@ are bound to that tenant for RLS and everything it writes lands there. The
 bridge and the Helm dashboard stay single: they serve every tenant and pick
 the tenant from the access token. The chart README has the full set of keys
 per cell.
+
+**On a single host** (no chart), run one more engine process per child, and
+set on each:
+
+| Where | Variable | Value |
+|---|---|---|
+| The child's engine | `ROBOTHOR_TENANT_ID` and `ROBOTHOR_DEFAULT_TENANT` | the child's id (both the same) |
+| The child's engine | `GENUS_EVENT_CONSUMER_GROUP` | `engine-<child id>`, so engines do not share one event-consumer group |
+| The bridge | `GENUS_TENANT_ENGINE_URLS` | a JSON object mapping each child id to its engine's URL, e.g. `{"acme-child-a": "http://127.0.0.1:18811"}` |
+| The bridge AND every engine | `GENUS_TENANT_SWITCH_MODE` | the same value everywhere (`off`, `observe` or `enforce`) |
+
+Every process also needs the shared vault key below.
 
 ### Vault key
 
@@ -102,10 +116,36 @@ Every tenant shares one vault master key. A credential the bridge stores while a
   genus vault list
   ```
 
-  Nothing the parent stored is visible to the child, and the reverse.
+  Nothing the parent stored is visible to the child, and the reverse. From a
+  root shell, `genus vault set` may also print a notice that the engine
+  refused an unauthenticated reload. It is harmless: the secret is stored, and
+  the child's engine reads it on its next reload.
 - **Google Workspace** is not a vault row: it is a file secret mounted into one
   engine (`engine.googleWorkspace` in the chart). Give each tenant's engine its
   own secret. Two engines sharing one would read and send one mailbox for both.
+
+## Add people to a child
+
+From a root shell (`--tenant` runs each command in the child's scope):
+
+```bash
+genus user add --tenant acme-child-a --name "Alice Example" --email alice@example.com --role admin
+genus user set-password --tenant acme-child-a alice@example.com
+```
+
+`genus user add` creates the account as `invited`. With SSO, the person's
+first sign-in activates it, and a binding grant (`genus auth grant-binding
+--email alice@example.com --tenant acme-child-a`) lets that sign-in bind it.
+**Under password-only sign-in nothing activates it yet**: there is no CLI verb
+for that today (a follow-up), so activate it in SQL, as the application role:
+
+```sql
+UPDATE user_accounts SET status = 'active', updated_at = NOW()
+WHERE tenant_id = 'acme-child-a' AND email = 'alice@example.com';
+```
+
+The person can then sign in with their password, and is signed in to the
+child.
 
 ## SSO domains: where a new user lands
 
@@ -222,10 +262,9 @@ tenants have one, the platform tenant's wins and the bridge logs an error;
 with several and none in the platform tenant, the sign-in is refused (and
 logged) until the duplicate is removed. An access token
 issued before the move still names the old tenant, and the refresh that would
-extend it is gone. Once the session-standing check ships (the bridge and
-engines re-validate human tokens against the account every 30 s), the old
-access token is refused within 30 seconds, or immediately if the move runs
-inside the bridge. Until then it remains valid until it expires (15 min).
+extend it is gone. The bridge and every engine re-validate human tokens
+against the account every 30 seconds, so they refuse the old access token
+within 30 seconds (immediately if the move runs inside the bridge).
 
 ## Verification queries
 
@@ -243,9 +282,12 @@ FROM crm_tenants, jsonb_array_elements_text(COALESCE(settings->'sso_domains', '[
 GROUP BY d HAVING count(*) > 1;
 
 -- Each root has one owner, each child none (must return no rows).
+-- robothor-primary and benchmark-sandbox are system roots with no owner
+-- (migrations 032a and 104 create them), so they are left out.
 SELECT t.id, t.parent_tenant_id, count(a.id) AS owners
 FROM crm_tenants t
 LEFT JOIN user_accounts a ON a.tenant_id = t.id AND a.role = 'owner'
+WHERE t.id NOT IN ('robothor-primary', 'benchmark-sandbox')
 GROUP BY t.id, t.parent_tenant_id
 HAVING (t.parent_tenant_id IS NULL AND count(a.id) <> 1)
     OR (t.parent_tenant_id IS NOT NULL AND count(a.id) <> 0);
@@ -275,8 +317,8 @@ SELECT DISTINCT tenant_id FROM crm_tasks;
 - A move: move the account back (`--to` the old tenant, `--role` the old role
   unless it was `owner`; restore an owner with `genus auth bootstrap` or the
   Users page of the root tenant).
-- Switching: set `GENUS_TENANT_SWITCH_MODE=off` and restart the bridge. No
-  new switch is issued from then on. An acting token issued before the flip is
-  rejected on the next request once the bridge is restarted with the flag off;
-  until that restart it stays valid for the rest of its lifetime (at most 15
-  minutes). Nothing else changes.
+- Switching: set `GENUS_TENANT_SWITCH_MODE=off` on the bridge and every
+  engine, and restart them. No new switch is issued from then on. An acting
+  token issued before the flip is rejected by each process once that process
+  has restarted with the flag off. Until then it stays valid for the rest of
+  its lifetime (at most 15 minutes). Nothing else changes.
