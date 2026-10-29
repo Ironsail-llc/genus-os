@@ -552,6 +552,67 @@ _ATTACHMENT_SCHEMAS: dict[str, dict[str, Any]] = {
 }
 
 
+#: The settings tools (GEN-42), outside ``get_engine_schemas`` for the same
+#: size-ratchet reason as the vault cluster below. Owner-only; see
+#: ``handlers/config_tools.py``.
+_CONFIG_SCHEMAS: dict[str, dict[str, Any]] = {
+    "config_get": {
+        "type": "function",
+        "function": {
+            "name": "config_get",
+            "description": (
+                "Read this instance's own settings: the effective value, where it comes "
+                "from (default, config.yaml, environment, runtime flag), its "
+                "description, and whether changing it needs a restart. Pass `key` for "
+                "one setting (its environment variable name, e.g. ROBOTHOR_LOG_LEVEL) "
+                "or `prefix` to list every setting whose name starts with it. Secret "
+                "values are never returned: they show as <set, fingerprint> or <unset>. "
+                "Owner only."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "key": {"type": "string", "description": "Exact setting name"},
+                    "prefix": {
+                        "type": "string",
+                        "description": "List settings whose name starts with this",
+                    },
+                },
+            },
+        },
+    },
+    "config_set": {
+        "type": "function",
+        "function": {
+            "name": "config_set",
+            "description": (
+                "Change one of this instance's settings, exactly as `genus config set` "
+                "does: the value is validated against the setting's declared type and "
+                "written to config.yaml (or the live flag store for a governed flag). "
+                "The reply says which services need a restart. Credentials are refused "
+                "-- store those with vault_set. apply=true also changes the value where "
+                "the running service actually reads it (a systemd drop-in) and "
+                "schedules the restart 15 s later; that needs host exec and is only "
+                "available to the verified owner's top-level run. Owner only."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "key": {"type": "string", "description": "Setting name (env var)"},
+                    "value": {"type": "string", "description": "New value, as text"},
+                    "apply": {
+                        "type": "boolean",
+                        "description": "Apply where the service reads it and restart",
+                        "default": False,
+                    },
+                },
+                "required": ["key", "value"],
+            },
+        },
+    },
+}
+
+
 #: The secrets vault's four tools, as one cluster.
 #:
 #: Lifted out of ``get_engine_schemas`` when ``vault_test`` was added: the
@@ -1461,7 +1522,12 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
         "type": "function",
         "function": {
             "name": "read_file",
-            "description": "Read the contents of a file.",
+            "description": (
+                "Read the contents of a file. Text files come back as-is; PDF, "
+                "Word (.docx), Excel (.xlsx) and PowerPoint (.pptx) files come "
+                "back as extracted text. For an image, call view_image instead; "
+                "any other binary file returns its size and type."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1776,7 +1842,7 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
         },
     }
 
-    schemas.update(_VAULT_SCHEMAS)
+    schemas.update(_VAULT_SCHEMAS | _CONFIG_SCHEMAS)
 
     # ── Knowledge Vault (verbatim memory store; RIP 12) ──
     # Distinct from the secrets vault above. Stores reference data the agent
@@ -2255,9 +2321,9 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
                 "Use this when you already have a message or thread id and need the text "
                 "of the email itself. Returns headers (from/to/cc/date/subject/"
                 "message_id), labels, snippet and the DECODED body_text — plain text, "
-                "never base64 — with attachments listed by filename, size and type and "
-                "never inlined. Given a thread_id it returns every message in the thread, "
-                "oldest first."
+                "never base64 — with attachments listed (filename, size, type, "
+                "attachment_id), never inlined. Given a thread_id it returns every "
+                "message in the thread, oldest first."
             ),
             "parameters": {
                 "type": "object",
@@ -2278,6 +2344,34 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
                         "description": "Cap on decoded body characters per message. Defaults to a value that fits the engine's tool-output limit; a cut body says body_truncated: true and body_chars.",
                     },
                 },
+            },
+        },
+    }
+    schemas["gws_gmail_get_attachment"] = {
+        "type": "function",
+        "function": {
+            "name": "gws_gmail_get_attachment",
+            "description": (
+                "Use this to open or read a file attached to an email, once "
+                "gws_gmail_get has listed its attachment_id. Downloads it (up to 20 MB) "
+                "into the local inbox and returns path, filename, mime_type, size_bytes, "
+                "format and the text of a PDF, Word, Excel, PowerPoint or text file (up "
+                "to 50,000 chars; truncated says if cut). An image returns a path for "
+                "view_image."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "message_id": {
+                        "type": "string",
+                        "description": "The id of the message carrying the attachment",
+                    },
+                    "attachment_id": {
+                        "type": "string",
+                        "description": "The attachment's attachment_id from gws_gmail_get",
+                    },
+                },
+                "required": ["message_id", "attachment_id"],
             },
         },
     }
@@ -3789,6 +3883,99 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
                         "description": "Filter by project key (optional)",
                     },
                 },
+            },
+        },
+    }
+    schemas["jira_create_issue"] = {
+        "type": "function",
+        "function": {
+            "name": "jira_create_issue",
+            "description": (
+                "Create a JIRA issue in any project the account can write to. Returns the "
+                "new key and its browse URL."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_key": {"type": "string", "description": "Project key, e.g. ABC"},
+                    "summary": {"type": "string", "description": "Issue title"},
+                    "description": {
+                        "type": "string",
+                        "description": "Plain text body; blank lines separate paragraphs",
+                    },
+                    "issue_type": {
+                        "type": "string",
+                        "description": "Task (default), Bug, Story, Epic or Sub-task",
+                    },
+                    "labels": {"type": "array", "items": {"type": "string"}},
+                    "parent_key": {
+                        "type": "string",
+                        "description": "Parent epic or issue key (optional)",
+                    },
+                    "priority": {"type": "string", "description": "Priority name (optional)"},
+                },
+                "required": ["project_key", "summary"],
+            },
+        },
+    }
+    schemas["jira_add_comment"] = {
+        "type": "function",
+        "function": {
+            "name": "jira_add_comment",
+            "description": "Add a comment to a JIRA issue.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "issue_key": {"type": "string", "description": "Issue key, e.g. ABC-123"},
+                    "body": {"type": "string", "description": "Plain text comment"},
+                },
+                "required": ["issue_key", "body"],
+            },
+        },
+    }
+    schemas["jira_transition_issue"] = {
+        "type": "function",
+        "function": {
+            "name": "jira_transition_issue",
+            "description": (
+                "Move a JIRA issue to a status, e.g. 'In Progress' or 'Done'. An unknown "
+                "status returns the statuses reachable from the current one."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "issue_key": {"type": "string", "description": "Issue key, e.g. ABC-123"},
+                    "status": {
+                        "type": "string",
+                        "description": "Target status or transition name",
+                    },
+                },
+                "required": ["issue_key", "status"],
+            },
+        },
+    }
+    schemas["jira_update_issue"] = {
+        "type": "function",
+        "function": {
+            "name": "jira_update_issue",
+            "description": "Edit a JIRA issue's summary, description, labels or priority.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "issue_key": {"type": "string", "description": "Issue key, e.g. ABC-123"},
+                    "summary": {"type": "string"},
+                    "description": {
+                        "type": "string",
+                        "description": "Plain text body; replaces the existing description",
+                    },
+                    "labels": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Replaces the existing labels",
+                    },
+                    "priority": {"type": "string"},
+                },
+                "required": ["issue_key"],
             },
         },
     }

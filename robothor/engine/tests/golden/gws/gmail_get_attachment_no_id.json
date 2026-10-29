@@ -1,0 +1,25 @@
+{
+  "args": {
+    "message_id": "m"
+  },
+  "calendar_requests": [],
+  "context": {
+    "is_benchmark": false,
+    "run_id": "run-golden",
+    "tenant_id": "tenant-a"
+  },
+  "crm_write_through": {
+    "calls": [],
+    "sql": []
+  },
+  "dnc_lookups": [],
+  "guardrail_events": [],
+  "gws_calls": [],
+  "result": {
+    "error": "message_id and attachment_id are both required",
+    "hint": "invalid_params: take both ids from gws_gmail_get"
+  },
+  "scenario": "gmail_get_attachment_no_id",
+  "scheduling_policy_lookups": [],
+  "tool": "gws_gmail_get_attachment"
+}

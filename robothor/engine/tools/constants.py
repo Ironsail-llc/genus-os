@@ -76,6 +76,7 @@ PR_REVIEW_TOOLS = frozenset(
 
 MAIL_SEARCH_TOOL = "gws_gmail_search"
 MAIL_GET_TOOL = "gws_gmail_get"
+MAIL_ATTACHMENT_TOOL = "gws_gmail_get_attachment"
 MAIL_SEND_TOOL = "gws_gmail_send"
 MAIL_REPLY_TOOL = "gws_gmail_reply"
 MAIL_MODIFY_TOOL = "gws_gmail_modify"
@@ -89,7 +90,7 @@ CHAT_SEND_TOOL = "gws_chat_send"
 CHAT_LIST_SPACES_TOOL = "gws_chat_list_spaces"
 CHAT_LIST_MESSAGES_TOOL = "gws_chat_list_messages"
 
-MAIL_READ_TOOLS: frozenset[str] = frozenset({MAIL_SEARCH_TOOL, MAIL_GET_TOOL})
+MAIL_READ_TOOLS: frozenset[str] = frozenset({MAIL_SEARCH_TOOL, MAIL_GET_TOOL, MAIL_ATTACHMENT_TOOL})
 #: Tools that put a message in someone's inbox.
 MAIL_SEND_TOOLS: frozenset[str] = frozenset({MAIL_SEND_TOOL, MAIL_REPLY_TOOL})
 MAIL_WRITE_TOOLS: frozenset[str] = MAIL_SEND_TOOLS | {MAIL_MODIFY_TOOL}
@@ -194,8 +195,30 @@ JIRA_TOOLS = frozenset(
         "jira_get_sprint",
         "jira_get_board_velocity",
         "jira_list_boards",
+        "jira_create_issue",
+        "jira_add_comment",
+        "jira_transition_issue",
+        "jira_update_issue",
     }
 )
+
+# JIRA write tools: they create, edit, comment on and move tickets as the
+# instance's account, so they are OPT_IN_TOOLS (below): offered only to a
+# manifest that names them. Migration 153 is the RBAC half.
+JIRA_WRITE_TOOLS = frozenset(
+    {
+        "jira_create_issue",
+        "jira_add_comment",
+        "jira_transition_issue",
+        "jira_update_issue",
+    }
+)
+
+# Settings tools (GEN-42): the owner's assistant reads and changes the
+# instance's declared settings through robothor.settings.operator — the same
+# functions `genus config` and the bridge call. Owner-only in the handler and
+# in RBAC (migration 152).
+CONFIG_TOOLS = frozenset({"config_get", "config_set"})
 
 # GitHub REST API tools (dev team operations)
 GITHUB_API_TOOLS = frozenset(
@@ -295,6 +318,11 @@ READONLY_TOOLS: frozenset[str] = frozenset(
         # File/system
         "read_file",
         "list_directory",
+        # Regex over workspace file contents; opens files read-only.
+        "search_files",
+        # Sleeps up to 300s and returns; touches nothing. A wait cut short was
+        # journalled as an uncertain write and fenced every later wait.
+        "wait_seconds",
         # Looking at an image reads a file and mutates nothing. Asking a
         # vision model about a batch of them spends tokens, which is a cost
         # and not a side effect: nothing on this box or anywhere else changes.
@@ -364,6 +392,8 @@ READONLY_TOOLS: frozenset[str] = frozenset(
         "get_stats",
         # Memory write-status probe (read-only)
         "memory_write_status",
+        # Settings read (GEN-42): value, source, restart flag; secrets masked.
+        "config_get",
         # Vault read-only tools
         "vault_get",
         "vault_list",
@@ -463,12 +493,17 @@ TOOLSEARCH_TOOLS = frozenset({"tool_search", "tool_describe", "tool_call"})
 # says so. Their RBAC half is NOT added yet: a `service`-role deny would also
 # stop the reviewer agent that names them, so it waits for a dedicated role.
 #
+# The four JIRA write tools create, edit, comment on and transition tickets as
+# the instance's account; same rule. Migration 153 denies them to `user` and
+# `member`; `service` keeps them, so an unattended agent that names them works.
+#
 # Spelled out rather than imported from robothor.sales so this module stays
 # import-light; test_opt_in_tools_are_not_default pins the two together.
 OPT_IN_TOOLS: frozenset[str] = frozenset(
     {
         "web_render",
         *GITHUB_REVIEW_WRITE_TOOLS,
+        *JIRA_WRITE_TOOLS,
         "sales_create_request",
         "sales_discover",
         "sales_get_context",

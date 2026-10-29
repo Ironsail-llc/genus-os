@@ -210,9 +210,18 @@ _BENCHMARK_EXTRA_READS: frozenset[str] = frozenset(
 #:
 #: The Claude Code reads joined on 2026-10-05, when they were classified
 #: read-only: they read the operator's REAL coding jobs (and the handlers
-#: refuse a benchmark run anyway).
+#: refuse a benchmark run anyway). ``config_get`` (GEN-42) reads the
+#: instance's REAL settings; its handler refuses a benchmark run too.
+#:
+#: ``search_files`` and ``wait_seconds`` joined when they were classified
+#: read-only: both were already excluded from the benchmark (see the
+#: comments in ``_BENCHMARK_EXCLUDED_TOOLS``), and classification does not
+#: change that.
 _BENCHMARK_WITHHELD_READS: frozenset[str] = frozenset(
-    DESKTOP_TOOLS | BENCHMARK_TOOLS | GWS_TOOLS | {"claude_code_status", "claude_code_wait"}
+    DESKTOP_TOOLS
+    | BENCHMARK_TOOLS
+    | GWS_TOOLS
+    | {"claude_code_status", "claude_code_wait", "search_files", "wait_seconds", "config_get"}
 )
 
 
@@ -392,6 +401,10 @@ _BENCHMARK_EXCLUDED_TOOLS: frozenset[str] = _BENCHMARK_WITHHELD_READS | frozense
         "tool_call",
         # Vault writes.
         "vault_set",
+        # The instance's real settings: changing them changes the box (the
+        # read, config_get, is withheld above). The handler refuses a
+        # benchmark run too.
+        "config_set",
         # Dials a real vendor endpoint with a real credential. Read-only as
         # far as this instance is concerned, and still excluded: a benchmark
         # run burning an operator's rate limit against their own account is a

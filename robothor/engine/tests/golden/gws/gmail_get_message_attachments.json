@@ -35,11 +35,13 @@
   "result": {
     "attachments": [
       {
+        "attachment_id": "att-1",
         "filename": "contract.pdf",
         "mime_type": "application/pdf",
         "size_bytes": 20481
       },
       {
+        "attachment_id": "att-2",
         "filename": "chart.png",
         "mime_type": "image/png",
         "size_bytes": 512

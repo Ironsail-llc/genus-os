@@ -215,6 +215,23 @@ def test_recovery_refuses_external_writes_and_stopped_lease_refuses_all(db):  # 
         binding.reset(token)
 
 
+def test_finished_work_period_refuses_waiting_even_though_it_is_read_only(db):  # noqa: F811
+    """``wait_seconds`` changes nothing, but a goal that has gone ``waiting``
+    must end its turn rather than sleep inside it."""
+    store.create(db, CreateGoal(objective="Report", success_criteria=["Delivered"]), "operator")
+    g, attempt = store.claim(db)
+    token = binding.set(Binding(db, g["id"], attempt, run_id="root"))
+    try:
+        store.update(
+            db, g["id"], GoalUpdate(action="wait", version=g["version"], note="later"), "operator"
+        )
+        with pytest.raises(ValueError, match="end the turn"):
+            admit_tool("wait_seconds", {"seconds": 60}, SimpleNamespace())
+        admit_tool("get_pursuit_goal", {}, SimpleNamespace())
+    finally:
+        binding.reset(token)
+
+
 @pytest.mark.asyncio
 async def test_delegated_context_cannot_mutate_goal():
     token = binding.set(Binding("t", "g", "a", run_id="parent"))

@@ -311,15 +311,23 @@ def kind_for(mime: str, name: str = "") -> str:
 
 
 def extractable(suffix: str, mime: str = "") -> str | None:
-    """``"text"``, ``"pdf"`` or None — what can be quoted into the first turn.
+    """What can be quoted into the first turn, or None.
 
-    Never decides on MIME alone: Telegram reports ``application/octet-stream``
-    for plenty of real text files, and reports ``text/plain`` for some that are
-    not. The suffix is the operator's own label for the file.
+    ``"text"`` for a file decoded as-is, or a document kind
+    (``"pdf"``, ``"docx"``, ``"xlsx"``, ``"pptx"``) that
+    :mod:`robothor.engine.file_extract` turns into text.
+
+    Never decides TEXT on MIME alone: Telegram reports
+    ``application/octet-stream`` for plenty of real text files, and reports
+    ``text/plain`` for some that are not. The suffix is the operator's own
+    label for the file. A document MIME type is specific enough to trust.
     """
+    from robothor.engine.file_extract import document_kind
+
     lowered = (suffix or "").lower()
-    if lowered == ".pdf" or (mime or "").strip().lower() == "application/pdf":
-        return "pdf"
+    doc = document_kind(lowered, mime)
+    if doc is not None:
+        return doc
     if lowered in TEXT_EXTENSIONS:
         return "text"
     return None
@@ -344,9 +352,15 @@ def is_inbox_secret(
     path: str | os.PathLike[str],
     *,
     workspace: str | Path | None = None,
-    channel: str = "telegram",
+    channel: str | None = None,
 ) -> bool:
     """Is *path* the inbox copy of a file that holds credentials?
+
+    ``channel`` narrows the answer to one channel's subtree; ``None`` (the
+    default, and what ``read_file`` / ``send_file`` / the browser pass) asks of
+    the whole ``<workspace>/inbox/`` tree. The default used to be
+    ``"telegram"``, which would have left an email attachment named ``.env``
+    — kept under ``inbox/email/.../secret/`` — readable by ``read_file``.
 
     Answered from the DIRECTORY, not the filename. The first version of this
     stripped the ``<file_unique_id>-`` prefix by splitting on the first ``-``
@@ -371,7 +385,12 @@ def is_inbox_secret(
     (``send_file`` has ``ctx.workspace``); otherwise settings answer.
     """
     resolved = Path(str(path)).expanduser().resolve(strict=False)
-    root = inbox_root(workspace, channel=channel).resolve(strict=False)
+    channel_root = (
+        inbox_root(workspace, channel=channel)
+        if channel is not None
+        else _workspace_root(workspace) / INBOX_DIRNAME
+    )
+    root = channel_root.resolve(strict=False)
     if root != resolved and root not in resolved.parents:
         return False
     # Relative to the channel root, so only the layout's own `secret/` segment

@@ -134,6 +134,11 @@ EXTERNAL_SIDE_EFFECT_TOOLS: frozenset[str] = frozenset(
         "github_create_review",
         "github_reply_review_comment",
         "github_resolve_threads",
+        # JIRA writes mutate the real tracker
+        "jira_create_issue",
+        "jira_add_comment",
+        "jira_transition_issue",
+        "jira_update_issue",
         # Messaging / paging a human.
         "message",
         "send_message",

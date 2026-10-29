@@ -754,6 +754,13 @@ GMAIL_SCENARIOS = [
         {"gmail users threads get": THREAD_FROM_BOB},
     ),
     Scenario("gmail_get_no_id", "gws_gmail_get", {}),
+    Scenario("gmail_get_attachment_no_id", "gws_gmail_get_attachment", {"message_id": "m"}),
+    Scenario(
+        "gmail_get_attachment_unknown_id",
+        "gws_gmail_get_attachment",
+        {"message_id": "msg-multi", "attachment_id": "nope"},
+        {"gmail users messages get": MULTIPART_WITH_ATTACHMENT},
+    ),
     Scenario("gmail_get_bad_format", "gws_gmail_get", {"message_id": "m", "format": "raw"}),
     Scenario(
         "gmail_get_cli_error",
@@ -1301,6 +1308,7 @@ BENCHMARK_SCENARIOS = [
     for tool in (
         "gws_gmail_search",
         "gws_gmail_get",
+        "gws_gmail_get_attachment",
         "gws_gmail_reply",
         "gws_gmail_send",
         "gws_gmail_modify",
