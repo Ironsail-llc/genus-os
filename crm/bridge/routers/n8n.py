@@ -167,8 +167,8 @@ def _workflow_out(row: dict[str, Any], base_url: str) -> dict[str, Any]:
         "last_failure_at": _iso(row.get("last_failure_at")),
         "last_error": row.get("last_error"),
         # The execution that failed last, so the operator lands on the failure
-        # rather than the workflow. Not part of the poller's ``workflow_row()``
-        # contract yet: it is computed here from ``n8n_executions``.
+        # rather than the workflow. ``contract.workflow_row()`` emits the same
+        # field; the row is built here only so ``name`` can fall back to the id.
         "last_failure_url": (
             _execution_url(base_url, row["workflow_id"], str(failed_id))
             if (failed_id := row.get("last_failed_execution_id"))
