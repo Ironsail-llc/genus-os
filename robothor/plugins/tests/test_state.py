@@ -83,6 +83,20 @@ def test_put_refuses_a_ttl_that_is_not_positive(ttl):
     cur.execute.assert_not_called()
 
 
+def test_put_refuses_a_ttl_too_large_for_the_database():
+    """A TTL past a 32-bit int would surface as a database error, not the promised ValueError."""
+    connect, cur = _recording_connect()
+    with pytest.raises(ValueError):
+        _state(connect).put("contact", "k1", {"a": 1}, ttl_seconds=2**31)
+    cur.execute.assert_not_called()
+
+
+def test_put_accepts_the_largest_ttl():
+    connect, cur = _recording_connect()
+    _state(connect).put("contact", "k1", {"a": 1}, ttl_seconds=2**31 - 1)
+    cur.execute.assert_called_once()
+
+
 @pytest.mark.parametrize(("kind", "key"), [("", "k1"), ("contact", "")])
 def test_kind_and_key_must_be_named(kind, key):
     connect, cur = _recording_connect()
