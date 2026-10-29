@@ -157,3 +157,24 @@ def test_a_workflow_directory_fault_does_not_break_the_listing(
     r = controls_client_as_operator.get("/api/workflows")
     assert r.status_code == 200
     assert [row["workflow_id"] for row in r.json()] == ["intel"]
+
+
+def test_an_unreadable_ledger_labels_no_source_and_is_logged(env_workspace, caplog):
+    """A damaged ledger must not relabel a plugin's workflow as the operator's."""
+    import logging
+
+    import yaml
+
+    wf_dir = env_workspace / "docs" / "workflows"
+    wf_dir.mkdir(parents=True, exist_ok=True)
+    (wf_dir / "desk-pass.yaml").write_text(
+        yaml.safe_dump({"id": "desk-pass", "steps": [{"id": "s1", "type": "noop"}]})
+    )
+    ledger = env_workspace / ".robothor" / "plugin-assets.yaml"
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    ledger.write_text("plugins: [unclosed")
+    with caplog.at_level(logging.WARNING):
+        rows = {r["workflow_id"]: r for r in workflows._defined_workflows()}
+    assert rows["desk-pass"]["source"] is None
+    assert "plugin-assets.yaml" in caplog.text
+    assert str(env_workspace) not in caplog.text
