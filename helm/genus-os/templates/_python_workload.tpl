@@ -41,6 +41,8 @@ Renders:
 {{- $wsKey := .workspaceKey | default "workspace" -}}
 {{- $claimName := .claimName | default (include "genus-os.workspaceClaimName" $root) -}}
 {{- $gwArgs := dict "root" $root "gw" ($cv.googleWorkspace | default dict) "secretName" (.googleSecretName | default (printf "%s-engine-google" (include "genus-os.fullname" $root))) "checkVault" (not .googleSecretName) -}}
+{{- /* The vault's readers: the bridge stores credentials, the engines read them. */ -}}
+{{- $vaultReader := has $component (list "engine" "bridge") -}}
 {{- $port := $cv.service.port | int -}}
 {{- $serviceEnv := dict -}}
 {{- if eq $component "engine" -}}
@@ -211,6 +213,9 @@ spec:
             {{- if eq $component "engine" }}
             {{- with include "genus-os.googleWorkspaceEnv" $gwArgs | trim }}{{ . | nindent 12 }}{{- end }}
             {{- end }}
+            {{- if $vaultReader }}
+            {{- with include "genus-os.vaultKeyEnv" $root | trim }}{{ . | nindent 12 }}{{- end }}
+            {{- end }}
             {{- range $k, $v := $componentEnv }}
             - name: {{ $k }}
               value: {{ $v | quote }}
@@ -244,6 +249,9 @@ spec:
             {{- if eq $component "engine" }}
             {{- with include "genus-os.googleWorkspaceVolumeMount" $gwArgs | trim }}{{ . | nindent 12 }}{{- end }}
             {{- end }}
+            {{- if $vaultReader }}
+            {{- with include "genus-os.vaultKeyVolumeMount" $root | trim }}{{ . | nindent 12 }}{{- end }}
+            {{- end }}
           resources:
             {{- toYaml $cv.resources | nindent 12 }}
       volumes:
@@ -273,6 +281,9 @@ spec:
         {{- with include "genus-os.dbCaVolume" $root | trim }}{{ . | nindent 8 }}{{- end }}
         {{- if eq $component "engine" }}
         {{- with include "genus-os.googleWorkspaceVolume" $gwArgs | trim }}{{ . | nindent 8 }}{{- end }}
+        {{- end }}
+        {{- if $vaultReader }}
+        {{- with include "genus-os.vaultKeyVolume" $root | trim }}{{ . | nindent 8 }}{{- end }}
         {{- end }}
         {{- if $root.Values.migrations.enabled }}
         - name: migration-api-token

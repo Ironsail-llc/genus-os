@@ -427,6 +427,51 @@ tenant cell's Secret is supplied by the deployment.
 {{- end }}
 {{- end -}}
 
+{{/*
+Shared vault key (vaultKey.enabled). One master key and one fingerprint salt
+for every process that reads the vault: the bridge, the root engine and every
+tenant cell. The `vault-key` class is materialized by VSO, which decodes the
+base64 fields stored in Vault into the raw files the code reads. NOT optional:
+under GENUS_VAULT_KEY_FILE a missing key is a hard error, and a pod that can
+start without it would only fail later, on the first secret it touches.
+Pass the top-level dot; each renders nothing when vaultKey.enabled is false.
+*/}}
+{{- define "genus-os.vaultKeyDir" -}}/etc/genus/vault{{- end -}}
+
+{{- define "genus-os.vaultKeyEnv" -}}
+{{- if (.Values.vaultKey | default dict).enabled }}
+{{- if and .Values.vault.enabled (not (hasKey .Values.vault.secrets "vault-key")) -}}
+{{- fail "vaultKey.enabled requires vault.secrets.vault-key (a Vault path holding base64 `key` and `fingerprint-salt`)" -}}
+{{- end }}
+- name: GENUS_VAULT_KEY_FILE
+  value: {{ printf "%s/key" (include "genus-os.vaultKeyDir" .) | quote }}
+- name: GENUS_FINGERPRINT_SALT_FILE
+  value: {{ printf "%s/fingerprint-salt" (include "genus-os.vaultKeyDir" .) | quote }}
+{{- end }}
+{{- end -}}
+
+{{- define "genus-os.vaultKeyVolumeMount" -}}
+{{- if (.Values.vaultKey | default dict).enabled }}
+- name: vault-key
+  mountPath: {{ include "genus-os.vaultKeyDir" . }}
+  readOnly: true
+{{- end }}
+{{- end -}}
+
+{{- define "genus-os.vaultKeyVolume" -}}
+{{- if (.Values.vaultKey | default dict).enabled }}
+- name: vault-key
+  secret:
+    secretName: {{ include "genus-os.fullname" . }}-vault-key
+    defaultMode: 0400
+    items:
+      - key: key
+        path: key
+      - key: fingerprint-salt
+        path: fingerprint-salt
+{{- end }}
+{{- end -}}
+
 {{- define "genus-os.dbCaVolume" -}}
 {{- $tls := .Values.database.tls | default dict -}}
 {{- if $tls.caConfigMap }}

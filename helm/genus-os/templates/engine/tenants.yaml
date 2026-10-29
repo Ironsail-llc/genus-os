@@ -13,6 +13,9 @@ are told apart by genus-os/tenant=<id>, which is in each cell's selectors.
 An empty list renders nothing.
 */ -}}
 {{- if .Values.engine.enabled -}}
+{{- if and (.Values.tenants | default list) (not (.Values.vaultKey | default dict).enabled) -}}
+{{- fail "tenants requires vaultKey.enabled: a credential the bridge stores for a child tenant is encrypted with the vault master key, and without one shared key (the vault-key Secret, mounted on the bridge and every engine) each engine would look for its own <workspace>/.vault-key, so the child's engine could not decrypt it. See \"Shared vault key\" in the chart README." -}}
+{{- end -}}
 {{- $root := . -}}
 {{- $fullName := include "genus-os.fullname" . -}}
 {{- $rootTenant := include "genus-os.rootTenant" . -}}

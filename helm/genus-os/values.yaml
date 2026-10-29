@@ -488,6 +488,22 @@ engine:
   tolerations: []
   affinity: {}
 
+# ─── Shared vault key ────────────────────────────────────────────────────────
+# The vault master key and fingerprint salt every vault reader shares: the
+# bridge, the root engine and every tenant cell. Without it each process looks
+# for `<workspace>/.vault-key`, and the bridge has no workspace at all, so a
+# credential the bridge stores for a child tenant could not be decrypted by
+# that child's engine. Required whenever `tenants` is non-empty.
+#
+# When enabled, the `vault-key` Secret class (declare
+# vault.secrets.vault-key.path in the environment layer) holds two fields,
+# each 32 random bytes stored base64-encoded (`openssl rand -base64 32`):
+# `key` and `fingerprint-salt`. VSO decodes them into raw files mounted
+# read-only at /etc/genus/vault/, and GENUS_VAULT_KEY_FILE /
+# GENUS_FINGERPRINT_SALT_FILE point at them. See the chart README.
+vaultKey:
+  enabled: false
+
 # ─── Tenant engine cells ─────────────────────────────────────────────────────
 # Additional engines, one per child tenant, in this release. The root engine
 # (`engine:`) is unchanged. Each entry renders <fullname>-engine-<id> (a
