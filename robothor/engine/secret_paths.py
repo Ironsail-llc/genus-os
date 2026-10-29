@@ -235,7 +235,7 @@ def _in_secret_location(p: PurePath) -> bool:
 #: (``.vault-key``, ``.fingerprint-salt``) cannot see a file the chart mounts
 #: as ``key``, so ``read_file`` and ``exec cat`` would print the master key
 #: that decrypts every vault row — the very read ``.vault-key`` was added for.
-_KEY_FILE_SETTINGS = (
+KEY_FILE_SETTINGS = (
     "GENUS_VAULT_KEY_FILE",
     "ROBOTHOR_VAULT_KEY_FILE",
     "GENUS_FINGERPRINT_SALT_FILE",
@@ -299,7 +299,7 @@ def _moved_key_files() -> list[str]:
 
     return [
         value.strip()
-        for value in (process_env_get(name, "") or "" for name in _KEY_FILE_SETTINGS)
+        for value in (process_env_get(name, "") or "" for name in KEY_FILE_SETTINGS)
         if value.strip()
     ]
 
@@ -446,6 +446,23 @@ _PRINTERS = frozenset(
         "perl",
         "ruby",
         "node",
+        # Readers that are not printers. Each copies, encodes or archives a
+        # file's bytes somewhere a printer can then reach them — `dd if=<key>
+        # | base64` and `cp <key> ws/k && od ws/k` printed the vault master
+        # key past a guard that only knew `cat` and friends.
+        "dd",
+        "cp",
+        "mv",
+        "install",
+        "ln",
+        "rsync",
+        "scp",
+        "tar",
+        "zip",
+        "gzip",
+        "split",
+        "uuencode",
+        "openssl",
     }
 )
 #: Prefixes that wrap another command; the real command word follows them.
@@ -601,6 +618,82 @@ def _relative_names_moved_key(
     return any(is_secret_path(str(Path(directory) / candidate)) for directory in shell_dirs)
 
 
+#: The key-file settings by name, wherever they appear. The exec environment
+#: never carries them (``robothor.engine.exec_env``), and a command that names
+#: one — ``od $GENUS_VAULT_KEY_FILE``, ``cat "${ROBOTHOR_VAULT_KEY_FILE}"`` —
+#: is asking for the master key by reference, so it is refused outright.
+_KEY_FILE_VARIABLE = re.compile(r"\b(?:GENUS|ROBOTHOR)_(?:VAULT_KEY_FILE|FINGERPRINT_SALT_FILE)\b")
+
+#: Interpreters whose one-liners open files by a string literal.
+_INTERPRETERS = frozenset({"python", "python3", "perl", "ruby", "node"})
+_STRING_LITERAL = re.compile(r"""['"]([^'"\s]+)['"]""")
+
+#: ``$(<file)``: bash's read-a-file-into-a-word, with no command at all.
+_READ_SUBSTITUTION = re.compile(r"\$\(\s*<\s*([^)\s]+)\s*\)")
+
+#: Redirections whose operand is READ.
+_INPUT_REDIRECTS = frozenset({"<", "<<<", "<&", "<>"})
+
+
+def _mentions_moved_key(command: str, tokens: list[str], shell_dirs: list[str]) -> bool:
+    """Defence in depth for a moved key or salt: refused whatever the command.
+
+    The rules above judge a command by its verb, and every verb nobody listed
+    was a way through. So when an override is set, ANY mention of the key file
+    — or of its dedicated directory — refuses the command: as written or
+    resolved, as a substring of the command line (which covers interpreter
+    one-liners and globs), or as a token or ``name=value`` operand that
+    resolves into it (which covers ``..`` and symlink spellings).
+    """
+    configured = _moved_key_files()
+    if not configured:
+        return False
+    broad = _broad_directories()
+    needles: set[str] = set()
+    for value in configured:
+        for spelled in (str(Path(value).expanduser()), _resolved(value)):
+            needles.add(spelled)
+            directory = str(Path(spelled).parent)
+            if not any(Path(wide).is_relative_to(directory) for wide in broad):
+                needles.add(directory)
+    if any(needle and needle in command for needle in needles):
+        return True
+    for token in tokens:
+        for part in (token, token.partition("=")[2]):
+            candidate = part.strip("'\"")
+            if not candidate:
+                continue
+            if candidate.startswith(("/", "~")):
+                if _is_moved_key_file(candidate):
+                    return True
+            elif any(_is_moved_key_file(str(Path(d) / candidate)) for d in shell_dirs):
+                return True
+    return False
+
+
+def _read_operands(command: str) -> list[str]:
+    """Paths a command READS that are not a printer's argument.
+
+    Input redirect operands (``xxd < <file>``, ``base64 <<< ...``), ``dd``'s
+    ``if=``/``of=``, ``$(<file)``, and the string literals of an interpreter
+    one-liner (``python -c "open('.env').read()"``).
+    """
+    found: list[str] = [m.group(1) for m in _READ_SUBSTITUTION.finditer(command)]
+    for line in command.splitlines():
+        tokens = _tokens(line)
+        for index, token in enumerate(tokens):
+            if token in _INPUT_REDIRECTS and index + 1 < len(tokens):
+                found.append(tokens[index + 1])
+            elif token.startswith(("if=", "of=")):
+                found.append(token[3:])
+    for tokens in _segments(command):
+        word, args = _command_word(tokens)
+        if word in _INTERPRETERS:
+            for arg in args:
+                found.extend(literal.lstrip("<>+") for literal in _STRING_LITERAL.findall(arg))
+    return [f.strip("'\"") for f in found if f.strip("'\"")]
+
+
 def exec_reads_secret(command: str) -> str | None:
     """The reason a shell command is refused, or None when it may run.
 
@@ -622,8 +715,28 @@ def exec_reads_secret(command: str) -> str | None:
             "`secrets:` list."
         )
 
+    if _KEY_FILE_VARIABLE.search(command):
+        return (
+            "refused: the command names the vault key or fingerprint-salt setting, "
+            "which points at the instance's master key. It is never read by an agent."
+        )
+
     segments = _segments(command)
     shell_dirs = _changed_directories(segments)
+    all_tokens = [tok for line in command.splitlines() for tok in _tokens(line)]
+    if _mentions_moved_key(command, all_tokens, shell_dirs):
+        return (
+            "refused: the command names the vault master key or fingerprint salt, or "
+            "the directory they are mounted in. Neither is ever read by an agent."
+        )
+    for operand in _read_operands(command):
+        if is_secret_path(operand):
+            return (
+                f"refused: the command would read {PurePath(operand).name}, a secrets "
+                "file. Credentials are supplied to tools by the platform; never read "
+                "them from disk."
+            )
+
     moved_names = _moved_key_basenames()
     for tokens in segments:
         word, args = _command_word(tokens)
