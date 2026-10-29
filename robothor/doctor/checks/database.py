@@ -15,6 +15,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from robothor.db import rls_exemptions
 from robothor.doctor.model import Check, FixResult, Result, fail, ok
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -30,10 +31,15 @@ __all__ = ["CHECKS", "SERVICE_ROLE_MIGRATION"]
 SERVICE_ROLE_MIGRATION = "107_seed_service_role.sql"
 RLS_BACKSTOP_MIGRATION = "120_tenant_rls_cover_new_tables.sql"
 
-_BARE_TENANT_TABLES_SQL = """
+#: Deliberately exempt tenant tables (``robothor.db.rls_exemptions``): they carry
+#: ``tenant_id`` and no ``tenant_isolation``, and are neither reported nor fixed.
+_EXEMPT = rls_exemptions.sql_literal_list()
+
+_BARE_TENANT_TABLES_SQL = f"""
 SELECT pt.tablename
 FROM pg_tables pt
 WHERE pt.schemaname = 'public'
+  AND pt.tablename NOT IN {_EXEMPT}
   AND EXISTS (
       SELECT 1 FROM information_schema.columns c
       WHERE c.table_schema = 'public'
@@ -323,11 +329,34 @@ async def _rls_coverage(ctx: DoctorContext) -> Result:
     return ok("every tenant_id table carries the tenant_isolation policy")
 
 
+#: Where the exemption goes in migration 120's loop: right after the one
+#: ``schemaname`` predicate of its ``FOR t IN SELECT ... FROM pg_tables pt``.
+_BACKSTOP_ANCHOR = "WHERE schemaname = 'public'"
+
+
+def _exemption_clause() -> str:
+    return f"\n          AND pt.tablename NOT IN {_EXEMPT}"
+
+
+def _backstop_sql() -> str:
+    """Migration 120's own loop, with the exempt tables taken out of it.
+
+    Executed rather than re-typed, for the reason ``SERVICE_ROLE_MIGRATION``
+    is; the ONE change is the exemption, inserted at a fixed anchor. A
+    migration 120 whose text no longer has exactly one anchor raises rather
+    than running a loop that would put RLS on ``audit_log``.
+    """
+    sql = _migration_sql(RLS_BACKSTOP_MIGRATION)
+    if sql.count(_BACKSTOP_ANCHOR) != 1:
+        raise RuntimeError(f"{RLS_BACKSTOP_MIGRATION} no longer has one '{_BACKSTOP_ANCHOR}'")
+    return sql.replace(_BACKSTOP_ANCHOR, _BACKSTOP_ANCHOR + _exemption_clause())
+
+
 async def _apply_rls_backstop(ctx: DoctorContext) -> FixResult:
-    """Run migration 120's own SQL. Idempotent -- it only touches bare tables."""
+    """Run migration 120's own loop, minus the exempt tables. Idempotent."""
 
     def _apply() -> None:
-        sql = _migration_sql(RLS_BACKSTOP_MIGRATION)
+        sql = _backstop_sql()
         with ctx.db() as conn:
             cursor = conn.cursor()
             cursor.execute(sql)

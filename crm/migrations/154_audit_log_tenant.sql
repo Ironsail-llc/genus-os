@@ -8,8 +8,15 @@
 --
 --   * NULL is allowed and is what every row written before this migration
 --     keeps: "appliance-wide". Only a root operator at home reads those.
---   * No RLS on this table. Reads filter on tenant_id explicitly; the table is
---     also read by appliance-wide jobs (retention, SIEM) that must see it all.
+--   * No RLS on this table, deliberately, and EXEMPT from the "every tenant_id
+--     table carries tenant_isolation" invariant: it is listed in
+--     robothor/db/rls_exemptions.py, which the static migration guard, the
+--     doctor's db.rls_coverage check and its --fix backstop all honour. The
+--     platform's root operator reads this trail unrestricted, and RLS would
+--     make the bridge's per-request tenant binding hide every other tenant's
+--     rows and every NULL row from that reader. Per-tenant reads are scoped by
+--     explicit predicates in the bridge (routers/_operator.py audit_scope).
+--     Appliance-wide jobs (retention, SIEM) also read it whole.
 --   * A plain CREATE INDEX: the migration runner executes each file inside one
 --     transaction, where CONCURRENTLY is not allowed.
 

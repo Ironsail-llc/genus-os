@@ -17,9 +17,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from robothor.db.rls_exemptions import RLS_EXEMPT_TENANT_TABLES
-
 from robothor.db import migrate
+from robothor.db.rls_exemptions import RLS_EXEMPT_TENANT_TABLES
 
 _CREATE = re.compile(
     r"CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:public\.)?(\w+)\s*\((.*?)\)\s*;",
