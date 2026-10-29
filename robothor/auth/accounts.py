@@ -820,6 +820,9 @@ class MoveReport:
     audit_id: int | None = None
     #: Set by ``detach_person``: the fresh CRM contact made in the target.
     new_person_id: str | None = None
+    #: The company the moved contact was linked to, when that company stays
+    #: in another tenant: the link is cleared rather than left cross-tenant.
+    company_unlinked: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -920,10 +923,17 @@ def _linked_rows(
         ("user_channel_identities", "tenant_id = %s AND user_id = %s", (source, uid)),
         ("face_identities", "tenant_id = %s AND user_account_id = %s", (source, uid)),
     ]
-    if person_id:
-        groups.append(
-            ("tenant_users", "tenant_id = %s AND person_id = %s", (source, str(person_id)))
+    # tenant_users is Telegram's source of truth (lookup_user reads nothing
+    # else). A pairing writes it keyed by the account's id with no person_id,
+    # so select by either link: a row left behind would keep driving the
+    # source tenant's agent.
+    groups.append(
+        (
+            "tenant_users",
+            "tenant_id = %s AND (user_id = %s OR person_id = %s::uuid)",
+            (source, uid, str(person_id) if person_id else None),
         )
+    )
     groups.append(
         (
             "sso_binding_grants",
@@ -1074,6 +1084,16 @@ def move_account(
                 counts=dict.fromkeys(MOVED_TABLES, 0),
             )
             groups = _linked_rows(account, source, detach_person=detach)
+            if old_person and not detach:
+                cur.execute(
+                    "SELECT p.company_id FROM crm_people p "
+                    "JOIN crm_companies c ON c.id = p.company_id "
+                    "WHERE p.id = %s AND c.tenant_id IS DISTINCT FROM %s",
+                    (old_person, to_tenant),
+                )
+                foreign = cur.fetchone()
+                if foreign:
+                    report.company_unlinked = str(foreign["company_id"])
 
             if dry_run:
                 for table, where, params in groups:
@@ -1095,12 +1115,21 @@ def move_account(
                         "updated_at = NOW() WHERE id = %s",
                         (to_tenant, report.role_after, report.user_id),
                     )
-                elif table == "user_channel_identities":
+                elif table in ("user_channel_identities", "tenant_users"):
+                    # Both carry the channel's own role; a demotion caps it.
                     cur.execute(
-                        "UPDATE user_channel_identities SET tenant_id = %s, "
+                        f"UPDATE {table} SET tenant_id = %s, "  # noqa: S608
                         "role = CASE WHEN %s THEN 'viewer' ELSE role END "
-                        f"WHERE {where}",  # noqa: S608
+                        f"WHERE {where}",
                         (to_tenant, cap_channel_role, *params),
+                    )
+                elif table == "crm_people":
+                    # A company left in another tenant is unlinked, not dragged.
+                    cur.execute(
+                        "UPDATE crm_people SET tenant_id = %s, "
+                        "company_id = CASE WHEN %s THEN NULL ELSE company_id END "
+                        f"WHERE {where}",  # noqa: S608
+                        (to_tenant, report.company_unlinked is not None, *params),
                     )
                 else:
                     cur.execute(

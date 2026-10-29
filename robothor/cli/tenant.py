@@ -209,6 +209,11 @@ def _cmd_move_account(args: argparse.Namespace) -> int:
         print(f"  Role: {report.role_before} -> {report.role_after}")
     for table, n in report.counts.items():
         print(f"  {table:<25} {n}")
+    if report.company_unlinked:
+        print(
+            f"  Company unlinked: {report.company_unlinked} stays in '{report.from_tenant}'; "
+            "the moved contact no longer points at it"
+        )
     if report.new_person_id:
         print(f"  New CRM contact: {report.new_person_id} (the old one stays in the source)")
     if not report.dry_run:

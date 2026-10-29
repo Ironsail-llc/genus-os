@@ -138,15 +138,16 @@ genus tenant move-account --email alice@example.com --to acme-child-a
 The dry run prints how many rows each table would move and changes nothing.
 The live move does everything in **one transaction**: it moves the account,
 its CRM contact (see below), its per-user permission overrides, its channel identities,
-its face enrolments, its Telegram routing row and any pending SSO binding
-grant; revokes every refresh session the account holds, so its next token is
+its face enrolments, its Telegram rows (both the contact's routing row and
+the pairing row keyed by the account, which is what Telegram reads to decide
+who may drive an agent) and any pending SSO binding grant; revokes every refresh session the account holds, so its next token is
 minted for the new tenant; and writes one `auth.account_moved` row to the
 audit log. If any step fails, none of it happened.
 
 | Flag | Use |
 |------|-----|
 | `--from acme-parent` | The address has an account in more than one tenant. The command refuses and lists them until you pick one. |
-| `--role admin` | Change the role on the way. `admin`, `member` or `viewer`; a move never makes an owner. `--role viewer` also caps the account's channel identities (Slack, Telegram pairings) at `viewer`; no role change ever raises them. |
+| `--role admin` | Change the role on the way. `admin`, `member` or `viewer`; a move never makes an owner. `--role viewer` also caps the account's channel roles at `viewer`, both its channel identities and its Telegram pairing; no role change ever raises them. |
 | `--detach-person` | Leave the account's CRM contact, and everything that references it, in the source tenant, and give the account a fresh contact in the target (same name and address). Required when that contact has CRM history; see below. |
 | `--json` | Print the report as JSON. |
 
@@ -160,6 +161,13 @@ own enrolment and Telegram routing row move with it and do not count. That histo
 leave it pointing at someone the source can no longer see. Re-run with
 `--detach-person` to keep the history where it is. An account with no linked
 contact is unaffected either way.
+
+**The contact's company.** A moved contact whose company stays in another
+tenant arrives with no company: the link is cleared in the same transaction
+rather than left pointing across tenants. The report, the dry run included,
+names the unlinked company (`Company unlinked: …`, or `company_unlinked` in
+`--json`). Re-link the contact to a company in the target tenant afterwards
+if it needs one.
 
 A move is refused, with nothing written, when:
 
