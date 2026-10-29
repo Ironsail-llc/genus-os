@@ -203,6 +203,28 @@ run in the home tenant, where the account lives. `GET /api/tenants` and
 operator at home sees every tenant, and a tenant outside the caller's reach is
 a 404.
 
+### When a token stops being honoured
+
+A signed token is honoured only while what it says is still true:
+
+- **An acting token needs the switch on.** With `GENUS_TENANT_SWITCH_MODE`
+  anything but `enforce`, the bridge refuses every acting token (`act: true`)
+  with 403 "tenant switching disabled". Home tokens are unaffected. Turning the
+  flag off ends every acting session at once.
+- **A human token needs its account where the token says.** The bridge checks
+  that the account still lives in the token's `home_tid` and is active, and
+  refuses it with 401 "session no longer valid" otherwise. The answer is cached
+  per user for 30 seconds (`robothor/auth/session_standing.py`), so an account
+  moved or disabled by another process (`genus tenant move-account`, psql)
+  loses its old access token within 30 s rather than at expiry. A change made
+  through the bridge itself (the Helm's account editor) takes effect on the next
+  request.
+
+Audit rows written while a human acts — including the CRM's own — name that
+account (`actor`, `user_id`), are filed under the acting tenant and carry the
+home tenant in `details`. A successful `tenant.switch` is filed under the
+tenant entered, so that tenant's admins can see who came in.
+
 ### What an acting token can administer
 
 Every Helm admin route is one of two kinds, decided by the gate it calls
