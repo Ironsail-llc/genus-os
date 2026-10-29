@@ -113,6 +113,8 @@ class FakeStreams:
                 out.append((stream.encode(), batch))
         if self.on_read is not None:
             self.on_read(len(self.read_by))
+        if not out:
+            await asyncio.sleep(0)
         if not out and self.on_idle is not None:
             self.on_idle()
         return out
@@ -1067,3 +1069,75 @@ class TestAnOwnerThatLosesTheGroupLetsItGo:
 
         assert fake.keys[self.OWNER_KEY] == OTHER_ROOT.encode()
         assert fake.deletes == []
+
+
+class TestRetriesStayWithTheirEngine:
+    """A retry or busy-requeue copy goes to a stream only its engine reads.
+
+    Re-adding it to the shared stream made every other engine read the copy
+    and drop it as foreign: one event failing three times cost each of them
+    four drops and four reads. Each engine now has a retry stream per source
+    stream, ``<stream>:retry:<group>``, that it alone reads; the dead-letter
+    entry stays on ``<stream>:dlq``, which no engine reads.
+    """
+
+    RETRY = f"{STREAM}:retry:engine-{CHILD}"
+
+    @pytest.fixture(autouse=True)
+    def _agreeing_tenant_env(self, monkeypatch):
+        monkeypatch.delenv("ROBOTHOR_TENANT_ID", raising=False)
+
+    @pytest.mark.asyncio
+    async def test_a_failing_event_is_retried_without_reaching_other_engines(self, engine_config):
+        fake = FakeStreams()
+        await fake.xgroup_create(STREAM, "engine")
+        await fake.xgroup_create(STREAM, f"engine-{CHILD}")
+        fake.add(STREAM, _event(CHILD))
+
+        child = EventHooks(_engine(engine_config, CHILD, f"engine-{CHILD}"), runner=None)  # type: ignore[arg-type]
+        attempts: list[str] = []
+
+        async def _always_fails(trigger, bare_stream, event_type, decoded, failed, busy):
+            attempts.append(decoded.get("_retry_count", "0"))
+            failed.append(trigger["agent_id"])
+
+        child._run_agent_trigger = _always_fails  # type: ignore[method-assign]
+        fake.on_read = lambda reads: (
+            child._stop_event.set() if fake.entries.get(f"{STREAM}:dlq") else None
+        )
+        await _consume_until_idle(child, fake, stop_when_idle=False)
+
+        assert attempts == ["0", "1", "2", "3"], "the original and three retries"
+        assert len(fake.entries[f"{STREAM}:dlq"]) == 1, "then one dead-letter entry"
+        assert len(fake.entries[STREAM]) == 1, "no copy went back to the shared stream"
+        assert len(fake.entries[self.RETRY]) == 3
+
+        fake.on_read = None
+        parent = EventHooks(_engine(engine_config, PARENT), runner=None)  # type: ignore[arg-type]
+        _Recorder().bind(parent)
+        await _consume_until_idle(parent, fake)
+
+        assert parent.foreign_events_dropped == 1, "only the original reached the root"
+
+    @pytest.mark.asyncio
+    async def test_a_busy_requeue_goes_to_the_engines_own_retry_stream(self, engine_config):
+        fake = FakeStreams()
+        await fake.xgroup_create(STREAM, f"engine-{CHILD}")
+        fake.add(STREAM, _event(CHILD))
+        child = EventHooks(_engine(engine_config, CHILD, f"engine-{CHILD}"), runner=None)  # type: ignore[arg-type]
+        calls: list[str] = []
+
+        async def _busy_once(trigger, bare_stream, event_type, decoded, failed, busy):
+            calls.append(decoded.get("_busy_requeue_count", "0"))
+            if len(calls) == 1:
+                busy.append(trigger["agent_id"])
+
+        child._run_agent_trigger = _busy_once  # type: ignore[method-assign]
+        fake.on_read = lambda reads: child._stop_event.set() if len(calls) >= 2 else None
+
+        with patch("robothor.engine.hooks.busy_requeue_delay", return_value=0):
+            await _consume_until_idle(child, fake, stop_when_idle=False)
+
+        assert calls == ["0", "1"], "the requeued copy came back to this engine"
+        assert len(fake.entries[STREAM]) == 1
+        assert len(fake.entries[self.RETRY]) == 1
