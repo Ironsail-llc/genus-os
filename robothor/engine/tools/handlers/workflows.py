@@ -13,6 +13,7 @@ early cannot cancel the workflow.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import logging
 import uuid
 from datetime import datetime
@@ -145,19 +146,21 @@ async def _handle_run_workflow(args: dict[str, Any], ctx: ToolContext) -> dict[s
 
     agent_id = getattr(ctx, "agent_id", "") or "unknown"
     run_id = str(uuid.uuid4())
-    # The ctx already carries the identity the runner resolved for this turn:
-    # the chat user's, or `service:<agent_id>` with the agent's service role
-    # for an unattended run (runtime/setup.principal). Pass it through as is.
-    user_id = getattr(ctx, "user_id", "") or ""
-    user_role = getattr(ctx, "user_role", "") or ""
-    task = get_task_registry().spawn(
+    # The run is the workflow's, exactly as a cron or hook run is: its own
+    # service identity, in a fresh context. Started in the chat turn's
+    # context it inherited that turn's runtime context (and with it effect
+    # admission) while its tool steps carry no agent run id, so every write
+    # step was refused. The caller is attributed by trigger_detail and the
+    # tool-call audit; RBAC on run_workflow decides who may start one.
+    task = contextvars.Context().run(
+        get_task_registry().spawn,
         engine.execute(
             workflow_id=workflow_id,
             trigger_type="agent",
             trigger_detail=f"agent:{agent_id}:{getattr(ctx, 'run_id', '')}",
             initial_context={"event": {"payload": payload}},
-            user_id=user_id,
-            user_role=user_role,
+            user_id=f"service:workflow:{workflow_id}",
+            user_role="service",
             run_id=run_id,
         ),
         name=f"workflow:{workflow_id}:{run_id}",
