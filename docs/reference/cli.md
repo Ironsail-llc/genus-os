@@ -1390,7 +1390,7 @@ Usage: `genus user list [--tenant TENANT]`
 
 Register a new user with full identity linkage.
 
-Usage: `genus user add [--tenant TENANT] [--name NAME] [--role ROLE] [--telegram-id TELEGRAM_ID] [--email EMAIL] [--person-id PERSON_ID] [--create-person]`
+Usage: `genus user add [--tenant TENANT] [--name NAME] [--role ROLE] [--telegram-id TELEGRAM_ID] [--email EMAIL] [--sso] [--person-id PERSON_ID] [--create-person]`
 
 | Flag | Takes | Default | Description |
 | --- | --- | --- | --- |
@@ -1399,6 +1399,7 @@ Usage: `genus user add [--tenant TENANT] [--name NAME] [--role ROLE] [--telegram
 | `--role` | `ROLE` | — | Role: owner/admin/member/user/viewer/auditor |
 | `--telegram-id` | `TELEGRAM_ID` | — | Telegram user id |
 | `--email` | `EMAIL` | — | Email address |
+| `--sso` | — | off | Create the account for SSO sign-in: active, with no password, ready for `auth grant-binding` (the same shape as the Helm's SSO invite) |
 | `--person-id` | `PERSON_ID` | — | Link to an existing crm_people row |
 | `--create-person` | — | off | Force-create a new crm_people row |
 

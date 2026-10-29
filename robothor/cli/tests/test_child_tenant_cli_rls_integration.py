@@ -196,9 +196,11 @@ def test_an_sso_user_added_from_the_cli_signs_in_to_the_child(
     app_role,  # noqa: F811
     rls_tenants,  # noqa: F811
     capsys,
+    monkeypatch,
 ):
     """The same shape the Helm's SSO invite makes: an active account with no
     password, armed with a one-shot grant that the first SSO sign-in spends."""
+    monkeypatch.setattr("sys.argv", ["genus"])  # the name the operator typed
     child = rls_tenants["a"]
     email = f"alice-{uuid.uuid4().hex[:8]}@example.com"
     assert _user_add(child, email, sso=True) == 0

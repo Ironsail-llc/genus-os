@@ -1138,6 +1138,12 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     user_add.add_argument("--telegram-id", default=None, help="Telegram user id")
     user_add.add_argument("--email", default=None, help="Email address")
+    user_add.add_argument(
+        "--sso",
+        action="store_true",
+        help="Create the account for SSO sign-in: active, with no password, ready for "
+        "`auth grant-binding` (the same shape as the Helm's SSO invite)",
+    )
     user_add_person = user_add.add_mutually_exclusive_group()
     user_add_person.add_argument(
         "--person-id", default=None, help="Link to an existing crm_people row"

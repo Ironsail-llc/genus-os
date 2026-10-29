@@ -599,6 +599,12 @@ def create_binding_grant(
         if target.get("idp_issuer"):
             raise GrantTargetError("account is already bound to an SSO identity")
         if target.get("status") != "active":
+            if target.get("status") == "invited":
+                raise GrantTargetError(
+                    "account is invited, and an invited account cannot consume a binding "
+                    "grant; for SSO sign-in create it with `user add --sso` (or the Helm's "
+                    "SSO invite), which makes it active with no password"
+                )
             raise GrantTargetError("account is not active")
         cur.execute(
             "UPDATE sso_binding_grants SET revoked_at = NOW() "
