@@ -136,3 +136,53 @@ lying about its isolation.
 journalctl -u robothor-engine -u robothor-bridge -u robothor-orchestrator \
            -u robothor-vision -u robothor-delphi-engine | grep "RLS IS INERT"
 ```
+
+## Per-request binding in the bridge
+
+The bridge binds every **authenticated** request to its token's tenant.
+`TenantScopeMiddleware` (`crm/bridge/middleware.py`) runs directly inside
+`AuthMiddleware` and wraps the handler in `tenant_scope(auth.tenant_id)`, so
+every pooled connection checked out for that request sets `app.tenant_id` to
+the token's `tid` — sync handlers included, because anyio copies the context
+into the threadpool. A route that forgets its tenant `WHERE` then gets only
+that tenant's rows from the database. Unauthenticated requests get no scope.
+With `ROBOTHOR_RLS_ENABLED` unset nothing is bound at all, as before.
+
+The vault follows the same scope: `robothor.vault` defaults `tenant_id` to the
+enclosing `tenant_scope` (the default tenant outside one), and its connection
+is bound like a pooled one. The session signing key is always resolved in the
+default tenant, whatever scope asks for it.
+
+**Sign-in is the exception.** A login has no token yet, and the account may
+live in any tenant — `(idp_issuer, idp_subject)` is unique platform-wide. The
+`/api/auth` sso, login, refresh, logout and switch-tenant routes and
+`accounts.get_account_by_idp` / `jit_provision` / `consume_active_session`
+therefore run inside `unbound_scope()`, which binds `app.tenant_id = ''` (the
+permissive branch of the policy). Without it, an SSO sign-in for an account
+outside the default tenant misses the existing row, inserts a duplicate and
+fails with a `UniqueViolation`. The caller list is pinned by
+`tests/test_unbound_scope_callers.py`; see the shared docstring on
+`unbound_scope` and `read_every_tenant_in_transaction` in
+`robothor/db/connection.py` for how the two widenings differ.
+
+### Tenant switching
+
+A root-tenant owner or admin may act in a descendant tenant:
+`POST /api/auth/switch-tenant {"tenant": "<id>"}` returns an access token with
+`tid` set to the target, `home_tid` set to the home tenant and `act: true`. The
+acting tenant is carried in the token, never in a header — an `X-Tenant-Id`
+that disagrees with `tid` is still refused. The target must be one of the
+HOME tenant's descendants (depth 3), so a child admin can reach neither its
+parent nor a sibling, and switching from an acting token is checked against
+home. `GET /api/tenants/accessible` lists the choices, home first. The refresh
+token is not touched: a refresh always returns a home token.
+
+`GENUS_TENANT_SWITCH_MODE` is `off` by default (every switch is refused);
+`observe` logs `tenant.switch would-allow` / `would-deny` / `would-refuse` and
+still refuses; `enforce` issues the token — **only while row-level security is
+genuinely enforcing**. That check is the same gate federation activation uses
+(`robothor/federation/rls_gate.py`): it refuses with 503 when
+`ROBOTHOR_RLS_ENABLED` is unset or the connection is a superuser.
+`GENUS_TENANT_SWITCH_ALLOW_INERT_RLS=1` is the deliberate escape hatch, and is
+logged at WARNING every time it admits a switch. Promote the ladder as in
+[Guardrail flips](GUARDRAIL_FLIPS.md).
