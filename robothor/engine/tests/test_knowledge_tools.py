@@ -170,3 +170,34 @@ async def test_writes_are_refused_in_a_benchmark_run(calls, name):
     )
     assert "error" in out
     assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_an_oversized_document_is_refused_before_embedding(calls):
+    from robothor.engine.tools.handlers.knowledge import MAX_DOCUMENT_CHARS
+
+    out = await _call(
+        "kb_upsert_document",
+        {
+            "collection": "helpdesk/policies",
+            "doc_id": "big",
+            "title": "Big",
+            "text": "x" * (MAX_DOCUMENT_CHARS + 1),
+        },
+    )
+    assert out["error"] == "document_too_large"
+    assert out["limit"] == MAX_DOCUMENT_CHARS
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_title_is_optional_in_both_schema_and_handler(calls):
+    from robothor.engine.tools.schemas import get_engine_schemas
+
+    required = get_engine_schemas()["kb_upsert_document"]["function"]["parameters"]["required"]
+    assert "title" not in required
+    out = await _call(
+        "kb_upsert_document", {"collection": "helpdesk/policies", "doc_id": "r", "text": "t"}
+    )
+    assert out["status"] == "created"
+    assert calls[0][1][3] == ""
