@@ -22,6 +22,11 @@ logger = logging.getLogger(__name__)
 
 HANDLERS: dict[str, Any] = {}
 
+#: Largest document text kb_upsert_document accepts (characters), about 500
+#: chunks of 400 words. Checked before anything is embedded: every chunk is
+#: one embedding call, so an unbounded paste is an unbounded tool call.
+MAX_DOCUMENT_CHARS = 200_000
+
 # Writes are refused in a benchmark run: fixture text stored as reference
 # documents would be read back by later real runs as curated fact.
 _MUTATING: frozenset[str] = frozenset({"kb_upsert_document", "kb_delete_document"})
@@ -70,6 +75,14 @@ async def _kb_upsert_document(args: dict[str, Any], ctx: ToolContext) -> dict[st
     from robothor.knowledge import store
 
     _required(args, "collection", "doc_id", "text")
+    length = len(str(args["text"]))
+    if length > MAX_DOCUMENT_CHARS:
+        return {
+            "error": "document_too_large",
+            "limit": MAX_DOCUMENT_CHARS,
+            "length": length,
+            "hint": "split the document into several doc_ids",
+        }
     result = await store.upsert_document(
         ctx.tenant_id,
         args["collection"],

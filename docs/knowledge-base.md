@@ -54,7 +54,7 @@ carries the search and each hit is marked `degraded`.
 | Tool | What it does |
 |---|---|
 | `kb_search` | `collection`, `query`, `limit` (default 5, at most 50). Read-only. |
-| `kb_upsert_document` | `collection`, `doc_id`, `title`, `text`, `source_uri`. Returns `status`, `version`, `chunks`. |
+| `kb_upsert_document` | `collection`, `doc_id`, `text`, and optionally `title` and `source_uri`. Returns `status`, `version`, `chunks`. Text over 200,000 characters is refused with `document_too_large` before anything is embedded: split it across several `doc_id`s. |
 | `kb_delete_document` | `collection`, `doc_id`. Returns `deleted`: false when there was no such document. |
 | `kb_list_collections` | Every collection in the tenant with its document and chunk counts and when it last changed. Read-only. |
 
