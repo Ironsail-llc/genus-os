@@ -128,3 +128,56 @@ def test_the_router_serves_a_drop_in_channel(
     assert resp.status_code == 200, resp.text
     assert resp.json()["event_type"] == "alpha.ping"
     mock_publish.assert_called_once()
+
+
+@patch.dict("os.environ", {"TEST_DROPIN_SECRET": "dropin-secret"})
+@patch("robothor.engine.webhooks._check_rate_limit", new_callable=AsyncMock, return_value=True)
+@patch("robothor.engine.webhooks._publish_to_stream", new_callable=AsyncMock, return_value="evt-1")
+def test_the_router_skips_a_bad_drop_in_and_serves_the_rest(
+    mock_publish, mock_rate, tmp_path: Path, monkeypatch, caplog, _clear_stats
+) -> None:
+    """A bad drop-in must not take the engine's HTTP app down with it."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    workspace = tmp_path / "ws"
+    dropins = workspace / "docs" / "webhooks.d"
+    dropins.mkdir(parents=True)
+    (workspace / "docs" / "webhooks.yaml").write_text(_channel("github"))
+    (dropins / "a-dup.yaml").write_text(_channel("github"))  # duplicate channel
+    (dropins / "b-broken.yaml").write_text("channels: [unclosed\n")  # does not parse
+    (dropins / "c-good.yaml").write_text(_channel("alpha"))
+    monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(workspace))
+
+    with caplog.at_level("ERROR", logger="robothor.engine.webhooks"):
+        router = get_webhook_router()
+    logged = " ".join(r.getMessage() for r in caplog.records)
+    assert "a-dup.yaml" in logged and "b-broken.yaml" in logged
+
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+    payload = json.dumps({"event_type": "ping"}).encode()
+    signature = hmac.new(b"dropin-secret", payload, hashlib.sha256).hexdigest()
+    for channel in ("github", "alpha"):
+        resp = client.post(
+            f"/api/webhooks/{channel}",
+            content=payload,
+            headers={
+                "Content-Type": "application/json",
+                "X-Hub-Signature-256": f"sha256={signature}",
+            },
+        )
+        assert resp.status_code == 200, (channel, resp.text)
+    # the base file's github wins; the duplicate's definition is not served
+    assert mock_publish.call_count == 2
+
+
+def test_the_strict_loader_still_raises_on_a_broken_drop_in(docs: Path) -> None:
+    import yaml
+
+    dropins = docs / "webhooks.d"
+    dropins.mkdir()
+    (dropins / "broken.yaml").write_text("channels: [unclosed\n")
+    with pytest.raises(yaml.YAMLError):
+        load_webhook_config(docs / "webhooks.yaml")

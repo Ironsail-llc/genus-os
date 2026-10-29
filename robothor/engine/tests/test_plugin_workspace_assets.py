@@ -1930,6 +1930,8 @@ def test_another_plugins_appended_hook_is_not_an_operator_edit(ws, capsys) -> No
         "install:\n  append:\n    hooks: {stream: email, event_type: email.new}\n",  # not a list
         "install:\n  append:\n    tools_allowed:\n      - {nested: mapping}\n",
         "install:\n  append:\n    id: [x]\n",
+        # a `:` in the stream would make hooks[<stream>:<event_type>] ambiguous
+        "install:\n  append:\n    hooks:\n      - {stream: 'a:b', event_type: c}\n",
     ],
 )
 def test_a_malformed_append_is_refused_before_pip(ws, capsys, patch) -> None:
@@ -2022,3 +2024,71 @@ def test_the_scan_names_a_webhook_drop_in_as_engine_loaded_config(tmp_path) -> N
         "docs/webhooks.d/alpha-plugin.yaml" in r and "configuration the engine loads" in r
         for r in result.reasons
     )
+
+
+def test_a_quoted_entry_is_the_same_item_under_the_round_trip_loader(ws, capsys) -> None:
+    """ruamel keeps quotes as str subclasses; identity is still the plain value."""
+    pytest.importorskip("ruamel.yaml")
+    from robothor.plugins import assets
+
+    fragment = "brain/agents/main.d/alpha-plugin.md"
+    (ws / _MAIN_YAML).write_text(_MAIN + f'bootstrap_files:\n  - "{fragment}"\n  - other.md\n')
+    patch = f"install:\n  append:\n    bootstrap_files: [{fragment}]\n"
+    assert _install(ws, **_patcher(_ALPHA, patch)) == 0, capsys.readouterr().err
+    assert _main(ws)["bootstrap_files"] == [fragment, "other.md"]
+    assets.retire(_ALPHA)
+    assert _main(ws)["bootstrap_files"] == ["other.md"]
+
+
+def test_the_round_trip_identity_matches_the_plain_one(tmp_path) -> None:
+    pytest.importorskip("ruamel.yaml")
+    from robothor.cli.agent import _load_manifest
+    from robothor.plugins.assets import _identity
+
+    path = tmp_path / "m.yaml"
+    path.write_text("items:\n  - \"quoted\"\n  - 'single'\n  - 1.5\n  - 3\n  - true\n")
+    document, _ = _load_manifest(path)
+    loaded = yaml.safe_load(path.read_text())["items"]
+    assert [_identity("items", i) for i in document["items"]] == [
+        _identity("items", i) for i in loaded
+    ]
+
+
+_BASE_CHANNELS = "channels:\n  github:\n    stream: github\n    secret_env: GH_SECRET\n"
+
+
+@pytest.mark.parametrize(
+    ("body", "what"),
+    [
+        ("channels:\n  github:\n    stream: x\n", "github"),  # collides with the base file
+        ("channels: [unclosed\n", "alpha-plugin.yaml"),  # does not parse
+    ],
+)
+def test_a_webhook_drop_in_that_would_break_the_channel_map_is_refused(
+    ws, capsys, body, what
+) -> None:
+    (ws / "docs" / "webhooks.yaml").write_text(_BASE_CHANNELS)
+    plugin = _fragment_plugin(
+        "  - src: extra/channels.yaml\n    dest: docs/webhooks.d/alpha-plugin.yaml\n"
+    )
+    plugin["extra"][f"{_ALPHA.replace('-', '_')}/extra/channels.yaml"] = body
+    pip = installer._run_pip
+    assert _install(ws, **plugin) == 2
+    err = capsys.readouterr().err
+    assert what in err and "docs/webhooks.d/alpha-plugin.yaml" in err
+    assert str(ws.parent) not in err  # names workspace files, not scratch paths
+    assert pip.calls == []
+    assert not (ws / "docs" / "webhooks.d").exists()
+
+
+def test_a_webhook_drop_in_colliding_with_another_plugins_is_refused(ws, capsys) -> None:
+    dropins = ws / "docs" / "webhooks.d"
+    dropins.mkdir()
+    (dropins / "beta-plugin.yaml").write_text("channels:\n  alpha:\n    stream: beta\n")
+    plugin = _fragment_plugin(
+        "  - src: extra/channels.yaml\n    dest: docs/webhooks.d/alpha-plugin.yaml\n"
+    )
+    assert _install(ws, **plugin) == 2
+    err = capsys.readouterr().err
+    assert "alpha" in err and "beta-plugin.yaml" in err
+    assert not (dropins / "alpha-plugin.yaml").exists()
