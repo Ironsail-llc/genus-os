@@ -25,6 +25,10 @@ if TYPE_CHECKING:
 
 pytestmark = pytest.mark.integration
 
+#: One seeded row per linked table, except tenant_users: the person's routing
+#: row and the Telegram pairing row (keyed by the account, no person_id).
+EXPECTED_COUNTS = {**dict.fromkeys(accounts.MOVED_TABLES, 1), "tenant_users": 2}
+
 PG_DSN = os.environ.get(
     "ROBOTHOR_TEST_DB_DSN",
     "dbname=robothor_test user=robothor host=/var/run/postgresql",
@@ -90,6 +94,13 @@ def world() -> Iterator[dict[str, Any]]:
         "VALUES (%s, 'Alice', %s, 'user', %s)",
         (f"tg-{sfx}", parent, person_id),
     )
+    # The shape a Telegram pairing writes (channels/identities.py
+    # _upsert_tenant_user): keyed by the account's id, with no person_id.
+    cur.execute(
+        "INSERT INTO tenant_users (telegram_user_id, display_name, tenant_id, role, user_id) "
+        "VALUES (%s, 'Alice', %s, 'member', %s)",
+        (f"tg-pair-{sfx}", parent, user_id),
+    )
     cur.execute(
         "INSERT INTO sso_binding_grants (tenant_id, email, created_by, expires_at) "
         "VALUES (%s, 'alice@example.com', 'cli', NOW() + interval '1 hour')",
@@ -143,6 +154,7 @@ def _where(cur: Any, w: dict[str, Any]) -> dict[str, str]:
             uid,
         ),
         "tenant_users": ("SELECT tenant_id FROM tenant_users WHERE person_id = %s", pid),
+        "tenant_users (pairing)": ("SELECT tenant_id FROM tenant_users WHERE user_id = %s", uid),
         "sso_binding_grants": (
             "SELECT tenant_id FROM sso_binding_grants WHERE email = 'alice@example.com' "
             "AND tenant_id IN (%s, %s)",
@@ -179,7 +191,7 @@ def test_live_move_moves_every_linked_row_revokes_sessions_and_audits(world) -> 
     report = accounts.move_account(world["user_id"], world["child"], actor="cli:test", role="admin")
 
     assert set(_where(cur, world).values()) == {world["child"]}
-    assert report.counts == dict.fromkeys(accounts.MOVED_TABLES, 1)
+    assert report.counts == EXPECTED_COUNTS
     assert report.sessions_revoked == 1
     assert _live_sessions(cur, world["user_id"]) == 0
 
@@ -197,7 +209,7 @@ def test_live_move_moves_every_linked_row_revokes_sessions_and_audits(world) -> 
 def test_dry_run_counts_and_moves_nothing(world) -> None:
     cur = world["cur"]
     report = accounts.move_account(world["user_id"], world["child"], actor="cli:test", dry_run=True)
-    assert report.counts == dict.fromkeys(accounts.MOVED_TABLES, 1)
+    assert report.counts == EXPECTED_COUNTS
     assert set(_where(cur, world).values()) == {world["parent"]}
     assert _live_sessions(cur, world["user_id"]) == 1
     assert _audit_rows(cur, world["user_id"]) == []
@@ -345,3 +357,58 @@ def test_a_role_change_never_raises_a_channel_identity(world) -> None:
 def test_no_role_change_leaves_the_channel_identity_alone(world) -> None:
     accounts.move_account(world["user_id"], world["child"], actor="cli:test")
     assert _channel_role(world) == "member"
+
+
+def _pairing(w: dict[str, Any]) -> tuple[str, str]:
+    w["cur"].execute("SELECT tenant_id, role FROM tenant_users WHERE user_id = %s", (w["user_id"],))
+    tenant, role = w["cur"].fetchone()
+    return str(tenant), str(role)
+
+
+def test_the_telegram_pairing_moves_with_the_capped_role(world) -> None:
+    """Telegram's inbound path reads only tenant_users; a pairing left behind
+    would keep driving the source tenant's agent."""
+    accounts.move_account(world["user_id"], world["child"], actor="cli:test", role="viewer")
+    assert _pairing(world) == (world["child"], "viewer")
+
+
+def test_the_telegram_pairing_keeps_its_role_without_a_demotion(world) -> None:
+    accounts.move_account(world["user_id"], world["child"], actor="cli:test", role="admin")
+    assert _pairing(world) == (world["child"], "member")
+
+
+# ─── the contact's company ───────────────────────────────────────────────
+
+
+def test_a_company_left_in_the_source_is_unlinked_and_reported(world) -> None:
+    cur = world["cur"]
+    cur.execute(
+        "INSERT INTO crm_companies (tenant_id, name) VALUES (%s, 'Example Co') RETURNING id",
+        (world["parent"],),
+    )
+    company_id = str(cur.fetchone()[0])
+    cur.execute(
+        "UPDATE crm_people SET company_id = %s WHERE id = %s", (company_id, world["person_id"])
+    )
+    try:
+        dry = accounts.move_account(
+            world["user_id"], world["child"], actor="cli:test", dry_run=True
+        )
+        assert dry.company_unlinked == company_id
+
+        report = accounts.move_account(world["user_id"], world["child"], actor="cli:test")
+        assert report.company_unlinked == company_id
+        cur.execute(
+            "SELECT tenant_id, company_id FROM crm_people WHERE id = %s", (world["person_id"],)
+        )
+        assert cur.fetchone() == (world["child"], None)
+        cur.execute("SELECT tenant_id FROM crm_companies WHERE id = %s", (company_id,))
+        assert cur.fetchone()[0] == world["parent"]
+    finally:
+        cur.execute("UPDATE crm_people SET company_id = NULL WHERE id = %s", (world["person_id"],))
+        cur.execute("DELETE FROM crm_companies WHERE id = %s", (company_id,))
+
+
+def test_a_contact_without_a_foreign_company_reports_nothing(world) -> None:
+    report = accounts.move_account(world["user_id"], world["child"], actor="cli:test")
+    assert report.company_unlinked is None
