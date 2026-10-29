@@ -150,8 +150,12 @@ With `ROBOTHOR_RLS_ENABLED` unset nothing is bound at all, as before.
 
 The vault follows the same scope: `robothor.vault` defaults `tenant_id` to the
 enclosing `tenant_scope` (the default tenant outside one), and its connection
-is bound like a pooled one. The session signing key is always resolved in the
-default tenant, whatever scope asks for it.
+is bound like a pooled one. An **explicit** `tenant_id` wins: the connection is
+then bound to that tenant, so the instance's own credentials (the SIEM webhook,
+provider keys, the Telegram token, all asked for with the default tenant by
+`robothor.secrets`) are still found inside a child-scoped request or a
+sandboxed run. The session signing key and the provider key pool are always
+read in the default tenant, whatever scope asks for them.
 
 **Sign-in is the exception.** A login has no token yet, and the account may
 live in any tenant — `(idp_issuer, idp_subject)` is unique platform-wide. The
@@ -176,6 +180,16 @@ HOME tenant's descendants (depth 3), so a child admin can reach neither its
 parent nor a sibling, and switching from an acting token is checked against
 home. `GET /api/tenants/accessible` lists the choices, home first. The refresh
 token is not touched: a refresh always returns a home token.
+
+Because switching trusts `crm_tenants.parent_tenant_id`, and that table has no
+RLS, only a **root operator** — a human owner/admin whose home and acting
+tenant are both the platform tenant — may create a tenant or change its
+`parentTenantId` or `active` flag (`crm/bridge/routers/tenants.py`). A new
+parent that would make a cycle, or put any tenant more than three levels below
+a root, is refused with 422 (`robothor.crm.dal.tenant_parent_problem`). Any
+owner/admin may still edit the display name and settings of a tenant it can
+reach. The caller's own-account routes (`/me`, `/password`, `/mfa/*`) always
+run in the home tenant, where the account lives.
 
 `GENUS_TENANT_SWITCH_MODE` is `off` by default (every switch is refused);
 `observe` logs `tenant.switch would-allow` / `would-deny` / `would-refuse` and
