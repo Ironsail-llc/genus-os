@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import getpass
 import json
 import sys
 from typing import TYPE_CHECKING
@@ -183,6 +182,7 @@ def _cmd_set_domains(args: argparse.Namespace) -> int:
 def _cmd_move_account(args: argparse.Namespace) -> int:
     """Move one account, and every row linked to it, to another tenant."""
     from robothor.auth import accounts
+    from robothor.cli import cli_actor
 
     found = accounts.accounts_for_email(args.email)
     if args.from_tenant:
@@ -204,7 +204,7 @@ def _cmd_move_account(args: argparse.Namespace) -> int:
         report = accounts.move_account(
             str(found[0]["id"]),
             args.to,
-            actor=f"cli:{getpass.getuser()}",
+            actor=cli_actor(),
             role=args.role,
             dry_run=args.dry_run,
             detach_person=getattr(args, "detach_person", False),

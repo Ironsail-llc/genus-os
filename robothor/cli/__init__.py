@@ -113,6 +113,25 @@ def _register_plugin_commands(parser: argparse.ArgumentParser) -> dict[str, dict
     return commands
 
 
+def cli_actor() -> str:
+    """``cli:<user>``, the actor a command records for the shell that ran it.
+
+    ``getpass.getuser()`` already consults ``LOGNAME``/``USER`` (and two more
+    variables) before the passwd database, and raises only when all of those
+    are missing, as in a container with no passwd entry for its uid. That must
+    not crash the command, so it falls back to the uid itself: still the
+    account that ran it, and still reconcilable against the box's own logs.
+    """
+    import getpass
+    import os
+
+    try:
+        user = getpass.getuser()
+    except Exception:  # noqa: BLE001 - no user name is not a reason to refuse
+        user = f"uid{os.getuid()}"
+    return f"cli:{user}"
+
+
 def _invoked_name() -> str:
     """Return the console-script name the user actually typed.
 

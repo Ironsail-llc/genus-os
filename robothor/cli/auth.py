@@ -10,12 +10,11 @@ never binds. Account/session/grant DAL lives in :mod:`robothor.auth.accounts`.
 
 from __future__ import annotations
 
-import getpass
 import json
 import sys
 from typing import TYPE_CHECKING
 
-from robothor.cli import _invoked_name
+from robothor.cli import _invoked_name, cli_actor
 
 if TYPE_CHECKING:
     from argparse import Namespace
@@ -182,7 +181,7 @@ def _cmd_grant_binding(args: Namespace) -> int:
             issuer=getattr(args, "issuer", None) or None,
             # A shell on the appliance is the root operator; `cli:` marks the
             # grant as one sign-in may honour against domain routing.
-            created_by=f"cli:{getpass.getuser()}",
+            created_by=cli_actor(),
         )
     except accounts.GrantTargetError as exc:
         print(f"error: {exc}", file=sys.stderr)
