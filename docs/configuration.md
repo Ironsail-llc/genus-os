@@ -624,6 +624,26 @@ fingerprint. **Adding a channel's token is still `genus channel add` on the
 box** (and `genus init --telegram-token` for Telegram) — there is no API that
 writes channel credentials, by design.
 
+### Many conversations at once
+
+A receiving channel — Slack, or a plugin channel such as a public chat widget —
+runs every inbound message through one shared pipeline, and that pipeline keeps
+three promises. Different conversations run concurrently and never wait on each
+other. Two messages in **one** conversation (one session key) run one after the
+other, so the second sees the first's exchange in its history. And all receiving
+channels together have at most `ROBOTHOR_CHANNEL_MAX_CONCURRENT_RUNS` runs in
+flight (default 8): a message over the cap waits for a slot rather than being
+refused. The pipeline reads the cap on every message rather than once at start,
+so it is declared `restart: no`: a new value applies as soon as the engine's
+settings are re-read.
+
+Each successful exchange is appended to the conversation's session history
+(trimmed to the platform's usual window), which is what gives a channel
+conversation memory; a refused or failed message appends nothing. A channel
+can opt out per message, or hand the run only the last few turns, through
+`handle_message`'s `record_turn` and `history_limit` arguments
+([Plugins](PLUGINS.md)).
+
 ### How replies look in Telegram
 
 Agents write Markdown; Telegram is read on a phone. Every Telegram send goes

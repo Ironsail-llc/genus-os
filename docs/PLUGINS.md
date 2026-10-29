@@ -298,6 +298,15 @@ than `safe`, which is the correct verdict for a channel: it reaches off the box
 and it runs without a tool call, and an operator should see both before
 accepting it.
 
+**Let the pipeline own ordering and memory.** `channels.inbound.handle_message`
+serialises messages that share a `session_key`, runs different keys
+concurrently up to `ROBOTHOR_CHANNEL_MAX_CONCURRENT_RUNS`, and appends each
+successful exchange to the session's history. So pick a `session_key` per
+conversation (per visitor, for a public chat) and call it from as many
+concurrent handlers as you like. Pass `record_turn=False` for a message that
+should not be remembered, and `history_limit=N` to hand the run only the last
+N turns — a cheap bound on prompt size for a chat that can run long.
+
 **Declare your chunk size if you split.** `register_platform_sender(...,
 chunk_size=N)` is how the platform tells a truncated send from a complete one.
 Without it, two answers are recorded `failed:<name>_unproven`, because neither
