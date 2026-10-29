@@ -45,6 +45,9 @@ DEPRECATED_ALIASES: dict[str, str] = {
     # silently left on the default.
     "ROBOTHOR_TENANT_SWITCH_MODE": "GENUS_TENANT_SWITCH_MODE",
     "ROBOTHOR_TENANT_SWITCH_ALLOW_INERT_RLS": "GENUS_TENANT_SWITCH_ALLOW_INERT_RLS",
+    # Per-tenant engine addressing, read by the bridge and the dashboard.
+    "ROBOTHOR_TENANT_ENGINE_URLS": "GENUS_TENANT_ENGINE_URLS",
+    "ROBOTHOR_TENANT_ENGINE_URL_TEMPLATE": "GENUS_TENANT_ENGINE_URL_TEMPLATE",
 }
 
 #: Names already warned about in this process. One warning per name per

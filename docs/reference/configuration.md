@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-483 settings in 17 groups.
+485 settings in 17 groups.
 
 ## autonomy
 
@@ -379,6 +379,8 @@ Who may reach the bridge and the dashboard, and how that is proven.
 | `GENUS_OIDC_ISSUERS` | str | _(empty)_ | `robothor-bridge`, `robothor-app` | no | legacy | Comma-separated OIDC issuer URLs whose tokens the bridge accepts. |
 | `GENUS_OWNER_MFA_REQUIRED` | bool | `true` | `robothor-bridge`, `robothor-app` | no | 1.69.0 | Tell an owner account with no second factor to enrol one while local login is on. Setting it false gives up the only compensating control for a public password endpoint: one argon2-verified password then becomes the entire authentication for the instance and its stored credentials, and the operator is never prompted. |
 | `GENUS_SETUP_TOKEN_TTL_SECONDS` | int | `1800` | `robothor-bridge`, `robothor-app` | no | 1.69.0 | How long the first-run setup link printed by `genus init` stays usable. The link reaches a page that creates the owner account, so a long window turns a terminal scrollback into a standing credential; raise it only for an install someone has to walk away from. |
+| `GENUS_TENANT_ENGINE_URLS` | str | _(empty)_ | `robothor-bridge`, `robothor-app` | no | 1.118.0 | Optional JSON object mapping a tenant id to the base URL of that tenant's engine, e.g. {"acme-child-a": "http://127.0.0.1:18801"}. An explicit entry wins over GENUS_TENANT_ENGINE_URL_TEMPLATE; meant for local development and one-off overrides. Empty means none. Also read from `ROBOTHOR_TENANT_ENGINE_URLS`. |
+| `GENUS_TENANT_ENGINE_URL_TEMPLATE` | str | _(empty)_ | `robothor-bridge`, `robothor-app` | no | 1.118.0 | Base URL of a child tenant's engine, with the literal {tenant} placeholder the bridge and dashboard substitute with the tenant id, e.g. http://engine-{tenant}:18800. Empty means every tenant is served by the instance's own engine. Also read from `ROBOTHOR_TENANT_ENGINE_URL_TEMPLATE`. |
 | `GENUS_TENANT_SWITCH_ALLOW_INERT_RLS` | bool | `false` | `robothor-bridge` | no | 1.118.0 | Let tenant switching issue tokens while row-level security is inert (ROBOTHOR_RLS_ENABLED unset, or a superuser connection). A deliberate escape hatch: without RLS the acting tenant is enforced only by each query's own WHERE clause. Also read from `ROBOTHOR_TENANT_SWITCH_ALLOW_INERT_RLS`. |
 | `GENUS_TENANT_SWITCH_MODE` | str | `off` | `robothor-bridge` | no | 1.118.0 | Whether a root-tenant owner or admin may switch into a descendant tenant (POST /api/auth/switch-tenant). 'off' refuses every switch; 'observe' runs the full check, logs would-allow / would-deny and still refuses; 'enforce' issues the acting token — and only while row-level security is genuinely enforcing. Any other value reads as 'off'. Also read from `ROBOTHOR_TENANT_SWITCH_MODE`. |
 | `GENUS_TRUSTED_PROXIES` | str | _(empty)_ | `robothor-bridge`, `robothor-app` | no | 1.69.0 | Comma-separated peer addresses or CIDR ranges allowed to assert the end user's address in X-Client-IP (the dashboard pod, a reverse proxy). Empty trusts nobody, loopback included; the real peer address is used. |
@@ -651,6 +653,8 @@ process naming its replacement. They stop being read after two minor releases.
 | `ROBOTHOR_ENVIRONMENT` | `GENUS_ENVIRONMENT` |
 | `ROBOTHOR_OWNER_EMAIL` | `~/.robothor/owner.yaml` |
 | `ROBOTHOR_OWNER_NAME` | `~/.robothor/owner.yaml` |
+| `ROBOTHOR_TENANT_ENGINE_URLS` | `GENUS_TENANT_ENGINE_URLS` |
+| `ROBOTHOR_TENANT_ENGINE_URL_TEMPLATE` | `GENUS_TENANT_ENGINE_URL_TEMPLATE` |
 | `ROBOTHOR_TENANT_SWITCH_ALLOW_INERT_RLS` | `GENUS_TENANT_SWITCH_ALLOW_INERT_RLS` |
 | `ROBOTHOR_TENANT_SWITCH_MODE` | `GENUS_TENANT_SWITCH_MODE` |
 | `TELEGRAM_BOT_TOKEN` | `ROBOTHOR_TELEGRAM_BOT_TOKEN` |

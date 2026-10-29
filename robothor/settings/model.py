@@ -1693,6 +1693,26 @@ class AuthSettings(SettingsGroup):
         restart_units=("robothor-bridge",),
         since="1.118.0",
     )
+    tenant_engine_urls: str = declare(
+        "",
+        "GENUS_TENANT_ENGINE_URLS",
+        "Optional JSON object mapping a tenant id to the base URL of that "
+        'tenant\'s engine, e.g. {"acme-child-a": "http://127.0.0.1:18801"}. '
+        "An explicit entry wins over GENUS_TENANT_ENGINE_URL_TEMPLATE; meant "
+        "for local development and one-off overrides. Empty means none.",
+        aliases=("ROBOTHOR_TENANT_ENGINE_URLS",),
+        since="1.118.0",
+    )
+    tenant_engine_url_template: str = declare(
+        "",
+        "GENUS_TENANT_ENGINE_URL_TEMPLATE",
+        "Base URL of a child tenant's engine, with the literal {tenant} "
+        "placeholder the bridge and dashboard substitute with the tenant id, "
+        "e.g. http://engine-{tenant}:18800. Empty means every tenant is "
+        "served by the instance's own engine.",
+        aliases=("ROBOTHOR_TENANT_ENGINE_URL_TEMPLATE",),
+        since="1.118.0",
+    )
 
 
 # ---------------------------------------------------------------------------
