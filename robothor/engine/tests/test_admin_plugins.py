@@ -296,6 +296,70 @@ class TestListing:
         reset_settings()
 
 
+class TestAssets:
+    """Each row carries what the plugin wrote into the workspace, from the ledger.
+
+    The Helm card answered "which tools" and never "which agents and
+    workflows", although the ledger has recorded both since workspace assets
+    shipped.
+    """
+
+    @pytest.fixture
+    def workspace(self, tmp_path, monkeypatch):
+        import yaml
+
+        root = tmp_path / "workspace"
+        (root / ".robothor").mkdir(parents=True)
+        (root / "docs" / "agents").mkdir(parents=True)
+        (root / "docs" / "workflows").mkdir(parents=True)
+        (root / ".robothor" / "plugin-assets.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "plugins": {
+                        "acme-tools": {
+                            "version": "1.2.3",
+                            "agents": ["acme-watch"],
+                            "files": {
+                                "docs/workflows/acme-pass.yaml": {"sha256": "0" * 64},
+                                "docs/webhooks.yaml": {"sha256": "0" * 64},
+                            },
+                            "patches": [{"agent": "main", "keys": ["tools_allowed"]}],
+                        }
+                    }
+                }
+            )
+        )
+        (root / "docs" / "agents" / "acme-watch.yaml").write_text(
+            "id: acme-watch\nname: Acme Watch\nschedule:\n  cron: '0 * * * *'\n"
+        )
+        (root / "docs" / "workflows" / "acme-pass.yaml").write_text(
+            "id: acme-pass\nname: Acme pass\ntriggers:\n  - type: cron\n    cron: '0 7 * * *'\n"
+            "steps:\n  - id: s1\n    type: noop\n"
+        )
+        monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(root))
+        return root
+
+    def test_a_row_carries_the_plugins_workspace_assets(self, client, one_plugin, workspace):
+        row = client.get("/api/admin/plugins").json()["plugins"][0]
+        assert row["assets"] == {
+            "agents": [{"id": "acme-watch", "name": "Acme Watch", "schedule": "0 * * * *"}],
+            "workflows": [{"id": "acme-pass", "name": "Acme pass", "triggers": ["cron 0 7 * * *"]}],
+            "patches": ["main"],
+            "files": ["docs/webhooks.yaml"],
+        }
+
+    def test_a_plugin_with_nothing_in_the_ledger_has_empty_assets(
+        self, client, one_plugin, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(tmp_path))
+        row = client.get("/api/admin/plugins").json()["plugins"][0]
+        assert row["assets"] == {"agents": [], "workflows": [], "patches": [], "files": []}
+
+    def test_assets_carry_no_absolute_path(self, client, one_plugin, workspace):
+        raw = json.dumps(client.get("/api/admin/plugins").json())
+        assert str(workspace) not in raw
+
+
 class TestEnableDisable:
     def test_disable_flips_the_row_and_says_it_did_not_reload(self, client, one_plugin):
         lockfile.sync()
