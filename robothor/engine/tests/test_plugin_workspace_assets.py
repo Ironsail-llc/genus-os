@@ -2169,3 +2169,47 @@ def test_removal_never_empties_a_tool_allowlist(ws, capsys) -> None:
     report = assets.retire(_ALPHA)
     assert _main(ws)["tools_allowed"] == ["alpha_probe"]
     assert any("tools_allowed" in w and "every tool" in w for w in report.warnings)
+
+
+def test_an_upgrade_that_drops_the_last_allowlist_item_keeps_it_and_proceeds(ws, capsys) -> None:
+    """The operator already restricted the agent to the one tool v1 appended;
+    v2 stops appending it. Detaching it would empty the allowlist (every
+    tool), so the item stays, the upgrade goes ahead and says so."""
+    (ws / _MAIN_YAML).write_text(_MAIN + "tools_allowed: [alpha_probe]\n")
+    v1 = "install:\n  append:\n    tools_allowed: [alpha_probe]\n    hooks:\n" + _HOOK_A
+    assert _install(ws, **_patcher(_ALPHA, v1)) == 0, capsys.readouterr().err
+    capsys.readouterr()
+    v2 = "install:\n  append:\n    hooks:\n" + _HOOK_A
+    assert _install(ws, **_patcher(_ALPHA, v2, version="1.1.0")) == 0, capsys.readouterr().err
+    out = capsys.readouterr().out
+    assert _main(ws)["tools_allowed"] == ["alpha_probe"]
+    assert "tools_allowed" in out and "every tool" in out
+    assert "was left as it is" not in out
+    # the item is the operator's now: a later removal does not take it back
+    assert "tools_allowed" not in _ledger(ws)[_ALPHA]["patches"][0].get("appended", {})
+
+
+def test_an_upgrade_that_drops_an_allowlist_item_others_remain_beside_detaches_it(
+    ws, capsys
+) -> None:
+    (ws / _MAIN_YAML).write_text(_MAIN + "tools_allowed: [read_file]\n")
+    v1 = "install:\n  append:\n    tools_allowed: [alpha_probe]\n    hooks:\n" + _HOOK_A
+    assert _install(ws, **_patcher(_ALPHA, v1)) == 0, capsys.readouterr().err
+    v2 = "install:\n  append:\n    hooks:\n" + _HOOK_A
+    assert _install(ws, **_patcher(_ALPHA, v2, version="1.1.0")) == 0, capsys.readouterr().err
+    assert _main(ws)["tools_allowed"] == ["read_file"]
+
+
+def test_an_upgrade_that_drops_the_whole_patch_keeps_the_last_allowlist_item(ws, capsys) -> None:
+    """The stale-patch path: v2 ships no patch for the agent at all."""
+    (ws / _MAIN_YAML).write_text(_MAIN + "tools_allowed: [alpha_probe]\n")
+    v1 = "install:\n  append:\n    tools_allowed: [alpha_probe]\n"
+    assert _install(ws, **_patcher(_ALPHA, v1)) == 0, capsys.readouterr().err
+    capsys.readouterr()
+    v2 = _patcher(_ALPHA, v1, version="1.1.0")
+    v2["manifest"] = v2["manifest"].split("patches:")[0]
+    assert _install(ws, **v2) == 0, capsys.readouterr().err
+    out = capsys.readouterr().out
+    assert _main(ws)["tools_allowed"] == ["alpha_probe"]
+    assert "tools_allowed" in out and "every tool" in out
+    assert "was left as it is" not in out
