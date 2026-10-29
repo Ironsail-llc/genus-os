@@ -1272,6 +1272,16 @@ class ChannelSettings(SettingsGroup):
         "Provisional name until adding a channel persists it to config.yaml.",
         since="1.70.0",
     )
+    inbound_max_concurrent_runs: int = declare(
+        8,
+        "ROBOTHOR_CHANNEL_MAX_CONCURRENT_RUNS",
+        "How many runs every receiving channel together may have in flight at "
+        "once. A message over the cap waits its turn rather than being refused; "
+        "messages within one conversation always run one after another. A value "
+        "below 1 is treated as 1.",
+        since="unreleased",
+        restart_required=False,
+    )
     telegram_bot_token: str = declare(
         "",
         "ROBOTHOR_TELEGRAM_BOT_TOKEN",
