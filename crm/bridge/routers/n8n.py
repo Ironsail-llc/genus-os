@@ -9,6 +9,12 @@ says ``not_configured``; one that has never polled, or has not succeeded for
 three poll intervals, says ``unknown`` rather than a stale green; and a
 database error degrades to ``unknown`` with the error named — the route never
 500s.
+
+Each workflow in the listing carries ``workflow_id``, ``name``, ``active``,
+``tags``, ``failures_24h``, ``failures_7d``, ``last_failure_at``,
+``last_error``, ``last_failure_url`` (the newest failed execution in n8n) and
+``url`` (the workflow in n8n). Both links are absolute, or ``""`` when no base
+URL is configured: never a path relative to the dashboard.
 """
 
 from __future__ import annotations
@@ -118,7 +124,9 @@ def _workflow_rows(tenant_id: str) -> list[dict[str, Any]]:
         "AS failures_7d, "
         "MAX(e.started_at) AS last_failure_at, "
         "(ARRAY_AGG(e.error_message ORDER BY e.started_at DESC) "
-        "FILTER (WHERE e.execution_id IS NOT NULL))[1] AS last_error "
+        "FILTER (WHERE e.execution_id IS NOT NULL))[1] AS last_error, "
+        "(ARRAY_AGG(e.execution_id ORDER BY e.started_at DESC) "
+        "FILTER (WHERE e.execution_id IS NOT NULL))[1] AS last_failed_execution_id "
         "FROM n8n_workflows w "
         "LEFT JOIN n8n_executions e ON e.tenant_id = w.tenant_id "
         "AND e.workflow_id = w.workflow_id AND e.status IN ('error', 'crashed') "
@@ -154,6 +162,14 @@ def _workflow_out(row: dict[str, Any], base_url: str) -> dict[str, Any]:
         "failures_7d": int(row.get("failures_7d") or 0),
         "last_failure_at": _iso(row.get("last_failure_at")),
         "last_error": row.get("last_error"),
+        # The execution that failed last, so the operator lands on the failure
+        # rather than the workflow. Not part of the poller's ``workflow_row()``
+        # contract yet: it is computed here from ``n8n_executions``.
+        "last_failure_url": (
+            _link(base_url, f"/workflow/{row['workflow_id']}/executions/{failed_id}")
+            if (failed_id := row.get("last_failed_execution_id"))
+            else ""
+        ),
         "url": _link(base_url, f"/workflow/{row['workflow_id']}"),
     }
 
