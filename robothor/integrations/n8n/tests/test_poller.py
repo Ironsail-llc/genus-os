@@ -506,7 +506,9 @@ async def test_a_failed_mark_alerted_does_not_fail_the_round(enabled) -> None:
 
 
 async def test_an_insecure_base_url_fails_the_round_without_any_request(configure) -> None:
-    settings = configure(ROBOTHOR_N8N_ENABLED="true", ROBOTHOR_N8N_BASE_URL="http://n8n.example.com")
+    settings = configure(
+        ROBOTHOR_N8N_ENABLED="true", ROBOTHOR_N8N_BASE_URL="http://n8n.example.com"
+    )
     store = MemoryN8nStore(now=lambda: NOW)
     rec = Recorder()
     await poller.run(

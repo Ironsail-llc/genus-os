@@ -23,7 +23,14 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["MAX_EXECUTIONS", "N8nClient", "N8nError", "instance_root"]
+__all__ = [
+    "MAX_EXECUTIONS",
+    "MAX_EXECUTION_BYTES",
+    "N8nClient",
+    "N8nError",
+    "checked_root",
+    "instance_root",
+]
 
 #: The most failed executions one listing returns, newest first.
 MAX_EXECUTIONS = 500
@@ -34,6 +41,9 @@ MAX_PAGES = 100
 #: An error message longer than this is cut: it is a hint, not a log.
 MAX_ERROR_CHARS = 500
 TIMEOUT_SECONDS = 15.0
+#: The most of one execution's JSON read to find its error message. An
+#: execution with large data is abandoned past this: no message, no memory spike.
+MAX_EXECUTION_BYTES = 2 * 1024 * 1024
 
 ErrorKind = Literal["auth", "rate_limit", "network", "unknown", "not_configured"]
 
@@ -41,10 +51,11 @@ ErrorKind = Literal["auth", "rate_limit", "network", "unknown", "not_configured"
 class N8nError(Exception):
     """An n8n call failed. ``kind`` is the whole explanation; nothing else is kept."""
 
-    def __init__(self, kind: ErrorKind, status: int | None = None) -> None:
+    def __init__(self, kind: ErrorKind, status: int | None = None, detail: str = "") -> None:
         self.kind: ErrorKind = kind
         self.status = status
-        super().__init__(f"{kind} (HTTP {status})" if status is not None else kind)
+        message = f"{kind} (HTTP {status})" if status is not None else kind
+        super().__init__(f"{message}: {detail}" if detail else message)
 
     def __repr__(self) -> str:
         return f"N8nError(kind={self.kind!r}, status={self.status!r})"
@@ -63,6 +74,36 @@ def _classify(status: int) -> ErrorKind:
 def instance_root(base_url: str) -> str:
     """The instance root: no trailing slash and no ``/api/v1`` suffix."""
     return (base_url or "").strip().rstrip("/").removesuffix("/api/v1")
+
+
+def checked_root(base_url: str, *, allow_insecure_http: bool = False) -> str:
+    """The instance root, or ``N8nError("not_configured")`` when it is unsafe to send a key to.
+
+    An absolute ``https://`` URL with a host. ``http://`` only for a loopback host,
+    or anywhere when ``allow_insecure_http`` (``ROBOTHOR_N8N_ALLOW_INSECURE_HTTP``).
+    """
+    from urllib.parse import urlsplit
+
+    from robothor.auth.runtime import is_loopback_host
+
+    root = instance_root(base_url)
+    try:
+        parts = urlsplit(root)
+        host = parts.hostname or ""
+    except ValueError:
+        parts, host = None, ""
+    scheme = parts.scheme.lower() if parts is not None else ""
+    if scheme == "https" and host:
+        return root
+    if scheme == "http" and host and (allow_insecure_http or is_loopback_host(host)):
+        return root
+    raise N8nError(
+        "not_configured",
+        detail=(
+            "ROBOTHOR_N8N_BASE_URL must be an absolute https:// URL with a host "
+            "(http:// only for localhost, or with ROBOTHOR_N8N_ALLOW_INSECURE_HTTP)"
+        ),
+    )
 
 
 def _when(value: Any) -> datetime | None:
@@ -107,8 +148,9 @@ class N8nClient:
         *,
         transport: httpx.AsyncBaseTransport | None = None,
         timeout: float = TIMEOUT_SECONDS,
+        allow_insecure_http: bool = False,
     ) -> None:
-        self.base_url = instance_root(base_url)
+        self.base_url = checked_root(base_url, allow_insecure_http=allow_insecure_http)
         self.__key = api_key
         self._http = httpx.AsyncClient(timeout=timeout, transport=transport)
 
@@ -185,8 +227,17 @@ class N8nClient:
         return [_execution(item) for item in raw]
 
     async def get_execution_error(self, execution_id: str) -> str | None:
-        """The error message n8n recorded for one execution, or None."""
-        body = await self._get(f"/api/v1/executions/{execution_id}", {"includeData": "true"})
+        """The error message n8n recorded for one execution, or None.
+
+        The body is streamed and abandoned past :data:`MAX_EXECUTION_BYTES`
+        (declared or read): an execution's data can be large, and only one
+        short string out of it is wanted.
+        """
+        if not str(execution_id).isdigit():
+            return None
+        body = await self._get_bounded(
+            f"/api/v1/executions/{execution_id}", {"includeData": "true"}
+        )
         if not isinstance(body, dict):
             return None
         data = body.get("data") or {}
@@ -196,3 +247,32 @@ class N8nClient:
         if not message:
             return None
         return str(message)[:MAX_ERROR_CHARS]
+
+    async def _get_bounded(self, path: str, params: dict[str, Any]) -> Any:
+        """Like :meth:`_get`, but None for a body over the byte budget."""
+        import json
+
+        try:
+            async with self._http.stream(
+                "GET",
+                f"{self.base_url}{path}",
+                params=params,
+                headers={"X-N8N-API-KEY": self.__key, "Accept": "application/json"},
+            ) as response:
+                if response.status_code != 200:
+                    raise N8nError(_classify(response.status_code), response.status_code)
+                declared = response.headers.get("Content-Length")
+                if declared and declared.isdigit() and int(declared) > MAX_EXECUTION_BYTES:
+                    return None
+                buffer = bytearray()
+                async for chunk in response.aiter_bytes():
+                    buffer.extend(chunk)
+                    if len(buffer) > MAX_EXECUTION_BYTES:
+                        return None
+        except httpx.HTTPError as exc:
+            logger.info("n8n: %s failed (%s)", path, type(exc).__name__)
+            raise N8nError("network") from None
+        try:
+            return json.loads(bytes(buffer))
+        except ValueError:
+            return None

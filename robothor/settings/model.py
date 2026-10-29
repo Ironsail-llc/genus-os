@@ -3644,6 +3644,14 @@ class IntegrationSettings(SettingsGroup):
         restart_required=False,
         since="unreleased",
     )
+    n8n_allow_insecure_http: bool = declare(
+        False,
+        "ROBOTHOR_N8N_ALLOW_INSECURE_HTTP",
+        "Let ROBOTHOR_N8N_BASE_URL be plain http:// on a host that is not loopback, for a "
+        "self-hosted n8n reachable only on a private network. Off: the base URL must be "
+        "https:// (http:// only for localhost), because the API key travels in every request.",
+        since="unreleased",
+    )
 
 
 class GenusSettings(BaseSettings):
