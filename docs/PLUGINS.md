@@ -505,7 +505,10 @@ remove:                 # optional: without a detach, remove takes back what ins
   `detach` needs only `stream` and `event_type`.
 * **Remove.** `genus plugin remove` applies the `remove:` section; when it has
   no `detach:`, the items the plugin last appended (recorded in the ledger) are
-  detached for it. An upgrade that stops appending an item detaches it too.
+  detached for it. An upgrade that stops appending an item detaches it too,
+  unless that would leave a tool allowlist empty: then the item is kept, the
+  upgrade goes ahead with a warning naming the key, and the item is the
+  operator's from then on (a later removal does not take it back).
   Detach removes every identity the plugin declared — including one that was
   already in the list before the plugin was installed (the original manifest is
   kept once as `.pre-<distribution>`).
