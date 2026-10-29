@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import contextlib
+import re
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
-from robothor.integrations.n8n.store import MemoryN8nStore
+from robothor.integrations.n8n.store import MemoryN8nStore, PgN8nStore
 
 NOW = datetime(2026, 10, 29, 12, 0, tzinfo=UTC)
 T = "test-tenant"
@@ -74,6 +77,56 @@ async def test_workflow_failure_counts_and_last_error() -> None:
     assert rows["wf2"]["failures_24h"] == 0
     assert rows["wf2"]["last_failure_at"] is None
     assert rows["wf2"]["active"] is False
+
+
+async def test_last_error_and_link_name_one_execution_when_times_tie() -> None:
+    store = MemoryN8nStore(now=lambda: NOW)
+    await store.upsert_workflows(T, [_wf("wf1", "Billing")])
+    tied = [{**_ex(eid, "wf1", 0), "started_at": None} for eid in ("1", "2")]
+    await store.record_executions(T, tied)
+    await store.set_error_messages(T, {"1": "first", "2": "second"})
+
+    [row] = await store.list_workflows(T, now=NOW)
+    assert row["last_failed_execution_id"] == "2"
+    assert row["last_error"] == "second"
+
+
+class _RecordingCursor:
+    def __init__(self, sql: list[str]) -> None:
+        self._sql = sql
+
+    def __enter__(self) -> _RecordingCursor:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        return None
+
+    def execute(self, sql: str, params: Any = None) -> None:
+        self._sql.append(sql)
+
+    def fetchall(self) -> list[Any]:
+        return []
+
+
+async def test_pg_last_error_and_link_come_from_one_tie_broken_row() -> None:
+    sql: list[str] = []
+
+    class _Conn:
+        def cursor(self) -> _RecordingCursor:
+            return _RecordingCursor(sql)
+
+    @contextlib.contextmanager
+    def _connect() -> Any:
+        yield _Conn()
+
+    await PgN8nStore(connect=_connect).list_workflows(T, now=NOW)
+    [query] = sql
+    assert "LATERAL" in query
+    assert len(re.findall(r"LIMIT 1\b", query)) == 1
+    assert re.search(
+        r"ORDER BY COALESCE\(\w*\.?started_at, \w*\.?seen_at\) DESC, \w*\.?execution_id DESC LIMIT 1",
+        query,
+    )
 
 
 async def test_a_workflow_gone_from_n8n_leaves_the_snapshot() -> None:
