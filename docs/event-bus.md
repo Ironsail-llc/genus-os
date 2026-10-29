@@ -63,15 +63,18 @@ events and drop them, so the engines on a group are not equals:
   takes effect without a restart. A tenant with a parent never claims or reads
   `engine`, whatever its setting says. A tenant with no row counts as a root,
   so a single-engine install keeps working, and the engine logs that once at
-  WARNING. If the lookup fails, the engine does not claim or read `engine`
-  and asks again on the next check.
+  WARNING. If the lookup fails, an engine already verified keeps its last
+  verdict for up to two consecutive failures, so a database blip does not
+  stop it. On the third, or at once if it was never verified, it does not
+  claim or read `engine`, and asks again on the next check.
 - **Among roots, the recorded owner holds it.** A root claims `engine` in
   Redis (`robothor:events:group-owner:engine`) if nobody has, even while a
   child is reading it, unless its own `ROBOTHOR_TENANT_ID` and
   `ROBOTHOR_DEFAULT_TENANT` disagree. Only the owner reads `engine`. The
-  claim has a 180-second TTL that the owner refreshes on every check, so a
-  dead or re-parented owner's claim lapses and another root takes the group
-  within minutes. To hand it over at once, delete the key.
+  claim has a 180-second TTL. The owner refreshes it from its own task every
+  60 seconds, separately from the read loop, so a slow read cannot let it
+  lapse. A dead or re-parented owner's claim lapses, and another root takes the
+  group within minutes. To hand it over at once, delete the key.
 - **An engine always reads its own `engine-<tenant>` group.** On any other
   group it reads only while no other tenant is reading.
 - **The engine that is not entitled to the group stops.** It logs an ERROR
