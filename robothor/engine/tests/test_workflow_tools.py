@@ -259,16 +259,27 @@ async def test_run_caps_wait_at_120_seconds(
 
 @pytest.mark.asyncio
 async def test_run_passes_identity_trigger_and_payload(engine: FakeEngine) -> None:
+    # An unattended run's ctx carries the identity the runner resolved for it
+    # (runtime/setup.principal): `service:<agent_id>` and the agent's service role.
     await _handlers()["run_workflow"](
-        {"workflow_id": "daily-report", "payload": {"x": 1}, "wait_seconds": 1}, _ctx()
+        {"workflow_id": "daily-report", "payload": {"x": 1}, "wait_seconds": 1},
+        _ctx(user_id="service:main", user_role="service"),
     )
     call = engine.calls[0]
     assert call["trigger_type"] == "agent"
     assert call["trigger_detail"] == "agent:main:agent-run-1"
     assert call["initial_context"] == {"event": {"payload": {"x": 1}}}
-    # No user on the context: the agent's own service identity.
-    assert call["user_id"] == "service:agent:main"
+    assert call["user_id"] == "service:main"
     assert call["user_role"] == "service"
+
+
+@pytest.mark.asyncio
+async def test_run_does_not_invent_an_identity(engine: FakeEngine) -> None:
+    # The handler passes the ctx identity through; it never mints its own.
+    await _handlers()["run_workflow"]({"workflow_id": "daily-report", "wait_seconds": 1}, _ctx())
+    call = engine.calls[0]
+    assert call["user_id"] == ""
+    assert call["user_role"] == ""
 
 
 @pytest.mark.asyncio
