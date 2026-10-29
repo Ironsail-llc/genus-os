@@ -98,6 +98,16 @@ genus tenant set-domains acme-child-a # no domains: clear the claim
 
 The same list is `settings.sso_domains` on `PATCH /api/tenants/{id}`.
 
+- **Domain claims are made by the root operator.** A claim decides where every
+  new SSO user from that domain lands, across the whole deployment, so adding,
+  changing or dropping one needs an owner or admin whose home and acting
+  tenant are both the platform tenant. That is the same rule as re-parenting.
+  A child's admin, or a root admin who has switched into a child, gets a 403.
+  They may still rename a tenant they can reach and edit its other settings,
+  as long as the save leaves `sso_domains` as it was. The `settings` object is
+  replaced whole, so a save that leaves the key out drops the claim and counts
+  as a change.
+
 - **One tenant per domain.** Claiming a domain another tenant holds is refused
   (409 from the API, an error from the CLI). A malformed entry (a scheme, an
   `@`, a wildcard, a single label) is refused with a 422.

@@ -16,7 +16,12 @@ from robothor.crm.dal import (
     list_tenants,
     update_tenant,
 )
-from robothor.crm.tenant_domains import InvalidSsoDomainError, SsoDomainConflictError
+from robothor.crm.tenant_domains import (
+    InvalidSsoDomainError,
+    SsoDomainConflictError,
+    normalize_sso_domains,
+    sso_domains_of,
+)
 from robothor.sanitize import sanitize_log
 
 logger = logging.getLogger(__name__)
@@ -73,6 +78,24 @@ def _may_edit_tenant(request: Request, tenant_id: str) -> bool:
     if auth.is_service:
         return bool(tenant_id == auth.tenant_id)
     return tenant_id in resolve_accessible_tenants(auth.home_tenant_id, auth.role)
+
+
+def _changes_sso_domains(tenant_id: str, settings: dict | None) -> bool:
+    """Whether saving ``settings`` would add, change or drop the SSO domain claim.
+
+    ``settings`` replaces the stored object, so a body without ``sso_domains``
+    drops an existing claim. Compared as normalized sets, so a case or order
+    change alone is not a change. A malformed list counts as a change: only a
+    root operator gets as far as the 422 for it.
+    """
+    if settings is None:
+        return False
+    stored = set(sso_domains_of(crm_dal.get_tenant(tenant_id) or {}))
+    try:
+        incoming = set(normalize_sso_domains(settings.get("sso_domains", [])))
+    except InvalidSsoDomainError:
+        return True
+    return incoming != stored
 
 
 def _domain_error(exc: ValueError) -> JSONResponse:
@@ -179,7 +202,14 @@ def api_update_tenant(tenant_id: str, body: UpdateTenantRequest, request: Reques
         if body.active is not None and body.active != stored.get("active", True)
         else None
     )
-    reshapes = new_parent is not None or new_active is not None
+    # A claim routes every new SSO user from a domain, deployment-wide, so
+    # changing one is a root decision like re-parenting (also compared with
+    # what is stored: an unchanged claim is not a change).
+    reshapes = (
+        new_parent is not None
+        or new_active is not None
+        or _changes_sso_domains(tenant_id, body.settings)
+    )
     if reshapes:
         if not _is_root_tenant_operator(request):
             return _ROOT_REQUIRED

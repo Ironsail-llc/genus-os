@@ -34,6 +34,13 @@ def _auth_env(monkeypatch):
     tokens.reset_signing_key_cache()
 
 
+@pytest.fixture(autouse=True)
+def _unclaimed_tenants():
+    """PATCH reads the stored claim to decide whether the save changes it."""
+    with patch("robothor.crm.dal.get_tenant", side_effect=lambda tid: {"id": tid, "settings": {}}):
+        yield
+
+
 @pytest.mark.asyncio
 async def test_sso_provisions_into_the_tenant_that_claims_the_domain(test_client):
     account = {
