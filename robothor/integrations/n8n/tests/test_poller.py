@@ -360,7 +360,7 @@ async def test_a_missing_key_fails_the_round_without_any_request(configure) -> N
         rounds=1,
         is_leader=lambda: True,
         now=lambda: NOW,
-        secret=lambda _name: None,
+        secret=lambda _name, _tenant: None,
     )
     state = await store.get_sync_state(T)
     assert state is not None and state.last_error is not None
@@ -372,11 +372,11 @@ async def test_the_default_client_factory_reads_the_key_through_the_vault_access
 ) -> None:
     looked_up: list[str] = []
 
-    def fake_secret(name: str) -> str | None:
+    def fake_secret(name: str, tenant_id: str) -> str | None:
         looked_up.append(name)
         return KEY
 
-    client = poller.client_from_settings(enabled, secret=fake_secret)
+    client = poller.client_from_settings(enabled, tenant_id=T, secret=fake_secret)
     assert looked_up == ["ROBOTHOR_N8N_API_KEY"]
     assert KEY not in repr(client)
     await client.aclose()
@@ -441,3 +441,97 @@ async def test_the_daemon_starts_the_monitor_only_when_enabled(configure, monkey
     for task in tasks:
         await task
     assert started == [T]
+
+
+async def test_the_key_is_resolved_for_the_pollers_tenant_off_the_event_loop(enabled) -> None:
+    import threading
+
+    loop_thread = threading.get_ident()
+    seen: list[tuple[str, str, bool]] = []
+
+    def fake_secret(name: str, tenant_id: str) -> str | None:
+        seen.append((name, tenant_id, threading.get_ident() != loop_thread))
+        return None  # not configured: the round fails before any HTTP call
+
+    store = MemoryN8nStore(now=lambda: NOW)
+    rec = Recorder()
+    await poller.run(
+        "tenant-b",
+        settings=enabled,
+        store=store,
+        notify=rec.notify,
+        alert=rec.alert,
+        sleep=rec.sleep,
+        rounds=1,
+        is_leader=lambda: True,
+        now=lambda: NOW,
+        secret=fake_secret,
+    )
+    assert seen == [("ROBOTHOR_N8N_API_KEY", "tenant-b", True)]
+    state = await store.get_sync_state("tenant-b")
+    assert state is not None and "not_configured" in (state.last_error or "")
+
+
+async def test_a_fault_outside_the_round_never_ends_the_loop(enabled) -> None:
+    n8n, rec = FakeN8n(), Recorder()
+    calls = {"n": 0}
+
+    def flaky_leader() -> bool:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("leader lease unreadable")
+        return True
+
+    store = MemoryN8nStore(now=lambda: NOW)
+    n8n.add_failure("101")
+    await _run(n8n, rec, store, enabled, rounds=2, is_leader=flaky_leader)
+    assert calls["n"] == 2
+    assert [n["metadata"]["execution_id"] for n in rec.notes] == ["101"]
+    assert rec.sleeps == [120]
+
+
+async def test_a_failed_mark_alerted_does_not_fail_the_round(enabled) -> None:
+    n8n, rec = FakeN8n(), Recorder()
+    n8n.add_failure("101")
+
+    class Sticky(MemoryN8nStore):
+        async def mark_alerted(self, tenant_id, execution_ids):
+            raise RuntimeError("db hiccup")
+
+    store = Sticky(now=lambda: NOW)
+    await _run(n8n, rec, store, enabled, rounds=1)
+    assert len(rec.notes) == 1
+    state = await store.get_sync_state(T)
+    assert state is not None and state.last_error is None and state.last_ok_at == NOW
+
+
+async def test_an_insecure_base_url_fails_the_round_without_any_request(configure) -> None:
+    settings = configure(ROBOTHOR_N8N_ENABLED="true", ROBOTHOR_N8N_BASE_URL="http://n8n.example.com")
+    store = MemoryN8nStore(now=lambda: NOW)
+    rec = Recorder()
+    await poller.run(
+        T,
+        settings=settings,
+        store=store,
+        notify=rec.notify,
+        alert=rec.alert,
+        sleep=rec.sleep,
+        rounds=1,
+        is_leader=lambda: True,
+        now=lambda: NOW,
+        secret=lambda _name, _tenant: KEY,
+    )
+    state = await store.get_sync_state(T)
+    assert state is not None and "not_configured" in (state.last_error or "")
+    assert "https" in (state.last_error or "")
+    assert KEY not in (state.last_error or "")
+
+
+def test_the_insecure_http_escape_hatch_reaches_the_client(configure) -> None:
+    settings = configure(
+        ROBOTHOR_N8N_ENABLED="true",
+        ROBOTHOR_N8N_BASE_URL="http://n8n.internal.example.com:5678",
+        ROBOTHOR_N8N_ALLOW_INSECURE_HTTP="true",
+    )
+    client = poller.client_from_settings(settings, tenant_id=T, secret=lambda _n, _t: KEY)
+    assert client.base_url == "http://n8n.internal.example.com:5678"
