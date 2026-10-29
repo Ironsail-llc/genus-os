@@ -2005,3 +2005,20 @@ def test_a_webhook_drop_in_is_one_yaml_file_directly_in_the_directory(ws, capsys
     assert _install(ws, **plugin) == 2
     assert "docs/webhooks.d" in capsys.readouterr().err
     assert not (ws / "docs" / "webhooks.d").exists()
+
+
+def test_the_scan_names_a_webhook_drop_in_as_engine_loaded_config(tmp_path) -> None:
+    from robothor.plugins import scan
+    from robothor.plugins.wheel import open_wheel
+
+    plugin = _fragment_plugin(
+        "  - src: extra/channels.yaml\n    dest: docs/webhooks.d/alpha-plugin.yaml\n"
+    )
+    path = tmp_path / "alpha_plugin-1.0.0-py3-none-any.whl"
+    _wheel(path, dist=_ALPHA, manifest=plugin["manifest"], extra=plugin["extra"])
+    result = scan.scan_wheel(open_wheel(path, tmp_path / "u"))
+    assert result.verdict == scan.REVIEW
+    assert any(
+        "docs/webhooks.d/alpha-plugin.yaml" in r and "configuration the engine loads" in r
+        for r in result.reasons
+    )
