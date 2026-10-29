@@ -98,9 +98,11 @@ def plugin_listing() -> dict[str, Any]:
     from robothor.plugins.inventory import inventory
     from robothor.plugins.loader import generation
     from robothor.plugins.lockfile import lockfile_path, read_lockfile
+    from robothor.plugins.overview import workspace_assets
     from robothor.plugins.registry import configured_indexes
 
     lock = read_lockfile()
+    assets = workspace_assets()
     return {
         "generation": generation(),
         # The indexes this instance reads, in order, so an install form can
@@ -126,8 +128,22 @@ def plugin_listing() -> dict[str, Any]:
             # `Lockfile.problem` is built from the error class, not the file.
             "problem": lock.problem or None,
         },
-        "plugins": [row.as_json() for row in inventory()],
+        "plugins": [_with_assets(row.as_json(), assets) for row in inventory()],
     }
+
+
+def _with_assets(row: dict[str, Any], assets: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    """Add what the plugin wrote into the workspace, from the asset ledger.
+
+    Workspace-relative destinations only, never where the workspace is: the
+    same rule as the rest of this response.
+    """
+    from robothor.plugins.assets import canonical
+    from robothor.plugins.overview import empty_assets
+
+    written = assets.get(canonical(str(row.get("name") or ""))) or {}
+    row["assets"] = {key: written.get(key, default) for key, default in empty_assets().items()}
+    return row
 
 
 def set_plugin_enabled(name: str, enabled: bool) -> dict[str, Any] | None:

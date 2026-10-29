@@ -1225,6 +1225,32 @@ recognises. SOPS-encrypted files, `secrets*` files, key files (`*.pem`,
 `KEY=VALUE` lines are still refused. `exec` checks are unchanged:
 `cat robothor.env` is still refused.
 
+### What plugins contribute: `plugins_overview`
+
+`plugins_overview` takes no arguments and lists every installed plugin:
+
+- `name`, `version`, and `state` (`loaded`, `failed`, `disabled`, or
+  `assets only` for a plugin that ships workspace files and no entry point);
+- `tools`: each tool the plugin's manifest declares, with the description from
+  its registered schema (empty when no schema is registered);
+- `checks`: the doctor check ids it declares;
+- `agents`: `{id, name, schedule}` for each agent the plugin installed, from the
+  asset ledger and every `installed.yaml` entry with `source: plugin:<dist>`.
+  `schedule` is the manifest's cron, or `null`;
+- `workflows`: `{id, name, triggers}` for each workflow it copied into
+  `docs/workflows/`; a trigger reads like `cron 0 7 * * *` or
+  `hook email:email.new`;
+- `patches`: ids of existing agent manifests it patched;
+- `files`: every other workspace-relative file it wrote.
+
+A `warnings` list appears when the asset ledger or `installed.yaml` cannot be
+read; the plugins the loader reports are still listed. The tool is read-only.
+
+**Which to use.** Use `plugins_overview` for "what does plugin X give us?" or
+"which plugin ships agent or workflow Y?". Use `tool_search` to find a tool by
+what it does, whatever provides it. [Plugins](PLUGINS.md#seeing-what-a-plugin-shipped)
+covers the same data on the dashboard and the admin API.
+
 ### Everything else
 
 The full registry is large and changes with the release; `tool_search` over the
@@ -1238,6 +1264,7 @@ agent's own allow-set is the authoritative answer. The families:
 | CRM | `search_records`, `get_person`, `create_task`, `list_my_tasks`, `resolve_task` |
 | Notifications | `get_inbox`, `ack_notification`, `send_notification` |
 | Skills | `list_skills`, `invoke_skill` |
+| Plugins | [`plugins_overview`](#what-plugins-contribute-plugins_overview) |
 | Sub-agents | `spawn_agent`, `spawn_agents` (only with `can_spawn_agents`) |
 | Vision | `view_image`, `analyze_image` (image files — see above); `look`, `who_is_here` (a real camera) |
 | Desktop | `desktop_*` (a real screen) |
