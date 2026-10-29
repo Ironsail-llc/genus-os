@@ -159,3 +159,56 @@ def test_an_empty_tenant_means_the_default_tenant(backend, embed, monkeypatch):
     _upsert(backend, embed, tenant="")
     listed = _run(store.list_collections("test-tenant", backend=backend))
     assert [c["collection"] for c in listed] == ["helpdesk/policies"]
+
+
+@pytest.mark.parametrize(
+    ("collection", "doc_id"), [("Bad Name", "refunds"), ("helpdesk/policies", "")]
+)
+def test_delete_validates_collection_and_doc_id(backend, collection, doc_id):
+    with pytest.raises(ValueError):
+        _run(store.delete_document("test-tenant", collection, doc_id, backend=backend))
+
+
+class _ScriptedCursor:
+    """A cursor whose fetchone answers come from a script, in order."""
+
+    def __init__(self, answers):
+        self._answers = list(answers)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def execute(self, *_a, **_kw):
+        return None
+
+    def fetchone(self):
+        return self._answers.pop(0)
+
+
+class _ScriptedConn:
+    def __init__(self, answers):
+        self._cursor = _ScriptedCursor(answers)
+
+    def cursor(self, *_a, **_kw):
+        return self._cursor
+
+    def commit(self):
+        return None
+
+
+def test_pg_write_names_the_race_when_the_document_vanishes():
+    import contextlib
+
+    @contextlib.contextmanager
+    def connect():
+        # Upsert returned no row (hash matched), then the row was gone.
+        yield _ScriptedConn([None, None])
+
+    doc = store.DocumentWrite(
+        "test-tenant", "helpdesk/policies", "refunds", "Refunds", "", "abc", {}, [("t", [0.1])]
+    )
+    with pytest.raises(store.KnowledgeWriteConflict, match="retry"):
+        store.PgKnowledgeBackend(connect).write(doc)
