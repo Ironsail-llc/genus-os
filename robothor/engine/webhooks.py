@@ -108,9 +108,10 @@ def load_webhook_config(path: str | Path) -> WebhookConfig:
 
 
 def _load_webhook_config(path: Path, *, strict: bool) -> WebhookConfig:
-    """:func:`load_webhook_config`; with ``strict=False`` a source that does not
-    parse, a duplicate channel or a malformed channel is logged and skipped, so
-    the router still serves every channel it can."""
+    """:func:`load_webhook_config`; with ``strict=False`` a DROP-IN that does not
+    parse, a channel a drop-in declares again, or a malformed drop-in channel is
+    logged and skipped, so the router still serves every channel it can. The
+    base file is the operator's and stays strict either way."""
     dropins = _dropin_dir(path)
     sources = sorted(dropins.glob("*.yaml")) if dropins.is_dir() else []
     if path.exists():
@@ -125,7 +126,7 @@ def _load_webhook_config(path: Path, *, strict: bool) -> WebhookConfig:
         try:
             found = _read_channels(source)
         except (yaml.YAMLError, OSError, UnicodeDecodeError) as exc:
-            if strict:
+            if strict or source == path:
                 raise
             logger.error(
                 "Webhook config %s is not readable (%s); none of its channels are served",
@@ -153,7 +154,7 @@ def _load_webhook_config(path: Path, *, strict: bool) -> WebhookConfig:
         try:
             channels[name] = _channel(name, raw)
         except (ValueError, TypeError) as exc:
-            if strict:
+            if strict or declared[name] == path:
                 raise
             logger.error(
                 "Webhook channel %r in %s is malformed (%s); it is not served",

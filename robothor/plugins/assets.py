@@ -1058,13 +1058,29 @@ def plan(
     return tuple(lines)
 
 
+#: Channel fields the engine reads with ``int()``.
+_WEBHOOK_INT_FIELDS = ("rate_limit_per_min", "timestamp_tolerance_seconds")
+
+
 def _webhook_channels(data: bytes, where: str) -> list[str]:
     try:
         parsed = yaml.safe_load(data.decode("utf-8")) or {}
     except (yaml.YAMLError, UnicodeDecodeError) as exc:
         raise AssetError(f"{where} is not valid YAML, so the engine could not load it.") from exc
     channels = parsed.get("channels") if isinstance(parsed, dict) else None
-    return [str(name) for name in channels] if isinstance(channels, dict) else []
+    if not isinstance(channels, dict):
+        return []
+    for name, raw in channels.items():
+        # The coercions the engine applies; one that fails there skips the channel.
+        for key in _WEBHOOK_INT_FIELDS:
+            if isinstance(raw, dict) and key in raw:
+                try:
+                    int(raw[key])
+                except (TypeError, ValueError) as exc:
+                    raise AssetError(
+                        f"{where}: channel {name!r} has a `{key}` that is not a whole number."
+                    ) from exc
+    return [str(name) for name in channels]
 
 
 def _check_webhook_map(assets: PluginAssets, dist: str, root: Path, own_files: set[str]) -> None:

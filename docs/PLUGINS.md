@@ -505,9 +505,12 @@ Two drop-in locations make the rest composable without a shared file:
 * **Webhook channels:** ship `docs/webhooks.d/<distribution>.yaml` (same shape
   as `docs/webhooks.yaml`, a `channels:` mapping). The engine merges every
   `*.yaml` there, in name order, after `docs/webhooks.yaml`. Install refuses a
-  drop-in that does not parse or declares a channel the base file or another
-  drop-in already has. If one still turns up (an operator edit), the engine logs
-  an error naming both files, serves the first, and keeps serving the rest.
+  drop-in that does not parse, has a `rate_limit_per_min` or
+  `timestamp_tolerance_seconds` that is not a whole number, or declares a
+  channel the base file or another drop-in already has. If a bad drop-in still
+  turns up (an operator edit), the engine logs an error naming the file, skips
+  it, and keeps serving the rest. `docs/webhooks.yaml` itself stays strict: a
+  broken base file stops the engine from starting, as it always has.
 
 ### Ownership
 
