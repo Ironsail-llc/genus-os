@@ -145,11 +145,11 @@ async def _handle_run_workflow(args: dict[str, Any], ctx: ToolContext) -> dict[s
 
     agent_id = getattr(ctx, "agent_id", "") or "unknown"
     run_id = str(uuid.uuid4())
+    # The ctx already carries the identity the runner resolved for this turn:
+    # the chat user's, or `service:<agent_id>` with the agent's service role
+    # for an unattended run (runtime/setup.principal). Pass it through as is.
     user_id = getattr(ctx, "user_id", "") or ""
     user_role = getattr(ctx, "user_role", "") or ""
-    if not user_id and not user_role:
-        # No person behind this turn: the agent's own service identity.
-        user_id, user_role = f"service:agent:{agent_id}", "service"
     task = get_task_registry().spawn(
         engine.execute(
             workflow_id=workflow_id,

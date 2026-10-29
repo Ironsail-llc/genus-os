@@ -472,6 +472,10 @@ READONLY_TOOLS: frozenset[str] = frozenset(
 # set; injected only when an agent's toolset is deferred (see registry).
 TOOLSEARCH_TOOLS = frozenset({"tool_search", "tool_describe", "tool_call"})
 
+# Workflow control tools that start work. `list_workflows` and `workflow_runs`
+# are reads and are not in this family.
+WORKFLOW_WRITE_TOOLS: frozenset[str] = frozenset({"run_workflow"})
+
 # Registered, but never part of the default "everything" set an agent with no
 # `tools_allowed` receives. An agent gets one of these only by naming it in its
 # manifest — the same opt-in shape as SPAWN_TOOLS (gated on can_spawn_agents)
@@ -524,7 +528,7 @@ OPT_IN_TOOLS: frozenset[str] = frozenset(
         "sales_research_parallel",
         *CLAUDE_CODE_TOOLS,
         *PR_REVIEW_TOOLS,
-        "run_workflow",
+        *WORKFLOW_WRITE_TOOLS,
     }
 )
 
