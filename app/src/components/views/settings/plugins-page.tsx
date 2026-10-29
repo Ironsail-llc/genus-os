@@ -126,6 +126,8 @@ export interface PluginAssets {
   files: string[];
   /** The engine's reason when it could not read what the plugin wrote. */
   error?: string;
+  /** With `error`: the lists still hold what the readable records gave. */
+  partial?: boolean;
 }
 
 export interface Plugin {
@@ -226,7 +228,9 @@ function normalizeAssets(value: unknown): PluginAssets {
       })),
     patches: strings(row.patches),
     files: strings(row.files),
-    ...(typeof row.error === "string" && row.error ? { error: row.error } : {}),
+    ...(typeof row.error === "string" && row.error
+      ? { error: row.error, partial: row.partial === true }
+      : {}),
   };
 }
 
@@ -1050,9 +1054,14 @@ export function PluginsPage({ visible = true }: PluginsPageProps) {
                 >
                   <p className="font-medium text-foreground">Agents and workflows</p>
                   {plugin.assets.error ? (
-                    <p>unavailable: {plugin.assets.error}</p>
-                  ) : plugin.assets.agents.length === 0 && plugin.assets.workflows.length === 0 ? (
-                    <p>none</p>
+                    <p data-testid={`plugin-assets-error-${plugin.name}`}>
+                      unavailable: {plugin.assets.error}
+                    </p>
+                  ) : null}
+                  {plugin.assets.agents.length === 0 && plugin.assets.workflows.length === 0 ? (
+                    plugin.assets.error ? null : (
+                      <p>none</p>
+                    )
                   ) : (
                     <ul className="flex min-w-0 flex-col gap-0.5 pt-0.5">
                       {plugin.assets.agents.map((agent) => (
