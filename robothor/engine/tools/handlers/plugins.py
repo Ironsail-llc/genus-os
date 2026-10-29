@@ -35,8 +35,9 @@ def _description(name: str) -> str:
         from robothor.engine.tools.registry import get_registry
 
         schema = get_registry().get_schema(name)
-    except Exception:  # noqa: BLE001 - a description is decoration, never a failure
-        logger.debug("no schema for plugin tool %s", name, exc_info=True)
+    except Exception as exc:  # noqa: BLE001 - a description is decoration, never a failure
+        # The class only: an exception's text can carry an absolute path.
+        logger.debug("no schema for plugin tool %s (%s)", name, type(exc).__name__)
         return ""
     function = schema.get("function") if isinstance(schema, dict) else None
     text = function.get("description") if isinstance(function, dict) else None
@@ -105,8 +106,10 @@ async def _plugins_overview(args: dict[str, Any], ctx: ToolContext) -> dict[str,
     try:
         return await asyncio.to_thread(plugins_overview)
     except Exception as exc:  # noqa: BLE001 - report, never crash the run
-        logger.warning("plugins_overview failed: %s", exc)
-        return {"error": f"plugins_overview failed: {type(exc).__name__}: {exc}"}
+        # The class only, in the log and to the model: an OSError's text
+        # carries the absolute workspace path.
+        logger.warning("plugins_overview failed (%s)", type(exc).__name__)
+        return {"error": f"plugins_overview failed ({type(exc).__name__})"}
 
 
 HANDLERS["plugins_overview"] = _plugins_overview

@@ -52,7 +52,9 @@ __all__ = [
 #: is reported as a workflow, every other one as a file.
 WORKFLOW_PREFIX = "docs/workflows/"
 
-_WORKFLOW_SUFFIXES = (".yaml", ".yml")
+#: The engine loads only ``docs/workflows/*.yaml``; a ``.yml`` file never fires,
+#: so it is reported as a file, never as a workflow with triggers.
+_WORKFLOW_SUFFIXES = (".yaml",)
 
 
 def empty_assets() -> dict[str, list[Any]]:
@@ -239,7 +241,8 @@ def workspace_assets(
         agent_ids |= owned.get(dist, set())
         files = entry.get("files") or {}
         dests = sorted(str(d) for d in files) if isinstance(files, dict) else []
-        patches = entry.get("patches") or []
+        patches = entry.get("patches")
+        patches = patches if isinstance(patches, list) else []
         version = entry.get("version")
         out[dist] = {
             "version": str(version) if version else None,
@@ -253,13 +256,19 @@ def workspace_assets(
     return out
 
 
-def workflow_sources(workspace: Path | None = None) -> dict[str, str]:
-    """Workflow file name -> ``plugin:<dist>`` for every workflow a plugin wrote."""
+def workflow_sources(
+    workspace: Path | None = None, warnings: list[str] | None = None
+) -> dict[str, str]:
+    """Workflow file name -> ``plugin:<dist>`` for every workflow a plugin wrote.
+
+    A ledger that cannot be read is appended to *warnings* (and the map is
+    empty), so a caller can tell "no plugin wrote it" from "nobody knows".
+    """
     root = _resolve_workspace(workspace)
     if root is None:
         return {}
     sources: dict[str, str] = {}
-    for dist, entry in _ledger(root, []).items():
+    for dist, entry in _ledger(root, warnings if warnings is not None else []).items():
         files = entry.get("files") if isinstance(entry, dict) else None
         if not isinstance(files, dict):
             continue

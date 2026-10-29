@@ -64,7 +64,16 @@ def _defined_workflows() -> list[dict]:
     config = EngineConfig.from_env()
     if not config.workflow_dir.is_dir():
         return []
-    sources = workflow_sources(config.workspace)
+    warnings: list[str] = []
+    sources = workflow_sources(config.workspace, warnings=warnings)
+    # Unreadable ledger: no label rather than a confident wrong one.
+    fallback = None if warnings else "workspace"
+    if warnings:
+        # A fixed sentence: nothing read from the workspace reaches the log.
+        logger.warning(
+            "the plugin asset ledger (.robothor/plugin-assets.yaml) could not be read; "
+            "workflows are listed without a source"
+        )
     out = []
     for path in sorted(config.workflow_dir.glob("*.yaml")):
         parsed = parse_workflow_file(path)
@@ -75,7 +84,7 @@ def _defined_workflows() -> list[dict]:
                 "workflow_id": parsed["id"],
                 "name": parsed["name"],
                 "triggers": parsed["triggers"],
-                "source": sources.get(path.name, "workspace"),
+                "source": sources.get(path.name, fallback),
             }
         )
     return out

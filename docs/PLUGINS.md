@@ -817,11 +817,17 @@ recorded with `source: plugin:<dist>`), so nobody has to open them by hand:
   patched agents and other files — see [Tools](TOOLS.md#what-plugins-contribute-plugins_overview);
 - each row of `GET /api/admin/plugins` carries **`assets`**:
   `{agents, workflows, patches, files}` in the same shapes, drawn on the Helm's
-  Plugins page as **Agents and workflows**;
+  Plugins page as **Agents and workflows**. If the ledger cannot be read at all,
+  the listing still answers: the lists are empty and `assets.error` names the
+  exception class;
 - `GET /api/workflows` on the bridge lists every workflow defined in
   `docs/workflows/`, including one that has never run (`runs: 0`), with
   `source: "plugin:<dist>"` when the ledger records that a plugin wrote it and
-  `"workspace"` otherwise.
+  `"workspace"` otherwise (`null`, and a logged warning, when the ledger cannot
+  be read).
+
+Only `docs/workflows/*.yaml` is loaded by the engine, so a plugin file ending in
+`.yml` there is listed under `files`, never as a workflow with triggers.
 
 A plugin that ships only workspace files has no entry point, so the loader never
 sees it; `plugins_overview` still lists it from the ledger, with state
