@@ -619,12 +619,21 @@ class Operations:
         self.audit(cur, str(row["id"]), "action.claimed")
         return claimed
 
-    def cancel_action(self, action: str, reason: str, *, proposed_by: str | None = None) -> None:
-        """Withdraw a draft or an unclaimed approval: superseded or refused by its proposer.
+    def cancel_action(
+        self,
+        action: str,
+        reason: str,
+        *,
+        proposed_by: str | None = None,
+        actor: str | None = None,
+    ) -> None:
+        """Withdraw a draft or an unclaimed approval: superseded or refused.
 
-        ``proposed_by`` must name the action's proposer (None for an action
-        proposed without one). Claimed and settled actions cannot be cancelled;
-        an executor records its own outcome with ``finish_action``.
+        A plugin's action is withdrawn by its proposer: ``proposed_by`` must
+        name it. An action proposed without one is withdrawn only by a named
+        human, ``actor="operator:<id>"``, which the audit records. Claimed and
+        settled actions cannot be cancelled; an executor records its own
+        outcome with ``finish_action``.
         """
         if not reason or not reason.strip():
             raise ValueError("Cancellation reason required")
@@ -637,8 +646,14 @@ class Operations:
             row = cur.fetchone()
             if not row:
                 raise Conflict("Action is missing")
-            if row["proposed_by"] != proposed_by:
-                raise Conflict("Only the proposer may cancel an action")
+            if row["proposed_by"] is not None:
+                if proposed_by != row["proposed_by"]:
+                    raise Conflict("Only the proposer may cancel an action")
+                audited = f"plugin:{proposed_by}"
+            else:
+                if proposed_by is not None or not (actor or "").startswith("operator:"):
+                    raise Conflict("Human operator decision required")
+                audited = str(actor)
             if row["status"] not in {"review", "approved"}:
                 raise Conflict("Only a draft or an unclaimed approval can be cancelled")
             cur.execute(
@@ -649,7 +664,7 @@ class Operations:
                 cur,
                 action,
                 "action.cancelled",
-                f"plugin:{proposed_by}" if proposed_by else "system",
+                audited,
                 {"reason": reason[:500], "previous_status": row["status"]},
             )
 
