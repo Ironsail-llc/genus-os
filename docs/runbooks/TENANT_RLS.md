@@ -218,7 +218,8 @@ Every Helm admin route is one of two kinds, decided by the gate it calls
   only by an owner whose home is the platform tenant.
 - **The appliance's** (`require_root_operator`): Controls, Settings, Logs,
   system health, the doctor, telemetry, plugins, marketplace installs, the
-  fleet-default model, guardrail events and the guardrail change log. Only a
+  fleet-default model, guardrail events and the guardrail change log (the last
+  two also admit the platform's `auditor`). Only a
   root owner/admin **at home** passes — switch back first.
 
 The bridge reaches each tenant's own engine: `GENUS_TENANT_ENGINE_URLS` (a
@@ -229,9 +230,10 @@ engine refuses a token minted for another tenant. A child tenant's agent
 manifests live on its engine's volume and are read and written through that
 engine's `/api/admin/manifests*` routes.
 
-Audit rows record the tenant they happened in (migration 154). Reads are the
-acting tenant and, for an owner/admin, its descendants; rows written before the
-migration have no tenant and only a root reader at home sees them.
+Audit rows record the tenant they happened in (migration 154). The platform's
+operator or auditor at home reads the whole appliance trail, untenanted rows
+and independent roots included (`_operator.audit_scope`); anyone else reads the
+acting tenant and, for an owner/admin, its descendants.
 
 `GENUS_TENANT_SWITCH_MODE` is `off` by default (every switch is refused);
 `observe` runs the full check and still refuses, recording what it would have
