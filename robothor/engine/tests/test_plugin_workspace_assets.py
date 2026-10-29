@@ -2094,3 +2094,30 @@ def test_a_webhook_drop_in_colliding_with_another_plugins_is_refused(ws, capsys)
     err = capsys.readouterr().err
     assert "alpha" in err and "beta-plugin.yaml" in err
     assert not (dropins / "alpha-plugin.yaml").exists()
+
+
+def _contract(plugin: dict, manifest_version: str, payload_version: str) -> dict:
+    """*plugin* re-declared at another contract version, manifest and payload."""
+    pkg = plugin["dist"].replace("-", "_")
+    plugin["manifest"] = plugin["manifest"].replace(
+        "contract_version: 1", f"contract_version: {manifest_version}"
+    )
+    plugin["extra"][f"{pkg}/__init__.py"] = _CODE.replace('"1.0"', f'"{payload_version}"')
+    return plugin
+
+
+def test_a_contract_2_plugin_using_append_installs(ws, capsys) -> None:
+    plugin = _contract(_patcher(_ALPHA, "install:\n  append:\n    hooks:\n" + _HOOK_A), "2", "2.0")
+    assert "contract_version: 2" in plugin["manifest"]
+    assert _install(ws, **plugin) == 0, capsys.readouterr().err
+    assert _hook_ids(ws) == [("email", "email.new")]
+
+
+def test_a_contract_3_plugin_is_refused_naming_every_accepted_version(ws, capsys) -> None:
+    plugin = _contract(_patcher(_ALPHA, "install:\n  append:\n    hooks:\n" + _HOOK_A), "3", "3.0")
+    pip = installer._run_pip
+    assert _install(ws, **plugin) == 2
+    err = capsys.readouterr().err
+    assert "'1.0'" in err and "'2.0'" in err
+    assert pip.calls == []
+    assert "hooks" not in _main(ws)

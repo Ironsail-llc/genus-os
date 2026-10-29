@@ -65,6 +65,27 @@ class TestLoading:
         assert result.tools == {} and not result.failures
 
 
+class TestContractVersions:
+    """The engine speaks contract 1.0 and 2.0. A plugin that needs a feature
+    only this engine has (composable patches, webhook drop-ins, agent
+    fragments) declares 2.0, so an engine that predates them refuses it."""
+
+    def test_contract_1_still_loads(self):
+        result = load_plugins(entry_points=[_EP("acme", "genus.tools", _tool(version="1.0"))])
+        assert "my_tool" in result.tools and not result.failures
+
+    def test_contract_2_loads(self):
+        result = load_plugins(entry_points=[_EP("acme", "genus.tools", _tool(version="2.0"))])
+        assert "my_tool" in result.tools and not result.failures
+
+    def test_contract_3_is_refused_naming_every_accepted_version(self):
+        result = load_plugins(entry_points=[_EP("new", "genus.tools", _tool(version="3.0"))])
+        assert result.tools == {}
+        reason = " ".join(f.reason for f in result.failures)
+        assert "contract version" in reason and "'3.0'" in reason
+        assert "'1.0'" in reason and "'2.0'" in reason
+
+
 class TestItFailsClosed:
     def test_a_version_mismatch_is_refused(self):
         result = load_plugins(entry_points=[_EP("old", "genus.tools", _tool(version="0.0.1"))])
