@@ -15,7 +15,7 @@ from typing import Any
 
 from psycopg2.extras import Json, RealDictCursor
 
-from robothor.constants import DEFAULT_TENANT
+from robothor.constants import DEFAULT_TENANT, PLATFORM_TENANT
 from robothor.db.connection import (
     get_connection,
     read_every_tenant_in_transaction,
@@ -337,8 +337,6 @@ def login_account_for_email(email: str) -> dict[str, Any] | None:
     that, single) row is returned so the caller refuses it on the same,
     equal-cost path it always used.
     """
-    import os
-
     address = canonical_email(email)
     with unbound_scope(), get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -352,8 +350,7 @@ def login_account_for_email(email: str) -> dict[str, Any] | None:
     if len(candidates) == 1:
         return candidates[0]
     if len(candidates) > 1:
-        platform = os.environ.get("ROBOTHOR_PLATFORM_TENANT") or DEFAULT_TENANT
-        preferred = next((r for r in candidates if r["tenant_id"] == platform), None)
+        preferred = next((r for r in candidates if r["tenant_id"] == PLATFORM_TENANT), None)
         logger.error(
             "local sign-in: the address has a password account in more than one "
             "tenant (%d); %s. Remove the duplicate so it names one account",
