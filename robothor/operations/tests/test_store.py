@@ -205,3 +205,28 @@ def test_completion_rechecks_wall_clock_after_a_transaction_wait(ops):
             )
             cur.execute("SELECT pg_sleep(0.06)")
             ops.complete(job_id, job["lease_token"], {}, cur=cur)
+
+
+def test_review_listing_is_this_tenants_open_drafts_only(ops):
+    open_draft = ops.propose("email", "draft:open", {"subject": "Hello"})
+    decided = ops.propose("email", "draft:decided", {"subject": "Done"})
+    ops.decide(decided, True, "operator:1")
+    expired = ops.propose("email", "draft:expired", {"subject": "Late"}, expires_seconds=-1)
+    neighbour = Operations(ops.tenant + "-neighbour").propose("email", "draft:n", {"subject": "N"})
+
+    listed = ops.list_review()
+
+    assert [str(row["id"]) for row in listed] == [open_draft]
+    assert listed[0]["kind"] == "email"
+    assert listed[0]["payload"] == {"subject": "Hello"}
+    assert listed[0]["expires_at"] is not None
+    assert {expired, neighbour}.isdisjoint(str(row["id"]) for row in listed)
+
+
+def test_an_action_is_read_only_within_its_tenant(ops):
+    action = ops.propose("email", "draft:1", {"subject": "Hello"})
+
+    assert str(ops.get_action(action)["id"]) == action
+    assert ops.get_action(action)["status"] == "review"
+    assert Operations(ops.tenant + "-neighbour").get_action(action) is None
+    assert ops.get_action(str(uuid4())) is None
