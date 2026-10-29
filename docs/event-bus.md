@@ -141,8 +141,10 @@ JSON body, delivery id, then published.
 A bad, stale or malformed signature answers `401 {"error": "Invalid
 signature"}` whatever the scheme; the reason is logged, the secret never is.
 For `hmac_ts_hex` the logged reason names the check that failed: `missing
-timestamp`, `malformed timestamp`, `stale timestamp`, `missing signature` or
-`bad digest`.
+timestamp`, `malformed timestamp`, `stale timestamp`, `missing signature`,
+`malformed signature` (not 64 hex characters after the optional prefix) or
+`bad digest` (well formed, but no match). The signed string uses the timestamp
+as a plain integer, so a sender that zero-pads it is refused.
 
 **`google_oidc`** is for Google Cloud Pub/Sub push subscriptions with
 authentication on. There is no shared secret, so `secret_env` is not used;
