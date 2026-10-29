@@ -764,11 +764,12 @@ def _glob_names_secret(arg: str, shell_dirs: list[str]) -> bool:
     """Whether an argument the shell will expand could name a secret.
 
     Braces are expanded first; an alternative with no wildcard left is
-    checked as a path. A wildcard is refused when its basename pattern could
-    match a secrets name (the exact names, a sample of each pattern's shapes,
-    and the moved key's basename), when its literal prefix starts one, or when
-    expanding it where the command runs (the working directory, the
-    workspace, any ``cd`` target) yields a refused file.
+    checked as a path. A wildcard is refused on two precise grounds only: its
+    basename pattern can MATCH a secrets name (the exact names, a sample of
+    each pattern's shapes, the moved key's basename), or expanding it where
+    the command runs (the working directory, the workspace, any ``cd``
+    target) yields a refused file. A pattern that merely STARTS like a secret
+    name (``c*.txt``, ``s*.md``) runs.
     """
     import glob as globbing
 
@@ -785,14 +786,7 @@ def _glob_names_secret(arg: str, shell_dirs: list[str]) -> bool:
                 return True
             continue
         base = Path(word).name
-        literal = ""
-        for ch in base:
-            if ch in "*?[":
-                break
-            literal += ch
         if any(_wildcard_matches(base, name) for name in names):
-            return True
-        if literal and any(name.startswith(literal) for name in names):
             return True
         for root in dict.fromkeys(roots):
             pattern = word if Path(word).expanduser().is_absolute() else str(Path(root) / word)
