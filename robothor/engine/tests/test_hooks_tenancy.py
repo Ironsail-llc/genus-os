@@ -60,6 +60,11 @@ class FakeStreams:
         self.keys: dict[str, bytes] = {}
         self.ttls: dict[str, int] = {}
         self.expire_calls: list[tuple[str, int]] = []
+        # Key expiry runs on this clock, which tests advance by hand.
+        self.clock = 0.0
+        self.expires_at: dict[str, float] = {}
+        self.reads = 0
+        self.block: Any = None  # async (read number) -> None, awaited inside a read
         # (stream, group) -> [{"name": ..., "idle": ms}], as XINFO CONSUMERS reports
         self.consumers: dict[tuple[str, str], list[dict[str, Any]]] = {}
         self._seq = 0
@@ -87,6 +92,9 @@ class FakeStreams:
 
     async def xreadgroup(self, group: str, consumer: str, streams: dict[str, str], **kw: Any):
         count = kw.get("count") or 10
+        self.reads += 1
+        if self.block is not None:
+            await self.block(self.reads)
         # Reading registers (or refreshes) the consumer, as Redis does.
         table = self.consumers.setdefault((next(iter(streams)), group), [])
         table[:] = [c for c in table if c["name"] not in (consumer, consumer.encode())]
@@ -125,6 +133,8 @@ class FakeStreams:
         return list(self.consumers.get((stream, group), []))
 
     async def get(self, key: str) -> bytes | None:
+        if key in self.expires_at and self.clock >= self.expires_at[key]:
+            self.lapse(key)
         return self.keys.get(key)
 
     async def set(
@@ -135,6 +145,7 @@ class FakeStreams:
         self.keys[key] = value.encode()
         if ex is not None:
             self.ttls[key] = ex
+            self.expires_at[key] = self.clock + ex
         return True
 
     async def expire(self, key: str, seconds: int) -> bool:
@@ -142,12 +153,14 @@ class FakeStreams:
         if key not in self.keys:
             return False
         self.ttls[key] = seconds
+        self.expires_at[key] = self.clock + seconds
         return True
 
     def lapse(self, key: str) -> None:
         """The key's TTL ran out."""
         self.keys.pop(key, None)
         self.ttls.pop(key, None)
+        self.expires_at.pop(key, None)
 
     async def aclose(self) -> None:
         return None
@@ -198,8 +211,10 @@ class _Recorder:
         hooks._run_agent_trigger = _run  # type: ignore[method-assign]
 
 
-async def _consume_until_idle(hooks: EventHooks, fake: FakeStreams) -> None:
-    fake.on_idle = hooks._stop_event.set
+async def _consume_until_idle(
+    hooks: EventHooks, fake: FakeStreams, *, stop_when_idle: bool = True
+) -> None:
+    fake.on_idle = hooks._stop_event.set if stop_when_idle else None
     with (
         patch("redis.asyncio.Redis", return_value=fake),
         patch("robothor.engine.hooks.build_event_triggers", return_value=TRIGGERS),
@@ -783,3 +798,116 @@ class TestTheRootGroupVerdictIsNotForever:
 
         assert fake.keys[self.OWNER_KEY] == PARENT.encode()
         assert recorder.runs == [(PARENT, PARENT)]
+
+
+class TestARunningRootRidesOutShortOutages:
+    """A root that is already reading is not stopped by a blip.
+
+    The tree is read on every check, so a single failed lookup used to stop a
+    verified root for a whole interval. Now the last verdict that was read
+    successfully stands through up to ``TREE_LOOKUP_FAILURES_TOLERATED - 1``
+    consecutive failures; the engine fails closed on the next one, or at once
+    if it was never verified. The owner's claim is refreshed by its own task,
+    so a read that blocks past the TTL does not lose the group.
+    """
+
+    OWNER_KEY = "robothor:events:group-owner:engine"
+
+    @pytest.fixture(autouse=True)
+    def _agreeing_tenant_env(self, monkeypatch):
+        monkeypatch.delenv("ROBOTHOR_TENANT_ID", raising=False)
+
+    @pytest.mark.asyncio
+    async def test_a_failed_lookup_does_not_stop_a_verified_root(
+        self, engine_config, hierarchy, caplog
+    ):
+        fake = FakeStreams()
+        await fake.xgroup_create(STREAM, "engine")
+        fake.add(STREAM, _event(PARENT))
+        root = EventHooks(_engine(engine_config, PARENT), runner=None)  # type: ignore[arg-type]
+        recorder = _Recorder()
+        recorder.bind(root)
+        blipped: list[bool] = []
+
+        def _blip(reads: int) -> None:
+            if reads == 1 and not blipped:  # verified and reading; then the DB blips
+                blipped.append(True)
+                hierarchy.down.add(PARENT)
+                fake.add(STREAM, _event(PARENT))
+
+        fake.on_read = _blip
+        fake.on_xinfo = lambda calls: root._stop_event.set() if calls >= 4 else None
+
+        with (
+            caplog.at_level(logging.WARNING, logger="robothor.engine.hooks"),
+            patch("robothor.engine.hooks.GROUP_RIVAL_RECHECK_SECONDS", 0),
+        ):
+            await _consume_until_idle(root, fake, stop_when_idle=False)
+
+        assert recorder.runs == [(PARENT, PARENT), (PARENT, PARENT)]
+        warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+        assert any("last verdict" in m for m in warnings)
+
+    @pytest.mark.asyncio
+    async def test_three_consecutive_failures_fail_closed(self, engine_config, hierarchy):
+        fake = FakeStreams()
+        await fake.xgroup_create(STREAM, "engine")
+        fake.add(STREAM, _event(PARENT))
+        root = EventHooks(_engine(engine_config, PARENT), runner=None)  # type: ignore[arg-type]
+        recorder = _Recorder()
+        recorder.bind(root)
+        blipped: list[bool] = []
+
+        def _db_down(reads: int) -> None:
+            if reads == 1 and not blipped:
+                blipped.append(True)
+                hierarchy.down.add(PARENT)
+
+        def _checks(calls: int) -> None:
+            # Check 1 verified the root. Checks 2 and 3 fail and keep the
+            # verdict; check 4 is the third consecutive failure.
+            if calls == 4:
+                fake.add(STREAM, _event(PARENT))
+            if calls >= 6:
+                root._stop_event.set()
+
+        fake.on_read = _db_down
+        fake.on_xinfo = _checks
+
+        with patch("robothor.engine.hooks.GROUP_RIVAL_RECHECK_SECONDS", 0):
+            await _consume_until_idle(root, fake, stop_when_idle=False)
+
+        assert recorder.runs == [(PARENT, PARENT)], "after the third failure it reads nothing"
+
+    @pytest.mark.asyncio
+    async def test_a_read_blocked_past_the_ttl_does_not_lose_ownership(self, engine_config):
+        fake = FakeStreams()
+        await fake.xgroup_create(STREAM, "engine")
+        fake.add(STREAM, _event(PARENT))
+        root = EventHooks(_engine(engine_config, PARENT), runner=None)  # type: ignore[arg-type]
+        recorder = _Recorder()
+        recorder.bind(root)
+
+        async def _long_block(read: int) -> None:
+            if read != 2:
+                return
+            # One read blocks for 200 s of Redis time, past the 180 s TTL,
+            # while the event loop keeps running other tasks.
+            for _ in range(20):
+                fake.clock += 10
+                await asyncio.sleep(0.01)
+            assert await fake.get(self.OWNER_KEY) == PARENT.encode(), "ownership survived"
+            root._stop_event.set()
+
+        fake.block = _long_block
+
+        with patch("robothor.engine.hooks.ROOT_GROUP_OWNER_REFRESH_SECONDS", 0.005):
+            await _consume_until_idle(root, fake, stop_when_idle=False)
+
+        assert recorder.runs == [(PARENT, PARENT)]
+        assert await fake.get(self.OWNER_KEY) == PARENT.encode()
+
+    def test_the_ttl_is_at_least_three_refreshes(self):
+        from robothor.engine import hooks
+
+        assert hooks.ROOT_GROUP_OWNER_TTL_SECONDS >= 3 * hooks.ROOT_GROUP_OWNER_REFRESH_SECONDS
