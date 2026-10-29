@@ -265,5 +265,30 @@ def test_vault_reads_inside_a_child_scope_see_only_that_tenant(db_conn, tenants,
 
     with tenant_scope(tenants["a"]):
         assert dal.list_keys() == ["svc/a-token"]
-        # RLS, not the WHERE: naming the sibling explicitly still sees nothing.
-        assert dal.list_keys(tenant_id=tenants["b"]) == []
+
+
+def test_an_explicit_vault_tenant_wins_over_the_ambient_scope(
+    db_conn, tenants, app_role, monkeypatch
+):
+    """Instance credentials (the SIEM webhook, provider keys, the Telegram
+    token) are asked for with ``tenant_id=DEFAULT_TENANT`` explicitly, and
+    must still be found inside a child-scoped request or a sandboxed run."""
+    import robothor.vault as vault
+    from robothor.constants import DEFAULT_TENANT
+    from robothor.db.connection import tenant_scope
+    from robothor.vault import dal
+
+    key = f"svc/instance-{uuid.uuid4().hex[:8]}"
+    with db_conn.cursor() as cur:
+        for tenant, value in ((DEFAULT_TENANT, b"root"), (tenants["a"], b"child")):
+            cur.execute(
+                "INSERT INTO vault_secrets (tenant_id, key, encrypted_value, category) "
+                "VALUES (%s, %s, %s, 'credential')",
+                (tenant, key, value),
+            )
+    monkeypatch.setattr(vault, "get_master_key", lambda: b"0" * 32)
+    monkeypatch.setattr(dal, "decrypt", lambda blob, master: bytes(blob).decode())
+
+    with tenant_scope(tenants["a"]):
+        assert vault.get(key, tenant_id=DEFAULT_TENANT) == "root"
+        assert vault.get(key) == "child"

@@ -501,3 +501,79 @@ async def test_the_scope_does_not_outlive_the_request(test_client, scope_probe):
     token = _token("u-alice", "acme-child-a", "admin", home_tenant_id="acme-parent")
     await test_client.get("/api/_scope_probe/sync", headers=_bearer(token))
     assert current_tenant_scope() is None
+
+
+# ── the caller's own account while acting ─────────────────────────────
+
+
+@pytest.fixture
+def local_login_on(monkeypatch):
+    from robothor.auth import local_login
+
+    monkeypatch.setattr(local_login, "local_login_enabled", lambda: True)
+    monkeypatch.setattr(local_login, "flood_limited", lambda *a, **k: False)
+    monkeypatch.setattr(local_login, "throttled", lambda *a, **k: False)
+
+
+def _scope_recorder(seen: list, result):
+    def record(*args, **kwargs):
+        from robothor.db.connection import current_tenant_scope
+
+        seen.append(current_tenant_scope())
+        return result
+
+    return record
+
+
+@pytest.mark.parametrize(
+    ("path", "body", "fn", "result"),
+    [
+        (
+            "/api/auth/password",
+            {"current_password": "old-password-123", "new_password": "new-password-123456"},
+            "change_password",
+            True,
+        ),
+        ("/api/auth/mfa/enroll", {"password": "old-password-123"}, "begin_enrollment", {}),
+        ("/api/auth/mfa/confirm", {"code": "123456"}, "confirm_enrollment", True),
+        (
+            "/api/auth/mfa/disable",
+            {"password": "old-password-123", "code": "123456"},
+            "disable_mfa",
+            True,
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_self_account_routes_run_in_the_home_tenant_while_acting(
+    test_client, local_login_on, monkeypatch, path, body, fn, result
+):
+    """The account lives at home; under the acting scope RLS would hide it."""
+    from robothor.auth import local_login
+
+    seen: list = []
+    monkeypatch.setattr(local_login, fn, _scope_recorder(seen, result))
+    token = _token("u-alice", "acme-child-a", "admin", home_tenant_id="acme-parent")
+    with patch("routers.auth.audited"):
+        r = await test_client.post(path, json=body, headers=_bearer(token))
+    assert r.status_code == 200, r.text
+    assert seen == ["acme-parent"]
+
+
+@pytest.mark.asyncio
+async def test_me_reads_the_account_in_the_home_tenant_while_acting(test_client):
+    seen: list = []
+    account = {**_account("u-alice", "acme-parent", "admin"), "mfa_enabled": True}
+    token = _token("u-alice", "acme-child-a", "admin", home_tenant_id="acme-parent")
+    with (
+        patch(
+            "robothor.auth.accounts.get_account_by_id",
+            side_effect=_scope_recorder(seen, account),
+        ),
+        patch("robothor.auth.local_login.mfa_setup_required_for", return_value=False),
+    ):
+        r = await test_client.get("/api/auth/me", headers=_bearer(token))
+    assert r.status_code == 200, r.text
+    assert r.json()["mfa_enabled"] is True
+    assert r.json()["tenant_id"] == "acme-child-a"
+    assert seen == ["acme-parent"]

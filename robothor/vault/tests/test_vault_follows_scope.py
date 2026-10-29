@@ -146,3 +146,18 @@ def test_public_api_passes_the_scope_through(conn: _Conn, monkeypatch: pytest.Mo
         vault.get("k")
         vault.list()
     assert _tenant_params(conn) == ["acme-child-a", "acme-child-a"]
+
+
+def test_an_explicit_tenant_binds_the_connection_to_that_tenant(
+    conn: _Conn, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Explicit wins over ambient for the RLS binding too, or the WHERE would
+    name a row the binding hides (the instance SIEM webhook inside a child
+    request, provider keys inside a sandboxed run)."""
+    from robothor.vault import dal
+
+    monkeypatch.setenv("ROBOTHOR_RLS_ENABLED", "1")
+    with tenant_scope("acme-child-a"):
+        dal.list_keys(tenant_id=DEFAULT_TENANT)
+    assert _binds(conn) == [DEFAULT_TENANT]
+    assert _tenant_params(conn) == [DEFAULT_TENANT]
