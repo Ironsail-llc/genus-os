@@ -214,8 +214,10 @@ password sign-in looks the address up in every tenant and signs the person in
 to the one tenant it is active in. An address that is active in more than one
 tenant is refused (and logged) until the duplicate is removed. An access token
 issued before the move still names the old tenant, and the refresh that would
-extend it is gone. The old token is refused by the bridge and every engine
-within 30 seconds (immediately if the move runs inside the bridge).
+extend it is gone. Once the session-standing check ships (the bridge and
+engines re-validate human tokens against the account every 30 s), the old
+access token is refused within 30 seconds, or immediately if the move runs
+inside the bridge. Until then it remains valid until it expires (15 min).
 
 ## Verification queries
 
