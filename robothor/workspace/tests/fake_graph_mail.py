@@ -438,6 +438,15 @@ def install_mail(tenant: FakeGraphTenant) -> FakeExchangeMail:
         expand = request.url.params.get("$expand", "")
         if "attachments" not in expand:
             out.pop("attachments", None)
+        else:
+            nested = re.search(r"attachments\(\$select=([^)]*)\)", expand)
+            if nested:
+                # An expanded attachment carries what was selected, plus its id
+                # and type, as in Graph -- never its bytes unless asked.
+                wanted = {s.strip() for s in nested.group(1).split(",")} | {"id", "@odata.type"}
+                out["attachments"] = [
+                    {k: v for k, v in a.items() if k in wanted} for a in out["attachments"]
+                ]
         select = request.url.params.get("$select")
         if select:
             keep = {s.strip() for s in select.split(",")} | {"id"}
@@ -514,6 +523,26 @@ def install_mail(tenant: FakeGraphTenant) -> FakeExchangeMail:
         except KeyError:
             return _not_found()
         return httpx.Response(200, json={"id": folder_id, "displayName": match["folder"]})
+
+    @tenant.route("GET", message_rx + r"/attachments/(?P<aid>[^/]+)")
+    async def get_attachment(tenant_, request, match):
+        """One attachment. Like Graph, ``@odata.type`` says which kind it is,
+        ``contentBytes`` is a fileAttachment's base64, and ``$select`` narrows
+        the properties (the type annotation and id always come back)."""
+        message = find(match)
+        if message is None:
+            return _not_found()
+        target = unquote(match["aid"])
+        for attachment in message.get("attachments") or []:
+            if attachment.get("id") == target:
+                out = dict(attachment)
+                out.setdefault("@odata.type", "#microsoft.graph.fileAttachment")
+                select = request.url.params.get("$select")
+                if select:
+                    keep = {s.strip() for s in select.split(",")} | {"id", "@odata.type"}
+                    out = {k: v for k, v in out.items() if k in keep}
+                return httpx.Response(200, json=out)
+        return _not_found()
 
     @tenant.route("GET", message_rx)
     async def get_message(tenant_, request, match):

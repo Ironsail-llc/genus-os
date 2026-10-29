@@ -139,7 +139,11 @@ def admit_tool(name: str, args: dict[str, Any], ctx: ToolContext) -> None:
         raise ValueError("goal execution is no longer authorized")
     if row["status"] in {"paused", "canceled", "blocked"} or budget_hit():
         raise ValueError("goal execution has stopped")
-    if row["status"] in {"waiting", "complete", "review"} and name not in READONLY_TOOLS:
+    # wait_seconds is read-only (it changes nothing) but sleeping is not how a
+    # goal that has finished its work period ends the turn.
+    if row["status"] in {"waiting", "complete", "review"} and (
+        name not in READONLY_TOOLS or name == "wait_seconds"
+    ):
         raise ValueError("goal has finished this work period; end the turn")
     if (
         row["data"]["recovery_required"]

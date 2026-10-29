@@ -453,7 +453,13 @@ class TestGmailGet:
 
         assert out["body_text"].strip() == "See attached contract."
         assert out["attachments"] == [
-            {"filename": "contract.pdf", "mime_type": "application/pdf", "size_bytes": 20481}
+            {
+                "filename": "contract.pdf",
+                "mime_type": "application/pdf",
+                "size_bytes": 20481,
+                # What gws_gmail_get_attachment takes back; the bytes stay out.
+                "attachment_id": "att-1",
+            }
         ]
         assert "attachmentId" not in json.dumps(out)
 

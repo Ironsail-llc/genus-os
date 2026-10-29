@@ -45,7 +45,7 @@ class TestJiraToolSchemas:
     def test_jira_tools_in_set(self):
         from robothor.engine.tools import JIRA_TOOLS
 
-        assert len(JIRA_TOOLS) == 5
+        assert len(JIRA_TOOLS) == 9
         assert "jira_search" in JIRA_TOOLS
         assert "jira_list_boards" in JIRA_TOOLS
 

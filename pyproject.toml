@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "genusos"
-version = "1.116.0"
+version = "1.117.0"
 description = "Self-hosted AI agent operating system: deterministic engine, plugin-style skills and connectors, multi-tenant CRM and memory. Everything is a plugin."
 readme = "PYPI_README.md"
 license = "MIT"
@@ -82,6 +82,15 @@ dependencies = [
     # check must be a real decode (a text file named .png must not be sent
     # to a model as an image).
     "Pillow>=10.0",
+    # `read_file` and the Telegram intake turn documents into text
+    # (robothor/engine/file_extract.py). Core, for the same reason as Pillow:
+    # an assistant that cannot open the PDF, Word document, spreadsheet or deck
+    # the operator sent is missing a basic capability. Each is imported lazily
+    # and a missing one degrades to a message naming the package.
+    "pypdf>=6.0",
+    "python-docx>=1.1",
+    "openpyxl>=3.1",
+    "python-pptx>=1.0",
     # litellm's aiohttp transport imports orjson and does not declare it.
     # The host venv happens to run a litellm new enough not to need it, so
     # this only ever bit the CONTAINER: the production image resolved 1.92.0

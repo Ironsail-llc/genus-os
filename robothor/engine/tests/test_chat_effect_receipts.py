@@ -100,3 +100,28 @@ def test_task_receipt_distinguishes_creation_from_existing_task(records, monkeyp
     else:
         assert "The task was created" in result["text"]
     assert "task is complete" not in result["text"]
+
+
+def test_sweep_release_is_not_reported_as_an_operator_decision(records, monkeypatch):  # noqa: F811
+    auth, client = identity(), str(uuid4())
+    run = insert(records, auth, client, status="failed", verified_status=None)
+    ctx, row = effect(records, monkeypatch, auth, run, tool="gws_gmail_send")
+    assert effects.expire(ctx, row["id"], actor="system:effect-sweep", note="window lapsed")
+    result = chat_recovery.read_outcome(auth, "web:main", client)
+    (receipt,) = result["effects"]
+    assert receipt["expired"] and not receipt["operator_reconciled"]
+    assert not receipt["verified"] and not result["reconciliation_pending"]
+    assert "released automatically after 24 hours" in result["text"]
+    assert "has not been independently verified" in result["text"]
+    assert "operator" not in result["text"].lower()
+
+
+def test_operator_reconciliation_keeps_its_wording(records, monkeypatch):  # noqa: F811
+    auth, client = identity(), str(uuid4())
+    run = insert(records, auth, client, status="failed", verified_status=None)
+    ctx, row = effect(records, monkeypatch, auth, run, tool="gws_gmail_send")
+    assert effects.attest(ctx, row["id"], actor="operator", note="Provider history reviewed")
+    result = chat_recovery.read_outcome(auth, "web:main", client)
+    (receipt,) = result["effects"]
+    assert receipt["operator_reconciled"] and not receipt["expired"]
+    assert "An operator recorded reconciliation" in result["text"]

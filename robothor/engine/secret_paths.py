@@ -215,6 +215,20 @@ def is_inbox_secret_path(path: str | os.PathLike[str]) -> bool:
     return bool(_INBOX_SECRET.search(posixpath.normpath(spelled)))
 
 
+def _in_secret_location(p: PurePath) -> bool:
+    """True when a DIRECTORY on the path holds nothing but credentials."""
+    parts = [part.lower() for part in p.parts]
+    if any(part in _SECRET_DIRS for part in parts):
+        return True
+    if any(pair in _SECRET_DIR_PAIRS for pair in zip(parts, parts[1:], strict=False)):
+        return True
+    # A dot-directory the platform reserves for instance secrets: .robothor/secrets*
+    return any(
+        part == ".robothor" and parts[i + 1].startswith("secret")
+        for i, part in enumerate(parts[:-1])
+    )
+
+
 def is_secret_path(path: str | os.PathLike[str]) -> bool:
     """True when *path* names a file that holds credentials.
 
@@ -234,19 +248,49 @@ def is_secret_path(path: str | os.PathLike[str]) -> bool:
     if lowered.endswith(_DOC_SUFFIXES):
         return False
 
-    parts = [part.lower() for part in p.parts]
-    if any(part in _SECRET_DIRS for part in parts):
+    if _in_secret_location(p):
         return True
-    if any(pair in _SECRET_DIR_PAIRS for pair in zip(parts, parts[1:], strict=False)):
-        return True
-    # A dot-directory the platform reserves for instance secrets: .robothor/secrets*
-    for i, part in enumerate(parts[:-1]):
-        if part == ".robothor" and parts[i + 1].startswith("secret"):
-            return True
 
     if lowered in _SECRET_NAMES:
         return True
     return any(pat.fullmatch(name) for pat in _SECRET_NAME_PATTERNS)
+
+
+#: The two dotenv shapes of :data:`_SECRET_NAME_PATTERNS` (``.env``,
+#: ``.env.local``, ``robothor.env``, ``connectors.env``). Kept as their own
+#: tuple so :func:`is_maskable_dotenv_path` and the refusal can never disagree
+#: about which names are "a dotenv file".
+_DOTENV_NAME_PATTERNS = _SECRET_NAME_PATTERNS[:2]
+
+#: The ``secrets*`` pattern: a file NAMED as secrets holds nothing else, so it
+#: is refused even when its body is dotenv.
+_SECRETS_NAMED = _SECRET_NAME_PATTERNS[2]
+
+
+def is_maskable_dotenv_path(path: str | os.PathLike[str]) -> bool:
+    """True when *path* is a secret path that ``read_file`` may return MASKED.
+
+    The instance env file (``robothor.env``, see
+    :data:`robothor.engine.instance_env.DEFAULT_ENV_FILE`) holds the
+    operator's settings and their credentials in one place. Refusing it whole
+    left the assistant unable to say what its own settings are; masking the
+    credential values answers that without putting one in a transcript
+    (:mod:`robothor.engine.env_masking`). Only the dotenv NAME shapes qualify,
+    and never one under a secrets directory, quarantined in the inbox, or
+    named ``secrets*`` -- those stay refused, as do SOPS files and key
+    files, which are not dotenv names at all. Pure, like
+    :func:`is_secret_path`: the body is checked by the masker after reading.
+    """
+    p = PurePath(Path(str(path)).expanduser())
+    name = p.name
+    lowered = name.lower()
+    if not is_secret_path(p) or is_inbox_secret_path(p) or _in_secret_location(p):
+        return False
+    if lowered in _SECRET_NAMES and lowered != ".env":
+        return False
+    if _SECRETS_NAMED.fullmatch(name):
+        return False
+    return any(pat.fullmatch(name) for pat in _DOTENV_NAME_PATTERNS)
 
 
 REFUSAL = (

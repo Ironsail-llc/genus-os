@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from robothor.engine.runtime.effects import UNCERTAIN_FENCE_WINDOW
+
 if TYPE_CHECKING:
     from robothor.auth.deps import AuthContext
 
@@ -24,7 +26,7 @@ def family_effect_receipts(
           FROM agent_runtime_effects e JOIN family f ON e.run_id=f.id::text
           WHERE e.tenant_id=%s AND e.principal_id=%s
             AND (e.state IN ('prepared','dispatching','uncertain','confirmed','not_applied')
-                 OR e.state='finished' AND e.resolution->>'source' IN ('tool_response','reconciled'))
+                 OR e.state='finished' AND e.resolution->>'source' IN ('tool_response','reconciled','expired'))
           ORDER BY e.created_at,e.id""",
         (
             run["id"],
@@ -59,6 +61,7 @@ def family_effect_receipts(
                 and isinstance(result, dict)
                 and result.get("deduplicated") is True,
                 "operator_reconciled": resolution.get("source") == "reconciled",
+                "expired": resolution.get("source") == "expired",
                 "reconciliation_pending": row["state"] in {"prepared", "dispatching", "uncertain"},
             }
         )
@@ -101,6 +104,13 @@ def effect_summary(receipt: dict[str, Any]) -> str:
         )
     elif receipt.get("operator_reconciled"):
         text = "An operator recorded reconciliation of this action. Its outcome has not been independently verified."
+    elif receipt.get("expired"):
+        text = (
+            "No one could confirm this action, so it was released automatically after "
+            f"{UNCERTAIN_FENCE_WINDOW} "
+            "to stop it blocking later actions. It may or may not have taken effect; its "
+            "outcome has not been independently verified."
+        )
     elif receipt["status"] == "finished":
         text = "The action returned a response, which is saved in the audit log. Its outcome has not been independently verified."
     else:

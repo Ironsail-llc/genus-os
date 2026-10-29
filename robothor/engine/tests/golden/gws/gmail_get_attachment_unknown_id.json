@@ -1,0 +1,43 @@
+{
+  "args": {
+    "attachment_id": "nope",
+    "message_id": "msg-multi"
+  },
+  "calendar_requests": [],
+  "context": {
+    "is_benchmark": false,
+    "run_id": "run-golden",
+    "tenant_id": "tenant-a"
+  },
+  "crm_write_through": {
+    "calls": [],
+    "sql": []
+  },
+  "dnc_lookups": [],
+  "guardrail_events": [],
+  "gws_calls": [
+    {
+      "argv": [
+        "gmail",
+        "users",
+        "messages",
+        "get",
+        "--params",
+        "{\"userId\": \"me\", \"id\": \"msg-multi\", \"format\": \"full\"}"
+      ],
+      "params": {
+        "format": "full",
+        "id": "msg-multi",
+        "userId": "me"
+      },
+      "timeout": 30
+    }
+  ],
+  "result": {
+    "error": "message msg-multi has no attachment 'nope'; it has: contract.pdf (attachment_id att-1), chart.png (attachment_id att-2)",
+    "hint": "not_found: take attachment_id from gws_gmail_get's attachments list"
+  },
+  "scenario": "gmail_get_attachment_unknown_id",
+  "scheduling_policy_lookups": [],
+  "tool": "gws_gmail_get_attachment"
+}

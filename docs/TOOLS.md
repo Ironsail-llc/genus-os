@@ -74,7 +74,7 @@ mailbox is empty when it is not.
 
 | You want | Use | What it is |
 |---|---|---|
-| Live email — what is in the mailbox right now | `gws_gmail_search`, then `gws_gmail_get` | The real Gmail account, through the `gws` CLI. The only tools that see an unread message. |
+| Live email — what is in the mailbox right now | `gws_gmail_search`, then `gws_gmail_get` (and `gws_gmail_get_attachment` to open a file attached to it) | The real Gmail account, through the `gws` CLI. The only tools that see an unread message. |
 | The CRM's record of past correspondence with a contact | `list_messages`, `get_conversation` | Ingested into the CRM by the email pipeline. Can be hours or days behind, and holds no unread state. |
 | The agent's own notification queue | `get_inbox`, `ack_notification` | Notifications other agents and the engine raised for this agent. Not email at all. |
 
@@ -367,7 +367,7 @@ engine unit, `.genus/` is gitignored, and the other writable home
 
 ### Google Workspace (`gws_*`)
 
-Eleven tools, all shelling out to the `gws` CLI with the instance's Workspace
+Fifteen tools, all shelling out to the `gws` CLI with the instance's Workspace
 credentials. Every one of them is refused on a benchmark run — reads included:
 a graded agent that can read the operator's mail can put the operator's mail in
 its answer.
@@ -375,7 +375,8 @@ its answer.
 | Tool | Returns |
 |---|---|
 | `gws_gmail_search` | One entry per matching message: `id`, `thread_id`, `date`, `from`, `to`, `subject`, `snippet`, `labels`. Already readable — you usually do not need `gws_gmail_get` after it. Drops results rather than letting them be cut (`truncated: true` says so). |
-| `gws_gmail_get` | Headers (`from`/`to`/`cc`/`date`/`subject`/`message_id`), `labels`, `snippet`, and a **decoded** `body_text` — plain text, never base64. Attachments listed by `filename`, `mime_type`, `size_bytes`, never inlined. `body_truncated` + `body_chars` when it had to cut. A `thread_id` returns every message in the thread, oldest first. |
+| `gws_gmail_get` | Headers (`from`/`to`/`cc`/`date`/`subject`/`message_id`), `labels`, `snippet`, and a **decoded** `body_text` — plain text, never base64. Attachments listed by `filename`, `mime_type`, `size_bytes` and `attachment_id`, never inlined. `body_truncated` + `body_chars` when it had to cut. A `thread_id` returns every message in the thread, oldest first. |
+| `gws_gmail_get_attachment` | Downloads one attachment (`message_id` + `attachment_id` from `gws_gmail_get`) and returns `path`, `filename`, `mime_type`, `size_bytes`, `format` and, for a PDF, Word, Excel, PowerPoint or text file, its `text` (up to 50,000 characters; `truncated` says if it was cut). An image returns its path to pass to `view_image`. See [Email attachments](#email-attachments). |
 | `gws_gmail_reply` | The sent message id and thread id. Threads correctly, replies to all original recipients, refuses a second reply on the same thread. **Use this, not `gws_gmail_send`, for anything that answers an existing thread.** |
 | `gws_gmail_send` | The sent message id and thread id. New conversations only. |
 | `gws_gmail_modify` | The message id and its labels after the change. Mark read/unread, archive, add or remove labels. |
@@ -388,6 +389,31 @@ its answer.
 | `gws_chat_send` | The created message's resource name. |
 | `gws_chat_list_spaces` | Each space's resource name and display name. |
 | `gws_chat_list_messages` | Each message's sender, time and text, newest last. |
+
+#### Email attachments
+
+`gws_gmail_get_attachment` works on either mailbox provider. On Gmail the
+`attachment_id` is the MIME part id (`"1"`, `"0.2"`): Gmail re-issues its own
+`attachmentId` on every read, so that one cannot be matched later; the raw
+`attachmentId` is accepted too. On Microsoft 365 it is the Graph attachment
+id. Only real files download: an Outlook attached message (`itemAttachment`)
+or cloud link (`referenceAttachment`) is refused with a sentence saying which
+it is.
+
+The file is kept exactly like a Telegram attachment, through the same code
+(`robothor/engine/attachments.py`): at
+`<workspace>/inbox/email/<provider>/<YYYY-MM-DD>/<id>-<name>`, owner-only,
+deduplicated per message and attachment, pruned with the rest of the inbox
+after `inbox_retention_days`. The 20 MB ceiling is checked against the size
+the provider reports before anything is downloaded, and against the bytes
+after. A file named like a credentials file (`.env`, `id_rsa`, ...) is saved
+under `secret/` and its contents are never returned — `read_file` and
+`send_file` refuse it too. Text comes from the same extractor `read_file` uses
+(see [`read_file`](#read_file-documents-not-just-text)).
+
+The tool writes only that local file and changes nothing in the mailbox, so it
+is classified read-only (plan mode may use it). Like every `gws_*` tool it is
+refused on a benchmark run.
 
 #### Errors
 
@@ -1135,9 +1161,69 @@ numbers never come from an agent.
   `review_fetch_failures` with `incomplete: true`.
 - `jira_search` pages: pass a result's `next_page_token` back as
   `next_page_token` until `is_last` is true. One call returns at most 100.
+- JIRA writes: `jira_create_issue` (Task by default; `parent_key` for an epic),
+  `jira_add_comment`, `jira_transition_issue` (by target status or transition
+  name; an unknown status returns the reachable ones) and `jira_update_issue`.
+  Plain-text bodies become Atlassian Document Format, blank lines splitting
+  paragraphs. They are opt-in (`OPT_IN_TOOLS`): an agent gets them only by
+  naming them in `tools_allowed` or, on top of the default set, in
+  `tools_opt_in`. Migration 153 denies them to the `user` and `member` roles;
+  `service` and the operator's roles keep them. Within those gates there is no
+  project allow-list: the API token's Jira permissions decide. Issue and parent
+  keys must look like `ABC-123` (or a numeric id) and project keys like `ABC`.
+  A create that times out after sending says the issue may exist and to
+  `jira_search` for it before retrying. They are external side effects, so
+  benchmark runs never get them and each handler refuses one.
 - `render_devops_report` takes the week's `people.json` aggregate with the
   analyst's narrative under `analyst`; the old free-form analyst report is
   refused.
+
+### The instance's own settings: `config_get`, `config_set`, and reading an env file
+
+The operator's assistant can read and change the instance's declared settings
+without `exec`. Both tools call the same `robothor.settings.operator` functions
+as `genus config` and the dashboard, so every surface gives the same answer.
+
+- `config_get` takes `key` (one setting, e.g. `ROBOTHOR_LOG_LEVEL`) or `prefix`
+  (every setting whose name starts with it, at most 100). It returns the
+  effective value, its `source` (default, `config.yaml`, environment, runtime
+  flag), the description, and whether a change needs a restart. A secret
+  comes back as `<set, b2:…>` or `<unset>`, never as its value.
+- `config_set` takes `key`, `value` and optionally `apply`. The value is
+  checked against the setting's declared type and written where the setting
+  lives: `config.yaml`, or the flag store for a governed flag. The reply lists
+  the units that need a restart, and warns when an environment variable will
+  keep winning over `config.yaml`. A credential is refused, and the refusal
+  does not echo it back; store credentials with `vault_set`. `apply=true` runs
+  `genus config set --apply` through the authenticated host-exec service,
+  because the engine process cannot write `/etc`. That writes the systemd
+  drop-in and schedules the restart 15 s out. The host-exec service is only
+  available to the verified owner on a top-level main run. Anywhere else,
+  `apply=true` returns an error saying it needs host exec.
+- Both tools are **owner-only**. The handler requires a verified identity with
+  role `owner` in the run's tenant and refuses benchmark runs. RBAC also
+  denies both tools to every other role (migration 152).
+
+**Which to use.** For "what is X set to and why", use `config_get`. Use
+`read_file` on the env file only to see the file itself. A plain dotenv
+file (`.env`, `.env.local`, `robothor.env`, `connectors.env`, and the instance
+env file `ROBOTHOR_ENV_FILE`) is no longer refused to the owner: a verified
+owner identity in the run's own tenant, outside a benchmark run, the same
+rule as `config_get`. Every other caller (sub-agents, cron and service runs,
+other roles, benchmarks) still gets the refusal. For the owner it comes back with every
+key and every non-secret value visible, and every secret value masked as
+`****` plus its last four characters, or `****` alone for a short value. A
+value counts as secret when its key says so (a declared secret setting, or
+a name holding `TOKEN`, `SECRET`, `PASSWORD`, `KEY`, `AUTH`, `COOKIE`,
+`PRIVATE`, `DSN` …) or when the value looks like a credential (vendor token
+shapes, a URL carrying `user:password@`). These checks use the shared
+redactors. A comment is shown only when it is a commented-out `KEY=VALUE`
+line, masked by the same rules; any other comment text is replaced by
+`# [comment hidden]`, since free text can hold a credential no rule
+recognises. SOPS-encrypted files, `secrets*` files, key files (`*.pem`,
+`id_rsa` …), files under secret directories, and any body that is not plain
+`KEY=VALUE` lines are still refused. `exec` checks are unchanged:
+`cat robothor.env` is still refused.
 
 ### Everything else
 
@@ -1155,6 +1241,25 @@ agent's own allow-set is the authoritative answer. The families:
 | Sub-agents | `spawn_agent`, `spawn_agents` (only with `can_spawn_agents`) |
 | Vision | `view_image`, `analyze_image` (image files — see above); `look`, `who_is_here` (a real camera) |
 | Desktop | `desktop_*` (a real screen) |
+
+### `read_file` — documents, not just text
+
+`read_file` returns a text file as it is, and turns the common document formats
+into text: PDF (pypdf; the `pdftotext` command, when installed, is tried
+instead if pypdf is missing, raises on a malformed file or finds no text),
+Word `.docx` and macro-enabled `.docm` (paragraphs, tables and body-level
+content controls in document order; macros are never run), Excel `.xlsx` /
+`.xlsm` (every sheet, rows tab-separated, capped per sheet) and PowerPoint
+`.pptx` / `.pptm` (text per slide, including grouped shapes, with speaker
+notes). Extraction stops once the 50,000-character cap is reached, so a long
+document is not parsed whole: such a result ends with an
+`[... extraction stopped at ...]` note and carries `"truncated": true`, and its
+`chars` is the length returned, not the document's. The result carries a
+`format` field. An image returns a
+pointer to `view_image`; any other binary file returns its size and guessed MIME
+type instead of a decode error. Telegram attachments in these formats are
+extracted into the agent's first turn by the same code
+(`robothor/engine/file_extract.py`). Secret-path refusals run first, unchanged.
 
 ---
 

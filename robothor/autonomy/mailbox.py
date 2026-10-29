@@ -41,12 +41,13 @@ async def retrieve_verification(
         return {"error": "mailbox_verification_unsupported", "reason": unsupported}
     from robothor.constants import DEFAULT_TENANT
     from robothor.crm.dal import get_owner_person
-    from robothor.engine.tools.constants import MAIL_READ_TOOLS, MAIL_SEARCH_TOOL
+    from robothor.engine.tools.constants import MAIL_GET_TOOL, MAIL_SEARCH_TOOL
     from robothor.engine.tools.dispatch import get_agent_toolset
     from robothor.engine.tools.handlers import gws
 
     allowed = get_agent_toolset() or frozenset()
-    if not allowed >= MAIL_READ_TOOLS or ctx.tenant_id != DEFAULT_TENANT:
+    # Verification reads a message; it needs search and get, not every mail read.
+    if not allowed >= {MAIL_SEARCH_TOOL, MAIL_GET_TOOL} or ctx.tenant_id != DEFAULT_TENANT:
         raise PermissionError("verification_mailbox_not_authorized")
     owner = await asyncio.to_thread(get_owner_person, ctx.tenant_id)
     if scope.owner_id != "person:" + str(owner.get("id", "")):

@@ -142,7 +142,10 @@ async def _handle_analyze_pdf(
             for i in page_indices[:5]:
                 page = reader.pages[i]
                 if "/XObject" in (page.get("/Resources") or {}):
-                    xobjects = page["/Resources"]["/XObject"].get_object()
+                    # pypdf types a subscript as PdfObject; the resources
+                    # entry is a dictionary at runtime.
+                    resources: Any = page["/Resources"]
+                    xobjects = resources["/XObject"].get_object()
                     for obj_name in xobjects:
                         xobj = xobjects[obj_name].get_object()
                         if xobj["/Subtype"] == "/Image":

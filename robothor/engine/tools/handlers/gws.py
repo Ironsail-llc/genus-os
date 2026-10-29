@@ -22,6 +22,7 @@ from robothor.engine.tools.constants import (
     CALENDAR_WRITE_TOOLS,
     CHAT_SEND_TOOLS,
     CHAT_TOOLS,
+    MAIL_ATTACHMENT_TOOL,
     MAIL_WRITE_TOOLS,
     MAX_TOOL_OUTPUT_CHARS,
     WORKSPACE_TOOLS,
@@ -2762,6 +2763,17 @@ for _tool_name in sorted(WORKSPACE_TOOLS):
 
 async def _run_in_thread(tn: str, args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     """Run one gws tool in a worker thread (the CLI is a subprocess)."""
+    if tn == MAIL_ATTACHMENT_TOOL:
+        # The one mail read that writes a local file: it needs the workspace
+        # the inbox hangs off, which only the context carries.
+        from robothor.engine.mail_attachments import fetch_attachment
+
+        def _fetch() -> dict[str, Any]:
+            return fetch_attachment(
+                _mail(), args, provider=_workspace_provider_name(), workspace=ctx.workspace
+            )
+
+        return await asyncio.to_thread(_fetch)
     if tn in _CALENDAR_EDITS:
         from robothor.engine.calendar_attendees import OperationCancellation
 

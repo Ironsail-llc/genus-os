@@ -345,23 +345,55 @@ def _extract_body(payload: dict[str, Any]) -> str:
     return ""
 
 
+def _attachment_id(part: dict[str, Any]) -> str:
+    """The id ``gws_gmail_get_attachment`` takes for this part, or ``""``.
+
+    Gmail's MIME ``partId`` first: it is short and stable. Gmail's own
+    ``body.attachmentId`` is several hundred characters and re-minted on every
+    ``messages.get``, so it cannot be matched against a later read and would
+    eat the result's character budget. It is the fallback for a part with no
+    part id; Graph's translated messages carry their attachment id there too.
+    """
+    part_id = str(part.get("partId") or "")
+    if part_id:
+        return part_id
+    return str((part.get("body") or {}).get("attachmentId") or "")
+
+
 def _extract_attachments(payload: dict[str, Any]) -> list[dict[str, Any]]:
-    """Attachments by name, type and size. Never their bytes: one PDF would be
-    the whole result, and the agent has `analyze_pdf` for the contents."""
+    """Attachments by name, type, size and id. Never their bytes: one PDF would
+    be the whole result; ``gws_gmail_get_attachment`` downloads one by id."""
     found: list[dict[str, Any]] = []
     for part in _walk_parts(payload):
         filename = str(part.get("filename") or "")
         if not filename:
             continue
         body = part.get("body") or {}
-        found.append(
-            {
-                "filename": filename,
-                "mime_type": str(part.get("mimeType", "")),
-                "size_bytes": int(body.get("size") or 0),
-            }
-        )
+        entry: dict[str, Any] = {
+            "filename": filename,
+            "mime_type": str(part.get("mimeType", "")),
+            "size_bytes": int(body.get("size") or 0),
+        }
+        attachment_id = _attachment_id(part)
+        if attachment_id:
+            entry["attachment_id"] = attachment_id
+        found.append(entry)
     return found
+
+
+def _find_attachment_part(payload: dict[str, Any], attachment_id: str) -> dict[str, Any] | None:
+    """The attachment part ``attachment_id`` names: by part id, or by Gmail's
+    ``attachmentId`` when the caller passed that verbatim."""
+    wanted = str(attachment_id or "").strip()
+    if not wanted:
+        return None
+    for part in _walk_parts(payload):
+        if not part.get("filename"):
+            continue
+        body = part.get("body") or {}
+        if wanted in (str(part.get("partId") or ""), str(body.get("attachmentId") or "")):
+            return part
+    return None
 
 
 def _header_map(payload: dict[str, Any]) -> dict[str, str]:

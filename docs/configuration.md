@@ -109,6 +109,12 @@ environment file is never shown — only the file's path — and a value from an
 `Environment=` line is masked when the setting is a secret or the name reads
 like a credential. `--json` carries the same under `systemd`.
 
+The operator's assistant has the same verbs as tools: `config_get` and
+`config_set` (with `apply`, which runs through host exec). Both are owner-only.
+The owner's assistant can also `read_file` the instance env file, with the secret
+values masked; every other caller is refused.
+See [The instance's own settings](TOOLS.md#the-instances-own-settings-config_get-config_set-and-reading-an-env-file).
+
 `genus config set NAME VALUE` without `--apply` still writes `config.yaml`,
 and warns on stderr when a unit's own value will keep winning. **`--apply`**
 changes it in the layer that wins:

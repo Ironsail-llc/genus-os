@@ -1,3 +1,25 @@
+## [1.117.0](https://github.com/Ironsail-llc/genus-os/compare/v1.116.2...v1.117.0) (2026-10-29)
+
+### Features
+
+* **engine:** unlock the assistant's tools, files, settings and jira (GEN-37) ([#741](https://github.com/Ironsail-llc/genus-os/issues/741)) ([a0a82bb](https://github.com/Ironsail-llc/genus-os/commit/a0a82bb964a643d1e8d3cd4b2b1281c15ad39af8)), closes [#742](https://github.com/Ironsail-llc/genus-os/issues/742) [#737](https://github.com/Ironsail-llc/genus-os/issues/737) [#735](https://github.com/Ironsail-llc/genus-os/issues/735) [#738](https://github.com/Ironsail-llc/genus-os/issues/738) [#736](https://github.com/Ironsail-llc/genus-os/issues/736) [#742](https://github.com/Ironsail-llc/genus-os/issues/742)
+
+## [1.116.2](https://github.com/Ironsail-llc/genus-os/compare/v1.116.1...v1.116.2) (2026-10-29)
+
+### Bug Fixes
+
+* **deps:** patch frontend advisories published 2026-10-28 ([#743](https://github.com/Ironsail-llc/genus-os/issues/743)) ([2afe2a2](https://github.com/Ironsail-llc/genus-os/commit/2afe2a2194afa26c6cea27df82b4207f2acab098))
+
+## [1.116.1](https://github.com/Ironsail-llc/genus-os/compare/v1.116.0...v1.116.1) (2026-10-28)
+
+### Bug Fixes
+
+* **app:** invites default to SSO, last a week, explain refusals (GEN-52) ([#740](https://github.com/Ironsail-llc/genus-os/issues/740)) ([59689ce](https://github.com/Ironsail-llc/genus-os/commit/59689ce1273b6f47a445c88ab273498742536db4))
+
+### Performance Improvements
+
+* **ci:** stop the release gate re-running what CI already ran ([#704](https://github.com/Ironsail-llc/genus-os/issues/704)) ([242b88a](https://github.com/Ironsail-llc/genus-os/commit/242b88ad7e74513d712a00c80a0b89b35e91b160))
+
 ## [1.116.0](https://github.com/Ironsail-llc/genus-os/compare/v1.115.0...v1.116.0) (2026-10-28)
 
 ### Features
