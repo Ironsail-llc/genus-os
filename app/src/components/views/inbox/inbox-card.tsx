@@ -22,9 +22,10 @@ import {
 /**
  * One thing waiting on a person, answered where it is read.
  *
- * The two kinds are answered with different fields and the card never blurs
+ * The kinds are answered with different fields and the card never blurs
  * them: a `question` takes `answer` (an option the operator clicked, or free
- * text), a `workflow` takes `approved` plus an optional `note`. Sending the
+ * text), a `workflow` takes `approved` plus an optional `note`, and an
+ * `action` (a proposed effect) takes `approved` alone — its ledger keeps no note. Sending the
  * wrong field is a 400 from the router, so the shape is decided here by the
  * row's own kind rather than by which control happens to be on screen.
  *
@@ -33,7 +34,7 @@ import {
  * unreachable on a phone keyboard, and invisible to every test.
  *
  * What the card CANNOT do is decide whether the operator may answer:
- * `canWrite` hides the controls, and the bridge calls `require_operator` on
+ * `canWrite` hides the controls, and the bridge calls `require_tenant_operator` on
  * the route regardless.
  */
 
@@ -214,18 +215,20 @@ export function InboxCard({ item, canWrite, onAnswer, onOpenRuns }: InboxCardPro
         </div>
       ) : null}
 
-      {canWrite && item.kind === "workflow" ? (
+      {canWrite && (item.kind === "workflow" || item.kind === "action") ? (
         <div className="flex flex-wrap items-center gap-1.5">
-          <Input
-            aria-label="Note (optional)"
-            data-testid={`inbox-note-${item.id}`}
-            value={note}
-            disabled={busy}
-            autoComplete="off"
-            placeholder="Note (optional)"
-            onChange={(event) => setNote(event.target.value)}
-            className="min-w-0 flex-1"
-          />
+          {item.kind === "workflow" ? (
+            <Input
+              aria-label="Note (optional)"
+              data-testid={`inbox-note-${item.id}`}
+              value={note}
+              disabled={busy}
+              autoComplete="off"
+              placeholder="Note (optional)"
+              onChange={(event) => setNote(event.target.value)}
+              className="min-w-0 flex-1"
+            />
+          ) : null}
           <Button
             size="xs"
             disabled={busy}
