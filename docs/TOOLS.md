@@ -1254,10 +1254,11 @@ chat, instead of asking the operator to open the dashboard.
   returns recent runs, newest first, with each step's status.
 
 The run is recorded with trigger type `agent` and trigger detail
-`agent:<agent id>:<agent run id>`. It runs as the user of the chat that asked
-for it. When the run has neither a user nor a role (a scheduled or service
-run), it runs as `service:agent:<agent id>` with role `service`. Run history is always limited to
-the caller's tenant. `list_workflows` and `workflow_runs` are read-only;
+`agent:<agent id>:<agent run id>`. It runs under the identity of the agent run
+that called it: the chat user and their role for an interactive turn, or
+`service:<agent id>` with the agent's service role (default `service`) for a
+scheduled or other unattended run. Run history is always limited to the
+caller's tenant. `list_workflows` and `workflow_runs` are read-only;
 `run_workflow` is not, and benchmark runs get none of the three.
 
 The three tools belong to no tool group. `run_workflow` is opt-in: an agent is
