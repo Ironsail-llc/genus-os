@@ -53,6 +53,9 @@ class FakeStreams:
         self.created: list[tuple[str, str]] = []
         self.read_by: list[tuple[str, str]] = []
         self.on_idle: Any = None
+        self.on_xinfo: Any = None
+        # (stream, group) -> [{"name": ..., "idle": ms}], as XINFO CONSUMERS reports
+        self.consumers: dict[tuple[str, str], list[dict[str, Any]]] = {}
         self._seq = 0
 
     def add(self, stream: str, fields: dict[str, str]) -> None:
@@ -102,6 +105,11 @@ class FakeStreams:
 
     async def xpending_range(self, *args: Any, **kwargs: Any) -> list[Any]:
         return []
+
+    async def xinfo_consumers(self, stream: str, group: str) -> list[dict[str, Any]]:
+        if self.on_xinfo is not None:
+            self.on_xinfo()
+        return list(self.consumers.get((stream, group), []))
 
     async def aclose(self) -> None:
         return None
@@ -300,3 +308,64 @@ class TestForeignEventsAreDropped:
         await hooks._handle_event(STREAM, b"1-0", data, fake, "engine")
 
         assert recorder.runs == [(PARENT, "")]
+
+
+class TestAnotherTenantOnMyGroup:
+    """Two tenants' engines on one group split the events and drop each other's.
+
+    The group comes from configuration, and a child engine whose deployment
+    forgot to set it lands on the root's ``engine`` group: Redis would then
+    hand it about half the root's events, which it acks and drops, so the
+    root never sees them. Consumer names carry the tenant, so an engine can
+    see another tenant actively reading its group; it then refuses to read,
+    says how to fix it, and checks again later.
+    """
+
+    @pytest.mark.asyncio
+    async def test_refuses_to_read_a_group_another_tenant_is_reading(self, engine_config, caplog):
+        fake = FakeStreams()
+        await fake.xgroup_create(STREAM, "engine")
+        fake.consumers[(STREAM, "engine")] = [{"name": f"engine-{PARENT}".encode(), "idle": 800}]
+        fake.add(STREAM, _event(PARENT))
+        # A child engine whose deployment did not set its group.
+        hooks = EventHooks(_engine(engine_config, CHILD), runner=None)  # type: ignore[arg-type]
+        recorder = _Recorder()
+        recorder.bind(hooks)
+        fake.on_xinfo = hooks._stop_event.set
+
+        with caplog.at_level(logging.ERROR, logger="robothor.engine.hooks"):
+            await _consume_until_idle(hooks, fake)
+
+        assert fake.read_by == [], "it must not take the root's events off the shared group"
+        assert fake.acked == []
+        errors = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
+        assert any("GENUS_EVENT_CONSUMER_GROUP" in m and f"engine-{PARENT}" in m for m in errors)
+
+    @pytest.mark.asyncio
+    async def test_reads_once_the_other_tenant_has_gone_quiet(self, engine_config):
+        fake = FakeStreams()
+        await fake.xgroup_create(STREAM, "engine")
+        # Last seen ten minutes ago: a consumer entry outlives its engine.
+        fake.consumers[(STREAM, "engine")] = [{"name": f"engine-{CHILD}", "idle": 600_000}]
+        fake.add(STREAM, _event(PARENT))
+        hooks = EventHooks(_engine(engine_config, PARENT), runner=None)  # type: ignore[arg-type]
+        recorder = _Recorder()
+        recorder.bind(hooks)
+
+        await _consume_until_idle(hooks, fake)
+
+        assert recorder.runs == [(PARENT, PARENT)]
+
+    @pytest.mark.asyncio
+    async def test_replicas_of_the_same_tenant_share_the_group(self, engine_config):
+        fake = FakeStreams()
+        await fake.xgroup_create(STREAM, "engine")
+        fake.consumers[(STREAM, "engine")] = [{"name": f"engine-{PARENT}", "idle": 10}]
+        fake.add(STREAM, _event(PARENT))
+        hooks = EventHooks(_engine(engine_config, PARENT), runner=None)  # type: ignore[arg-type]
+        recorder = _Recorder()
+        recorder.bind(hooks)
+
+        await _consume_until_idle(hooks, fake)
+
+        assert recorder.runs == [(PARENT, PARENT)]

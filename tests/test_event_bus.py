@@ -124,16 +124,45 @@ class TestPublishStampsTenant:
         mock_redis.xadd.assert_called_once()
         return mock_redis.xadd.call_args.args[1]
 
-    def test_untagged_publish_is_stamped_with_the_default_tenant(self):
-        from robothor import constants
-
+    def test_untagged_publish_is_stamped_with_the_default_tenant(self, monkeypatch):
+        monkeypatch.delenv("ROBOTHOR_TENANT_ID", raising=False)
+        monkeypatch.setenv("ROBOTHOR_DEFAULT_TENANT", "acme-parent")
         mock_redis = MagicMock()
         set_redis_client(mock_redis)
 
         publish("crm", "task.created", {"task_id": "t1"}, source="test")
 
-        assert self._published_envelope(mock_redis)["tenant_id"] == constants.DEFAULT_TENANT
-        assert constants.DEFAULT_TENANT, "the stamp is never empty"
+        assert self._published_envelope(mock_redis)["tenant_id"] == "acme-parent"
+
+    def test_the_stamp_is_the_tenant_the_process_operates_as(self, monkeypatch):
+        """Engines filter on ``ROBOTHOR_TENANT_ID``; the stamp must agree with it.
+
+        When the two tenant variables disagree (the case
+        ``constants.tenant_env_conflict`` exists for), stamping the write
+        default would tag an engine's own unscoped events -- its webhooks --
+        with another tenant, and every engine would drop or misroute them.
+        """
+        monkeypatch.setenv("ROBOTHOR_TENANT_ID", "acme-child-a")
+        monkeypatch.setenv("ROBOTHOR_DEFAULT_TENANT", "acme-parent")
+        mock_redis = MagicMock()
+        set_redis_client(mock_redis)
+
+        publish("crm", "task.created", {"task_id": "t1"}, source="test")
+
+        assert self._published_envelope(mock_redis)["tenant_id"] == "acme-child-a"
+
+    def test_a_process_with_no_tenant_configured_publishes_untagged(self, monkeypatch):
+        """Untagged means "the root's": a sync script started with no tenant
+        variables must keep reaching the root engine, whatever its tenant is
+        called, rather than being tagged with the literal fallback ``default``."""
+        monkeypatch.delenv("ROBOTHOR_TENANT_ID", raising=False)
+        monkeypatch.delenv("ROBOTHOR_DEFAULT_TENANT", raising=False)
+        mock_redis = MagicMock()
+        set_redis_client(mock_redis)
+
+        publish("crm", "task.created", {"task_id": "t1"}, source="test")
+
+        assert self._published_envelope(mock_redis)["tenant_id"] == ""
 
     def test_publish_inside_a_tenant_scope_is_stamped_with_that_tenant(self):
         from robothor.db.connection import tenant_scope
