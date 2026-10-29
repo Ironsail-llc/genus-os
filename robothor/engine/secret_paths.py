@@ -693,6 +693,118 @@ def _tar_reads(args: list[str], positional: list[int]) -> set[int]:
     return reads
 
 
+#: Characters the shell expands in an argument AFTER this module has read it.
+_GLOB_CHARS = frozenset("*?[]{}")
+
+#: Representative names for the secret PATTERNS, so a wildcard can be tested
+#: against them as well as against the exact names: ``*.env`` must be read as
+#: able to name ``robothor.env``.
+_PATTERN_SAMPLES = (
+    ".env.local",
+    "robothor.env",
+    "connectors.env",
+    "secrets.json",
+    "secrets.yaml",
+    "secret.toml",
+    "store.enc.json",
+    "server.pem",
+    "server.key",
+    "cert.p12",
+    "vault.kdbx",
+    "id_rsa.pub",
+    "my-service-account.json",
+)
+_MAX_BRACE_EXPANSIONS = 64
+
+
+def _expand_braces(word: str) -> list[str]:
+    """Bash brace expansion of ``{a,b}`` groups (no ranges), bounded."""
+    depth = 0
+    start = -1
+    for i, ch in enumerate(word):
+        if ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}" and depth:
+            depth -= 1
+            if depth == 0:
+                inner = word[start + 1 : i]
+                parts, level, current = [], 0, ""
+                for c in inner:
+                    if c == "," and level == 0:
+                        parts.append(current)
+                        current = ""
+                        continue
+                    level += c == "{"
+                    level -= c == "}"
+                    current += c
+                parts.append(current)
+                if len(parts) < 2:
+                    continue  # `{x}` is literal in bash
+                out: list[str] = []
+                for part in parts:
+                    out.extend(_expand_braces(word[:start] + part + word[i + 1 :]))
+                    if len(out) >= _MAX_BRACE_EXPANSIONS:
+                        break
+                return out[:_MAX_BRACE_EXPANSIONS]
+    return [word]
+
+
+def _wildcard_matches(pattern: str, name: str) -> bool:
+    """``fnmatch`` with the shell's dotfile rule: ``*`` does not match ``.env``."""
+    from fnmatch import fnmatchcase
+
+    if name.startswith(".") and not pattern.startswith("."):
+        return False
+    return fnmatchcase(name, pattern)
+
+
+def _glob_names_secret(arg: str, shell_dirs: list[str]) -> bool:
+    """Whether an argument the shell will expand could name a secret.
+
+    Braces are expanded first; an alternative with no wildcard left is
+    checked as a path. A wildcard is refused when its basename pattern could
+    match a secrets name (the exact names, a sample of each pattern's shapes,
+    and the moved key's basename), when its literal prefix starts one, or when
+    expanding it where the command runs (the working directory, the
+    workspace, any ``cd`` target) yields a refused file.
+    """
+    import glob as globbing
+
+    from robothor.settings.env import process_env_get
+
+    names = set(_SECRET_NAMES) | set(_PATTERN_SAMPLES) | _moved_key_basenames()
+    workspace = (process_env_get("ROBOTHOR_WORKSPACE", "") or "").strip()
+    roots = [str(Path.cwd()), *shell_dirs] + ([workspace] if workspace else [])
+    for word in _expand_braces(arg):
+        if not any(ch in word for ch in "*?["):
+            if is_secret_path(word) or (
+                not word.startswith(("/", "~")) and Path(word).name in _moved_key_basenames()
+            ):
+                return True
+            continue
+        base = Path(word).name
+        literal = ""
+        for ch in base:
+            if ch in "*?[":
+                break
+            literal += ch
+        if any(_wildcard_matches(base, name) for name in names):
+            return True
+        if literal and any(name.startswith(literal) for name in names):
+            return True
+        for root in dict.fromkeys(roots):
+            pattern = word if Path(word).expanduser().is_absolute() else str(Path(root) / word)
+            # glob.glob, not Path.glob: it follows the SHELL's rule that `*`
+            # does not match a leading dot, which is what will actually run.
+            expanded = globbing.glob(str(Path(pattern).expanduser()))  # noqa: PTH207
+            for match in expanded[:256]:
+                if is_secret_path(match):
+                    return True
+    return False
+
+
 #: The key-file settings by name, wherever they appear. The exec environment
 #: never carries them (``robothor.engine.exec_env``), and a command that names
 #: one — ``od $GENUS_VAULT_KEY_FILE``, ``cat "${ROBOTHOR_VAULT_KEY_FILE}"`` —
@@ -813,7 +925,9 @@ def exec_reads_secret(command: str) -> str | None:
             "the directory they are mounted in. Neither is ever read by an agent."
         )
     for operand in _read_operands(command):
-        if is_secret_path(operand):
+        if is_secret_path(operand) or (
+            any(ch in operand for ch in _GLOB_CHARS) and _glob_names_secret(operand, shell_dirs)
+        ):
             return (
                 f"refused: the command would read {PurePath(operand).name}, a secrets "
                 "file. Credentials are supplied to tools by the platform; never read "
@@ -836,9 +950,22 @@ def exec_reads_secret(command: str) -> str | None:
             pattern_at = _search_pattern_index(word, args)
             reads = _read_argument_indices(word, args)
             for index, arg in enumerate(args):
-                if arg.startswith("-") or (reads is not None and index not in reads):
+                if arg.startswith("-"):
                     continue
                 candidate = arg.strip("'\"")
+                # Any position, a destination included: `cp {.env,leak.txt}`
+                # is ONE argument until the shell expands it into a source.
+                if (
+                    index != pattern_at
+                    and any(ch in candidate for ch in _GLOB_CHARS)
+                    and _glob_names_secret(candidate, shell_dirs)
+                ):
+                    return (
+                        f"refused: `{word}` is given {candidate}, a pattern the shell would "
+                        "expand to a secrets file. Name the files you mean explicitly."
+                    )
+                if reads is not None and index not in reads:
+                    continue
                 moved = index != pattern_at and _relative_names_moved_key(
                     candidate, shell_dirs, moved_names, file_only=word in _FILE_ONLY_PRINTERS
                 )

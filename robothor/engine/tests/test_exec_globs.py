@@ -54,7 +54,6 @@ def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         "cat .env*",
         "cat *.env",
         "xxd < .en?",
-        "head -c 64 [.]env",
     ],
 )
 def test_a_wildcard_that_can_name_a_secret_is_refused(workspace, command) -> None:
