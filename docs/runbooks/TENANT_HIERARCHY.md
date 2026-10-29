@@ -126,18 +126,34 @@ Every tenant shares one vault master key. A credential the bridge stores while a
 
 ## Add people to a child
 
-From a root shell (`--tenant` runs each command in the child's scope):
+From a root shell (`--tenant` runs each command in the child's scope). Pick
+one path per person.
+
+**SSO sign-in.** Add the account with `--sso`, then arm its one-shot binding
+grant:
+
+```bash
+genus user add --tenant acme-child-a --name "Alice Example" --email alice@example.com --role admin --sso
+genus auth grant-binding --email alice@example.com --tenant acme-child-a --ttl 1d
+```
+
+`--sso` makes the same account the Helm's SSO invite makes: active, with no
+password and no identity-provider binding, so nothing can sign in as it yet.
+The person's first verified SSO sign-in with that address spends the grant,
+binds the account to their IdP identity, and signs them in to the child. Re-arm
+the grant if it expires first. Without `--sso` the account is `invited`, and
+`grant-binding` refuses it, because an invited account cannot consume a grant.
+
+**Password sign-in.** Add the account, then set its password:
 
 ```bash
 genus user add --tenant acme-child-a --name "Alice Example" --email alice@example.com --role admin
 genus user set-password --tenant acme-child-a alice@example.com
 ```
 
-`genus user add` creates the account as `invited`. With SSO, the person's
-first sign-in activates it, and a binding grant (`genus auth grant-binding
---email alice@example.com --tenant acme-child-a`) lets that sign-in bind it.
-**Under password-only sign-in nothing activates it yet**: there is no CLI verb
-for that today (a follow-up), so activate it in SQL, as the application role:
+A password sign-in needs the account `active`, and `genus user add` without
+`--sso` leaves it `invited`. Nothing in the CLI activates it yet (a follow-up),
+so activate it in SQL, as the application role:
 
 ```sql
 UPDATE user_accounts SET status = 'active', updated_at = NOW()
@@ -262,9 +278,10 @@ tenants have one, the platform tenant's wins and the bridge logs an error;
 with several and none in the platform tenant, the sign-in is refused (and
 logged) until the duplicate is removed. An access token
 issued before the move still names the old tenant, and the refresh that would
-extend it is gone. The bridge and every engine re-validate human tokens
-against the account every 30 seconds, so they refuse the old access token
-within 30 seconds (immediately if the move runs inside the bridge).
+extend it is gone. The old access token remains valid until it expires (15
+min) unless the session-standing check from the tenant-admin-gates change is
+deployed; with it, the bridge and every engine refuse the token within 30 s
+(immediately if the move runs inside the bridge).
 
 ## Verification queries
 
@@ -319,6 +336,8 @@ SELECT DISTINCT tenant_id FROM crm_tasks;
   Users page of the root tenant).
 - Switching: set `GENUS_TENANT_SWITCH_MODE=off` on the bridge and every
   engine, and restart them. No new switch is issued from then on. An acting
-  token issued before the flip is rejected by each process once that process
-  has restarted with the flag off. Until then it stays valid for the rest of
-  its lifetime (at most 15 minutes). Nothing else changes.
+  token issued before the flip is rejected by the bridge once it has restarted
+  with the flag off. The engines reject it too once the tenant-admin-gates
+  change, which adds that check to them, is deployed. Until then the token
+  stays valid for the rest of its lifetime (at most 15 minutes). Nothing else
+  changes.
