@@ -72,11 +72,18 @@ The Helm deployment has a different boundary from the systemd appliance:
   (`app/src/app/api/bridge/[...path]`) will not forward the path at all. Humans
   set and rotate secrets with `robothor vault` on the appliance.
   `/api/vault/list` stays open to operators because it returns key names only.
-- Bridge mutations under `/api/` either call `require_operator(request)` or are
+- Bridge mutations under `/api/` either call an operator gate or are
   scope-gated by the middleware; `crm/bridge/tests/test_mutations_are_gated.py`
   enumerates the assembled app and fails on any route that is neither, so a new
-  ungated mutation cannot ship unnoticed. Appliance-global acts (marketplace
-  agent install/update/remove) are operator-gated and write an audit row.
+  ungated mutation cannot ship unnoticed. There are two gates
+  (`crm/bridge/routers/_operator.py`): `require_tenant_admin` for the *acting*
+  tenant's own administration (its fleet, runs, approvals, accounts, provider
+  keys), and `require_root_operator` — a root owner/admin at home, not acting in
+  a child — for appliance-wide state (flags, settings, logs, plugins, the
+  doctor, marketplace installs). `crm/bridge/tests/test_tenant_admin_gates.py`
+  classifies every admin route and fails on one that is not. Calls to the
+  engine go to the acting tenant's engine (`robothor.engine_control.
+  engine_base_url(tenant)`), with a token minted for that tenant.
 - Engine non-probe HTTP routes and the IDE WebSocket independently verify
   signed, tenant-bound Engine scopes. Channel webhooks use their own
   route-specific HMAC. Empty roles do not imply privileged execution.

@@ -198,7 +198,40 @@ parent that would make a cycle, or put any tenant more than three levels below
 a root, is refused with 422 (`robothor.crm.dal.tenant_parent_problem`). Any
 owner/admin may still edit the display name and settings of a tenant it can
 reach. The caller's own-account routes (`/me`, `/password`, `/mfa/*`) always
-run in the home tenant, where the account lives.
+run in the home tenant, where the account lives. `GET /api/tenants` and
+`GET /api/tenants/{id}` return only what the caller's home reaches; the root
+operator at home sees every tenant, and a tenant outside the caller's reach is
+a 404.
+
+### What an acting token can administer
+
+Every Helm admin route is one of two kinds, decided by the gate it calls
+(`crm/bridge/routers/_operator.py`; the full table is
+`crm/bridge/tests/test_tenant_admin_gates.py`):
+
+- **The acting tenant's own** (`require_tenant_admin`): agent manifests,
+  fleet, automations, runs, workflows, approvals, channel pairings, memory
+  facts, accounts and roles, provider keys, and the audit log (which also
+  admits `auditor`). A child tenant's own owner/admin and a root admin acting
+  in that child both pass. Every query is scoped to the acting tenant, and an
+  account grant may not exceed the caller's authority: owner can be granted
+  only by an owner whose home is the platform tenant.
+- **The appliance's** (`require_root_operator`): Controls, Settings, Logs,
+  system health, the doctor, telemetry, plugins, marketplace installs, the
+  fleet-default model, guardrail events and the guardrail change log. Only a
+  root owner/admin **at home** passes — switch back first.
+
+The bridge reaches each tenant's own engine: `GENUS_TENANT_ENGINE_URLS` (a
+JSON `{tenant: url}` map, for local development) wins, then
+`GENUS_TENANT_ENGINE_URL_TEMPLATE` with its literal `{tenant}`; with neither,
+calls fall back to the single engine with one warning per process — and that
+engine refuses a token minted for another tenant. A child tenant's agent
+manifests live on its engine's volume and are read and written through that
+engine's `/api/admin/manifests*` routes.
+
+Audit rows record the tenant they happened in (migration 154). Reads are the
+acting tenant and, for an owner/admin, its descendants; rows written before the
+migration have no tenant and only a root reader at home sees them.
 
 `GENUS_TENANT_SWITCH_MODE` is `off` by default (every switch is refused);
 `observe` runs the full check and still refuses, recording what it would have
