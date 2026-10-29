@@ -149,8 +149,8 @@ the request, so a slow or unreachable n8n cannot slow the dashboard. The section
 refreshes every 60 seconds while the view is on screen.
 
 Each row is one n8n workflow: its name, whether it is active, failed executions
-in the last 24 hours and the last 7 days, when it last failed, and a link that
-opens the workflow in n8n in a new tab. The badge in the header is the
+in the last 24 hours and the last 7 days, when it last failed (linked to that
+failed execution in n8n), and a link that opens the workflow in n8n in a new tab. The badge in the header is the
 monitor's status:
 
 | Status | Meaning |
@@ -160,7 +160,8 @@ monitor's status:
 | Unknown (grey) | The poller has never succeeded, its last success is older than three poll intervals (`ROBOTHOR_N8N_POLL_SECONDS`), or the bridge could not read the tables. |
 
 When `ROBOTHOR_N8N_ENABLED` is off the section is a single line saying n8n
-monitoring is not configured. A workflow's recent executions, each with a link
+monitoring is not configured, and it stops refreshing until the view is opened
+again. A workflow's recent executions, each with a link
 to the execution in n8n, are at
 `GET /api/integrations/n8n/workflows/{workflow_id}/executions?limit=20`
 (at most 100).

@@ -34,6 +34,8 @@ export interface N8nWorkflow {
   failures_7d: number;
   last_failure_at: string | null;
   last_error: string | null;
+  /** The newest failed execution in n8n, or `""`. */
+  last_failure_url: string;
   url: string;
 }
 
@@ -85,6 +87,7 @@ export function normalizeN8nListing(body: unknown): N8nListing {
         failures_7d: num(w.failures_7d),
         last_failure_at: str(w.last_failure_at),
         last_error: str(w.last_error),
+        last_failure_url: str(w.last_failure_url) ?? "",
         url: str(w.url) ?? "",
       })),
   };
@@ -93,9 +96,17 @@ export function normalizeN8nListing(body: unknown): N8nListing {
 export function N8nSection({ visible = true }: { visible?: boolean }) {
   const [listing, setListing] = useState<N8nListing | null>(null);
   const absorb = useCallback((body: unknown) => setListing(normalizeN8nListing(body)), []);
-  const { error, forbidden } = useBridgePoll({ visible, url: URL, onData: absorb });
-
   const notConfigured = listing?.status === "not_configured";
+  // A monitor that is switched off stays off until someone changes the
+  // instance's settings, so there is nothing for the beat to find. Paused, the
+  // hook still reads when the view comes back on screen.
+  const { error, forbidden } = useBridgePoll({
+    visible,
+    url: URL,
+    onData: absorb,
+    paused: notConfigured,
+  });
+
   const tone = listing && !notConfigured ? TONE[listing.status as keyof typeof TONE] : null;
 
   return (
@@ -169,8 +180,19 @@ export function N8nSection({ visible = true }: { visible?: boolean }) {
                   <span title="Failed executions in the last 24 hours / 7 days">
                     {w.failures_24h} / {w.failures_7d} failed
                   </span>
-                  {w.last_failure_at ? (
-                    <span title={absoluteTime(w.last_failure_at)}>
+                  {w.last_failure_at && w.last_failure_url ? (
+                    <a
+                      data-testid="n8n-last-failure"
+                      href={w.last_failure_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      title={absoluteTime(w.last_failure_at)}
+                      className="underline decoration-dotted underline-offset-2 hover:text-foreground"
+                    >
+                      last {relativeTime(w.last_failure_at)}
+                    </a>
+                  ) : w.last_failure_at ? (
+                    <span data-testid="n8n-last-failure" title={absoluteTime(w.last_failure_at)}>
                       last {relativeTime(w.last_failure_at)}
                     </span>
                   ) : null}
