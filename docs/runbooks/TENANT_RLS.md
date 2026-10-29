@@ -157,6 +157,15 @@ provider keys, the Telegram token, all asked for with the default tenant by
 sandboxed run. The session signing key and the provider key pool are always
 read in the default tenant, whatever scope asks for them.
 
+**One key for the bridge and every engine cell.** The vault master key and the
+credential-fingerprint salt normally live in the workspace (`.vault-key`,
+`.fingerprint-salt`), which gives each pod its own. `GENUS_VAULT_KEY_FILE` and
+`GENUS_FINGERPRINT_SALT_FILE` name the files outright; the chart mounts them
+from the `vault-key` secret, so every process reads the same key and salt.
+Under either setting nothing is ever generated: a missing or wrong-length key
+fails with an error naming the variable, and a missing salt logs an error and
+fingerprints unsalted until the file appears. Unset, both behave as before.
+
 **Sign-in is the exception.** A login has no token yet, and the account may
 live in any tenant — `(idp_issuer, idp_subject)` is unique platform-wide. The
 `/api/auth` sso, login, refresh, logout and switch-tenant routes and
