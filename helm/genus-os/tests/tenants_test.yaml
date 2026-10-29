@@ -421,6 +421,34 @@ tests:
           path: spec.template.spec.containers[0].env
           content: {name: ROBOTHOR_DEFAULT_TENANT, value: acme-root}
 
+  # Setting one of the two to something else would split the pod's tenant.
+  - it: engine.env may not name a tenant other than global.rootTenant
+    template: engine/workload.yaml
+    set:
+      engine.env.ROBOTHOR_DEFAULT_TENANT: acme-root
+    asserts:
+      - failedTemplate:
+          errorPattern: "set global.rootTenant instead"
+
+  - it: engine.env may repeat global.rootTenant
+    template: engine/workload.yaml
+    documentIndex: 0
+    set:
+      global.rootTenant: acme-root
+      engine.env.ROBOTHOR_TENANT_ID: acme-root
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: ROBOTHOR_DEFAULT_TENANT, value: acme-root}
+
+  - it: rejects a root tenant that is not a valid label value
+    template: engine/workload.yaml
+    set:
+      global.rootTenant: "not a label"
+    asserts:
+      - failedTemplate:
+          errorPattern: "global.rootTenant must be a valid label value"
+
   # A Deployment's selector is immutable: changing it would make every
   # existing release fail to upgrade. It stays exactly as it was.
   - it: the root engine's Deployment selector is unchanged with tenants
