@@ -505,6 +505,19 @@ engine:
 vaultKey:
   enabled: false
 
+# ─── Tenant switching ────────────────────────────────────────────────────────
+# Whether a root-tenant owner or admin may act in a descendant tenant. The
+# bridge issues the acting token and every engine enforces it, so these reach
+# the bridge, the root engine and every tenant cell alike (a component's own
+# `env` still wins). Unset renders nothing, and the code's default applies.
+tenancy:
+  # GENUS_TENANT_SWITCH_MODE: off | observe | enforce. Empty: not set (off).
+  switchMode: ""
+  # GENUS_TENANT_SWITCH_ALLOW_INERT_RLS: let switching issue tokens while
+  # row-level security is inert. Unset: not set (false). A deliberate escape
+  # hatch; see the setting's description before turning it on.
+  # allowInertRls: false
+
 # ─── Tenant engine cells ─────────────────────────────────────────────────────
 # Additional engines, one per child tenant, in this release. The root engine
 # (`engine:`) is unchanged. Each entry renders <fullname>-engine-<id> (a

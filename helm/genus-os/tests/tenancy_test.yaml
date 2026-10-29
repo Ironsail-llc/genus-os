@@ -111,8 +111,10 @@ tests:
 
   # The code reads any value it does not know as `off`; a typo would silently
   # disable switching, so it fails here instead.
+  # Release-wide: helm-unittest reports the failure on the first template that
+  # renders it, which is the root engine.
   - it: rejects an unknown switch mode
-    template: bridge/workload.yaml
+    template: engine/workload.yaml
     set:
       tenancy.switchMode: enforcing
     asserts:

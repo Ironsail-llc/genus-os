@@ -270,6 +270,24 @@ The chart refuses an id that would make `<fullname>-engine-<id>` longer than 63
 characters, because the template could then name a Service that does not
 exist.
 
+**Tenant switching.** Whether a root-tenant owner or admin may act in a
+descendant tenant is one setting, read by the bridge (which issues the acting
+token) and by every engine (which enforces it). Set it once and the chart
+renders it on the bridge, the root engine and every cell. A component's own
+`env`, or a cell's `env`, still wins.
+
+| Value | Renders | Default |
+|-------|---------|---------|
+| `tenancy.switchMode` | `GENUS_TENANT_SWITCH_MODE`: `off`, `observe` or `enforce` | `""`, which renders nothing; the code's default is `off` |
+| `tenancy.allowInertRls` | `GENUS_TENANT_SWITCH_ALLOW_INERT_RLS` | unset, which renders nothing; the code's default is `false` |
+
+Both render nothing until set, so a release that sets neither renders exactly
+as before. Any other switch mode fails at template time, because the code
+would read it as `off` and silently disable switching. `allowInertRls` lets
+switching work while row-level security is inert, which leaves each query's
+own `WHERE` clause as the only tenant boundary. Turn it on deliberately, if at
+all.
+
 **Shared vault key.** Credentials in the vault are encrypted with one master
 key, and a credential the bridge stores while acting in a child tenant is read
 back by that child's engine. So the bridge, the root engine and every cell

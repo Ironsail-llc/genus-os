@@ -69,6 +69,23 @@ Renders:
 {{- $_ := set $serviceEnv "GENUS_TENANT_ENGINE_URL_TEMPLATE" (include "genus-os.tenantEngineUrlTemplate" $root) -}}
 {{- end -}}
 {{- end -}}
+{{- /* Tenant switching: the bridge issues the acting token and every engine
+       enforces it, so one value reaches all of them. Rendered only when set,
+       so an unset key leaves the code's own default (`off`) in charge. */ -}}
+{{- if has $component (list "engine" "bridge") -}}
+{{- $tenancy := $root.Values.tenancy | default dict -}}
+{{- with $tenancy.switchMode -}}
+{{- if not (has (toString .) (list "off" "observe" "enforce")) -}}
+{{- fail (printf "tenancy.switchMode must be one of off, observe, enforce, got %q" (toString .)) -}}
+{{- end -}}
+{{- $_ := set $serviceEnv "GENUS_TENANT_SWITCH_MODE" (toString .) -}}
+{{- end -}}
+{{- if hasKey $tenancy "allowInertRls" -}}
+{{- if not (kindIs "invalid" $tenancy.allowInertRls) -}}
+{{- $_ := set $serviceEnv "GENUS_TENANT_SWITCH_ALLOW_INERT_RLS" (toString $tenancy.allowInertRls) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- $componentEnv := mergeOverwrite $serviceEnv ($cv.env | default dict) (.pinnedEnv | default dict) -}}
 {{- if and (eq $component "engine") $ws.configMap.name $ws.persistence.enabled -}}
 {{- fail (printf "%s.configMap.name and %s.persistence.enabled are mutually exclusive" $wsKey $wsKey) -}}
