@@ -10,10 +10,65 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import sys
 from typing import Any
 
-__all__ = ["configure_structured_logging", "ensure_logging_configured", "select_log_renderer"]
+__all__ = [
+    "CredentialRedactingFilter",
+    "configure_structured_logging",
+    "ensure_logging_configured",
+    "redact_log_text",
+    "select_log_renderer",
+]
+
+#: Libraries that log every request with its full URL at INFO. httpx does
+#: (``HTTP Request: GET <url> "200 OK"``), and the setup wizard checks a
+#: Telegram token at ``https://api.telegram.org/bot<token>/getMe`` — so a root
+#: INFO handler would print each token an operator types into the journal.
+_URL_LOGGING_LIBRARIES = ("httpx", "httpcore")
+
+#: A Telegram bot token in a URL path: ``/bot<digits>:<secret>``.
+_BOT_TOKEN = re.compile(r"(/bot\d+:)[A-Za-z0-9_-]+")
+
+#: A credential-bearing query (or fragment) parameter, by NAME.
+_CREDENTIAL_PARAM = re.compile(
+    r"([?&#;](?:access_token|api_key|token|key|secret|password)=)[^&#\s\"']*",
+    re.IGNORECASE,
+)
+
+_REDACTED = "[REDACTED]"
+
+
+def redact_log_text(text: str) -> str:
+    """``text`` with bot tokens and credential query parameters replaced.
+
+    Belt and braces under the httpx level below: other libraries log URLs
+    too, and a record's formatted message is the last place to catch one.
+    """
+    return _CREDENTIAL_PARAM.sub(
+        lambda m: m.group(1) + _REDACTED,
+        _BOT_TOKEN.sub(lambda m: m.group(1) + _REDACTED, text),
+    )
+
+
+class CredentialRedactingFilter(logging.Filter):
+    """Redact credentials from every record before a handler formats it.
+
+    Rewrites the record's message in place (args folded in), so the renderer
+    — JSON or console — only ever sees the redacted text.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            message = record.getMessage()
+        except Exception:  # noqa: BLE001 - a broken format string must still log
+            return True
+        redacted = redact_log_text(message)
+        if redacted != message:
+            record.msg = redacted
+            record.args = None
+        return True
 
 
 def select_log_renderer() -> Any:
@@ -64,10 +119,13 @@ def configure_structured_logging() -> None:
 
     handler = logging.StreamHandler()
     handler.setFormatter(structlog.stdlib.ProcessorFormatter(processor=select_log_renderer()))
+    handler.addFilter(CredentialRedactingFilter())
     root = logging.getLogger()
     root.handlers.clear()
     root.addHandler(handler)
     root.setLevel(logging.INFO)
+    for name in _URL_LOGGING_LIBRARIES:
+        logging.getLogger(name).setLevel(logging.WARNING)
 
 
 def ensure_logging_configured() -> bool:

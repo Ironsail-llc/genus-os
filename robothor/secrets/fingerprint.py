@@ -224,11 +224,11 @@ def _read_or_create_salt() -> bytes:
         # malformed input, so "at least 16 bytes" would silently key every
         # fingerprint with an error message.
         try:
-            found = override.read_bytes()
+            shared = override.read_bytes()
         except OSError:
-            found = b""
-        if len(found) == _SALT_BYTES:
-            return found
+            shared = b""
+        if len(shared) == _SALT_BYTES:
+            return shared
         logger.error(
             "secrets: %s names a fingerprint salt that is missing, unreadable or not "
             "exactly %d bytes; it is never generated under that setting, so "

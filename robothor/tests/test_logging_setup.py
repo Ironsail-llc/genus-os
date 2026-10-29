@@ -34,9 +34,12 @@ def bare_root(monkeypatch: pytest.MonkeyPatch):
             root.setLevel(logging.WARNING)
             return root
 
+    libraries = {name: logging.getLogger(name).level for name in ("httpx", "httpcore")}
     yield _Root()
     root.handlers[:] = stripped
     root.setLevel(saved_level)
+    for name, level in libraries.items():
+        logging.getLogger(name).setLevel(level)
     structlog.reset_defaults()
 
 

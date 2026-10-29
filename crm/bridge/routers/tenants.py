@@ -64,7 +64,7 @@ def _may_edit_tenant(request: Request, tenant_id: str) -> bool:
     if auth is None:
         return _legacy_dev_mode()
     if auth.is_service:
-        return tenant_id == auth.tenant_id
+        return bool(tenant_id == auth.tenant_id)
     return tenant_id in resolve_accessible_tenants(auth.home_tenant_id, auth.role)
 
 
