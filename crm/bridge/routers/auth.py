@@ -234,6 +234,17 @@ def _sso_exchange(
         # Do not reveal whether an email maps to a privileged, invited, or
         # disabled local account.
         return JSONResponse({"error": "account not eligible for SSO"}, status_code=403)
+    routed_over = account.pop(accounts.GRANT_OVERRODE_ROUTING, None)
+    if routed_over is not None:
+        # A binding grant put this person in the tenant holding their account,
+        # not the one their domain routes to: record both, ids only.
+        audited(
+            request,
+            "auth.sso.grant_bound",
+            action=str(account["id"]),
+            account_tenant=account["tenant_id"],
+            routed_tenant=routed_over,
+        )
     ip = request.client.host if request.client else None
     try:
         return _issue_for_account(account, user_agent=request.headers.get("user-agent"), ip=ip)

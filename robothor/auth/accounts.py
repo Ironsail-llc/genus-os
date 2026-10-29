@@ -26,6 +26,11 @@ from robothor.sanitize import sanitize_log
 logger = logging.getLogger(__name__)
 
 DEFAULT_ROLE = "member"
+
+#: Key ``jit_provision`` adds to the account it returns when a binding grant
+#: signed the person in to a tenant other than the routed one; its value is
+#: the routed tenant. The caller pops it for its audit row.
+GRANT_OVERRODE_ROUTING = "_grant_overrode_routing"
 JIT_PROVISIONABLE_ROLES = frozenset({"member", "viewer"})
 
 
@@ -456,6 +461,24 @@ def _jit_provision(
 
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
+        # A live binding grant is the operator's explicit intent, and it wins
+        # over domain routing: the account it was armed for is signed in where
+        # it lives, whether or not that tenant claims the person's domain.
+        # Exactly one tenant holding such an account and grant, else routing
+        # decides as before. Read under the caller's unbound scope.
+        routed_tenant = tenant_id
+        cur.execute(
+            """SELECT DISTINCT ua.tenant_id
+               FROM user_accounts ua
+               JOIN sso_binding_grants g ON g.tenant_id = ua.tenant_id AND g.email = ua.email
+               WHERE ua.email = %s AND ua.status = 'active' AND ua.idp_issuer IS NULL
+                 AND g.used_at IS NULL AND g.revoked_at IS NULL AND g.expires_at > NOW()
+                 AND (g.issuer IS NULL OR g.issuer = %s)""",
+            (email, issuer),
+        )
+        holders = [r["tenant_id"] for r in cur.fetchall()]
+        if len(holders) == 1:
+            tenant_id = holders[0]
         # Never turn a matching email claim into an identity binding.  The
         # explicit safe bindings are a pre-populated (idp_issuer, idp_subject)
         # pair (resolved by the branch above) or an operator-armed one-shot
@@ -507,12 +530,18 @@ def _jit_provision(
             )
             conn.commit()
             logger.info(
-                "jit_provision: binding grant %s consumed; account %s bound to issuer %s",
+                "jit_provision: binding grant %s consumed; account %s bound to issuer %s "
+                "in tenant %s",
                 grant["id"],
                 bound["id"],
                 issuer,
+                sanitize_log(tenant_id),
             )
-            return dict(bound)
+            out = dict(bound)
+            if tenant_id != routed_tenant:
+                # For the caller's audit row: the grant overrode routing.
+                out[GRANT_OVERRODE_ROUTING] = routed_tenant
+            return out
 
         # An account with this address in ANOTHER tenant blocks the create,
         # exactly as one in the routed tenant does. A domain claim routes NEW
