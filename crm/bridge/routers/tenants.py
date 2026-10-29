@@ -15,6 +15,7 @@ from robothor.crm.dal import (
     list_tenants,
     update_tenant,
 )
+from robothor.crm.tenant_domains import InvalidSsoDomainError, SsoDomainConflictError
 
 router = APIRouter(prefix="/api/tenants", tags=["tenants"])
 
@@ -70,6 +71,12 @@ def _may_edit_tenant(request: Request, tenant_id: str) -> bool:
     return tenant_id in resolve_accessible_tenants(auth.home_tenant_id, auth.role)
 
 
+def _domain_error(exc: ValueError) -> JSONResponse:
+    """409 for a domain another tenant claims, 422 for a malformed one."""
+    status = 409 if isinstance(exc, SsoDomainConflictError) else 422
+    return JSONResponse({"error": str(exc)}, status_code=status)
+
+
 @router.get("")
 def api_list_tenants(
     parentId: str | None = Query(None),
@@ -91,12 +98,15 @@ def api_create_tenant(body: CreateTenantRequest, request: Request):
         problem = crm_dal.tenant_parent_problem(body.id, body.parentTenantId)
         if problem:
             return JSONResponse({"error": problem}, status_code=422)
-    tenant_id = create_tenant(
-        tenant_id=body.id,
-        display_name=body.displayName,
-        parent_tenant_id=body.parentTenantId,
-        settings=body.settings,
-    )
+    try:
+        tenant_id = create_tenant(
+            tenant_id=body.id,
+            display_name=body.displayName,
+            parent_tenant_id=body.parentTenantId,
+            settings=body.settings,
+        )
+    except (SsoDomainConflictError, InvalidSsoDomainError) as exc:
+        return _domain_error(exc)
     if tenant_id:
         return {"id": tenant_id, "displayName": body.displayName}
     return JSONResponse({"error": "failed to create tenant (may already exist)"}, status_code=409)
@@ -178,6 +188,10 @@ def api_update_tenant(tenant_id: str, body: UpdateTenantRequest, request: Reques
     if new_active is not None:
         kwargs["active"] = new_active
 
-    if update_tenant(tenant_id, **kwargs):
+    try:
+        updated = update_tenant(tenant_id, **kwargs)
+    except (SsoDomainConflictError, InvalidSsoDomainError) as exc:
+        return _domain_error(exc)
+    if updated:
         return {"success": True, "id": tenant_id}
     return JSONResponse({"error": "tenant not found"}, status_code=404)

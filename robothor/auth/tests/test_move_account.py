@@ -78,10 +78,10 @@ def _conn(
     cur = _Cursor(
         [
             ("role = 'owner'", {"n": other_owners}),
+            ("COUNT(*)", {"n": 1}),
             ("FROM user_accounts WHERE tenant_id", {"id": "x"} if email_taken else None),
             ("FROM user_accounts WHERE id", account),
             ("FROM crm_tenants", target),
-            ("COUNT(*)", {"n": 1}),
             ("INSERT INTO audit_log", {"id": 42}),
         ]
     )

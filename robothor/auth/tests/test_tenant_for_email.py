@@ -53,7 +53,9 @@ def test_two_tenants_claiming_one_domain_fail_safe_to_default(caplog) -> None:
         caplog.at_level(logging.ERROR, logger="robothor.auth.accounts"),
     ):
         assert accounts.tenant_for_email("alice@example.com") == DEFAULT_TENANT
-    assert any(r.levelno == logging.ERROR and "example.com" in r.getMessage() for r in caplog.records)
+    assert any(
+        r.levelno == logging.ERROR and "example.com" in r.getMessage() for r in caplog.records
+    )
 
 
 def test_an_address_without_a_domain_maps_to_default() -> None:

@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
-from argparse import Namespace
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from unittest.mock import patch
 
 import pytest
+
+if TYPE_CHECKING:
+    from argparse import Namespace
 
 from robothor.auth import accounts
 from robothor.cli import _build_parser
@@ -21,7 +23,11 @@ ALICE_PARENT = {
     "role": "member",
     "status": "active",
 }
-ALICE_OTHER = {**ALICE_PARENT, "id": "00000000-0000-0000-0000-00000000a11d", "tenant_id": "acme-other"}
+ALICE_OTHER = {
+    **ALICE_PARENT,
+    "id": "00000000-0000-0000-0000-00000000a11d",
+    "tenant_id": "acme-other",
+}
 
 
 def _report(**overrides: Any) -> accounts.MoveReport:
@@ -168,7 +174,9 @@ def test_move_account_moves_the_single_match(capsys) -> None:
         patch("robothor.auth.accounts.accounts_for_email", return_value=[ALICE_PARENT]),
         patch("robothor.auth.accounts.move_account", return_value=_report()) as mv,
     ):
-        rc = cmd_tenant(_parse("move-account", "--email", "alice@example.com", "--to", "acme-child-a"))
+        rc = cmd_tenant(
+            _parse("move-account", "--email", "alice@example.com", "--to", "acme-child-a")
+        )
     assert rc == 0
     assert mv.call_args.args == (ALICE_PARENT["id"], "acme-child-a")
     assert mv.call_args.kwargs["role"] is None
@@ -209,7 +217,9 @@ def test_move_account_ambiguous_email_lists_tenants_and_moves_nothing(capsys) ->
         ),
         patch("robothor.auth.accounts.move_account") as mv,
     ):
-        rc = cmd_tenant(_parse("move-account", "--email", "alice@example.com", "--to", "acme-child-a"))
+        rc = cmd_tenant(
+            _parse("move-account", "--email", "alice@example.com", "--to", "acme-child-a")
+        )
     assert rc == 1
     mv.assert_not_called()
     err = capsys.readouterr().err
@@ -233,7 +243,9 @@ def test_move_account_unknown_email_fails(capsys) -> None:
         patch("robothor.auth.accounts.accounts_for_email", return_value=[]),
         patch("robothor.auth.accounts.move_account") as mv,
     ):
-        rc = cmd_tenant(_parse("move-account", "--email", "bob@example.com", "--to", "acme-child-a"))
+        rc = cmd_tenant(
+            _parse("move-account", "--email", "bob@example.com", "--to", "acme-child-a")
+        )
     assert rc == 1
     mv.assert_not_called()
     assert "bob@example.com" in capsys.readouterr().err

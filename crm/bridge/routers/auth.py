@@ -15,6 +15,7 @@ import hmac
 import json
 import logging
 import os
+from contextlib import AbstractContextManager, nullcontext
 from typing import TYPE_CHECKING, Annotated, Any, TypeAlias
 
 from robothor.settings import get_settings
@@ -213,16 +214,25 @@ def _sso_exchange(
         return JSONResponse({"error": "identity provider not authorized"}, status_code=403)
     if body.email_verified is not True:
         return JSONResponse({"error": "verified email required"}, status_code=403)
+    # Tenant selection is operator-controlled — a tenant's claimed SSO
+    # domains, else ROBOTHOR_DEFAULT_TENANT — and never accepted from the SSO
+    # caller. It decides where a NEW account is created and which tenant's
+    # email match and binding grant are consulted; an account already bound
+    # to this (issuer, subject) signs in to wherever it lives.
+    tenant_id = accounts.tenant_for_email(body.email)
+    # Bound to the routed tenant so the RLS WITH CHECK accepts the new row.
+    scope: AbstractContextManager[None] = (
+        tenant_scope(tenant_id) if tenant_id != DEFAULT_TENANT else nullcontext()
+    )
     try:
-        account = accounts.jit_provision(
-            issuer=body.issuer.strip(),
-            subject=body.subject.strip(),
-            email=body.email,
-            display_name=body.display_name,
-            # Tenant selection is operator-controlled through
-            # ROBOTHOR_DEFAULT_TENANT, never accepted from the SSO caller.
-            tenant_id=DEFAULT_TENANT,
-        )
+        with scope:
+            account = accounts.jit_provision(
+                issuer=body.issuer.strip(),
+                subject=body.subject.strip(),
+                email=body.email,
+                display_name=body.display_name,
+                tenant_id=tenant_id,
+            )
     except accounts.AccountProvisioningError:
         # Do not reveal whether an email maps to a privileged, invited, or
         # disabled local account.

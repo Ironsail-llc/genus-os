@@ -44,6 +44,11 @@ from robothor.crm.models import (
     task_to_dict,
     tenant_to_dict,
 )
+from robothor.crm.tenant_domains import (
+    SsoDomainConflictError,
+    normalize_sso_domains,
+    sso_domains_of,
+)
 from robothor.crm.validation import (
     COMPANY_BLOCKLIST,
     normalize_email,
@@ -3389,9 +3394,17 @@ def create_tenant(
     parent_tenant_id: str | None = None,
     settings: dict[str, Any] | None = None,
 ) -> str | None:
-    """Create a tenant. Returns tenant ID."""
+    """Create a tenant. Returns tenant ID.
+
+    Raises ``InvalidSsoDomainError`` / ``SsoDomainConflictError`` when
+    ``settings.sso_domains`` is malformed or names a domain another tenant
+    already claims (see :mod:`robothor.crm.tenant_domains`).
+    """
+    settings = _validated_sso_settings(settings)
     with get_connection() as conn:
         cur = conn.cursor()
+        if settings is not None and "sso_domains" in settings:
+            _assert_sso_domains_unclaimed(cur, tenant_id, settings["sso_domains"])
         try:
             cur.execute(
                 """INSERT INTO crm_tenants (id, display_name, parent_tenant_id, settings)
@@ -3531,8 +3544,43 @@ def tenant_parent_problem(tenant_id: str, parent_id: str) -> str | None:
     return None
 
 
+def _validated_sso_settings(settings: dict[str, Any] | None) -> dict[str, Any] | None:
+    """``settings`` with its ``sso_domains`` normalized, or raise if malformed."""
+    if settings is None or "sso_domains" not in settings:
+        return settings
+    return {**settings, "sso_domains": normalize_sso_domains(settings["sso_domains"])}
+
+
+def _assert_sso_domains_unclaimed(cur: Any, tenant_id: str, domains: list[str]) -> None:
+    """Raise ``SsoDomainConflictError`` if another tenant claims any of ``domains``.
+
+    Takes a table lock first, in the caller's transaction, so two concurrent
+    saves cannot both pass the check and leave one domain claimed twice. The
+    lock is ``SHARE ROW EXCLUSIVE``: it conflicts with itself and with writes,
+    never with reads, and is held only until this save commits.
+    """
+    if not domains:
+        return
+    cur.execute("LOCK TABLE crm_tenants IN SHARE ROW EXCLUSIVE MODE")
+    cur.execute("SELECT id, settings FROM crm_tenants WHERE id <> %s", (tenant_id,))
+    for other_id, other_settings in cur.fetchall():
+        if isinstance(other_settings, str):
+            other_settings = json.loads(other_settings)
+        claimed = set(sso_domains_of({"settings": other_settings}))
+        for domain in domains:
+            if domain in claimed:
+                raise SsoDomainConflictError(domain, other_id)
+
+
 def update_tenant(tenant_id: str, **fields: Any) -> bool:
-    """Update a tenant's fields."""
+    """Update a tenant's fields.
+
+    Raises ``InvalidSsoDomainError`` / ``SsoDomainConflictError`` when
+    ``settings.sso_domains`` is malformed or names a domain another tenant
+    already claims; every other failure is logged and returns ``False``.
+    """
+    if fields.get("settings") is not None:
+        fields["settings"] = _validated_sso_settings(fields["settings"])
     col_map = {
         "display_name": "display_name",
         "parent_tenant_id": "parent_tenant_id",
@@ -3554,6 +3602,9 @@ def update_tenant(tenant_id: str, **fields: Any) -> bool:
     with get_connection() as conn:
         cur = conn.cursor()
         try:
+            settings = fields.get("settings")
+            if settings is not None and "sso_domains" in settings:
+                _assert_sso_domains_unclaimed(cur, tenant_id, settings["sso_domains"])
             cur.execute(
                 f"UPDATE crm_tenants SET {', '.join(sets)} WHERE id = %s",
                 vals,
@@ -3561,6 +3612,9 @@ def update_tenant(tenant_id: str, **fields: Any) -> bool:
             ok: bool = cur.rowcount > 0
             conn.commit()
             return ok
+        except SsoDomainConflictError:
+            conn.rollback()
+            raise
         except Exception as e:
             conn.rollback()
             logger.error("Failed to update tenant %s: %s", sanitize_log(tenant_id), e)

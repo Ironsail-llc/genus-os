@@ -1226,7 +1226,9 @@ def _build_parser() -> argparse.ArgumentParser:
     )
 
     # tenant — multi-tenant administration
-    tenant_parser = subparsers.add_parser("tenant", help="Create, list, and inspect tenants")
+    tenant_parser = subparsers.add_parser(
+        "tenant", help="Create, list, and inspect tenants; claim SSO domains; move accounts"
+    )
     tenant_sub = tenant_parser.add_subparsers(dest="tenant_command")
     tenant_create = tenant_sub.add_parser("create", help="Create a new tenant")
     tenant_create.add_argument("id", help="Tenant ID (e.g. acme)")
@@ -1240,6 +1242,39 @@ def _build_parser() -> argparse.ArgumentParser:
         "status", help="Show tenant details, memory stats, and recent run counts"
     )
     tenant_status.add_argument("tenant_id", help="Tenant ID")
+    tenant_domains = tenant_sub.add_parser(
+        "set-domains",
+        help="Set the email domains whose new SSO users are provisioned into this tenant",
+    )
+    tenant_domains.add_argument("tenant_id", help="Tenant ID")
+    tenant_domains.add_argument(
+        "domains",
+        nargs="*",
+        help="Email domains (e.g. example.com); none clears the tenant's claim",
+    )
+    tenant_move = tenant_sub.add_parser(
+        "move-account",
+        help="Move an account and every row linked to it to another tenant",
+    )
+    tenant_move.add_argument("--email", required=True, help="The account's email address")
+    tenant_move.add_argument("--to", required=True, help="Target tenant ID")
+    tenant_move.add_argument(
+        "--from",
+        dest="from_tenant",
+        default=None,
+        help="Source tenant ID, when the address has an account in more than one tenant",
+    )
+    tenant_move.add_argument(
+        "--role",
+        choices=["admin", "member", "viewer"],
+        default=None,
+        help="Role in the target tenant (default: keep it; an owner moving into a "
+        "child tenant needs --role admin)",
+    )
+    tenant_move.add_argument(
+        "--dry-run", action="store_true", help="Show what would move; change nothing"
+    )
+    tenant_move.add_argument("--json", action="store_true", help="Print the report as JSON")
 
     # engine
     # run -- quick single-shot agent execution

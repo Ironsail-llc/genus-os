@@ -14,12 +14,14 @@ from __future__ import annotations
 
 import os
 import uuid
-from collections.abc import Iterator
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
 from robothor.auth import accounts
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 pytestmark = pytest.mark.integration
 
@@ -49,9 +51,7 @@ def world() -> Iterator[dict[str, Any]]:
     conn = _connect()
     conn.autocommit = True
     cur = conn.cursor()
-    cur.execute(
-        "INSERT INTO crm_tenants (id, display_name) VALUES (%s, 'Acme Parent')", (parent,)
-    )
+    cur.execute("INSERT INTO crm_tenants (id, display_name) VALUES (%s, 'Acme Parent')", (parent,))
     cur.execute(
         "INSERT INTO crm_tenants (id, display_name, parent_tenant_id) "
         "VALUES (%s, 'Acme Child A', %s)",
@@ -110,9 +110,7 @@ def world() -> Iterator[dict[str, Any]]:
         }
     finally:
         tenants = (parent, child)
-        cur.execute(
-            "DELETE FROM audit_log WHERE target = %s", (f"user_account:{user_id}",)
-        )
+        cur.execute("DELETE FROM audit_log WHERE target = %s", (f"user_account:{user_id}",))
         cur.execute("DELETE FROM user_sessions WHERE user_id = %s", (user_id,))
         for table in (
             "sso_binding_grants",
@@ -177,9 +175,7 @@ def _audit_rows(cur: Any, user_id: str) -> list[Any]:
 
 def test_live_move_moves_every_linked_row_revokes_sessions_and_audits(world) -> None:
     cur = world["cur"]
-    report = accounts.move_account(
-        world["user_id"], world["child"], actor="cli:test", role="admin"
-    )
+    report = accounts.move_account(world["user_id"], world["child"], actor="cli:test", role="admin")
 
     assert set(_where(cur, world).values()) == {world["child"]}
     assert report.counts == dict.fromkeys(accounts.MOVED_TABLES, 1)
@@ -199,9 +195,7 @@ def test_live_move_moves_every_linked_row_revokes_sessions_and_audits(world) -> 
 
 def test_dry_run_counts_and_moves_nothing(world) -> None:
     cur = world["cur"]
-    report = accounts.move_account(
-        world["user_id"], world["child"], actor="cli:test", dry_run=True
-    )
+    report = accounts.move_account(world["user_id"], world["child"], actor="cli:test", dry_run=True)
     assert report.counts == dict.fromkeys(accounts.MOVED_TABLES, 1)
     assert set(_where(cur, world).values()) == {world["parent"]}
     assert _live_sessions(cur, world["user_id"]) == 1
@@ -225,9 +219,7 @@ def test_a_failure_part_way_leaves_every_table_untouched(world) -> None:
 
     with pytest.raises(psycopg2.IntegrityError):
         accounts.move_account(world["user_id"], world["child"], actor="cli:test")
-    cur.execute(
-        "DELETE FROM user_permissions WHERE tenant_id = %s", (world["child"],)
-    )
+    cur.execute("DELETE FROM user_permissions WHERE tenant_id = %s", (world["child"],))
 
     assert set(_where(cur, world).values()) == {world["parent"]}
     cur.execute("SELECT role FROM user_accounts WHERE id = %s", (world["user_id"],))
@@ -237,6 +229,10 @@ def test_a_failure_part_way_leaves_every_table_untouched(world) -> None:
 
 
 def test_accounts_for_email_finds_the_account_across_tenants(world) -> None:
-    found = [a for a in accounts.accounts_for_email("Alice@Example.com") if a["tenant_id"] in (world["parent"], world["child"])]
+    found = [
+        a
+        for a in accounts.accounts_for_email("Alice@Example.com")
+        if a["tenant_id"] in (world["parent"], world["child"])
+    ]
     assert [a["tenant_id"] for a in found] == [world["parent"]]
     assert "password_hash" not in found[0]

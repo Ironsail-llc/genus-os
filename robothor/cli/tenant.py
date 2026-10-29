@@ -1,7 +1,9 @@
-"""Tenant management CLI — create, list, and inspect tenants."""
+"""Tenant management CLI — create, list, inspect, claim SSO domains, move accounts."""
 
 from __future__ import annotations
 
+import getpass
+import json
 import sys
 from typing import TYPE_CHECKING
 
@@ -18,8 +20,12 @@ def cmd_tenant(args: argparse.Namespace) -> int:
         return _cmd_list()
     if subcmd == "status":
         return _cmd_status(args)
+    if subcmd == "set-domains":
+        return _cmd_set_domains(args)
+    if subcmd == "move-account":
+        return _cmd_move_account(args)
 
-    print("Usage: robothor tenant {create|list|status}")
+    print("Usage: robothor tenant {create|list|status|set-domains|move-account}")
     return 1
 
 
@@ -92,10 +98,14 @@ def _cmd_status(args: argparse.Namespace) -> int:
         print(f"Tenant '{tenant_id}' not found.", file=sys.stderr)
         return 1
 
+    from robothor.crm.tenant_domains import sso_domains_of
+
+    # get_tenant returns the API shape (camelCase keys).
     print(f"Tenant: {tenant['id']}")
-    print(f"  Name:   {tenant.get('display_name', '-')}")
+    print(f"  Name:   {tenant.get('displayName') or '-'}")
     print(f"  Active: {tenant.get('active', True)}")
-    print(f"  Parent: {tenant.get('parent_tenant_id') or '-'}")
+    print(f"  Parent: {tenant.get('parentTenantId') or '-'}")
+    print(f"  SSO domains: {', '.join(sso_domains_of(tenant)) or '-'}")
 
     # Memory block stats
     try:
@@ -127,4 +137,77 @@ def _cmd_status(args: argparse.Namespace) -> int:
     except Exception as e:
         print(f"\n  Runs: error ({e})")
 
+    return 0
+
+
+def _cmd_set_domains(args: argparse.Namespace) -> int:
+    """Replace the email domains a tenant claims for SSO provisioning."""
+    from robothor.crm import dal
+    from robothor.crm.tenant_domains import (
+        InvalidSsoDomainError,
+        SsoDomainConflictError,
+        normalize_sso_domains,
+    )
+
+    tenant = dal.get_tenant(args.tenant_id)
+    if not tenant:
+        print(f"Tenant '{args.tenant_id}' not found.", file=sys.stderr)
+        return 1
+    try:
+        domains = normalize_sso_domains(list(args.domains))
+        settings = {**(tenant.get("settings") or {}), "sso_domains": domains}
+        ok = dal.update_tenant(args.tenant_id, settings=settings)
+    except (InvalidSsoDomainError, SsoDomainConflictError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    if not ok:
+        print(f"Error: could not update tenant '{args.tenant_id}'.", file=sys.stderr)
+        return 1
+    print(f"Tenant '{args.tenant_id}' SSO domains: {', '.join(domains) or '(none)'}")
+    return 0
+
+
+def _cmd_move_account(args: argparse.Namespace) -> int:
+    """Move one account, and every row linked to it, to another tenant."""
+    from robothor.auth import accounts
+
+    found = accounts.accounts_for_email(args.email)
+    if args.from_tenant:
+        found = [a for a in found if a["tenant_id"] == args.from_tenant]
+    if not found:
+        where = f" in tenant '{args.from_tenant}'" if args.from_tenant else ""
+        print(f"Error: no account for {args.email}{where}.", file=sys.stderr)
+        return 1
+    if len(found) > 1:
+        tenants = ", ".join(str(a["tenant_id"]) for a in found)
+        print(
+            f"Error: {args.email} has an account in more than one tenant ({tenants}); "
+            "choose one with --from <tenant>.",
+            file=sys.stderr,
+        )
+        return 1
+
+    try:
+        report = accounts.move_account(
+            str(found[0]["id"]),
+            args.to,
+            actor=f"cli:{getpass.getuser()}",
+            role=args.role,
+            dry_run=args.dry_run,
+        )
+    except accounts.AccountMoveError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+    if args.json:
+        print(json.dumps(report.to_dict(), indent=2))
+        return 0
+    verb = "Would move" if report.dry_run else "Moved"
+    print(f"{verb} {report.email} from '{report.from_tenant}' to '{report.to_tenant}'")
+    if report.role_after != report.role_before:
+        print(f"  Role: {report.role_before} -> {report.role_after}")
+    for table, n in report.counts.items():
+        print(f"  {table:<25} {n}")
+    if not report.dry_run:
+        print(f"  Sessions revoked: {report.sessions_revoked}")
     return 0

@@ -8,13 +8,19 @@ with the rest of the platform's multi-tenant isolation.
 from __future__ import annotations
 
 import logging
+from dataclasses import asdict, dataclass
+from dataclasses import field as dataclass_field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from psycopg2.extras import RealDictCursor
+from psycopg2.extras import Json, RealDictCursor
 
 from robothor.constants import DEFAULT_TENANT
-from robothor.db.connection import get_connection, unbound_scope
+from robothor.db.connection import (
+    get_connection,
+    read_every_tenant_in_transaction,
+    unbound_scope,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +60,10 @@ class UnsafeProvisioningRoleError(AccountProvisioningError):
 
 class GrantTargetError(RuntimeError):
     """A binding grant was armed for an account that could never consume it."""
+
+
+class AccountMoveError(RuntimeError):
+    """``move_account`` refused before writing anything. The message says why."""
 
 
 def get_account_by_id(user_id: str) -> dict[str, Any] | None:
@@ -306,6 +316,44 @@ def get_account_by_idp(issuer: str, subject: str) -> dict[str, Any] | None:
         )
         row = cur.fetchone()
         return dict(row) if row else None
+
+
+def tenant_for_email(email: str) -> str:
+    """The tenant a brand-new SSO user with this address is provisioned into.
+
+    The tenant that claims the address's domain in ``settings.sso_domains``
+    (:mod:`robothor.crm.tenant_domains`), else ``DEFAULT_TENANT``. Exact domain
+    match only: claiming ``example.com`` does not claim ``mail.example.com``.
+
+    Never raises. This runs on the sign-in path, so every unclear answer — no
+    claim, two tenants claiming one domain (a configuration error the writer
+    refuses, logged here as an error), an unreadable tenant table — lands on
+    the default tenant rather than failing the login. Only inactive-tenant
+    claims are ignored: a disabled tenant must not receive new accounts.
+    """
+    _local, at, domain = canonical_email(email).rpartition("@")
+    if not at or not domain:
+        return DEFAULT_TENANT
+    try:
+        from robothor.crm import dal
+        from robothor.crm.tenant_domains import sso_domains_of
+
+        tenants = dal.list_tenants(active_only=True)
+    except Exception:
+        logger.exception("tenant_for_email: tenant table unreadable; using the default tenant")
+        return DEFAULT_TENANT
+    matches = sorted({t["id"] for t in tenants if domain in sso_domains_of(t)})
+    if len(matches) == 1:
+        return str(matches[0])
+    if matches:
+        logger.error(
+            "tenant_for_email: domain %s is claimed by %d tenants (%s); "
+            "provisioning into the default tenant until the claim is fixed",
+            domain,
+            len(matches),
+            ", ".join(matches),
+        )
+    return DEFAULT_TENANT
 
 
 def jit_provision(
@@ -731,6 +779,250 @@ def revoke_session(refresh_token_hash: str) -> bool:
         revoked = bool(cur.rowcount > 0)
         conn.commit()
         return revoked
+
+
+# ── Moving an account to another tenant ─────────────────────────────
+
+#: Every table that holds a row linked to an account, in the order a move
+#: rewrites them. ``user_sessions`` is not here: sessions are revoked, not moved.
+MOVED_TABLES = (
+    "user_accounts",
+    "crm_people",
+    "user_permissions",
+    "user_channel_identities",
+    "face_identities",
+    "tenant_users",
+    "sso_binding_grants",
+)
+
+#: Roles a move may assign. Never ``owner``: a move must not mint a second
+#: owner, and a child tenant has none at all.
+MOVE_ROLES = frozenset({"admin", "member", "viewer"})
+
+
+@dataclass
+class MoveReport:
+    """What :func:`move_account` moved, or (``dry_run``) would move."""
+
+    user_id: str
+    email: str
+    from_tenant: str
+    to_tenant: str
+    role_before: str
+    role_after: str
+    dry_run: bool
+    counts: dict[str, int] = dataclass_field(default_factory=dict)
+    sessions_revoked: int = 0
+    audit_id: int | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+def accounts_for_email(email: str) -> list[dict[str, Any]]:
+    """Every account with this address, in any tenant, without credentials.
+
+    The lookup ``genus tenant move-account --email`` needs: which tenant an
+    address lives in is a question across tenants by definition, so the read
+    widens RLS for its one transaction (pinned in
+    ``test_benchmark_decontamination.py``).
+    """
+    with get_connection() as conn:
+        read_every_tenant_in_transaction(conn)
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            f"SELECT {_ADMIN_COLUMNS} FROM user_accounts WHERE email = %s "  # noqa: S608
+            "ORDER BY tenant_id",
+            (canonical_email(email),),
+        )
+        rows = [dict(r) for r in cur.fetchall()]
+        conn.rollback()  # end the widened read-only transaction
+        return rows
+
+
+def _linked_rows(account: dict[str, Any], source: str) -> list[tuple[str, str, tuple[Any, ...]]]:
+    """``(table, WHERE clause, params)`` for every row group that moves with the account.
+
+    Each predicate names the SOURCE tenant as well as the link, so a row the
+    account is linked to in some other tenant is never dragged along.
+    """
+    uid = str(account["id"])
+    person_id = account.get("person_id")
+    groups: list[tuple[str, str, tuple[Any, ...]]] = [
+        ("user_accounts", "id = %s", (uid,)),
+    ]
+    if person_id:
+        groups.append(("crm_people", "id = %s AND tenant_id = %s", (str(person_id), source)))
+    groups += [
+        ("user_permissions", "tenant_id = %s AND user_id = %s", (source, uid)),
+        ("user_channel_identities", "tenant_id = %s AND user_id = %s", (source, uid)),
+        ("face_identities", "tenant_id = %s AND user_account_id = %s", (source, uid)),
+    ]
+    if person_id:
+        groups.append(
+            ("tenant_users", "tenant_id = %s AND person_id = %s", (source, str(person_id)))
+        )
+    groups.append(
+        (
+            "sso_binding_grants",
+            "tenant_id = %s AND email = %s AND used_at IS NULL AND revoked_at IS NULL",
+            (source, str(account["email"])),
+        )
+    )
+    return groups
+
+
+def _refuse_move(
+    cur: Any, account: dict[str, Any], user_id: str, to_tenant: str, role: str | None
+) -> None:
+    """Raise ``AccountMoveError`` for every reason the move must not happen."""
+    source = account["tenant_id"]
+    if role is not None and role not in MOVE_ROLES:
+        raise AccountMoveError(
+            f"a move can assign role {', '.join(sorted(MOVE_ROLES))}, not {role!r}"
+        )
+    cur.execute("SELECT id, active, parent_tenant_id FROM crm_tenants WHERE id = %s", (to_tenant,))
+    target = cur.fetchone()
+    if not target:
+        raise AccountMoveError(f"target tenant {to_tenant!r} does not exist")
+    if not target["active"]:
+        raise AccountMoveError(f"target tenant {to_tenant!r} is not active")
+    if source == to_tenant:
+        raise AccountMoveError(f"account is already in tenant {to_tenant!r}")
+    if account["role"] == "owner":
+        # Any status counts: an invited or disabled owner still holds the
+        # one-owner slot (migration 071), see ``owner_count``.
+        cur.execute(
+            "SELECT COUNT(*) AS n FROM user_accounts "
+            "WHERE tenant_id = %s AND role = 'owner' AND id <> %s",
+            (source, user_id),
+        )
+        if int(cur.fetchone()["n"]) == 0:
+            raise AccountMoveError(
+                f"account is the last owner of tenant {source!r}; make someone else its owner first"
+            )
+    if (role or account["role"]) == "owner" and target["parent_tenant_id"]:
+        raise AccountMoveError(
+            f"tenant {to_tenant!r} is a child tenant and has no owner; "
+            "move the account with --role admin"
+        )
+    cur.execute(
+        "SELECT id FROM user_accounts WHERE tenant_id = %s AND email = %s",
+        (to_tenant, str(account["email"])),
+    )
+    if cur.fetchone():
+        raise AccountMoveError(
+            f"tenant {to_tenant!r} already has an account for {account['email']}"
+        )
+
+
+def move_account(
+    user_id: str,
+    to_tenant: str,
+    *,
+    actor: str,
+    role: str | None = None,
+    dry_run: bool = False,
+) -> MoveReport:
+    """Move one account, and every row linked to it, to another tenant.
+
+    ONE transaction, under :func:`read_every_tenant_in_transaction` (the move
+    reads the source tenant and writes the target; a connection bound to
+    either would see half of it). In it: every refusal is checked before the
+    first write; the row groups in :data:`MOVED_TABLES` are rewritten; the
+    account's live refresh sessions are revoked, so the next token it gets
+    carries the new tenant; and one ``audit_log`` row records the move. Any
+    failure rolls all of it back.
+
+    ``role`` reassigns the role on the way (one of :data:`MOVE_ROLES`);
+    ``None`` keeps it. ``dry_run`` reports the per-table counts and rolls back.
+
+    Raises ``AccountMoveError`` for a refusal; database errors propagate after
+    the rollback.
+    """
+    with get_connection() as conn:
+        try:
+            read_every_tenant_in_transaction(conn)
+            cur = conn.cursor(cursor_factory=RealDictCursor)
+            cur.execute("SELECT * FROM user_accounts WHERE id = %s FOR UPDATE", (user_id,))
+            account = cur.fetchone()
+            if not account:
+                raise AccountMoveError(f"no account with id {user_id!r}")
+            _refuse_move(cur, account, user_id, to_tenant, role)
+            source = account["tenant_id"]
+            report = MoveReport(
+                user_id=str(account["id"]),
+                email=str(account["email"]),
+                from_tenant=source,
+                to_tenant=to_tenant,
+                role_before=account["role"],
+                role_after=role or account["role"],
+                dry_run=dry_run,
+                counts=dict.fromkeys(MOVED_TABLES, 0),
+            )
+            groups = _linked_rows(account, source)
+
+            if dry_run:
+                for table, where, params in groups:
+                    cur.execute(
+                        f"SELECT COUNT(*) AS n FROM {table} WHERE {where}",  # noqa: S608
+                        params,
+                    )
+                    report.counts[table] = int(cur.fetchone()["n"])
+                conn.rollback()
+                return report
+
+            for table, where, params in groups:
+                if table == "user_accounts":
+                    cur.execute(
+                        "UPDATE user_accounts SET tenant_id = %s, role = %s, "
+                        "updated_at = NOW() WHERE id = %s",
+                        (to_tenant, report.role_after, report.user_id),
+                    )
+                else:
+                    cur.execute(
+                        f"UPDATE {table} SET tenant_id = %s WHERE {where}",  # noqa: S608
+                        (to_tenant, *params),
+                    )
+                report.counts[table] = int(cur.rowcount or 0)
+
+            cur.execute(
+                "UPDATE user_sessions SET revoked_at = NOW() "
+                "WHERE user_id = %s AND revoked_at IS NULL",
+                (report.user_id,),
+            )
+            report.sessions_revoked = int(cur.rowcount or 0)
+
+            details = {
+                k: v for k, v in report.to_dict().items() if k not in ("audit_id", "dry_run")
+            }
+            cur.execute(
+                """INSERT INTO audit_log
+                       (event_type, category, actor, action, details, target, status, user_id)
+                   VALUES ('auth.account_moved', 'auth', %s, %s, %s, %s, 'ok', %s)
+                   RETURNING id""",
+                (
+                    actor,
+                    f"move account {report.user_id} from {source} to {to_tenant}",
+                    Json(details),
+                    f"user_account:{report.user_id}",
+                    report.user_id,
+                ),
+            )
+            report.audit_id = int(cur.fetchone()["id"])
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+    logger.info(
+        "move_account: %s moved %s from %s to %s (%s)",
+        actor,
+        report.user_id,
+        report.from_tenant,
+        report.to_tenant,
+        report.counts,
+    )
+    return report
 
 
 # ── Owner bootstrap (single-operator → first admin) ─────────────────
