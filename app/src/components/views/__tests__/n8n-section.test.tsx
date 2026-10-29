@@ -105,6 +105,21 @@ describe("N8nSection", () => {
     expect(screen.queryAllByTestId("n8n-row")).toHaveLength(0);
   });
 
+  it("a database error the bridge names is shown, not an empty healthy list", async () => {
+    vi.spyOn(global, "fetch").mockResolvedValue(
+      reply({
+        ...LISTING,
+        status: "unknown",
+        last_error: "relation n8n_workflows does not exist",
+        workflows: [],
+      })
+    );
+    render(<N8nSection visible />);
+    const line = await screen.findByTestId("n8n-last-error");
+    expect(line.textContent).toContain("relation n8n_workflows does not exist");
+    expect(within(await screen.findByTestId("n8n-status")).getByText("Unknown")).toBeTruthy();
+  });
+
   it("an operator-only refusal is the forbidden sentence, not an error", async () => {
     vi.spyOn(global, "fetch").mockResolvedValue(reply({ detail: "operator role required" }, 403));
     render(<N8nSection visible />);
