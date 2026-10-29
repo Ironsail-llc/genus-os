@@ -1225,6 +1225,41 @@ recognises. SOPS-encrypted files, `secrets*` files, key files (`*.pem`,
 `KEY=VALUE` lines are still refused. `exec` checks are unchanged:
 `cat robothor.env` is still refused.
 
+### Workflows: `list_workflows`, `run_workflow`, `workflow_runs`
+
+An agent can start the instance's declared workflows and report on them from a
+chat, instead of asking the operator to open the dashboard.
+
+- `list_workflows` returns each loaded workflow: id, name, description, its
+  triggers (cron schedule, or the stream and event type it listens on), the
+  last run's status, start time and trigger, and how many runs failed or timed
+  out in the last 7 days.
+- `run_workflow` takes `workflow_id`, an optional `payload` object and
+  `wait_seconds` (0–120). The run's steps see the payload as
+  `{{ event.payload.<key> }}`, the same shape a hook-triggered run gets. The run
+  always goes on in the background; the call only waits for it. It returns
+  `{status: "started", run_id}` while the run is still going, `{status, run_id,
+  error_message}` once it has finished, `{status: "already_running"}` when a
+  run of that workflow is in progress, and `{error: "unknown_workflow"}` for an
+  id that is not loaded. With `wait_seconds: 0` it still waits about 2 seconds,
+  so a run refused at once is not reported as started.
+- `workflow_runs` takes `workflow_id` and `limit` (default 10, at most 50) and
+  returns recent runs, newest first, with each step's status.
+
+The run is recorded with trigger type `agent` and trigger detail
+`agent:<agent id>:<agent run id>`. It runs as the user of the chat that asked
+for it. With no user (a scheduled or service run), it runs as
+`service:agent:<agent id>` with role `service`. Run history is always limited to
+the caller's tenant. `list_workflows` and `workflow_runs` are read-only;
+`run_workflow` is not, and benchmark runs get none of the three.
+
+**Which to use.** Use `run_workflow` when the work is a workflow that is already
+declared: a fixed, repeatable pipeline with its own steps, timeout and run
+history. Use `spawn_agent` for open-ended work that one agent should reason
+through. A workflow can do anything its steps do, so deployments should deny
+`run_workflow` to member-class roles through RBAC (`role_permissions`) and
+leave it to the owner's own agents.
+
 ### Everything else
 
 The full registry is large and changes with the release; `tool_search` over the
@@ -1239,6 +1274,7 @@ agent's own allow-set is the authoritative answer. The families:
 | Notifications | `get_inbox`, `ack_notification`, `send_notification` |
 | Skills | `list_skills`, `invoke_skill` |
 | Sub-agents | `spawn_agent`, `spawn_agents` (only with `can_spawn_agents`) |
+| Workflows | [`list_workflows`, `run_workflow`, `workflow_runs`](#workflows-list_workflows-run_workflow-workflow_runs) |
 | Vision | `view_image`, `analyze_image` (image files — see above); `look`, `who_is_here` (a real camera) |
 | Desktop | `desktop_*` (a real screen) |
 
