@@ -15,8 +15,15 @@ import { test, expect, type Page, type Route } from "@playwright/test";
 
 const TASKS_URL = "/?v=tasks";
 
-const PARENT = { id: "acme-parent", display_name: "Acme Parent", parent_tenant_id: null, is_home: true };
-const CHILD = {
+interface Tenant {
+  id: string;
+  display_name: string;
+  parent_tenant_id: string | null;
+  is_home: boolean;
+}
+
+const PARENT: Tenant = { id: "acme-parent", display_name: "Acme Parent", parent_tenant_id: null, is_home: true };
+const CHILD: Tenant = {
   id: "acme-child-a",
   display_name: "Acme Child A",
   parent_tenant_id: "acme-parent",
@@ -34,7 +41,7 @@ function json(route: Route, body: unknown, status = 200) {
 
 interface Identity {
   home: string;
-  accessible: (typeof PARENT)[];
+  accessible: Tenant[];
 }
 
 async function setupMocks(page: Page, identity: Identity) {

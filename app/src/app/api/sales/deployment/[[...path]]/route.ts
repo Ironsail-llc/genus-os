@@ -1,8 +1,9 @@
 import { bridgeAuthHeaders } from "@/lib/bridge-auth";
+import { engineUrlFor } from "@/lib/services/registry";
+import { tenantClaimsFromAuthorization } from "@/lib/tenant-session";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
-const ENGINE_URL = process.env.ROBOTHOR_ENGINE_URL || "http://127.0.0.1:18800";
 const UUID = "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}";
 type Context = { params: Promise<{ path?: string[] }> };
 
@@ -24,7 +25,9 @@ async function proxy(request: Request, context: Context) {
     return Response.json({ error: "Request too large" }, { status: 413 });
   }
   try {
-    const response = await fetch(`${ENGINE_URL.replace(/\/$/, "")}/api/admin/sales-deployment${path ? `/${path}` : ""}`, {
+    // The acting tenant's engine: a switched session manages that tenant's deployment.
+    const engine = engineUrlFor(tenantClaimsFromAuthorization(identity.Authorization)?.tenant);
+    const response = await fetch(`${engine}/api/admin/sales-deployment${path ? `/${path}` : ""}`, {
       method: request.method,
       headers: { Authorization: identity.Authorization, "Content-Type": "application/json" },
       body, redirect: "error", cache: "no-store", signal: AbortSignal.timeout(120_000),

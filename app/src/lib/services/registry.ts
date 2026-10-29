@@ -156,6 +156,61 @@ export function getServiceUrl(name: string, urlPath = ""): string | null {
   return validatedServiceUrl(base, urlPath);
 }
 
+const DEFAULT_ENGINE_URL = "http://127.0.0.1:18800";
+// A Kubernetes Service name segment: what the chart's `{tenant}` template can
+// actually name. Anything else would be spliced into a URL as-is.
+const TENANT_ID = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+
+function rootTenant(): string {
+  return process.env.ROBOTHOR_DEFAULT_TENANT?.trim() || "default";
+}
+
+function tenantEngineOverride(tenant: string): string | undefined {
+  const raw = process.env.GENUS_TENANT_ENGINE_URLS?.trim();
+  if (!raw) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error("Invalid GENUS_TENANT_ENGINE_URLS: not a JSON object");
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Invalid GENUS_TENANT_ENGINE_URLS: not a JSON object");
+  }
+  const value = (parsed as Record<string, unknown>)[tenant];
+  return typeof value === "string" && value ? value : undefined;
+}
+
+/**
+ * The engine that serves `tenant`, resolved in the bridge's order:
+ * `GENUS_TENANT_ENGINE_URLS` (JSON `{tenant: url}`), then
+ * `GENUS_TENANT_ENGINE_URL_TEMPLATE` (literal `{tenant}` placeholder), then
+ * `ROBOTHOR_ENGINE_URL`. The root tenant (`ROBOTHOR_DEFAULT_TENANT`, default
+ * `default`) — and no tenant at all — is always `ROBOTHOR_ENGINE_URL`.
+ *
+ * Read at call time, and fails closed: a misconfigured override or template
+ * throws rather than sending a child tenant's session to the root engine.
+ */
+export function engineUrlFor(tenant?: string | null): string {
+  const root = (process.env.ROBOTHOR_ENGINE_URL || DEFAULT_ENGINE_URL).replace(/\/$/, "");
+  if (!tenant || tenant === rootTenant()) return root;
+
+  const override = tenantEngineOverride(tenant);
+  const template = process.env.GENUS_TENANT_ENGINE_URL_TEMPLATE?.trim();
+  let candidate: string;
+  if (override) {
+    candidate = override;
+  } else if (template?.includes("{tenant}")) {
+    if (!TENANT_ID.test(tenant)) throw new Error("Invalid tenant id for engine routing");
+    candidate = template.replaceAll("{tenant}", tenant);
+  } else {
+    return root;
+  }
+  const validated = validatedServiceUrl(candidate);
+  if (!validated) throw new Error(`Invalid engine URL configuration for tenant ${tenant}`);
+  return validated;
+}
+
 /** Resolve a health/readiness target from operator runtime configuration only. */
 export function getConfiguredServiceUrl(name: string, urlPath = ""): string | null {
   const envKey = ENV_OVERRIDES[name];

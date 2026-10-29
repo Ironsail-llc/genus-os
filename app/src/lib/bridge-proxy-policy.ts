@@ -28,11 +28,16 @@
  * verdicts, never a value — and Settings goes dark if a broader pattern ever
  * swallows them.
  *
+ * `/api/auth/switch-tenant` is denied because its reply IS a bearer: the
+ * bridge answers a tenant switch with a fresh access token in the body, and
+ * this proxy would hand it to browser JavaScript. The Helm switches through
+ * `/api/session/switch-tenant`, which keeps the token in the session cookie.
+ *
  * Matched against the RESOLVED target path (after `new URL` normalizes any
  * `..` segments), never the raw string the caller supplied.
  */
 export const DENIED_BRIDGE_PATHS =
-  /^\/(?:api\/)?(?:vault\/(?:get|list)|setup)(?:\/|$)/i;
+  /^\/(?:api\/)?(?:vault\/(?:get|list)|setup|auth\/switch-tenant)(?:\/|$)/i;
 
 export function isDeniedBridgePath(pathname: string): boolean {
   return DENIED_BRIDGE_PATHS.test(pathname);
