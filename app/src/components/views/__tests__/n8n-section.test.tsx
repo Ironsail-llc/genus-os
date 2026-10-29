@@ -1,0 +1,125 @@
+/**
+ * External: n8n — the operator's own n8n, watched from the Automations view.
+ *
+ * The claims: it lists each workflow with its failure counts and a link out to
+ * n8n; a monitor that is switched off is one muted line, not an error; a member
+ * sees the operator-only sentence, not red; an unreachable bridge says so; and
+ * it does not touch the bridge while the view is hidden.
+ */
+import { render, screen, within } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { N8nSection } from "../automations/n8n-section";
+import { BRIDGE_UNREACHABLE } from "@/lib/bridge/use-bridge-poll";
+
+afterEach(() => vi.restoreAllMocks());
+
+const LISTING = {
+  status: "warn",
+  base_url: "https://n8n.example.com",
+  last_poll_at: "2026-06-15T12:00:00Z",
+  last_ok_at: "2026-06-15T12:00:00Z",
+  last_error: null,
+  workflows: [
+    {
+      workflow_id: "wf1",
+      name: "Invoice sync",
+      active: true,
+      tags: ["billing"],
+      failures_24h: 2,
+      failures_7d: 5,
+      last_failure_at: new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString(),
+      last_error: "timeout",
+      url: "https://n8n.example.com/workflow/wf1",
+    },
+    {
+      workflow_id: "wf2",
+      name: "Lead intake",
+      active: false,
+      tags: [],
+      failures_24h: 0,
+      failures_7d: 0,
+      last_failure_at: null,
+      last_error: null,
+      url: "https://n8n.example.com/workflow/wf2",
+    },
+  ],
+};
+
+function reply(body: unknown, status = 200) {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    json: async () => body,
+    text: async () => JSON.stringify(body),
+    headers: new Headers({ "content-type": "application/json" }),
+  } as unknown as Response;
+}
+
+describe("N8nSection", () => {
+  it("reads the n8n listing through the bridge proxy", async () => {
+    const spy = vi.spyOn(global, "fetch").mockResolvedValue(reply(LISTING));
+    render(<N8nSection visible />);
+    await screen.findAllByTestId("n8n-row");
+    expect(spy).toHaveBeenCalledWith("/api/bridge/api/integrations/n8n/workflows");
+  });
+
+  it("renders a row per workflow with counts, active pill and a link out", async () => {
+    vi.spyOn(global, "fetch").mockResolvedValue(reply(LISTING));
+    render(<N8nSection visible />);
+    const rows = await screen.findAllByTestId("n8n-row");
+    expect(rows).toHaveLength(2);
+
+    const first = within(rows[0]);
+    expect(first.getByText("Invoice sync")).toBeTruthy();
+    expect(rows[0].textContent).toMatch(/active/i);
+    expect(rows[0].textContent).toMatch(/2\s*\/\s*5/);
+    expect(rows[0].textContent).toMatch(/3 hours ago/);
+    const link = first.getByRole("link");
+    expect(link.getAttribute("href")).toBe("https://n8n.example.com/workflow/wf1");
+    expect(link.getAttribute("target")).toBe("_blank");
+    expect(link.getAttribute("rel")).toContain("noopener");
+
+    expect(rows[1].textContent).toMatch(/inactive/i);
+  });
+
+  it("headlines the section with its status", async () => {
+    vi.spyOn(global, "fetch").mockResolvedValue(reply(LISTING));
+    render(<N8nSection visible />);
+    await screen.findAllByTestId("n8n-row");
+    const section = screen.getByTestId("n8n-section");
+    expect(section.textContent).toContain("External: n8n");
+    expect(within(section).getByTestId("n8n-status").textContent).toMatch(/warn/i);
+  });
+
+  it("a switched-off monitor is one muted line pointing at the docs", async () => {
+    vi.spyOn(global, "fetch").mockResolvedValue(
+      reply({ ...LISTING, status: "not_configured", workflows: [] })
+    );
+    render(<N8nSection visible />);
+    const line = await screen.findByTestId("n8n-not-configured");
+    expect(line.textContent).toContain("n8n monitoring is not configured");
+    expect(line.textContent).toContain("docs/integrations/n8n.md");
+    expect(screen.queryAllByTestId("n8n-row")).toHaveLength(0);
+  });
+
+  it("an operator-only refusal is the forbidden sentence, not an error", async () => {
+    vi.spyOn(global, "fetch").mockResolvedValue(reply({ detail: "operator role required" }, 403));
+    render(<N8nSection visible />);
+    expect(await screen.findByTestId("n8n-forbidden")).toBeTruthy();
+    expect(screen.queryByTestId("n8n-error")).toBeNull();
+  });
+
+  it("an unreachable bridge says so", async () => {
+    vi.spyOn(global, "fetch").mockRejectedValue(new TypeError("fetch failed"));
+    render(<N8nSection visible />);
+    const err = await screen.findByTestId("n8n-error");
+    expect(err.textContent).toContain(BRIDGE_UNREACHABLE);
+  });
+
+  it("does not fetch when hidden", () => {
+    const spy = vi.spyOn(global, "fetch").mockResolvedValue(reply(LISTING));
+    render(<N8nSection visible={false} />);
+    expect(spy).not.toHaveBeenCalled();
+  });
+});
