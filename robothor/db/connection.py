@@ -418,8 +418,9 @@ connection already checked out.
     duplicate, and sign-in 500s on a UniqueViolation. Pinned by
     ``tests/test_unbound_scope_callers.py`` to the sign-in paths only: the
     bridge's ``/api/auth`` sso, login, refresh, logout and switch-tenant
-    routes, and ``accounts.get_account_by_idp``, ``jit_provision`` and
-    ``consume_active_session``. ``current_tenant_scope()`` reports ``None``
+    routes, and ``accounts.get_account_by_idp``, ``jit_provision``,
+    ``consume_active_session`` and ``login_account_for_email`` (password
+    sign-in for an account in any tenant). ``current_tenant_scope()`` reports ``None``
     inside it, so nothing that defaults a tenant from the scope writes under
     the sentinel.
 

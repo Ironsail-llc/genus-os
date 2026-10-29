@@ -38,6 +38,24 @@ VALID_ROLES = HUMAN_ROLES
 
 
 def cmd_user(args: Namespace) -> int:
+    """Run one ``user`` verb, bound to ``--tenant`` when it is given.
+
+    With RLS enforcing, a connection is confined to the tenant it is bound to,
+    and a CLI process is bound to its own tenant. So ``--tenant <child>`` from
+    a root shell must also mean "run in the child's scope": otherwise every
+    write into the child is refused by the policy's ``WITH CHECK`` and every
+    lookup in it finds nothing.
+    """
+    from robothor.db.connection import tenant_scope
+
+    tenant = getattr(args, "tenant", None)
+    if tenant:
+        with tenant_scope(tenant):
+            return _dispatch(args)
+    return _dispatch(args)
+
+
+def _dispatch(args: Namespace) -> int:
     command = getattr(args, "user_command", None)
     if command == "list":
         return _cmd_list(args)

@@ -84,6 +84,7 @@ def app_role(db_conn, monkeypatch):
         finally:
             conn.close()
 
+    original = connection.get_connection  # before anything below replaces it
     real = conftest_integration._current_holder.get("real")
     proxy = conftest_integration._session_fake_get_connection
     monkeypatch.setitem(conftest_integration._current_holder, "real", scoped)
@@ -95,4 +96,10 @@ def app_role(db_conn, monkeypatch):
         if local is not None and local in (real, proxy, connection.get_connection):
             monkeypatch.setattr(module, "get_connection", scoped)
     monkeypatch.setattr(connection, "get_connection", scoped)
-    return scoped
+    yield scoped
+    # A module first imported DURING the test bound ``scoped`` at import time,
+    # which monkeypatch never set and so never restores; the next test would
+    # inherit a function closed over this test's (closed) connection.
+    for module in list(sys.modules.values()):
+        if module is not None and getattr(module, "get_connection", None) is scoped:
+            module.get_connection = original

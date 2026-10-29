@@ -3430,8 +3430,14 @@ def create_tenant_with_user(
     """Create a tenant and its first user in a single transaction.
 
     Returns tenant ID on success, None on failure.
+
+    Bound to the NEW tenant: the caller is usually a root shell, and with RLS
+    enforcing the ``tenant_users`` row is refused under any other binding.
+    (``crm_tenants`` has no RLS, so the tenant row itself is unaffected.)
     """
-    with get_connection() as conn:
+    from robothor.db.connection import tenant_scope
+
+    with tenant_scope(tenant_id), get_connection() as conn:
         cur = conn.cursor()
         try:
             cur.execute(

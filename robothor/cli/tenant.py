@@ -39,9 +39,15 @@ def _cmd_create(args: argparse.Namespace) -> int:
     telegram_user_id = getattr(args, "telegram_user_id", None)
     parent = getattr(args, "parent", None)
 
-    # Check if tenant already exists
+    # An existing tenant is finished, not refused, when a previous create was
+    # interrupted after the row was written: seeding is idempotent, so a rerun
+    # adds whatever blocks are missing and says so.
     existing = get_tenant(tenant_id)
     if existing:
+        seeded = seed_blocks_for_tenant(tenant_id)
+        if seeded:
+            print(f"Tenant '{tenant_id}' already existed; seeded {seeded} missing memory blocks.")
+            return 0
         print(f"Error: Tenant '{tenant_id}' already exists.", file=sys.stderr)
         return 1
 

@@ -230,6 +230,13 @@ def api_update_tenant(tenant_id: str, body: UpdateTenantRequest, request: Reques
     if new_active is not None:
         kwargs["active"] = new_active
 
+    if not kwargs:
+        # Nothing to change (e.g. {"parentTenantId": null}): a no-op is not a
+        # missing tenant. update_tenant answers False for an empty change.
+        if crm_dal.get_tenant(tenant_id):
+            return {"success": True, "id": tenant_id}
+        return JSONResponse({"error": "tenant not found"}, status_code=404)
+
     try:
         updated = update_tenant(tenant_id, **kwargs)
     except (SsoDomainConflictError, InvalidSsoDomainError) as exc:

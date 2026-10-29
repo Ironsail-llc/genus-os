@@ -27,7 +27,11 @@ pytestmark = pytest.mark.integration
 
 #: One seeded row per linked table, except tenant_users: the person's routing
 #: row and the Telegram pairing row (keyed by the account, no person_id).
-EXPECTED_COUNTS = {**dict.fromkeys(accounts.MOVED_TABLES, 1), "tenant_users": 2}
+EXPECTED_COUNTS = {
+    **dict.fromkeys(accounts.MOVED_TABLES, 1),
+    "tenant_users": 2,
+    "contact_identifiers": 0,  # the world seeds none; see the user-add RLS test
+}
 
 PG_DSN = os.environ.get(
     "ROBOTHOR_TEST_DB_DSN",

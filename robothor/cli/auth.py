@@ -39,6 +39,22 @@ def _parse_ttl(value: str) -> int:
 
 
 def cmd_auth(args: Namespace) -> int:
+    """Run one ``auth`` verb, bound to ``--tenant`` when it is given.
+
+    The same reason as ``genus user``: with RLS enforcing, a grant armed for a
+    child from a root shell must be written, read and revoked in the child's
+    scope, or the policy refuses the write and hides the row.
+    """
+    from robothor.db.connection import tenant_scope
+
+    tenant = getattr(args, "tenant", None)
+    if tenant:
+        with tenant_scope(tenant):
+            return _dispatch(args)
+    return _dispatch(args)
+
+
+def _dispatch(args: Namespace) -> int:
     command = getattr(args, "auth_command", None)
     if command == "bootstrap":
         return _cmd_bootstrap(args)

@@ -319,6 +319,42 @@ def get_account_by_idp(issuer: str, subject: str) -> dict[str, Any] | None:
         return dict(row) if row else None
 
 
+def login_account_for_email(email: str) -> dict[str, Any] | None:
+    """The account a local (email + password) sign-in is for, in ANY tenant.
+
+    Unbound (``unbound_scope``), like the SSO identity lookup: a sign-in has
+    no tenant until it has an account, and a child tenant's admin or a moved
+    user must be able to sign in with a password. The token is issued for the
+    account's OWN tenant.
+
+    Exactly one active account with the address is the answer. Several active
+    ones (the same address in two tenants) answer ``None`` — a refusal, with
+    an error naming the count, because which tenant the person meant is the
+    operator's to decide by removing the duplicate. With no active account, a
+    single inactive one is returned so the caller refuses it on the same,
+    equal-cost path it always used.
+    """
+    address = canonical_email(email)
+    with unbound_scope(), get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            "SELECT * FROM user_accounts WHERE email = %s ORDER BY tenant_id",
+            (address,),
+        )
+        rows = [dict(r) for r in cur.fetchall()]
+    active = [r for r in rows if r.get("status") == "active"]
+    if len(active) == 1:
+        return active[0]
+    if len(active) > 1:
+        logger.error(
+            "local sign-in refused: the address has an active account in more than "
+            "one tenant (%d); remove the duplicate so it names one account",
+            len(active),
+        )
+        return None
+    return rows[0] if len(rows) == 1 else None
+
+
 def tenant_for_email(email: str) -> str:
     """The tenant a brand-new SSO user with this address is provisioned into.
 
@@ -792,6 +828,7 @@ def revoke_session(refresh_token_hash: str) -> bool:
 MOVED_TABLES = (
     "user_accounts",
     "crm_people",
+    "contact_identifiers",
     "user_permissions",
     "user_channel_identities",
     "face_identities",
@@ -836,6 +873,10 @@ class MoveReport:
 _PERSON_REFS_MOVED_WITH_ACCOUNT: dict[str, str | None] = {
     "user_accounts": "id <> %(uid)s::uuid",
     "tenant_users": None,  # moved by person_id, every row
+    # The person's own addresses and handles are attributes of the contact,
+    # not a relationship to other CRM rows: they move with it (``genus user
+    # add`` writes one for every account it makes).
+    "contact_identifiers": None,
     "face_identities": "user_account_id IS DISTINCT FROM %(uid)s::uuid",
 }
 
@@ -918,6 +959,9 @@ def _linked_rows(
     ]
     if person_id and not detach_person:
         groups.append(("crm_people", "id = %s AND tenant_id = %s", (str(person_id), source)))
+        groups.append(
+            ("contact_identifiers", "tenant_id = %s AND person_id = %s", (source, str(person_id)))
+        )
     groups += [
         ("user_permissions", "tenant_id = %s AND user_id = %s", (source, uid)),
         ("user_channel_identities", "tenant_id = %s AND user_id = %s", (source, uid)),
@@ -1131,6 +1175,14 @@ def move_account(
                         f"WHERE {where}",  # noqa: S608
                         (to_tenant, report.company_unlinked is not None, *params),
                     )
+                elif table == "contact_identifiers":
+                    # Its memory_entity_id names a source-tenant memory entity,
+                    # which does not move: clear it rather than point across.
+                    cur.execute(
+                        "UPDATE contact_identifiers SET tenant_id = %s, memory_entity_id = NULL "
+                        f"WHERE {where}",  # noqa: S608
+                        (to_tenant, *params),
+                    )
                 else:
                     cur.execute(
                         f"UPDATE {table} SET tenant_id = %s WHERE {where}",  # noqa: S608
@@ -1149,18 +1201,29 @@ def move_account(
             details = {
                 k: v for k, v in report.to_dict().items() if k not in ("audit_id", "dry_run")
             }
+            # Filed under the TARGET tenant, so the trail of the tenant the
+            # account now belongs to shows how it arrived; both ids are in
+            # ``details``. The column is migration 154's; on a database that
+            # has not applied it yet the row is written without it.
             cur.execute(
-                """INSERT INTO audit_log
-                       (event_type, category, actor, action, details, target, status, user_id)
-                   VALUES ('auth.account_moved', 'auth', %s, %s, %s, %s, 'ok', %s)
-                   RETURNING id""",
-                (
-                    actor,
-                    f"move account {report.user_id} from {source} to {to_tenant}",
-                    Json(details),
-                    f"user_account:{report.user_id}",
-                    report.user_id,
-                ),
+                "SELECT 1 AS present FROM pg_attribute "
+                "WHERE attrelid = 'audit_log'::regclass AND attname = 'tenant_id' "
+                "AND NOT attisdropped"
+            )
+            tenant_column = ", tenant_id" if cur.fetchone() else ""
+            values = (
+                actor,
+                f"move account {report.user_id} from {source} to {to_tenant}",
+                Json(details),
+                f"user_account:{report.user_id}",
+                report.user_id,
+            )
+            cur.execute(
+                "INSERT INTO audit_log (event_type, category, actor, action, details, "  # noqa: S608
+                f"target, status, user_id{tenant_column}) "
+                "VALUES ('auth.account_moved', 'auth', %s, %s, %s, %s, 'ok', %s"
+                f"{', %s' if tenant_column else ''}) RETURNING id",
+                (*values, to_tenant) if tenant_column else values,
             )
             report.audit_id = int(cur.fetchone()["id"])
             conn.commit()

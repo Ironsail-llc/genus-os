@@ -28,7 +28,6 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool
 
 from robothor.auth import accounts, local_login, tokens
 from robothor.auth.deps import get_current_user
-from robothor.constants import DEFAULT_TENANT
 from robothor.db.connection import tenant_scope, unbound_scope
 from robothor.sanitize import sanitize_log
 
@@ -824,9 +823,11 @@ def local_login_route(body: _LoginBody, request: Request) -> dict[str, Any] | JS
         return _BAD_REQUEST
     ip = _client_ip(request)
     # Unbound, like /sso: the sign-in has no tenant until it has an account.
+    # tenant_id=None: the address is looked up in every tenant, and a child
+    # tenant's account signs in to its own tenant (one active match only).
     with unbound_scope():
         result = local_login.authenticate(
-            DEFAULT_TENANT,
+            None,
             body["email"],
             body["password"],
             body.get("code"),
