@@ -1165,7 +1165,11 @@ class TestHTMLAndSender:
         smtp = _SMTPFactory()
         with patch("robothor.crm.dal.do_not_contact_emails", side_effect=_opt_out()):
             receipt = await _channel(gws_present=False, smtp=smtp).send(
-                WILLING, "hello", config=_config(), run=_run(), sender=42  # type: ignore[arg-type]
+                WILLING,
+                "hello",
+                config=_config(),
+                run=_run(),
+                sender=42,  # type: ignore[arg-type]
             )
 
         assert receipt.status == "failed:email_invalid_sender"

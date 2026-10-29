@@ -378,7 +378,9 @@ def _valid_sender(raw: str) -> str:
     """
     from email.utils import formataddr, getaddresses
 
-    value = (raw or "").strip()
+    if not isinstance(raw, str):
+        return ""
+    value = raw.strip()
     if not value or any(ord(c) < 32 or ord(c) == 127 for c in value):
         return ""
     parsed = getaddresses([value])
