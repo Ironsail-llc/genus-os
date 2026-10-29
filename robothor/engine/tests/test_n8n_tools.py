@@ -177,3 +177,16 @@ async def test_bad_arguments_are_coerced_not_crashed(store) -> None:
     assert result["hours"] == 24
     huge = await HANDLERS["n8n_recent_failures"]({"hours": 10_000}, CTX)
     assert huge["hours"] == 720
+
+
+def test_a_benchmark_run_never_gets_the_n8n_reads() -> None:
+    """They read the operator's REAL automations' snapshot and settings, so a
+    graded run is withheld them like config_get and the Claude Code reads."""
+    from robothor.engine.tools.handlers.benchmark import (
+        _BENCHMARK_WITHHELD_READS,
+        benchmark_readonly_tools,
+    )
+
+    for name in ("n8n_list_workflows", "n8n_recent_failures"):
+        assert name in _BENCHMARK_WITHHELD_READS
+        assert name not in benchmark_readonly_tools()
