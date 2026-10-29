@@ -4,8 +4,7 @@
  */
 import type { ChatMessage } from "./types";
 import { bridgeAuthHeaders } from "@/lib/bridge-auth";
-import { engineUrlFor } from "@/lib/services/registry";
-import { tenantClaimsFromAuthorization } from "@/lib/tenant-session";
+import { engineUrlForAuthorization } from "@/lib/services/registry";
 
 /**
  * The engine for the tenant this caller's bearer acts in. A session switched
@@ -13,7 +12,7 @@ import { tenantClaimsFromAuthorization } from "@/lib/tenant-session";
  * caller with no bearer, talk to `ROBOTHOR_ENGINE_URL`.
  */
 function engineBase(headers: Record<string, string>): string {
-  return engineUrlFor(tenantClaimsFromAuthorization(headers.Authorization)?.tenant);
+  return engineUrlForAuthorization(headers.Authorization);
 }
 
 /**

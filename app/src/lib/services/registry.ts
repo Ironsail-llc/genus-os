@@ -8,6 +8,8 @@
 import fs from "fs";
 import path from "path";
 
+import { tenantClaimsFromAuthorization } from "@/lib/tenant-session";
+
 interface ServiceDef {
   name: string;
   port: number;
@@ -209,6 +211,11 @@ export function engineUrlFor(tenant?: string | null): string {
   const validated = validatedServiceUrl(candidate);
   if (!validated) throw new Error(`Invalid engine URL configuration for tenant ${tenant}`);
   return validated;
+}
+
+/** The engine for the tenant an `Authorization: Bearer` value acts in. */
+export function engineUrlForAuthorization(authorization?: string | null): string {
+  return engineUrlFor(tenantClaimsFromAuthorization(authorization)?.tenant);
 }
 
 /** Resolve a health/readiness target from operator runtime configuration only. */

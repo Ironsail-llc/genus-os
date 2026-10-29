@@ -1,6 +1,5 @@
 import { bridgeAuthHeaders } from "@/lib/bridge-auth";
-import { engineUrlFor } from "@/lib/services/registry";
-import { tenantClaimsFromAuthorization } from "@/lib/tenant-session";
+import { engineUrlForAuthorization } from "@/lib/services/registry";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -26,7 +25,7 @@ async function proxy(request: Request, context: Context) {
   }
   try {
     // The acting tenant's engine: a switched session manages that tenant's deployment.
-    const engine = engineUrlFor(tenantClaimsFromAuthorization(identity.Authorization)?.tenant);
+    const engine = engineUrlForAuthorization(identity.Authorization);
     const response = await fetch(`${engine}/api/admin/sales-deployment${path ? `/${path}` : ""}`, {
       method: request.method,
       headers: { Authorization: identity.Authorization, "Content-Type": "application/json" },

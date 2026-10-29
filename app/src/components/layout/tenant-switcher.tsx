@@ -82,23 +82,31 @@ async function requestSwitch(tenant: string): Promise<string | null> {
   }
 }
 
-export function TenantSwitcher({ onSwitched = reload }: SwitchProps) {
-  const { data: session } = useSession();
-  const tenants = useAccessibleTenants(Boolean(session));
+/** One switch at a time; a refusal is kept to show, a success hands off. */
+function useTenantSwitch(onSwitched: () => void) {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  if (!tenants || tenants.length <= 1) return null;
-  const current = session?.tenantId ?? tenants.find((t) => t.is_home)?.id ?? tenants[0].id;
-
-  async function choose(tenant: string) {
-    if (tenant === current) return;
+  async function switchTo(tenant: string) {
     setPending(true);
     setError(null);
     const refused = await requestSwitch(tenant);
     setPending(false);
     if (refused) setError(refused);
     else onSwitched();
+  }
+  return { pending, error, switchTo };
+}
+
+export function TenantSwitcher({ onSwitched = reload }: SwitchProps) {
+  const { data: session } = useSession();
+  const tenants = useAccessibleTenants(Boolean(session));
+  const { pending, error, switchTo } = useTenantSwitch(onSwitched);
+
+  if (!tenants || tenants.length <= 1) return null;
+  const current = session?.tenantId ?? tenants.find((t) => t.is_home)?.id ?? tenants[0].id;
+
+  function choose(tenant: string) {
+    if (tenant !== current) void switchTo(tenant);
   }
 
   return (
@@ -108,7 +116,7 @@ export function TenantSwitcher({ onSwitched = reload }: SwitchProps) {
         aria-label="Tenant"
         value={current}
         disabled={pending}
-        onChange={(e) => void choose(e.target.value)}
+        onChange={(e) => choose(e.target.value)}
         className="h-7 text-xs max-w-48"
       >
         {tenants.map((t) => (
@@ -130,8 +138,7 @@ export function ActingTenantBanner({ onSwitched = reload }: SwitchProps) {
   const { data: session, update } = useSession();
   const acting = actingTenantId(session);
   const tenants = useAccessibleTenants(acting !== null);
-  const [pending, setPending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const { pending, error, switchTo } = useTenantSwitch(onSwitched);
   const [notice, setNotice] = useState(false);
 
   // Shown once per notice: raised during render when the session first carries
@@ -149,15 +156,8 @@ export function ActingTenantBanner({ onSwitched = reload }: SwitchProps) {
     return () => clearTimeout(timer);
   }, [reverted, update]);
 
-  async function switchBack() {
-    const home = session?.homeTenantId;
-    if (!home) return;
-    setPending(true);
-    setError(null);
-    const refused = await requestSwitch(home);
-    setPending(false);
-    if (refused) setError(refused);
-    else onSwitched();
+  function switchBack() {
+    if (session?.homeTenantId) void switchTo(session.homeTenantId);
   }
 
   const name = acting ? (tenants?.find((t) => t.id === acting)?.display_name ?? acting) : null;
@@ -180,7 +180,7 @@ export function ActingTenantBanner({ onSwitched = reload }: SwitchProps) {
           </span>
           <button
             type="button"
-            onClick={() => void switchBack()}
+            onClick={switchBack}
             disabled={pending}
             className="shrink-0 rounded-md border border-primary/25 bg-background/60 px-3 py-1 text-xs font-medium transition-colors hover:bg-background disabled:opacity-50"
           >
