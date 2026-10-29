@@ -80,6 +80,18 @@ ROOT_GROUP_OWNER_TTL_SECONDS = 3 * ROOT_GROUP_OWNER_REFRESH_SECONDS
 # Consecutive failed tenant-tree lookups an already verified engine rides out on
 # its last verdict; the next one, or any for an engine never verified, fails closed.
 TREE_LOOKUP_FAILURES_TOLERATED = 3
+# Delete the owner record only if it still names this tenant: never another's.
+_RELEASE_IF_MINE = (
+    "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) "
+    "else return 0 end"
+)
+# Extend the owner record only if it still names this tenant, in one step, so
+# a claim released and re-taken by another root between a GET and an EXPIRE is
+# never extended on that root's behalf.
+_REFRESH_IF_MINE = (
+    "if redis.call('get', KEYS[1]) == ARGV[1] then "
+    "return redis.call('expire', KEYS[1], ARGV[2]) else return 0 end"
+)
 
 # Cap on the payload text an ``include_payload`` hook appends to its message.
 MAX_PAYLOAD_CHARS = 8000
@@ -462,14 +474,45 @@ class EventHooks:
             if self._stop_event.is_set() or not self._holds_root_group:
                 continue
             try:
-                raw = await redis_client.get(ROOT_GROUP_OWNER_KEY)
-                owner = raw.decode() if isinstance(raw, bytes) else raw
-                if owner == self.config.tenant_id:
-                    await redis_client.expire(ROOT_GROUP_OWNER_KEY, ROOT_GROUP_OWNER_TTL_SECONDS)
-                else:
+                if not await redis_client.eval(
+                    _REFRESH_IF_MINE,
+                    1,
+                    ROOT_GROUP_OWNER_KEY,
+                    self.config.tenant_id,
+                    ROOT_GROUP_OWNER_TTL_SECONDS,
+                ):
                     self._holds_root_group = False
             except Exception as e:
                 logger.warning("Could not refresh the claim on group %r: %s", ROOT_EVENT_GROUP, e)
+
+    async def _release_root_group(self, redis_client: Any) -> None:
+        """Give up this engine's claim on the root group, if it has one.
+
+        For an engine no longer entitled to the group (re-parented, or failing
+        closed): the refresher stops extending the claim, and the record is
+        deleted if -- and only if -- it still names this tenant, so another
+        root can claim at once rather than after a TTL. Another owner's record
+        is never touched.
+        """
+        self._holds_root_group = False
+        try:
+            if await redis_client.eval(
+                _RELEASE_IF_MINE, 1, ROOT_GROUP_OWNER_KEY, self.config.tenant_id
+            ):
+                logger.warning(
+                    "Tenant %r released event consumer group %r (deleted Redis key %s)",
+                    self.config.tenant_id,
+                    ROOT_EVENT_GROUP,
+                    ROOT_GROUP_OWNER_KEY,
+                )
+        except Exception as e:
+            logger.warning(
+                "Could not release the claim on group %r (it lapses %ds after the last "
+                "refresh): %s",
+                ROOT_EVENT_GROUP,
+                ROOT_GROUP_OWNER_TTL_SECONDS,
+                e,
+            )
 
     async def _may_hold_root_group(self, redis_client: Any, rivals: set[str]) -> bool:
         """Whether this engine may read the root group ``engine``. Logs why not.
@@ -482,8 +525,10 @@ class EventHooks:
         tenant = self.config.tenant_id
         known, parent = await self._parent_tenant()
         if not known:
+            await self._release_root_group(redis_client)
             return False
         if parent is not None:
+            await self._release_root_group(redis_client)
             logger.error(
                 "Event consumer group %r belongs to the root tenant, and tenant %r is "
                 "a child of %r, so this engine will not read it. Give it its own "

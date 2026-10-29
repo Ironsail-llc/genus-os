@@ -159,14 +159,17 @@ class FakeStreams:
         return True
 
     async def eval(self, script: str, numkeys: int, *args: Any) -> int:
-        """Only the compare-and-delete the hook loop uses: DEL key iff it holds value."""
-        assert numkeys == 1 and "del" in script.lower(), script
-        key, value = args
-        if self.keys.get(key) == str(value).encode():
+        """The two compare-and-act scripts the hook loop uses, on a key holding ``value``."""
+        assert numkeys == 1, script
+        key, value = args[0], str(args[1])
+        if await self.get(key) != value.encode():
+            return 0
+        if "'del'" in script:
             self.lapse(key)
-            self.deletes.append((key, str(value), len(self.expire_calls)))
+            self.deletes.append((key, value, len(self.expire_calls)))
             return 1
-        return 0
+        assert "'expire'" in script, script
+        return int(await self.expire(key, int(args[2])))
 
     def lapse(self, key: str) -> None:
         """The key's TTL ran out."""
