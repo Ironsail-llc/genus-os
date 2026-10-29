@@ -1166,7 +1166,7 @@ def _workspace_review(manifest_text: str) -> list[str]:
     data and :func:`_classify_member` rightly waved it through. A declared
     asset is not inert: an agent manifest can register lifecycle hooks that run
     shell commands, ``docs/hooks/`` and workflows are executed by the engine,
-    ``docs/webhooks.yaml`` is loaded by it, a ``brain/`` file is text a model
+    ``docs/webhooks.yaml`` and ``docs/webhooks.d/`` are loaded by it, a ``brain/`` file is text a model
     reads, and a patch changes an agent the plugin does not own. None of that is
     visible from member names, so it is read from the declaration -- normalised
     the way the installer normalises it, so ``./brain/x`` is ``brain/x``.
@@ -1216,6 +1216,8 @@ def _workspace_review(manifest_text: str) -> list[str]:
         "hook runs shell)",
         "docs/workflows/": "writes workflow files the engine runs",
         "docs/webhooks.yaml": "writes docs/webhooks.yaml, configuration the engine loads",
+        "docs/webhooks.d/": "writes docs/webhooks.d/ channel drop-ins, configuration the "
+        "engine loads",
     }
     for prefix, what in by_kind.items():
         hits = [d for d in dests if d == prefix or d.startswith(prefix)]
