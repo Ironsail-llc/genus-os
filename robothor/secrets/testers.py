@@ -121,10 +121,18 @@ def _classify(status: int) -> str:
 
 def _n8n_url(settings: Any) -> str:
     """The n8n monitor's instance, at the cheapest authenticated endpoint."""
-    from robothor.integrations.n8n.client import instance_root
+    from robothor.integrations.n8n.client import N8nError, checked_root
 
-    root = instance_root(settings.integrations.n8n_base_url or "")
-    return f"{root}/api/v1/workflows?limit=1" if root else ""
+    group = settings.integrations
+    try:
+        # The same policy the poller applies: never send the key over plain
+        # http to a host that is not loopback unless the operator opted in.
+        root = checked_root(
+            group.n8n_base_url or "", allow_insecure_http=bool(group.n8n_allow_insecure_http)
+        )
+    except N8nError:
+        return ""
+    return f"{root}/api/v1/workflows?limit=1"
 
 
 #: Per kind: the request to make, and how to read an identity out of a 200.

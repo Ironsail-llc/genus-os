@@ -27,11 +27,13 @@ window are purged hourly.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
+from robothor.constants import DEFAULT_TENANT
 from robothor.integrations.n8n.client import N8nClient, N8nError
 from robothor.integrations.n8n.contract import (
     MIN_POLL_SECONDS,
@@ -47,6 +49,7 @@ if TYPE_CHECKING:
 
     Notify = Callable[[str, str, str, dict[str, Any]], Awaitable[Any]]
     Alert = Callable[[str, str, str], Awaitable[Any]]
+    ClientFactory = Callable[[GenusSettings | None], N8nClient | Awaitable[N8nClient]]
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +67,7 @@ __all__ = [
 ]
 
 MIN_INTERVAL_SECONDS = MIN_POLL_SECONDS
+DEFAULT_INTERVAL_SECONDS = 120
 PURGE_EVERY_SECONDS = 3600
 #: More new failures than this in one round are summarised in ONE notification.
 COALESCE_ABOVE = 5
@@ -91,27 +95,32 @@ def _interval(settings: GenusSettings | None) -> int:
     return effective_poll_seconds(_settings(settings).integrations.n8n_poll_seconds)
 
 
-def _get_secret(name: str) -> str | None:
+def _get_secret(name: str, tenant_id: str) -> str | None:
     from robothor.secrets import get_secret
 
-    return get_secret(name)
+    return get_secret(name, tenant_id=tenant_id)
 
 
 def client_from_settings(
     settings: GenusSettings | None = None,
     *,
-    secret: Callable[[str], str | None] = _get_secret,
+    tenant_id: str = DEFAULT_TENANT,
+    secret: Callable[[str, str], str | None] = _get_secret,
 ) -> N8nClient:
-    """A client for the configured instance; the key is resolved vault-first.
+    """A client for the configured instance; the key is ``tenant_id``'s, vault-first.
 
-    Raises ``N8nError("not_configured")`` when the base URL or the key is missing.
+    Blocking (the vault read): call it through :func:`asyncio.to_thread` from
+    async code. Raises ``N8nError("not_configured")`` when the base URL or the
+    key is missing, or the base URL is not safe to send the key to.
     """
     group = _settings(settings).integrations
     base_url = (group.n8n_base_url or "").strip()
-    key = secret(API_KEY_ENV) or (group.n8n_api_key or "").strip()
-    if not base_url or not key:
-        raise N8nError("not_configured")
-    return N8nClient(base_url, key)
+    if not base_url:
+        raise N8nError("not_configured", detail="ROBOTHOR_N8N_BASE_URL is empty")
+    key = secret(API_KEY_ENV, tenant_id) or (group.n8n_api_key or "").strip()
+    if not key:
+        raise N8nError("not_configured", detail="no ROBOTHOR_N8N_API_KEY")
+    return N8nClient(base_url, key, allow_insecure_http=bool(group.n8n_allow_insecure_http))
 
 
 async def default_notify(tenant_id: str, subject: str, body: str, metadata: dict[str, Any]) -> None:
@@ -207,7 +216,7 @@ async def _notify_pending(
         except Exception as exc:  # noqa: BLE001 - retried next round
             logger.warning("n8n failure summary deferred: %s", type(exc).__name__)
             return 0
-        await store.mark_alerted(tenant_id, [r["execution_id"] for r in pending])
+        await _mark(tenant_id, store, [r["execution_id"] for r in pending])
         return 1
     sent: list[str] = []
     for row in pending:
@@ -220,8 +229,25 @@ async def _notify_pending(
             continue
         sent.append(row["execution_id"])
     if sent:
-        await store.mark_alerted(tenant_id, sent)
+        await _mark(tenant_id, store, sent)
     return len(sent)
+
+
+async def _mark(tenant_id: str, store: N8nStore, execution_ids: list[str]) -> None:
+    """Stamp notified executions alerted; a failure here is logged, not raised.
+
+    Delivery is at-least-once: the notification is already written, so an
+    unstamped row is notified AGAIN next round. A duplicate is the lesser harm
+    than a failure the main agent never hears about.
+    """
+    try:
+        await store.mark_alerted(tenant_id, execution_ids)
+    except Exception as exc:  # noqa: BLE001 - see the docstring
+        logger.warning(
+            "n8n alerted stamp deferred (%d may be notified again): %s",
+            len(execution_ids),
+            type(exc).__name__,
+        )
 
 
 async def poll_once(
@@ -273,14 +299,16 @@ async def _round(
     tenant_id: str,
     *,
     settings: GenusSettings | None,
-    client_factory: Callable[[GenusSettings | None], N8nClient],
+    client_factory: ClientFactory,
     store: N8nStore,
     notify: Notify,
     now: datetime,
 ) -> PollResult:
     """One round that never raises: an API failure is recorded and reported."""
     try:
-        async with client_factory(settings) as client:
+        made = client_factory(settings)
+        client = await made if inspect.isawaitable(made) else made
+        async with client:
             return await poll_once(tenant_id, client=client, store=store, notify=notify, now=now)
     except N8nError as exc:
         error = str(exc)
@@ -298,7 +326,7 @@ async def run(
     tenant_id: str,
     *,
     settings: GenusSettings | None = None,
-    client_factory: Callable[[GenusSettings | None], N8nClient] | None = None,
+    client_factory: ClientFactory | None = None,
     store: N8nStore | None = None,
     notify: Notify | None = None,
     alert: Alert | None = None,
@@ -306,7 +334,7 @@ async def run(
     rounds: int | None = None,
     is_leader: Callable[[], bool] | None = None,
     now: Callable[[], datetime] | None = None,
-    secret: Callable[[str], str | None] = _get_secret,
+    secret: Callable[[str, str], str | None] = _get_secret,
 ) -> None:
     """Poll until cancelled (or for ``rounds`` rounds, in tests).
 
@@ -315,7 +343,14 @@ async def run(
     if not n8n_enabled(settings):
         return
     if client_factory is None:
-        client_factory = lambda s: client_from_settings(s, secret=secret)  # noqa: E731
+
+        async def _default_factory(s: GenusSettings | None) -> N8nClient:
+            # The vault read blocks: off the loop, for THIS poller's tenant.
+            return await asyncio.to_thread(
+                client_from_settings, s, tenant_id=tenant_id, secret=secret
+            )
+
+        client_factory = _default_factory
 
     if store is None:
         store = PgN8nStore()
@@ -329,46 +364,69 @@ async def run(
         is_leader = leader
 
     clock = now or (lambda: datetime.now(UTC))
-    failures = 0
-    outage_alerted = False
+    outage = _Outage(alert)
     last_purge: datetime | None = None
     done = 0
     while rounds is None or done < rounds:
         done += 1
-        if is_leader():
-            current = clock()
-            result = await _round(
-                tenant_id,
-                settings=settings,
-                client_factory=client_factory,
-                store=store,
-                notify=notify,
-                now=current,
-            )
-            if result.ok:
-                failures, outage_alerted = 0, False
-            else:
-                failures += 1
-                if failures >= OUTAGE_ROUNDS and not outage_alerted:
-                    outage_alerted = True
+        try:
+            if is_leader():
+                current = clock()
+                result = await _round(
+                    tenant_id,
+                    settings=settings,
+                    client_factory=client_factory,
+                    store=store,
+                    notify=notify,
+                    now=current,
+                )
+                await outage.after(result)
+                if (
+                    last_purge is None
+                    or (current - last_purge).total_seconds() >= PURGE_EVERY_SECONDS
+                ):
                     try:
-                        await alert(
-                            "warning",
-                            "n8n monitor: polls failing",
-                            f"The last {failures} n8n polls failed ({result.error}). "
-                            "Workflow failures are not being reported until it recovers. "
-                            "Run `genus doctor --only n8n.connection`.",
-                        )
+                        await store.purge(tenant_id, older_than_days=RETENTION_DAYS)
+                        last_purge = current
                     except Exception as exc:  # noqa: BLE001
-                        logger.warning("n8n outage alert not sent: %s", type(exc).__name__)
-            if last_purge is None or (current - last_purge).total_seconds() >= PURGE_EVERY_SECONDS:
-                try:
-                    await store.purge(tenant_id, older_than_days=RETENTION_DAYS)
-                    last_purge = current
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning("n8n purge deferred: %s", type(exc).__name__)
+                        logger.warning("n8n purge deferred: %s", type(exc).__name__)
+        except Exception as exc:  # noqa: BLE001 - a daemon subsystem that returns ends the daemon
+            logger.warning("n8n monitor round skipped: %s", type(exc).__name__)
         if rounds is None or done < rounds:
-            await sleep(_interval(settings))
+            try:
+                interval = _interval(settings)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("n8n poll interval unreadable: %s", type(exc).__name__)
+                interval = DEFAULT_INTERVAL_SECONDS
+            await sleep(interval)
+
+
+class _Outage:
+    """Consecutive failed rounds, and whether this outage was already alerted."""
+
+    def __init__(self, alert: Alert) -> None:
+        self.alert = alert
+        self.failures = 0
+        self.alerted = False
+
+    async def after(self, result: PollResult) -> None:
+        if result.ok:
+            self.failures, self.alerted = 0, False
+            return
+        self.failures += 1
+        if self.failures < OUTAGE_ROUNDS or self.alerted:
+            return
+        self.alerted = True
+        try:
+            await self.alert(
+                "warning",
+                "n8n monitor: polls failing",
+                f"The last {self.failures} n8n polls failed ({result.error}). "
+                "Workflow failures are not being reported until it recovers. "
+                "Run `genus doctor --only n8n.connection`.",
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("n8n outage alert not sent: %s", type(exc).__name__)
 
 
 def start_tasks(tenant_id: str) -> list[asyncio.Task[None]]:

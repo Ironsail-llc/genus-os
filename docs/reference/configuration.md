@@ -130,6 +130,7 @@ External systems the instance watches, such as an n8n instance.
 
 | Variable | Type | Default | Restart | Secret | Since | Description |
 | --- | --- | --- | --- | --- | --- | --- |
+| `ROBOTHOR_N8N_ALLOW_INSECURE_HTTP` | bool | `false` | `robothor-engine`, `robothor-bridge` | no | unreleased | Let ROBOTHOR_N8N_BASE_URL be plain http:// on a host that is not loopback, for a self-hosted n8n reachable only on a private network. Off: the base URL must be https:// (http:// only for localhost), because the API key travels in every request. |
 | `ROBOTHOR_N8N_API_KEY` | str | _(unset)_ | `robothor-engine`, `robothor-bridge` | yes | unreleased | An n8n public-API key (Settings > n8n API in n8n), sent as X-N8N-API-KEY. Resolved vault-first. Read-only use: the monitor never changes a workflow. |
 | `ROBOTHOR_N8N_BASE_URL` | str | _(empty)_ | `robothor-engine`, `robothor-bridge` | no | unreleased | Root URL of the n8n instance, e.g. https://n8n.example.com (no /api/v1). The poller calls its public API under it, and execution links in notifications point into it. |
 | `ROBOTHOR_N8N_ENABLED` | bool | `false` | `robothor-engine`, `robothor-bridge` | no | unreleased | Watch an external n8n instance: the engine's scheduler leader polls its workflows and failed executions, keeps a snapshot for the dashboard and the n8n_* agent tools, and notifies the main agent once per failed execution. Off: nothing is polled and the n8n section reads not configured. |

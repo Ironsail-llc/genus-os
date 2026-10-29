@@ -42,10 +42,11 @@ def _key_source(tenant_id: str) -> str:
     return str(secret_source(API_KEY_ENV, tenant_id=tenant_id))
 
 
-def _make_client(settings: GenusSettings) -> N8nClient:
+def _make_client(settings: GenusSettings, tenant_id: str) -> N8nClient:
+    """A client for ``tenant_id``'s key. Blocking (the vault read)."""
     from robothor.integrations.n8n.poller import client_from_settings
 
-    return client_from_settings(settings)
+    return client_from_settings(settings, tenant_id=tenant_id)
 
 
 # ── n8n.configured ───────────────────────────────────────────────────────────
@@ -54,7 +55,9 @@ def _make_client(settings: GenusSettings) -> N8nClient:
 async def _configured(ctx: DoctorContext) -> Result:
     """The n8n monitor knows where n8n is and holds a key for it.
 
-    Fails when ``ROBOTHOR_N8N_BASE_URL`` is empty or no
+    Fails when ``ROBOTHOR_N8N_BASE_URL`` is empty or not an ``https://`` URL
+    (``http://`` is accepted for localhost, or anywhere with
+    ``ROBOTHOR_N8N_ALLOW_INSECURE_HTTP`` for an n8n on a private network), or no
     ``ROBOTHOR_N8N_API_KEY`` resolves (vault first, then the environment):
     the poller then fails every round and the dashboard shows stale data.
     Fix: set the base URL, then store the key in the vault (``genus vault set
@@ -66,6 +69,12 @@ async def _configured(ctx: DoctorContext) -> Result:
     base_url = (group.n8n_base_url or "").strip()
     if not base_url:
         return fail("ROBOTHOR_N8N_BASE_URL is empty: set it to the n8n instance's root URL")
+    from robothor.integrations.n8n.client import N8nError, checked_root
+
+    try:
+        checked_root(base_url, allow_insecure_http=bool(group.n8n_allow_insecure_http))
+    except N8nError as exc:
+        return fail(str(exc).removeprefix("not_configured: "))
     source = await ctx.run_blocking(_key_source, _tenant(ctx))
     if source in ("env", "vault"):
         return ok(f"n8n at {base_url}; API key from the {source}")
@@ -94,7 +103,8 @@ async def _connection(ctx: DoctorContext) -> Result:
     from robothor.integrations.n8n.client import N8nError
 
     try:
-        async with _make_client(ctx.settings) as client:
+        client = await ctx.run_blocking(_make_client, ctx.settings, _tenant(ctx))
+        async with client:
             await client.healthz()
             count = await client.count_workflows(limit=1)
     except N8nError as exc:

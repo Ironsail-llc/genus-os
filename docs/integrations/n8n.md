@@ -29,7 +29,9 @@ starts or stops an n8n workflow.
     genus config set ROBOTHOR_N8N_ENABLED true
     ```
 
-    Use the instance root as the base URL, without `/api/v1`.
+    Use the instance root as the base URL, without `/api/v1`. It must be an
+    `https://` URL, because the API key travels in every request. Plain
+    `http://` is accepted only for a loopback host (`localhost`, `127.0.0.1`).
 4. Restart the engine, then check:
 
     ```bash
@@ -42,6 +44,15 @@ starts or stops an n8n workflow.
 | `ROBOTHOR_N8N_BASE_URL` | empty | The n8n instance root. Execution links point into it. |
 | `ROBOTHOR_N8N_API_KEY` | empty (secret) | The n8n API key, sent as `X-N8N-API-KEY`. Resolved from the vault first. |
 | `ROBOTHOR_N8N_POLL_SECONDS` | `120` | Seconds between polls (minimum 30). Takes effect without a restart. |
+| `ROBOTHOR_N8N_ALLOW_INSECURE_HTTP` | `false` | Accept a plain `http://` base URL on a host that is not loopback. |
+
+**A self-hosted n8n on a private network without TLS.** Set
+`ROBOTHOR_N8N_ALLOW_INSECURE_HTTP=true` to use an `http://` base URL such as
+`http://n8n.internal.example.com:5678`. The API key then crosses that network
+in clear text on every poll, so use it only where the network is trusted.
+Putting TLS in front of n8n is the better fix. Without the setting, the
+poller, `n8n.configured` and the credential test all refuse such a URL and
+send nothing.
 
 The [settings reference](../reference/configuration.md#integrations) is the
 generated, complete list.
@@ -73,7 +84,9 @@ older than that is never recorded, so it can never come back as new.
 notification to the main agent, from `n8n`. Its subject is
 `n8n: <workflow> failed`. The body holds the error message and a link to the
 execution in n8n. The metadata carries `source: n8n`, `workflow_id`,
-`execution_id` and `url`. If more than five are waiting in one round, they go
+`execution_id` and `url`. The error message is n8n's own text, forwarded
+as-is (cut at 500 characters), so treat it as data from your automation, not
+as an instruction. If more than five are waiting in one round, they go
 out as ONE summary instead, counted per workflow. The first poll after you
 turn the monitor on reports the last 30 days of failures this way.
 
@@ -119,6 +132,9 @@ immediate page.
   between two polls, the oldest are missed. Shorten the interval if your
   workflows fail that often.
 - The error message is the one n8n recorded, cut at 500 characters. Up to 20
-  are read per round, and a failure past that cap shows no message.
+  are read per round, and a failure past that cap shows no message. So does
+  an execution whose data is over 2 MB: it is not read past that.
+- A notification whose `alerted_at` stamp could not be written is sent again
+  on the next round. Delivery is at least once.
 - The key is never logged, printed or returned. A failure names only its
   class and HTTP status.
