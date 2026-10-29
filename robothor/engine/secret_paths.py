@@ -19,7 +19,7 @@ from __future__ import annotations
 import re
 import shlex
 from pathlib import Path, PurePath
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 
 if TYPE_CHECKING:
     import os
@@ -596,6 +596,13 @@ def _names_a_pattern(arg: str) -> bool:
     return arg.startswith("-") and not arg.startswith("--") and any(ch in "ef" for ch in arg[1:])
 
 
+#: Tools whose first positional argument is a PROGRAM, not a file:
+#: ``sed 's/[a-z]//' f``, ``awk '{print $1}' f``, ``jq '.[0]' f``. Like a
+#: search pattern it is skipped by the glob rule, which would otherwise read
+#: its brackets and braces as filename expansion.
+_PROGRAM_TAKERS = frozenset({"sed", "awk", "gawk", "jq", "yq"})
+
+
 def _search_pattern_index(word: str, args: list[str]) -> int | None:
     """Index in ``args`` of a searcher's positional PATTERN, or None.
 
@@ -603,7 +610,7 @@ def _search_pattern_index(word: str, args: list[str]) -> int | None:
     ``--regexp``, ``--file``, in any spelling: then every positional argument is
     a file), or when ``word`` is not a searcher.
     """
-    if word not in _SEARCHERS:
+    if word not in _SEARCHERS and word not in _PROGRAM_TAKERS:
         return None
     if any(_names_a_pattern(a) for a in args):
         return None
@@ -644,76 +651,160 @@ _ALL_BUT_LAST = frozenset({"split", "uuencode"})
 _READERS = _COPIERS | _ALL_BUT_LAST | {"dd", "tar", "zip", "gzip", "openssl"}
 
 
+class _CopyScan(NamedTuple):
+    """What a copy tool's options say about its operands."""
+
+    reads: set[int]
+    #: ``-b``/``--backup``/``-S``/``--suffix``: the existing destination is
+    #: RENAMED first, to a name this module may not recognise (``.env~``,
+    #: ``.vault-key.txt``), so the destination is a read too.
+    backup: bool
+    #: Index of the destination operand, or None.
+    destination: int | None
+
+
+#: Short options of the copy tools that take a value: the value is the rest of
+#: the cluster when there is one, else the next argument.
+_COPY_VALUE_OPTIONS = frozenset("tSmog")
+
+
+def _scan_copy(args: list[str]) -> _CopyScan:
+    """Positional operands of ``cp``/``mv``/``install``/``ln``/``rsync``/``scp``.
+
+    Clusters are expanded (``-rt`` is ``-r -t``) and attached values
+    recognised (``-t/tmp``, ``--target-directory=/tmp``), so no spelling of
+    the target option leaves a source unchecked.
+    """
+    positional: list[int] = []
+    values: set[int] = set()
+    backup = False
+    target_given = False
+    target_index: int | None = None
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg == "--":
+            positional.extend(range(i + 1, len(args)))
+            break
+        if arg.startswith("--"):
+            name, equals, _ = arg.partition("=")
+            if name.startswith(("--backup", "--suffix")):
+                backup = True
+            if name == "--suffix" and not equals and i + 1 < len(args):
+                values.add(i + 1)
+                i += 1
+            elif name == "--target-directory":
+                target_given = True
+                if not equals and i + 1 < len(args):
+                    target_index = i + 1
+                    values.add(i + 1)
+                    i += 1
+        elif arg.startswith("-") and len(arg) > 1:
+            cluster = arg[1:]
+            for j, ch in enumerate(cluster):
+                if ch == "b":
+                    backup = True
+                if ch in _COPY_VALUE_OPTIONS:
+                    if ch == "S":
+                        backup = True
+                    if ch == "t":
+                        target_given = True
+                    if j == len(cluster) - 1 and i + 1 < len(args):
+                        values.add(i + 1)
+                        if ch == "t":
+                            target_index = i + 1
+                        i += 1
+                    break
+        else:
+            positional.append(i)
+        i += 1
+    positional = [p for p in positional if p not in values]
+    if target_given:
+        return _CopyScan(set(positional) - {target_index}, backup, None)
+    destination = positional[-1] if positional else None
+    if backup:
+        return _CopyScan(set(positional), backup, destination)
+    return _CopyScan(set(positional[:-1]), backup, destination)
+
+
+def _tar_reads(args: list[str]) -> set[int]:
+    """``tar``'s member operands, plus the archive unless it is being created.
+
+    ``f`` takes the rest of a dashed cluster as the archive (``-cfz`` names an
+    archive ``z``), or the next argument when it ends the cluster. In the
+    old-style first word (``czf``), it takes the next argument. Only real
+    option words are read as clusters: a member such as ``src/conf.c`` is not.
+    """
+    reads: set[int] = set()
+    creating = False
+    archive: int | None = None
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg.startswith("--"):
+            name, equals, _ = arg.partition("=")
+            if name == "--create":
+                creating = True
+            if name == "--file" and not equals and i + 1 < len(args):
+                archive = i + 1
+                i += 1
+        elif arg.startswith("-") and len(arg) > 1:
+            cluster = arg[1:]
+            for j, ch in enumerate(cluster):
+                if ch == "c":
+                    creating = True
+                if ch == "f":
+                    if j == len(cluster) - 1 and i + 1 < len(args):
+                        archive = i + 1
+                        i += 1
+                    break
+        elif i == 0 and arg.isalpha():
+            # Old-style options: `tar czf out.tgz files`.
+            creating = "c" in arg
+            if "f" in arg and i + 1 < len(args):
+                archive = i + 1
+                i += 1
+        else:
+            reads.add(i)
+        i += 1
+    if archive is not None and not creating:
+        reads.add(archive)
+    return reads
+
+
+#: openssl options whose value is a file it WRITES.
+_OPENSSL_OUTPUTS = frozenset({"-out", "-keyout"})
+
+
 def _read_argument_indices(word: str, args: list[str]) -> set[int] | None:
     """Indices in ``args`` that a reader READS, or None to check them all.
 
-    Positionals only (flags are skipped by the caller). Conservative where a
-    flag's value cannot be told from a path: an option value counted as a
-    source is checked, never skipped, so the error is a false refusal rather
-    than a missed read.
+    Conservative where a flag's value cannot be told from a path: an option
+    value counted as an operand is checked, never skipped, so the error is a
+    false refusal rather than a missed read.
     """
     if word not in _READERS:
         return None
     positional = [i for i, a in enumerate(args) if not a.startswith("-")]
     if word in _COPIERS:
-        for i, arg in enumerate(args):
-            if arg in ("-t", "--target-directory") and i + 1 < len(args):
-                return set(positional) - {i + 1}
-            if arg.startswith("--target-directory="):
-                return set(positional)
-        return set(positional[:-1])
+        return _scan_copy(args).reads
     if word in _ALL_BUT_LAST:
         return set(positional[:-1]) if len(positional) > 1 else set(positional)
     if word == "openssl":
-        return {i + 1 for i, a in enumerate(args) if a == "-in" and i + 1 < len(args)}
+        outputs = {i + 1 for i, a in enumerate(args) if a in _OPENSSL_OUTPUTS}
+        return set(positional) - outputs
     if word == "zip":
         return set(positional[1:])
     if word == "tar":
-        return _tar_reads(args, positional)
+        return _tar_reads(args)
     if word == "dd":
         return set()  # its read is `if=`, collected with the redirects
     return set(positional)
 
 
-def _tar_reads(args: list[str], positional: list[int]) -> set[int]:
-    """``tar``: the archive named by ``f`` is written on create, read otherwise."""
-    reads = set(positional)
-    for i, arg in enumerate(args):
-        cluster = arg.lstrip("-")
-        if arg.startswith("--") or "f" not in cluster:
-            continue
-        creating = "c" in cluster
-        archive = i + 1
-        if i == 0 and not arg.startswith("-") and positional and positional[0] == 0:
-            # `tar czf out.tgz files`: the cluster is itself the first positional.
-            reads.discard(0)
-        if creating:
-            reads.discard(archive)
-        break
-    return reads
-
-
 #: Characters the shell expands in an argument AFTER this module has read it.
 _GLOB_CHARS = frozenset("*?[]{}")
 
-#: Representative names for the secret PATTERNS, so a wildcard can be tested
-#: against them as well as against the exact names: ``*.env`` must be read as
-#: able to name ``robothor.env``.
-_PATTERN_SAMPLES = (
-    ".env.local",
-    "robothor.env",
-    "connectors.env",
-    "secrets.json",
-    "secrets.yaml",
-    "secret.toml",
-    "store.enc.json",
-    "server.pem",
-    "server.key",
-    "cert.p12",
-    "vault.kdbx",
-    "id_rsa.pub",
-    "my-service-account.json",
-)
 _MAX_BRACE_EXPANSIONS = 64
 
 
@@ -751,6 +842,13 @@ def _expand_braces(word: str) -> list[str]:
     return [word]
 
 
+def _exists_literally(word: str, roots: list[str]) -> bool:
+    """Whether ``word`` names an existing file as written (``report[1].txt``)."""
+    if Path(word).expanduser().is_absolute():
+        return Path(word).expanduser().exists()
+    return any((Path(root) / word).exists() for root in roots)
+
+
 def _wildcard_matches(pattern: str, name: str) -> bool:
     """``fnmatch`` with the shell's dotfile rule: ``*`` does not match ``.env``."""
     from fnmatch import fnmatchcase
@@ -764,18 +862,21 @@ def _glob_names_secret(arg: str, shell_dirs: list[str]) -> bool:
     """Whether an argument the shell will expand could name a secret.
 
     Braces are expanded first; an alternative with no wildcard left is
-    checked as a path. A wildcard is refused on two precise grounds only: its
-    basename pattern can MATCH a secrets name (the exact names, a sample of
-    each pattern's shapes, the moved key's basename), or expanding it where
-    the command runs (the working directory, the workspace, any ``cd``
-    target) yields a refused file. A pattern that merely STARTS like a secret
-    name (``c*.txt``, ``s*.md``) runs.
+    checked as a path. A wildcard is refused on precise grounds only: a
+    pattern starting with a literal character can MATCH an exact secrets name
+    or the moved key's basename, or expanding it where the command runs (the
+    working directory, the workspace, any ``cd`` target) yields a refused
+    file. A bracket expression is refused outright unless it names an existing
+    file literally: agent exec does not support character classes, because
+    Python's matcher cannot reproduce the shell's. A pattern that merely
+    STARTS like a secret name (``c*.txt``) or is bare (``*``, ``*.json``)
+    runs unless the disk says otherwise.
     """
     import glob as globbing
 
     from robothor.settings.env import process_env_get
 
-    names = set(_SECRET_NAMES) | set(_PATTERN_SAMPLES) | _moved_key_basenames()
+    names = set(_SECRET_NAMES) | _moved_key_basenames()
     workspace = (process_env_get("ROBOTHOR_WORKSPACE", "") or "").strip()
     roots = [str(Path.cwd()), *shell_dirs] + ([workspace] if workspace else [])
     for word in _expand_braces(arg):
@@ -786,7 +887,16 @@ def _glob_names_secret(arg: str, shell_dirs: list[str]) -> bool:
                 return True
             continue
         base = Path(word).name
-        if any(_wildcard_matches(base, name) for name in names):
+        if "[" in word and not _exists_literally(word, roots):
+            # Python's fnmatch is not the shell's: it has no POSIX classes
+            # (`[[:alpha:]]`) and reads `[^x]` as a set containing `^`. So a
+            # bracket expression cannot be judged, and is refused.
+            return True
+        # Matched against the exact secret NAMES only when the pattern starts
+        # with a literal character (`.en?`, `.env*`, `instance-k*`). A bare
+        # `*` or `*.json` would match `credentials`, refusing `grep TODO *`;
+        # those are judged by what they expand to on disk, below.
+        if base[:1] not in ("*", "?") and any(_wildcard_matches(base, n) for n in names):
             return True
         for root in dict.fromkeys(roots):
             pattern = word if Path(word).expanduser().is_absolute() else str(Path(root) / word)
@@ -943,6 +1053,16 @@ def exec_reads_secret(command: str) -> str | None:
         if word in _PRINTERS:
             pattern_at = _search_pattern_index(word, args)
             reads = _read_argument_indices(word, args)
+            if word in _COPIERS:
+                scan = _scan_copy(args)
+                if scan.backup and scan.destination is not None:
+                    destination = args[scan.destination].strip("'\"")
+                    if is_secret_path(destination):
+                        return (
+                            f"refused: `{word}` with a backup option would rename "
+                            f"{PurePath(destination).name}, a secrets file, to a name this "
+                            "guard may not recognise. Never back up or overwrite one."
+                        )
             for index, arg in enumerate(args):
                 if arg.startswith("-"):
                     continue
