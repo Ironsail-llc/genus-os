@@ -930,3 +930,232 @@ class TestTheProtocol:
 
         assert "the morning briefing" in receipt.body
         assert receipt.post_delivery is True
+
+
+#: Today's SMTP message, byte for byte, with the two values that change on
+#: every send (``Date`` and ``Message-ID``) pinned. A caller that passes
+#: neither ``html`` nor ``sender`` must keep getting exactly this.
+GOLDEN_PLAIN_SMTP = (
+    b"To: alice@example.com\n"
+    b"Subject: Alice\n"
+    b"Date: Thu, 01 Jan 2026 00:00:00 +0000\n"
+    b"From: genus@example.com\n"
+    b"Message-ID: <golden@example.com>\n"
+    b'Content-Type: text/plain; charset="utf-8"\n'
+    b"Content-Transfer-Encoding: 7bit\n"
+    b"MIME-Version: 1.0\n"
+    b"\n"
+    b"hello\n"
+)
+
+HTML = "<p>Hello <b>Alice</b></p>"
+NO_REPLY = "no-reply@example.com"
+
+
+@pytest.fixture
+def pinned_headers():
+    """``Date`` and ``Message-ID`` fixed, so a message can be compared as bytes."""
+    with (
+        patch("email.utils.formatdate", return_value="Thu, 01 Jan 2026 00:00:00 +0000"),
+        patch("email.utils.make_msgid", return_value="<golden@example.com>") as msgid,
+    ):
+        yield msgid
+
+
+class TestHTMLAndSender:
+    """``html=`` adds an HTML alternative; ``sender=`` sets the SMTP ``From``."""
+
+    @pytest.mark.asyncio
+    async def test_no_html_and_no_sender_is_byte_identical_to_today(self, pinned_headers):
+        smtp = _SMTPFactory()
+        with patch("robothor.crm.dal.do_not_contact_emails", side_effect=_opt_out()):
+            receipt = await _channel(gws_present=False, smtp=smtp).send(
+                WILLING, "hello", config=_config(), run=_run()
+            )
+
+        assert receipt.acknowledged == 1
+        (message,) = smtp.client.messages
+        assert message.as_bytes() == GOLDEN_PLAIN_SMTP
+
+    @pytest.mark.asyncio
+    async def test_html_sends_multipart_alternative_with_both_parts(self):
+        smtp = _SMTPFactory()
+        with patch("robothor.crm.dal.do_not_contact_emails", side_effect=_opt_out()):
+            receipt = await _channel(gws_present=False, smtp=smtp).send(
+                WILLING, "hello in plain text", config=_config(), run=_run(), html=HTML
+            )
+
+        assert receipt.acknowledged == 1
+        (message,) = smtp.client.messages
+        assert message.get_content_type() == "multipart/alternative"
+        parts = list(message.iter_parts())
+        assert [p.get_content_type() for p in parts] == ["text/plain", "text/html"]
+        assert parts[0].get_content().strip() == "hello in plain text"
+        assert parts[1].get_content().strip() == HTML
+
+    @pytest.mark.asyncio
+    async def test_a_long_html_send_is_still_one_message(self):
+        smtp = _SMTPFactory()
+        long_text = "word " * 20000
+        with patch("robothor.crm.dal.do_not_contact_emails", side_effect=_opt_out()):
+            receipt = await _channel(gws_present=False, smtp=smtp).send(
+                WILLING, long_text, config=_config(), run=_run(), html=HTML * 2000
+            )
+
+        assert receipt.acknowledged == 1
+        assert len(smtp.client.messages) == 1
+
+    @pytest.mark.asyncio
+    async def test_html_reaches_gws_as_one_mime_message(self):
+        gws = _FakeGws()
+        with patch("robothor.crm.dal.do_not_contact_emails", side_effect=_opt_out()):
+            receipt = await _channel(gws=gws, gws_present=True).send(
+                WILLING, "plain", config=_config(), run=_run(), html=HTML
+            )
+
+        assert receipt.acknowledged == 1
+        (args,) = gws.calls
+        import json
+        from email import message_from_bytes, policy
+
+        raw = json.loads(args[-1])["raw"]
+        parsed = message_from_bytes(base64.urlsafe_b64decode(raw), policy=policy.default)
+        assert parsed.get_content_type() == "multipart/alternative"
+        assert parsed.get_body(preferencelist=("html",)).get_content().strip() == HTML
+
+    @pytest.mark.parametrize(
+        "sender", [NO_REPLY, f"Example Updates <{NO_REPLY}>", f'"Updates, Example" <{NO_REPLY}>']
+    )
+    @pytest.mark.asyncio
+    async def test_sender_sets_the_smtp_from(self, sender: str):
+        smtp = _SMTPFactory()
+        with patch("robothor.crm.dal.do_not_contact_emails", side_effect=_opt_out()):
+            receipt = await _channel(gws_present=False, smtp=smtp).send(
+                WILLING, "hello", config=_config(), run=_run(), sender=sender
+            )
+
+        assert receipt.acknowledged == 1
+        (message,) = smtp.client.messages
+        from email.utils import parseaddr
+
+        assert parseaddr(str(message["From"]))[1] == NO_REPLY
+        assert str(message["Message-ID"]).rstrip(">").endswith("@example.com")
+
+    @pytest.mark.asyncio
+    async def test_sender_derives_the_message_id_domain_from_the_address(self, pinned_headers):
+        smtp = _SMTPFactory()
+        with patch("robothor.crm.dal.do_not_contact_emails", side_effect=_opt_out()):
+            await _channel(gws_present=False, smtp=smtp).send(
+                WILLING,
+                "hello",
+                config=_config(),
+                run=_run(),
+                sender="Updates <no-reply@mail.example.com>",
+            )
+
+        pinned_headers.assert_called_once_with(domain="mail.example.com")
+
+    @pytest.mark.parametrize(
+        "sender",
+        [
+            "not an address",
+            "alice@",
+            "alice@example.com, bob@example.com",
+            "alice@example.com\r\nBcc: bob@example.com",
+            "Alice <alice@example.com",
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_an_invalid_sender_is_refused_before_any_transport(self, sender: str):
+        gws, smtp = _FakeGws(), _SMTPFactory()
+        with patch("robothor.crm.dal.do_not_contact_emails", side_effect=_opt_out()):
+            receipt = await _channel(gws=gws, gws_present=False, smtp=smtp).send(
+                WILLING, "hello", config=_config(), run=_run(), sender=sender
+            )
+
+        assert receipt.acknowledged == 0
+        assert receipt.status == "failed:email_invalid_sender"
+        assert (gws.calls, smtp.calls) == ([], [])
+
+    def test_the_invalid_sender_status_is_in_the_closed_set(self):
+        from robothor.engine.channels.email import STATUSES
+
+        assert "failed:email_invalid_sender" in STATUSES
+
+    @pytest.mark.asyncio
+    async def test_sender_is_ignored_on_gws_with_one_info_line(self, caplog):
+        gws = _FakeGws()
+        with (
+            caplog.at_level(logging.INFO, logger="robothor.engine.channels.email"),
+            patch("robothor.crm.dal.do_not_contact_emails", side_effect=_opt_out()),
+        ):
+            receipt = await _channel(gws=gws, gws_present=True).send(
+                WILLING, "hello", config=_config(), run=_run(), sender=NO_REPLY
+            )
+
+        assert receipt.acknowledged == 1
+        (args,) = gws.calls
+        import json
+
+        raw = base64.urlsafe_b64decode(json.loads(args[-1])["raw"]).decode()
+        assert NO_REPLY not in raw
+        notes = [r for r in caplog.records if r.levelno == logging.INFO and "sender" in r.message]
+        assert len(notes) == 1
+
+    @pytest.mark.asyncio
+    async def test_sender_is_ignored_on_microsoft365_with_one_info_line(self, monkeypatch, caplog):
+        from robothor.settings import reset_settings
+
+        monkeypatch.setenv("ROBOTHOR_WORKSPACE_PROVIDER", "microsoft365")
+        monkeypatch.setenv("ROBOTHOR_M365_ASSISTANT_MAILBOX", "assistant@example.com")
+        reset_settings()
+        sent: list[str] = []
+
+        class Mail:
+            async def send(self, raw: str, *, thread_id: str | None = None) -> dict[str, Any]:
+                sent.append(raw)
+                return {"id": "graph-msg-1"}
+
+        class Workspace:
+            mail = Mail()
+
+        monkeypatch.setattr("robothor.workspace.get_workspace", lambda tenant_id=None: Workspace())
+        with (
+            caplog.at_level(logging.INFO, logger="robothor.engine.channels.email"),
+            patch("robothor.crm.dal.do_not_contact_emails", side_effect=_opt_out()),
+        ):
+            receipt = await _channel().send(
+                WILLING, "plain", config=_config(), run=_run(), sender=NO_REPLY, html=HTML
+            )
+
+        assert receipt.acknowledged == 1
+        (raw,) = sent
+        decoded = base64.urlsafe_b64decode(raw).decode()
+        assert NO_REPLY not in decoded
+        assert "text/html" in decoded
+        notes = [r for r in caplog.records if r.levelno == logging.INFO and "sender" in r.message]
+        assert len(notes) == 1
+
+    @pytest.mark.asyncio
+    async def test_the_opt_out_still_blocks_an_html_send_with_a_sender(self):
+        gws, smtp = _FakeGws(), _SMTPFactory()
+        with (
+            patch("robothor.crm.dal.do_not_contact_emails", side_effect=_opt_out(FLAGGED)),
+            patch("robothor.engine.tracking.log_guardrail_event") as logged,
+        ):
+            receipt = await _channel(gws=gws, gws_present=False, smtp=smtp).send(
+                FLAGGED, "hello", config=_config(), run=_run(), html=HTML, sender=NO_REPLY
+            )
+
+        assert receipt.status == "failed:email_dnc"
+        assert (gws.calls, smtp.calls) == ([], [])
+        assert logged.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_the_receipt_carries_the_plain_text_body(self):
+        with patch("robothor.crm.dal.do_not_contact_emails", side_effect=_opt_out()):
+            receipt = await _channel(gws_present=False).send(
+                WILLING, "plain body", config=_config(), run=_run(), html=HTML
+            )
+
+        assert receipt.body == "plain body"
