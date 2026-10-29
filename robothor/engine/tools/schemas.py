@@ -1510,6 +1510,59 @@ _PR_REVIEW_SCHEMAS: dict[str, dict[str, Any]] = {
 }
 
 
+#: The n8n monitor's read tools (handlers/n8n.py): the snapshot, never n8n itself.
+_N8N_SCHEMAS: dict[str, dict[str, Any]] = {
+    "n8n_list_workflows": {
+        "type": "function",
+        "function": {
+            "name": "n8n_list_workflows",
+            "description": (
+                "List the operator's n8n automations (the external n8n instance, not Genus "
+                "workflows) with failures in the last 24h and 7 days, the last error and a link, "
+                "as of the n8n monitor's last poll. Reads the snapshot; never calls n8n."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "active_only": {
+                        "type": "boolean",
+                        "description": "Only workflows that are switched on in n8n (default true).",
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "Case-insensitive match on the workflow name or a tag.",
+                    },
+                },
+            },
+        },
+    },
+    "n8n_recent_failures": {
+        "type": "function",
+        "function": {
+            "name": "n8n_recent_failures",
+            "description": (
+                "Failed n8n executions (the external n8n instance) in the last `hours`, newest "
+                "first: workflow, error message, mode, times and a link to the execution in n8n. "
+                "Reads the n8n monitor's snapshot; never calls n8n."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "hours": {
+                        "type": "integer",
+                        "description": "Look-back window in hours (default 24, max 720).",
+                    },
+                    "workflow_id": {
+                        "type": "string",
+                        "description": "Only this n8n workflow id (from n8n_list_workflows).",
+                    },
+                },
+            },
+        },
+    },
+}
+
+
 def get_engine_schemas() -> dict[str, dict[str, Any]]:
     """Return all engine-specific tool schemas keyed by tool name."""
     schemas: dict[str, dict[str, Any]] = {}
@@ -4142,54 +4195,7 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
         },
     }
 
-    schemas["n8n_list_workflows"] = {
-        "type": "function",
-        "function": {
-            "name": "n8n_list_workflows",
-            "description": (
-                "List the operator's n8n automations (the external n8n instance, not Genus "
-                "workflows) with failures in the last 24h and 7 days, the last error and a link, "
-                "as of the n8n monitor's last poll. Reads the snapshot; never calls n8n."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "active_only": {
-                        "type": "boolean",
-                        "description": "Only workflows that are switched on in n8n (default true).",
-                    },
-                    "query": {
-                        "type": "string",
-                        "description": "Case-insensitive match on the workflow name or a tag.",
-                    },
-                },
-            },
-        },
-    }
-    schemas["n8n_recent_failures"] = {
-        "type": "function",
-        "function": {
-            "name": "n8n_recent_failures",
-            "description": (
-                "Failed n8n executions (the external n8n instance) in the last `hours`, newest "
-                "first: workflow, error message, mode, times and a link to the execution in n8n. "
-                "Reads the n8n monitor's snapshot; never calls n8n."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "hours": {
-                        "type": "integer",
-                        "description": "Look-back window in hours (default 24, max 720).",
-                    },
-                    "workflow_id": {
-                        "type": "string",
-                        "description": "Only this n8n workflow id (from n8n_list_workflows).",
-                    },
-                },
-            },
-        },
-    }
+    schemas.update(_N8N_SCHEMAS)
 
     schemas["buddy_refresh"] = {
         "type": "function",
