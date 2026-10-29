@@ -30,6 +30,8 @@ tools_opt_in:
   - claude_code_cancel
   - pr_review_intake
   - pr_review_status
+  # Starts declared workflows when the operator asks; RBAC denies it to user/member.
+  - run_workflow
 
 task_protocol: true
 status_file: brain/memory/main-status.md
