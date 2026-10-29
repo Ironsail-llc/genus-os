@@ -599,6 +599,23 @@ async def test_publish_envelope_omits_unknown_delivery_id():
     assert "delivery_id" not in envelope
 
 
+@pytest.mark.asyncio
+async def test_publish_envelope_is_tagged_with_the_receiving_tenant():
+    """One engine per tenant reads every stream; an untagged webhook event
+    would be claimed by the root engine whichever tenant received it."""
+    from robothor.db.connection import tenant_scope
+
+    redis = AsyncMock()
+    with (
+        patch(
+            "robothor.engine.webhooks._get_async_redis", new_callable=AsyncMock, return_value=redis
+        ),
+        tenant_scope("acme-child-a"),
+    ):
+        await _publish_to_stream("webhook", "x", {"id": 1})
+    assert redis.xadd.call_args.args[1]["tenant_id"] == "acme-child-a"
+
+
 @patch.dict("os.environ", {"TEST_WEBHOOK_SECRET": "mysecret"})
 @patch("robothor.engine.webhooks._check_rate_limit", new_callable=AsyncMock, return_value=True)
 @patch("robothor.engine.webhooks._publish_to_stream", new_callable=AsyncMock, return_value="")

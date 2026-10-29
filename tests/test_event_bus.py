@@ -111,6 +111,53 @@ class TestPublish:
             assert msg_id == "1-0"
 
 
+class TestPublishStampsTenant:
+    """Every event names the tenant it belongs to.
+
+    One engine runs per tenant and every engine reads every stream, so an
+    event without a tenant cannot be routed: a child engine would react to the
+    root's ``task.created`` and vice versa.
+    """
+
+    @staticmethod
+    def _published_envelope(mock_redis: MagicMock) -> dict:
+        mock_redis.xadd.assert_called_once()
+        return mock_redis.xadd.call_args.args[1]
+
+    def test_untagged_publish_is_stamped_with_the_default_tenant(self):
+        from robothor import constants
+
+        mock_redis = MagicMock()
+        set_redis_client(mock_redis)
+
+        publish("crm", "task.created", {"task_id": "t1"}, source="test")
+
+        assert self._published_envelope(mock_redis)["tenant_id"] == constants.DEFAULT_TENANT
+        assert constants.DEFAULT_TENANT, "the stamp is never empty"
+
+    def test_publish_inside_a_tenant_scope_is_stamped_with_that_tenant(self):
+        from robothor.db.connection import tenant_scope
+
+        mock_redis = MagicMock()
+        set_redis_client(mock_redis)
+
+        with tenant_scope("acme-child-a"):
+            publish("crm", "task.created", {"task_id": "t1"}, source="test")
+
+        assert self._published_envelope(mock_redis)["tenant_id"] == "acme-child-a"
+
+    def test_an_explicit_tenant_wins_over_the_scope(self):
+        from robothor.db.connection import tenant_scope
+
+        mock_redis = MagicMock()
+        set_redis_client(mock_redis)
+
+        with tenant_scope("acme-child-a"):
+            publish("crm", "task.created", {}, source="test", tenant_id="acme-parent")
+
+        assert self._published_envelope(mock_redis)["tenant_id"] == "acme-parent"
+
+
 # Namespaces used by the guard tests. ``.invalid`` is reserved by RFC 2606 and
 # never resolves, so a guard regression cannot silently reach a real host.
 PROD_LOCAL_URL = "redis://localhost:6379/0"
