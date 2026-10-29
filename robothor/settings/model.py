@@ -1680,7 +1680,7 @@ class AuthSettings(SettingsGroup):
         "security is genuinely enforcing. Any other value reads as 'off'.",
         aliases=("ROBOTHOR_TENANT_SWITCH_MODE",),
         restart_units=("robothor-bridge",),
-        since="1.117.0",
+        since="1.118.0",
     )
     tenant_switch_allow_inert_rls: bool = declare(
         False,
@@ -1691,7 +1691,7 @@ class AuthSettings(SettingsGroup):
         "query's own WHERE clause.",
         aliases=("ROBOTHOR_TENANT_SWITCH_ALLOW_INERT_RLS",),
         restart_units=("robothor-bridge",),
-        since="1.117.0",
+        since="1.118.0",
     )
 
 
