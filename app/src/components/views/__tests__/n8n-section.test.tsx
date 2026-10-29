@@ -6,11 +6,11 @@
  * sees the operator-only sentence, not red; an unreachable bridge says so; and
  * it does not touch the bridge while the view is hidden.
  */
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { N8nSection } from "../automations/n8n-section";
-import { BRIDGE_UNREACHABLE } from "@/lib/bridge/use-bridge-poll";
+import { BRIDGE_UNREACHABLE, POLL_MS } from "@/lib/bridge/use-bridge-poll";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -30,6 +30,7 @@ const LISTING = {
       failures_7d: 5,
       last_failure_at: new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString(),
       last_error: "timeout",
+      last_failure_url: "https://n8n.example.com/workflow/wf1/executions/ex7",
       url: "https://n8n.example.com/workflow/wf1",
     },
     {
@@ -41,6 +42,7 @@ const LISTING = {
       failures_7d: 0,
       last_failure_at: null,
       last_error: null,
+      last_failure_url: "",
       url: "https://n8n.example.com/workflow/wf2",
     },
   ],
@@ -75,7 +77,7 @@ describe("N8nSection", () => {
     expect(rows[0].textContent).toMatch(/active/i);
     expect(rows[0].textContent).toMatch(/2\s*\/\s*5/);
     expect(rows[0].textContent).toMatch(/3 hours ago/);
-    const link = first.getByRole("link");
+    const link = first.getByRole("link", { name: /open invoice sync in n8n/i });
     expect(link.getAttribute("href")).toBe("https://n8n.example.com/workflow/wf1");
     expect(link.getAttribute("target")).toBe("_blank");
     expect(link.getAttribute("rel")).toContain("noopener");
@@ -117,9 +119,63 @@ describe("N8nSection", () => {
     expect(err.textContent).toContain(BRIDGE_UNREACHABLE);
   });
 
+  it("links the last failure to the execution that failed", async () => {
+    vi.spyOn(global, "fetch").mockResolvedValue(reply(LISTING));
+    render(<N8nSection visible />);
+    const rows = await screen.findAllByTestId("n8n-row");
+    const failure = within(rows[0]).getByTestId("n8n-last-failure");
+    expect(failure.tagName).toBe("A");
+    expect(failure.getAttribute("href")).toBe(
+      "https://n8n.example.com/workflow/wf1/executions/ex7"
+    );
+    expect(failure.getAttribute("target")).toBe("_blank");
+    expect(failure.getAttribute("rel")).toContain("noopener");
+    expect(failure.textContent).toMatch(/3 hours ago/);
+  });
+
+  it("a last failure without an execution link is plain text", async () => {
+    vi.spyOn(global, "fetch").mockResolvedValue(
+      reply({
+        ...LISTING,
+        workflows: [{ ...LISTING.workflows[0], last_failure_url: "" }],
+      })
+    );
+    render(<N8nSection visible />);
+    const [row] = await screen.findAllByTestId("n8n-row");
+    expect(within(row).getByTestId("n8n-last-failure").tagName).not.toBe("A");
+  });
+
   it("does not fetch when hidden", () => {
     const spy = vi.spyOn(global, "fetch").mockResolvedValue(reply(LISTING));
     render(<N8nSection visible={false} />);
     expect(spy).not.toHaveBeenCalled();
+  });
+});
+
+describe("N8nSection polling", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it("stops polling once the monitor says it is not configured", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const spy = vi
+      .spyOn(global, "fetch")
+      .mockResolvedValue(reply({ ...LISTING, status: "not_configured", workflows: [] }));
+    render(<N8nSection visible />);
+    await screen.findByTestId("n8n-not-configured");
+    await vi.advanceTimersByTimeAsync(0);
+    const settled = spy.mock.calls.length;
+
+    await vi.advanceTimersByTimeAsync(POLL_MS * 3 + 1_000);
+    expect(spy.mock.calls.length).toBe(settled);
+  });
+
+  it("keeps polling while the monitor is configured", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const spy = vi.spyOn(global, "fetch").mockResolvedValue(reply(LISTING));
+    render(<N8nSection visible />);
+    await waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
+
+    await vi.advanceTimersByTimeAsync(POLL_MS + 1_000);
+    expect(spy.mock.calls.length).toBeGreaterThan(1);
   });
 });

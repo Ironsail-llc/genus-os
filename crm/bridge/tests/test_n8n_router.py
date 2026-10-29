@@ -347,3 +347,41 @@ def test_no_base_url_means_no_relative_links(controls_client_as_operator, monkey
         "/api/integrations/n8n/workflows/wf1/executions"
     ).json()["executions"]
     assert all(ex["url"] == "" for ex in executions)
+
+
+# --- the last failure links to its execution ---------------------------------
+
+
+def test_last_failure_links_to_its_execution(controls_client_as_operator, enabled, fake_db, calls):
+    fake_db(
+        n8n_sync_state=[_sync()],
+        n8n_workflows=[
+            _workflow(
+                failures_24h=1,
+                failures_7d=1,
+                last_failure_at=_now() - timedelta(hours=1),
+                last_error="timeout",
+                last_failed_execution_id="ex7",
+            )
+        ],
+    )
+    [wf] = controls_client_as_operator.get("/api/integrations/n8n/workflows").json()["workflows"]
+    assert wf["last_failure_url"] == f"{BASE}/workflow/wf1/executions/ex7"
+    listing_sql = " ".join(sql for sql, _ in calls if "n8n_workflows" in sql)
+    assert "ARRAY_AGG(e.execution_id" in listing_sql
+
+
+def test_no_failure_means_no_failure_link(controls_client_as_operator, enabled, fake_db):
+    fake_db(n8n_sync_state=[_sync()], n8n_workflows=[_workflow()])
+    [wf] = controls_client_as_operator.get("/api/integrations/n8n/workflows").json()["workflows"]
+    assert wf["last_failure_url"] == ""
+
+
+def test_no_base_url_means_no_failure_link(controls_client_as_operator, monkeypatch, fake_db):
+    monkeypatch.setattr(n8n, "_n8n_settings", lambda: (True, "", POLL))
+    fake_db(
+        n8n_sync_state=[_sync()],
+        n8n_workflows=[_workflow(failures_24h=1, last_failed_execution_id="ex7")],
+    )
+    [wf] = controls_client_as_operator.get("/api/integrations/n8n/workflows").json()["workflows"]
+    assert wf["last_failure_url"] == ""

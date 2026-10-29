@@ -30,6 +30,7 @@ const LISTING = {
       failures_7d: 5,
       last_failure_at: "2026-06-15T11:00:00Z",
       last_error: "timeout",
+      last_failure_url: "https://n8n.example.com/workflow/wf1/executions/ex7",
       url: "https://n8n.example.com/workflow/wf1",
     },
     {
@@ -41,6 +42,7 @@ const LISTING = {
       failures_7d: 0,
       last_failure_at: null,
       last_error: null,
+      last_failure_url: "",
       url: "https://n8n.example.com/workflow/wf2",
     },
   ],
@@ -94,10 +96,18 @@ test.describe("Automations › External: n8n", () => {
     await expect(rows.nth(0)).toContainText("2 / 5 failed");
     await expect(rows.nth(1)).toContainText("inactive");
 
-    const link = rows.nth(0).getByRole("link");
+    const link = rows.nth(0).getByRole("link", { name: /open invoice sync in n8n/i });
     await expect(link).toHaveAttribute("href", "https://n8n.example.com/workflow/wf1");
     await expect(link).toHaveAttribute("target", "_blank");
     await expect(link).toHaveAttribute("rel", /noopener/);
+
+    // The last failure opens the execution that failed, not just the workflow.
+    const failure = rows.nth(0).locator('[data-testid="n8n-last-failure"]');
+    await expect(failure).toHaveAttribute(
+      "href",
+      "https://n8n.example.com/workflow/wf1/executions/ex7"
+    );
+    await expect(failure).toHaveAttribute("target", "_blank");
   });
 
   test("a switched-off monitor is one muted line", async ({ page }) => {
