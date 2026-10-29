@@ -1050,10 +1050,10 @@ class TestHTMLAndSender:
                 "hello",
                 config=_config(),
                 run=_run(),
-                sender="Updates <no-reply@mail.example.com>",
+                sender="Updates <no-reply@mail.example>",
             )
 
-        pinned_headers.assert_called_once_with(domain="mail.example.com")
+        pinned_headers.assert_called_once_with(domain="mail.example")
 
     @pytest.mark.parametrize(
         "sender",
