@@ -81,8 +81,20 @@ def test_workflow_row_has_exactly_the_contract_keys() -> None:
         "failures_7d": 4,
         "last_failure_at": "2026-10-29T11:00:00+00:00",
         "last_error": "Request failed with status 500",
+        "last_failure_url": "",
         "url": "https://n8n.example.com/workflow/wf1",
     }
+
+
+def test_workflow_row_links_the_newest_failed_execution() -> None:
+    row = workflow_row({"workflow_id": "wf1", "last_failed_execution_id": "ex7"}, BASE)
+    assert row["last_failure_url"] == "https://n8n.example.com/workflow/wf1/executions/ex7"
+
+
+def test_workflow_row_has_no_failure_link_without_a_failure_or_a_base_url() -> None:
+    assert workflow_row({"workflow_id": "wf1"}, BASE)["last_failure_url"] == ""
+    no_base = workflow_row({"workflow_id": "wf1", "last_failed_execution_id": "ex7"}, "")
+    assert no_base["last_failure_url"] == ""
 
 
 def test_execution_row_has_exactly_the_contract_keys() -> None:

@@ -125,6 +125,7 @@ def test_the_snapshot_round_trips(pg_store):
     assert wf1["tags"] == ["billing"]
     assert (wf1["failures_24h"], wf1["failures_7d"]) == (1, 2)
     assert wf1["last_error"] == "boom"
+    assert wf1["last_failed_execution_id"] == "1"
     assert [e["execution_id"] for e in executions] == ["1", "2"]
     assert [e["execution_id"] for e in recent] == ["1"]
     assert state is not None

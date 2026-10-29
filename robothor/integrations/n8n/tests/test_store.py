@@ -69,6 +69,8 @@ async def test_workflow_failure_counts_and_last_error() -> None:
     assert rows["wf1"]["failures_7d"] == 2
     assert rows["wf1"]["last_failure_at"] == NOW - timedelta(hours=1)
     assert rows["wf1"]["last_error"] == "newest"
+    assert rows["wf1"]["last_failed_execution_id"] == "1"
+    assert rows["wf2"]["last_failed_execution_id"] is None
     assert rows["wf2"]["failures_24h"] == 0
     assert rows["wf2"]["last_failure_at"] is None
     assert rows["wf2"]["active"] is False
