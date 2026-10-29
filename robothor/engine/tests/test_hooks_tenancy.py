@@ -27,6 +27,7 @@ from robothor.engine.hooks import STREAM_PREFIX, EventHooks
 
 PARENT = "acme-parent"
 CHILD = "acme-child-a"
+OTHER_ROOT = "acme-other"
 STREAM = f"{STREAM_PREFIX}crm"
 TRIGGERS = {
     "crm": [
@@ -138,6 +139,30 @@ def _engine(base: EngineConfig, tenant: str, group: str | None = None) -> Engine
     if group is None:
         return replace(base, tenant_id=tenant)
     return replace(base, tenant_id=tenant, event_group=group)
+
+
+class FakeHierarchy:
+    """``robothor.crm.dal.get_tenant`` over a fixed tenant tree."""
+
+    def __init__(self) -> None:
+        self.parents: dict[str, str | None] = {PARENT: None, OTHER_ROOT: None, CHILD: PARENT}
+        self.down: set[str] = set()
+        self.calls: list[str] = []
+
+    def get_tenant(self, tenant_id: str) -> dict[str, Any] | None:
+        self.calls.append(tenant_id)
+        if tenant_id in self.down:
+            raise ConnectionError("database unreachable")
+        if tenant_id not in self.parents:
+            return None
+        return {"id": tenant_id, "parentTenantId": self.parents[tenant_id]}
+
+
+@pytest.fixture(autouse=True)
+def hierarchy():
+    tree = FakeHierarchy()
+    with patch("robothor.crm.dal.get_tenant", side_effect=tree.get_tenant):
+        yield tree
 
 
 class _Recorder:
@@ -511,3 +536,130 @@ class TestAnotherTenantOnMyGroup:
         await _consume_until_idle(hooks, fake)
 
         assert recorder.runs == [(PARENT, PARENT)]
+
+
+class TestOnlyARootTenantHoldsTheRootGroup:
+    """Who may hold ``engine`` is decided by the tenant tree, not by start order.
+
+    A tenant with a parent (every cell the chart renders) can never claim or
+    read the root group, whatever its setting says; the owner record only
+    breaks ties between legitimate roots.
+    """
+
+    OWNER_KEY = "robothor:events:group-owner:engine"
+
+    @pytest.fixture(autouse=True)
+    def _agreeing_tenant_env(self, monkeypatch):
+        monkeypatch.delenv("ROBOTHOR_TENANT_ID", raising=False)
+
+    @staticmethod
+    def _stop_after_checks(hooks: EventHooks, fake: FakeStreams, n: int) -> None:
+        fake.on_xinfo = lambda calls: hooks._stop_event.set() if calls >= n else None
+
+    @staticmethod
+    def _errors(caplog) -> list[str]:
+        return [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
+
+    @pytest.mark.asyncio
+    async def test_a_child_that_starts_first_never_claims_the_root_group(
+        self, engine_config, caplog
+    ):
+        fake = FakeStreams()
+        await fake.xgroup_create(STREAM, "engine")
+        fake.add(STREAM, _event(PARENT))
+        child = EventHooks(_engine(engine_config, CHILD), runner=None)  # type: ignore[arg-type]
+        _Recorder().bind(child)
+        self._stop_after_checks(child, fake, 1)
+
+        with caplog.at_level(logging.ERROR, logger="robothor.engine.hooks"):
+            await _consume_until_idle(child, fake)
+
+        assert fake.read_by == []
+        assert self.OWNER_KEY not in fake.keys
+        assert any(f"GENUS_EVENT_CONSUMER_GROUP=engine-{CHILD}" in m for m in self._errors(caplog))
+
+    @pytest.mark.asyncio
+    async def test_the_root_claims_the_group_even_when_it_starts_last(self, engine_config):
+        """An existing install: a child left on ``engine`` is still reading
+        (it ran the old code) when the root restarts. The root takes it."""
+        fake = FakeStreams()
+        await fake.xgroup_create(STREAM, "engine")
+        fake.consumers[(STREAM, "engine")] = [{"name": f"engine-{CHILD}", "idle": 10}]
+        fake.add(STREAM, _event(PARENT))
+        root = EventHooks(_engine(engine_config, PARENT), runner=None)  # type: ignore[arg-type]
+        recorder = _Recorder()
+        recorder.bind(root)
+
+        await _consume_until_idle(root, fake)
+
+        assert fake.keys[self.OWNER_KEY] == PARENT.encode()
+        assert recorder.runs == [(PARENT, PARENT)]
+
+    @pytest.mark.asyncio
+    async def test_a_child_whose_setting_is_engine_is_told_to_set_its_own_group(
+        self, engine_config, caplog
+    ):
+        fake = FakeStreams()
+        await fake.xgroup_create(STREAM, "engine")
+        fake.add(STREAM, _event(PARENT))
+        child = EventHooks(_engine(engine_config, CHILD, "engine"), runner=None)  # type: ignore[arg-type]
+        _Recorder().bind(child)
+        self._stop_after_checks(child, fake, 1)
+
+        with caplog.at_level(logging.ERROR, logger="robothor.engine.hooks"):
+            await _consume_until_idle(child, fake)
+
+        assert fake.read_by == []
+        errors = self._errors(caplog)
+        assert any(
+            f"GENUS_EVENT_CONSUMER_GROUP=engine-{CHILD}" in m and PARENT in m for m in errors
+        ), "the error names the child's parent and the setting to change"
+
+    @pytest.mark.asyncio
+    async def test_database_unreachable_does_not_claim_and_retries(
+        self, engine_config, hierarchy, caplog
+    ):
+        fake = FakeStreams()
+        await fake.xgroup_create(STREAM, "engine")
+        fake.add(STREAM, _event(PARENT))
+        hierarchy.down.add(PARENT)
+        root = EventHooks(_engine(engine_config, PARENT), runner=None)  # type: ignore[arg-type]
+        recorder = _Recorder()
+        recorder.bind(root)
+
+        def _db_back(calls: int) -> None:
+            if calls == 1:
+                assert self.OWNER_KEY not in fake.keys, "no claim without knowing the tree"
+                hierarchy.down.clear()
+
+        fake.on_xinfo = _db_back
+
+        with (
+            caplog.at_level(logging.WARNING, logger="robothor.engine.hooks"),
+            patch("robothor.engine.hooks.GROUP_RIVAL_RECHECK_SECONDS", 0),
+        ):
+            await _consume_until_idle(root, fake)
+
+        assert hierarchy.calls.count(PARENT) >= 2, "the lookup is retried on the re-check"
+        assert fake.keys[self.OWNER_KEY] == PARENT.encode()
+        assert recorder.runs == [(PARENT, PARENT)]
+        warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+        assert any(PARENT in m for m in warnings)
+
+    @pytest.mark.asyncio
+    async def test_the_error_names_the_owner_and_the_record(self, engine_config, caplog):
+        """Two roots: the record breaks the tie, and the loser is told where
+        the record lives so an operator can hand the group over."""
+        fake = FakeStreams()
+        await fake.xgroup_create(STREAM, "engine")
+        fake.keys[self.OWNER_KEY] = OTHER_ROOT.encode()
+        fake.add(STREAM, _event(PARENT))
+        root = EventHooks(_engine(engine_config, PARENT), runner=None)  # type: ignore[arg-type]
+        _Recorder().bind(root)
+        self._stop_after_checks(root, fake, 1)
+
+        with caplog.at_level(logging.ERROR, logger="robothor.engine.hooks"):
+            await _consume_until_idle(root, fake)
+
+        assert fake.read_by == []
+        assert any(OTHER_ROOT in m and self.OWNER_KEY in m for m in self._errors(caplog))
