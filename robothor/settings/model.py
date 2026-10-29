@@ -819,9 +819,9 @@ class EngineSettings(SettingsGroup):
         "'engine' so its stream offsets survive upgrades; each child-tenant "
         "engine needs its own, e.g. 'engine-<tenant>', set by its deployment. "
         "An engine on any other group ignores events that carry no tenant. The "
-        "root group belongs to the first engine that read it (recorded in "
-        "Redis); any other engine on it stops reading and logs an error naming "
-        "this setting.",
+        "root group is only ever read by a root tenant (one with no parent in "
+        "crm_tenants); a child engine on it stops reading and logs an error "
+        "naming this setting.",
         aliases=("ROBOTHOR_EVENT_CONSUMER_GROUP",),
         since="unreleased",
     )

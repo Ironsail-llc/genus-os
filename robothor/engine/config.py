@@ -116,8 +116,8 @@ class EngineConfig:
     # The root tenant keeps the historical "engine" so its stream offsets
     # survive the upgrade; each child engine's deployment sets its own group,
     # e.g. "engine-<tenant>" (GENUS_EVENT_CONSUMER_GROUP). Only an engine on
-    # the root group handles events that carry no tenant_id. The root group
-    # has a recorded owner and only it reads there; see hooks._may_read_group.
+    # the root group handles events that carry no tenant_id, and only a root
+    # tenant (no parent in crm_tenants) reads there; see hooks._may_read_group.
     event_group: str = ROOT_EVENT_GROUP
 
     # Paths

@@ -58,13 +58,16 @@ child engine's deployment must give it a group of its own, for example
 A child engine left on the root's group would take about half of the root's
 events and drop them, so the engines on a group are not equals:
 
-- **The root group has an owner.** The first engine to read `engine` claims
-  it in Redis (`robothor:events:group-owner:engine`), but only when no other
-  tenant's engine is reading it and its own `ROBOTHOR_TENANT_ID` and
-  `ROBOTHOR_DEFAULT_TENANT` agree. The record never expires, and only the
-  owner reads `engine`, so the root never gives its group up to a child that
-  forgot its setting, even while the root is down. To hand the root group to
-  another tenant, delete the key.
+- **Only a root tenant may hold the root group.** At start an engine looks
+  up its tenant in `crm_tenants`. A tenant with a parent never claims or reads
+  `engine`, whatever its setting says. If the lookup fails, the engine does
+  not claim or read `engine` and asks again on the next check.
+- **Among roots, the recorded owner holds it.** A root claims `engine` in
+  Redis (`robothor:events:group-owner:engine`) if nobody has, even while a
+  child is reading it, unless its own `ROBOTHOR_TENANT_ID` and
+  `ROBOTHOR_DEFAULT_TENANT` disagree. The record never expires, and only the
+  owner reads `engine`. To hand the root group to another root tenant, delete
+  the key.
 - **An engine always reads its own `engine-<tenant>` group.** On any other
   group it reads only while no other tenant is reading.
 - **The engine that is not entitled to the group stops.** It logs an ERROR
