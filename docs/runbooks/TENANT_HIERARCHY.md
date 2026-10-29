@@ -9,8 +9,10 @@ holds.
 
 The examples use a root tenant `acme-parent` with one child `acme-child-a`,
 and the address `alice@example.com`. Substitute your own. The root is the
-deployment's own tenant: its `ROBOTHOR_DEFAULT_TENANT` (`default` unless you
-set it), which is the tenant root operators sign in to.
+platform tenant: `ROBOTHOR_PLATFORM_TENANT` if set, else the bridge's
+`ROBOTHOR_DEFAULT_TENANT` (`default` unless you set it). It is the tenant root
+operators sign in to, and the one a "root operator" must have as both home
+and acting tenant.
 
 ## Concepts
 
