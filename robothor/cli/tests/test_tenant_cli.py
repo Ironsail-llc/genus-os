@@ -201,6 +201,26 @@ def test_move_account_passes_role_and_dry_run() -> None:
     assert mv.call_args.kwargs["dry_run"] is True
 
 
+def test_move_account_passes_detach_person() -> None:
+    with (
+        patch("robothor.auth.accounts.accounts_for_email", return_value=[ALICE_PARENT]),
+        patch("robothor.auth.accounts.move_account", return_value=_report()) as mv,
+    ):
+        argv = ("--email", "alice@example.com", "--to", "acme-child-a", "--detach-person")
+        assert cmd_tenant(_parse("move-account", *argv)) == 0
+    assert mv.call_args.kwargs["detach_person"] is True
+
+
+def test_move_account_does_not_detach_by_default() -> None:
+    with (
+        patch("robothor.auth.accounts.accounts_for_email", return_value=[ALICE_PARENT]),
+        patch("robothor.auth.accounts.move_account", return_value=_report()) as mv,
+    ):
+        argv = ("--email", "alice@example.com", "--to", "acme-child-a")
+        assert cmd_tenant(_parse("move-account", *argv)) == 0
+    assert mv.call_args.kwargs["detach_person"] is False
+
+
 def test_move_account_json_output(capsys) -> None:
     with (
         patch("robothor.auth.accounts.accounts_for_email", return_value=[ALICE_PARENT]),

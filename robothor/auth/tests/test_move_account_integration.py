@@ -119,6 +119,7 @@ def world() -> Iterator[dict[str, Any]]:
             "user_channel_identities",
             "user_permissions",
             "user_accounts",
+            "crm_notes",
             "crm_people",
         ):
             cur.execute(f"DELETE FROM {table} WHERE tenant_id IN %s", (tenants,))  # noqa: S608
@@ -236,3 +237,91 @@ def test_accounts_for_email_finds_the_account_across_tenants(world) -> None:
     ]
     assert [a["tenant_id"] for a in found] == [world["parent"]]
     assert "password_hash" not in found[0]
+
+
+# ─── the person's CRM history ────────────────────────────────────────────
+
+
+def _seed_note(w: dict[str, Any]) -> str:
+    cur = w["cur"]
+    cur.execute(
+        "INSERT INTO crm_notes (tenant_id, title, person_id) VALUES (%s, 'Call', %s) RETURNING id",
+        (w["parent"], w["person_id"]),
+    )
+    return str(cur.fetchone()[0])
+
+
+def test_a_person_with_crm_history_is_not_moved_by_default(world) -> None:
+    """The person row is the source tenant's CRM contact. Moving it would leave
+    the tenant's notes pointing at someone it can no longer see."""
+    _seed_note(world)
+    cur = world["cur"]
+    with pytest.raises(accounts.AccountMoveError, match=r"crm_notes=1.*--detach-person"):
+        accounts.move_account(world["user_id"], world["child"], actor="cli:test")
+    assert set(_where(cur, world).values()) == {world["parent"]}
+
+
+def test_a_dry_run_reports_the_persons_crm_history(world) -> None:
+    _seed_note(world)
+    with pytest.raises(accounts.AccountMoveError, match=r"crm_notes=1"):
+        accounts.move_account(world["user_id"], world["child"], actor="cli:test", dry_run=True)
+
+
+def test_detach_person_leaves_the_contact_and_gives_the_account_a_new_one(world) -> None:
+    note_id = _seed_note(world)
+    cur = world["cur"]
+    report = accounts.move_account(
+        world["user_id"], world["child"], actor="cli:test", detach_person=True
+    )
+
+    # The old contact, and its history, stay where they were.
+    cur.execute("SELECT tenant_id FROM crm_people WHERE id = %s", (world["person_id"],))
+    assert cur.fetchone()[0] == world["parent"]
+    cur.execute("SELECT tenant_id, person_id FROM crm_notes WHERE id = %s", (note_id,))
+    assert cur.fetchone() == (world["parent"], uuid.UUID(world["person_id"]))
+
+    # The account, its Telegram routing row and its face enrolment point at a
+    # fresh contact in the target tenant.
+    cur.execute("SELECT tenant_id, person_id FROM user_accounts WHERE id = %s", (world["user_id"],))
+    tenant, new_person = cur.fetchone()
+    assert tenant == world["child"]
+    assert new_person is not None and str(new_person) != world["person_id"]
+    cur.execute("SELECT tenant_id, first_name, email FROM crm_people WHERE id = %s", (new_person,))
+    assert cur.fetchone() == (world["child"], "Alice", "alice@example.com")
+    cur.execute("SELECT tenant_id FROM tenant_users WHERE person_id = %s", (new_person,))
+    assert [r[0] for r in cur.fetchall()] == [world["child"]]
+    cur.execute(
+        "SELECT tenant_id, person_id FROM face_identities WHERE user_account_id = %s",
+        (world["user_id"],),
+    )
+    assert cur.fetchone() == (world["child"], new_person)
+
+    assert report.new_person_id == str(new_person)
+    assert report.counts["crm_people"] == 1
+
+
+# ─── the role follows into channel identities ────────────────────────────
+
+
+def _channel_role(w: dict[str, Any]) -> str:
+    w["cur"].execute("SELECT role FROM user_channel_identities WHERE user_id = %s", (w["user_id"],))
+    return str(w["cur"].fetchone()[0])
+
+
+def test_a_demotion_to_viewer_caps_the_channel_identity(world) -> None:
+    accounts.move_account(world["user_id"], world["child"], actor="cli:test", role="viewer")
+    assert _channel_role(world) == "viewer"
+
+
+def test_a_role_change_never_raises_a_channel_identity(world) -> None:
+    world["cur"].execute(
+        "UPDATE user_channel_identities SET role = 'viewer' WHERE user_id = %s",
+        (world["user_id"],),
+    )
+    accounts.move_account(world["user_id"], world["child"], actor="cli:test", role="admin")
+    assert _channel_role(world) == "viewer"
+
+
+def test_no_role_change_leaves_the_channel_identity_alone(world) -> None:
+    accounts.move_account(world["user_id"], world["child"], actor="cli:test")
+    assert _channel_role(world) == "member"
