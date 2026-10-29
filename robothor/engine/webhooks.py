@@ -101,9 +101,16 @@ def load_webhook_config(path: str | Path) -> WebhookConfig:
     beside ``docs/webhooks.yaml``) is merged after the base file, in name
     order, so a plugin can own a file of its own channels. A channel declared
     twice -- in the base file and a drop-in, or in two drop-ins -- is a
-    ``ValueError`` naming both files. A missing directory is fine.
+    ``ValueError`` naming both files, and a file that does not parse raises. A
+    missing directory is fine.
     """
-    path = Path(path)
+    return _load_webhook_config(Path(path), strict=True)
+
+
+def _load_webhook_config(path: Path, *, strict: bool) -> WebhookConfig:
+    """:func:`load_webhook_config`; with ``strict=False`` a source that does not
+    parse, a duplicate channel or a malformed channel is logged and skipped, so
+    the router still serves every channel it can."""
     dropins = _dropin_dir(path)
     sources = sorted(dropins.glob("*.yaml")) if dropins.is_dir() else []
     if path.exists():
@@ -115,12 +122,27 @@ def load_webhook_config(path: str | Path) -> WebhookConfig:
     declared: dict[str, Path] = {}
     merged: dict[str, Any] = {}
     for source in sources:
-        for name, raw in _read_channels(source).items():
+        try:
+            found = _read_channels(source)
+        except (yaml.YAMLError, OSError, UnicodeDecodeError) as exc:
+            if strict:
+                raise
+            logger.error(
+                "Webhook config %s is not readable (%s); none of its channels are served",
+                source,
+                type(exc).__name__,
+            )
+            continue
+        for name, raw in found.items():
             if name in declared:
-                raise ValueError(
+                message = (
                     f"Webhook channel {name!r} is declared in both {declared[name]} and "
                     f"{source}; rename one of them."
                 )
+                if strict:
+                    raise ValueError(message)
+                logger.error("%s Serving the one in %s.", message, declared[name])
+                continue
             declared[name] = source
             merged[name] = raw
 
@@ -128,22 +150,18 @@ def load_webhook_config(path: str | Path) -> WebhookConfig:
     for name, raw in merged.items():
         if not isinstance(raw, dict):
             continue
-        channels[name] = WebhookChannel(
-            name=name,
-            stream=raw.get("stream", name),
-            secret_env=raw.get("secret_env", ""),
-            event_type_header=raw.get("event_type_header", ""),
-            event_type_field=raw.get("event_type_field", ""),
-            event_type_prefix=raw.get("event_type_prefix", ""),
-            enabled=raw.get("enabled", True),
-            rate_limit_per_min=int(raw.get("rate_limit_per_min", 60)),
-            signature_header=raw.get("signature_header", "") or "",
-            signature_scheme=raw.get("signature_scheme", "hmac_hex") or "hmac_hex",
-            timestamp_tolerance_seconds=int(raw.get("timestamp_tolerance_seconds", 300)),
-            delivery_id_header=raw.get("delivery_id_header", "") or "",
-            oidc_audience=str(raw.get("oidc_audience", "") or ""),
-            oidc_service_account=str(raw.get("oidc_service_account", "") or ""),
-        )
+        try:
+            channels[name] = _channel(name, raw)
+        except (ValueError, TypeError) as exc:
+            if strict:
+                raise
+            logger.error(
+                "Webhook channel %r in %s is malformed (%s); it is not served",
+                name,
+                declared[name],
+                type(exc).__name__,
+            )
+            continue
         if channels[name].signature_scheme not in SIGNATURE_SCHEMES:
             logger.warning(
                 "Webhook channel '%s' has unknown signature_scheme %r; every request will be "
@@ -153,6 +171,25 @@ def load_webhook_config(path: str | Path) -> WebhookConfig:
             )
 
     return WebhookConfig(channels=channels)
+
+
+def _channel(name: str, raw: dict[str, Any]) -> WebhookChannel:
+    return WebhookChannel(
+        name=name,
+        stream=raw.get("stream", name),
+        secret_env=raw.get("secret_env", ""),
+        event_type_header=raw.get("event_type_header", ""),
+        event_type_field=raw.get("event_type_field", ""),
+        event_type_prefix=raw.get("event_type_prefix", ""),
+        enabled=raw.get("enabled", True),
+        rate_limit_per_min=int(raw.get("rate_limit_per_min", 60)),
+        signature_header=raw.get("signature_header", "") or "",
+        signature_scheme=raw.get("signature_scheme", "hmac_hex") or "hmac_hex",
+        timestamp_tolerance_seconds=int(raw.get("timestamp_tolerance_seconds", 300)),
+        delivery_id_header=raw.get("delivery_id_header", "") or "",
+        oidc_audience=str(raw.get("oidc_audience", "") or ""),
+        oidc_service_account=str(raw.get("oidc_service_account", "") or ""),
+    )
 
 
 def _verify_hmac(payload_bytes: bytes, signature: str, secret: str) -> bool:
@@ -592,7 +629,8 @@ def get_webhook_router(config: WebhookConfig | None = None) -> APIRouter:
             / "docs"
             / "webhooks.yaml"
         )
-        config = load_webhook_config(default_path)
+        # Lenient: one bad drop-in must not take the engine's HTTP app down.
+        config = _load_webhook_config(default_path, strict=False)
 
     router = APIRouter(tags=["webhooks"])
 

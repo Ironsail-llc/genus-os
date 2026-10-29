@@ -125,8 +125,9 @@ External services reach the bus through `POST /api/webhooks/{channel}`
 (`robothor/engine/webhooks.py`). Channels are defined in
 `$ROBOTHOR_WORKSPACE/docs/webhooks.yaml`, plus every `*.yaml` drop-in in
 `docs/webhooks.d/` (instance files, merged in name order after the base file, so a plugin can
-ship its own channels; a channel declared twice is an error naming both
-files); each names the stream it publishes to, the environment variable that holds its signing secret, and how the event
+ship its own channels; a channel declared twice, or a file that does not
+parse, is logged as an error naming the file and skipped, and the other channels are still
+served); each names the stream it publishes to, the environment variable that holds its signing secret, and how the event
 type is derived. A request is checked in this order: signature, rate limit,
 JSON body, delivery id, then published.
 

@@ -375,10 +375,13 @@ def _identity(key: str, item: Any) -> tuple[Any, ...] | None:
             if isinstance(stream, str) and stream and isinstance(event_type, str) and event_type:
                 return ("hook", stream, event_type)
         return None
-    if item is None or isinstance(item, (dict, list)):
-        return None
-    # The type too, so `true` and `1` are different items.
-    return ("value", type(item).__name__, item)
+    # Normalised to the builtin type: the round-trip loader hands back str and
+    # float subclasses (a quoted scalar, a ScalarFloat) that safe_load does not.
+    # bool first, as it is an int; the type is kept so `true` and `1` differ.
+    for kind in (bool, str, int, float):
+        if isinstance(item, kind):
+            return ("value", kind.__name__, kind(item))
+    return None
 
 
 def _claim(key: str, item: Any) -> str:
@@ -416,6 +419,8 @@ def _list_section(raw: Any, where: str) -> dict[str, list[Any]]:
         if not isinstance(items, list):
             raise AssetError(f"{where}.{key} must be a list.")
         for item in items:
+            if key == _HOOKS_KEY and isinstance(item, dict) and ":" in str(item.get("stream")):
+                raise AssetError(f"{where}.{key}: a hook's `stream` may not contain `:`.")
             if _identity(key, item) is None:
                 if key == _HOOKS_KEY:
                     raise AssetError(
@@ -1020,6 +1025,8 @@ def plan(
             suffix += " [hooks the engine executes]"
         lines.append(f"{label} {item.dest}{suffix}")
 
+    _check_webhook_map(assets, dist, root, own_files)
+
     claimed: dict[tuple[str, str], str] = {}
     for owner, entry in ledger.items():
         if owner == dist or not isinstance(entry, dict):
@@ -1049,6 +1056,70 @@ def plan(
         keys = ", ".join(sorted(patch_keys(patch.install)))
         lines.append(f"patch    docs/agents/{patch.agent}.yaml ({keys})")
     return tuple(lines)
+
+
+def _webhook_channels(data: bytes, where: str) -> list[str]:
+    try:
+        parsed = yaml.safe_load(data.decode("utf-8")) or {}
+    except (yaml.YAMLError, UnicodeDecodeError) as exc:
+        raise AssetError(f"{where} is not valid YAML, so the engine could not load it.") from exc
+    channels = parsed.get("channels") if isinstance(parsed, dict) else None
+    return [str(name) for name in channels] if isinstance(channels, dict) else []
+
+
+def _check_webhook_map(assets: PluginAssets, dist: str, root: Path, own_files: set[str]) -> None:
+    """Refuse a webhook file whose channels would collide once written.
+
+    The engine merges ``docs/webhooks.yaml`` and every ``docs/webhooks.d/*.yaml``
+    into one channel map, and a channel declared twice is an error there. This
+    reads the map as it would be after the install -- the plugin's own files in
+    place of what it wrote before -- and refuses a collision or a file that does
+    not parse, when the plugin's file is one of those involved. The same merge
+    rule as ``robothor.engine.webhooks.load_webhook_config``, without importing
+    the engine (and its web stack) into the installer.
+    """
+    ours = {
+        f.dest: f
+        for f in assets.files
+        if f.dest == "docs/webhooks.yaml" or f.dest.startswith(WEBHOOK_DROPINS + "/")
+    }
+    if not ours:
+        return
+    would_be: dict[str, bytes] = {}
+    dropins = root / WEBHOOK_DROPINS
+    candidates = ["docs/webhooks.yaml"]
+    if dropins.is_dir() and not dropins.is_symlink():
+        candidates += [f"{WEBHOOK_DROPINS}/{p.name}" for p in sorted(dropins.glob("*.yaml"))]
+    candidates += [d for d in ours if d not in candidates]
+    for relative in candidates:
+        on_disk = root / relative
+        present = on_disk.is_file() and not on_disk.is_symlink()
+        item = ours.get(relative)
+        if item is not None and not (item.mode == "if_missing" and present):
+            would_be[relative] = item.source.read_bytes()
+        elif present and relative not in own_files:
+            would_be[relative] = on_disk.read_bytes()
+    base = [k for k in would_be if k == "docs/webhooks.yaml"]
+    order = base + sorted(k for k in would_be if k not in base)
+    declared: dict[str, str] = {}
+    for relative in order:
+        mine = relative in ours
+        try:
+            names = _webhook_channels(would_be[relative], relative)
+        except AssetError:
+            if mine:
+                raise
+            continue
+        for name in names:
+            first = declared.get(name)
+            if first is None:
+                declared[name] = relative
+            elif mine or first in ours:
+                raise AssetError(
+                    f"Webhook channel {name!r} would be declared in both {first} and "
+                    f"{relative}, which the engine refuses; {dist} will not write "
+                    f"{relative if mine else first}. Rename one of the channels."
+                )
 
 
 # ---------------------------------------------------------------------------

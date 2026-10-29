@@ -477,7 +477,7 @@ remove:                 # optional: without a detach, remove takes back what ins
   is absent. A key that holds something other than a list is refused, and the
   patch is not applied.
 * **Identity.** A `hooks` item is identified by its `(stream, event_type)` and
-  must have both; an item of any other list (`bootstrap_files`,
+  must have both (a `stream` may not contain `:`); an item of any other list (`bootstrap_files`,
   `warmup.memory_blocks`, `tools_allowed`, `tools_opt_in`, …) must be a scalar
   and is identified by its value. An item already present with the same
   identity is replaced in place, never duplicated, so a re-apply changes
@@ -504,8 +504,10 @@ Two drop-in locations make the rest composable without a shared file:
   bootstrap files are read on every run.
 * **Webhook channels:** ship `docs/webhooks.d/<distribution>.yaml` (same shape
   as `docs/webhooks.yaml`, a `channels:` mapping). The engine merges every
-  `*.yaml` there, in name order, after `docs/webhooks.yaml`; a channel name
-  declared twice is an error naming both files.
+  `*.yaml` there, in name order, after `docs/webhooks.yaml`. Install refuses a
+  drop-in that does not parse or declares a channel the base file or another
+  drop-in already has. If one still turns up (an operator edit), the engine logs
+  an error naming both files, serves the first, and keeps serving the rest.
 
 ### Ownership
 
