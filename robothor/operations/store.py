@@ -475,8 +475,7 @@ class Operations:
         """Read one action only within this tenant."""
         with self.transaction() as cur:
             cur.execute(
-                "SELECT id,kind,status,decided_by,decided_at,expires_at FROM operation_actions "
-                "WHERE tenant_id=%s AND id=%s",
+                "SELECT * FROM operation_actions WHERE tenant_id=%s AND id=%s",
                 (self.tenant, action),
             )
             row = cur.fetchone()
@@ -533,16 +532,6 @@ class Operations:
             actor=actor,
             tenant_id=self.tenant,
         )
-
-    def get_action(self, action: str) -> dict[str, Any] | None:
-        """Read one action only within this tenant."""
-        with self.transaction() as cur:
-            cur.execute(
-                "SELECT * FROM operation_actions WHERE tenant_id=%s AND id=%s",
-                (self.tenant, action),
-            )
-            row = cur.fetchone()
-            return dict(row) if row else None
 
     def list_actions(
         self,
