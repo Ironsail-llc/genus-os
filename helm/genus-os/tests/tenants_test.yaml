@@ -197,6 +197,41 @@ tests:
           path: metadata.annotations["helm.sh/resource-policy"]
           value: keep
 
+  # Production syncs with `argocd app sync --prune`, which ignores Helm's
+  # resource-policy. Argo CD needs its own opt-out.
+  - it: a tenant workspace claim survives Argo CD pruning
+    template: engine/tenants.yaml
+    set:
+      workspace.persistence.enabled: true
+      tenants:
+        - id: acme-child-a
+    documentSelector:
+      path: kind
+      value: PersistentVolumeClaim
+    asserts:
+      - equal:
+          path: metadata.annotations["argocd.argoproj.io/sync-options"]
+          value: Prune=false
+
+  # An operator's own sync options are kept, with Prune=false added.
+  - it: a tenant workspace claim adds Prune=false to its own Argo CD sync options
+    template: engine/tenants.yaml
+    set:
+      tenants:
+        - id: acme-child-a
+          workspace:
+            persistence:
+              enabled: true
+              annotations:
+                argocd.argoproj.io/sync-options: ServerSideApply=true
+    documentSelector:
+      path: kind
+      value: PersistentVolumeClaim
+    asserts:
+      - equal:
+          path: metadata.annotations["argocd.argoproj.io/sync-options"]
+          value: ServerSideApply=true,Prune=false
+
   - it: a tenant workspace claim keeps the policy alongside its own annotations
     template: engine/tenants.yaml
     set:
