@@ -221,6 +221,23 @@ async def answer_approval(kind: str, approval_id: str, request: Request) -> Any:
         return await _decide_action(request, approval_id, body, who)
 
 
+def _audit_decision(
+    request: Request, who: TenantOperator, kind: str, item_id: str, settled: bool, **extra: Any
+) -> None:
+    """One ``approval.answer`` event naming who decided, in which tenant."""
+    audited(
+        request,
+        "approval.answer",
+        action=item_id,
+        status="ok" if settled else "error",
+        kind=kind,
+        settled=settled,
+        decided_by=who.actor,
+        tenant_id=who.tenant_id,
+        **extra,
+    )
+
+
 def _not_found(request: Request, kind: str, item_id: str) -> JSONResponse:
     """Not the acting tenant's (or nobody's). Indistinguishable on purpose."""
     return _refuse(request, kind, item_id, 404, f"no such {kind} in this tenant")
@@ -240,16 +257,7 @@ async def _answer_question(
         await asyncio.to_thread(get_question, question_id, tenant_id=who.tenant_id) is None
     ):
         return _not_found(request, "question", question_id)
-    audited(
-        request,
-        "approval.answer",
-        action=question_id,
-        status="ok" if settled else "error",
-        kind="question",
-        settled=settled,
-        decided_by=who.actor,
-        tenant_id=who.tenant_id,
-    )
+    _audit_decision(request, who, "question", question_id, settled)
     if not settled:
         return {"settled": False, "message": "Already answered — nothing changed."}
     return {"settled": True, "kind": "question", "id": question_id}
@@ -274,16 +282,13 @@ async def _decide_workflow(
         await asyncio.to_thread(get_approval_by_id, approval_id, tenant_id=who.tenant_id) is None
     ):
         return _not_found(request, "workflow", approval_id)
-    audited(
+    _audit_decision(
         request,
-        "approval.answer",
-        action=approval_id,
-        status="ok" if settled else "error",
-        kind="workflow",
+        who,
+        "workflow",
+        approval_id,
+        settled,
         decision=decision.value,
-        settled=settled,
-        decided_by=who.actor,
-        tenant_id=who.tenant_id,
     )
     if not settled:
         return {"settled": False, "message": "Already decided — nothing changed."}
@@ -311,16 +316,13 @@ async def _decide_action(
         if await asyncio.to_thread(ops.get_action, action_id) is None:
             return _not_found(request, "action", action_id)
     decision = "approved" if body.approved else "rejected"
-    audited(
+    _audit_decision(
         request,
-        "approval.answer",
-        action=action_id,
-        status="ok" if settled else "error",
-        kind="action",
+        who,
+        "action",
+        action_id,
+        settled,
         decision=decision,
-        settled=settled,
-        decided_by=who.actor,
-        tenant_id=who.tenant_id,
     )
     if not settled:
         return {"settled": False, "message": "Already decided or expired — nothing changed."}
