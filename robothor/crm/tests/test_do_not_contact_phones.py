@@ -92,16 +92,15 @@ def test_a_database_failure_is_not_swallowed(mock_get_conn):
 
 @pytest.mark.integration
 def test_stored_numbers_are_normalised_by_the_query(scratch_db):
-    from robothor.crm.dal import do_not_contact_phones
-
     import psycopg2
+
+    from robothor.crm.dal import do_not_contact_phones
 
     db, dsn = scratch_db(through="154_plugin_state")
     with db.cursor() as cur:
         for tenant in ("test-tenant", "tenant-b"):
             cur.execute(
-                "INSERT INTO crm_tenants (id, display_name) VALUES (%s, %s) "
-                "ON CONFLICT DO NOTHING",
+                "INSERT INTO crm_tenants (id, display_name) VALUES (%s, %s) ON CONFLICT DO NOTHING",
                 (tenant, tenant),
             )
 

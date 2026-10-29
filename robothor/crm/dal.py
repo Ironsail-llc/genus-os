@@ -647,6 +647,96 @@ def do_not_contact_emails(
         return {row["addr"] for row in cur.fetchall() if row["addr"]}
 
 
+#: How many trailing digits identify a phone number for the opt-out check:
+#: a ten-digit national number, whatever country code or punctuation was
+#: written around it.
+_PHONE_MATCH_DIGITS = 10
+
+
+def _phone_match_key(phone: str | None) -> str | None:
+    """The last ten digits of ``phone``, or ``None`` when it has fewer."""
+    if not phone:
+        return None
+    digits = "".join(ch for ch in phone if ch.isdigit())
+    if len(digits) < _PHONE_MATCH_DIGITS:
+        return None
+    return digits[-_PHONE_MATCH_DIGITS:]
+
+
+def do_not_contact_phones(
+    phones: Iterable[str | None],
+    tenant_id: str = DEFAULT_TENANT,
+) -> set[str]:
+    """Return the subset of ``phones`` that belongs to an opted-out person.
+
+    The phone half of :func:`do_not_contact_emails`: an SMS or voice sender
+    calls this with every number it is about to contact and refuses the send
+    if the result is non-empty.
+
+    Numbers are written every way a person writes them -- ``+15550100100``,
+    ``(555) 010-0100``, ``555.010.0100`` -- so both sides are compared on
+    their last ten digits, digits only. A number with fewer than ten digits
+    matches nothing. The returned strings are the caller's own, exactly as
+    passed, so it can drop them from its recipient list without normalising.
+
+    A number reaches a person three ways, and all three are checked, for the
+    reason :func:`do_not_contact_emails` gives: ``crm_people.phone``,
+    the ``crm_people.additional_phones`` JSONB list, and ``contact_identifiers``
+    rows on the ``sms`` and ``voice`` channels. Soft-deleted people are
+    ignored.
+
+    Raises whatever the database raises: a failed lookup is a refusal, not a
+    clean bill.
+    """
+    by_key: dict[str, set[str]] = {}
+    for phone in phones:
+        key = _phone_match_key(phone.strip() if phone else None)
+        if key is not None and phone is not None:
+            by_key.setdefault(key, set()).add(phone)
+    if not by_key:
+        return set()
+    wanted = sorted(by_key)
+
+    # Stored numbers are normalised in SQL the same way: strip non-digits,
+    # keep the last ten, and ignore anything shorter.
+    def matches(col: str) -> str:
+        digits = f"regexp_replace({col}, '[^0-9]', '', 'g')"
+        return f"length({digits}) >= 10 AND RIGHT({digits}, 10) = ANY(%s)"
+
+    def key_of(col: str) -> str:
+        return f"RIGHT(regexp_replace({col}, '[^0-9]', '', 'g'), 10)"
+
+    extra = "(ap.value #>> '{}')"
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            f"""
+            SELECT {key_of("p.phone")} AS digits
+              FROM crm_people p
+             WHERE p.tenant_id = %s AND p.deleted_at IS NULL AND p.do_not_contact
+               AND {matches("p.phone")}
+            UNION
+            SELECT {key_of(extra)} AS digits
+              FROM crm_people p
+              CROSS JOIN LATERAL jsonb_array_elements(
+                  CASE WHEN jsonb_typeof(p.additional_phones) = 'array'
+                       THEN p.additional_phones ELSE '[]'::jsonb END) AS ap(value)
+             WHERE p.tenant_id = %s AND p.deleted_at IS NULL AND p.do_not_contact
+               AND {matches(extra)}
+            UNION
+            SELECT {key_of("ci.identifier")} AS digits
+              FROM contact_identifiers ci
+              JOIN crm_people p ON p.id = ci.person_id
+             WHERE ci.tenant_id = %s AND ci.channel IN ('sms', 'voice')
+               AND p.tenant_id = %s AND p.deleted_at IS NULL AND p.do_not_contact
+               AND {matches("ci.identifier")}
+            """,
+            (tenant_id, wanted, tenant_id, wanted, tenant_id, tenant_id, wanted),
+        )
+        blocked = {row["digits"] for row in cur.fetchall() if row["digits"]}
+    return {phone for key in blocked for phone in by_key.get(key, ())}
+
+
 # ─── Companies ───────────────────────────────────────────────────────────
 
 
