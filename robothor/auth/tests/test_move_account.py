@@ -182,3 +182,40 @@ def test_report_serializes_for_json() -> None:
     data = report.to_dict()
     assert data["to_tenant"] == "acme-child-a"
     assert data["counts"]["user_accounts"] == 1
+
+
+# ─── the bridge's session-standing cache ─────────────────────────────────
+
+
+def _standing_module(monkeypatch) -> MagicMock:
+    """A stand-in ``robothor.auth.session_standing`` (added by the session
+    standing work); the move must use it when it is there."""
+    import sys
+    import types
+
+    module = types.ModuleType("robothor.auth.session_standing")
+    module.forget = MagicMock()  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "robothor.auth.session_standing", module)
+    return module.forget  # type: ignore[attr-defined,no-any-return]
+
+
+def test_a_live_move_forgets_the_accounts_cached_standing(monkeypatch) -> None:
+    forget = _standing_module(monkeypatch)
+    conn, _ = _conn()
+    _move(conn)
+    forget.assert_called_once_with(ACCOUNT["id"])
+
+
+def test_a_dry_run_forgets_nothing(monkeypatch) -> None:
+    forget = _standing_module(monkeypatch)
+    conn, _ = _conn()
+    _move(conn, dry_run=True)
+    forget.assert_not_called()
+
+
+def test_a_move_works_where_the_standing_cache_does_not_exist(monkeypatch) -> None:
+    import sys
+
+    monkeypatch.setitem(sys.modules, "robothor.auth.session_standing", None)
+    conn, _ = _conn()
+    assert _move(conn).dry_run is False
