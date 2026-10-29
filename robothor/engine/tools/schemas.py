@@ -2104,15 +2104,18 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
                 "properties": {
                     "collection": _kb_collection,
                     "doc_id": {"type": "string", "description": "Stable id within the collection"},
-                    "title": {"type": "string"},
-                    "text": {"type": "string", "description": "The full document text"},
+                    "title": {"type": "string", "default": ""},
+                    "text": {
+                        "type": "string",
+                        "description": "The full document text (at most 200,000 characters)",
+                    },
                     "source_uri": {
                         "type": "string",
                         "description": "Where the document came from (optional)",
                         "default": "",
                     },
                 },
-                "required": ["collection", "doc_id", "title", "text"],
+                "required": ["collection", "doc_id", "text"],
             },
         },
     }

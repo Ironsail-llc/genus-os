@@ -39,6 +39,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "KnowledgeBackend",
+    "KnowledgeWriteConflictError",
     "MemoryKnowledgeBackend",
     "PgKnowledgeBackend",
     "default_embed",
@@ -106,6 +107,10 @@ class DocumentWrite:
     sha256: str
     metadata: dict[str, Any]
     chunks: list[tuple[str, list[float]]]
+
+
+class KnowledgeWriteConflictError(RuntimeError):
+    """A concurrent delete removed the document mid-upsert; the caller may retry."""
 
 
 class KnowledgeBackend(Protocol):
@@ -208,6 +213,11 @@ class PgKnowledgeBackend:
                     )
                     unchanged = cur.fetchone()
                     conn.commit()
+                    if unchanged is None:
+                        raise KnowledgeWriteConflictError(
+                            f"{doc.collection}/{doc.doc_id} was deleted while it was being "
+                            "written; retry the upsert"
+                        )
                     return "unchanged", int(unchanged[0])
                 version, inserted = int(row[0]), bool(row[1])
                 cur.execute(
@@ -511,6 +521,8 @@ async def delete_document(
     tenant_id: str, collection: str, doc_id: str, *, backend: KnowledgeBackend | None = None
 ) -> bool:
     """Remove a document and its chunks; False when there was none."""
+    validate_collection(collection)
+    _validate_doc_id(doc_id)
     store = backend or get_backend()
     return await asyncio.to_thread(store.delete, resolve_tenant(tenant_id), collection, doc_id)
 

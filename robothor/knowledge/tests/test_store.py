@@ -210,5 +210,5 @@ def test_pg_write_names_the_race_when_the_document_vanishes():
     doc = store.DocumentWrite(
         "test-tenant", "helpdesk/policies", "refunds", "Refunds", "", "abc", {}, [("t", [0.1])]
     )
-    with pytest.raises(store.KnowledgeWriteConflict, match="retry"):
+    with pytest.raises(store.KnowledgeWriteConflictError, match="retry"):
         store.PgKnowledgeBackend(connect).write(doc)
