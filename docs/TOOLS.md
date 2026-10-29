@@ -1254,11 +1254,14 @@ chat, instead of asking the operator to open the dashboard.
   returns recent runs, newest first, with each step's status.
 
 The run is recorded with trigger type `agent` and trigger detail
-`agent:<agent id>:<agent run id>`. It runs under the identity of the agent run
-that called it: the chat user and their role for an interactive turn, or
-`service:<agent id>` with the agent's service role (default `service`) for a
-scheduled or other unattended run. Run history is always limited to the
-caller's tenant. `list_workflows` and `workflow_runs` are read-only;
+`agent:<agent id>:<agent run id>`. It runs as the workflow, exactly as a cron
+or hook run does: under `service:workflow:<workflow id>` with the `service`
+role, and in a fresh context, with none of the calling agent run's runtime
+state. Its steps never act as the chat user or the calling agent, so a tool
+that accepts only the workflow's own identity works the same whoever started
+the run. The caller is recorded only in that trigger detail and in the
+tool-call audit of the `run_workflow` call. Run history is always limited to
+the caller's tenant. `list_workflows` and `workflow_runs` are read-only;
 `run_workflow` is not, and benchmark runs get none of the three.
 
 The three tools belong to no tool group. `run_workflow` is opt-in: an agent is
@@ -1268,7 +1271,9 @@ agent with no `tools_allowed` list; an agent with one must name each tool it
 should have. Migration 157 denies `run_workflow` to the `user` and `member`
 roles, as the HTTP route it mirrors needs `engine:control`. `owner`, `admin`
 and `service` keep it, so the operator's chat and an unattended agent that
-names it can both start workflows. A tenant that wants it back for a role adds
+names it can both start workflows. This permission is the whole gate: because
+the run takes the workflow's identity, not the caller's, whoever may call
+`run_workflow` may start any loaded workflow in its tenant. A tenant that wants it back for a role adds
 a tenant-scoped `role_permissions` row.
 
 **Which to use.** Use `run_workflow` when the work is a workflow that is already
