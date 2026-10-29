@@ -113,7 +113,17 @@ def _cmd_status(args: argparse.Namespace) -> int:
     print(f"  Parent: {tenant.get('parentTenantId') or '-'}")
     print(f"  SSO domains: {', '.join(sso_domains_of(tenant)) or '-'}")
 
-    # Memory block stats
+    # Read the tenant's rows in ITS scope. With RLS on, a root shell's own
+    # binding sees none of a child's blocks or runs and would report zeros.
+    from robothor.db.connection import tenant_scope
+
+    with tenant_scope(tenant_id):
+        _print_tenant_activity(tenant_id)
+    return 0
+
+
+def _print_tenant_activity(tenant_id: str) -> None:
+    """Memory blocks and the last week's run count for one tenant."""
     try:
         from robothor.memory.blocks import list_blocks
 
@@ -127,7 +137,6 @@ def _cmd_status(args: argparse.Namespace) -> int:
     except Exception as e:
         print(f"\n  Memory blocks: error ({e})")
 
-    # Recent run counts
     try:
         from robothor.db import get_connection
 
@@ -142,8 +151,6 @@ def _cmd_status(args: argparse.Namespace) -> int:
             print(f"\n  Runs (last 7d): {count}")
     except Exception as e:
         print(f"\n  Runs: error ({e})")
-
-    return 0
 
 
 def _cmd_set_domains(args: argparse.Namespace) -> int:
