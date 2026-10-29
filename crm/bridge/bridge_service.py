@@ -100,6 +100,7 @@ async def _routine_trigger_loop():
             await asyncio.sleep(60)
             due = get_due_routines()
             for routine in due:
+                tenant_id = routine.get("tenantId", _default_tenant())
                 task_id = create_task(
                     title=routine["title"],
                     body=routine.get("body"),
@@ -109,7 +110,7 @@ async def _routine_trigger_loop():
                     person_id=routine.get("personId"),
                     company_id=routine.get("companyId"),
                     created_by_agent="routine-trigger",
-                    tenant_id=routine.get("tenantId", _default_tenant()),
+                    tenant_id=tenant_id,
                 )
                 if task_id:
                     advance_routine(routine["id"])
@@ -122,6 +123,7 @@ async def _routine_trigger_loop():
                             "title": routine["title"],
                         },
                         source="bridge",
+                        tenant_id=tenant_id,
                     )
                     logger.info("Routine '%s' triggered → task %s", routine["title"], task_id)
         except asyncio.CancelledError:

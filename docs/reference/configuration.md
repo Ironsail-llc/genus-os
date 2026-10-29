@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-487 settings in 17 groups.
+488 settings in 17 groups.
 
 ## autonomy
 
@@ -252,6 +252,7 @@ The agent execution layer: bind address, concurrency, pacing, sandbox.
 
 | Variable | Type | Default | Restart | Secret | Since | Description |
 | --- | --- | --- | --- | --- | --- | --- |
+| `GENUS_EVENT_CONSUMER_GROUP` | str | `engine` | `robothor-engine` | no | unreleased | Redis consumer group this engine reads the event streams with. Redis hands each event to one reader per group, so every engine sharing a Redis needs a group of its own. The root tenant's engine keeps 'engine' so its stream offsets survive upgrades; each child-tenant engine uses 'engine-<tenant>' (the Helm chart sets it). An engine on any other group ignores events that carry no tenant. Also read from `ROBOTHOR_EVENT_CONSUMER_GROUP`. |
 | `ROBOTHOR_ALERT_COOLDOWN_SECONDS` | int | `3600` | `robothor-engine` | no | legacy | Minimum seconds between repeats of the same unit-failure alert. |
 | `ROBOTHOR_ALERT_SELFTEST` | bool | `false` | `robothor-engine` | no | legacy | Fire one info-level alert shortly after boot to prove the alert path delivers. Leave off outside a delivery test. |
 | `ROBOTHOR_ALERT_SPOOL_CAP` | int | `50` | `robothor-engine` | no | legacy | Most alerts held on the retry spool; beyond it the oldest are dropped. |
@@ -653,6 +654,7 @@ process naming its replacement. They stop being read after two minor releases.
 | `CODEX_HOME` | `ROBOTHOR_CODEX_HOME` |
 | `OLLAMA_URL` | `ROBOTHOR_OLLAMA_URL` |
 | `ROBOTHOR_ENVIRONMENT` | `GENUS_ENVIRONMENT` |
+| `ROBOTHOR_EVENT_CONSUMER_GROUP` | `GENUS_EVENT_CONSUMER_GROUP` |
 | `ROBOTHOR_FINGERPRINT_SALT_FILE` | `GENUS_FINGERPRINT_SALT_FILE` |
 | `ROBOTHOR_OWNER_EMAIL` | `~/.robothor/owner.yaml` |
 | `ROBOTHOR_OWNER_NAME` | `~/.robothor/owner.yaml` |

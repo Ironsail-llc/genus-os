@@ -27,6 +27,10 @@ from robothor.engine.models import (
 
 logger = logging.getLogger(__name__)
 
+#: The event consumer group of the root tenant's engine. Historical name: the
+#: stream offsets an existing instance holds live under it.
+ROOT_EVENT_GROUP = "engine"
+
 from robothor.engine.manifest_schema import ManifestSchemaError  # noqa: E402
 from robothor.engine.sanitize import sanitize_log as _sanitize  # noqa: E402
 from robothor.engine.service_roles import resolve_service_role  # noqa: E402
@@ -44,6 +48,13 @@ def _default_tenant() -> str:
 # raises ValueError so the run fails loudly instead of silently losing instructions.
 # Silent truncation caused data corruption (email-log.json wipe, Apr 2026).
 BOOTSTRAP_TOTAL_MAX_CHARS = 100_000
+
+
+def _event_group() -> str:
+    """The consumer group this engine reads the event streams with."""
+    from robothor.settings import get_settings
+
+    return str(get_settings().engine.event_consumer_group or "").strip() or ROOT_EVENT_GROUP
 
 
 def _telegram() -> Any:
@@ -99,6 +110,15 @@ class EngineConfig:
     port: int = 18800
     tenant_id: str = ""  # Set from env in from_env(); empty = use DEFAULT_TENANT
 
+    # Redis consumer group the event hooks read with. Redis delivers each
+    # stream entry to ONE consumer of a group, so engines sharing a Redis (one
+    # per tenant) need a group each or they split the events between them.
+    # The root tenant keeps the historical "engine" so its stream offsets
+    # survive the upgrade; the Helm chart sets "engine-<tenant>" for each
+    # child engine (GENUS_EVENT_CONSUMER_GROUP). Only an engine on the root
+    # group handles events that carry no tenant_id.
+    event_group: str = ROOT_EVENT_GROUP
+
     # Paths
     workspace: Path = field(default_factory=lambda: Path.home() / "robothor")
     manifest_dir: Path = field(default_factory=lambda: Path.home() / "robothor" / "docs" / "agents")
@@ -146,6 +166,7 @@ class EngineConfig:
             default_chat_id=_default_chat_id(),
             port=int(os.environ.get("ROBOTHOR_ENGINE_PORT", "18800")),
             tenant_id=os.environ.get("ROBOTHOR_TENANT_ID", "") or _default_tenant(),
+            event_group=_event_group(),
             workspace=workspace,
             manifest_dir=Path(
                 os.environ.get("ROBOTHOR_MANIFEST_DIR", workspace / "docs" / "agents")

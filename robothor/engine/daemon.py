@@ -1584,7 +1584,7 @@ async def main() -> int:
             name="health",
         ),
         asyncio.create_task(_watchdog(config, scheduler, workflow_engine), name="watchdog"),
-        asyncio.create_task(_autodream_loop(), name="autodream"),
+        asyncio.create_task(_autodream_loop(config.tenant_id), name="autodream"),
         asyncio.create_task(_federation_heartbeat(), name="federation-heartbeat"),
         asyncio.create_task(_curiosity_density_loop(scheduler), name="curiosity-density"),
         asyncio.create_task(_curator_loop(scheduler), name="curator"),
@@ -2528,7 +2528,7 @@ def _autodream_defer_decision(
     }
 
 
-async def _autodream_loop() -> None:
+async def _autodream_loop(tenant_id: str = "") -> None:
     """Background loop — triggers autoDream memory consolidation when engine is idle.
 
     Implements exponential backoff on consecutive errors (60s → 120s → ... → 3600s max).
@@ -2574,7 +2574,7 @@ async def _autodream_loop() -> None:
                     # load a post_stall force would reset the staleness clock while
                     # deep maintenance silently never runs — the exact starvation
                     # this MAX_DEFER ceiling exists to prevent.
-                    result = await run_autodream(mode="deep")
+                    result = await run_autodream(mode="deep", tenant_id=tenant_id)
                     if result.get("skipped"):
                         # A concurrent run holds the lock. Back off instead of
                         # re-firing every 60s; keep the defer streak so we retry,
@@ -2590,7 +2590,7 @@ async def _autodream_loop() -> None:
                     consecutive_errors = 0
                 continue
 
-            await run_autodream(mode="idle")
+            await run_autodream(mode="idle", tenant_id=tenant_id)
             _autodream_defer_started_at = None
             consecutive_errors = 0
         except asyncio.CancelledError:

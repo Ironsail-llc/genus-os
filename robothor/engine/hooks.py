@@ -6,6 +6,12 @@ agents when matching events arrive.
 
 Publishers (event_bus.py) write to "robothor:events:<stream>" keys.
 This consumer subscribes to those same prefixed keys.
+
+One engine runs per tenant, all on one Redis. Each engine reads with its own
+consumer group (``EngineConfig.event_group``) so every engine sees every
+event once, and acts only on the events whose envelope ``tenant_id`` is its
+own. An event with no tenant predates tagging and belongs to the root
+tenant, whose engine is the one on the historical ``engine`` group.
 """
 
 from __future__ import annotations
@@ -255,6 +261,22 @@ class EventHooks:
         self._agent_lanes: dict[str, asyncio.Lock] = {}
         # Hook agent runs share the fleet's concurrency limit.
         self._agent_runs = asyncio.Semaphore(max(1, config.max_concurrent_agents))
+        # Events another tenant's engine handles; read and acked, never run.
+        self.foreign_events_dropped = 0
+
+    def _owns_event(self, decoded: dict[str, Any]) -> bool:
+        """Whether this engine's tenant is the one the event belongs to.
+
+        Untagged (or empty-tagged) events were published before tenant
+        tagging and belong to the root tenant: only the root-group engine
+        takes them, so the upgrade changes nothing for a single engine.
+        """
+        from robothor.engine.config import ROOT_EVENT_GROUP
+
+        tenant = decoded.get("tenant_id", "")
+        if tenant:
+            return bool(tenant == self.config.tenant_id)
+        return (self.config.event_group or ROOT_EVENT_GROUP) == ROOT_EVENT_GROUP
 
     async def _dispatch(
         self,
@@ -386,7 +408,9 @@ class EventHooks:
             await self._idle()
             return
 
-        consumer_group = "engine"
+        from robothor.engine.config import ROOT_EVENT_GROUP
+
+        consumer_group = self.config.event_group or ROOT_EVENT_GROUP
         consumer_name = f"engine-{self.config.tenant_id}"
 
         # Build triggers from manifests (with legacy fallback)
@@ -458,6 +482,22 @@ class EventHooks:
 
         # event_bus._make_envelope() stores the event type under "type"
         event_type = decoded.get("type", "")
+
+        if not self._owns_event(decoded):
+            self.foreign_events_dropped += 1
+            logger.debug(
+                "Dropping %s on %s for tenant %r (this engine: %r, %d dropped)",
+                event_type,
+                stream,
+                decoded.get("tenant_id", ""),
+                self.config.tenant_id,
+                self.foreign_events_dropped,
+            )
+            try:
+                await redis_client.xack(stream, group, msg_id)
+            except Exception as e:
+                logger.warning("Failed to ack message %s: %s", msg_id, e)
+            return
 
         # Strip prefix to get bare stream name for trigger lookup
         bare_stream = self._prefixed_to_bare.get(stream, stream)

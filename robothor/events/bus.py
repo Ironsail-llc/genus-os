@@ -305,6 +305,22 @@ def _stream_key(stream: str) -> str:
     return f"{STREAM_PREFIX}{stream}"
 
 
+def publishing_tenant() -> str:
+    """The tenant an event published from here belongs to.
+
+    The enclosing ``tenant_scope`` if there is one, else the process's
+    default tenant. Never empty: one engine runs per tenant and each acts only
+    on its own tenant's events, so an untagged event would land on the root.
+    """
+    from robothor import constants
+
+    try:
+        from robothor.db.connection import current_tenant_scope
+    except ImportError:  # psycopg2 absent: no scope can be open either
+        return constants.DEFAULT_TENANT
+    return current_tenant_scope() or constants.DEFAULT_TENANT
+
+
 def _make_envelope(
     event_type: str,
     payload: dict[str, Any],
@@ -347,7 +363,8 @@ def publish(
         actor: Agent or system identity
         correlation_id: Optional trace ID for correlation
         agent_id: Agent identity for RBAC check (None = no check, backward compat)
-        tenant_id: Tenant identifier for multi-tenant filtering
+        tenant_id: The tenant the event belongs to. Defaults to
+            :func:`publishing_tenant`; engines ignore other tenants' events.
 
     Returns:
         Stream message ID on success, None on failure.
@@ -402,7 +419,7 @@ def publish(
             source=source,
             actor=actor,
             correlation_id=correlation_id,
-            tenant_id=tenant_id,
+            tenant_id=tenant_id or publishing_tenant(),
         )
         key = _stream_key(stream)
         msg_id: str | None = r.xadd(key, envelope, maxlen=MAXLEN, approximate=True)

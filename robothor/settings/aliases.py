@@ -34,6 +34,9 @@ DEPRECATED_ALIASES: dict[str, str] = {
     # Deployment environment: the bridge and the dashboard both prefer the
     # GENUS_ name and fall through to the ROBOTHOR_ one.
     "ROBOTHOR_ENVIRONMENT": "GENUS_ENVIRONMENT",
+    # The engine's event consumer group: GENUS_ is canonical, the ROBOTHOR_
+    # spelling is accepted so it matches the engine's other variables.
+    "ROBOTHOR_EVENT_CONSUMER_GROUP": "GENUS_EVENT_CONSUMER_GROUP",
     # Operator identity moved out of the environment entirely. owner_config
     # already warns at its own call site; this is the registry's record of it.
     "ROBOTHOR_OWNER_NAME": "~/.robothor/owner.yaml",

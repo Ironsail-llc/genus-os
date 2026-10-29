@@ -810,6 +810,18 @@ class EngineSettings(SettingsGroup):
         "auth guard refuses the insecure dev mode on any other address.",
     )
     port: int = declare(18800, "ROBOTHOR_ENGINE_PORT", "Engine HTTP port.")
+    event_consumer_group: str = declare(
+        "engine",
+        "GENUS_EVENT_CONSUMER_GROUP",
+        "Redis consumer group this engine reads the event streams with. Redis "
+        "hands each event to one reader per group, so every engine sharing a "
+        "Redis needs a group of its own. The root tenant's engine keeps "
+        "'engine' so its stream offsets survive upgrades; each child-tenant "
+        "engine uses 'engine-<tenant>' (the Helm chart sets it). An engine "
+        "on any other group ignores events that carry no tenant.",
+        aliases=("ROBOTHOR_EVENT_CONSUMER_GROUP",),
+        since="unreleased",
+    )
     url: str = declare(
         "http://127.0.0.1:18800",
         "ROBOTHOR_ENGINE_URL",
