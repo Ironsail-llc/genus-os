@@ -2,6 +2,7 @@
 
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from unittest.mock import patch
 from uuid import uuid4
 
 import pytest
@@ -9,16 +10,16 @@ import pytest
 from robothor.db.connection import get_connection
 from robothor.operations.store import BudgetExceeded, Conflict, Operations
 
+#: The operations ledger's schema, in order. Other suites' fixtures reuse it.
+OPERATIONS_MIGRATIONS = ("126_durable_operations.sql", "154_operation_action_proposer.sql")
+
 
 @pytest.fixture
 def ops():
     with get_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                (
-                    Path(__file__).parents[3] / "crm/migrations/126_durable_operations.sql"
-                ).read_text()
-            )
+            for filename in OPERATIONS_MIGRATIONS:
+                cur.execute((Path(__file__).parents[3] / "crm/migrations" / filename).read_text())
         conn.commit()
     return Operations("test-" + uuid4().hex)
 
@@ -230,3 +231,125 @@ def test_an_action_is_read_only_within_its_tenant(ops):
     assert ops.get_action(action)["status"] == "review"
     assert Operations(ops.tenant + "-neighbour").get_action(action) is None
     assert ops.get_action(str(uuid4())) is None
+
+
+def _audit(ops, action):
+    with ops.transaction() as cur:
+        cur.execute(
+            "SELECT event,actor,detail FROM operation_audit WHERE tenant_id=%s AND entity_id=%s "
+            "ORDER BY id",
+            (ops.tenant, action),
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+
+def _row(ops, action):
+    with ops.transaction() as cur:
+        cur.execute(
+            "SELECT * FROM operation_actions WHERE tenant_id=%s AND id=%s", (ops.tenant, action)
+        )
+        return dict(cur.fetchone())
+
+
+def test_policy_actor_decides_its_own_plugins_proposal(ops):
+    action = ops.propose("acme-plugin.note", "n:1", {"body": "Hi"}, proposed_by="acme-plugin")
+    ops.decide(action, True, "policy:acme-plugin:2026-10-29")
+    row = _row(ops, action)
+    assert row["status"] == "approved"
+    assert row["proposed_by"] == "acme-plugin"
+    assert row["decided_by"] == "policy:acme-plugin:2026-10-29"
+    decided = [a for a in _audit(ops, action) if a["event"] == "action.approved"]
+    assert decided == [
+        {
+            "event": "action.approved",
+            "actor": "policy:acme-plugin:2026-10-29",
+            "detail": {"policy": "acme-plugin", "version": "2026-10-29"},
+        }
+    ]
+    assert ops.claim_action(kind="acme-plugin.note")["id"] == action
+
+
+def test_policy_actor_for_another_plugin_is_refused(ops):
+    action = ops.propose("acme-plugin.note", "n:1", {"body": "Hi"}, proposed_by="acme-plugin")
+    with pytest.raises(Conflict):
+        ops.decide(action, True, "policy:other-plugin:1")
+    assert _row(ops, action)["status"] == "review"
+    assert ops.claim_action() is None
+
+
+def test_policy_actor_cannot_decide_an_unattributed_proposal(ops):
+    action = ops.propose("email", "draft:1", {"body": "Hello"})
+    with pytest.raises(Conflict):
+        ops.decide(action, True, "policy:acme-plugin:1")
+    assert _row(ops, action)["status"] == "review"
+    ops.decide(action, True, "operator:1")
+    assert _row(ops, action)["status"] == "approved"
+
+
+@pytest.mark.parametrize(
+    "actor", ["agent:main", "policy:acme-plugin", "policy::1", "policy:acme-plugin:", ""]
+)
+def test_malformed_or_unknown_actors_are_refused(ops, actor):
+    action = ops.propose("acme-plugin.note", "n:1", {"body": "Hi"}, proposed_by="acme-plugin")
+    with pytest.raises(Conflict):
+        ops.decide(action, True, actor)
+    assert _row(ops, action)["status"] == "review"
+
+
+def test_policy_rejection_is_recorded_for_the_proposing_plugin(ops):
+    action = ops.propose("acme-plugin.note", "n:1", {"body": "Hi"}, proposed_by="acme-plugin")
+    ops.decide(action, False, "policy:acme-plugin:3")
+    assert _row(ops, action)["status"] == "rejected"
+    assert _audit(ops, action)[-1]["actor"] == "policy:acme-plugin:3"
+
+
+def test_draft_key_cannot_be_rebound_to_another_proposer(ops):
+    payload = {"body": "Hi"}
+    action = ops.propose("acme-plugin.note", "n:1", payload, proposed_by="acme-plugin")
+    assert ops.propose("acme-plugin.note", "n:1", payload, proposed_by="acme-plugin") == action
+    with pytest.raises(Conflict):
+        ops.propose("acme-plugin.note", "n:1", payload, proposed_by="other-plugin")
+    with pytest.raises(Conflict):
+        ops.propose("acme-plugin.note", "n:1", payload)
+
+
+def test_approval_publishes_operation_action_approved(ops):
+    published = []
+    with patch("robothor.events.bus.publish", side_effect=lambda *a, **k: published.append((a, k))):
+        by_operator = ops.propose("email", "draft:1", {"body": "Hello"})
+        ops.decide(by_operator, True, "operator:1")
+        by_policy = ops.propose(
+            "acme-plugin.note", "n:1", {"body": "Hi"}, proposed_by="acme-plugin"
+        )
+        ops.decide(by_policy, True, "policy:acme-plugin:1")
+        rejected = ops.propose("email", "draft:2", {"body": "No"})
+        ops.decide(rejected, False, "operator:1")
+    assert [(a[:3], k["tenant_id"]) for a, k in published] == [
+        (
+            (
+                "operations",
+                "operation_action.approved",
+                {
+                    "action_id": by_operator,
+                    "kind": "email",
+                    "tenant_id": ops.tenant,
+                    "proposed_by": None,
+                },
+            ),
+            ops.tenant,
+        ),
+        (
+            (
+                "operations",
+                "operation_action.approved",
+                {
+                    "action_id": by_policy,
+                    "kind": "acme-plugin.note",
+                    "tenant_id": ops.tenant,
+                    "proposed_by": "acme-plugin",
+                },
+            ),
+            ops.tenant,
+        ),
+    ]
+    assert [k["actor"] for _a, k in published] == ["operator:1", "policy:acme-plugin:1"]
