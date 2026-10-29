@@ -1,0 +1,122 @@
+"""The engine refuses a human token whose account no longer stands.
+
+The dashboard forwards the user's own bridge token to the engine's ``/chat/*``
+and ``/api/dashboard/completions``, and the IDE WebSocket takes it too. The
+bridge already refuses a token whose account has left its home tenant or been
+disabled (``robothor.auth.session_standing``); without the same check here a
+disabled account kept engine chat until its token expired.
+"""
+
+from __future__ import annotations
+
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+from fastapi import APIRouter
+from starlette.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
+
+from robothor.auth import session_standing, tokens
+from robothor.engine.models import AgentRun, RunStatus, TriggerType
+
+
+@pytest.fixture
+def secure_engine(monkeypatch, engine_config):
+    monkeypatch.delenv("GENUS_INSECURE_DEV_MODE", raising=False)
+    monkeypatch.setenv("ROBOTHOR_ENGINE_HOST", "0.0.0.0")
+    monkeypatch.setenv("GENUS_AUTH_SIGNING_KEY", "engine-auth-test-key-that-is-at-least-32-bytes")
+    tokens.reset_signing_key_cache()
+    session_standing.forget_all()
+
+    runner = MagicMock()
+    runner.config = engine_config
+    runner.execute = AsyncMock(
+        return_value=AgentRun(
+            status=RunStatus.COMPLETED, output_text="ok", trigger_type=TriggerType.WEBCHAT
+        )
+    )
+    from robothor.engine.health import create_health_app
+
+    with (
+        patch("robothor.engine.dashboards.get_dashboard_router", return_value=APIRouter()),
+        patch("robothor.engine.dashboards.get_public_router", return_value=APIRouter()),
+        patch("robothor.engine.webhooks.get_webhook_router", return_value=APIRouter()),
+        patch("robothor.engine.chat.load_all_sessions", return_value={}),
+    ):
+        app = create_health_app(engine_config, runner=runner)
+    yield TestClient(app, raise_server_exceptions=False), engine_config
+    session_standing.forget_all()
+
+
+def _account(tenant: str, status: str = "active") -> dict:
+    return {"id": "human-1", "tenant_id": tenant, "status": status}
+
+
+def _send(client, token):
+    return client.post(
+        "/chat/send",
+        json={"session_key": "agent:main:primary", "message": "hello"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+
+def test_a_standing_account_chats(secure_engine):
+    client, config = secure_engine
+    token = tokens.issue_access_token("human-1", config.tenant_id, "member")
+    with patch("robothor.auth.accounts.get_account_by_id", return_value=_account(config.tenant_id)):
+        assert _send(client, token).status_code == 200
+
+
+def test_a_disabled_account_is_refused(secure_engine):
+    client, config = secure_engine
+    token = tokens.issue_access_token("human-1", config.tenant_id, "member")
+    with patch(
+        "robothor.auth.accounts.get_account_by_id",
+        return_value=_account(config.tenant_id, status="disabled"),
+    ):
+        response = _send(client, token)
+    assert response.status_code == 401
+    assert response.json() == {"error": "session no longer valid"}
+
+
+def test_a_moved_account_is_refused(secure_engine):
+    client, config = secure_engine
+    token = tokens.issue_access_token("human-1", config.tenant_id, "member")
+    with patch("robothor.auth.accounts.get_account_by_id", return_value=_account("elsewhere")):
+        assert _send(client, token).status_code == 401
+
+
+def test_a_service_token_is_not_looked_up(secure_engine):
+    client, config = secure_engine
+    token = tokens.issue_service_token(
+        "dashboard-bff", config.tenant_id, audience="genus-engine", scopes=("engine:read",)
+    )
+    with patch("robothor.auth.accounts.get_account_by_id") as lookup:
+        client.get(
+            "/chat/history?session_key=agent:main:primary",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    lookup.assert_not_called()
+
+
+def test_the_ide_websocket_refuses_a_disabled_account(secure_engine):
+    client, config = secure_engine
+    token = tokens.issue_access_token("human-1", config.tenant_id, "owner")
+    with (
+        patch(
+            "robothor.auth.accounts.get_account_by_id",
+            return_value=_account(config.tenant_id, status="disabled"),
+        ),
+        pytest.raises(WebSocketDisconnect) as closed,
+        client.websocket_connect("/ide/ws", headers={"Authorization": f"Bearer {token}"}),
+    ):
+        pass
+    assert closed.value.code == 4401
+
+
+def test_a_database_failure_is_not_a_sign_out(secure_engine):
+    """Same bargain as the bridge: fail open, with a warning, uncached."""
+    client, config = secure_engine
+    token = tokens.issue_access_token("human-1", config.tenant_id, "member")
+    with patch("robothor.auth.accounts.get_account_by_id", side_effect=OSError("down")):
+        assert _send(client, token).status_code == 200
