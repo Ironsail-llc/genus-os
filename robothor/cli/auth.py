@@ -10,6 +10,7 @@ never binds. Account/session/grant DAL lives in :mod:`robothor.auth.accounts`.
 
 from __future__ import annotations
 
+import getpass
 import json
 import sys
 from typing import TYPE_CHECKING
@@ -179,6 +180,9 @@ def _cmd_grant_binding(args: Namespace) -> int:
             ttl_seconds=ttl_seconds,
             reason=getattr(args, "reason", None) or "",
             issuer=getattr(args, "issuer", None) or None,
+            # A shell on the appliance is the root operator; `cli:` marks the
+            # grant as one sign-in may honour against domain routing.
+            created_by=f"cli:{getpass.getuser()}",
         )
     except accounts.GrantTargetError as exc:
         print(f"error: {exc}", file=sys.stderr)

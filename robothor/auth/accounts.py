@@ -31,6 +31,14 @@ DEFAULT_ROLE = "member"
 #: signed the person in to a tenant other than the routed one; its value is
 #: the routed tenant. The caller pops it for its audit row.
 GRANT_OVERRODE_ROUTING = "_grant_overrode_routing"
+
+#: ``sso_binding_grants.created_by`` values that mark a grant as the ROOT
+#: operator's, the only grants SSO sign-in honours against domain routing:
+#: ``cli`` (older CLI grants) and ``cli:<user>`` from ``genus auth
+#: grant-binding`` (a shell on the appliance), and ``root:<actor>`` from the
+#: bridge when the caller's home and acting tenant are both the platform
+#: tenant. Mirrored in ``_jit_provision``'s SQL.
+ROOT_GRANT_PREFIX = "root:"
 JIT_PROVISIONABLE_ROLES = frozenset({"member", "viewer"})
 
 
@@ -461,24 +469,22 @@ def _jit_provision(
 
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
-        # A live binding grant is the operator's explicit intent, and it wins
-        # over domain routing: the account it was armed for is signed in where
-        # it lives, whether or not that tenant claims the person's domain.
+        # A live binding grant armed by the ROOT operator is an explicit
+        # decision, and it wins over domain routing: the account it was armed
+        # for signs in where it lives, whether or not that tenant claims the
+        # person's domain. Two conditions, both required:
+        #   * root-armed (see ROOT_GRANT_PREFIX). A child admin can arm a
+        #     grant for any address in its own tenant; honouring that against
+        #     routing would be a per-address domain claim without the root
+        #     gate that claims have. A child admin's grant keeps the old rule:
+        #     it is spent only when the address routes to that child.
+        #   * the routed tenant has no account for the address at all, so a
+        #     grant elsewhere can never capture a sign-in that routing already
+        #     names an account for (the platform's bootstrap owner, before its
+        #     own grant is armed, is exactly such a row).
         # Exactly one tenant holding such an account and grant, else routing
         # decides as before. Read under the caller's unbound scope.
         routed_tenant = tenant_id
-        cur.execute(
-            """SELECT DISTINCT ua.tenant_id
-               FROM user_accounts ua
-               JOIN sso_binding_grants g ON g.tenant_id = ua.tenant_id AND g.email = ua.email
-               WHERE ua.email = %s AND ua.status = 'active' AND ua.idp_issuer IS NULL
-                 AND g.used_at IS NULL AND g.revoked_at IS NULL AND g.expires_at > NOW()
-                 AND (g.issuer IS NULL OR g.issuer = %s)""",
-            (email, issuer),
-        )
-        holders = [r["tenant_id"] for r in cur.fetchall()]
-        if len(holders) == 1:
-            tenant_id = holders[0]
         # Never turn a matching email claim into an identity binding.  The
         # explicit safe bindings are a pre-populated (idp_issuer, idp_subject)
         # pair (resolved by the branch above) or an operator-armed one-shot
@@ -488,6 +494,27 @@ def _jit_provision(
             (tenant_id, email),
         )
         row = cur.fetchone()
+        if row is None:
+            cur.execute(
+                """SELECT DISTINCT ua.tenant_id
+                   FROM user_accounts ua
+                   JOIN sso_binding_grants g
+                     ON g.tenant_id = ua.tenant_id AND g.email = ua.email
+                   WHERE ua.email = %s AND ua.status = 'active' AND ua.idp_issuer IS NULL
+                     AND g.used_at IS NULL AND g.revoked_at IS NULL AND g.expires_at > NOW()
+                     AND (g.issuer IS NULL OR g.issuer = %s)
+                     AND (g.created_by = 'cli' OR g.created_by LIKE 'cli:%%'
+                          OR g.created_by LIKE 'root:%%')""",
+                (email, issuer),
+            )
+            holders = [r["tenant_id"] for r in cur.fetchall()]
+            if len(holders) == 1:
+                tenant_id = holders[0]
+                cur.execute(
+                    "SELECT * FROM user_accounts WHERE tenant_id = %s AND email = %s",
+                    (tenant_id, email),
+                )
+                row = cur.fetchone()
         if row:
             # Inactive accounts fail before the grant lookup (the grant is not
             # burned), and a grant never re-binds an already-bound account.
