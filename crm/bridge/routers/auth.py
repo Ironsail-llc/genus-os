@@ -399,13 +399,27 @@ def switch_tenant(body: SwitchTenantRequest, request: Request) -> dict[str, Any]
             verdict, why = "would-refuse", "row-level security is not enforcing"
         else:
             verdict, why = "would-allow", "ok"
-        logger.info(
+        # WARNING, and an audit row: the observe rung exists to be read, and
+        # audit_log is the durable record (GET /api/audit/events
+        # ?event_type=tenant.switch) a promotion decision is made from.
+        logger.warning(
             "tenant.switch %s user=%s home=%s target=%s reason=%s",
             verdict,
             sanitize_log(ctx.user_id),
             sanitize_log(home),
             sanitize_log(target),
             why,
+        )
+        audited(
+            request,
+            "tenant.switch",
+            action=target,
+            status=verdict,
+            reason=why,
+            user_id=ctx.user_id,
+            home_tenant_id=home,
+            target_tenant_id=target,
+            mode="observe",
         )
         return _SWITCH_DISABLED
 

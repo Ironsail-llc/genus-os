@@ -25,6 +25,7 @@ import logging
 import httpx
 from fastapi import Depends, FastAPI
 
+from robothor.logging_setup import ensure_logging_configured
 from robothor.sales.api import router as sales_router
 from robothor.sales.ingestion import router as sales_ingestion_router
 
@@ -133,6 +134,12 @@ async def _routine_trigger_loop():
 async def lifespan(app: FastAPI):
     global http_client
     from robothor.auth.runtime import validate_auth_configuration
+
+    # First, so everything below can be heard. The bridge never configured
+    # logging, and with no handler on the root logger the stdlib drops every
+    # INFO line — the observe rung of tenant switching included. Respects a
+    # handler something else already installed.
+    ensure_logging_configured()
 
     validate_auth_configuration(bind_host=os.environ.get("ROBOTHOR_BRIDGE_HOST", "127.0.0.1"))
     # Say at boot, once, whether this process can complete a sign-in at all.
