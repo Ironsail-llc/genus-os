@@ -20,8 +20,28 @@ import re
 from typing import TYPE_CHECKING
 
 from robothor.auth.deps import AuthContext, bearer_from_header, verify_token
-from robothor.auth.runtime import auth_required
+from robothor.auth.runtime import auth_required, tenant_switch_mode
 from robothor.auth.tokens import TokenError
+
+#: The answer to an acting token while tenant switching is not enforced.
+SWITCHING_DISABLED = "tenant switching disabled"
+
+
+class SwitchingDisabledError(TokenError):
+    """An acting token arrived while ``GENUS_TENANT_SWITCH_MODE`` is not ``enforce``."""
+
+
+def _acting_refused(context: AuthContext) -> bool:
+    """Whether this is an acting token the switch flag no longer honours.
+
+    The bridge refuses an acting token (``act: true``, ``tid != home_tid``)
+    unless switching is enforced, and so must every engine: the dashboard
+    forwards the user's own token to ``/chat/*``, and a child tenant's engine
+    accepts a token for its own tenant whatever the token's home. Service
+    tokens cannot act; home tokens are unaffected.
+    """
+    return context.is_acting and tenant_switch_mode() != "enforce"
+
 
 if TYPE_CHECKING:
     from fastapi import Request, WebSocket
@@ -141,6 +161,8 @@ def authenticate_http_request(request: Request, *, tenant_id: str) -> AuthContex
     # tenant and fail closed at this boundary.
     if context.tenant_id != tenant_id:
         raise HTTPException(status_code=403, detail="tenant not authorized for this engine")
+    if _acting_refused(context):
+        raise HTTPException(status_code=403, detail=SWITCHING_DISABLED)
 
     scope = required_scope(request.method, path)
     if not context.has_scope(scope):
@@ -198,6 +220,8 @@ def authenticate_websocket(websocket: WebSocket, *, tenant_id: str) -> AuthConte
     context = verify_engine_token(token)
     if context.tenant_id != tenant_id:
         raise TokenError("tenant not authorized for this engine")
+    if _acting_refused(context):
+        raise SwitchingDisabledError(SWITCHING_DISABLED)
     if not context.has_scope("engine:chat"):
         raise TokenError("insufficient scope")
     return context
