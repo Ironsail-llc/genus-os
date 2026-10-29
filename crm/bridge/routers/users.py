@@ -54,7 +54,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from robothor.auth import accounts
+from robothor.auth import accounts, session_standing
 from robothor.auth.tokens import HUMAN_ROLES, ROLE_DESCRIPTIONS
 from routers._audit import audited
 from routers._operator import require_tenant_admin
@@ -599,6 +599,10 @@ def update_user(user_id: str, body: AccountPatch, request: Request) -> dict[str,
         raise _unavailable(exc) from exc
     if updated is None:
         raise HTTPException(status_code=404, detail="no account with that id")
+    # The bridge's own cached answer to "does this account still stand" is
+    # dropped now, so a disable takes effect on the account's next request
+    # rather than when the cache expires (robothor.auth.session_standing).
+    session_standing.forget(target_id)
 
     revoked = 0
     if body.status == "disabled":

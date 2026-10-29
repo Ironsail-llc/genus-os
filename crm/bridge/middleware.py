@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import uuid
@@ -108,9 +109,24 @@ class TenantScopeMiddleware:
             await self.app(scope, receive, send)
             return
 
+        from robothor.audit.logger import request_actor
         from robothor.db.connection import tenant_scope
 
-        with tenant_scope(str(tenant_id)):
+        if getattr(auth, "is_service", True):
+            with tenant_scope(str(tenant_id)):
+                await self.app(scope, receive, send)
+            return
+        # A human caller: audit rows written beneath this request without an
+        # explicit actor (the DAL's CRM audit) are filed under this account,
+        # in the acting tenant, with the home tenant in their details.
+        with (
+            tenant_scope(str(tenant_id)),
+            request_actor(
+                user_id=str(auth.user_id),
+                home_tenant_id=str(auth.home_tenant_id),
+                tenant_id=str(tenant_id),
+            ),
+        ):
             await self.app(scope, receive, send)
 
 
@@ -245,6 +261,22 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 _log_unauthorized(request, "invalid or expired token")
                 return JSONResponse(status_code=401, content={"error": "invalid or expired token"})
 
+        verified = request.state.auth
+        if verified is not None:
+            refusal = await _session_refusal(verified)
+            if refusal is not None:
+                status, error = refusal
+                log_event(
+                    "auth.denied",
+                    error,
+                    actor=verified.actor_id,
+                    details={"method": request.method, "path": request.url.path},
+                    status="denied",
+                )
+                if status == 401:
+                    _log_unauthorized(request, error)
+                return JSONResponse(status_code=status, content={"error": error})
+
         path = request.url.path
         if _auth_enforced() and request.state.auth is None and path not in self._PUBLIC_PATHS:
             log_event(
@@ -263,6 +295,31 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 return _deny(request, denial, actor=auth.actor_id, public_error=denial)
 
         return await call_next(request)
+
+
+async def _session_refusal(auth: AuthContext) -> tuple[int, str] | None:
+    """Why a verified token may not be honoured right now, or None.
+
+    A signature proves who minted the token, not that what it says is still
+    true. Two things can stop being true before it expires:
+
+    * the switch was turned off — an ACTING token is honoured only while
+      ``GENUS_TENANT_SWITCH_MODE`` is ``enforce`` (403), so turning it off ends
+      every acting session at once;
+    * the account moved tenant or was disabled — a HUMAN token is honoured
+      only while its account still lives in ``home_tid`` and is active (401;
+      ``robothor.auth.session_standing``, cached ~30 s per user).
+    """
+    from robothor.auth import session_standing
+    from robothor.auth.runtime import tenant_switch_mode
+
+    if auth.is_acting and tenant_switch_mode() != "enforce":
+        return 403, "tenant switching disabled"
+    if not auth.is_service and not await asyncio.to_thread(
+        session_standing.stands, auth.user_id, auth.home_tenant_id
+    ):
+        return 401, "session no longer valid"
+    return None
 
 
 def _auth_enforced() -> bool:

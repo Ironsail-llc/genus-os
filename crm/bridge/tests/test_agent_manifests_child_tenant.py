@@ -106,14 +106,19 @@ class ChildEngine:
 @pytest.fixture(autouse=True)
 def _env(monkeypatch, tmp_path):
     monkeypatch.setenv("GENUS_AUTH_SIGNING_KEY", KEY)
+    # Acting tokens are honoured only while switching is enforced.
+    monkeypatch.setenv("GENUS_TENANT_SWITCH_MODE", "enforce")
     import routers._operator as operator
 
     from robothor.auth import tokens
+    from robothor.settings import reset_settings
 
     monkeypatch.setattr(operator, "PLATFORM_TENANT", ROOT)
     tokens.reset_signing_key_cache()
+    reset_settings()
     yield
     tokens.reset_signing_key_cache()
+    reset_settings()
 
 
 @pytest.fixture

@@ -412,7 +412,8 @@ async def test_accessible_lists_home_first_then_descendants(test_client, hierarc
 
 
 @pytest.mark.asyncio
-async def test_accessible_while_acting_is_still_rooted_at_home(test_client, hierarchy):
+async def test_accessible_while_acting_is_still_rooted_at_home(test_client, hierarchy, mode):
+    mode("enforce")  # acting tokens are honoured only while switching is enforced
     token = _token("u-alice", "acme-child-a", "admin", home_tenant_id="acme-parent")
     r = await _accessible(test_client, token)
     assert r.status_code == 200, r.text
@@ -477,8 +478,9 @@ def scope_probe():
 @pytest.mark.parametrize("kind", ["sync", "async"])
 @pytest.mark.asyncio
 async def test_an_authenticated_request_runs_inside_its_tokens_tenant(
-    test_client, scope_probe, kind
+    test_client, scope_probe, kind, mode
 ):
+    mode("enforce")  # acting tokens are honoured only while switching is enforced
     token = _token("u-alice", "acme-child-a", "admin", home_tenant_id="acme-parent")
     r = await test_client.get(f"/api/_scope_probe/{kind}", headers=_bearer(token))
     assert r.status_code == 200, r.text
@@ -546,11 +548,12 @@ def _scope_recorder(seen: list, result):
 )
 @pytest.mark.asyncio
 async def test_self_account_routes_run_in_the_home_tenant_while_acting(
-    test_client, local_login_on, monkeypatch, path, body, fn, result
+    test_client, local_login_on, monkeypatch, path, body, fn, result, mode
 ):
     """The account lives at home; under the acting scope RLS would hide it."""
     from robothor.auth import local_login
 
+    mode("enforce")  # acting tokens are honoured only while switching is enforced
     seen: list = []
     monkeypatch.setattr(local_login, fn, _scope_recorder(seen, result))
     token = _token("u-alice", "acme-child-a", "admin", home_tenant_id="acme-parent")
@@ -561,7 +564,8 @@ async def test_self_account_routes_run_in_the_home_tenant_while_acting(
 
 
 @pytest.mark.asyncio
-async def test_me_reads_the_account_in_the_home_tenant_while_acting(test_client):
+async def test_me_reads_the_account_in_the_home_tenant_while_acting(test_client, mode):
+    mode("enforce")  # acting tokens are honoured only while switching is enforced
     seen: list = []
     account = {**_account("u-alice", "acme-parent", "admin"), "mfa_enabled": True}
     token = _token("u-alice", "acme-child-a", "admin", home_tenant_id="acme-parent")

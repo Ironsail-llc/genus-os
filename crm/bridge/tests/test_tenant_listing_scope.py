@@ -49,12 +49,16 @@ def _list(parent_id=None, active_only=True):
 @pytest.fixture(autouse=True)
 def _env(monkeypatch):
     monkeypatch.setenv("GENUS_AUTH_SIGNING_KEY", KEY)
+    # Acting tokens are honoured only while switching is enforced.
+    monkeypatch.setenv("GENUS_TENANT_SWITCH_MODE", "enforce")
     import routers._operator as operator
 
     from robothor.auth import tokens
+    from robothor.settings import reset_settings
 
     monkeypatch.setattr(operator, "PLATFORM_TENANT", ROOT)
     tokens.reset_signing_key_cache()
+    reset_settings()
     with (
         patch("routers.tenants.list_tenants", side_effect=_list),
         patch("routers.tenants.get_tenant", side_effect=lambda tid: ROWS.get(tid)),
@@ -62,6 +66,7 @@ def _env(monkeypatch):
     ):
         yield
     tokens.reset_signing_key_cache()
+    reset_settings()
 
 
 def _client(tenant: str, role: str = "admin", *, home: str | None = None):

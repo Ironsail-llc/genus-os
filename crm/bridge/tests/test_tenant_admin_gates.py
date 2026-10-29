@@ -183,6 +183,8 @@ GATED_CLASSES = (T, TA, R, RA)
 @pytest.fixture(autouse=True)
 def _env(monkeypatch):
     monkeypatch.setenv("GENUS_AUTH_SIGNING_KEY", KEY)
+    # Acting tokens are honoured only while switching is enforced.
+    monkeypatch.setenv("GENUS_TENANT_SWITCH_MODE", "enforce")
     from robothor.auth import tokens
     from robothor.settings import reset_settings
 

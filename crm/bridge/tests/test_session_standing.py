@@ -322,6 +322,13 @@ async def test_a_crm_write_while_acting_is_audited_as_the_owner_in_the_child(
     monkeypatch.setenv("GENUS_TENANT_SWITCH_MODE", "enforce")
     reset_settings()
     owner_id = "00000000-0000-4000-8000-0000000000f1"
+    # The owner's account exists in its HOME tenant: the session check reads it.
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO user_accounts (id, tenant_id, email, display_name, role, status) "
+            "VALUES (%s, %s, 'owner-qa@example.com', 'Owner', 'owner', 'active')",
+            (owner_id, tenants["parent"]),
+        )
     token = tokens.issue_access_token(
         owner_id, tenants["a"], "owner", home_tenant_id=tenants["parent"]
     )

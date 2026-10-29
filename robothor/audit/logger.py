@@ -19,18 +19,48 @@ from __future__ import annotations
 
 import contextlib
 import logging
+from contextvars import ContextVar
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 import psycopg2
 from psycopg2.extras import Json
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Iterator, Sequence
 
 logger = logging.getLogger(__name__)
 
 # Lazy connection resolution — don't import config at module level so tests can mock
 _conn_factory = None
+
+
+@dataclass(frozen=True)
+class RequestActor:
+    """Who a request acts as, for audit rows written beneath it."""
+
+    user_id: str
+    home_tenant_id: str
+    tenant_id: str
+
+
+#: The verified caller of the request this context is serving, if any. Set by
+#: the bridge's ``TenantScopeMiddleware``; read by :func:`log_event` when its
+#: caller names no actor — the DAL's CRM audit (``_safe_audit``) never does, so
+#: before this a root owner's write in a child tenant was filed as ``robothor``.
+_request_actor: ContextVar[RequestActor | None] = ContextVar("audit_request_actor", default=None)
+
+
+@contextlib.contextmanager
+def request_actor(*, user_id: str, home_tenant_id: str, tenant_id: str) -> Iterator[None]:
+    """Attribute every audit row written in this context to this caller."""
+    token = _request_actor.set(
+        RequestActor(user_id=user_id, home_tenant_id=home_tenant_id, tenant_id=tenant_id)
+    )
+    try:
+        yield
+    finally:
+        _request_actor.reset(token)
 
 
 def _get_connection() -> Any:
@@ -126,11 +156,22 @@ def log_event(
 
     ``tenant_id`` defaults to the enclosing ``tenant_scope`` (a bridge
     request's acting tenant), then the process's own tenant — see
-    :func:`_writing_tenant`.
+    :func:`_writing_tenant`. Inside a request (:func:`request_actor`), a
+    caller that names no ``actor`` / ``user_id`` gets the request's verified
+    caller instead of ``robothor`` / ``""``, and an acting caller's home tenant
+    is added to ``details``.
 
     Returns {"id": int, "timestamp": str} on success, None on failure.
     Failures are logged but never raise — audit must not break callers.
     """
+    requester = _request_actor.get()
+    if requester is not None:
+        if actor == "robothor":
+            actor = requester.user_id
+        if not user_id:
+            user_id = requester.user_id
+        if requester.home_tenant_id != requester.tenant_id:
+            details = {"home_tenant_id": requester.home_tenant_id, **(details or {})}
     conn = None
     tenant = _writing_tenant(tenant_id)
     try:
