@@ -83,7 +83,16 @@ BASELINE_DEFAULT = {
     ("VaultStaticSecret", "gos-genus-os-orchestrator-providers"),
 }
 
+#: Tenant cells need the one vault key every engine and the bridge share.
+SHARED_VAULT_KEY = [
+    "--set",
+    "vaultKey.enabled=true",
+    "--set",
+    "vault.secrets.vault-key.path=genus-os/test/vault-key",
+]
+
 TWO_TENANTS = [
+    *SHARED_VAULT_KEY,
     "--set",
     "workspace.persistence.enabled=true",
     "--set",
@@ -130,7 +139,7 @@ def test_empty_tenants_render_the_same_objects_as_before() -> None:
 
 
 def test_two_tenants_add_exactly_their_cells() -> None:
-    before = _kind_names(_render("--set", "workspace.persistence.enabled=true"))
+    before = _kind_names(_render(*SHARED_VAULT_KEY, "--set", "workspace.persistence.enabled=true"))
     after = _kind_names(_render(*TWO_TENANTS))
     assert after - before == {
         ("Deployment", "gos-genus-os-engine-acme-child-a"),
@@ -207,3 +216,40 @@ def test_lint_is_clean_with_tenants() -> None:
         check=False,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_every_vault_reader_shares_one_key() -> None:
+    """The bridge stores a child's credential; the child's engine decrypts it."""
+    readers = {}
+    for doc in _render(*TWO_TENANTS):
+        if doc["kind"] != "Deployment":
+            continue
+        labels = doc["spec"]["template"]["metadata"]["labels"]
+        if labels.get("app.kubernetes.io/component") not in ("engine", "bridge"):
+            continue
+        volumes = doc["spec"]["template"]["spec"]["volumes"]
+        secret = next(v["secret"]["secretName"] for v in volumes if v["name"] == "vault-key")
+        env = _env(doc)
+        readers[doc["metadata"]["name"]] = (
+            secret,
+            env["GENUS_VAULT_KEY_FILE"],
+            env["GENUS_FINGERPRINT_SALT_FILE"],
+        )
+    assert set(readers) == {
+        "gos-genus-os-bridge",
+        "gos-genus-os-engine",
+        "gos-genus-os-engine-acme-child-a",
+        "gos-genus-os-engine-acme-child-b",
+    }
+    assert len(set(readers.values())) == 1, readers
+
+
+def test_tenants_without_the_shared_key_are_refused() -> None:
+    result = subprocess.run(
+        ["helm", "template", "gos", str(CHART), "--set", "tenants[0].id=acme-child-a"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "vaultKey.enabled" in result.stderr

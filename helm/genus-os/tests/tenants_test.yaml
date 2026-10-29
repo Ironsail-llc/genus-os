@@ -2,6 +2,11 @@ suite: tenant engine cells
 release:
   name: gos
   namespace: genus
+# Tenant cells require the shared vault key (see vault_key_test.yaml), so every
+# case here renders with it on.
+set:
+  vaultKey.enabled: true
+  vault.secrets.vault-key.path: genus-os/test/vault-key
 tests:
   # ─── Default: no tenants, nothing new ──────────────────────────────────────
   - it: an empty tenants list renders no tenant cell
