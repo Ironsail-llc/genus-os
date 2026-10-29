@@ -165,6 +165,15 @@ def test_tools_are_registered_with_schemas_and_read_only_split() -> None:
     assert "run_workflow" not in READONLY_TOOLS
 
 
+def test_run_workflow_is_opt_in() -> None:
+    # Offered only to an agent whose manifest names it; the reads are not.
+    from robothor.engine.tools.constants import OPT_IN_TOOLS
+
+    assert "run_workflow" in OPT_IN_TOOLS
+    assert "list_workflows" not in OPT_IN_TOOLS
+    assert "workflow_runs" not in OPT_IN_TOOLS
+
+
 def test_registry_round_trip() -> None:
     sentinel = object()
     previous = get_workflow_engine()
