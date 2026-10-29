@@ -1944,3 +1944,64 @@ def test_append_to_a_key_that_is_not_a_list_is_refused(ws, capsys) -> None:
     assert _install(ws, **_patcher(_ALPHA, "install:\n  append:\n    hooks:\n" + _HOOK_A)) == 2
     assert "hooks" in capsys.readouterr().err
     assert (ws / _MAIN_YAML).read_text() == _MAIN + "hooks: not-a-list\n"
+
+
+_FRAGMENT = "# Alpha\n\nWhen an email arrives, file it.\n"
+_CHANNELS = "channels:\n  alpha:\n    stream: alpha\n    secret_env: ALPHA_WEBHOOK_SECRET\n"
+
+
+def _fragment_plugin(files: str, patch: str = "") -> dict:
+    """A plugin that patches `main` (optionally) and writes *files*."""
+    pkg = _ALPHA.replace("-", "_")
+    manifest = f"name: {_ALPHA}\ncontract_version: 1\nhandlers:\n  - {pkg}_probe\n"
+    if patch:
+        manifest += "patches:\n  - agent: main\n    file: patches/main.patch.yaml\n"
+    manifest += "files:\n" + files
+    return {
+        "dist": _ALPHA,
+        "manifest": manifest,
+        "extra": {
+            f"{pkg}/patches/main.patch.yaml": patch or "install: {}\n",
+            f"{pkg}/extra/fragment.md": _FRAGMENT,
+            f"{pkg}/extra/channels.yaml": _CHANNELS,
+        },
+    }
+
+
+def test_a_plugin_adds_an_instruction_fragment_and_a_webhook_drop_in(ws, capsys) -> None:
+    """The composable way to extend `main`: its own instruction fragment under
+    brain/agents/main.d/, named in bootstrap_files by `append`, and its own
+    channel file under docs/webhooks.d/ -- nothing another plugin owns."""
+    from robothor.plugins import assets
+
+    fragment = "brain/agents/main.d/alpha-plugin.md"
+    channels = "docs/webhooks.d/alpha-plugin.yaml"
+    plugin = _fragment_plugin(
+        f"  - src: extra/fragment.md\n    dest: {fragment}\n"
+        f"  - src: extra/channels.yaml\n    dest: {channels}\n",
+        f"install:\n  append:\n    bootstrap_files: [{fragment}]\n",
+    )
+    assert _install(ws, **plugin) == 0, capsys.readouterr().err
+    assert (ws / fragment).read_text() == _FRAGMENT
+    assert (ws / channels).read_text() == _CHANNELS
+    assert _main(ws)["bootstrap_files"] == [fragment]
+
+    assets.retire(_ALPHA)
+    assert not (ws / fragment).exists()
+    assert not (ws / channels).exists()
+    assert _main(ws)["bootstrap_files"] == []
+
+
+def test_a_fragment_for_an_agent_the_plugin_does_not_patch_is_refused(ws, capsys) -> None:
+    plugin = _fragment_plugin("  - src: extra/fragment.md\n    dest: brain/agents/main.d/x.md\n")
+    assert _install(ws, **plugin) == 2
+    assert "main" in capsys.readouterr().err
+    assert not (ws / "brain" / "agents" / "main.d").exists()
+
+
+@pytest.mark.parametrize("dest", ["docs/webhooks.d/nested/alpha.yaml", "docs/webhooks.d/alpha.txt"])
+def test_a_webhook_drop_in_is_one_yaml_file_directly_in_the_directory(ws, capsys, dest) -> None:
+    plugin = _fragment_plugin(f"  - src: extra/channels.yaml\n    dest: {dest}\n")
+    assert _install(ws, **plugin) == 2
+    assert "docs/webhooks.d" in capsys.readouterr().err
+    assert not (ws / "docs" / "webhooks.d").exists()
