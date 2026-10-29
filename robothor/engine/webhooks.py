@@ -2,9 +2,12 @@
 
 External services POST to /api/webhooks/{channel} with an HMAC-SHA256 signature.
 Each channel picks its signature scheme: ``hmac_hex`` (hex digest of the raw
-body, GitHub-style) or ``stripe_t_v1`` (``t=<unix>,v1=<hex>`` over
-``"<t>." + body`` with a timestamp window). A channel may also name a delivery
-id header, in which case a replayed delivery is answered as a duplicate and
+body, GitHub-style), ``stripe_t_v1`` (``t=<unix>,v1=<hex>`` over
+``"<t>." + body`` with a timestamp window) or ``hmac_ts_hex`` (hex digest of
+``"<timestamp>." + body`` in the signature header, optionally ``sha256=``
+prefixed, with the integer unix-seconds timestamp in the channel's
+``timestamp_header`` and the same timestamp window). A channel may also name a
+delivery id header, in which case a replayed delivery is answered as a duplicate and
 not re-published. A ``google_oidc`` channel takes Google Cloud Pub/Sub push
 instead: the ``Authorization: Bearer`` ID token is verified against the
 channel's audience and service account, the Pub/Sub ``messageId`` is the
