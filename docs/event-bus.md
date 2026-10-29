@@ -38,9 +38,12 @@ Every message uses a standard envelope:
 The `payload` field is a JSON string (Redis Streams require flat field values).
 
 `tenant_id` is the tenant the event belongs to. `publish()` stamps it when the
-caller passes none: the enclosing `tenant_scope`, else the process's
-`ROBOTHOR_DEFAULT_TENANT`. A service that acts for several tenants from one
-process (the bridge) passes `tenant_id=` on every call.
+caller passes none: the enclosing `tenant_scope`, else the tenant the process
+operates as (`ROBOTHOR_TENANT_ID`, then `ROBOTHOR_DEFAULT_TENANT`), the same
+order an engine identifies itself by. A process with neither variable set
+publishes untagged events, which go to the root engine. A service that acts
+for several tenants from one process (the bridge) passes `tenant_id=` on every
+call.
 
 ## One engine per tenant
 
@@ -48,8 +51,16 @@ Several engines (one per tenant) can share one Redis. Each reads the streams
 with a consumer group of its own, `GENUS_EVENT_CONSUMER_GROUP`, because Redis
 hands each stream entry to only one reader in a group: engines sharing a group
 would split the events between them. The root tenant's engine keeps the
-historical group `engine`, so its stream offsets survive the upgrade; each
-child engine uses `engine-<tenant>`.
+historical group `engine`, so its stream offsets survive the upgrade. Each
+child engine's deployment must give it a group of its own, for example
+`engine-<tenant>`.
+
+A child engine left on the root's group would take about half of the root's
+events and drop them. Consumer names carry the tenant (`engine-<tenant>`), so
+before reading, an engine checks whether another tenant's engine has read its
+group in the last minute. If one has, it does not read, logs an ERROR naming
+`GENUS_EVENT_CONSUMER_GROUP`, and checks again every minute. Replicas of one
+engine share a consumer name and are not affected.
 
 Every engine therefore sees every event, and acts only on those whose
 `tenant_id` is its own `ROBOTHOR_TENANT_ID`. The others are acknowledged and
