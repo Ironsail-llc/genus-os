@@ -242,6 +242,10 @@ def test_every_vault_reader_shares_one_key() -> None:
         "gos-genus-os-engine-acme-child-b",
     }
     assert len(set(readers.values())) == 1, readers
+    # The agent secret-file denylist guards these basenames.
+    _, key_file, salt_file = next(iter(readers.values()))
+    assert key_file.endswith("/.vault-key")
+    assert salt_file.endswith("/.fingerprint-salt")
 
 
 def test_tenants_without_the_shared_key_are_refused() -> None:

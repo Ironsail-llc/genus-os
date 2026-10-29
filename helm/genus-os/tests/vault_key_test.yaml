@@ -45,17 +45,17 @@ tests:
               secretName: gos-genus-os-vault-key
               defaultMode: 0400
               items:
-                - {key: key, path: key}
-                - {key: fingerprint-salt, path: fingerprint-salt}
+                - {key: key, path: .vault-key}
+                - {key: fingerprint-salt, path: .fingerprint-salt}
       - contains:
           path: spec.template.spec.containers[0].volumeMounts
           content: {name: vault-key, mountPath: /etc/genus/vault, readOnly: true}
       - contains:
           path: spec.template.spec.containers[0].env
-          content: {name: GENUS_VAULT_KEY_FILE, value: /etc/genus/vault/key}
+          content: {name: GENUS_VAULT_KEY_FILE, value: /etc/genus/vault/.vault-key}
       - contains:
           path: spec.template.spec.containers[0].env
-          content: {name: GENUS_FINGERPRINT_SALT_FILE, value: /etc/genus/vault/fingerprint-salt}
+          content: {name: GENUS_FINGERPRINT_SALT_FILE, value: /etc/genus/vault/.fingerprint-salt}
 
   - it: the bridge mounts the same key
     template: bridge/workload.yaml
@@ -72,17 +72,17 @@ tests:
               secretName: gos-genus-os-vault-key
               defaultMode: 0400
               items:
-                - {key: key, path: key}
-                - {key: fingerprint-salt, path: fingerprint-salt}
+                - {key: key, path: .vault-key}
+                - {key: fingerprint-salt, path: .fingerprint-salt}
       - contains:
           path: spec.template.spec.containers[0].volumeMounts
           content: {name: vault-key, mountPath: /etc/genus/vault, readOnly: true}
       - contains:
           path: spec.template.spec.containers[0].env
-          content: {name: GENUS_VAULT_KEY_FILE, value: /etc/genus/vault/key}
+          content: {name: GENUS_VAULT_KEY_FILE, value: /etc/genus/vault/.vault-key}
       - contains:
           path: spec.template.spec.containers[0].env
-          content: {name: GENUS_FINGERPRINT_SALT_FILE, value: /etc/genus/vault/fingerprint-salt}
+          content: {name: GENUS_FINGERPRINT_SALT_FILE, value: /etc/genus/vault/.fingerprint-salt}
 
   - it: every tenant cell mounts the same key, not one of its own
     template: engine/tenants.yaml
@@ -103,17 +103,17 @@ tests:
               secretName: gos-genus-os-vault-key
               defaultMode: 0400
               items:
-                - {key: key, path: key}
-                - {key: fingerprint-salt, path: fingerprint-salt}
+                - {key: key, path: .vault-key}
+                - {key: fingerprint-salt, path: .fingerprint-salt}
       - contains:
           path: spec.template.spec.containers[0].volumeMounts
           content: {name: vault-key, mountPath: /etc/genus/vault, readOnly: true}
       - contains:
           path: spec.template.spec.containers[0].env
-          content: {name: GENUS_VAULT_KEY_FILE, value: /etc/genus/vault/key}
+          content: {name: GENUS_VAULT_KEY_FILE, value: /etc/genus/vault/.vault-key}
       - contains:
           path: spec.template.spec.containers[0].env
-          content: {name: GENUS_FINGERPRINT_SALT_FILE, value: /etc/genus/vault/fingerprint-salt}
+          content: {name: GENUS_FINGERPRINT_SALT_FILE, value: /etc/genus/vault/.fingerprint-salt}
 
   - it: the orchestrator never gets the vault key
     template: orchestrator/workload.yaml
@@ -130,6 +130,27 @@ tests:
           path: spec.template.spec.containers[0].env
           content: {name: GENUS_VAULT_KEY_FILE}
           any: true
+
+  # The agent secret-file denylist (robothor/engine/secret_paths.py) refuses
+  # these basenames, so an agent with exec or read_file cannot print the key
+  # even if a path check is missed. Pinned on every reader.
+  - it: the key files keep the basenames the agent denylist guards
+    template: engine/tenants.yaml
+    set:
+      vaultKey.enabled: true
+      vault.secrets.vault-key.path: genus-os/test/vault-key
+      tenants:
+        - id: acme-child-a
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content: {name: GENUS_VAULT_KEY_FILE, value: /etc/genus/vault/key}
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content: {name: GENUS_FINGERPRINT_SALT_FILE, value: /etc/genus/vault/fingerprint-salt}
 
   # ─── The VSO class ─────────────────────────────────────────────────────────
   # Vault KV holds strings, so the key and salt are stored base64-encoded and
