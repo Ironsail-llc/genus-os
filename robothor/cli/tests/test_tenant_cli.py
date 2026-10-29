@@ -169,6 +169,40 @@ def test_status_shows_sso_domains(capsys) -> None:
     assert "Acme Parent" in out
 
 
+def test_status_reads_blocks_and_runs_in_the_tenant_asked_about(capsys) -> None:
+    """From a root shell with RLS on, a read in the shell's own scope sees none
+    of a child's rows: status reported 0 blocks and 0 runs for a busy child."""
+    from contextlib import contextmanager
+    from unittest.mock import MagicMock
+
+    from robothor.db.connection import current_tenant_scope
+
+    seen: dict[str, object] = {}
+
+    def blocks(tenant_id: str) -> dict:
+        seen["blocks"] = current_tenant_scope()
+        return {"blocks": [{"name": "persona", "size": 10}]}
+
+    @contextmanager
+    def connection():
+        seen["runs"] = current_tenant_scope()
+        cur = MagicMock()
+        cur.fetchone.return_value = (16,)
+        conn = MagicMock()
+        conn.cursor.return_value = cur
+        yield conn
+
+    tenant = {"id": "acme-child-a", "displayName": "A", "settings": {}, "active": True}
+    with (
+        patch("robothor.crm.dal.get_tenant", return_value=tenant),
+        patch("robothor.memory.blocks.list_blocks", side_effect=blocks),
+        patch("robothor.db.get_connection", side_effect=connection),
+    ):
+        assert cmd_tenant(_parse("status", "acme-child-a")) == 0
+    assert seen == {"blocks": "acme-child-a", "runs": "acme-child-a"}
+    assert "Runs (last 7d): 16" in capsys.readouterr().out
+
+
 # ─── move-account ────────────────────────────────────────────────────────
 
 
