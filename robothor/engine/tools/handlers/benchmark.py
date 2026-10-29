@@ -213,6 +213,10 @@ _BENCHMARK_EXTRA_READS: frozenset[str] = frozenset(
 #: refuse a benchmark run anyway). ``config_get`` (GEN-42) reads the
 #: instance's REAL settings; its handler refuses a benchmark run too.
 #:
+#: ``plugins_overview`` reads the instance's REAL installed plugins, ledger and
+#: agent registry, so a graded agent could describe the operator's deployment
+#: in its answer; it is withheld for ``config_get``'s reason.
+#:
 #: ``search_files`` and ``wait_seconds`` joined when they were classified
 #: read-only: both were already excluded from the benchmark (see the
 #: comments in ``_BENCHMARK_EXCLUDED_TOOLS``), and classification does not
@@ -221,7 +225,14 @@ _BENCHMARK_WITHHELD_READS: frozenset[str] = frozenset(
     DESKTOP_TOOLS
     | BENCHMARK_TOOLS
     | GWS_TOOLS
-    | {"claude_code_status", "claude_code_wait", "search_files", "wait_seconds", "config_get"}
+    | {
+        "claude_code_status",
+        "claude_code_wait",
+        "search_files",
+        "wait_seconds",
+        "config_get",
+        "plugins_overview",
+    }
 )
 
 

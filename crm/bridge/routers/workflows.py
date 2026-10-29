@@ -10,11 +10,15 @@ plugin asset ledger records that a plugin wrote it, else ``workspace``.
 
 from __future__ import annotations
 
+import logging
+
 import psycopg2.extras
 from fastapi import APIRouter, Request
 
 from robothor.db.connection import get_connection
 from routers._operator import require_operator
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/workflows", tags=["workflows"])
 
@@ -79,7 +83,14 @@ def _defined_workflows() -> list[dict]:
 
 def _merged() -> list[dict]:
     """Workflows that ran, most recent first, then defined ones that never ran."""
-    defined = {d["workflow_id"]: d for d in _defined_workflows()}
+    try:
+        found = _defined_workflows()
+    except Exception as exc:  # noqa: BLE001 - run history must still answer
+        # A config, environment or directory fault reading the definitions
+        # must not take the run history down with it.
+        logger.warning("defined workflows could not be read: %s", type(exc).__name__)
+        found = []
+    defined = {d["workflow_id"]: d for d in found}
     out = []
     for row in _list_workflows():
         known = defined.pop(row["workflow_id"], None)

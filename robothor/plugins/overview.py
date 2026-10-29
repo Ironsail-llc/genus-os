@@ -125,7 +125,11 @@ def _installed_plugin_agents(root: Path, warnings: list[str]) -> dict[str, set[s
     if not path.is_file():
         return {}
     data = _read_yaml(path)
-    agents = data.get("agents") if isinstance(data, dict) else None
+    if data is None:
+        return {}  # an empty file records nothing
+    agents = data.get("agents") if isinstance(data, dict) else data
+    if agents is None:
+        return {}  # no `agents` key yet: nothing installed, not damage
     if not isinstance(agents, dict):
         warnings.append("The installed agent registry (.robothor/installed.yaml) is not readable.")
         return {}
@@ -215,7 +219,8 @@ def workspace_assets(
             (v for k, v in ledger.items() if canonical(str(k)) == dist and isinstance(v, dict)),
             {},
         )
-        agent_ids = {str(a) for a in entry.get("agents") or [] if isinstance(a, str)}
+        listed = entry.get("agents")
+        agent_ids = {a for a in listed if isinstance(a, str)} if isinstance(listed, list) else set()
         agent_ids |= owned.get(dist, set())
         files = entry.get("files") or {}
         dests = sorted(str(d) for d in files) if isinstance(files, dict) else []
