@@ -4,7 +4,7 @@ Redis Streams-based publish-subscribe system with consumer groups, RBAC, and JSO
 
 ## Streams
 
-Seven streams carry all system events:
+These streams carry system events:
 
 | Stream | Key | Events |
 |--------|-----|--------|
@@ -15,6 +15,7 @@ Seven streams carry all system events:
 | Health | `robothor:events:health` | `health.check`, `health.alert`, `health.recovery` |
 | Agent | `robothor:events:agent` | `agent.started`, `agent.completed`, `agent.error` |
 | System | `robothor:events:system` | `system.boot`, `system.shutdown`, `system.error` |
+| Operations | `robothor:events:operations` | `operation_action.approved` — see [Operations ledger](OPERATIONS.md#executing-an-approved-action-from-a-workflow) |
 
 Each stream is a circular buffer (default 10,000 entries, configurable via `EVENT_BUS_MAXLEN`).
 
