@@ -217,10 +217,12 @@ def _sso_exchange(
     # Tenant selection is operator-controlled — a tenant's claimed SSO
     # domains, else ROBOTHOR_DEFAULT_TENANT — and never accepted from the SSO
     # caller. It decides where a NEW account is created and which tenant's
-    # email match and binding grant are consulted; an account already bound
-    # to this (issuer, subject) signs in to wherever it lives.
+    # email match and binding grant are consulted.
     tenant_id = accounts.tenant_for_email(body.email)
     # Bound to the routed tenant so the RLS WITH CHECK accepts the new row.
+    # With RLS on, that also bounds the (issuer, subject) lookup to the routed
+    # tenant, so an account bound in another tenant must be moved there before
+    # its domain is claimed (docs/runbooks/TENANT_HIERARCHY.md).
     scope: AbstractContextManager[None] = (
         tenant_scope(tenant_id) if tenant_id != DEFAULT_TENANT else nullcontext()
     )
