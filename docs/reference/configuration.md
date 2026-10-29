@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-485 settings in 17 groups.
+487 settings in 17 groups.
 
 ## autonomy
 
@@ -487,6 +487,8 @@ Secret material that belongs to no single service.
 
 | Variable | Type | Default | Restart | Secret | Since | Description |
 | --- | --- | --- | --- | --- | --- | --- |
+| `GENUS_FINGERPRINT_SALT_FILE` | str | _(empty)_ | `robothor-engine`, `robothor-bridge` | no | 1.118.0 | Path of THE credential-fingerprint salt file, instead of <workspace>/.fingerprint-salt, so fingerprints agree across the bridge and every engine cell. Never generated under an override: a missing file logs an error and fingerprints degrade to the unsalted form. Empty keeps the workspace salt, created on first use. Also read from `ROBOTHOR_FINGERPRINT_SALT_FILE`. |
+| `GENUS_VAULT_KEY_FILE` | str | _(empty)_ | `robothor-engine`, `robothor-bridge` | no | 1.118.0 | Path of THE vault master key file (32 bytes), instead of <workspace>/.vault-key, so the bridge and every engine cell share one key (typically a read-only Secret mount). Under it nothing is ever generated: a missing or wrong-length file is an error naming this variable. Empty keeps the workspace key, generated on first boot. Also read from `ROBOTHOR_VAULT_KEY_FILE`. |
 | `ROBOTHOR_ENV_FILE` | str | `/etc/robothor/robothor.env` | `robothor-engine`, `robothor-bridge` | no | legacy | The EnvironmentFile systemd loads secrets from. It is instance data, never in git; the path is what the platform declares. |
 | `ROBOTHOR_INTENT_HMAC_SECRET` | str | _(unset)_ | `robothor-engine`, `robothor-bridge` | yes | legacy | Key that signs memory intents so a stored intent cannot be forged. Signing raises rather than falling back when it is unset. |
 | `ROBOTHOR_SECRETS_BACKEND` | str | _(empty)_ | `robothor-secrets`, `robothor-engine`, `robothor-bridge`, `robothor-app`, `robothor-orchestrator` | no | 1.69.0 | Where scripts/load-secrets.sh gets this instance's credentials: `sops` (decrypt /etc/robothor/secrets.enc.json with the age key), `file` (a plaintext file the operator manages, mode 0600 or 0400), or `env` (they are already in the unit environment, so an empty secrets.env is written). Empty means auto-detect: sops if an encrypted store exists, else file if one exists, else env. SOPS is therefore opt-in rather than a precondition for starting. |
@@ -651,11 +653,13 @@ process naming its replacement. They stop being read after two minor releases.
 | `CODEX_HOME` | `ROBOTHOR_CODEX_HOME` |
 | `OLLAMA_URL` | `ROBOTHOR_OLLAMA_URL` |
 | `ROBOTHOR_ENVIRONMENT` | `GENUS_ENVIRONMENT` |
+| `ROBOTHOR_FINGERPRINT_SALT_FILE` | `GENUS_FINGERPRINT_SALT_FILE` |
 | `ROBOTHOR_OWNER_EMAIL` | `~/.robothor/owner.yaml` |
 | `ROBOTHOR_OWNER_NAME` | `~/.robothor/owner.yaml` |
 | `ROBOTHOR_TENANT_ENGINE_URLS` | `GENUS_TENANT_ENGINE_URLS` |
 | `ROBOTHOR_TENANT_ENGINE_URL_TEMPLATE` | `GENUS_TENANT_ENGINE_URL_TEMPLATE` |
 | `ROBOTHOR_TENANT_SWITCH_ALLOW_INERT_RLS` | `GENUS_TENANT_SWITCH_ALLOW_INERT_RLS` |
 | `ROBOTHOR_TENANT_SWITCH_MODE` | `GENUS_TENANT_SWITCH_MODE` |
+| `ROBOTHOR_VAULT_KEY_FILE` | `GENUS_VAULT_KEY_FILE` |
 | `TELEGRAM_BOT_TOKEN` | `ROBOTHOR_TELEGRAM_BOT_TOKEN` |
 | `TELEGRAM_CHAT_ID` | `ROBOTHOR_TELEGRAM_CHAT_ID` |

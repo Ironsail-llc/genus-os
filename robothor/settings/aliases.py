@@ -48,6 +48,9 @@ DEPRECATED_ALIASES: dict[str, str] = {
     # Per-tenant engine addressing, read by the bridge and the dashboard.
     "ROBOTHOR_TENANT_ENGINE_URLS": "GENUS_TENANT_ENGINE_URLS",
     "ROBOTHOR_TENANT_ENGINE_URL_TEMPLATE": "GENUS_TENANT_ENGINE_URL_TEMPLATE",
+    # One vault key and one fingerprint salt shared across pods.
+    "ROBOTHOR_VAULT_KEY_FILE": "GENUS_VAULT_KEY_FILE",
+    "ROBOTHOR_FINGERPRINT_SALT_FILE": "GENUS_FINGERPRINT_SALT_FILE",
 }
 
 #: Names already warned about in this process. One warning per name per

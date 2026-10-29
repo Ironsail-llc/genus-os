@@ -2255,6 +2255,28 @@ class SecretSettings(SettingsGroup):
         secret=True,
         bootstrap=True,
     )
+    vault_key_file: str = declare(
+        "",
+        "GENUS_VAULT_KEY_FILE",
+        "Path of THE vault master key file (32 bytes), instead of "
+        "<workspace>/.vault-key, so the bridge and every engine cell share one "
+        "key (typically a read-only Secret mount). Under it nothing is ever "
+        "generated: a missing or wrong-length file is an error naming this "
+        "variable. Empty keeps the workspace key, generated on first boot.",
+        aliases=("ROBOTHOR_VAULT_KEY_FILE",),
+        since="1.118.0",
+    )
+    fingerprint_salt_file: str = declare(
+        "",
+        "GENUS_FINGERPRINT_SALT_FILE",
+        "Path of THE credential-fingerprint salt file, instead of "
+        "<workspace>/.fingerprint-salt, so fingerprints agree across the "
+        "bridge and every engine cell. Never generated under an override: a "
+        "missing file logs an error and fingerprints degrade to the unsalted "
+        "form. Empty keeps the workspace salt, created on first use.",
+        aliases=("ROBOTHOR_FINGERPRINT_SALT_FILE",),
+        since="1.118.0",
+    )
     env_file: str = declare(
         "/etc/robothor/robothor.env",
         "ROBOTHOR_ENV_FILE",

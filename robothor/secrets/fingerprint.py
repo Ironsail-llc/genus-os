@@ -103,6 +103,28 @@ _retry_degraded_after = 0.0
 _warned_unsalted = False
 
 
+SALT_FILE_ENV = "GENUS_FINGERPRINT_SALT_FILE"
+_SALT_FILE_ALIAS = "ROBOTHOR_FINGERPRINT_SALT_FILE"
+
+
+def _salt_file_override() -> Path | None:
+    """The salt file ``GENUS_FINGERPRINT_SALT_FILE`` names, or None when unset.
+
+    So the bridge and every engine cell of one deployment fingerprint alike:
+    they share one salt, mounted read-only, instead of one per workspace.
+    """
+    from robothor.settings.env import process_env_get
+
+    value = (process_env_get(SALT_FILE_ENV, "") or "").strip()
+    if not value:
+        value = (process_env_get(_SALT_FILE_ALIAS, "") or "").strip()
+        if value:
+            from robothor.settings.aliases import warn_deprecated_alias
+
+            warn_deprecated_alias(_SALT_FILE_ALIAS)
+    return Path(value) if value else None
+
+
 def _workspace() -> Path:
     from robothor.settings.env import process_env_get
 
@@ -190,7 +212,24 @@ def _read_or_create_salt() -> bytes:
 
     Never raises. A fingerprint is used on the status path, in tool results and
     in the doctor; a filesystem problem must degrade it, not take those down.
+
+    Under ``GENUS_FINGERPRINT_SALT_FILE`` the salt is read from that file and
+    never created: it is a shared, usually read-only mount, and a salt written
+    in its place would make this process disagree with every other one.
     """
+    override = _salt_file_override()
+    if override is not None:
+        found = _read_salt(override)
+        if found is not None:
+            return found
+        logger.error(
+            "secrets: %s names a fingerprint salt that is missing, unreadable or too "
+            "short; it is never generated under that setting, so fingerprints in "
+            "this process are unsalted until the file is mounted.",
+            SALT_FILE_ENV,
+        )
+        return _UNSALTED_FALLBACK
+
     path = _workspace() / _SALT_FILENAME
 
     for attempt in range(_PLACEMENT_ATTEMPTS):
