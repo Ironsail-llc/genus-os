@@ -147,8 +147,8 @@ plainly; a number with fewer than ten digits matches nothing. The match
 assumes NANP (US/Canada) numbers; an international deployment must normalise
 both sides to E.164 before calling (nine-digit national numbers never match).
 It checks the person's primary number, their additional numbers and their
-SMS and voice identifiers. Drop every returned number before sending, and treat an
-exception as a refusal: a lookup that failed is not a clean list.
+SMS and voice identifiers. Drop every returned number before sending, and
+treat an exception as a refusal: a lookup that failed is not a clean list.
 
 The knowledge-base tools (`kb_*`) are engine tools, not imports: an agent
 that runs your plugin's workflow lists them in `tools_allowed`.
