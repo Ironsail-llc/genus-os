@@ -167,8 +167,13 @@ function rootTenant(): string {
   return process.env.ROBOTHOR_DEFAULT_TENANT?.trim() || "default";
 }
 
+/** A setting by its GENUS_ name, else its ROBOTHOR_ alias — the bridge's order. */
+function settingWithAlias(name: string, alias: string): string | undefined {
+  return process.env[name]?.trim() || process.env[alias]?.trim() || undefined;
+}
+
 function tenantEngineOverride(tenant: string): string | undefined {
-  const raw = process.env.GENUS_TENANT_ENGINE_URLS?.trim();
+  const raw = settingWithAlias("GENUS_TENANT_ENGINE_URLS", "ROBOTHOR_TENANT_ENGINE_URLS");
   if (!raw) return undefined;
   let parsed: unknown;
   try {
@@ -187,7 +192,8 @@ function tenantEngineOverride(tenant: string): string | undefined {
  * The engine that serves `tenant`, resolved in the bridge's order:
  * `GENUS_TENANT_ENGINE_URLS` (JSON `{tenant: url}`), then
  * `GENUS_TENANT_ENGINE_URL_TEMPLATE` (literal `{tenant}` placeholder), then
- * `ROBOTHOR_ENGINE_URL`. The root tenant (`ROBOTHOR_DEFAULT_TENANT`, default
+ * `ROBOTHOR_ENGINE_URL`. Each of the first two also answers to its
+ * `ROBOTHOR_TENANT_…` alias, the GENUS_ name winning. The root tenant (`ROBOTHOR_DEFAULT_TENANT`, default
  * `default`) — and no tenant at all — is always `ROBOTHOR_ENGINE_URL`.
  *
  * Read at call time, and fails closed: a misconfigured override or template
@@ -198,7 +204,10 @@ export function engineUrlFor(tenant?: string | null): string {
   if (!tenant || tenant === rootTenant()) return root;
 
   const override = tenantEngineOverride(tenant);
-  const template = process.env.GENUS_TENANT_ENGINE_URL_TEMPLATE?.trim();
+  const template = settingWithAlias(
+    "GENUS_TENANT_ENGINE_URL_TEMPLATE",
+    "ROBOTHOR_TENANT_ENGINE_URL_TEMPLATE",
+  );
   let candidate: string;
   if (override) {
     candidate = override;
