@@ -118,7 +118,19 @@ def configure_structured_logging() -> None:
     )
 
     handler = logging.StreamHandler()
-    handler.setFormatter(structlog.stdlib.ProcessorFormatter(processor=select_log_renderer()))
+    # foreign_pre_chain: a record from the STDLIB (every `logging.getLogger`
+    # module, which is most of the platform) otherwise renders as `{"event":
+    # ...}` alone, with no level to filter on, no logger and no time.
+    handler.setFormatter(
+        structlog.stdlib.ProcessorFormatter(
+            processor=select_log_renderer(),
+            foreign_pre_chain=[
+                structlog.stdlib.add_log_level,
+                structlog.stdlib.add_logger_name,
+                structlog.processors.TimeStamper(fmt="iso"),
+            ],
+        )
+    )
     handler.addFilter(CredentialRedactingFilter())
     root = logging.getLogger()
     root.handlers.clear()
