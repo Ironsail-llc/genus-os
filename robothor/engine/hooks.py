@@ -70,11 +70,16 @@ GROUP_RIVAL_ACTIVE_MS = 60_000
 # How often every engine looks again at who else reads its group.
 GROUP_RIVAL_RECHECK_SECONDS = 60
 # Which root tenant owns the root group: claimed by a root of the tenant tree
-# when nobody holds it, and refreshed by the owner on every check. Three missed
-# checks and it lapses, so a dead or re-parented owner's claim passes to another
-# root within minutes. Deleting it hands the group over at once.
+# when nobody holds it, and refreshed by the owner from its own task, so a slow
+# read or a stalled dispatch cannot let it lapse. Three missed refreshes and it
+# lapses, so a dead or re-parented owner's claim passes to another root within
+# minutes. Deleting it hands the group over at once.
 ROOT_GROUP_OWNER_KEY = "robothor:events:group-owner:" + ROOT_EVENT_GROUP
-ROOT_GROUP_OWNER_TTL_SECONDS = 180
+ROOT_GROUP_OWNER_REFRESH_SECONDS = 60
+ROOT_GROUP_OWNER_TTL_SECONDS = 3 * ROOT_GROUP_OWNER_REFRESH_SECONDS
+# Consecutive failed tenant-tree lookups an already verified engine rides out on
+# its last verdict; the next one, or any for an engine never verified, fails closed.
+TREE_LOOKUP_FAILURES_TOLERATED = 3
 
 # Cap on the payload text an ``include_payload`` hook appends to its message.
 MAX_PAYLOAD_CHARS = 8000
@@ -279,6 +284,12 @@ class EventHooks:
         self.foreign_events_dropped = 0
         # Said once: a tenant with no crm_tenants row is treated as a root.
         self._warned_no_row = False
+        # The last tenant-tree verdict read successfully, and failures since.
+        self._verified = False
+        self._verified_parent: str | None = None
+        self._tree_failures = 0
+        # Set while this engine holds the root group; its refresh task reads it.
+        self._holds_root_group = False
 
     def _owns_event(self, decoded: dict[str, Any]) -> bool:
         """Whether this engine's tenant is the one the event belongs to.
@@ -345,19 +356,37 @@ class EventHooks:
         Read on every check, so a row created or re-parented later takes
         effect without a restart. A tenant with no row has no parent, so it is
         a root -- a single-engine install that never created its row keeps
-        working -- and that is logged once. When the tree cannot be read,
-        ``known`` is False: the caller claims and reads nothing.
+        working -- and that is logged once. When the tree cannot be read, an
+        engine already verified keeps its last verdict for up to
+        ``TREE_LOOKUP_FAILURES_TOLERATED - 1`` consecutive failures, so a blip
+        does not leave its events unread for an interval; after that, or if it
+        was never verified, ``known`` is False and the caller claims and reads
+        nothing.
         """
         try:
             from robothor.crm import dal
 
             row = await asyncio.to_thread(dal.get_tenant, self.config.tenant_id)
         except Exception as e:
+            self._tree_failures += 1
+            if self._verified and self._tree_failures < TREE_LOOKUP_FAILURES_TOLERATED:
+                logger.warning(
+                    "Cannot read tenant %r from the tenant tree (%s; failure %d of %d), "
+                    "keeping its last verdict for event consumer group %r.",
+                    self.config.tenant_id,
+                    e,
+                    self._tree_failures,
+                    TREE_LOOKUP_FAILURES_TOLERATED,
+                    ROOT_EVENT_GROUP,
+                )
+                return True, self._verified_parent
             logger.warning(
-                "Cannot read tenant %r from the tenant tree (%s), so this engine will "
-                "not claim or read event consumer group %r. Checking again in %ds.",
+                "Cannot read tenant %r from the tenant tree (%s; failure %d), so this "
+                "engine will not claim or read event consumer group %r. Checking again "
+                "in %ds.",
                 self.config.tenant_id,
                 e,
+                self._tree_failures,
                 ROOT_EVENT_GROUP,
                 GROUP_RIVAL_RECHECK_SECONDS,
             )
@@ -371,7 +400,10 @@ class EventHooks:
                 self.config.tenant_id,
                 ROOT_EVENT_GROUP,
             )
-        return True, (row or {}).get("parentTenantId") or None
+        self._verified = True
+        self._verified_parent = (row or {}).get("parentTenantId") or None
+        self._tree_failures = 0
+        return True, self._verified_parent
 
     async def _root_group_owner(self, redis_client: Any) -> str | None:
         """The tenant that owns the root group, claiming it if nobody does.
@@ -393,26 +425,51 @@ class EventHooks:
             owner = _text(await redis_client.get(ROOT_GROUP_OWNER_KEY))
             if owner == self.config.tenant_id:
                 await redis_client.expire(ROOT_GROUP_OWNER_KEY, ROOT_GROUP_OWNER_TTL_SECONDS)
-                return owner
-            if owner or tenant_env_conflict():
-                return owner
-            if await redis_client.set(
-                ROOT_GROUP_OWNER_KEY,
-                self.config.tenant_id,
-                nx=True,
-                ex=ROOT_GROUP_OWNER_TTL_SECONDS,
-            ):
-                logger.info(
-                    "Tenant %r now owns event consumer group %r (Redis key %s)",
-                    self.config.tenant_id,
-                    ROOT_EVENT_GROUP,
+            elif not owner and not tenant_env_conflict():
+                if await redis_client.set(
                     ROOT_GROUP_OWNER_KEY,
-                )
-                return self.config.tenant_id
-            return _text(await redis_client.get(ROOT_GROUP_OWNER_KEY))
+                    self.config.tenant_id,
+                    nx=True,
+                    ex=ROOT_GROUP_OWNER_TTL_SECONDS,
+                ):
+                    logger.info(
+                        "Tenant %r now owns event consumer group %r (Redis key %s)",
+                        self.config.tenant_id,
+                        ROOT_EVENT_GROUP,
+                        ROOT_GROUP_OWNER_KEY,
+                    )
+                    owner = self.config.tenant_id
+                else:
+                    owner = _text(await redis_client.get(ROOT_GROUP_OWNER_KEY))
         except Exception as e:
             logger.warning("Could not read the owner of group %r: %s", ROOT_EVENT_GROUP, e)
             return None
+        self._holds_root_group = owner == self.config.tenant_id
+        return owner
+
+    async def _refresh_root_group_claim(self, redis_client: Any) -> None:
+        """Keep this engine's claim on the root group alive, off the read loop.
+
+        Runs for the life of the hook loop and refreshes the claim every
+        ``ROOT_GROUP_OWNER_REFRESH_SECONDS`` while this engine holds the group,
+        so a read that blocks, or a dispatch that waits for a free slot, can
+        never let it lapse. It only extends a claim that is still this
+        engine's: a lost one is left for the next check to notice.
+        """
+        while not self._stop_event.is_set():
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(self._stop_event.wait(), ROOT_GROUP_OWNER_REFRESH_SECONDS)
+            if self._stop_event.is_set() or not self._holds_root_group:
+                continue
+            try:
+                raw = await redis_client.get(ROOT_GROUP_OWNER_KEY)
+                owner = raw.decode() if isinstance(raw, bytes) else raw
+                if owner == self.config.tenant_id:
+                    await redis_client.expire(ROOT_GROUP_OWNER_KEY, ROOT_GROUP_OWNER_TTL_SECONDS)
+                else:
+                    self._holds_root_group = False
+            except Exception as e:
+                logger.warning("Could not refresh the claim on group %r: %s", ROOT_EVENT_GROUP, e)
 
     async def _may_hold_root_group(self, redis_client: Any, rivals: set[str]) -> bool:
         """Whether this engine may read the root group ``engine``. Logs why not.
@@ -643,6 +700,9 @@ class EventHooks:
         reading = False
         replayed = False
         next_check = 0.0
+        refresher = asyncio.create_task(
+            self._refresh_root_group_claim(r), name="hook-root-group-claim"
+        )
         while not self._stop_event.is_set():
             if time.monotonic() >= next_check:
                 reading = await self._may_read_group(
@@ -685,6 +745,9 @@ class EventHooks:
                 logger.error("Event hook error: %s", e, exc_info=True)
                 await asyncio.sleep(5)
 
+        refresher.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await refresher
         await self._stop_in_flight()
         await r.aclose()
 
