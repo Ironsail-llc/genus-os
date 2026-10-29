@@ -359,6 +359,20 @@ class TestAssets:
         raw = json.dumps(client.get("/api/admin/plugins").json())
         assert str(workspace) not in raw
 
+    def test_an_asset_read_failure_does_not_take_the_listing_down(
+        self, client, one_plugin, monkeypatch
+    ):
+        def refuse(*_args, **_kwargs):
+            raise PermissionError("/srv/secret-path denied")
+
+        monkeypatch.setattr("robothor.plugins.overview.workspace_assets", refuse)
+        response = client.get("/api/admin/plugins")
+        assert response.status_code == 200
+        row = response.json()["plugins"][0]
+        assert row["assets"]["agents"] == [] and row["assets"]["workflows"] == []
+        assert "PermissionError" in row["assets"]["error"]
+        assert "/srv/secret-path" not in response.text
+
 
 class TestEnableDisable:
     def test_disable_flips_the_row_and_says_it_did_not_reload(self, client, one_plugin):

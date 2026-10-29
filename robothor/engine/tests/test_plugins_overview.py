@@ -331,3 +331,69 @@ class TestNoValuesInLogsOrWarnings:
         warnings = _call()["warnings"]
         assert any("PermissionError" in w for w in warnings)
         assert not any("/srv/secret-path" in w for w in warnings)
+
+    def test_a_top_level_failure_names_its_class_only(
+        self, workspace, monkeypatch, fake_loader, fake_registry, caplog
+    ) -> None:
+        import logging
+
+        def refuse(**_kwargs):
+            raise PermissionError("/srv/secret-path denied")
+
+        monkeypatch.setattr("robothor.plugins.overview.workspace_assets", refuse)
+        with caplog.at_level(logging.DEBUG):
+            result = _call()
+        assert "PermissionError" in result["error"]
+        assert "/srv/secret-path" not in result["error"]
+        assert "/srv/secret-path" not in caplog.text
+        assert all(r.exc_info is None for r in caplog.records)
+
+    def test_a_schema_lookup_failure_logs_no_text(self, monkeypatch, caplog) -> None:
+        import logging
+
+        from robothor.engine.tools.handlers.plugins import _description
+
+        def boom():
+            raise RuntimeError("/srv/secret-path registry")
+
+        monkeypatch.setattr("robothor.engine.tools.registry.get_registry", boom)
+        with caplog.at_level(logging.DEBUG):
+            assert _description("host_state") == ""
+        assert "/srv/secret-path" not in caplog.text
+        assert all(r.exc_info is None for r in caplog.records)
+
+
+class TestRound2:
+    def test_workflow_sources_reports_an_unreadable_ledger(self, workspace) -> None:
+        from robothor.plugins.overview import workflow_sources
+
+        ledger = workspace / ".robothor" / "plugin-assets.yaml"
+        ledger.parent.mkdir(parents=True)
+        ledger.write_text("plugins: [unclosed", encoding="utf-8")
+        warnings: list[str] = []
+        assert workflow_sources(workspace, warnings=warnings) == {}
+        assert warnings and "plugin-assets.yaml" in warnings[0]
+
+    def test_a_yml_file_is_not_listed_as_a_workflow(self, workspace) -> None:
+        """The engine loads only ``docs/workflows/*.yaml``; a .yml never fires."""
+        from robothor.plugins.overview import workflow_sources, workspace_assets
+
+        ledger = {
+            "plugins": {
+                "acme-desk": {"files": {"docs/workflows/legacy.yml": {"sha256": "0" * 64}}}
+            }
+        }
+        _write(workspace / ".robothor" / "plugin-assets.yaml", ledger)
+        written = workspace_assets(workspace)["acme-desk"]
+        assert written["workflows"] == []
+        assert written["files"] == ["docs/workflows/legacy.yml"]
+        assert workflow_sources(workspace) == {}
+
+    def test_a_patches_value_that_is_not_a_list_is_ignored(self, workspace) -> None:
+        from robothor.plugins.overview import workspace_assets
+
+        _write(
+            workspace / ".robothor" / "plugin-assets.yaml",
+            {"plugins": {"acme-desk": {"patches": 5}}},
+        )
+        assert workspace_assets(workspace)["acme-desk"]["patches"] == []
