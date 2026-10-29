@@ -1537,7 +1537,7 @@ Usage: `genus tenant set-domains <tenant_id> [domains]`
 
 Move an account and every row linked to it to another tenant.
 
-Usage: `genus tenant move-account [--email EMAIL] [--to TO] [--from FROM_TENANT] [--role ROLE] [--dry-run] [--json]`
+Usage: `genus tenant move-account [--email EMAIL] [--to TO] [--from FROM_TENANT] [--role ROLE] [--detach-person] [--dry-run] [--json]`
 
 | Flag | Takes | Default | Description |
 | --- | --- | --- | --- |
@@ -1545,6 +1545,7 @@ Usage: `genus tenant move-account [--email EMAIL] [--to TO] [--from FROM_TENANT]
 | `--to` | `TO` | — | Target tenant ID |
 | `--from` | `FROM_TENANT` | — | Source tenant ID, when the address has an account in more than one tenant |
 | `--role` | `admin` \| `member` \| `viewer` | — | Role in the target tenant (default: keep it; an owner moving into a child tenant needs --role admin) |
+| `--detach-person` | — | off | Leave the account's CRM contact and its history in the source tenant and give the account a new contact in the target (required when that contact has history) |
 | `--dry-run` | — | off | Show what would move; change nothing |
 | `--json` | — | off | Print the report as JSON |
 

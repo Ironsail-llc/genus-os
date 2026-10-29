@@ -278,7 +278,8 @@ def test_detach_person_leaves_the_contact_and_gives_the_account_a_new_one(world)
     cur.execute("SELECT tenant_id FROM crm_people WHERE id = %s", (world["person_id"],))
     assert cur.fetchone()[0] == world["parent"]
     cur.execute("SELECT tenant_id, person_id FROM crm_notes WHERE id = %s", (note_id,))
-    assert cur.fetchone() == (world["parent"], uuid.UUID(world["person_id"]))
+    tenant, person = cur.fetchone()
+    assert (tenant, str(person)) == (world["parent"], world["person_id"])
 
     # The account, its Telegram routing row and its face enrolment point at a
     # fresh contact in the target tenant.

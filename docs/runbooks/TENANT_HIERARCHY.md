@@ -127,7 +127,7 @@ genus tenant move-account --email alice@example.com --to acme-child-a
 
 The dry run prints how many rows each table would move and changes nothing.
 The live move does everything in **one transaction**: it moves the account,
-its CRM person row, its per-user permission overrides, its channel identities,
+its CRM contact (see below), its per-user permission overrides, its channel identities,
 its face enrolments, its Telegram routing row and any pending SSO binding
 grant; revokes every refresh session the account holds, so its next token is
 minted for the new tenant; and writes one `auth.account_moved` row to the
@@ -136,8 +136,18 @@ audit log. If any step fails, none of it happened.
 | Flag | Use |
 |------|-----|
 | `--from acme-parent` | The address has an account in more than one tenant. The command refuses and lists them until you pick one. |
-| `--role admin` | Change the role on the way. `admin`, `member` or `viewer`; a move never makes an owner. |
+| `--role admin` | Change the role on the way. `admin`, `member` or `viewer`; a move never makes an owner. `--role viewer` also caps the account's channel identities (Slack, Telegram pairings) at `viewer`; no role change ever raises them. |
+| `--detach-person` | Leave the account's CRM contact, and everything that references it, in the source tenant, and give the account a fresh contact in the target (same name and address). Required when that contact has CRM history; see below. |
 | `--json` | Print the report as JSON. |
+
+**The CRM contact.** An account may be linked to a CRM contact (`person_id`).
+If nothing else in the source tenant references that contact, it moves with
+the account. If notes, tasks, conversations, contact identifiers or any other
+tenant table do, the move is refused and the error lists each table and its
+count. That history belongs to the source tenant, and moving the contact would
+leave it pointing at someone the source can no longer see. Re-run with
+`--detach-person` to keep the history where it is. An account with no linked
+contact is unaffected either way.
 
 A move is refused, with nothing written, when:
 
@@ -148,7 +158,9 @@ A move is refused, with nothing written, when:
   cannot be moved at all until the role is handed over);
 - the account is an `owner` and the target is a child (children have no
   owner; pass `--role admin`);
-- the target already has an account with that address.
+- the target already has an account with that address;
+- the account's CRM contact has history in the source tenant and
+  `--detach-person` was not given.
 
 After a move the person signs in again. An access token issued before the move
 stays valid for its few minutes of lifetime and still names the old tenant;

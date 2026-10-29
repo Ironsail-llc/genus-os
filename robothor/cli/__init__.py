@@ -1272,6 +1272,12 @@ def _build_parser() -> argparse.ArgumentParser:
         "child tenant needs --role admin)",
     )
     tenant_move.add_argument(
+        "--detach-person",
+        action="store_true",
+        help="Leave the account's CRM contact and its history in the source tenant and "
+        "give the account a new contact in the target (required when that contact has history)",
+    )
+    tenant_move.add_argument(
         "--dry-run", action="store_true", help="Show what would move; change nothing"
     )
     tenant_move.add_argument("--json", action="store_true", help="Print the report as JSON")

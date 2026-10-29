@@ -818,9 +818,56 @@ class MoveReport:
     counts: dict[str, int] = dataclass_field(default_factory=dict)
     sessions_revoked: int = 0
     audit_id: int | None = None
+    #: Set by ``detach_person``: the fresh CRM contact made in the target.
+    new_person_id: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+#: Tables that reference ``crm_people`` through rows the move itself carries
+#: (the account, its Telegram routing row, its face enrolment). Every OTHER
+#: tenant-scoped table that references the person is its CRM history.
+_PERSON_REFS_MOVED_WITH_ACCOUNT = frozenset({"user_accounts", "tenant_users", "face_identities"})
+
+
+def _person_history(cur: Any, person_id: str, source: str) -> dict[str, int]:
+    """Rows in the source tenant that reference the account's CRM contact.
+
+    Found from the catalog, not a hand-kept list: every single-column foreign
+    key onto ``crm_people`` in a table with a ``tenant_id``. A table added
+    later is covered without anyone remembering this function.
+    """
+    from psycopg2 import sql
+
+    cur.execute(
+        """SELECT cl.relname AS tbl, a.attname AS col
+           FROM pg_constraint c
+           JOIN pg_class cl ON cl.oid = c.conrelid
+           JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = c.conkey[1]
+           WHERE c.contype = 'f'
+             AND c.confrelid = 'crm_people'::regclass
+             AND cardinality(c.conkey) = 1
+             AND EXISTS (SELECT 1 FROM pg_attribute t
+                         WHERE t.attrelid = c.conrelid AND t.attname = 'tenant_id'
+                           AND NOT t.attisdropped)
+           ORDER BY cl.relname, a.attname"""
+    )
+    refs = [(r["tbl"], r["col"]) for r in cur.fetchall()]
+    history: dict[str, int] = {}
+    for table, column in refs:
+        if table in _PERSON_REFS_MOVED_WITH_ACCOUNT:
+            continue
+        cur.execute(
+            sql.SQL("SELECT COUNT(*) AS n FROM {} WHERE {} = %s AND tenant_id = %s").format(
+                sql.Identifier(table), sql.Identifier(column)
+            ),
+            (person_id, source),
+        )
+        n = int(cur.fetchone()["n"])
+        if n:
+            history[table] = history.get(table, 0) + n
+    return history
 
 
 def accounts_for_email(email: str) -> list[dict[str, Any]]:
@@ -844,18 +891,21 @@ def accounts_for_email(email: str) -> list[dict[str, Any]]:
         return rows
 
 
-def _linked_rows(account: dict[str, Any], source: str) -> list[tuple[str, str, tuple[Any, ...]]]:
+def _linked_rows(
+    account: dict[str, Any], source: str, *, detach_person: bool = False
+) -> list[tuple[str, str, tuple[Any, ...]]]:
     """``(table, WHERE clause, params)`` for every row group that moves with the account.
 
     Each predicate names the SOURCE tenant as well as the link, so a row the
-    account is linked to in some other tenant is never dragged along.
+    account is linked to in some other tenant is never dragged along. With
+    ``detach_person`` the CRM contact stays behind.
     """
     uid = str(account["id"])
     person_id = account.get("person_id")
     groups: list[tuple[str, str, tuple[Any, ...]]] = [
         ("user_accounts", "id = %s", (uid,)),
     ]
-    if person_id:
+    if person_id and not detach_person:
         groups.append(("crm_people", "id = %s AND tenant_id = %s", (str(person_id), source)))
     groups += [
         ("user_permissions", "tenant_id = %s AND user_id = %s", (source, uid)),
@@ -920,6 +970,33 @@ def _refuse_move(
         )
 
 
+def _detach_person(cur: Any, old_person: str, to_tenant: str, user_id: str) -> str:
+    """Give an already-moved account a fresh CRM contact in its new tenant.
+
+    Copies the name and address from the old contact, which stays put. The
+    account's Telegram routing row and face enrolment, already moved, are
+    relinked to the new contact.
+    """
+    cur.execute(
+        """INSERT INTO crm_people (tenant_id, first_name, last_name, email)
+           SELECT %s, first_name, last_name, email FROM crm_people WHERE id = %s
+           RETURNING id""",
+        (to_tenant, old_person),
+    )
+    new_person = str(cur.fetchone()["id"])
+    cur.execute("UPDATE user_accounts SET person_id = %s WHERE id = %s", (new_person, user_id))
+    cur.execute(
+        "UPDATE tenant_users SET person_id = %s WHERE tenant_id = %s AND person_id = %s",
+        (new_person, to_tenant, old_person),
+    )
+    cur.execute(
+        "UPDATE face_identities SET person_id = %s "
+        "WHERE tenant_id = %s AND user_account_id = %s AND person_id = %s",
+        (new_person, to_tenant, user_id, old_person),
+    )
+    return new_person
+
+
 def move_account(
     user_id: str,
     to_tenant: str,
@@ -927,6 +1004,7 @@ def move_account(
     actor: str,
     role: str | None = None,
     dry_run: bool = False,
+    detach_person: bool = False,
 ) -> MoveReport:
     """Move one account, and every row linked to it, to another tenant.
 
@@ -939,7 +1017,19 @@ def move_account(
     failure rolls all of it back.
 
     ``role`` reassigns the role on the way (one of :data:`MOVE_ROLES`);
-    ``None`` keeps it. ``dry_run`` reports the per-table counts and rolls back.
+    ``None`` keeps it. A demotion to ``viewer`` also caps the account's
+    channel identities at ``viewer``; nothing ever raises them, because in a
+    non-default tenant a ``member`` pairing grants every tool (migration 118).
+    ``dry_run`` reports the per-table counts and rolls back.
+
+    The account's CRM contact (``person_id``) moves with it only when nothing
+    else in the source tenant references that contact. If notes, tasks,
+    conversations or anything else do, the move is refused with the counts —
+    moving the contact would leave that history pointing at a person the
+    source tenant can no longer see. ``detach_person`` resolves it: the
+    contact and its history stay in the source tenant, and the account (with
+    its Telegram routing row and face enrolment) is relinked to a fresh
+    contact created in the target from the old one's name and address.
 
     Raises ``AccountMoveError`` for a refusal; database errors propagate after
     the rollback.
@@ -954,6 +1044,17 @@ def move_account(
                 raise AccountMoveError(f"no account with id {user_id!r}")
             _refuse_move(cur, account, user_id, to_tenant, role)
             source = account["tenant_id"]
+            old_person = str(account["person_id"]) if account.get("person_id") else None
+            detach = bool(old_person) and detach_person
+            if old_person and not detach:
+                history = _person_history(cur, old_person, source)
+                if history:
+                    listed = ", ".join(f"{t}={n}" for t, n in sorted(history.items()))
+                    raise AccountMoveError(
+                        f"the account's CRM contact has history in tenant {source!r} "
+                        f"({listed}); pass --detach-person to leave the contact and its "
+                        "history there and give the account a new contact in the target"
+                    )
             report = MoveReport(
                 user_id=str(account["id"]),
                 email=str(account["email"]),
@@ -964,7 +1065,7 @@ def move_account(
                 dry_run=dry_run,
                 counts=dict.fromkeys(MOVED_TABLES, 0),
             )
-            groups = _linked_rows(account, source)
+            groups = _linked_rows(account, source, detach_person=detach)
 
             if dry_run:
                 for table, where, params in groups:
@@ -973,9 +1074,12 @@ def move_account(
                         params,
                     )
                     report.counts[table] = int(cur.fetchone()["n"])
+                if detach:
+                    report.counts["crm_people"] = 1  # the fresh contact it would create
                 conn.rollback()
                 return report
 
+            cap_channel_role = role == "viewer"
             for table, where, params in groups:
                 if table == "user_accounts":
                     cur.execute(
@@ -983,12 +1087,25 @@ def move_account(
                         "updated_at = NOW() WHERE id = %s",
                         (to_tenant, report.role_after, report.user_id),
                     )
+                elif table == "user_channel_identities":
+                    cur.execute(
+                        "UPDATE user_channel_identities SET tenant_id = %s, "
+                        "role = CASE WHEN %s THEN 'viewer' ELSE role END "
+                        f"WHERE {where}",  # noqa: S608
+                        (to_tenant, cap_channel_role, *params),
+                    )
                 else:
                     cur.execute(
                         f"UPDATE {table} SET tenant_id = %s WHERE {where}",  # noqa: S608
                         (to_tenant, *params),
                     )
                 report.counts[table] = int(cur.rowcount or 0)
+
+            if detach:
+                report.new_person_id = _detach_person(
+                    cur, old_person or "", to_tenant, report.user_id
+                )
+                report.counts["crm_people"] = 1
 
             report.sessions_revoked = _revoke_sessions(cur, report.user_id)
 

@@ -194,6 +194,7 @@ def _cmd_move_account(args: argparse.Namespace) -> int:
             actor=f"cli:{getpass.getuser()}",
             role=args.role,
             dry_run=args.dry_run,
+            detach_person=getattr(args, "detach_person", False),
         )
     except accounts.AccountMoveError as exc:
         print(f"Error: {exc}", file=sys.stderr)
@@ -208,6 +209,8 @@ def _cmd_move_account(args: argparse.Namespace) -> int:
         print(f"  Role: {report.role_before} -> {report.role_after}")
     for table, n in report.counts.items():
         print(f"  {table:<25} {n}")
+    if report.new_person_id:
+        print(f"  New CRM contact: {report.new_person_id} (the old one stays in the source)")
     if not report.dry_run:
         print(f"  Sessions revoked: {report.sessions_revoked}")
     return 0
