@@ -192,6 +192,21 @@ class TestMalformedRecords:
             result = _call()
             assert "warnings" not in result, body
 
+    def test_an_empty_installed_yaml_is_not_a_warning(
+        self, workspace, fake_loader, fake_registry
+    ) -> None:
+        path = workspace / ".robothor" / "installed.yaml"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("", encoding="utf-8")
+        assert "warnings" not in _call()
+
+    def test_a_corrupted_installed_yaml_warns(self, workspace, fake_loader, fake_registry) -> None:
+        path = workspace / ".robothor" / "installed.yaml"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("agents: [unclosed", encoding="utf-8")
+        result = _call()
+        assert any("not readable" in w for w in result.get("warnings", []))
+
     def test_installed_yaml_agents_that_is_not_a_mapping_warns(
         self, workspace, fake_loader, fake_registry
     ) -> None:
