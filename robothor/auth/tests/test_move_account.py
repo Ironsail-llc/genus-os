@@ -184,12 +184,13 @@ def test_report_serializes_for_json() -> None:
     assert data["counts"]["user_accounts"] == 1
 
 
-# ─── the bridge's session-standing cache ─────────────────────────────────
+# ─── the calling process's session-standing cache ────────────────────────
 
 
 def _standing_module(monkeypatch) -> MagicMock:
     """A stand-in ``robothor.auth.session_standing`` (added by the session
-    standing work); the move must use it when it is there."""
+    standing work). When it is there, the move drops the entry in the
+    process that ran the move; other processes' caches expire on their own."""
     import sys
     import types
 
@@ -199,7 +200,7 @@ def _standing_module(monkeypatch) -> MagicMock:
     return module.forget  # type: ignore[attr-defined,no-any-return]
 
 
-def test_a_live_move_forgets_the_accounts_cached_standing(monkeypatch) -> None:
+def test_a_live_move_forgets_the_accounts_standing_in_this_process(monkeypatch) -> None:
     forget = _standing_module(monkeypatch)
     conn, _ = _conn()
     _move(conn)

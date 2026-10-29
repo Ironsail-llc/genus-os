@@ -213,8 +213,9 @@ After a move the person signs in again, by SSO or with their password: the
 password sign-in looks the address up in every tenant and signs the person in
 to the one tenant it is active in. An address that is active in more than one
 tenant is refused (and logged) until the duplicate is removed. An access token
-issued before the move stays valid for its few minutes of lifetime and still
-names the old tenant; the refresh that would extend it is gone.
+issued before the move still names the old tenant, and the refresh that would
+extend it is gone. The old token is refused by the bridge and every engine
+within 30 seconds (immediately if the move runs inside the bridge).
 
 ## Verification queries
 

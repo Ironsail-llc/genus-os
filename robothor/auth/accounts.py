@@ -1238,17 +1238,25 @@ def move_account(
         report.to_tenant,
         report.counts,
     )
+    # In-process cache only; other processes' caches expire within 30 s.
     _forget_session_standing(report.user_id)
     return report
 
 
 def _forget_session_standing(user_id: str) -> None:
-    """Drop the account's cached session standing, so a token minted before
-    the move stops working now rather than when the cache entry expires.
+    """Best-effort: drop the account's cached session standing in THIS process.
+
+    The cache is per process. Today the only caller is ``genus tenant
+    move-account``, so this clears the CLI's own copy and nothing else. The
+    bridge's and every engine's caches are not reached from here. What ends a
+    pre-move token there is the database-backed standing check, within the
+    cache's 30-second lifetime. The call pays off for an in-process caller,
+    such as a future bridge-side move endpoint, where it makes the refusal
+    immediate.
 
     The cache module ships with the session-standing work and may not be
-    present; without it there is no cache to drop. Never fails the move,
-    which has already committed.
+    present; without it there is nothing to drop. Never fails the move, which
+    has already committed.
     """
     import importlib
 
