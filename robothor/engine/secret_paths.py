@@ -279,8 +279,7 @@ def _is_moved_key_file(path: str | os.PathLike[str]) -> bool:
         return False
     candidate = _resolved(str(path))
     broad = _broad_directories()
-    for value in configured:
-        target = _resolved(value)
+    for target in (t for value in configured for t in _key_file_targets(value)):
         if candidate == target:
             return True
         directory = str(Path(target).parent)
@@ -291,6 +290,24 @@ def _is_moved_key_file(path: str | os.PathLike[str]) -> bool:
         if not too_broad and candidate != directory and Path(candidate).is_relative_to(directory):
             return True
     return False
+
+
+def _key_file_targets(value: str) -> list[str]:
+    """Absolute, resolved spellings of one override value.
+
+    A relative value is resolved against both places it could mean: the
+    process's working directory (where ``open`` would find it) and the
+    workspace. Never a relative string: ``"."`` as a needle refused every
+    command.
+    """
+    from robothor.settings.env import process_env_get
+
+    expanded = Path(value).expanduser()
+    if expanded.is_absolute():
+        return [_resolved(str(expanded))]
+    workspace = (process_env_get("ROBOTHOR_WORKSPACE", "") or "").strip()
+    bases = [Path.cwd(), Path(workspace).expanduser() if workspace else Path.home() / "robothor"]
+    return sorted({_resolved(str(base / expanded)) for base in bases})
 
 
 def _moved_key_files() -> list[str]:
@@ -309,7 +326,7 @@ def _moved_key_basenames() -> set[str]:
     names: set[str] = set()
     for value in _moved_key_files():
         names.add(Path(value).name)
-        names.add(Path(_resolved(value)).name)
+        names.update(Path(target).name for target in _key_file_targets(value))
     names.discard("")
     return names
 
@@ -618,6 +635,64 @@ def _relative_names_moved_key(
     return any(is_secret_path(str(Path(directory) / candidate)) for directory in shell_dirs)
 
 
+#: The readers among :data:`_PRINTERS` that are not printers: they copy,
+#: archive or encode a file's bytes. Only what they READ is checked — their
+#: destination is a write, and writing a file named like a secret is the send
+#: gate's business (``attachment_gate``), not this module's.
+_COPIERS = frozenset({"cp", "mv", "install", "ln", "rsync", "scp"})
+_ALL_BUT_LAST = frozenset({"split", "uuencode"})
+_READERS = _COPIERS | _ALL_BUT_LAST | {"dd", "tar", "zip", "gzip", "openssl"}
+
+
+def _read_argument_indices(word: str, args: list[str]) -> set[int] | None:
+    """Indices in ``args`` that a reader READS, or None to check them all.
+
+    Positionals only (flags are skipped by the caller). Conservative where a
+    flag's value cannot be told from a path: an option value counted as a
+    source is checked, never skipped, so the error is a false refusal rather
+    than a missed read.
+    """
+    if word not in _READERS:
+        return None
+    positional = [i for i, a in enumerate(args) if not a.startswith("-")]
+    if word in _COPIERS:
+        for i, arg in enumerate(args):
+            if arg in ("-t", "--target-directory") and i + 1 < len(args):
+                return set(positional) - {i + 1}
+            if arg.startswith("--target-directory="):
+                return set(positional)
+        return set(positional[:-1])
+    if word in _ALL_BUT_LAST:
+        return set(positional[:-1]) if len(positional) > 1 else set(positional)
+    if word == "openssl":
+        return {i + 1 for i, a in enumerate(args) if a == "-in" and i + 1 < len(args)}
+    if word == "zip":
+        return set(positional[1:])
+    if word == "tar":
+        return _tar_reads(args, positional)
+    if word == "dd":
+        return set()  # its read is `if=`, collected with the redirects
+    return set(positional)
+
+
+def _tar_reads(args: list[str], positional: list[int]) -> set[int]:
+    """``tar``: the archive named by ``f`` is written on create, read otherwise."""
+    reads = set(positional)
+    for i, arg in enumerate(args):
+        cluster = arg.lstrip("-")
+        if arg.startswith("--") or "f" not in cluster:
+            continue
+        creating = "c" in cluster
+        archive = i + 1
+        if i == 0 and not arg.startswith("-") and positional and positional[0] == 0:
+            # `tar czf out.tgz files`: the cluster is itself the first positional.
+            reads.discard(0)
+        if creating:
+            reads.discard(archive)
+        break
+    return reads
+
+
 #: The key-file settings by name, wherever they appear. The exec environment
 #: never carries them (``robothor.engine.exec_env``), and a command that names
 #: one — ``od $GENUS_VAULT_KEY_FILE``, ``cat "${ROBOTHOR_VAULT_KEY_FILE}"`` —
@@ -651,11 +726,17 @@ def _mentions_moved_key(command: str, tokens: list[str], shell_dirs: list[str]) 
     broad = _broad_directories()
     needles: set[str] = set()
     for value in configured:
-        for spelled in (str(Path(value).expanduser()), _resolved(value)):
+        expanded = Path(value).expanduser()
+        spellings = set(_key_file_targets(value))
+        if expanded.is_absolute():
+            spellings.add(str(expanded))  # as written, before symlinks resolve
+        for spelled in spellings:
             needles.add(spelled)
             directory = str(Path(spelled).parent)
             if not any(Path(wide).is_relative_to(directory) for wide in broad):
                 needles.add(directory)
+    # Only absolute, specific needles: never `.`, `/`, home or the workspace.
+    needles = {n for n in needles if Path(n).is_absolute() and n not in broad}
     if any(needle and needle in command for needle in needles):
         return True
     for token in tokens:
@@ -675,7 +756,7 @@ def _read_operands(command: str) -> list[str]:
     """Paths a command READS that are not a printer's argument.
 
     Input redirect operands (``xxd < <file>``, ``base64 <<< ...``), ``dd``'s
-    ``if=``/``of=``, ``$(<file)``, and the string literals of an interpreter
+    ``if=``, ``$(<file)``, and the string literals of an interpreter
     one-liner (``python -c "open('.env').read()"``).
     """
     found: list[str] = [m.group(1) for m in _READ_SUBSTITUTION.finditer(command)]
@@ -684,7 +765,9 @@ def _read_operands(command: str) -> list[str]:
         for index, token in enumerate(tokens):
             if token in _INPUT_REDIRECTS and index + 1 < len(tokens):
                 found.append(tokens[index + 1])
-            elif token.startswith(("if=", "of=")):
+            elif token.startswith("if="):
+                # `of=` is a WRITE: creating a secrets-named file is the send
+                # gate's business, as for a copy's destination.
                 found.append(token[3:])
     for tokens in _segments(command):
         word, args = _command_word(tokens)
@@ -751,16 +834,24 @@ def exec_reads_secret(command: str) -> str | None:
             return f"refused: `{word}` prints the process environment, which holds credentials"
         if word in _PRINTERS:
             pattern_at = _search_pattern_index(word, args)
+            reads = _read_argument_indices(word, args)
             for index, arg in enumerate(args):
-                if arg.startswith("-"):
+                if arg.startswith("-") or (reads is not None and index not in reads):
                     continue
                 candidate = arg.strip("'\"")
                 moved = index != pattern_at and _relative_names_moved_key(
                     candidate, shell_dirs, moved_names, file_only=word in _FILE_ONLY_PRINTERS
                 )
                 if is_secret_path(candidate) or moved:
+                    name = PurePath(candidate).name
+                    if word in _READERS:
+                        return (
+                            f"refused: `{word}` would read {name}, a secrets file. "
+                            "Credentials are supplied to tools by the platform; never copy, "
+                            "archive or encode one."
+                        )
                     return (
-                        f"refused: `{word}` would print {PurePath(candidate).name}, a secrets "
+                        f"refused: `{word}` would print {name}, a secrets "
                         "file. Credentials are supplied to tools by the platform; source the "
                         "file to use a value, or ask the operator, but never print it."
                     )
