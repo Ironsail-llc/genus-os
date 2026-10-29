@@ -1486,9 +1486,9 @@ Usage: `genus import [platform] [--source SOURCE] [--tenant TENANT]`
 
 ## `genus tenant`
 
-Create, list, and inspect tenants.
+Create, list, and inspect tenants; claim SSO domains; move accounts.
 
-Usage: `genus tenant {create,list,status}`
+Usage: `genus tenant {create,list,status,set-domains,move-account}`
 
 ### `genus tenant create`
 
@@ -1521,6 +1521,32 @@ Usage: `genus tenant status <tenant_id>`
 | Argument | Required | Description |
 | --- | --- | --- |
 | `tenant_id` | yes | Tenant ID |
+
+### `genus tenant set-domains`
+
+Set the email domains whose new SSO users are provisioned into this tenant.
+
+Usage: `genus tenant set-domains <tenant_id> [domains]`
+
+| Argument | Required | Description |
+| --- | --- | --- |
+| `tenant_id` | yes | Tenant ID |
+| `domains` | no | Email domains (e.g. example.com); none clears the tenant's claim |
+
+### `genus tenant move-account`
+
+Move an account and every row linked to it to another tenant.
+
+Usage: `genus tenant move-account [--email EMAIL] [--to TO] [--from FROM_TENANT] [--role ROLE] [--dry-run] [--json]`
+
+| Flag | Takes | Default | Description |
+| --- | --- | --- | --- |
+| `--email` | `EMAIL` | — | The account's email address |
+| `--to` | `TO` | — | Target tenant ID |
+| `--from` | `FROM_TENANT` | — | Source tenant ID, when the address has an account in more than one tenant |
+| `--role` | `admin` \| `member` \| `viewer` | — | Role in the target tenant (default: keep it; an owner moving into a child tenant needs --role admin) |
+| `--dry-run` | — | off | Show what would move; change nothing |
+| `--json` | — | off | Print the report as JSON |
 
 ## `genus run`
 
