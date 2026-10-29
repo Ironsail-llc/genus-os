@@ -577,3 +577,82 @@ async def test_me_reads_the_account_in_the_home_tenant_while_acting(test_client)
     assert r.json()["mfa_enabled"] is True
     assert r.json()["tenant_id"] == "acme-child-a"
     assert seen == ["acme-parent"]
+
+
+# ── observe is readable: an audit row and a WARNING ───────────────────
+
+
+def _observe_rows(audit) -> list:
+    return [c for c in audit.call_args_list if c.args[1] == "tenant.switch"]
+
+
+@pytest.mark.parametrize(
+    ("user", "home", "target", "outcome"),
+    [
+        ("u-alice", "acme-parent", "acme-child-a", "would-allow"),
+        ("u-bob", "acme-child-a", "acme-parent", "would-deny"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_observe_writes_an_audit_row_and_a_warning(
+    test_client, mode, hierarchy, caplog, user, home, target, outcome
+):
+    """The audit table is the durable record the rollout reads; an INFO line
+    the bridge never configured a handler for was nothing at all."""
+    mode("observe")
+    token = _token(user, home, "admin")
+    with caplog.at_level(logging.WARNING):
+        r, audit = await _switch(test_client, token, target, _account(user, home, "admin"))
+    assert r.status_code == 403
+
+    rows = _observe_rows(audit)
+    assert len(rows) == 1, audit.call_args_list
+    assert rows[0].kwargs["status"] == outcome
+    assert rows[0].kwargs["home_tenant_id"] == home
+    assert rows[0].kwargs["target_tenant_id"] == target
+
+    warnings = [
+        rec
+        for rec in caplog.records
+        if rec.levelno == logging.WARNING and f"tenant.switch {outcome}" in rec.getMessage()
+    ]
+    assert warnings, [rec.getMessage() for rec in caplog.records]
+
+
+@pytest.mark.asyncio
+async def test_observe_audits_would_refuse_while_rls_is_inert(
+    test_client, mode, hierarchy, monkeypatch
+):
+    from robothor.federation import rls_gate
+
+    mode("observe")
+    monkeypatch.setattr(rls_gate, "_rls_flag_on", lambda: False)
+    token = _token("u-alice", "acme-parent", "admin")
+    r, audit = await _switch(
+        test_client, token, "acme-child-a", _account("u-alice", "acme-parent", "admin")
+    )
+    assert r.status_code == 403
+    rows = _observe_rows(audit)
+    assert [c.kwargs["status"] for c in rows] == ["would-refuse"]
+
+
+@pytest.mark.asyncio
+async def test_the_bridge_configures_logging_at_startup(monkeypatch):
+    """Without a handler on the root logger, INFO from every bridge module
+    is dropped by the stdlib's last-resort handler."""
+    import bridge_service
+
+    from robothor.autonomy import handoff_worker
+
+    calls: list[int] = []
+    monkeypatch.setattr(bridge_service, "ensure_logging_configured", lambda: calls.append(1))
+
+    async def idle():
+        return None
+
+    monkeypatch.setattr(handoff_worker, "recover_checks", idle)
+    monkeypatch.setattr(handoff_worker, "purge_expired_observations", idle)
+    monkeypatch.setattr(bridge_service, "_routine_trigger_loop", idle)
+    async with bridge_service.lifespan(bridge_service.app):
+        pass
+    assert calls == [1]
