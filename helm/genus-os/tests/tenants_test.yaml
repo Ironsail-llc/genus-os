@@ -182,6 +182,41 @@ tests:
           path: kind
           value: PersistentVolumeClaim
 
+  # Removing an entry from tenants: must not delete that tenant's memory.
+  - it: a tenant workspace claim survives the tenant's removal
+    template: engine/tenants.yaml
+    set:
+      workspace.persistence.enabled: true
+      tenants:
+        - id: acme-child-a
+    documentSelector:
+      path: kind
+      value: PersistentVolumeClaim
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/resource-policy"]
+          value: keep
+
+  - it: a tenant workspace claim keeps the policy alongside its own annotations
+    template: engine/tenants.yaml
+    set:
+      tenants:
+        - id: acme-child-a
+          workspace:
+            persistence:
+              enabled: true
+              annotations: {example.com/backup: daily}
+    documentSelector:
+      path: kind
+      value: PersistentVolumeClaim
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/resource-policy"]
+          value: keep
+      - equal:
+          path: metadata.annotations["example.com/backup"]
+          value: daily
+
   - it: a tenant workspace can be sized on its own
     template: engine/tenants.yaml
     set:
