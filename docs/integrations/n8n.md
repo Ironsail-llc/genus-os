@@ -166,4 +166,7 @@ instance root, so a base URL that ends in `/api/v1` still opens the right page.
 A workflow's recent executions, each with a link to the execution in n8n, are at
 `GET /api/integrations/n8n/workflows/{workflow_id}/executions?limit=20`
 (at most 100). If the bridge cannot read them, the list is empty and an `error`
-field names the problem, so an outage never reads as no failures.
+field names the problem by kind, such as `database_error: OperationalError`, so
+an outage never reads as no failures. The same goes for the listing's
+`last_error` when the bridge cannot read its tables or settings. The full error
+text goes to the bridge's log, never to the browser.
