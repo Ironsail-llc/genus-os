@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING, Any
 
 import yaml
 
+from robothor.engine.config import ROOT_EVENT_GROUP
 from robothor.engine.dedup import release, try_acquire
 from robothor.engine.delivery import deliver
 from robothor.engine.models import RunStatus, TriggerType
@@ -271,8 +272,6 @@ class EventHooks:
         tagging and belong to the root tenant: only the root-group engine
         takes them, so the upgrade changes nothing for a single engine.
         """
-        from robothor.engine.config import ROOT_EVENT_GROUP
-
         tenant = decoded.get("tenant_id", "")
         if tenant:
             return bool(tenant == self.config.tenant_id)
@@ -407,8 +406,6 @@ class EventHooks:
             logger.warning("Redis not available, event hooks disabled: %s", e)
             await self._idle()
             return
-
-        from robothor.engine.config import ROOT_EVENT_GROUP
 
         consumer_group = self.config.event_group or ROOT_EVENT_GROUP
         consumer_name = f"engine-{self.config.tenant_id}"
