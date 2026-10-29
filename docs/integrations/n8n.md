@@ -157,11 +157,13 @@ monitor's status:
 |--------|---------|
 | OK (green) | The last poll succeeded and no workflow failed in the last 24 hours. |
 | Warn (amber) | A workflow failed in the last 24 hours, or the last poll recorded an error. |
-| Unknown (grey) | The poller has never succeeded, its last success is older than three poll intervals (`ROBOTHOR_N8N_POLL_SECONDS`), or the bridge could not read the tables. |
+| Unknown (grey) | The poller has never succeeded, its last success is older than three poll intervals (`ROBOTHOR_N8N_POLL_SECONDS`, at least 30 seconds), or the bridge could not read the tables. |
 
-When `ROBOTHOR_N8N_ENABLED` is off the section is a single line saying n8n
-monitoring is not configured, and it stops refreshing until the view is opened
-again. A workflow's recent executions, each with a link
-to the execution in n8n, are at
+When `ROBOTHOR_N8N_ENABLED` is off, or it is on but `ROBOTHOR_N8N_BASE_URL` is
+empty, the section is a single line saying n8n monitoring is not configured,
+and it stops refreshing until the view is opened again. Links point at the
+instance root, so a base URL that ends in `/api/v1` still opens the right page.
+A workflow's recent executions, each with a link to the execution in n8n, are at
 `GET /api/integrations/n8n/workflows/{workflow_id}/executions?limit=20`
-(at most 100).
+(at most 100). If the bridge cannot read them, the list is empty and an `error`
+field names the problem, so an outage never reads as no failures.

@@ -4,22 +4,27 @@ The poller (``robothor/integrations/n8n``) writes ``n8n_workflows``,
 ``n8n_executions`` and ``n8n_sync_state``; this router only reads them. It never
 calls n8n itself, so a slow or down n8n cannot slow the dashboard.
 
-Honesty rules, the same as ``system_health``: a monitor that is switched off
-says ``not_configured``; one that has never polled, or has not succeeded for
-three poll intervals, says ``unknown`` rather than a stale green; and a
-database error degrades to ``unknown`` with the error named — the route never
-500s.
+Honesty rules, the same as ``system_health``: a monitor that is switched off,
+or switched on without a base URL, says ``not_configured``; one that has never
+polled, or has not succeeded for three poll intervals, says ``unknown`` rather
+than a stale green; and a database error degrades to ``unknown`` with the error
+named (on the executions route, an ``error`` beside the empty list) — the route
+never 500s.
 
 Each workflow in the listing carries ``workflow_id``, ``name``, ``active``,
 ``tags``, ``failures_24h``, ``failures_7d``, ``last_failure_at``,
 ``last_error``, ``last_failure_url`` (the newest failed execution in n8n) and
 ``url`` (the workflow in n8n). Both links are absolute, or ``""`` when no base
 URL is configured: never a path relative to the dashboard.
+
+What counts as configured, where links point and when a snapshot is stale are
+the poller's rules, read from ``robothor.integrations.n8n.contract`` so the
+badge never disagrees with what the poller does.
 """
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, TypeVar
 
 import psycopg2.extras
@@ -27,6 +32,8 @@ from deps import get_tenant_id
 from fastapi import APIRouter, Depends, Request
 
 from robothor.db.connection import get_connection
+from robothor.integrations.n8n import contract
+from robothor.integrations.n8n.client import instance_root
 from routers._operator import require_operator
 
 if TYPE_CHECKING:
@@ -35,24 +42,26 @@ if TYPE_CHECKING:
 router = APIRouter(prefix="/api/integrations/n8n", tags=["integrations"])
 
 _MAX_LIMIT = 100
-_DEFAULT_POLL_SECONDS = 300
 
 T = TypeVar("T")
 
 
 def _n8n_settings() -> tuple[bool, str, int]:
-    """(enabled, base_url, poll_seconds) from the settings the poller declares.
+    """(configured, instance_root, poll_seconds) by the poller's own rules.
 
-    Guarded with ``getattr`` so the bridge imports and answers
-    ``not_configured`` on an install whose settings do not declare them yet.
+    Configured means switched on AND a base URL (``contract.is_configured``):
+    the poller refuses to run without one. The root has no ``/api/v1``, and the
+    interval is the one the poller actually sleeps for.
     """
     from robothor.settings import get_settings
 
-    integrations = getattr(get_settings(), "integrations", None)
-    enabled = bool(getattr(integrations, "n8n_enabled", False))
-    base_url = str(getattr(integrations, "n8n_base_url", "") or "").rstrip("/")
-    poll = getattr(integrations, "n8n_poll_seconds", None) or _DEFAULT_POLL_SECONDS
-    return enabled, base_url, int(poll)
+    settings = get_settings()
+    integrations = settings.integrations
+    return (
+        contract.is_configured(settings),
+        instance_root(str(integrations.n8n_base_url or "")),
+        contract.effective_poll_seconds(integrations.n8n_poll_seconds),
+    )
 
 
 def _as_datetime(value: Any) -> datetime | None:
@@ -70,22 +79,13 @@ def _as_datetime(value: Any) -> datetime | None:
 def status_for(
     sync_state: dict[str, Any] | None, poll_seconds: int, rows: list[dict[str, Any]]
 ) -> str:
-    """ok | warn | unknown for an ENABLED monitor (``not_configured`` is the route's).
+    """ok | warn | unknown for a configured monitor (``contract.status_for``).
 
-    unknown — never polled, never succeeded, or the last success is older than
-    three poll intervals. warn — any workflow failed in the last 24 h, or the
-    last poll recorded an error. Otherwise ok.
+    Times read back from the database may be strings; they are parsed first.
     """
-    if not sync_state:
-        return "unknown"
-    last_ok = _as_datetime(sync_state.get("last_ok_at"))
-    if last_ok is None:
-        return "unknown"
-    if datetime.now(UTC) - last_ok > timedelta(seconds=3 * poll_seconds):
-        return "unknown"
-    if sync_state.get("last_error") or any((r.get("failures_24h") or 0) > 0 for r in rows):
-        return "warn"
-    return "ok"
+    state = dict(sync_state or {})
+    state["last_ok_at"] = _as_datetime(state.get("last_ok_at"))
+    return contract.status_for(state, poll_seconds, rows)
 
 
 def _rows(sql: str, params: tuple[Any, ...]) -> list[dict[str, Any]]:
@@ -147,9 +147,13 @@ def _execution_rows(tenant_id: str, workflow_id: str, limit: int) -> list[dict[s
     )
 
 
-def _link(base_url: str, path: str) -> str:
+def _workflow_url(root: str, workflow_id: str) -> str:
     """An absolute link into n8n, or ``""`` — never a path relative to the Helm."""
-    return f"{base_url}{path}" if base_url else ""
+    return contract.workflow_url(root, workflow_id) if root else ""
+
+
+def _execution_url(root: str, workflow_id: str, execution_id: str) -> str:
+    return contract.execution_url(root, workflow_id, execution_id) if root else ""
 
 
 def _workflow_out(row: dict[str, Any], base_url: str) -> dict[str, Any]:
@@ -166,11 +170,11 @@ def _workflow_out(row: dict[str, Any], base_url: str) -> dict[str, Any]:
         # rather than the workflow. Not part of the poller's ``workflow_row()``
         # contract yet: it is computed here from ``n8n_executions``.
         "last_failure_url": (
-            _link(base_url, f"/workflow/{row['workflow_id']}/executions/{failed_id}")
+            _execution_url(base_url, row["workflow_id"], str(failed_id))
             if (failed_id := row.get("last_failed_execution_id"))
             else ""
         ),
-        "url": _link(base_url, f"/workflow/{row['workflow_id']}"),
+        "url": _workflow_url(base_url, row["workflow_id"]),
     }
 
 
@@ -226,7 +230,10 @@ def workflow_executions(
         return {"executions": []}
     base_url = settings[1]
     limit = max(1, min(limit, _MAX_LIMIT))
-    rows, _error = _safe(lambda: _execution_rows(tenant_id, workflow_id, limit))
+    rows, db_error = _safe(lambda: _execution_rows(tenant_id, workflow_id, limit))
+    if db_error:
+        # An outage must not read as a clean record of no failures.
+        return {"executions": [], "error": db_error}
     return {
         "executions": [
             {
@@ -236,7 +243,7 @@ def workflow_executions(
                 "started_at": _iso(r.get("started_at")),
                 "stopped_at": _iso(r.get("stopped_at")),
                 "error_message": r.get("error_message"),
-                "url": _link(base_url, f"/workflow/{workflow_id}/executions/{r['execution_id']}"),
+                "url": _execution_url(base_url, workflow_id, r["execution_id"]),
             }
             for r in rows or []
         ]
