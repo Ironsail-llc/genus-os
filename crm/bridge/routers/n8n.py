@@ -139,6 +139,11 @@ def _execution_rows(tenant_id: str, workflow_id: str, limit: int) -> list[dict[s
     )
 
 
+def _link(base_url: str, path: str) -> str:
+    """An absolute link into n8n, or ``""`` — never a path relative to the Helm."""
+    return f"{base_url}{path}" if base_url else ""
+
+
 def _workflow_out(row: dict[str, Any], base_url: str) -> dict[str, Any]:
     return {
         "workflow_id": row["workflow_id"],
@@ -149,22 +154,28 @@ def _workflow_out(row: dict[str, Any], base_url: str) -> dict[str, Any]:
         "failures_7d": int(row.get("failures_7d") or 0),
         "last_failure_at": _iso(row.get("last_failure_at")),
         "last_error": row.get("last_error"),
-        "url": f"{base_url}/workflow/{row['workflow_id']}",
+        "url": _link(base_url, f"/workflow/{row['workflow_id']}"),
     }
 
 
 @router.get("/workflows")
 def list_workflows(request: Request, tenant_id: str = Depends(get_tenant_id)) -> dict[str, Any]:
     require_operator(request)
-    enabled, base_url, poll_seconds = _n8n_settings()
     body: dict[str, Any] = {
         "status": "not_configured",
-        "base_url": base_url,
+        "base_url": "",
         "last_poll_at": None,
         "last_ok_at": None,
         "last_error": None,
         "workflows": [],
     }
+    settings, settings_error = _safe(_n8n_settings)
+    if settings is None:
+        # A config the bridge cannot read is not "off" and not healthy.
+        body.update(status="unknown", last_error=settings_error)
+        return body
+    enabled, base_url, poll_seconds = settings
+    body["base_url"] = base_url
     if not enabled:
         return body
 
@@ -194,7 +205,10 @@ def workflow_executions(
     tenant_id: str = Depends(get_tenant_id),
 ) -> dict[str, Any]:
     require_operator(request)
-    _, base_url, _ = _n8n_settings()
+    settings, _settings_error = _safe(_n8n_settings)
+    if settings is None or not settings[0]:
+        return {"executions": []}
+    base_url = settings[1]
     limit = max(1, min(limit, _MAX_LIMIT))
     rows, _error = _safe(lambda: _execution_rows(tenant_id, workflow_id, limit))
     return {
@@ -206,7 +220,7 @@ def workflow_executions(
                 "started_at": _iso(r.get("started_at")),
                 "stopped_at": _iso(r.get("stopped_at")),
                 "error_message": r.get("error_message"),
-                "url": f"{base_url}/workflow/{workflow_id}/executions/{r['execution_id']}",
+                "url": _link(base_url, f"/workflow/{workflow_id}/executions/{r['execution_id']}"),
             }
             for r in rows or []
         ]
