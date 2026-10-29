@@ -174,6 +174,18 @@ def test_run_workflow_is_opt_in() -> None:
     assert "workflow_runs" not in OPT_IN_TOOLS
 
 
+def test_the_main_template_opts_into_run_workflow() -> None:
+    # Opt-in means main gets nothing unless its manifest names the tool.
+    from pathlib import Path
+
+    import yaml
+
+    root = Path(__file__).resolve().parents[3]
+    text = (root / "templates/agents/core/main/manifest.template.yaml").read_text()
+    manifest = yaml.safe_load(text.replace("{{ timezone }}", "UTC"))
+    assert "run_workflow" in manifest["tools_opt_in"]
+
+
 def test_registry_round_trip() -> None:
     sentinel = object()
     previous = get_workflow_engine()
