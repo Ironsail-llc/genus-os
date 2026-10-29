@@ -40,7 +40,8 @@ def test_the_domain_is_matched_case_insensitively() -> None:
 
 def test_a_subdomain_is_not_its_parent_domain() -> None:
     with patch("robothor.crm.dal.list_tenants", return_value=TENANTS):
-        assert accounts.tenant_for_email("alice@mail.example.com") == DEFAULT_TENANT
+        # child.example is claimed; its subdomain is not.
+        assert accounts.tenant_for_email("alice@mail.child.example") == DEFAULT_TENANT
 
 
 def test_two_tenants_claiming_one_domain_fail_safe_to_default(caplog) -> None:
