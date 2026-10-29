@@ -2264,6 +2264,10 @@ class SecretSettings(SettingsGroup):
         "generated: a missing or wrong-length file is an error naming this "
         "variable. Empty keeps the workspace key, generated on first boot.",
         aliases=("ROBOTHOR_VAULT_KEY_FILE",),
+        # Bootstrap: it says where the vault's own key is, so it can only ever
+        # come from the environment (and never reaches an agent's shell).
+        secret=True,
+        bootstrap=True,
         since="1.118.0",
     )
     fingerprint_salt_file: str = declare(
@@ -2275,6 +2279,10 @@ class SecretSettings(SettingsGroup):
         "missing file logs an error and fingerprints degrade to the unsalted "
         "form. Empty keeps the workspace salt, created on first use.",
         aliases=("ROBOTHOR_FINGERPRINT_SALT_FILE",),
+        # Bootstrap for the same reason as the vault key file beside it: read
+        # before the vault, from the environment only, never by an agent.
+        secret=True,
+        bootstrap=True,
         since="1.118.0",
     )
     env_file: str = declare(
