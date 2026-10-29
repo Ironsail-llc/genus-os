@@ -116,7 +116,8 @@ def load_webhook_config(path: str | Path) -> WebhookConfig:
             signature_header=raw.get("signature_header", "") or "",
             signature_scheme=raw.get("signature_scheme", "hmac_hex") or "hmac_hex",
             timestamp_tolerance_seconds=int(raw.get("timestamp_tolerance_seconds", 300)),
-            timestamp_header=str(raw.get("timestamp_header", "") or DEFAULT_TIMESTAMP_HEADER),
+            timestamp_header=str(raw.get("timestamp_header", "") or "").strip()
+            or DEFAULT_TIMESTAMP_HEADER,
             delivery_id_header=raw.get("delivery_id_header", "") or "",
             oidc_audience=str(raw.get("oidc_audience", "") or ""),
             oidc_service_account=str(raw.get("oidc_service_account", "") or ""),
@@ -201,6 +202,9 @@ def _verify_stripe_t_v1(
     return False, "no v1 signature matched"
 
 
+_HEX_SHA256 = re.compile(r"[0-9a-fA-F]{64}")
+
+
 def _verify_hmac_ts_hex(
     payload_bytes: bytes,
     signature: str,
@@ -233,8 +237,8 @@ def _verify_hmac_ts_hex(
         signature = signature[7:]
     if not signature:
         return False, "missing signature"
-    if not signature.isascii():
-        return False, "bad digest"
+    if not _HEX_SHA256.fullmatch(signature):
+        return False, "malformed signature"
     expected = hmac.new(
         secret.encode("utf-8"),
         f"{ts}.".encode() + payload_bytes,
