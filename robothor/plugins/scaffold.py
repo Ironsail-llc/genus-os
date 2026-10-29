@@ -270,6 +270,10 @@ A Genus OS plugin. Docs: `docs/PLUGINS.md` in the Genus OS repository.
 - `files:` may only write `brain/**`, `docs/workflows/**`, `docs/hooks/**`,
   `docs/webhooks.yaml` or `docs/webhooks.d/<name>.yaml`. Patches use
   `install:`/`remove:` sections of `set:`/`append:`/`delete:`/`detach:`.
+- The plugin declares contract 1. If it uses `append:`/`detach:`, a
+  `docs/webhooks.d/` drop-in or a `brain/agents/<agent>.d/` fragment, declare
+  `contract_version: 2` here and `"genus_contract_version": "2.0"` in `PLUGIN`
+  (and its test), so an engine that predates them refuses it loudly.
 - Dependencies are not installed (`--no-deps`): vendor them.
 - No personal names, emails, hosts or secrets in this repo.
 

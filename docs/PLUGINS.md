@@ -71,10 +71,19 @@ keeps those in separate registries and so does the loader.
 
 ## The rules, and why
 
-**The contract version is checked and mismatches are refused.** `1.0` today.
-A plugin built against a different contract is not loaded — an agent
-platform running third-party code that expects a different tool-calling
-contract is a security problem, not a compatibility inconvenience.
+**The contract version is checked and mismatches are refused.** This engine
+speaks `1.0` and `2.0`. A plugin built against a different contract is not
+loaded — an agent platform running third-party code that expects a different
+tool-calling contract is a security problem, not a compatibility inconvenience.
+
+`2.0` is `1.0` plus [composable patches](#composable-patches-append-and-detach)
+(`append:`/`detach:`), `docs/webhooks.d/` drop-ins (instance files) and
+`brain/agents/<agent>.d/` instruction fragments. Declare `contract_version: 2`
+in `genus-plugin.yaml` and `genus_contract_version: "2.0"` in the payload when
+your plugin uses any of them; engines before this release refuse it with the
+contract-mismatch message instead of installing it without its hooks. A plugin
+that uses none of them stays on `1.0` and still loads on older engines.
+`genus plugin new` scaffolds `1.0`.
 
 **A plugin cannot shadow a built-in.** Claiming `exec` or `write_file` is
 refused and logged. That is a takeover, not an extension.
@@ -92,7 +101,7 @@ broken package must never stop the engine booting.
 Plugin failures are logged at WARNING with the plugin name and the reason:
 
 ```
-Plugin 'acme' declares contract '0.9', this engine speaks '1.0' — refused
+Plugin 'acme' declares contract '0.9', this engine speaks '1.0' or '2.0' — refused
 Plugin 'acme' tried to shadow built-in(s) ['exec']
 ```
 
@@ -495,6 +504,9 @@ remove:                 # optional: without a detach, remove takes back what ins
   or `<key>[<value>]`. Two plugins appending different items to the same list
   coexist; two appending the same identity are refused, as is one plugin
   appending to a list another `set`s or `delete`s (and the reverse).
+
+A patch that uses `append:` or `detach:` belongs to a plugin that declares
+contract `2.0` (see [The rules, and why](#the-rules-and-why)).
 
 Two drop-in locations make the rest composable without a shared file:
 

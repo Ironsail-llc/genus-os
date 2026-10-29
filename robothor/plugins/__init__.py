@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from robothor.plugins.loader import (
     CONTRACT_VERSION,
+    CONTRACT_VERSIONS,
     PluginFailure,
     PluginSet,
     generation,
@@ -28,6 +29,7 @@ from robothor.plugins.loader import (
 
 __all__ = [
     "CONTRACT_VERSION",
+    "CONTRACT_VERSIONS",
     "PluginFailure",
     "PluginSet",
     "generation",
