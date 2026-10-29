@@ -267,19 +267,14 @@ def _is_moved_key_file(path: str | os.PathLike[str]) -> bool:
     timestamped symlink farm all name the same bytes. Every file in the key's
     directory is refused as well — a dedicated mount holds nothing an agent
     needs — unless that directory is the workspace, home or ``/``, where the
-    rule would blind the agent to everything.
+    rule would blind the agent to everything — nor when it is an ancestor of
+    either.
 
     The one exception to this module's "pure" contract: resolving a symlink
     reads the filesystem. It still answers the same whether or not the file
     exists, which is what the purity was for.
     """
-    from robothor.settings.env import process_env_get
-
-    configured = [
-        value.strip()
-        for value in (process_env_get(name, "") or "" for name in _KEY_FILE_SETTINGS)
-        if value.strip()
-    ]
+    configured = _moved_key_files()
     if not configured:
         return False
     candidate = _resolved(str(path))
@@ -289,13 +284,34 @@ def _is_moved_key_file(path: str | os.PathLike[str]) -> bool:
         if candidate == target:
             return True
         directory = str(Path(target).parent)
-        if (
-            directory not in broad
-            and candidate != directory
-            and Path(candidate).is_relative_to(directory)
-        ):
+        # Skipped when the key's directory holds (or is) the workspace or home:
+        # `/srv/genus/key` beside `/srv/genus/workspace` must not refuse every
+        # workspace file. Then only the file itself is refused.
+        too_broad = any(Path(wide).is_relative_to(directory) for wide in broad)
+        if not too_broad and candidate != directory and Path(candidate).is_relative_to(directory):
             return True
     return False
+
+
+def _moved_key_files() -> list[str]:
+    """The configured override paths, as written, read at call time."""
+    from robothor.settings.env import process_env_get
+
+    return [
+        value.strip()
+        for value in (process_env_get(name, "") or "" for name in _KEY_FILE_SETTINGS)
+        if value.strip()
+    ]
+
+
+def _moved_key_basenames() -> set[str]:
+    """Basenames of the override files and of what they resolve to."""
+    names: set[str] = set()
+    for value in _moved_key_files():
+        names.add(Path(value).name)
+        names.add(Path(_resolved(value)).name)
+    names.discard("")
+    return names
 
 
 def is_secret_path(path: str | os.PathLike[str]) -> bool:
@@ -494,6 +510,37 @@ def _command_word(tokens: list[str]) -> tuple[str | None, list[str]]:
     return None, []
 
 
+def _changed_directories(segments: list[list[str]]) -> list[str]:
+    """Every directory a ``cd`` or ``pushd`` in the command moves into.
+
+    A printer argument is otherwise judged against the ENGINE's working
+    directory, not the shell's, so ``cd <mount> && cat key`` named the key with
+    a path :func:`is_secret_path` never saw.
+    """
+    found: list[str] = []
+    for tokens in segments:
+        word, args = _command_word(tokens)
+        if word in ("cd", "pushd"):
+            targets = [a for a in args if not a.startswith("-")]
+            if targets:
+                found.append(targets[0].strip("'\""))
+    return found
+
+
+def _relative_names_moved_key(candidate: str, shell_dirs: list[str], moved_names: set[str]) -> bool:
+    """A RELATIVE printer argument that may be a moved key or salt.
+
+    Refused when it resolves to one under any directory the command ``cd``s
+    into, and — because a script or a subshell can change directory where
+    this cannot see it — whenever its basename is the override file's own.
+    """
+    if not moved_names or candidate.startswith(("/", "~")):
+        return False
+    if Path(candidate).name in moved_names:
+        return True
+    return any(is_secret_path(str(Path(directory) / candidate)) for directory in shell_dirs)
+
+
 def exec_reads_secret(command: str) -> str | None:
     """The reason a shell command is refused, or None when it may run.
 
@@ -515,7 +562,10 @@ def exec_reads_secret(command: str) -> str | None:
             "`secrets:` list."
         )
 
-    for tokens in _segments(command):
+    segments = _segments(command)
+    shell_dirs = _changed_directories(segments)
+    moved_names = _moved_key_basenames()
+    for tokens in segments:
         word, args = _command_word(tokens)
         if word is None:
             continue
@@ -531,7 +581,9 @@ def exec_reads_secret(command: str) -> str | None:
                 if arg.startswith("-"):
                     continue
                 candidate = arg.strip("'\"")
-                if is_secret_path(candidate):
+                if is_secret_path(candidate) or _relative_names_moved_key(
+                    candidate, shell_dirs, moved_names
+                ):
                     return (
                         f"refused: `{word}` would print {PurePath(candidate).name}, a secrets "
                         "file. Credentials are supplied to tools by the platform; source the "
