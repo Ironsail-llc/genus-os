@@ -142,12 +142,27 @@ def api_get_tenant(tenant_id: str):
 
 @router.patch("/{tenant_id}")
 def api_update_tenant(tenant_id: str, body: UpdateTenantRequest, request: Request):
-    reshapes = body.parentTenantId is not None or body.active is not None
+    # Compared with what is stored, so a form that sends every field back
+    # unchanged is an edit, not a reshape: an unchanged parent or flag
+    # changes nothing a child admin is not already allowed to keep.
+    asks_to_reshape = body.parentTenantId is not None or body.active is not None
+    stored = (crm_dal.get_tenant(tenant_id) or {}) if asks_to_reshape else {}
+    new_parent = (
+        body.parentTenantId
+        if body.parentTenantId is not None and body.parentTenantId != stored.get("parentTenantId")
+        else None
+    )
+    new_active = (
+        body.active
+        if body.active is not None and body.active != stored.get("active", True)
+        else None
+    )
+    reshapes = new_parent is not None or new_active is not None
     if reshapes:
         if not _is_root_tenant_operator(request):
             return _ROOT_REQUIRED
-        if body.parentTenantId is not None:
-            problem = crm_dal.tenant_parent_problem(tenant_id, body.parentTenantId)
+        if new_parent is not None:
+            problem = crm_dal.tenant_parent_problem(tenant_id, new_parent)
             if problem:
                 return JSONResponse({"error": problem}, status_code=422)
     elif not _may_edit_tenant(request, tenant_id):
@@ -156,12 +171,12 @@ def api_update_tenant(tenant_id: str, body: UpdateTenantRequest, request: Reques
     kwargs = {}
     if body.displayName is not None:
         kwargs["display_name"] = body.displayName
-    if body.parentTenantId is not None:
-        kwargs["parent_tenant_id"] = body.parentTenantId
+    if new_parent is not None:
+        kwargs["parent_tenant_id"] = new_parent
     if body.settings is not None:
         kwargs["settings"] = body.settings
-    if body.active is not None:
-        kwargs["active"] = body.active
+    if new_active is not None:
+        kwargs["active"] = new_active
 
     if update_tenant(tenant_id, **kwargs):
         return {"success": True, "id": tenant_id}
