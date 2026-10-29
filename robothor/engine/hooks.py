@@ -67,8 +67,13 @@ REPLAY_MAX_DELIVERIES = 3
 # A live reader blocks EVENT_BUS_BLOCK_MS (2 s) per read, so its idle time stays
 # far below this; a consumer entry outlives its engine, so an old one is stale.
 GROUP_RIVAL_ACTIVE_MS = 60_000
-# How often an engine that found another tenant on its group looks again.
+# How often every engine looks again at who else reads its group.
 GROUP_RIVAL_RECHECK_SECONDS = 60
+# Which tenant owns the root group. Written once, by the first engine to read
+# ``engine`` with no other tenant reading it and with its two tenant variables
+# in agreement; never expires. Delete it to hand the root group to another
+# tenant.
+ROOT_GROUP_OWNER_KEY = "robothor:events:group-owner:" + ROOT_EVENT_GROUP
 
 # Cap on the payload text an ``include_payload`` hook appends to its message.
 MAX_PAYLOAD_CHARS = 8000
@@ -331,34 +336,80 @@ class EventHooks:
                     rivals.add(name)
         return rivals
 
-    async def _wait_until_group_is_ours(
+    async def _root_group_owner(self, redis_client: Any, rivals: set[str]) -> str | None:
+        """The tenant that owns the root group, claiming it if nobody does.
+
+        An engine claims only when no other tenant is reading the group and
+        its own tenant variables agree: an engine whose ``ROBOTHOR_TENANT_ID``
+        differs from its ``ROBOTHOR_DEFAULT_TENANT`` is the documented shape
+        of a child, never the root. ``""`` means unclaimed; None means Redis
+        could not say.
+        """
+        from robothor.constants import tenant_env_conflict
+
+        def _text(raw: Any) -> str:
+            if isinstance(raw, bytes):
+                return raw.decode()
+            return raw if isinstance(raw, str) else ""
+
+        try:
+            owner = _text(await redis_client.get(ROOT_GROUP_OWNER_KEY))
+            if owner or rivals or tenant_env_conflict():
+                return owner
+            if await redis_client.set(ROOT_GROUP_OWNER_KEY, self.config.tenant_id, nx=True):
+                logger.info(
+                    "Tenant %r now owns event consumer group %r",
+                    self.config.tenant_id,
+                    ROOT_EVENT_GROUP,
+                )
+                return self.config.tenant_id
+            return _text(await redis_client.get(ROOT_GROUP_OWNER_KEY))
+        except Exception as e:
+            logger.warning("Could not read the owner of group %r: %s", ROOT_EVENT_GROUP, e)
+            return None
+
+    async def _may_read_group(
         self, redis_client: Any, group: str, consumer: str, streams: list[str]
     ) -> bool:
-        """Hold off while another tenant's engine is reading this engine's group.
+        """Whether this engine should read ``group`` now. Logs why not, and who to fix.
 
         Two tenants on one group split every stream between them, and each
-        acks and drops the other's half, so those events are lost. That is a
-        deployment mistake -- a child engine left on the root group -- and
-        reading anyway would make it silent. Returns False once stopped.
+        acks and drops the other's half, so those events are lost. The engines
+        are not equals: the root group belongs to its recorded owner and an
+        ``engine-<tenant>`` group to that tenant, so the engine that keeps
+        reading is the one configured for the group, and the one told to
+        change its setting is the one that is not.
         """
-        while not self._stop_event.is_set():
-            rivals = await self._rival_consumers(redis_client, group, consumer, streams)
-            if not rivals:
-                return True
-            logger.error(
-                "Event consumer group %r is being read by %s, another tenant's "
-                "engine. This engine (tenant %r) will not read it: two tenants on "
-                "one group split the events and drop each other's. Give each child "
-                "engine its own group, e.g. GENUS_EVENT_CONSUMER_GROUP=engine-%s. "
-                "Checking again in %ds.",
-                group,
-                ", ".join(sorted(rivals)),
-                self.config.tenant_id,
-                self.config.tenant_id,
-                GROUP_RIVAL_RECHECK_SECONDS,
-            )
-            with contextlib.suppress(TimeoutError):
-                await asyncio.wait_for(self._stop_event.wait(), GROUP_RIVAL_RECHECK_SECONDS)
+        tenant = self.config.tenant_id
+        rivals = await self._rival_consumers(redis_client, group, consumer, streams)
+        if group == ROOT_EVENT_GROUP:
+            owner = await self._root_group_owner(redis_client, rivals)
+            rightful = owner == tenant or (owner is None and not rivals)
+        else:
+            rightful = group == f"engine-{tenant}" or not rivals
+        if rightful:
+            for rival in sorted(rivals):
+                logger.error(
+                    "Event consumer group %r belongs to tenant %r, but %s is also "
+                    "reading it and drops this tenant's events. Give that engine its "
+                    "own group: GENUS_EVENT_CONSUMER_GROUP=%s.",
+                    group,
+                    tenant,
+                    rival,
+                    rival,
+                )
+            return True
+        logger.error(
+            "Event consumer group %r is not this engine's (tenant %r)%s, so it will "
+            "not read it: two tenants on one group split the events and drop each "
+            "other's. Give this engine its own group, "
+            "GENUS_EVENT_CONSUMER_GROUP=engine-%s. Checking again in %ds.",
+            group,
+            tenant,
+            f"; {', '.join(sorted(rivals))} reading it" if rivals else "",
+            tenant,
+            GROUP_RIVAL_RECHECK_SECONDS,
+        )
         return False
 
     async def _replay_pending(
@@ -483,23 +534,32 @@ class EventHooks:
             with contextlib.suppress(Exception):
                 await r.xgroup_create(prefixed, consumer_group, id="$", mkstream=True)
 
-        if not await self._wait_until_group_is_ours(
-            r, consumer_group, consumer_name, prefixed_streams
-        ):
-            await r.aclose()
-            return
-
         logger.info("Listening on streams: %s", ", ".join(prefixed_streams))
 
-        # Events read before a restart but never acknowledged come first
-        try:
-            await self._replay_pending(r, consumer_group, consumer_name, prefixed_streams)
-        except Exception as e:
-            logger.error("Replaying pending hook events failed: %s", e, exc_info=True)
-
-        # Read loop — subscribe to prefixed keys
+        # Read loop — subscribe to prefixed keys. Who else reads the group is
+        # checked before the first read and again every recheck interval.
         stream_keys = dict.fromkeys(prefixed_streams, ">")
+        reading = False
+        replayed = False
+        next_check = 0.0
         while not self._stop_event.is_set():
+            if time.monotonic() >= next_check:
+                reading = await self._may_read_group(
+                    r, consumer_group, consumer_name, prefixed_streams
+                )
+                next_check = time.monotonic() + GROUP_RIVAL_RECHECK_SECONDS
+            if not reading:
+                with contextlib.suppress(TimeoutError):
+                    await asyncio.wait_for(self._stop_event.wait(), GROUP_RIVAL_RECHECK_SECONDS)
+                next_check = 0.0
+                continue
+            if not replayed:
+                replayed = True
+                # Events read before a restart but never acknowledged come first
+                try:
+                    await self._replay_pending(r, consumer_group, consumer_name, prefixed_streams)
+                except Exception as e:
+                    logger.error("Replaying pending hook events failed: %s", e, exc_info=True)
             try:
                 results = await r.xreadgroup(
                     consumer_group,
