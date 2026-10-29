@@ -184,9 +184,10 @@ def parse_workflow_file(path: Path) -> dict[str, Any] | None:
     try:
         workflow = parse_workflow(data)
     except Exception as exc:  # noqa: BLE001 - a malformed workflow is skipped, not fatal
-        # The file and the exception CLASS only: the message and traceback can
-        # carry values from the workflow body.
-        logger.debug("workflow %s does not parse (%s)", path.name, type(exc).__name__)
+        # A fixed sentence and the exception CLASS only. The message, the
+        # traceback and even the file name are derived from workspace data a
+        # static analyser cannot prove is free of secrets.
+        logger.debug("a workflow file does not parse (%s)", type(exc).__name__)
         return None
     return {
         "id": workflow.id,
