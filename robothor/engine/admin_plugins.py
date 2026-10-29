@@ -103,13 +103,21 @@ def plugin_listing() -> dict[str, Any]:
 
     lock = read_lockfile()
     assets_error: str | None = None
+    warnings: list[str] = []
     try:
-        assets = workspace_assets()
+        assets = workspace_assets(warnings=warnings)
     except Exception as exc:  # noqa: BLE001 - one unreadable file must not hide every plugin
         # The class only: an OSError's text carries the absolute path.
         logger.warning("plugin workspace assets could not be read (%s)", type(exc).__name__)
         assets = {}
         assets_error = f"The plugin workspace assets could not be read ({type(exc).__name__})."
+    else:
+        # Each warning is a fixed sentence naming a workspace-relative record
+        # and at most an exception class, never a value or an absolute path.
+        for warning in warnings:
+            logger.warning("plugin workspace assets: %s", warning)
+        if warnings:
+            assets_error = " ".join(warnings)
     return {
         "generation": generation(),
         # The indexes this instance reads, in order, so an install form can

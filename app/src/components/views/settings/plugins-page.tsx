@@ -124,6 +124,8 @@ export interface PluginAssets {
   workflows: PluginWorkflow[];
   patches: string[];
   files: string[];
+  /** The engine's reason when it could not read what the plugin wrote. */
+  error?: string;
 }
 
 export interface Plugin {
@@ -224,6 +226,7 @@ function normalizeAssets(value: unknown): PluginAssets {
       })),
     patches: strings(row.patches),
     files: strings(row.files),
+    ...(typeof row.error === "string" && row.error ? { error: row.error } : {}),
   };
 }
 
@@ -1046,7 +1049,9 @@ export function PluginsPage({ visible = true }: PluginsPageProps) {
                   className="min-w-0 break-words text-[11px] text-muted-foreground"
                 >
                   <p className="font-medium text-foreground">Agents and workflows</p>
-                  {plugin.assets.agents.length === 0 && plugin.assets.workflows.length === 0 ? (
+                  {plugin.assets.error ? (
+                    <p>unavailable: {plugin.assets.error}</p>
+                  ) : plugin.assets.agents.length === 0 && plugin.assets.workflows.length === 0 ? (
                     <p>none</p>
                   ) : (
                     <ul className="flex min-w-0 flex-col gap-0.5 pt-0.5">
