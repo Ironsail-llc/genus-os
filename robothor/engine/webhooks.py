@@ -41,10 +41,13 @@ logger = logging.getLogger(__name__)
 # Must match hooks.py / event_bus.py
 STREAM_PREFIX = "robothor:events:"
 
-SIGNATURE_SCHEMES = ("hmac_hex", "stripe_t_v1", "google_oidc")
+SIGNATURE_SCHEMES = ("hmac_hex", "stripe_t_v1", "hmac_ts_hex", "google_oidc")
 
 # Headers tried in order when a channel names no signature_header.
 DEFAULT_SIGNATURE_HEADERS = ("X-Hub-Signature-256", "X-Signature-256", "X-Webhook-Signature")
+
+# hmac_ts_hex: header carrying the signed timestamp when a channel names none.
+DEFAULT_TIMESTAMP_HEADER = "X-Webhook-Timestamp"
 
 # How long a delivery id is remembered for replay detection.
 DELIVERY_ID_TTL_SECONDS = 86400
@@ -66,8 +69,10 @@ class WebhookChannel:
     signature_header: str = ""
     # One of SIGNATURE_SCHEMES.
     signature_scheme: str = "hmac_hex"
-    # stripe_t_v1 only: how far the signed timestamp may drift from now.
+    # stripe_t_v1 and hmac_ts_hex: how far the signed timestamp may drift from now.
     timestamp_tolerance_seconds: int = 300
+    # hmac_ts_hex only: header carrying the signed timestamp (unix seconds).
+    timestamp_header: str = DEFAULT_TIMESTAMP_HEADER
     # When set and present on a request, replays of the same id are dropped.
     delivery_id_header: str = ""
     # google_oidc only: the token's required audience and signing service account.
@@ -187,6 +192,7 @@ def _channel(name: str, raw: dict[str, Any]) -> WebhookChannel:
         signature_header=raw.get("signature_header", "") or "",
         signature_scheme=raw.get("signature_scheme", "hmac_hex") or "hmac_hex",
         timestamp_tolerance_seconds=int(raw.get("timestamp_tolerance_seconds", 300)),
+        timestamp_header=str(raw.get("timestamp_header", "") or DEFAULT_TIMESTAMP_HEADER),
         delivery_id_header=raw.get("delivery_id_header", "") or "",
         oidc_audience=str(raw.get("oidc_audience", "") or ""),
         oidc_service_account=str(raw.get("oidc_service_account", "") or ""),
@@ -262,8 +268,56 @@ def _verify_stripe_t_v1(
     return False, "no v1 signature matched"
 
 
+def _verify_hmac_ts_hex(
+    payload_bytes: bytes,
+    signature: str,
+    timestamp: str,
+    secret: str,
+    tolerance_seconds: int,
+    now: float | None = None,
+) -> tuple[bool, str]:
+    """Verify a hex HMAC-SHA256 over ``f"{timestamp}."`` followed by the raw body.
+
+    ``timestamp`` is the value of the channel's timestamp header, in integer
+    unix seconds (milliseconds are not accepted: they read as far in the
+    future). The signature may carry a ``sha256=`` prefix in any case. Returns
+    ``(ok, reason)``; the reason names the failed check, never the secret.
+    """
+    if not secret:
+        return False, "missing secret"
+    if not timestamp:
+        return False, "missing timestamp"
+    # Bounded so the float comparison cannot overflow; 13 digits lets a
+    # millisecond value through to be refused as stale rather than malformed.
+    if not (timestamp.isascii() and timestamp.isdigit() and len(timestamp) <= 13):
+        return False, "malformed timestamp"
+    ts = int(timestamp)
+    current = time.time() if now is None else now
+    if abs(current - ts) > tolerance_seconds:
+        return False, f"stale timestamp (outside {tolerance_seconds}s)"
+
+    if signature[:7].lower() == "sha256=":
+        signature = signature[7:]
+    if not signature:
+        return False, "missing signature"
+    if not signature.isascii():
+        return False, "bad digest"
+    expected = hmac.new(
+        secret.encode("utf-8"),
+        f"{ts}.".encode() + payload_bytes,
+        hashlib.sha256,
+    ).hexdigest()
+    if hmac.compare_digest(expected, signature.lower()):
+        return True, ""
+    return False, "bad digest"
+
+
 def _verify_signature(
-    channel: WebhookChannel, payload_bytes: bytes, signature: str, secret: str
+    channel: WebhookChannel,
+    payload_bytes: bytes,
+    signature: str,
+    secret: str,
+    timestamp: str = "",
 ) -> tuple[bool, str]:
     """Dispatch to the channel's signature scheme. Returns ``(ok, reason)``."""
     if channel.signature_scheme == "hmac_hex":
@@ -273,6 +327,10 @@ def _verify_signature(
     if channel.signature_scheme == "stripe_t_v1":
         return _verify_stripe_t_v1(
             payload_bytes, signature, secret, channel.timestamp_tolerance_seconds
+        )
+    if channel.signature_scheme == "hmac_ts_hex":
+        return _verify_hmac_ts_hex(
+            payload_bytes, signature, timestamp, secret, channel.timestamp_tolerance_seconds
         )
     return False, f"unknown signature scheme {channel.signature_scheme!r}"
 
@@ -699,7 +757,14 @@ def get_webhook_router(config: WebhookConfig | None = None) -> APIRouter:
                 status_code=503,
             )
 
-        ok, reason = (True, "") if oidc else _verify_signature(ch, body, signature, secret)
+        timestamp = (
+            request.headers.get(ch.timestamp_header, "")
+            if ch.signature_scheme == "hmac_ts_hex"
+            else ""
+        )
+        ok, reason = (
+            (True, "") if oidc else _verify_signature(ch, body, signature, secret, timestamp)
+        )
         if not ok:
             logger.warning("Webhook signature rejected for channel '%s': %s", ch.name, reason)
             return JSONResponse(
