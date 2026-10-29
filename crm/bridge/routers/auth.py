@@ -15,7 +15,6 @@ import hmac
 import json
 import logging
 import os
-from contextlib import AbstractContextManager, nullcontext
 from typing import TYPE_CHECKING, Annotated, Any, TypeAlias
 
 from robothor.settings import get_settings
@@ -219,22 +218,19 @@ def _sso_exchange(
     # caller. It decides where a NEW account is created and which tenant's
     # email match and binding grant are consulted.
     tenant_id = accounts.tenant_for_email(body.email)
-    # Bound to the routed tenant so the RLS WITH CHECK accepts the new row.
-    # With RLS on, that also bounds the (issuer, subject) lookup to the routed
-    # tenant, so an account bound in another tenant must be moved there before
-    # its domain is claimed (docs/runbooks/TENANT_HIERARCHY.md).
-    scope: AbstractContextManager[None] = (
-        tenant_scope(tenant_id) if tenant_id != DEFAULT_TENANT else nullcontext()
-    )
+    # No tenant_scope here. The caller's unbound_scope covers both halves: the
+    # (issuer, subject) lookup sees an account bound in ANY tenant, so a
+    # bound account signs in where it lives however its domain is routed;
+    # and the policy's permissive branch accepts the INSERT into the routed
+    # tenant, which jit_provision names explicitly.
     try:
-        with scope:
-            account = accounts.jit_provision(
-                issuer=body.issuer.strip(),
-                subject=body.subject.strip(),
-                email=body.email,
-                display_name=body.display_name,
-                tenant_id=tenant_id,
-            )
+        account = accounts.jit_provision(
+            issuer=body.issuer.strip(),
+            subject=body.subject.strip(),
+            email=body.email,
+            display_name=body.display_name,
+            tenant_id=tenant_id,
+        )
     except accounts.AccountProvisioningError:
         # Do not reveal whether an email maps to a privileged, invited, or
         # disabled local account.

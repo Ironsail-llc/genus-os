@@ -103,12 +103,14 @@ The same list is `settings.sso_domains` on `PATCH /api/tenants/{id}`.
   `@`, a wildcard, a single label) is refused with a 422.
 - **Exact match.** `example.com` does not claim `mail.example.com`; list both.
 - **Only new accounts are routed.** An account already bound to the person's
-  identity provider subject signs in to whatever tenant it is in. Claiming a
+  identity provider subject signs in to whatever tenant it is in, with RLS on
+  or off: the sign-in looks the binding up across every tenant. Claiming a
   domain does not move anyone: use `move-account` for that.
-- **Claim before the first sign-in, or move first.** With RLS on, a person who
-  already has an SSO-bound account in another tenant cannot sign in once their
-  domain is claimed elsewhere until their account is moved to the claiming
-  tenant. Move existing accounts for the domain before you claim it.
+- **Move invited accounts first.** An account that exists but is not yet bound
+  (an invitation, or one waiting on a binding grant) is looked up by email in
+  the *routed* tenant only. If it sits in another tenant when its domain is
+  claimed, the person's first sign-in creates a second, new account in the
+  claiming tenant instead. Move such accounts before you claim the domain.
 - **Fail safe.** If two tenants ever claim one domain (a hand-edited row), the
   sign-in lands in the default tenant and the bridge logs an error naming the
   domain. Fix the claim; nobody is locked out by it.
