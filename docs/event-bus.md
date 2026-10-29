@@ -93,8 +93,12 @@ Every engine therefore sees every event, and acts only on those whose
 `tenant_id` is its own `ROBOTHOR_TENANT_ID`. The others are acknowledged and
 dropped (logged at DEBUG, counted in `EventHooks.foreign_events_dropped`). An
 event with no `tenant_id` was published before tagging and belongs to the
-root: only the engine on the `engine` group takes it. Retry and busy-requeue
-copies keep the original's tag, so they reach only the engine that wrote them.
+root: only the engine on the `engine` group takes it.
+
+Retry and busy-requeue copies don't go back onto the shared stream. Each
+engine writes them to its own retry stream, `robothor:events:<stream>:retry:<group>`,
+which only that engine reads, so other engines never see them. An event whose
+retries run out goes to `robothor:events:<stream>:dlq`, which no engine reads.
 
 ## Email and calendar event contract
 
