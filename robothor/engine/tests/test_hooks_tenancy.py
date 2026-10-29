@@ -280,7 +280,9 @@ class TestConsumerGroupName:
 
         await _consume_until_idle(hooks, fake)
 
-        assert fake.created == [(STREAM, f"engine-{CHILD}")]
+        group = f"engine-{CHILD}"
+        assert (STREAM, group) in fake.created
+        assert {g for _, g in fake.created} == {group}, "every stream it reads, one group"
         assert {group for group, _ in fake.read_by} <= {f"engine-{CHILD}"}
 
     @pytest.mark.asyncio
@@ -291,7 +293,8 @@ class TestConsumerGroupName:
 
         await _consume_until_idle(hooks, fake)
 
-        assert fake.created == [(STREAM, "engine")]
+        assert (STREAM, "engine") in fake.created
+        assert {g for _, g in fake.created} == {"engine"}
 
 
 class TestEveryEngineSeesEveryEventOnce:

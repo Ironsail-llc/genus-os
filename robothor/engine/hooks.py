@@ -93,6 +93,15 @@ _REFRESH_IF_MINE = (
     "return redis.call('expire', KEYS[1], ARGV[2]) else return 0 end"
 )
 
+# Bound on an engine's own retry stream (copies are acked as they are handled).
+RETRY_STREAM_MAXLEN = 10_000
+
+
+def retry_stream_key(stream: str, group: str) -> str:
+    """The stream only ``group`` reads, for its retries of ``stream``'s events."""
+    return f"{stream}:retry:{group}"
+
+
 # Cap on the payload text an ``include_payload`` hook appends to its message.
 MAX_PAYLOAD_CHARS = 8000
 
@@ -285,6 +294,10 @@ class EventHooks:
         self.workflow_engine = workflow_engine
         self._stop_event = asyncio.Event()
         self._prefixed_to_bare: dict[str, str] = {}
+        # Every key this engine reads -> its own retry stream for that source
+        # stream, and each retry stream -> the shared stream it retries.
+        self._retry_key: dict[str, str] = {}
+        self._source_key: dict[str, str] = {}
         self._event_triggers: dict[str, list[dict[str, Any]]] = {}
         self._in_flight: set[asyncio.Task[None]] = set()
         self._slots = asyncio.Semaphore(MAX_IN_FLIGHT_EVENTS)
@@ -740,12 +753,30 @@ class EventHooks:
         prefixed_streams = [f"{STREAM_PREFIX}{s}" for s in bare_streams]
         self._prefixed_to_bare = {f"{STREAM_PREFIX}{s}": s for s in bare_streams}
 
-        # Create consumer groups on the prefixed keys
+        # Retry and busy-requeue copies go to a stream only this engine reads,
+        # never back onto the shared one where every other engine would read
+        # and drop each copy.
+        retry_streams = []
+        for prefixed in prefixed_streams:
+            retry = retry_stream_key(prefixed, consumer_group)
+            retry_streams.append(retry)
+            self._retry_key[prefixed] = self._retry_key[retry] = retry
+            self._source_key[retry] = prefixed
+            self._prefixed_to_bare[retry] = self._prefixed_to_bare[prefixed]
+
+        # Create consumer groups on the prefixed keys, and on this engine's
+        # retry streams from their start so no copy written before is missed
         for prefixed in prefixed_streams:
             with contextlib.suppress(Exception):
                 await r.xgroup_create(prefixed, consumer_group, id="$", mkstream=True)
+        for retry in retry_streams:
+            with contextlib.suppress(Exception):
+                await r.xgroup_create(retry, consumer_group, id="0", mkstream=True)
 
         logger.info("Listening on streams: %s", ", ".join(prefixed_streams))
+        # Rivals matter only on the shared streams; replay and reads cover both.
+        shared_streams = prefixed_streams
+        prefixed_streams = prefixed_streams + retry_streams
 
         # Read loop — subscribe to prefixed keys. Who else reads the group is
         # checked before the first read and again every recheck interval.
@@ -759,7 +790,7 @@ class EventHooks:
         while not self._stop_event.is_set():
             if time.monotonic() >= next_check:
                 reading = await self._may_read_group(
-                    r, consumer_group, consumer_name, prefixed_streams
+                    r, consumer_group, consumer_name, shared_streams
                 )
                 next_check = time.monotonic() + GROUP_RIVAL_RECHECK_SECONDS
             if not reading:
@@ -887,6 +918,11 @@ class EventHooks:
             )
         )
 
+        # Copies go to this engine's own retry stream; the dead letter to the
+        # source stream's DLQ, which no engine reads.
+        requeue_to = self._retry_key.get(stream, stream)
+        dlq_of = self._source_key.get(stream, stream)
+
         # Retry failed runs; dead-letter once the budget is spent
         if failed_agents:
             retry_count = int(decoded.get("_retry_count", "0"))
@@ -894,7 +930,9 @@ class EventHooks:
             if retry_count < MAX_RETRIES:
                 try:
                     retry_data["_retry_count"] = str(retry_count + 1)
-                    await redis_client.xadd(stream, retry_data)
+                    await redis_client.xadd(
+                        requeue_to, retry_data, maxlen=RETRY_STREAM_MAXLEN, approximate=True
+                    )
                     logger.info(
                         "Retrying %s:%s (attempt %d/%d)",
                         stream,
@@ -905,7 +943,7 @@ class EventHooks:
                 except Exception as e:
                     logger.warning("Failed to re-queue for retry: %s", e)
             else:
-                await self._dead_letter(redis_client, stream, retry_data, event_type)
+                await self._dead_letter(redis_client, dlq_of, retry_data, event_type)
 
         # Requeue for busy agents on their own budget, off the consumer loop
         if busy_agents:
@@ -915,12 +953,12 @@ class EventHooks:
                 busy_data["_busy_requeue_count"] = str(busy_count + 1)
                 get_task_registry().spawn(
                     self._delayed_requeue(
-                        redis_client, stream, busy_data, busy_requeue_delay(busy_count)
+                        redis_client, requeue_to, busy_data, busy_requeue_delay(busy_count)
                     ),
                     name=f"hook-requeue:{bare_stream}:{event_type}",
                 )
             else:
-                await self._dead_letter(redis_client, stream, busy_data, event_type)
+                await self._dead_letter(redis_client, dlq_of, busy_data, event_type)
 
         # Acknowledge the original message
         try:
@@ -1024,7 +1062,7 @@ class EventHooks:
         """Re-add a busy agent's event after a pause, without holding the consumer loop."""
         await asyncio.sleep(delay)
         try:
-            await redis_client.xadd(stream, data)
+            await redis_client.xadd(stream, data, maxlen=RETRY_STREAM_MAXLEN, approximate=True)
         except Exception as e:
             logger.warning("Failed to re-queue busy event: %s", e)
 
@@ -1121,10 +1159,18 @@ class EventHooks:
             logger.info("Requeueing %s:%s — workflow %s busy", stream, event_type, workflow_id)
             busy_data["_busy_requeue_count"] = str(busy_count + 1)
             await self._delayed_requeue(
-                redis_client, prefixed_stream, busy_data, busy_requeue_delay(busy_count)
+                redis_client,
+                self._retry_key.get(prefixed_stream, prefixed_stream),
+                busy_data,
+                busy_requeue_delay(busy_count),
             )
         else:
-            await self._dead_letter(redis_client, prefixed_stream, busy_data, event_type)
+            await self._dead_letter(
+                redis_client,
+                self._source_key.get(prefixed_stream, prefixed_stream),
+                busy_data,
+                event_type,
+            )
 
     async def _idle(self) -> None:
         """Idle loop when Redis is not available."""
