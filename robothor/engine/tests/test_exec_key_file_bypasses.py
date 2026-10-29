@@ -234,3 +234,89 @@ def test_a_relative_override_still_refuses_the_key(relative_override) -> None:
     assert exec_reads_secret("cat instance-key")
     assert exec_reads_secret(f"cat {relative_override / 'instance-key'}")
     assert exec_reads_secret("cat .vault-key")
+
+
+# ── backup options and option spellings on copy tools ────────────────
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cp -b -S .txt notes.txt .vault-key",
+        "cp --backup=numbered notes.txt .env",
+        "cp --suffix=.txt notes.txt .env",
+        "mv -b x .env",
+        "install -bS .bak notes.txt .netrc",
+        "ln -sfb notes.txt id_rsa",
+        "cp -ab notes.txt credentials.json",
+    ],
+)
+def test_a_backup_option_makes_the_destination_a_read(command) -> None:
+    refused = exec_reads_secret(command)
+    assert refused, command
+    assert "rename" in refused or "read" in refused
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cp -rt /tmp .env",
+        "cp -t/tmp .env",
+        "mv -vt dir id_rsa",
+        "cp --target-directory /tmp .netrc",
+        "cp --target-directory=/tmp .netrc",
+    ],
+)
+def test_every_target_spelling_leaves_the_sources_checked(command) -> None:
+    assert exec_reads_secret(command), command
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "tar -cfz .env notes",
+        "tar -c --file=x.tar src/conf.c .env",
+        "tar cvf out.tar .env",
+        "tar -cvf out.tar .env",
+        "tar -xf .env",
+    ],
+)
+def test_tar_members_are_checked_in_every_spelling(command) -> None:
+    assert exec_reads_secret(command), command
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "tar -cf out.tar notes/",
+        "tar czf secrets-backup.env notes/",
+        "cp -rt build/ src/",
+        "cp -t/tmp notes.txt",
+    ],
+)
+def test_ordinary_copy_and_tar_spellings_run(command) -> None:
+    assert exec_reads_secret(command) is None, command
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "openssl rsa -inkey server.key -pubout",
+        "openssl s_client -CAfile ca.pem -connect example.com:443",
+        "openssl dgst -sha256 server.key",
+        "openssl req -new -key server.key -out req.csr",
+    ],
+)
+def test_openssl_reads_every_operand_but_its_outputs(command) -> None:
+    assert exec_reads_secret(command), command
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "openssl req -new -newkey rsa:2048 -nodes -keyout server.key -out server.csr",
+        "openssl genrsa -out server.key 2048",
+    ],
+)
+def test_openssl_outputs_are_writes(command) -> None:
+    assert exec_reads_secret(command) is None, command

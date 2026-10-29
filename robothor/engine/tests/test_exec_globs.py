@@ -52,7 +52,6 @@ def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         "cp {.env,leak.txt} && cat leak.txt",
         "tar cf - .en? | tar xOf -",
         "cat .env*",
-        "cat *.env",
         "xxd < .en?",
     ],
 )
@@ -105,3 +104,63 @@ def test_a_wildcard_that_merely_starts_like_a_secret_name_runs(workspace, comman
 def test_a_wildcard_that_expands_to_a_secret_file_is_refused(workspace) -> None:
     (workspace / "credentials.json").write_text("{}")
     assert exec_reads_secret("cat c*")
+
+
+# ── review round: shell semantics, sample shapes, option spellings ────
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cat [[:alpha:]]obothor.env",
+        "cat [^x].env",
+        "cat .en[v]",
+        "cp [[:alpha:]]redentials.json k && od k",
+    ],
+)
+def test_a_bracket_expression_is_refused(workspace, command) -> None:
+    """Python's fnmatch is not the shell's: POSIX classes and `[^x]` mean
+    something else to it. Agent exec does not support character classes."""
+    assert exec_reads_secret(command), command
+
+
+def test_a_bracket_class_cannot_reach_a_relative_override(workspace, monkeypatch) -> None:
+    (workspace / "instance-key").write_bytes(b"\x00" * 32)
+    monkeypatch.setenv("GENUS_VAULT_KEY_FILE", "instance-key")
+    assert exec_reads_secret("cat [[:alpha:]]nstance-key")
+
+
+def test_a_literal_path_with_brackets_that_exists_is_allowed(workspace) -> None:
+    (workspace / "report[1].txt").write_text("ok")
+    assert exec_reads_secret("cat report[1].txt") is None
+
+
+def test_a_sed_or_awk_program_is_not_a_glob(workspace) -> None:
+    assert exec_reads_secret("sed -n 's/[a-z]*//p' notes.txt") is None
+    assert exec_reads_secret("awk '/[0-9]+/ {print $1}' notes.txt") is None
+    assert exec_reads_secret("jq '.[0]' data.json") is None
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["grep TODO *", "grep -rn x *", "cat *.json", "jq . data/*.json", "cat *.yaml", "head *"],
+)
+def test_a_bare_or_extension_glob_is_judged_on_disk(workspace, command) -> None:
+    (workspace / "data").mkdir()
+    (workspace / "data" / "a.json").write_text("{}")
+    (workspace / "data.json").write_text("{}")
+    assert exec_reads_secret(command) is None, command
+
+
+def test_an_extension_glob_over_a_real_secret_is_refused(workspace) -> None:
+    (workspace / "credentials.json").write_text("{}")
+    assert exec_reads_secret("cat *.json")
+    (workspace / "robothor.env").write_text("TOKEN=x")
+    assert exec_reads_secret("cat *.env")
+
+
+def test_only_the_disk_can_refuse_this_one(workspace) -> None:
+    (workspace / "conf").mkdir()
+    (workspace / "conf" / "prod.pem").write_text("-----BEGIN")
+    assert exec_reads_secret("cat conf/p*")
+    assert exec_reads_secret("cat conf/q*") is None
