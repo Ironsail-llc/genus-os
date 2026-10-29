@@ -270,6 +270,52 @@ The chart refuses an id that would make `<fullname>-engine-<id>` longer than 63
 characters, because the template could then name a Service that does not
 exist.
 
+**Shared vault key.** Credentials in the vault are encrypted with one master
+key, and a credential the bridge stores while acting in a child tenant is read
+back by that child's engine. So the bridge, the root engine and every cell
+must hold the same key. Without one, each process looks for
+`<workspace>/.vault-key`. The bridge has no workspace at all, and each cell has
+its own, so nothing would match. The chart therefore refuses to render
+`tenants` unless `vaultKey.enabled` is true.
+
+```yaml
+vault:
+  secrets:
+    vault-key: {path: genus-os/production/vault-key}
+vaultKey:
+  enabled: true
+```
+
+The Vault path holds two fields, each 32 random bytes stored base64-encoded,
+because Vault KV holds strings:
+
+```sh
+vault kv put <mount>/<path>/vault-key \
+  key="$(openssl rand -base64 32)" \
+  fingerprint-salt="$(openssl rand -base64 32)"
+```
+
+VSO decodes them into raw files in the `<fullname>-vault-key` Secret. The
+chart mounts them read-only at `/etc/genus/vault/` on the bridge, the root
+engine and every cell, and sets `GENUS_VAULT_KEY_FILE=/etc/genus/vault/key`
+and `GENUS_FINGERPRINT_SALT_FILE=/etc/genus/vault/fingerprint-salt`. The mount
+is not optional: under those variables a missing file is a hard error, and the
+pod waits for the Secret rather than starting without a key. Rotating either
+field through VSO restarts the bridge and every engine. Rotating `key`
+re-keys nothing, though: secrets already stored stay encrypted under the old
+key and become unreadable, so treat `key` as write-once.
+
+The fingerprint salt is separate from the key. A fingerprint (`b2:…`) is
+keyed by the salt file, not by the vault key, so two processes with the same
+key but different salts print different fingerprints for the same
+credential. Sharing the salt as well keeps fingerprints comparable across the
+bridge and every engine. It has no effect on whether a secret can be
+decrypted.
+
+With `vault.enabled: false` (local values), create the
+`<fullname>-vault-key` Secret yourself with the raw bytes under `key` and
+`fingerprint-salt`.
+
 **Defaults and inheritance.**
 
 | Key | Default | Notes |
