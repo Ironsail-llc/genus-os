@@ -49,7 +49,10 @@ automatically, so it works with RLS enforcing.
 4a. Add the child's people (see [Add people to a child](#add-people-to-a-child)).
     A binding grant armed by the root operator signs the person in to the
     tenant that holds the account; grants armed by a child admin apply only
-    to addresses routed to that child.
+    to addresses routed to that child. A routing-override grant for a CHILD
+    account is armed from the CLI (`genus auth grant-binding`); dashboard
+    invites arm grants that apply only to addresses routed to the inviting
+    tenant.
 5. Move any account that already exists in the wrong tenant, BEFORE claiming
    its domain (see [Move an account](#move-an-account-to-another-tenant)).
 6. Optional: claim the child's SSO domains, so that NEW people nobody has
@@ -149,9 +152,13 @@ binds the account to their IdP identity, and signs them in to the child.
 
 A binding grant armed by the root operator signs the person in to the tenant
 that holds the account; grants armed by a child admin apply only to addresses
-routed to that child. "Root operator" means `genus auth grant-binding` from a
-shell on the appliance, or the Helm used by an owner/admin whose home and
-acting tenant are both the platform tenant. A root grant overrides domain
+routed to that child. A routing-override grant for a CHILD account is armed
+from the CLI (`genus auth grant-binding`); dashboard invites arm grants that
+apply only to addresses routed to the inviting tenant. The dashboard's invite
+and re-arm routes create a grant in the tenant the caller is acting in, so a
+root owner who switches into a child and invites there gets a grant with the
+child's rules, and that sign-in is refused unless the address routes to the
+child. A root grant overrides domain
 routing only when the tenant the address routes to has no account for it at
 all, so it can never take a sign-in that routing already names an account
 for. When it does override, the bridge writes an `auth.sso.grant_bound` audit
@@ -232,8 +239,9 @@ The same list is `settings.sso_domains` on `PATCH /api/tenants/{id}`.
   acme-child-a`) from a root shell, for an account added with `--sso`, is
   spent by that person's first SSO sign-in, which signs them in to
   `acme-child-a` whatever any claim says, unless the tenant the address routes
-  to already holds an account for it. A grant a child admin arms from the Helm
-  is spent only when the address routes to that child.
+  to already holds an account for it. A grant armed from the dashboard (by
+  anyone, including a root owner acting in a child) is spent only when the
+  address routes to the tenant it was armed in.
 
 ## Move an account to another tenant
 
