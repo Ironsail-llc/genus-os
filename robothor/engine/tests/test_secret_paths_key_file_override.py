@@ -198,3 +198,28 @@ def test_a_search_of_the_key_file_itself_is_still_refused(mount, monkeypatch) ->
     assert exec_reads_secret(f"grep -rn secret {mount / 'key'}")
     assert exec_reads_secret(f"cat {mount / 'key'}")
     assert exec_reads_secret(f"cd {mount} && grep -c x key")
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cd {mount} && grep -ekey key",
+        "cd {mount} && grep -rnekey key",
+        "cd {mount} && grep -fpatterns.txt key",
+        "cd {mount} && grep --file=patterns.txt key",
+        "cd {mount} && grep --regexp=key key",
+        "grep -ekey {mount}/.vault-key",
+        "grep --regexp=key {mount}/key",
+    ],
+)
+def test_an_attached_pattern_option_makes_every_positional_a_file(
+    mount, monkeypatch, command
+) -> None:
+    monkeypatch.setenv("GENUS_VAULT_KEY_FILE", str(mount / "key"))
+    assert exec_reads_secret(command.format(mount=mount))
+
+
+def test_an_attached_pattern_against_an_ordinary_file_is_allowed(mount, monkeypatch) -> None:
+    monkeypatch.setenv("GENUS_VAULT_KEY_FILE", str(mount / "key"))
+    assert exec_reads_secret("grep -esecret config.yaml") is None
+    assert exec_reads_secret("grep -ekey config.yaml") is None
