@@ -455,7 +455,7 @@ example_agent = ["genus-plugin.yaml", "agents/**/*", "workflows/*", "patches/*",
 |---|---|---|
 | `agents` | a directory laid out like `templates/agents/core/main`: `manifest.template.yaml`, `instructions.template.md`, optional `setup.yaml` and `SKILL.md` | rendered by the agent-template installer — the same code as `genus agent install` — into `docs/agents/<id>.yaml` and the instruction file under the instance's `brain/`, and recorded in `.robothor/installed.yaml` with `source: plugin:<distribution>`. With no `setup.yaml`, the agent id is the directory name and the version is the plugin's. `.robothor/overrides/<id>.yaml` applies exactly as it does to any template |
 | `workflows` | a file | copied to `docs/workflows/<basename>` |
-| `patches` | `agent:` an agent id the plugin does **not** ship, `file:` a YAML file with top-level `install:` and `remove:` sections | each section has `set:` — a deep merge for mappings; any other value, lists included, replaces — `delete:`, a list of keys, dotted for nested ones, and `append:` / `detach:`, which add or take out single list items (see [Composable patches](#composable-patches-append-and-detach)). The order is `set`, `append`, `delete`, `detach`. A patch may not touch `id`. A patch whose target agent does not exist is skipped with a warning. **A list replaces**: `set: {tools_allowed: [x]}` on an agent with no `tools_allowed` (which means every non-opt-in tool) narrows it to `x`; `append: {tools_allowed: [x]}` adds `x` to whatever is there |
+| `patches` | `agent:` an agent id the plugin does **not** ship, `file:` a YAML file with top-level `install:` and `remove:` sections | each section has `set:` — a deep merge for mappings; any other value, lists included, replaces — `delete:`, a list of keys, dotted for nested ones, and `append:` / `detach:`, which add or take out single list items (see [Composable patches](#composable-patches-append-and-detach)). The order is `set`, `append`, `delete`, `detach`. A patch may not touch `id`. A patch whose target agent does not exist is skipped with a warning. **A list replaces**: `set: {tools_allowed: [x]}` on an agent with no `tools_allowed` (which means every non-opt-in tool) narrows it to `x`. `append:` does not help there either: it refuses to create or fill an absent or empty `tools_allowed` (or `heartbeat_tools_allowed` / `worker_tools_allowed`), and only adds `x` to an allowlist the agent already has. To give an unrestricted agent a plugin tool that is opt-in, append it to `tools_opt_in` |
 | `files` | `src`, `dest`, `mode` (`overwrite`, the default, or `if_missing`) | `dest` must be under `brain/`, `docs/workflows/` or `docs/hooks/`, be exactly `docs/webhooks.yaml`, or be one `<name>.yaml` directly in `docs/webhooks.d/`. `if_missing` never replaces a file that exists. `brain/` has ownership rules, below (all of these are instance paths) |
 
 ### Composable patches: `append` and `detach`
@@ -485,6 +485,11 @@ remove:                 # optional: without a detach, remove takes back what ins
   for nested), creating the list — and any missing mapping above it — when it
   is absent. A key that holds something other than a list is refused, and the
   patch is not applied.
+* **Tool allowlists are never created.** An absent or empty `tools_allowed`
+  (and `heartbeat.heartbeat_tools_allowed`, `worker.worker_tools_allowed`)
+  means every non-opt-in tool, so appending to one would strip every other
+  tool. `append:` refuses that, naming the key, and adds to an allowlist only
+  where the agent already has a non-empty one.
 * **Identity.** A `hooks` item is identified by its `(stream, event_type)` and
   must have both (a `stream` may not contain `:`); an item of any other list (`bootstrap_files`,
   `warmup.memory_blocks`, `tools_allowed`, `tools_opt_in`, …) must be a scalar

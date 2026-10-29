@@ -2145,3 +2145,13 @@ def test_append_adds_to_an_allowlist_that_exists(ws, capsys) -> None:
     assert _main(ws)["tools_allowed"] == ["read_file", "alpha_probe"]
     assets.retire(_ALPHA)
     assert _main(ws)["tools_allowed"] == ["read_file"]
+
+
+def test_append_never_fills_an_empty_allowlist(ws, capsys) -> None:
+    """An empty `tools_allowed` also means every tool (the registry filters
+    only on a non-empty one)."""
+    (ws / _MAIN_YAML).write_text(_MAIN + "tools_allowed: []\n")
+    patch = "install:\n  append:\n    tools_allowed: [alpha_probe]\n"
+    assert _install(ws, **_patcher(_ALPHA, patch)) == 2
+    assert "tools_allowed" in capsys.readouterr().err
+    assert _main(ws)["tools_allowed"] == []

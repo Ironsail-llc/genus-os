@@ -1187,8 +1187,22 @@ def _list_at(target: Any, dotted: str, *, create: bool) -> list[Any] | None:
     return found
 
 
+def _is_allowlist(dotted: str) -> bool:
+    """``tools_allowed``, ``heartbeat.heartbeat_tools_allowed`` and the like: a
+    list whose absence -- or emptiness -- means every (non-opt-in) tool."""
+    leaf = dotted.rsplit(".", 1)[-1]
+    return leaf == "tools_allowed" or leaf.endswith("_tools_allowed")
+
+
 def _append(target: Any, dotted: str, items: list[Any]) -> None:
     """Upsert *items* into the list at *dotted*, matching by identity."""
+    if _is_allowlist(dotted) and not _list_at(target, dotted, create=False):
+        raise AssetError(
+            f"`{dotted}` is absent or empty, which allows every tool; appending would "
+            "narrow the agent to only the appended tools. It was not patched: append "
+            "to it only where the agent already restricts its tools, or opt the tool in "
+            "with `tools_opt_in`."
+        )
     current = _list_at(target, dotted, create=True)
     assert current is not None
     for item in items:
