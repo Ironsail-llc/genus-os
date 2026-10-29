@@ -47,8 +47,9 @@ automatically, so it works with RLS enforcing.
 3. Add the child's engine cell to the deployment and let it sync.
 4. Store the child's connector credentials.
 4a. Add the child's people (see [Add people to a child](#add-people-to-a-child)).
-    An SSO binding grant signs the person in to the tenant that holds their
-    account, whether or not that tenant claims their domain.
+    A binding grant armed by the root operator signs the person in to the
+    tenant that holds the account; grants armed by a child admin apply only
+    to addresses routed to that child.
 5. Move any account that already exists in the wrong tenant, BEFORE claiming
    its domain (see [Move an account](#move-an-account-to-another-tenant)).
 6. Optional: claim the child's SSO domains, so that NEW people nobody has
@@ -144,11 +145,17 @@ genus auth grant-binding --email alice@example.com --tenant acme-child-a --ttl 1
 `--sso` makes the same account the Helm's SSO invite makes: active, with no
 password and no identity-provider binding, so nothing can sign in as it yet.
 The person's first verified SSO sign-in with that address spends the grant,
-binds the account to their IdP identity, and signs them in to the child. That
-holds whether or not the child claims the person's domain, and even if another
-tenant claims it: a live grant is the operator's explicit choice, and it wins
-over domain routing (the bridge writes an `auth.sso.grant_bound` audit row
-when it does). Re-arm the grant if it expires first. Without `--sso` the
+binds the account to their IdP identity, and signs them in to the child.
+
+A binding grant armed by the root operator signs the person in to the tenant
+that holds the account; grants armed by a child admin apply only to addresses
+routed to that child. "Root operator" means `genus auth grant-binding` from a
+shell on the appliance, or the Helm used by an owner/admin whose home and
+acting tenant are both the platform tenant. A root grant overrides domain
+routing only when the tenant the address routes to has no account for it at
+all, so it can never take a sign-in that routing already names an account
+for. When it does override, the bridge writes an `auth.sso.grant_bound` audit
+row. Re-arm the grant if it expires first. Without `--sso` the
 account is `invited`, and
 `grant-binding` refuses it, because an invited account cannot consume a grant.
 
@@ -176,9 +183,10 @@ child.
 A brand-new SSO user (someone nobody has added) is provisioned into the tenant
 that **claims their email domain**, and into the default tenant
 (`ROBOTHOR_DEFAULT_TENANT` of the bridge) when no tenant does. Claims are
-optional, and only matter for people like that: anyone you added with
-`genus user add --sso` and armed a binding grant for signs in to the tenant
-that holds their account, whatever the claims say.
+optional, and only matter for people like that: anyone the root operator
+added with `genus user add --sso` and armed a binding grant for signs in to
+the tenant that holds their account, provided the tenant the address routes
+to holds no account for it.
 
 ```bash
 genus tenant set-domains acme-child-a example.com other.example
@@ -214,15 +222,18 @@ The same list is `settings.sso_domains` on `PATCH /api/tenants/{id}`.
   "account not eligible for SSO". The bridge logs which tenant holds the
   account, and password sign-in keeps working. So move such accounts before
   you claim the domain (step 5 before step 6 above). An account with a live
-  binding grant is not affected: the grant signs the person in to the tenant
-  that holds it.
+  binding grant from the root operator is not affected: the grant signs the
+  person in to the tenant that holds it, as long as the claiming tenant has
+  no account for the address.
 - **Fail safe.** If two tenants ever claim one domain (a hand-edited row), the
   sign-in lands in the default tenant and the bridge logs an error naming the
   domain. Fix the claim; nobody is locked out by it.
 - A binding grant (`genus auth grant-binding --email alice@example.com --tenant
-  acme-child-a`) for an account added with `--sso` is spent by that person's
-  first SSO sign-in, which signs them in to `acme-child-a`, whatever any claim
-  says.
+  acme-child-a`) from a root shell, for an account added with `--sso`, is
+  spent by that person's first SSO sign-in, which signs them in to
+  `acme-child-a` whatever any claim says, unless the tenant the address routes
+  to already holds an account for it. A grant a child admin arms from the Helm
+  is spent only when the address routes to that child.
 
 ## Move an account to another tenant
 
