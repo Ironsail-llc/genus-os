@@ -2121,3 +2121,27 @@ def test_a_contract_3_plugin_is_refused_naming_every_accepted_version(ws, capsys
     assert "'1.0'" in err and "'2.0'" in err
     assert pip.calls == []
     assert "hooks" not in _main(ws)
+
+
+@pytest.mark.parametrize(
+    "key", ["tools_allowed", "heartbeat.heartbeat_tools_allowed", "worker.worker_tools_allowed"]
+)
+def test_append_never_creates_an_allowlist_whose_absence_means_everything(ws, capsys, key) -> None:
+    """No `tools_allowed` means every non-opt-in tool; creating it with one
+    item would strip the rest."""
+    patch = f"install:\n  append:\n    {key}: [alpha_probe]\n"
+    assert _install(ws, **_patcher(_ALPHA, patch)) == 2
+    err = capsys.readouterr().err
+    assert key in err and "absent" in err
+    assert (ws / _MAIN_YAML).read_text() == _MAIN
+
+
+def test_append_adds_to_an_allowlist_that_exists(ws, capsys) -> None:
+    from robothor.plugins import assets
+
+    (ws / _MAIN_YAML).write_text(_MAIN + "tools_allowed: [read_file]\n")
+    patch = "install:\n  append:\n    tools_allowed: [alpha_probe]\n"
+    assert _install(ws, **_patcher(_ALPHA, patch)) == 0, capsys.readouterr().err
+    assert _main(ws)["tools_allowed"] == ["read_file", "alpha_probe"]
+    assets.retire(_ALPHA)
+    assert _main(ws)["tools_allowed"] == ["read_file"]
