@@ -30,8 +30,8 @@ HANDLERS: dict[str, Any] = {}
 
 #: Longest a single run_workflow call waits for the run to finish.
 MAX_WAIT_SECONDS = 120
-#: With wait_seconds=0, how long to wait anyway so an instant refusal (already
-#: running, identity rejected) is reported instead of a misleading "started".
+#: With wait_seconds=0, how long to wait anyway so an instant refusal (the
+#: workflow is already running) is reported instead of a misleading "started".
 START_GRACE_SECONDS = 2.0
 #: Most runs workflow_runs returns in one call.
 MAX_RUNS = 50
