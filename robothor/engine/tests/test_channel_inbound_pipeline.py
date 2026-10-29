@@ -59,6 +59,35 @@ def _no_session(monkeypatch):
     monkeypatch.setattr(inbound, "get_shared_session", lambda key: _Session())
 
 
+class _Store:
+    """Stands in for the chat store, which writes to the database."""
+
+    def __init__(self) -> None:
+        self.saved: list[dict[str, Any]] = []
+
+    async def save_exchange_async(
+        self, session_key: str, user_content: str, assistant_content: str, **kw: Any
+    ) -> list[int]:
+        self.saved.append(
+            {
+                "session_key": session_key,
+                "user_content": user_content,
+                "assistant_content": assistant_content,
+                **kw,
+            }
+        )
+        return [1, 2]
+
+
+@pytest.fixture(autouse=True)
+def store(monkeypatch) -> _Store:
+    from robothor.engine import chat_store
+
+    fake = _Store()
+    monkeypatch.setattr(chat_store, "save_exchange_async", fake.save_exchange_async)
+    return fake
+
+
 def _allow(identity: IdentityContext | None = None):
     async def _evaluate(*_a: Any, **_kw: Any) -> AccessDecision:
         return AccessDecision(allowed=True, identity=identity)
@@ -375,6 +404,45 @@ class TestTheTurnIsRemembered:
             monkeypatch, _refuse("no"), _GatedRunner(), text="hi", session_key="visitor:a"
         )
         assert list(sessions.get("visitor:a").history) == []
+
+    @pytest.mark.asyncio
+    async def test_a_successful_turn_is_persisted_once_so_it_survives_a_restart(
+        self, monkeypatch, sessions, store
+    ):
+        await _handle(
+            monkeypatch,
+            _allow(),
+            _GatedRunner(),
+            text="hi",
+            session_key="visitor:a",
+            channel="webwidget",
+        )
+        assert len(store.saved) == 1
+        saved = store.saved[0]
+        assert saved["session_key"] == "visitor:a"
+        assert saved["user_content"] == "hi"
+        assert saved["assistant_content"] == "re: hi"
+        assert saved["channel"] == "webwidget"
+        assert saved["tenant_id"] == TENANT
+
+    @pytest.mark.asyncio
+    async def test_a_failed_run_persists_nothing(self, monkeypatch, sessions, store):
+        await _handle(
+            monkeypatch, _allow(), _GatedRunner(fail=True), text="hi", session_key="visitor:a"
+        )
+        assert store.saved == []
+
+    @pytest.mark.asyncio
+    async def test_record_turn_false_persists_nothing(self, monkeypatch, sessions, store):
+        await _handle(
+            monkeypatch,
+            _allow(),
+            _GatedRunner(),
+            text="hi",
+            session_key="visitor:a",
+            record_turn=False,
+        )
+        assert store.saved == []
 
     @pytest.mark.asyncio
     async def test_history_limit_hands_the_run_only_the_last_turns(self, monkeypatch, sessions):
