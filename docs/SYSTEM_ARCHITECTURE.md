@@ -386,6 +386,7 @@ Two databases on the same instance:
 | `pr_reviews` | One row per (tenant, repo, pull request) for the pr-reviewer suite (migration 145): head we saw, head we last reviewed, head a task is queued for, the review job bound to it, status, pending trigger, retry state, Chat thread refs, our GitHub review ids (the only threads it resolves) and the last review's findings with their inline comment ids. Tenant RLS |
 | `pr_review_messages` | Each Google Chat message the pr-review intake handled, once, with what it did or the error it raised — a failing message is recorded and skipped, never retried. Tenant RLS |
 | `pr_review_cursors` | Where each Chat source's last intake poll stopped. Tenant RLS |
+| `plugin_state` | Plugin data (migration 154): one JSON object per (tenant, plugin, kind, key), with an optional `expires_at`. A plugin wheel cannot ship a migration, so each "table" a plugin needs is a row kind here, read and written through `robothor.plugins.state.PluginState`. Expired rows are hidden from reads at once and purged by the daemon's watchdog hourly. Tenant RLS |
 
 ### Canonical schema lifecycle
 
