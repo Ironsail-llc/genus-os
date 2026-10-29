@@ -1260,15 +1260,20 @@ run), it runs as `service:agent:<agent id>` with role `service`. Run history is 
 the caller's tenant. `list_workflows` and `workflow_runs` are read-only;
 `run_workflow` is not, and benchmark runs get none of the three.
 
-The three tools belong to no tool group. An agent with no `tools_allowed` list
-gets them; an agent with one must name each tool it should have.
+The three tools belong to no tool group. `run_workflow` is opt-in: an agent is
+offered it only when its manifest names it, in `tools_allowed` or, for an agent
+with no `tools_allowed` list, in `tools_opt_in`. The two reads are offered to an
+agent with no `tools_allowed` list; an agent with one must name each tool it
+should have. Migration 157 denies `run_workflow` to the `user` and `member`
+roles, as the HTTP route it mirrors needs `engine:control`. `owner`, `admin`
+and `service` keep it, so the operator's chat and an unattended agent that
+names it can both start workflows. A tenant that wants it back for a role adds
+a tenant-scoped `role_permissions` row.
 
 **Which to use.** Use `run_workflow` when the work is a workflow that is already
 declared: a fixed, repeatable pipeline with its own steps, timeout and run
 history. Use `spawn_agent` for open-ended work that one agent should reason
-through. A workflow can do anything its steps do, so deployments should deny
-`run_workflow` to member-class roles through RBAC (`role_permissions`) and
-leave it to the owner's own agents.
+through.
 
 ### Everything else
 
