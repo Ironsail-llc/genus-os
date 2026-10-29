@@ -223,3 +223,53 @@ def test_automations_are_the_childs(root_workspace, engine):
     ):
         body = _client().get("/api/automations").json()
     assert {row["agent_id"] for row in body["automations"]} == {"child-agent"}
+
+
+# ─── An engine that predates the manifest routes ──────────────────────
+
+
+class OldEngine(ChildEngine):
+    """A child engine without ``/api/admin/manifests*``: FastAPI's own 404."""
+
+    async def __call__(self, method, path, *, json=None, timeout=30, tenant=None):
+        if path.startswith("/api/admin/manifests"):
+            self.calls.append((method, path, tenant))
+            return 404, {"detail": "Not Found"}
+        return await super().__call__(method, path, json=json, timeout=timeout, tenant=tenant)
+
+
+@pytest.fixture
+def old_engine():
+    fake = OldEngine()
+    with (
+        patch("routers.agent_manifests.engine_request", new=fake),
+        patch("routers._manifest_backend.engine_request", new=fake),
+        patch("routers._audit.log_event"),
+    ):
+        yield fake
+
+
+def test_an_engine_without_the_manifest_routes_is_a_502_naming_the_upgrade(
+    root_workspace, old_engine, caplog
+):
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger="routers._manifest_backend"):
+        response = _client().get("/api/agent-manifests")
+    assert response.status_code == 502
+    assert "upgrade the engine" in response.json()["detail"]
+    assert any("manifest administration" in r.getMessage() for r in caplog.records)
+
+
+def test_a_single_agent_read_on_an_old_engine_is_not_reported_as_no_such_agent(
+    root_workspace, old_engine
+):
+    response = _client().get("/api/agent-manifests/child-agent")
+    assert response.status_code == 502
+    assert "upgrade the engine" in response.json()["detail"]
+
+
+def test_a_missing_agent_on_a_current_engine_is_still_no_such_agent(root_workspace, engine):
+    response = _client().get("/api/agent-manifests/nobody")
+    assert response.status_code == 404
+    assert response.json()["detail"] == "no such agent"

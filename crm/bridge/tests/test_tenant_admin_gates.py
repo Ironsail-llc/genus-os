@@ -147,7 +147,7 @@ ROUTE_CLASSES: dict[tuple[str, str], str] = {
     ("GET", "/api/audit/events.csv"): TA,
     ("GET", "/api/audit/stats"): TA,
     ("GET", "/api/audit"): TA,
-    ("GET", "/api/audit/guardrails"): R,
+    ("GET", "/api/audit/guardrails"): RA,
     ("GET", "/api/controls/audit"): RA,
     # ── appliance-wide ──
     ("GET", "/api/doctor"): R,
@@ -737,17 +737,23 @@ class TestAuditVisibility:
     def test_a_child_admin_reads_only_its_tenant_and_never_the_untenanted(self, root_is_parent):
         kwargs = self._events(CHILD_A, "admin")
         assert list(kwargs["tenants"]) == [CHILD_A]
-        assert kwargs["include_untenanted"] is False
+        assert kwargs.get("include_untenanted", False) is False
 
     def test_a_root_admin_acting_in_a_child_reads_that_child(self, root_is_parent):
         kwargs = self._events(CHILD_A, "admin", home=ROOT)
         assert list(kwargs["tenants"]) == [CHILD_A]
-        assert kwargs["include_untenanted"] is False
+        assert kwargs.get("include_untenanted", False) is False
 
-    def test_the_root_operator_at_home_reads_the_tree_and_the_untenanted(self, root_is_parent):
+    def test_the_root_operator_at_home_reads_the_whole_appliance_trail(self, root_is_parent):
+        """Unrestricted, exactly as before tenants were recorded: every tenant —
+        including independent roots like the benchmark sandbox, which no
+        hierarchy walk from the platform tenant reaches — and the NULL rows."""
         kwargs = self._events(ROOT, "owner")
-        assert set(kwargs["tenants"]) == {ROOT, CHILD_A, CHILD_B}
-        assert kwargs["include_untenanted"] is True
+        assert kwargs["tenants"] is None
+
+    def test_the_root_auditor_at_home_reads_the_whole_appliance_trail(self, root_is_parent):
+        kwargs = self._events(ROOT, "auditor")
+        assert kwargs["tenants"] is None
 
     def test_the_csv_export_is_filtered_the_same_way(self, root_is_parent):
         with (
@@ -757,7 +763,7 @@ class TestAuditVisibility:
             response = _client(CHILD_A, "auditor").get("/api/audit/events.csv")
         assert response.status_code == 200, response.text
         assert list(query.call_args.kwargs["tenants"]) == [CHILD_A]
-        assert query.call_args.kwargs["include_untenanted"] is False
+        assert query.call_args.kwargs.get("include_untenanted", False) is False
 
     def test_the_stats_are_filtered_too(self, root_is_parent):
         # Two routers declare GET /api/audit/stats (health.py first, so it is
@@ -773,7 +779,7 @@ class TestAuditVisibility:
         called = health_stats.call_args or audit_stats.call_args
         assert called is not None
         assert list(called.kwargs["tenants"]) == [CHILD_A]
-        assert called.kwargs["include_untenanted"] is False
+        assert called.kwargs.get("include_untenanted", False) is False
 
     def test_the_legacy_audit_route_is_filtered_too(self, root_is_parent):
         with (
@@ -783,4 +789,59 @@ class TestAuditVisibility:
             response = _client(CHILD_A).get("/api/audit")
         assert response.status_code == 200, response.text
         assert list(query.call_args.kwargs["tenants"]) == [CHILD_A]
-        assert query.call_args.kwargs["include_untenanted"] is False
+        assert query.call_args.kwargs.get("include_untenanted", False) is False
+
+
+# ─── audit_scope: one answer for every audit read ─────────────────────
+
+
+def _auth(tenant: str, role: str, *, home: str | None = None):
+    from robothor.auth.deps import AuthContext
+
+    return AuthContext(
+        user_id="alice",
+        tenant_id=tenant,
+        role=role,
+        typ="user",
+        audience="genus-bridge",
+        home_tenant_id=home or tenant,
+    )
+
+
+class TestAuditScope:
+    def test_the_platform_root_at_home_is_unrestricted(self, root_is_parent):
+        from routers._operator import audit_scope
+
+        assert audit_scope(_auth(ROOT, "owner")) is None
+        assert audit_scope(_auth(ROOT, "auditor")) is None
+
+    def test_the_platform_root_acting_in_a_child_sees_that_child(self, root_is_parent):
+        from routers._operator import audit_scope
+
+        with patch("robothor.engine.permissions.resolve_accessible_tenants", new=_hierarchy):
+            assert audit_scope(_auth(CHILD_A, "admin", home=ROOT)) == [CHILD_A]
+
+    def test_any_other_caller_sees_what_its_acting_tenant_reaches(self, root_is_parent):
+        from routers._operator import audit_scope
+
+        hierarchy = {CHILD_A: ("acme-child-a", "acme-grandchild")}
+        with patch(
+            "robothor.engine.permissions.resolve_accessible_tenants",
+            new=lambda tenant, role=None, **_: hierarchy[tenant] if role == "admin" else (tenant,),
+        ):
+            assert audit_scope(_auth(CHILD_A, "admin")) == ["acme-child-a", "acme-grandchild"]
+            assert audit_scope(_auth(CHILD_A, "auditor")) == [CHILD_A]
+
+    def test_every_audit_read_site_uses_it(self):
+        import inspect
+
+        from routers import audit, health
+
+        for handler in (
+            audit.get_audit_events,
+            audit.export_audit_events_csv,
+            audit.get_audit_stats,
+            health.api_query_audit,
+            health.api_audit_stats,
+        ):
+            assert "audit_scope(" in inspect.getsource(handler), handler.__name__
