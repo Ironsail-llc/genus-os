@@ -741,8 +741,13 @@ class TestTheRootGroupVerdictIsNotForever:
         root = EventHooks(_engine(engine_config, PARENT), runner=None)  # type: ignore[arg-type]
         _Recorder().bind(root)
 
+        shortened: list[bool] = []
+
         def _nearly_lapsed(reads: int) -> None:
-            if reads == 1:
+            # ``reads`` counts batches that returned entries, so it stays 1 on
+            # the empty reads that follow: shorten the TTL only the first time.
+            if reads == 1 and not shortened:
+                shortened.append(True)
                 assert fake.ttls[self.OWNER_KEY] == 180, "the claim carries a TTL"
                 fake.ttls[self.OWNER_KEY] = 5
 

@@ -69,11 +69,12 @@ REPLAY_MAX_DELIVERIES = 3
 GROUP_RIVAL_ACTIVE_MS = 60_000
 # How often every engine looks again at who else reads its group.
 GROUP_RIVAL_RECHECK_SECONDS = 60
-# Which tenant owns the root group. Written once, by the first engine to read
-# ``engine`` with no other tenant reading it and with its two tenant variables
-# in agreement; never expires. Delete it to hand the root group to another
-# tenant.
+# Which root tenant owns the root group: claimed by a root of the tenant tree
+# when nobody holds it, and refreshed by the owner on every check. Three missed
+# checks and it lapses, so a dead or re-parented owner's claim passes to another
+# root within minutes. Deleting it hands the group over at once.
 ROOT_GROUP_OWNER_KEY = "robothor:events:group-owner:" + ROOT_EVENT_GROUP
+ROOT_GROUP_OWNER_TTL_SECONDS = 180
 
 # Cap on the payload text an ``include_payload`` hook appends to its message.
 MAX_PAYLOAD_CHARS = 8000
@@ -276,9 +277,8 @@ class EventHooks:
         self._agent_runs = asyncio.Semaphore(max(1, config.max_concurrent_agents))
         # Events another tenant's engine handles; read and acked, never run.
         self.foreign_events_dropped = 0
-        # This tenant's parent in crm_tenants, once read (None: a root).
-        self._parent: str | None = None
-        self._parent_known = False
+        # Said once: a tenant with no crm_tenants row is treated as a root.
+        self._warned_no_row = False
 
     def _owns_event(self, decoded: dict[str, Any]) -> bool:
         """Whether this engine's tenant is the one the event belongs to.
@@ -342,12 +342,12 @@ class EventHooks:
     async def _parent_tenant(self) -> tuple[bool, str | None]:
         """``(known, parent)`` for this engine's tenant in ``crm_tenants``.
 
-        Read once and kept. A tenant with no row has no parent, so it is a
-        root. When the tree cannot be read, ``known`` is False and nothing is
-        cached, so the next re-check asks again.
+        Read on every check, so a row created or re-parented later takes
+        effect without a restart. A tenant with no row has no parent, so it is
+        a root -- a single-engine install that never created its row keeps
+        working -- and that is logged once. When the tree cannot be read,
+        ``known`` is False: the caller claims and reads nothing.
         """
-        if self._parent_known:
-            return True, self._parent
         try:
             from robothor.crm import dal
 
@@ -362,9 +362,16 @@ class EventHooks:
                 GROUP_RIVAL_RECHECK_SECONDS,
             )
             return False, None
-        self._parent = (row or {}).get("parentTenantId") or None
-        self._parent_known = True
-        return True, self._parent
+        if row is None and not self._warned_no_row:
+            self._warned_no_row = True
+            logger.warning(
+                "Tenant %r has no row in crm_tenants, so it is treated as a root "
+                "tenant and may hold event consumer group %r. Create its row (with "
+                "its parent, if it has one) to make that explicit.",
+                self.config.tenant_id,
+                ROOT_EVENT_GROUP,
+            )
+        return True, (row or {}).get("parentTenantId") or None
 
     async def _root_group_owner(self, redis_client: Any) -> str | None:
         """The tenant that owns the root group, claiming it if nobody does.
@@ -384,9 +391,17 @@ class EventHooks:
 
         try:
             owner = _text(await redis_client.get(ROOT_GROUP_OWNER_KEY))
+            if owner == self.config.tenant_id:
+                await redis_client.expire(ROOT_GROUP_OWNER_KEY, ROOT_GROUP_OWNER_TTL_SECONDS)
+                return owner
             if owner or tenant_env_conflict():
                 return owner
-            if await redis_client.set(ROOT_GROUP_OWNER_KEY, self.config.tenant_id, nx=True):
+            if await redis_client.set(
+                ROOT_GROUP_OWNER_KEY,
+                self.config.tenant_id,
+                nx=True,
+                ex=ROOT_GROUP_OWNER_TTL_SECONDS,
+            ):
                 logger.info(
                     "Tenant %r now owns event consumer group %r (Redis key %s)",
                     self.config.tenant_id,
@@ -430,13 +445,15 @@ class EventHooks:
             logger.error(
                 "Event consumer group %r is owned by tenant %r (consumer engine-%s), "
                 "recorded at Redis key %s, so this engine (tenant %r) will not read it. "
-                "If tenant %r should own the root group, delete that key; otherwise "
-                "give this engine its own group: GENUS_EVENT_CONSUMER_GROUP=engine-%s.",
+                "The claim lapses %ds after its owner stops refreshing it. If tenant %r "
+                "should own the root group now, delete that key; otherwise give this "
+                "engine its own group: GENUS_EVENT_CONSUMER_GROUP=engine-%s.",
                 ROOT_EVENT_GROUP,
                 owner,
                 owner,
                 ROOT_GROUP_OWNER_KEY,
                 tenant,
+                ROOT_GROUP_OWNER_TTL_SECONDS,
                 tenant,
                 tenant,
             )
