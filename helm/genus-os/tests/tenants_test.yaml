@@ -25,26 +25,32 @@ tests:
           kind: Deployment
           apiVersion: apps/v1
           name: gos-genus-os-engine-acme-child-a
+          any: true
       - containsDocument:
           kind: Service
           apiVersion: v1
           name: gos-genus-os-engine-acme-child-a
+          any: true
       - containsDocument:
           kind: PersistentVolumeClaim
           apiVersion: v1
           name: gos-genus-os-workspace-acme-child-a
+          any: true
       - containsDocument:
           kind: Deployment
           apiVersion: apps/v1
           name: gos-genus-os-engine-acme-child-b
+          any: true
       - containsDocument:
           kind: Service
           apiVersion: v1
           name: gos-genus-os-engine-acme-child-b
+          any: true
       - containsDocument:
           kind: PersistentVolumeClaim
           apiVersion: v1
           name: gos-genus-os-workspace-acme-child-b
+          any: true
 
   - it: a tenant cell carries the engine component and its own tenant label
     template: engine/tenants.yaml

@@ -4,6 +4,23 @@ orchestrator). Pass:
   .root      — top-level dot
   .component — string key into .root.Values (e.g. "engine")
 
+Optional, for the engine only (all default to the root engine's own values,
+so the root engine passes none of them except its tenant):
+  .values        — the component's values map (default .root.Values.<component>)
+  .name          — resource name (default <fullname>-<component>)
+  .tenant        — tenant engine cell id: genus-os/tenant on every label and
+                   selector this renders
+  .podTenant     — genus-os/tenant on the POD labels only (the root engine:
+                   its Deployment selector is immutable and must not gain it)
+  .narrowService — also put .podTenant in the Service and PDB selectors, which
+                   are mutable (the root engine, once tenant cells exist)
+  .workspace     — workspace map, same shape as .root.Values.workspace
+  .workspaceKey  — its values path, for error messages (default "workspace")
+  .claimName     — workspace PVC name (default genus-os.workspaceClaimName)
+  .pinnedEnv     — env that wins over .values.env (the tenant identity)
+  .googleSecretName — Secret mounted for googleWorkspace (default
+                   <fullname>-engine-google, the VSO-materialized one)
+
 Renders:
   - Deployment
   - Service (ClusterIP)
@@ -13,18 +30,26 @@ Renders:
 {{- define "genus-os.pythonWorkload" -}}
 {{- $root := .root -}}
 {{- $component := .component -}}
-{{- $cv := index $root.Values $component -}}
+{{- $cv := .values | default (index $root.Values $component) -}}
 {{- if $cv.enabled -}}
-{{- $fullName := printf "%s-%s" (include "genus-os.fullname" $root) $component | trunc 63 | trimSuffix "-" -}}
+{{- $fullName := .name | default (printf "%s-%s" (include "genus-os.fullname" $root) $component | trunc 63 | trimSuffix "-") -}}
+{{- $tenant := .tenant | default "" -}}
+{{- $podTenant := .podTenant | default $tenant -}}
+{{- $selectTenant := $tenant -}}
+{{- if and .podTenant .narrowService -}}{{- $selectTenant = .podTenant -}}{{- end -}}
+{{- $ws := .workspace | default $root.Values.workspace -}}
+{{- $wsKey := .workspaceKey | default "workspace" -}}
+{{- $claimName := .claimName | default (include "genus-os.workspaceClaimName" $root) -}}
+{{- $gwArgs := dict "root" $root "gw" ($cv.googleWorkspace | default dict) "secretName" (.googleSecretName | default (printf "%s-engine-google" (include "genus-os.fullname" $root))) "checkVault" (not .googleSecretName) -}}
 {{- $port := $cv.service.port | int -}}
 {{- $serviceEnv := dict -}}
 {{- if eq $component "engine" -}}
 {{- $_ := set $serviceEnv "ROBOTHOR_ENGINE_HOST" "0.0.0.0" -}}
-{{- $_ := set $serviceEnv "ROBOTHOR_WORKSPACE" $root.Values.workspace.mountPath -}}
-{{- $_ := set $serviceEnv "ROBOTHOR_MANIFEST_DIR" (printf "%s/docs/agents" $root.Values.workspace.mountPath) -}}
-{{- $_ := set $serviceEnv "ROBOTHOR_ALLOW_EMPTY_FLEET" (toString $root.Values.workspace.allowEmptyFleet) -}}
-{{- $_ := set $serviceEnv "ROBOTHOR_MIN_AGENT_COUNT" (toString $root.Values.workspace.minAgentCount) -}}
-{{- $_ := set $serviceEnv "ROBOTHOR_REQUIRED_AGENT_IDS" (join "," $root.Values.workspace.requiredAgentIds) -}}
+{{- $_ := set $serviceEnv "ROBOTHOR_WORKSPACE" $ws.mountPath -}}
+{{- $_ := set $serviceEnv "ROBOTHOR_MANIFEST_DIR" (printf "%s/docs/agents" $ws.mountPath) -}}
+{{- $_ := set $serviceEnv "ROBOTHOR_ALLOW_EMPTY_FLEET" (toString $ws.allowEmptyFleet) -}}
+{{- $_ := set $serviceEnv "ROBOTHOR_MIN_AGENT_COUNT" (toString $ws.minAgentCount) -}}
+{{- $_ := set $serviceEnv "ROBOTHOR_REQUIRED_AGENT_IDS" (join "," $ws.requiredAgentIds) -}}
 {{- if $root.Values.bridge.enabled -}}
 {{- $_ := set $serviceEnv "BRIDGE_URL" (printf "http://%s-bridge:%v" (include "genus-os.fullname" $root) $root.Values.bridge.service.port) -}}
 {{- end -}}
@@ -37,10 +62,14 @@ Renders:
 {{- if $root.Values.orchestrator.enabled -}}
 {{- $_ := set $serviceEnv "MEMORY_URL" (printf "http://%s-orchestrator:%v" (include "genus-os.fullname" $root) $root.Values.orchestrator.service.port) -}}
 {{- end -}}
+{{- if $root.Values.engine.enabled -}}
+{{- $_ := set $serviceEnv "ROBOTHOR_ENGINE_URL" (include "genus-os.engineUrl" $root) -}}
+{{- $_ := set $serviceEnv "GENUS_TENANT_ENGINE_URL_TEMPLATE" (include "genus-os.tenantEngineUrlTemplate" $root) -}}
 {{- end -}}
-{{- $componentEnv := mergeOverwrite $serviceEnv ($cv.env | default dict) -}}
-{{- if and (eq $component "engine") $root.Values.workspace.configMap.name $root.Values.workspace.persistence.enabled -}}
-{{- fail "workspace.configMap.name and workspace.persistence.enabled are mutually exclusive" -}}
+{{- end -}}
+{{- $componentEnv := mergeOverwrite $serviceEnv ($cv.env | default dict) (.pinnedEnv | default dict) -}}
+{{- if and (eq $component "engine") $ws.configMap.name $ws.persistence.enabled -}}
+{{- fail (printf "%s.configMap.name and %s.persistence.enabled are mutually exclusive" $wsKey $wsKey) -}}
 {{- end -}}
 ---
 apiVersion: apps/v1
@@ -48,7 +77,7 @@ kind: Deployment
 metadata:
   name: {{ $fullName }}
   labels:
-    {{- include "genus-os.labels" (dict "root" $root "component" $component) | nindent 4 }}
+    {{- include "genus-os.labels" (dict "root" $root "component" $component "tenant" $tenant) | nindent 4 }}
 spec:
   replicas: {{ $cv.replicaCount }}
   revisionHistoryLimit: 5
@@ -63,11 +92,11 @@ spec:
     {{- end }}
   selector:
     matchLabels:
-      {{- include "genus-os.selectorLabels" (dict "root" $root "component" $component) | nindent 6 }}
+      {{- include "genus-os.selectorLabels" (dict "root" $root "component" $component "tenant" $tenant) | nindent 6 }}
   template:
     metadata:
       labels:
-        {{- include "genus-os.labels" (dict "root" $root "component" $component) | nindent 8 }}
+        {{- include "genus-os.labels" (dict "root" $root "component" $component "tenant" $podTenant) | nindent 8 }}
         {{- with $root.Values.global.podLabels }}{{- toYaml . | nindent 8 }}{{- end }}
         {{- with $cv.podLabels }}{{- toYaml . | nindent 8 }}{{- end }}
       annotations:
@@ -88,17 +117,17 @@ spec:
       {{- end }}
       securityContext:
         {{- toYaml $root.Values.global.podSecurityContext | nindent 8 }}
-      {{- $ns := include "genus-os.nodeSelector" (dict "root" $root "component" $component) }}
+      {{- $ns := include "genus-os.nodeSelector" (dict "root" $root "component" $component "values" $cv) }}
       {{- if $ns | trim }}
       nodeSelector:
         {{- $ns | nindent 8 }}
       {{- end }}
-      {{- $tols := include "genus-os.tolerations" (dict "root" $root "component" $component) }}
+      {{- $tols := include "genus-os.tolerations" (dict "root" $root "component" $component "values" $cv) }}
       {{- if $tols | trim }}
       tolerations:
         {{- $tols | nindent 8 }}
       {{- end }}
-      {{- $aff := include "genus-os.affinity" (dict "root" $root "component" $component) }}
+      {{- $aff := include "genus-os.affinity" (dict "root" $root "component" $component "values" $cv "tenant" $tenant) }}
       {{- if $aff | trim }}
       affinity:
         {{- $aff | nindent 8 }}
@@ -161,8 +190,8 @@ spec:
       {{- end }}
       containers:
         - name: {{ $component }}
-          image: {{ include "genus-os.image" (dict "root" $root "component" $component) }}
-          imagePullPolicy: {{ include "genus-os.imagePullPolicy" (dict "root" $root "component" $component) }}
+          image: {{ include "genus-os.image" (dict "root" $root "component" $component "values" $cv) }}
+          imagePullPolicy: {{ include "genus-os.imagePullPolicy" (dict "root" $root "component" $component "values" $cv) }}
           securityContext:
             {{- toYaml $root.Values.global.securityContext | nindent 12 }}
           {{- with $cv.command }}
@@ -180,20 +209,20 @@ spec:
             {{- include "genus-os.commonEnv" $root | nindent 12 }}
             {{- with include "genus-os.dbCaEnv" $root | trim }}{{ . | nindent 12 }}{{- end }}
             {{- if eq $component "engine" }}
-            {{- with include "genus-os.googleWorkspaceEnv" $root | trim }}{{ . | nindent 12 }}{{- end }}
+            {{- with include "genus-os.googleWorkspaceEnv" $gwArgs | trim }}{{ . | nindent 12 }}{{- end }}
             {{- end }}
             {{- range $k, $v := $componentEnv }}
             - name: {{ $k }}
               value: {{ $v | quote }}
             {{- end }}
           envFrom:
-            {{- include "genus-os.envFromSecret" (dict "root" $root "component" $component) | nindent 12 }}
-          {{- $liveness := include "genus-os.httpProbe" (dict "root" $root "component" $component "probe" "liveness" "port" "http") }}
+            {{- include "genus-os.envFromSecret" (dict "root" $root "component" $component "values" $cv) | nindent 12 }}
+          {{- $liveness := include "genus-os.httpProbe" (dict "root" $root "component" $component "values" $cv "probe" "liveness" "port" "http") }}
           {{- if $liveness | trim }}
           livenessProbe:
             {{- $liveness | nindent 12 }}
           {{- end }}
-          {{- $readiness := include "genus-os.httpProbe" (dict "root" $root "component" $component "probe" "readiness" "port" "http") }}
+          {{- $readiness := include "genus-os.httpProbe" (dict "root" $root "component" $component "values" $cv "probe" "readiness" "port" "http") }}
           {{- if $readiness | trim }}
           readinessProbe:
             {{- $readiness | nindent 12 }}
@@ -201,8 +230,8 @@ spec:
           volumeMounts:
             {{- if eq $component "engine" }}
             - name: workspace
-              mountPath: {{ $root.Values.workspace.mountPath | quote }}
-              readOnly: {{ or $root.Values.workspace.readOnly (ne $root.Values.workspace.configMap.name "") }}
+              mountPath: {{ $ws.mountPath | quote }}
+              readOnly: {{ or $ws.readOnly (ne $ws.configMap.name "") }}
             {{- end }}
             {{- with $cv.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}
@@ -213,23 +242,23 @@ spec:
               mountPath: /app/.cache
             {{- with include "genus-os.dbCaVolumeMount" $root | trim }}{{ . | nindent 12 }}{{- end }}
             {{- if eq $component "engine" }}
-            {{- with include "genus-os.googleWorkspaceVolumeMount" $root | trim }}{{ . | nindent 12 }}{{- end }}
+            {{- with include "genus-os.googleWorkspaceVolumeMount" $gwArgs | trim }}{{ . | nindent 12 }}{{- end }}
             {{- end }}
           resources:
             {{- toYaml $cv.resources | nindent 12 }}
       volumes:
         {{- if eq $component "engine" }}
         - name: workspace
-          {{- if $root.Values.workspace.configMap.name }}
+          {{- if $ws.configMap.name }}
           configMap:
-            name: {{ $root.Values.workspace.configMap.name }}
-            {{- with $root.Values.workspace.configMap.items }}
+            name: {{ $ws.configMap.name }}
+            {{- with $ws.configMap.items }}
             items:
               {{- toYaml . | nindent 14 }}
             {{- end }}
-          {{- else if $root.Values.workspace.persistence.enabled }}
+          {{- else if $ws.persistence.enabled }}
           persistentVolumeClaim:
-            claimName: {{ include "genus-os.workspaceClaimName" $root }}
+            claimName: {{ $claimName }}
           {{- else }}
           emptyDir: {}
           {{- end }}
@@ -243,7 +272,7 @@ spec:
           emptyDir: {}
         {{- with include "genus-os.dbCaVolume" $root | trim }}{{ . | nindent 8 }}{{- end }}
         {{- if eq $component "engine" }}
-        {{- with include "genus-os.googleWorkspaceVolume" $root | trim }}{{ . | nindent 8 }}{{- end }}
+        {{- with include "genus-os.googleWorkspaceVolume" $gwArgs | trim }}{{ . | nindent 8 }}{{- end }}
         {{- end }}
         {{- if $root.Values.migrations.enabled }}
         - name: migration-api-token
@@ -270,7 +299,7 @@ kind: Service
 metadata:
   name: {{ $fullName }}
   labels:
-    {{- include "genus-os.labels" (dict "root" $root "component" $component) | nindent 4 }}
+    {{- include "genus-os.labels" (dict "root" $root "component" $component "tenant" $tenant) | nindent 4 }}
   {{- with $cv.service.annotations }}
   annotations:
     {{- toYaml . | nindent 4 }}
@@ -283,7 +312,7 @@ spec:
       targetPort: http
       protocol: TCP
   selector:
-    {{- include "genus-os.selectorLabels" (dict "root" $root "component" $component) | nindent 4 }}
+    {{- include "genus-os.selectorLabels" (dict "root" $root "component" $component "tenant" $selectTenant) | nindent 4 }}
 {{- if and $cv.ingress $cv.ingress.enabled }}
 ---
 apiVersion: networking.k8s.io/v1
@@ -291,7 +320,7 @@ kind: Ingress
 metadata:
   name: {{ $fullName }}
   labels:
-    {{- include "genus-os.labels" (dict "root" $root "component" $component) | nindent 4 }}
+    {{- include "genus-os.labels" (dict "root" $root "component" $component "tenant" $tenant) | nindent 4 }}
   {{- with $cv.ingress.annotations }}
   annotations:
     {{- toYaml . | nindent 4 }}
@@ -321,13 +350,13 @@ kind: PodDisruptionBudget
 metadata:
   name: {{ $fullName }}
   labels:
-    {{- include "genus-os.labels" (dict "root" $root "component" $component) | nindent 4 }}
+    {{- include "genus-os.labels" (dict "root" $root "component" $component "tenant" $tenant) | nindent 4 }}
 spec:
   minAvailable: {{ $cv.podDisruptionBudget.minAvailable }}
   unhealthyPodEvictionPolicy: AlwaysAllow
   selector:
     matchLabels:
-      {{- include "genus-os.selectorLabels" (dict "root" $root "component" $component) | nindent 6 }}
+      {{- include "genus-os.selectorLabels" (dict "root" $root "component" $component "tenant" $selectTenant) | nindent 6 }}
 {{- end }}
 {{- end }}
 {{- end -}}

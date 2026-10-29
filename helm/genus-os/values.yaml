@@ -115,6 +115,14 @@ global:
   deployedFromPR: ""
   deployedAt: ""
 
+  # The tenant the root engine (`engine:`) operates as: the chart sets both
+  # ROBOTHOR_TENANT_ID and ROBOTHOR_DEFAULT_TENANT on it to this value, which
+  # must equal a crm_tenants id. `default` is what the code assumes when
+  # neither is set, so the default changes nothing. Set this, not engine.env,
+  # to change it: engine.env naming either variable with another value fails
+  # at template time.
+  rootTenant: default
+
 # ─── Database connection (used by every Python service) ─────────────────────
 # The Python services read host/port/name/user from here; password comes
 # from the VSO-materialized `{fullname}-database` Secret as
@@ -479,6 +487,37 @@ engine:
   nodeSelector: {}
   tolerations: []
   affinity: {}
+
+# ─── Tenant engine cells ─────────────────────────────────────────────────────
+# Additional engines, one per child tenant, in this release. The root engine
+# (`engine:`) is unchanged. Each entry renders <fullname>-engine-<id> (a
+# Deployment and a Service) and, unless it mounts a ConfigMap or an existing
+# claim, a workspace PVC <fullname>-workspace-<id>. Every key but `id` is
+# optional; see "Tenant cells" in the chart README.
+#
+# The list itself is deployment data: keep it in the environment layer, never
+# in this chart.
+tenants: []
+#  - id: child-a                 # a crm_tenants id: lowercase DNS label
+#    replicaCount: 1             # default engine.replicaCount
+#    env: {}                     # merged over engine.env
+#    resources: {}               # default engine.resources (replaced, not merged)
+#    secretRefs: []              # default engine.secretRefs; same allow-list
+#    podLabels: {}               # also podAnnotations, nodeSelector, tolerations, affinity
+#    workspace:                  # unset keys come from the top-level workspace:
+#      allowEmptyFleet: true
+#      minAgentCount: 1
+#      requiredAgentIds: []
+#      persistence:              # merged over workspace.persistence, minus existingClaim
+#        enabled: true
+#        existingClaim: ""
+#        size: 20Gi
+#      configMap:                # never inherited from workspace.configMap
+#        name: ""
+#        items: []
+#    googleWorkspace:            # never inherited from engine.googleWorkspace
+#      enabled: false
+#      secretName: ""            # default <fullname>-engine-<id>-google
 
 # ─── Bridge (CRM API + webhooks + multi-tenancy) ─────────────────────────────
 bridge:

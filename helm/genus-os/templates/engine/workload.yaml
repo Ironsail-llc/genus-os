@@ -1,1 +1,26 @@
-{{- include "genus-os.pythonWorkload" (dict "root" . "component" "engine") -}}
+{{- /*
+The root engine: the `engine:` block, operating as global.rootTenant. Tenant
+engine cells are rendered by engine/tenants.yaml.
+
+The tenant identity is pinned from global.rootTenant. engine.env may still
+name it, but only with the same value: setting one of the two variables to
+something else would put the pod at odds with itself (robothor/constants.py,
+tenant_env_conflict), so that fails here instead of at runtime.
+*/ -}}
+{{- $rootTenant := toString (.Values.global.rootTenant | default "default") -}}
+{{- if not (regexMatch "^[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$" $rootTenant) -}}
+{{- fail (printf "global.rootTenant must be a valid label value, got %q" $rootTenant) -}}
+{{- end -}}
+{{- range $name := list "ROBOTHOR_TENANT_ID" "ROBOTHOR_DEFAULT_TENANT" -}}
+{{- $set := index ($.Values.engine.env | default dict) $name -}}
+{{- if and $set (ne (toString $set) $rootTenant) -}}
+{{- fail (printf "engine.env.%s is %q but global.rootTenant is %q; set global.rootTenant instead, the chart sets both tenant variables from it" $name (toString $set) $rootTenant) -}}
+{{- end -}}
+{{- end -}}
+{{- include "genus-os.pythonWorkload" (dict
+      "root" .
+      "component" "engine"
+      "podTenant" $rootTenant
+      "narrowService" (gt (len (.Values.tenants | default list)) 0)
+      "pinnedEnv" (dict "ROBOTHOR_TENANT_ID" $rootTenant "ROBOTHOR_DEFAULT_TENANT" $rootTenant)
+    ) -}}
