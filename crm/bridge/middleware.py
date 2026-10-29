@@ -341,12 +341,12 @@ def _authorization_denial(auth: AuthContext, method: str, path: str) -> str | No
         )
 
     if path == "/api/installed-agents" or path.startswith("/api/installed-agents/"):
-        from robothor.constants import DEFAULT_TENANT
+        from routers._operator import is_root
 
-        # Installation state is appliance-global, not tenant-local.  Until it
-        # is represented as a tenant-scoped resource, only the primary tenant
-        # may administer or inspect it.
-        if auth.tenant_id != DEFAULT_TENANT:
+        # Installation state writes the bridge host's own workspace — the
+        # platform tenant's fleet. Only a caller AT HOME in the platform tenant
+        # may administer or inspect it; a root admin acting in a child is not.
+        if not is_root(auth):
             return "appliance administration not authorized for tenant"
         scope = "agent:read" if method.upper() in {"GET", "HEAD", "OPTIONS"} else "agent:admin"
         return _privileged_access_denial(auth, scope, "agent administration not authorized")
@@ -361,14 +361,15 @@ def _authorization_denial(auth: AuthContext, method: str, path: str) -> str | No
         if denial:
             return denial
 
-        # The current ingestion and pipeline-trigger implementations are
-        # appliance-local and do not accept a tenant boundary.  Fail closed
-        # for every non-primary tenant instead of writing or executing against
-        # another tenant's state.
-        if path == "/api/memory/store" or path.startswith("/api/memory/pipeline/trigger/"):
-            from robothor.constants import DEFAULT_TENANT
+        # Ingestion is tenant-aware (``ingest_content(tenant_id=...)``); the
+        # pipeline trigger is not: it runs the host's own ingestion scripts,
+        # which read the platform tenant's sources. Run under a child's binding
+        # they would copy the platform's data into the child, so it stays with
+        # a caller at home in the platform tenant.
+        if path.startswith("/api/memory/pipeline/trigger/"):
+            from routers._operator import is_root
 
-            if auth.tenant_id != DEFAULT_TENANT:
+            if not is_root(auth):
                 return "memory operation not authorized for tenant"
 
     if method.upper() == "POST" and path.startswith("/api/tasks/"):

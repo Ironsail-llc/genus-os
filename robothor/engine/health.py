@@ -196,6 +196,13 @@ def _mount_subsystem_routers(
 
     register_admin_scheduler(app, scheduler)
 
+    # This engine's manifest files. A child tenant's engine has its own volume
+    # that the bridge cannot reach, so the agent builder reads and writes a
+    # child's manifests here.
+    from robothor.engine.admin_manifests import register as register_admin_manifests
+
+    register_admin_manifests(app)
+
     # Dropping the identity caches. The binding is a row anyone can write; the
     # belief about who a sender IS lives in THIS process for up to 300s, so a
     # revoke from the Helm has to reach here to take effect promptly.

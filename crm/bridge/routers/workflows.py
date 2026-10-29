@@ -1,18 +1,21 @@
-"""Operator-scoped, read-only workflow accounting, from workflow_runs.
+"""Tenant-scoped, read-only workflow accounting, from workflow_runs.
 
 Deliberately bridge-side: the engine's /api/workflows* is not operator-scoped and
 the dashboard proxy targets the bridge. Lists workflows that have RUN (distinct
 workflow_id in workflow_runs); a defined-but-never-run workflow is not shown, and
 the tab states that limitation rather than implying full registry coverage.
+Every query names the ACTING tenant as well as reading through the RLS-scoped
+connection.
 """
 
 from __future__ import annotations
 
 import psycopg2.extras
+from deps import get_tenant_id
 from fastapi import APIRouter, Request
 
 from robothor.db.connection import get_connection
-from routers._operator import require_operator
+from routers._operator import require_tenant_admin
 
 router = APIRouter(prefix="/api/workflows", tags=["workflows"])
 
@@ -30,19 +33,20 @@ def _iso(row: dict) -> dict:
     return {k: (v.isoformat() if hasattr(v, "isoformat") else v) for k, v in row.items()}
 
 
-def _list_workflows() -> list[dict]:
+def _list_workflows(tenant_id: str) -> list[dict]:
     rows = _rows(
         "SELECT workflow_id, COUNT(*) AS runs, MAX(started_at) AS last_run_at, "
         "COUNT(*) FILTER (WHERE status IN ('failed','timeout')) AS failures "
-        "FROM workflow_runs GROUP BY workflow_id ORDER BY MAX(started_at) DESC NULLS LAST",
-        (),
+        "FROM workflow_runs WHERE tenant_id = %s "
+        "GROUP BY workflow_id ORDER BY MAX(started_at) DESC NULLS LAST",
+        (tenant_id,),
     )
     out = []
     for r in rows:
         last = _rows(
-            "SELECT status FROM workflow_runs WHERE workflow_id = %s "
+            "SELECT status FROM workflow_runs WHERE workflow_id = %s AND tenant_id = %s "
             "ORDER BY started_at DESC NULLS LAST LIMIT 1",
-            (r["workflow_id"],),
+            (r["workflow_id"], tenant_id),
         )
         d = _iso(r)
         d["last_status"] = last[0]["status"] if last else None
@@ -50,25 +54,25 @@ def _list_workflows() -> list[dict]:
     return out
 
 
-def _workflow_runs(workflow_id: str, limit: int) -> list[dict]:
+def _workflow_runs(workflow_id: str, limit: int, tenant_id: str) -> list[dict]:
     rows = _rows(
         "SELECT id, workflow_id, status, trigger_type, steps_total, steps_completed, "
         "steps_failed, steps_skipped, duration_ms, started_at, completed_at, error_message "
-        "FROM workflow_runs WHERE workflow_id = %s "
+        "FROM workflow_runs WHERE workflow_id = %s AND tenant_id = %s "
         "ORDER BY started_at DESC NULLS LAST LIMIT %s",
-        (workflow_id, limit),
+        (workflow_id, tenant_id, limit),
     )
     return [_iso(r) for r in rows]
 
 
 @router.get("")
 def list_workflows(request: Request) -> list[dict]:
-    require_operator(request)
-    return _list_workflows()
+    require_tenant_admin(request)
+    return _list_workflows(get_tenant_id(request))
 
 
 @router.get("/{workflow_id}/runs")
 def workflow_runs(workflow_id: str, request: Request, limit: int = 20) -> list[dict]:
-    require_operator(request)
+    require_tenant_admin(request)
     limit = max(1, min(limit, _MAX_LIMIT))
-    return _workflow_runs(workflow_id, limit)
+    return _workflow_runs(workflow_id, limit, get_tenant_id(request))

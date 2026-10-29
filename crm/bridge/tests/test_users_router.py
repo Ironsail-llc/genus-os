@@ -323,8 +323,18 @@ def test_a_non_operator_cannot_list_users(request, client_name, store):
     assert client.get("/api/users").status_code == 403
 
 
-def test_another_tenants_operator_cannot_list_users(controls_client_as_other_tenant_owner, store):
-    assert controls_client_as_other_tenant_owner.get("/api/users").status_code == 403
+def test_another_tenants_operator_lists_only_its_own_users(
+    controls_client_as_other_tenant_owner, store, monkeypatch
+):
+    """Accounts are per tenant: another tenant's owner sees ITS accounts."""
+    from routers import users
+
+    asked: list[str] = []
+    monkeypatch.setattr(
+        users.accounts, "list_accounts", lambda tenant_id: asked.append(tenant_id) or []
+    )
+    assert controls_client_as_other_tenant_owner.get("/api/users").status_code == 200
+    assert asked == ["acme-corp"]
 
 
 # ── Invite ──────────────────────────────────────────────────────────────

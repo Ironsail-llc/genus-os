@@ -476,7 +476,11 @@ async def test_memory_blocks_are_privileged_and_tenant_bound(test_client, monkey
 
 
 @pytest.mark.asyncio
-async def test_memory_ingestion_requires_permission_and_primary_tenant(test_client, monkeypatch):
+async def test_memory_ingestion_requires_permission_and_lands_in_the_callers_tenant(
+    test_client, monkeypatch
+):
+    """Ingestion is tenant-aware: a secondary tenant's admin is no longer
+    refused, its content is ingested into ITS tenant and nobody else's."""
     from robothor.constants import DEFAULT_TENANT
 
     _secure_mode(monkeypatch)
@@ -494,7 +498,7 @@ async def test_memory_ingestion_requires_permission_and_primary_tenant(test_clie
             json={"content": "a durable fact"},
             headers={"Authorization": f"Bearer {member_token}"},
         )
-        denied_tenant = await test_client.post(
+        secondary = await test_client.post(
             "/api/memory/store",
             json={"content": "a durable fact"},
             headers={"Authorization": f"Bearer {secondary_admin_token}"},
@@ -507,14 +511,18 @@ async def test_memory_ingestion_requires_permission_and_primary_tenant(test_clie
 
     assert denied_member.status_code == 403
     assert denied_member.json() == {"error": "memory administration not authorized"}
-    assert denied_tenant.status_code == 403
-    assert denied_tenant.json() == {"error": "memory operation not authorized for tenant"}
+    assert secondary.status_code == 200
     assert allowed.status_code == 200
-    ingest.assert_awaited_once_with(
+    assert [call.kwargs["tenant_id"] for call in ingest.await_args_list] == [
+        "tenant-b",
+        DEFAULT_TENANT,
+    ]
+    ingest.assert_awaited_with(
         "a durable fact",
         source_channel="api",
         content_type="conversation",
         metadata={"tenant_id": DEFAULT_TENANT},
+        tenant_id=DEFAULT_TENANT,
     )
 
 

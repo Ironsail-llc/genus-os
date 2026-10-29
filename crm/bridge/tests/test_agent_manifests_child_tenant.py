@@ -37,6 +37,8 @@ CHILD_AGENT = {
     "instruction_file": "brain/CHILD_AGENT.md",
 }
 
+CHILD_MODEL = "openrouter/example/child-model"
+
 ROOT_AGENT = {**CHILD_AGENT, "id": "root-agent", "name": "Root Agent"}
 
 
@@ -61,11 +63,11 @@ class ChildEngine:
                 "manifests": [yaml.safe_load(text) for text in self.files.values()],
                 "failures": [],
                 "main_agent_id": "child-agent",
-                "default_model": "",
+                "default_model": CHILD_MODEL,
             }
         if path == "/api/admin/manifests/context":
             return 200, {
-                "defaults_yaml": "",
+                "defaults_yaml": f"model:\n  primary: {CHILD_MODEL}\n",
                 "schema_yaml": "",
                 "existing": [p for p in (json or {}).get("paths", []) if p in self.instructions],
             }
@@ -132,8 +134,11 @@ def root_workspace(tmp_path, monkeypatch):
 @pytest.fixture
 def engine():
     fake = ChildEngine()
+    # Both modules that dial the engine: the router (tools, reconcile, trigger)
+    # and the manifest backend (the store calls).
     with (
         patch("routers.agent_manifests.engine_request", new=fake),
+        patch("routers._manifest_backend.engine_request", new=fake),
         patch("routers._audit.log_event"),
     ):
         yield fake

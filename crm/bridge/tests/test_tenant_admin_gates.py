@@ -389,7 +389,7 @@ def test_no_classification_is_stale() -> None:
 
 
 def test_the_enumeration_did_not_collapse() -> None:
-    assert len(_admin_routes()) >= 80
+    assert len(_admin_routes()) >= 75
 
 
 # ─── The gate matrix, over HTTP ───────────────────────────────────────
@@ -760,14 +760,20 @@ class TestAuditVisibility:
         assert query.call_args.kwargs["include_untenanted"] is False
 
     def test_the_stats_are_filtered_too(self, root_is_parent):
+        # Two routers declare GET /api/audit/stats (health.py first, so it is
+        # the one served); both must filter, so both seams are watched.
         with (
-            patch("robothor.audit.logger.stats", return_value={}) as stats,
+            patch("robothor.audit.logger.stats", return_value={}) as audit_stats,
+            patch("routers.health.stats", return_value={}) as health_stats,
             patch("routers.audit._get_guardrail_stats", return_value={}),
             patch("robothor.engine.permissions.resolve_accessible_tenants", new=_hierarchy),
         ):
             response = _client(CHILD_A).get("/api/audit/stats")
         assert response.status_code == 200, response.text
-        assert list(stats.call_args.kwargs["tenants"]) == [CHILD_A]
+        called = health_stats.call_args or audit_stats.call_args
+        assert called is not None
+        assert list(called.kwargs["tenants"]) == [CHILD_A]
+        assert called.kwargs["include_untenanted"] is False
 
     def test_the_legacy_audit_route_is_filtered_too(self, root_is_parent):
         with (

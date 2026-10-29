@@ -36,57 +36,36 @@ Four properties this file is built around:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
-import os
 import re
-import tempfile
 from datetime import UTC, datetime
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
 
 import yaml
 from deps import get_tenant_id
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from robothor.engine.manifest_store import main_agent_id
 from robothor.engine.sanitize import sanitize_log
-from robothor.templates.safety import (
-    TemplateSecurityError,
-    contained_path,
-    trusted_directory,
-    validate_identifier,
-    workspace_path,
-)
+from robothor.templates.safety import TemplateSecurityError, validate_identifier
 from routers import _manifest_validation as validation
 from routers._audit import audited
 from routers._engine_client import engine_request
+from routers._manifest_backend import Backend, LocalBackend, backend_for
 from routers._manifest_rows import _broken, _chat_fields, _summary
-from routers._operator import require_operator
+from routers._operator import require_tenant_admin
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 
-def _require_primary_tenant(tenant_id: str = Depends(get_tenant_id)) -> None:
-    """The agent fleet is appliance-global, so deny secondary tenants.
-
-    Symmetric with ``installed_agents``: one engine owns one manifest
-    directory, and a second tenant's operator editing it would be editing
-    somebody else's fleet.
-    """
-    from robothor.constants import DEFAULT_TENANT
-
-    if tenant_id != DEFAULT_TENANT:
-        raise HTTPException(
-            status_code=403,
-            detail="appliance administration not authorized for tenant",
-        )
-
-
-router = APIRouter(
-    tags=["agent-manifests"],
-    dependencies=[Depends(_require_primary_tenant)],
-)
+router = APIRouter(tags=["agent-manifests"])
 
 #: The only paths a simple-form PATCH may write. Everything else in the
 #: document survives untouched, including keys this code has never heard of.
@@ -123,66 +102,33 @@ FORM_OWNED_PATHS: tuple[str, ...] = (
 #: union would silently keep it.
 _REPLACED_LIST_PATHS = frozenset({"model.fallbacks", "tools_allowed", "tools_denied", "changelog"})
 
-#: How many previous versions of a manifest are kept per agent.
-HISTORY_DEPTH = 5
-
-#: Sub-directories of the manifest dir that the engine's loader cannot see:
-#: ``load_manifest_dir`` globs ``*.yaml`` one level deep, non-recursively.
-HISTORY_DIR = ".history"
-RETIRED_DIR = "retired"
-
 #: The scaffold templates ``genus agent scaffold`` renders, so a Helm-created
 #: agent and a CLI-created one are the same kind of object.
 _INSTRUCTION_TEMPLATE = "agent-instructions.md"
 _MANIFEST_TEMPLATE = "agent-manifest.yaml"
 
 
-# ─── Paths ───────────────────────────────────────────────────────────
+# ─── Where the acting tenant's manifests are ─────────────────────────
 
 
-def _workspace() -> Path:
-    """The workspace the ENGINE resolves, not the bridge's own view of it.
+def _backend(request: Request) -> Backend:
+    """The platform tenant's files on this host, or a child tenant's engine.
 
-    Same authority ``providers.py`` reads for the identical reason: writing a
-    manifest anywhere the engine does not look produces a save that reports
-    success, survives a reload, and changes nothing about the fleet.
+    The ACTING tenant decides: a root admin who switched into a child edits
+    the child's fleet, on the child's engine.
     """
-    from robothor.engine.config import EngineConfig
-
-    return EngineConfig.from_env().workspace
-
-
-def _manifest_dir() -> Path:
-    from robothor.engine.config import EngineConfig
-
-    return EngineConfig.from_env().manifest_dir
+    return backend_for(get_tenant_id(request))
 
 
 def _main_agent_id() -> str:
-    """The agent whose conversation a chat request reaches by sending NO key.
+    """The agent a chat request reaches by sending NO key, on this host's engine.
 
-    Read out of ``EngineConfig.main_session_key``, not ``default_chat_agent``.
-    They are two independent environment variables and they are free to
-    disagree, and only one of them answers the question the browser is asking.
-    ``chat.py::_effective_session_key`` substitutes ``main_session_key`` for an
-    empty key and then derives the agent as ``parts[1]``; this derives it the
-    same way, so the listing cannot name one agent while the engine runs
-    another. ``default_chat_agent`` says which agent an interactive turn is
-    *dispatched* to — a different question, and the wrong answer here.
-
-    A key that is not shaped ``agent:<id>:…`` leaves nothing to derive, and the
-    honest fallback is the other configured value rather than a guess.
-
-    Resolved ONCE per listing by the caller: this builder reads the environment
-    and touches the filesystem, and a fleet of twenty is twenty of those.
+    Resolved ONCE per listing by the caller: ``EngineConfig.from_env`` reads
+    the environment and touches the filesystem, and a fleet of twenty is twenty
+    of those. ``robothor.engine.manifest_store.main_agent_id`` explains why it
+    is derived from ``main_session_key`` and not ``default_chat_agent``.
     """
-    from robothor.engine.config import EngineConfig
-
-    config = EngineConfig.from_env()
-    parts = config.main_session_key.split(":")
-    if len(parts) >= 2 and parts[1]:
-        return parts[1]
-    return config.default_chat_agent
+    return main_agent_id()
 
 
 def _refused(error: TemplateSecurityError) -> HTTPException:
@@ -196,26 +142,6 @@ def _refused(error: TemplateSecurityError) -> HTTPException:
     return HTTPException(status_code=422, detail=str(error))
 
 
-def _manifest_root() -> Path:
-    """The manifest directory, created and canonicalized.
-
-    Wrapped like every other path helper here: ``trusted_directory`` refuses a
-    root reached through a symlink, and that refusal is an operator's
-    misconfiguration rather than a bug in this process.
-    """
-    directory = _manifest_dir()
-    try:
-        directory.mkdir(parents=True, exist_ok=True)
-        return trusted_directory(directory, label="agent manifest root")
-    except TemplateSecurityError as error:
-        raise _refused(error) from error
-    except OSError as error:
-        logger.warning("Manifest directory unusable: %s", type(error).__name__)
-        raise HTTPException(
-            status_code=422, detail="the agent manifest directory is not writable"
-        ) from error
-
-
 def _safe_id(agent_id: object) -> str:
     """A kebab-case agent id, or a 422 naming the rule it broke."""
     try:
@@ -224,71 +150,11 @@ def _safe_id(agent_id: object) -> str:
         raise _refused(error) from error
 
 
-def _manifest_path(agent_id: str) -> Path:
-    try:
-        return contained_path(_manifest_root(), f"{agent_id}.yaml", label="agent manifest")
-    except TemplateSecurityError as error:
-        raise _refused(error) from error
-
-
 def _instruction_filename(agent_id: str) -> str:
     return f"{agent_id.upper().replace('-', '_')}.md"
 
 
-def _instruction_path(relative: object) -> Path:
-    """Resolve ``brain/<FILE>.md`` inside the workspace, or refuse.
-
-    ``allowed_prefix="brain"`` is what the template installer uses, so a
-    Helm-created agent lands exactly where ``genus agent install`` puts one.
-    A ``brain/`` that is a symlink outside the workspace is refused here
-    rather than followed.
-    """
-    try:
-        return workspace_path(
-            _workspace(),
-            relative,
-            allowed_prefix="brain",
-            label="agent instruction file",
-        )
-    except TemplateSecurityError as error:
-        raise _refused(error) from error
-
-
-# ─── Atomic writes + history ─────────────────────────────────────────
-
-
-def _write_atomically(path: Path, text: str, *, exclusive: bool = False) -> None:
-    """Replace one file in a single step, leaving no residue on failure.
-
-    Temp file in the SAME directory so ``os.replace`` stays atomic, fsync
-    before the rename so a power loss cannot leave a zero-length manifest, and
-    ``BaseException`` on the cleanup so a ``KeyboardInterrupt`` mid-write does
-    not strand a ``.tmp`` in the directory the engine globs.
-
-    ``exclusive=True`` makes the create path a create: ``os.replace`` happily
-    overwrites, so ``.exists()`` followed by a write is a check-then-act race in
-    which two concurrent creates both clear the 409 and the second silently
-    destroys the first. ``O_EXCL`` moves the decision into the kernel, where it
-    is the only place it can actually be atomic.
-    """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
-    temp_path = Path(name)
-    try:
-        with os.fdopen(descriptor, "w") as handle:
-            handle.write(text)
-            handle.flush()
-            os.fsync(handle.fileno())
-        if exclusive:
-            # link() fails with EEXIST if the target exists — the atomic
-            # "create only" primitive os.replace does not offer.
-            os.link(temp_path, path)
-            temp_path.unlink(missing_ok=True)
-        else:
-            temp_path.replace(path)
-    except BaseException:
-        temp_path.unlink(missing_ok=True)
-        raise
+# ─── Serialisation ───────────────────────────────────────────────────
 
 
 def _dump(document: dict[str, Any]) -> str:
@@ -303,42 +169,6 @@ def _dump(document: dict[str, Any]) -> str:
     return yaml.safe_dump(document, sort_keys=False, allow_unicode=True, width=100)
 
 
-def _snapshot(agent_id: str) -> None:
-    """Copy the current manifest into the agent's history ring.
-
-    Best-effort by design: losing a snapshot is a smaller harm than refusing an
-    edit the operator asked for, and the ring is a convenience over git, not
-    the backup story.
-    """
-    source = _manifest_path(agent_id)
-    if not source.is_file():
-        return
-    # Microseconds, not whole seconds: two edits inside one second are a normal
-    # thing for a form (toggle disabled, fix the cron), and a second-resolution
-    # name silently overwrote the earlier snapshot — a ring of five that held
-    # one entry. Every name shares this shape, so a plain sort is chronological.
-    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S.%fZ")
-    try:
-        target = contained_path(
-            _manifest_root(),
-            f"{HISTORY_DIR}/{agent_id}/{stamp}.yaml",
-            label="manifest history entry",
-        )
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
-        for stale in sorted(target.parent.glob("*.yaml"))[:-HISTORY_DEPTH]:
-            stale.unlink(missing_ok=True)
-    except Exception as error:  # noqa: BLE001 — a snapshot must not block an edit
-        # The TYPE only: an OSError's str() is "[Errno 13] Permission denied:
-        # '/home/<user>/robothor/docs/agents/...'". This was the one log line
-        # in the router that could print a path (CLAUDE.md rule 2).
-        logger.warning(
-            "Could not snapshot manifest for %s: %s",
-            sanitize_log(agent_id),
-            type(error).__name__,
-        )
-
-
 # ─── Reading ─────────────────────────────────────────────────────────
 #
 # The row shapers — `_block`, `_summary`, `_chat_fields`, `_broken` — live in
@@ -349,9 +179,8 @@ def _snapshot(agent_id: str) -> None:
 
 
 def _scan() -> Any:
-    from robothor.engine.config import load_manifest_dir
-
-    return load_manifest_dir(_manifest_dir())
+    """The PLATFORM tenant's manifests, synchronously (``automations`` and ``fleet``)."""
+    return LocalBackend().scan_sync()
 
 
 def _parse(text: str) -> dict[str, Any]:
@@ -374,14 +203,14 @@ def _parse(text: str) -> dict[str, Any]:
 # ValidationContext. See that module's header for the seam.
 
 
-async def _engine_tools() -> tuple[set[str], list[dict[str, str]]]:
-    """The engine's registered tool names, and a warning if it would not say.
+async def _engine_tools(tenant: str | None) -> tuple[set[str], list[dict[str, str]]]:
+    """The tenant's engine's registered tool names, and a warning if it would not say.
 
     An unreachable engine downgrades the tool check to a warning rather than
     failing the save: the operator would otherwise be unable to edit an agent
     while the engine is down, which is exactly when they most want to.
     """
-    status, body = await engine_request("GET", "/api/admin/tools")
+    status, body = await engine_request("GET", "/api/admin/tools", tenant=tenant)
     if status >= 400 or not isinstance(body, dict):
         return set(), [
             validation.issue(
@@ -393,27 +222,34 @@ async def _engine_tools() -> tuple[set[str], list[dict[str, str]]]:
     return {str(name) for name in body.get("tools") or []}, []
 
 
-async def _validation_context() -> validation.ValidationContext:
+@contextlib.asynccontextmanager
+async def _validation_context(
+    backend: Backend, *documents: dict[str, Any]
+) -> AsyncIterator[validation.ValidationContext]:
     """One view of the world for every verdict in this request.
 
     Its own function so an edit can validate the BEFORE and AFTER documents
-    against the same fleet and the same tool list — see ValidationContext.
+    against the same fleet and the same tool list — see ValidationContext. A
+    context manager because, for a child tenant, the files the validators read
+    are a throwaway copy of that tenant's (``RemoteBackend.validation_paths``).
     """
-    scan = await asyncio.to_thread(_scan)
+    scan = await backend.scan()
     fleet = {str(m["id"]): m for m in scan.manifests if isinstance(m.get("id"), str)}
-    tools, tool_warnings = await _engine_tools()
-    return validation.ValidationContext(
-        fleet=fleet,
-        tools=tools,
-        manifest_dir=_manifest_dir(),
-        repo_root=_workspace(),
-        tool_warnings=tool_warnings,
-    )
+    tools, tool_warnings = await _engine_tools(backend.tenant)
+    async with backend.validation_paths(list(documents)) as (manifest_dir, repo_root):
+        yield validation.ValidationContext(
+            fleet=fleet,
+            tools=tools,
+            manifest_dir=manifest_dir,
+            repo_root=repo_root,
+            tool_warnings=tool_warnings,
+        )
 
 
-async def _validate(document: dict[str, Any]) -> dict[str, Any]:
+async def _validate(backend: Backend, document: dict[str, Any]) -> dict[str, Any]:
     """One document's verdict, against a context fetched for it alone."""
-    return await validation.validate(document, await _validation_context())
+    async with _validation_context(backend, document) as context:
+        return await validation.validate(document, context)
 
 
 def _refuse(verdict: dict[str, Any]) -> None:
@@ -517,15 +353,13 @@ def _kebab(name: str) -> str:
     return re.sub(r"-{2,}", "-", slug)
 
 
-def _fleet_default_model() -> str:
-    from robothor.engine import config as engine_config
+def _scaffold(
+    agent_id: str, body: CreateRequest, fleet_model: str
+) -> tuple[dict[str, Any], str, str]:
+    """``(manifest, instruction_relpath, instruction_text)`` for a new agent.
 
-    block = engine_config._load_defaults(_manifest_dir()).get("model") or {}
-    return str(block.get("primary") or "")
-
-
-def _scaffold(agent_id: str, body: CreateRequest) -> tuple[dict[str, Any], str, str]:
-    """``(manifest, instruction_relpath, instruction_text)`` for a new agent."""
+    ``fleet_model`` is the acting tenant's ``_defaults.yaml`` primary.
+    """
     name = body.name.strip() or agent_id
     description = body.description.strip() or f"A new agent: {agent_id}"
     instruction_filename = _instruction_filename(agent_id)
@@ -555,7 +389,7 @@ def _scaffold(agent_id: str, body: CreateRequest) -> tuple[dict[str, Any], str, 
     # nothing means the agent inherits from _defaults.yaml, which is what the
     # templates intend and what `check_structure` accepts.
     model: dict[str, Any] = {}
-    primary = (body.model or "").strip() or _fleet_default_model()
+    primary = (body.model or "").strip() or fleet_model
     if primary:
         model["primary"] = primary
     if body.fallbacks:
@@ -696,8 +530,8 @@ class DeleteRequest(BaseModel):
 # ─── Engine reconcile ────────────────────────────────────────────────
 
 
-async def reconcile_engine_schedules() -> dict[str, Any]:
-    """Tell the engine to re-derive its job set, and report what it said.
+async def reconcile_engine_schedules(tenant: str | None = None) -> dict[str, Any]:
+    """Tell *tenant*'s engine to re-derive its job set, and report what it said.
 
     Never raises. A manifest write that succeeded is not rolled back because
     the engine could not be reached — the file on disk is the source of truth
@@ -705,7 +539,7 @@ async def reconcile_engine_schedules() -> dict[str, Any]:
     not happen is the operator being told the agent is live when it is not, so
     the failure is reported in the response instead of swallowed.
     """
-    status, body = await engine_request("POST", "/api/admin/scheduler/reconcile")
+    status, body = await engine_request("POST", "/api/admin/scheduler/reconcile", tenant=tenant)
     if status >= 400 or not isinstance(body, dict):
         detail = body.get("error") if isinstance(body, dict) else None
         return {"applied": False, "error": detail or "the engine did not reconcile"}
@@ -717,10 +551,10 @@ async def reconcile_engine_schedules() -> dict[str, Any]:
 
 @router.get("/api/agent-manifests")
 async def list_manifests(request: Request) -> dict[str, Any]:
-    """Every agent this appliance has, including the ones that will not load.
+    """Every agent the ACTING tenant has, including the ones that will not load.
 
-    ``require_operator`` on a GET deliberately: this enumerates the fleet, its
-    models and its delivery targets, which is not member data.
+    Gated on a GET deliberately: this enumerates the fleet, its models and its
+    delivery targets, which is not member data.
 
     Per manifest rather than one generator over all of them, so that sentence
     stays true. ``_block`` handles the shapes known to break ``_summary`` today;
@@ -728,9 +562,11 @@ async def list_manifests(request: Request) -> dict[str, Any]:
     ``broken``, where the operator can see which one to fix — not in a 500 that
     takes the other nineteen agents off the page with it.
     """
-    require_operator(request)
-    scan = await asyncio.to_thread(_scan)
-    main_agent_id = _main_agent_id()
+    require_tenant_admin(request)
+    scan = await _backend(request).scan()
+    # A child tenant's engine names its own main agent in the scan.
+    remote_main = getattr(scan, "main_agent_id", None)
+    main_agent_id = remote_main if remote_main is not None else _main_agent_id()
     agents: list[dict[str, Any]] = []
     undescribable: list[dict[str, str]] = []
     for manifest in scan.manifests:
@@ -767,12 +603,12 @@ async def get_manifest(agent_id: str, request: Request) -> dict[str, Any]:
     the operator their agent does not exist when the file is sitting there with
     a typo in it is the confusion the whole scan machinery exists to remove.
     """
-    require_operator(request)
+    require_tenant_admin(request)
     agent_id = _safe_id(agent_id)
-    path = _manifest_path(agent_id)
-    if not path.is_file():
+    backend = _backend(request)
+    text = await backend.read(agent_id)
+    if text is None:
         raise HTTPException(status_code=404, detail="no such agent")
-    text = await asyncio.to_thread(path.read_text, encoding="utf-8")
     try:
         document = _parse(text)
     except HTTPException as unreadable:
@@ -789,25 +625,11 @@ async def get_manifest(agent_id: str, request: Request) -> dict[str, Any]:
     return {
         "manifest": document,
         "yaml": text,
-        "instructions": await asyncio.to_thread(_read_instructions, document),
-        "validation": await _validate(document),
+        # An instruction file outside the workspace reads as "" rather than a
+        # 422: the refusal is right, making it fatal to the page is not.
+        "instructions": await backend.read_instructions(document),
+        "validation": await _validate(backend, document),
     }
-
-
-def _read_instructions(document: dict[str, Any]) -> str:
-    """The agent's instruction file, or an empty string if it has none."""
-    relative = document.get("instruction_file")
-    if not relative:
-        return ""
-    try:
-        path = _instruction_path(relative)
-    except HTTPException:
-        # A READ of the fleet must not 422 because one agent names an
-        # instruction file outside the workspace. The refusal is right; making
-        # it fatal to the page is not.
-        logger.warning("Refusing to read an instruction file outside the workspace")
-        return ""
-    return path.read_text(encoding="utf-8") if path.is_file() else ""
 
 
 @router.post("/api/agent-manifests/validate")
@@ -818,7 +640,7 @@ async def validate_manifest(body: ValidateRequest, request: Request) -> dict[str
     editor sent a malformed request" the same answer, which is unusable for a
     form that validates as the operator types.
     """
-    require_operator(request)
+    require_tenant_admin(request)
     if body.manifest is not None:
         document = body.manifest
     elif body.yaml is not None:
@@ -832,7 +654,7 @@ async def validate_manifest(body: ValidateRequest, request: Request) -> dict[str
             }
     else:
         raise HTTPException(status_code=422, detail="send either 'manifest' or 'yaml'")
-    return await _validate(document)
+    return await _validate(_backend(request), document)
 
 
 @router.post("/api/agent-manifests", status_code=201)
@@ -842,56 +664,36 @@ async def create_manifest(body: CreateRequest, request: Request) -> dict[str, An
     409 rather than an overwrite on a colliding id: the ids are derived from a
     display name, so a collision is far more likely to be an operator who
     forgot they already built this agent than one who meant to replace it.
+    The check here is a courtesy; the backend's exclusive create is the
+    decision, so two concurrent creates of one id cannot both win.
     """
-    require_operator(request)
+    require_tenant_admin(request)
     agent_id = _safe_id(body.id if body.id is not None else _kebab(body.name))
-    if _manifest_path(agent_id).exists():
+    backend = _backend(request)
+    if await backend.read(agent_id) is not None:
         raise HTTPException(status_code=409, detail="an agent with that id already exists")
 
     document, instruction_relative, instructions = await asyncio.to_thread(
-        _scaffold, agent_id, body
+        _scaffold, agent_id, body, await backend.default_model()
     )
-    verdict = await _validate(document)
+    verdict = await _validate(backend, document)
     _refuse(verdict)
 
-    await asyncio.to_thread(_write_pair, agent_id, document, instruction_relative, instructions)
+    # Instructions first, manifest second (ManifestStore.create).
+    await backend.create(agent_id, _dump(document), instruction_relative, instructions)
     audited(request, "helm.agent_manifest.create", action=agent_id, agent_id=agent_id)
     return {
         "id": agent_id,
         "manifest": document,
         "warnings": verdict["warnings"],
-        "reconcile": await reconcile_engine_schedules(),
+        "reconcile": await reconcile_engine_schedules(backend.tenant),
     }
-
-
-def _write_pair(
-    agent_id: str, document: dict[str, Any], instruction_relative: str, instructions: str
-) -> None:
-    """Manifest and instructions, each replaced atomically.
-
-    Not one transaction: two files on a POSIX filesystem cannot be. The order
-    is deliberate — instructions first, manifest second — so the window between
-    them is "an instruction file nothing references" rather than "an agent
-    whose instructions do not exist", which is the half that makes a run fail.
-    """
-    instruction_path = _instruction_path(instruction_relative)
-    if not instruction_path.exists():
-        _write_atomically(instruction_path, instructions)
-    try:
-        _write_atomically(_manifest_path(agent_id), _dump(document), exclusive=True)
-    except FileExistsError as error:
-        # The 409 above is a courtesy; this is the decision. Two concurrent
-        # creates of the same id both pass `.exists()`, and without O_EXCL the
-        # second would silently destroy the first.
-        raise HTTPException(
-            status_code=409, detail="an agent with that id already exists"
-        ) from error
 
 
 @router.patch("/api/agent-manifests/{agent_id}")
 async def patch_manifest(agent_id: str, body: PatchRequest, request: Request) -> dict[str, Any]:
     """Edit the paths the form owns, and nothing else. See :func:`_merge_owned`."""
-    require_operator(request)
+    require_tenant_admin(request)
     return await _apply_patch(request, agent_id, body.owned_paths(), body.change)
 
 
@@ -913,26 +715,27 @@ async def _apply_patch(
     needed to fix or silence.
     """
     agent_id = _safe_id(agent_id)
-    path = _manifest_path(agent_id)
-    if not path.is_file():
+    backend = _backend(request)
+    text = await backend.read(agent_id)
+    if text is None:
         raise HTTPException(status_code=404, detail="no such agent")
 
-    original = _parse(await asyncio.to_thread(path.read_text, encoding="utf-8"))
-    document = _parse(await asyncio.to_thread(path.read_text, encoding="utf-8"))
+    original = _parse(text)
+    document = _parse(text)
     _merge_owned(document, changes)
     _bump_version(document, change)
     # ONE context for both verdicts: two reads of the engine's tool list across
     # a single save could disagree about which tools exist, and the difference
     # between the two answers is what decides the refusal.
-    context = await _validation_context()
-    verdict = validation.introduced(
-        await validation.validate(original, context),
-        await validation.validate(document, context),
-    )
+    async with _validation_context(backend, original, document) as context:
+        verdict = validation.introduced(
+            await validation.validate(original, context),
+            await validation.validate(document, context),
+        )
     _refuse(verdict)
 
-    await asyncio.to_thread(_snapshot, agent_id)
-    await asyncio.to_thread(_write_atomically, path, _dump(document))
+    # The store snapshots the previous version into the history ring first.
+    await backend.update(agent_id, _dump(document))
     audited(
         request,
         "helm.agent_manifest.update",
@@ -950,7 +753,7 @@ async def _apply_patch(
         # for these reasons" without diffing two lists to find out which of the
         # warnings were errors a moment ago. Empty on a healthy manifest.
         "pre_existing": verdict["pre_existing"],
-        "reconcile": await reconcile_engine_schedules(),
+        "reconcile": await reconcile_engine_schedules(backend.tenant),
     }
 
 
@@ -963,14 +766,14 @@ async def enable_manifest(agent_id: str, request: Request) -> dict[str, Any]:
     success without producing a document that says so, and the fleet view would
     keep showing whatever it showed before.
     """
-    require_operator(request)
+    require_tenant_admin(request)
     return await _apply_patch(request, agent_id, {"schedule.enabled": True}, "Enabled via the Helm")
 
 
 @router.post("/api/agent-manifests/{agent_id}/disable")
 async def disable_manifest(agent_id: str, request: Request) -> dict[str, Any]:
     """Silence the agent without retiring it — cron, heartbeat and worker."""
-    require_operator(request)
+    require_tenant_admin(request)
     return await _apply_patch(
         request, agent_id, {"schedule.enabled": False}, "Disabled via the Helm"
     )
@@ -986,46 +789,38 @@ async def retire_manifest(agent_id: str, body: DeleteRequest, request: Request) 
     it is — it is the operator's writing, and re-creating the agent with the
     same id picks it back up.
     """
-    require_operator(request)
+    require_tenant_admin(request)
     agent_id = _safe_id(agent_id)
     if body.confirm != agent_id:
         raise HTTPException(status_code=422, detail="confirm must be the agent's id")
-    path = _manifest_path(agent_id)
-    if not path.is_file():
-        raise HTTPException(status_code=404, detail="no such agent")
-
-    await asyncio.to_thread(_snapshot, agent_id)
-    await asyncio.to_thread(_retire, agent_id, path)
+    backend = _backend(request)
+    # Snapshot, then move aside (404 if there is no such agent).
+    await backend.retire(agent_id)
     audited(request, "helm.agent_manifest.retire", action=agent_id, agent_id=agent_id)
-    return {"id": agent_id, "retired": True, "reconcile": await reconcile_engine_schedules()}
-
-
-def _retire(agent_id: str, path: Path) -> None:
-    root = _manifest_root()
-    (root / RETIRED_DIR).mkdir(parents=True, exist_ok=True)
-    try:
-        target = contained_path(root, f"{RETIRED_DIR}/{agent_id}.yaml", label="retired manifest")
-    except TemplateSecurityError as error:
-        raise _refused(error) from error
-    path.replace(target)
+    return {
+        "id": agent_id,
+        "retired": True,
+        "reconcile": await reconcile_engine_schedules(backend.tenant),
+    }
 
 
 @router.post("/api/agent-manifests/{agent_id}/run")
 async def run_manifest(agent_id: str, request: Request) -> dict[str, Any]:
-    """Fire the agent once, now. Proxied to the engine, which owns the runner."""
-    require_operator(request)
+    """Fire the agent once, now. Proxied to the tenant's engine, which owns the runner."""
+    require_tenant_admin(request)
     agent_id = _safe_id(agent_id)
+    backend = _backend(request)
     # Same 404 every sibling route gives for an id that is not an agent here.
     # Without it an unknown id was proxied to the engine and came back 502,
     # which reads as "the engine is down" rather than "no such agent".
-    if not _manifest_path(agent_id).is_file():
+    if await backend.read(agent_id) is None:
         raise HTTPException(status_code=404, detail="no such agent")
     # Percent-encoded as well as identifier-validated. ``validate_identifier``
     # already limits this to [a-z0-9-], so nothing can survive both — which is
     # the point: this value is the only part of an engine URL that a caller
     # chooses, and a URL a request is built from gets two locks, not one.
     path = f"/api/agents/{quote(agent_id, safe='')}/trigger"
-    status, body = await engine_request("POST", path)
+    status, body = await engine_request("POST", path, tenant=backend.tenant)
     # The engine's trigger route answers 200 with an ``error`` key for an agent
     # it cannot load, so the status code alone is not the verdict.
     refused = status >= 400 or (isinstance(body, dict) and body.get("error"))

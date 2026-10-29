@@ -96,7 +96,7 @@ class FakeEngine:
             ),
         }
 
-    async def __call__(self, method, path, *, json=None, timeout=30):
+    async def __call__(self, method, path, *, json=None, timeout=30, tenant=None):
         self.calls.append((method, path, json))
         if path.endswith("/test"):
             return 200, {
@@ -763,7 +763,7 @@ class TestDefaultsReachTheEngine:
         seen: list[bool] = []
         original = fake_engine.__call__
 
-        async def _watch(method, path, *, json=None, timeout=30):
+        async def _watch(method, path, *, json=None, timeout=30, tenant=None):
             if path == "/api/admin/defaults/reload":
                 seen.append((agents_dir / "_defaults.yaml").exists())
             return await original(method, path, json=json, timeout=timeout)

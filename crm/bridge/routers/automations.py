@@ -45,6 +45,7 @@ import logging
 from typing import Any
 
 import psycopg2.extras
+from deps import get_tenant_id
 from fastapi import APIRouter, HTTPException, Request
 
 from robothor.db.connection import get_connection
@@ -52,8 +53,9 @@ from robothor.engine.sanitize import sanitize_log
 from robothor.engine.schedule_reconcile import KIND_AGENT, KIND_HEARTBEAT, KIND_WORKER
 from routers import agent_manifests
 from routers._audit import audited
+from routers._manifest_backend import backend_for, is_platform
 from routers._manifest_rows import _block, _summary
-from routers._operator import PLATFORM_TENANT, require_operator
+from routers._operator import require_tenant_admin
 
 logger = logging.getLogger(__name__)
 
@@ -183,15 +185,29 @@ def _jobs_of(document: dict[str, Any]) -> list[dict[str, Any]]:
     return jobs
 
 
-def _manifests() -> list[dict[str, Any]]:
-    """Every job every readable manifest declares.
+def _scan(tenant_id: str) -> Any:
+    """The acting tenant's manifests: this host's, or its own engine's.
+
+    Called from a sync handler, i.e. a worker thread, so a child tenant's
+    engine is reached by running the async backend on the event loop that
+    owns this request (``anyio.from_thread``).
+    """
+    if is_platform(tenant_id):
+        return agent_manifests._scan()
+    import anyio.from_thread
+
+    return anyio.from_thread.run(backend_for(tenant_id).scan)
+
+
+def _manifests(tenant_id: str) -> list[dict[str, Any]]:
+    """Every job every readable manifest of the acting tenant declares.
 
     One unreadable manifest is skipped rather than 500ing the page, the same
     bargain ``list_manifests`` already makes — and a manifest the loader could
     not parse at all still reaches the operator, as a degraded card built from
     its schedule row (see ``_automations``).
     """
-    scan = agent_manifests._scan()
+    scan = _scan(tenant_id)
     rows: list[dict[str, Any]] = []
     for document in scan.manifests:
         try:
@@ -348,7 +364,7 @@ def _automations(tenant_id: str) -> list[dict[str, Any]]:
     parse — it belongs on screen even more.
     """
     schedules = {str(row.get("agent_id") or ""): row for row in _schedule_rows(tenant_id)}
-    manifests = _manifests()
+    manifests = _manifests(tenant_id)
 
     # A manifest job with neither a cron nor a schedule row is not an
     # automation: it is an agent that only runs when something triggers it, and
@@ -409,12 +425,12 @@ def _reset_breaker(agent_id: str, tenant_id: str) -> bool:
 def list_automations(request: Request) -> dict[str, Any]:
     """Every scheduled agent, with what its last run did.
 
-    ``require_operator`` on a GET for the same reason the fleet listing has
-    one: this enumerates the appliance's schedule and its delivery targets,
-    which is not member data.
+    Gated on a GET for the same reason the fleet listing is: this enumerates
+    the acting tenant's schedule and its delivery targets, which is not member
+    data.
     """
-    require_operator(request)
-    rows = _automations(PLATFORM_TENANT)
+    require_tenant_admin(request)
+    rows = _automations(get_tenant_id(request))
     return {"automations": rows, "count": len(rows)}
 
 
@@ -428,9 +444,9 @@ def reset_breaker(agent_id: str, request: Request) -> dict[str, Any]:
     audited because it is an act that makes an agent start doing things again,
     and the trail has to name who decided that.
     """
-    require_operator(request)
+    require_tenant_admin(request)
     agent_id = _safe_job_id(agent_id)
-    if not _reset_breaker(agent_id, PLATFORM_TENANT):
+    if not _reset_breaker(agent_id, get_tenant_id(request)):
         audited(
             request,
             "automation.reset_breaker",

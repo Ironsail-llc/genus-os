@@ -16,7 +16,11 @@ from robothor.audit.logger import query_log, query_telemetry, stats
 from robothor.crm.dal import check_health
 from robothor.doctor.context import DoctorContext
 from robothor.doctor.runner import DoctorReport, run_sync
-from routers._operator import require_operator
+from routers._operator import (
+    audit_visibility,
+    require_root_operator,
+    require_tenant_audit_reader,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -214,7 +218,7 @@ async def api_doctor(request: Request):
     CRM and the Helm. The report says nothing about when it was taken, so a
     client that needs a fresh answer uses the CLI.
     """
-    require_operator(request)
+    require_root_operator(request)
 
     try:
         payload = await asyncio.to_thread(_cached_or_run)
@@ -231,6 +235,7 @@ async def api_doctor(request: Request):
 
 @router.get("/api/audit")
 def api_query_audit(
+    request: Request,
     event_type: str | None = Query(None),
     category: str | None = Query(None),
     actor: str | None = Query(None),
@@ -239,6 +244,8 @@ def api_query_audit(
     status: str | None = Query(None),
     limit: int = Query(50),
 ):
+    require_tenant_audit_reader(request)
+    tenants, include_untenanted = audit_visibility(request)
     results = query_log(
         limit=limit,
         event_type=event_type,
@@ -247,21 +254,28 @@ def api_query_audit(
         target=target,
         since=since,
         status=status,
+        tenants=tenants,
+        include_untenanted=include_untenanted,
     )
     return {"events": results, "count": len(results)}
 
 
 @router.get("/api/audit/stats")
-def api_audit_stats():
-    return stats()
+def api_audit_stats(request: Request):
+    require_tenant_audit_reader(request)
+    tenants, include_untenanted = audit_visibility(request)
+    return stats(tenants=tenants, include_untenanted=include_untenanted)
 
 
 @router.get("/api/telemetry")
 def api_query_telemetry(
+    request: Request,
     service: str | None = Query(None),
     metric: str | None = Query(None),
     since: str | None = Query(None),
     limit: int = Query(100),
 ):
+    # Root-only: the telemetry table is the appliance's, with no tenant.
+    require_root_operator(request)
     results = query_telemetry(service=service, metric=metric, since=since, limit=limit)
     return {"data": results, "count": len(results)}
