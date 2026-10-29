@@ -47,9 +47,13 @@ automatically, so it works with RLS enforcing.
 3. Add the child's engine cell to the deployment and let it sync.
 4. Store the child's connector credentials.
 4a. Add the child's people (see [Add people to a child](#add-people-to-a-child)).
+    An SSO binding grant signs the person in to the tenant that holds their
+    account, whether or not that tenant claims their domain.
 5. Move any account that already exists in the wrong tenant, BEFORE claiming
    its domain (see [Move an account](#move-an-account-to-another-tenant)).
-6. Claim the child's SSO domains, if its people sign in from their own domain.
+6. Optional: claim the child's SSO domains, so that NEW people nobody has
+   added yet are provisioned into the child on their first SSO sign-in.
+   People you add in step 4a do not need a claim.
 7. Run the verification queries.
 8. Raise `GENUS_TENANT_SWITCH_MODE` from `off` to `observe`, then `enforce`.
 
@@ -140,8 +144,12 @@ genus auth grant-binding --email alice@example.com --tenant acme-child-a --ttl 1
 `--sso` makes the same account the Helm's SSO invite makes: active, with no
 password and no identity-provider binding, so nothing can sign in as it yet.
 The person's first verified SSO sign-in with that address spends the grant,
-binds the account to their IdP identity, and signs them in to the child. Re-arm
-the grant if it expires first. Without `--sso` the account is `invited`, and
+binds the account to their IdP identity, and signs them in to the child. That
+holds whether or not the child claims the person's domain, and even if another
+tenant claims it: a live grant is the operator's explicit choice, and it wins
+over domain routing (the bridge writes an `auth.sso.grant_bound` audit row
+when it does). Re-arm the grant if it expires first. Without `--sso` the
+account is `invited`, and
 `grant-binding` refuses it, because an invited account cannot consume a grant.
 
 **Password sign-in.** Add the account, then set its password:
@@ -165,9 +173,12 @@ child.
 
 ## SSO domains: where a new user lands
 
-A brand-new SSO user is provisioned into the tenant that **claims their email
-domain**, and into the default tenant (`ROBOTHOR_DEFAULT_TENANT` of the
-bridge) when no tenant does.
+A brand-new SSO user (someone nobody has added) is provisioned into the tenant
+that **claims their email domain**, and into the default tenant
+(`ROBOTHOR_DEFAULT_TENANT` of the bridge) when no tenant does. Claims are
+optional, and only matter for people like that: anyone you added with
+`genus user add --sso` and armed a binding grant for signs in to the tenant
+that holds their account, whatever the claims say.
 
 ```bash
 genus tenant set-domains acme-child-a example.com other.example
@@ -196,21 +207,22 @@ The same list is `settings.sso_domains` on `PATCH /api/tenants/{id}`.
   or off: the sign-in looks the binding up across every tenant. Claiming a
   domain does not move anyone: use `move-account` for that.
 - **Move existing accounts first.** A claim never creates a second account
-  for an address that already has one. If an account that is not yet bound to
-  the person's IdP subject (an invitation, a `genus user add` +
-  `set-password` account, or one waiting on a binding grant) sits in another
-  tenant when its domain is claimed, the person's SSO sign-in is refused with
+  for an address that already has one. Take an account that is not yet bound
+  to the person's IdP subject and has no live binding grant (an invitation, or
+  a `genus user add` + `set-password` account). If it sits in another tenant
+  when its domain is claimed, the person's SSO sign-in is refused with
   "account not eligible for SSO". The bridge logs which tenant holds the
-  account, and password sign-in keeps working. So move such accounts into
-  the claiming tenant before you claim the domain (step 5 before step 6
-  above); after the move, a binding grant in that tenant lets the first SSO
-  sign-in bind the account.
+  account, and password sign-in keeps working. So move such accounts before
+  you claim the domain (step 5 before step 6 above). An account with a live
+  binding grant is not affected: the grant signs the person in to the tenant
+  that holds it.
 - **Fail safe.** If two tenants ever claim one domain (a hand-edited row), the
   sign-in lands in the default tenant and the bridge logs an error naming the
   domain. Fix the claim; nobody is locked out by it.
 - A binding grant (`genus auth grant-binding --email alice@example.com --tenant
-  acme-child-a`) for an invited account in the claiming tenant is spent by that
-  person's first sign-in, exactly as in the default tenant.
+  acme-child-a`) for an account added with `--sso` is spent by that person's
+  first SSO sign-in, which signs them in to `acme-child-a`, whatever any claim
+  says.
 
 ## Move an account to another tenant
 
