@@ -1159,3 +1159,14 @@ class TestHTMLAndSender:
             )
 
         assert receipt.body == "plain body"
+
+    @pytest.mark.asyncio
+    async def test_a_sender_that_is_not_a_string_is_a_receipt_not_an_exception(self):
+        smtp = _SMTPFactory()
+        with patch("robothor.crm.dal.do_not_contact_emails", side_effect=_opt_out()):
+            receipt = await _channel(gws_present=False, smtp=smtp).send(
+                WILLING, "hello", config=_config(), run=_run(), sender=42  # type: ignore[arg-type]
+            )
+
+        assert receipt.status == "failed:email_invalid_sender"
+        assert smtp.calls == []
