@@ -206,6 +206,25 @@ def test_live_move_moves_every_linked_row_revokes_sessions_and_audits(world) -> 
     assert details["to_tenant"] == world["child"]
 
 
+def test_the_audit_row_is_filed_under_the_target_tenant(world) -> None:
+    """``audit_log.tenant_id`` (migration 154, from the tenant admin gates
+    work) is how a tenant's own trail is read. Skipped where that column has
+    not been migrated yet."""
+    cur = world["cur"]
+    cur.execute(
+        "SELECT 1 FROM information_schema.columns "
+        "WHERE table_name = 'audit_log' AND column_name = 'tenant_id'"
+    )
+    if cur.fetchone() is None:
+        pytest.skip("audit_log.tenant_id is not migrated on this database")
+    accounts.move_account(world["user_id"], world["child"], actor="cli:test")
+    cur.execute(
+        "SELECT tenant_id FROM audit_log WHERE target = %s",
+        (f"user_account:{world['user_id']}",),
+    )
+    assert [r[0] for r in cur.fetchall()] == [world["child"]]
+
+
 def test_dry_run_counts_and_moves_nothing(world) -> None:
     cur = world["cur"]
     report = accounts.move_account(world["user_id"], world["child"], actor="cli:test", dry_run=True)

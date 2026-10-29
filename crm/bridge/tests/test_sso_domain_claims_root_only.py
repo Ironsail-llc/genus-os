@@ -158,3 +158,15 @@ async def test_a_child_admin_may_edit_settings_of_an_unclaimed_tenant(test_clien
     )
     assert r.status_code == 200, r.text
     assert update.call_args.kwargs["settings"] == {"theme": "dark"}
+
+
+@pytest.mark.asyncio
+async def test_a_patch_that_changes_nothing_is_200_not_404(test_client):
+    """``{"parentTenantId": null}`` names no field to change. update_tenant
+    reports False for an empty change, which is not a missing tenant."""
+    with patch("routers.tenants.update_tenant", return_value=False):
+        r = await test_client.patch(
+            "/api/tenants/acme-child-a", json={"parentTenantId": None}, headers=_bearer(_root())
+        )
+    assert r.status_code == 200, r.text
+    assert r.json() == {"success": True, "id": "acme-child-a"}
