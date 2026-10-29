@@ -1722,3 +1722,225 @@ def test_an_identical_unrecorded_instruction_file_is_taken_over_and_later_upgrad
     extra = {f"{pkg}/agents/desk-monitor/instructions.template.md": newer}
     assert _install(ws, version="1.1.0", extra=extra) == 0
     assert (ws / _DESK_MD).read_text() == newer
+
+
+# ---------------------------------------------------------------------------
+# composable patches: `append` and `detach`
+# ---------------------------------------------------------------------------
+
+_ALPHA = "alpha-plugin"
+_BETA = "beta-plugin"
+_MAIN_YAML = "docs/agents/main.yaml"
+
+_HOOK_A = "      - stream: email\n        event_type: email.new\n        message: alpha\n"
+_HOOK_B = "      - stream: crm\n        event_type: crm.task.created\n        message: beta\n"
+
+
+def _patcher(dist: str, patch: str, *, agent: str = "main", version: str = "1.0.0") -> dict:
+    """The wheel of a plugin whose only asset is one patch for *agent*."""
+    pkg = dist.replace("-", "_")
+    manifest = (
+        f"name: {dist}\ncontract_version: 1\nhandlers:\n  - {pkg}_probe\n"
+        f"patches:\n  - agent: {agent}\n    file: patches/main.patch.yaml\n"
+    )
+    return {
+        "dist": dist,
+        "version": version,
+        "manifest": manifest,
+        "extra": {f"{pkg}/patches/main.patch.yaml": patch},
+    }
+
+
+def _main(ws: Path) -> dict:
+    return yaml.safe_load((ws / _MAIN_YAML).read_text())
+
+
+def _hook_ids(ws: Path) -> list[tuple[str, str]]:
+    return [(h["stream"], h["event_type"]) for h in _main(ws).get("hooks") or []]
+
+
+def test_append_creates_the_list(ws, capsys) -> None:
+    assert _install(ws, **_patcher(_ALPHA, "install:\n  append:\n    hooks:\n" + _HOOK_A)) == 0, (
+        capsys.readouterr().err
+    )
+    assert _main(ws)["hooks"] == [
+        {"stream": "email", "event_type": "email.new", "message": "alpha"}
+    ]
+    assert _main(ws)["schedule"]["heartbeat_minutes"] == 60  # nothing else changed
+
+
+def test_append_upserts_by_identity_and_is_idempotent(ws, capsys) -> None:
+    (ws / _MAIN_YAML).write_text(
+        _MAIN
+        + "hooks:\n"
+        + "  - stream: email\n    event_type: email.new\n    message: the operator's\n"
+        + "  - stream: calendar\n    event_type: calendar.changed\n    message: keep me\n"
+    )
+    assert _install(ws, **_patcher(_ALPHA, "install:\n  append:\n    hooks:\n" + _HOOK_A)) == 0, (
+        capsys.readouterr().err
+    )
+    hooks = _main(ws)["hooks"]
+    assert [(h["stream"], h["event_type"], h["message"]) for h in hooks] == [
+        ("email", "email.new", "alpha"),  # upserted in place, not duplicated
+        ("calendar", "calendar.changed", "keep me"),
+    ]
+    main = ws / _MAIN_YAML
+    before = (main.read_bytes(), main.stat().st_mtime_ns)
+    assert _install(ws, **_patcher(_ALPHA, "install:\n  append:\n    hooks:\n" + _HOOK_A)) == 0
+    assert (main.read_bytes(), main.stat().st_mtime_ns) == before
+
+
+def test_two_plugins_appending_distinct_hooks_coexist_and_remove_separately(ws, capsys) -> None:
+    from robothor.plugins import assets
+
+    alpha = _patcher(_ALPHA, "install:\n  append:\n    hooks:\n" + _HOOK_A)
+    beta = _patcher(_BETA, "install:\n  append:\n    hooks:\n" + _HOOK_B)
+    assert _install(ws, **alpha) == 0, capsys.readouterr().err
+    assert _install(ws, **beta) == 0, capsys.readouterr().err
+    assert _hook_ids(ws) == [("email", "email.new"), ("crm", "crm.task.created")]
+
+    assets.retire(_ALPHA)
+    assert _hook_ids(ws) == [("crm", "crm.task.created")]
+
+    assert _install(ws, **alpha) == 0, capsys.readouterr().err
+    assets.retire(_BETA)
+    assert _hook_ids(ws) == [("email", "email.new")]
+
+
+def test_the_ledger_records_appended_items_by_identity(ws) -> None:
+    assert _install(ws, **_patcher(_ALPHA, "install:\n  append:\n    hooks:\n" + _HOOK_A)) == 0
+    keys = _ledger(ws)[_ALPHA]["patches"][0]["keys"]
+    assert "hooks[email:email.new]" in keys
+    assert "hooks" not in keys
+
+
+def test_set_hooks_is_refused_when_another_plugin_appends_to_hooks(ws, capsys) -> None:
+    assert _install(ws, **_patcher(_ALPHA, "install:\n  append:\n    hooks:\n" + _HOOK_A)) == 0
+    capsys.readouterr()
+    beta = _patcher(_BETA, "install:\n  set:\n    hooks: []\n")
+    assert _install(ws, **beta) == 2
+    err = capsys.readouterr().err
+    assert "hooks" in err and _ALPHA in err and _BETA in err
+    assert "Two plugins may not patch the same key" in err
+    assert _hook_ids(ws) == [("email", "email.new")]
+
+
+def test_delete_hooks_is_refused_when_another_plugin_appends_to_hooks(ws, capsys) -> None:
+    assert _install(ws, **_patcher(_ALPHA, "install:\n  append:\n    hooks:\n" + _HOOK_A)) == 0
+    capsys.readouterr()
+    assert _install(ws, **_patcher(_BETA, "install:\n  delete:\n    - hooks\n")) == 2
+    assert "hooks" in capsys.readouterr().err
+    assert _hook_ids(ws) == [("email", "email.new")]
+
+
+def test_append_is_refused_when_another_plugin_sets_the_whole_list(ws, capsys) -> None:
+    owner = _patcher(_ALPHA, "install:\n  set:\n    hooks:\n" + _HOOK_A)
+    assert _install(ws, **owner) == 0, capsys.readouterr().err
+    capsys.readouterr()
+    assert _install(ws, **_patcher(_BETA, "install:\n  append:\n    hooks:\n" + _HOOK_B)) == 2
+    err = capsys.readouterr().err
+    assert "hooks" in err and _ALPHA in err and _BETA in err
+    assert _hook_ids(ws) == [("email", "email.new")]
+
+
+def test_two_plugins_appending_the_same_identity_is_refused(ws, capsys) -> None:
+    assert _install(ws, **_patcher(_ALPHA, "install:\n  append:\n    hooks:\n" + _HOOK_A)) == 0
+    capsys.readouterr()
+    same = _HOOK_A.replace("message: alpha", "message: beta")
+    assert _install(ws, **_patcher(_BETA, "install:\n  append:\n    hooks:\n" + same)) == 2
+    err = capsys.readouterr().err
+    assert "hooks[email:email.new]" in err and _ALPHA in err
+    assert _main(ws)["hooks"][0]["message"] == "alpha"
+
+
+def test_detach_of_an_unknown_identity_is_a_no_op(ws, capsys) -> None:
+    from robothor.plugins import assets
+
+    (ws / _MAIN_YAML).write_text(
+        _MAIN + "hooks:\n  - stream: calendar\n    event_type: calendar.changed\n"
+    )
+    patch = (
+        "install:\n  append:\n    hooks:\n"
+        + _HOOK_A
+        + "remove:\n  detach:\n    hooks:\n"
+        + "      - {stream: email, event_type: email.new}\n"
+        + "      - {stream: nowhere, event_type: never.seen}\n"
+    )
+    assert _install(ws, **_patcher(_ALPHA, patch)) == 0, capsys.readouterr().err
+    report = assets.retire(_ALPHA)
+    assert report.warnings == []
+    assert _hook_ids(ws) == [("calendar", "calendar.changed")]
+
+
+def test_append_to_a_scalar_list_upserts_by_value(ws, capsys) -> None:
+    from robothor.plugins import assets
+
+    (ws / _MAIN_YAML).write_text(_MAIN + "bootstrap_files:\n  - brain/agents/main.d/base.md\n")
+    patch = (
+        "install:\n  append:\n"
+        "    bootstrap_files: [brain/agents/main.d/alpha-plugin.md, brain/agents/main.d/base.md]\n"
+        "    warmup.memory_blocks: [alpha_notes]\n"
+    )
+    assert _install(ws, **_patcher(_ALPHA, patch)) == 0, capsys.readouterr().err
+    data = _main(ws)
+    assert data["bootstrap_files"] == [
+        "brain/agents/main.d/base.md",
+        "brain/agents/main.d/alpha-plugin.md",
+    ]
+    assert data["warmup"]["memory_blocks"] == ["alpha_notes"]
+    keys = _ledger(ws)[_ALPHA]["patches"][0]["keys"]
+    assert "bootstrap_files[brain/agents/main.d/alpha-plugin.md]" in keys
+    assert "warmup.memory_blocks[alpha_notes]" in keys
+
+    beta = "install:\n  append:\n    bootstrap_files: [brain/agents/main.d/beta-plugin.md]\n"
+    assert _install(ws, **_patcher(_BETA, beta)) == 0, capsys.readouterr().err
+    assets.retire(_ALPHA)
+    data = _main(ws)
+    # the derived detach takes back exactly what alpha appended
+    assert data["bootstrap_files"] == ["brain/agents/main.d/beta-plugin.md"]
+    assert data["warmup"]["memory_blocks"] == []
+
+
+def test_an_upgrade_that_drops_an_appended_item_detaches_it(ws, capsys) -> None:
+    both = "install:\n  append:\n    hooks:\n" + _HOOK_A + _HOOK_B
+    assert _install(ws, **_patcher(_ALPHA, both)) == 0, capsys.readouterr().err
+    one = "install:\n  append:\n    hooks:\n" + _HOOK_B
+    assert _install(ws, **_patcher(_ALPHA, one, version="1.1.0")) == 0, capsys.readouterr().err
+    assert _hook_ids(ws) == [("crm", "crm.task.created")]
+    assert _ledger(ws)[_ALPHA]["patches"][0]["keys"] == ["hooks[crm:crm.task.created]"]
+
+
+def test_another_plugins_appended_hook_is_not_an_operator_edit(ws, capsys) -> None:
+    """A hook whose event type has a dot is still a `hooks` key, not `hooks[x:y`."""
+    assert _install(ws) == 0, capsys.readouterr().err
+    hooks = "install:\n  append:\n    hooks:\n" + _HOOK_A
+    assert _install(ws, **_patcher(_ALPHA, hooks, agent="desk-monitor")) == 0
+    capsys.readouterr()
+    assert _install(ws, version="1.1.0", description="Release two") == 0
+    captured = capsys.readouterr()
+    assert "edited since" not in captured.out + captured.err
+    desk = yaml.safe_load((ws / "docs" / "agents" / "desk-monitor.yaml").read_text())
+    assert desk["description"] == "Release two"
+
+
+@pytest.mark.parametrize(
+    "patch",
+    [
+        "install:\n  append:\n    hooks:\n      - {stream: email}\n",  # no event_type
+        "install:\n  append:\n    hooks: {stream: email, event_type: email.new}\n",  # not a list
+        "install:\n  append:\n    tools_allowed:\n      - {nested: mapping}\n",
+        "install:\n  append:\n    id: [x]\n",
+    ],
+)
+def test_a_malformed_append_is_refused_before_pip(ws, capsys, patch) -> None:
+    pip = installer._run_pip
+    assert _install(ws, **_patcher(_ALPHA, patch)) == 2
+    assert pip.calls == []
+    assert (ws / _MAIN_YAML).read_text() == _MAIN
+
+
+def test_append_to_a_key_that_is_not_a_list_is_refused(ws, capsys) -> None:
+    (ws / _MAIN_YAML).write_text(_MAIN + "hooks: not-a-list\n")
+    assert _install(ws, **_patcher(_ALPHA, "install:\n  append:\n    hooks:\n" + _HOOK_A)) == 2
+    assert "hooks" in capsys.readouterr().err
+    assert (ws / _MAIN_YAML).read_text() == _MAIN + "hooks: not-a-list\n"
