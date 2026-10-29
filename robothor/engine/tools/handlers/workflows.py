@@ -129,6 +129,12 @@ async def _handle_run_workflow(args: dict[str, Any], ctx: ToolContext) -> dict[s
     if not workflow_id or engine.get_workflow(workflow_id) is None:
         return {"error": "unknown_workflow", "workflow_id": workflow_id}
 
+    # Runs are recorded under the engine's tenant. A caller acting for another
+    # tenant would start work it could then never see in workflow_runs.
+    run_tenant = getattr(getattr(engine, "config", None), "tenant_id", "") or ""
+    if run_tenant and _tenant(ctx) != run_tenant:
+        return {"error": "workflow_tenant_mismatch", "run_tenant": run_tenant}
+
     payload = args.get("payload") or {}
     if not isinstance(payload, dict):
         return {"error": "payload must be an object"}
@@ -139,14 +145,19 @@ async def _handle_run_workflow(args: dict[str, Any], ctx: ToolContext) -> dict[s
 
     agent_id = getattr(ctx, "agent_id", "") or "unknown"
     run_id = str(uuid.uuid4())
+    user_id = getattr(ctx, "user_id", "") or ""
+    user_role = getattr(ctx, "user_role", "") or ""
+    if not user_id and not user_role:
+        # No person behind this turn: the agent's own service identity.
+        user_id, user_role = f"service:agent:{agent_id}", "service"
     task = get_task_registry().spawn(
         engine.execute(
             workflow_id=workflow_id,
             trigger_type="agent",
             trigger_detail=f"agent:{agent_id}:{getattr(ctx, 'run_id', '')}",
             initial_context={"event": {"payload": payload}},
-            user_id=getattr(ctx, "user_id", "") or f"service:agent:{agent_id}",
-            user_role=getattr(ctx, "user_role", "") or "service",
+            user_id=user_id,
+            user_role=user_role,
             run_id=run_id,
         ),
         name=f"workflow:{workflow_id}:{run_id}",
@@ -158,6 +169,8 @@ async def _handle_run_workflow(args: dict[str, Any], ctx: ToolContext) -> dict[s
     if not done:
         return {"status": "started", "run_id": run_id}
 
+    if task.cancelled():
+        return {"status": "cancelled", "run_id": run_id}
     exc = task.exception()
     if exc is not None:
         return {"status": "failed", "run_id": run_id, "error_message": str(exc)}
