@@ -79,6 +79,13 @@ def test_parser_requires_email_and_target() -> None:
         _parse("move-account", "--to", "acme-child-a")
 
 
+def test_user_add_accepts_sso() -> None:
+    """``genus user add --sso``: the CLI twin of the Helm's SSO invite."""
+    argv = ["user", "add", "--name", "Alice", "--role", "member", "--email", "a@example.com"]
+    assert _build_parser().parse_args([*argv, "--sso"]).sso is True
+    assert _build_parser().parse_args(argv).sso is False
+
+
 def test_parser_accepts_set_domains() -> None:
     args = _parse("set-domains", "acme-parent", "example.com", "other.example")
     assert args.tenant_command == "set-domains"

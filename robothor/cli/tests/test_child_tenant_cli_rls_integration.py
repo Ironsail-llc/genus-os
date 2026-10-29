@@ -32,7 +32,7 @@ def _blocks(db_conn, tenant: str) -> int:
         return int(cur.fetchone()[0])
 
 
-def _user_add(tenant: str, email: str, role: str = "member") -> int:
+def _user_add(tenant: str, email: str, role: str = "member", *, sso: bool = False) -> int:
     from robothor.cli.user import cmd_user
 
     return cmd_user(
@@ -45,6 +45,23 @@ def _user_add(tenant: str, email: str, role: str = "member") -> int:
             email=email,
             person_id=None,
             create_person=False,
+            sso=sso,
+        )
+    )
+
+
+def _grant(tenant: str, email: str) -> int:
+    from robothor.cli.auth import cmd_auth
+
+    return cmd_auth(
+        Namespace(
+            auth_command="grant-binding",
+            tenant=tenant,
+            email=email,
+            ttl="15m",
+            reason="",
+            issuer=None,
+            json_output=False,
         )
     )
 
@@ -159,3 +176,69 @@ def test_a_user_add_account_moves_with_its_own_identifiers(db_conn, app_role, rl
             (a, b),
         )
         assert [r[0] for r in cur.fetchall()] == [b]
+
+
+# ─── SSO onboarding from the CLI ─────────────────────────────────────────
+
+ISSUER = "https://idp.example.com"
+
+
+def _sso(tenant: str, email: str, subject: str):
+    from robothor.auth import accounts
+
+    return accounts.jit_provision(
+        issuer=ISSUER, subject=subject, email=email, display_name="Alice", tenant_id=tenant
+    )
+
+
+def test_an_sso_user_added_from_the_cli_signs_in_to_the_child(
+    db_conn,
+    app_role,  # noqa: F811
+    rls_tenants,  # noqa: F811
+    capsys,
+):
+    """The same shape the Helm's SSO invite makes: an active account with no
+    password, armed with a one-shot grant that the first SSO sign-in spends."""
+    child = rls_tenants["a"]
+    email = f"alice-{uuid.uuid4().hex[:8]}@example.com"
+    assert _user_add(child, email, sso=True) == 0
+    out = capsys.readouterr().out
+    assert f"genus auth grant-binding --email {email} --tenant {child}" in out
+    assert "robothor auth" not in out
+    assert _grant(child, email) == 0
+
+    account = _sso(child, email, "sub-alice")
+    assert account["tenant_id"] == child
+    assert account["status"] == "active"
+    assert account["idp_issuer"] == ISSUER and account["idp_subject"] == "sub-alice"
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM user_accounts WHERE email = %s", (email,))
+        assert cur.fetchone()[0] == 1
+
+
+def test_an_invited_account_cannot_be_armed_and_says_how(
+    db_conn,
+    app_role,  # noqa: F811
+    rls_tenants,  # noqa: F811
+    capsys,
+):
+    child = rls_tenants["a"]
+    email = f"bob-{uuid.uuid4().hex[:8]}@example.com"
+    assert _user_add(child, email) == 0
+    capsys.readouterr()
+    assert _grant(child, email) == 1
+    assert "--sso" in capsys.readouterr().err
+
+
+def test_an_invited_account_without_a_grant_is_refused_at_sso(
+    db_conn,
+    app_role,  # noqa: F811
+    rls_tenants,  # noqa: F811
+):
+    from robothor.auth import accounts
+
+    child = rls_tenants["a"]
+    email = f"carol-{uuid.uuid4().hex[:8]}@example.com"
+    assert _user_add(child, email) == 0
+    with pytest.raises(accounts.AccountBindingRequiredError):
+        _sso(child, email, "sub-carol")
