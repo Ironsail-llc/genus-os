@@ -15,8 +15,8 @@ same kind and key without ever seeing each other's rows.
 
 A row written with ``ttl_seconds`` is invisible to ``get``, ``exists`` and
 ``list`` the moment it expires; the daemon deletes expired rows hourly
-(:func:`purge_expired`), so storage stays bounded without the plugin running
-a sweep of its own.
+(:func:`purge_expired`) for the instance's tenant; rows for any other tenant
+are deleted by :meth:`PluginState.purge_expired` on a store for that tenant.
 
 Synchronous, on the platform pool and bound to the tenant for row-level
 security, like the CRM DAL. From an async tool handler, call it through
@@ -35,10 +35,14 @@ from robothor.constants import DEFAULT_TENANT
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
 
-__all__ = ["MAX_LIST_LIMIT", "PluginState", "purge_expired"]
+__all__ = ["MAX_LIST_LIMIT", "MAX_TTL_SECONDS", "PluginState", "purge_expired"]
 
 #: The most rows one ``list`` call returns.
 MAX_LIST_LIMIT = 1000
+
+#: The longest TTL ``put`` accepts: the database computes the expiry from an
+#: ``int`` (32-bit), and a larger value would fail there instead of here.
+MAX_TTL_SECONDS = 2**31 - 1
 
 _LIVE = "(expires_at IS NULL OR expires_at > now())"
 
@@ -127,9 +131,14 @@ class PluginState:
         if not isinstance(value, dict):
             raise TypeError(f"plugin state values are JSON objects, not {type(value).__name__}")
         if ttl_seconds is not None and (
-            isinstance(ttl_seconds, bool) or not isinstance(ttl_seconds, int) or ttl_seconds <= 0
+            isinstance(ttl_seconds, bool)
+            or not isinstance(ttl_seconds, int)
+            or not 0 < ttl_seconds <= MAX_TTL_SECONDS
         ):
-            raise ValueError("ttl_seconds must be a positive whole number of seconds, or None")
+            raise ValueError(
+                f"ttl_seconds must be a whole number of seconds from 1 to {MAX_TTL_SECONDS}, "
+                "or None"
+            )
         with self._connect() as conn, conn.cursor() as cur:
             cur.execute(
                 "INSERT INTO plugin_state (tenant_id, plugin, kind, key, value, expires_at) "
