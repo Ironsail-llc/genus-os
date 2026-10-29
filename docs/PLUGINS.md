@@ -650,9 +650,12 @@ recorded with `source: plugin:<dist>`), so nobody has to open them by hand:
 - each row of `GET /api/admin/plugins` carries **`assets`**:
   `{agents, workflows, patches, files}` in the same shapes, drawn on the Helm's
   Plugins page as **Agents and workflows**. If the asset ledger or
-  `installed.yaml` cannot be read, the listing still answers: the lists are
-  empty, `assets.error` says which record (by exception class, never its text)
-  and the Plugins page shows "unavailable" with that reason instead of "none";
+  `installed.yaml` cannot be read, the listing still answers: `assets.error`
+  says which record (by exception class, never its text) and `assets.partial`
+  is `true`, because the lists still hold what the other record gave. The
+  Plugins page shows "unavailable" with that reason above whatever lists it
+  could read (and no "none"). If the asset read fails outright, the lists are
+  empty and `partial` is `false`;
 - `GET /api/workflows` on the bridge lists every workflow defined in
   `docs/workflows/`, including one that has never run (`runs: 0`), with
   `source: "plugin:<dist>"` when the ledger records that a plugin wrote it and
