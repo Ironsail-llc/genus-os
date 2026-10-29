@@ -77,6 +77,9 @@ def test_auth_grant_binding_arms_grant(capsys) -> None:
     assert kwargs["email"] == "Owner@Example.com"
     assert kwargs["ttl_seconds"] == 1800
     assert kwargs["reason"] == "initial owner binding"
+    # A shell on the appliance is the root operator; sign-in honours a grant
+    # recorded this way even when the address routes to another tenant.
+    assert kwargs["created_by"].startswith("cli:")
     out = capsys.readouterr().out
     assert "grant-1" in out
     assert "owner@example.com" in out

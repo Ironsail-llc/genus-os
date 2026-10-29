@@ -333,3 +333,68 @@ async def test_a_grant_wins_over_a_claim_by_another_child(
             (tenants["a"],),
         )
         assert cur.fetchone() is not None
+
+
+# ─── only a ROOT-armed grant may override routing ────────────────────────
+
+
+def _child_admin_grant(db_conn, tenant: str, email: str) -> None:
+    """A grant as a child tenant's admin arms it from the dashboard: an
+    account in the child with no password, and a grant recorded against that
+    admin, not the root operator."""
+    _seed_passwordless(db_conn, tenant, email)
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO sso_binding_grants (tenant_id, email, created_by, expires_at) "
+            "VALUES (%s, %s, 'admin:u-child-admin', NOW() + interval '1 hour')",
+            (tenant, email),
+        )
+
+
+def _claim(db_conn, tenant: str, domain: str) -> None:
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "UPDATE crm_tenants SET settings = jsonb_build_object('sso_domains', "
+            "jsonb_build_array(%s::text)) WHERE id = %s",
+            (domain, tenant),
+        )
+
+
+@pytest.mark.asyncio
+async def test_a_child_admins_grant_does_not_override_a_platform_claim(
+    test_client,
+    db_conn,
+    tenants,  # noqa: F811 - the imported fixture
+    app_role,  # noqa: F811 - the imported fixture
+    sso_env,
+):
+    sfx = uuid.uuid4().hex[:8]
+    domain = f"platform-{sfx}.example"
+    email = f"alice@{domain}"
+    _claim(db_conn, "default", domain)
+    _child_admin_grant(db_conn, tenants["a"], email)
+    r = await _sso(test_client, email, f"sub-{sfx}")
+    assert r.status_code == 403
+    assert _bound(db_conn, email) == [(tenants["a"], "active", None)]
+
+
+@pytest.mark.asyncio
+async def test_a_root_grant_does_not_capture_an_account_in_the_routed_tenant(
+    test_client,
+    db_conn,
+    tenants,  # noqa: F811 - the imported fixture
+    app_role,  # noqa: F811 - the imported fixture
+    sso_env,
+):
+    """The routed tenant (here the platform tenant) already holds an unbound
+    account for the address, as the bootstrap owner's row does before its own
+    grant is armed. A grant elsewhere must not take that sign-in."""
+    sfx = uuid.uuid4().hex[:8]
+    email = f"alice@unclaimed-{sfx}.example"
+    _seed_passwordless(db_conn, "default", email)
+    _cli_sso_invite(tenants["a"], email)
+    r = await _sso(test_client, email, f"sub-{sfx}")
+    assert r.status_code == 403
+    assert sorted(_bound(db_conn, email)) == sorted(
+        [("default", "active", None), (tenants["a"], "active", None)]
+    )

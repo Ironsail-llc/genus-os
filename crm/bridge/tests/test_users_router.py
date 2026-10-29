@@ -855,3 +855,13 @@ def test_a_non_operator_cannot_arm_a_grant(request, client_name, store):
 
     assert client.post(f"/api/users/{MEMBER_ID}/binding-grant").status_code == 403
     assert not store.grants
+
+
+# ── who armed a grant: only a root operator's may override SSO routing ──
+
+
+def test_a_root_operators_grant_is_recorded_as_root(operator, store):
+    """A grant armed by an operator whose home and acting tenant are both the
+    platform tenant is the root's, and sign-in may honour it off-route."""
+    assert operator.post(f"/api/users/{MEMBER_ID}/binding-grant").status_code == 201
+    assert store.grants[0]["created_by"].startswith("root:")
