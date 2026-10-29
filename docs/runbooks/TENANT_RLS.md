@@ -211,14 +211,17 @@ A signed token is honoured only while what it says is still true:
   anything but `enforce`, the bridge refuses every acting token (`act: true`)
   with 403 "tenant switching disabled". Home tokens are unaffected. Turning the
   flag off ends every acting session at once.
-- **A human token needs its account where the token says.** The bridge checks
-  that the account still lives in the token's `home_tid` and is active, and
-  refuses it with 401 "session no longer valid" otherwise. The answer is cached
-  per user for 30 seconds (`robothor/auth/session_standing.py`), so an account
+- **A human token needs its account where the token says.** The bridge — and
+  every engine, for the chat, dashboard-completion and IDE routes the dashboard
+  reaches with the user's own token — checks that the account still lives in
+  the token's `home_tid` and is active, and refuses it with 401 "session no
+  longer valid" otherwise. Each process caches the answer per account and home
+  tenant for 30 seconds (`robothor/auth/session_standing.py`), so an account
   moved or disabled by another process (`genus tenant move-account`, psql)
-  loses its old access token within 30 s rather than at expiry. A change made
-  through the bridge itself (the Helm's account editor) takes effect on the next
-  request.
+  loses its old access token everywhere within 30 s rather than at expiry. A
+  change made through the bridge itself (the Helm's account editor) takes
+  effect on the bridge's next request. If the database cannot be read the token
+  is honoured, with a warning, rather than signing every operator out.
 
 Audit rows written while a human acts — including the CRM's own — name that
 account (`actor`, `user_id`), are filed under the acting tenant and carry the
