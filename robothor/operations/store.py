@@ -514,19 +514,22 @@ class Operations:
                 cur, action, "action.approved" if approved else "action.rejected", actor, detail
             )
         if approved:
-            bus.publish(
-                OPERATIONS_STREAM,
-                ACTION_APPROVED,
-                {
-                    "action_id": action,
-                    "kind": row["kind"],
-                    "tenant_id": self.tenant,
-                    "proposed_by": row["proposed_by"],
-                },
-                source="operations",
-                actor=actor,
-                tenant_id=self.tenant,
-            )
+            self._announce_approval(action, row["kind"], row["proposed_by"], actor)
+
+    def _announce_approval(self, action: str, kind: str, proposer: str | None, actor: str) -> None:
+        """Tell hook workflows a committed approval is ready to execute.
+
+        Best effort, like every bus producer: a lost event leaves the action
+        approved, and a cron sweep calling ``claim_action`` still finds it.
+        """
+        bus.publish(
+            OPERATIONS_STREAM,
+            ACTION_APPROVED,
+            {"action_id": action, "kind": kind, "tenant_id": self.tenant, "proposed_by": proposer},
+            source="operations",
+            actor=actor,
+            tenant_id=self.tenant,
+        )
 
     def claim_action(
         self, *, kind: str | None = None, lease_seconds: int = 120

@@ -12,6 +12,7 @@ Streams:
   robothor:events:health    — health check results
   robothor:events:agent     — agent actions (hook pipeline, triage, etc.)
   robothor:events:system    — system lifecycle (boot, shutdown, errors)
+  robothor:events:operations — operation_action.approved (robothor.operations.store)
 
 Envelope format:
   {
