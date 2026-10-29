@@ -284,3 +284,13 @@ genuinely enforcing**. That check is the same gate federation activation uses
 `GENUS_TENANT_SWITCH_ALLOW_INERT_RLS=1` is the deliberate escape hatch, and is
 logged at WARNING every time it admits a switch. Promote the ladder as in
 [Guardrail flips](GUARDRAIL_FLIPS.md).
+
+**Rollback.** Set `GENUS_TENANT_SWITCH_MODE=off` (or `observe`) on the bridge
+**and on every engine**, and restart them. Once restarted, the bridge and every
+engine refuse every acting token already issued — the bridge with 403 "tenant
+switching disabled", an engine's HTTP routes (the dashboard forwards the user's
+token to `/chat/*` and `/api/dashboard/completions`) with the same 403, and the
+IDE WebSocket with close code 4403. Nobody has to wait out the 15-minute token
+lifetime. Home tokens and service tokens are unaffected. A process still
+running with `enforce` keeps honouring acting tokens until it is restarted, so
+roll the flag out to all of them.
