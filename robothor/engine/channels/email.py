@@ -381,19 +381,23 @@ def _valid_sender(raw: str) -> str:
     if not isinstance(raw, str):
         return ""
     value = raw.strip()
-    if not value or any(ord(c) < 32 or ord(c) == 127 for c in value):
+    if not value or any(ord(c) < 32 or ord(c) == 127 or 0xD800 <= ord(c) <= 0xDFFF for c in value):
         return ""
     parsed = getaddresses([value])
     if len(parsed) != 1:
         return ""
     name, addr = parsed[0]
-    if not _ADDRESS_RE.fullmatch(addr):
+    # formataddr encodes the address as ASCII; an internationalised one is refused.
+    if not addr.isascii() or not _ADDRESS_RE.fullmatch(addr):
         return ""
     if value != addr:
         named = _NAMED_SENDER_RE.fullmatch(value)
         if named is None or named.group(2).strip() != addr:
             return ""
-    return formataddr((name, addr))
+    try:
+        return formataddr((name, addr))
+    except (UnicodeError, ValueError):
+        return ""
 
 
 def _message(
