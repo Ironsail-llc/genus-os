@@ -108,6 +108,10 @@ class AssetError(ValueError):
     """A refusal, in the sentence the operator gets told."""
 
 
+class _AllowlistError(AssetError):
+    """A tool-allowlist edit refused; its text names only the key, never a path."""
+
+
 @dataclass(frozen=True)
 class AgentDecl:
     src: str
@@ -1035,9 +1039,12 @@ def plan(
             if isinstance(recorded, dict):
                 for key in recorded.get("keys") or []:
                     claimed[(str(recorded.get("agent")), str(key))] = owner
+    own_patches = {
+        p.get("agent"): p for p in (own_ledger or {}).get("patches") or [] if isinstance(p, dict)
+    }
     for patch in assets.patches:
         try:
-            workspace_path(
+            target = workspace_path(
                 root,
                 f"docs/agents/{patch.agent}.yaml",
                 allowed_prefix="docs/agents",
@@ -1045,6 +1052,10 @@ def plan(
             )
         except TemplateSecurityError as exc:
             raise AssetError(str(exc)) from exc
+        if target.is_file():
+            # Dry-run the edit on a copy: a list that is not one, or an
+            # allowlist append would narrow, is refused here, before pip.
+            _patch_would_change(target, _with_dropped(patch.install, own_patches.get(patch.agent)))
         for key in sorted(patch_keys(patch.install) | patch_keys(patch.remove)):
             for (target_agent, theirs), owner in claimed.items():
                 if target_agent == patch.agent and _overlaps(key, theirs):
@@ -1197,7 +1208,7 @@ def _is_allowlist(dotted: str) -> bool:
 def _append(target: Any, dotted: str, items: list[Any]) -> None:
     """Upsert *items* into the list at *dotted*, matching by identity."""
     if _is_allowlist(dotted) and not _list_at(target, dotted, create=False):
-        raise AssetError(
+        raise _AllowlistError(
             f"`{dotted}` is absent or empty, which allows every tool; appending would "
             "narrow the agent to only the appended tools. It was not patched: append "
             "to it only where the agent already restricts its tools, or opt the tool in "
@@ -1222,6 +1233,15 @@ def _detach(target: Any, dotted: str, items: list[Any]) -> None:
     if current is None:
         return
     gone = {_identity(dotted, item) for item in items}
+    if (
+        _is_allowlist(dotted)
+        and current
+        and all(_identity(dotted, entry) in gone for entry in current)
+    ):
+        raise _AllowlistError(
+            f"`{dotted}` would be left empty, which allows every tool; it was left as it "
+            "is. Edit the agent's allowlist by hand if it should change."
+        )
     for index in reversed(range(len(current))):
         if _identity(dotted, current[index]) in gone:
             del current[index]
@@ -1902,6 +1922,8 @@ def _remove_file(
 def _why(exc: BaseException) -> str:
     """A fixed phrase for a report line, never the exception's own text (which
     can carry a resolved path)."""
+    if isinstance(exc, _AllowlistError):
+        return str(exc)
     if isinstance(exc, AssetError):
         return "its manifest is not valid YAML, or the patch is malformed"
     return type(exc).__name__

@@ -489,7 +489,11 @@ remove:                 # optional: without a detach, remove takes back what ins
   (and `heartbeat.heartbeat_tools_allowed`, `worker.worker_tools_allowed`)
   means every non-opt-in tool, so appending to one would strip every other
   tool. `append:` refuses that, naming the key, and adds to an allowlist only
-  where the agent already has a non-empty one.
+  where the agent already has a non-empty one. The same rule holds the other
+  way: a `detach:` (or a removal) that would leave an allowlist empty is
+  refused and the list is left as it is, so removing a plugin never widens an
+  agent to every tool; the removal reports it, naming the key. Every one of
+  these refusals is taken at plan time, before pip runs.
 * **Identity.** A `hooks` item is identified by its `(stream, event_type)` and
   must have both (a `stream` may not contain `:`); an item of any other list (`bootstrap_files`,
   `warmup.memory_blocks`, `tools_allowed`, `tools_opt_in`, …) must be a scalar
