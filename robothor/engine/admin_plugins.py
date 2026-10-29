@@ -138,11 +138,9 @@ def _with_assets(row: dict[str, Any], assets: dict[str, dict[str, Any]]) -> dict
     Workspace-relative destinations only, never where the workspace is: the
     same rule as the rest of this response.
     """
-    from robothor.plugins.assets import canonical
-    from robothor.plugins.overview import empty_assets
+    from robothor.plugins.overview import assets_for
 
-    written = assets.get(canonical(str(row.get("name") or ""))) or {}
-    row["assets"] = {key: written.get(key, default) for key, default in empty_assets().items()}
+    row["assets"] = assets_for(assets, str(row.get("name") or ""))
     return row
 
 

@@ -40,6 +40,7 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "WORKFLOW_PREFIX",
+    "assets_for",
     "empty_assets",
     "parse_workflow_file",
     "trigger_summary",
@@ -57,6 +58,16 @@ _WORKFLOW_SUFFIXES = (".yaml", ".yml")
 def empty_assets() -> dict[str, list[Any]]:
     """The shape every plugin carries, for one that wrote nothing."""
     return {"agents": [], "workflows": [], "patches": [], "files": []}
+
+
+def assets_for(assets: dict[str, dict[str, Any]], name: str) -> dict[str, list[Any]]:
+    """One distribution's ``{agents, workflows, patches, files}`` from :func:`workspace_assets`.
+
+    Keyed by the canonical name, so ``Acme_Desk`` finds ``acme-desk``; a plugin
+    the ledger does not know gets empty lists.
+    """
+    written = assets.get(canonical(name)) or {}
+    return {key: written.get(key, default) for key, default in empty_assets().items()}
 
 
 def trigger_summary(trigger: Any) -> str:
