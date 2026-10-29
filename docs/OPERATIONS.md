@@ -17,7 +17,7 @@ This page covers the part that sends things into the world: **actions**.
 | Claim the approved payload | `claim_action(kind=...)` | `executing`, with a `lease_token` |
 | Claim one named approved action | `claim_action_by_id(action_id)` | `executing`, with a `lease_token` |
 | Record the outcome | `finish_action(action_id, lease_token, status, receipt)` | `completed`, `unknown`, `cancelled` or `failed` |
-| Withdraw it before a claim | `cancel_action(action_id, reason, proposed_by=None)` | `cancelled` |
+| Withdraw it before a claim | `cancel_action(action_id, reason, proposed_by=..., actor=...)` | `cancelled` |
 
 A proposal is immutable. Its `key` is an idempotency key: proposing the same
 `kind` and `key` again returns the same action id, and a different payload — or
@@ -33,12 +33,13 @@ executor wins, re-checks the approved payload hash, and audits `action.claimed`.
 It returns `None` for an action that is not approved, has expired, belongs to
 another tenant, or is already claimed.
 
-`cancel_action` is how a proposer withdraws an action it no longer wants — a
-draft superseded by a newer one, or one its own rule refuses. `proposed_by`
-must match the action's proposer (`None` for an action proposed without one),
-only `review` and `approved` actions can be cancelled, and the audit row
-(`action.cancelled`, actor `plugin:<name>` or `system`) records the reason and
-the status it left. A claimed action is the executor's to settle with
+`cancel_action` withdraws an action nobody should execute any more — a draft
+superseded by a newer one, or one a rule refuses. A plugin's action is
+withdrawn only by its proposer (`proposed_by="<plugin>"`); an action proposed
+without one only by a named human (`actor="operator:<id>"`), so an operator's
+approval is never undone anonymously. Only `review` and `approved` actions can
+be cancelled, and the audit row (`action.cancelled`, actor `plugin:<name>` or
+the operator) records the reason and the status it left. A claimed action is the executor's to settle with
 `finish_action`.
 
 `get_action(action_id)` and `list_actions(kinds=None, status=None,
@@ -101,11 +102,18 @@ steps:
       kind: "{{ event.payload.kind }}"
 ```
 
-Every approval on the instance reaches every workflow with this trigger, so the
-tool reads the named action with `get_action(action_id)`, leaves it alone when
+Every approval in the engine's tenant reaches every workflow with this
+trigger, so the tool reads the named action with `get_action(action_id)`, leaves it alone when
 its `kind` is not one the plugin owns, and only then claims it with
 `claim_action_by_id(action_id)` — a claim it then abandons would expire to
-`unknown`. A workflow can also filter on
+`unknown`.
+
+The event is a prompt, not the only path. Engines read the stream in one
+consumer group, so each event is handled by one engine; where several engines
+share a Redis, the one that receives an approval for another tenant finds
+nothing with `get_action` and moves on. Keep a scheduled job or cron workflow
+that calls `claim_action(kind=...)` as the backstop: it picks up any approved
+action whose event was lost or went to another engine. A workflow can also filter on
 `event.payload.proposed_by` in a condition step before the tool runs. The workflow runs as the engine's
 tenant; the tool reads it from `ctx.tenant_id`, and the event's `tenant_id`
 says which tenant the approval was for.

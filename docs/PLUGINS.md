@@ -200,6 +200,8 @@ async def acme_execute_action(args, ctx=None):
 - **Executing.** An approval publishes `operation_action.approved` on the
   `operations` stream, so a workflow your plugin ships can run the execute tool
   as soon as a draft is approved, by an operator or by your policy.
+  Ship a scheduled sweep calling `claim_action(kind=...)` as well: the event
+  is best effort and reaches one engine.
 
 Everything a plugin needs is a method on `Operations`, so it never writes SQL
 against `operation_actions` or `operation_audit` itself:
@@ -213,7 +215,7 @@ against `operation_actions` or `operation_audit` itself:
 | `claim_action(kind=...)` | Leases the oldest approved action of a kind |
 | `claim_action_by_id(action_id)` | Leases that approved action, or `None` |
 | `finish_action(action_id, lease_token, status, receipt)` | Records the outcome of a claim |
-| `cancel_action(action_id, reason, proposed_by=...)` | Withdraws your draft or unclaimed approval (superseded, or refused by your rule) |
+| `cancel_action(action_id, reason, proposed_by=...)` | Withdraws your draft or unclaimed approval (superseded, or refused by your rule). Only the proposer can; an action with no proposer needs `actor="operator:<id>"` |
 
 Every method is scoped to the tenant `Operations` was built with, and every
 transition writes `operation_audit`.
