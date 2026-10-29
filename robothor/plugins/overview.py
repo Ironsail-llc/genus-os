@@ -115,7 +115,12 @@ def _ledger(root: Path, warnings: list[str]) -> dict[str, Any]:
     try:
         return read_ledger(instance)
     except (AssetError, TemplateSecurityError, OSError) as exc:
-        warnings.append(str(exc))
+        # The file and the exception CLASS, never its text: an OSError's
+        # message carries the absolute path.
+        warnings.append(
+            f"The plugin asset ledger (.robothor/{LEDGER_NAME}) could not be read "
+            f"({type(exc).__name__})."
+        )
         return {}
 
 
@@ -178,8 +183,10 @@ def parse_workflow_file(path: Path) -> dict[str, Any] | None:
         return None
     try:
         workflow = parse_workflow(data)
-    except Exception:  # noqa: BLE001 - a malformed workflow is skipped, not fatal
-        logger.debug("workflow %s does not parse", path.name, exc_info=True)
+    except Exception as exc:  # noqa: BLE001 - a malformed workflow is skipped, not fatal
+        # The file and the exception CLASS only: the message and traceback can
+        # carry values from the workflow body.
+        logger.debug("workflow %s does not parse (%s)", path.name, type(exc).__name__)
         return None
     return {
         "id": workflow.id,
