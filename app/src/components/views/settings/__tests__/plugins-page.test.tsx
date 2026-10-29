@@ -419,6 +419,27 @@ describe("Settings › Plugins — agents and workflows", () => {
     expect(assets.textContent).not.toContain("none");
   });
 
+  it("keeps the lists it could read and notes only the part that failed", async () => {
+    const partial = {
+      ...WITH_ASSETS,
+      assets: {
+        ...WITH_ASSETS.assets,
+        error: "The installed agent registry (.robothor/installed.yaml) is not readable.",
+        partial: true,
+      },
+    };
+    mockBridge({ listings: [{ ...LISTING, plugins: [partial] }] });
+    render(<PluginsPage visible />);
+
+    const assets = await screen.findByTestId("plugin-assets-genus-weather");
+    expect(within(assets).getByTestId("plugin-asset-workflow-weather-pass")).toBeTruthy();
+    expect(within(assets).getByTestId("plugin-asset-agent-weather-watch")).toBeTruthy();
+    expect(assets.textContent).toContain(
+      "unavailable: The installed agent registry (.robothor/installed.yaml) is not readable.",
+    );
+    expect(assets.textContent).not.toContain("none");
+  });
+
   it("an agent with no schedule says so rather than printing nothing", async () => {
     const unscheduled = {
       ...WITH_ASSETS,

@@ -378,6 +378,18 @@ class TestAssets:
         assert str(workspace) not in response.text
         assert str(workspace) not in caplog.text
 
+    def test_a_damaged_installed_yaml_keeps_the_ledgers_lists_and_marks_them_partial(
+        self, client, one_plugin, workspace
+    ):
+        (workspace / ".robothor" / "installed.yaml").write_text("agents: [unclosed")
+        assets = client.get("/api/admin/plugins").json()["plugins"][0]["assets"]
+        assert assets["workflows"] == [
+            {"id": "acme-pass", "name": "Acme pass", "triggers": ["cron 0 7 * * *"]}
+        ]
+        assert [a["id"] for a in assets["agents"]] == ["acme-watch"]
+        assert "installed.yaml" in assets["error"]
+        assert assets["partial"] is True
+
     def test_an_asset_read_failure_does_not_take_the_listing_down(
         self, client, one_plugin, monkeypatch
     ):
@@ -390,6 +402,7 @@ class TestAssets:
         row = response.json()["plugins"][0]
         assert row["assets"]["agents"] == [] and row["assets"]["workflows"] == []
         assert "PermissionError" in row["assets"]["error"]
+        assert row["assets"].get("partial") is not True  # nothing was read at all
         assert "/srv/secret-path" not in response.text
 
 
