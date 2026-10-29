@@ -266,3 +266,24 @@ async def test_re_parent_then_switch_does_not_reach_the_root(test_client, monkey
         assert "access_token" not in r.json()
     finally:
         reset_settings()
+
+
+@pytest.mark.asyncio
+async def test_the_root_is_the_platform_tenant_not_the_default(test_client, monkeypatch):
+    """ROBOTHOR_PLATFORM_TENANT is what require_operator treats as the root.
+    When it differs from DEFAULT_TENANT, the default tenant's admins must not
+    reshape the hierarchy, and the platform tenant's must."""
+    import routers._operator as operator
+
+    monkeypatch.setattr(operator, "PLATFORM_TENANT", "acme-platform")
+
+    r, update = await _patch(
+        test_client, "acme-child-b", {"parentTenantId": "acme-child-a"}, _bearer(_root())
+    )
+    assert r.status_code == 403
+    update.assert_not_called()
+
+    r, update = await _patch(
+        test_client, "acme-child-b", {"parentTenantId": "acme-child-a"}, _bearer("acme-platform")
+    )
+    assert r.status_code == 200, r.text
