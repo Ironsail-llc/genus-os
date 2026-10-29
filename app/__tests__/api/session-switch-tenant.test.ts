@@ -51,6 +51,23 @@ describe("POST /api/session/switch-tenant", () => {
     expect(await res.json()).toEqual({ error: "tenant switching disabled" });
   });
 
+  // 503 is the bridge refusing because row-level security is inert. Its body
+  // carries operator fix text; the browser gets one distinct, fixed sentence.
+  it("names an inert-isolation 503 distinctly instead of relaying the fix text", async () => {
+    switchSessionTenant.mockResolvedValue({
+      ok: false,
+      status: 503,
+      error: "tenant switching refused: row-level security is not enforcing. Set …",
+    });
+
+    const res = await POST(request({ tenant: "acme-child-a" }));
+
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({
+      error: "tenant switching unavailable: isolation not enforcing",
+    });
+  });
+
   it.each([
     ["no body", "not json"],
     ["no tenant", {}],
