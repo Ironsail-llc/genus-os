@@ -116,3 +116,24 @@ def test_a_generated_signing_key_is_stored_in_the_root_tenant(
     finally:
         tokens.reset_signing_key_cache()
     assert stored == [(DEFAULT_TENANT, DEFAULT_TENANT)]
+
+
+def test_the_provider_key_pool_reads_the_root_tenant_inside_any_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Provider keys are the instance's. A pool refresh that happens inside a
+    scoped run (the benchmark sandbox, a child tenant) must not come back
+    empty because the vault now follows the scope."""
+    import robothor.vault as vault
+    from robothor.engine import key_pool
+
+    seen: list[tuple[str | None, str]] = []
+
+    def fake_export(*, tenant_id=None):
+        seen.append((tenant_id, effective_tenant()))
+        return {}
+
+    monkeypatch.setattr(vault, "export_env", fake_export)
+    with tenant_scope("acme-child-a"):
+        key_pool._vault_export()
+    assert seen == [(DEFAULT_TENANT, DEFAULT_TENANT)]
