@@ -673,8 +673,8 @@ def do_not_contact_phones(
     calls this with every number it is about to contact and refuses the send
     if the result is non-empty.
 
-    Numbers are written every way a person writes them -- ``+15550100100``,
-    ``(555) 010-0100``, ``555.010.0100`` -- so both sides are compared on
+    Numbers are written every way a person writes them -- ``+1 (555) 123-4567``,
+    dotted, dashed or bare digits -- so both sides are compared on
     their last ten digits, digits only. A number with fewer than ten digits
     matches nothing. The returned strings are the caller's own, exactly as
     passed, so it can drop them from its recipient list without normalising.
