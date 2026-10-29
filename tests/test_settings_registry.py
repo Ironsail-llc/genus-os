@@ -96,13 +96,16 @@ DISCOVERY_SCRIPT = REPO_ROOT / "scripts" / "list_env_reads.py"
 #: `genus config` could not show it. A pre-existing raw read that MOVED into a
 #: new module during this change, which is the cheap moment to route it through
 #: the declaration rather than carry it across untouched.
+#: 472 -> 471: `ROBOTHOR_PLATFORM_TENANT` was read twice, once by the bridge's
+#: operator gate and again by local sign-in's duplicate preference. It is now
+#: one constant, `robothor.constants.PLATFORM_TENANT`, that both import.
 #:
 #: The two 482 -> N runs above happened on branches that did not see each other
 #: (the vault work reached 474, the attachment work 480). Neither figure is
 #: right for the merged tree, so the number here is the MEASURED count from
 #: `scripts/list_env_reads.py --count-sites` after the rebase; both histories
 #: are kept because both sets of removals are real.
-ENV_READ_SITE_BASELINE = 472
+ENV_READ_SITE_BASELINE = 471
 
 
 def _discovery():
