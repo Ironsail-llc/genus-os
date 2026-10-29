@@ -1,4 +1,4 @@
-"""155: the n8n snapshot tables, and PgN8nStore against them.
+"""156: the n8n snapshot tables, and PgN8nStore against them.
 
 The unit suite proves the snapshot rules on :class:`MemoryN8nStore`; this
 proves the real store keeps the same promises on PostgreSQL: workflows are
@@ -17,7 +17,7 @@ from pathlib import Path
 import pytest
 
 MIGRATIONS_DIR = Path(__file__).resolve().parents[2] / "crm" / "migrations"
-MIGRATION = "155_n8n_integration"
+MIGRATION = "156_n8n_integration"
 TABLES = ["n8n_executions", "n8n_sync_state", "n8n_workflows"]
 
 

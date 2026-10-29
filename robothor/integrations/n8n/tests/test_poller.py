@@ -412,3 +412,32 @@ async def test_the_poll_interval_has_a_floor(configure) -> None:
     n8n, rec = FakeN8n(), Recorder()
     await _run(n8n, rec, MemoryN8nStore(now=lambda: NOW), settings, rounds=2)
     assert rec.sleeps == [poller.MIN_INTERVAL_SECONDS]
+
+
+async def test_the_daemon_starts_the_monitor_only_when_enabled(configure, monkeypatch) -> None:
+    from robothor.engine import daemon
+
+    started: list[str] = []
+
+    async def fake_run(tenant_id, **_kw):
+        started.append(tenant_id)
+
+    async def idle(_tenant):
+        return None
+
+    monkeypatch.setattr(poller, "run", fake_run)
+    monkeypatch.setattr("robothor.engine.calendar_recovery_worker.run", idle)
+    monkeypatch.setattr("robothor.workspace.ingest.worker.start_tasks", lambda _t: [])
+
+    configure()
+    tasks = daemon._background_workers(T)
+    assert "n8n-monitor" not in {t.get_name() for t in tasks}
+    for task in tasks:
+        await task
+
+    configure(ROBOTHOR_N8N_ENABLED="true", ROBOTHOR_N8N_BASE_URL=BASE)
+    tasks = daemon._background_workers(T)
+    assert "n8n-monitor" in {t.get_name() for t in tasks}
+    for task in tasks:
+        await task
+    assert started == [T]

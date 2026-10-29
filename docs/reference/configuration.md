@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-482 settings in 17 groups.
+486 settings in 18 groups.
 
 ## autonomy
 
@@ -123,6 +123,17 @@ Host paths for the isolated personal browser service and clients.
 | `ROBOTHOR_M365_SCOPE_CANARY_MAILBOX` | str | _(empty)_ | `robothor-engine` | no | unreleased | A mailbox in the same Microsoft 365 tenant that the app must NOT be able to read. The doctor tries it to prove Exchange RBAC for Applications scopes the grant to the assistant and owner mailboxes; a readable canary is an error. Empty skips the check. |
 | `ROBOTHOR_TRIAGE_INBOX_PATH` | str | _(empty)_ | `robothor-engine` | no | unreleased | The triage-inbox.json the platform's Microsoft 365 ingest rebuilds after new mail and every five minutes: the pending email, calendar and jira items the email classifier and calendar monitor read. Empty means triage-inbox.json beside the email log. Has no effect on google, where the instance's own sync script writes it. |
 | `ROBOTHOR_WORKSPACE_PROVIDER` | Literal | `google` | `robothor-engine` | no | unreleased | Mail and calendar backend behind the gws_* tools: `google` (the gws CLI) or `microsoft365` (Microsoft Graph with an Entra app-only credential stored in the vault under workspace/microsoft365/). Under `microsoft365` the mail tools serve the assistant's Exchange mailbox and the calendar tools refuse until the Microsoft 365 calendar ships. |
+
+## integrations
+
+External systems the instance watches, such as an n8n instance.
+
+| Variable | Type | Default | Restart | Secret | Since | Description |
+| --- | --- | --- | --- | --- | --- | --- |
+| `ROBOTHOR_N8N_API_KEY` | str | _(unset)_ | `robothor-engine`, `robothor-bridge` | yes | unreleased | An n8n public-API key (Settings > n8n API in n8n), sent as X-N8N-API-KEY. Resolved vault-first. Read-only use: the monitor never changes a workflow. |
+| `ROBOTHOR_N8N_BASE_URL` | str | _(empty)_ | `robothor-engine`, `robothor-bridge` | no | unreleased | Root URL of the n8n instance, e.g. https://n8n.example.com (no /api/v1). The poller calls its public API under it, and execution links in notifications point into it. |
+| `ROBOTHOR_N8N_ENABLED` | bool | `false` | `robothor-engine`, `robothor-bridge` | no | unreleased | Watch an external n8n instance: the engine's scheduler leader polls its workflows and failed executions, keeps a snapshot for the dashboard and the n8n_* agent tools, and notifies the main agent once per failed execution. Off: nothing is polled and the n8n section reads not configured. |
+| `ROBOTHOR_N8N_POLL_SECONDS` | int | `120` | no | no | unreleased | Seconds between n8n polls (minimum 30). The doctor's poll-freshness check and the dashboard's status allow three intervals before a snapshot counts as stale. |
 
 ## paths
 
