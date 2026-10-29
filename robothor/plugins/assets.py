@@ -91,8 +91,11 @@ LEDGER_NAME = "plugin-assets.yaml"
 #: it; ``docs/webhooks.yaml`` is the one exact file. ``docs/agents/`` is NOT
 #: here: an agent arrives through ``agents:`` and the template installer, or
 #: changes through ``patches:``, never as a raw file copy.
-FILE_PREFIXES = ("brain", "docs/workflows", "docs/hooks")
+FILE_PREFIXES = ("brain", "docs/workflows", "docs/hooks", "docs/webhooks.d")
 FILE_EXACT = ("docs/webhooks.yaml",)
+
+#: Webhook channel drop-ins: one ``<name>.yaml`` directly inside, never nested.
+WEBHOOK_DROPINS = "docs/webhooks.d"
 
 #: The modes a ``files:`` entry may ask for.
 MODES = ("overwrite", "if_missing")
@@ -573,6 +576,13 @@ def _check_dest_shape(dest: str) -> str:
     if parsed not in FILE_EXACT and not any(parsed.startswith(p + "/") for p in FILE_PREFIXES):
         allowed = ", ".join([*(p + "/**" for p in FILE_PREFIXES), *FILE_EXACT])
         raise AssetError(f"{dest!r} is outside the paths a plugin may write ({allowed}).")
+    if parsed.startswith(WEBHOOK_DROPINS + "/"):
+        name = parsed[len(WEBHOOK_DROPINS) + 1 :]
+        if "/" in name or not name.endswith(".yaml"):
+            raise AssetError(
+                f"{dest!r}: a webhook drop-in is one file directly in "
+                f"{WEBHOOK_DROPINS}/, named <name>.yaml."
+            )
     return parsed
 
 
@@ -775,11 +785,14 @@ def _reclaimable(
 
 
 def _brain_agent(dest: str) -> str | None:
-    """The agent id a ``brain/agents/<id>.md`` or ``brain/agents/<id>/...`` path belongs to."""
+    """The agent id a ``brain/agents/<id>.md``, ``brain/agents/<id>/...`` or
+    ``brain/agents/<id>.d/...`` (instruction fragments) path belongs to."""
     parts = pathlib.PurePosixPath(dest).parts
     if len(parts) < 3 or parts[:2] != ("brain", "agents"):
         return None
-    return pathlib.PurePosixPath(parts[2]).stem if len(parts) == 3 else parts[2]
+    if len(parts) == 3:
+        return pathlib.PurePosixPath(parts[2]).stem
+    return parts[2].removesuffix(".d")
 
 
 def patch_keys(section: dict[str, Any]) -> set[str]:
@@ -1001,7 +1014,7 @@ def plan(
         suffix = " (if missing)" if item.mode == "if_missing" else ""
         if replaces:
             suffix = f" (replaces an existing file; the original is kept as .pre-{dist})"
-        if item.dest == "docs/webhooks.yaml":
+        if item.dest == "docs/webhooks.yaml" or item.dest.startswith(WEBHOOK_DROPINS + "/"):
             suffix += " [engine-loaded config]"
         elif item.dest.startswith("docs/hooks/"):
             suffix += " [hooks the engine executes]"
