@@ -294,13 +294,21 @@ exist.
   `workspace.persistence.enabled: false` on that cell.
 
 **Removing a cell.** Removing an entry from `tenants:` deletes that cell's
-Deployment and Service but not its workspace. The chart-created PVC survives
-both `helm` and Argo CD pruning: it carries `helm.sh/resource-policy: keep`
-for the Helm CLI, and `argocd.argoproj.io/sync-options: Prune=false` for
-`argocd app sync --prune`, which ignores Helm's policy. Any other sync options
-set in `workspace.persistence.annotations` are kept alongside it. Adding the
-same `id` back later mounts the same workspace again. Neither tool will ever
-delete it, so delete it by hand once you no longer need its contents:
+Deployment and Service and never deletes its workspace claim. The
+chart-created PVC carries two sets of opt-outs:
+
+- `helm.sh/resource-policy: keep`, so `helm upgrade` and `helm uninstall`
+  leave it in place;
+- `argocd.argoproj.io/sync-options: Prune=false,Delete=false`, because Argo CD
+  ignores Helm's policy. `Prune=false` stops `argocd app sync --prune` from
+  removing it, and `Delete=false` stops a cascading delete of the Argo CD
+  Application from removing it.
+
+Other sync options set in `workspace.persistence.annotations` are kept, and a
+`Prune=` or `Delete=` set there is replaced. Under Argo CD the orphaned claim
+then shows as requiring pruning, and the Application stays OutOfSync until the
+claim is gone. Adding the same `id` back mounts the same workspace again.
+Otherwise, delete the claim by hand once you no longer need its contents:
 `kubectl delete pvc <fullname>-workspace-<id> --namespace <namespace>`.
 
 ## Google Workspace credentials

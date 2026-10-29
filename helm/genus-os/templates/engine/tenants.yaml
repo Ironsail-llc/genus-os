@@ -87,17 +87,18 @@ metadata:
   name: {{ $claimName }}
   labels:
     {{- include "genus-os.labels" (dict "root" $root "component" "workspace" "tenant" $id) | nindent 4 }}
-  {{- /* Dropping an entry from tenants: must not delete that tenant's
-         workspace. `helm` honours resource-policy; `argocd app sync --prune`
-         ignores it and needs Prune=false. An operator deletes the claim. */}}
+  {{- /* No removal path deletes a tenant's workspace. `helm` honours
+         resource-policy; Argo CD ignores it and needs Prune=false (an entry
+         removed from tenants:) and Delete=false (a cascading delete of the
+         Application). An operator deletes the claim by hand. */}}
   {{- $pvcAnnotations := deepCopy ($persistence.annotations | default dict) }}
   {{- $_ := set $pvcAnnotations "helm.sh/resource-policy" "keep" }}
   {{- $syncOptions := list }}
   {{- range $opt := splitList "," (toString (index $pvcAnnotations "argocd.argoproj.io/sync-options" | default "")) }}
   {{- $opt = trim $opt }}
-  {{- if and $opt (not (hasPrefix "Prune=" $opt)) }}{{- $syncOptions = append $syncOptions $opt }}{{- end }}
+  {{- if and $opt (not (hasPrefix "Prune=" $opt)) (not (hasPrefix "Delete=" $opt)) }}{{- $syncOptions = append $syncOptions $opt }}{{- end }}
   {{- end }}
-  {{- $_ := set $pvcAnnotations "argocd.argoproj.io/sync-options" (append $syncOptions "Prune=false" | join ",") }}
+  {{- $_ := set $pvcAnnotations "argocd.argoproj.io/sync-options" (concat $syncOptions (list "Prune=false" "Delete=false") | join ",") }}
   annotations:
     {{- toYaml $pvcAnnotations | nindent 4 }}
 spec:
