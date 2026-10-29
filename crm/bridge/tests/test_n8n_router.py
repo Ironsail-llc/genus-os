@@ -334,19 +334,85 @@ def test_disabled_monitor_lists_no_executions(
     assert calls == []
 
 
-def test_no_base_url_means_no_relative_links(controls_client_as_operator, monkeypatch, fake_db):
-    monkeypatch.setattr(n8n, "_n8n_settings", lambda: (True, "", POLL))
+def _settings(monkeypatch, **over):
+    """Real-shaped settings, so the router's own reading of them is exercised."""
+    from types import SimpleNamespace
+
+    fields = {"n8n_enabled": True, "n8n_base_url": BASE, "n8n_poll_seconds": POLL} | over
+    monkeypatch.setattr(
+        "robothor.settings.get_settings",
+        lambda: SimpleNamespace(integrations=SimpleNamespace(**fields)),
+    )
+
+
+def test_no_base_url_means_no_relative_links(
+    controls_client_as_operator, monkeypatch, fake_db, calls
+):
+    # Switched on but with nowhere to poll: the poller refuses to run, so the
+    # section says not_configured (and points at the setup doc), not a listing.
+    _settings(monkeypatch, n8n_base_url="  ")
     fake_db(
         n8n_sync_state=[_sync()],
         n8n_workflows=[_workflow()],
         n8n_executions=[{"execution_id": "ex1", "status": "error"}],
     )
-    [wf] = controls_client_as_operator.get("/api/integrations/n8n/workflows").json()["workflows"]
-    assert wf["url"] == ""
+    body = controls_client_as_operator.get("/api/integrations/n8n/workflows").json()
+    assert body["status"] == "not_configured"
+    assert body["workflows"] == []
     executions = controls_client_as_operator.get(
         "/api/integrations/n8n/workflows/wf1/executions"
     ).json()["executions"]
-    assert all(ex["url"] == "" for ex in executions)
+    assert executions == []
+    assert calls == []
+
+
+def test_a_base_url_ending_in_api_v1_links_to_the_instance_root(
+    controls_client_as_operator, monkeypatch, fake_db
+):
+    _settings(monkeypatch, n8n_base_url=f"{BASE}/api/v1/")
+    fake_db(
+        n8n_sync_state=[_sync()],
+        n8n_workflows=[_workflow(failures_24h=1, last_failed_execution_id="ex7")],
+        n8n_executions=[{"execution_id": "ex1", "status": "error"}],
+    )
+    body = controls_client_as_operator.get("/api/integrations/n8n/workflows").json()
+    assert body["base_url"] == BASE
+    [wf] = body["workflows"]
+    assert wf["url"] == f"{BASE}/workflow/wf1"
+    assert wf["last_failure_url"] == f"{BASE}/workflow/wf1/executions/ex7"
+    [ex] = controls_client_as_operator.get("/api/integrations/n8n/workflows/wf1/executions").json()[
+        "executions"
+    ]
+    assert ex["url"] == f"{BASE}/workflow/wf1/executions/ex1"
+
+
+def test_a_poll_interval_under_the_floor_does_not_flap(
+    controls_client_as_operator, monkeypatch, fake_db
+):
+    # The poller never sleeps less than 30 s, so a 10 s setting must not make a
+    # snapshot one real round old read as stale.
+    _settings(monkeypatch, n8n_poll_seconds=10)
+    fake_db(n8n_sync_state=[_sync(last_ok_at=_now() - timedelta(seconds=60))], n8n_workflows=[])
+    body = controls_client_as_operator.get("/api/integrations/n8n/workflows").json()
+    assert body["status"] == "ok"
+
+
+def test_executions_db_error_is_named(controls_client_as_operator, enabled, monkeypatch):
+    @contextmanager
+    def boom(*args, **kwargs):
+        raise RuntimeError("connection refused")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(n8n, "get_connection", boom)
+    body = controls_client_as_operator.get("/api/integrations/n8n/workflows/wf1/executions").json()
+    assert body["executions"] == []
+    assert "connection refused" in body["error"]
+
+
+def test_executions_without_an_error_carry_none(controls_client_as_operator, enabled, fake_db):
+    fake_db(n8n_executions=[])
+    body = controls_client_as_operator.get("/api/integrations/n8n/workflows/wf1/executions").json()
+    assert body == {"executions": []}
 
 
 # --- the last failure links to its execution ---------------------------------
