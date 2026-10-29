@@ -38,8 +38,11 @@ async def acme_propose_note(args: dict[str, Any], ctx: ToolContext) -> dict[str,
 async def acme_execute_action(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     """Claim the approved note and record the provider's acknowledgement."""
     ops = Operations(ctx.tenant_id)
+    row = ops.get_action(args["action_id"])
+    if row is None or row["kind"] != KIND:
+        return {"error": "not this plugin's action"}
     claimed = ops.claim_action_by_id(args["action_id"])
-    if claimed is None or claimed["kind"] != KIND:
+    if claimed is None:
         return {"error": "nothing approved to execute"}
     ops.finish_action(str(claimed["id"]), claimed["lease_token"], "completed", {"id": "ack-1"})
     return {"executed": str(claimed["id"]), "body": claimed["payload"]["body"]}
