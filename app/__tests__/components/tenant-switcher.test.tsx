@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockSession: { data: Record<string, unknown> | null; update: ReturnType<typeof vi.fn> } = {
@@ -185,5 +185,39 @@ describe("ActingTenantBanner", () => {
 
     expect(await screen.findByRole("status")).toHaveTextContent(/back in your home tenant/i);
     await waitFor(() => expect(mockSession.update).toHaveBeenCalledWith({ tenantNoticeSeen: true }));
+  });
+
+  // Acknowledging the notice changes the session, and that must not cancel
+  // the timer that dismisses the toast — nor send the acknowledgement again.
+  it("dismisses the toast after eight seconds, acknowledging it exactly once", () => {
+    vi.useFakeTimers();
+    try {
+      mockSession.data = {
+        role: "owner",
+        tenantId: "acme-parent",
+        homeTenantId: "acme-parent",
+        tenantNotice: "acting-tenant-reverted",
+      };
+      // What the real session does: the acknowledgement clears the notice.
+      mockSession.update = vi.fn(async () => {
+        mockSession.data = { role: "owner", tenantId: "acme-parent", homeTenantId: "acme-parent" };
+      });
+      routeFetch({});
+
+      const { rerender } = render(<ActingTenantBanner onSwitched={vi.fn()} />);
+      expect(screen.getByRole("status")).toHaveTextContent(/back in your home tenant/i);
+
+      // The session refetch after the acknowledgement re-renders the banner.
+      act(() => rerender(<ActingTenantBanner onSwitched={vi.fn()} />));
+      act(() => vi.advanceTimersByTime(7_999));
+      expect(screen.getByRole("status")).toBeInTheDocument();
+
+      act(() => vi.advanceTimersByTime(1));
+      expect(screen.queryByRole("status")).toBeNull();
+      expect(mockSession.update).toHaveBeenCalledOnce();
+      expect(mockSession.update).toHaveBeenCalledWith({ tenantNoticeSeen: true });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
