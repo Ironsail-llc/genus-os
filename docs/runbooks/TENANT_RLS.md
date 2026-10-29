@@ -126,7 +126,7 @@ config.
 ## The guardrail that would have caught it
 
 `_apply_tenant_scope` now checks `rolsuper` once per process and logs a loud
-`RLS IS INERT` error when `ROBOTHOR_RLS_ENABLED` is set but the connection is a
+`NO TENANT ISOLATION` error when the connection is a
 superuser. It is never fatal — it cannot take the instance down, only stop it
 lying about its isolation.
 
@@ -134,7 +134,7 @@ lying about its isolation.
 
 ```bash
 journalctl -u robothor-engine -u robothor-bridge -u robothor-orchestrator \
-           -u robothor-vision -u robothor-delphi-engine | grep "RLS IS INERT"
+           -u robothor-vision -u robothor-delphi-engine | grep "NO TENANT ISOLATION"
 ```
 
 ## Per-request binding in the bridge

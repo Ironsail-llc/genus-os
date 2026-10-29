@@ -8,7 +8,9 @@ tenant, how to move one who landed in the wrong one, and how to prove it all
 holds.
 
 The examples use a root tenant `acme-parent` with one child `acme-child-a`,
-and the address `alice@example.com`. Substitute your own.
+and the address `alice@example.com`. Substitute your own. The root is the
+deployment's own tenant: its `ROBOTHOR_DEFAULT_TENANT` (`default` unless you
+set it), which is the tenant root operators sign in to.
 
 ## Concepts
 
@@ -27,8 +29,14 @@ connectors (each tenant has its own vault rows and its own engine).
 
 ## Order of operations
 
-Do these in order. Each step assumes the one before it.
+Do these in order. Each step assumes the one before it. Every command below
+runs from a root shell (the deployment's own tenant). A `genus` command given
+`--tenant <child>` (`genus user …`, `genus auth …`), and `genus tenant create`
+for the tenant it creates, runs its database work in that child's scope
+automatically, so it works with RLS enforcing.
 
+0. **Create the vault-key material in Vault** (see [Vault key](#vault-key)),
+   before adding any tenant cell.
 1. **Turn on row-level security first.** Without it, a child's isolation rests
    on every query remembering its `WHERE` clause. Follow
    [TENANT_RLS.md](TENANT_RLS.md) and prove it with the query there before
@@ -49,16 +57,18 @@ genus tenant status acme-child-a
 ```
 
 `status` should show `Parent: acme-parent`. The command also seeds the child's
-memory blocks.
+memory blocks, in the child's scope. If an earlier run was interrupted after
+the tenant row was written, running the same command again seeds whatever is
+missing instead of refusing.
 
 ## Add the child's engine
 
-One engine runs per tenant. Each is a cell in the Helm chart's `tenants:` list
-in the environment's values layer:
+One engine runs per tenant. The root tenant's engine is the chart's `engine:`
+block, as before. Each CHILD is a cell in the `tenants:` list in the
+environment's values layer. The root does not appear in that list:
 
 ```yaml
 tenants:
-  - id: acme-parent
   - id: acme-child-a
 ```
 
@@ -66,14 +76,24 @@ The chart renders one engine per entry and sets both `ROBOTHOR_TENANT_ID` and
 `ROBOTHOR_DEFAULT_TENANT` to the entry's `id`, so that engine's connections
 are bound to that tenant for RLS and everything it writes lands there. The
 bridge and the Helm dashboard stay single: they serve every tenant and pick
-the tenant from the access token.
+the tenant from the access token. The chart README has the full set of keys
+per cell.
+
+### Vault key
+
+Every tenant shares one vault master key. A credential the bridge stores while acting in a child tenant is encrypted with that key and decrypted later by the child's own engine, so the bridge, the root engine and every child engine must hold the same key. A key per workspace makes the child's credentials unreadable by its engine. On Kubernetes the chart provides the key: set `vaultKey.enabled: true` and point `vault.secrets.vault-key.path` at a Vault path holding two base64 fields, `key` and `fingerprint-salt`, each made with `openssl rand -base64 32`. The chart mounts both read-only at `/etc/genus/vault/` on the bridge and every engine, and sets `GENUS_VAULT_KEY_FILE` and `GENUS_FINGERPRINT_SALT_FILE` to them. It refuses to render tenant cells without this. On a single host, point both variables at the same files for every process. Treat `key` as write-once: secrets already stored cannot be read under a new key. The fingerprint salt only affects how credentials are displayed (`b2:…`), not decryption, but sharing it keeps one credential's fingerprint identical everywhere.
 
 ## Connectors are per tenant
 
-- **Vault rows** are keyed by tenant. Store a child's credentials with the
-  tenant selected through the environment, from a shell on the deployment:
+- **Vault rows** are keyed by tenant. `genus vault` has no `--tenant`: it
+  works in the shell's own tenant. Store a child's credentials from a shell
+  whose `ROBOTHOR_TENANT_ID` is unset or equal to the child, with the child
+  selected as its default tenant. A shell left at the root's
+  `ROBOTHOR_TENANT_ID` is bound to the root, and the child's rows are written
+  or read nowhere it can see:
 
   ```bash
+  unset ROBOTHOR_TENANT_ID
   export ROBOTHOR_DEFAULT_TENANT=acme-child-a
   genus vault set slack/bot_token
   genus vault list
@@ -137,7 +157,8 @@ genus tenant move-account --email alice@example.com --to acme-child-a
 
 The dry run prints how many rows each table would move and changes nothing.
 The live move does everything in **one transaction**: it moves the account,
-its CRM contact (see below), its per-user permission overrides, its channel identities,
+its CRM contact and that contact's own addresses and handles
+(`contact_identifiers`; see below), its per-user permission overrides, its channel identities,
 its face enrolments, its Telegram rows (both the contact's routing row and
 the pairing row keyed by the account, which is what Telegram reads to decide
 who may drive an agent) and any pending SSO binding grant; revokes every refresh session the account holds, so its next token is
@@ -153,11 +174,15 @@ audit log. If any step fails, none of it happened.
 
 **The CRM contact.** An account may be linked to a CRM contact (`person_id`).
 If nothing else in the source tenant references that contact, it moves with
-the account. If notes, tasks, conversations, contact identifiers or any other
-tenant table do, the move is refused and the error lists each table and its
-count. That includes a face enrolment of the person that is not this
-account's own, and another account linked to the same contact; the account's
-own enrolment and Telegram routing row move with it and do not count. That history belongs to the source tenant, and moving the contact would
+the account. If notes, tasks, conversations or any other tenant table do, the
+move is refused and the error lists each table and its count. That includes a
+face enrolment of the person that is not this account's own, and another
+account linked to the same contact. What does not count: the account's own
+enrolment and Telegram rows, and the contact's own addresses and handles
+(`contact_identifiers`, such as the email row `genus user add` writes), which
+are part of the contact and move with it. Their link to a memory entity is
+cleared, because that entity stays in the source. So a plain `genus user add`
+account moves, and its dry run prints counts. That history belongs to the source tenant, and moving the contact would
 leave it pointing at someone the source can no longer see. Re-run with
 `--detach-person` to keep the history where it is. An account with no linked
 contact is unaffected either way.
@@ -182,9 +207,12 @@ A move is refused, with nothing written, when:
 - the account's CRM contact has history in the source tenant and
   `--detach-person` was not given.
 
-After a move the person signs in again. An access token issued before the move
-stays valid for its few minutes of lifetime and still names the old tenant;
-the refresh that would extend it is gone.
+After a move the person signs in again, by SSO or with their password: the
+password sign-in looks the address up in every tenant and signs the person in
+to the one tenant it is active in. An address that is active in more than one
+tenant is refused (and logged) until the duplicate is removed. An access token
+issued before the move stays valid for its few minutes of lifetime and still
+names the old tenant; the refresh that would extend it is gone.
 
 ## Verification queries
 
@@ -234,5 +262,8 @@ SELECT DISTINCT tenant_id FROM crm_tasks;
 - A move: move the account back (`--to` the old tenant, `--role` the old role
   unless it was `owner`; restore an owner with `genus auth bootstrap` or the
   Users page of the root tenant).
-- Switching: set `GENUS_TENANT_SWITCH_MODE=off`. Tokens then act only in the
-  account's own tenant again; nothing else changes.
+- Switching: set `GENUS_TENANT_SWITCH_MODE=off` and restart the bridge. No
+  new switch is issued from then on. An acting token issued before the flip is
+  rejected on the next request once the bridge is restarted with the flag off;
+  until that restart it stays valid for the rest of its lifetime (at most 15
+  minutes). Nothing else changes.
