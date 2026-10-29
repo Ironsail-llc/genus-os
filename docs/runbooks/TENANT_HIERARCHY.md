@@ -46,8 +46,9 @@ automatically, so it works with RLS enforcing.
 2. Create the child tenant (below).
 3. Add the child's engine cell to the deployment and let it sync.
 4. Store the child's connector credentials.
-5. Claim the child's SSO domains, if its people sign in from their own domain.
-6. Move any account that already exists in the wrong tenant.
+5. Move any account that already exists in the wrong tenant, BEFORE claiming
+   its domain (see [Move an account](#move-an-account-to-another-tenant)).
+6. Claim the child's SSO domains, if its people sign in from their own domain.
 7. Run the verification queries.
 8. Raise `GENUS_TENANT_SWITCH_MODE` from `off` to `observe`, then `enforce`.
 
@@ -138,11 +139,16 @@ The same list is `settings.sso_domains` on `PATCH /api/tenants/{id}`.
   identity provider subject signs in to whatever tenant it is in, with RLS on
   or off: the sign-in looks the binding up across every tenant. Claiming a
   domain does not move anyone: use `move-account` for that.
-- **Move invited accounts first.** An account that exists but is not yet bound
-  (an invitation, or one waiting on a binding grant) is looked up by email in
-  the *routed* tenant only. If it sits in another tenant when its domain is
-  claimed, the person's first sign-in creates a second, new account in the
-  claiming tenant instead. Move such accounts before you claim the domain.
+- **Move existing accounts first.** A claim never creates a second account
+  for an address that already has one. If an account that is not yet bound to
+  the person's IdP subject (an invitation, a `genus user add` +
+  `set-password` account, or one waiting on a binding grant) sits in another
+  tenant when its domain is claimed, the person's SSO sign-in is refused with
+  "account not eligible for SSO". The bridge logs which tenant holds the
+  account, and password sign-in keeps working. So move such accounts into
+  the claiming tenant before you claim the domain (step 5 before step 6
+  above); after the move, a binding grant in that tenant lets the first SSO
+  sign-in bind the account.
 - **Fail safe.** If two tenants ever claim one domain (a hand-edited row), the
   sign-in lands in the default tenant and the bridge logs an error naming the
   domain. Fix the claim; nobody is locked out by it.
@@ -211,8 +217,10 @@ A move is refused, with nothing written, when:
 
 After a move the person signs in again, by SSO or with their password: the
 password sign-in looks the address up in every tenant and signs the person in
-to the one tenant it is active in. An address that is active in more than one
-tenant is refused (and logged) until the duplicate is removed. An access token
+to the one tenant where it has an active account with a password. If several
+tenants have one, the platform tenant's wins and the bridge logs an error;
+with several and none in the platform tenant, the sign-in is refused (and
+logged) until the duplicate is removed. An access token
 issued before the move still names the old tenant, and the refresh that would
 extend it is gone. Once the session-standing check ships (the bridge and
 engines re-validate human tokens against the account every 30 s), the old
