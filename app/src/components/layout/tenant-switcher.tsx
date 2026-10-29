@@ -13,7 +13,7 @@
  * UX only. The bridge authorizes the switch and every request after it.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useSession } from "next-auth/react";
 import { Building2 } from "lucide-react";
 
@@ -149,12 +149,25 @@ export function ActingTenantBanner({ onSwitched = reload }: SwitchProps) {
     setSeenReverted(reverted);
     if (reverted) setNotice(true);
   }
+  // Acknowledge once per notice. The acknowledgement changes the session, so it
+  // must not share an effect with the dismiss timer: re-running that effect
+  // would cancel the timer and leave the toast up for good.
+  const acknowledged = useRef(false);
   useEffect(() => {
-    if (!reverted) return;
+    if (!reverted) {
+      acknowledged.current = false;
+      return;
+    }
+    if (acknowledged.current) return;
+    acknowledged.current = true;
     void update({ tenantNoticeSeen: true });
+  }, [reverted, update]);
+  // Keyed on the toast alone, which nothing but this timer turns off.
+  useEffect(() => {
+    if (!notice) return;
     const timer = setTimeout(() => setNotice(false), 8_000);
     return () => clearTimeout(timer);
-  }, [reverted, update]);
+  }, [notice]);
 
   function switchBack() {
     if (session?.homeTenantId) void switchTo(session.homeTenantId);
