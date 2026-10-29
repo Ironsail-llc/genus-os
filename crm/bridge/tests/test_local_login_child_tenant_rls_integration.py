@@ -202,3 +202,134 @@ async def test_sso_refuses_rather_than_duplicating_an_unbound_account_elsewhere(
     login = await _login(test_client, email)
     assert login.status_code == 200, login.text
     assert login.json()["user"]["id"] == user_id
+
+
+# ─── a binding grant wins over domain routing ────────────────────────────
+
+
+def _cli_sso_invite(tenant: str, email: str, *, grant: bool = True) -> None:
+    """``genus user add --sso --tenant <t>`` then ``genus auth grant-binding``."""
+    from argparse import Namespace
+
+    from robothor.cli.auth import cmd_auth
+    from robothor.cli.user import cmd_user
+
+    added = cmd_user(
+        Namespace(
+            user_command="add",
+            tenant=tenant,
+            name="Alice Example",
+            role="member",
+            telegram_id=None,
+            email=email,
+            person_id=None,
+            create_person=False,
+            sso=True,
+        )
+    )
+    assert added == 0
+    if grant:
+        armed = cmd_auth(
+            Namespace(
+                auth_command="grant-binding",
+                tenant=tenant,
+                email=email,
+                ttl="15m",
+                reason="",
+                issuer=None,
+                json_output=False,
+            )
+        )
+        assert armed == 0
+
+
+async def _sso(client, email: str, subject: str):
+    return await client.post(
+        "/api/auth/sso",
+        json={
+            "issuer": ISSUER,
+            "subject": subject,
+            "email": email,
+            "email_verified": True,
+            "display_name": "Alice",
+        },
+        headers={"X-Bridge-Auth": "dashboard-shared-secret"},
+    )
+
+
+@pytest.fixture
+def sso_env(monkeypatch):
+    monkeypatch.setenv("GENUS_BRIDGE_SSO_SECRET", "dashboard-shared-secret")
+    monkeypatch.setenv("GENUS_OIDC_ISSUERS", ISSUER)
+
+
+def _bound(db_conn, email: str) -> list[tuple]:
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "SELECT tenant_id, status, idp_subject FROM user_accounts WHERE email = %s", (email,)
+        )
+        return cur.fetchall()
+
+
+@pytest.mark.asyncio
+async def test_a_grant_signs_in_to_its_tenant_with_no_domain_claimed(
+    test_client,
+    db_conn,
+    tenants,  # noqa: F811 - the imported fixture
+    app_role,  # noqa: F811 - the imported fixture
+    sso_env,
+):
+    sfx = uuid.uuid4().hex[:8]
+    email = f"alice@unclaimed-{sfx}.example"
+    _cli_sso_invite(tenants["a"], email)
+    r = await _sso(test_client, email, f"sub-{sfx}")
+    assert r.status_code == 200, r.text
+    assert r.json()["user"]["tenant_id"] == tenants["a"]
+    assert _bound(db_conn, email) == [(tenants["a"], "active", f"sub-{sfx}")]
+
+
+@pytest.mark.asyncio
+async def test_the_same_account_without_a_grant_is_refused(
+    test_client,
+    db_conn,
+    tenants,  # noqa: F811 - the imported fixture
+    app_role,  # noqa: F811 - the imported fixture
+    sso_env,
+):
+    sfx = uuid.uuid4().hex[:8]
+    email = f"alice@unclaimed-{sfx}.example"
+    _cli_sso_invite(tenants["a"], email, grant=False)
+    r = await _sso(test_client, email, f"sub-{sfx}")
+    assert r.status_code == 403
+    assert _bound(db_conn, email) == [(tenants["a"], "active", None)]
+
+
+@pytest.mark.asyncio
+async def test_a_grant_wins_over_a_claim_by_another_child(
+    test_client,
+    db_conn,
+    tenants,  # noqa: F811 - the imported fixture
+    app_role,  # noqa: F811 - the imported fixture
+    sso_env,
+):
+    sfx = uuid.uuid4().hex[:8]
+    domain = f"claimed-{sfx}.example"
+    email = f"alice@{domain}"
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "UPDATE crm_tenants SET settings = jsonb_build_object('sso_domains', "
+            "jsonb_build_array(%s::text)) WHERE id = %s",
+            (domain, tenants["b"]),
+        )
+    _cli_sso_invite(tenants["a"], email)
+    r = await _sso(test_client, email, f"sub-{sfx}")
+    assert r.status_code == 200, r.text
+    assert r.json()["user"]["tenant_id"] == tenants["a"]
+    assert _bound(db_conn, email) == [(tenants["a"], "active", f"sub-{sfx}")]
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "SELECT details->>'account_tenant' FROM audit_log "
+            "WHERE event_type = 'auth.sso.grant_bound' AND details->>'account_tenant' = %s",
+            (tenants["a"],),
+        )
+        assert cur.fetchone() is not None
