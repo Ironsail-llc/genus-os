@@ -162,6 +162,42 @@ class TestWiring:
 
         assert "plugins_overview" in READONLY_TOOLS
 
+    def test_benchmark_agents_do_not_receive_it(self) -> None:
+        """It reads the REAL instance's plugins, like ``config_get`` its settings."""
+        from robothor.engine.tools.handlers.benchmark import (
+            _BENCHMARK_WITHHELD_READS,
+            benchmark_readonly_tools,
+        )
+
+        assert "plugins_overview" in _BENCHMARK_WITHHELD_READS
+        assert "plugins_overview" not in benchmark_readonly_tools()
+
+
+class TestMalformedRecords:
+    def test_a_ledger_agents_value_that_is_not_a_list_is_ignored(
+        self, workspace, fake_loader, fake_registry
+    ) -> None:
+        _write(
+            workspace / ".robothor" / "plugin-assets.yaml",
+            {"plugins": {"acme-desk": {"version": "1.0.0", "agents": "desk-monitor"}}},
+        )
+        desk = _by_name(_call())["acme-desk"]
+        assert desk["agents"] == [], "a string must not be iterated character by character"
+
+    def test_installed_yaml_with_no_agents_key_is_not_a_warning(
+        self, workspace, fake_loader, fake_registry
+    ) -> None:
+        for body in ({}, {"agents": None}):
+            _write(workspace / ".robothor" / "installed.yaml", body)
+            result = _call()
+            assert "warnings" not in result, body
+
+    def test_installed_yaml_agents_that_is_not_a_mapping_warns(
+        self, workspace, fake_loader, fake_registry
+    ) -> None:
+        _write(workspace / ".robothor" / "installed.yaml", {"agents": ["desk-monitor"]})
+        assert _call().get("warnings")
+
 
 class TestOverview:
     def test_every_installed_plugin_is_listed_with_its_version(

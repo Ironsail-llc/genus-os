@@ -138,3 +138,22 @@ def test_defined_workflows_are_read_from_the_workspace(env_workspace):
     assert rows["desk-pass"]["triggers"] == ["cron 0 7 * * *"]
     assert rows["local-flow"]["source"] == "workspace"
     assert rows["local-flow"]["name"] == "local-flow"
+
+
+def test_a_workflow_directory_fault_does_not_break_the_listing(
+    controls_client_as_operator, monkeypatch
+):
+    """Run history still answers when the defined-workflow scan cannot."""
+    monkeypatch.setattr(
+        workflows,
+        "_list_workflows",
+        lambda: [{"workflow_id": "intel", "runs": 1, "last_run_at": None, "failures": 0}],
+    )
+
+    def boom():
+        raise PermissionError("workflow directory unreadable")
+
+    monkeypatch.setattr(workflows, "_defined_workflows", boom)
+    r = controls_client_as_operator.get("/api/workflows")
+    assert r.status_code == 200
+    assert [row["workflow_id"] for row in r.json()] == ["intel"]
