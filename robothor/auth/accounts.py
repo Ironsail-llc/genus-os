@@ -1238,7 +1238,29 @@ def move_account(
         report.to_tenant,
         report.counts,
     )
+    _forget_session_standing(report.user_id)
     return report
+
+
+def _forget_session_standing(user_id: str) -> None:
+    """Drop the account's cached session standing, so a token minted before
+    the move stops working now rather than when the cache entry expires.
+
+    The cache module ships with the session-standing work and may not be
+    present; without it there is no cache to drop. Never fails the move,
+    which has already committed.
+    """
+    import importlib
+
+    try:
+        # By name, so the type checker passes with or without the module.
+        session_standing = importlib.import_module("robothor.auth.session_standing")
+    except ImportError:
+        return
+    try:
+        session_standing.forget(user_id)
+    except Exception:
+        logger.warning("move_account: could not drop the cached session standing", exc_info=True)
 
 
 # ── Owner bootstrap (single-operator → first admin) ─────────────────
