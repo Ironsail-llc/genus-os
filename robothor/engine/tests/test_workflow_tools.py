@@ -270,39 +270,60 @@ async def test_run_caps_wait_at_120_seconds(
 
 
 @pytest.mark.asyncio
-async def test_run_passes_identity_trigger_and_payload(engine: FakeEngine) -> None:
-    # An unattended run's ctx carries the identity the runner resolved for it
-    # (runtime/setup.principal): `service:<agent_id>` and the agent's service role.
+async def test_run_passes_trigger_and_payload(engine: FakeEngine) -> None:
     await _handlers()["run_workflow"](
         {"workflow_id": "daily-report", "payload": {"x": 1}, "wait_seconds": 1},
         _ctx(user_id="service:main", user_role="service"),
     )
     call = engine.calls[0]
     assert call["trigger_type"] == "agent"
+    # The caller is attributed here (and in the tool-call audit), not by identity.
     assert call["trigger_detail"] == "agent:main:agent-run-1"
     assert call["initial_context"] == {"event": {"payload": {"x": 1}}}
-    assert call["user_id"] == "service:main"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("user_id", "user_role"),
+    [("alice", "member"), ("alice", ""), ("service:main", "service"), ("", "")],
+)
+async def test_run_starts_under_the_workflows_service_identity(
+    engine: FakeEngine, user_id: str, user_role: str
+) -> None:
+    # Whoever starts it, the run gets the identity a cron or hook run gets.
+    await _handlers()["run_workflow"](
+        {"workflow_id": "daily-report", "wait_seconds": 1},
+        _ctx(user_id=user_id, user_role=user_role),
+    )
+    call = engine.calls[0]
+    assert call["user_id"] == "service:workflow:daily-report"
     assert call["user_role"] == "service"
 
 
 @pytest.mark.asyncio
-async def test_run_does_not_invent_an_identity(engine: FakeEngine) -> None:
-    # The handler passes the ctx identity through; it never mints its own.
-    await _handlers()["run_workflow"]({"workflow_id": "daily-report", "wait_seconds": 1}, _ctx())
-    call = engine.calls[0]
-    assert call["user_id"] == ""
-    assert call["user_role"] == ""
+async def test_run_does_not_inherit_the_chat_runs_context(engine: FakeEngine) -> None:
+    # The chat turn's runtime context must not leak into the workflow run:
+    # with it, every write step was refused by effect admission.
+    from robothor.engine.runtime.contracts import ExecutionContext
+    from robothor.engine.runtime.current import active_context
 
+    seen: list[Any] = []
+    real_execute = engine.execute
 
-@pytest.mark.asyncio
-async def test_run_propagates_the_users_identity(engine: FakeEngine) -> None:
-    await _handlers()["run_workflow"](
-        {"workflow_id": "daily-report", "wait_seconds": 1},
-        _ctx(user_id="alice", user_role="member"),
-    )
-    call = engine.calls[0]
-    assert call["user_id"] == "alice"
-    assert call["user_role"] == "member"
+    async def spy(workflow_id: str, **kwargs: Any) -> WorkflowRun:
+        seen.append(active_context.get())
+        return await real_execute(workflow_id, **kwargs)
+
+    engine.execute = spy  # type: ignore[method-assign]
+    token = active_context.set(ExecutionContext(TENANT, "alice", "chat-request"))
+    try:
+        await _handlers()["run_workflow"](
+            {"workflow_id": "daily-report", "wait_seconds": 1}, _ctx(user_id="alice")
+        )
+        assert active_context.get() is not None  # the caller's own context is untouched
+    finally:
+        active_context.reset(token)
+    assert seen == [None]
 
 
 @pytest.mark.asyncio
@@ -321,16 +342,6 @@ async def test_run_reports_a_cancelled_run(engine: FakeEngine) -> None:
         {"workflow_id": "daily-report", "wait_seconds": 1}, _ctx()
     )
     assert out == {"status": "cancelled", "run_id": engine.calls[0]["run_id"]}
-
-
-@pytest.mark.asyncio
-async def test_run_keeps_a_user_without_a_role_as_given(engine: FakeEngine) -> None:
-    await _handlers()["run_workflow"](
-        {"workflow_id": "daily-report", "wait_seconds": 1}, _ctx(user_id="alice")
-    )
-    call = engine.calls[0]
-    assert call["user_id"] == "alice"
-    assert call["user_role"] == ""
 
 
 # ── list_workflows ───────────────────────────────────────────────────────
@@ -410,3 +421,94 @@ async def test_workflow_runs_are_tenant_scoped_with_steps(engine: FakeEngine) ->
 async def test_workflow_runs_requires_an_id(engine: FakeEngine) -> None:
     out = await _handlers()["workflow_runs"]({}, _ctx())
     assert "error" in out
+
+
+# ── an agent-started run end to end ──────────────────────────────────────
+
+
+class _AdmittingRegistry:
+    """Tool registry stand-in that dispatches through real effect admission.
+
+    It builds the ToolContext the real dispatcher would from the step's
+    arguments and records what the step was dispatched with.
+    """
+
+    def __init__(self) -> None:
+        self.dispatched: list[dict[str, Any]] = []
+
+    async def execute(self, tool_name: str, arguments: dict[str, Any], **kw: Any) -> Any:
+        from robothor.engine.runtime import effect_dispatch
+        from robothor.engine.runtime.current import active_context
+
+        ctx = ToolContext(
+            agent_id=kw.get("agent_id", ""),
+            run_id=kw.get("run_id", ""),
+            tenant_id=kw.get("tenant_id", ""),
+            user_id=kw.get("user_id", ""),
+            user_role=kw.get("user_role", ""),
+        )
+
+        async def dispatch() -> dict[str, Any]:
+            self.dispatched.append(
+                {**kw, "tool": tool_name, "runtime_context": active_context.get()}
+            )
+            return {"ok": True}
+
+        return await effect_dispatch.invoke(tool_name, arguments, ctx, dispatch)
+
+
+@pytest.mark.asyncio
+async def test_an_agent_started_run_can_take_a_write_step(engine_config: Any) -> None:
+    from unittest.mock import AsyncMock, MagicMock
+
+    from robothor.engine.models import WorkflowStepDef, WorkflowStepType
+    from robothor.engine.runtime.contracts import ExecutionContext
+    from robothor.engine.runtime.current import active_context
+    from robothor.engine.workflow import WorkflowEngine
+
+    registry = _AdmittingRegistry()
+    real = WorkflowEngine(engine_config, runner=MagicMock(registry=registry))
+    real._workflows["desk-tick"] = WorkflowDef(
+        id="desk-tick",
+        name="Desk tick",
+        steps=[
+            WorkflowStepDef(
+                id="tick",
+                type=WorkflowStepType.TOOL,
+                tool_name="create_task",
+                tool_args={"title": "follow up"},
+            )
+        ],
+    )
+    real._persist_run_start = MagicMock()  # type: ignore[method-assign]
+    real._persist_run_end = MagicMock()  # type: ignore[method-assign]
+    real._persist_step = MagicMock()  # type: ignore[method-assign]
+    real._persist_step_start = MagicMock()  # type: ignore[method-assign]
+
+    previous = get_workflow_engine()
+    set_workflow_engine(real)
+    # The chat turn that calls run_workflow has a runtime context set.
+    token = active_context.set(ExecutionContext(TENANT, "alice", "chat-request"))
+    try:
+        with (
+            patch("robothor.engine.dedup.try_acquire", new=AsyncMock(return_value=True)),
+            patch("robothor.engine.dedup.release", new=AsyncMock()),
+        ):
+            out = await _handlers()["run_workflow"](
+                {"workflow_id": "desk-tick", "wait_seconds": 5},
+                _ctx(user_id="alice", user_role="owner"),
+            )
+    finally:
+        active_context.reset(token)
+        set_workflow_engine(previous)
+
+    assert out["status"] == "completed", out
+    assert len(registry.dispatched) == 1
+    step = registry.dispatched[0]
+    # Dispatched as cron and hook runs are: the workflow's own service
+    # identity, outside the chat run's context, never with its run id.
+    assert step["user_id"] == "service:workflow:desk-tick"
+    assert step["user_role"] == "service"
+    assert step["agent_id"] == "workflow:desk-tick"
+    assert step["runtime_context"] is None
+    assert step.get("run_id", "") != "agent-run-1"
