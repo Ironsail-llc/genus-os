@@ -179,3 +179,22 @@ def test_a_key_in_an_ancestor_of_the_workspace_refuses_only_itself(monkeypatch, 
     assert is_secret_path(root / "key")
     assert not is_secret_path(workspace / "notes.txt")
     assert not is_secret_path(root / "other-file")
+
+
+# ── a search PATTERN is not a path ────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["grep key config.yaml", 'grep -rn "key" .', "rg key src/", "ag -i key", "ack key lib"],
+)
+def test_a_search_pattern_spelled_like_the_key_is_allowed(mount, monkeypatch, command) -> None:
+    monkeypatch.setenv("GENUS_VAULT_KEY_FILE", str(mount / "key"))
+    assert exec_reads_secret(command) is None
+
+
+def test_a_search_of_the_key_file_itself_is_still_refused(mount, monkeypatch) -> None:
+    monkeypatch.setenv("GENUS_VAULT_KEY_FILE", str(mount / "key"))
+    assert exec_reads_secret(f"grep -rn secret {mount / 'key'}")
+    assert exec_reads_secret(f"cat {mount / 'key'}")
+    assert exec_reads_secret(f"cd {mount} && grep -c x key")
