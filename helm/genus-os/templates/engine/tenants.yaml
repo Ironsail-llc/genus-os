@@ -87,13 +87,19 @@ metadata:
   name: {{ $claimName }}
   labels:
     {{- include "genus-os.labels" (dict "root" $root "component" "workspace" "tenant" $id) | nindent 4 }}
+  {{- /* Dropping an entry from tenants: must not delete that tenant's
+         workspace. `helm` honours resource-policy; `argocd app sync --prune`
+         ignores it and needs Prune=false. An operator deletes the claim. */}}
+  {{- $pvcAnnotations := deepCopy ($persistence.annotations | default dict) }}
+  {{- $_ := set $pvcAnnotations "helm.sh/resource-policy" "keep" }}
+  {{- $syncOptions := list }}
+  {{- range $opt := splitList "," (toString (index $pvcAnnotations "argocd.argoproj.io/sync-options" | default "")) }}
+  {{- $opt = trim $opt }}
+  {{- if and $opt (not (hasPrefix "Prune=" $opt)) }}{{- $syncOptions = append $syncOptions $opt }}{{- end }}
+  {{- end }}
+  {{- $_ := set $pvcAnnotations "argocd.argoproj.io/sync-options" (append $syncOptions "Prune=false" | join ",") }}
   annotations:
-    {{- /* Dropping an entry from tenants: must not delete that tenant's
-           workspace. Helm leaves the claim behind; an operator deletes it. */}}
-    helm.sh/resource-policy: keep
-    {{- with omit ($persistence.annotations | default dict) "helm.sh/resource-policy" }}
-    {{- toYaml . | nindent 4 }}
-    {{- end }}
+    {{- toYaml $pvcAnnotations | nindent 4 }}
 spec:
   accessModes:
     {{- toYaml $persistence.accessModes | nindent 4 }}

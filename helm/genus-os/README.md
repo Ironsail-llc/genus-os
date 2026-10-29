@@ -294,10 +294,13 @@ exist.
   `workspace.persistence.enabled: false` on that cell.
 
 **Removing a cell.** Removing an entry from `tenants:` deletes that cell's
-Deployment and Service but not its workspace. The chart-created PVC carries
-`helm.sh/resource-policy: keep`, so Helm leaves it behind, and adding the same
-`id` back later mounts the same workspace again. To discard it, delete it by
-hand once you no longer need its contents:
+Deployment and Service but not its workspace. The chart-created PVC survives
+both `helm` and Argo CD pruning: it carries `helm.sh/resource-policy: keep`
+for the Helm CLI, and `argocd.argoproj.io/sync-options: Prune=false` for
+`argocd app sync --prune`, which ignores Helm's policy. Any other sync options
+set in `workspace.persistence.annotations` are kept alongside it. Adding the
+same `id` back later mounts the same workspace again. Neither tool will ever
+delete it, so delete it by hand once you no longer need its contents:
 `kubectl delete pvc <fullname>-workspace-<id> --namespace <namespace>`.
 
 ## Google Workspace credentials
