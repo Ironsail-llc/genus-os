@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
@@ -53,6 +54,8 @@ class FakeEngine:
         self.delay = delay
         self.calls: list[dict[str, Any]] = []
         self.finished = asyncio.Event()
+        self.config = SimpleNamespace(tenant_id=TENANT)
+        self.cancel = False
 
     def list_workflows(self) -> list[WorkflowDef]:
         return list(self._workflows.values())
@@ -64,6 +67,8 @@ class FakeEngine:
         self.calls.append({"workflow_id": workflow_id, **kwargs})
         if self.delay:
             await asyncio.sleep(self.delay)
+        if self.cancel:
+            raise asyncio.CancelledError
         run = WorkflowRun(
             workflow_id=workflow_id,
             status=self.status,
@@ -266,6 +271,34 @@ async def test_run_propagates_the_users_identity(engine: FakeEngine) -> None:
     call = engine.calls[0]
     assert call["user_id"] == "alice"
     assert call["user_role"] == "member"
+
+
+@pytest.mark.asyncio
+async def test_run_refuses_a_caller_in_another_tenant(engine: FakeEngine) -> None:
+    out = await _handlers()["run_workflow"](
+        {"workflow_id": "daily-report"}, _ctx(tenant_id="child-tenant")
+    )
+    assert out == {"error": "workflow_tenant_mismatch", "run_tenant": TENANT}
+    assert engine.calls == []
+
+
+@pytest.mark.asyncio
+async def test_run_reports_a_cancelled_run(engine: FakeEngine) -> None:
+    engine.cancel = True
+    out = await _handlers()["run_workflow"](
+        {"workflow_id": "daily-report", "wait_seconds": 1}, _ctx()
+    )
+    assert out == {"status": "cancelled", "run_id": engine.calls[0]["run_id"]}
+
+
+@pytest.mark.asyncio
+async def test_run_keeps_a_user_without_a_role_as_given(engine: FakeEngine) -> None:
+    await _handlers()["run_workflow"](
+        {"workflow_id": "daily-report", "wait_seconds": 1}, _ctx(user_id="alice")
+    )
+    call = engine.calls[0]
+    assert call["user_id"] == "alice"
+    assert call["user_role"] == ""
 
 
 # ── list_workflows ───────────────────────────────────────────────────────
