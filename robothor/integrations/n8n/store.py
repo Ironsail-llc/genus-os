@@ -195,7 +195,7 @@ class MemoryN8nStore:
                     for (et, _), r in self.executions.items()
                     if et == t and r["workflow_id"] == wid
                 ),
-                key=_at,
+                key=lambda r: (_at(r), str(r["execution_id"])),
                 reverse=True,
             )
             out.append(
@@ -413,14 +413,15 @@ class PgN8nStore:
                 "SELECT w.workflow_id, w.name, w.active, w.tags, w.remote_updated_at, "
                 "COUNT(e.execution_id) FILTER (WHERE COALESCE(e.started_at, e.seen_at) >= %s), "
                 "COUNT(e.execution_id) FILTER (WHERE COALESCE(e.started_at, e.seen_at) >= %s), "
-                "MAX(COALESCE(e.started_at, e.seen_at)), "
-                "(SELECT l.error_message FROM n8n_executions l WHERE l.tenant_id = w.tenant_id "
-                f"AND l.workflow_id = w.workflow_id ORDER BY {_WHEN} DESC LIMIT 1), "
-                "(SELECT l.execution_id FROM n8n_executions l WHERE l.tenant_id = w.tenant_id "
-                f"AND l.workflow_id = w.workflow_id ORDER BY {_WHEN} DESC LIMIT 1) "
-                "FROM n8n_workflows w LEFT JOIN n8n_executions e "
+                "MAX(COALESCE(e.started_at, e.seen_at)), l.error_message, l.execution_id "
+                "FROM n8n_workflows w "
+                "LEFT JOIN LATERAL (SELECT error_message, execution_id FROM n8n_executions "
+                "WHERE tenant_id = w.tenant_id AND workflow_id = w.workflow_id "
+                f"ORDER BY {_WHEN} DESC, execution_id DESC LIMIT 1) l ON true "
+                "LEFT JOIN n8n_executions e "
                 "ON e.tenant_id = w.tenant_id AND e.workflow_id = w.workflow_id "
-                "WHERE w.tenant_id = %s GROUP BY w.tenant_id, w.workflow_id "
+                "WHERE w.tenant_id = %s "
+                "GROUP BY w.tenant_id, w.workflow_id, l.error_message, l.execution_id "
                 "ORDER BY lower(w.name), w.workflow_id",
                 (now - timedelta(hours=24), now - timedelta(days=7), tenant_id),
             )
