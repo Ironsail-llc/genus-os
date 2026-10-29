@@ -216,3 +216,57 @@ def test_the_chat_router_mounted_alone_refuses_it_too(secure_engine, switch_mode
     with pytest.raises(HTTPException) as refused:
         chat._require_chat_auth(request)
     assert refused.value.status_code == 403
+
+
+# ─── The 4403 close must reach the client as a WebSocket close ────────
+
+
+def _asgi_websocket_messages(app, token: str) -> list[dict]:
+    """Drive ``/ide/ws`` at the ASGI level and return what the app SENT.
+
+    Starlette's TestClient reports a close sent before ``accept`` as that close
+    code, but a real server (uvicorn) turns a pre-accept close into an HTTP 403
+    handshake rejection — the client never sees 4403 or its reason. Reading the
+    raw ASGI messages is what tells the two apart.
+    """
+    import asyncio
+
+    sent: list[dict] = []
+    inbox = [{"type": "websocket.connect"}]
+
+    async def receive():
+        if inbox:
+            return inbox.pop(0)
+        await asyncio.sleep(0)
+        return {"type": "websocket.disconnect", "code": 1000}
+
+    async def send(message):
+        sent.append(message)
+
+    scope = {
+        "type": "websocket",
+        "asgi": {"version": "3.0"},
+        "scheme": "ws",
+        "path": "/ide/ws",
+        "raw_path": b"/ide/ws",
+        "query_string": b"",
+        "root_path": "",
+        "headers": [(b"host", b"testserver"), (b"authorization", f"Bearer {token}".encode())],
+        "client": ("127.0.0.1", 50000),
+        "server": ("testserver", 80),
+        "subprotocols": [],
+        "state": {},
+    }
+    asyncio.run(app(scope, receive, send))
+    return sent
+
+
+def test_the_switching_refusal_is_accepted_then_closed_4403(secure_engine, switch_mode):
+    client, config = secure_engine
+    switch_mode("off")
+    with patch("robothor.auth.accounts.get_account_by_id", return_value=_account("acme-parent")):
+        sent = _asgi_websocket_messages(client.app, _acting(config))
+    kinds = [m["type"] for m in sent]
+    assert kinds[:2] == ["websocket.accept", "websocket.close"], sent
+    assert sent[1]["code"] == 4403
+    assert sent[1].get("reason") == "tenant switching disabled"
