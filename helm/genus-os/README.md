@@ -212,6 +212,87 @@ ready.
 configuration. Legacy `/health` and `/liveness` endpoints remain available for
 older integrations.
 
+## Tenant cells
+
+One release can run an engine per tenant. The root engine is the `engine:`
+block and operates as `global.rootTenant` (default `default`, which is also
+what the code assumes when nothing is set). Each entry in `tenants:` adds a
+**cell**: one more engine for one child tenant, sharing the release's bridge,
+dashboard, orchestrator, database and cache. The default `tenants: []` renders
+nothing extra.
+
+The list names real tenants, so it is deployment data: put it in your
+environment's values, never in this chart.
+
+```yaml
+tenants:
+  - id: child-a                  # a crm_tenants id: lowercase DNS label
+  - id: child-b
+    replicaCount: 1
+    env: {SOME_FLAG: "1"}        # merged over engine.env
+    workspace:
+      requiredAgentIds: [main]
+      persistence: {size: 5Gi}
+    googleWorkspace: {enabled: true}
+```
+
+**What one entry renders.** A Deployment and a Service named
+`<fullname>-engine-<id>`, and a workspace PVC `<fullname>-workspace-<id>`
+unless the cell mounts a ConfigMap or an existing claim. A cell never renders
+an Ingress. Its pods carry `app.kubernetes.io/component: engine`, like the
+root engine's, so every NetworkPolicy written for the engine (ingress from the
+bridge and dashboard, egress to the database, cache, NATS and external
+destinations) covers them with no change. They are told apart by
+`genus-os/tenant: <id>`, which is in each cell's selectors.
+
+**The root engine.** Its Deployment selector is immutable and does not change.
+Its pods gain the `genus-os/tenant: <rootTenant>` label, and once `tenants` is
+non-empty its Service and PodDisruptionBudget select on it, so traffic for the
+root engine never reaches a cell. If you add the first cell in the same
+upgrade that first adds the label, the root Service has no endpoints until
+the new root pod is ready. To avoid that gap, upgrade the chart first and add
+cells afterwards.
+
+**Tenant identity.** Every engine pod gets `ROBOTHOR_TENANT_ID` and
+`ROBOTHOR_DEFAULT_TENANT` set to the same value: the cell's `id`, or
+`global.rootTenant` on the root engine. The two must agree in one process
+(`tenant_env_conflict` in `robothor/constants.py`), so a cell's `env` cannot
+override them, and `engine.env` naming either one with a value other than
+`global.rootTenant` fails at template time. A cell also gets
+`GENUS_EVENT_CONSUMER_GROUP=engine-<id>`, so each engine reads the event
+stream as its own consumer group.
+
+**Reaching a cell.** The bridge and the dashboard both get
+`ROBOTHOR_ENGINE_URL` (the root engine) and
+`GENUS_TENANT_ENGINE_URL_TEMPLATE=http://<fullname>-engine-{tenant}:<engine.service.port>`.
+`{tenant}` is literal text that the application replaces with a tenant id.
+The chart refuses an id that would make `<fullname>-engine-<id>` longer than 63
+characters, because the template could then name a Service that does not
+exist.
+
+**Defaults and inheritance.**
+
+| Key | Default | Notes |
+|-----|---------|-------|
+| `id` | required | Lowercase DNS label, unique, and not `global.rootTenant`. |
+| `replicaCount`, `resources`, `secretRefs`, `podLabels`, `podAnnotations`, `nodeSelector`, `tolerations`, `affinity` | the `engine.*` value | Replaced, not merged. `secretRefs` keeps the engine's allow-list. |
+| `env` | `engine.env` | Merged over it, key by key. |
+| `workspace.allowEmptyFleet`, `minAgentCount`, `requiredAgentIds`, `readOnly` | the top-level `workspace.*` value | |
+| `workspace.persistence` | `workspace.persistence` without `existingClaim` | Merged key by key. A cell never mounts the root engine's claim. |
+| `workspace.configMap` | none | Never inherited: a bundle holds one tenant's fleet. |
+| `googleWorkspace.enabled` | `false` | Never inherited: credentials belong to one mailbox. |
+| `googleWorkspace.secretName` | `<fullname>-engine-<id>-google` | A Secret with a `credentials.json` key, supplied by the deployment. VSO only materializes the root engine's `engine-google`. The mount is optional, as on the root engine. |
+
+**Seeding a cell's workspace.** Same options as the root engine (see
+[Workspace and readiness](#workspace-and-readiness)):
+
+- a chart-created PVC (the default when `workspace.persistence.enabled`),
+  seeded by an operator or a provisioning job, with the cell unready until a
+  valid fleet is present unless `allowEmptyFleet` is true;
+- `workspace.persistence.existingClaim`: a volume you have already populated;
+- `workspace.configMap`: an immutable bundle, with
+  `workspace.persistence.enabled: false` on that cell.
+
 ## Google Workspace credentials
 
 The engine's mail, calendar and chat tools (`gws_*`) run the `gws` CLI, which

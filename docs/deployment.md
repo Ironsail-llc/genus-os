@@ -793,6 +793,15 @@ claim. The engine runs one replica with the `Recreate` strategy, so a
 replicas with rolling updates, so give them a `ReadWriteMany` claim or a
 per-pod volume such as `emptyDir`.
 
+### Running child tenants in one release
+
+Each entry in the chart's `tenants:` list runs one more engine, its own
+workspace and its own tenant identity, beside the root engine, in the same
+release. An empty list (the default) renders nothing extra. The list names
+real tenants, so it belongs in your deployment's values, not in the chart. See
+[Tenant cells](https://github.com/Ironsail-llc/genus-os/blob/main/helm/genus-os/README.md#tenant-cells) in the chart README for
+what an entry renders and how to seed its workspace.
+
 ## Production Checklist
 
 - [ ] Set a strong `ROBOTHOR_DB_PASSWORD`
