@@ -214,8 +214,9 @@ async def handle_message(
             compatibility clause the gate cannot know about (Slack does). Left
             ``None``, the gate reads it.
         record_turn: append the exchange to the session's history after a
-            successful run, so the conversation remembers it. A refused or
-            failed run appends nothing.
+            successful run and persist it through the chat store, so the
+            conversation remembers it across restarts. A refused or failed run
+            records nothing.
         history_limit: hand the run only the last N turns (user + assistant
             pairs) of the session's history. ``None`` hands it all of it.
 
@@ -290,6 +291,23 @@ async def handle_message(
                 append_turn(session, user_message=text, assistant_text=output)
             except Exception:
                 logger.exception("channel %s could not record a turn", channel)
+            # Persisted the way the Helm's turns are, so the conversation is
+            # restored after a restart. Awaited inside the conversation's turn
+            # so two exchanges are stored in the order they happened; the call
+            # logs its own store failures; the guard is for anything else.
+            from robothor.engine.chat_store import save_exchange_async
+
+            try:
+                await save_exchange_async(
+                    session_key,
+                    text,
+                    output,
+                    channel=channel,
+                    model_override=getattr(session, "model_override", None),
+                    tenant_id=resolved_tenant,
+                )
+            except Exception:
+                logger.exception("channel %s could not persist a turn", channel)
 
     return InboundResult(
         reply=output or NO_OUTPUT_REPLY,

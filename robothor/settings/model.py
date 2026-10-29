@@ -1278,7 +1278,8 @@ class ChannelSettings(SettingsGroup):
         "How many runs every receiving channel together may have in flight at "
         "once. A message over the cap waits its turn rather than being refused; "
         "messages within one conversation always run one after another. A value "
-        "below 1 is treated as 1.",
+        "below 1 is treated as 1. A changed value applies to messages that arrive "
+        "after it, not to ones already queued.",
         since="unreleased",
         restart_required=False,
     )
