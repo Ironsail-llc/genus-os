@@ -286,14 +286,47 @@ vaultKey:
   enabled: true
 ```
 
-The Vault path holds two fields, each 32 random bytes stored base64-encoded,
-because Vault KV holds strings:
+The Vault path holds two fields, `key` and `fingerprint-salt`, each 32 bytes
+stored base64-encoded because Vault KV holds strings. Where those bytes come
+from depends on whether the release already has a vault key, and **the chart
+cannot tell the two cases apart**. Check before you write anything:
+
+```sh
+kubectl exec deploy/<fullname>-engine --namespace <namespace> -- \
+  genus vault list
+```
+
+Run it as the root tenant. If it lists any rows, or
+`/workspace/.vault-key` exists in the engine pod, you are in case (b).
+
+**(a) No key yet: an empty vault and no `/workspace/.vault-key`.** Generate
+both values:
 
 ```sh
 vault kv put <mount>/<path>/vault-key \
   key="$(openssl rand -base64 32)" \
   fingerprint-salt="$(openssl rand -base64 32)"
 ```
+
+**(b) An existing key: stored secrets, or a `.vault-key` in the workspace.**
+Migrate the key the release already uses. **Do not generate a new one.**
+Every secret already stored is encrypted under the existing key, and a new
+key would make all of them permanently unreadable. Copy the existing files
+into Vault instead. A missing salt only changes how fingerprints print, so
+generate one if the workspace has none:
+
+```sh
+key="$(kubectl exec deploy/<fullname>-engine --namespace <namespace> -- \
+  base64 -w0 /workspace/.vault-key)"
+salt="$(kubectl exec deploy/<fullname>-engine --namespace <namespace> -- \
+  base64 -w0 /workspace/.fingerprint-salt 2>/dev/null || openssl rand -base64 32)"
+vault kv put <mount>/<path>/vault-key key="$key" fingerprint-salt="$salt"
+unset key salt
+```
+
+Then enable `vaultKey`. The engine reads the same key from
+`/etc/genus/vault/.vault-key` from then on, and the workspace copy is no
+longer used.
 
 VSO decodes them into raw files in the `<fullname>-vault-key` Secret. The
 chart mounts them read-only on the bridge, the root engine and every cell as
