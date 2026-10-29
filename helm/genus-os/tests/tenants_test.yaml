@@ -433,6 +433,72 @@ tests:
       - failedTemplate:
           errorPattern: "secretRefs forbids secret class \"bridge-sso\""
 
+  # The root engine's extra volumes name its own resources (often a
+  # ReadWriteOnce claim); a cell mounting them could never be scheduled.
+  - it: a tenant cell does not inherit the root engine's extra volumes
+    template: engine/tenants.yaml
+    set:
+      engine.extraVolumes:
+        - name: root-plugin-state
+          persistentVolumeClaim: {claimName: root-plugin-state}
+      engine.extraVolumeMounts:
+        - {name: root-plugin-state, mountPath: /var/lib/plugin-state}
+      tenants:
+        - id: acme-child-a
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - notContains:
+          path: spec.template.spec.volumes
+          content: {name: root-plugin-state}
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content: {name: root-plugin-state}
+          any: true
+
+  - it: a tenant cell mounts its own extra volumes
+    template: engine/tenants.yaml
+    set:
+      tenants:
+        - id: acme-child-a
+          extraVolumes:
+            - name: child-plugin-state
+              persistentVolumeClaim: {claimName: child-a-plugin-state}
+          extraVolumeMounts:
+            - {name: child-plugin-state, mountPath: /var/lib/plugin-state}
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: child-plugin-state
+            persistentVolumeClaim: {claimName: child-a-plugin-state}
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content: {name: child-plugin-state, mountPath: /var/lib/plugin-state}
+
+  - it: the root engine keeps its extra volumes
+    template: engine/workload.yaml
+    documentIndex: 0
+    set:
+      engine.extraVolumes:
+        - name: root-plugin-state
+          persistentVolumeClaim: {claimName: root-plugin-state}
+      engine.extraVolumeMounts:
+        - {name: root-plugin-state, mountPath: /var/lib/plugin-state}
+      tenants:
+        - id: acme-child-a
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: root-plugin-state
+            persistentVolumeClaim: {claimName: root-plugin-state}
+
   - it: a tenant cell never renders an Ingress
     template: engine/tenants.yaml
     set:
