@@ -43,7 +43,9 @@ def _is_root_tenant_operator(request: Request) -> bool:
     back first. Only the loopback insecure-dev mode, which has no identity at
     all, bypasses this. (A shared ``require_root_operator`` will replace it.)
     """
-    from robothor.constants import DEFAULT_TENANT
+    # The same root require_operator gates on: ROBOTHOR_PLATFORM_TENANT, else
+    # the default tenant. Read from the module at call time.
+    from . import _operator
 
     auth = getattr(request.state, "auth", None)
     if auth is None:
@@ -51,8 +53,8 @@ def _is_root_tenant_operator(request: Request) -> bool:
     return (
         not auth.is_service
         and auth.role in _OPERATOR_ROLES
-        and auth.tenant_id == DEFAULT_TENANT
-        and auth.home_tenant_id == DEFAULT_TENANT
+        and auth.tenant_id == _operator.PLATFORM_TENANT
+        and auth.home_tenant_id == _operator.PLATFORM_TENANT
     )
 
 
