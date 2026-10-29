@@ -306,19 +306,24 @@ def _stream_key(stream: str) -> str:
 
 
 def publishing_tenant() -> str:
-    """The tenant an event published from here belongs to.
+    """The tenant an event published from here belongs to, or ``""``.
 
-    The enclosing ``tenant_scope`` if there is one, else the process's
-    default tenant. Never empty: one engine runs per tenant and each acts only
-    on its own tenant's events, so an untagged event would land on the root.
+    The enclosing ``tenant_scope`` if there is one, else the tenant this
+    process operates as -- ``ROBOTHOR_TENANT_ID``, then
+    ``ROBOTHOR_DEFAULT_TENANT``, read now. That is the order an engine
+    identifies itself by (``EngineConfig.tenant_id``) and the one its RLS
+    connections bind with, so an engine's own unscoped events (its webhooks)
+    carry its own tenant even when the two variables disagree.
+
+    A process with no tenant configured publishes untagged rather than
+    stamping the literal fallback ``default``: untagged events belong to the
+    root, which is where such a process's events have always gone.
     """
-    from robothor import constants
-
     try:
-        from robothor.db.connection import current_tenant_scope
+        from robothor.db.connection import effective_tenant
     except ImportError:  # psycopg2 absent: no scope can be open either
-        return constants.DEFAULT_TENANT
-    return current_tenant_scope() or constants.DEFAULT_TENANT
+        return ""
+    return effective_tenant()
 
 
 def _make_envelope(
@@ -364,7 +369,8 @@ def publish(
         correlation_id: Optional trace ID for correlation
         agent_id: Agent identity for RBAC check (None = no check, backward compat)
         tenant_id: The tenant the event belongs to. Defaults to
-            :func:`publishing_tenant`; engines ignore other tenants' events.
+            :func:`publishing_tenant`; engines ignore other tenants' events
+            and treat an untagged one as the root tenant's.
 
     Returns:
         Stream message ID on success, None on failure.

@@ -63,6 +63,13 @@ STOP_DRAIN_SECONDS = 20
 REPLAY_MAX_AGE_SECONDS = 3600
 REPLAY_MAX_DELIVERIES = 3
 
+# Another tenant's consumer that read a group this recently is still running.
+# A live reader blocks EVENT_BUS_BLOCK_MS (2 s) per read, so its idle time stays
+# far below this; a consumer entry outlives its engine, so an old one is stale.
+GROUP_RIVAL_ACTIVE_MS = 60_000
+# How often an engine that found another tenant on its group looks again.
+GROUP_RIVAL_RECHECK_SECONDS = 60
+
 # Cap on the payload text an ``include_payload`` hook appends to its message.
 MAX_PAYLOAD_CHARS = 8000
 
@@ -301,6 +308,59 @@ class EventHooks:
 
         task.add_done_callback(_done)
 
+    async def _rival_consumers(
+        self, redis_client: Any, group: str, consumer: str, streams: list[str]
+    ) -> set[str]:
+        """Other tenants' engines that recently read ``group`` on any of ``streams``.
+
+        Consumer names are ``engine-<tenant>``, so a different name is a
+        different tenant; HA replicas of this engine share its name.
+        """
+        rivals: set[str] = set()
+        for stream in streams:
+            try:
+                infos = await redis_client.xinfo_consumers(stream, group)
+            except Exception as e:  # an unreadable group is not evidence of a rival
+                logger.debug("XINFO CONSUMERS %s %s failed: %s", stream, group, e)
+                continue
+            for info in infos or []:
+                name = info.get("name", info.get(b"name", b""))
+                name = name.decode() if isinstance(name, bytes) else str(name)
+                idle = int(info.get("idle", info.get(b"idle", 0)) or 0)
+                if name and name != consumer and idle < GROUP_RIVAL_ACTIVE_MS:
+                    rivals.add(name)
+        return rivals
+
+    async def _wait_until_group_is_ours(
+        self, redis_client: Any, group: str, consumer: str, streams: list[str]
+    ) -> bool:
+        """Hold off while another tenant's engine is reading this engine's group.
+
+        Two tenants on one group split every stream between them, and each
+        acks and drops the other's half, so those events are lost. That is a
+        deployment mistake -- a child engine left on the root group -- and
+        reading anyway would make it silent. Returns False once stopped.
+        """
+        while not self._stop_event.is_set():
+            rivals = await self._rival_consumers(redis_client, group, consumer, streams)
+            if not rivals:
+                return True
+            logger.error(
+                "Event consumer group %r is being read by %s, another tenant's "
+                "engine. This engine (tenant %r) will not read it: two tenants on "
+                "one group split the events and drop each other's. Give each child "
+                "engine its own group, e.g. GENUS_EVENT_CONSUMER_GROUP=engine-%s. "
+                "Checking again in %ds.",
+                group,
+                ", ".join(sorted(rivals)),
+                self.config.tenant_id,
+                self.config.tenant_id,
+                GROUP_RIVAL_RECHECK_SECONDS,
+            )
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(self._stop_event.wait(), GROUP_RIVAL_RECHECK_SECONDS)
+        return False
+
     async def _replay_pending(
         self, redis_client: Any, group: str, consumer: str, streams: list[str]
     ) -> None:
@@ -422,6 +482,12 @@ class EventHooks:
         for prefixed in prefixed_streams:
             with contextlib.suppress(Exception):
                 await r.xgroup_create(prefixed, consumer_group, id="$", mkstream=True)
+
+        if not await self._wait_until_group_is_ours(
+            r, consumer_group, consumer_name, prefixed_streams
+        ):
+            await r.aclose()
+            return
 
         logger.info("Listening on streams: %s", ", ".join(prefixed_streams))
 

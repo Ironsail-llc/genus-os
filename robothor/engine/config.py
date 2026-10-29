@@ -114,9 +114,10 @@ class EngineConfig:
     # stream entry to ONE consumer of a group, so engines sharing a Redis (one
     # per tenant) need a group each or they split the events between them.
     # The root tenant keeps the historical "engine" so its stream offsets
-    # survive the upgrade; the Helm chart sets "engine-<tenant>" for each
-    # child engine (GENUS_EVENT_CONSUMER_GROUP). Only an engine on the root
-    # group handles events that carry no tenant_id.
+    # survive the upgrade; each child engine's deployment sets its own group,
+    # e.g. "engine-<tenant>" (GENUS_EVENT_CONSUMER_GROUP). Only an engine on
+    # the root group handles events that carry no tenant_id. An engine that
+    # finds another tenant reading its group refuses to read it (hooks.py).
     event_group: str = ROOT_EVENT_GROUP
 
     # Paths
