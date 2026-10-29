@@ -493,8 +493,16 @@ class EventHooks:
         deleted if -- and only if -- it still names this tenant, so another
         root can claim at once rather than after a TTL. Another owner's record
         is never touched.
+
+        Only a claim this process held is released: the record names a
+        tenant, not a process, so a replica that never verified itself or
+        never held the group here (a twin of the owning tenant, a restarted
+        root that has not claimed yet) leaves it to the live holder or the TTL.
         """
+        held = self._holds_root_group
         self._holds_root_group = False
+        if not held:
+            return
         try:
             if await redis_client.eval(
                 _RELEASE_IF_MINE, 1, ROOT_GROUP_OWNER_KEY, self.config.tenant_id
