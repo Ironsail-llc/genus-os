@@ -122,6 +122,11 @@ on the next sync.
 {{- printf "%s-migrate-%s" (include "genus-os.fullname" .) (include "genus-os.migrationsPodTemplate" . | sha256sum | trunc 8) -}}
 {{- end -}}
 
+{{/* The tenant the root engine operates as (global.rootTenant). */}}
+{{- define "genus-os.rootTenant" -}}
+{{- toString (.Values.global.rootTenant | default "default") -}}
+{{- end -}}
+
 {{/* The root engine's in-cluster URL. */}}
 {{- define "genus-os.engineUrl" -}}
 {{- printf "http://%s-engine:%v" (include "genus-os.fullname" .) .Values.engine.service.port -}}

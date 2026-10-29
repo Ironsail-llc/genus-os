@@ -15,7 +15,7 @@ An empty list renders nothing.
 {{- if .Values.engine.enabled -}}
 {{- $root := . -}}
 {{- $fullName := include "genus-os.fullname" . -}}
-{{- $rootTenant := toString (.Values.global.rootTenant | default "default") -}}
+{{- $rootTenant := include "genus-os.rootTenant" . -}}
 {{- $seen := dict -}}
 {{- range $i, $t := .Values.tenants | default list -}}
 {{- $id := toString ($t.id | default "") -}}
