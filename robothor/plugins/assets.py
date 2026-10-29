@@ -91,11 +91,10 @@ LEDGER_NAME = "plugin-assets.yaml"
 #: it; ``docs/webhooks.yaml`` is the one exact file. ``docs/agents/`` is NOT
 #: here: an agent arrives through ``agents:`` and the template installer, or
 #: changes through ``patches:``, never as a raw file copy.
-FILE_PREFIXES = ("brain", "docs/workflows", "docs/hooks", "docs/webhooks.d")
-FILE_EXACT = ("docs/webhooks.yaml",)
-
 #: Webhook channel drop-ins: one ``<name>.yaml`` directly inside, never nested.
 WEBHOOK_DROPINS = "docs/webhooks.d"
+FILE_PREFIXES = ("brain", "docs/workflows", "docs/hooks", WEBHOOK_DROPINS)
+FILE_EXACT = ("docs/webhooks.yaml",)
 
 #: The modes a ``files:`` entry may ask for.
 MODES = ("overwrite", "if_missing")
@@ -378,7 +377,8 @@ def _identity(key: str, item: Any) -> tuple[Any, ...] | None:
         return None
     if item is None or isinstance(item, (dict, list)):
         return None
-    return ("value", item)
+    # The type too, so `true` and `1` are different items.
+    return ("value", type(item).__name__, item)
 
 
 def _claim(key: str, item: Any) -> str:
@@ -388,7 +388,7 @@ def _claim(key: str, item: Any) -> str:
     assert identity is not None
     if identity[0] == "hook":
         return f"{key}[{identity[1]}:{identity[2]}]"
-    return f"{key}[{identity[1]}]"
+    return f"{key}[{identity[2]}]"
 
 
 def _split_claim(claim: str) -> tuple[str, str | None]:
@@ -1673,8 +1673,8 @@ def _with_dropped(install: dict[str, Any], previous: Any) -> dict[str, Any]:
     for key, items in appended.items():
         if not isinstance(items, list):
             continue
-        kept = {_identity(key, item) for item in now.get(key) or []}
-        gone = [i for i in items if _identity(key, i) is not None and _identity(key, i) not in kept]
+        kept = {_identity(key, item) for item in now.get(key) or []} | {None}
+        gone = [item for item in items if _identity(key, item) not in kept]
         if gone:
             dropped[key] = gone
     if not dropped:
