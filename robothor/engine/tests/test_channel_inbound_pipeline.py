@@ -22,7 +22,7 @@ import pytest
 
 from robothor.engine.channels import inbound
 from robothor.engine.channels.access import AccessDecision
-from robothor.engine.models import TriggerType
+from robothor.engine.models import RunStatus, TriggerType
 from robothor.identity import IdentityContext
 
 TENANT = "00000000-0000-0000-0000-000000000000"
@@ -30,8 +30,14 @@ ALICE = "29:alice-object-id"
 
 
 class _Run:
-    def __init__(self, output_text: str = "the answer") -> None:
+    """The shape ``AgentRunner.execute`` returns. A failure is usually a
+    RETURNED run with a failed status, not an exception."""
+
+    def __init__(
+        self, output_text: str = "the answer", status: RunStatus = RunStatus.COMPLETED
+    ) -> None:
         self.output_text = output_text
+        self.status = status
         self.id = "run-1"
 
 
@@ -442,6 +448,29 @@ class TestTheTurnIsRemembered:
             session_key="visitor:a",
             record_turn=False,
         )
+        assert store.saved == []
+
+    @pytest.mark.parametrize("status", [RunStatus.FAILED, RunStatus.TIMEOUT, RunStatus.CANCELLED])
+    @pytest.mark.asyncio
+    async def test_a_run_returned_as_not_completed_records_nothing(
+        self, monkeypatch, sessions, store, status
+    ):
+        """The runner reports most failures by returning the run, and a timed-out
+        run can carry partial output — remembering it would teach the next turn
+        an answer that was never finished."""
+        runner = _Runner(run=_Run(output_text="a partial answer", status=status))
+        await _handle(monkeypatch, _allow(), runner, text="hi", session_key="visitor:a")
+        assert list(sessions.get("visitor:a").history) == []
+        assert store.saved == []
+
+    @pytest.mark.asyncio
+    async def test_a_completed_run_with_no_output_records_nothing(
+        self, monkeypatch, sessions, store
+    ):
+        runner = _Runner(run=_Run(output_text=""))
+        result = await _handle(monkeypatch, _allow(), runner, text="hi", session_key="visitor:a")
+        assert result.reply == inbound.NO_OUTPUT_REPLY
+        assert list(sessions.get("visitor:a").history) == []
         assert store.saved == []
 
     @pytest.mark.asyncio
