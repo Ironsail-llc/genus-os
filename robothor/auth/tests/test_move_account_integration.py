@@ -261,6 +261,25 @@ def test_a_person_with_crm_history_is_not_moved_by_default(world) -> None:
     assert set(_where(cur, world).values()) == {world["parent"]}
 
 
+def test_a_face_enrolment_not_tied_to_the_account_counts_as_history(world) -> None:
+    """The account's own enrolment moves with it; another enrolment of the same
+    person (no user_account_id) belongs to the source tenant's records."""
+    cur = world["cur"]
+    cur.execute(
+        "INSERT INTO face_identities (tenant_id, face_label, person_id) VALUES (%s, %s, %s)",
+        (world["parent"], f"alice-door-{uuid.uuid4().hex[:6]}", world["person_id"]),
+    )
+    with pytest.raises(accounts.AccountMoveError, match=r"face_identities=1"):
+        accounts.move_account(world["user_id"], world["child"], actor="cli:test")
+    assert set(_where(cur, world).values()) == {world["parent"]}
+
+
+def test_the_accounts_own_face_enrolment_is_not_history(world) -> None:
+    """The seeded enrolment is tied to the account, so the move goes ahead."""
+    accounts.move_account(world["user_id"], world["child"], actor="cli:test")
+    assert set(_where(world["cur"], world).values()) == {world["child"]}
+
+
 def test_a_dry_run_reports_the_persons_crm_history(world) -> None:
     _seed_note(world)
     with pytest.raises(accounts.AccountMoveError, match=r"crm_notes=1"):
