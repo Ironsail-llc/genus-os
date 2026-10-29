@@ -45,6 +45,10 @@ An empty list renders nothing.
 {{- $env := deepCopy ($cv.env | default dict) -}}
 {{- range $k, $v := ($t.env | default dict) -}}{{- $_ := set $env $k $v -}}{{- end -}}
 {{- $_ := set $cv "env" $env -}}
+{{- /* Extra volumes name the root engine's own resources (often a
+       ReadWriteOnce claim), so a cell gets only the ones its entry declares. */ -}}
+{{- $_ := set $cv "extraVolumes" ($t.extraVolumes | default list) -}}
+{{- $_ := set $cv "extraVolumeMounts" ($t.extraVolumeMounts | default list) -}}
 {{- /* One Ingress host cannot front several engines; cells are internal. */ -}}
 {{- $_ := set $cv "ingress" (dict "enabled" false) -}}
 {{- /* Credentials are per mailbox, so the root engine's never carry over. */ -}}

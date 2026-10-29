@@ -329,6 +329,7 @@ With `vault.enabled: false` (local values), create the
 | `workspace.allowEmptyFleet`, `minAgentCount`, `requiredAgentIds`, `readOnly` | the top-level `workspace.*` value | |
 | `workspace.persistence` | `workspace.persistence` without `existingClaim` | Merged key by key. A cell never mounts the root engine's claim. |
 | `workspace.configMap` | none | Never inherited: a bundle holds one tenant's fleet. |
+| `extraVolumes`, `extraVolumeMounts` | none | Never inherited: the root engine's extra volumes name its own resources, and a `ReadWriteOnce` claim mounted by a second pod would leave the cell unschedulable. Same shape as `engine.extraVolumes` (see [Extra volumes](#extra-volumes)). |
 | `googleWorkspace.enabled` | `false` | Never inherited: credentials belong to one mailbox. |
 | `googleWorkspace.secretName` | `<fullname>-engine-<id>-google` | A Secret with a `credentials.json` key, supplied by the deployment. VSO only materializes the root engine's `engine-google`. The mount is optional, as on the root engine. |
 

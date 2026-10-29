@@ -532,6 +532,8 @@ tenants: []
 #      configMap:                # never inherited from workspace.configMap
 #        name: ""
 #        items: []
+#    extraVolumes: []            # never inherited from engine.extraVolumes
+#    extraVolumeMounts: []       # never inherited from engine.extraVolumeMounts
 #    googleWorkspace:            # never inherited from engine.googleWorkspace
 #      enabled: false
 #      secretName: ""            # default <fullname>-engine-<id>-google
