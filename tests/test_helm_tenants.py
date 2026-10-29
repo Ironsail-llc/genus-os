@@ -169,7 +169,8 @@ def test_no_two_engine_services_select_the_same_pods() -> None:
     services = [
         d
         for d in docs
-        if d["kind"] == "Service" and d["spec"]["selector"].get("app.kubernetes.io/component") == "engine"
+        if d["kind"] == "Service"
+        and d["spec"]["selector"].get("app.kubernetes.io/component") == "engine"
     ]
     pods = [
         d["spec"]["template"]["metadata"]["labels"]
