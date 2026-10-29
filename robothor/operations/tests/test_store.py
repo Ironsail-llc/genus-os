@@ -353,3 +353,168 @@ def test_approval_publishes_operation_action_approved(ops):
         ),
     ]
     assert [k["actor"] for _a, k in published] == ["operator:1", "policy:acme-plugin:1"]
+
+
+# ── Reading, claiming by id and cancelling: the plugin seam ────────────────
+
+
+def _note(ops, key, proposer="acme-plugin", kind="acme-plugin.note"):
+    return ops.propose(kind, key, {"body": key}, proposed_by=proposer)
+
+
+def test_get_action_reads_one_row_within_the_tenant(ops):
+    action = _note(ops, "n:1")
+    row = ops.get_action(action)
+    assert row["id"] == action
+    assert row["status"] == "review"
+    assert row["proposed_by"] == "acme-plugin"
+    assert row["payload"] == {"body": "n:1"}
+    assert ops.get_action(str(uuid4())) is None
+    assert Operations("test-" + uuid4().hex).get_action(action) is None
+
+
+def test_list_actions_filters_by_kind_status_and_proposer(ops):
+    first = _note(ops, "n:1")
+    second = _note(ops, "n:2")
+    other = _note(ops, "o:1", proposer="other-plugin", kind="other-plugin.note")
+    unattributed = ops.propose("email", "draft:1", {"body": "Hello"})
+    ops.decide(second, True, "policy:acme-plugin:1")
+
+    def ids(**filters):
+        return {str(r["id"]) for r in ops.list_actions(**filters)}
+
+    assert ids() == {first, second, other, unattributed}
+    assert ids(kinds=["acme-plugin.note"]) == {first, second}
+    assert ids(kinds=["acme-plugin.note", "email"]) == {first, second, unattributed}
+    assert ids(status="approved") == {second}
+    assert ids(proposed_by="other-plugin") == {other}
+    assert ids(proposed_by="acme-plugin", status="review") == {first}
+    assert len(ops.list_actions(limit=2)) == 2
+    assert Operations("test-" + uuid4().hex).list_actions() == []
+    with pytest.raises(ValueError):
+        ops.list_actions(limit=0)
+
+
+def test_list_actions_is_newest_first(ops):
+    older = _note(ops, "n:1")
+    newer = _note(ops, "n:2")
+    with ops.transaction() as cur:
+        cur.execute(
+            "UPDATE operation_actions SET created_at=now()-interval '1 hour' "
+            "WHERE tenant_id=%s AND id=%s",
+            (ops.tenant, older),
+        )
+    assert [str(r["id"]) for r in ops.list_actions()] == [newer, older]
+
+
+def test_claim_action_by_id_takes_exactly_that_approved_action(ops):
+    first = _note(ops, "n:1")
+    second = _note(ops, "n:2")
+    for action in (first, second):
+        ops.decide(action, True, "policy:acme-plugin:1")
+    claimed = ops.claim_action_by_id(second)
+    assert str(claimed["id"]) == second
+    assert claimed["status"] == "executing"
+    assert claimed["lease_token"]
+    assert ops.claim_action_by_id(second) is None  # already executing
+    assert ops.get_action(first)["status"] == "approved"
+    ops.finish_action(second, claimed["lease_token"], "completed", {"id": "ack"})
+    assert ops.get_action(second)["status"] == "completed"
+    assert [a["event"] for a in _audit(ops, second)][-2:] == ["action.claimed", "action.completed"]
+
+
+def test_claim_action_by_id_refuses_unapproved_expired_and_foreign_actions(ops):
+    in_review = _note(ops, "n:1")
+    assert ops.claim_action_by_id(in_review) is None
+    expired = _note(ops, "n:2")
+    ops.decide(expired, True, "policy:acme-plugin:1")
+    with ops.transaction() as cur:
+        cur.execute(
+            "UPDATE operation_actions SET expires_at=now()-interval '1 second' "
+            "WHERE tenant_id=%s AND id=%s",
+            (ops.tenant, expired),
+        )
+    assert ops.claim_action_by_id(expired) is None
+    approved = _note(ops, "n:3")
+    ops.decide(approved, True, "policy:acme-plugin:1")
+    assert Operations("test-" + uuid4().hex).claim_action_by_id(approved) is None
+    assert ops.get_action(approved)["status"] == "approved"
+
+
+def test_claim_action_by_id_is_fenced_like_claim_action(ops):
+    action = _note(ops, "n:1")
+    ops.decide(action, True, "policy:acme-plugin:1")
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        claims = list(pool.map(lambda _: ops.claim_action_by_id(action), range(4)))
+    claimed = [c for c in claims if c]
+    assert len(claimed) == 1
+    with pytest.raises(Conflict):
+        ops.finish_action(action, str(uuid4()), "completed", {"id": "ack"})
+    with ops.transaction() as cur:
+        cur.execute(
+            "UPDATE operation_actions SET lease_until=now()-interval '1 second' "
+            "WHERE tenant_id=%s AND id=%s",
+            (ops.tenant, action),
+        )
+    assert ops.claim_action_by_id(action) is None  # an expired send is unknown, never ready
+    assert ops.get_action(action)["status"] == "unknown"
+
+
+def test_claim_action_by_id_refuses_a_modified_payload(ops):
+    action = _note(ops, "n:1")
+    ops.decide(action, True, "policy:acme-plugin:1")
+    with ops.transaction() as cur:
+        cur.execute(
+            'UPDATE operation_actions SET payload=\'{"body":"changed"}\'::jsonb '
+            "WHERE tenant_id=%s AND id=%s",
+            (ops.tenant, action),
+        )
+    with pytest.raises(Conflict):
+        ops.claim_action_by_id(action)
+
+
+@pytest.mark.parametrize("decide_first", [False, True])
+def test_proposer_cancels_its_own_draft_with_an_audited_reason(ops, decide_first):
+    action = _note(ops, "n:1")
+    if decide_first:
+        ops.decide(action, True, "policy:acme-plugin:1")
+    ops.cancel_action(action, "superseded by n:2", proposed_by="acme-plugin")
+    assert ops.get_action(action)["status"] == "cancelled"
+    assert ops.claim_action_by_id(action) is None
+    assert _audit(ops, action)[-1] == {
+        "event": "action.cancelled",
+        "actor": "plugin:acme-plugin",
+        "detail": {
+            "reason": "superseded by n:2",
+            "previous_status": "approved" if decide_first else "review",
+        },
+    }
+
+
+def test_cancel_is_refused_for_another_proposer_or_a_settled_action(ops):
+    action = _note(ops, "n:1")
+    with pytest.raises(Conflict):
+        ops.cancel_action(action, "not mine", proposed_by="other-plugin")
+    with pytest.raises(Conflict):
+        ops.cancel_action(action, "no proposer named")
+    assert ops.get_action(action)["status"] == "review"
+    ops.decide(action, True, "policy:acme-plugin:1")
+    claimed = ops.claim_action_by_id(action)
+    with pytest.raises(Conflict):
+        ops.cancel_action(action, "too late", proposed_by="acme-plugin")
+    ops.finish_action(action, claimed["lease_token"], "completed", {"id": "ack"})
+    with pytest.raises(Conflict):
+        ops.cancel_action(action, "too late", proposed_by="acme-plugin")
+    with pytest.raises(Conflict):
+        ops.cancel_action(str(uuid4()), "missing", proposed_by="acme-plugin")
+    with pytest.raises(ValueError):
+        ops.cancel_action(action, " ", proposed_by="acme-plugin")
+
+
+def test_an_unattributed_draft_is_cancelled_without_a_proposer(ops):
+    action = ops.propose("email", "draft:1", {"body": "Hello"})
+    with pytest.raises(Conflict):
+        ops.cancel_action(action, "not mine", proposed_by="acme-plugin")
+    ops.cancel_action(action, "operator withdrew it")
+    assert ops.get_action(action)["status"] == "cancelled"
+    assert _audit(ops, action)[-1]["actor"] == "system"
