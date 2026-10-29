@@ -434,7 +434,11 @@ tenant cell. The `vault-key` class is materialized by VSO, which decodes the
 base64 fields stored in Vault into the raw files the code reads. NOT optional:
 under GENUS_VAULT_KEY_FILE a missing key is a hard error, and a pod that can
 start without it would only fail later, on the first secret it touches.
-Pass the top-level dot; each renders nothing when vaultKey.enabled is false.
+The files keep the basenames the agent secret-file denylist guards
+(.vault-key, .fingerprint-salt in robothor/engine/secret_paths.py), so a
+missed path check still cannot hand the master key to an agent's exec or
+read_file. Pass the top-level dot; each renders nothing when
+vaultKey.enabled is false.
 */}}
 {{- define "genus-os.vaultKeyDir" -}}/etc/genus/vault{{- end -}}
 
@@ -444,9 +448,9 @@ Pass the top-level dot; each renders nothing when vaultKey.enabled is false.
 {{- fail "vaultKey.enabled requires vault.secrets.vault-key (a Vault path holding base64 `key` and `fingerprint-salt`)" -}}
 {{- end }}
 - name: GENUS_VAULT_KEY_FILE
-  value: {{ printf "%s/key" (include "genus-os.vaultKeyDir" .) | quote }}
+  value: {{ printf "%s/.vault-key" (include "genus-os.vaultKeyDir" .) | quote }}
 - name: GENUS_FINGERPRINT_SALT_FILE
-  value: {{ printf "%s/fingerprint-salt" (include "genus-os.vaultKeyDir" .) | quote }}
+  value: {{ printf "%s/.fingerprint-salt" (include "genus-os.vaultKeyDir" .) | quote }}
 {{- end }}
 {{- end -}}
 
@@ -466,9 +470,9 @@ Pass the top-level dot; each renders nothing when vaultKey.enabled is false.
     defaultMode: 0400
     items:
       - key: key
-        path: key
+        path: .vault-key
       - key: fingerprint-salt
-        path: fingerprint-salt
+        path: .fingerprint-salt
 {{- end }}
 {{- end -}}
 

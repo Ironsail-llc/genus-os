@@ -499,7 +499,8 @@ engine:
 # vault.secrets.vault-key.path in the environment layer) holds two fields,
 # each 32 random bytes stored base64-encoded (`openssl rand -base64 32`):
 # `key` and `fingerprint-salt`. VSO decodes them into raw files mounted
-# read-only at /etc/genus/vault/, and GENUS_VAULT_KEY_FILE /
+# read-only as /etc/genus/vault/.vault-key and .fingerprint-salt (basenames the
+# agent secret-file denylist guards), and GENUS_VAULT_KEY_FILE /
 # GENUS_FINGERPRINT_SALT_FILE point at them. See the chart README.
 vaultKey:
   enabled: false

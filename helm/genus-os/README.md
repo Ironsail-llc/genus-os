@@ -296,9 +296,12 @@ vault kv put <mount>/<path>/vault-key \
 ```
 
 VSO decodes them into raw files in the `<fullname>-vault-key` Secret. The
-chart mounts them read-only at `/etc/genus/vault/` on the bridge, the root
-engine and every cell, and sets `GENUS_VAULT_KEY_FILE=/etc/genus/vault/key`
-and `GENUS_FINGERPRINT_SALT_FILE=/etc/genus/vault/fingerprint-salt`. The mount
+chart mounts them read-only on the bridge, the root engine and every cell as
+`/etc/genus/vault/.vault-key` and `/etc/genus/vault/.fingerprint-salt`, and
+sets `GENUS_VAULT_KEY_FILE` and `GENUS_FINGERPRINT_SALT_FILE` to those paths.
+The basenames are deliberate: the agent secret-file denylist refuses
+`.vault-key` and `.fingerprint-salt` wherever they live, so an agent's shell
+or file tools cannot read the master key. The mount
 is not optional: under those variables a missing file is a hard error, and the
 pod waits for the Secret rather than starting without a key. Rotating either
 field through VSO restarts the bridge and every engine. Rotating `key`
