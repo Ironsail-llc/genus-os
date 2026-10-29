@@ -198,8 +198,9 @@ tests:
           value: keep
 
   # Production syncs with `argocd app sync --prune`, which ignores Helm's
-  # resource-policy. Argo CD needs its own opt-out.
-  - it: a tenant workspace claim survives Argo CD pruning
+  # resource-policy, so Argo CD needs its own opt-outs: Prune=false for a
+  # removed entry, Delete=false for a cascading delete of the Application.
+  - it: a tenant workspace claim survives Argo CD pruning and Application deletion
     template: engine/tenants.yaml
     set:
       workspace.persistence.enabled: true
@@ -211,10 +212,10 @@ tests:
     asserts:
       - equal:
           path: metadata.annotations["argocd.argoproj.io/sync-options"]
-          value: Prune=false
+          value: Prune=false,Delete=false
 
-  # An operator's own sync options are kept, with Prune=false added.
-  - it: a tenant workspace claim adds Prune=false to its own Argo CD sync options
+  # An operator's own sync options are kept, with both opt-outs added.
+  - it: a tenant workspace claim adds the opt-outs to its own Argo CD sync options
     template: engine/tenants.yaml
     set:
       tenants:
@@ -230,7 +231,26 @@ tests:
     asserts:
       - equal:
           path: metadata.annotations["argocd.argoproj.io/sync-options"]
-          value: ServerSideApply=true,Prune=false
+          value: ServerSideApply=true,Prune=false,Delete=false
+
+  # A conflicting Prune= or Delete= the operator set is replaced, not doubled.
+  - it: a tenant workspace claim replaces a conflicting Prune or Delete option
+    template: engine/tenants.yaml
+    set:
+      tenants:
+        - id: acme-child-a
+          workspace:
+            persistence:
+              enabled: true
+              annotations:
+                argocd.argoproj.io/sync-options: Delete=true, ServerSideApply=true, Prune=true
+    documentSelector:
+      path: kind
+      value: PersistentVolumeClaim
+    asserts:
+      - equal:
+          path: metadata.annotations["argocd.argoproj.io/sync-options"]
+          value: ServerSideApply=true,Prune=false,Delete=false
 
   - it: a tenant workspace claim keeps the policy alongside its own annotations
     template: engine/tenants.yaml
