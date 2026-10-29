@@ -165,3 +165,50 @@ def test_both_tables_carry_the_tenant_policy(pg):
             "AND tablename IN ('kb_documents', 'kb_chunks') ORDER BY tablename"
         )
         assert cur.fetchall() == [("kb_chunks",), ("kb_documents",)]
+
+
+@pytest.mark.integration
+def test_a_scoped_non_superuser_sees_only_its_own_tenant(pg, scratch_db, embed):
+    """The policy itself, enforced by PostgreSQL for a role that cannot bypass it.
+
+    The scratch connection is a superuser, which bypasses RLS, so the check
+    runs as a temporary NOSUPERUSER NOBYPASSRLS role bound to one tenant.
+    """
+    from uuid import uuid4
+
+    import psycopg2
+    from psycopg2 import sql
+
+    _db, backend = pg
+    _db, dsn = scratch_db(through=MIGRATION)  # already migrated: the same database
+    _upsert(backend, embed, tenant="test-tenant", doc_id="mine")
+    _upsert(backend, embed, tenant="tenant-b", doc_id="theirs")
+
+    conn = psycopg2.connect(dsn)
+    role = "kb_rls_" + uuid4().hex
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                sql.SQL("CREATE ROLE {} NOSUPERUSER NOBYPASSRLS").format(sql.Identifier(role))
+            )
+            cur.execute(sql.SQL("GRANT USAGE ON SCHEMA public TO {}").format(sql.Identifier(role)))
+            cur.execute(
+                sql.SQL("GRANT SELECT, INSERT ON kb_documents, kb_chunks TO {}").format(
+                    sql.Identifier(role)
+                )
+            )
+            cur.execute(sql.SQL("SET LOCAL ROLE {}").format(sql.Identifier(role)))
+            cur.execute("SELECT set_config('app.tenant_id', 'test-tenant', true)")
+            for table in ("kb_documents", "kb_chunks"):
+                cur.execute(
+                    sql.SQL("SELECT DISTINCT tenant_id FROM {}").format(sql.Identifier(table))
+                )
+                assert cur.fetchall() == [("test-tenant",)], table
+            with pytest.raises(psycopg2.errors.InsufficientPrivilege):
+                cur.execute(
+                    "INSERT INTO kb_documents (tenant_id, collection, doc_id, sha256) "
+                    "VALUES ('tenant-b', 'helpdesk/policies', 'forged', 'x')"
+                )
+    finally:
+        conn.rollback()  # Drops the temporary role with the transaction.
+        conn.close()
