@@ -8,8 +8,8 @@ Honesty rules, the same as ``system_health``: a monitor that is switched off,
 or switched on without a base URL, says ``not_configured``; one that has never
 polled, or has not succeeded for three poll intervals, says ``unknown`` rather
 than a stale green; and a database error degrades to ``unknown`` with the error
-named (on the executions route, an ``error`` beside the empty list) — the route
-never 500s.
+named by code and class only (on the executions route, an ``error`` beside the
+empty list); its text is logged, never returned. The route never 500s.
 
 Each workflow in the listing carries ``workflow_id``, ``name``, ``active``,
 ``tags``, ``failures_24h``, ``failures_7d``, ``last_failure_at``,
@@ -24,6 +24,7 @@ badge never disagrees with what the poller does.
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, TypeVar
 
@@ -38,6 +39,8 @@ from routers._operator import require_operator
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/integrations/n8n", tags=["integrations"])
 
@@ -99,11 +102,17 @@ def _iso(value: Any) -> Any:
     return value.isoformat() if hasattr(value, "isoformat") else value
 
 
-def _safe(fn: Callable[[], T]) -> tuple[T | None, str | None]:
+def _safe(fn: Callable[[], T], code: str) -> tuple[T | None, str | None]:
+    """``(value, None)``, or ``(None, "<code>: <ExceptionClass>")`` on any failure.
+
+    The response names the failure by a stable code and the exception's class
+    only; its text (SQL, hosts, settings values) goes to the server log.
+    """
     try:
         return fn(), None
     except Exception as exc:  # a probe failure must never 500 or read as healthy
-        return None, str(exc)
+        logger.warning("n8n route %s: %s", code, exc, exc_info=True)
+        return None, f"{code}: {type(exc).__name__}"
 
 
 def _sync_state(tenant_id: str) -> dict[str, Any] | None:
@@ -189,7 +198,7 @@ def list_workflows(request: Request, tenant_id: str = Depends(get_tenant_id)) ->
         "last_error": None,
         "workflows": [],
     }
-    settings, settings_error = _safe(_n8n_settings)
+    settings, settings_error = _safe(_n8n_settings, "settings_error")
     if settings is None:
         # A config the bridge cannot read is not "off" and not healthy.
         body.update(status="unknown", last_error=settings_error)
@@ -199,8 +208,8 @@ def list_workflows(request: Request, tenant_id: str = Depends(get_tenant_id)) ->
     if not enabled:
         return body
 
-    sync, sync_error = _safe(lambda: _sync_state(tenant_id))
-    rows, rows_error = _safe(lambda: _workflow_rows(tenant_id))
+    sync, sync_error = _safe(lambda: _sync_state(tenant_id), "database_error")
+    rows, rows_error = _safe(lambda: _workflow_rows(tenant_id), "database_error")
     db_error = sync_error or rows_error
     if db_error:
         body.update(status="unknown", last_error=db_error)
@@ -225,12 +234,12 @@ def workflow_executions(
     tenant_id: str = Depends(get_tenant_id),
 ) -> dict[str, Any]:
     require_operator(request)
-    settings, _settings_error = _safe(_n8n_settings)
+    settings, _settings_error = _safe(_n8n_settings, "settings_error")
     if settings is None or not settings[0]:
         return {"executions": []}
     base_url = settings[1]
     limit = max(1, min(limit, _MAX_LIMIT))
-    rows, db_error = _safe(lambda: _execution_rows(tenant_id, workflow_id, limit))
+    rows, db_error = _safe(lambda: _execution_rows(tenant_id, workflow_id, limit), "database_error")
     if db_error:
         # An outage must not read as a clean record of no failures.
         return {"executions": [], "error": db_error}
