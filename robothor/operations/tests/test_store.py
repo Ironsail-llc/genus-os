@@ -511,10 +511,27 @@ def test_cancel_is_refused_for_another_proposer_or_a_settled_action(ops):
         ops.cancel_action(action, " ", proposed_by="acme-plugin")
 
 
-def test_an_unattributed_draft_is_cancelled_without_a_proposer(ops):
+@pytest.mark.parametrize("decide_first", [False, True])
+def test_an_unattributed_action_is_cancelled_only_by_a_named_operator(ops, decide_first):
     action = ops.propose("email", "draft:1", {"body": "Hello"})
-    with pytest.raises(Conflict):
-        ops.cancel_action(action, "not mine", proposed_by="acme-plugin")
-    ops.cancel_action(action, "operator withdrew it")
+    if decide_first:
+        ops.decide(action, True, "operator:1")
+    for refused in (
+        {"proposed_by": "acme-plugin"},
+        {},
+        {"actor": "agent:main"},
+        {"actor": "policy:acme-plugin:1"},
+    ):
+        with pytest.raises(Conflict):
+            ops.cancel_action(action, "not mine", **refused)
+    assert ops.get_action(action)["status"] == ("approved" if decide_first else "review")
+    ops.cancel_action(action, "operator withdrew it", actor="operator:2")
     assert ops.get_action(action)["status"] == "cancelled"
-    assert _audit(ops, action)[-1]["actor"] == "system"
+    assert _audit(ops, action)[-1]["actor"] == "operator:2"
+
+
+def test_a_plugins_action_is_not_cancelled_by_an_operator_actor_alone(ops):
+    action = _note(ops, "n:1")
+    with pytest.raises(Conflict):
+        ops.cancel_action(action, "not the proposer", actor="operator:2")
+    assert ops.get_action(action)["status"] == "review"
