@@ -219,14 +219,22 @@ def _read_or_create_salt() -> bytes:
     """
     override = _salt_file_override()
     if override is not None:
-        found = _read_salt(override)
-        if found is not None:
+        # EXACTLY the 32 bytes this module writes. A shared salt comes from a
+        # Secret through a template whose b64dec returns its error TEXT on
+        # malformed input, so "at least 16 bytes" would silently key every
+        # fingerprint with an error message.
+        try:
+            found = override.read_bytes()
+        except OSError:
+            found = b""
+        if len(found) == _SALT_BYTES:
             return found
         logger.error(
-            "secrets: %s names a fingerprint salt that is missing, unreadable or too "
-            "short; it is never generated under that setting, so fingerprints in "
-            "this process are unsalted until the file is mounted.",
+            "secrets: %s names a fingerprint salt that is missing, unreadable or not "
+            "exactly %d bytes; it is never generated under that setting, so "
+            "fingerprints in this process are unsalted until the file is fixed.",
             SALT_FILE_ENV,
+            _SALT_BYTES,
         )
         return _UNSALTED_FALLBACK
 

@@ -229,15 +229,91 @@ def _in_secret_location(p: PurePath) -> bool:
     )
 
 
+#: The settings that MOVE the vault master key and the fingerprint salt out of
+#: the workspace (``robothor/vault/crypto.py``, ``robothor/secrets/
+#: fingerprint.py``), with their aliases. The basename rules above
+#: (``.vault-key``, ``.fingerprint-salt``) cannot see a file the chart mounts
+#: as ``key``, so ``read_file`` and ``exec cat`` would print the master key
+#: that decrypts every vault row — the very read ``.vault-key`` was added for.
+_KEY_FILE_SETTINGS = (
+    "GENUS_VAULT_KEY_FILE",
+    "ROBOTHOR_VAULT_KEY_FILE",
+    "GENUS_FINGERPRINT_SALT_FILE",
+    "ROBOTHOR_FINGERPRINT_SALT_FILE",
+)
+
+
+def _resolved(path: str) -> str:
+    """``realpath``: symlinks followed, ``..`` resolved, missing files allowed."""
+    return str(Path(path).expanduser().resolve(strict=False))
+
+
+def _broad_directories() -> set[str]:
+    """Directories too broad to refuse wholesale for holding a key file."""
+    from robothor.settings.env import process_env_get
+
+    broad = {"/", _resolved("~")}
+    workspace = (process_env_get("ROBOTHOR_WORKSPACE", "") or "").strip()
+    broad.add(_resolved(workspace) if workspace else _resolved("~/robothor"))
+    return broad
+
+
+def _is_moved_key_file(path: str | os.PathLike[str]) -> bool:
+    """True for an overriding key/salt file, or anything in its directory.
+
+    Read when the check runs, not at import, and RESOLVED on both sides
+    (``realpath``), because a denylist that matches a string rather than a
+    path means nothing: a symlink, a ``..`` or the Secret mount's own
+    timestamped symlink farm all name the same bytes. Every file in the key's
+    directory is refused as well — a dedicated mount holds nothing an agent
+    needs — unless that directory is the workspace, home or ``/``, where the
+    rule would blind the agent to everything.
+
+    The one exception to this module's "pure" contract: resolving a symlink
+    reads the filesystem. It still answers the same whether or not the file
+    exists, which is what the purity was for.
+    """
+    from robothor.settings.env import process_env_get
+
+    configured = [
+        value.strip()
+        for value in (process_env_get(name, "") or "" for name in _KEY_FILE_SETTINGS)
+        if value.strip()
+    ]
+    if not configured:
+        return False
+    candidate = _resolved(str(path))
+    broad = _broad_directories()
+    for value in configured:
+        target = _resolved(value)
+        if candidate == target:
+            return True
+        directory = str(Path(target).parent)
+        if (
+            directory not in broad
+            and candidate != directory
+            and Path(candidate).is_relative_to(directory)
+        ):
+            return True
+    return False
+
+
 def is_secret_path(path: str | os.PathLike[str]) -> bool:
     """True when *path* names a file that holds credentials.
 
-    Pure: no filesystem access, so the answer is the same for a file that
-    does not exist (the refusal must not reveal whether it does).
+    Pure but for one rule: no filesystem access, so the answer is the same for
+    a file that does not exist (the refusal must not reveal whether it does).
+    The exception is :func:`_is_moved_key_file`, which resolves symlinks to
+    find a vault key or fingerprint salt moved by its setting.
     """
     p = PurePath(Path(str(path)).expanduser())
     name = p.name
     lowered = name.lower()
+
+    # First, and before the documentation suffixes: a moved key file may be
+    # named anything at all.
+    if _is_moved_key_file(path):
+        return True
 
     # BEFORE the documentation suffixes: a file the operator sent as
     # `notes.md` holding their credentials is quarantined on the way in, and
