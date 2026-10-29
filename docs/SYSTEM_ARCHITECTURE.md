@@ -73,7 +73,8 @@ The Helm deployment has a different boundary from the systemd appliance:
   set and rotate secrets with `robothor vault` on the appliance.
   `/api/vault/list` stays open to operators because it returns key names only.
 - Bridge mutations under `/api/` either call `require_operator(request)` or are
-  scope-gated by the middleware; `crm/bridge/tests/test_mutations_are_gated.py`
+  scope-gated by the middleware (the Inbox answers additionally carry the
+  tenant-local `require_tenant_operator`, pinned by the same test); `crm/bridge/tests/test_mutations_are_gated.py`
   enumerates the assembled app and fails on any route that is neither, so a new
   ungated mutation cannot ship unnoticed. Appliance-global acts (marketplace
   agent install/update/remove) are operator-gated and write an audit row.
@@ -1411,11 +1412,17 @@ identity caches (60 s, and 300 s for `tenant_users`), both callers finish by
 posting `/api/admin/identities/reload`, best effort. Full rules, tables and CLI:
 [Channel access](channels/access.md).
 
-**Answering from the Helm.** `GET /api/approvals` lists both durable kinds;
-`POST /api/approvals/{kind}/{id}` answers one, with `kind` in `workflow`,
-`question`, `escalation`. Operator-scoped and audited (identifiers only — the
-answer text is content, not an identifier). `escalation` is proxied to the
-engine, because settling it means waking a coroutine in that process.
+**Answering from the Helm.** `GET /api/approvals` lists the three durable
+kinds; `POST /api/approvals/{kind}/{id}` answers one, with `kind` in
+`workflow`, `question`, `action` (an `operation_actions` row in `review`,
+decided through `Operations.decide`), `escalation`. The durable kinds are
+tenant-local: `require_tenant_operator` admits an owner or admin of the tenant
+the session acts in, every store call filters on that tenant and runs inside
+`tenant_scope` so RLS binds it too, and another tenant's id is a 404 that
+settles nothing. Audited with `decided_by` and `tenant_id` (identifiers only —
+the answer text is content, not an identifier). `escalation` stays
+platform-only (`require_operator`) and is proxied to the engine, because
+settling it means waking a coroutine in that process.
 
 #### Claude Code driver (`robothor/engine/coding/`)
 

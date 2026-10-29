@@ -122,9 +122,10 @@ The row is the single source of truth, which is why there is no engine endpoint
 for this: the CLI, Telegram and the Helm all settle the same row, and a second
 answer path would be a second opinion about what the person said.
 
-**Who may answer.** The bridge's approvals route is operator-gated
-(owner/admin), so a member sees the card and gets an honest refusal — "an
-operator has to answer this" — rather than a silent failure. Letting the person
+**Who may answer.** The bridge's approvals route is gated to an owner or
+admin of the tenant the session acts in, so a member sees the card and gets an
+honest refusal — "an operator has to answer this" — rather than a silent
+failure. Letting the person
 who was *asked* answer means binding the answerer to the row's target, which is
 an ask-binding change and not part of this channel.
 
