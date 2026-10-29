@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import os
+from typing import NamedTuple
 
 logger = logging.getLogger(__name__)
 
@@ -27,16 +28,39 @@ OVERRIDE_ENV = "ROBOTHOR_FEDERATION_ALLOW_INERT_RLS"
 _FEDERATION_CONTEXT = "activate a federation link"
 
 
+class _Wording(NamedTuple):
+    """The context-specific phrases in the gate's messages."""
+
+    scope: str  # what the tenant scope wraps
+    exposure: str  # where isolation is missing, appended to "no tenant isolation"
+    anyway: str  # how the override sentence begins
+    overridden: str  # the warning logged when the override admits the caller
+
+
+def _wording(context: str) -> _Wording:
+    if context == _FEDERATION_CONTEXT:
+        return _Wording(
+            scope="the tenant scope around every inbound op",
+            exposure=" on inbound federation ops",
+            anyway="To federate anyway and accept that inbound ops are not tenant-isolated",
+            overridden="Federation: activating with %s set — inbound ops from this peer "
+            "are NOT tenant-isolated.",
+        )
+    return _Wording(
+        scope="the tenant scope",
+        exposure="",
+        anyway=f"To {context} anyway and accept that tenancy is not enforced",
+        overridden=f"Allowed to {context} with %s set — row-level security is not "
+        "verified, so tenancy may not be enforced.",
+    )
+
+
 def fix_text(override_env: str, context: str) -> str:
     """How to make the gate pass, naming THIS caller's override."""
-    if context == _FEDERATION_CONTEXT:
-        anyway = "To federate anyway and accept that inbound ops are not tenant-isolated"
-    else:
-        anyway = f"To {context} anyway and accept that tenancy is not enforced"
     return (
         "Set ROBOTHOR_RLS_ENABLED=1 and run the engine as a non-superuser "
         "(ROBOTHOR_DB_USER=robothor_app, migration 082) — see "
-        f"docs/runbooks/TENANT_RLS.md. {anyway}, set {override_env}=1."
+        f"docs/runbooks/TENANT_RLS.md. {_wording(context).anyway}, set {override_env}=1."
     )
 
 
@@ -113,30 +137,16 @@ def require_enforcing_rls(
             reads ``override_env`` from the environment.
     """
     overridden = _truthy(os.environ.get(override_env)) if override is None else override
+    words = _wording(context)
     fix = fix_text(override_env, context)
     if overridden:
-        if context == _FEDERATION_CONTEXT:
-            logger.warning(
-                "Federation: activating with %s set — inbound ops from this peer are "
-                "NOT tenant-isolated.",
-                override_env,
-            )
-        else:
-            logger.warning(
-                "Allowed to %s with %s set — row-level security is not verified, so "
-                "tenancy may not be enforced.",
-                context,
-                override_env,
-            )
+        logger.warning(words.overridden, override_env)
         return
 
     if not _rls_flag_on():
         raise RLSInertError(
-            f"Refusing to {context}: ROBOTHOR_RLS_ENABLED is not set, so the tenant "
-            "scope enforces nothing. " + fix
-            if context != _FEDERATION_CONTEXT
-            else "Refusing to activate a federation link: ROBOTHOR_RLS_ENABLED is not "
-            "set, so the tenant scope around every inbound op enforces nothing. " + fix
+            f"Refusing to {context}: ROBOTHOR_RLS_ENABLED is not set, so "
+            f"{words.scope} enforces nothing. " + fix
         )
 
     try:
@@ -152,7 +162,5 @@ def require_enforcing_rls(
         raise RLSInertError(
             f"Refusing to {context}: ROBOTHOR_RLS_ENABLED is set "
             "but this connection is a SUPERUSER, which bypasses row-level "
-            "security unconditionally. There is no tenant isolation"
-            + (" on inbound federation ops. " if context == _FEDERATION_CONTEXT else ". ")
-            + fix
+            f"security unconditionally. There is no tenant isolation{words.exposure}. " + fix
         )

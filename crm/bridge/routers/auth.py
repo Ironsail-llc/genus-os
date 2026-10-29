@@ -349,8 +349,12 @@ def _account_denial(ctx: Any, account: dict[str, Any] | None) -> str | None:
 
 
 def _rls_refusal() -> str | None:
-    """The inert-RLS gate shared with federation, or None when it passes."""
-    from robothor.federation.rls_gate import RLSInertError, fix_text, require_enforcing_rls
+    """Why the inert-RLS gate (shared with federation) refuses, or None.
+
+    The returned reason is for the journal only: it can quote a probe's
+    exception, so the caller is answered with the fixed fix text instead.
+    """
+    from robothor.federation.rls_gate import RLSInertError, require_enforcing_rls
 
     try:
         require_enforcing_rls(
@@ -359,12 +363,7 @@ def _rls_refusal() -> str | None:
             override=bool(get_settings().auth.tenant_switch_allow_inert_rls),
         )
     except RLSInertError as exc:
-        # The reason goes to the journal; the caller gets the fixed fix text,
-        # never an exception string that might carry connection detail.
-        logger.error("tenant.switch refused: %s", exc)
-        return "tenant switching refused: row-level security is not enforcing. " + fix_text(
-            _SWITCH_OVERRIDE_ENV, _SWITCH_CONTEXT
-        )
+        return str(exc)
     return None
 
 
@@ -394,28 +393,19 @@ def switch_tenant(body: SwitchTenantRequest, request: Request) -> dict[str, Any]
 
     if mode == "observe":
         if denial:
-            logger.info(
-                "tenant.switch would-deny user=%s home=%s target=%s reason=%s",
-                ctx.user_id,
-                home,
-                target,
-                denial,
-            )
+            verdict, why = "would-deny", denial
         elif refusal:
-            logger.info(
-                "tenant.switch would-refuse user=%s home=%s target=%s: row-level "
-                "security is not enforcing",
-                ctx.user_id,
-                home,
-                target,
-            )
+            verdict, why = "would-refuse", "row-level security is not enforcing"
         else:
-            logger.info(
-                "tenant.switch would-allow user=%s home=%s target=%s",
-                ctx.user_id,
-                home,
-                target,
-            )
+            verdict, why = "would-allow", "ok"
+        logger.info(
+            "tenant.switch %s user=%s home=%s target=%s reason=%s",
+            verdict,
+            ctx.user_id,
+            home,
+            target,
+            why,
+        )
         return _SWITCH_DISABLED
 
     if denial:
@@ -431,7 +421,26 @@ def switch_tenant(body: SwitchTenantRequest, request: Request) -> dict[str, Any]
         )
         return _SWITCH_ROLE_DENIED if denial == "role not authorized" else _SWITCH_DENIED
     if refusal:
-        return JSONResponse({"error": refusal}, status_code=503)
+        from robothor.federation.rls_gate import fix_text
+
+        logger.error("tenant.switch refused: %s", refusal)
+        audited(
+            request,
+            "tenant.switch",
+            action=target,
+            status="error",
+            reason="rls_inert",
+            user_id=ctx.user_id,
+            home_tenant_id=home,
+            target_tenant_id=target,
+        )
+        return JSONResponse(
+            {
+                "error": "tenant switching refused: row-level security is not enforcing. "
+                + fix_text(_SWITCH_OVERRIDE_ENV, _SWITCH_CONTEXT)
+            },
+            status_code=503,
+        )
 
     access = tokens.issue_access_token(
         ctx.user_id,
