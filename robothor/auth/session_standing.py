@@ -7,7 +7,8 @@ its old tenant until the token expired. The bridge therefore honours a HUMAN
 token only while its account still lives in the token's home tenant
 (``home_tid``) and is ``active``.
 
-One SELECT per user per :data:`TTL_SECONDS`, cached in this process. The cache
+One SELECT per (user, home tenant) per :data:`TTL_SECONDS`, cached in this
+process — the bridge's and each engine's. The cache
 bounds how stale the answer can be for a change made by ANOTHER process (``genus
 tenant move-account``, an operator's psql); a change the bridge makes itself
 calls :func:`forget` and takes effect on the very next request.
@@ -34,8 +35,11 @@ logger = logging.getLogger(__name__)
 TTL_SECONDS = 30.0
 
 _lock = threading.Lock()
-#: user_id -> (expires_at, tenant the account lives in or None, status)
-_cache: dict[str, tuple[float, str | None, str]] = {}
+#: (user_id, home tenant) -> (expires_at, tenant the account lives in or None,
+#: status). Keyed by the HOME tenant as well: the lookup is bound to it, so
+#: under RLS a moved account reads as absent from its old home and present from
+#: its new one — an old token's "absent" must not sign out the new token.
+_cache: dict[tuple[str, str], tuple[float, str | None, str]] = {}
 
 
 def _now() -> float:
@@ -56,8 +60,9 @@ def _lookup(user_id: str, home_tenant_id: str) -> tuple[str | None, str]:
 def stands(user_id: str, home_tenant_id: str) -> bool:
     """True while the account lives in ``home_tenant_id`` and is active."""
     now = _now()
+    key = (user_id, home_tenant_id)
     with _lock:
-        cached = _cache.get(user_id)
+        cached = _cache.get(key)
     if cached is None or cached[0] <= now:
         try:
             tenant, status = _lookup(user_id, home_tenant_id)
@@ -66,15 +71,17 @@ def stands(user_id: str, home_tenant_id: str) -> bool:
             return True
         cached = (now + TTL_SECONDS, tenant, status)
         with _lock:
-            _cache[user_id] = cached
+            _cache[key] = cached
     _expires, tenant, status = cached
     return tenant == home_tenant_id and status == "active"
 
 
 def forget(user_id: str) -> None:
-    """Drop one account's cached answer: the bridge just changed it."""
+    """Drop every cached answer for one account, whatever its home: it just changed."""
+    user_id = str(user_id)
     with _lock:
-        _cache.pop(str(user_id), None)
+        for key in [key for key in _cache if key[0] == user_id]:
+            del _cache[key]
 
 
 def forget_all() -> None:

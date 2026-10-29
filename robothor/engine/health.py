@@ -7,6 +7,7 @@ and last run per agent.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import inspect
 import logging
@@ -108,7 +109,11 @@ def _install_engine_auth(app: FastAPI, config: EngineConfig) -> None:
 
     @app.middleware("http")
     async def _authenticate_engine_request(request: Request, call_next: Any) -> Any:
-        from robothor.engine.auth import authenticate_http_request
+        from robothor.engine.auth import (
+            SESSION_NO_LONGER_VALID,
+            authenticate_http_request,
+            session_stands,
+        )
 
         try:
             context = authenticate_http_request(request, tenant_id=config.tenant_id)
@@ -118,6 +123,9 @@ def _install_engine_auth(app: FastAPI, config: EngineConfig) -> None:
                 status_code=error.status_code,
             )
         if context is not None:
+            # Off the loop: a cache miss is a SELECT.
+            if not await asyncio.to_thread(session_stands, context):
+                return JSONResponse({"error": SESSION_NO_LONGER_VALID}, status_code=401)
             request.state.auth = context
         return await call_next(request)
 

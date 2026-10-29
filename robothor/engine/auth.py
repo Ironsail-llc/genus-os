@@ -148,6 +148,33 @@ def authenticate_http_request(request: Request, *, tenant_id: str) -> AuthContex
     return context
 
 
+#: The answer an engine route gives a human token whose account no longer stands.
+SESSION_NO_LONGER_VALID = "session no longer valid"
+
+
+def session_stands(context: AuthContext) -> bool:
+    """Whether a verified identity's account still stands where its token says.
+
+    The same check the bridge makes (``robothor.auth.session_standing``): a
+    HUMAN token is honoured only while its account still lives in the token's
+    home tenant and is active. The dashboard forwards the user's own bridge
+    token to ``/chat/*`` and ``/api/dashboard/completions``, so without this a
+    disabled or moved account kept engine chat until the token expired.
+
+    Service tokens and the loopback-development identity are not accounts and
+    are not looked up. Blocking (a SELECT on a cache miss): async callers run it
+    with ``asyncio.to_thread``. The import is guarded so an engine without the
+    module (a stubbed test environment) still serves.
+    """
+    if context.is_service or context.audience == "loopback-development":
+        return True
+    try:
+        from robothor.auth import session_standing
+    except ImportError:  # pragma: no cover - the module ships with the platform
+        return True
+    return session_standing.stands(context.user_id, context.home_tenant_id)
+
+
 def request_context(request: Request) -> AuthContext:
     """Return the identity installed by Engine middleware or fail closed."""
 

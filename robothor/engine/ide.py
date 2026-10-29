@@ -90,10 +90,13 @@ async def ide_websocket(ws: WebSocket) -> None:
         return
 
     from robothor.auth.tokens import TokenError
-    from robothor.engine.auth import authenticate_websocket
+    from robothor.engine.auth import authenticate_websocket, session_stands
 
     try:
         auth = authenticate_websocket(ws, tenant_id=_config.tenant_id)
+        # A disabled or moved account is refused like a bad token (off the loop).
+        if not await asyncio.to_thread(session_stands, auth):
+            raise TokenError("session no longer valid")
     except TokenError:
         # Authenticate before accepting so an unauthenticated peer never gets a
         # live JSON-RPC channel.  Keep the close reason generic to avoid making
