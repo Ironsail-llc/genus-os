@@ -13,6 +13,7 @@ every stored secret. Unset, everything behaves exactly as before.
 
 from __future__ import annotations
 
+import base64
 from typing import TYPE_CHECKING
 
 import pytest
@@ -172,6 +173,33 @@ def test_the_salt_alias_is_honoured(tmp_path, monkeypatch) -> None:
     monkeypatch.delenv("ROBOTHOR_FINGERPRINT_SALT_FILE")
     module.reset_fingerprint_key()
     assert module.fingerprint("a-credential") != with_override
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        # What a template's b64dec yields for a malformed value: error TEXT.
+        b"error calling b64dec: illegal base64 data at input byte 4",
+        base64.b64encode(SALT),  # still the base64 text, 44 bytes
+        SALT[:16],
+    ],
+)
+def test_a_salt_override_must_be_exactly_32_bytes(tmp_path, monkeypatch, caplog, content) -> None:
+    import hashlib
+    import logging
+
+    from robothor.secrets import fingerprint as module
+
+    monkeypatch.setenv(
+        "GENUS_FINGERPRINT_SALT_FILE", str(_mounted(tmp_path, "fingerprint-salt", content))
+    )
+    with caplog.at_level(logging.ERROR, logger="robothor.secrets.fingerprint"):
+        printed = module.fingerprint("a-credential")
+    unsalted = hashlib.blake2b(
+        b"a-credential", key=module._UNSALTED_FALLBACK, digest_size=16
+    ).hexdigest()
+    assert printed.endswith(unsalted[: len(printed) - len(module.FINGERPRINT_PREFIX)])
+    assert any("GENUS_FINGERPRINT_SALT_FILE" in rec.getMessage() for rec in caplog.records)
 
 
 def test_a_missing_salt_override_is_never_generated(tmp_path, monkeypatch) -> None:
