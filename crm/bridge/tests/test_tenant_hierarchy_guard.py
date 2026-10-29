@@ -228,3 +228,41 @@ async def test_create_refuses_a_parent_past_depth_three(test_client):
         )
     assert r.status_code == 422
     create.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_re_parent_then_switch_does_not_reach_the_root(test_client, monkeypatch):
+    """The end-to-end attack: a child admin hangs the root under itself, then
+    switches into it. The re-parent is refused, so the switch is too."""
+    from robothor.federation import rls_gate
+    from robothor.settings import reset_settings
+
+    monkeypatch.setenv("GENUS_TENANT_SWITCH_MODE", "enforce")
+    monkeypatch.setattr(rls_gate, "_rls_flag_on", lambda: True)
+    monkeypatch.setattr(rls_gate, "_connection_is_superuser", lambda: False)
+    reset_settings()
+    headers = _bearer("acme-child-a")
+    try:
+        r, update = await _patch(test_client, _root(), {"parentTenantId": "acme-child-a"}, headers)
+        assert r.status_code == 403
+        update.assert_not_called()
+
+        account = {
+            "id": "u-alice",
+            "email": "alice@example.com",
+            "display_name": "Alice",
+            "role": "admin",
+            "tenant_id": "acme-child-a",
+            "status": "active",
+        }
+        with (
+            patch("robothor.auth.accounts.get_account_by_id", return_value=account),
+            patch("routers.auth.audited"),
+        ):
+            r = await test_client.post(
+                "/api/auth/switch-tenant", json={"tenant": _root()}, headers=headers
+            )
+        assert r.status_code == 403
+        assert "access_token" not in r.json()
+    finally:
+        reset_settings()
