@@ -130,17 +130,22 @@ require_operator = require_root_operator
 require_audit_reader = require_root_audit_reader
 
 
-def audit_visibility(request: Request) -> tuple[tuple[str, ...], bool]:
-    """``(tenants, include_untenanted)`` an audit read by this caller may see.
+def audit_scope(auth: Any) -> list[str] | None:
+    """The tenants an audit read by *auth* may see; ``None`` means unrestricted.
 
-    The acting tenant and, for an owner/admin, its descendants
-    (``resolve_accessible_tenants``). Rows written before ``audit_log`` had a
-    tenant are NULL — appliance-wide — and only a root reader at home sees
-    them. Rooted at the ACTING tenant, not the home one: a root admin who
-    switched into a child is reading that child's trail.
+    One answer for every audit read site:
+
+    * the platform root operator or auditor AT HOME reads the appliance-wide
+      trail — every tenant, the rows written before ``audit_log`` recorded a
+      tenant (NULL), and independent roots (such as the benchmark sandbox)
+      that no hierarchy walk from the platform tenant reaches — exactly as
+      before tenants were recorded;
+    * anyone else, a root admin acting in a child included, reads the ACTING
+      tenant and, for an owner/admin, its descendants
+      (``resolve_accessible_tenants``), and never the NULL rows.
     """
+    if is_root(auth):
+        return None
     from robothor.engine.permissions import resolve_accessible_tenants
 
-    auth = _auth(request)
-    tenants = tuple(resolve_accessible_tenants(str(auth.tenant_id), auth.role))
-    return tenants, is_root(auth)
+    return list(resolve_accessible_tenants(str(auth.tenant_id), auth.role))

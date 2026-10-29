@@ -42,6 +42,11 @@ HISTORY_DEPTH = 5
 HISTORY_DIR = ".history"
 RETIRED_DIR = "retired"
 
+#: The ``error`` an engine's ``/api/admin/manifests/{id}`` answers a 404 with
+#: when the AGENT is absent. Shared with the bridge, which must tell that apart
+#: from a 404 for the route itself (an engine that predates it).
+NO_SUCH_AGENT = "no such agent"
+
 #: Where ``manifest_checks`` reads the canonical schema from, under the workspace.
 SCHEMA_RELATIVE = "docs/agents/schema.yaml"
 

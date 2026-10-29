@@ -42,8 +42,8 @@ from robothor.audit.logger import query_log
 from robothor.sanitize import sanitize_log
 from robothor.secrets.redaction import redact
 from routers._operator import (
-    audit_visibility,
-    require_root_operator,
+    audit_scope,
+    require_root_audit_reader,
     require_tenant_audit_reader,
 )
 from routers._params import iso_timestamp, positive_int
@@ -97,7 +97,7 @@ def get_audit_events(
 ) -> dict[str, Any]:
     """Query audit log events with filters, over the tenants the caller may see."""
     require_tenant_audit_reader(request)
-    tenants, include_untenanted = audit_visibility(request)
+    tenants = audit_scope(request.state.auth)
     try:
         events = query_log(
             limit=limit,
@@ -106,7 +106,6 @@ def get_audit_events(
             since=since,
             user_id=user_id,
             tenants=tenants,
-            include_untenanted=include_untenanted,
         )
 
         # Apply 'until' filter in Python (query_log doesn't support it natively)
@@ -194,14 +193,14 @@ def export_audit_events_csv(
 
     **The export is the caller's tenants, not the appliance.** ``audit_log``
     records the tenant each event happened in (migration 154), and this reads
-    the ACTING tenant and — for an owner/admin — its descendants. Rows written
-    before the column existed are NULL, appliance-wide, and only a root reader
-    at home sees them. The filename names the acting tenant.
+    the caller's ``audit_scope``: the whole appliance for the platform root
+    operator or auditor at home, else the ACTING tenant and — for an
+    owner/admin — its descendants. The filename names the acting tenant.
     """
     require_tenant_audit_reader(request)
     from deps import get_tenant_id
 
-    tenants, include_untenanted = audit_visibility(request)
+    tenants = audit_scope(request.state.auth)
 
     rows = positive_int(limit, field="limit", maximum=MAX_CSV_ROWS)
     if since is not None:
@@ -217,7 +216,6 @@ def export_audit_events_csv(
             since=since,
             user_id=user_id,
             tenants=tenants,
-            include_untenanted=include_untenanted,
         )
         if until:
             events = [e for e in events if e.get("timestamp", "") <= until]
@@ -254,10 +252,11 @@ def get_guardrail_events(
 ) -> dict[str, Any]:
     """Query guardrail events.
 
-    Root-only: ``agent_guardrail_events`` carries no tenant, so there is no
-    per-tenant slice of it to hand a child tenant's admin.
+    Root operator or root auditor, at home: ``agent_guardrail_events`` carries
+    no tenant, so there is no per-tenant slice of it to hand a child tenant's
+    admin — but it is an audit read, and the platform's auditor keeps it.
     """
-    require_root_operator(request)
+    require_root_audit_reader(request)
     try:
         from robothor.db.connection import get_connection
 
@@ -317,18 +316,18 @@ def get_audit_stats(
 ) -> dict[str, Any]:
     """Aggregated audit statistics for the given time window.
 
-    The audit half is the caller's tenants. The guardrail half has no tenant
-    column, so only a root reader at home is shown it.
+    The audit half is the caller's ``audit_scope``. The guardrail half has no
+    tenant column, so only an unrestricted (root, at home) reader is shown it.
     """
     require_tenant_audit_reader(request)
-    tenants, include_untenanted = audit_visibility(request)
+    tenants = audit_scope(request.state.auth)
     try:
         from robothor.audit.logger import stats as audit_stats
 
-        base_stats = audit_stats(tenants=tenants, include_untenanted=include_untenanted)
+        base_stats = audit_stats(tenants=tenants)
 
         # Add guardrail-specific stats
-        guardrail_stats = _get_guardrail_stats(hours) if include_untenanted else {}
+        guardrail_stats = _get_guardrail_stats(hours) if tenants is None else {}
 
         return {
             "audit_log": base_stats,

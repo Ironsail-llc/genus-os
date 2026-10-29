@@ -51,6 +51,7 @@ def register(app: FastAPI) -> None:
     from fastapi.responses import JSONResponse
 
     from robothor.engine.manifest_store import (
+        NO_SUCH_AGENT,
         ManifestStore,
         default_model,
         failure_rows,
@@ -118,7 +119,7 @@ def register(app: FastAPI) -> None:
         except TemplateSecurityError as error:
             return _refused(error)
         if found is None:
-            return JSONResponse({"error": "no such agent"}, status_code=404)
+            return JSONResponse({"error": NO_SUCH_AGENT}, status_code=404)
         return found
 
     @router.put("/{agent_id}")
@@ -139,7 +140,7 @@ def register(app: FastAPI) -> None:
         except FileExistsError:
             return JSONResponse({"error": "an agent with that id already exists"}, status_code=409)
         except FileNotFoundError:
-            return JSONResponse({"error": "no such agent"}, status_code=404)
+            return JSONResponse({"error": NO_SUCH_AGENT}, status_code=404)
         except OSError as error:
             logger.warning("Manifest write failed: %s", type(error).__name__)
             return JSONResponse(
@@ -155,7 +156,7 @@ def register(app: FastAPI) -> None:
         except TemplateSecurityError as error:
             return _refused(error)
         except FileNotFoundError:
-            return JSONResponse({"error": "no such agent"}, status_code=404)
+            return JSONResponse({"error": NO_SUCH_AGENT}, status_code=404)
         return {"retired": True}
 
     app.include_router(router)

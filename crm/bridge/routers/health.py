@@ -17,7 +17,7 @@ from robothor.crm.dal import check_health
 from robothor.doctor.context import DoctorContext
 from robothor.doctor.runner import DoctorReport, run_sync
 from routers._operator import (
-    audit_visibility,
+    audit_scope,
     require_root_operator,
     require_tenant_audit_reader,
 )
@@ -245,7 +245,7 @@ def api_query_audit(
     limit: int = Query(50),
 ):
     require_tenant_audit_reader(request)
-    tenants, include_untenanted = audit_visibility(request)
+    tenants = audit_scope(request.state.auth)
     results = query_log(
         limit=limit,
         event_type=event_type,
@@ -255,7 +255,6 @@ def api_query_audit(
         since=since,
         status=status,
         tenants=tenants,
-        include_untenanted=include_untenanted,
     )
     return {"events": results, "count": len(results)}
 
@@ -263,8 +262,8 @@ def api_query_audit(
 @router.get("/api/audit/stats")
 def api_audit_stats(request: Request):
     require_tenant_audit_reader(request)
-    tenants, include_untenanted = audit_visibility(request)
-    return stats(tenants=tenants, include_untenanted=include_untenanted)
+    tenants = audit_scope(request.state.auth)
+    return stats(tenants=tenants)
 
 
 @router.get("/api/telemetry")

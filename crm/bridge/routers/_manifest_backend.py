@@ -29,10 +29,15 @@ from urllib.parse import quote
 
 from fastapi import HTTPException
 
-from robothor.engine.manifest_store import ManifestStore, default_model, write_atomically
+from robothor.engine.manifest_store import (
+    NO_SUCH_AGENT,
+    ManifestStore,
+    default_model,
+    write_atomically,
+)
 from robothor.templates.safety import TemplateSecurityError
 from routers import _operator
-from routers._engine_client import engine_request
+from routers._engine_client import engine_base_url, engine_request
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -163,7 +168,21 @@ class RemoteBackend:
     async def _call(self, method: str, path: str, *, json: dict[str, Any] | None = None) -> Any:
         status, body = await engine_request(method, path, json=json, tenant=self.tenant)
         if status == 404:
-            raise HTTPException(status_code=404, detail="no such agent")
+            if isinstance(body, dict) and body.get("error") == NO_SUCH_AGENT:
+                raise HTTPException(status_code=404, detail=NO_SUCH_AGENT)
+            # Any other 404 is the ROUTE missing: an engine that predates
+            # /api/admin/manifests. Reporting it as "no such agent" would tell
+            # the operator their agent is gone when their engine is old.
+            logger.warning(
+                "The engine at %s does not support manifest administration "
+                "(no /api/admin/manifests); upgrade it",
+                engine_base_url(self.tenant),
+            )
+            raise HTTPException(
+                status_code=502,
+                detail="the tenant's engine does not support manifest administration; "
+                "upgrade the engine",
+            )
         if status == 409:
             raise HTTPException(status_code=409, detail="an agent with that id already exists")
         if status == 422:
