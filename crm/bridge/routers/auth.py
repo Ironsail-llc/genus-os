@@ -30,6 +30,7 @@ from robothor.auth import accounts, local_login, tokens
 from robothor.auth.deps import get_current_user
 from robothor.constants import DEFAULT_TENANT
 from robothor.db.connection import tenant_scope, unbound_scope
+from robothor.sanitize import sanitize_log
 
 from ._audit import audited
 
@@ -401,9 +402,9 @@ def switch_tenant(body: SwitchTenantRequest, request: Request) -> dict[str, Any]
         logger.info(
             "tenant.switch %s user=%s home=%s target=%s reason=%s",
             verdict,
-            ctx.user_id,
-            home,
-            target,
+            sanitize_log(ctx.user_id),
+            sanitize_log(home),
+            sanitize_log(target),
             why,
         )
         return _SWITCH_DISABLED
@@ -423,7 +424,7 @@ def switch_tenant(body: SwitchTenantRequest, request: Request) -> dict[str, Any]
     if refusal:
         from robothor.federation.rls_gate import fix_text
 
-        logger.error("tenant.switch refused: %s", refusal)
+        logger.error("tenant.switch refused: %s", sanitize_log(refusal))
         audited(
             request,
             "tenant.switch",
@@ -921,12 +922,14 @@ def change_password_route(body: _PasswordBody, request: Request) -> dict[str, An
     raw_keep = body.get("keep_refresh_token")
     keep_hash = tokens.hash_refresh_token(raw_keep) if raw_keep else None
     try:
-        changed = local_login.change_password(
-            ctx.user_id,
-            body["current_password"],
-            body["new_password"],
-            keep_refresh_hash=keep_hash,
-        )
+        # The account lives in the HOME tenant (see /me).
+        with tenant_scope(ctx.home_tenant_id):
+            changed = local_login.change_password(
+                ctx.user_id,
+                body["current_password"],
+                body["new_password"],
+                keep_refresh_hash=keep_hash,
+            )
     except local_login.WeakPasswordError:
         return _WEAK_PASSWORD
     audited(
@@ -974,7 +977,8 @@ def mfa_enroll_route(body: _MfaEnrollBody, request: Request) -> dict[str, Any] |
     if local_login.throttled(f"mfa:{ctx.user_id}", _client_ip(request)):
         return _THROTTLED
     try:
-        enrolled = local_login.begin_enrollment(ctx.user_id, body["password"])
+        with tenant_scope(ctx.home_tenant_id):
+            enrolled = local_login.begin_enrollment(ctx.user_id, body["password"])
     except local_login.MfaAlreadyEnabledError:
         audited(request, "auth.mfa_enroll", action="local", status="denied", user_id=ctx.user_id)
         return JSONResponse(
@@ -1009,7 +1013,8 @@ def mfa_confirm_route(body: _MfaCodeBody, request: Request) -> dict[str, Any] | 
         return _BAD_REQUEST
     if local_login.throttled(f"mfa:{ctx.user_id}", _client_ip(request)):
         return _THROTTLED
-    confirmed = local_login.confirm_enrollment(ctx.user_id, body["code"])
+    with tenant_scope(ctx.home_tenant_id):
+        confirmed = local_login.confirm_enrollment(ctx.user_id, body["code"])
     audited(
         request,
         "auth.mfa_confirm",
@@ -1043,7 +1048,8 @@ def mfa_disable_route(body: _MfaDisableBody, request: Request) -> dict[str, Any]
         return _BAD_REQUEST
     if local_login.throttled(f"mfa:{ctx.user_id}", _client_ip(request)):
         return _THROTTLED
-    disabled = local_login.disable_mfa(ctx.user_id, body["password"], body["code"])
+    with tenant_scope(ctx.home_tenant_id):
+        disabled = local_login.disable_mfa(ctx.user_id, body["password"], body["code"])
     audited(
         request,
         "auth.mfa_disable",

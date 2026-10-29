@@ -18,6 +18,55 @@ from robothor.crm.dal import (
 
 router = APIRouter(prefix="/api/tenants", tags=["tenants"])
 
+_OPERATOR_ROLES = frozenset({"owner", "admin"})
+_ROOT_REQUIRED = JSONResponse(
+    {"error": "root operator required to change the tenant hierarchy"}, status_code=403
+)
+_NOT_ACCESSIBLE = JSONResponse({"error": "tenant not accessible"}, status_code=403)
+
+
+def _legacy_dev_mode() -> bool:
+    import os
+
+    from robothor.auth.runtime import legacy_headers_allowed
+
+    return legacy_headers_allowed(bind_host=os.environ.get("ROBOTHOR_BRIDGE_HOST", "127.0.0.1"))
+
+
+def _is_root_tenant_operator(request: Request) -> bool:
+    """Whether the caller may shape the tenant hierarchy.
+
+    Tenant switching trusts ``parent_tenant_id``, and ``crm_tenants`` has no
+    RLS, so creating a tenant or changing its parent or ``active`` flag is
+    reserved for a human owner/admin whose home AND acting tenant are both the
+    platform tenant. A root admin acting in a child is not one: it must switch
+    back first. Only the loopback insecure-dev mode, which has no identity at
+    all, bypasses this. (A shared ``require_root_operator`` will replace it.)
+    """
+    from robothor.constants import DEFAULT_TENANT
+
+    auth = getattr(request.state, "auth", None)
+    if auth is None:
+        return _legacy_dev_mode()
+    return (
+        not auth.is_service
+        and auth.role in _OPERATOR_ROLES
+        and auth.tenant_id == DEFAULT_TENANT
+        and auth.home_tenant_id == DEFAULT_TENANT
+    )
+
+
+def _may_edit_tenant(request: Request, tenant_id: str) -> bool:
+    """Display name and settings: any operator, for a tenant it can reach."""
+    from robothor.engine.permissions import resolve_accessible_tenants
+
+    auth = getattr(request.state, "auth", None)
+    if auth is None:
+        return _legacy_dev_mode()
+    if auth.is_service:
+        return tenant_id == auth.tenant_id
+    return tenant_id in resolve_accessible_tenants(auth.home_tenant_id, auth.role)
+
 
 @router.get("")
 def api_list_tenants(
@@ -28,12 +77,18 @@ def api_list_tenants(
 
 
 @router.post("")
-def api_create_tenant(body: CreateTenantRequest):
+def api_create_tenant(body: CreateTenantRequest, request: Request):
     if not body.id or not body.displayName:
         return JSONResponse(
             {"error": "id and displayName required"},
             status_code=400,
         )
+    if not _is_root_tenant_operator(request):
+        return _ROOT_REQUIRED
+    if body.parentTenantId:
+        problem = crm_dal.tenant_parent_problem(body.id, body.parentTenantId)
+        if problem:
+            return JSONResponse({"error": problem}, status_code=422)
     tenant_id = create_tenant(
         tenant_id=body.id,
         display_name=body.displayName,
@@ -84,7 +139,18 @@ def api_get_tenant(tenant_id: str):
 
 
 @router.patch("/{tenant_id}")
-def api_update_tenant(tenant_id: str, body: UpdateTenantRequest):
+def api_update_tenant(tenant_id: str, body: UpdateTenantRequest, request: Request):
+    reshapes = body.parentTenantId is not None or body.active is not None
+    if reshapes:
+        if not _is_root_tenant_operator(request):
+            return _ROOT_REQUIRED
+        if body.parentTenantId is not None:
+            problem = crm_dal.tenant_parent_problem(tenant_id, body.parentTenantId)
+            if problem:
+                return JSONResponse({"error": problem}, status_code=422)
+    elif not _may_edit_tenant(request, tenant_id):
+        return _NOT_ACCESSIBLE
+
     kwargs = {}
     if body.displayName is not None:
         kwargs["display_name"] = body.displayName

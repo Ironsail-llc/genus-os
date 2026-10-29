@@ -3480,6 +3480,57 @@ def list_tenants(parent_id: str | None = None, active_only: bool = True) -> list
         return [tenant_to_dict(r) for r in cur.fetchall()]
 
 
+#: How deep the tenant hierarchy may go below a root. ``resolve_accessible_
+#: tenants`` walks descendants to this depth, so a tenant hung deeper would be
+#: unreachable by the root operator who is supposed to administer it.
+MAX_TENANT_DEPTH = 3
+
+
+def tenant_parent_problem(tenant_id: str, parent_id: str) -> str | None:
+    """Why ``parent_id`` may not become ``tenant_id``'s parent, or None.
+
+    Refuses a missing parent, a tenant parented to itself or to one of its own
+    descendants (a cycle), and a move that would put any tenant in the moved
+    subtree deeper than :data:`MAX_TENANT_DEPTH`. ``tenant_id`` need not exist
+    yet (a create), in which case its subtree is just itself.
+    """
+    if parent_id == tenant_id:
+        return "a tenant cannot be its own parent"
+    parent = get_tenant(parent_id)
+    if not parent:
+        return "parent tenant not found"
+
+    # Depth of the new parent, and the cycle check, by walking its ancestors.
+    depth = 0
+    seen = {parent_id}
+    current = parent.get("parentTenantId")
+    while current:
+        if current == tenant_id:
+            return "that parent would create a cycle"
+        if current in seen:
+            return "the existing hierarchy already contains a cycle"
+        seen.add(current)
+        depth += 1
+        if depth > MAX_TENANT_DEPTH:
+            break
+        row = get_tenant(current)
+        current = row.get("parentTenantId") if row else None
+
+    # Height of the subtree being moved (0 for a leaf or a new tenant).
+    height = 0
+    level = [tenant_id]
+    while level and height <= MAX_TENANT_DEPTH:
+        children = [c["id"] for t in level for c in list_tenants(parent_id=t, active_only=False)]
+        if not children:
+            break
+        height += 1
+        level = children
+
+    if depth + 1 + height > MAX_TENANT_DEPTH:
+        return f"the hierarchy may be at most {MAX_TENANT_DEPTH} levels below a root"
+    return None
+
+
 def update_tenant(tenant_id: str, **fields: Any) -> bool:
     """Update a tenant's fields."""
     col_map = {

@@ -31,6 +31,8 @@ def _get_conn() -> Any:
     exactly as a pooled checkout is: ``_apply_tenant_scope`` sets
     ``app.tenant_id`` from the enclosing scope, so the vault was no longer the
     one tenant table the policy could not protect.
+
+    Callers take it inside :func:`_bound_conn`, so an explicit tenant binds it.
     """
     import psycopg2
 
@@ -45,6 +47,24 @@ def _get_conn() -> Any:
         conn.close()
         raise
     return conn
+
+
+def _bound_conn(explicit_tenant: str | None) -> Any:
+    """``_get_conn()``, bound to ``explicit_tenant`` when one was passed.
+
+    An EXPLICIT tenant wins over the ambient scope for the RLS binding too.
+    The instance's own credentials — the SIEM webhook, provider keys, the
+    Telegram token — are asked for with ``tenant_id=DEFAULT_TENANT`` through
+    ``robothor.secrets``; inside a child-scoped request or a sandboxed run, a
+    WHERE naming the root row under a binding that hides it would read as
+    "missing". ``None`` follows the enclosing scope.
+    """
+    if explicit_tenant is None:
+        return _get_conn()
+    from robothor.db.connection import tenant_scope
+
+    with tenant_scope(explicit_tenant):
+        return _get_conn()
 
 
 def _tenant(tenant_id: str | None) -> str:
@@ -66,11 +86,11 @@ def set_secret(
     tenant_id: str | None = None,
 ) -> None:
     """Encrypt and upsert a secret."""
-    tenant_id = _tenant(tenant_id)
+    explicit, tenant_id = tenant_id, _tenant(tenant_id)
     encrypted = encrypt(value, master_key)
     meta_json = json.dumps(metadata or {})
 
-    conn = _get_conn()
+    conn = _bound_conn(explicit)
     try:
         with conn.cursor() as cur:
             cur.execute(
@@ -97,8 +117,8 @@ def get_secret(
     tenant_id: str | None = None,
 ) -> str | None:
     """Retrieve and decrypt a secret. Returns None if not found."""
-    tenant_id = _tenant(tenant_id)
-    conn = _get_conn()
+    explicit, tenant_id = tenant_id, _tenant(tenant_id)
+    conn = _bound_conn(explicit)
     try:
         with conn.cursor() as cur:
             cur.execute(
@@ -129,10 +149,10 @@ def get_secrets_updated_at(
 
     Keys with no row are simply absent from the result.
     """
-    tenant_id = _tenant(tenant_id)
+    explicit, tenant_id = tenant_id, _tenant(tenant_id)
     if not keys:
         return {}
-    conn = _get_conn()
+    conn = _bound_conn(explicit)
     try:
         with conn.cursor() as cur:
             cur.execute(
@@ -146,8 +166,8 @@ def get_secrets_updated_at(
 
 def delete_secret(key: str, *, tenant_id: str | None = None) -> bool:
     """Delete a secret. Returns True if a row was deleted."""
-    tenant_id = _tenant(tenant_id)
-    conn = _get_conn()
+    explicit, tenant_id = tenant_id, _tenant(tenant_id)
+    conn = _bound_conn(explicit)
     try:
         with conn.cursor() as cur:
             cur.execute(
@@ -167,8 +187,8 @@ def list_keys(
     tenant_id: str | None = None,
 ) -> list[str]:
     """List all secret keys, optionally filtered by category."""
-    tenant_id = _tenant(tenant_id)
-    conn = _get_conn()
+    explicit, tenant_id = tenant_id, _tenant(tenant_id)
+    conn = _bound_conn(explicit)
     try:
         with conn.cursor() as cur:
             if category:
@@ -192,8 +212,8 @@ def export_secrets(
     tenant_id: str | None = None,
 ) -> dict[str, str]:
     """Export all secrets as {KEY: VALUE}. Keys are uppercased with / → _."""
-    tenant_id = _tenant(tenant_id)
-    conn = _get_conn()
+    explicit, tenant_id = tenant_id, _tenant(tenant_id)
+    conn = _bound_conn(explicit)
     try:
         result: dict[str, str] = {}
         with conn.cursor() as cur:
@@ -211,8 +231,8 @@ def export_secrets(
 
 def count_secrets(*, tenant_id: str | None = None) -> int:
     """Count secrets in the vault."""
-    tenant_id = _tenant(tenant_id)
-    conn = _get_conn()
+    explicit, tenant_id = tenant_id, _tenant(tenant_id)
+    conn = _bound_conn(explicit)
     try:
         with conn.cursor() as cur:
             cur.execute(

@@ -141,12 +141,12 @@ class ResolvedSecret(NamedTuple):
 #: the setup wizard are separate processes, and a cache with no TTL made every
 #: one of their writes invisible to a running engine until a restart.
 #:
-#: ``binding`` is the tenant the vault's connection is RLS-bound to
-#: (:func:`robothor.db.connection.effective_tenant`). The same ``(tenant, key)``
-#: question has different answers under different bindings once RLS is on: a
-#: root-tenant hit served from here inside a child tenant's request would hand
-#: the child a credential the database itself refuses, and a child's miss would
-#: blank the root's next read.
+#: ``binding`` is the ambient RLS binding
+#: (:func:`robothor.db.connection.effective_tenant`). This module always names
+#: its tenant, and the vault binds an explicit tenant's connection to that
+#: tenant, so today the binding does not change the answer. It stays in the key
+#: as a guard: a cached answer must never outlive the binding it was read
+#: under, should a reader ever reach the vault through the ambient scope.
 _vault_cache: dict[tuple[str, str, str], tuple[str | None, bool, float]] = {}
 
 #: How long a cached HIT is served. Short, because this process is not the only
