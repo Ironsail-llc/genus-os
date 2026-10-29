@@ -178,7 +178,10 @@ async def acme_propose_note(args, ctx=None):
 
 async def acme_execute_action(args, ctx=None):
     ops = Operations(ctx.tenant_id)
-    claimed = ops.claim_action(kind="acme-plugin.note")
+    row = ops.get_action(args["action_id"])               # from the approval event
+    if row is None or row["kind"] != "acme-plugin.note":
+        return {"skipped": "not ours"}                    # never claim another plugin's
+    claimed = ops.claim_action_by_id(args["action_id"])
     if claimed is None:
         return {"skipped": "nothing approved"}
     receipt = {"id": "..."}                  # the provider's acknowledgement
@@ -197,6 +200,23 @@ async def acme_execute_action(args, ctx=None):
 - **Executing.** An approval publishes `operation_action.approved` on the
   `operations` stream, so a workflow your plugin ships can run the execute tool
   as soon as a draft is approved, by an operator or by your policy.
+
+Everything a plugin needs is a method on `Operations`, so it never writes SQL
+against `operation_actions` or `operation_audit` itself:
+
+| Method | Does |
+|---|---|
+| `propose(kind, key, payload, proposed_by=...)` | Creates an immutable draft, idempotent on `kind` + `key` |
+| `decide(action_id, approved, actor)` | Approves or rejects; `policy:<plugin>:<version>` for your own drafts |
+| `get_action(action_id)` | One row, or `None` |
+| `list_actions(kinds=None, status=None, proposed_by=None, limit=100)` | Rows, newest first; `limit` is 1–1000 |
+| `claim_action(kind=...)` | Leases the oldest approved action of a kind |
+| `claim_action_by_id(action_id)` | Leases that approved action, or `None` |
+| `finish_action(action_id, lease_token, status, receipt)` | Records the outcome of a claim |
+| `cancel_action(action_id, reason, proposed_by=...)` | Withdraws your draft or unclaimed approval (superseded, or refused by your rule) |
+
+Every method is scoped to the tenant `Operations` was built with, and every
+transition writes `operation_audit`.
 
 [Operations ledger](OPERATIONS.md) has the statuses, the event's payload and a
 complete workflow.

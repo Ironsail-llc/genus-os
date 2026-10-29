@@ -15,7 +15,9 @@ This page covers the part that sends things into the world: **actions**.
 | Propose an exact payload | `propose(kind, key, payload, proposed_by=None)` | `review` |
 | Decide it | `decide(action_id, approved, actor)` | `approved` or `rejected` |
 | Claim the approved payload | `claim_action(kind=...)` | `executing`, with a `lease_token` |
+| Claim one named approved action | `claim_action_by_id(action_id)` | `executing`, with a `lease_token` |
 | Record the outcome | `finish_action(action_id, lease_token, status, receipt)` | `completed`, `unknown`, `cancelled` or `failed` |
+| Withdraw it before a claim | `cancel_action(action_id, reason, proposed_by=None)` | `cancelled` |
 
 A proposal is immutable. Its `key` is an idempotency key: proposing the same
 `kind` and `key` again returns the same action id, and a different payload — or
@@ -24,6 +26,24 @@ approval binds the exact payload hash; if the stored payload changes after
 approval, `claim_action` refuses it. A claim whose lease expires becomes
 `unknown`, never ready again, so an uncertain send is never retried blindly.
 `completed` requires a provider acknowledgement id in the receipt.
+
+`claim_action_by_id` is fenced exactly like `claim_action`: it first turns
+expired leases into `unknown`, locks the row with `SKIP LOCKED` so only one
+executor wins, re-checks the approved payload hash, and audits `action.claimed`.
+It returns `None` for an action that is not approved, has expired, belongs to
+another tenant, or is already claimed.
+
+`cancel_action` is how a proposer withdraws an action it no longer wants — a
+draft superseded by a newer one, or one its own rule refuses. `proposed_by`
+must match the action's proposer (`None` for an action proposed without one),
+only `review` and `approved` actions can be cancelled, and the audit row
+(`action.cancelled`, actor `plugin:<name>` or `system`) records the reason and
+the status it left. A claimed action is the executor's to settle with
+`finish_action`.
+
+`get_action(action_id)` and `list_actions(kinds=None, status=None,
+proposed_by=None, limit=100)` read without changing anything; the list is
+newest first and `limit` runs from 1 to 1000.
 
 ## Who may decide
 
@@ -82,8 +102,11 @@ steps:
 ```
 
 Every approval on the instance reaches every workflow with this trigger, so the
-tool should claim with its own `kind` (`claim_action(kind="acme-plugin.note")`)
-and ignore events for kinds it does not own. The workflow runs as the engine's
+tool reads the named action with `get_action(action_id)`, leaves it alone when
+its `kind` is not one the plugin owns, and only then claims it with
+`claim_action_by_id(action_id)` — a claim it then abandons would expire to
+`unknown`. A workflow can also filter on
+`event.payload.proposed_by` in a condition step before the tool runs. The workflow runs as the engine's
 tenant; the tool reads it from `ctx.tenant_id`, and the event's `tenant_id`
 says which tenant the approval was for.
 
