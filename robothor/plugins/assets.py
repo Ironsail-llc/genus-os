@@ -1055,7 +1055,10 @@ def plan(
         if target.is_file():
             # Dry-run the edit on a copy: a list that is not one, or an
             # allowlist append would narrow, is refused here, before pip.
-            _patch_would_change(target, _with_dropped(patch.install, own_patches.get(patch.agent)))
+            kept: list[str] = []
+            section = _with_dropped(patch.install, own_patches.get(patch.agent), target, kept)
+            _patch_would_change(target, section)
+            lines.extend(f"warning  docs/agents/{patch.agent}.yaml: {w}" for w in kept)
         for key in sorted(patch_keys(patch.install) | patch_keys(patch.remove)):
             for (target_agent, theirs), owner in claimed.items():
                 if target_agent == patch.agent and _overlaps(key, theirs):
@@ -1239,8 +1242,9 @@ def _detach(target: Any, dotted: str, items: list[Any]) -> None:
         and all(_identity(dotted, entry) in gone for entry in current)
     ):
         raise _AllowlistError(
-            f"`{dotted}` would be left empty, which allows every tool; it was left as it "
-            "is. Edit the agent's allowlist by hand if it should change."
+            f"removing these entries would leave `{dotted}` empty, which allows every "
+            "tool, so none of them were removed. Edit the agent's allowlist by hand if "
+            "it should change."
         )
     for index in reversed(range(len(current))):
         if _identity(dotted, current[index]) in gone:
@@ -1256,6 +1260,22 @@ def _edit(document: Any, section: dict[str, Any]) -> None:
         _delete(document, key)
     for key, items in (section.get("detach") or {}).items():
         _detach(document, key, items)
+
+
+def _after_edit(path: Path, section: dict[str, Any]) -> dict[str, Any] | None:
+    """The manifest at *path* as *section* would leave it, or None when it is
+    absent, unreadable, or the edit is refused (its callers report that)."""
+    try:
+        before = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError, UnicodeDecodeError):
+        return None
+    if not isinstance(before, dict):
+        return None
+    try:
+        _edit(before, section)
+    except AssetError:
+        return None
+    return before
 
 
 def _patch_would_change(path: Path, section: dict[str, Any]) -> bool:
@@ -1741,7 +1761,9 @@ def apply(
                     "does not exist"
                 )
                 continue
-            section = _with_dropped(patch.install, before_patches.get(patch.agent))
+            kept: list[str] = []
+            section = _with_dropped(patch.install, before_patches.get(patch.agent), target, kept)
+            report.warnings.extend(f"patch for {patch.agent!r}: {w}" for w in kept)
             if _patch_would_change(target, section):
                 if patch.agent not in before_patches:
                     _backup_once(target, dist, root)
@@ -1783,9 +1805,19 @@ def apply(
     return report
 
 
-def _with_dropped(install: dict[str, Any], previous: Any) -> dict[str, Any]:
+def _with_dropped(
+    install: dict[str, Any],
+    previous: Any,
+    target: Path | None = None,
+    warnings: list[str] | None = None,
+) -> dict[str, Any]:
     """*install*, plus a ``detach`` of every item the plugin's last release
-    appended (the ledger's ``appended``) that this release no longer does."""
+    appended (the ledger's ``appended``) that this release no longer does.
+
+    A dropped allowlist item whose detach would leave the allowlist at
+    *target* empty -- which allows every tool -- is kept instead (fail
+    closed), and a line saying so goes to *warnings*: the upgrade proceeds.
+    """
     appended = previous.get("appended") if isinstance(previous, dict) else None
     if not isinstance(appended, dict):
         return install
@@ -1798,6 +1830,21 @@ def _with_dropped(install: dict[str, Any], previous: Any) -> dict[str, Any]:
         gone = [item for item in items if _identity(key, item) not in kept]
         if gone:
             dropped[key] = gone
+    after = _after_edit(target, install) if target is not None else None
+    for key in [k for k in dropped if _is_allowlist(k) and after is not None]:
+        try:
+            current = _list_at(after, key, create=False)
+        except AssetError:
+            continue  # the edit itself refuses it, with its own message
+        gone_ids = {_identity(key, item) for item in dropped[key]}
+        if current and all(_identity(key, entry) in gone_ids for entry in current):
+            names = ", ".join(str(_identity(key, item)) for item in dropped.pop(key))
+            if warnings is not None:
+                warnings.append(
+                    f"this release no longer adds {names} to `{key}`, but removing it "
+                    "would leave the allowlist empty, which allows every tool, so it was "
+                    "kept. Edit the agent's allowlist by hand if it should go."
+                )
     if not dropped:
         return install
     section = copy.deepcopy(install)
