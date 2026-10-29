@@ -327,13 +327,18 @@ def login_account_for_email(email: str) -> dict[str, Any] | None:
     user must be able to sign in with a password. The token is issued for the
     account's OWN tenant.
 
-    Exactly one active account with the address is the answer. Several active
-    ones (the same address in two tenants) answer ``None`` — a refusal, with
-    an error naming the count, because which tenant the person meant is the
-    operator's to decide by removing the duplicate. With no active account, a
-    single inactive one is returned so the caller refuses it on the same,
+    Only active accounts that HAVE a password are candidates, so an SSO-only
+    duplicate never blocks a password account. Exactly one is the answer.
+    Several (the same password-bearing address in two tenants) prefer the
+    platform tenant's row, with an error naming the count so the operator
+    removes the duplicate; if none of them is the platform tenant's, the
+    answer is ``None``, a refusal, because which tenant the person meant is
+    the operator's to decide. With no candidate, a single active (or, failing
+    that, single) row is returned so the caller refuses it on the same,
     equal-cost path it always used.
     """
+    import os
+
     address = canonical_email(email)
     with unbound_scope(), get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -343,15 +348,21 @@ def login_account_for_email(email: str) -> dict[str, Any] | None:
         )
         rows = [dict(r) for r in cur.fetchall()]
     active = [r for r in rows if r.get("status") == "active"]
+    candidates = [r for r in active if r.get("password_hash")]
+    if len(candidates) == 1:
+        return candidates[0]
+    if len(candidates) > 1:
+        platform = os.environ.get("ROBOTHOR_PLATFORM_TENANT") or DEFAULT_TENANT
+        preferred = next((r for r in candidates if r["tenant_id"] == platform), None)
+        logger.error(
+            "local sign-in: the address has a password account in more than one "
+            "tenant (%d); %s. Remove the duplicate so it names one account",
+            len(candidates),
+            "using the platform tenant's" if preferred else "refusing",
+        )
+        return preferred
     if len(active) == 1:
         return active[0]
-    if len(active) > 1:
-        logger.error(
-            "local sign-in refused: the address has an active account in more than "
-            "one tenant (%d); remove the duplicate so it names one account",
-            len(active),
-        )
-        return None
     return rows[0] if len(rows) == 1 else None
 
 
@@ -505,6 +516,29 @@ def _jit_provision(
                 issuer,
             )
             return dict(bound)
+
+        # An account with this address in ANOTHER tenant blocks the create,
+        # exactly as one in the routed tenant does. A domain claim routes NEW
+        # people; it must not mint a second account for someone who already
+        # has one elsewhere (it would also make their password sign-in
+        # ambiguous). Read under the caller's unbound scope, so every tenant
+        # is visible. The operator moves the account first.
+        cur.execute(
+            "SELECT tenant_id FROM user_accounts WHERE email = %s AND tenant_id <> %s "
+            "ORDER BY tenant_id LIMIT 1",
+            (email, tenant_id),
+        )
+        elsewhere = cur.fetchone()
+        if elsewhere:
+            logger.warning(
+                "jit_provision: refused a new account in tenant %s: the address already "
+                "has an account in tenant %s; move it there first (genus tenant move-account)",
+                sanitize_log(tenant_id),
+                sanitize_log(elsewhere["tenant_id"]),
+            )
+            raise AccountBindingRequiredError(
+                "existing account must be explicitly bound to the SSO identity"
+            )
 
         cur.execute(
             """INSERT INTO user_accounts
