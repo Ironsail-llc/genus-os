@@ -11,7 +11,8 @@ So this router joins them, and the join is the whole of what it is:
 
 ``_manifests``
     What the automation IS — name, cron, timezone, enabled, delivery target.
-    Read through ``agent_manifests._scan`` / ``_manifest_rows._summary``, imported rather than
+    Read through ``_manifest_backend.scan_from_worker_thread`` /
+    ``_manifest_rows._summary``, imported rather than
     re-derived: a second reader of the manifest directory is a second set of
     rules about what a manifest means, and the two would drift.
 ``_schedule_rows``
@@ -53,7 +54,7 @@ from robothor.engine.sanitize import sanitize_log
 from robothor.engine.schedule_reconcile import KIND_AGENT, KIND_HEARTBEAT, KIND_WORKER
 from routers import agent_manifests
 from routers._audit import audited
-from routers._manifest_backend import backend_for, is_platform
+from routers._manifest_backend import scan_from_worker_thread
 from routers._manifest_rows import _block, _summary
 from routers._operator import require_tenant_admin
 
@@ -185,20 +186,6 @@ def _jobs_of(document: dict[str, Any]) -> list[dict[str, Any]]:
     return jobs
 
 
-def _scan(tenant_id: str) -> Any:
-    """The acting tenant's manifests: this host's, or its own engine's.
-
-    Called from a sync handler, i.e. a worker thread, so a child tenant's
-    engine is reached by running the async backend on the event loop that
-    owns this request (``anyio.from_thread``).
-    """
-    if is_platform(tenant_id):
-        return agent_manifests._scan()
-    import anyio.from_thread
-
-    return anyio.from_thread.run(backend_for(tenant_id).scan)
-
-
 def _manifests(tenant_id: str) -> list[dict[str, Any]]:
     """Every job every readable manifest of the acting tenant declares.
 
@@ -207,7 +194,7 @@ def _manifests(tenant_id: str) -> list[dict[str, Any]]:
     not parse at all still reaches the operator, as a degraded card built from
     its schedule row (see ``_automations``).
     """
-    scan = _scan(tenant_id)
+    scan = scan_from_worker_thread(tenant_id)
     rows: list[dict[str, Any]] = []
     for document in scan.manifests:
         try:

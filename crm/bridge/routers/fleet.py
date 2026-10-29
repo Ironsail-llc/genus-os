@@ -21,7 +21,7 @@ from fastapi import APIRouter, HTTPException, Request
 
 from robothor.db.connection import get_connection
 from robothor.engine.config import load_all_manifests
-from routers._manifest_backend import backend_for, is_platform
+from routers._manifest_backend import is_platform, scan_from_worker_thread
 from routers._operator import require_tenant_admin
 
 router = APIRouter(prefix="/api/fleet", tags=["fleet"])
@@ -41,17 +41,11 @@ def _load_manifests() -> list[dict]:
 
 
 def _tenant_manifests(tenant_id: str) -> list[dict]:
-    """The acting tenant's manifests: this host's, or its own engine's.
-
-    Called from a sync handler (a worker thread — psycopg2 is synchronous), so
-    a child tenant's engine is reached by running the async backend on the
-    request's event loop via ``anyio.from_thread``.
-    """
+    """The acting tenant's manifests: this host's (through the legacy
+    ``ROBOTHOR_AGENTS_DIR`` listing override), or its own engine's."""
     if is_platform(tenant_id):
         return _load_manifests()
-    import anyio.from_thread
-
-    return list(anyio.from_thread.run(backend_for(tenant_id).scan).manifests)
+    return list(scan_from_worker_thread(tenant_id).manifests)
 
 
 def _schedule_rows(tenant_id: str) -> dict[str, dict]:

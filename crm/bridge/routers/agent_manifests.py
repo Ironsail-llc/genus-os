@@ -54,7 +54,7 @@ from robothor.templates.safety import TemplateSecurityError, validate_identifier
 from routers import _manifest_validation as validation
 from routers._audit import audited
 from routers._engine_client import engine_request
-from routers._manifest_backend import Backend, LocalBackend, backend_for
+from routers._manifest_backend import Backend, backend_for
 from routers._manifest_rows import _broken, _chat_fields, _summary
 from routers._operator import require_tenant_admin
 
@@ -176,11 +176,6 @@ def _dump(document: dict[str, Any]) -> str:
 # is the module, not a re-export through this one: a name that exists here only
 # so another router can reach it reads as dead to every linter and every human,
 # and the first thing either does is delete it.
-
-
-def _scan() -> Any:
-    """The PLATFORM tenant's manifests, synchronously (``automations`` and ``fleet``)."""
-    return LocalBackend().scan_sync()
 
 
 def _parse(text: str) -> dict[str, Any]:

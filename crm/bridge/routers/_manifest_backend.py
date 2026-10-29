@@ -287,3 +287,17 @@ def backend_for(tenant: str | None) -> Backend:
     if is_platform(tenant):
         return LocalBackend()
     return RemoteBackend(str(tenant))
+
+
+def scan_from_worker_thread(tenant: str | None) -> Any:
+    """The tenant's manifest scan, for a SYNC handler (a worker thread).
+
+    ``fleet`` and ``automations`` are plain ``def`` routes because psycopg2 is
+    synchronous. The platform tenant's scan is a local read; a child tenant's
+    is an engine call, run on the request's event loop via ``anyio.from_thread``.
+    """
+    if is_platform(tenant):
+        return LocalBackend().scan_sync()
+    import anyio.from_thread
+
+    return anyio.from_thread.run(RemoteBackend(str(tenant)).scan)
