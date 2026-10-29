@@ -64,6 +64,8 @@ class FakeStreams:
         self.clock = 0.0
         self.expires_at: dict[str, float] = {}
         self.reads = 0
+        # (key, value, expire calls made before it) for each compare-and-delete
+        self.deletes: list[tuple[str, str, int]] = []
         self.block: Any = None  # async (read number) -> None, awaited inside a read
         # (stream, group) -> [{"name": ..., "idle": ms}], as XINFO CONSUMERS reports
         self.consumers: dict[tuple[str, str], list[dict[str, Any]]] = {}
@@ -155,6 +157,16 @@ class FakeStreams:
         self.ttls[key] = seconds
         self.expires_at[key] = self.clock + seconds
         return True
+
+    async def eval(self, script: str, numkeys: int, *args: Any) -> int:
+        """Only the compare-and-delete the hook loop uses: DEL key iff it holds value."""
+        assert numkeys == 1 and "del" in script.lower(), script
+        key, value = args
+        if self.keys.get(key) == str(value).encode():
+            self.lapse(key)
+            self.deletes.append((key, str(value), len(self.expire_calls)))
+            return 1
+        return 0
 
     def lapse(self, key: str) -> None:
         """The key's TTL ran out."""
@@ -911,3 +923,121 @@ class TestARunningRootRidesOutShortOutages:
         from robothor.engine import hooks
 
         assert hooks.ROOT_GROUP_OWNER_TTL_SECONDS >= 3 * hooks.ROOT_GROUP_OWNER_REFRESH_SECONDS
+
+
+class TestAnOwnerThatLosesTheGroupLetsItGo:
+    """An owner that is no longer entitled to the root group gives up its claim.
+
+    Re-parented, or failing closed after repeated lookup failures, the engine
+    stops reading ``engine``; it must also stop refreshing its claim and
+    delete the record -- only if it still holds this engine's tenant -- so
+    another root can claim at once instead of after a TTL that would never
+    lapse while the refresher kept extending it.
+    """
+
+    OWNER_KEY = "robothor:events:group-owner:engine"
+
+    @pytest.fixture(autouse=True)
+    def _agreeing_tenant_env(self, monkeypatch):
+        monkeypatch.delenv("ROBOTHOR_TENANT_ID", raising=False)
+
+    @pytest.fixture(autouse=True)
+    def _fast_cadence(self):
+        with (
+            patch("robothor.engine.hooks.GROUP_RIVAL_RECHECK_SECONDS", 0.01),
+            patch("robothor.engine.hooks.ROOT_GROUP_OWNER_REFRESH_SECONDS", 0.002),
+        ):
+            yield
+
+    @staticmethod
+    def _owner_then(fake: FakeStreams, change: Any) -> Any:
+        """After the owner's first batch, apply ``change`` once."""
+        done: list[bool] = []
+
+        def _hook(reads: int) -> None:
+            if reads == 1 and not done:
+                done.append(True)
+                change()
+
+        return _hook
+
+    async def _run(self, hooks: EventHooks, fake: FakeStreams, checks: int) -> None:
+        fake.on_xinfo = lambda calls: hooks._stop_event.set() if calls >= checks else None
+        await _consume_until_idle(hooks, fake, stop_when_idle=False)
+
+    @pytest.mark.asyncio
+    async def test_a_re_parented_owner_deletes_its_claim_and_stops_refreshing(
+        self, engine_config, hierarchy
+    ):
+        fake = FakeStreams()
+        await fake.xgroup_create(STREAM, "engine")
+        fake.add(STREAM, _event(PARENT))
+        root = EventHooks(_engine(engine_config, PARENT), runner=None)  # type: ignore[arg-type]
+        _Recorder().bind(root)
+        fake.on_read = self._owner_then(
+            fake, lambda: hierarchy.parents.update({PARENT: OTHER_ROOT})
+        )
+
+        await self._run(root, fake, checks=8)
+
+        assert self.OWNER_KEY not in fake.keys, "the claim is released on the next check"
+        assert [d[:2] for d in fake.deletes] == [(self.OWNER_KEY, PARENT)]
+        released_after = fake.deletes[0][2]
+        assert all(k != self.OWNER_KEY for k, _ in fake.expire_calls[released_after:]), (
+            "the refresher stops extending a claim it gave up"
+        )
+
+    @pytest.mark.asyncio
+    async def test_another_root_claims_within_one_ttl(self, engine_config, hierarchy):
+        fake = FakeStreams()
+        await fake.xgroup_create(STREAM, "engine")
+        fake.add(STREAM, _event(PARENT))
+        old = EventHooks(_engine(engine_config, PARENT), runner=None)  # type: ignore[arg-type]
+        _Recorder().bind(old)
+        fake.on_read = self._owner_then(
+            fake, lambda: hierarchy.parents.update({PARENT: OTHER_ROOT})
+        )
+        await self._run(old, fake, checks=4)
+
+        fake.clock += 1  # well inside one TTL
+        fake.on_read = None
+        fake.add(STREAM, _event(OTHER_ROOT))
+        new = EventHooks(_engine(engine_config, OTHER_ROOT), runner=None)  # type: ignore[arg-type]
+        recorder = _Recorder()
+        recorder.bind(new)
+        await self._run(new, fake, checks=fake.xinfo_calls + 3)
+
+        assert fake.keys[self.OWNER_KEY] == OTHER_ROOT.encode()
+        assert (OTHER_ROOT, OTHER_ROOT) in recorder.runs
+
+    @pytest.mark.asyncio
+    async def test_failing_closed_releases_the_claim(self, engine_config, hierarchy):
+        fake = FakeStreams()
+        await fake.xgroup_create(STREAM, "engine")
+        fake.add(STREAM, _event(PARENT))
+        root = EventHooks(_engine(engine_config, PARENT), runner=None)  # type: ignore[arg-type]
+        _Recorder().bind(root)
+        fake.on_read = self._owner_then(fake, lambda: hierarchy.down.add(PARENT))
+
+        await self._run(root, fake, checks=8)
+
+        assert self.OWNER_KEY not in fake.keys
+        assert [d[:2] for d in fake.deletes] == [(self.OWNER_KEY, PARENT)]
+
+    @pytest.mark.asyncio
+    async def test_a_non_owner_never_deletes_the_claim(self, engine_config, hierarchy):
+        fake = FakeStreams()
+        await fake.xgroup_create(STREAM, "engine")
+        fake.keys[self.OWNER_KEY] = OTHER_ROOT.encode()
+        fake.add(STREAM, _event(PARENT))
+        child = EventHooks(_engine(engine_config, CHILD), runner=None)  # type: ignore[arg-type]
+        _Recorder().bind(child)
+        await self._run(child, fake, checks=3)
+
+        hierarchy.down.add(PARENT)  # a root that was never verified fails closed
+        root = EventHooks(_engine(engine_config, PARENT), runner=None)  # type: ignore[arg-type]
+        _Recorder().bind(root)
+        await self._run(root, fake, checks=fake.xinfo_calls + 3)
+
+        assert fake.keys[self.OWNER_KEY] == OTHER_ROOT.encode()
+        assert fake.deletes == []
