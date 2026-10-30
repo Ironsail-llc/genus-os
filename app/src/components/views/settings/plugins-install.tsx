@@ -4,7 +4,7 @@ import { useCallback, useState } from "react";
 import { Copy, Download } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { readBridgeReply } from "@/lib/bridge/read-reply";
+import { refusalSentence } from "@/components/views/settings/plugins-page";
 import { BRIDGE_UNREACHABLE } from "@/lib/bridge/use-bridge-poll";
 
 /**
@@ -47,9 +47,8 @@ import { BRIDGE_UNREACHABLE } from "@/lib/bridge/use-bridge-poll";
 
 const BRIDGE = "/api/bridge";
 
-/** The engine answered nothing at all. A bridge that cannot reach it says 502. */
-const ENGINE_UNREACHABLE =
-  "The engine is unreachable from the bridge, so nothing was installed. Nothing has been changed.";
+/** What a 502 cost here; `refusalSentence` names which hop answered it. */
+const NOT_INSTALLED = "nothing was installed";
 
 export interface InstallPlan {
   name: string;
@@ -276,7 +275,8 @@ export function PluginInstallCard({ indexes, onAct, onInstalled }: PluginInstall
         if (!dryRun) setAttempted(true);
         if (!res.ok) {
           /*
-            The server's own sentence, whatever the status.
+            The server's own sentence, whatever the status — a 502 aside, which
+            names the hop that could not be reached.
 
             A 504 here does NOT mean "failed": the engine stopped waiting at its
             60 s cap and says the operation may still be running. A page that
@@ -284,7 +284,7 @@ export function PluginInstallCard({ indexes, onAct, onInstalled }: PluginInstall
             that is in flight, and `pip install` twice over is how a half-written
             distribution happens. The route's own words say what to do instead.
           */
-          setError(res.status === 502 ? ENGINE_UNREACHABLE : await readBridgeReply(res));
+          setError(await refusalSentence(res, NOT_INSTALLED));
           if (dryRun) setPlan(null);
           return;
         }
