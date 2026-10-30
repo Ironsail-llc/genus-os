@@ -272,9 +272,13 @@ Or in chat: a delivery agent with the `list_pending_approvals` /
 answer, and the engine picks it up on the next watchdog tick (≤1 min).
 
 Or from the Helm: `GET /api/approvals` lists everything waiting on a person —
-workflow steps and `ask_user` questions in one list — and
-`POST /api/approvals/{kind}/{id}` answers one. Both are operator-scoped and
-audited.
+workflow steps, `ask_user` questions and proposed actions (`operation_actions`
+in review, `kind: "action"`) in one list — and
+`POST /api/approvals/{kind}/{id}` answers one. Both are scoped to the tenant
+the session acts in: an owner or admin of that tenant sees and decides only
+its rows, an id from another tenant is a 404, and members and viewers get a
+403. Each decision records `operator:<user>` on the row and in the audit log
+with the tenant.
 
 A **tool-permission escalation** is the third kind and is deliberately not in
 that list: it lives in the engine's memory with a coroutine blocked on it, so a

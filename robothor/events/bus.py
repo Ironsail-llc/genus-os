@@ -12,6 +12,7 @@ Streams:
   robothor:events:health    — health check results
   robothor:events:agent     — agent actions (hook pipeline, triage, etc.)
   robothor:events:system    — system lifecycle (boot, shutdown, errors)
+  robothor:events:operations — operation_action.approved (robothor.operations.store)
 
 Envelope format:
   {
@@ -63,7 +64,17 @@ EVENT_BUS_ENABLED = os.environ.get("EVENT_BUS_ENABLED", "true").lower() in (
 STREAM_PREFIX = "robothor:events:"
 
 # Base stream names (always valid)
-_BASE_STREAMS = {"email", "calendar", "crm", "vision", "health", "agent", "system", "channel"}
+_BASE_STREAMS = {
+    "email",
+    "calendar",
+    "crm",
+    "vision",
+    "health",
+    "agent",
+    "system",
+    "channel",
+    "operations",
+}
 
 # Dynamic: extend with ROBOTHOR_EXTRA_STREAMS env var (comma-separated)
 _extra = os.environ.get("ROBOTHOR_EXTRA_STREAMS", "")

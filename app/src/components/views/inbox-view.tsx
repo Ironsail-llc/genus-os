@@ -12,8 +12,8 @@ import { InboxCard } from "./inbox/inbox-card";
 /**
  * The Inbox: everything waiting on a person, in one list, answered in place.
  *
- * Approvals and agent questions interleaved by deadline, in the order the
- * route already sorted them — soonest first. They are re-sorted nowhere: the
+ * Approvals, agent questions and proposed actions interleaved by deadline, in
+ * the order the route already sorted them — soonest first. They are re-sorted nowhere: the
  * ordering is a property of the queue, and a client that re-sorted would
  * disagree with the count beside it the moment a row changed.
  *
@@ -77,7 +77,7 @@ export function InboxView({
       <div className="flex flex-col gap-3 p-4">
         <PageHeader
           title="Inbox"
-          description="Approvals and agent questions, soonest deadline first."
+          description="Approvals, agent questions and proposed actions, soonest deadline first."
         >
           <Button variant="outline" size="sm" data-testid="inbox-refresh" onClick={onRefresh}>
             {/* The loading card is suppressed once there are cards, so the
@@ -133,8 +133,8 @@ export function InboxView({
           >
             <p className="text-sm font-medium text-foreground">Nothing is waiting on you.</p>
             <p className="mt-1 max-w-xl text-xs text-muted-foreground">
-              Approvals and agent questions land here. Tasks in review are not in this queue yet —
-              they are still on the Tasks screen.
+              Approvals, agent questions and proposed actions land here. Tasks in review are not
+              in this queue yet — they are still on the Tasks screen.
             </p>
           </div>
         ) : null}

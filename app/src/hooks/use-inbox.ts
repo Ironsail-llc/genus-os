@@ -35,7 +35,7 @@ import {
  * the bridge. Returning to the tab refreshes at once rather than showing a
  * stale badge until the next tick.
  *
- * Role gating in the view is UX only: the bridge calls `require_operator` on
+ * Role gating in the view is UX only: the bridge calls `require_tenant_operator` on
  * the listing and on every answer.
  */
 
