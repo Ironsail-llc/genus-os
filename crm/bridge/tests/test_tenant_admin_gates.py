@@ -70,6 +70,7 @@ ADMIN_ROUTER_MODULES = (
     "routers.logs",
     "routers.settings",
     "routers.plugins",
+    "routers.n8n",
 )
 
 #: Every gate a handler may call. Each is wrapped in every admin router module
@@ -167,6 +168,9 @@ ROUTE_CLASSES: dict[tuple[str, str], str] = {
     ("POST", "/api/plugins/{name}/remove"): R,
     ("POST", "/api/plugins/{name}/enable"): R,
     ("POST", "/api/plugins/{name}/disable"): R,
+    # The external n8n instance is watched by the appliance, not per tenant.
+    ("GET", "/api/integrations/n8n/workflows"): R,
+    ("GET", "/api/integrations/n8n/workflows/{workflow_id}/executions"): R,
     # ── not admin routes ──
     ("GET", "/health"): OPEN,
     ("GET", "/liveness"): OPEN,
