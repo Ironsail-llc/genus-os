@@ -420,6 +420,46 @@ class TestPluginToolsResolve:
         assert "acme_probe" in result.detail
 
 
+    @pytest.mark.asyncio
+    async def test_one_doctor_run_measures_the_plugin_inventory_once(
+        self, instance: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Every check that judges tool names, and plugins.load, share one
+        measurement: discovery imports every plugin."""
+        from robothor.doctor.checks import plugins as plugin_checks
+        from robothor.plugins.inventory import PluginStatus
+
+        calls: list[int] = []
+        rows = (
+            PluginStatus(
+                name="acme-desk",
+                version="1.0.0",
+                groups=("genus.tools",),
+                manifest={"contract_version": 1, "declared": {"handlers": ["acme_probe"]}},
+            ),
+        )
+
+        def counted() -> tuple[PluginStatus, ...]:
+            calls.append(1)
+            return rows
+
+        monkeypatch.setattr("robothor.plugins.inventory.inventory", counted)
+        _write_agent(instance, "desk", {"tools_allowed": ["read_file", "acme_probe"]})
+        ctx = DoctorContext()
+        for check_id in (
+            "agents.tools_named_but_not_granted",
+            "agents.approval_gate_available",
+            "agents.approval_gate_not_armed",
+            "tools.exec_allowlist_bypasses_denied_tool",
+            "calendar.operator_calendar_writable",
+        ):
+            await _BY_ID[check_id].run(ctx)
+        named = await _BY_ID["agents.tools_named_but_not_granted"].run(ctx)
+        assert named.status == "pass", named.detail
+        await plugin_checks._inventory(ctx)  # plugins.load reads the same cache
+        assert len(calls) == 1
+
+
 # ── agents.tools_named_but_not_granted ────────────────────────────────
 
 
