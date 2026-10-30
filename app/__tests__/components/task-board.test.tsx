@@ -22,8 +22,7 @@ describe("TaskBoard", () => {
   it("lays its columns out by the board's own width, not the window's", () => {
     render(<TaskBoard tasks={mockTasks} />);
     const board = screen.getByTestId("task-board");
-    expect(board.className).toContain("auto-fit");
-    expect(board.className).toContain("minmax(");
+    expect(board.className).toContain("grid-cols-[repeat(auto-fit,minmax(min(100%,15rem),1fr))]");
     expect(board.className).not.toContain("grid-cols-4");
   });
 
@@ -36,6 +35,12 @@ describe("TaskBoard", () => {
     for (const card of screen.getAllByTestId("task-card")) {
       expect(card.className).toContain("min-w-0");
     }
+  });
+
+  it("renders no badge row on a card without badges", () => {
+    const t = [{ id: "21", title: "Plain task", status: "TODO" as const }];
+    render(<TaskBoard tasks={t} />);
+    expect(screen.queryByTestId("task-card-badges")).toBeNull();
   });
 
   it("puts the title on its own line and the badges on a wrapping row beneath", () => {

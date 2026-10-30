@@ -453,9 +453,9 @@ describe("Mobile UX — MetricGrid", () => {
       />
     );
     const grid = screen.getByTestId("metric-grid");
-    // auto-fit with a minimum card width: as many columns as fit, no viewport
-    // breakpoint deciding the count.
-    expect(grid.className).toMatch(/grid-cols-\[repeat\(auto-fit,minmax\(/);
+    // auto-fit with a minimum card width small enough that two counters fit
+    // side by side on a phone, guarded so one track never overflows.
+    expect(grid.className).toContain("grid-cols-[repeat(auto-fit,minmax(min(100%,9.5rem),1fr))]");
     expect(grid.className).not.toMatch(/(md|lg):grid-cols-/);
   });
 });
