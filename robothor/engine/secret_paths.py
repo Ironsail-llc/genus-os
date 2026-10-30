@@ -490,30 +490,35 @@ _OPERATORS = frozenset(
 )
 
 
-def _tokens(line: str) -> list[str]:
+def _tokens(text: str) -> list[str]:
     """Shell-aware tokens with operators split out, so a quoted ``\\|`` inside
-    a grep pattern is data and a bare ``|`` is a pipe."""
-    lexer = shlex.shlex(line, posix=True, punctuation_chars=True)
+    a grep pattern is data and a bare ``|`` is a pipe.
+
+    Lexed as ONE text, newlines included, because a quote may span a line.
+    When the shell lexer gives up (an unclosed quote), the fallback splits
+    on whitespace and strips every quote character from each piece, so a
+    word like ``.e"n"v`` is still judged as ``.env`` (fail closed).
+    """
+    lexer = shlex.shlex(text, posix=True, punctuation_chars=True)
     lexer.whitespace_split = True
     try:
         return list(lexer)
     except ValueError:
-        return line.split()
+        return [piece.replace("'", "").replace('"', "") for piece in text.split()]
 
 
 def _segments(command: str) -> list[list[str]]:
     out: list[list[str]] = []
-    for line in command.splitlines():
-        current: list[str] = []
-        for tok in _tokens(line):
-            if tok in _OPERATORS or all(ch in "|&;()<>" for ch in tok):
-                if current:
-                    out.append(current)
-                current = []
-            else:
-                current.append(tok.lstrip("`"))
-        if current:
-            out.append(current)
+    current: list[str] = []
+    for tok in _tokens(command):
+        if tok in _OPERATORS or all(ch in "|&;()<>" for ch in tok):
+            if current:
+                out.append(current)
+            current = []
+        else:
+            current.append(tok.lstrip("`"))
+    if current:
+        out.append(current)
     return out
 
 
@@ -663,7 +668,10 @@ def _program_indices(word: str, args: list[str]) -> set[int] | None:
             if canonical is not None:
                 supplied = True
                 if "=" not in arg and i + 1 < len(args):
-                    indices.add(i + 1)
+                    # A program FILE (`--file x`) is a file, not program text:
+                    # it stays under every rule, so only text values join.
+                    if canonical not in _PROGRAM_FILE_LONGS:
+                        indices.add(i + 1)
                     i += 1
         elif arg.startswith("-") and len(arg) > 1:
             cluster = arg[1:]
@@ -676,7 +684,8 @@ def _program_indices(word: str, args: list[str]) -> set[int] | None:
                 if ch in shorts:
                     supplied = True
                     if j == len(cluster) - 1 and i + 1 < len(args):
-                        indices.add(i + 1)
+                        if ch != _PROGRAM_FILE_SHORT:
+                            indices.add(i + 1)
                         i += 1
                     break
         i += 1
@@ -686,6 +695,40 @@ def _program_indices(word: str, args: list[str]) -> set[int] | None:
         if not arg.startswith("-"):
             return {index}
     return set()
+
+
+#: The program-supplying options whose value is a FILE of program text
+#: (``grep -f patterns``, ``sed --file=script``, ``jq --from-file=prog``).
+#: Such a value is a path the tool READS, so it is judged like any other
+#: operand instead of being exempt as program text.
+_PROGRAM_FILE_SHORT = "f"
+_PROGRAM_FILE_LONGS = frozenset({"--file", "--from-file"})
+
+
+def _attached_option_files(word: str, args: list[str]) -> list[str]:
+    """File values attached to an option word (``--from-file=.en?``, ``-f.env``).
+
+    The operand walk skips every argument that starts with ``-``, so a path
+    attached to its option would otherwise never be seen.
+    """
+    table = _PROGRAM_OPTIONS.get(word)
+    if table is None:
+        return []
+    shorts, longs, _, cluster_letters = table
+    found: list[str] = []
+    for arg in args:
+        if arg.startswith("--"):
+            canonical = _long_option(arg, longs)
+            if canonical in _PROGRAM_FILE_LONGS and "=" in arg:
+                found.append(arg.partition("=")[2])
+        elif arg.startswith("-") and len(arg) > 1 and _PROGRAM_FILE_SHORT in shorts:
+            cluster = arg[1:]
+            if cluster_letters is not None and any(ch not in cluster_letters for ch in cluster):
+                continue
+            position = cluster.find(_PROGRAM_FILE_SHORT)
+            if 0 <= position < len(cluster) - 1:
+                found.append(cluster[position + 1 :])
+    return [f.strip("'\"") for f in found if f.strip("'\"")]
 
 
 def _expandable_words(command: str) -> set[str] | None:
@@ -1131,20 +1174,21 @@ def _read_operands(command: str) -> list[str]:
     one-liner (``python -c "open('.env').read()"``).
     """
     found: list[str] = [m.group(1) for m in _READ_SUBSTITUTION.finditer(command)]
-    for line in command.splitlines():
-        tokens = _tokens(line)
-        for index, token in enumerate(tokens):
-            if token in _INPUT_REDIRECTS and index + 1 < len(tokens):
-                found.append(tokens[index + 1])
-            elif token.startswith("if="):
-                # `of=` is a WRITE: creating a secrets-named file is the send
-                # gate's business, as for a copy's destination.
-                found.append(token[3:])
-    for tokens in _segments(command):
-        word, args = _command_word(tokens)
+    tokens = _tokens(command)
+    for index, token in enumerate(tokens):
+        if token in _INPUT_REDIRECTS and index + 1 < len(tokens):
+            found.append(tokens[index + 1])
+        elif token.startswith("if="):
+            # `of=` is a WRITE: creating a secrets-named file is the send
+            # gate's business, as for a copy's destination.
+            found.append(token[3:])
+    for segment in _segments(command):
+        word, args = _command_word(segment)
         if word in _INTERPRETERS:
             for arg in args:
                 found.extend(literal.lstrip("<>+") for literal in _STRING_LITERAL.findall(arg))
+        if word is not None:
+            found.extend(_attached_option_files(word, args))
     return [f.strip("'\"") for f in found if f.strip("'\"")]
 
 
@@ -1177,7 +1221,7 @@ def exec_reads_secret(command: str) -> str | None:
 
     segments = _segments(command)
     shell_dirs = _changed_directories(segments)
-    all_tokens = [tok for line in command.splitlines() for tok in _tokens(line)]
+    all_tokens = _tokens(command)
     if _mentions_moved_key(command, all_tokens, shell_dirs):
         return (
             "refused: the command names the vault master key or fingerprint salt, or "
