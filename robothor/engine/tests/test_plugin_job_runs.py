@@ -196,6 +196,17 @@ class TestTheReturnValueIsCapped:
         context = json.loads(_row(db)["context"])
         assert "object" in str(context["result"])
 
+    def test_a_value_json_cannot_encode_at_all_still_ends_the_run(self, scheduled, db):
+        """A circular value defeats ``default=str``; the run must not be
+        left 'running' for the stale-run reaper to call a timeout."""
+        loop: dict[str, Any] = {}
+        loop["self"] = loop
+        func = scheduled("sweep", lambda: loop)
+        func()
+        row = _row(db)
+        assert row["status"] == "completed"
+        assert "self" in json.loads(row["context"])["result"]
+
 
 class TestAsyncJobs:
     def test_a_coroutine_job_stays_a_coroutine_function(self, scheduled, db):
