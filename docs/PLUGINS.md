@@ -96,6 +96,63 @@ loads none of them: half-loading leaves it in a state its author never
 tested. And a plugin that fails to import is recorded and skipped — one
 broken package must never stop the engine booting.
 
+## State and shared primitives
+
+A plugin's runtime dependencies are stdlib-only, and that rule is about
+*third-party* packages. Importing `robothor.*` at runtime is fine: the plugin
+runs inside the engine, and the primitives below exist so that it does not
+reinvent them.
+
+**`PluginState` — your plugin's tables.** A wheel cannot ship a database
+migration, so every table a plugin needs is a *kind* of row in one core table,
+`plugin_state`, keyed by tenant, plugin name, kind and key, holding a JSON
+object:
+
+```python
+from robothor.plugins.state import PluginState
+
+state = PluginState("acme")             # tenant defaults to the instance's
+state.put("contact", "alice", {"stage": "lead"})
+state.put("seen", message_id, {}, ttl_seconds=86_400)
+state.get("contact", "alice")                     # {"stage": "lead"}, or None
+state.exists("seen", message_id)
+state.list("contact", prefix="a", limit=50)
+# -> [{key, value, updated_at, expires_at}]
+state.delete("contact", "alice")
+```
+
+Two plugins, or two tenants, using the same kind and key never see each
+other's rows. A row written with `ttl_seconds` disappears from `get`, `exists`
+and `list` the moment it expires. The engine deletes expired rows hourly for
+the instance's tenant; rows for other tenants need
+`PluginState.purge_expired()`. `list` returns rows in key order; its
+prefix is literal text, not a pattern. The calls are synchronous database
+queries: from an async handler, run them with `asyncio.to_thread`.
+
+**`fleet_model_chain()` — never pin a model.** A plugin tool that calls a
+model must not name one. The operator chooses the fleet's models, and a
+pinned name goes stale the day they change them.
+`robothor.engine.llm_client.fleet_model_chain()` returns the fleet's chain,
+primary first, then the fallbacks, ending in the instance's model of last
+resort when one is set. With no fleet defaults file it is that last-resort
+model alone, and empty only when neither exists, so check for an empty list.
+
+**`do_not_contact_phones()` — honour the opt-out.** Anything that texts or
+calls a person must check the same opt-out the email tools do.
+`robothor.crm.dal.do_not_contact_phones(phones, tenant_id)` returns the
+numbers, exactly as you passed them, that belong to a person marked do not
+contact. It compares the last ten digits, so a number written with a `+1`
+country code, brackets, spaces or dots matches the same ten digits written
+plainly; a number with fewer than ten digits matches nothing. The match
+assumes NANP (US/Canada) numbers; an international deployment must normalise
+both sides to E.164 before calling (nine-digit national numbers never match).
+It checks the person's primary number, their additional numbers and their
+SMS and voice identifiers. Drop every returned number before sending, and
+treat an exception as a refusal: a lookup that failed is not a clean list.
+
+The knowledge-base tools (`kb_*`) are engine tools, not imports: an agent
+that runs your plugin's workflow lists them in `tools_allowed`.
+
 ## Checking what loaded
 
 Plugin failures are logged at WARNING with the plugin name and the reason:
