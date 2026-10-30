@@ -249,8 +249,10 @@ export function ProvidersPage() {
 
   const [primary, setPrimary] = useState("");
   const [fallbacks, setFallbacks] = useState<string[]>([]);
-  // "" is "Same as the fleet default", sent as null.
-  const [canvasModel, setCanvasModel] = useState("");
+  // null: not read from the engine and not touched, so a save leaves the
+  // engine's value alone. "" is the operator's choice "Same as the fleet
+  // default", sent as null; a refresh must not overwrite either choice.
+  const [canvasModel, setCanvasModel] = useState<string | null>(null);
   const [savingDefaults, setSavingDefaults] = useState(false);
   const [defaults, setDefaults] = useState<FleetDefaults | null>(null);
   const [defaultsReadError, setDefaultsReadError] = useState<string | null>(null);
@@ -315,7 +317,7 @@ export function ProvidersPage() {
       setDefaultsReadError(null);
       setPrimary((prev) => (prev ? prev : (current.primary ?? "")));
       setFallbacks((prev) => (prev.length ? prev : current.fallbacks));
-      setCanvasModel((prev) => (prev ? prev : (current.canvas ?? "")));
+      setCanvasModel((prev) => (prev !== null ? prev : (current.canvas ?? "")));
     } catch {
       setDefaultsReadError(
         "The dashboard could not reach the bridge to read the fleet default."
@@ -500,7 +502,8 @@ export function ProvidersPage() {
         body: JSON.stringify({
           model: primary,
           fallbacks: fallbacks.filter(Boolean),
-          canvas: canvasModel || null,
+          // Absent leaves the engine's canvas model as it is.
+          ...(canvasModel !== null ? { canvas: canvasModel || null } : {}),
         }),
       });
       if (!res.ok) {
@@ -1137,7 +1140,7 @@ export function ProvidersPage() {
               id="canvas-model"
               data-testid="canvas-model"
               aria-describedby="canvas-model-hint"
-              value={canvasModel}
+              value={canvasModel ?? ""}
               onChange={(event) => setCanvasModel(event.target.value)}
             >
               <option value="">Same as the fleet default</option>
