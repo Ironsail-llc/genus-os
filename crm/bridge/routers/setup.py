@@ -929,11 +929,18 @@ async def _store_provider_key(provider_id: str, api_key: str) -> None:
 
 
 async def _store_default_model(model: str) -> None:
-    """Point the fleet's manifest defaults at the chosen model, then reload."""
-    from routers.providers import _manifest_dir, _merge_model_block, _reload_engine_defaults
+    """Point the fleet's manifest defaults at the chosen model.
 
-    await asyncio.to_thread(_merge_model_block, _manifest_dir() / "_defaults.yaml", model, [])
-    await _reload_engine_defaults()
+    The engine writes ``_defaults.yaml`` and reloads it — the same route the
+    Settings page uses — because it is the process that reads the file. A
+    refusal is logged rather than raised: the test connection that follows
+    gives the operator the verdict to act on.
+    """
+    from routers.providers import _write_engine_defaults
+
+    status, _ = await _write_engine_defaults(model, [])
+    if status >= 400:
+        logger.warning("setup: the engine did not store the default model (status %s)", status)
 
 
 async def _test_provider(provider_id: str, model: str) -> tuple[int, dict[str, Any]]:
