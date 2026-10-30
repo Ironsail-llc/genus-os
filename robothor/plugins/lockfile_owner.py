@@ -9,8 +9,9 @@ starts a child engine on the root's workspace would not be.
 
 So a small marker beside the lockfile names the tenant whose engine owns it.
 The engine claims it at boot, and the first write claims an unclaimed file. A
-ROOT tenant's engine (its tenant row has no parent) takes a claim over from
-another tenant, so the child is refused whichever engine booted first.
+ROOT tenant's engine (its tenant row has no parent) takes a claim over from a
+child, so the child is refused whichever engine booted first. A root never
+takes another root's claim: two root engines on one workspace are refused.
 An engine whose lockfile names a DIFFERENT tenant refuses to change it (the
 engine admin API answers 409), and the remedy is a workspace of its own.
 
@@ -110,7 +111,7 @@ def claim(tenant: str | None = None) -> str | None:
         if owner is None:
             _write(marker, me)
             return me
-        if owner != me and _is_root_tenant(me):
+        if owner != me and _is_root_tenant(me) and not _is_root_tenant(owner):
             # The root's claim is authoritative. Boot order on a shared
             # workspace is random after an upgrade, and the child is the side
             # that must be refused, whoever started first.
