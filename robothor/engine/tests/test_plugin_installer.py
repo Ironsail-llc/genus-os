@@ -638,6 +638,10 @@ def test_no_pip_token_after_our_own_flags_can_look_like_an_option(tmp_path) -> N
         "--no-input",
         "--target",
         "--upgrade",
+        "--force-reinstall",
+        "--no-cache-dir",
+        "--reinstall",
+        "--no-cache",
     }
     tail = command[command.index("--find-links") + 2 :]
     assert [t for t in tail if t.startswith("-") and t not in ours] == []
