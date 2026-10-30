@@ -59,16 +59,17 @@ export function ChatLanding({ ownerName, suggestedPrompts, onPrompt }: ChatLandi
 
       <div className="grid grid-cols-3 gap-2" data-testid="chat-landing-metrics">
         <MetricTile label="Services" testId="landing-metric-services">
-          {healthFailure ? (
+          {/* The last known figure stays beside a failed refresh, as on the
+              Dashboard view. */}
+          <p
+            className={`font-mono text-xl font-semibold tabular-nums ${
+              totalServices > 0 && healthyCount < totalServices ? "text-warning" : "text-foreground"
+            }`}
+          >
+            {totalServices > 0 ? `${healthyCount}/${totalServices}` : "-"}
+          </p>
+          {healthFailure && (
             <SectionError failure={healthFailure} testId="section-error-health" className="mt-1" />
-          ) : (
-            <p
-              className={`font-mono text-xl font-semibold tabular-nums ${
-                totalServices > 0 && healthyCount < totalServices ? "text-warning" : "text-foreground"
-              }`}
-            >
-              {totalServices > 0 ? `${healthyCount}/${totalServices}` : "-"}
-            </p>
           )}
         </MetricTile>
         <MetricTile label="Active tasks" testId="landing-metric-tasks">

@@ -8,6 +8,7 @@ import { fetchPeople } from "@/lib/api/people";
 import { fetchConversations } from "@/lib/api/conversations";
 import { searchMemory } from "@/lib/api/memory";
 import { useVisualState } from "@/hooks/use-visual-state";
+import { QUICK_ACTION_LABELS } from "./quick-action-labels";
 
 export interface QuickAction {
   label: string;
@@ -24,7 +25,7 @@ type PushView = ReturnType<typeof useVisualState>["pushView"];
 export function buildQuickActions(pushView: PushView): QuickAction[] {
   return [
     {
-      label: "Show my contacts",
+      label: QUICK_ACTION_LABELS.contacts,
       icon: Users,
       failureLabel: "Contacts",
       endpoint: "/api/bridge/api/people",
@@ -38,7 +39,7 @@ export function buildQuickActions(pushView: PushView): QuickAction[] {
       },
     },
     {
-      label: "Check inbox",
+      label: QUICK_ACTION_LABELS.inbox,
       icon: Inbox,
       failureLabel: "Conversations",
       endpoint: "/api/bridge/api/conversations",
@@ -52,7 +53,7 @@ export function buildQuickActions(pushView: PushView): QuickAction[] {
       },
     },
     {
-      label: "Search memory",
+      label: QUICK_ACTION_LABELS.memory,
       icon: Brain,
       failureLabel: "Memory",
       endpoint: "/api/orchestrator/query",
@@ -66,7 +67,7 @@ export function buildQuickActions(pushView: PushView): QuickAction[] {
       },
     },
     {
-      label: "Service health",
+      label: QUICK_ACTION_LABELS.health,
       icon: Activity,
       failureLabel: "System health",
       endpoint: "/api/health",
