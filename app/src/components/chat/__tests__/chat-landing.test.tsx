@@ -77,6 +77,13 @@ function routedFetch(overrides: RouteOverrides = {}) {
   });
 }
 
+/** A quick action by label; a suggested prompt may share its words. */
+function quickAction(name: RegExp): HTMLElement {
+  const match = screen.getAllByTestId("quick-action").find((b) => name.test(b.textContent ?? ""));
+  if (!match) throw new Error(`no quick action matching ${name}`);
+  return match;
+}
+
 const PROMPTS = ["How's everything running?", "Show my contacts"];
 
 function renderLanding(props: { ownerName?: string; onPrompt?: (p: string) => void } = {}) {
@@ -137,7 +144,7 @@ describe("ChatLanding", () => {
   it("offers the dashboard's quick actions, and one opens its canvas view", async () => {
     renderLanding();
     expect(screen.getAllByTestId("quick-action")).toHaveLength(4);
-    fireEvent.click(screen.getByRole("button", { name: /show my contacts/i }));
+    fireEvent.click(quickAction(/show my contacts/i));
     await vi.waitFor(() =>
       expect(mockPushView).toHaveBeenCalledWith(
         expect.objectContaining({ toolName: "render_contact_table" }),
@@ -148,7 +155,7 @@ describe("ChatLanding", () => {
   it("reports a failed quick action", async () => {
     vi.stubGlobal("fetch", routedFetch({ people: jsonResponse({}, 401) }));
     renderLanding();
-    fireEvent.click(screen.getByRole("button", { name: /show my contacts/i }));
+    fireEvent.click(quickAction(/show my contacts/i));
     const error = await screen.findByTestId("section-error-actions");
     expect(error.textContent).toMatch(/unavailable \(401\)/i);
     expect(error.textContent).toContain("/api/bridge/api/people");

@@ -79,6 +79,8 @@ export function AppShell() {
   const { data: session, status } = useSession();
   const roleLoading = status === "loading";
   const role = session?.role;
+  // The landing greets the owner by first name; none when the session has none.
+  const ownerName = session?.user?.name?.trim().split(/\s+/)[0] || undefined;
 
   const [chatOpen, setChatOpen] = useState(true);
   const [canvasRailOpen, setCanvasRailOpen] = useState(false);
@@ -309,8 +311,19 @@ export function AppShell() {
                 style={isChatView ? undefined : { width: chatOpen ? 400 : 0 }}
                 data-testid="chat-container"
               >
-                <div className={isChatView ? "h-full w-full" : "h-full w-[400px]"}>
-                  <ChatPanel />
+                <div
+                  className={
+                    isChatView && !showCanvasRail
+                      ? "h-full mx-auto w-full max-w-5xl"
+                      : isChatView
+                        ? "h-full w-full"
+                        : "h-full w-[400px]"
+                  }
+                >
+                  <ChatPanel
+                    variant={isChatView && !showCanvasRail ? "page" : "dock"}
+                    ownerName={ownerName}
+                  />
                 </div>
               </div>
             )}
@@ -322,7 +335,7 @@ export function AppShell() {
       {mobileInChat && (
         <div className="flex-1 min-h-0 pb-14" data-testid="chat-container">
           <div className="h-full">
-            <ChatPanel mobile />
+            <ChatPanel mobile variant="page" ownerName={ownerName} />
           </div>
         </div>
       )}
