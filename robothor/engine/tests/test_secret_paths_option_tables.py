@@ -204,6 +204,12 @@ def test_arguments_after_a_multi_line_quote_are_still_judged(workspace, command)
         "cd repo  # go there\ncat .env",
         "ls # x\nprintenv",
         "echo ok # don't\nhead .env",
+        # A comment is a comment: apostrophes in it are not quotes, so two
+        # contractions in two comments cannot pair up and hide the line
+        # between them.
+        "# Let's look at the config\ncat .env\n# That's all",
+        "ls  # don't care\ncat .env\necho ok  # that's it",
+        "cat .env  # it's here",
     ],
 )
 def test_an_unquoted_newline_separates_commands(workspace, command) -> None:
@@ -213,6 +219,8 @@ def test_an_unquoted_newline_separates_commands(workspace, command) -> None:
 def test_a_newline_separated_command_without_a_secret_runs(workspace) -> None:
     assert exec_reads_secret("ls\ncat notes.txt") is None
     assert exec_reads_secret("true\n\nhead config.yaml") is None
+    assert exec_reads_secret("# Let's look\ncat notes.txt\n# That's all") is None
+    assert exec_reads_secret("cat notes.txt  # don't mind the .env mention") is None
 
 
 @pytest.mark.parametrize(
