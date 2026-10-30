@@ -69,6 +69,25 @@ An empty list renders nothing.
 {{- $_ := set $ws "configMap" $configMap -}}
 {{- $claimName := $persistence.existingClaim | default (printf "%s-workspace-%s" $fullName $id) -}}
 
+{{- /* Plugins: the root filesystem is read-only, so a cell's plugins live on
+       its own workspace, and only a persistent, writable one keeps an
+       install. The default wins over engine.env, which describes the root
+       engine; the entry's own env wins over the default. */ -}}
+{{- if and $persistence.enabled (not $configMap.name) (not $ws.readOnly) -}}
+{{- $pluginDir := printf "%s/.plugins" $ws.mountPath -}}
+{{- range $key := list "ROBOTHOR_PLUGIN_DIR" "PYTHONPATH" -}}
+{{- if not (hasKey ($t.env | default dict) $key) -}}{{- $_ := set $env $key $pluginDir -}}{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{- /* A cell may read one provider class of its own, and no other cell's. */ -}}
+{{- $ownProviders := printf "engine-providers-%s" $id -}}
+{{- range $ref := ($cv.secretRefs | default list) -}}
+{{- if and (hasPrefix "engine-providers-" (toString $ref)) (ne (toString $ref) $ownProviders) -}}
+{{- fail (printf "tenants[%d].secretRefs names %q, but a cell may read only its own %q" $i (toString $ref) $ownProviders) -}}
+{{- end -}}
+{{- end -}}
+
 {{- /* The workload opens with `---`; keep it off the previous cell's last line. */ -}}
 {{- "\n" }}
 {{- include "genus-os.pythonWorkload" (dict

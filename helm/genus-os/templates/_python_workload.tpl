@@ -241,7 +241,7 @@ spec:
               value: {{ $v | quote }}
             {{- end }}
           envFrom:
-            {{- include "genus-os.envFromSecret" (dict "root" $root "component" $component "values" $cv) | nindent 12 }}
+            {{- include "genus-os.envFromSecret" (dict "root" $root "component" $component "values" $cv "tenant" $tenant) | nindent 12 }}
           {{- $liveness := include "genus-os.httpProbe" (dict "root" $root "component" $component "values" $cv "probe" "liveness" "port" "http") }}
           {{- if $liveness | trim }}
           livenessProbe:
