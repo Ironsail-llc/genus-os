@@ -15,13 +15,14 @@ proof that the seam is a seam and not a Slack-shaped hole.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import pytest
 
 from robothor.engine.channels import inbound
 from robothor.engine.channels.access import AccessDecision
-from robothor.engine.models import TriggerType
+from robothor.engine.models import RunStatus, TriggerType
 from robothor.identity import IdentityContext
 
 TENANT = "00000000-0000-0000-0000-000000000000"
@@ -29,8 +30,14 @@ ALICE = "29:alice-object-id"
 
 
 class _Run:
-    def __init__(self, output_text: str = "the answer") -> None:
+    """The shape ``AgentRunner.execute`` returns. A failure is usually a
+    RETURNED run with a failed status, not an exception."""
+
+    def __init__(
+        self, output_text: str = "the answer", status: RunStatus = RunStatus.COMPLETED
+    ) -> None:
         self.output_text = output_text
+        self.status = status
         self.id = "run-1"
 
 
@@ -56,6 +63,35 @@ def _no_session(monkeypatch):
         history: list[Any] = []
 
     monkeypatch.setattr(inbound, "get_shared_session", lambda key: _Session())
+
+
+class _Store:
+    """Stands in for the chat store, which writes to the database."""
+
+    def __init__(self) -> None:
+        self.saved: list[dict[str, Any]] = []
+
+    async def save_exchange_async(
+        self, session_key: str, user_content: str, assistant_content: str, **kw: Any
+    ) -> list[int]:
+        self.saved.append(
+            {
+                "session_key": session_key,
+                "user_content": user_content,
+                "assistant_content": assistant_content,
+                **kw,
+            }
+        )
+        return [1, 2]
+
+
+@pytest.fixture(autouse=True)
+def store(monkeypatch) -> _Store:
+    from robothor.engine import chat_store
+
+    fake = _Store()
+    monkeypatch.setattr(chat_store, "save_exchange_async", fake.save_exchange_async)
+    return fake
 
 
 def _allow(identity: IdentityContext | None = None):
@@ -199,6 +235,308 @@ class TestWhatComesBack:
         result = await _handle(monkeypatch, _allow(), runner)
         assert "psycopg2" not in result.reply
         assert "password" not in result.reply
+
+
+class _GatedRunner:
+    """A runner whose run for a given message waits until the test lets it go,
+    so a test can hold one conversation mid-run and watch what else moves."""
+
+    def __init__(self, *, fail: bool = False) -> None:
+        self.calls: list[dict[str, Any]] = []
+        self.gates: dict[str, asyncio.Event] = {}
+        self.finished: list[str] = []
+        self._fail = fail
+
+    def hold(self, message: str) -> asyncio.Event:
+        self.gates[message] = asyncio.Event()
+        return self.gates[message]
+
+    async def execute(self, **kw: Any) -> Any:
+        self.calls.append(kw)
+        gate = self.gates.get(kw["message"])
+        if gate is not None:
+            await gate.wait()
+        self.finished.append(kw["message"])
+        if self._fail:
+            raise RuntimeError("the model is down")
+        return _Run(output_text=f"re: {kw['message']}")
+
+
+class _Sessions:
+    """One real session object per key, so what one message writes the next
+    one on the same key can read."""
+
+    def __init__(self) -> None:
+        self.by_key: dict[str, Any] = {}
+
+    def get(self, key: str) -> Any:
+        from robothor.engine.chat_history import ChatHistory
+
+        if key not in self.by_key:
+
+            class _Session:
+                history = ChatHistory()
+
+            self.by_key[key] = _Session()
+        return self.by_key[key]
+
+
+@pytest.fixture
+def sessions(monkeypatch) -> _Sessions:
+    store = _Sessions()
+    monkeypatch.setattr(inbound, "get_shared_session", store.get)
+    return store
+
+
+@pytest.fixture
+def fleet_cap(monkeypatch):
+    """Set the fleet-wide cap through the environment, the way an operator would."""
+    from robothor.settings import reset_settings
+
+    def _set(n: int) -> None:
+        monkeypatch.setenv("ROBOTHOR_CHANNEL_MAX_CONCURRENT_RUNS", str(n))
+        reset_settings()
+
+    yield _set
+    monkeypatch.delenv("ROBOTHOR_CHANNEL_MAX_CONCURRENT_RUNS", raising=False)
+    reset_settings()
+
+
+async def _until(predicate: Any, timeout: float = 2.0) -> None:
+    async def _poll() -> None:
+        while not predicate():
+            await asyncio.sleep(0)
+
+    await asyncio.wait_for(_poll(), timeout)
+
+
+async def _settle() -> None:
+    """Give every runnable task many turns of the loop."""
+    for _ in range(50):
+        await asyncio.sleep(0)
+
+
+class TestConversationsRunConcurrentlyButInOrder:
+    """A public chat channel hands this pipeline many visitors at once. Two
+    visitors must never wait on each other; one visitor's two messages must
+    never race each other's history."""
+
+    @pytest.mark.asyncio
+    async def test_a_second_conversation_completes_while_the_first_is_held(
+        self, monkeypatch, sessions
+    ):
+        runner = _GatedRunner()
+        gate = runner.hold("first")
+        first = asyncio.create_task(
+            _handle(monkeypatch, _allow(), runner, text="first", session_key="visitor:a")
+        )
+        await _until(lambda: len(runner.calls) == 1)
+
+        second = await asyncio.wait_for(
+            _handle(monkeypatch, _allow(), runner, text="second", session_key="visitor:b"), 2.0
+        )
+        assert second.reply == "re: second"
+        assert not first.done(), "the held conversation finished early"
+
+        gate.set()
+        assert (await first).reply == "re: first"
+
+    @pytest.mark.asyncio
+    async def test_a_second_message_in_one_conversation_waits_for_the_first(
+        self, monkeypatch, sessions
+    ):
+        runner = _GatedRunner()
+        gate = runner.hold("first")
+        first = asyncio.create_task(
+            _handle(monkeypatch, _allow(), runner, text="first", session_key="visitor:a")
+        )
+        await _until(lambda: len(runner.calls) == 1)
+        second = asyncio.create_task(
+            _handle(monkeypatch, _allow(), runner, text="second", session_key="visitor:a")
+        )
+        await _settle()
+        assert len(runner.calls) == 1, "the second message ran while the first was mid-run"
+
+        gate.set()
+        await asyncio.wait_for(asyncio.gather(first, second), 2.0)
+        assert runner.finished == ["first", "second"]
+        # And it ran with the first exchange already in its history.
+        history = runner.calls[1]["conversation_history"]
+        assert {"role": "user", "content": "first"} in history
+        assert {"role": "assistant", "content": "re: first"} in history
+
+    @pytest.mark.asyncio
+    async def test_an_idle_conversation_leaves_no_lock_behind(self, monkeypatch, sessions):
+        """Anonymous visitors are unbounded; a lock kept per visitor forever is
+        a leak with a slow fuse."""
+        runner = _GatedRunner()
+        for n in range(5):
+            await _handle(monkeypatch, _allow(), runner, session_key=f"visitor:{n}")
+        assert inbound._session_locks == {}
+
+
+class TestTheTurnIsRemembered:
+    @pytest.mark.asyncio
+    async def test_a_successful_run_appends_exactly_one_turn(self, monkeypatch, sessions):
+        await _handle(monkeypatch, _allow(), _GatedRunner(), text="hi", session_key="visitor:a")
+        assert list(sessions.get("visitor:a").history) == [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "re: hi"},
+        ]
+
+    @pytest.mark.asyncio
+    async def test_record_turn_false_appends_nothing(self, monkeypatch, sessions):
+        await _handle(
+            monkeypatch,
+            _allow(),
+            _GatedRunner(),
+            text="hi",
+            session_key="visitor:a",
+            record_turn=False,
+        )
+        assert list(sessions.get("visitor:a").history) == []
+
+    @pytest.mark.asyncio
+    async def test_a_failed_run_appends_nothing(self, monkeypatch, sessions):
+        result = await _handle(
+            monkeypatch, _allow(), _GatedRunner(fail=True), text="hi", session_key="visitor:a"
+        )
+        assert result.failed is True
+        assert list(sessions.get("visitor:a").history) == []
+
+    @pytest.mark.asyncio
+    async def test_a_refused_message_appends_nothing(self, monkeypatch, sessions):
+        await _handle(
+            monkeypatch, _refuse("no"), _GatedRunner(), text="hi", session_key="visitor:a"
+        )
+        assert list(sessions.get("visitor:a").history) == []
+
+    @pytest.mark.asyncio
+    async def test_a_successful_turn_is_persisted_once_so_it_survives_a_restart(
+        self, monkeypatch, sessions, store
+    ):
+        await _handle(
+            monkeypatch,
+            _allow(),
+            _GatedRunner(),
+            text="hi",
+            session_key="visitor:a",
+            channel="webwidget",
+        )
+        assert len(store.saved) == 1
+        saved = store.saved[0]
+        assert saved["session_key"] == "visitor:a"
+        assert saved["user_content"] == "hi"
+        assert saved["assistant_content"] == "re: hi"
+        assert saved["channel"] == "webwidget"
+        assert saved["tenant_id"] == TENANT
+
+    @pytest.mark.asyncio
+    async def test_a_failed_run_persists_nothing(self, monkeypatch, sessions, store):
+        await _handle(
+            monkeypatch, _allow(), _GatedRunner(fail=True), text="hi", session_key="visitor:a"
+        )
+        assert store.saved == []
+
+    @pytest.mark.asyncio
+    async def test_record_turn_false_persists_nothing(self, monkeypatch, sessions, store):
+        await _handle(
+            monkeypatch,
+            _allow(),
+            _GatedRunner(),
+            text="hi",
+            session_key="visitor:a",
+            record_turn=False,
+        )
+        assert store.saved == []
+
+    @pytest.mark.parametrize("status", [RunStatus.FAILED, RunStatus.TIMEOUT, RunStatus.CANCELLED])
+    @pytest.mark.asyncio
+    async def test_a_run_returned_as_not_completed_records_nothing(
+        self, monkeypatch, sessions, store, status
+    ):
+        """The runner reports most failures by returning the run, and a timed-out
+        run can carry partial output — remembering it would teach the next turn
+        an answer that was never finished."""
+        runner = _Runner(run=_Run(output_text="a partial answer", status=status))
+        await _handle(monkeypatch, _allow(), runner, text="hi", session_key="visitor:a")
+        assert list(sessions.get("visitor:a").history) == []
+        assert store.saved == []
+
+    @pytest.mark.asyncio
+    async def test_a_completed_run_with_no_output_records_nothing(
+        self, monkeypatch, sessions, store
+    ):
+        runner = _Runner(run=_Run(output_text=""))
+        result = await _handle(monkeypatch, _allow(), runner, text="hi", session_key="visitor:a")
+        assert result.reply == inbound.NO_OUTPUT_REPLY
+        assert list(sessions.get("visitor:a").history) == []
+        assert store.saved == []
+
+    @pytest.mark.asyncio
+    async def test_history_limit_hands_the_run_only_the_last_turns(self, monkeypatch, sessions):
+        session = sessions.get("visitor:a")
+        for n in range(5):
+            session.history.append({"role": "user", "content": f"q{n}"})
+            session.history.append({"role": "assistant", "content": f"a{n}"})
+        runner = _GatedRunner()
+        await _handle(
+            monkeypatch, _allow(), runner, text="now", session_key="visitor:a", history_limit=2
+        )
+        assert runner.calls[0]["conversation_history"] == [
+            {"role": "user", "content": "q3"},
+            {"role": "assistant", "content": "a3"},
+            {"role": "user", "content": "q4"},
+            {"role": "assistant", "content": "a4"},
+        ]
+
+    @pytest.mark.asyncio
+    async def test_without_history_limit_the_run_gets_the_whole_history(
+        self, monkeypatch, sessions
+    ):
+        session = sessions.get("visitor:a")
+        for n in range(5):
+            session.history.append({"role": "user", "content": f"q{n}"})
+            session.history.append({"role": "assistant", "content": f"a{n}"})
+        runner = _GatedRunner()
+        await _handle(monkeypatch, _allow(), runner, text="now", session_key="visitor:a")
+        assert len(runner.calls[0]["conversation_history"]) == 10
+
+
+class TestTheFleetCap:
+    @pytest.mark.asyncio
+    async def test_a_cap_of_one_serialises_two_conversations_and_both_complete(
+        self, monkeypatch, sessions, fleet_cap
+    ):
+        fleet_cap(1)
+        runner = _GatedRunner()
+        gate = runner.hold("first")
+        first = asyncio.create_task(
+            _handle(monkeypatch, _allow(), runner, text="first", session_key="visitor:a")
+        )
+        await _until(lambda: len(runner.calls) == 1)
+        second = asyncio.create_task(
+            _handle(monkeypatch, _allow(), runner, text="second", session_key="visitor:b")
+        )
+        await _settle()
+        assert len(runner.calls) == 1, "the cap of one let a second run start"
+        assert not second.done(), "a capped message was refused instead of queued"
+
+        gate.set()
+        results = await asyncio.wait_for(asyncio.gather(first, second), 2.0)
+        assert [r.reply for r in results] == ["re: first", "re: second"]
+
+    def test_the_cap_is_a_declared_hot_reloadable_setting(self, fleet_cap):
+        from robothor.settings import get_settings
+        from robothor.settings.model import ChannelSettings
+
+        field = ChannelSettings.model_fields["inbound_max_concurrent_runs"]
+        extra = field.json_schema_extra or {}
+        assert ChannelSettings().inbound_max_concurrent_runs == 8
+        assert extra.get("env") == "ROBOTHOR_CHANNEL_MAX_CONCURRENT_RUNS"
+        assert extra.get("restart_required") is False
+        fleet_cap(3)
+        assert get_settings().channels.inbound_max_concurrent_runs == 3
 
 
 class TestSlackIsBuiltOnIt:
