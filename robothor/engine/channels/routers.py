@@ -23,7 +23,10 @@ operator's own console; the engine's app has no other owner-based check to fall
 back on, because every route on it is the platform's by construction.
 
 The AUTHENTICATION of what arrives on that route is the channel's own business
-and deliberately not attempted here. The engine cannot know what proves a Teams
+and deliberately not attempted here. The engine's bearer gate steps aside for a
+POST to a mounted channel's own path (``auth.channel_uses_own_auth``), because
+the senders a channel exists for never hold an engine token, so every POST
+route a channel publishes must authenticate its request itself. The engine cannot know what proves a Teams
 activity genuine, and a shared "is this request ok?" hook would be a gate with
 one caller pretending to be a policy. What this module guarantees is narrower
 and checkable: only an armed channel is reachable, and only at its own address.
