@@ -29,7 +29,8 @@ export function LiveCanvas() {
   const [error, setError] = useState<string | null>(null);
   // The page on screen came from an earlier session, not from this one: offer
   // to regenerate it rather than leave a stale view looking current.
-  const [restored, setRestored] = useState(false);
+  // Held as the restored html, so the offer goes away once anything replaces it.
+  const [restoredHtml, setRestoredHtml] = useState<string | null>(null);
   const welcomeLoadedRef = useRef(false);
   const welcomeAbortRef = useRef<AbortController | null>(null);
 
@@ -48,8 +49,6 @@ export function LiveCanvas() {
       welcomeAbortRef.current?.abort();
       const abort = new AbortController();
       welcomeAbortRef.current = abort;
-      setError(null);
-      setRestored(false);
       setCanvasMode("loading");
 
       const restoreSaved = async (): Promise<boolean> => {
@@ -62,7 +61,7 @@ export function LiveCanvas() {
           const data = JSON.parse(text);
           if (data.html) {
             setDashboardCode(data.html, "html");
-            setRestored(true);
+            setRestoredHtml(data.html);
             return true;
           }
         } catch {
@@ -145,11 +144,15 @@ export function LiveCanvas() {
   // Retry asks for a page again; it used to reset the canvas to idle and ask
   // for nothing.
   const handleRetry = useCallback(() => {
+    setError(null);
+    setRestoredHtml(null);
     clearDashboard();
     loadWelcome({ restore: false });
   }, [clearDashboard, loadWelcome]);
 
   const handleRegenerate = useCallback(() => {
+    setError(null);
+    setRestoredHtml(null);
     loadWelcome({ restore: false });
   }, [loadWelcome]);
 
@@ -222,7 +225,10 @@ export function LiveCanvas() {
       )}
 
       {/* A page restored from an earlier session can be regenerated */}
-      {restored && canvasMode === "dashboard" && !isUpdating && (
+      {restoredHtml !== null &&
+        dashboardCode === restoredHtml &&
+        canvasMode === "dashboard" &&
+        !isUpdating && (
         <div className="flex items-center gap-2 border-b border-border px-3 py-1.5">
           <span className="text-xs text-muted-foreground">
             Restored from your last session.
