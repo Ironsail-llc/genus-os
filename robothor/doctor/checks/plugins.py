@@ -108,6 +108,12 @@ def _load_state() -> list[dict[str, Any]]:
             "reason": row.failure_reason,
             "drifted": row.drifted,
             "recorded": row.recorded,
+            # The tools it declares, so the tool-name checks read this same
+            # per-run measurement instead of loading every plugin again.
+            "tools": sorted(
+                str(name)
+                for name in (((row.manifest or {}).get("declared") or {}).get("handlers") or [])
+            ),
         }
         for row in inventory()
     ]

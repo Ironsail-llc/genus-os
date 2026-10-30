@@ -37,7 +37,7 @@ from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, Any
 
-from robothor.plugins.loader import _GROUPS, CONTRACT_VERSION
+from robothor.plugins.loader import _GROUPS, CONTRACT_VERSIONS, accepted_contracts
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from pathlib import Path
@@ -321,9 +321,9 @@ def _builtin_names(group: str) -> set[str]:
 
 
 def _contract_matches(declared: Any) -> bool:
-    """Whether a manifest's ``contract_version`` is the one this engine speaks.
+    """Whether a manifest's ``contract_version`` is one this engine speaks.
 
-    ``CONTRACT_VERSION`` is the string ``"1.0"`` and every manifest published so
+    ``CONTRACT_VERSIONS`` are strings (``"1.0"``) and every manifest published so
     far writes the integer ``1``; the loader never compared them because it
     checks the PAYLOAD's version instead. Comparing them as numbers is what
     keeps this scanner from blocking every plugin that exists on a spelling.
@@ -331,9 +331,9 @@ def _contract_matches(declared: Any) -> bool:
     if declared is None:
         return False
     try:
-        return float(str(declared)) == float(CONTRACT_VERSION)
+        return float(str(declared)) in {float(v) for v in CONTRACT_VERSIONS}
     except (TypeError, ValueError):
-        return str(declared) == CONTRACT_VERSION
+        return str(declared) in CONTRACT_VERSIONS
 
 
 def _declared_contract(manifest_text: str, parsed: Any) -> Any:
@@ -967,7 +967,7 @@ def _declaration_reasons(contents: WheelContents) -> tuple[list[str], list[str]]
     if not _contract_matches(declared_contract):
         blocked.append(
             f"{MANIFEST_NAME} declares contract_version "
-            f"{declared_contract!r}; this engine speaks {CONTRACT_VERSION!r}."
+            f"{declared_contract!r}; this engine speaks {accepted_contracts()}."
         )
 
     names_declared = False
@@ -1166,7 +1166,7 @@ def _workspace_review(manifest_text: str) -> list[str]:
     data and :func:`_classify_member` rightly waved it through. A declared
     asset is not inert: an agent manifest can register lifecycle hooks that run
     shell commands, ``docs/hooks/`` and workflows are executed by the engine,
-    ``docs/webhooks.yaml`` is loaded by it, a ``brain/`` file is text a model
+    ``docs/webhooks.yaml`` and ``docs/webhooks.d/`` are loaded by it, a ``brain/`` file is text a model
     reads, and a patch changes an agent the plugin does not own. None of that is
     visible from member names, so it is read from the declaration -- normalised
     the way the installer normalises it, so ``./brain/x`` is ``brain/x``.
@@ -1216,6 +1216,8 @@ def _workspace_review(manifest_text: str) -> list[str]:
         "hook runs shell)",
         "docs/workflows/": "writes workflow files the engine runs",
         "docs/webhooks.yaml": "writes docs/webhooks.yaml, configuration the engine loads",
+        "docs/webhooks.d/": "writes docs/webhooks.d/ channel drop-ins, configuration the "
+        "engine loads",
     }
     for prefix, what in by_kind.items():
         hits = [d for d in dests if d == prefix or d.startswith(prefix)]

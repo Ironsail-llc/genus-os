@@ -63,7 +63,7 @@ import contextlib
 import json
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
 from robothor.constants import DEFAULT_TENANT
@@ -94,6 +94,7 @@ STATUS_DNC = "failed:email_dnc"
 STATUS_DNC_UNREADABLE = "failed:email_dnc_unreadable"
 STATUS_NO_TRANSPORT = "failed:email_no_transport"
 STATUS_SEND = "failed:email_send"
+STATUS_INVALID_SENDER = "failed:email_invalid_sender"
 
 STATUSES = frozenset(
     {
@@ -106,6 +107,7 @@ STATUSES = frozenset(
         STATUS_DNC_UNREADABLE,
         STATUS_NO_TRANSPORT,
         STATUS_SEND,
+        STATUS_INVALID_SENDER,
     }
 )
 
@@ -123,6 +125,10 @@ _PERSON_ID_RE = re.compile(
 #: dotted domain, and no whitespace or separator that would make this two
 #: recipients rather than one.
 _ADDRESS_RE = re.compile(r"[^@\s,;<>\"]+@[^@\s,;<>\"]+\.[A-Za-z]{2,}\Z")
+
+#: The display-name form of a ``From``: a name, then exactly one ``<address>``
+#: closing the value. Anything after the ``>`` would be a second mailbox.
+_NAMED_SENDER_RE = re.compile(r"(?s)(.*?)\s*<([^<>]+)>\Z")
 
 #: Implicit TLS. STARTTLS is not offered on this port and calling it there
 #: raises, so the channel opens an ``SMTP_SSL`` connection instead.
@@ -361,8 +367,43 @@ def _log_dnc_event(run: AgentRun | None, reason: str, *, action: str, mode: str)
         logger.error("could not record do_not_contact guardrail event: %s", exc)
 
 
-def _message(address: str, subject: str, body: str, *, sender: str = "") -> EmailMessage:
-    """One plain-text message.
+def _valid_sender(raw: str) -> str:
+    """``raw`` as a ``From`` header value, or ``""`` when it is not one mailbox.
+
+    Accepts ``addr@example.com`` and ``Name <addr@example.com>`` (the name may
+    be quoted). Refuses a CR or LF (a header injection), more than one mailbox,
+    an unclosed bracket, and anything whose address fails the same loose check
+    a target gets. The value returned is re-rendered by ``formataddr``, so a
+    display name that needs quoting is quoted.
+    """
+    from email.utils import formataddr, getaddresses
+
+    if not isinstance(raw, str):
+        return ""
+    value = raw.strip()
+    if not value or any(ord(c) < 32 or ord(c) == 127 or 0xD800 <= ord(c) <= 0xDFFF for c in value):
+        return ""
+    parsed = getaddresses([value])
+    if len(parsed) != 1:
+        return ""
+    name, addr = parsed[0]
+    # formataddr encodes the address as ASCII; an internationalised one is refused.
+    if not addr.isascii() or not _ADDRESS_RE.fullmatch(addr):
+        return ""
+    if value != addr:
+        named = _NAMED_SENDER_RE.fullmatch(value)
+        if named is None or named.group(2).strip() != addr:
+            return ""
+    try:
+        return formataddr((name, addr))
+    except (UnicodeError, ValueError):
+        return ""
+
+
+def _message(
+    address: str, subject: str, body: str, *, sender: str = "", html: str | None = None
+) -> EmailMessage:
+    """One message: plain text, or ``multipart/alternative`` when ``html`` is given.
 
     ``sender`` is set only on the SMTP path. Gmail sends as whichever account
     the gws CLI is authenticated to and rewrites a ``From`` it does not own, so
@@ -372,7 +413,7 @@ def _message(address: str, subject: str, body: str, *, sender: str = "") -> Emai
     channel reports.
     """
     from email.message import EmailMessage
-    from email.utils import formatdate, make_msgid
+    from email.utils import formatdate, make_msgid, parseaddr
 
     message = EmailMessage()
     message["To"] = address
@@ -380,9 +421,11 @@ def _message(address: str, subject: str, body: str, *, sender: str = "") -> Emai
     message["Date"] = formatdate(localtime=True)
     if sender:
         message["From"] = sender
-        domain = sender.partition("@")[2].strip()
+        domain = parseaddr(sender)[1].partition("@")[2].strip()
         message["Message-ID"] = make_msgid(domain=domain or None)
     message.set_content(body)
+    if html is not None:
+        message.add_alternative(html, subtype="html")
     return message
 
 
@@ -572,9 +615,19 @@ class EmailChannel:
         subject: str | None = None,
         config: AgentConfig | None = None,
         run: AgentRun | None = None,
+        html: str | None = None,
+        sender: str | None = None,
         **kw: Any,
     ) -> SendReceipt:
         """Mail ``text`` to ``target``, and report only what a transport proved.
+
+        ``html``, when given, rides along as the HTML alternative of a
+        ``multipart/alternative`` message; ``text`` stays the plain part and is
+        what the receipt carries. It is one message however long, on every
+        transport. ``sender`` replaces the SMTP ``From`` for this send; gws and
+        Microsoft 365 send as their signed-in account and ignore it. A
+        ``sender`` that is not one mailbox is ``failed:email_invalid_sender``,
+        checked after the opt-out list and before any transport.
 
         The order is the contract. Guards run before the tenant is read, the
         tenant before the recipient is resolved, and the opt-out list before any
@@ -646,6 +699,15 @@ class EmailChannel:
         if refusal is not None:
             return SendReceipt(acknowledged=0, expected=1, status=refusal, target=address)
 
+        from_override = ""
+        if sender is not None:
+            from_override = _valid_sender(sender)
+            if not from_override:
+                logger.error("The email sender passed for %s is not a single mailbox", agent)
+                return SendReceipt(
+                    acknowledged=0, expected=1, status=STATUS_INVALID_SENDER, target=address
+                )
+
         body = text
         line = subject or (getattr(config, "name", "") or "") or DEFAULT_SUBJECT
         transport = self._transport()
@@ -663,11 +725,20 @@ class EmailChannel:
                 target=address,
                 body=body,
             )
+        if from_override and transport.kind != "smtp":
+            logger.info(
+                "The %s transport sends as its signed-in account; ignoring the sender "
+                "passed for %s",
+                transport.kind,
+                agent,
+            )
         if transport.kind == MICROSOFT365:
-            return await self._send_workspace(address, line, body, agent, tenant)
+            return await self._send_workspace(address, line, body, agent, tenant, html=html)
         if transport.kind == "gws":
-            return await self._send_gws(address, line, body, agent)
-        return await self._send_smtp(transport, address, line, body, agent)
+            return await self._send_gws(address, line, body, agent, html=html)
+        if from_override:
+            transport = replace(transport, sender=from_override)
+        return await self._send_smtp(transport, address, line, body, agent, html=html)
 
     # ── recipient ────────────────────────────────────────────────────────
 
@@ -789,7 +860,14 @@ class EmailChannel:
     # ── transports ───────────────────────────────────────────────────────
 
     async def _send_workspace(
-        self, address: str, subject: str, body: str, agent: str, tenant: str
+        self,
+        address: str,
+        subject: str,
+        body: str,
+        agent: str,
+        tenant: str,
+        *,
+        html: str | None = None,
     ) -> SendReceipt:
         """Send through the tenant's Microsoft 365 mailbox (Graph), insisting on an id.
 
@@ -801,7 +879,7 @@ class EmailChannel:
         from robothor.workspace import get_workspace
 
         try:
-            message = _message(address, subject, body)
+            message = _message(address, subject, body, html=html)
             raw = base64.urlsafe_b64encode(message.as_bytes()).decode("ascii")
             result = await get_workspace(tenant).mail.send(raw)
         except Exception as exc:  # noqa: BLE001 — a transport failure is a receipt
@@ -825,7 +903,9 @@ class EmailChannel:
             )
         return receipt_from([{"id": message_id}], 1, target=address, body=body)
 
-    async def _send_gws(self, address: str, subject: str, body: str, agent: str) -> SendReceipt:
+    async def _send_gws(
+        self, address: str, subject: str, body: str, agent: str, *, html: str | None = None
+    ) -> SendReceipt:
         """Send through the gws CLI and insist on the message id it files under.
 
         Building the message is INSIDE the try, and so is ``as_bytes()``. Both
@@ -837,7 +917,7 @@ class EmailChannel:
         outside this module's closed set.
         """
         try:
-            message = _message(address, subject, body)
+            message = _message(address, subject, body, html=html)
             raw = base64.urlsafe_b64encode(message.as_bytes()).decode("ascii")
             args = [
                 "gmail",
@@ -884,7 +964,14 @@ class EmailChannel:
         return receipt_from([{"id": message_id}], 1, target=address, body=body)
 
     async def _send_smtp(
-        self, transport: _Transport, address: str, subject: str, body: str, agent: str
+        self,
+        transport: _Transport,
+        address: str,
+        subject: str,
+        body: str,
+        agent: str,
+        *,
+        html: str | None = None,
     ) -> SendReceipt:
         """Send over SMTP. ``send_message`` returns what it REFUSED.
 
@@ -895,7 +982,7 @@ class EmailChannel:
         """
         message_id = ""
         try:
-            message = _message(address, subject, body, sender=transport.sender)
+            message = _message(address, subject, body, sender=transport.sender, html=html)
             message_id = str(message["Message-ID"] or "")
             refused = await asyncio.to_thread(self._smtp_exchange, transport, message)
         except Exception as exc:  # noqa: BLE001 — a transport failure is a receipt

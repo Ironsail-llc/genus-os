@@ -158,7 +158,7 @@ def _contracts(root: Path, spec: ReleaseSpec) -> dict[str, Any]:
             if (
                 manifest is None
                 or len(wheel.manifest_candidates) != 1
-                or manifest.contract_version != 1
+                or manifest.contract_version not in (1, 2)
             ):
                 raise ReleaseError("Plugin wheel needs one supported native manifest")
             if any(

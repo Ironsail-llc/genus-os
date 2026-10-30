@@ -130,8 +130,29 @@ def webhook_uses_channel_auth(method: str, path: str) -> bool:
     return method.upper() == "POST" and bool(re.fullmatch(r"/api/webhooks/[^/]+", path))
 
 
+def channel_uses_own_auth(method: str, path: str) -> bool:
+    """Whether the route belongs to a mounted plugin channel that authenticates it.
+
+    A plugin channel's senders (a storefront, an SMS provider, a support form)
+    never hold an engine token; the channel proves each request itself, with
+    its own HMAC, shared token or signed JWT. So a POST to
+    ``/api/channels/<name>`` or below skips the engine bearer, but only when
+    ``<name>``'s router is actually mounted in this process. Every other
+    method, and any name that is not mounted, still needs the bearer.
+    """
+
+    if method.upper() != "POST":
+        return False
+    from robothor.engine.channels import routers
+
+    match = re.fullmatch(re.escape(routers.CHANNEL_PATH_PREFIX) + r"/([^/]+)(/.*)?", path)
+    if match is None or ".." in path.split("/"):
+        return False
+    return routers.is_mounted(match.group(1))
+
+
 def authenticate_http_request(request: Request, *, tenant_id: str) -> AuthContext | None:
-    """Authenticate one HTTP request, returning ``None`` for public probes/HMAC webhooks.
+    """Authenticate one HTTP request, returning ``None`` for probes, HMAC webhooks and channels.
 
     Raises FastAPI ``HTTPException`` with stable, non-oracular messages.
     """
@@ -139,7 +160,11 @@ def authenticate_http_request(request: Request, *, tenant_id: str) -> AuthContex
     from fastapi import HTTPException
 
     path = request.url.path
-    if path in PROBE_PATHS or webhook_uses_channel_auth(request.method, path):
+    if (
+        path in PROBE_PATHS
+        or webhook_uses_channel_auth(request.method, path)
+        or channel_uses_own_auth(request.method, path)
+    ):
         return None
 
     if not auth_required(bind_host=_engine_bind_host()):

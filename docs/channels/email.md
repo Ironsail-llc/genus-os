@@ -131,6 +131,48 @@ One message per send: email has no chunk limit worth splitting on, so there is
 no `partial:` outcome here. The subject is the agent's display name unless the
 caller passes one.
 
+## HTML and sender
+
+Code that holds the channel can send more than a plain-text briefing. Two
+optional keyword arguments on `EmailChannel.send`, and a caller that passes
+neither gets exactly the message it got before:
+
+```python
+from robothor.engine.channels.registry import get_channel
+
+channel = get_channel("email")
+receipt = await channel.send(
+    "alice@example.com",
+    "Your plan renews on Friday.",          # the plain-text part, always required
+    subject="Your plan renews soon",
+    run=run,                                # carries the tenant whose opt-out list is read
+    html="<p>Your plan renews on <b>Friday</b>.</p>",
+    sender="Example Updates <no-reply@example.com>",
+)
+```
+
+| Argument | What it does |
+|----------|--------------|
+| `html` | Sends a `multipart/alternative` message: `text` is the plain part, `html` the HTML part. Every transport carries it — SMTP, the `gws` CLI and Microsoft Graph all take the same MIME message. |
+| `sender` | Sets the SMTP `From` (and the `Message-ID` domain) for this send instead of `ROBOTHOR_EMAIL_FROM`. `addr@example.com` or `Name <addr@example.com>`. The `gws` and Microsoft 365 transports send as their signed-in account, so they ignore it and log one INFO line saying so. |
+
+A `sender` that is not exactly one mailbox — no address, two addresses, an
+unclosed `<`, or a line break — is refused with `failed:email_invalid_sender`
+and nothing is sent. Your SMTP server still decides whether it will relay mail
+from that address; a server that refuses it is `failed:email_send`.
+
+The opt-out check is unchanged and comes first: a recipient flagged
+`do_not_contact` is refused before the sender is looked at or a transport is
+chosen, whatever arguments the call carried. An HTML send is one message no
+matter how long either part is — this channel never splits a send — and the
+receipt's `body` is the plain-text part.
+
+No agent tool reaches this channel: a manifest's `delivery.channel: email`
+sends plain text, and the `gws_gmail_send` tool has its own `content_type:
+html`. Platform or plugin code that needs HTML through the opt-out guard gets
+the channel with `robothor.engine.channels.registry.get_channel("email")`, as
+above.
+
 ## What gets recorded
 
 Delivery status is derived from what a transport acknowledged — Gmail's own
@@ -148,6 +190,7 @@ send call returning:
 | `failed:email_unexpanded_target` | A literal `${VAR}` reached the target |
 | `failed:email_unresolved_target` | Neither an address nor a `crm_people` id, or a person with no primary email |
 | `failed:email_no_run` | A send with no run, so no tenant — and the opt-out list is per-tenant. A guard may not guess whose list it is reading |
+| `failed:email_invalid_sender` | The caller passed a `sender` that is not one mailbox. See [HTML and sender](#html-and-sender) |
 | `failed:email_benchmark` | The run is a benchmark. A sandbox tenant isolates the database, not the outside world, so mail stays denied — the same rule `gws_gmail_send` follows |
 
 `ROBOTHOR_DNC_MODE=observe` applies to **the two opt-out refusals only** —
@@ -190,5 +233,5 @@ bus, not by the mail mirror.
   row, answerable from the Helm.
 * **Threading.** The provider message id is recorded on every send, which is
   what a phase-2 reply reader will thread against; nothing reads it yet.
-* **Attachments and HTML.** Plain text only. The agent tool path
-  (`gws_gmail_send`) takes `content_type: html`; the channel does not.
+* **Attachments.** The channel sends a body — plain text, or plain text with
+  an HTML alternative — and no attachments. Link to the file instead.

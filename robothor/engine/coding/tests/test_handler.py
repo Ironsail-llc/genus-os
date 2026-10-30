@@ -196,6 +196,8 @@ def test_the_main_template_opts_in_to_every_claude_code_tool():
     assert set(manifest["tools_opt_in"]) == CLAUDE_CODE_TOOLS | {
         "pr_review_intake",
         "pr_review_status",
+        # ...and starting the instance's workflows when the operator asks.
+        "run_workflow",
     }
 
 

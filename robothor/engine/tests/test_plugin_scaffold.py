@@ -302,3 +302,15 @@ def test_a_scaffold_with_a_patch_and_a_file_builds_and_plans(tmp_path) -> None:
     lines = assets.plan(declared, NAME, workspace=workspace)
     assert any("docs/agents/main.yaml" in line for line in lines)
     assert any(f"brain/{NAME}/notes.md" in line for line in lines)
+
+
+def test_the_scaffold_declares_contract_1_and_says_when_to_declare_2(tmp_path) -> None:
+    """A new plugin uses none of the contract-2 features, so it stays on 1 and
+    loads on older engines too; its README says when to move to 2."""
+    root = scaffold.scaffold(NAME, tmp_path / NAME)
+    package = root / "src" / PKG
+    manifest = yaml.safe_load((package / "genus-plugin.yaml").read_text())
+    assert manifest["contract_version"] == 1
+    assert '"genus_contract_version": "1.0"' in (package / "__init__.py").read_text()
+    guide = (root / "CLAUDE.md").read_text() + (root / "README.md").read_text()
+    assert "contract_version: 2" in guide and "append" in guide

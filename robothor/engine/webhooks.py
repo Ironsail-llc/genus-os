@@ -2,9 +2,13 @@
 
 External services POST to /api/webhooks/{channel} with an HMAC-SHA256 signature.
 Each channel picks its signature scheme: ``hmac_hex`` (hex digest of the raw
-body, GitHub-style) or ``stripe_t_v1`` (``t=<unix>,v1=<hex>`` over
-``"<t>." + body`` with a timestamp window). A channel may also name a delivery
-id header, in which case a replayed delivery is answered as a duplicate and
+body, GitHub-style), ``stripe_t_v1`` (``t=<unix>,v1=<hex>`` over
+``"<t>." + body`` with a timestamp window) or ``hmac_ts_hex`` (hex digest of
+``"<timestamp>." + body`` in the signature header, optionally ``sha256=``
+prefixed, with the integer unix-seconds timestamp in the channel's
+``timestamp_header`` and the same timestamp window; the signed string uses the
+canonical integer, so a zero-padded timestamp fails the digest rather than
+passing). A channel may also name a delivery id header, in which case a replayed delivery is answered as a duplicate and
 not re-published. A ``google_oidc`` channel takes Google Cloud Pub/Sub push
 instead: the ``Authorization: Bearer`` ID token is verified against the
 channel's audience and service account, the Pub/Sub ``messageId`` is the
@@ -43,10 +47,13 @@ logger = logging.getLogger(__name__)
 # Must match hooks.py / event_bus.py
 STREAM_PREFIX = "robothor:events:"
 
-SIGNATURE_SCHEMES = ("hmac_hex", "stripe_t_v1", "google_oidc")
+SIGNATURE_SCHEMES = ("hmac_hex", "stripe_t_v1", "hmac_ts_hex", "google_oidc")
 
 # Headers tried in order when a channel names no signature_header.
 DEFAULT_SIGNATURE_HEADERS = ("X-Hub-Signature-256", "X-Signature-256", "X-Webhook-Signature")
+
+# hmac_ts_hex: header carrying the signed timestamp when a channel names none.
+DEFAULT_TIMESTAMP_HEADER = "X-Webhook-Timestamp"
 
 # How long a delivery id is remembered for replay detection.
 DELIVERY_ID_TTL_SECONDS = 86400
@@ -68,8 +75,10 @@ class WebhookChannel:
     signature_header: str = ""
     # One of SIGNATURE_SCHEMES.
     signature_scheme: str = "hmac_hex"
-    # stripe_t_v1 only: how far the signed timestamp may drift from now.
+    # stripe_t_v1 and hmac_ts_hex: how far the signed timestamp may drift from now.
     timestamp_tolerance_seconds: int = 300
+    # hmac_ts_hex only: header carrying the signed timestamp (unix seconds).
+    timestamp_header: str = DEFAULT_TIMESTAMP_HEADER
     # When set and present on a request, replays of the same id are dropped.
     delivery_id_header: str = ""
     # google_oidc only: the token's required audience and signing service account.
@@ -84,36 +93,87 @@ class WebhookConfig:
     channels: dict[str, WebhookChannel] = field(default_factory=dict)
 
 
+def _dropin_dir(path: Path) -> Path:
+    """``docs/webhooks.yaml`` -> ``docs/webhooks.d``."""
+    return path.with_name(f"{path.stem}.d")
+
+
+def _read_channels(path: Path) -> dict[str, Any]:
+    with path.open() as f:
+        data = yaml.safe_load(f) or {}
+    raw = data.get("channels") if isinstance(data, dict) else None
+    return raw if isinstance(raw, dict) else {}
+
+
 def load_webhook_config(path: str | Path) -> WebhookConfig:
-    """Load webhook channel definitions from a YAML file."""
-    path = Path(path)
-    if not path.exists():
+    """Load webhook channel definitions from a YAML file and its drop-ins.
+
+    Every ``*.yaml`` in the sibling ``<stem>.d/`` directory (``docs/webhooks.d/``
+    beside ``docs/webhooks.yaml``) is merged after the base file, in name
+    order, so a plugin can own a file of its own channels. A channel declared
+    twice -- in the base file and a drop-in, or in two drop-ins -- is a
+    ``ValueError`` naming both files, and a file that does not parse raises. A
+    missing directory is fine.
+    """
+    return _load_webhook_config(Path(path), strict=True)
+
+
+def _load_webhook_config(path: Path, *, strict: bool) -> WebhookConfig:
+    """:func:`load_webhook_config`; with ``strict=False`` a DROP-IN that does not
+    parse, a channel a drop-in declares again, or a malformed drop-in channel is
+    logged and skipped, so the router still serves every channel it can. The
+    base file is the operator's and stays strict either way."""
+    dropins = _dropin_dir(path)
+    sources = sorted(dropins.glob("*.yaml")) if dropins.is_dir() else []
+    if path.exists():
+        sources.insert(0, path)
+    elif not sources:
         logger.warning("Webhook config not found: %s", path)
         return WebhookConfig()
 
-    with path.open() as f:
-        data = yaml.safe_load(f) or {}
+    declared: dict[str, Path] = {}
+    merged: dict[str, Any] = {}
+    for source in sources:
+        try:
+            found = _read_channels(source)
+        except (yaml.YAMLError, OSError, UnicodeDecodeError) as exc:
+            if strict or source == path:
+                raise
+            logger.error(
+                "Webhook config %s is not readable (%s); none of its channels are served",
+                source,
+                type(exc).__name__,
+            )
+            continue
+        for name, raw in found.items():
+            if name in declared:
+                message = (
+                    f"Webhook channel {name!r} is declared in both {declared[name]} and "
+                    f"{source}; rename one of them."
+                )
+                if strict:
+                    raise ValueError(message)
+                logger.error("%s Serving the one in %s.", message, declared[name])
+                continue
+            declared[name] = source
+            merged[name] = raw
 
     channels: dict[str, WebhookChannel] = {}
-    for name, raw in (data.get("channels") or {}).items():
+    for name, raw in merged.items():
         if not isinstance(raw, dict):
             continue
-        channels[name] = WebhookChannel(
-            name=name,
-            stream=raw.get("stream", name),
-            secret_env=raw.get("secret_env", ""),
-            event_type_header=raw.get("event_type_header", ""),
-            event_type_field=raw.get("event_type_field", ""),
-            event_type_prefix=raw.get("event_type_prefix", ""),
-            enabled=raw.get("enabled", True),
-            rate_limit_per_min=int(raw.get("rate_limit_per_min", 60)),
-            signature_header=raw.get("signature_header", "") or "",
-            signature_scheme=raw.get("signature_scheme", "hmac_hex") or "hmac_hex",
-            timestamp_tolerance_seconds=int(raw.get("timestamp_tolerance_seconds", 300)),
-            delivery_id_header=raw.get("delivery_id_header", "") or "",
-            oidc_audience=str(raw.get("oidc_audience", "") or ""),
-            oidc_service_account=str(raw.get("oidc_service_account", "") or ""),
-        )
+        try:
+            channels[name] = _channel(name, raw)
+        except (ValueError, TypeError) as exc:
+            if strict or declared[name] == path:
+                raise
+            logger.error(
+                "Webhook channel %r in %s is malformed (%s); it is not served",
+                name,
+                declared[name],
+                type(exc).__name__,
+            )
+            continue
         if channels[name].signature_scheme not in SIGNATURE_SCHEMES:
             logger.warning(
                 "Webhook channel '%s' has unknown signature_scheme %r; every request will be "
@@ -123,6 +183,27 @@ def load_webhook_config(path: str | Path) -> WebhookConfig:
             )
 
     return WebhookConfig(channels=channels)
+
+
+def _channel(name: str, raw: dict[str, Any]) -> WebhookChannel:
+    return WebhookChannel(
+        name=name,
+        stream=raw.get("stream", name),
+        secret_env=raw.get("secret_env", ""),
+        event_type_header=raw.get("event_type_header", ""),
+        event_type_field=raw.get("event_type_field", ""),
+        event_type_prefix=raw.get("event_type_prefix", ""),
+        enabled=raw.get("enabled", True),
+        rate_limit_per_min=int(raw.get("rate_limit_per_min", 60)),
+        signature_header=raw.get("signature_header", "") or "",
+        signature_scheme=raw.get("signature_scheme", "hmac_hex") or "hmac_hex",
+        timestamp_tolerance_seconds=int(raw.get("timestamp_tolerance_seconds", 300)),
+        timestamp_header=str(raw.get("timestamp_header", "") or "").strip()
+        or DEFAULT_TIMESTAMP_HEADER,
+        delivery_id_header=raw.get("delivery_id_header", "") or "",
+        oidc_audience=str(raw.get("oidc_audience", "") or ""),
+        oidc_service_account=str(raw.get("oidc_service_account", "") or ""),
+    )
 
 
 def _verify_hmac(payload_bytes: bytes, signature: str, secret: str) -> bool:
@@ -194,8 +275,61 @@ def _verify_stripe_t_v1(
     return False, "no v1 signature matched"
 
 
+_HEX_SHA256 = re.compile(r"[0-9a-fA-F]{64}")
+
+
+def _verify_hmac_ts_hex(
+    payload_bytes: bytes,
+    signature: str,
+    timestamp: str,
+    secret: str,
+    tolerance_seconds: int,
+    now: float | None = None,
+) -> tuple[bool, str]:
+    """Verify a hex HMAC-SHA256 over ``f"{timestamp}."`` followed by the raw body.
+
+    ``timestamp`` is the value of the channel's timestamp header, in integer
+    unix seconds (milliseconds are not accepted: they read as far in the
+    future). The signed string uses the canonical integer (``str(int(...))``),
+    not the raw header text, so a zero-padded timestamp fails safe as a bad
+    digest. The signature may carry a ``sha256=`` prefix in any case. Returns
+    ``(ok, reason)``; the reason names the failed check, never the secret.
+    """
+    if not secret:
+        return False, "missing secret"
+    if not timestamp:
+        return False, "missing timestamp"
+    # Bounded so the float comparison cannot overflow; 13 digits lets a
+    # millisecond value through to be refused as stale rather than malformed.
+    if not (timestamp.isascii() and timestamp.isdigit() and len(timestamp) <= 13):
+        return False, "malformed timestamp"
+    ts = int(timestamp)
+    current = time.time() if now is None else now
+    if abs(current - ts) > tolerance_seconds:
+        return False, f"stale timestamp (outside {tolerance_seconds}s)"
+
+    if signature[:7].lower() == "sha256=":
+        signature = signature[7:]
+    if not signature:
+        return False, "missing signature"
+    if not _HEX_SHA256.fullmatch(signature):
+        return False, "malformed signature"
+    expected = hmac.new(
+        secret.encode("utf-8"),
+        f"{ts}.".encode() + payload_bytes,
+        hashlib.sha256,
+    ).hexdigest()
+    if hmac.compare_digest(expected, signature.lower()):
+        return True, ""
+    return False, "bad digest"
+
+
 def _verify_signature(
-    channel: WebhookChannel, payload_bytes: bytes, signature: str, secret: str
+    channel: WebhookChannel,
+    payload_bytes: bytes,
+    signature: str,
+    secret: str,
+    timestamp: str = "",
 ) -> tuple[bool, str]:
     """Dispatch to the channel's signature scheme. Returns ``(ok, reason)``."""
     if channel.signature_scheme == "hmac_hex":
@@ -205,6 +339,10 @@ def _verify_signature(
     if channel.signature_scheme == "stripe_t_v1":
         return _verify_stripe_t_v1(
             payload_bytes, signature, secret, channel.timestamp_tolerance_seconds
+        )
+    if channel.signature_scheme == "hmac_ts_hex":
+        return _verify_hmac_ts_hex(
+            payload_bytes, signature, timestamp, secret, channel.timestamp_tolerance_seconds
         )
     return False, f"unknown signature scheme {channel.signature_scheme!r}"
 
@@ -564,7 +702,8 @@ def get_webhook_router(config: WebhookConfig | None = None) -> APIRouter:
             / "docs"
             / "webhooks.yaml"
         )
-        config = load_webhook_config(default_path)
+        # Lenient: one bad drop-in must not take the engine's HTTP app down.
+        config = _load_webhook_config(default_path, strict=False)
 
     router = APIRouter(tags=["webhooks"])
 
@@ -632,7 +771,14 @@ def get_webhook_router(config: WebhookConfig | None = None) -> APIRouter:
                 status_code=503,
             )
 
-        ok, reason = (True, "") if oidc else _verify_signature(ch, body, signature, secret)
+        timestamp = (
+            request.headers.get(ch.timestamp_header, "")
+            if ch.signature_scheme == "hmac_ts_hex"
+            else ""
+        )
+        ok, reason = (
+            (True, "") if oidc else _verify_signature(ch, body, signature, secret, timestamp)
+        )
         if not ok:
             logger.warning("Webhook signature rejected for channel '%s': %s", ch.name, reason)
             return JSONResponse(

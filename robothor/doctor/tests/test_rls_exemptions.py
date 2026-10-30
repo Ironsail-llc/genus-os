@@ -69,7 +69,7 @@ def test_the_coverage_check_passes_on_a_schema_with_migration_154(db_conn) -> No
     from pathlib import Path
 
     migration = (
-        Path(__file__).resolve().parents[3] / "crm" / "migrations" / "154_audit_log_tenant.sql"
+        Path(__file__).resolve().parents[3] / "crm" / "migrations" / "158_audit_log_tenant.sql"
     )
     with db_conn.cursor() as cur:
         cur.execute(migration.read_text(encoding="utf-8"))
@@ -84,7 +84,7 @@ def test_the_backstop_leaves_audit_log_without_a_policy(db_conn) -> None:
     from pathlib import Path
 
     migration = (
-        Path(__file__).resolve().parents[3] / "crm" / "migrations" / "154_audit_log_tenant.sql"
+        Path(__file__).resolve().parents[3] / "crm" / "migrations" / "158_audit_log_tenant.sql"
     )
     with db_conn.cursor() as cur:
         cur.execute(migration.read_text(encoding="utf-8"))

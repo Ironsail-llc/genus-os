@@ -71,7 +71,9 @@ not to Graph.
 
 The messaging endpoint must be reachable from Microsoft over public HTTPS. That
 is one path — `/api/channels/teams/messages` — on the engine's API, and it
-authenticates every request itself (see *What the endpoint refuses*).
+authenticates every request itself (see *What the endpoint refuses*). The
+engine does not ask Microsoft for an engine token on it: a `POST` to a mounted
+channel's own path skips the engine bearer, and any other request still needs it.
 
 On this platform's reference deployment the API sits behind **Cloudflare
 Access**, which challenges every request with an email OTP. Microsoft's servers

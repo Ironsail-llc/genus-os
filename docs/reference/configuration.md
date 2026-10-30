@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-488 settings in 17 groups.
+494 settings in 18 groups.
 
 ## autonomy
 
@@ -123,6 +123,18 @@ Host paths for the isolated personal browser service and clients.
 | `ROBOTHOR_M365_SCOPE_CANARY_MAILBOX` | str | _(empty)_ | `robothor-engine` | no | unreleased | A mailbox in the same Microsoft 365 tenant that the app must NOT be able to read. The doctor tries it to prove Exchange RBAC for Applications scopes the grant to the assistant and owner mailboxes; a readable canary is an error. Empty skips the check. |
 | `ROBOTHOR_TRIAGE_INBOX_PATH` | str | _(empty)_ | `robothor-engine` | no | unreleased | The triage-inbox.json the platform's Microsoft 365 ingest rebuilds after new mail and every five minutes: the pending email, calendar and jira items the email classifier and calendar monitor read. Empty means triage-inbox.json beside the email log. Has no effect on google, where the instance's own sync script writes it. |
 | `ROBOTHOR_WORKSPACE_PROVIDER` | Literal | `google` | `robothor-engine` | no | unreleased | Mail and calendar backend behind the gws_* tools: `google` (the gws CLI) or `microsoft365` (Microsoft Graph with an Entra app-only credential stored in the vault under workspace/microsoft365/). Under `microsoft365` the mail tools serve the assistant's Exchange mailbox and the calendar tools refuse until the Microsoft 365 calendar ships. |
+
+## integrations
+
+External systems the instance watches, such as an n8n instance.
+
+| Variable | Type | Default | Restart | Secret | Since | Description |
+| --- | --- | --- | --- | --- | --- | --- |
+| `ROBOTHOR_N8N_ALLOW_INSECURE_HTTP` | bool | `false` | `robothor-engine`, `robothor-bridge` | no | unreleased | Let ROBOTHOR_N8N_BASE_URL be plain http:// on a host that is not loopback, for a self-hosted n8n reachable only on a private network. Off: the base URL must be https:// (http:// only for localhost), because the API key travels in every request. |
+| `ROBOTHOR_N8N_API_KEY` | str | _(unset)_ | `robothor-engine`, `robothor-bridge` | yes | unreleased | An n8n public-API key (Settings > n8n API in n8n), sent as X-N8N-API-KEY. Resolved vault-first. Read-only use: the monitor never changes a workflow. |
+| `ROBOTHOR_N8N_BASE_URL` | str | _(empty)_ | `robothor-engine`, `robothor-bridge` | no | unreleased | Root URL of the n8n instance, e.g. https://n8n.example.com (no /api/v1). The poller calls its public API under it, and execution links in notifications point into it. |
+| `ROBOTHOR_N8N_ENABLED` | bool | `false` | `robothor-engine`, `robothor-bridge` | no | unreleased | Watch an external n8n instance: the engine's scheduler leader polls its workflows and failed executions, keeps a snapshot for the dashboard and the n8n_* agent tools, and notifies the main agent once per failed execution. Off: nothing is polled and the n8n section reads not configured. |
+| `ROBOTHOR_N8N_POLL_SECONDS` | int | `120` | no | no | unreleased | Seconds between n8n polls (minimum 30). The doctor's poll-freshness check and the dashboard's status allow three intervals before a snapshot counts as stale. |
 
 ## paths
 
@@ -332,6 +344,7 @@ How the instance reaches people, and who it says it is.
 | `ROBOTHOR_BRAND_NAME` | str | `Genus OS` | `robothor-engine` | no | legacy | Product name shown in dashboard chrome. |
 | `ROBOTHOR_CHANNELS` | str | _(empty)_ | `robothor-engine` | no | 1.70.0 | Comma-separated names of plugin-provided channels to arm. An installed genus.channels plugin is INERT until it is named here, the same rule ROBOTHOR_SANDBOX_BACKEND follows and for the same reason: a package that became the delivery surface merely by being installed could intercept every briefing. Built-in channels (telegram, event_bus, slack, webchat, email) are always available and are not listed here. Provisional name until adding a channel persists it to config.yaml. |
 | `ROBOTHOR_CHANNEL_ACCESS_DEFAULT` | str | `pairing` | `robothor-engine` | no | 1.73.0 | Inbound access policy for any channel with no setting of its own -- every plugin channel. One of `pairing` (an unknown sender gets a one-shot code and reaches nothing until an operator approves it), `allowlist` (the channel's own membership test decides) or `open` (anyone the surface admits may drive the agent). A value that is none of those resolves to `pairing`, so a typo cannot open a surface. |
+| `ROBOTHOR_CHANNEL_MAX_CONCURRENT_RUNS` | int | `8` | no | no | unreleased | How many runs every receiving channel together may have in flight at once. A message over the cap waits its turn rather than being refused; messages within one conversation always run one after another. A value below 1 is treated as 1. A changed value applies to messages that arrive after it, not to ones already queued. A run waiting on ask_user holds its slot until it is answered or its bounded wait times out. |
 | `ROBOTHOR_DOMAIN` | str | _(empty)_ | `robothor-engine` | no | legacy | Public domain the tunnel generator issues ingress hostnames under. |
 | `ROBOTHOR_EMAIL_FROM` | str | _(empty)_ | `robothor-engine` | no | 1.74.0 | Address the email channel sends FROM over SMTP, and the one an operator will reply to. Required for the SMTP transport and unused by the gws transport, which sends as whichever account the gws CLI is authenticated to. |
 | `ROBOTHOR_EMAIL_SMTP_HOST` | str | _(empty)_ | `robothor-engine` | no | 1.74.0 | SMTP server the email channel falls back to when no gws CLI is installed. Empty means the channel has no SMTP transport; on a box without gws that makes `delivery.channel: email` answer failed:email_no_transport rather than silently doing nothing. |

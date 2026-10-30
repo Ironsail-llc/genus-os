@@ -71,10 +71,19 @@ keeps those in separate registries and so does the loader.
 
 ## The rules, and why
 
-**The contract version is checked and mismatches are refused.** `1.0` today.
-A plugin built against a different contract is not loaded — an agent
-platform running third-party code that expects a different tool-calling
-contract is a security problem, not a compatibility inconvenience.
+**The contract version is checked and mismatches are refused.** This engine
+speaks `1.0` and `2.0`. A plugin built against a different contract is not
+loaded — an agent platform running third-party code that expects a different
+tool-calling contract is a security problem, not a compatibility inconvenience.
+
+`2.0` is `1.0` plus [composable patches](#composable-patches-append-and-detach)
+(`append:`/`detach:`), `docs/webhooks.d/` drop-ins (instance files) and
+`brain/agents/<agent>.d/` instruction fragments. Declare `contract_version: 2`
+in `genus-plugin.yaml` and `genus_contract_version: "2.0"` in the payload when
+your plugin uses any of them; engines before this release refuse it with the
+contract-mismatch message instead of installing it without its hooks. A plugin
+that uses none of them stays on `1.0` and still loads on older engines.
+`genus plugin new` scaffolds `1.0`.
 
 **A plugin cannot shadow a built-in.** Claiming `exec` or `write_file` is
 refused and logged. That is a takeover, not an extension.
@@ -87,12 +96,69 @@ loads none of them: half-loading leaves it in a state its author never
 tested. And a plugin that fails to import is recorded and skipped — one
 broken package must never stop the engine booting.
 
+## State and shared primitives
+
+A plugin's runtime dependencies are stdlib-only, and that rule is about
+*third-party* packages. Importing `robothor.*` at runtime is fine: the plugin
+runs inside the engine, and the primitives below exist so that it does not
+reinvent them.
+
+**`PluginState` — your plugin's tables.** A wheel cannot ship a database
+migration, so every table a plugin needs is a *kind* of row in one core table,
+`plugin_state`, keyed by tenant, plugin name, kind and key, holding a JSON
+object:
+
+```python
+from robothor.plugins.state import PluginState
+
+state = PluginState("acme")             # tenant defaults to the instance's
+state.put("contact", "alice", {"stage": "lead"})
+state.put("seen", message_id, {}, ttl_seconds=86_400)
+state.get("contact", "alice")                     # {"stage": "lead"}, or None
+state.exists("seen", message_id)
+state.list("contact", prefix="a", limit=50)
+# -> [{key, value, updated_at, expires_at}]
+state.delete("contact", "alice")
+```
+
+Two plugins, or two tenants, using the same kind and key never see each
+other's rows. A row written with `ttl_seconds` disappears from `get`, `exists`
+and `list` the moment it expires. The engine deletes expired rows hourly for
+the instance's tenant; rows for other tenants need
+`PluginState.purge_expired()`. `list` returns rows in key order; its
+prefix is literal text, not a pattern. The calls are synchronous database
+queries: from an async handler, run them with `asyncio.to_thread`.
+
+**`fleet_model_chain()` — never pin a model.** A plugin tool that calls a
+model must not name one. The operator chooses the fleet's models, and a
+pinned name goes stale the day they change them.
+`robothor.engine.llm_client.fleet_model_chain()` returns the fleet's chain,
+primary first, then the fallbacks, ending in the instance's model of last
+resort when one is set. With no fleet defaults file it is that last-resort
+model alone, and empty only when neither exists, so check for an empty list.
+
+**`do_not_contact_phones()` — honour the opt-out.** Anything that texts or
+calls a person must check the same opt-out the email tools do.
+`robothor.crm.dal.do_not_contact_phones(phones, tenant_id)` returns the
+numbers, exactly as you passed them, that belong to a person marked do not
+contact. It compares the last ten digits, so a number written with a `+1`
+country code, brackets, spaces or dots matches the same ten digits written
+plainly; a number with fewer than ten digits matches nothing. The match
+assumes NANP (US/Canada) numbers; an international deployment must normalise
+both sides to E.164 before calling (nine-digit national numbers never match).
+It checks the person's primary number, their additional numbers and their
+SMS and voice identifiers. Drop every returned number before sending, and
+treat an exception as a refusal: a lookup that failed is not a clean list.
+
+The knowledge-base tools (`kb_*`) are engine tools, not imports: an agent
+that runs your plugin's workflow lists them in `tools_allowed`.
+
 ## Checking what loaded
 
 Plugin failures are logged at WARNING with the plugin name and the reason:
 
 ```
-Plugin 'acme' declares contract '0.9', this engine speaks '1.0' — refused
+Plugin 'acme' declares contract '0.9', this engine speaks '1.0' or '2.0' — refused
 Plugin 'acme' tried to shadow built-in(s) ['exec']
 ```
 
@@ -298,6 +364,28 @@ than `safe`, which is the correct verdict for a channel: it reaches off the box
 and it runs without a tool call, and an operator should see both before
 accepting it.
 
+**A receiving channel authenticates every request itself.** The engine skips
+its own bearer for a `POST` to `/api/channels/<name>` or any path below it, and
+only while that channel's router is mounted, because the senders such a route
+exists for (a storefront, an SMS provider's webhook, a support form, Microsoft's
+Bot Framework) never hold an engine token. Every other method on the channel's
+path, and any name that is not mounted, still needs the engine bearer. So a
+channel's `POST` handler must check its own credential (an HMAC over the raw
+body, a shared token, a signed JWT) before it reads anything else, and refuse
+with its own `401` or `403`. There is no flag that asks the engine to keep the
+bearer in front of a channel: a `POST` route that cannot authenticate its
+sender should not be in the router.
+
+**Let the pipeline own ordering and memory.** `channels.inbound.handle_message`
+serialises messages that share a `session_key`, runs different keys
+concurrently up to `ROBOTHOR_CHANNEL_MAX_CONCURRENT_RUNS`, and records each
+successful exchange in the session's history and the chat store, so it is
+remembered across restarts. Ordering and the cap are per engine process. So pick a `session_key` per
+conversation (per visitor, for a public chat) and call it from as many
+concurrent handlers as you like. Pass `record_turn=False` for a message that
+should not be remembered, and `history_limit=N` to hand the run only the last
+N turns — a cheap bound on prompt size for a chat that can run long.
+
 **Declare your chunk size if you split.** `register_platform_sender(...,
 chunk_size=N)` is how the platform tells a truncated send from a complete one.
 Without it, two answers are recorded `failed:<name>_unproven`, because neither
@@ -446,8 +534,86 @@ example_agent = ["genus-plugin.yaml", "agents/**/*", "workflows/*", "patches/*",
 |---|---|---|
 | `agents` | a directory laid out like `templates/agents/core/main`: `manifest.template.yaml`, `instructions.template.md`, optional `setup.yaml` and `SKILL.md` | rendered by the agent-template installer — the same code as `genus agent install` — into `docs/agents/<id>.yaml` and the instruction file under the instance's `brain/`, and recorded in `.robothor/installed.yaml` with `source: plugin:<distribution>`. With no `setup.yaml`, the agent id is the directory name and the version is the plugin's. `.robothor/overrides/<id>.yaml` applies exactly as it does to any template |
 | `workflows` | a file | copied to `docs/workflows/<basename>` |
-| `patches` | `agent:` an agent id the plugin does **not** ship, `file:` a YAML file with top-level `install:` and `remove:` sections | each section has `set:` — a deep merge for mappings; any other value, lists included, replaces — and `delete:`, a list of keys, dotted for nested ones. `set` runs before `delete`. A patch may not touch `id`. A patch whose target agent does not exist is skipped with a warning. **A list replaces**: `set: {tools_allowed: [x]}` on an agent with no `tools_allowed` (which means every non-opt-in tool) narrows it to `x` |
-| `files` | `src`, `dest`, `mode` (`overwrite`, the default, or `if_missing`) | `dest` must be under `brain/`, `docs/workflows/` or `docs/hooks/`, or be exactly `docs/webhooks.yaml`. `if_missing` never replaces a file that exists. `brain/` has ownership rules, below (all of these are instance paths) |
+| `patches` | `agent:` an agent id the plugin does **not** ship, `file:` a YAML file with top-level `install:` and `remove:` sections | each section has `set:` — a deep merge for mappings; any other value, lists included, replaces — `delete:`, a list of keys, dotted for nested ones, and `append:` / `detach:`, which add or take out single list items (see [Composable patches](#composable-patches-append-and-detach)). The order is `set`, `append`, `delete`, `detach`. A patch may not touch `id`. A patch whose target agent does not exist is skipped with a warning. **A list replaces**: `set: {tools_allowed: [x]}` on an agent with no `tools_allowed` (which means every non-opt-in tool) narrows it to `x`. `append:` does not help there either: it refuses to create or fill an absent or empty `tools_allowed` (or `heartbeat_tools_allowed` / `worker_tools_allowed`), and only adds `x` to an allowlist the agent already has. To give an unrestricted agent a plugin tool that is opt-in, append it to `tools_opt_in` |
+| `files` | `src`, `dest`, `mode` (`overwrite`, the default, or `if_missing`) | `dest` must be under `brain/`, `docs/workflows/` or `docs/hooks/`, be exactly `docs/webhooks.yaml`, or be one `<name>.yaml` directly in `docs/webhooks.d/`. `if_missing` never replaces a file that exists. `brain/` has ownership rules, below (all of these are instance paths) |
+
+### Composable patches: `append` and `detach`
+
+`set:` owns a key wholesale, so only one plugin can `set: hooks` on an agent.
+To let several plugins extend one agent — each giving `main` its own event
+hook, instruction fragment or webhook channel — a patch names list **items**
+instead:
+
+```yaml
+# example_agent/patches/main.patch.yaml
+install:
+  append:
+    hooks:
+      - stream: email
+        event_type: email.new
+        message: "A new email arrived; triage it."
+    bootstrap_files: [brain/agents/main.d/example-agent.md]
+    warmup.memory_blocks: [example_notes]
+remove:                 # optional: without a detach, remove takes back what install appended
+  detach:
+    hooks:
+      - {stream: email, event_type: email.new}
+```
+
+* **`append: {key: [items]}`** upserts each item into the list at `key` (dotted
+  for nested), creating the list — and any missing mapping above it — when it
+  is absent. A key that holds something other than a list is refused, and the
+  patch is not applied.
+* **Tool allowlists are never created.** An absent or empty `tools_allowed`
+  (and `heartbeat.heartbeat_tools_allowed`, `worker.worker_tools_allowed`)
+  means every non-opt-in tool, so appending to one would strip every other
+  tool. `append:` refuses that, naming the key, and adds to an allowlist only
+  where the agent already has a non-empty one. The same rule holds the other
+  way: a `detach:` (or a removal) that would leave an allowlist empty is
+  refused and the list is left as it is, so removing a plugin never widens an
+  agent to every tool; the removal reports it, naming the key. Every one of
+  these refusals is taken at plan time, before pip runs.
+* **Identity.** A `hooks` item is identified by its `(stream, event_type)` and
+  must have both (a `stream` may not contain `:`); an item of any other list (`bootstrap_files`,
+  `warmup.memory_blocks`, `tools_allowed`, `tools_opt_in`, …) must be a scalar
+  and is identified by its value. An item already present with the same
+  identity is replaced in place, never duplicated, so a re-apply changes
+  nothing.
+* **`detach: {key: [items]}`** removes the entries whose identity matches and
+  leaves the rest; an identity that is not there is a no-op. A `hooks` item in
+  `detach` needs only `stream` and `event_type`.
+* **Remove.** `genus plugin remove` applies the `remove:` section; when it has
+  no `detach:`, the items the plugin last appended (recorded in the ledger) are
+  detached for it. An upgrade that stops appending an item detaches it too,
+  unless that would leave a tool allowlist empty: then the item is kept, the
+  upgrade goes ahead with a warning naming the key, and the item is the
+  operator's from then on (a later removal does not take it back).
+  Detach removes every identity the plugin declared — including one that was
+  already in the list before the plugin was installed (the original manifest is
+  kept once as `.pre-<distribution>`).
+* **Claims.** The ledger records each appended item as `hooks[<stream>:<event_type>]`
+  or `<key>[<value>]`. Two plugins appending different items to the same list
+  coexist; two appending the same identity are refused, as is one plugin
+  appending to a list another `set`s or `delete`s (and the reverse).
+
+A patch that uses `append:` or `detach:` belongs to a plugin that declares
+contract `2.0` (see [The rules, and why](#the-rules-and-why)).
+
+Two drop-in locations make the rest composable without a shared file:
+
+* **Instruction fragments:** ship `brain/agents/<agent>/…` or
+  `brain/agents/<agent>.d/<distribution>.md` as a `files:` entry (allowed for an
+  agent the plugin patches) and `append` it to the agent's `bootstrap_files`;
+  bootstrap files are read on every run.
+* **Webhook channels:** ship `docs/webhooks.d/<distribution>.yaml` (same shape
+  as `docs/webhooks.yaml`, a `channels:` mapping). The engine merges every
+  `*.yaml` there, in name order, after `docs/webhooks.yaml`. Install refuses a
+  drop-in that does not parse, has a `rate_limit_per_min` or
+  `timestamp_tolerance_seconds` that is not a whole number, or declares a
+  channel the base file or another drop-in already has. If a bad drop-in still
+  turns up (an operator edit), the engine logs an error naming the file, skips
+  it, and keeps serving the rest. `docs/webhooks.yaml` itself stays strict: a
+  broken base file stops the engine from starting, as it always has.
 
 ### Ownership
 
@@ -500,7 +666,9 @@ instruction-file check already applies to agents.
 * **Files** another plugin wrote are refused.
 * **Patch keys.** Each patched key (agent plus dotted key, prefix-aware) is
   recorded per plugin; a second plugin that sets or deletes a key another
-  plugin already patches is refused, naming both.
+  plugin already patches is refused, naming both. Appended list items are
+  claimed one by one, by identity (see
+  [Composable patches](#composable-patches-append-and-detach)).
 * **Operator edits.** A file the plugin wrote and the operator has since edited
   is left alone by sync (with a warning) and by remove. That covers a plugin
   agent's manifest and instruction file as well as `files:` and `workflows:`:
@@ -639,6 +807,36 @@ which keeps comments only when `ruamel.yaml` is installed (the platform does
 not depend on it). Without it the patched manifest is rewritten by PyYAML and
 its comments are lost; the `.pre-<distribution>` backup is the original.
 
+### Seeing what a plugin shipped
+
+Three surfaces read the asset ledger and `.robothor/installed.yaml` (every agent
+recorded with `source: plugin:<dist>`), so nobody has to open them by hand:
+
+- the **`plugins_overview`** tool lists each installed plugin with its tools,
+  doctor checks, agents (id, name, schedule), workflows (id, name, triggers),
+  patched agents and other files — see [Tools](TOOLS.md#what-plugins-contribute-plugins_overview);
+- each row of `GET /api/admin/plugins` carries **`assets`**:
+  `{agents, workflows, patches, files}` in the same shapes, drawn on the Helm's
+  Plugins page as **Agents and workflows**. If the asset ledger or
+  `installed.yaml` cannot be read, the listing still answers: `assets.error`
+  says which record (by exception class, never its text) and `assets.partial`
+  is `true`, because the lists still hold what the other record gave. The
+  Plugins page shows "unavailable" with that reason above whatever lists it
+  could read (and no "none"). If the asset read fails outright, the lists are
+  empty and `partial` is `false`;
+- `GET /api/workflows` on the bridge lists every workflow defined in
+  `docs/workflows/`, including one that has never run (`runs: 0`), with
+  `source: "plugin:<dist>"` when the ledger records that a plugin wrote it and
+  `"workspace"` otherwise (`null`, and a logged warning, when the ledger cannot
+  be read).
+
+Only `docs/workflows/*.yaml` is loaded by the engine, so a plugin file ending in
+`.yml` there is listed under `files`, never as a workflow with triggers.
+
+A plugin that ships only workspace files has no entry point, so the loader never
+sees it; `plugins_overview` still lists it from the ledger, with state
+`assets only`. All three are read-only and never create `.robothor/`.
+
 ### Scan verdict
 
 A wheel whose manifest declares **any** workspace asset is graded `review`,
@@ -650,7 +848,7 @@ the way the installer reads it (`./brain/x` is `brain/x`, an instance path):
 | `agents` | a rendered manifest can declare lifecycle hooks, including `command` hooks the engine runs as shell |
 | `workflows`, `files` → `docs/workflows/` | the engine runs them |
 | `files` → `docs/hooks/` | the engine executes them |
-| `files` → `docs/webhooks.yaml` | configuration the engine loads |
+| `files` → `docs/webhooks.yaml`, `docs/webhooks.d/` (instance drop-ins) | configuration the engine loads |
 | `files` → `brain/` (instance) | text a model reads |
 | `patches` | they change an agent the plugin does not own |
 
@@ -798,7 +996,7 @@ acts with identifiers only.
 
 | route (bridge) | engine | what it does |
 |---|---|---|
-| `GET /api/plugins` | `GET /api/admin/plugins` | generation, lockfile state, one row per distribution |
+| `GET /api/plugins` | `GET /api/admin/plugins` | generation, lockfile state, one row per distribution, each with the `assets` it wrote into the workspace |
 | `POST /api/plugins/sync` | `POST /api/admin/plugins/sync` | record what is installed; **409** when the existing file's contents cannot be read (`--force` is CLI-only), **503** when the path itself cannot be written |
 | `POST /api/plugins/{name}/enable` | `POST /api/admin/plugins/{name}/enable` | flip the row; 404 if unrecorded; does **not** reload |
 | `POST /api/plugins/{name}/disable` | `POST /api/admin/plugins/{name}/disable` | as above |
@@ -913,7 +1111,19 @@ What happens, in order, each step a refusal:
 7. **Install** with pip — and pip is allowed to do nothing at all:
    `--no-deps --no-index --find-links <the temp directory>`. It resolves
    nothing, reaches nowhere, and installs exactly the one file that survived
-   the steps above. It never sees a URL, an `--index-url` or `--pre`.
+   the steps above. It never sees a URL, an `--index-url` or `--pre`. The
+   engine's interpreter runs it as `python -m pip` when it has pip; a venv
+   built by uv (the container image's) has none, so the installer runs
+   `uv pip install --python <that interpreter>` with the same flags instead.
+   With neither pip nor `uv` on PATH, the install is refused with a sentence
+   naming both. Either way it reinstalls without a cache (`--force-reinstall
+   --no-cache-dir` for pip, `--reinstall --no-cache` for uv), so installing a
+   rebuilt wheel of a version already installed replaces its files, and what
+   lands on disk is the file whose hash was checked, never a cached copy of
+   the same name and version. `genus plugin remove` uninstalls through the same choice
+   (`uv pip uninstall --python <that interpreter>` without pip). With neither,
+   it refuses; `--force` then retires the plugin's workspace files and drops
+   its lockfile row without uninstalling the package.
 8. **Record** the row: verdict, wheel hash, and where it came from.
 
 Nothing signals the engine. The running daemon keeps serving the plugin set it

@@ -613,6 +613,26 @@ _CONFIG_SCHEMAS: dict[str, dict[str, Any]] = {
 }
 
 
+#: What installed plugins contribute (``handlers/plugins.py``). Its own block,
+#: outside ``get_engine_schemas``, for the size-ratchet reason above.
+_PLUGIN_SCHEMAS: dict[str, dict[str, Any]] = {
+    "plugins_overview": {
+        "type": "function",
+        "function": {
+            "name": "plugins_overview",
+            "description": (
+                "List every installed plugin and what it contributes to this instance: "
+                "its tools (with descriptions), doctor checks, agents (id, name, "
+                "schedule), workflows (id, name, triggers), the agent manifests it "
+                "patched, and other workspace files it wrote. Read-only. Use this to "
+                "answer 'what does plugin X give us?' or 'which plugin ships agent or "
+                "workflow Y?'; use tool_search to find a tool by what it does."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+}
+
 #: The secrets vault's four tools, as one cluster.
 #:
 #: Lifted out of ``get_engine_schemas`` when ``vault_test`` was added: the
@@ -1021,6 +1041,74 @@ _HUMAN_IN_THE_LOOP_SCHEMAS: dict[str, dict[str, Any]] = {
             },
         },
     },
+    # ── Workflow control: list, start, report ──
+    "list_workflows": {
+        "type": "function",
+        "function": {
+            "name": "list_workflows",
+            "description": (
+                "List the workflows this instance has loaded: id, name, description, "
+                "triggers (cron schedule or event), the last run's status and start time, "
+                "and how many runs failed in the last 7 days. Use it to find a workflow id "
+                "before run_workflow or workflow_runs."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    "run_workflow": {
+        "type": "function",
+        "function": {
+            "name": "run_workflow",
+            "description": (
+                "Start a workflow now. The run continues in the background; this call "
+                "waits up to wait_seconds (max 120) for it to finish. With wait_seconds 0 "
+                "it still waits about 2 seconds so an immediate refusal is reported. "
+                'Returns {status: "started", run_id} if still running, {status, run_id, '
+                'error_message} if it finished, {status: "already_running"} if a run of '
+                'this workflow is in progress, or {error: "unknown_workflow"}. Check '
+                "progress later with workflow_runs. Use this for a defined, repeatable "
+                "workflow; use spawn_agent for open-ended work."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "workflow_id": {"type": "string", "description": "Workflow id"},
+                    "payload": {
+                        "type": "object",
+                        "description": (
+                            "Input for the run, available to its steps as event.payload"
+                        ),
+                    },
+                    "wait_seconds": {
+                        "type": "integer",
+                        "description": "Seconds to wait for completion (0-120, default 0)",
+                    },
+                },
+                "required": ["workflow_id"],
+            },
+        },
+    },
+    "workflow_runs": {
+        "type": "function",
+        "function": {
+            "name": "workflow_runs",
+            "description": (
+                "Recent runs of one workflow, newest first: status, trigger, start and "
+                "end time, error message, and each step's status."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "workflow_id": {"type": "string", "description": "Workflow id"},
+                    "limit": {
+                        "type": "integer",
+                        "description": "How many runs (1-50, default 10)",
+                    },
+                },
+                "required": ["workflow_id"],
+            },
+        },
+    },
 }
 
 
@@ -1370,6 +1458,92 @@ _CLAUDE_CODE_SCHEMAS: dict[str, dict[str, Any]] = {
 }
 
 
+_KB_COLLECTION: dict[str, Any] = {
+    "type": "string",
+    "description": "Collection name, <plugin>/<topic> (e.g. helpdesk/policies)",
+}
+
+#: Knowledge base (robothor/knowledge/, docs/knowledge-base.md): curated
+#: reference documents per collection. Kept out of get_engine_schemas() so the
+#: function-size ratchet holds.
+_KB_SCHEMAS: dict[str, dict[str, Any]] = {
+    "kb_search": {
+        "type": "function",
+        "function": {
+            "name": "kb_search",
+            "description": (
+                "Search a knowledge-base collection of curated reference documents "
+                "(policies, product docs, playbooks) — hybrid semantic + keyword. Use it "
+                "for reference material scoped to a collection; use search_memory for "
+                "facts you have remembered yourself. Returns matching chunks with "
+                "doc_id, title, text, score and source_uri."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "collection": _KB_COLLECTION,
+                    "query": {"type": "string", "description": "What to look for"},
+                    "limit": {"type": "integer", "default": 5, "description": "1..50"},
+                },
+                "required": ["collection", "query"],
+            },
+        },
+    },
+    "kb_upsert_document": {
+        "type": "function",
+        "function": {
+            "name": "kb_upsert_document",
+            "description": (
+                "Add or replace a reference document in a knowledge-base collection. "
+                "Re-sending an identical document is a no-op (status unchanged); a "
+                "changed one replaces its chunks and bumps its version."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "collection": _KB_COLLECTION,
+                    "doc_id": {"type": "string", "description": "Stable id within the collection"},
+                    "title": {"type": "string", "default": ""},
+                    "text": {
+                        "type": "string",
+                        "description": "The full document text (at most 200,000 characters)",
+                    },
+                    "source_uri": {
+                        "type": "string",
+                        "description": "Where the document came from (optional)",
+                        "default": "",
+                    },
+                },
+                "required": ["collection", "doc_id", "text"],
+            },
+        },
+    },
+    "kb_delete_document": {
+        "type": "function",
+        "function": {
+            "name": "kb_delete_document",
+            "description": "Remove a document and its chunks from a knowledge-base collection.",
+            "parameters": {
+                "type": "object",
+                "properties": {"collection": _KB_COLLECTION, "doc_id": {"type": "string"}},
+                "required": ["collection", "doc_id"],
+            },
+        },
+    },
+    "kb_list_collections": {
+        "type": "function",
+        "function": {
+            "name": "kb_list_collections",
+            "description": (
+                "List this tenant's knowledge-base collections with their document "
+                "and chunk counts and when each last changed."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+}
+
+
 #: The pr-reviewer suite (robothor/pr_review/). Opt-in: see OPT_IN_TOOLS.
 _PR_REVIEW_SCHEMAS: dict[str, dict[str, Any]] = {
     "pr_review_intake": {
@@ -1502,6 +1676,59 @@ _PR_REVIEW_SCHEMAS: dict[str, dict[str, Any]] = {
                     "pr": {
                         "type": "string",
                         "description": "One pull request (URL or owner/repo#N) to report on",
+                    },
+                },
+            },
+        },
+    },
+}
+
+
+#: The n8n monitor's read tools (handlers/n8n.py): the snapshot, never n8n itself.
+_N8N_SCHEMAS: dict[str, dict[str, Any]] = {
+    "n8n_list_workflows": {
+        "type": "function",
+        "function": {
+            "name": "n8n_list_workflows",
+            "description": (
+                "List the operator's n8n automations (the external n8n instance, not Genus "
+                "workflows) with failures in the last 24h and 7 days, the last error and a link, "
+                "as of the n8n monitor's last poll. Reads the snapshot; never calls n8n."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "active_only": {
+                        "type": "boolean",
+                        "description": "Only workflows that are switched on in n8n (default true).",
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "Case-insensitive match on the workflow name or a tag.",
+                    },
+                },
+            },
+        },
+    },
+    "n8n_recent_failures": {
+        "type": "function",
+        "function": {
+            "name": "n8n_recent_failures",
+            "description": (
+                "Failed n8n executions (the external n8n instance) in the last `hours`, newest "
+                "first: workflow, error message, mode, times and a link to the execution in n8n. "
+                "Reads the n8n monitor's snapshot; never calls n8n."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "hours": {
+                        "type": "integer",
+                        "description": "Look-back window in hours (default 24, max 720).",
+                    },
+                    "workflow_id": {
+                        "type": "string",
+                        "description": "Only this n8n workflow id (from n8n_list_workflows).",
                     },
                 },
             },
@@ -1842,7 +2069,7 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
         },
     }
 
-    schemas.update(_VAULT_SCHEMAS | _CONFIG_SCHEMAS)
+    schemas.update(_VAULT_SCHEMAS | _CONFIG_SCHEMAS | _PLUGIN_SCHEMAS)
 
     # ── Knowledge Vault (verbatim memory store; RIP 12) ──
     # Distinct from the secrets vault above. Stores reference data the agent
@@ -1941,6 +2168,8 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
                 },
             },
         }
+
+    schemas.update(_KB_SCHEMAS)
 
     # ── Intent memory (prospective objectives; RIP 14) ──
     if is_rip_enabled(14):
@@ -4141,6 +4370,8 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
             },
         },
     }
+
+    schemas.update(_N8N_SCHEMAS)
 
     schemas["buddy_refresh"] = {
         "type": "function",

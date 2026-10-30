@@ -65,6 +65,8 @@ CHECK_MODULES = (
     # Mail and calendar backend: skips unless Microsoft 365 is configured. Next
     # to the channels because it answers the same question for the same mail.
     "workspace_m365",
+    # Opt-in external integrations: skip unless switched on.
+    "n8n",
     "services",
     "manifests",
     # Right after the manifests parse: "does this agent's prose agree with its

@@ -41,6 +41,7 @@ from robothor.engine.tools.constants import (
     DESKTOP_TOOLS,
     GOAL_TOOLS,
     GWS_TOOLS,
+    N8N_TOOLS,
     READONLY_TOOLS,
 )
 
@@ -213,15 +214,32 @@ _BENCHMARK_EXTRA_READS: frozenset[str] = frozenset(
 #: refuse a benchmark run anyway). ``config_get`` (GEN-42) reads the
 #: instance's REAL settings; its handler refuses a benchmark run too.
 #:
+#: ``plugins_overview`` reads the instance's REAL installed plugins, ledger and
+#: agent registry, so a graded agent could describe the operator's deployment
+#: in its answer; it is withheld for ``config_get``'s reason.
+#:
 #: ``search_files`` and ``wait_seconds`` joined when they were classified
 #: read-only: both were already excluded from the benchmark (see the
 #: comments in ``_BENCHMARK_EXCLUDED_TOOLS``), and classification does not
 #: change that.
+#:
+#: The n8n reads (``N8N_TOOLS``) joined with the n8n monitor: they read the
+#: snapshot of the operator's REAL automations, so a graded run gets neither.
 _BENCHMARK_WITHHELD_READS: frozenset[str] = frozenset(
     DESKTOP_TOOLS
     | BENCHMARK_TOOLS
     | GWS_TOOLS
-    | {"claude_code_status", "claude_code_wait", "search_files", "wait_seconds", "config_get"}
+    | N8N_TOOLS
+    | {
+        "claude_code_status",
+        "claude_code_wait",
+        "search_files",
+        "wait_seconds",
+        "config_get",
+        "plugins_overview",
+    }
+    # The instance's REAL workflows and their run history.
+    | {"list_workflows", "workflow_runs"}
 )
 
 
@@ -305,6 +323,10 @@ _BENCHMARK_EXCLUDED_TOOLS: frozenset[str] = _BENCHMARK_WITHHELD_READS | frozense
         "leave_breadcrumb",
         "record_procedure",
         "report_procedure_outcome",
+        # Knowledge-base writes: fixture text stored as a curated reference
+        # document would be read back by later real runs as fact.
+        "kb_upsert_document",
+        "kb_delete_document",
         # Task-system writes beyond the sandbox CRM set.
         "approve_task",
         "reject_task",
@@ -317,6 +339,8 @@ _BENCHMARK_EXCLUDED_TOOLS: frozenset[str] = _BENCHMARK_WITHHELD_READS | frozense
         "approve_workflow_step",
         "reject_workflow_step",
         "list_pending_approvals",
+        # Starts a real workflow run on the instance.
+        "run_workflow",
         # Asking a person mid-run. A graded agent must not be able to page the
         # operator, and a benchmark run has nobody watching it anyway — the
         # handler's own trigger gate would refuse, but a tool the harness never
