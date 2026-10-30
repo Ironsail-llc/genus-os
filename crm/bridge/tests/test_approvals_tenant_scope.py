@@ -224,6 +224,22 @@ def test_a_proposed_email_shows_who_it_goes_to_and_its_whole_body(child_admin, s
     assert action["detail"] == body_text
 
 
+def test_a_proposal_with_a_body_shows_every_other_field_too(child_admin, stores, ops):
+    """A plugin's payload may address people in keys the envelope does not name;
+    Approve authorizes all of it, so the card shows the body and the rest."""
+    payload = {"to": "bob@example.com", "cc": ["carol@example.com"], "body": "Hello Bob", "urgent": True}
+    ops.review = [{**_email_proposal(""), "kind": "acme-plugin.email", "payload": payload}]
+
+    [action] = [
+        i for i in child_admin.get("/api/approvals").json()["pending"] if i["kind"] == "action"
+    ]
+
+    assert action["envelope"] == {}
+    assert action["detail"].startswith("Hello Bob")
+    rest = json.loads(action["detail"][len("Hello Bob") :])
+    assert rest == {"to": "bob@example.com", "cc": ["carol@example.com"], "urgent": True}
+
+
 def test_a_proposal_without_a_body_shows_its_whole_payload(child_admin, stores, ops):
     big = {"items": ["x" * 50] * 40}
     ops.review = [{**_email_proposal(""), "kind": "crm.update", "payload": big}]
