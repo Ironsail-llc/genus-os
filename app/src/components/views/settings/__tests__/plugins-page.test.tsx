@@ -38,7 +38,11 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { PluginsPage } from "../plugins-page";
+import { PluginsPage, unreachableSentence } from "../plugins-page";
+
+/** The two 502 bodies, one per hop: the bridge's and the app proxy's. */
+const ENGINE_502 = { status: 502, body: { error: "engine unavailable" } };
+const PROXY_502 = { status: 502, body: { error: "Bridge service unavailable" } };
 
 const LOADED = {
   name: "genus-hostinfo",
@@ -241,6 +245,8 @@ function mockBridge(options: {
   install?: Reply[];
   remove?: Reply;
   listStatus?: number;
+  /** A queue of whole replies for `GET /api/plugins`; the last one repeats. */
+  listReplies?: Reply[];
 }): Recorded {
   const recorded: Recorded = { posts: [], listReads: 0 };
   const listings = options.listings ?? [LISTING];
@@ -271,6 +277,16 @@ function mockBridge(options: {
                   },
                 })
               : (options.toggle ?? { status: 200, body: {} });
+      return {
+        ok: reply.status < 400,
+        status: reply.status,
+        json: async () => reply.body,
+      } as Response;
+    }
+    if (options.listReplies) {
+      const reply =
+        options.listReplies[Math.min(recorded.listReads, options.listReplies.length - 1)];
+      recorded.listReads += 1;
       return {
         ok: reply.status < 400,
         status: reply.status,
@@ -649,18 +665,25 @@ describe("Settings › Plugins — enabling and disabling", () => {
     );
   });
 
-  it("says the engine is unreachable when a toggle answers 502", async () => {
-    mockBridge({
-      listings: [LISTING],
-      toggle: { status: 502, body: { error: "Bridge service unavailable" } },
-    });
+  it("says the dashboard could not reach the bridge when the proxy answers a toggle 502", async () => {
+    mockBridge({ listings: [LISTING], toggle: PROXY_502 });
     render(<PluginsPage visible />);
 
     fireEvent.click(await screen.findByTestId("plugin-switch-genus-notes"));
     const error = await screen.findByTestId("plugin-error-genus-notes");
-    expect(error.textContent).toMatch(/engine/i);
-    expect(error.textContent).toMatch(/unreachable/i);
+    expect(error.textContent).toMatch(/dashboard could not reach the bridge/i);
+    expect(error.textContent).not.toMatch(/engine/i);
     expect(error.textContent).not.toMatch(/502/);
+  });
+
+  it("says the bridge could not reach the engine when the bridge answers a toggle 502", async () => {
+    mockBridge({ listings: [LISTING], toggle: ENGINE_502 });
+    render(<PluginsPage visible />);
+
+    fireEvent.click(await screen.findByTestId("plugin-switch-genus-notes"));
+    const error = await screen.findByTestId("plugin-error-genus-notes");
+    expect(error.textContent).toMatch(/bridge could not reach the engine/i);
+    expect(error.textContent).toContain("ROBOTHOR_ENGINE_URL");
   });
 
   it("keeps one default for a missing enabled: true, as the contract has it", async () => {
@@ -1088,6 +1111,75 @@ describe("Settings › Plugins — reloading", () => {
   });
 });
 
+describe("Settings › Plugins — which hop a 502 came from", () => {
+  it("maps each hop's 502 body to its own sentence, keeping the act's outcome", () => {
+    expect(unreachableSentence("engine unavailable", "nothing was installed")).toBe(
+      "The bridge could not reach the engine at its configured URL (ROBOTHOR_ENGINE_URL), so " +
+        "nothing was installed. Check that the engine is running and that the network path " +
+        "from the bridge to the engine is allowed. Nothing has been changed."
+    );
+    expect(unreachableSentence("Bridge service unavailable", "nothing was installed")).toBe(
+      "The dashboard could not reach the bridge, so nothing was installed. Check that the " +
+        "bridge service is running. Nothing has been changed."
+    );
+    expect(unreachableSentence("The bridge refused the request (HTTP 502).")).toBe(
+      "The engine is unreachable from the bridge, so the plugin set could not be read. " +
+        "Nothing has been changed."
+    );
+  });
+
+  it("names the bridge-to-engine hop when Record answers the bridge's 502", async () => {
+    mockBridge({ listings: [FRESH], sync: ENGINE_502 });
+    render(<PluginsPage visible />);
+
+    await screen.findByTestId("plugins-record-empty");
+    fireEvent.click(screen.getByTestId("plugins-record"));
+    expect((await screen.findByTestId("plugins-record-error")).textContent).toMatch(
+      /bridge could not reach the engine/i
+    );
+  });
+
+  it("names the dashboard-to-bridge hop when Reload answers the proxy's 502", async () => {
+    mockBridge({ listings: [LISTING], reload: PROXY_502 });
+    render(<PluginsPage visible />);
+
+    await screen.findByTestId("plugin-genus-hostinfo");
+    fireEvent.click(screen.getByTestId("plugins-reload"));
+    expect((await screen.findByTestId("plugins-reload-error")).textContent).toMatch(
+      /dashboard could not reach the bridge/i
+    );
+  });
+
+  it("names the hop on an install 502 and keeps 'nothing was installed'", async () => {
+    mockBridge({ listings: [LISTING], install: [ENGINE_502] });
+    render(<PluginsPage visible />);
+
+    await screen.findByTestId("plugins-install-card");
+    fireEvent.change(screen.getByTestId("plugins-install-name"), {
+      target: { value: "genus-weather" },
+    });
+    fireEvent.click(screen.getByTestId("plugins-install-preview"));
+
+    const error = (await screen.findByTestId("plugins-install-error")).textContent ?? "";
+    expect(error).toMatch(/bridge could not reach the engine/i);
+    expect(error).toMatch(/nothing was installed/i);
+  });
+
+  it("says the dashboard could not reach the bridge on an install proxy 502", async () => {
+    mockBridge({ listings: [LISTING], install: [PROXY_502] });
+    render(<PluginsPage visible />);
+
+    await screen.findByTestId("plugins-install-card");
+    fireEvent.change(screen.getByTestId("plugins-install-name"), {
+      target: { value: "genus-weather" },
+    });
+    fireEvent.click(screen.getByTestId("plugins-install-preview"));
+
+    const error = (await screen.findByTestId("plugins-install-error")).textContent ?? "";
+    expect(error).toMatch(/dashboard could not reach the bridge, so nothing was installed/i);
+  });
+});
+
 describe("Settings › Plugins — the states that are not a listing", () => {
   it("renders a 403 as muted text, not as a fault", async () => {
     mockBridge({ listStatus: 403 });
@@ -1099,13 +1191,75 @@ describe("Settings › Plugins — the states that are not a listing", () => {
     expect(screen.queryByTestId("plugins-error")).toBeNull();
   });
 
-  it("says the engine is unreachable on a 502", async () => {
+  it("says the bridge could not reach the engine when the bridge answers 502", async () => {
+    mockBridge({ listReplies: [ENGINE_502] });
+    render(<PluginsPage visible />);
+
+    const error = await screen.findByTestId("plugins-error");
+    expect(error.textContent).toBe(
+      "The bridge could not reach the engine at its configured URL (ROBOTHOR_ENGINE_URL), so the " +
+        "plugin set could not be read. Check that the engine is running and that the network " +
+        "path from the bridge to the engine is allowed. Nothing has been changed."
+    );
+  });
+
+  it("says the dashboard could not reach the bridge when the app proxy answers 502", async () => {
+    mockBridge({ listReplies: [PROXY_502] });
+    render(<PluginsPage visible />);
+
+    const error = await screen.findByTestId("plugins-error");
+    expect(error.textContent).toBe(
+      "The dashboard could not reach the bridge, so the plugin set could not be read. Check " +
+        "that the bridge service is running. Nothing has been changed."
+    );
+    expect(error.textContent).not.toMatch(/engine/i);
+  });
+
+  it("keeps the generic sentence for a 502 neither hop claimed", async () => {
     mockBridge({ listStatus: 502 });
     render(<PluginsPage visible />);
 
     const error = await screen.findByTestId("plugins-error");
-    expect(error.textContent).toMatch(/engine/i);
-    expect(error.textContent).toMatch(/unreachable|did not answer|could not be reached/i);
+    expect(error.textContent).toBe(
+      "The engine is unreachable from the bridge, so the plugin set could not be read. " +
+        "Nothing has been changed."
+    );
+  });
+
+  it("keeps the last listing when a refresh fails, says so, and locks the switches", async () => {
+    mockBridge({ listReplies: [{ status: 200, body: LISTING }, ENGINE_502] });
+    render(<PluginsPage visible />);
+
+    const sw = await screen.findByTestId("plugin-switch-genus-notes");
+    expect(sw).not.toBeDisabled();
+    expect(screen.queryByTestId("plugins-stale")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("plugins-refresh"));
+
+    expect((await screen.findByTestId("plugins-error")).textContent).toMatch(
+      /bridge could not reach the engine/i
+    );
+    expect(screen.getByTestId("plugin-genus-hostinfo")).toBeInTheDocument();
+    expect(screen.getByTestId("plugins-stale").textContent).toBe(
+      "This is the plugin set the bridge last answered with; the live state could not be confirmed."
+    );
+    expect(screen.getByTestId("plugin-switch-genus-notes")).toBeDisabled();
+  });
+
+  it("unlocks the switches once a later refresh succeeds", async () => {
+    mockBridge({
+      listReplies: [{ status: 200, body: LISTING }, PROXY_502, { status: 200, body: LISTING }],
+    });
+    render(<PluginsPage visible />);
+
+    await screen.findByTestId("plugin-switch-genus-notes");
+    fireEvent.click(screen.getByTestId("plugins-refresh"));
+    await screen.findByTestId("plugins-stale");
+    fireEvent.click(screen.getByTestId("plugins-refresh"));
+
+    await waitFor(() => expect(screen.queryByTestId("plugins-stale")).toBeNull());
+    expect(screen.queryByTestId("plugins-error")).toBeNull();
+    expect(screen.getByTestId("plugin-switch-genus-notes")).not.toBeDisabled();
   });
 
   it("reads nothing at all while the page is not on screen", () => {
