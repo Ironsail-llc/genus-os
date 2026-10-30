@@ -72,13 +72,32 @@ def _engine(engine_config: Any, data: dict[str, Any]) -> WorkflowEngine:
     return engine
 
 
-async def _run(engine: WorkflowEngine, trigger: str = "hook") -> Any:
+async def _run(engine: WorkflowEngine, trigger: str = "hook", *, requeue: bool = False) -> Any:
+    kwargs: dict[str, Any] = {"requeue_on_rate_limit": True} if requeue else {}
     return await engine.execute(
         "order-flow",
         trigger_type=trigger,
         user_id="service:workflow:order-flow",
         user_role="service",
+        **kwargs,
     )
+
+
+def _parallel(**extra: Any) -> dict[str, Any]:
+    branch = {"type": "tool", "tool_name": "create_task", "on_failure": "skip"}
+    return {
+        "id": "order-flow",
+        "triggers": [{"type": "hook", "stream": "platform", "event_type": EVENT}],
+        "steps": [
+            {
+                "id": "fan",
+                "type": "parallel",
+                "on_failure": "skip",
+                "parallel_steps": [{"id": "a", **branch}, {"id": "b", **branch}],
+            }
+        ],
+        **extra,
+    }
 
 
 # ── the YAML field ───────────────────────────────────────────────────────
@@ -147,16 +166,47 @@ class TestBlockedStep:
         sleep.assert_awaited_once_with(60)
 
     @pytest.mark.asyncio
-    async def test_a_blocked_hook_run_is_deferred_not_failed(self, engine_config, clock, no_dedup):
+    async def test_a_run_its_caller_requeues_is_deferred_not_failed(
+        self, engine_config, clock, no_dedup
+    ):
         # on_failure: skip must not swallow it either: the step did nothing.
         engine = _engine(
             engine_config, _definition(rate_limit_per_minute=1, step={"on_failure": "skip"})
         )
         await _run(engine)
-        run = await _run(engine)
+        run = await _run(engine, requeue=True)
         assert run.status == RunStatus.SKIPPED
         assert run.rate_limited is True
         assert "rate limit" in (run.error_message or "").lower()
+
+    @pytest.mark.asyncio
+    async def test_a_hook_run_no_caller_requeues_fails(self, engine_config, clock, no_dedup):
+        # Being hook-triggered is not enough: only a caller that requeues may defer.
+        engine = _engine(engine_config, _definition(rate_limit_per_minute=1))
+        await _run(engine)
+        run = await _run(engine)
+        assert run.status == RunStatus.FAILED
+        assert run.rate_limited is True
+
+    @pytest.mark.asyncio
+    async def test_a_resumed_hook_run_fails_visibly(self, engine_config, clock, no_dedup):
+        # The approval driver resumes a run; nothing requeues it, so a block
+        # after the approval must fail, not read as a benign skip.
+        from robothor.engine.models import WorkflowRun
+
+        engine = _engine(engine_config, _definition(rate_limit_per_minute=1))
+        await _run(engine)
+        suspended = WorkflowRun(
+            workflow_id="order-flow",
+            trigger_type="hook",
+            status=RunStatus.AWAITING_APPROVAL,
+            context={"steps": {}},
+        )
+        with patch.object(engine, "_load_suspended_run", return_value=(suspended, "claim")):
+            run = await engine.resume_run(suspended.id)
+        assert run is not None
+        assert run.status == RunStatus.FAILED
+        assert run.rate_limited is True
 
     @pytest.mark.asyncio
     async def test_a_blocked_cron_run_still_fails(self, engine_config, clock, no_dedup):
@@ -216,3 +266,29 @@ class TestBurst:
         assert not [r for r in runs if r.status == RunStatus.FAILED]
         assert engine.runner.registry.execute.await_count == 6
         assert clock.now - 1000.0 >= 120  # six calls at two a minute
+
+
+# ── inside a parallel step ───────────────────────────────────────────────
+
+
+class TestParallelBranch:
+    @pytest.mark.asyncio
+    async def test_a_blocked_branch_defers_the_run(self, engine_config, clock, no_dedup):
+        # Limit 1, two branches: one is blocked. Neither the branch's nor the
+        # parallel step's on_failure: skip may swallow it.
+        engine = _engine(engine_config, _parallel(rate_limit_per_minute=1))
+        run = await _run(engine, requeue=True)
+        assert run.status == RunStatus.SKIPPED
+        assert run.rate_limited is True
+        blocked = [r for r in run.step_results if r.rate_limited]
+        assert len(blocked) == 1
+        assert blocked[0].status.value == "failed"
+
+    @pytest.mark.asyncio
+    async def test_a_blocked_branch_fails_a_run_nothing_requeues(
+        self, engine_config, clock, no_dedup
+    ):
+        engine = _engine(engine_config, _parallel(rate_limit_per_minute=1))
+        run = await _run(engine)
+        assert run.status == RunStatus.FAILED
+        assert run.rate_limited is True
