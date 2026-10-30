@@ -302,6 +302,10 @@ who may drive an agent) and any pending SSO binding grant; revokes every refresh
 minted for the new tenant; and writes one `auth.account_moved` row to the
 audit log. If any step fails, none of it happened.
 
+Run it from a root shell: `ROBOTHOR_TENANT_ID` unset or the root's id, and
+`ROBOTHOR_DEFAULT_TENANT` the root. Unlike `move-workload`, `move-account`
+does not check this itself yet, so check it before you run the command.
+
 | Flag | Use |
 |------|-----|
 | `--from acme-parent` | The address has an account in more than one tenant. The command refuses and lists them until you pick one. |
@@ -381,7 +385,13 @@ counts the live move would write, and changes nothing. The live move does
 everything in **one transaction** and writes one `tenant.workload_moved` row
 to the audit log, filed under the root of the source tenant (the details name
 both tenants, the agents, the workflows and the counts). If any step fails,
-none of it happened.
+none of it happened. A run that finds nothing to move (a re-run of a move
+that already happened) reports zeros and writes no audit row.
+
+Run it from the root's shell: the command refuses unless the shell's engine
+tenant (`ROBOTHOR_TENANT_ID`, else `ROBOTHOR_DEFAULT_TENANT`) is the root of
+both tenants. A shell left bound to a child, or to another root, is refused
+with the tenant it is bound to and the root it needs.
 
 **What moves.** Each named agent's runs, every run descended from them
 (sub-agent runs), and the runs the named workflows' steps started; with
@@ -415,6 +425,7 @@ A move is refused, with nothing written, when:
 - no `--agent` or `--workflow` is given;
 - the target is not under the same root as the source, or is one of its
   ancestors (a workload moves to a descendant or a sibling);
+- the shell's engine tenant is not that root;
 - a tenant table in the database has no move classification (a migration
   newer than the command: upgrade first);
 - any of the workload's runs, workflow runs or coding jobs is still pending,
