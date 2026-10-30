@@ -1,3 +1,22 @@
+## [1.118.0](https://github.com/Ironsail-llc/genus-os/compare/v1.117.0...v1.118.0) (2026-10-30)
+
+### Features
+
+* **app:** n8n monitor section and bridge routes (GEN-104) ([#755](https://github.com/Ironsail-llc/genus-os/issues/755)) ([54cfe81](https://github.com/Ironsail-llc/genus-os/commit/54cfe81e49ad5716afb1c9d2b612bc39c1d699ce))
+* **engine:** agent tools to list, run and report on workflows (GEN-101) ([#753](https://github.com/Ironsail-llc/genus-os/issues/753)) ([faaf1b8](https://github.com/Ironsail-llc/genus-os/commit/faaf1b89563c0c6246f3250cd4feee665417b582))
+* **engine:** email channel sends html with a per-send sender (GEN-119) ([#758](https://github.com/Ironsail-llc/genus-os/issues/758)) ([a9c9c30](https://github.com/Ironsail-llc/genus-os/commit/a9c9c3085712fe952cf33f151d3f8652c08d3717))
+* **engine:** knowledge-base collections with hybrid search (GEN-105) ([#756](https://github.com/Ironsail-llc/genus-os/issues/756)) ([49edd6e](https://github.com/Ironsail-llc/genus-os/commit/49edd6e0be720fea32b6c401f9a65b7381dee30e))
+* **engine:** ordered, remembered and capped channel conversations (GEN-102) ([#754](https://github.com/Ironsail-llc/genus-os/issues/754)) ([9a4bae9](https://github.com/Ironsail-llc/genus-os/commit/9a4bae9d3b15033140748796fb91d2d53a96ed38))
+* **engine:** plugins overview for orion and the dashboard (GEN-107) ([#759](https://github.com/Ironsail-llc/genus-os/issues/759)) ([1286eb5](https://github.com/Ironsail-llc/genus-os/commit/1286eb5db5fec01f47e4d1ddb565ea87443068b3))
+* **engine:** timestamped hex hmac webhook signature scheme (GEN-138) ([#762](https://github.com/Ironsail-llc/genus-os/issues/762)) ([482e7fb](https://github.com/Ironsail-llc/genus-os/commit/482e7fb4f86a9cf84e4c0310ab0d8e415f1af40f))
+* **engine:** watch an external n8n instance (GEN-103) ([#760](https://github.com/Ironsail-llc/genus-os/issues/760)) ([7e45ce0](https://github.com/Ironsail-llc/genus-os/commit/7e45ce082b33db963badb939bab1a1b96df10e79))
+* **plugins:** composable patch append and webhook drop-ins (GEN-100) ([#752](https://github.com/Ironsail-llc/genus-os/issues/752)) ([e3c61dc](https://github.com/Ironsail-llc/genus-os/commit/e3c61dc49c7504f9026746fb9597376fc2f1e45c))
+* **plugins:** plugin state, fleet chain and phone opt-out primitives (GEN-106) ([#757](https://github.com/Ironsail-llc/genus-os/issues/757)) ([9bdc758](https://github.com/Ironsail-llc/genus-os/commit/9bdc7589d83494d9260d799394fe8b18b773bad8))
+
+### Bug Fixes
+
+* **platform:** bridge reaches the engine; pages, readiness, cache (GEN-130) ([#772](https://github.com/Ironsail-llc/genus-os/issues/772)) ([85e883a](https://github.com/Ironsail-llc/genus-os/commit/85e883a6396236c0dadae46bb46079cb171cfe6e)), closes [#764](https://github.com/Ironsail-llc/genus-os/issues/764)
+
 ## [1.117.0](https://github.com/Ironsail-llc/genus-os/compare/v1.116.2...v1.117.0) (2026-10-29)
 
 ### Features
