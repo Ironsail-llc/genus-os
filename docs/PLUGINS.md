@@ -307,6 +307,28 @@ than `safe`, which is the correct verdict for a channel: it reaches off the box
 and it runs without a tool call, and an operator should see both before
 accepting it.
 
+**A receiving channel authenticates every request itself.** The engine skips
+its own bearer for a `POST` to `/api/channels/<name>` or any path below it, and
+only while that channel's router is mounted, because the senders such a route
+exists for (a storefront, an SMS provider's webhook, a support form, Microsoft's
+Bot Framework) never hold an engine token. Every other method on the channel's
+path, and any name that is not mounted, still needs the engine bearer. So a
+channel's `POST` handler must check its own credential (an HMAC over the raw
+body, a shared token, a signed JWT) before it reads anything else, and refuse
+with its own `401` or `403`. There is no flag that asks the engine to keep the
+bearer in front of a channel: a `POST` route that cannot authenticate its
+sender should not be in the router.
+
+**Let the pipeline own ordering and memory.** `channels.inbound.handle_message`
+serialises messages that share a `session_key`, runs different keys
+concurrently up to `ROBOTHOR_CHANNEL_MAX_CONCURRENT_RUNS`, and records each
+successful exchange in the session's history and the chat store, so it is
+remembered across restarts. Ordering and the cap are per engine process. So pick a `session_key` per
+conversation (per visitor, for a public chat) and call it from as many
+concurrent handlers as you like. Pass `record_turn=False` for a message that
+should not be remembered, and `history_limit=N` to hand the run only the last
+N turns — a cheap bound on prompt size for a chat that can run long.
+
 **Declare your chunk size if you split.** `register_platform_sender(...,
 chunk_size=N)` is how the platform tells a truncated send from a complete one.
 Without it, two answers are recorded `failed:<name>_unproven`, because neither
