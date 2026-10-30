@@ -1,8 +1,6 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import { useRuntimeConfig } from "@/components/runtime-config";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -16,6 +14,7 @@ import { useVisualState } from "@/hooks/use-visual-state";
 import { useThrottle } from "@/hooks/use-throttle";
 import { MarkerInterceptor, stripMarkers } from "@/lib/engine/marker-interceptor";
 import { ChatRecovery, type ChatRecoveryRequest } from "@/components/chat-recovery";
+import { ChatMarkdown, CHAT_PROSE } from "@/components/chat/chat-markdown";
 import { ChatAskCard, type ApprovalKind } from "@/components/chat-ask-card";
 import { ChatLanding } from "@/components/chat/chat-landing";
 import { repeatsQuickAction } from "@/components/business/quick-action-labels";
@@ -1450,13 +1449,13 @@ export function ChatPanel({
                 }`}
               >
                 {msg.role === "assistant" ? (
-                  <div className="prose prose-sm prose-invert max-w-none">
-                    {msg.recovery ? (
+                  msg.recovery ? (
+                    <div className={CHAT_PROSE}>
                       <ChatRecovery request={msg.recovery} messageId={msg.id} onRecovered={recoverMessage} />
-                    ) : (
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
-                    )}
-                  </div>
+                    </div>
+                  ) : (
+                    <ChatMarkdown content={msg.content} />
+                  )
                 ) : (
                   <p>{msg.content}</p>
                 )}
@@ -1496,11 +1495,7 @@ export function ChatPanel({
                   {activePlan.deep_plan ? <Brain className="w-4 h-4" /> : <ClipboardList className="w-4 h-4" />}
                   <span>{activePlan.deep_plan ? "Deep Research Plan" : "Proposed Plan"}</span>
                 </div>
-                <div className="prose prose-sm prose-invert max-w-none">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                    {activePlan.plan_text}
-                  </ReactMarkdown>
-                </div>
+                <ChatMarkdown content={activePlan.plan_text} />
                 <div className="flex gap-2 pt-1">
                   <Button
                     size="sm"
@@ -1570,11 +1565,7 @@ export function ChatPanel({
                       </span>
                     </div>
                     {throttledStreamingText && (
-                      <div className="prose prose-sm prose-invert max-w-none">
-                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                          {throttledStreamingText}
-                        </ReactMarkdown>
-                      </div>
+                      <ChatMarkdown content={throttledStreamingText} />
                     )}
                   </div>
                 ) : (
@@ -1589,11 +1580,7 @@ export function ChatPanel({
                       </div>
                     )}
                     {throttledStreamingText ? (
-                      <div className="prose prose-sm prose-invert max-w-none">
-                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                          {throttledStreamingText}
-                        </ReactMarkdown>
-                      </div>
+                      <ChatMarkdown content={throttledStreamingText} />
                     ) : activeToolName ? (
                       <div className="flex items-center gap-2 text-xs text-info" data-testid="tool-indicator">
                         <span className="inline-block w-2 h-2 rounded-full bg-info animate-pulse" />
