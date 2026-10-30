@@ -237,11 +237,14 @@ def _sso_exchange(
     routed_over = account.pop(accounts.GRANT_OVERRODE_ROUTING, None)
     if routed_over is not None:
         # A binding grant put this person in the tenant holding their account,
-        # not the one their domain routes to: record both, ids only.
+        # not the one their domain routes to: record both, ids only. Filed
+        # under the tenant holding the account, so its admins see it.
         audited(
             request,
             "auth.sso.grant_bound",
             action=str(account["id"]),
+            audit_tenant_id=account["tenant_id"],
+            tenant_id=account["tenant_id"],
             account_tenant=account["tenant_id"],
             routed_tenant=routed_over,
         )
