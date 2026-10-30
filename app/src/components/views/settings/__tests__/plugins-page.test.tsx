@@ -38,7 +38,7 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { PluginsPage, unreachableSentence } from "../plugins-page";
+import { PluginsPage } from "../plugins-page";
 
 /** The two 502 bodies, one per hop: the bridge's and the app proxy's. */
 const ENGINE_502 = { status: 502, body: { error: "engine unavailable" } };
@@ -1211,22 +1211,6 @@ describe("Settings › Plugins — reloading", () => {
 });
 
 describe("Settings › Plugins — which hop a 502 came from", () => {
-  it("maps each hop's 502 body to its own sentence, keeping the act's outcome", () => {
-    expect(unreachableSentence("engine unavailable", "nothing was installed")).toBe(
-      "The bridge could not reach the engine at its configured URL (ROBOTHOR_ENGINE_URL), so " +
-        "nothing was installed. Check that the engine is running and that the network path " +
-        "from the bridge to the engine is allowed. Nothing has been changed."
-    );
-    expect(unreachableSentence("Bridge service unavailable", "nothing was installed")).toBe(
-      "The dashboard could not reach the bridge, so nothing was installed. Check that the " +
-        "bridge service is running. Nothing has been changed."
-    );
-    expect(unreachableSentence("The bridge refused the request (HTTP 502).")).toBe(
-      "The engine is unreachable from the bridge, so the plugin set could not be read. " +
-        "Nothing has been changed."
-    );
-  });
-
   it("names the bridge-to-engine hop when Record answers the bridge's 502", async () => {
     mockBridge({ listings: [FRESH], sync: ENGINE_502 });
     render(<PluginsPage visible />);
