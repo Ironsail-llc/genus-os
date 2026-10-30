@@ -4,7 +4,7 @@ import { useCallback, useState } from "react";
 import { Copy, Download } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { refusalSentence } from "@/components/views/settings/plugins-page";
+import { refusalSentence } from "@/lib/bridge/hop-sentence";
 import { BRIDGE_UNREACHABLE } from "@/lib/bridge/use-bridge-poll";
 
 /**
