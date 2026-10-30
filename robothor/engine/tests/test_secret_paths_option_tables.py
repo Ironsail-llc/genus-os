@@ -215,6 +215,10 @@ def test_arguments_after_a_multi_line_quote_are_still_judged(workspace, command)
         # comment and an operator stuck to a word still separates commands.
         'echo "a # b" ; cat .env\necho \'',
         "echo hi; cat .env\necho '",
+        # After the first line that cannot be read, the quote state is
+        # unknown: a continuation line may close the quote and run a
+        # command, so every later line is judged loosely too.
+        "echo '\n\"' ; cat .env #\"\necho '",
     ],
 )
 def test_an_unquoted_newline_separates_commands(workspace, command) -> None:
