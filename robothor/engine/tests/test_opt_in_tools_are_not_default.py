@@ -71,6 +71,7 @@ def test_the_opt_in_list_cannot_drift_from_the_sales_package():
         GITHUB_REVIEW_WRITE_TOOLS,
         JIRA_WRITE_TOOLS,
         PR_REVIEW_TOOLS,
+        WORKFLOW_WRITE_TOOLS,
     )
     from robothor.sales.tool_schemas import SALES_SCHEMAS
 
@@ -81,6 +82,7 @@ def test_the_opt_in_list_cannot_drift_from_the_sales_package():
         | GITHUB_REVIEW_WRITE_TOOLS
         | JIRA_WRITE_TOOLS
         | PR_REVIEW_TOOLS
+        | WORKFLOW_WRITE_TOOLS
     )
 
 

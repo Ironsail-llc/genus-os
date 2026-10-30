@@ -1021,6 +1021,74 @@ _HUMAN_IN_THE_LOOP_SCHEMAS: dict[str, dict[str, Any]] = {
             },
         },
     },
+    # ── Workflow control: list, start, report ──
+    "list_workflows": {
+        "type": "function",
+        "function": {
+            "name": "list_workflows",
+            "description": (
+                "List the workflows this instance has loaded: id, name, description, "
+                "triggers (cron schedule or event), the last run's status and start time, "
+                "and how many runs failed in the last 7 days. Use it to find a workflow id "
+                "before run_workflow or workflow_runs."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    "run_workflow": {
+        "type": "function",
+        "function": {
+            "name": "run_workflow",
+            "description": (
+                "Start a workflow now. The run continues in the background; this call "
+                "waits up to wait_seconds (max 120) for it to finish. With wait_seconds 0 "
+                "it still waits about 2 seconds so an immediate refusal is reported. "
+                'Returns {status: "started", run_id} if still running, {status, run_id, '
+                'error_message} if it finished, {status: "already_running"} if a run of '
+                'this workflow is in progress, or {error: "unknown_workflow"}. Check '
+                "progress later with workflow_runs. Use this for a defined, repeatable "
+                "workflow; use spawn_agent for open-ended work."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "workflow_id": {"type": "string", "description": "Workflow id"},
+                    "payload": {
+                        "type": "object",
+                        "description": (
+                            "Input for the run, available to its steps as event.payload"
+                        ),
+                    },
+                    "wait_seconds": {
+                        "type": "integer",
+                        "description": "Seconds to wait for completion (0-120, default 0)",
+                    },
+                },
+                "required": ["workflow_id"],
+            },
+        },
+    },
+    "workflow_runs": {
+        "type": "function",
+        "function": {
+            "name": "workflow_runs",
+            "description": (
+                "Recent runs of one workflow, newest first: status, trigger, start and "
+                "end time, error message, and each step's status."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "workflow_id": {"type": "string", "description": "Workflow id"},
+                    "limit": {
+                        "type": "integer",
+                        "description": "How many runs (1-50, default 10)",
+                    },
+                },
+                "required": ["workflow_id"],
+            },
+        },
+    },
 }
 
 

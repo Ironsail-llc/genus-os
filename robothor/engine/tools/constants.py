@@ -459,6 +459,10 @@ READONLY_TOOLS: frozenset[str] = frozenset(
         # then refused every later wait for that principal across runs.
         "claude_code_status",
         "claude_code_wait",
+        # Workflow status: definitions plus SELECT-only run history.
+        # `run_workflow` is deliberately NOT here — it starts a real run.
+        "list_workflows",
+        "workflow_runs",
     }
 )
 
@@ -467,6 +471,10 @@ READONLY_TOOLS: frozenset[str] = frozenset(
 # The meta-tools that drive tools-as-code. Excluded from the normal advertised
 # set; injected only when an agent's toolset is deferred (see registry).
 TOOLSEARCH_TOOLS = frozenset({"tool_search", "tool_describe", "tool_call"})
+
+# Workflow control tools that start work. `list_workflows` and `workflow_runs`
+# are reads and are not in this family.
+WORKFLOW_WRITE_TOOLS: frozenset[str] = frozenset({"run_workflow"})
 
 # Registered, but never part of the default "everything" set an agent with no
 # `tools_allowed` receives. An agent gets one of these only by naming it in its
@@ -497,6 +505,10 @@ TOOLSEARCH_TOOLS = frozenset({"tool_search", "tool_describe", "tool_call"})
 # the instance's account; same rule. Migration 153 denies them to `user` and
 # `member`; `service` keeps them, so an unattended agent that names them works.
 #
+# `run_workflow` starts any declared workflow, which can do anything its steps
+# do; the HTTP route it mirrors needs `engine:control`. Same rule again:
+# migration 157 denies it to `user` and `member`. Its two reads stay default.
+#
 # Spelled out rather than imported from robothor.sales so this module stays
 # import-light; test_opt_in_tools_are_not_default pins the two together.
 OPT_IN_TOOLS: frozenset[str] = frozenset(
@@ -516,6 +528,7 @@ OPT_IN_TOOLS: frozenset[str] = frozenset(
         "sales_research_parallel",
         *CLAUDE_CODE_TOOLS,
         *PR_REVIEW_TOOLS,
+        *WORKFLOW_WRITE_TOOLS,
     }
 )
 

@@ -176,3 +176,4 @@ crm/150_pr_review_requested_at.sql
 crm/151_pr_review_work_denies.sql
 crm/152_config_tool_denies.sql
 crm/153_jira_write_tool_denies.sql
+crm/157_run_workflow_tool_denies.sql

@@ -39,6 +39,7 @@ from robothor.engine.shutdown_budget import (
 )
 from robothor.engine.telegram import TelegramBot
 from robothor.engine.workflow import WorkflowEngine
+from robothor.engine.workflow_registry import set_workflow_engine
 from robothor.plugins import reload_plugins
 
 if TYPE_CHECKING:
@@ -1562,6 +1563,8 @@ async def main() -> int:
     set_runner(runner, config)
 
     workflow_engine = WorkflowEngine(config, runner)
+    # Agent tools (list_workflows, run_workflow, workflow_runs) reach the engine here.
+    set_workflow_engine(workflow_engine)
     wf_count = workflow_engine.load_workflows(config.workflow_dir)
     logger.info("Loaded %d workflows", wf_count)
 

@@ -909,6 +909,16 @@ class GuardrailEngine:
             )
         return GuardrailResult()
 
+    def rate_limit_full(self, agent_id: str) -> bool:
+        """Whether the next call for ``agent_id`` would be rate limited. Counts nothing."""
+        if "rate_limit" not in self.enabled_policies:
+            return False
+        limit = self.rate_limit_per_minute or DEFAULT_RATE_LIMIT
+        cutoff = time.monotonic() - 60
+        return (
+            sum(1 for t in self._rate_counts.get(agent_id or "_default", ()) if t > cutoff) >= limit
+        )
+
     def _check_rate_limit(self, agent_id: str) -> GuardrailResult:
         """Rate limit: max N tool calls per minute, per agent."""
         limit = self.rate_limit_per_minute or DEFAULT_RATE_LIMIT

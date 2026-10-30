@@ -222,6 +222,8 @@ _BENCHMARK_WITHHELD_READS: frozenset[str] = frozenset(
     | BENCHMARK_TOOLS
     | GWS_TOOLS
     | {"claude_code_status", "claude_code_wait", "search_files", "wait_seconds", "config_get"}
+    # The instance's REAL workflows and their run history.
+    | {"list_workflows", "workflow_runs"}
 )
 
 
@@ -317,6 +319,8 @@ _BENCHMARK_EXCLUDED_TOOLS: frozenset[str] = _BENCHMARK_WITHHELD_READS | frozense
         "approve_workflow_step",
         "reject_workflow_step",
         "list_pending_approvals",
+        # Starts a real workflow run on the instance.
+        "run_workflow",
         # Asking a person mid-run. A graded agent must not be able to page the
         # operator, and a benchmark run has nobody watching it anyway — the
         # handler's own trigger gate would refuse, but a tool the harness never

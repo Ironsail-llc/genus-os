@@ -1225,6 +1225,62 @@ recognises. SOPS-encrypted files, `secrets*` files, key files (`*.pem`,
 `KEY=VALUE` lines are still refused. `exec` checks are unchanged:
 `cat robothor.env` is still refused.
 
+### Workflows: `list_workflows`, `run_workflow`, `workflow_runs`
+
+An agent can start the instance's declared workflows and report on them from a
+chat, instead of asking the operator to open the dashboard.
+
+- `list_workflows` returns each loaded workflow: id, name, description, its
+  triggers (cron schedule, or the stream and event type it listens on), the
+  last run's status, start time and trigger, and how many runs failed or timed
+  out in the last 7 days.
+- `run_workflow` takes `workflow_id`, an optional `payload` object and
+  `wait_seconds` (0–120). The run's steps see the payload as
+  `{{ event.payload.<key> }}`, the same shape a hook-triggered run gets. The run
+  always goes on in the background; the call only waits for it. It returns
+  `{status: "started", run_id}` while the run is still going, `{status, run_id,
+  error_message}` once it has finished, `{status: "already_running"}` when a
+  run of that workflow is in progress, and `{error: "unknown_workflow"}` for an
+  id that is not loaded. With `wait_seconds: 0` it still waits about 2 seconds,
+  so a run refused at once is not reported as started. A run that stops at an
+  approval step returns `awaiting_approval`; it goes on once someone decides
+  (`list_pending_approvals`). A workflow normally triggered by a hook gets only
+  `event.payload` when started this way: there is no `event.type` or
+  `event.stream`, so a step that reads either finds nothing there.
+  A caller whose tenant is not the engine's own gets
+  `{error: "workflow_tenant_mismatch", run_tenant}`, because the run would be
+  recorded under a tenant the caller cannot read.
+- `workflow_runs` takes `workflow_id` and `limit` (default 10, at most 50) and
+  returns recent runs, newest first, with each step's status.
+
+The run is recorded with trigger type `agent` and trigger detail
+`agent:<agent id>:<agent run id>`. It runs as the workflow, exactly as a cron
+or hook run does: under `service:workflow:<workflow id>` with the `service`
+role, and in a fresh context, with none of the calling agent run's runtime
+state. Its steps never act as the chat user or the calling agent, so a tool
+that accepts only the workflow's own identity works the same whoever started
+the run. The caller is recorded only in that trigger detail and in the
+tool-call audit of the `run_workflow` call. Run history is always limited to
+the caller's tenant. `list_workflows` and `workflow_runs` are read-only;
+`run_workflow` is not, and benchmark runs get none of the three.
+
+The three tools belong to no tool group. `run_workflow` is opt-in: an agent is
+offered it only when its manifest names it, in `tools_allowed` or, for an agent
+with no `tools_allowed` list, in `tools_opt_in`. The two reads are offered to an
+agent with no `tools_allowed` list; an agent with one must name each tool it
+should have. Migration 157 denies `run_workflow` to the `user` and `member`
+roles, as the HTTP route it mirrors needs `engine:control`. `owner`, `admin`
+and `service` keep it, so the operator's chat and an unattended agent that
+names it can both start workflows. This permission is the whole gate: because
+the run takes the workflow's identity, not the caller's, whoever may call
+`run_workflow` may start any loaded workflow in its tenant. A tenant that wants it back for a role adds
+a tenant-scoped `role_permissions` row.
+
+**Which to use.** Use `run_workflow` when the work is a workflow that is already
+declared: a fixed, repeatable pipeline with its own steps, timeout and run
+history. Use `spawn_agent` for open-ended work that one agent should reason
+through.
+
 ### Everything else
 
 The full registry is large and changes with the release; `tool_search` over the
@@ -1239,6 +1295,7 @@ agent's own allow-set is the authoritative answer. The families:
 | Notifications | `get_inbox`, `ack_notification`, `send_notification` |
 | Skills | `list_skills`, `invoke_skill` |
 | Sub-agents | `spawn_agent`, `spawn_agents` (only with `can_spawn_agents`) |
+| Workflows | [`list_workflows`, `run_workflow`, `workflow_runs`](#workflows-list_workflows-run_workflow-workflow_runs) |
 | Vision | `view_image`, `analyze_image` (image files — see above); `look`, `who_is_here` (a real camera) |
 | Desktop | `desktop_*` (a real screen) |
 

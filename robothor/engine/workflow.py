@@ -189,6 +189,17 @@ _TEMPLATE_RE = re.compile(r"\{\{\s*(.+?)\s*\}\}")
 _RETRY_BACKOFF_SECONDS: tuple[int, ...] = (60, 300)
 
 
+# A step the tool-call rate limit blocks polls it again after 5 s, doubling
+# to 30 s, until it is admitted or the workflow deadline ends the wait.
+_RATE_LIMIT_WAIT_SECONDS = 5
+_MAX_RATE_LIMIT_WAIT_SECONDS = 30
+
+
+def _run_lock_key(wf: WorkflowDef) -> str:
+    """The one lock key a workflow's runs take and release."""
+    return f"workflow:{wf.id}"
+
+
 def _retry_delay(attempt: int) -> int:
     """Backoff before retry ``attempt`` (0-based): 60s, then 300s thereafter."""
     if not _RETRY_BACKOFF_SECONDS:
@@ -315,6 +326,14 @@ def parse_workflow(data: dict[str, Any]) -> WorkflowDef:
                 raise ValueError(f"duplicate step id {sid!r} in workflow {data.get('id')!r}")
             seen_ids.add(sid)
 
+    rate_limit = data.get("rate_limit_per_minute", 0)
+    if "rate_limit_per_minute" in data and (
+        not isinstance(rate_limit, int) or isinstance(rate_limit, bool) or rate_limit < 1
+    ):
+        raise ValueError(
+            f"workflow {data.get('id')!r}: rate_limit_per_minute must be a positive integer"
+        )
+
     delivery = data.get("delivery", {})
 
     return WorkflowDef(
@@ -325,6 +344,7 @@ def parse_workflow(data: dict[str, Any]) -> WorkflowDef:
         triggers=triggers,
         steps=steps,
         timeout_seconds=data.get("timeout_seconds", 900),
+        rate_limit_per_minute=rate_limit,
         delivery_mode=delivery.get("mode", "none"),
         delivery_channel=delivery.get("channel", ""),
         delivery_to=delivery.get("to", ""),
@@ -481,15 +501,26 @@ class WorkflowEngine:
         correlation_id: str | None = None,
         user_id: str = "",
         user_role: str = "",
+        run_id: str | None = None,
+        requeue_on_rate_limit: bool = False,
     ) -> WorkflowRun:
         """Execute a workflow by ID under an explicit caller identity.
 
-        Cron and hook executions are trusted Engine workloads and receive a
-        narrow, auditable service identity.  Interactive/manual callers must
-        propagate their verified user identity; a missing identity fails
-        closed outside the explicit loopback development mode.
+        Cron, hook and agent executions are trusted Engine workloads and
+        receive a narrow, auditable service identity when no user is given.
+        Interactive/manual callers must propagate their verified user
+        identity; a missing identity fails closed outside the explicit
+        loopback development mode.
+
+        ``run_id`` lets a caller that starts the run in the background name it
+        up front, so it can report the id before the run finishes.
+
+        ``requeue_on_rate_limit`` says the caller will requeue the event when
+        the tool-call rate limit would block the first step, so the run is
+        deferred (``skipped``, ``rate_limited``) before it is recorded instead
+        of waiting in place. Only the hook consumer passes it.
         """
-        from robothor.engine.dedup import release, try_acquire
+        from robothor.engine.dedup import release
 
         wf = self._workflows.get(workflow_id)
         if not wf:
@@ -502,55 +533,24 @@ class WorkflowEngine:
             )
             return run
 
-        effective_user_id = user_id
-        effective_user_role = user_role
-        if trigger_type in {"cron", "hook"}:
-            effective_user_id = effective_user_id or f"service:workflow:{workflow_id}"
-            effective_user_role = effective_user_role or "service"
-        elif not effective_user_id or not effective_user_role:
-            import os
+        identity = self._resolve_identity(
+            workflow_id, trigger_type, trigger_detail, user_id, user_role
+        )
+        if isinstance(identity, WorkflowRun):
+            return identity
+        effective_user_id, effective_user_role = identity
 
-            from robothor.auth.runtime import auth_required
-
-            bind_host = os.environ.get("ROBOTHOR_ENGINE_HOST", "127.0.0.1")
-            if not auth_required(bind_host=bind_host):
-                effective_user_id = effective_user_id or "loopback-development-operator"
-                effective_user_role = effective_user_role or "owner"
-            else:
-                logger.warning(
-                    "Rejected workflow without verified identity: workflow=%s trigger=%s",
-                    _sanitize(workflow_id),
-                    _sanitize(trigger_type),
-                )
-                return WorkflowRun(
-                    workflow_id=workflow_id,
-                    tenant_id=self.config.tenant_id,
-                    trigger_type=trigger_type,
-                    trigger_detail=trigger_detail,
-                    user_id=effective_user_id,
-                    user_role=effective_user_role,
-                    status=RunStatus.FAILED,
-                    error_message="Authentication identity required for workflow execution",
-                )
-
-        # Prevent concurrent runs of the same workflow
-        dedup_key = f"workflow:{workflow_id}"
-        if not await try_acquire(dedup_key):
-            logger.info(
-                "Workflow %s already running, skipping duplicate",
-                _sanitize(workflow_id),
-            )
-            run = WorkflowRun(
-                workflow_id=workflow_id,
-                tenant_id=self.config.tenant_id,
-                user_id=effective_user_id,
-                user_role=effective_user_role,
-                trigger_type=trigger_type,
-                trigger_detail=trigger_detail,
-                status=RunStatus.SKIPPED,
-                error_message="Skipped: workflow already running",
-            )
-            return run
+        refused = await self._admit_or_defer(
+            wf,
+            trigger_type=trigger_type,
+            trigger_detail=trigger_detail,
+            user_id=effective_user_id,
+            user_role=effective_user_role,
+            requeue_on_rate_limit=requeue_on_rate_limit,
+        )
+        if refused is not None:
+            return refused
+        dedup_key = _run_lock_key(wf)
 
         # Initialize run
         run = WorkflowRun(
@@ -565,6 +565,8 @@ class WorkflowEngine:
             started_at=datetime.now(UTC),
             context={"steps": {}, **(initial_context or {})},
         )
+        if run_id:
+            run.id = run_id
 
         # Record run in DB
         self._persist_run_start(run, wf)
@@ -652,6 +654,121 @@ class WorkflowEngine:
             return run
         finally:
             await release(dedup_key)
+
+    def _resolve_identity(
+        self,
+        workflow_id: str,
+        trigger_type: str,
+        trigger_detail: str,
+        user_id: str,
+        user_role: str,
+    ) -> tuple[str, str] | WorkflowRun:
+        """The identity a run executes under, or the failed run that refuses it.
+
+        Cron, hook and agent runs get ``service:workflow:<id>`` when no user is
+        given. Any other caller must bring a verified identity, except in the
+        explicit loopback development mode.
+        """
+        effective_user_id = user_id
+        effective_user_role = user_role
+        if trigger_type in {"cron", "hook", "agent"}:
+            effective_user_id = effective_user_id or f"service:workflow:{workflow_id}"
+            effective_user_role = effective_user_role or "service"
+        elif not effective_user_id or not effective_user_role:
+            import os
+
+            from robothor.auth.runtime import auth_required
+
+            bind_host = os.environ.get("ROBOTHOR_ENGINE_HOST", "127.0.0.1")
+            if not auth_required(bind_host=bind_host):
+                effective_user_id = effective_user_id or "loopback-development-operator"
+                effective_user_role = effective_user_role or "owner"
+            else:
+                logger.warning(
+                    "Rejected workflow without verified identity: workflow=%s trigger=%s",
+                    _sanitize(workflow_id),
+                    _sanitize(trigger_type),
+                )
+                return WorkflowRun(
+                    workflow_id=workflow_id,
+                    tenant_id=self.config.tenant_id,
+                    trigger_type=trigger_type,
+                    trigger_detail=trigger_detail,
+                    user_id=effective_user_id,
+                    user_role=effective_user_role,
+                    status=RunStatus.FAILED,
+                    error_message="Authentication identity required for workflow execution",
+                )
+        return effective_user_id, effective_user_role
+
+    async def _admit_or_defer(
+        self,
+        wf: WorkflowDef,
+        *,
+        trigger_type: str,
+        trigger_detail: str,
+        user_id: str,
+        user_role: str,
+        requeue_on_rate_limit: bool,
+    ) -> WorkflowRun | None:
+        """Take the workflow's run lock, or say why this run will not start.
+
+        Returns None with the lock held, or an unrecorded ``skipped`` run with
+        the lock free: the workflow is already running, or (for a caller that
+        requeues) the tool-call rate limit would block its first step.
+        """
+        from robothor.engine.dedup import release, try_acquire
+
+        # Prevent concurrent runs of the same workflow
+        dedup_key = _run_lock_key(wf)
+        if not await try_acquire(dedup_key):
+            logger.info(
+                "Workflow %s already running, skipping duplicate",
+                _sanitize(wf.id),
+            )
+            return WorkflowRun(
+                workflow_id=wf.id,
+                tenant_id=self.config.tenant_id,
+                user_id=user_id,
+                user_role=user_role,
+                trigger_type=trigger_type,
+                trigger_detail=trigger_detail,
+                status=RunStatus.SKIPPED,
+                error_message="Skipped: workflow already running",
+            )
+
+        # A hook run whose first step the tool-call rate limit would block is
+        # deferred before anything is recorded: the hook consumer requeues the
+        # event, and a deferral is a log line, not a workflow_runs row. Busy
+        # is checked first, so a busy workflow keeps its trigger's own busy
+        # handling (requeue_if_busy) whatever the window holds.
+        if requeue_on_rate_limit and self._first_step_rate_limited(wf):
+            await release(dedup_key)
+            logger.info(
+                "Workflow %s deferred: tool-call rate limit reached at first step %s (%s)",
+                _sanitize(wf.id),
+                wf.steps[0].id,
+                _sanitize(trigger_detail),
+            )
+            return WorkflowRun(
+                workflow_id=wf.id,
+                tenant_id=self.config.tenant_id,
+                user_id=user_id,
+                user_role=user_role,
+                trigger_type=trigger_type,
+                trigger_detail=trigger_detail,
+                status=RunStatus.SKIPPED,
+                error_message=f"Deferred: tool-call rate limit reached at step '{wf.steps[0].id}'",
+                rate_limited=True,
+            )
+        return None
+
+    def _first_step_rate_limited(self, wf: WorkflowDef) -> bool:
+        """Whether the workflow's first step is a tool call the limiter would block now."""
+        if not wf.steps or wf.steps[0].type != WorkflowStepType.TOOL:
+            return False
+        guardrails = self._workflow_guardrails(wf.rate_limit_per_minute)
+        return bool(guardrails.rate_limit_full(f"workflow:{wf.id}"))
 
     def _timeout_message(self, run: WorkflowRun, wf: WorkflowDef) -> str:
         """Say WHICH step was in flight when the budget expired.
@@ -1132,7 +1249,7 @@ class WorkflowEngine:
         finally:
             await release(step.agent_id)
 
-    def _workflow_guardrails(self) -> Any:
+    def _workflow_guardrails(self, rate_limit_per_minute: int = 0) -> Any:
         """Baseline guardrails for workflow tool steps.
 
         Workflow YAML steps call tools directly via ``registry.execute`` — they
@@ -1140,8 +1257,14 @@ class WorkflowEngine:
         workflow step could run ``exec``/``git_push``/cold email unguarded;
         audit 2026-05-29). Apply the fleet defaults plus protected-branch
         safety so this path is no longer a hole.
+
+        One engine per rate limit (0 is the fleet default): the workflow's
+        own ``rate_limit_per_minute`` stands in for the manifest field a
+        workflow does not have. Calls are counted per ``workflow:<id>``, so
+        workflows sharing an engine never share a budget.
         """
-        cached = getattr(self, "_wf_guardrail_engine", None)
+        engines: dict[int, Any] = self.__dict__.setdefault("_wf_guardrail_engines", {})
+        cached = engines.get(rate_limit_per_minute)
         if cached is not None:
             return cached
         from robothor.engine.guardrails import DEFAULT_GUARDRAILS, GuardrailEngine
@@ -1150,8 +1273,9 @@ class WorkflowEngine:
         engine = GuardrailEngine(
             enabled_policies=policies,
             workspace=str(self.config.workspace) + "/",
+            rate_limit_per_minute=rate_limit_per_minute,
         )
-        self._wf_guardrail_engine = engine
+        engines[rate_limit_per_minute] = engine
         return engine
 
     async def _run_tool_step(
@@ -1167,10 +1291,27 @@ class WorkflowEngine:
                 rendered_args[k] = v
 
         # ── [GUARDRAILS] Pre-execution check (workflow steps are otherwise unguarded) ──
-        guardrails = self._workflow_guardrails()
-        gr = guardrails.check_pre_execution(
-            step.tool_name, rendered_args, agent_id=f"workflow:{run.workflow_id}"
-        )
+        wf = self._workflows.get(run.workflow_id)
+        guardrails = self._workflow_guardrails(wf.rate_limit_per_minute if wf else 0)
+        # A blocked call is only early. Replaying the event would run every
+        # earlier step again, so a step waits in place for the limiter (the
+        # workflow deadline bounds the wait). A hook run blocked at its first
+        # step never gets here: execute() defers it before it is recorded.
+        wait = _RATE_LIMIT_WAIT_SECONDS
+        while True:
+            gr = guardrails.check_pre_execution(
+                step.tool_name, rendered_args, agent_id=f"workflow:{run.workflow_id}"
+            )
+            if gr.allowed or gr.guardrail_name != "rate_limit":
+                break
+            logger.info(
+                "Workflow %s step %s rate limited; waiting %ds",
+                _sanitize(run.workflow_id),
+                step.id,
+                wait,
+            )
+            await asyncio.sleep(wait)
+            wait = min(wait * 2, _MAX_RATE_LIMIT_WAIT_SECONDS)
         if not gr.allowed:
             result.status = WorkflowStepStatus.FAILED
             result.error_message = f"Blocked by guardrail ({gr.guardrail_name}): {gr.reason}"

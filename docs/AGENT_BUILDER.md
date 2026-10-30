@@ -195,6 +195,41 @@ steps:
 The payload comes from outside: a tool that receives it validates what it
 is given.
 
+#### Tool-call rate limit
+
+A workflow's tool steps share one ceiling of tool calls a minute, counted
+for the whole workflow across all its runs. It is the fleet default (30)
+unless the workflow sets its own with a top-level `rate_limit_per_minute`
+(a positive integer). Raise it for a workflow that takes bursts, such as a
+hook workflow whose run makes several tool calls:
+
+```yaml
+id: order-events
+rate_limit_per_minute: 120
+```
+
+A call the limit blocks is only early, so the step waits in place: it asks
+the limiter again after 5 seconds, then 10, 20 and every 30, and runs once it
+is admitted. A run can therefore make more calls than its limit, spread over
+time, and no step ever runs twice. The wait counts against the workflow's
+`timeout_seconds`; a step still waiting at the deadline ends the run as
+`timeout`, naming that step. Branches of a `parallel` step wait the same way.
+While a run waits it holds the workflow, so an event that arrives meanwhile is
+handled as for any busy run (see `requeue_if_busy` above), whatever the
+limit's window holds.
+
+There is one exception. When the limit would block a hook-triggered run's
+first step, which is a tool step, the run does not start: the engine checks
+the limit before it records the run or runs any step, so no step, wait or
+`retry_count` retry happens and the run leaves no `workflow_runs` row, only an
+engine log line ("deferred: tool-call rate limit reached"). Its event is
+requeued for this workflow on the same budget and backoff as
+`requeue_if_busy`, whether or not the trigger sets that, and goes to
+`<stream>:dlq` only once that budget is spent. That is the usual shape of a
+burst; the workflow is never held by a deferred run, and a burst leaves one
+run row per event.
+A run resumed after an approval step always waits.
+
 #### Asking a human mid-workflow
 
 An `approval` step suspends the run until a person decides. The run stops
