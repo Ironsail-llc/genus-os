@@ -204,11 +204,8 @@ def test_user_add_creates_full_linkage(capsys) -> None:
     assert "telegram:555" in out
     assert "email:alice@example.com" in out
     assert "invite" in out.lower()
-    # The follow-up hint must be copy-pasteable and correct. An invited account
-    # cannot consume a binding grant, so the hint for one is the password path
-    # (the grant hint belongs to `--sso`; see the child-tenant RLS tests).
-    assert "user set-password --tenant acme alice@example.com" in out
-    assert "auth grant-binding" not in out
+    # The follow-up hint must be copy-pasteable and correct.
+    assert "robothor auth grant-binding --email alice@example.com --tenant acme" in out
 
 
 def test_user_add_reuses_existing_person_by_email(capsys) -> None:

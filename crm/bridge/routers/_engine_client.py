@@ -29,7 +29,7 @@ from robothor.engine_control import TOKEN_TTL_SECONDS as TOKEN_TTL_SECONDS
 from robothor.engine_control import control_token
 from robothor.engine_control import engine_base_url as _shared_base_url
 from robothor.sanitize import sanitize_log
-from routers import _operator
+from routers._operator import PLATFORM_TENANT
 
 logger = logging.getLogger(__name__)
 
@@ -68,34 +68,23 @@ def _checked_path(path: str) -> str:
     return path
 
 
-def _target(tenant: str | None) -> str:
-    """The tenant whose engine a call is for. ``None`` is the platform tenant."""
-    return tenant or _operator.PLATFORM_TENANT
-
-
-def engine_base_url(tenant: str | None = None) -> str:
-    """Where *tenant*'s engine answers. Loopback unless deployment says otherwise.
+def engine_base_url() -> str:
+    """Where the engine answers. Loopback unless deployment says otherwise.
 
     Shared with ``robothor.engine_control``, which the CLI and the doctor use:
     two answers to "where is the engine" is how a control call reaches a
-    different instance than the one the operator is reading about. The
-    platform tenant is decided HERE, by the same constant the gates use, so a
-    root request always reaches the root engine.
+    different instance than the one the operator is reading about.
     """
-    target = _target(tenant)
-    return _shared_base_url(None if target == _operator.PLATFORM_TENANT else target)
+    return _shared_base_url()
 
 
-def _engine_token(tenant: str | None = None) -> str:
+def _engine_token() -> str:
     # ``require_existing_key=False``: the guard is for a CLI or a doctor on a
     # box whose vault may be unreadable, where minting would generate and
     # upsert a signing key. A bridge process that could not resolve the key
     # could not have verified the session of the caller it is proxying for, so
     # the check is pure latency here -- a live vault read per proxied request.
-    #
-    # Minted for the tenant being CALLED: each tenant's engine refuses a token
-    # for any tenant but its own (``engine/auth.py``).
-    return control_token(SERVICE_ID, _target(tenant), require_existing_key=False)
+    return control_token(SERVICE_ID, PLATFORM_TENANT, require_existing_key=False)
 
 
 async def engine_request(
@@ -104,13 +93,8 @@ async def engine_request(
     *,
     json: dict[str, Any] | None = None,
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
-    tenant: str | None = None,
 ) -> tuple[int, Any]:
-    """Call one route on *tenant*'s engine, returning ``(status_code, decoded body)``.
-
-    Every route passes ``get_tenant_id(request)`` — the ACTING tenant — so a
-    root admin who switched into a child reaches the child's engine. ``None``
-    is the platform tenant, for callers with no request (the first-run wizard).
+    """Call one engine route, returning ``(status_code, decoded body)``.
 
     Never logs ``json``: the only bodies that travel this way carry a
     credential the operator has just typed, and a debug line is a permanent
@@ -118,8 +102,8 @@ async def engine_request(
     than by re-raising, so a proxying route answers the browser with something
     actionable instead of a 500 and a traceback.
     """
-    url = f"{engine_base_url(tenant)}{_checked_path(path)}"
-    headers = {"Authorization": f"Bearer {_engine_token(tenant)}"}
+    url = f"{engine_base_url()}{_checked_path(path)}"
+    headers = {"Authorization": f"Bearer {_engine_token()}"}
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.request(method, url, json=json, headers=headers)

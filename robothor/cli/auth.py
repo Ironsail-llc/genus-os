@@ -14,7 +14,7 @@ import json
 import sys
 from typing import TYPE_CHECKING
 
-from robothor.cli import _invoked_name, cli_actor
+from robothor.cli import _invoked_name
 
 if TYPE_CHECKING:
     from argparse import Namespace
@@ -39,22 +39,6 @@ def _parse_ttl(value: str) -> int:
 
 
 def cmd_auth(args: Namespace) -> int:
-    """Run one ``auth`` verb, bound to ``--tenant`` when it is given.
-
-    The same reason as ``genus user``: with RLS enforcing, a grant armed for a
-    child from a root shell must be written, read and revoked in the child's
-    scope, or the policy refuses the write and hides the row.
-    """
-    from robothor.db.connection import tenant_scope
-
-    tenant = getattr(args, "tenant", None)
-    if tenant:
-        with tenant_scope(tenant):
-            return _dispatch(args)
-    return _dispatch(args)
-
-
-def _dispatch(args: Namespace) -> int:
     command = getattr(args, "auth_command", None)
     if command == "bootstrap":
         return _cmd_bootstrap(args)
@@ -179,9 +163,6 @@ def _cmd_grant_binding(args: Namespace) -> int:
             ttl_seconds=ttl_seconds,
             reason=getattr(args, "reason", None) or "",
             issuer=getattr(args, "issuer", None) or None,
-            # A shell on the appliance is the root operator; `cli:` marks the
-            # grant as one sign-in may honour against domain routing.
-            created_by=cli_actor(),
         )
     except accounts.GrantTargetError as exc:
         print(f"error: {exc}", file=sys.stderr)

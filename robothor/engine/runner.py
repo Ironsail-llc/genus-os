@@ -1397,7 +1397,7 @@ class AgentRunner(
                 reason = abort_reason or f"Stall watchdog: no progress for {stall_timeout}s"
                 logger.warning("Agent %s killed: %s", _sanitize(agent_id), _sanitize(reason))
                 session.record_error(reason)
-                spawn_post_stall_autodream(agent_id, self.config.tenant_id)
+                spawn_post_stall_autodream(agent_id)
                 return self._finish_run(
                     session.timeout(reason=reason),
                     trace=trace,

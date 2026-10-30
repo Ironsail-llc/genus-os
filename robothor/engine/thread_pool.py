@@ -19,6 +19,7 @@ a failing hook silently returns ``None``.
 from __future__ import annotations
 
 import logging
+import os
 import re
 import subprocess
 from dataclasses import dataclass
@@ -27,8 +28,6 @@ from typing import TYPE_CHECKING
 from robothor.constants import DEFAULT_TENANT
 
 if TYPE_CHECKING:
-    import os
-
     from robothor.engine.models import AgentConfig
 
 logger = logging.getLogger(__name__)
@@ -247,9 +246,7 @@ def _thread_pool_context(config: AgentConfig) -> str | None:
     if current_warmup_kind() != "cron":
         return None
     try:
-        from robothor.engine.warmup import current_warmup_tenant
-
-        tenant_id = current_warmup_tenant()
+        tenant_id = os.environ.get("ROBOTHOR_TENANT_ID", "") or DEFAULT_TENANT
         try:
             swept = auto_close_completed_threads(tenant_id=tenant_id)
         except Exception as exc:

@@ -60,7 +60,6 @@ def api_send_notification(
                 "tenant_id": tenant_id,
             },
             source="bridge",
-            tenant_id=tenant_id,
         )
         return {"id": notification_id, "subject": body.subject}
     return JSONResponse({"error": "failed to send notification"}, status_code=500)

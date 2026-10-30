@@ -18,7 +18,6 @@ import re
 from pathlib import Path
 
 from robothor.db import migrate
-from robothor.db.rls_exemptions import RLS_EXEMPT_TENANT_TABLES
 
 _CREATE = re.compile(
     r"CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:public\.)?(\w+)\s*\((.*?)\)\s*;",
@@ -64,7 +63,7 @@ def test_every_tenant_table_created_after_the_last_backstop_is_policied_inline()
         f"{name}: {table}"
         for name, sql in migrations[last_backstop + 1 :]
         for table in _tenant_tables(sql)
-        if not _policies_inline(sql, table) and table not in RLS_EXEMPT_TENANT_TABLES
+        if not _policies_inline(sql, table)
     ]
     assert not bare, (
         "these migrations create a tenant_id table without applying tenant_isolation "
@@ -80,22 +79,3 @@ def test_the_detector_sees_the_tables_the_gap_was_made_of() -> None:
     assert "user_permissions" in _tenant_tables(by_name["086_user_permissions.sql"])
     assert "face_identities" in _tenant_tables(by_name["089_face_identities.sql"])
     assert not _policies_inline(by_name["085_sso_binding_grants.sql"], "sso_binding_grants")
-
-
-def test_the_exempt_tables_are_tenant_tables_a_migration_actually_creates() -> None:
-    """An exemption for a table no migration gives a tenant_id is a stale hole."""
-    tenant_tables = {t for _name, sql in _ordered_migrations() for t in _tenant_tables(sql)}
-    stale = sorted(set(RLS_EXEMPT_TENANT_TABLES) - tenant_tables)
-    assert not stale, f"RLS exemptions name no tenant_id table: {stale}"
-
-
-def test_no_migration_policies_an_exempt_table() -> None:
-    """Exempt means exempt: a migration that put tenant_isolation on one would
-    make the bridge's per-request binding hide rows from the root reader."""
-    policied = sorted(
-        f"{name}: {table}"
-        for name, sql in _ordered_migrations()
-        for table in RLS_EXEMPT_TENANT_TABLES
-        if _policies_inline(sql, table)
-    )
-    assert not policied, f"exempt tables given tenant_isolation: {policied}"

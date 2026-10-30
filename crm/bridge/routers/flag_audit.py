@@ -40,7 +40,7 @@ from fastapi import APIRouter, Query, Request
 from robothor.db.connection import get_connection
 from robothor.sanitize import sanitize_log
 from robothor.secrets.redaction import redact
-from routers._operator import require_root_audit_reader
+from routers._operator import require_audit_reader
 from routers._params import positive_int
 
 router = APIRouter(prefix="/api/controls", tags=["controls"])
@@ -86,7 +86,7 @@ def list_flag_changes(
     an operator reading page two while a flag is flipped would otherwise see a
     row twice.
     """
-    require_root_audit_reader(request)
+    require_audit_reader(request)
     page = positive_int(limit, field="limit", maximum=MAX_LIMIT)
     after = positive_int(cursor, field="cursor") if cursor is not None else None
 

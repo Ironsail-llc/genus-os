@@ -231,24 +231,6 @@ describe("Bridge Proxy vault denylist", () => {
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
-  // The bridge answers a switch with a fresh access token in the body. Through
-  // this proxy that bearer would land in browser JavaScript; the Helm switches
-  // only through /api/session/switch-tenant, which keeps it in the cookie.
-  it.each([
-    ["api/auth/switch-tenant", ["api", "auth", "switch-tenant"]],
-    ["auth/switch-tenant", ["auth", "switch-tenant"]],
-    ["api/AUTH/Switch-Tenant", ["api", "AUTH", "Switch-Tenant"]],
-    // The bridge decodes before it routes; so must the deny rule.
-    ["api/auth/switch%2Dtenant", ["api", "auth", "switch%2Dtenant"]],
-    ["api/auth/switch%252Dtenant", ["api", "auth", "switch%252Dtenant"]],
-    ["api//auth/switch-tenant", ["api", "", "auth", "switch-tenant"]],
-  ])("refuses the bearer-minting %s and never forwards", async (path, segments) => {
-    const res = await POST(makeRequest("POST", path, '{"tenant":"acme-child-a"}'), makeContext(segments));
-
-    expect(res.status).toBe(404);
-    expect(mockFetch).not.toHaveBeenCalled();
-  });
-
   it("refuses a vault path on a mutating method too", async () => {
     const post = await POST(
       makeRequest("POST", "api/vault/get", "{}"),

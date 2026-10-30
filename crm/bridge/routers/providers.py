@@ -1,8 +1,6 @@
 """Providers, models and fleet defaults — the operator-facing front door.
 
-Every route here is ``require_tenant_admin`` first line and audited — the
-keys are the ACTING tenant's vault rows and its engine reloads them — except
-the fleet-default write, which is a file on this host and root-only, and the split
+Every route here is ``require_operator`` first line and audited, and the split
 with the engine is deliberate: the engine owns the key pool, the model
 registry and the process litellm reads credentials from, so it answers "is
 this configured" and "does this key work". The bridge owns the vault write and
@@ -22,7 +20,6 @@ import asyncio
 import logging
 from typing import Any
 
-from deps import get_tenant_id
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, SecretStr
@@ -32,7 +29,7 @@ from robothor.engine.key_pool import MAX_KEY_SLOTS, key_fingerprint, provider_by
 from robothor.vault.naming import provider_key
 from routers._audit import audited
 from routers._engine_client import engine_request
-from routers._operator import require_root_operator, require_tenant_admin
+from routers._operator import require_operator
 
 logger = logging.getLogger(__name__)
 
@@ -121,26 +118,26 @@ def _proxied(status: int, body: Any) -> JSONResponse:
     return JSONResponse(content=body, status_code=status)
 
 
-async def _reload_engine_secrets(tenant: str) -> None:
+async def _reload_engine_secrets() -> None:
     """Tell the engine to pick the new credential up.
 
     Without this the vault row exists and the running engine keeps dialling
     the key it started with: "saved" and "in use" would be different states
     with nothing in the UI to tell them apart.
     """
-    status, _ = await engine_request("POST", "/api/admin/secrets/reload", tenant=tenant)
+    status, _ = await engine_request("POST", "/api/admin/secrets/reload")
     if status >= 400:
         logger.warning("Engine refused a secrets reload (status %s)", status)
 
 
-async def _occupied_slots(provider_id: str, tenant: str) -> set[int]:
+async def _occupied_slots(provider_id: str) -> set[int]:
     """Which storage slots this provider already holds, per the engine.
 
     Asked of the engine rather than computed here: the engine is the process
     that resolves credentials, and the bridge's own view of the vault and the
     environment is not the one that decides what gets dialled.
     """
-    status, body = await engine_request("GET", "/api/admin/providers", tenant=tenant)
+    status, body = await engine_request("GET", "/api/admin/providers")
     if status >= 400 or not isinstance(body, dict):
         raise HTTPException(status_code=502, detail="could not read the provider state")
     for provider in body.get("providers", []):
@@ -149,7 +146,7 @@ async def _occupied_slots(provider_id: str, tenant: str) -> set[int]:
     return set()
 
 
-async def _refuse_a_numbering_gap(provider_id: str, slot: int, tenant: str) -> None:
+async def _refuse_a_numbering_gap(provider_id: str, slot: int) -> None:
     """A spare must extend the run, not start a second one past a hole.
 
     The pool walks slots from 1 and stops at the first empty one, so writing
@@ -161,7 +158,7 @@ async def _refuse_a_numbering_gap(provider_id: str, slot: int, tenant: str) -> N
     """
     if slot == 1:
         return
-    occupied = await _occupied_slots(provider_id, tenant)
+    occupied = await _occupied_slots(provider_id)
     missing = [n for n in range(1, slot) if n not in occupied]
     if missing:
         raise HTTPException(
@@ -173,7 +170,7 @@ async def _refuse_a_numbering_gap(provider_id: str, slot: int, tenant: str) -> N
         )
 
 
-async def _refuse_to_strand_a_spare(provider_id: str, slot: int, tenant: str) -> None:
+async def _refuse_to_strand_a_spare(provider_id: str, slot: int) -> None:
     """Removing a slot below an occupied one is the numbering gap, from the
     other side.
 
@@ -187,7 +184,7 @@ async def _refuse_to_strand_a_spare(provider_id: str, slot: int, tenant: str) ->
     """
     if slot >= MAX_KEY_SLOTS:
         return
-    higher = sorted(n for n in await _occupied_slots(provider_id, tenant) if n > slot)
+    higher = sorted(n for n in await _occupied_slots(provider_id) if n > slot)
     if higher:
         raise HTTPException(
             status_code=409,
@@ -220,18 +217,16 @@ async def _write_engine_defaults(
 @router.get("/api/providers")
 async def list_providers(request: Request) -> JSONResponse:
     """Which providers hold a credential, from where, and in what state."""
-    require_tenant_admin(request)
-    status, body = await engine_request(
-        "GET", "/api/admin/providers", tenant=get_tenant_id(request)
-    )
+    require_operator(request)
+    status, body = await engine_request("GET", "/api/admin/providers")
     return _proxied(status, body)
 
 
 @router.get("/api/models")
 async def list_models(request: Request) -> JSONResponse:
     """Every model the engine can route to, curated registry plus plugins."""
-    require_tenant_admin(request)
-    status, body = await engine_request("GET", "/api/admin/models", tenant=get_tenant_id(request))
+    require_operator(request)
+    status, body = await engine_request("GET", "/api/admin/models")
     return _proxied(status, body)
 
 
@@ -240,24 +235,19 @@ async def set_provider_key(
     provider_id: str, position: int, body: KeyWrite, request: Request
 ) -> dict[str, Any]:
     """Store one provider credential and put it into service."""
-    actor = require_tenant_admin(request)
+    actor = require_operator(request)
     spec = _known_provider(provider_id)
     slot = _validated_position(position)
     value = body.api_key.get_secret_value().strip()
     if not value:
         raise HTTPException(status_code=422, detail="api_key must not be empty")
-    tenant = get_tenant_id(request)
-    await _refuse_a_numbering_gap(spec.id, slot, tenant)
+    await _refuse_a_numbering_gap(spec.id, slot)
 
     # psycopg2 is synchronous; this handler is async because it awaits the
     # engine, so the database write goes to a worker thread rather than
-    # stalling the event loop for every other request on the bridge. The row
-    # is the ACTING tenant's, named explicitly, and that tenant's engine is
-    # the one told to reload.
-    await asyncio.to_thread(
-        vault.set, provider_key(spec.id, slot), value, category="credential", tenant_id=tenant
-    )
-    await _reload_engine_secrets(tenant)
+    # stalling the event loop for every other request on the bridge.
+    await asyncio.to_thread(vault.set, provider_key(spec.id, slot), value, category="credential")
+    await _reload_engine_secrets()
 
     fingerprint = key_fingerprint(value)
     audited(
@@ -275,16 +265,13 @@ async def set_provider_key(
 @router.delete("/api/providers/{provider_id}/keys/{position}")
 async def delete_provider_key(provider_id: str, position: int, request: Request) -> dict[str, Any]:
     """Remove one provider credential and take it out of service."""
-    actor = require_tenant_admin(request)
+    actor = require_operator(request)
     spec = _known_provider(provider_id)
     slot = _validated_position(position)
-    tenant = get_tenant_id(request)
-    await _refuse_to_strand_a_spare(spec.id, slot, tenant)
+    await _refuse_to_strand_a_spare(spec.id, slot)
 
-    removed = bool(
-        await asyncio.to_thread(vault.delete, provider_key(spec.id, slot), tenant_id=tenant)
-    )
-    await _reload_engine_secrets(tenant)
+    removed = bool(await asyncio.to_thread(vault.delete, provider_key(spec.id, slot)))
+    await _reload_engine_secrets()
 
     audited(
         request,
@@ -309,14 +296,13 @@ async def test_provider(
     appliance where such a value exists. It is *typed* rather than passed
     through as a dict so the key spends its time here inside a ``SecretStr``.
     """
-    require_tenant_admin(request)
+    require_operator(request)
     spec = _known_provider(provider_id)
     status, result = await engine_request(
         "POST",
         f"/api/admin/providers/{spec.id}/test",
         json=body.engine_payload(),
         timeout=_TEST_TIMEOUT_SECONDS,
-        tenant=get_tenant_id(request),
     )
     audited(
         request,
@@ -332,8 +318,8 @@ async def test_provider(
 @router.get("/api/providers/defaults")
 async def get_default_models(request: Request) -> JSONResponse:
     """The fleet's current default model and fallback chain, for the form to pre-select."""
-    require_tenant_admin(request)
-    status, body = await engine_request("GET", "/api/admin/defaults", tenant=get_tenant_id(request))
+    require_operator(request)
+    status, body = await engine_request("GET", "/api/admin/defaults")
     return _proxied(status, body)
 
 
@@ -347,12 +333,8 @@ async def set_default_models(body: DefaultsWrite, request: Request) -> JSONRespo
     its own catalog, and reloads before it answers. The bridge never touches
     the file. An engine refusal (an unknown model id, or the engine being
     unreachable) is passed through as the engine gave it.
-
-    ROOT-only: the engine this reaches is the root engine, whose
-    ``_defaults.yaml`` is the platform tenant's fleet. A child tenant's lives
-    on its own engine; a per-tenant write is a follow-up.
     """
-    actor = require_root_operator(request)
+    actor = require_operator(request)
 
     # Forwarded only when the body names it: absent leaves the engine's value
     # alone, null clears it.

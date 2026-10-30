@@ -7,9 +7,6 @@ from pathlib import Path
 
 DEFAULT_TENANT = os.environ.get("ROBOTHOR_DEFAULT_TENANT", "default")
 
-#: The tenant whose owner/admins are the appliance's operators.
-PLATFORM_TENANT = os.environ.get("ROBOTHOR_PLATFORM_TENANT") or DEFAULT_TENANT
-
 #: The platform's fallback IANA timezone, and the one `ROBOTHOR_TIMEZONE`
 #: overrides. Declared here so a subsystem cannot invent its own: the sales
 #: package shipped `America/Chicago` — the first operator's locale, which is

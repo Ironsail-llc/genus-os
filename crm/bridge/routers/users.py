@@ -8,7 +8,7 @@ administered, but only by the person holding a shell.
 The rules this module is built around, in the order a reviewer should check
 them:
 
-* **Every route is ``require_tenant_admin`` first line.** Reads included: the
+* **Every route is ``require_operator`` first line.** Reads included: the
   listing enumerates every account on the appliance and what each one may do,
   which is the map an attacker holding a member session wants most.
 * **A credential never travels.** ``user_accounts`` rows carry
@@ -54,10 +54,10 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from robothor.auth import accounts, session_standing
+from robothor.auth import accounts
 from robothor.auth.tokens import HUMAN_ROLES, ROLE_DESCRIPTIONS
 from routers._audit import audited
-from routers._operator import require_tenant_admin
+from routers._operator import require_operator
 
 logger = logging.getLogger(__name__)
 
@@ -132,7 +132,7 @@ class AccountPatch(BaseModel):
 def _identity(request: Request) -> tuple[str, str, str]:
     """``(caller account id, tenant, caller role)`` from the VERIFIED session.
 
-    Only ever called after ``require_tenant_admin``, which is spelled out in each
+    Only ever called after ``require_operator``, which is spelled out in each
     handler rather than folded in here: ``test_mutations_are_gated.py`` walks
     the assembled app and reads each handler's own source for that call, so a
     gate hidden behind a helper would be a gate that guard cannot see.
@@ -140,7 +140,7 @@ def _identity(request: Request) -> tuple[str, str, str]:
     The tenant comes from the token, never from ``X-Tenant-Id``: that header is
     the unverified legacy fallback, and every query below is scoped by whatever
     this returns. The ROLE comes from the token too, and is the caller's own
-    authority — ``require_tenant_admin`` admits owner and admin alike, so nothing
+    authority — ``require_operator`` admits owner and admin alike, so nothing
     but the rules below separates them.
     """
     auth = request.state.auth
@@ -204,25 +204,6 @@ def _drops_authority(new_role: str | None, new_status: str | None) -> bool:
     return (new_role is not None and new_role != OWNER_ROLE) or new_status == "disabled"
 
 
-def _may_grant_owner(request: Request, caller_role: str) -> bool:
-    """Whether this caller may make an account the OWNER of its tenant.
-
-    A grant may never exceed the caller's own authority. Owner and admin are
-    the only roles past the gate, and admin may grant every role but owner, so
-    the ceiling comes down to this one rule — and owner is the role that
-    decides who else is an administrator, so it stays with the ROOT tenant's
-    owner: an owner whose home is the platform tenant (at home, or acting in a
-    child it is setting up). A child tenant's own owner may not mint another,
-    and an admin of any tenant — a root admin acting in a child included —
-    never may.
-    """
-    from routers import _operator
-
-    auth = request.state.auth
-    home = getattr(auth, "home_tenant_id", None) or auth.tenant_id
-    return caller_role == OWNER_ROLE and home == _operator.PLATFORM_TENANT
-
-
 def _refuse_an_authority_change_the_caller_cannot_make(
     request: Request,
     *,
@@ -242,17 +223,17 @@ def _refuse_an_authority_change_the_caller_cannot_make(
     tenant at one owner row, so an admin demoted the (``invited``) incumbent and
     took the slot it freed — two PATCHes, no other check in the way.
 
-    ``require_tenant_admin`` cannot express this: it admits owner and admin alike,
+    ``require_operator`` cannot express this: it admits owner and admin alike,
     which is correct for every other account on the appliance.
 
     403 rather than 409: this is about the CALLER's authority, not about the
     appliance's state, and the same request from the owner succeeds.
     """
-    if new_role == OWNER_ROLE and not _may_grant_owner(request, caller_role):
+    if new_role == OWNER_ROLE and caller_role != OWNER_ROLE:
         audited(request, event, action=action, status="denied", reason="grant_owner")
         raise HTTPException(
             status_code=403,
-            detail="only the root tenant's owner may grant the owner role",
+            detail="only an owner may grant the owner role",
         )
     if (
         target_role == OWNER_ROLE
@@ -369,26 +350,6 @@ def _load(user_id: str, tenant_id: str) -> dict[str, Any]:
     return row
 
 
-def _grant_creator(request: Request, actor: str) -> str:
-    """How a grant records who armed it.
-
-    ``root:<actor>`` only when the caller's home AND acting tenant are both
-    the platform tenant: SSO sign-in honours such a grant even where the
-    address routes elsewhere (``accounts._jit_provision``). Any other
-    operator's grant is spent only when the address routes to its tenant.
-    """
-    from routers import _operator
-
-    auth = getattr(request.state, "auth", None)
-    is_root = (
-        auth is not None
-        and not auth.is_service
-        and auth.tenant_id == _operator.PLATFORM_TENANT
-        and getattr(auth, "home_tenant_id", auth.tenant_id) == _operator.PLATFORM_TENANT
-    )
-    return f"{accounts.ROOT_GRANT_PREFIX}{actor}" if is_root else actor
-
-
 def _arm_grant(request: Request, email: str, tenant_id: str, actor: str) -> dict[str, Any]:
     """Arm one binding grant, turning the DAL's refusals into answers.
 
@@ -402,7 +363,7 @@ def _arm_grant(request: Request, email: str, tenant_id: str, actor: str) -> dict
             email=email,
             ttl_seconds=_grant_ttl_seconds(),
             reason="armed from the Helm",
-            created_by=_grant_creator(request, actor),
+            created_by=actor,
             issuer=_issuer_pin(),
         )
     except accounts.GrantTargetError as exc:
@@ -433,7 +394,7 @@ def list_roles(request: Request) -> dict[str, Any]:
     picker that offers a role the token layer does not know creates an account
     that cannot sign in, and this file is how the two stay one fact.
     """
-    require_tenant_admin(request)
+    require_operator(request)
     return {
         "roles": [
             {"id": role, "description": ROLE_DESCRIPTIONS[role]} for role in sorted(HUMAN_ROLES)
@@ -447,7 +408,7 @@ def list_roles(request: Request) -> dict[str, Any]:
 @router.get("/api/users")
 def list_users(request: Request) -> dict[str, Any]:
     """Every account in the caller's tenant. No credentials, ever."""
-    require_tenant_admin(request)
+    require_operator(request)
     _, tenant_id, _ = _identity(request)
     try:
         rows = accounts.list_accounts(tenant_id)
@@ -485,7 +446,7 @@ def invite_user(body: InviteRequest, request: Request) -> JSONResponse:
       (``create_binding_grant`` refuses a non-active target), so "invited plus
       a grant" would be an invitation nobody could accept.
     """
-    actor = require_tenant_admin(request)
+    actor = require_operator(request)
     _, tenant_id, caller_role = _identity(request)
     email = _email(body.email)
     role = _role(body.role)
@@ -549,7 +510,7 @@ def update_user(user_id: str, body: AccountPatch, request: Request) -> dict[str,
     reasons — one is about the INSTANCE (somebody must be owner), the other
     about the CALLER (a session must not drop its own authority).
     """
-    actor = require_tenant_admin(request)
+    actor = require_operator(request)
     caller_id, tenant_id, caller_role = _identity(request)
     target_id = _account_id(user_id)
     row = _load(target_id, tenant_id)
@@ -619,10 +580,6 @@ def update_user(user_id: str, body: AccountPatch, request: Request) -> dict[str,
         raise _unavailable(exc) from exc
     if updated is None:
         raise HTTPException(status_code=404, detail="no account with that id")
-    # The bridge's own cached answer to "does this account still stand" is
-    # dropped now, so a disable takes effect on the account's next request
-    # rather than when the cache expires (robothor.auth.session_standing).
-    session_standing.forget(target_id)
 
     revoked = 0
     if body.status == "disabled":
@@ -690,7 +647,7 @@ def arm_binding_grant(user_id: str, request: Request) -> JSONResponse:
     accepts — and consuming the grant binds the presenter's identity onto that
     account. The CLI equivalent is a shell on the box; this is an HTTP route.
     """
-    actor = require_tenant_admin(request)
+    actor = require_operator(request)
     _, tenant_id, caller_role = _identity(request)
     target_id = _account_id(user_id)
     row = _load(target_id, tenant_id)
@@ -727,7 +684,7 @@ def list_user_binding_grants(user_id: str, request: Request) -> dict[str, Any]:
     the filter — applied here rather than by widening the DAL, because a
     per-email query is not a question anything else asks.
     """
-    require_tenant_admin(request)
+    require_operator(request)
     _, tenant_id, _ = _identity(request)
     target_id = _account_id(user_id)
     row = _load(target_id, tenant_id)

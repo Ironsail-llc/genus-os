@@ -8,8 +8,6 @@
 import fs from "fs";
 import path from "path";
 
-import { tenantClaimsFromAuthorization } from "@/lib/tenant-session";
-
 interface ServiceDef {
   name: string;
   port: number;
@@ -156,84 +154,6 @@ export function getServiceUrl(name: string, urlPath = ""): string | null {
   if (protocol !== "http" && protocol !== "https") return null;
   const base = `${protocol}://${svc.host}:${svc.port}`;
   return validatedServiceUrl(base, urlPath);
-}
-
-const DEFAULT_ENGINE_URL = "http://127.0.0.1:18800";
-// A Kubernetes Service name segment: what the chart's `{tenant}` template can
-// actually name. Anything else would be spliced into a URL as-is.
-const TENANT_ID = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
-
-// The same resolution as the bridge's PLATFORM_TENANT (robothor/constants.py):
-// ROBOTHOR_PLATFORM_TENANT when set, else ROBOTHOR_DEFAULT_TENANT, else
-// `default`. The two must agree, or a root user's token is templated into a
-// Service that does not exist.
-export function rootTenant(): string {
-  return (
-    process.env.ROBOTHOR_PLATFORM_TENANT?.trim() ||
-    process.env.ROBOTHOR_DEFAULT_TENANT?.trim() ||
-    "default"
-  );
-}
-
-/** A setting by its GENUS_ name, else its ROBOTHOR_ alias. */
-function settingWithAlias(name: string, alias: string): string | undefined {
-  return process.env[name]?.trim() || process.env[alias]?.trim() || undefined;
-}
-
-function tenantEngineOverride(tenant: string): string | undefined {
-  const raw = settingWithAlias("GENUS_TENANT_ENGINE_URLS", "ROBOTHOR_TENANT_ENGINE_URLS");
-  if (!raw) return undefined;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    throw new Error("Invalid GENUS_TENANT_ENGINE_URLS: not a JSON object");
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error("Invalid GENUS_TENANT_ENGINE_URLS: not a JSON object");
-  }
-  const value = (parsed as Record<string, unknown>)[tenant];
-  return typeof value === "string" && value ? value : undefined;
-}
-
-/**
- * The engine that serves `tenant` (the token's `tid`: an acting tenant, or a
- * child-tenant user's home), in three steps: `GENUS_TENANT_ENGINE_URLS`
- * (JSON `{tenant: url}`), then `GENUS_TENANT_ENGINE_URL_TEMPLATE` (literal
- * `{tenant}` placeholder), then `ROBOTHOR_ENGINE_URL`. Each of the first two
- * also answers to its `ROBOTHOR_TENANT_…` alias, the GENUS_ name winning. The
- * root tenant (`ROBOTHOR_DEFAULT_TENANT`, default `default`) — and no tenant
- * at all — is always `ROBOTHOR_ENGINE_URL`.
- *
- * Read at call time, and fails closed: a misconfigured override or template
- * throws rather than sending a child tenant's session to the root engine.
- */
-export function engineUrlFor(tenant?: string | null): string {
-  const root = (process.env.ROBOTHOR_ENGINE_URL || DEFAULT_ENGINE_URL).replace(/\/$/, "");
-  if (!tenant || tenant === rootTenant()) return root;
-
-  const override = tenantEngineOverride(tenant);
-  const template = settingWithAlias(
-    "GENUS_TENANT_ENGINE_URL_TEMPLATE",
-    "ROBOTHOR_TENANT_ENGINE_URL_TEMPLATE",
-  );
-  let candidate: string;
-  if (override) {
-    candidate = override;
-  } else if (template?.includes("{tenant}")) {
-    if (!TENANT_ID.test(tenant)) throw new Error("Invalid tenant id for engine routing");
-    candidate = template.replaceAll("{tenant}", tenant);
-  } else {
-    return root;
-  }
-  const validated = validatedServiceUrl(candidate);
-  if (!validated) throw new Error(`Invalid engine URL configuration for tenant ${tenant}`);
-  return validated;
-}
-
-/** The engine for the tenant an `Authorization: Bearer` value acts in. */
-export function engineUrlForAuthorization(authorization?: string | null): string {
-  return engineUrlFor(tenantClaimsFromAuthorization(authorization)?.tenant);
 }
 
 /** Resolve a health/readiness target from operator runtime configuration only. */

@@ -792,10 +792,8 @@ CAPS = {
     # 1,172 -> 1,049: the verdicts moved to _manifest_validation.py along a real
     # seam (nothing there touches the filesystem, the engine or a request, which
     # is what lets it take its inputs as parameters instead of importing the
-    # router's resolvers back). 1,049 -> 836: the file work (atomic writes, the
-    # history ring, retire) moved to robothor/engine/manifest_store.py, shared
-    # with the engine's own /api/admin/manifests routes for child tenants.
-    "crm/bridge/routers/agent_manifests.py": 900,
+    # router's resolvers back).
+    "crm/bridge/routers/agent_manifests.py": 1060,
     # 250 -> 260: `introduced` now carries the record of getting this wrong
     # twice in opposite directions — keyed too loosely it missed an added
     # fault, keyed too tightly it refused a partial repair — plus the per-fault

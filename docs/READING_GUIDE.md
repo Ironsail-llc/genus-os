@@ -66,7 +66,6 @@ present; do not treat an instance path as a shipped security control.
 | Kubernetes deployment boundary | `helm/genus-os/README.md` + environment values |
 | Database upgrades | `robothor/migrations/manifest.txt` + `robothor/db/migrate.py` + upgrade-safety integration test |
 | Backup / restore | `docs/runbooks/SNAPSHOT_RESTORE.md` + `genus snapshot --help` |
-| Parent and child tenants, SSO domains, moving accounts | `docs/runbooks/TENANT_HIERARCHY.md` + `genus tenant --help` |
 | Entity authority / treasury | `docs/ENTITY_KERNEL_TREASURY.md` |
 | Customer or Genus payment data | `docs/compliance/PAYMENT_DATA.md` |
 | Managing agents | `docs/AGENT_BUILDER.md` |

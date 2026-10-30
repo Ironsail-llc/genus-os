@@ -1,19 +1,16 @@
-"""Tenant-scoped, read-only run accounting: recent runs, and per-run steps +
-guardrail blocks + cost, for the ACTING tenant. Every run query names the tenant
-as well as reading through the RLS-scoped connection, so isolation does not
-depend on row-level security being on. Steps and guardrail events are reached
-only through a run the tenant owns."""
+"""Operator-scoped, read-only run accounting: recent runs, and per-run steps +
+guardrail blocks + cost. Reads through the RLS-scoped connection, so the operator
+sees the platform tenant's runs only."""
 
 from __future__ import annotations
 
 from decimal import Decimal
 
 import psycopg2.extras
-from deps import get_tenant_id
 from fastapi import APIRouter, HTTPException, Request
 
 from robothor.db.connection import get_connection
-from routers._operator import require_tenant_admin
+from routers._operator import require_operator
 
 router = APIRouter(prefix="/api/runs", tags=["runs"])
 
@@ -55,27 +52,23 @@ def _serialize(row: dict) -> dict:
     return out
 
 
-def _list_runs(agent: str | None, limit: int, tenant_id: str) -> list[dict]:
+def _list_runs(agent: str | None, limit: int) -> list[dict]:
     if agent:
         sql = (
-            f"SELECT {_RUN_COLUMNS} FROM agent_runs WHERE tenant_id = %s AND agent_id = %s "
+            f"SELECT {_RUN_COLUMNS} FROM agent_runs WHERE agent_id = %s "
             "ORDER BY started_at DESC NULLS LAST LIMIT %s"
         )
-        rows = _rows(sql, (tenant_id, agent, limit))
+        rows = _rows(sql, (agent, limit))
     else:
-        sql = (
-            f"SELECT {_RUN_COLUMNS} FROM agent_runs WHERE tenant_id = %s "
-            "ORDER BY started_at DESC NULLS LAST LIMIT %s"
-        )
-        rows = _rows(sql, (tenant_id, limit))
+        sql = f"SELECT {_RUN_COLUMNS} FROM agent_runs ORDER BY started_at DESC NULLS LAST LIMIT %s"
+        rows = _rows(sql, (limit,))
     return [_serialize(r) for r in rows]
 
 
-def _get_run(run_id: str, tenant_id: str) -> dict | None:
+def _get_run(run_id: str) -> dict | None:
     rows = _rows(
-        f"SELECT {_RUN_COLUMNS}, output_text, error_traceback FROM agent_runs "
-        "WHERE id = %s AND tenant_id = %s",
-        (run_id, tenant_id),
+        f"SELECT {_RUN_COLUMNS}, output_text, error_traceback FROM agent_runs WHERE id = %s",
+        (run_id,),
     )
     return _serialize(rows[0]) if rows else None
 
@@ -101,15 +94,15 @@ def _get_guardrail_events(run_id: str) -> list[dict]:
 
 @router.get("")
 def list_runs(request: Request, agent: str | None = None, limit: int = 50) -> list[dict]:
-    require_tenant_admin(request)
+    require_operator(request)
     limit = max(1, min(limit, _MAX_LIMIT))
-    return _list_runs(agent, limit, get_tenant_id(request))
+    return _list_runs(agent, limit)
 
 
 @router.get("/{run_id}")
 def get_run(run_id: str, request: Request) -> dict:
-    require_tenant_admin(request)
-    run = _get_run(run_id, get_tenant_id(request))
+    require_operator(request)
+    run = _get_run(run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="unknown run")
     return {
