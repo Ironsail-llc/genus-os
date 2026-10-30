@@ -33,6 +33,7 @@ from dataclasses import asdict, dataclass
 from dataclasses import field as dataclass_field
 from typing import Any
 
+import psycopg2.extensions
 from psycopg2 import sql
 from psycopg2.extras import Json, RealDictCursor
 
@@ -251,6 +252,11 @@ UNTOUCHED_TABLES: dict[str, str] = {
 #: engine that is executing it writing into a tenant that no longer holds it.
 _LIVE_RUN_STATES = ("pending", "running", "awaiting_approval")
 _LIVE_CODING_JOB_STATES = ("queued", "running")
+#: Async work that outlives a finished run. An unresolved effect is resolved
+#: by the source's recovery sweep against the source's CRM; an unfinished
+#: memory write may be extracting into the source's memory right now.
+_UNRESOLVED_EFFECT_STATES = ("prepared", "dispatching", "uncertain")
+_UNFINISHED_MEMORY_WRITE_STATES = ("pending", "running")
 
 _TENANT_TABLES_SQL = """
 SELECT c.relname AS tbl FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -445,6 +451,18 @@ def _refuse_live(cur: Any, params: dict[str, Any]) -> None:
             f"run_id IN {_RUN_TEXT} AND status IN {_LIVE_CODING_JOB_STATES}",
             params,
         ),
+        "agent_runtime_effects": _count(
+            cur,
+            "agent_runtime_effects",
+            f"run_id IN {_RUN_TEXT} AND state IN {_UNRESOLVED_EFFECT_STATES}",
+            params,
+        ),
+        "memory_write_jobs": _count(
+            cur,
+            "memory_write_jobs",
+            f"run_id IN {_RUN_TEXT} AND status IN {_UNFINISHED_MEMORY_WRITE_STATES}",
+            params,
+        ),
     }
     listed = ", ".join(f"{t}={n}" for t, n in live.items() if n)
     if listed:
@@ -506,6 +524,22 @@ def _foreign_keys(cur: Any) -> list[dict[str, Any]]:
 
 def _refuse_left_behind(cur: Any, fks: list[dict[str, Any]], params: dict[str, Any]) -> None:
     """Refuse when a source row that stays references a row that moves."""
+    # ``workflow_run_steps.agent_run_id`` has no foreign key, so the catalog
+    # loop below cannot see a step of a workflow that is not named pointing at
+    # a run that moves.
+    cur.execute(
+        "SELECT COUNT(*) AS n FROM workflow_run_steps s "
+        "JOIN workflow_runs w ON w.id = s.run_id AND w.tenant_id = %(source)s "
+        f"WHERE s.agent_run_id IN {_RUNS} AND s.run_id NOT IN {_WF_RUNS}",
+        params,
+    )
+    n = int(cur.fetchone()["n"])
+    if n:
+        raise WorkloadMoveError(
+            f"{n} workflow_run_steps row(s) of a workflow that is not being moved started "
+            "runs of the workload; name that workflow with --workflow too, or the steps "
+            "would point across tenants"
+        )
     for fk in fks:
         parent, child = fk["parent"], fk["child"]
         if parent not in MOVED_TABLES:
@@ -611,6 +645,28 @@ def _record_audit(cur: Any, *, actor: str, root: str, report: WorkloadMoveReport
     return int(cur.fetchone()["id"])
 
 
+def _one_snapshot(conn: Any) -> None:
+    """Run the move at REPEATABLE READ: every statement sees one snapshot.
+
+    At READ COMMITTED each UPDATE would see rows the source engine committed
+    after the workload's runs were selected, so a new run would stay behind
+    while its agent-keyed rows moved. Under one snapshot those rows stay
+    together, and a concurrent update of a moving row fails the move (rolled
+    back) instead of splitting it. The checkout's own statements (its tenant
+    binding) are committed first, because the level must be set before a
+    transaction's first query; their session settings survive the commit.
+    """
+    if conn.get_transaction_status() != psycopg2.extensions.TRANSACTION_STATUS_IDLE:
+        conn.commit()
+    if conn.get_transaction_status() != psycopg2.extensions.TRANSACTION_STATUS_IDLE:
+        # Only a caller that owns the transaction can get here (the RLS test
+        # wrapper, whose commit is a no-op); it keeps its own isolation.
+        logger.warning("move_workload: an open transaction keeps its isolation level")
+        return
+    with conn.cursor() as cur:
+        cur.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+
+
 def move_workload(
     *,
     from_tenant: str,
@@ -656,6 +712,7 @@ def move_workload(
     )
     with get_connection() as conn:
         try:
+            _one_snapshot(conn)
             read_every_tenant_in_transaction(conn)
             cur = conn.cursor(cursor_factory=RealDictCursor)
             root = _refuse_tenants(cur, from_tenant, to_tenant)
