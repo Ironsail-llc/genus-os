@@ -1,0 +1,737 @@
+suite: tenant engine cells
+release:
+  name: gos
+  namespace: genus
+# Tenant cells require the shared vault key (see vault_key_test.yaml), so every
+# case here renders with it on.
+set:
+  vaultKey.enabled: true
+  vault.secrets.vault-key.path: genus-os/test/vault-key
+tests:
+  # ─── Default: no tenants, nothing new ──────────────────────────────────────
+  - it: an empty tenants list renders no tenant cell
+    template: engine/tenants.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # ─── One cell per tenant ───────────────────────────────────────────────────
+  - it: two tenants render a Deployment, Service and workspace PVC each
+    template: engine/tenants.yaml
+    set:
+      workspace.persistence.enabled: true
+      tenants:
+        - id: acme-child-a
+        - id: acme-child-b
+    asserts:
+      - hasDocuments:
+          count: 6
+      - containsDocument:
+          kind: Deployment
+          apiVersion: apps/v1
+          name: gos-genus-os-engine-acme-child-a
+          any: true
+      - containsDocument:
+          kind: Service
+          apiVersion: v1
+          name: gos-genus-os-engine-acme-child-a
+          any: true
+      - containsDocument:
+          kind: PersistentVolumeClaim
+          apiVersion: v1
+          name: gos-genus-os-workspace-acme-child-a
+          any: true
+      - containsDocument:
+          kind: Deployment
+          apiVersion: apps/v1
+          name: gos-genus-os-engine-acme-child-b
+          any: true
+      - containsDocument:
+          kind: Service
+          apiVersion: v1
+          name: gos-genus-os-engine-acme-child-b
+          any: true
+      - containsDocument:
+          kind: PersistentVolumeClaim
+          apiVersion: v1
+          name: gos-genus-os-workspace-acme-child-b
+          any: true
+
+  - it: a tenant cell carries the engine component and its own tenant label
+    template: engine/tenants.yaml
+    set:
+      tenants:
+        - id: acme-child-a
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: spec.selector.matchLabels
+          value:
+            app.kubernetes.io/name: genus-os
+            app.kubernetes.io/instance: gos
+            app.kubernetes.io/component: engine
+            genus-os/tenant: acme-child-a
+      - equal:
+          path: spec.template.metadata.labels["app.kubernetes.io/component"]
+          value: engine
+      - equal:
+          path: spec.template.metadata.labels["genus-os/tenant"]
+          value: acme-child-a
+
+  - it: a tenant Service selects only its own cell
+    template: engine/tenants.yaml
+    set:
+      tenants:
+        - id: acme-child-a
+    documentSelector:
+      path: kind
+      value: Service
+    asserts:
+      - equal:
+          path: spec.selector["genus-os/tenant"]
+          value: acme-child-a
+      - equal:
+          path: spec.ports[0].port
+          value: 18800
+
+  - it: a tenant pod operates as its tenant and consumes its own event group
+    template: engine/tenants.yaml
+    set:
+      tenants:
+        - id: acme-child-a
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: ROBOTHOR_TENANT_ID, value: acme-child-a}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: ROBOTHOR_DEFAULT_TENANT, value: acme-child-a}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: GENUS_EVENT_CONSUMER_GROUP, value: engine-acme-child-a}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: ROBOTHOR_WORKSPACE, value: /workspace}
+
+  - it: tenant env is merged over engine.env, and cannot override the tenant
+    template: engine/tenants.yaml
+    set:
+      engine.env.SHARED_FLAG: from-engine
+      tenants:
+        - id: acme-child-a
+          env:
+            CELL_FLAG: from-tenant
+            ROBOTHOR_TENANT_ID: someone-else
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: SHARED_FLAG, value: from-engine}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: CELL_FLAG, value: from-tenant}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: ROBOTHOR_TENANT_ID, value: acme-child-a}
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content: {name: ROBOTHOR_TENANT_ID, value: someone-else}
+
+  - it: a tenant can set its own replica count and resources
+    template: engine/tenants.yaml
+    set:
+      tenants:
+        - id: acme-child-a
+          replicaCount: 0
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 0
+      - equal:
+          path: spec.template.spec.containers[0].resources.requests.cpu
+          value: 100m
+
+  - it: a tenant mounts its own workspace claim, never the root engine's
+    template: engine/tenants.yaml
+    set:
+      workspace.persistence.enabled: true
+      workspace.persistence.existingClaim: root-workspace
+      tenants:
+        - id: acme-child-a
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: workspace
+            persistentVolumeClaim:
+              claimName: gos-genus-os-workspace-acme-child-a
+        documentSelector:
+          path: kind
+          value: Deployment
+      - equal:
+          path: spec.resources.requests.storage
+          value: 20Gi
+        documentSelector:
+          path: kind
+          value: PersistentVolumeClaim
+
+  # Removing an entry from tenants: must not delete that tenant's memory.
+  - it: a tenant workspace claim survives the tenant's removal
+    template: engine/tenants.yaml
+    set:
+      workspace.persistence.enabled: true
+      tenants:
+        - id: acme-child-a
+    documentSelector:
+      path: kind
+      value: PersistentVolumeClaim
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/resource-policy"]
+          value: keep
+
+  # Production syncs with `argocd app sync --prune`, which ignores Helm's
+  # resource-policy, so Argo CD needs its own opt-outs: Prune=false for a
+  # removed entry, Delete=false for a cascading delete of the Application.
+  - it: a tenant workspace claim survives Argo CD pruning and Application deletion
+    template: engine/tenants.yaml
+    set:
+      workspace.persistence.enabled: true
+      tenants:
+        - id: acme-child-a
+    documentSelector:
+      path: kind
+      value: PersistentVolumeClaim
+    asserts:
+      - equal:
+          path: metadata.annotations["argocd.argoproj.io/sync-options"]
+          value: Prune=false,Delete=false
+
+  # An operator's own sync options are kept, with both opt-outs added.
+  - it: a tenant workspace claim adds the opt-outs to its own Argo CD sync options
+    template: engine/tenants.yaml
+    set:
+      tenants:
+        - id: acme-child-a
+          workspace:
+            persistence:
+              enabled: true
+              annotations:
+                argocd.argoproj.io/sync-options: ServerSideApply=true
+    documentSelector:
+      path: kind
+      value: PersistentVolumeClaim
+    asserts:
+      - equal:
+          path: metadata.annotations["argocd.argoproj.io/sync-options"]
+          value: ServerSideApply=true,Prune=false,Delete=false
+
+  # A conflicting Prune= or Delete= the operator set is replaced, not doubled.
+  - it: a tenant workspace claim replaces a conflicting Prune or Delete option
+    template: engine/tenants.yaml
+    set:
+      tenants:
+        - id: acme-child-a
+          workspace:
+            persistence:
+              enabled: true
+              annotations:
+                argocd.argoproj.io/sync-options: Delete=true, ServerSideApply=true, Prune=true
+    documentSelector:
+      path: kind
+      value: PersistentVolumeClaim
+    asserts:
+      - equal:
+          path: metadata.annotations["argocd.argoproj.io/sync-options"]
+          value: ServerSideApply=true,Prune=false,Delete=false
+
+  - it: a tenant workspace claim keeps the policy alongside its own annotations
+    template: engine/tenants.yaml
+    set:
+      tenants:
+        - id: acme-child-a
+          workspace:
+            persistence:
+              enabled: true
+              annotations: {example.com/backup: daily}
+    documentSelector:
+      path: kind
+      value: PersistentVolumeClaim
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/resource-policy"]
+          value: keep
+      - equal:
+          path: metadata.annotations["example.com/backup"]
+          value: daily
+
+  - it: a tenant workspace can be sized on its own
+    template: engine/tenants.yaml
+    set:
+      tenants:
+        - id: acme-child-a
+          workspace:
+            persistence: {enabled: true, size: 5Gi}
+    documentSelector:
+      path: kind
+      value: PersistentVolumeClaim
+    asserts:
+      - equal:
+          path: metadata.name
+          value: gos-genus-os-workspace-acme-child-a
+      - equal:
+          path: spec.resources.requests.storage
+          value: 5Gi
+      - equal:
+          path: metadata.labels["genus-os/tenant"]
+          value: acme-child-a
+
+  - it: a tenant workspace can be an immutable ConfigMap bundle
+    template: engine/tenants.yaml
+    set:
+      workspace.persistence.enabled: true
+      tenants:
+        - id: acme-child-a
+          workspace:
+            persistence: {enabled: false}
+            configMap: {name: acme-child-a-bundle}
+    asserts:
+      - hasDocuments:
+          count: 2
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: workspace
+            configMap:
+              name: acme-child-a-bundle
+        documentSelector:
+          path: kind
+          value: Deployment
+
+  - it: a tenant fleet policy comes from its own workspace block
+    template: engine/tenants.yaml
+    set:
+      workspace.requiredAgentIds: [main]
+      tenants:
+        - id: acme-child-a
+          workspace:
+            allowEmptyFleet: false
+            requiredAgentIds: [main, helper]
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: ROBOTHOR_ALLOW_EMPTY_FLEET, value: "false"}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: ROBOTHOR_REQUIRED_AGENT_IDS, value: "main,helper"}
+
+  - it: a tenant mounts its own Google Workspace secret when enabled
+    template: engine/tenants.yaml
+    set:
+      tenants:
+        - id: acme-child-a
+          googleWorkspace: {enabled: true}
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: google-workspace
+            secret:
+              secretName: gos-genus-os-engine-acme-child-a-google
+              defaultMode: 0400
+              optional: true
+              items:
+                - key: credentials.json
+                  path: credentials.json
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE
+            value: /etc/genus/gws/credentials.json
+
+  - it: a tenant Google Workspace secret name can be set explicitly
+    template: engine/tenants.yaml
+    set:
+      tenants:
+        - id: acme-child-a
+          googleWorkspace: {enabled: true, secretName: child-a-gws}
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: google-workspace
+            secret:
+              secretName: child-a-gws
+              defaultMode: 0400
+              optional: true
+              items:
+                - key: credentials.json
+                  path: credentials.json
+
+  - it: the root engine's Google Workspace mount does not leak into a tenant
+    template: engine/tenants.yaml
+    set:
+      vault.secrets.engine-google.path: genus-os/test/engine-google
+      engine.googleWorkspace.enabled: true
+      tenants:
+        - id: acme-child-a
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - notContains:
+          path: spec.template.spec.volumes
+          content:
+            name: google-workspace
+          any: true
+
+  - it: tenant secretRefs default to the engine's and may be narrowed
+    template: engine/tenants.yaml
+    set:
+      tenants:
+        - id: acme-child-a
+          secretRefs: [database, cache, auth-signing]
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].envFrom
+          value:
+            - secretRef: {name: gos-genus-os-database}
+            - secretRef: {name: gos-genus-os-cache}
+            - secretRef: {name: gos-genus-os-auth-signing}
+
+  - it: tenant secretRefs keep the engine allow-list
+    template: engine/tenants.yaml
+    set:
+      tenants:
+        - id: acme-child-a
+          secretRefs: [bridge-sso]
+    asserts:
+      - failedTemplate:
+          errorPattern: "secretRefs forbids secret class \"bridge-sso\""
+
+  # The root engine's extra volumes name its own resources (often a
+  # ReadWriteOnce claim); a cell mounting them could never be scheduled.
+  - it: a tenant cell does not inherit the root engine's extra volumes
+    template: engine/tenants.yaml
+    set:
+      engine.extraVolumes:
+        - name: root-plugin-state
+          persistentVolumeClaim: {claimName: root-plugin-state}
+      engine.extraVolumeMounts:
+        - {name: root-plugin-state, mountPath: /var/lib/plugin-state}
+      tenants:
+        - id: acme-child-a
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - notContains:
+          path: spec.template.spec.volumes
+          content: {name: root-plugin-state}
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content: {name: root-plugin-state}
+          any: true
+
+  - it: a tenant cell mounts its own extra volumes
+    template: engine/tenants.yaml
+    set:
+      tenants:
+        - id: acme-child-a
+          extraVolumes:
+            - name: child-plugin-state
+              persistentVolumeClaim: {claimName: child-a-plugin-state}
+          extraVolumeMounts:
+            - {name: child-plugin-state, mountPath: /var/lib/plugin-state}
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: child-plugin-state
+            persistentVolumeClaim: {claimName: child-a-plugin-state}
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content: {name: child-plugin-state, mountPath: /var/lib/plugin-state}
+
+  - it: the root engine keeps its extra volumes
+    template: engine/workload.yaml
+    documentIndex: 0
+    set:
+      engine.extraVolumes:
+        - name: root-plugin-state
+          persistentVolumeClaim: {claimName: root-plugin-state}
+      engine.extraVolumeMounts:
+        - {name: root-plugin-state, mountPath: /var/lib/plugin-state}
+      tenants:
+        - id: acme-child-a
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: root-plugin-state
+            persistentVolumeClaim: {claimName: root-plugin-state}
+
+  - it: a tenant cell never renders an Ingress
+    template: engine/tenants.yaml
+    set:
+      engine.ingress.enabled: true
+      engine.ingress.host: engine.example.invalid
+      tenants:
+        - id: acme-child-a
+    asserts:
+      - hasDocuments:
+          count: 2
+
+  # ─── Validation ────────────────────────────────────────────────────────────
+  - it: rejects a tenant id that is not DNS-safe
+    template: engine/tenants.yaml
+    set:
+      tenants:
+        - id: Acme_Child
+    asserts:
+      - failedTemplate:
+          errorPattern: "tenants\\[0\\]\\.id"
+
+  - it: rejects a tenant without an id
+    template: engine/tenants.yaml
+    set:
+      tenants:
+        - replicaCount: 1
+    asserts:
+      - failedTemplate:
+          errorPattern: "tenants\\[0\\]\\.id"
+
+  - it: rejects a duplicate tenant id
+    template: engine/tenants.yaml
+    set:
+      tenants:
+        - id: acme-child-a
+        - id: acme-child-a
+    asserts:
+      - failedTemplate:
+          errorPattern: "duplicate"
+
+  - it: rejects a tenant that is the root tenant
+    template: engine/tenants.yaml
+    set:
+      tenants:
+        - id: default
+    asserts:
+      - failedTemplate:
+          errorPattern: "global.rootTenant"
+
+  - it: rejects a tenant whose resource name would be truncated
+    template: engine/tenants.yaml
+    set:
+      tenants:
+        - id: acme-child-with-a-name-long-enough-to-overflow-sixty-three
+    asserts:
+      - failedTemplate:
+          errorPattern: "63"
+
+  # ─── Root engine ───────────────────────────────────────────────────────────
+  - it: the root engine operates as the root tenant explicitly
+    template: engine/workload.yaml
+    documentIndex: 0
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: ROBOTHOR_TENANT_ID, value: default}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: ROBOTHOR_DEFAULT_TENANT, value: default}
+
+  - it: global.rootTenant names the root engine's tenant
+    template: engine/workload.yaml
+    documentIndex: 0
+    set:
+      global.rootTenant: acme-root
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: ROBOTHOR_TENANT_ID, value: acme-root}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: ROBOTHOR_DEFAULT_TENANT, value: acme-root}
+
+  # Setting one of the two to something else would split the pod's tenant.
+  - it: engine.env may not name a tenant other than global.rootTenant
+    template: engine/workload.yaml
+    set:
+      engine.env.ROBOTHOR_DEFAULT_TENANT: acme-root
+    asserts:
+      - failedTemplate:
+          errorPattern: "set global.rootTenant instead"
+
+  - it: engine.env may repeat global.rootTenant
+    template: engine/workload.yaml
+    documentIndex: 0
+    set:
+      global.rootTenant: acme-root
+      engine.env.ROBOTHOR_TENANT_ID: acme-root
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: ROBOTHOR_DEFAULT_TENANT, value: acme-root}
+
+  - it: rejects a root tenant that is not a valid label value
+    template: engine/workload.yaml
+    set:
+      global.rootTenant: "not a label"
+    asserts:
+      - failedTemplate:
+          errorPattern: "global.rootTenant must be a valid label value"
+
+  # A Deployment's selector is immutable: changing it would make every
+  # existing release fail to upgrade. It stays exactly as it was.
+  - it: the root engine's Deployment selector is unchanged with tenants
+    template: engine/workload.yaml
+    documentIndex: 0
+    set:
+      tenants:
+        - id: acme-child-a
+    asserts:
+      - equal:
+          path: spec.selector.matchLabels
+          value:
+            app.kubernetes.io/name: genus-os
+            app.kubernetes.io/instance: gos
+            app.kubernetes.io/component: engine
+      - equal:
+          path: spec.template.metadata.labels["genus-os/tenant"]
+          value: default
+
+  # Tenant pods share the component=engine label, so the root Service would
+  # route to them. With tenants it narrows to the root tenant's pods.
+  - it: the root engine Service excludes tenant pods once tenants exist
+    template: engine/workload.yaml
+    documentIndex: 1
+    set:
+      tenants:
+        - id: acme-child-a
+    asserts:
+      - equal:
+          path: spec.selector["genus-os/tenant"]
+          value: default
+
+  - it: the root engine Service selector is unchanged without tenants
+    template: engine/workload.yaml
+    documentIndex: 1
+    asserts:
+      - equal:
+          path: spec.selector
+          value:
+            app.kubernetes.io/name: genus-os
+            app.kubernetes.io/instance: gos
+            app.kubernetes.io/component: engine
+
+  # ─── Callers ───────────────────────────────────────────────────────────────
+  - it: the bridge can reach the root engine and every tenant engine
+    template: bridge/workload.yaml
+    documentIndex: 0
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: ROBOTHOR_ENGINE_URL, value: "http://gos-genus-os-engine:18800"}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: GENUS_TENANT_ENGINE_URL_TEMPLATE
+            value: "http://gos-genus-os-engine-{tenant}:18800"
+
+  - it: the dashboard can reach every tenant engine
+    template: dashboard/deployment.yaml
+    documentIndex: 0
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: GENUS_TENANT_ENGINE_URL_TEMPLATE
+            value: "http://gos-genus-os-engine-{tenant}:18800"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: ROBOTHOR_ENGINE_URL, value: "http://gos-genus-os-engine:18800"}
+
+  # ─── NetworkPolicy ─────────────────────────────────────────────────────────
+  - it: engine ingress admits the bridge and dashboard for every engine pod
+    template: networkpolicy.yaml
+    set:
+      networkPolicy.enabled: true
+      tenants:
+        - id: acme-child-a
+    documentSelector:
+      path: metadata.name
+      value: gos-genus-os-engine-internal-ingress
+    asserts:
+      # component=engine only, so tenant cells are covered with no policy change.
+      - equal:
+          path: spec.podSelector.matchLabels
+          value:
+            app.kubernetes.io/name: genus-os
+            app.kubernetes.io/instance: gos
+            app.kubernetes.io/component: engine
+      - contains:
+          path: spec.ingress[0].from
+          content:
+            podSelector:
+              matchLabels:
+                app.kubernetes.io/name: genus-os
+                app.kubernetes.io/instance: gos
+                app.kubernetes.io/component: bridge
+      - contains:
+          path: spec.ingress[0].from
+          content:
+            podSelector:
+              matchLabels:
+                app.kubernetes.io/name: genus-os
+                app.kubernetes.io/instance: gos
+                app.kubernetes.io/component: dashboard
+
+  - it: bridge egress reaches the engines
+    template: networkpolicy.yaml
+    set:
+      networkPolicy.enabled: true
+      networkPolicy.egress.enabled: true
+    documentSelector:
+      path: metadata.name
+      value: gos-genus-os-bridge-internal-egress
+    asserts:
+      - contains:
+          path: spec.egress
+          content:
+            to:
+              - podSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: genus-os
+                    app.kubernetes.io/instance: gos
+                    app.kubernetes.io/component: engine
+            ports:
+              - {protocol: TCP, port: 18800}
