@@ -117,8 +117,7 @@ class TestHandlerArguments:
     async def test_only_the_blank_argument_is_reported_missing(self) -> None:
         with patch.object(res, "store_fact", new=AsyncMock()):
             out = await self._call({"open_item": "the X alert", "outcome": "  "})
-        assert "missing: outcome" in out["error"]
-        assert "open_item," not in out["error"].split("missing:")[1]
+        assert out["error"].split("missing: ")[1].split(";")[0] == "outcome"
 
 
 class TestExtractionAwareness:

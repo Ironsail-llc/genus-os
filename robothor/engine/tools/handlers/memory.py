@@ -273,12 +273,25 @@ async def _recall_routed(
     return out["results"], out["query_class"]
 
 
+def _argument_error(
+    tool: str, required: tuple[str, ...], missing: list[str], args: dict[str, Any]
+) -> str:
+    """An error the calling model can act on: what it lacked and what it sent."""
+    received = ", ".join(sorted(args)) or "nothing"
+    return (
+        f"{tool} needs {' and '.join(required)} "
+        f"(missing: {', '.join(missing)}; received: {received})"
+    )
+
+
 @_handler("store_memory")
 async def _store_memory(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.memory.write_jobs import async_write_enabled, enqueue_write, process_write_job
 
     content = args.get("content", "")
     content_type = args.get("content_type", "conversation")
+    if not str(content or "").strip():
+        return {"error": _argument_error("store_memory", ("content",), ["content"], args)}
 
     if not async_write_enabled():
         return await store_memory_content(content, content_type, tenant_id=ctx.tenant_id)
@@ -367,6 +380,9 @@ async def store_memory_content(
     """
     from robothor.memory.facts import extract_facts, store_facts_batch
 
+    if not (content or "").strip():
+        return {"error": "content is required: there is nothing to store"}
+
     facts = await extract_facts(content, timeout=extract_timeout)
     if not facts:
         # No facts, or extraction timed out. Storing the raw content keeps the
@@ -393,6 +409,12 @@ async def store_memory_content(
 async def _record_resolution(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     """Record that an open item/alert/decision is resolved and retire it."""
     from robothor.memory.resolution import record_resolution
+
+    missing = [k for k in ("open_item", "outcome") if not str(args.get(k) or "").strip()]
+    if missing:
+        return {
+            "error": _argument_error("record_resolution", ("open_item", "outcome"), missing, args)
+        }
 
     return await record_resolution(
         open_item=args.get("open_item", ""),

@@ -235,6 +235,7 @@ class RunToolProxy:
     async def _dispatch(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
         from robothor.engine.post_execution import apply_post_execution_guardrails
         from robothor.engine.runner import _resolve_tool_timeout
+        from robothor.engine.tool_outcome import error_text
 
         req = self._req
         session = req.session
@@ -288,7 +289,7 @@ class RunToolProxy:
         )
         elapsed_ms = int((asyncio.get_running_loop().time() - started) * 1000)
 
-        error_msg = result.get("error") if isinstance(result, dict) else None
+        error_msg = error_text(result)
         # Redaction applies to a proxied result exactly as it does to a turn's:
         # a credential the snippet prints lands in stdout, which lands in the
         # model's context, which is the leak this guardrail exists to stop.
