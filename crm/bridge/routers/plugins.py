@@ -340,6 +340,7 @@ async def grant_plugin(name: str, tenant_id: str, request: Request) -> JSONRespo
     if tenant_id not in await _root_tree():
         raise HTTPException(status_code=404, detail="no such tenant")
 
+    written = True
     try:
         if state is None:
             await asyncio.to_thread(plugin_grants.clear_grant, tenant_id, plugin)
@@ -347,20 +348,7 @@ async def grant_plugin(name: str, tenant_id: str, request: Request) -> JSONRespo
             await asyncio.to_thread(plugin_grants.set_grant, tenant_id, plugin, state, actor)
     except Exception as exc:  # noqa: BLE001 - the class only; the text can carry a DSN
         logger.warning("Plugin grant could not be written (%s)", type(exc).__name__)
-        audited(
-            request,
-            "plugin.grant",
-            action=plugin,
-            plugin=plugin,
-            tenant=tenant_id,
-            state=state,
-            status="error",
-            audit_tenant_id=tenant_id,
-        )
-        return JSONResponse(
-            status_code=503, content={"error": "the plugin grant could not be written"}
-        )
-
+        written = False
     audited(
         request,
         "plugin.grant",
@@ -368,8 +356,14 @@ async def grant_plugin(name: str, tenant_id: str, request: Request) -> JSONRespo
         plugin=plugin,
         tenant=tenant_id,
         state=state,
+        status="ok" if written else "error",
         audit_tenant_id=tenant_id,
     )
+    if not written:
+        return JSONResponse(
+            status_code=503, content={"error": "the plugin grant could not be written"}
+        )
+
     reload_status, reload_body = await engine_request(
         "POST", "/api/admin/plugins/reload", tenant=tenant_id
     )
