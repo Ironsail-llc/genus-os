@@ -353,3 +353,32 @@ def test_move_account_reports_a_refusal(capsys) -> None:
         rc = cmd_tenant(_parse("move-account", "--email", "alice@example.com", "--to", "x"))
     assert rc == 1
     assert "does not exist" in capsys.readouterr().err
+
+
+# ─── tenant list ─────────────────────────────────────────────────────
+
+
+def test_tenant_list_shows_each_tenants_name_and_parent(capsys) -> None:
+    """The DAL hands back the API shape (``displayName``, ``parentTenantId``);
+    the table must show them, not a blank name and a dash for every parent."""
+    from robothor.crm.models import tenant_to_dict
+
+    rows = [
+        tenant_to_dict({"id": "acme-parent", "display_name": "Acme Holdings", "active": True}),
+        tenant_to_dict(
+            {
+                "id": "acme-child-a",
+                "display_name": "Acme Child A",
+                "parent_tenant_id": "acme-parent",
+                "active": True,
+            }
+        ),
+    ]
+    with patch("robothor.crm.dal.list_tenants", return_value=rows):
+        assert cmd_tenant(_parse("list")) == 0
+    out = capsys.readouterr().out
+    child = next(line for line in out.splitlines() if line.startswith("acme-child-a"))
+    assert "Acme Child A" in child
+    assert child.rstrip().endswith("acme-parent")
+    parent = next(line for line in out.splitlines() if line.startswith("acme-parent"))
+    assert "Acme Holdings" in parent
