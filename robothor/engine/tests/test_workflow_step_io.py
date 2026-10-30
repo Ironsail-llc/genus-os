@@ -298,3 +298,106 @@ class TestStepIOIsCapped:
             await _run(engine)
         sql, params = _step_inserts(statements)[0]
         assert json.loads(_column_value(sql, params, "tool_input")) == payload
+
+
+# ── review: stored inputs are redacted like every other tool_input ─────
+
+
+class TestStoredInputIsRedacted:
+    """``agent_run_steps.tool_input`` is redacted before it is persisted
+    (``redact_tool_arguments``); a workflow step's stored input must be too,
+    while the tool itself still receives the real arguments."""
+
+    @pytest.mark.asyncio
+    async def test_credential_named_argument_is_stored_as_the_placeholder(
+        self, engine_config, no_side_effects
+    ) -> None:
+        engine = _engine(
+            engine_config,
+            _definition({"api_key": "{{ key }}", "query": "x"}),
+            {"ok": True},
+        )
+        with _capture_sql() as statements:
+            await engine.execute(
+                "step-io-flow",
+                trigger_type="manual",
+                initial_context={"key": "example-secret-value"},
+                user_id="alice",
+                user_role="owner",
+            )
+
+        sql, params = _step_inserts(statements)[0]
+        stored = json.loads(_column_value(sql, params, "tool_input"))
+        assert stored == {"api_key": "<redacted>", "query": "x"}
+        called = engine.runner.registry.execute.call_args.args[1]
+        assert called["api_key"] == "example-secret-value"
+
+    @pytest.mark.asyncio
+    async def test_vault_set_value_is_stored_as_the_placeholder(
+        self, engine_config, no_side_effects
+    ) -> None:
+        data = {
+            "id": "step-io-flow",
+            "steps": [
+                {
+                    "id": "store",
+                    "type": "tool",
+                    "tool_name": "vault_set",
+                    "tool_args": {"key": "example/service", "value": "plain-secret"},
+                }
+            ],
+        }
+        engine = _engine(engine_config, data, {"ok": True})
+        with _capture_sql() as statements:
+            await _run(engine)
+
+        sql, params = _step_inserts(statements)[0]
+        stored = json.loads(_column_value(sql, params, "tool_input"))
+        assert stored == {"key": "example/service", "value": "<redacted>"}
+        assert "plain-secret" not in json.dumps([p for _, p in statements], default=str)
+
+    def test_fallback_insert_redacts_too(self, engine_config) -> None:
+        engine = WorkflowEngine(engine_config, runner=MagicMock())
+        result = WorkflowStepResult(
+            step_id="store",
+            step_type=WorkflowStepType.TOOL,
+            status=WorkflowStepStatus.COMPLETED,
+            tool_name="vault_set",
+            tool_input={"key": "example/service", "value": "plain-secret"},
+        )
+        with _capture_sql(rowcount=0) as statements:
+            engine._persist_step(WorkflowRun(workflow_id="step-io-flow"), result)
+
+        sql, params = _step_inserts(statements)[0]
+        stored = json.loads(_column_value(sql, params, "tool_input"))
+        assert stored["value"] == "<redacted>"
+
+
+# ── review: an empty ``tool_args:`` must not fail the whole run ────────
+
+
+class TestEmptyToolArgs:
+    @pytest.mark.asyncio
+    async def test_yaml_tool_args_with_no_value_does_not_crash_the_run(
+        self, engine_config, no_side_effects
+    ) -> None:
+        """``tool_args:`` with nothing under it parses to ``None``. Rendering
+        now happens before the step's ``try``, so it must not raise there and
+        take the run down before any step row is written."""
+        import yaml
+
+        data = yaml.safe_load(
+            "id: step-io-flow\n"
+            "steps:\n"
+            "  - id: lookup\n"
+            "    type: tool\n"
+            "    tool_name: search_records\n"
+            "    tool_args:\n"
+        )
+        engine = _engine(engine_config, data, {"ok": True})
+        with _capture_sql() as statements:
+            run = await _run(engine)
+
+        assert run.status == RunStatus.COMPLETED, run.error_message
+        sql, params = _step_inserts(statements)[0]
+        assert json.loads(_column_value(sql, params, "tool_input")) == {}
