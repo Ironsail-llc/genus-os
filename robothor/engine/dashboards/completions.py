@@ -7,10 +7,12 @@ endpoint keeps those capabilities inside the Engine authentication boundary.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
 import re
+from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Request
@@ -24,6 +26,18 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard-completions"])
 
 DEFAULT_DASHBOARD_MODEL = "openrouter/google/gemini-2.5-flash-lite"
+#: The whole chain's time, per purpose. The dashboard's client gives up on a
+#: triage after 20s and a render after 130s for the WHOLE request, so the
+#: chain shares one deadline inside that window, and each model gets an equal
+#: slice of it: a first model that hangs must leave time for the next.
+TRIAGE_BUDGET_SECONDS = 15
+RENDER_BUDGET_SECONDS = 120
+#: No model's slice drops below these. On a long chain an equal split would
+#: leave a slow but healthy primary too little time to answer, so it would
+#: fall through to the last resort; with a floor the tail of the chain may
+#: simply not get a turn before the overall deadline, which is the better loss.
+TRIAGE_MIN_PER_MODEL_SECONDS = 5
+RENDER_MIN_PER_MODEL_SECONDS = 30
 MAX_SYSTEM_PROMPT_CHARS = 12_000
 MAX_USER_PROMPT_CHARS = 40_000
 MAX_REQUEST_BYTES = 64 * 1024
@@ -62,17 +76,48 @@ class DashboardCompletionResponse(BaseModel):
     content: str
 
 
-def dashboard_model() -> str:
-    """Return the operator-selected OpenRouter model in LiteLLM format."""
+def dashboard_model_chain(manifest_dir: Path | None = None) -> list[str]:
+    """The models the canvas tries, in order; the first that answers wins.
 
-    configured = os.environ.get("DASHBOARD_MODEL", "").strip()
-    model = configured or DEFAULT_DASHBOARD_MODEL
-    if not _MODEL_ID_RE.fullmatch(model):
+    ``DASHBOARD_MODEL`` (an operator override) first, then the fleet defaults'
+    ``model.canvas`` (the Providers page's "Canvas model"), then the fleet's
+    own ``model.primary``, then the instance's model of last resort. No
+    provider prefix is added: an id is dialled as written, so the canvas
+    works on whichever provider the instance holds a key for. Only when
+    nothing at all is configured does the historical default apply.
+
+    The defaults are read through the same cached loader the admin defaults
+    routes use, so a ``PUT /api/admin/defaults`` or a reload is seen here
+    without a restart.
+    """
+    from robothor.engine import config as engine_config
+
+    override = os.environ.get("DASHBOARD_MODEL", "").strip()
+    if override and not _MODEL_ID_RE.fullmatch(override):
         logger.error("DASHBOARD_MODEL is not a valid model identifier")
         raise RuntimeError("invalid dashboard model configuration")
-    if not model.startswith("openrouter/"):
-        model = f"openrouter/{model}"
-    return model
+
+    directory = manifest_dir or engine_config.EngineConfig.from_env().manifest_dir
+    block = engine_config._load_defaults(Path(directory)).get("model") or {}
+    if not isinstance(block, dict):
+        block = {}
+
+    candidates = [
+        override,
+        block.get("canvas"),
+        block.get("primary"),
+        engine_config.last_resort_model(),
+    ]
+    chain: list[str] = []
+    for candidate in candidates:
+        model = str(candidate).strip() if candidate else ""
+        if not model or model in chain:
+            continue
+        if not _MODEL_ID_RE.fullmatch(model):
+            logger.warning("Skipping an invalid model id in the dashboard model chain")
+            continue
+        chain.append(model)
+    return chain or [DEFAULT_DASHBOARD_MODEL]
 
 
 def _completion_content(response: Any) -> str:
@@ -125,26 +170,32 @@ async def dashboard_completion(request: Request) -> DashboardCompletionResponse:
         max_tokens = 256
         json_mode = True
         temperature = 0.1
-        timeout = 15
+        budget: float = TRIAGE_BUDGET_SECONDS
+        floor: float = TRIAGE_MIN_PER_MODEL_SECONDS
     else:
         max_tokens = 4096
         json_mode = False
         temperature = 0.3
-        timeout = 120
+        budget = RENDER_BUDGET_SECONDS
+        floor = RENDER_MIN_PER_MODEL_SECONDS
 
     try:
-        response = await llm_call(
+        chain = dashboard_model_chain()
+        call = llm_call(
             [
                 {"role": "system", "content": payload.system_prompt},
                 {"role": "user", "content": payload.user_prompt},
             ],
-            model=dashboard_model(),
+            model=chain,
             temperature=temperature,
             json_mode=json_mode,
-            timeout=timeout,
+            timeout=max(budget / len(chain), floor),
             max_retries=1,
             max_tokens=max_tokens,
         )
+        # One deadline for the whole chain, so nothing is still dialling a
+        # provider after the client has stopped waiting.
+        response = await asyncio.wait_for(call, timeout=budget)
         return DashboardCompletionResponse(content=_completion_content(response))
     except Exception as error:
         # Provider response bodies can contain request details and must not be

@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { flushSync } from "react-dom";
 import dynamic from "next/dynamic";
 import { useSession } from "next-auth/react";
 import { Sidebar } from "./sidebar";
@@ -33,7 +34,8 @@ import { useInbox } from "@/hooks/use-inbox";
 import { useScreenSize } from "@/hooks/use-mobile";
 import { useViewRoute } from "@/hooks/use-view-route";
 import { useVisualState } from "@/hooks/use-visual-state";
-import { PanelRight, Zap } from "lucide-react";
+import { PanelRight, PanelRightOpen, Zap } from "lucide-react";
+import { readChatDockOpen, subscribeChatDockOpen, writeChatDockOpen } from "@/lib/chat/dock-state";
 
 // The conversation canvas (agent-pushed components + chat-driven dashboards)
 // loads only when the rail first opens, keeping it out of the chat bundle.
@@ -80,8 +82,44 @@ export function AppShell() {
   const { data: session, status } = useSession();
   const roleLoading = status === "loading";
   const role = session?.role;
+  // The landing greets the owner by first name; none when the session has none.
+  const ownerName = session?.user?.name?.trim().split(/\s+/)[0] || undefined;
 
-  const [chatOpen, setChatOpen] = useState(true);
+  // The dock's open state is remembered per browser. The server cannot see that
+  // choice, so it renders open and the stored value is adopted right after
+  // hydration (a lazy useState read would leave the server's attributes on the
+  // sidebar toggle). A choice made on this page applies at once and is written
+  // where the operator acts rather than in an effect; it holds even if storage
+  // refuses the write. Another tab's write (the `storage` event) drops that
+  // choice, so the latest decision in any tab wins.
+  const [chosenChatOpen, setChosenChatOpen] = useState<boolean | null>(null);
+  const subscribeStoredChatOpen = useCallback(
+    (onChange: () => void) =>
+      subscribeChatDockOpen(() => {
+        setChosenChatOpen(null);
+        onChange();
+      }),
+    [],
+  );
+  const storedChatOpen = useSyncExternalStore(subscribeStoredChatOpen, readChatDockOpen, () => true);
+  const chatOpen = chosenChatOpen ?? storedChatOpen;
+  const setChatDockOpen = (open: boolean) => {
+    setChosenChatOpen(open);
+    writeChatDockOpen(open);
+  };
+  // Focus follows the dock: collapsing from the panel's own header would leave
+  // it on a button nobody can see, and reopening from the edge tab would drop
+  // it on the page when the tab goes away.
+  const dockRef = useRef<HTMLDivElement>(null);
+  const dockTabRef = useRef<HTMLButtonElement>(null);
+  const collapseDockFromPanel = () => {
+    flushSync(() => setChatDockOpen(false));
+    dockTabRef.current?.focus();
+  };
+  const reopenDockFromTab = () => {
+    flushSync(() => setChatDockOpen(true));
+    dockRef.current?.focus();
+  };
   const [canvasRailOpen, setCanvasRailOpen] = useState(false);
   const { viewStack, pendingAgentData } = useVisualState();
   const [seenVisualCount, setSeenVisualCount] = useState(viewStack.length);
@@ -147,7 +185,7 @@ export function AppShell() {
           activeSettingsPage={settingsPage}
           onNavigate={navigate}
           chatOpen={chatOpen}
-          onChatToggle={() => setChatOpen((prev) => !prev)}
+          onChatToggle={() => setChatDockOpen(!chatOpen)}
           reviewCount={reviewCount}
           unhealthyCount={unhealthyCount}
           inboxCount={inbox.count}
@@ -315,10 +353,44 @@ export function AppShell() {
                 style={isChatView ? undefined : { width: chatOpen ? 400 : 0 }}
                 data-testid="chat-container"
               >
-                <div className={isChatView ? "h-full w-full" : "h-full w-[400px]"}>
-                  <ChatPanel />
+                {/* A collapsed dock stays mounted (the chat keeps its state), so
+                    it is made inert: nothing hidden stays in the tab order. */}
+                <div
+                  ref={dockRef}
+                  tabIndex={-1}
+                  inert={!isChatView && !chatOpen}
+                  className={`focus:outline-none ${
+                    isChatView && !showCanvasRail
+                      ? "h-full mx-auto w-full max-w-5xl"
+                      : isChatView
+                        ? "h-full w-full"
+                        : "h-full w-[400px]"
+                  }`}
+                >
+                  <ChatPanel
+                    variant={isChatView && !showCanvasRail ? "page" : "dock"}
+                    ownerName={ownerName}
+                    docked={!isChatView}
+                    onCollapse={collapseDockFromPanel}
+                  />
                 </div>
               </div>
+            )}
+
+            {/* A collapsed dock leaves a slim tab at the right edge to reopen it; the
+                collapsed rail's own left border draws its edge. */}
+            {!isMobile && !isChatView && !chatOpen && (
+              <button
+                type="button"
+                ref={dockTabRef}
+                onClick={reopenDockFromTab}
+                aria-label="Open chat panel"
+                title="Open chat panel"
+                className="shrink-0 w-7 flex items-start justify-center pt-3 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                data-testid="chat-dock-open"
+              >
+                <PanelRightOpen className="size-4" />
+              </button>
             )}
           </div>
         </div>
@@ -328,7 +400,14 @@ export function AppShell() {
       {mobileInChat && (
         <div className="flex-1 min-h-0 pb-14" data-testid="chat-container">
           <div className="h-full">
-            <ChatPanel mobile />
+            <ChatPanel
+              mobile
+              variant="page"
+              ownerName={ownerName}
+              // No canvas on the mobile chat home: a quick action's view
+              // renders in the Dashboard view, so go there.
+              onViewOpened={() => navigate("dashboard")}
+            />
           </div>
         </div>
       )}

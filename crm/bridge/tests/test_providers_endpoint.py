@@ -577,8 +577,31 @@ class TestDefaults:
         assert body == {
             "model": "openrouter/openai/gpt-5.4",
             "fallbacks": ["ollama_chat/qwen3:8b"],
+            "canvas": None,
             "applied": True,
         }
+
+    def test_it_forwards_the_canvas_model(self, controls_client_as_operator, fake_engine) -> None:
+        body = {**self.BODY, "canvas": "ollama_chat/qwen3:8b"}
+        fake_engine.responses[("PUT", "/api/admin/defaults")] = (
+            200,
+            {
+                "primary": "openrouter/openai/gpt-5.4",
+                "fallbacks": ["ollama_chat/qwen3:8b"],
+                "canvas": "ollama_chat/qwen3:8b",
+            },
+        )
+        response = controls_client_as_operator.patch("/api/providers/defaults", json=body)
+        assert response.status_code == 200
+        assert ("PUT", "/api/admin/defaults", body) in fake_engine.calls
+        assert response.json()["canvas"] == "ollama_chat/qwen3:8b"
+
+    def test_an_explicit_null_canvas_is_forwarded_so_the_engine_clears_it(
+        self, controls_client_as_operator, fake_engine
+    ) -> None:
+        body = {**self.BODY, "canvas": None}
+        controls_client_as_operator.patch("/api/providers/defaults", json=body)
+        assert ("PUT", "/api/admin/defaults", body) in fake_engine.calls
 
     def test_a_missing_fallbacks_field_is_sent_as_an_empty_list(
         self, controls_client_as_operator, fake_engine
@@ -636,6 +659,26 @@ class TestDefaults:
         with patch("routers._audit.log_event") as log_event:
             controls_client_as_operator.patch("/api/providers/defaults", json=self.BODY)
         assert log_event.called
+
+    def test_the_audit_entry_names_the_canvas_model(
+        self, controls_client_as_operator, fake_engine
+    ) -> None:
+        body = {**self.BODY, "canvas": "ollama_chat/qwen3:8b"}
+        with patch("routers._audit.log_event") as log_event:
+            controls_client_as_operator.patch("/api/providers/defaults", json=body)
+        details = [call.kwargs.get("details") or {} for call in log_event.call_args_list]
+        assert any(d.get("canvas") == "ollama_chat/qwen3:8b" for d in details), details
+
+    def test_the_audit_entry_records_a_cleared_canvas_model(
+        self, controls_client_as_operator, fake_engine
+    ) -> None:
+        """``null`` drops out of the audit details like every ``None``; the
+        clear itself still has to be on the record."""
+        body = {**self.BODY, "canvas": None}
+        with patch("routers._audit.log_event") as log_event:
+            controls_client_as_operator.patch("/api/providers/defaults", json=body)
+        details = [call.kwargs.get("details") or {} for call in log_event.call_args_list]
+        assert any(d.get("canvas_cleared") is True for d in details), details
 
     def test_it_never_touches_the_filesystem(
         self, controls_client_as_operator, fake_engine, tmp_path, monkeypatch

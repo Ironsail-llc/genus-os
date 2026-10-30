@@ -1,8 +1,6 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import { useRuntimeConfig } from "@/components/runtime-config";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -16,13 +14,16 @@ import { useVisualState } from "@/hooks/use-visual-state";
 import { useThrottle } from "@/hooks/use-throttle";
 import { MarkerInterceptor, stripMarkers } from "@/lib/engine/marker-interceptor";
 import { ChatRecovery, type ChatRecoveryRequest } from "@/components/chat-recovery";
+import { ChatMarkdown, CHAT_PROSE } from "@/components/chat/chat-markdown";
 import { ChatAskCard, type ApprovalKind } from "@/components/chat-ask-card";
+import { ChatLanding } from "@/components/chat/chat-landing";
+import { repeatsQuickAction } from "@/components/business/quick-action-labels";
 import {
   isKeyableAgentId,
   readStoredChatAgent,
   storeChatAgent,
 } from "@/lib/chat/agent-session";
-import { Send, Square, Check, X, ClipboardList, MessageSquareText, Brain } from "lucide-react";
+import { Send, Square, Check, X, ClipboardList, MessageSquareText, Brain, PanelRightClose } from "lucide-react";
 
 import { forgetRequest, journalRequest, pendingRequests } from "@/lib/chat/request-journal";
 
@@ -91,9 +92,29 @@ function stripResidualMarkers(text: string): string {
 interface ChatPanelProps {
   /** When true, renders in mobile-optimized layout (no duplicate header, labeled controls) */
   mobile?: boolean;
+  /**
+   * "page" when the panel is the chat home (shows the landing before the
+   * first message); "dock" beside another view (a compact empty state).
+   */
+  variant?: "page" | "dock";
+  /** The owner's first name, for the landing's greeting. */
+  ownerName?: string;
+  /** When true, the panel is docked beside another view and offers to collapse itself */
+  docked?: boolean;
+  /** Called by the header's collapse control; only used when `docked` */
+  onCollapse?: () => void;
+  /** A landing quick action opened its view (the shell decides where to show it). */
+  onViewOpened?: () => void;
 }
 
-export function ChatPanel({ mobile = false }: ChatPanelProps) {
+export function ChatPanel({
+  mobile = false,
+  variant = "dock",
+  ownerName,
+  docked = false,
+  onCollapse,
+  onViewOpened,
+}: ChatPanelProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const recoveryScopes = useRef<Record<string, string>>({});
   const requestScopes = useRef<Record<string, string>>({});
@@ -383,6 +404,11 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
     [agent, chattable, defaultAgent]
   );
 
+  // Which chat's history has answered (or failed). The landing waits for it:
+  // shown before the transcript arrives, it would flash and fire its requests
+  // on every load of an existing conversation.
+  const [historySettledFor, setHistorySettledFor] = useState<string | null>(null);
+
   // Load history on mount, and again whenever the chat is pointed elsewhere
   //
   // Cancelled on the way out, like the listing above it. Both the abandoned
@@ -433,10 +459,13 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
               timestamp: new Date(), recovery: { requestId, agent, scope },
             })) : [];
           setMessages([...loaded, ...restored]);
+          setHistorySettledFor(agentQuery);
         }
       })
       .catch(() => {
-        // Engine not available on mount
+        // Engine not available on mount. The conversation is unknown, not
+        // known to be long, so the landing may show.
+        if (!cancelled) setHistorySettledFor(agentQuery);
       });
     return () => {
       cancelled = true;
@@ -1295,6 +1324,16 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
     "What happened today?",
   ];
 
+  // The landing shows the quick actions beside the prompts; a prompt that says
+  // the same thing as one of them would be a second button with one name.
+  const landingPrompts = suggestedPrompts.filter((prompt) => !repeatsQuickAction(prompt));
+
+  // A suggested prompt fills the composer; it is never sent on its own.
+  const applyPrompt = (prompt: string) => {
+    setInput(prompt);
+    setTimeout(() => inputRef.current?.focus(), 0);
+  };
+
   return (
     <div className="h-full w-full flex flex-col bg-background" data-testid="chat-panel">
       {/* Header — richer on mobile since there's no app header above */}
@@ -1363,12 +1402,32 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
             Deep reasoning... {deepElapsed}s
           </Badge>
         )}
+        {docked && (
+          <button
+            type="button"
+            onClick={onCollapse}
+            aria-label="Collapse chat panel"
+            title="Collapse chat panel"
+            className="ml-auto rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            data-testid="chat-dock-close"
+          >
+            <PanelRightClose className="size-4" />
+          </button>
+        )}
       </div>
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto p-4">
         <div className="space-y-4" data-testid="message-list">
-          {messages.length === 0 && !isStreaming && (
+          {messages.length === 0 && !isStreaming && variant === "page" && historySettledFor === agentQuery && (
+            <ChatLanding
+              ownerName={ownerName}
+              suggestedPrompts={landingPrompts}
+              onPrompt={applyPrompt}
+              onViewOpened={onViewOpened}
+            />
+          )}
+          {messages.length === 0 && !isStreaming && variant === "dock" && (
             <div className="space-y-4" data-testid="empty-state">
               <p className="text-sm text-muted-foreground">
                 Ready when you are.
@@ -1377,10 +1436,7 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
                 {suggestedPrompts.map((prompt) => (
                   <button
                     key={prompt}
-                    onClick={() => {
-                      setInput(prompt);
-                      setTimeout(() => inputRef.current?.focus(), 0);
-                    }}
+                    onClick={() => applyPrompt(prompt)}
                     className="text-xs px-3 py-2 md:py-1.5 rounded-full border border-border text-muted-foreground hover:text-foreground hover:bg-accent transition-colors min-h-[44px] md:min-h-0"
                     data-testid="suggested-prompt"
                   >
@@ -1405,13 +1461,13 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
                 }`}
               >
                 {msg.role === "assistant" ? (
-                  <div className="prose prose-sm prose-invert max-w-none">
-                    {msg.recovery ? (
+                  msg.recovery ? (
+                    <div className={CHAT_PROSE}>
                       <ChatRecovery request={msg.recovery} messageId={msg.id} onRecovered={recoverMessage} />
-                    ) : (
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
-                    )}
-                  </div>
+                    </div>
+                  ) : (
+                    <ChatMarkdown content={msg.content} />
+                  )
                 ) : (
                   <p>{msg.content}</p>
                 )}
@@ -1451,11 +1507,7 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
                   {activePlan.deep_plan ? <Brain className="w-4 h-4" /> : <ClipboardList className="w-4 h-4" />}
                   <span>{activePlan.deep_plan ? "Deep Research Plan" : "Proposed Plan"}</span>
                 </div>
-                <div className="prose prose-sm prose-invert max-w-none">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                    {activePlan.plan_text}
-                  </ReactMarkdown>
-                </div>
+                <ChatMarkdown content={activePlan.plan_text} />
                 <div className="flex gap-2 pt-1">
                   <Button
                     size="sm"
@@ -1525,11 +1577,7 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
                       </span>
                     </div>
                     {throttledStreamingText && (
-                      <div className="prose prose-sm prose-invert max-w-none">
-                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                          {throttledStreamingText}
-                        </ReactMarkdown>
-                      </div>
+                      <ChatMarkdown content={throttledStreamingText} />
                     )}
                   </div>
                 ) : (
@@ -1544,11 +1592,7 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
                       </div>
                     )}
                     {throttledStreamingText ? (
-                      <div className="prose prose-sm prose-invert max-w-none">
-                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                          {throttledStreamingText}
-                        </ReactMarkdown>
-                      </div>
+                      <ChatMarkdown content={throttledStreamingText} />
                     ) : activeToolName ? (
                       <div className="flex items-center gap-2 text-xs text-info" data-testid="tool-indicator">
                         <span className="inline-block w-2 h-2 rounded-full bg-info animate-pulse" />

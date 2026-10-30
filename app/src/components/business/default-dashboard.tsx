@@ -1,166 +1,31 @@
 "use client";
 
-import { useEffect, useState, useSyncExternalStore } from "react";
 import { ServiceHealth } from "./service-health";
-import { SectionError, toSectionFailure, type SectionFailure } from "./section-error";
-import { fetchHealth } from "@/lib/api/health";
-import { fetchPeople } from "@/lib/api/people";
-import { fetchConversations } from "@/lib/api/conversations";
-import { searchMemory } from "@/lib/api/memory";
-import { useVisualState } from "@/hooks/use-visual-state";
-import { useTasks } from "@/hooks/use-tasks";
-import { useAgents } from "@/hooks/use-agents";
-import { Users, Inbox, Brain, Activity } from "lucide-react";
-import type { HealthResponse } from "@/lib/api/types";
-
-function computeGreeting(): string {
-  const hour = new Date().getHours();
-  if (hour < 12) return "Good morning";
-  if (hour < 17) return "Good afternoon";
-  return "Good evening";
-}
-
-function formatToday(): string {
-  return new Date().toLocaleDateString("en-US", {
-    weekday: "long",
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-  });
-}
-
-// `useSyncExternalStore` with constant snapshots is the React-19-blessed way
-// to render different output on server vs client without a hydration mismatch
-// and without a setState-in-useEffect that trips react-hooks linting and
-// pollutes test runs. The server snapshot is `false`, the client snapshot is
-// `true`, and the subscribe fn is a no-op (the value never changes after
-// mount).
-const subscribe = () => () => {};
-function useIsClient(): boolean {
-  return useSyncExternalStore(
-    subscribe,
-    () => true,
-    () => false,
-  );
-}
-
-const HEALTH_ENDPOINT = "/api/health";
-
-// Module-level stale-while-revalidate cache: the last good health snapshot
-// paints instantly on a remount while a fresh probe runs, and survives a
-// failed refresh — so a 401 shows an inline error *next to* the last known
-// numbers instead of blanking the tile.
-let healthCache: HealthResponse | null = null;
+import { SectionError } from "./section-error";
+import { computeGreeting, formatToday, useIsClient } from "./greeting";
+import { useHomeMetrics } from "./use-home-metrics";
+import { useQuickActions } from "./quick-actions";
 
 export function DefaultDashboard() {
-  const [health, setHealth] = useState<HealthResponse | null>(healthCache);
-  const [healthFailure, setHealthFailure] = useState<SectionFailure | null>(null);
-  const [actionFailure, setActionFailure] = useState<SectionFailure | null>(null);
-  const { pushView } = useVisualState();
-  const { tasks, error: tasksError } = useTasks({ live: false });
-  const { summary: agentSummary, error: agentsError } = useAgents();
+  const {
+    health,
+    healthFailure,
+    services,
+    healthyCount,
+    totalServices,
+    offCount,
+    troubled,
+    activeTasks,
+    tasksError,
+    agentSummary,
+    agentsError,
+  } = useHomeMetrics();
+  const { actions: quickActions, failure: actionFailure, run: runQuickAction } = useQuickActions();
   const isClient = useIsClient();
 
   // Render only on the client; server emits empty strings so SSR/CSR match.
   const greeting = isClient ? computeGreeting() : "";
   const todayLabel = isClient ? formatToday() : "";
-
-  // A failed probe is reported, never swallowed into `null` — an empty card
-  // and an unreachable service are not the same statement. State is only ever
-  // set from the promise's callbacks, never synchronously in the effect body.
-  useEffect(() => {
-    const applyHealth = (next: HealthResponse) => {
-      healthCache = next;
-      setHealth(next);
-      setHealthFailure(null);
-    };
-    const reportFailure = (err: unknown) => {
-      setHealthFailure(toSectionFailure("System health", HEALTH_ENDPOINT, err));
-    };
-
-    fetchHealth().then(applyHealth).catch(reportFailure);
-    const interval = setInterval(() => {
-      fetchHealth().then(applyHealth).catch(reportFailure);
-    }, 30000);
-
-    return () => clearInterval(interval);
-  }, []);
-
-  const activeTasks = tasks.filter(
-    (t) => t.status === "TODO" || t.status === "IN_PROGRESS" || t.status === "REVIEW"
-  ).length;
-
-  // Defensive on the payload's shape, not just its presence: this component is
-  // the home screen, so a 200 whose body is missing `services` must degrade to
-  // "awaiting first probe" rather than throw out of render and take the whole
-  // app (chat panel included) down with it.
-  const services = Array.isArray(health?.services) ? health.services : [];
-  // A service the operator switched off is not counted: "2/2 · 1 switched off"
-  // is the truth, "2/3" reads as an outage.
-  const running = services.filter((s) => s.status !== "disabled");
-  const healthyCount = running.filter((s) => s.status === "healthy").length;
-  const totalServices = running.length;
-  const offCount = services.length - running.length;
-  const troubled = running.filter((s) => s.status !== "healthy");
-
-  const quickActions = [
-    {
-      label: "Show my contacts",
-      icon: Users,
-      failureLabel: "Contacts",
-      endpoint: "/api/bridge/api/people",
-      handler: async () => {
-        const people = await fetchPeople();
-        pushView({
-          toolName: "render_contact_table",
-          props: { data: people },
-          title: "All Contacts",
-        });
-      },
-    },
-    {
-      label: "Check inbox",
-      icon: Inbox,
-      failureLabel: "Conversations",
-      endpoint: "/api/bridge/api/conversations",
-      handler: async () => {
-        const conversations = await fetchConversations();
-        pushView({
-          toolName: "render_conversations",
-          props: { conversations },
-          title: "Conversations",
-        });
-      },
-    },
-    {
-      label: "Search memory",
-      icon: Brain,
-      failureLabel: "Memory",
-      endpoint: "/api/orchestrator/query",
-      handler: async () => {
-        const results = await searchMemory("recent");
-        pushView({
-          toolName: "render_memory_search",
-          props: { results, query: "recent" },
-          title: 'Memory: "recent"',
-        });
-      },
-    },
-    {
-      label: "Service health",
-      icon: Activity,
-      failureLabel: "System health",
-      endpoint: HEALTH_ENDPOINT,
-      handler: async () => {
-        const h = await fetchHealth();
-        pushView({
-          toolName: "render_service_health",
-          props: { services: h?.services ?? [], overallStatus: h?.status },
-          title: "Service Health",
-        });
-      },
-    },
-  ];
 
   return (
     <div className="space-y-6" data-testid="default-dashboard">
@@ -268,14 +133,7 @@ export function DefaultDashboard() {
             return (
               <button
                 key={action.label}
-                onClick={() => {
-                  setActionFailure(null);
-                  action.handler().catch((err) => {
-                    setActionFailure(
-                      toSectionFailure(action.failureLabel, action.endpoint, err),
-                    );
-                  });
-                }}
+                onClick={() => runQuickAction(action)}
                 className="flex flex-col items-center gap-2 p-4 rounded-lg bg-accent/50 hover:bg-accent transition-colors text-muted-foreground hover:text-foreground"
                 data-testid="quick-action"
               >

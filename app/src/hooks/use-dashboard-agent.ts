@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useCallback } from "react";
+import { useEffect, useRef, useCallback, useState } from "react";
 import { useVisualState } from "@/hooks/use-visual-state";
 import { validateDashboardCode } from "@/lib/dashboard/code-validator";
 import { reportDashboardError } from "@/lib/dashboard/error-reporter";
@@ -21,8 +21,21 @@ const DEBOUNCE_MS = 300;
  * the "updating" flag from end to end — it raises it when a request actually
  * goes out and clears it on every exit — so the flag can never outlive the
  * work, or be left set with nobody mounted to clear it.
+ *
+ * A failed update is returned as `error` (the reason, in words) with `retry`
+ * to send the same request again and `dismiss` to put the message away. It
+ * used to reach the browser console only, which left the operator looking at
+ * the previous view with no idea an update had been asked for and lost.
  */
-export function useDashboardAgent() {
+export interface DashboardAgentState {
+  error: string | null;
+  retry: () => void;
+  dismiss: () => void;
+}
+
+type ConversationMessages = Array<{ role: string; content: string }>;
+
+export function useDashboardAgent(): DashboardAgentState {
   const {
     pendingMessages,
     pendingAgentData,
@@ -32,9 +45,16 @@ export function useDashboardAgent() {
 
   const abortRef = useRef<AbortController | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastRequestRef = useRef<{
+    messages: ConversationMessages;
+    agentData?: Record<string, unknown> | null;
+  } | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const handleUpdate = useCallback(
-    async (messages: Array<{ role: string; content: string }>, agentData?: Record<string, unknown> | null) => {
+    async (messages: ConversationMessages, agentData?: Record<string, unknown> | null) => {
+      lastRequestRef.current = { messages, agentData };
+      setError(null);
       // Cancel any in-flight request
       abortRef.current?.abort();
       const abort = new AbortController();
@@ -71,6 +91,7 @@ export function useDashboardAgent() {
           const errorText = await res.text().catch(() => "");
           console.warn("[dashboard-agent] Generate failed:", res.status, errorText);
           reportDashboardError("generate-api", `HTTP ${res.status}`, { status: res.status, body: errorText });
+          setError(`The canvas update failed (HTTP ${res.status}).`);
           setIsUpdating(false);
           return;
         }
@@ -85,6 +106,7 @@ export function useDashboardAgent() {
         if (data.error) {
           console.warn("[dashboard-agent] Generate returned error:", data.error);
           reportDashboardError("generate-api", data.error);
+          setError(String(data.error));
         } else if (data.html) {
           const validation = validateDashboardCode(data.html);
           if (validation.valid) {
@@ -93,14 +115,17 @@ export function useDashboardAgent() {
           } else {
             console.warn("[dashboard-agent] Client validation failed:", validation.errors);
             reportDashboardError("client-validation", validation.errors.join("; "), { errors: validation.errors });
+            setError("The generated view failed validation and was not shown.");
           }
         } else {
           console.warn("[dashboard-agent] Response missing html field:", Object.keys(data));
+          setError("The canvas service answered without a view.");
         }
       } catch (err) {
         if ((err as Error).name !== "AbortError") {
           console.error("[dashboard-agent] Error:", err);
           reportDashboardError("generate-exception", String(err));
+          setError(err instanceof Error ? err.message : String(err));
         }
       } finally {
         if (!abort.signal.aborted) {
@@ -134,6 +159,14 @@ export function useDashboardAgent() {
     };
   }, [pendingMessages, pendingAgentData, handleUpdate]);
 
+  const retry = useCallback(() => {
+    const last = lastRequestRef.current;
+    if (!last) return;
+    void handleUpdate(last.messages, last.agentData);
+  }, [handleUpdate]);
+
+  const dismiss = useCallback(() => setError(null), []);
+
   // Cleanup on unmount
   useEffect(() => {
     return () => {
@@ -143,4 +176,6 @@ export function useDashboardAgent() {
       }
     };
   }, []);
+
+  return { error, retry, dismiss };
 }

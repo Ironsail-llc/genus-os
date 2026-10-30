@@ -69,6 +69,14 @@ function isSlaOverdue(slaDeadlineAt?: string): boolean {
   return new Date(slaDeadlineAt) < new Date();
 }
 
+function hasBadges(task: Task): boolean {
+  return (
+    (!!task.priority && task.priority !== "normal") ||
+    !!task.requiresHuman ||
+    (task.escalationCount != null && task.escalationCount > 0)
+  );
+}
+
 export function TaskBoard({ tasks, onApprove, onReject, onResolve, onAnswer }: TaskBoardProps) {
   const [actionPending, setActionPending] = useState<string | null>(null);
   const [resolvingTaskId, setResolvingTaskId] = useState<string | null>(null);
@@ -171,205 +179,212 @@ export function TaskBoard({ tasks, onApprove, onReject, onResolve, onAnswer }: T
   };
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-4 gap-4" data-testid="task-board">
-      {statusColumns.map((status) => {
-        const columnTasks = tasks.filter((t) => t.status === status);
-        return (
-          <div key={status} className={`space-y-2 rounded-lg p-2 ${columnTints[status]}`}>
-            <div className={`flex items-center gap-2 mb-2 border-t-2 pt-2 ${statusColors[status]}`}>
-              <h4 className="text-sm font-medium">{statusLabels[status]}</h4>
-              <Badge variant="secondary">{columnTasks.length}</Badge>
-            </div>
-            {columnTasks.map((task) => (
-              <Card
-                key={task.id}
-                className={`glass-panel ${isSlaOverdue(task.slaDeadlineAt) && status !== "DONE" ? "ring-1 ring-destructive/50 animate-pulse" : ""}`}
-                data-testid="task-card"
-              >
-                <CardHeader className="pb-1 pt-3 px-3">
-                  <div className="flex items-center gap-1.5">
-                    {task.priority && task.priority !== "normal" && (
-                      <Badge className={`text-[10px] px-1 py-0 ${priorityColors[task.priority] || ""}`} data-testid="priority-badge">
-                        {task.priority}
-                      </Badge>
-                    )}
-                    {task.requiresHuman && (
-                      <Badge className="text-[10px] px-1 py-0 bg-destructive/20 text-destructive" data-testid="requires-human-badge">
-                        needs you
-                      </Badge>
-                    )}
-                    {task.escalationCount != null && task.escalationCount > 0 && (
-                      <Badge
-                        className="text-[10px] px-1 py-0 bg-warning/20 text-warning"
-                        data-testid="escalation-badge"
-                        title={`Escalated ${task.escalationCount}× since last operator answer`}
-                      >
-                        ↑{task.escalationCount}
-                      </Badge>
-                    )}
-                    <CardTitle className="text-sm flex-1">{task.title}</CardTitle>
-                  </div>
-                </CardHeader>
-                <CardContent className="px-3 pb-3">
-                  {task.body && (
-                    <p className="text-xs text-muted-foreground line-clamp-2">
-                      {task.body}
-                    </p>
-                  )}
-                  {/* Planner subsection — Phase 4 surface of objective/next_action/question. */}
-                  {task.objective && status !== "DONE" && (
-                    <p className="text-xs italic text-muted-foreground mt-1.5 truncate" data-testid="task-objective">
-                      Objective: {task.objective}
-                    </p>
-                  )}
-                  {task.nextAction && status !== "DONE" && (
-                    <p className="text-xs text-muted-foreground mt-1" data-testid="task-next-action">
-                      Next: {task.nextAction}
-                      {task.nextActionAgent && (
-                        <Badge variant="outline" className="ml-1 text-[10px] px-1 py-0">
-                          @{task.nextActionAgent}
-                        </Badge>
-                      )}
-                    </p>
-                  )}
-                  {task.assignedToAgent && (
-                    <p className="text-xs text-muted-foreground mt-1">
-                      {task.assignedToAgent}
-                    </p>
-                  )}
-                  {task.dueAt && (
-                    <p className="text-xs text-muted-foreground mt-1">
-                      Due: {new Date(task.dueAt).toLocaleDateString()}
-                    </p>
-                  )}
-                  {task.tags && task.tags.length > 0 && (
-                    <div className="flex flex-wrap gap-1 mt-1.5">
-                      {task.tags.map((tag) => (
-                        <Badge key={tag} variant="outline" className="text-[10px] px-1 py-0">
-                          {tag}
-                        </Badge>
-                      ))}
-                    </div>
-                  )}
-                  {/* Question + Answer UI — primary path on REVIEW when the planner asked something. */}
-                  {status === "REVIEW" && task.questionForOperator && (
-                    <div
-                      className="mt-2 rounded border border-warning/30 bg-warning/[0.05] p-2"
-                      data-testid="question-block"
-                    >
-                      <p className="text-xs font-medium text-warning/90 mb-1">Question</p>
-                      <p className="text-xs text-foreground/90 mb-2" data-testid="question-text">
-                        {task.questionForOperator}
-                      </p>
-                      <textarea
-                        className="w-full h-16 text-xs rounded bg-background/40 border border-border/40 p-1.5"
-                        placeholder="Type your answer…"
-                        value={answerText[task.id] || ""}
-                        onChange={(e) =>
-                          setAnswerText((prev) => ({ ...prev, [task.id]: e.target.value }))
-                        }
-                        data-testid="answer-input"
-                      />
-                      <div className="flex gap-1.5 mt-1.5">
-                        <Button
-                          size="sm"
-                          className="h-7 text-xs px-3 bg-warning hover:bg-warning/90 text-warning-foreground"
-                          disabled={actionPending === task.id || !(answerText[task.id] || "").trim()}
-                          onClick={() => handleAnswer(task.id, "IN_PROGRESS")}
-                          data-testid="answer-button"
-                        >
-                          Answer
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          className="h-7 text-xs px-2"
-                          onClick={() =>
-                            setOverrideOpen((prev) => ({ ...prev, [task.id]: !prev[task.id] }))
-                          }
-                          data-testid="override-toggle"
-                        >
-                          {overrideOpen[task.id] ? "Hide override" : "Override (approve/reject)"}
-                        </Button>
+    // Columns follow the board's own width (sidebar and chat dock excluded):
+    // four when four 15rem columns fit, else two, else one. Never three, which
+    // would leave Done alone on a second row.
+    <div className="@container">
+      <div className="grid grid-cols-1 @[31rem]:grid-cols-2 @[63rem]:grid-cols-4 gap-4" data-testid="task-board">
+        {statusColumns.map((status) => {
+          const columnTasks = tasks.filter((t) => t.status === status);
+          return (
+            <div key={status} className={`min-w-0 space-y-2 rounded-lg p-2 ${columnTints[status]}`}>
+              <div className={`flex items-center gap-2 mb-2 border-t-2 pt-2 ${statusColors[status]}`}>
+                <h4 className="text-sm font-medium">{statusLabels[status]}</h4>
+                <Badge variant="secondary">{columnTasks.length}</Badge>
+              </div>
+              {columnTasks.map((task) => (
+                <Card
+                  key={task.id}
+                  className={`glass-panel min-w-0 ${isSlaOverdue(task.slaDeadlineAt) && status !== "DONE" ? "ring-1 ring-destructive/50 animate-pulse" : ""}`}
+                  data-testid="task-card"
+                >
+                  <CardHeader className="pb-1 pt-3 px-3">
+                    <CardTitle className="min-w-0 text-sm wrap-anywhere">{task.title}</CardTitle>
+                    {hasBadges(task) && (
+                      <div className="flex flex-wrap gap-1" data-testid="task-card-badges">
+                        {task.priority && task.priority !== "normal" && (
+                          <Badge className={`text-[10px] px-1 py-0 ${priorityColors[task.priority] || ""}`} data-testid="priority-badge">
+                            {task.priority}
+                          </Badge>
+                        )}
+                        {task.requiresHuman && (
+                          <Badge className="text-[10px] px-1 py-0 bg-destructive/20 text-destructive" data-testid="requires-human-badge">
+                            needs you
+                          </Badge>
+                        )}
+                        {task.escalationCount != null && task.escalationCount > 0 && (
+                          <Badge
+                            className="text-[10px] px-1 py-0 bg-warning/20 text-warning"
+                            data-testid="escalation-badge"
+                            title={`Escalated ${task.escalationCount}× since last operator answer`}
+                          >
+                            ↑{task.escalationCount}
+                          </Badge>
+                        )}
                       </div>
-                    </div>
-                  )}
-                  {/* Approve/Reject — default for REVIEW without a question; hidden behind toggle when a question is present. */}
-                  {status === "REVIEW" && (!task.questionForOperator || overrideOpen[task.id]) && (
-                    <div className="flex gap-1.5 mt-2" data-testid="review-actions">
-                      <Button
-                        size="sm"
-                        variant="default"
-                        className="h-8 text-xs px-3 bg-success hover:bg-success/90 text-success-foreground"
-                        disabled={actionPending === task.id}
-                        onClick={() => handleApprove(task.id)}
-                        data-testid="approve-button"
+                    )}
+                  </CardHeader>
+                  <CardContent className="px-3 pb-3">
+                    {task.body && (
+                      <p className="text-xs text-muted-foreground line-clamp-2">
+                        {task.body}
+                      </p>
+                    )}
+                    {/* Planner subsection — Phase 4 surface of objective/next_action/question. */}
+                    {task.objective && status !== "DONE" && (
+                      <p className="text-xs italic text-muted-foreground mt-1.5 truncate" data-testid="task-objective">
+                        Objective: {task.objective}
+                      </p>
+                    )}
+                    {task.nextAction && status !== "DONE" && (
+                      <p className="text-xs text-muted-foreground mt-1" data-testid="task-next-action">
+                        Next: {task.nextAction}
+                        {task.nextActionAgent && (
+                          <Badge variant="outline" className="ml-1 text-[10px] px-1 py-0">
+                            @{task.nextActionAgent}
+                          </Badge>
+                        )}
+                      </p>
+                    )}
+                    {task.assignedToAgent && (
+                      <p className="text-xs text-muted-foreground mt-1">
+                        {task.assignedToAgent}
+                      </p>
+                    )}
+                    {task.dueAt && (
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Due: {new Date(task.dueAt).toLocaleDateString()}
+                      </p>
+                    )}
+                    {task.tags && task.tags.length > 0 && (
+                      <div className="flex flex-wrap gap-1 mt-1.5">
+                        {task.tags.map((tag) => (
+                          <Badge key={tag} variant="outline" className="text-[10px] px-1 py-0">
+                            {tag}
+                          </Badge>
+                        ))}
+                      </div>
+                    )}
+                    {/* Question + Answer UI — primary path on REVIEW when the planner asked something. */}
+                    {status === "REVIEW" && task.questionForOperator && (
+                      <div
+                        className="mt-2 rounded border border-warning/30 bg-warning/[0.05] p-2"
+                        data-testid="question-block"
                       >
-                        Approve
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="destructive"
-                        className="h-8 text-xs px-3"
-                        disabled={actionPending === task.id}
-                        onClick={() => handleReject(task.id)}
-                        data-testid="reject-button"
-                      >
-                        Reject
-                      </Button>
-                    </div>
-                  )}
-                  {status !== "DONE" && (
-                    <div className="mt-2" data-testid="resolve-section">
-                      {resolvingTaskId === task.id ? (
-                        <div className="flex gap-1.5">
-                          <Input
-                            className="h-8 text-xs"
-                            placeholder="Resolution note..."
-                            value={resolutionText}
-                            onChange={(e) => setResolutionText(e.target.value)}
-                            onKeyDown={(e) => e.key === "Enter" && handleResolve(task.id)}
-                            autoFocus
-                            data-testid="resolution-input"
-                          />
+                        <p className="text-xs font-medium text-warning/90 mb-1">Question</p>
+                        <p className="text-xs text-foreground/90 mb-2" data-testid="question-text">
+                          {task.questionForOperator}
+                        </p>
+                        <textarea
+                          className="w-full h-16 text-xs rounded bg-background/40 border border-border/40 p-1.5"
+                          placeholder="Type your answer…"
+                          value={answerText[task.id] || ""}
+                          onChange={(e) =>
+                            setAnswerText((prev) => ({ ...prev, [task.id]: e.target.value }))
+                          }
+                          data-testid="answer-input"
+                        />
+                        <div className="flex gap-1.5 mt-1.5">
                           <Button
                             size="sm"
-                            className="h-8 text-xs px-3 bg-success hover:bg-success/90 text-success-foreground"
-                            disabled={actionPending === task.id || !resolutionText.trim()}
-                            onClick={() => handleResolve(task.id)}
-                            data-testid="confirm-resolve-button"
+                            className="h-7 text-xs px-3 bg-warning hover:bg-warning/90 text-warning-foreground"
+                            disabled={actionPending === task.id || !(answerText[task.id] || "").trim()}
+                            onClick={() => handleAnswer(task.id, "IN_PROGRESS")}
+                            data-testid="answer-button"
                           >
-                            Confirm
+                            Answer
                           </Button>
                           <Button
                             size="sm"
                             variant="ghost"
-                            className="h-8 text-xs px-2"
-                            onClick={() => { setResolvingTaskId(null); setResolutionText(""); }}
+                            className="h-7 text-xs px-2"
+                            onClick={() =>
+                              setOverrideOpen((prev) => ({ ...prev, [task.id]: !prev[task.id] }))
+                            }
+                            data-testid="override-toggle"
                           >
-                            ✕
+                            {overrideOpen[task.id] ? "Hide override" : "Override (approve/reject)"}
                           </Button>
                         </div>
-                      ) : (
+                      </div>
+                    )}
+                    {/* Approve/Reject — default for REVIEW without a question; hidden behind toggle when a question is present. */}
+                    {status === "REVIEW" && (!task.questionForOperator || overrideOpen[task.id]) && (
+                      <div className="flex gap-1.5 mt-2" data-testid="review-actions">
                         <Button
                           size="sm"
-                          variant="outline"
-                          className="h-7 text-xs px-2"
+                          variant="default"
+                          className="h-8 text-xs px-3 bg-success hover:bg-success/90 text-success-foreground"
                           disabled={actionPending === task.id}
-                          onClick={() => setResolvingTaskId(task.id)}
-                          data-testid="resolve-button"
+                          onClick={() => handleApprove(task.id)}
+                          data-testid="approve-button"
                         >
-                          Resolve
+                          Approve
                         </Button>
-                      )}
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-        );
-      })}
+                        <Button
+                          size="sm"
+                          variant="destructive"
+                          className="h-8 text-xs px-3"
+                          disabled={actionPending === task.id}
+                          onClick={() => handleReject(task.id)}
+                          data-testid="reject-button"
+                        >
+                          Reject
+                        </Button>
+                      </div>
+                    )}
+                    {status !== "DONE" && (
+                      <div className="mt-2" data-testid="resolve-section">
+                        {resolvingTaskId === task.id ? (
+                          <div className="flex gap-1.5">
+                            <Input
+                              className="h-8 text-xs"
+                              placeholder="Resolution note..."
+                              value={resolutionText}
+                              onChange={(e) => setResolutionText(e.target.value)}
+                              onKeyDown={(e) => e.key === "Enter" && handleResolve(task.id)}
+                              autoFocus
+                              data-testid="resolution-input"
+                            />
+                            <Button
+                              size="sm"
+                              className="h-8 text-xs px-3 bg-success hover:bg-success/90 text-success-foreground"
+                              disabled={actionPending === task.id || !resolutionText.trim()}
+                              onClick={() => handleResolve(task.id)}
+                              data-testid="confirm-resolve-button"
+                            >
+                              Confirm
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-8 text-xs px-2"
+                              onClick={() => { setResolvingTaskId(null); setResolutionText(""); }}
+                            >
+                              ✕
+                            </Button>
+                          </div>
+                        ) : (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 text-xs px-2"
+                            disabled={actionPending === task.id}
+                            onClick={() => setResolvingTaskId(task.id)}
+                            data-testid="resolve-button"
+                          >
+                            Resolve
+                          </Button>
+                        )}
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }

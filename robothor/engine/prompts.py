@@ -230,16 +230,29 @@ TELEGRAM_SURFACE_NOTE = (
 )
 
 
+#: Engine-context line for a webchat turn: the dashboard's chat panel, and the
+#: terminal client, which shows plain text. Without guidance a simple question
+#: gets a multi-section overview.
+WEBCHAT_SURFACE_NOTE = (
+    "This reply is read in a chat view. Answer the question first. Use short "
+    "paragraphs with a blank line between them. Use headings and lists only "
+    "when they help the reader, and bold sparingly. Do not give a "
+    "multi-section overview of what you can do unless asked."
+)
+
+
 def with_surface_note(preamble: str, trigger_type: Any, agent_config: Any) -> str:
-    """The engine-context preamble, plus the Telegram note when the run's
-    words reach Telegram: an interactive Telegram turn, or a run whose
-    manifest announces to the Telegram channel."""
+    """The engine-context preamble, plus a note on where the reply is read:
+    the webchat note for a dashboard chat turn, the Telegram note when the
+    run's words reach Telegram (an interactive Telegram turn, or a run whose
+    manifest announces to the Telegram channel)."""
     from robothor.engine.models import DeliveryMode, TriggerType
 
+    if trigger_type == TriggerType.WEBCHAT:
+        return "\n\n".join(p for p in (preamble, WEBCHAT_SURFACE_NOTE) if p)
     on_telegram = trigger_type == TriggerType.TELEGRAM or (
         getattr(agent_config, "delivery_mode", None) == DeliveryMode.ANNOUNCE
         and getattr(agent_config, "delivery_channel", "") == "telegram"
-        and trigger_type != TriggerType.WEBCHAT
     )
     if not on_telegram:
         return preamble
