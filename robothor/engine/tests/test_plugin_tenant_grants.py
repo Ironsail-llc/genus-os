@@ -332,6 +332,28 @@ class TestColdStartFailsClosed:
         assert len(grants_db.calls) == 2
         assert _reason(result, "acme-tools") == ROOT_DISABLED_REASON
 
+    def test_a_recovery_after_a_cold_failure_rebuilds_the_registries(self, grants_db, two_plugins):
+        """The caches built while nothing was known hold the plugin; the first
+        read that succeeds must mark them stale, or it stays loaded."""
+        grants_db.error = RuntimeError("database starting")
+        loader.load_plugins(entry_points=two_plugins)
+        gen = loader.generation()
+
+        grants_db.error = None
+        grants_db.rows = {"acme-tools": "off"}
+        loader.load_plugins(entry_points=two_plugins)
+        assert loader.generation() > gen
+
+    def test_a_recovery_with_nothing_forced_off_does_not_reload(self, grants_db, two_plugins):
+        grants_db.error = RuntimeError("database starting")
+        loader.load_plugins(entry_points=two_plugins)
+        gen = loader.generation()
+
+        grants_db.error = None
+        grants_db.rows = {"acme-tools": "on"}
+        loader.load_plugins(entry_points=two_plugins)
+        assert loader.generation() == gen
+
     def test_a_restart_with_the_database_down_keeps_the_last_forced_off_set(
         self, grants_db, two_plugins
     ):

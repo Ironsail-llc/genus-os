@@ -370,7 +370,7 @@ def test_each_act_writes_one_audit_event_with_identifiers_only(
         args, kwargs = audited.call_args
         assert args[1] == expected
         # Identifiers only: a name, and nothing out of the engine's answer.
-        assert set(kwargs) <= {"action", "status", "plugin"}
+        assert set(kwargs) <= {"action", "status", "plugin", "tenant", "audit_tenant_id"}
         if "plugin" in kwargs:
             assert kwargs["plugin"] == "acme-tools"
 
@@ -462,7 +462,15 @@ def test_install_and_remove_audit_identifiers_only(controls_client_as_operator, 
     assert audited.call_count == 1
     args, kwargs = audited.call_args
     assert args[1] == "plugin.install"
-    assert set(kwargs) <= {"action", "status", "plugin", "version", "verdict"}
+    assert set(kwargs) <= {
+        "action",
+        "status",
+        "plugin",
+        "version",
+        "verdict",
+        "tenant",
+        "audit_tenant_id",
+    }
     assert kwargs["plugin"] == "acme-tools"
     assert kwargs["verdict"] == "safe"
     assert kwargs["version"] == "1.2.3"
@@ -472,7 +480,7 @@ def test_install_and_remove_audit_identifiers_only(controls_client_as_operator, 
     assert audited.call_count == 1
     args, kwargs = audited.call_args
     assert args[1] == "plugin.remove"
-    assert set(kwargs) <= {"action", "status", "plugin"}
+    assert set(kwargs) <= {"action", "status", "plugin", "tenant", "audit_tenant_id"}
 
 
 def test_a_failed_install_is_audited_as_an_error(controls_client_as_operator, fake_engine):

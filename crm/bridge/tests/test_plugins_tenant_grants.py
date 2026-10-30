@@ -197,6 +197,23 @@ class TestBoxLevelActsStayRoot:
         assert response.status_code == 200, response.text
         assert engines.tenants() == [CHILD_B]
 
+    def test_an_act_on_a_child_is_audited_under_the_child(self, engines, path):
+        """The root installing into a child's engine must leave a row the
+        child's admins can see, and one that says which engine it was."""
+        with patch("routers.plugins.audited") as audited:
+            root_admin().post(path, json={"name": "acme-tools", "tenant_id": CHILD_B})
+        assert audited.call_count == 1
+        kwargs = audited.call_args.kwargs
+        assert kwargs["tenant"] == CHILD_B
+        assert kwargs["audit_tenant_id"] == CHILD_B
+
+    def test_an_act_on_the_root_is_audited_as_before(self, engines, path):
+        with patch("routers.plugins.audited") as audited:
+            root_admin().post(path, json={"name": "acme-tools"})
+        kwargs = audited.call_args.kwargs
+        assert kwargs.get("audit_tenant_id") is None
+        assert kwargs["tenant"] == ROOT
+
     def test_a_tenant_outside_the_roots_tree_never_reaches_an_engine(self, engines, path):
         response = root_admin().post(path, json={"name": "acme-tools", "tenant_id": OUTSIDER})
         assert response.status_code == 404
