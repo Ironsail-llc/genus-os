@@ -8,7 +8,6 @@ check this before anything is written, through :func:`root_shell_refusal`.
 
 from __future__ import annotations
 
-import os
 from typing import Any
 
 __all__ = ["root_shell_refusal", "shell_tenant", "tenant_ancestry"]
@@ -17,12 +16,9 @@ __all__ = ["root_shell_refusal", "shell_tenant", "tenant_ancestry"]
 def shell_tenant() -> str:
     """The tenant this process's engine runs as, in the order the engine reads it."""
     from robothor.constants import DEFAULT_TENANT
+    from robothor.db.connection import process_tenant
 
-    return (
-        os.environ.get("ROBOTHOR_TENANT_ID", "")
-        or os.environ.get("ROBOTHOR_DEFAULT_TENANT", "")
-        or DEFAULT_TENANT
-    )
+    return process_tenant() or DEFAULT_TENANT
 
 
 def tenant_ancestry(cur: Any, tenant: str) -> list[str]:

@@ -230,6 +230,12 @@ def effective_tenant() -> str:
         return ""
     if override:
         return override
+    return process_tenant()
+
+
+def process_tenant() -> str:
+    """The tenant this process runs as, from its environment: ``ROBOTHOR_TENANT_ID``,
+    else ``ROBOTHOR_DEFAULT_TENANT``, else ``""``. No context override applies."""
     return os.environ.get("ROBOTHOR_TENANT_ID", "") or os.environ.get("ROBOTHOR_DEFAULT_TENANT", "")
 
 
