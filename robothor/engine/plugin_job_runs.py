@@ -12,6 +12,7 @@ Recording is best effort: a database fault is logged and the job still runs.
 
 from __future__ import annotations
 
+import asyncio
 import functools
 import inspect
 import json
@@ -44,98 +45,100 @@ def _context(result: Any) -> str:
     return json.dumps({"result": text[:RESULT_CAP_CHARS], "result_truncated": True})
 
 
-def _start(run_id: str, job_id: str) -> None:
-    try:
-        from robothor.db.connection import get_connection
+class _Run:
+    """One execution of one plugin job, and the row that records it."""
 
-        with get_connection() as conn:
-            cur = conn.cursor()
-            cur.execute(
-                """INSERT INTO workflow_runs
-                   (id, tenant_id, workflow_id, trigger_type, trigger_detail,
-                    status, steps_total, started_at)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
-                (
-                    run_id,
-                    DEFAULT_TENANT,
-                    job_id,
-                    TRIGGER_TYPE,
-                    job_id,
-                    "running",
-                    0,
-                    datetime.now(UTC),
-                ),
-            )
-            conn.commit()
-    except Exception as exc:  # noqa: BLE001 - recording must not stop the job
-        logger.warning("Failed to record plugin job run start for %s: %s", job_id, exc)
+    def __init__(self, job_id: str) -> None:
+        self.job_id = job_id
+        self.run_id = str(uuid.uuid4())
+        self.started = time.monotonic()
 
+    def start(self) -> None:
+        self._write(
+            """INSERT INTO workflow_runs
+               (id, tenant_id, workflow_id, trigger_type, trigger_detail,
+                status, steps_total, started_at)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
+            (
+                self.run_id,
+                DEFAULT_TENANT,
+                self.job_id,
+                TRIGGER_TYPE,
+                self.job_id,
+                "running",
+                0,
+                datetime.now(UTC),
+            ),
+        )
+        self.started = time.monotonic()
 
-def _finish(
-    run_id: str,
-    job_id: str,
-    started: float,
-    *,
-    status: str,
-    result: Any = None,
-    error: BaseException | None = None,
-) -> None:
-    try:
-        from robothor.db.connection import get_connection
+    def completed(self, result: Any) -> None:
+        self._finish("completed", None, _context(result))
 
-        duration_ms = int((time.monotonic() - started) * 1000)
-        error_message = f"{type(error).__name__}: {error}" if error is not None else None
-        context = _context(result) if error is None else json.dumps({})
-        with get_connection() as conn:
-            cur = conn.cursor()
-            cur.execute(
-                """UPDATE workflow_runs
-                   SET status = %s, completed_at = %s, duration_ms = %s,
-                       error_message = %s, context = %s
-                   WHERE id = %s""",
-                (status, datetime.now(UTC), duration_ms, error_message, context, run_id),
-            )
-            conn.commit()
-    except Exception as exc:  # noqa: BLE001 - recording must not stop the job
-        logger.warning("Failed to record plugin job run end for %s: %s", job_id, exc)
+    def failed(self, error: BaseException) -> None:
+        self._finish("failed", f"{type(error).__name__}: {error}", json.dumps({}))
+
+    def _finish(self, status: str, error_message: str | None, context: str) -> None:
+        self._write(
+            """UPDATE workflow_runs
+               SET status = %s, completed_at = %s, duration_ms = %s,
+                   error_message = %s, context = %s
+               WHERE id = %s""",
+            (
+                status,
+                datetime.now(UTC),
+                int((time.monotonic() - self.started) * 1000),
+                error_message,
+                context,
+                self.run_id,
+            ),
+        )
+
+    def _write(self, sql: str, params: tuple[Any, ...]) -> None:
+        try:
+            from robothor.db.connection import get_connection
+
+            with get_connection() as conn:
+                conn.cursor().execute(sql, params)
+                conn.commit()
+        except Exception as exc:  # noqa: BLE001 - recording must not stop the job
+            logger.warning("Failed to record a run of plugin job %s: %s", self.job_id, exc)
 
 
 def recorded(job_id: str, func: Callable[..., Any]) -> Callable[..., Any]:
-    """Wrap ``func`` so each call writes a run row; coroutines stay coroutines."""
+    """Wrap ``func`` so each call writes a run row; coroutines stay coroutines.
+
+    A coroutine job is awaited by AsyncIOScheduler on the event loop, so its
+    row writes go to a thread; a plain job already runs in the scheduler's
+    thread pool and writes inline. The job's exception is re-raised either
+    way, so the scheduler's own error handling is unchanged.
+    """
     if inspect.iscoroutinefunction(func):
 
         @functools.wraps(func)
         async def _async_job(*args: Any, **kwargs: Any) -> Any:
-            import asyncio
-
-            run_id = str(uuid.uuid4())
-            await asyncio.to_thread(_start, run_id, job_id)
-            started = time.monotonic()
+            run = _Run(job_id)
+            await asyncio.to_thread(run.start)
             try:
                 result = await func(*args, **kwargs)
             except BaseException as exc:
-                await asyncio.to_thread(
-                    _finish, run_id, job_id, started, status="failed", error=exc
-                )
+                await asyncio.to_thread(run.failed, exc)
                 raise
-            await asyncio.to_thread(
-                _finish, run_id, job_id, started, status="completed", result=result
-            )
+            await asyncio.to_thread(run.completed, result)
             return result
 
         return _async_job
 
     @functools.wraps(func)
     def _job(*args: Any, **kwargs: Any) -> Any:
-        run_id = str(uuid.uuid4())
-        _start(run_id, job_id)
-        started = time.monotonic()
+        run = _Run(job_id)
+        run.start()
         try:
             result = func(*args, **kwargs)
         except BaseException as exc:
-            _finish(run_id, job_id, started, status="failed", error=exc)
+            run.failed(exc)
             raise
-        _finish(run_id, job_id, started, status="completed", result=result)
+        run.completed(result)
         return result
 
     return _job
