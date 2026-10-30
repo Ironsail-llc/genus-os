@@ -63,7 +63,7 @@ class FakeEngine:
         self.calls: list[tuple[str, str, dict | None]] = []
         self.status = 200
 
-    async def __call__(self, method, path, *, json=None, timeout=30):
+    async def __call__(self, method, path, *, json=None, timeout=30, tenant=None):
         self.calls.append((method, path, json))
         if path.endswith("/verify"):
             return self.status, ENGINE_VERIFY
@@ -105,12 +105,22 @@ def test_a_non_operator_cannot_verify(request, client_name, fake_engine, local_s
     assert not fake_engine.calls
 
 
-def test_another_tenants_operator_cannot_list_channels(
+def test_another_tenants_operator_lists_its_own_engines_channels(
     controls_client_as_other_tenant_owner, fake_engine, local_state
 ):
-    """One engine owns one set of channels. A second tenant's operator reading
-    them would be reading somebody else's instance."""
-    assert controls_client_as_other_tenant_owner.get("/api/channels").status_code == 403
+    """One engine per tenant: another tenant's operator is not refused, it is
+    shown the channels of ITS engine (``engine_request(tenant=...)``)."""
+    seen: list = []
+    real = fake_engine.__call__
+
+    async def _recording(method, path, *, json=None, timeout=30, tenant=None):
+        seen.append(tenant)
+        return await real(method, path, json=json, timeout=timeout, tenant=tenant)
+
+    with patch("routers.channel_access.engine_request", new=_recording):
+        response = controls_client_as_other_tenant_owner.get("/api/channels")
+    assert response.status_code == 200
+    assert seen == ["acme-corp"]
 
 
 # ── The listing ─────────────────────────────────────────────────────────

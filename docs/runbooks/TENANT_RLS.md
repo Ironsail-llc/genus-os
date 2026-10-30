@@ -198,7 +198,79 @@ parent that would make a cycle, or put any tenant more than three levels below
 a root, is refused with 422 (`robothor.crm.dal.tenant_parent_problem`). Any
 owner/admin may still edit the display name and settings of a tenant it can
 reach. The caller's own-account routes (`/me`, `/password`, `/mfa/*`) always
-run in the home tenant, where the account lives.
+run in the home tenant, where the account lives. `GET /api/tenants` and
+`GET /api/tenants/{id}` return only what the caller's home reaches; the root
+operator at home sees every tenant, and a tenant outside the caller's reach is
+a 404.
+
+### When a token stops being honoured
+
+A signed token is honoured only while what it says is still true:
+
+- **An acting token needs the switch on.** With `GENUS_TENANT_SWITCH_MODE`
+  anything but `enforce`, the bridge refuses every acting token (`act: true`)
+  with 403 "tenant switching disabled". Home tokens are unaffected. Turning the
+  flag off ends every acting session at once.
+- **A human token needs its account where the token says.** The bridge — and
+  every engine, for the chat, dashboard-completion and IDE routes the dashboard
+  reaches with the user's own token — checks that the account still lives in
+  the token's `home_tid` and is active, and refuses it with 401 "session no
+  longer valid" otherwise. Each process caches the answer per account and home
+  tenant for 30 seconds (`robothor/auth/session_standing.py`), so an account
+  moved or disabled by another process (`genus tenant move-account`, psql)
+  loses its old access token everywhere within 30 s rather than at expiry. A
+  change made through the bridge itself (the Helm's account editor) takes
+  effect on the bridge's next request. If the database cannot be read the token
+  is honoured, with a warning, rather than signing every operator out.
+
+Audit rows written while a human acts — including the CRM's own — name that
+account (`actor`, `user_id`), are filed under the acting tenant and carry the
+home tenant in `details`. A successful `tenant.switch` is filed under the
+tenant entered, so that tenant's admins can see who came in.
+
+### What an acting token can administer
+
+Every Helm admin route is one of two kinds, decided by the gate it calls
+(`crm/bridge/routers/_operator.py`; the full table is
+`crm/bridge/tests/test_tenant_admin_gates.py`):
+
+- **The acting tenant's own** (`require_tenant_admin`): agent manifests,
+  fleet, automations, runs, workflows, approvals, channel pairings, memory
+  facts, accounts and roles, provider keys, and the audit log (which also
+  admits `auditor`). A child tenant's own owner/admin and a root admin acting
+  in that child both pass. Every query is scoped to the acting tenant, and an
+  account grant may not exceed the caller's authority: owner can be granted
+  only by an owner whose home is the platform tenant.
+- **The appliance's** (`require_root_operator`): Controls, Settings, Logs,
+  system health, the doctor, telemetry, plugins, marketplace installs, the
+  fleet-default model, guardrail events and the guardrail change log (the last
+  two also admit the platform's `auditor`). Only a
+  root owner/admin **at home** passes — switch back first.
+
+The bridge reaches each tenant's own engine: `GENUS_TENANT_ENGINE_URLS` (a
+JSON `{tenant: url}` map, for local development) wins, then
+`GENUS_TENANT_ENGINE_URL_TEMPLATE` with its literal `{tenant}`; with neither,
+calls fall back to the single engine with one warning per process — and that
+engine refuses a token minted for another tenant. A child tenant's agent
+manifests live on its engine's volume and are read and written through that
+engine's `/api/admin/manifests*` routes.
+
+Audit rows record the tenant they happened in (migration 154). The platform's
+operator or auditor at home reads the whole appliance trail, untenanted rows
+and independent roots included (`_operator.audit_scope`); anyone else reads the
+acting tenant and, for an owner/admin, its descendants.
+
+### Tables exempt from row-level security
+
+`audit_log` has a `tenant_id` column and deliberately **no** `tenant_isolation`
+policy. It is the appliance-wide trail the platform's root reader sees whole,
+and RLS would make the bridge's per-request tenant binding hide every other
+tenant's rows (and every untenanted one) from that reader; per-tenant reads are
+scoped by explicit predicates instead. The exemption lives in one list,
+`robothor/db/rls_exemptions.py`, honoured by the migration guard
+(`tests/test_tenant_rls_coverage.py`), by `genus doctor`'s `db.rls_coverage`
+check, and by its `--fix`, which runs migration 120's loop minus the exempt
+tables. Do not add `tenant_isolation` to `audit_log` by hand.
 
 `GENUS_TENANT_SWITCH_MODE` is `off` by default (every switch is refused);
 `observe` runs the full check and still refuses, recording what it would have
@@ -212,3 +284,13 @@ genuinely enforcing**. That check is the same gate federation activation uses
 `GENUS_TENANT_SWITCH_ALLOW_INERT_RLS=1` is the deliberate escape hatch, and is
 logged at WARNING every time it admits a switch. Promote the ladder as in
 [Guardrail flips](GUARDRAIL_FLIPS.md).
+
+**Rollback.** Set `GENUS_TENANT_SWITCH_MODE=off` (or `observe`) on the bridge
+**and on every engine**, and restart them. Once restarted, the bridge and every
+engine refuse every acting token already issued — the bridge with 403 "tenant
+switching disabled", an engine's HTTP routes (the dashboard forwards the user's
+token to `/chat/*` and `/api/dashboard/completions`) with the same 403, and the
+IDE WebSocket with close code 4403. Nobody has to wait out the 15-minute token
+lifetime. Home tokens and service tokens are unaffected. A process still
+running with `enforce` keeps honouring acting tokens until it is restarted, so
+roll the flag out to all of them.

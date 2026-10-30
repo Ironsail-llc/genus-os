@@ -17,7 +17,7 @@ def test_schedule_rows_query_runs(db_conn, monkeypatch):
         yield db_conn
 
     monkeypatch.setattr(fleet, "get_connection", _fake_conn)
-    rows = fleet._schedule_rows()
+    rows = fleet._schedule_rows("test-tenant")
     assert isinstance(rows, dict)
 
 
@@ -29,5 +29,5 @@ def test_run_stats_query_runs(db_conn, monkeypatch):
         yield db_conn
 
     monkeypatch.setattr(fleet, "get_connection", _fake_conn)
-    stats = fleet._run_stats()
+    stats = fleet._run_stats("test-tenant")
     assert isinstance(stats, dict)

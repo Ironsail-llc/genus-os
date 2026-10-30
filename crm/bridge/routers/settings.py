@@ -34,7 +34,7 @@ Four rules the routes enforce that the library does not:
    settings package exists to end. The CLI, which runs on the box where the
    variable can be cleared, still writes the file — and ``genus doctor``
    reports the disagreement.
-4. **Operator-only, and audited by name.** Same ``require_operator`` gate as
+4. **Operator-only, and audited by name.** Same ``require_root_operator`` gate as
    Controls (no service tokens, owner/admin only, platform tenant only), and
    every write leaves an audit row naming the settings that changed. Never a
    value: the audit log is exported to a SIEM.
@@ -56,7 +56,7 @@ from pydantic import BaseModel, Field
 from robothor.settings import operator, provenance
 from robothor.settings.registry import field_index, groups
 from routers._audit import audited
-from routers._operator import require_operator
+from routers._operator import require_root_operator
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
@@ -213,7 +213,7 @@ def settings_schema(request: Request) -> dict[str, Any]:
     A page whose field order changed between two loads is a page an operator
     cannot learn.
     """
-    require_operator(request)
+    require_root_operator(request)
     by_group: dict[str, list[dict[str, Any]]] = {name: [] for name in groups()}
     for record in _declared():
         by_group.setdefault(record["group"], []).append(_field_schema(record))
@@ -287,7 +287,7 @@ def _pending_restart() -> list[str]:
 @router.get("")
 def settings_values(request: Request) -> dict[str, Any]:
     """What is configured, and which layer said so."""
-    require_operator(request)
+    require_root_operator(request)
     # Per-request rather than per-process: this same process serves the
     # /api/controls writes, and a snapshot taken at boot would report a flag
     # the operator flipped an hour ago as unset.
@@ -396,7 +396,7 @@ def patch_settings(patch: SettingsPatch, request: Request) -> Any:
     rolled back across a file and a table, so it is reported as 500 with the
     same body: ``applied`` names exactly what landed.
     """
-    actor = require_operator(request)
+    actor = require_root_operator(request)
     operator.reset_db_rows()
 
     planned, errors = _plan(patch.changes)

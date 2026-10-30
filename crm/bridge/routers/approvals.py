@@ -18,7 +18,8 @@ that are stuck on me" — while the mechanics underneath are genuinely different
     written here instead would leave the agent waiting until its own timeout
     denied it, while the Helm showed a green tick.
 
-Every route asks ``require_operator`` first. Every *answer* — including one that
+Every route asks ``require_tenant_admin`` first, and reads and settles the
+ACTING tenant's rows only; an escalation goes to that tenant's engine. Every *answer* — including one that
 is refused — also writes exactly one ``audited`` event, identifiers only, so the
 free-text answer never lands in the audit store that gets exported to a SIEM.
 The listing does not: it changes nothing, and a read that writes a row per poll
@@ -32,6 +33,7 @@ import re
 import uuid
 from typing import Any
 
+from deps import get_tenant_id
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -44,7 +46,7 @@ from robothor.engine.approvals import (
 )
 from routers._audit import audited
 from routers._engine_client import engine_request
-from routers._operator import require_operator
+from routers._operator import require_tenant_admin
 
 router = APIRouter(prefix="/api/approvals", tags=["approvals"])
 
@@ -80,7 +82,7 @@ def _iso(value: Any) -> Any:
     return value.isoformat() if hasattr(value, "isoformat") else value
 
 
-def _pending() -> list[dict]:
+def _pending(tenant_id: str) -> list[dict]:
     """Everything waiting on a person, newest deadline last.
 
     Composed rather than unioned in SQL: the two tables have different columns
@@ -101,7 +103,7 @@ def _pending() -> list[dict]:
             "expires_at": _iso(row.expires_at),
             "created_at": _iso(row.created_at),
         }
-        for row in list_pending_approvals()
+        for row in list_pending_approvals(tenant_id=tenant_id)
     ]
     out.extend(
         {
@@ -115,7 +117,7 @@ def _pending() -> list[dict]:
             "expires_at": _iso(q.expires_at),
             "created_at": _iso(q.created_at),
         }
-        for q in list_pending_questions()
+        for q in list_pending_questions(tenant_id=tenant_id)
     )
     out.sort(key=lambda item: str(item["expires_at"] or ""))
     return out
@@ -131,15 +133,15 @@ def list_approvals(request: Request) -> dict:
     over the run's own status stream (``approval_required``), which is where a
     prompt with a sub-minute life belongs.
     """
-    require_operator(request)
-    pending = _pending()
+    require_tenant_admin(request)
+    pending = _pending(get_tenant_id(request))
     return {"count": len(pending), "pending": pending}
 
 
 @router.post("/{kind}/{approval_id}")
 async def answer_approval(kind: str, approval_id: str, request: Request) -> Any:
     """Answer one waiting question. ``kind`` decides where the answer goes."""
-    actor = require_operator(request)
+    actor = require_tenant_admin(request)
 
     if kind not in KINDS:
         return _refuse(request, kind, approval_id, 400, f"kind must be one of {KINDS}")
@@ -171,7 +173,13 @@ async def _answer_question(
     if not answer:
         return _refuse(request, "question", question_id, 400, "answer is required")
 
-    settled = await asyncio.to_thread(answer_question, question_id, answer, answered_by=actor)
+    settled = await asyncio.to_thread(
+        answer_question,
+        question_id,
+        answer,
+        answered_by=actor,
+        tenant_id=get_tenant_id(request),
+    )
     audited(
         request,
         "approval.answer",
@@ -193,7 +201,12 @@ async def _decide_workflow(
 
     decision = ApprovalDecision.APPROVED if body.approved else ApprovalDecision.REJECTED
     settled = await asyncio.to_thread(
-        decide_approval_by_id, approval_id, decision, decided_by=actor, note=body.note or ""
+        decide_approval_by_id,
+        approval_id,
+        decision,
+        decided_by=actor,
+        note=body.note or "",
+        tenant_id=get_tenant_id(request),
     )
     audited(
         request,
@@ -219,6 +232,7 @@ async def _resolve_escalation(request: Request, request_id: str, body: AnswerReq
         "POST",
         f"/api/admin/approvals/escalation/{request_id}",
         json={"approved": bool(body.approved), "remember_session": bool(body.remember_session)},
+        tenant=get_tenant_id(request),
     )
     ok = status == 200
     audited(

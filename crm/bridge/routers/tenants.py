@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from models import CreateTenantRequest, UpdateTenantRequest
 
@@ -23,12 +23,12 @@ from robothor.crm.tenant_domains import (
     sso_domains_of,
 )
 from robothor.sanitize import sanitize_log
+from routers._operator import is_root, require_root_operator
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/tenants", tags=["tenants"])
 
-_OPERATOR_ROLES = frozenset({"owner", "admin"})
 _ROOT_REQUIRED = JSONResponse(
     {"error": "root operator required to change the tenant hierarchy"}, status_code=403
 )
@@ -51,21 +51,37 @@ def _is_root_tenant_operator(request: Request) -> bool:
     reserved for a human owner/admin whose home AND acting tenant are both the
     platform tenant. A root admin acting in a child is not one: it must switch
     back first. Only the loopback insecure-dev mode, which has no identity at
-    all, bypasses this. (A shared ``require_root_operator`` will replace it.)
+    all, bypasses this. Otherwise this is exactly ``require_root_operator``.
     """
-    # The same root require_operator gates on: ROBOTHOR_PLATFORM_TENANT, else
-    # the default tenant. Read from the module at call time.
-    from . import _operator
+    if getattr(request.state, "auth", None) is None:
+        return _legacy_dev_mode()
+    try:
+        require_root_operator(request)
+    except HTTPException:
+        return False
+    return True
+
+
+def _visible(request: Request) -> frozenset[str] | None:
+    """The tenant ids this caller may read; ``None`` means every tenant.
+
+    A human sees ``resolve_accessible_tenants(home, role)`` — home, plus its
+    descendants for an owner/admin — rooted at the HOME tenant like the
+    switcher, so a root admin acting in a child still sees the tree it came
+    from. The root operator at home sees every tenant, including roots it did
+    not create. A service token sees its own tenant. The loopback insecure-dev
+    mode, with no identity at all, sees everything as it always did.
+    """
+    from robothor.engine.permissions import resolve_accessible_tenants
 
     auth = getattr(request.state, "auth", None)
     if auth is None:
-        return _legacy_dev_mode()
-    return (
-        not auth.is_service
-        and auth.role in _OPERATOR_ROLES
-        and auth.tenant_id == _operator.PLATFORM_TENANT
-        and auth.home_tenant_id == _operator.PLATFORM_TENANT
-    )
+        return None if _legacy_dev_mode() else frozenset()
+    if auth.is_service:
+        return frozenset({auth.tenant_id})
+    if is_root(auth):
+        return None
+    return frozenset(resolve_accessible_tenants(auth.home_tenant_id, auth.role))
 
 
 def _may_edit_tenant(request: Request, tenant_id: str) -> bool:
@@ -114,10 +130,15 @@ def _domain_error(exc: ValueError) -> JSONResponse:
 
 @router.get("")
 def api_list_tenants(
+    request: Request,
     parentId: str | None = Query(None),
     activeOnly: bool = Query(True),
 ):
-    return {"tenants": list_tenants(parent_id=parentId, active_only=activeOnly)}
+    visible = _visible(request)
+    rows = list_tenants(parent_id=parentId, active_only=activeOnly)
+    if visible is not None:
+        rows = [row for row in rows if row.get("id") in visible]
+    return {"tenants": rows}
 
 
 @router.post("")
@@ -178,8 +199,11 @@ def api_accessible_tenants(request: Request) -> list[dict[str, Any]] | JSONRespo
 
 
 @router.get("/{tenant_id}")
-def api_get_tenant(tenant_id: str):
-    result = get_tenant(tenant_id)
+def api_get_tenant(tenant_id: str, request: Request):
+    visible = _visible(request)
+    # 404, not 403, for a tenant outside the caller's reach: whether a sibling
+    # exists is itself something a child admin should not learn.
+    result = get_tenant(tenant_id) if visible is None or tenant_id in visible else None
     if not result:
         return JSONResponse({"error": "tenant not found"}, status_code=404)
     return result

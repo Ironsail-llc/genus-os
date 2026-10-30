@@ -317,7 +317,6 @@ def me(request: Request) -> dict[str, Any] | JSONResponse:
 # TenantScopeMiddleware binds the request's RLS scope to it.
 
 _SWITCH_ROLES = frozenset({"owner", "admin"})
-_SWITCH_MODES = frozenset({"off", "observe", "enforce"})
 _SWITCH_OVERRIDE_ENV = "GENUS_TENANT_SWITCH_ALLOW_INERT_RLS"
 _SWITCH_CONTEXT = "switch tenants"
 _SWITCH_DISABLED = JSONResponse({"error": "tenant switching disabled"}, status_code=403)
@@ -332,9 +331,10 @@ class SwitchTenantRequest(BaseModel):
 
 
 def _tenant_switch_mode() -> str:
-    """off | observe | enforce. Anything unrecognised reads as off."""
-    mode = str(get_settings().auth.tenant_switch_mode or "").strip().lower()
-    return mode if mode in _SWITCH_MODES else "off"
+    """off | observe | enforce — the answer ``AuthMiddleware`` also honours."""
+    from robothor.auth.runtime import tenant_switch_mode
+
+    return tenant_switch_mode()
 
 
 def _switch_denial(ctx: Any, target: str) -> str | None:
@@ -486,6 +486,8 @@ def switch_tenant(body: SwitchTenantRequest, request: Request) -> dict[str, Any]
         request,
         "tenant.switch",
         action=target,
+        # Filed under the tenant ENTERED, so its admins can see who came in.
+        audit_tenant_id=target,
         user_id=ctx.user_id,
         home_tenant_id=home,
         target_tenant_id=target,

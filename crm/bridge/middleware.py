@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import uuid
@@ -108,9 +109,24 @@ class TenantScopeMiddleware:
             await self.app(scope, receive, send)
             return
 
+        from robothor.audit.logger import request_actor
         from robothor.db.connection import tenant_scope
 
-        with tenant_scope(str(tenant_id)):
+        if getattr(auth, "is_service", True):
+            with tenant_scope(str(tenant_id)):
+                await self.app(scope, receive, send)
+            return
+        # A human caller: audit rows written beneath this request without an
+        # explicit actor (the DAL's CRM audit) are filed under this account,
+        # in the acting tenant, with the home tenant in their details.
+        with (
+            tenant_scope(str(tenant_id)),
+            request_actor(
+                user_id=str(auth.user_id),
+                home_tenant_id=str(auth.home_tenant_id),
+                tenant_id=str(tenant_id),
+            ),
+        ):
             await self.app(scope, receive, send)
 
 
@@ -245,6 +261,22 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 _log_unauthorized(request, "invalid or expired token")
                 return JSONResponse(status_code=401, content={"error": "invalid or expired token"})
 
+        verified = request.state.auth
+        if verified is not None:
+            refusal = await _session_refusal(verified)
+            if refusal is not None:
+                status, error = refusal
+                log_event(
+                    "auth.denied",
+                    error,
+                    actor=verified.actor_id,
+                    details={"method": request.method, "path": request.url.path},
+                    status="denied",
+                )
+                if status == 401:
+                    _log_unauthorized(request, error)
+                return JSONResponse(status_code=status, content={"error": error})
+
         path = request.url.path
         if _auth_enforced() and request.state.auth is None and path not in self._PUBLIC_PATHS:
             log_event(
@@ -263,6 +295,31 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 return _deny(request, denial, actor=auth.actor_id, public_error=denial)
 
         return await call_next(request)
+
+
+async def _session_refusal(auth: AuthContext) -> tuple[int, str] | None:
+    """Why a verified token may not be honoured right now, or None.
+
+    A signature proves who minted the token, not that what it says is still
+    true. Two things can stop being true before it expires:
+
+    * the switch was turned off — an ACTING token is honoured only while
+      ``GENUS_TENANT_SWITCH_MODE`` is ``enforce`` (403), so turning it off ends
+      every acting session at once;
+    * the account moved tenant or was disabled — a HUMAN token is honoured
+      only while its account still lives in ``home_tid`` and is active (401;
+      ``robothor.auth.session_standing``, cached ~30 s per user).
+    """
+    from robothor.auth import session_standing
+    from robothor.auth.runtime import tenant_switch_mode
+
+    if auth.is_acting and tenant_switch_mode() != "enforce":
+        return 403, "tenant switching disabled"
+    if not auth.is_service and not await asyncio.to_thread(
+        session_standing.stands, auth.user_id, auth.home_tenant_id
+    ):
+        return 401, "session no longer valid"
+    return None
 
 
 def _auth_enforced() -> bool:
@@ -341,12 +398,12 @@ def _authorization_denial(auth: AuthContext, method: str, path: str) -> str | No
         )
 
     if path == "/api/installed-agents" or path.startswith("/api/installed-agents/"):
-        from robothor.constants import DEFAULT_TENANT
+        from routers._operator import is_root
 
-        # Installation state is appliance-global, not tenant-local.  Until it
-        # is represented as a tenant-scoped resource, only the primary tenant
-        # may administer or inspect it.
-        if auth.tenant_id != DEFAULT_TENANT:
+        # Installation state writes the bridge host's own workspace — the
+        # platform tenant's fleet. Only a caller AT HOME in the platform tenant
+        # may administer or inspect it; a root admin acting in a child is not.
+        if not is_root(auth):
             return "appliance administration not authorized for tenant"
         scope = "agent:read" if method.upper() in {"GET", "HEAD", "OPTIONS"} else "agent:admin"
         return _privileged_access_denial(auth, scope, "agent administration not authorized")
@@ -361,14 +418,15 @@ def _authorization_denial(auth: AuthContext, method: str, path: str) -> str | No
         if denial:
             return denial
 
-        # The current ingestion and pipeline-trigger implementations are
-        # appliance-local and do not accept a tenant boundary.  Fail closed
-        # for every non-primary tenant instead of writing or executing against
-        # another tenant's state.
-        if path == "/api/memory/store" or path.startswith("/api/memory/pipeline/trigger/"):
-            from robothor.constants import DEFAULT_TENANT
+        # Ingestion is tenant-aware (``ingest_content(tenant_id=...)``); the
+        # pipeline trigger is not: it runs the host's own ingestion scripts,
+        # which read the platform tenant's sources. Run under a child's binding
+        # they would copy the platform's data into the child, so it stays with
+        # a caller at home in the platform tenant.
+        if path.startswith("/api/memory/pipeline/trigger/"):
+            from routers._operator import is_root
 
-            if auth.tenant_id != DEFAULT_TENANT:
+            if not is_root(auth):
                 return "memory operation not authorized for tenant"
 
     if method.upper() == "POST" and path.startswith("/api/tasks/"):

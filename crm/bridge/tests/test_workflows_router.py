@@ -12,7 +12,7 @@ def fake_workflows(monkeypatch):
     monkeypatch.setattr(
         workflows,
         "_list_workflows",
-        lambda: [
+        lambda tenant_id: [
             {
                 "workflow_id": "intel",
                 "runs": 3,
@@ -25,7 +25,9 @@ def fake_workflows(monkeypatch):
     monkeypatch.setattr(
         workflows,
         "_workflow_runs",
-        lambda wid, limit: [{"id": "wr1", "status": "completed"}] if wid == "intel" else [],
+        lambda wid, limit, tenant_id: (
+            [{"id": "wr1", "status": "completed"}] if wid == "intel" else []
+        ),
     )
 
 

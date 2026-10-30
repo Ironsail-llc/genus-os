@@ -131,11 +131,16 @@ def _seed_people(db_conn, tenants: dict[str, str]) -> dict[str, str]:
 @pytest.fixture(autouse=True)
 def _signing_key(monkeypatch):
     monkeypatch.setenv("GENUS_AUTH_SIGNING_KEY", KEY)
+    # Acting tokens are honoured only while switching is enforced.
+    monkeypatch.setenv("GENUS_TENANT_SWITCH_MODE", "enforce")
     from robothor.auth import tokens
+    from robothor.settings import reset_settings
 
     tokens.reset_signing_key_cache()
+    reset_settings()
     yield
     tokens.reset_signing_key_cache()
+    reset_settings()
 
 
 @pytest.fixture

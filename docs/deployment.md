@@ -958,9 +958,17 @@ anything a spreadsheet would evaluate is prefixed with an apostrophe, so an
 audit detail cannot become a formula or carry a credential off the box. A
 failed export is a real `500` rather than an empty file.
 
-`audit_log` has no tenant column, so **the export is appliance-wide**, not
-caller-tenant-wide — the same rows `GET /api/audit/events` has always returned.
-The `<tenant>` in the filename names who exported it, not what is inside.
+**Who sees which rows.** Since migration 154 every `audit_log` row records the
+tenant it happened in — a bridge request's *acting* tenant, else the writing
+process's own. The platform tenant's operator or auditor, **at home**, still
+reads the appliance-wide trail: every tenant, independent root tenants such as
+the benchmark sandbox, and the rows written before the migration (which carry
+no tenant). Everyone else — a child tenant's admin, and a root admin acting in
+a child — reads `/api/audit/events`, its CSV and `/api/audit/stats` for the
+acting tenant and, for an owner or admin, its descendants, and never the
+untenanted rows. The `<tenant>` in the filename is the acting tenant. The
+guardrail change log and `/api/audit/guardrails` have no tenant at all and
+stay with the platform's operator or auditor at home.
 
 **Logs.** `GET /api/logs/units` lists the units that may be followed — derived
 from the unit files `scripts/install-units.sh` installs, so a unit added to
@@ -1007,9 +1015,9 @@ is too short to check against the blocks rather than claiming there are none.
 **Observe › Audit** has two tabs: the audit log itself, and the guardrail
 change log (every `PATCH /api/controls`, with the reason its operator typed).
 **Export CSV** is a plain download link carrying the same filters the table is
-showing, up to 5,000 rows. It is **appliance-wide** — `audit_log` has no tenant
-column, so it holds every tenant's rows, and the tenant in the filename names
-who exported it, not what is inside. The events tab has no cursor: "Load more"
+showing, up to 5,000 rows. For the platform's operator or auditor at home it is
+the whole appliance; for anyone else it is the acting tenant and, for an owner
+or admin, its descendants. The events tab has no cursor: "Load more"
 re-reads a larger window up to the route's 500-row ceiling, and anything bigger
 is an export.
 

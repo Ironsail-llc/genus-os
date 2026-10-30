@@ -13,7 +13,7 @@ import psycopg2.extras
 from fastapi import APIRouter, Request
 
 from robothor.db.connection import get_connection
-from routers._operator import require_operator
+from routers._operator import require_root_operator
 
 router = APIRouter(prefix="/api/health", tags=["health"])
 
@@ -103,7 +103,7 @@ def _safe(fn):
 
 @router.get("/system")
 def system_health(request: Request) -> dict:
-    require_operator(request)
+    require_root_operator(request)
     return {
         "wal": _safe(_wal_status),
         "backups": _safe(_backup_status),
