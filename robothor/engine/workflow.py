@@ -559,28 +559,6 @@ class WorkflowEngine:
                     error_message="Authentication identity required for workflow execution",
                 )
 
-        # A hook run whose first step the tool-call rate limit would block is
-        # deferred before anything is recorded: the hook consumer requeues the
-        # event, and a deferral is a log line, not a workflow_runs row.
-        if requeue_on_rate_limit and self._first_step_rate_limited(wf):
-            logger.info(
-                "Workflow %s deferred: tool-call rate limit reached at first step %s (%s)",
-                _sanitize(workflow_id),
-                wf.steps[0].id,
-                _sanitize(trigger_detail),
-            )
-            return WorkflowRun(
-                workflow_id=workflow_id,
-                tenant_id=self.config.tenant_id,
-                user_id=effective_user_id,
-                user_role=effective_user_role,
-                trigger_type=trigger_type,
-                trigger_detail=trigger_detail,
-                status=RunStatus.SKIPPED,
-                error_message=f"Deferred: tool-call rate limit reached at step '{wf.steps[0].id}'",
-                rate_limited=True,
-            )
-
         # Prevent concurrent runs of the same workflow
         dedup_key = f"workflow:{workflow_id}"
         if not await try_acquire(dedup_key):
@@ -599,6 +577,31 @@ class WorkflowEngine:
                 error_message="Skipped: workflow already running",
             )
             return run
+
+        # A hook run whose first step the tool-call rate limit would block is
+        # deferred before anything is recorded: the hook consumer requeues the
+        # event, and a deferral is a log line, not a workflow_runs row. Busy
+        # is checked first, so a busy workflow keeps its trigger's own busy
+        # handling (requeue_if_busy) whatever the window holds.
+        if requeue_on_rate_limit and self._first_step_rate_limited(wf):
+            await release(dedup_key)
+            logger.info(
+                "Workflow %s deferred: tool-call rate limit reached at first step %s (%s)",
+                _sanitize(workflow_id),
+                wf.steps[0].id,
+                _sanitize(trigger_detail),
+            )
+            return WorkflowRun(
+                workflow_id=workflow_id,
+                tenant_id=self.config.tenant_id,
+                user_id=effective_user_id,
+                user_role=effective_user_role,
+                trigger_type=trigger_type,
+                trigger_detail=trigger_detail,
+                status=RunStatus.SKIPPED,
+                error_message=f"Deferred: tool-call rate limit reached at step '{wf.steps[0].id}'",
+                rate_limited=True,
+            )
 
         # Initialize run
         run = WorkflowRun(
