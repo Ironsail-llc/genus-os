@@ -660,6 +660,26 @@ class TestDefaults:
             controls_client_as_operator.patch("/api/providers/defaults", json=self.BODY)
         assert log_event.called
 
+    def test_the_audit_entry_names_the_canvas_model(
+        self, controls_client_as_operator, fake_engine
+    ) -> None:
+        body = {**self.BODY, "canvas": "ollama_chat/qwen3:8b"}
+        with patch("routers._audit.log_event") as log_event:
+            controls_client_as_operator.patch("/api/providers/defaults", json=body)
+        details = [call.kwargs.get("details") or {} for call in log_event.call_args_list]
+        assert any(d.get("canvas") == "ollama_chat/qwen3:8b" for d in details), details
+
+    def test_the_audit_entry_records_a_cleared_canvas_model(
+        self, controls_client_as_operator, fake_engine
+    ) -> None:
+        """``null`` drops out of the audit details like every ``None``; the
+        clear itself still has to be on the record."""
+        body = {**self.BODY, "canvas": None}
+        with patch("routers._audit.log_event") as log_event:
+            controls_client_as_operator.patch("/api/providers/defaults", json=body)
+        details = [call.kwargs.get("details") or {} for call in log_event.call_args_list]
+        assert any(d.get("canvas_cleared") is True for d in details), details
+
     def test_it_never_touches_the_filesystem(
         self, controls_client_as_operator, fake_engine, tmp_path, monkeypatch
     ) -> None:
