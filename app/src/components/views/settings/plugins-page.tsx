@@ -136,6 +136,34 @@ export interface PluginManifest {
   declared: Array<{ kind: string; names: string[] }>;
 }
 
+/** One agent a plugin rendered into the workspace. */
+export interface PluginAgent {
+  id: string;
+  name: string;
+  /** The manifest's cron, or null for an agent that only runs when asked. */
+  schedule: string | null;
+}
+
+/** One workflow a plugin copied into `docs/workflows/`. */
+export interface PluginWorkflow {
+  id: string;
+  name: string;
+  /** Short phrases, e.g. `cron 0 7 * * *`, `hook email:email.new`. */
+  triggers: string[];
+}
+
+/** What the plugin wrote into the workspace, from the engine's asset ledger. */
+export interface PluginAssets {
+  agents: PluginAgent[];
+  workflows: PluginWorkflow[];
+  patches: string[];
+  files: string[];
+  /** The engine's reason when it could not read what the plugin wrote. */
+  error?: string;
+  /** With `error`: the lists still hold what the readable records gave. */
+  partial?: boolean;
+}
+
 export interface Plugin {
   name: string;
   version: string;
@@ -149,6 +177,8 @@ export interface Plugin {
   manifest: PluginManifest | null;
   /** Null for anything this platform did not install. Gates Remove. */
   source: PluginSource | null;
+  /** Empty lists from an older engine that sends no `assets`. */
+  assets: PluginAssets;
 }
 
 export interface Listing {
@@ -207,6 +237,37 @@ function normalizeManifest(value: unknown): PluginManifest | null {
   };
 }
 
+function records(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value)
+    ? value.filter((v): v is Record<string, unknown> => !!v && typeof v === "object")
+    : [];
+}
+
+function normalizeAssets(value: unknown): PluginAssets {
+  const row = (value && typeof value === "object" ? value : {}) as Record<string, unknown>;
+  return {
+    agents: records(row.agents)
+      .filter((a) => typeof a.id === "string" && a.id)
+      .map((a) => ({
+        id: a.id as string,
+        name: typeof a.name === "string" && a.name ? a.name : (a.id as string),
+        schedule: typeof a.schedule === "string" && a.schedule ? a.schedule : null,
+      })),
+    workflows: records(row.workflows)
+      .filter((w) => typeof w.id === "string" && w.id)
+      .map((w) => ({
+        id: w.id as string,
+        name: typeof w.name === "string" && w.name ? w.name : (w.id as string),
+        triggers: strings(w.triggers),
+      })),
+    patches: strings(row.patches),
+    files: strings(row.files),
+    ...(typeof row.error === "string" && row.error
+      ? { error: row.error, partial: row.partial === true }
+      : {}),
+  };
+}
+
 export function normalizePlugin(value: unknown): Plugin | null {
   if (!value || typeof value !== "object") return null;
   const row = value as Record<string, unknown>;
@@ -232,6 +293,7 @@ export function normalizePlugin(value: unknown): Plugin | null {
     failureReason: typeof row.failure_reason === "string" ? row.failure_reason : null,
     manifest: normalizeManifest(row.manifest),
     source: normalizeSource(row.source),
+    assets: normalizeAssets(row.assets),
   };
 }
 
@@ -1031,6 +1093,61 @@ export function PluginsPage({ visible = true }: PluginsPageProps) {
                     {plugin.failureReason}
                   </p>
                 ) : null}
+
+                {/*
+                  What the plugin wrote into the workspace. The tool count above
+                  says what it adds to the engine; this says which agents now
+                  run and which workflows can fire because it is installed.
+                */}
+                <div
+                  data-testid={`plugin-assets-${plugin.name}`}
+                  className="min-w-0 break-words text-[11px] text-muted-foreground"
+                >
+                  <p className="font-medium text-foreground">Agents and workflows</p>
+                  {plugin.assets.error ? (
+                    <p data-testid={`plugin-assets-error-${plugin.name}`}>
+                      unavailable: {plugin.assets.error}
+                    </p>
+                  ) : null}
+                  {plugin.assets.agents.length === 0 && plugin.assets.workflows.length === 0 ? (
+                    plugin.assets.error ? null : (
+                      <p>none</p>
+                    )
+                  ) : (
+                    <ul className="flex min-w-0 flex-col gap-0.5 pt-0.5">
+                      {plugin.assets.agents.map((agent) => (
+                        <li
+                          key={`agent-${agent.id}`}
+                          data-testid={`plugin-asset-agent-${agent.id}`}
+                          className="min-w-0 break-words"
+                        >
+                          agent <span className="break-all font-mono">{agent.id}</span>
+                          {" · "}
+                          {agent.schedule ? (
+                            <span className="font-mono">{agent.schedule}</span>
+                          ) : (
+                            "no schedule"
+                          )}
+                        </li>
+                      ))}
+                      {plugin.assets.workflows.map((workflow) => (
+                        <li
+                          key={`workflow-${workflow.id}`}
+                          data-testid={`plugin-asset-workflow-${workflow.id}`}
+                          className="min-w-0 break-words"
+                        >
+                          workflow <span className="break-all font-mono">{workflow.id}</span>
+                          {" · "}
+                          {workflow.triggers.length > 0 ? (
+                            <span className="font-mono">{workflow.triggers.join(", ")}</span>
+                          ) : (
+                            "no trigger"
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
 
                 <details
                   data-testid={`plugin-manifest-${plugin.name}`}

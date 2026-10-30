@@ -211,6 +211,7 @@ def builtin_handlers() -> dict[str, Any]:
         intents,
         jira,
         judge,
+        knowledge,
         mcp_client,
         memory,
         memory_vault,
@@ -218,6 +219,7 @@ def builtin_handlers() -> dict[str, Any]:
         n8n,
         observability,
         pdf,
+        plugins,
         pr_review,
         reasoning,
         reports,
@@ -241,6 +243,7 @@ def builtin_handlers() -> dict[str, Any]:
         memory,
         memory_vault,
         intents,
+        knowledge,
         symbolic,
         vision,
         web,
@@ -284,6 +287,7 @@ def builtin_handlers() -> dict[str, Any]:
         claude_code,
         pr_review,
         workflows,
+        plugins,
     ]:
         all_handlers.update(mod.HANDLERS)
 

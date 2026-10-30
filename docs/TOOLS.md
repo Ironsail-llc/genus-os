@@ -1299,6 +1299,51 @@ declared: a fixed, repeatable pipeline with its own steps, timeout and run
 history. Use `spawn_agent` for open-ended work that one agent should reason
 through.
 
+### Knowledge base (`kb_*`)
+
+Curated reference documents, grouped in collections named `<plugin>/<topic>`
+(`helpdesk/policies`). Each tenant has its own collections.
+
+| Tool | Use |
+|---|---|
+| `kb_search` | Hybrid search (vector + keyword, RRF) within one `collection`. Returns chunks with `doc_id`, `title`, `text`, `score`, `source_uri`. Read-only. |
+| `kb_list_collections` | Which collections exist, with document and chunk counts. Read-only. |
+| `kb_upsert_document` | Add or replace a document. An identical re-send is `unchanged`; a changed one replaces its chunks and bumps `version`. |
+| `kb_delete_document` | Remove a document and its chunks. |
+
+**Which to use.** Use `kb_search` for curated reference documents scoped to a
+collection, and `search_memory` for the agent's own remembered facts.
+`kb_search` never returns memory facts, and `search_memory` never returns
+knowledge-base documents. The writes are refused in a benchmark run. How
+collections are named and how documents are versioned:
+[Knowledge Base](knowledge-base.md).
+
+### What plugins contribute: `plugins_overview`
+
+`plugins_overview` takes no arguments and lists every installed plugin:
+
+- `name`, `version`, and `state` (`loaded`, `failed`, `disabled`, or
+  `assets only` for a plugin that ships workspace files and no entry point);
+- `tools`: each tool the plugin's manifest declares, with the description from
+  its registered schema (empty when no schema is registered);
+- `checks`: the doctor check ids it declares;
+- `agents`: `{id, name, schedule}` for each agent the plugin installed, from the
+  asset ledger and every `installed.yaml` entry with `source: plugin:<dist>`.
+  `schedule` is the manifest's cron, or `null`;
+- `workflows`: `{id, name, triggers}` for each workflow it copied into
+  `docs/workflows/`; a trigger reads like `cron 0 7 * * *` or
+  `hook email:email.new`;
+- `patches`: ids of existing agent manifests it patched;
+- `files`: every other workspace-relative file it wrote.
+
+A `warnings` list appears when the asset ledger or `installed.yaml` cannot be
+read; the plugins the loader reports are still listed. The tool is read-only.
+
+**Which to use.** Use `plugins_overview` for "what does plugin X give us?" or
+"which plugin ships agent or workflow Y?". Use `tool_search` to find a tool by
+what it does, whatever provides it. [Plugins](PLUGINS.md#seeing-what-a-plugin-shipped)
+covers the same data on the dashboard and the admin API.
+
 ### Everything else
 
 The full registry is large and changes with the release; `tool_search` over the
@@ -1309,9 +1354,11 @@ agent's own allow-set is the authoritative answer. The families:
 | Files and shell | `read_file`, `write_file`, `list_directory`, `exec`, [`execute_code`](#execute_code-calling-tools-from-inside-python) |
 | Web | `web_fetch`, `web_render`, `web_search`, `browser` |
 | Memory | `search_memory`, `memory_block_read`, `memory_block_write`, `store_memory` |
+| Knowledge base | [`kb_search`, `kb_upsert_document`, `kb_delete_document`, `kb_list_collections`](#knowledge-base-kb_) |
 | CRM | `search_records`, `get_person`, `create_task`, `list_my_tasks`, `resolve_task` |
 | Notifications | `get_inbox`, `ack_notification`, `send_notification` |
 | Skills | `list_skills`, `invoke_skill` |
+| Plugins | [`plugins_overview`](#what-plugins-contribute-plugins_overview) |
 | Sub-agents | `spawn_agent`, `spawn_agents` (only with `can_spawn_agents`) |
 | Workflows | [`list_workflows`, `run_workflow`, `workflow_runs`](#workflows-list_workflows-run_workflow-workflow_runs) |
 | Vision | `view_image`, `analyze_image` (image files — see above); `look`, `who_is_here` (a real camera) |
@@ -1375,7 +1422,9 @@ names that appear in its instruction and bootstrap files but are absent from
 schema. Both halves are silent in production: the agent cannot see its own
 manifest, so a tool it was told to use simply stops working and it finds
 another way; and an unresolvable name is dropped after one journald warning.
-Results name agents and tools, never instruction text.
+Results name agents and tools, never instruction text. "Registered" means a
+built-in, an adapter route, or a tool a loaded plugin declares; a disabled or
+failed plugin's tools still resolve to nothing.
 
 **`calendar.operator_calendar_writable`** (required, and skipped entirely on an
 instance where no agent holds a calendar tool) — the instance's Google account

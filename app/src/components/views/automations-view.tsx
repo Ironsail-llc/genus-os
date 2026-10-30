@@ -8,6 +8,7 @@ import { PageHeader } from "@/components/business/page-header";
 import { Button } from "@/components/ui/button";
 import { isOperatorRole } from "@/components/layout/nav-config";
 import { AutomationCard } from "@/components/views/automations/automation-card";
+import { N8nSection } from "@/components/views/automations/n8n-section";
 import { WorkflowsSection } from "@/components/views/automations/workflows-section";
 import { describeTrigger } from "@/components/views/agents/agent-manifests";
 import { reconcileNote, warningLine, warningsOf } from "@/lib/agents/reconcile";
@@ -26,7 +27,8 @@ import { useBridgePoll } from "@/lib/bridge/use-bridge-poll";
  * Two sections, two bridge routes, two independent failure modes. Above: the
  * cron'd agents, from `GET /api/automations` — a composition of the manifest,
  * `agent_schedules` and the newest `agent_runs` row, which is the only place
- * those three have ever been joined. Below: workflows, unchanged.
+ * those three have ever been joined. Below: workflows, unchanged, and then the
+ * operator's external n8n as the bridge's poller last saw it.
  *
  * It polls every 60 s **while visible**. `AppShell` mounts every view and hides
  * them with `display: none`, so an ungated effect here would put an
@@ -271,6 +273,7 @@ export function AutomationsView({
       </div>
 
       <WorkflowsSection visible={visible} />
+      <N8nSection visible={visible} />
     </div>
   );
 }

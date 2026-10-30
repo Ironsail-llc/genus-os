@@ -613,6 +613,26 @@ _CONFIG_SCHEMAS: dict[str, dict[str, Any]] = {
 }
 
 
+#: What installed plugins contribute (``handlers/plugins.py``). Its own block,
+#: outside ``get_engine_schemas``, for the size-ratchet reason above.
+_PLUGIN_SCHEMAS: dict[str, dict[str, Any]] = {
+    "plugins_overview": {
+        "type": "function",
+        "function": {
+            "name": "plugins_overview",
+            "description": (
+                "List every installed plugin and what it contributes to this instance: "
+                "its tools (with descriptions), doctor checks, agents (id, name, "
+                "schedule), workflows (id, name, triggers), the agent manifests it "
+                "patched, and other workspace files it wrote. Read-only. Use this to "
+                "answer 'what does plugin X give us?' or 'which plugin ships agent or "
+                "workflow Y?'; use tool_search to find a tool by what it does."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+}
+
 #: The secrets vault's four tools, as one cluster.
 #:
 #: Lifted out of ``get_engine_schemas`` when ``vault_test`` was added: the
@@ -1438,6 +1458,92 @@ _CLAUDE_CODE_SCHEMAS: dict[str, dict[str, Any]] = {
 }
 
 
+_KB_COLLECTION: dict[str, Any] = {
+    "type": "string",
+    "description": "Collection name, <plugin>/<topic> (e.g. helpdesk/policies)",
+}
+
+#: Knowledge base (robothor/knowledge/, docs/knowledge-base.md): curated
+#: reference documents per collection. Kept out of get_engine_schemas() so the
+#: function-size ratchet holds.
+_KB_SCHEMAS: dict[str, dict[str, Any]] = {
+    "kb_search": {
+        "type": "function",
+        "function": {
+            "name": "kb_search",
+            "description": (
+                "Search a knowledge-base collection of curated reference documents "
+                "(policies, product docs, playbooks) — hybrid semantic + keyword. Use it "
+                "for reference material scoped to a collection; use search_memory for "
+                "facts you have remembered yourself. Returns matching chunks with "
+                "doc_id, title, text, score and source_uri."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "collection": _KB_COLLECTION,
+                    "query": {"type": "string", "description": "What to look for"},
+                    "limit": {"type": "integer", "default": 5, "description": "1..50"},
+                },
+                "required": ["collection", "query"],
+            },
+        },
+    },
+    "kb_upsert_document": {
+        "type": "function",
+        "function": {
+            "name": "kb_upsert_document",
+            "description": (
+                "Add or replace a reference document in a knowledge-base collection. "
+                "Re-sending an identical document is a no-op (status unchanged); a "
+                "changed one replaces its chunks and bumps its version."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "collection": _KB_COLLECTION,
+                    "doc_id": {"type": "string", "description": "Stable id within the collection"},
+                    "title": {"type": "string", "default": ""},
+                    "text": {
+                        "type": "string",
+                        "description": "The full document text (at most 200,000 characters)",
+                    },
+                    "source_uri": {
+                        "type": "string",
+                        "description": "Where the document came from (optional)",
+                        "default": "",
+                    },
+                },
+                "required": ["collection", "doc_id", "text"],
+            },
+        },
+    },
+    "kb_delete_document": {
+        "type": "function",
+        "function": {
+            "name": "kb_delete_document",
+            "description": "Remove a document and its chunks from a knowledge-base collection.",
+            "parameters": {
+                "type": "object",
+                "properties": {"collection": _KB_COLLECTION, "doc_id": {"type": "string"}},
+                "required": ["collection", "doc_id"],
+            },
+        },
+    },
+    "kb_list_collections": {
+        "type": "function",
+        "function": {
+            "name": "kb_list_collections",
+            "description": (
+                "List this tenant's knowledge-base collections with their document "
+                "and chunk counts and when each last changed."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+}
+
+
 #: The pr-reviewer suite (robothor/pr_review/). Opt-in: see OPT_IN_TOOLS.
 _PR_REVIEW_SCHEMAS: dict[str, dict[str, Any]] = {
     "pr_review_intake": {
@@ -1963,7 +2069,7 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
         },
     }
 
-    schemas.update(_VAULT_SCHEMAS | _CONFIG_SCHEMAS)
+    schemas.update(_VAULT_SCHEMAS | _CONFIG_SCHEMAS | _PLUGIN_SCHEMAS)
 
     # ── Knowledge Vault (verbatim memory store; RIP 12) ──
     # Distinct from the secrets vault above. Stores reference data the agent
@@ -2062,6 +2168,8 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
                 },
             },
         }
+
+    schemas.update(_KB_SCHEMAS)
 
     # ── Intent memory (prospective objectives; RIP 14) ──
     if is_rip_enabled(14):

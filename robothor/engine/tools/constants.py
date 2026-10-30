@@ -353,6 +353,9 @@ READONLY_TOOLS: frozenset[str] = frozenset(
         # Intent memory: search/list are read-only.
         "intent_search",
         "intent_list",
+        # Knowledge base: search and list read curated documents.
+        "kb_search",
+        "kb_list_collections",
         # Symbolic memory: reads a stored tool-output file.
         "recall_node",
         # CRM read
@@ -402,6 +405,8 @@ READONLY_TOOLS: frozenset[str] = frozenset(
         "memory_write_status",
         # Settings read (GEN-42): value, source, restart flag; secrets masked.
         "config_get",
+        # What each installed plugin contributes (tools, agents, workflows...).
+        "plugins_overview",
         # Vault read-only tools
         "vault_get",
         "vault_list",

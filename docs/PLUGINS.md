@@ -96,6 +96,63 @@ loads none of them: half-loading leaves it in a state its author never
 tested. And a plugin that fails to import is recorded and skipped — one
 broken package must never stop the engine booting.
 
+## State and shared primitives
+
+A plugin's runtime dependencies are stdlib-only, and that rule is about
+*third-party* packages. Importing `robothor.*` at runtime is fine: the plugin
+runs inside the engine, and the primitives below exist so that it does not
+reinvent them.
+
+**`PluginState` — your plugin's tables.** A wheel cannot ship a database
+migration, so every table a plugin needs is a *kind* of row in one core table,
+`plugin_state`, keyed by tenant, plugin name, kind and key, holding a JSON
+object:
+
+```python
+from robothor.plugins.state import PluginState
+
+state = PluginState("acme")             # tenant defaults to the instance's
+state.put("contact", "alice", {"stage": "lead"})
+state.put("seen", message_id, {}, ttl_seconds=86_400)
+state.get("contact", "alice")                     # {"stage": "lead"}, or None
+state.exists("seen", message_id)
+state.list("contact", prefix="a", limit=50)
+# -> [{key, value, updated_at, expires_at}]
+state.delete("contact", "alice")
+```
+
+Two plugins, or two tenants, using the same kind and key never see each
+other's rows. A row written with `ttl_seconds` disappears from `get`, `exists`
+and `list` the moment it expires. The engine deletes expired rows hourly for
+the instance's tenant; rows for other tenants need
+`PluginState.purge_expired()`. `list` returns rows in key order; its
+prefix is literal text, not a pattern. The calls are synchronous database
+queries: from an async handler, run them with `asyncio.to_thread`.
+
+**`fleet_model_chain()` — never pin a model.** A plugin tool that calls a
+model must not name one. The operator chooses the fleet's models, and a
+pinned name goes stale the day they change them.
+`robothor.engine.llm_client.fleet_model_chain()` returns the fleet's chain,
+primary first, then the fallbacks, ending in the instance's model of last
+resort when one is set. With no fleet defaults file it is that last-resort
+model alone, and empty only when neither exists, so check for an empty list.
+
+**`do_not_contact_phones()` — honour the opt-out.** Anything that texts or
+calls a person must check the same opt-out the email tools do.
+`robothor.crm.dal.do_not_contact_phones(phones, tenant_id)` returns the
+numbers, exactly as you passed them, that belong to a person marked do not
+contact. It compares the last ten digits, so a number written with a `+1`
+country code, brackets, spaces or dots matches the same ten digits written
+plainly; a number with fewer than ten digits matches nothing. The match
+assumes NANP (US/Canada) numbers; an international deployment must normalise
+both sides to E.164 before calling (nine-digit national numbers never match).
+It checks the person's primary number, their additional numbers and their
+SMS and voice identifiers. Drop every returned number before sending, and
+treat an exception as a refusal: a lookup that failed is not a clean list.
+
+The knowledge-base tools (`kb_*`) are engine tools, not imports: an agent
+that runs your plugin's workflow lists them in `tools_allowed`.
+
 ## Checking what loaded
 
 Plugin failures are logged at WARNING with the plugin name and the reason:
@@ -750,6 +807,36 @@ which keeps comments only when `ruamel.yaml` is installed (the platform does
 not depend on it). Without it the patched manifest is rewritten by PyYAML and
 its comments are lost; the `.pre-<distribution>` backup is the original.
 
+### Seeing what a plugin shipped
+
+Three surfaces read the asset ledger and `.robothor/installed.yaml` (every agent
+recorded with `source: plugin:<dist>`), so nobody has to open them by hand:
+
+- the **`plugins_overview`** tool lists each installed plugin with its tools,
+  doctor checks, agents (id, name, schedule), workflows (id, name, triggers),
+  patched agents and other files — see [Tools](TOOLS.md#what-plugins-contribute-plugins_overview);
+- each row of `GET /api/admin/plugins` carries **`assets`**:
+  `{agents, workflows, patches, files}` in the same shapes, drawn on the Helm's
+  Plugins page as **Agents and workflows**. If the asset ledger or
+  `installed.yaml` cannot be read, the listing still answers: `assets.error`
+  says which record (by exception class, never its text) and `assets.partial`
+  is `true`, because the lists still hold what the other record gave. The
+  Plugins page shows "unavailable" with that reason above whatever lists it
+  could read (and no "none"). If the asset read fails outright, the lists are
+  empty and `partial` is `false`;
+- `GET /api/workflows` on the bridge lists every workflow defined in
+  `docs/workflows/`, including one that has never run (`runs: 0`), with
+  `source: "plugin:<dist>"` when the ledger records that a plugin wrote it and
+  `"workspace"` otherwise (`null`, and a logged warning, when the ledger cannot
+  be read).
+
+Only `docs/workflows/*.yaml` is loaded by the engine, so a plugin file ending in
+`.yml` there is listed under `files`, never as a workflow with triggers.
+
+A plugin that ships only workspace files has no entry point, so the loader never
+sees it; `plugins_overview` still lists it from the ledger, with state
+`assets only`. All three are read-only and never create `.robothor/`.
+
 ### Scan verdict
 
 A wheel whose manifest declares **any** workspace asset is graded `review`,
@@ -909,7 +996,7 @@ acts with identifiers only.
 
 | route (bridge) | engine | what it does |
 |---|---|---|
-| `GET /api/plugins` | `GET /api/admin/plugins` | generation, lockfile state, one row per distribution |
+| `GET /api/plugins` | `GET /api/admin/plugins` | generation, lockfile state, one row per distribution, each with the `assets` it wrote into the workspace |
 | `POST /api/plugins/sync` | `POST /api/admin/plugins/sync` | record what is installed; **409** when the existing file's contents cannot be read (`--force` is CLI-only), **503** when the path itself cannot be written |
 | `POST /api/plugins/{name}/enable` | `POST /api/admin/plugins/{name}/enable` | flip the row; 404 if unrecorded; does **not** reload |
 | `POST /api/plugins/{name}/disable` | `POST /api/admin/plugins/{name}/disable` | as above |

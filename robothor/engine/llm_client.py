@@ -113,6 +113,7 @@ from robothor.engine.workflow_budget import bound_call_timeout
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
+    from pathlib import Path
 
     from robothor.engine.session import AgentSession
     from robothor.engine.stall_watchdog import _StallWatchdog
@@ -1317,6 +1318,26 @@ def _log_reasoning_replay_rejection(
         )
     except Exception as digest_error:  # noqa: BLE001 — never lose the real error
         logger.warning("reasoning-replay history digest failed: %s", _sanitize(digest_error))
+
+
+def fleet_model_chain(manifest_dir: Path | str | None = None) -> list[str]:
+    """The fleet's model chain, primary first: what a plugin should dial.
+
+    A plugin tool must never pin a model name -- the operator chooses the
+    fleet's models in ``_defaults.yaml`` and a pinned name goes stale the day
+    they change it. This is ``[primary, *fallbacks]`` from that file (the
+    engine's manifest directory unless ``manifest_dir`` is given), ending in
+    the instance's model of last resort when one is set. With no defaults file
+    the chain is that last-resort model alone, the one model the engine dials
+    regardless of manifests; it is empty only when neither exists.
+
+    One reader with the engine's readiness check
+    (:func:`robothor.engine.config.fleet_model_chain`), so the chain a plugin
+    walks is the chain the engine itself would.
+    """
+    from robothor.engine.config import fleet_model_chain as _chain
+
+    return _chain(manifest_dir)
 
 
 async def llm_call(

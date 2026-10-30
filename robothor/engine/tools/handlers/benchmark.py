@@ -214,6 +214,10 @@ _BENCHMARK_EXTRA_READS: frozenset[str] = frozenset(
 #: refuse a benchmark run anyway). ``config_get`` (GEN-42) reads the
 #: instance's REAL settings; its handler refuses a benchmark run too.
 #:
+#: ``plugins_overview`` reads the instance's REAL installed plugins, ledger and
+#: agent registry, so a graded agent could describe the operator's deployment
+#: in its answer; it is withheld for ``config_get``'s reason.
+#:
 #: ``search_files`` and ``wait_seconds`` joined when they were classified
 #: read-only: both were already excluded from the benchmark (see the
 #: comments in ``_BENCHMARK_EXCLUDED_TOOLS``), and classification does not
@@ -226,7 +230,14 @@ _BENCHMARK_WITHHELD_READS: frozenset[str] = frozenset(
     | BENCHMARK_TOOLS
     | GWS_TOOLS
     | N8N_TOOLS
-    | {"claude_code_status", "claude_code_wait", "search_files", "wait_seconds", "config_get"}
+    | {
+        "claude_code_status",
+        "claude_code_wait",
+        "search_files",
+        "wait_seconds",
+        "config_get",
+        "plugins_overview",
+    }
     # The instance's REAL workflows and their run history.
     | {"list_workflows", "workflow_runs"}
 )
@@ -312,6 +323,10 @@ _BENCHMARK_EXCLUDED_TOOLS: frozenset[str] = _BENCHMARK_WITHHELD_READS | frozense
         "leave_breadcrumb",
         "record_procedure",
         "report_procedure_outcome",
+        # Knowledge-base writes: fixture text stored as a curated reference
+        # document would be read back by later real runs as fact.
+        "kb_upsert_document",
+        "kb_delete_document",
         # Task-system writes beyond the sandbox CRM set.
         "approve_task",
         "reject_task",

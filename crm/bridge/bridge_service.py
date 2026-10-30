@@ -57,6 +57,7 @@ from routers.integration import router as integration_router
 from routers.logs import router as logs_router
 from routers.memory import router as memory_router
 from routers.memory_facts import router as memory_facts_router
+from routers.n8n import router as n8n_router
 from routers.notes_tasks import router as notes_tasks_router
 from routers.notifications import router as notifications_router
 from routers.people import router as people_router
@@ -217,6 +218,9 @@ app.include_router(system_health_router)
 # the lines the processes actually printed.
 app.include_router(logs_router)
 app.include_router(workflows_router)
+# External n8n: the operator's own automations outside the engine, as the
+# poller last saw them. Beside workflows for the same reason as automations.
+app.include_router(n8n_router)
 # Automations: the scheduled half of the fleet, joined to what its last run
 # actually did. Beside workflows because the Helm shows them on one screen --
 # a cron'd agent and a workflow are the same question to an operator.

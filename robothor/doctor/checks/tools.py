@@ -160,17 +160,64 @@ def _adapter_names() -> set[str]:
         return set()
 
 
-def _registered_names() -> set[str]:
+def _plugin_tool_names() -> set[str]:
+    """Tools every LOADED plugin declares, from the same inventory the
+    ``plugins_overview`` tool and ``genus plugin list`` read.
+
+    A disabled or failed plugin's tools are not served, so they stay out: an
+    agent granted one still resolves it to nothing.
+    """
+    try:
+        from robothor.plugins.inventory import inventory
+
+        names: set[str] = set()
+        for row in inventory():
+            if row.state != "loaded":
+                continue
+            declared = (row.manifest or {}).get("declared") or {}
+            handlers = declared.get("handlers") if isinstance(declared, dict) else None
+            if isinstance(handlers, list | tuple | set):
+                names |= {str(name) for name in handlers}
+        return names
+    except Exception:  # noqa: BLE001 - an unreadable plugin set is not a doctor failure
+        return set()
+
+
+def _registered_names(plugin_tools: set[str] | None = None) -> set[str]:
     """Every tool name this instance can actually resolve.
 
-    Built-ins AND adapter routes. Judging ``tools_allowed`` against the
-    built-ins alone reported every MCP-adapter tool an instance grants as
-    "resolves to nothing" — a permanent red on any instance with an adapter,
-    which is how an operator learns to ignore a check.
+    Built-ins, adapter routes AND loaded plugins' tools. Judging
+    ``tools_allowed`` against the built-ins alone reported every MCP-adapter or
+    plugin tool an instance grants as "resolves to nothing" — a permanent red
+    on any instance with an adapter or a plugin, which is how an operator
+    learns to ignore a check.
     """
     from robothor.engine.tools.registry import builtin_schema_names
 
-    return builtin_schema_names() | _adapter_names()
+    plugins = plugin_tools if plugin_tools is not None else _plugin_tool_names()
+    return builtin_schema_names() | _adapter_names() | plugins
+
+
+async def _registered(ctx: DoctorContext) -> set[str]:
+    """:func:`_registered_names` once per doctor run, with the plugin tools
+    read from the run's cached inventory (``plugins.load`` measures it)."""
+    cached = ctx._registered_tool_names  # noqa: SLF001 - the context's own per-run cache
+    if cached is None:
+        from robothor.doctor.checks.plugins import _inventory
+
+        try:
+            rows = await _inventory(ctx)
+        except Exception:  # noqa: BLE001 - an unreadable plugin set is not a doctor failure
+            rows = []
+        tools = {
+            str(name)
+            for row in rows
+            if row.get("state") == "loaded"
+            for name in row.get("tools") or []
+        }
+        cached = await ctx.run_blocking(_registered_names, tools)
+        ctx._registered_tool_names = cached  # noqa: SLF001
+    return set(cached)
 
 
 def mentioned_tools(text: str, registered: set[str]) -> set[str]:
@@ -391,8 +438,10 @@ def _scan_manifests(directory: Path) -> list[dict[str, Any]]:
 # ── agents.tools_named_but_not_granted ────────────────────────────────
 
 
-def _scan_named_but_not_granted(directory: Path, workspace: Path) -> list[str]:
-    registered = _registered_names()
+def _scan_named_but_not_granted(
+    directory: Path, workspace: Path, registered: set[str] | None = None
+) -> list[str]:
+    registered = registered if registered is not None else _registered_names()
     lines: list[str] = []
     for manifest in _scan_manifests(directory):
         agent_id = str(manifest.get("id") or "")
@@ -438,7 +487,9 @@ async def _tools_named_but_not_granted(ctx: DoctorContext) -> Result:
     if not workspace.is_dir():
         return skip(f"no workspace at {workspace}")
     try:
-        lines = await ctx.run_blocking(_scan_named_but_not_granted, directory, workspace)
+        lines = await ctx.run_blocking(
+            _scan_named_but_not_granted, directory, workspace, await _registered(ctx)
+        )
     except Exception as exc:  # noqa: BLE001 - a scan that raises is a failure
         return fail(f"cannot scan the manifests: {type(exc).__name__}")
     if not lines:
@@ -524,8 +575,8 @@ def _has_a_shell(manifest: dict[str, Any], registered: set[str]) -> bool:
     return "exec" in _granted(manifest, registered)
 
 
-def _scan_exec_bypasses(directory: Path) -> list[str]:
-    registered = _registered_names()
+def _scan_exec_bypasses(directory: Path, registered: set[str] | None = None) -> list[str]:
+    registered = registered if registered is not None else _registered_names()
     lines: list[str] = []
     for manifest in _scan_manifests(directory):
         agent_id = str(manifest.get("id") or "")
@@ -569,7 +620,7 @@ async def _exec_allowlist_bypasses_denied_tool(ctx: DoctorContext) -> Result:
     if not directory.is_dir():
         return skip(f"no manifest directory at {directory}")
     try:
-        lines = await ctx.run_blocking(_scan_exec_bypasses, directory)
+        lines = await ctx.run_blocking(_scan_exec_bypasses, directory, await _registered(ctx))
     except Exception as exc:  # noqa: BLE001 - a scan that raises is a failure
         return fail(f"cannot scan the manifests: {type(exc).__name__}")
     if not lines:
@@ -647,7 +698,9 @@ def _approval_gate_state() -> tuple[str, str]:
     )
 
 
-def _destructive_grants(directory: Path) -> tuple[list[_Grant], list[_Grant]]:
+def _destructive_grants(
+    directory: Path, registered: set[str] | None = None
+) -> tuple[list[_Grant], list[_Grant]]:
     """``(ungated, gated)`` destructive grants across this instance's manifests.
 
     Scoped to grants the manifest has an OPINION about: a record-deleting tool
@@ -669,7 +722,7 @@ def _destructive_grants(directory: Path) -> tuple[list[_Grant], list[_Grant]]:
     actually escalates then depends entirely on the engine's two environment
     variables, which is the half nothing else brings together.
     """
-    registered = _registered_names()
+    registered = registered if registered is not None else _registered_names()
     ungated: list[_Grant] = []
     gated: list[_Grant] = []
     for manifest in _scan_manifests(directory):
@@ -765,7 +818,9 @@ async def _approval_gate_available(ctx: DoctorContext) -> Result:
     if not directory.is_dir():
         return skip(f"no manifest directory at {directory}")
     try:
-        ungated, _gated = await ctx.run_blocking(_destructive_grants, directory)
+        ungated, _gated = await ctx.run_blocking(
+            _destructive_grants, directory, await _registered(ctx)
+        )
     except Exception as exc:  # noqa: BLE001 - a scan that raises is a failure
         return fail(f"cannot scan the manifests: {type(exc).__name__}")
 
@@ -812,7 +867,9 @@ async def _approval_gate_not_armed(ctx: DoctorContext) -> Result:
     if not directory.is_dir():
         return skip(f"no manifest directory at {directory}")
     try:
-        _ungated, gated = await ctx.run_blocking(_destructive_grants, directory)
+        _ungated, gated = await ctx.run_blocking(
+            _destructive_grants, directory, await _registered(ctx)
+        )
     except Exception as exc:  # noqa: BLE001 - a scan that raises is a failure
         return fail(f"cannot scan the manifests: {type(exc).__name__}")
 
@@ -835,7 +892,7 @@ async def _approval_gate_not_armed(ctx: DoctorContext) -> Result:
 # ── calendar.operator_calendar_writable ───────────────────────────────
 
 
-def _calendar_tool_granted(directory: Path) -> bool:
+def _calendar_tool_granted(directory: Path, registered: set[str] | None = None) -> bool:
     """Does any agent on this instance hold a calendar tool at all?
 
     The check is meaningless on an instance that does not do calendars, and a
@@ -844,7 +901,7 @@ def _calendar_tool_granted(directory: Path) -> bool:
     """
     from robothor.engine.tools.constants import CALENDAR_READ_TOOLS, CALENDAR_WRITE_TOOLS
 
-    registered = _registered_names()
+    registered = registered if registered is not None else _registered_names()
     calendar_tools = CALENDAR_READ_TOOLS | CALENDAR_WRITE_TOOLS
     for manifest in _scan_manifests(directory):
         if _granted(manifest, registered) & calendar_tools:
@@ -908,7 +965,7 @@ async def _operator_calendar_writable(ctx: DoctorContext) -> Result:
         # offline, so without this every poll forked a subprocess. Emptying
         # PATH does not save us: `gws_available()` probes an absolute path.
         return skip("--offline: the calendar list was not fetched")
-    if not await ctx.run_blocking(_calendar_tool_granted, directory):
+    if not await ctx.run_blocking(_calendar_tool_granted, directory, await _registered(ctx)):
         return skip("no agent on this instance is granted a calendar tool")
 
     from robothor.engine.tools.handlers.gws import gws_available
