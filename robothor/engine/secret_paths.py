@@ -494,24 +494,33 @@ def _tokens(text: str) -> list[str]:
     """Shell-aware tokens with operators split out, so a quoted ``\\|`` inside
     a grep pattern is data and a bare ``|`` is a pipe.
 
-    Lexed as ONE text, newlines included, because a quote may span a line.
-    When the shell lexer gives up (an unclosed quote), the fallback splits
-    on whitespace and strips every quote character from each piece, so a
-    word like ``.e"n"v`` is still judged as ``.env`` (fail closed).
+    Lexed as ONE text because a quote may span a line, with an UNQUOTED
+    newline kept as an operator token (it ends a command like ``;`` does)
+    rather than swallowed as whitespace. When the shell lexer gives up (an
+    unclosed quote), the fallback splits each line on whitespace and strips
+    every quote character from each piece, so ``.e"n"v`` is still judged as
+    ``.env`` and the complete lines before the bad quote — which the shell
+    runs before it reports the error — keep their boundaries (fail closed).
     """
-    lexer = shlex.shlex(text, posix=True, punctuation_chars=True)
+    lexer = shlex.shlex(text, posix=True, punctuation_chars="();<>|&\n")
+    lexer.whitespace = " \t\r"
     lexer.whitespace_split = True
     try:
         return list(lexer)
     except ValueError:
-        return [piece.replace("'", "").replace('"', "") for piece in text.split()]
+        out: list[str] = []
+        for line in text.splitlines():
+            if out:
+                out.append("\n")
+            out.extend(piece.replace("'", "").replace('"', "") for piece in line.split())
+        return out
 
 
 def _segments(command: str) -> list[list[str]]:
     out: list[list[str]] = []
     current: list[str] = []
     for tok in _tokens(command):
-        if tok in _OPERATORS or all(ch in "|&;()<>" for ch in tok):
+        if tok in _OPERATORS or all(ch in "|&;()<>\n" for ch in tok):
             if current:
                 out.append(current)
             current = []
