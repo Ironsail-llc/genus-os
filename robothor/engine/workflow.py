@@ -491,6 +491,7 @@ class WorkflowEngine:
         user_id: str = "",
         user_role: str = "",
         run_id: str | None = None,
+        requeue_on_rate_limit: bool = False,
     ) -> WorkflowRun:
         """Execute a workflow by ID under an explicit caller identity.
 
@@ -502,6 +503,10 @@ class WorkflowEngine:
 
         ``run_id`` lets a caller that starts the run in the background name it
         up front, so it can report the id before the run finishes.
+
+        ``requeue_on_rate_limit`` says the caller will requeue a run the
+        tool-call rate limit stops, so that run ends ``skipped`` (deferred)
+        instead of ``failed``. Only the hook consumer passes it.
         """
         from robothor.engine.dedup import release, try_acquire
 
@@ -578,6 +583,7 @@ class WorkflowEngine:
             status=RunStatus.RUNNING,
             started_at=datetime.now(UTC),
             context={"steps": {}, **(initial_context or {})},
+            requeue_on_rate_limit=requeue_on_rate_limit,
         )
         if run_id:
             run.id = run_id
@@ -885,13 +891,18 @@ class WorkflowEngine:
                 return
 
             # A rate-limit block is transient and the tool never ran, so
-            # on_failure does not apply: the run stops here. A hook run is
-            # deferred for the hook consumer to requeue (on the busy-requeue
-            # budget); nothing requeues any other run, so it fails visibly.
+            # on_failure does not apply: the run stops here. It is deferred
+            # only when its caller will requeue it (the hook consumer, on the
+            # busy-requeue budget). Nothing requeues any other run, a resumed
+            # hook run included, so it fails visibly.
             if result.status == WorkflowStepStatus.FAILED and result.rate_limited:
                 run.rate_limited = True
-                run.error_message = f"Step '{step.id}' deferred: {result.error_message}"
-                run.status = RunStatus.SKIPPED if run.trigger_type == "hook" else RunStatus.FAILED
+                if run.requeue_on_rate_limit:
+                    run.status = RunStatus.SKIPPED
+                    run.error_message = f"Step '{step.id}' deferred: {result.error_message}"
+                else:
+                    run.status = RunStatus.FAILED
+                    run.error_message = f"Step '{step.id}' failed: {result.error_message}"
                 return
 
             # Handle failure
@@ -969,7 +980,12 @@ class WorkflowEngine:
                 await asyncio.sleep(delay)
                 attempt += 1
                 branch_result = await once()
-            if branch_result.status == WorkflowStepStatus.FAILED and branch.on_failure == "skip":
+            # A rate-limited branch did nothing; skip must not swallow it.
+            if (
+                branch_result.status == WorkflowStepStatus.FAILED
+                and branch.on_failure == "skip"
+                and not branch_result.rate_limited
+            ):
                 branch_result.status = WorkflowStepStatus.SKIPPED
             return branch_result
 
@@ -996,7 +1012,12 @@ class WorkflowEngine:
                 f"{len(failed)} of {len(step.parallel_steps)} parallel branch(es) "
                 f"failed: {', '.join(failed)}"
             )
-            if step.on_failure == "skip":
+            # A blocked branch makes the join rate-limited, so the top-level
+            # loop defers or fails the run as it would for a top-level step.
+            result.rate_limited = any(
+                r.rate_limited for r in branch_results if r.status == WorkflowStepStatus.FAILED
+            )
+            if step.on_failure == "skip" and not result.rate_limited:
                 # The top-level loop will recast THIS result to SKIPPED and
                 # continue — the same object-mutation contract every step
                 # follows. The absorbed branch failures must be recast too:

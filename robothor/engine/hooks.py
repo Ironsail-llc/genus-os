@@ -722,6 +722,7 @@ class EventHooks:
                 initial_context={"event": _workflow_event(stream, envelope)},
                 user_id=f"service:workflow:{workflow_id}",
                 user_role="service",
+                requeue_on_rate_limit=True,
             )
         except Exception as e:
             logger.error(

@@ -280,7 +280,7 @@ class TestParallelBranch:
         run = await _run(engine, requeue=True)
         assert run.status == RunStatus.SKIPPED
         assert run.rate_limited is True
-        blocked = [r for r in run.step_results if r.rate_limited]
+        blocked = [r for r in run.step_results if r.step_id in {"a", "b"} and r.rate_limited]
         assert len(blocked) == 1
         assert blocked[0].status.value == "failed"
 

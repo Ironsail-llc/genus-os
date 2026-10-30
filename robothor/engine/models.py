@@ -975,3 +975,6 @@ class WorkflowRun:
     completed_at: datetime | None = None
     #: The run stopped at a step the tool-call rate limit blocked. Not persisted.
     rate_limited: bool = False
+    #: The caller requeues a rate-limited run (the hook consumer), so it may
+    #: be deferred instead of failed. Not persisted: a resumed run never has it.
+    requeue_on_rate_limit: bool = False
