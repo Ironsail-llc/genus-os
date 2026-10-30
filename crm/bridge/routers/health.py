@@ -6,7 +6,7 @@ import asyncio
 import logging
 import threading
 import time
-from typing import Any
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Query, Request  # noqa: TC002 — FastAPI needs it at runtime
 from fastapi.responses import JSONResponse
@@ -15,7 +15,7 @@ from robothor import __version__
 from robothor.audit.logger import query_log, query_telemetry, stats
 from robothor.crm.dal import check_health
 from robothor.doctor.context import DoctorContext
-from robothor.doctor.runner import DoctorReport, run_sync
+from robothor.doctor.runner import CheckResult, DoctorReport, run_sync
 from routers._operator import require_operator
 
 logger = logging.getLogger(__name__)
@@ -49,7 +49,7 @@ _now = time.monotonic
 #: The last completed report and when it was taken. Errors are deliberately NOT
 #: cached: an error is not a report, and keeping one would answer with it for
 #: the whole window after the cause was fixed.
-_doctor_cache: tuple[float, dict[str, Any]] | None = None
+_doctor_cache: tuple[float, DoctorReport] | None = None
 
 #: Single flight. Five operator tabs refreshing at once must produce ONE doctor
 #: run, not five competing for the same connection pool -- each of which would
@@ -67,6 +67,73 @@ _doctor_cache: tuple[float, dict[str, Any]] | None = None
 #: length of a run that is itself bounded at DOCTOR_TOTAL_TIMEOUT_S.
 _doctor_guard = threading.Lock()
 
+#: The engine probe's budget: the same five seconds readiness gives each of its
+#: own checks.
+ENGINE_CHECK_TIMEOUT_S = 5.0
+
+
+def _engine_origin(base: str) -> str:
+    """``scheme://host:port`` of the engine URL, and nothing else.
+
+    The setting may carry credentials, a path or a query; a report served to a
+    dashboard names where the bridge knocked, never what it knocked with.
+    """
+    parts = urlsplit(base)
+    host = parts.hostname or ""
+    if ":" in host:
+        host = f"[{host}]"
+    port = f":{parts.port}" if parts.port is not None else ""
+    return f"{parts.scheme}://{host}{port}"
+
+
+async def probe_engine() -> tuple[str, str]:
+    """Ask the engine's ``/live`` whether it answers. Returns ``(origin, failure)``.
+
+    ``failure`` is empty when the engine answered 200, otherwise the failure
+    CLASS -- ``ConnectError``, ``HTTP 503``, ``timeout`` -- never the message,
+    which may echo the URL it was given. Never raises.
+
+    Not a readiness gate (see :func:`readiness`): an unreachable engine makes
+    every proxied Helm call fail, but it does not make sign-in, the CRM or the
+    Health view fail, and those are what an operator needs to find out why.
+    """
+    from bridge_service import http_client
+
+    from robothor.engine_control import engine_base_url
+
+    try:
+        base = engine_base_url()
+        origin = _engine_origin(base)
+    except ValueError as exc:
+        return "(invalid ROBOTHOR_ENGINE_URL)", type(exc).__name__
+    if http_client is None:
+        return origin, "http-client-not-started"
+    try:
+        response = await asyncio.wait_for(
+            http_client.get(f"{base}/live"), timeout=ENGINE_CHECK_TIMEOUT_S
+        )
+    except TimeoutError:
+        return origin, "timeout"
+    except Exception as exc:  # noqa: BLE001 - a probe reports, it never raises
+        return origin, type(exc).__name__
+    if response.status_code != 200:
+        return origin, f"HTTP {response.status_code}"
+    return origin, ""
+
+
+def _engine_row(origin: str, failure: str) -> CheckResult:
+    """The probe as one doctor row, the same shape as every other check."""
+    url = f"{origin}/live"
+    return CheckResult(
+        id="bridge.engine",
+        title="The bridge reaches the engine",
+        category="services",
+        severity="recommended",
+        status="fail" if failure else "pass",
+        detail=f"{url}: {failure}" if failure else f"{url} answered 200",
+        fixable=False,
+    )
+
 
 def reset_doctor_cache() -> None:
     """Forget the memoised report. For tests, and after a deliberate reload."""
@@ -74,7 +141,7 @@ def reset_doctor_cache() -> None:
     _doctor_cache = None
 
 
-def _cached_or_run() -> dict[str, Any]:
+def _cached_or_run() -> DoctorReport:
     """The memoised report, running the doctor only if nobody else just did.
 
     Runs on a worker thread (``asyncio.to_thread``) because everything under a
@@ -99,9 +166,8 @@ def _cached_or_run() -> dict[str, Any]:
                 offline=True,
             )
         )
-        payload = report.as_dict()
-        _doctor_cache = (_now(), payload)
-        return payload
+        _doctor_cache = (_now(), report)
+        return report
 
 
 @router.get("/health")
@@ -173,7 +239,19 @@ async def readiness():
         return sso_secret_readiness_check()
 
     checks = {"crm": check_crm, "memory": check_memory, "sso_secret": check_sso_secret}
-    body, status = await readiness_response("bridge", __version__, checks)
+    # The engine is probed beside the checks, not among them: a check that
+    # fails answers 503, and an unreachable engine must not pull the bridge out
+    # of its Service -- sign-in, the CRM and the Health view would go with it.
+    # It is reported instead, as ``engine`` and a ``degraded`` marker.
+    (body, status), (_origin, failure) = await asyncio.gather(
+        readiness_response("bridge", __version__, checks), probe_engine()
+    )
+    if failure:
+        logger.warning("Readiness check engine failed: %s", failure)
+        body["engine"] = f"unreachable:{failure}"
+        body["degraded"] = True
+    else:
+        body["engine"] = "ok"
     return JSONResponse(body, status_code=status)
 
 
@@ -216,14 +294,24 @@ async def api_doctor(request: Request):
     """
     require_operator(request)
 
-    try:
-        payload = await asyncio.to_thread(_cached_or_run)
-    except Exception as exc:  # noqa: BLE001 - a broken doctor is a report, not a 500
-        logger.warning("doctor route failed: %s", type(exc).__name__)
-        # Deliberately not cached: see _doctor_cache.
-        errored = DoctorReport(errored=True, error_detail=f"{type(exc).__name__}: {exc}")
-        return JSONResponse(errored.as_dict(), status_code=200)
-    return JSONResponse(payload, status_code=200)
+    # The engine row is probed on every request, outside the memo: it is one
+    # GET bounded at ENGINE_CHECK_TIMEOUT_S, and "the engine came back" must
+    # not wait out a cache window. It runs while the doctor does.
+    async def _doctor() -> DoctorReport:
+        try:
+            return await asyncio.to_thread(_cached_or_run)
+        except Exception as exc:  # noqa: BLE001 - a broken doctor is a report, not a 500
+            logger.warning("doctor route failed: %s", type(exc).__name__)
+            # Deliberately not cached: see _doctor_cache.
+            return DoctorReport(errored=True, error_detail=f"{type(exc).__name__}: {exc}")
+
+    report, (origin, failure) = await asyncio.gather(_doctor(), probe_engine())
+    combined = DoctorReport(
+        results=[*report.results, _engine_row(origin, failure)],
+        errored=report.errored,
+        error_detail=report.error_detail,
+    )
+    return JSONResponse(combined.as_dict(), status_code=200)
 
 
 # ─── Audit Endpoints ─────────────────────────────────────────────────────
