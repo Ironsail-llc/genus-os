@@ -201,6 +201,9 @@ def world() -> Iterator[dict[str, Any]]:
             (tenants,),
         )
         for table in (
+            "agent_breadcrumbs",
+            "agent_runtime_effects",
+            "memory_write_jobs",
             "pursuit_goal_attempts",
             "pursuit_goals",
             "chat_approval_receipts",
@@ -458,6 +461,78 @@ def test_a_live_run_is_refused(world, status) -> None:
     with pytest.raises(mw.WorkloadMoveError, match="still"):
         _move(world)
     _assert_untouched(world)
+
+
+@pytest.mark.parametrize("state", ["prepared", "dispatching", "uncertain"])
+def test_an_unresolved_runtime_effect_is_refused(world, state) -> None:
+    """The source's recovery sweep resolves it against the source's CRM; moved,
+    it would never resolve."""
+    world["cur"].execute(
+        "INSERT INTO agent_runtime_effects (id, tenant_id, principal_id, request_id, run_id, "
+        "agent_id, tool_name, fingerprint, state) "
+        "VALUES (%s, %s, 'agent', 'req-1', %s, %s, 'create_task', 'fp-1', %s)",
+        (str(uuid.uuid4()), world["parent"], world["runs"]["a1"], world["agent"], state),
+    )
+    with pytest.raises(mw.WorkloadMoveError, match="agent_runtime_effects"):
+        _move(world)
+    _assert_untouched(world)
+
+
+@pytest.mark.parametrize("status", ["pending", "running"])
+def test_an_unfinished_memory_write_is_refused(world, status) -> None:
+    """The source engine may be extracting it right now, into the source's memory."""
+    world["cur"].execute(
+        "INSERT INTO memory_write_jobs (tenant_id, content, agent_id, run_id, status) "
+        "VALUES (%s, 'a fact', %s, %s, %s)",
+        (world["parent"], world["agent"], world["runs"]["a1"], status),
+    )
+    with pytest.raises(mw.WorkloadMoveError, match="memory_write_jobs"):
+        _move(world)
+    _assert_untouched(world)
+
+
+def test_a_run_started_by_a_workflow_that_stays_is_refused(world) -> None:
+    """``workflow_run_steps.agent_run_id`` has no foreign key, so the catalog
+    cannot see the step that would be left pointing across tenants."""
+    cur = world["cur"]
+    cur.execute(
+        "INSERT INTO workflow_run_steps (run_id, step_id, step_type, agent_id, agent_run_id) "
+        "VALUES (%s, 'bill', 'agent', %s, %s)",
+        (world["other_wf_run"], world["agent"], world["runs"]["a1"]),
+    )
+    with pytest.raises(mw.WorkloadMoveError, match="workflow_run_steps"):
+        _move(world)
+    _assert_untouched(world)
+
+
+def test_rows_committed_during_the_move_are_not_split(world, monkeypatch) -> None:
+    """The source engine is still running: a new run of the agent and its
+    breadcrumb are committed after the workload's runs were selected. The move
+    must see one snapshot, so the breadcrumb stays with its run in the source
+    rather than moving by agent id while the run does not."""
+    real = mw._refuse_live
+    late: dict[str, str] = {}
+
+    def commit_concurrently(cur: Any, params: dict[str, Any]) -> None:
+        other = _connect()
+        other.autocommit = True
+        oc = other.cursor()
+        late["run"] = _run(oc, world["parent"], world["agent"], status="completed")
+        oc.execute(
+            "INSERT INTO agent_breadcrumbs (tenant_id, agent_id, run_id, content) "
+            "VALUES (%s, %s, %s, '{}') RETURNING id",
+            (world["parent"], world["agent"], late["run"]),
+        )
+        late["crumb"] = str(oc.fetchone()[0])
+        other.close()
+        real(cur, params)
+
+    monkeypatch.setattr(mw, "_refuse_live", commit_concurrently)
+    _move(world)
+    cur = world["cur"]
+    run_tenant = _tenant_of(cur, "agent_runs", "id", late["run"])
+    assert _tenant_of(cur, "agent_breadcrumbs", "id", late["crumb"]) == run_tenant
+    cur.execute("DELETE FROM agent_breadcrumbs WHERE id = %s", (late["crumb"],))
 
 
 def test_a_live_workflow_run_is_refused(world) -> None:
