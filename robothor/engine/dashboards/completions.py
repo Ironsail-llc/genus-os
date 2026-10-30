@@ -7,6 +7,7 @@ endpoint keeps those capabilities inside the Engine authentication boundary.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -25,6 +26,12 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard-completions"])
 
 DEFAULT_DASHBOARD_MODEL = "openrouter/google/gemini-2.5-flash-lite"
+#: The whole chain's time, per purpose. The dashboard's client gives up on a
+#: triage after 20s and a render after 130s for the WHOLE request, so the
+#: chain shares one deadline inside that window, and each model gets an equal
+#: slice of it: a first model that hangs must leave time for the next.
+TRIAGE_BUDGET_SECONDS = 15
+RENDER_BUDGET_SECONDS = 120
 MAX_SYSTEM_PROMPT_CHARS = 12_000
 MAX_USER_PROMPT_CHARS = 40_000
 MAX_REQUEST_BYTES = 64 * 1024
@@ -157,26 +164,30 @@ async def dashboard_completion(request: Request) -> DashboardCompletionResponse:
         max_tokens = 256
         json_mode = True
         temperature = 0.1
-        timeout = 15
+        budget: float = TRIAGE_BUDGET_SECONDS
     else:
         max_tokens = 4096
         json_mode = False
         temperature = 0.3
-        timeout = 120
+        budget = RENDER_BUDGET_SECONDS
 
     try:
-        response = await llm_call(
+        chain = dashboard_model_chain()
+        call = llm_call(
             [
                 {"role": "system", "content": payload.system_prompt},
                 {"role": "user", "content": payload.user_prompt},
             ],
-            model=dashboard_model_chain(),
+            model=chain,
             temperature=temperature,
             json_mode=json_mode,
-            timeout=timeout,
+            timeout=budget / len(chain),
             max_retries=1,
             max_tokens=max_tokens,
         )
+        # One deadline for the whole chain, so nothing is still dialling a
+        # provider after the client has stopped waiting.
+        response = await asyncio.wait_for(call, timeout=budget)
         return DashboardCompletionResponse(content=_completion_content(response))
     except Exception as error:
         # Provider response bodies can contain request details and must not be
