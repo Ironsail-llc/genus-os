@@ -807,6 +807,36 @@ which keeps comments only when `ruamel.yaml` is installed (the platform does
 not depend on it). Without it the patched manifest is rewritten by PyYAML and
 its comments are lost; the `.pre-<distribution>` backup is the original.
 
+### Seeing what a plugin shipped
+
+Three surfaces read the asset ledger and `.robothor/installed.yaml` (every agent
+recorded with `source: plugin:<dist>`), so nobody has to open them by hand:
+
+- the **`plugins_overview`** tool lists each installed plugin with its tools,
+  doctor checks, agents (id, name, schedule), workflows (id, name, triggers),
+  patched agents and other files — see [Tools](TOOLS.md#what-plugins-contribute-plugins_overview);
+- each row of `GET /api/admin/plugins` carries **`assets`**:
+  `{agents, workflows, patches, files}` in the same shapes, drawn on the Helm's
+  Plugins page as **Agents and workflows**. If the asset ledger or
+  `installed.yaml` cannot be read, the listing still answers: `assets.error`
+  says which record (by exception class, never its text) and `assets.partial`
+  is `true`, because the lists still hold what the other record gave. The
+  Plugins page shows "unavailable" with that reason above whatever lists it
+  could read (and no "none"). If the asset read fails outright, the lists are
+  empty and `partial` is `false`;
+- `GET /api/workflows` on the bridge lists every workflow defined in
+  `docs/workflows/`, including one that has never run (`runs: 0`), with
+  `source: "plugin:<dist>"` when the ledger records that a plugin wrote it and
+  `"workspace"` otherwise (`null`, and a logged warning, when the ledger cannot
+  be read).
+
+Only `docs/workflows/*.yaml` is loaded by the engine, so a plugin file ending in
+`.yml` there is listed under `files`, never as a workflow with triggers.
+
+A plugin that ships only workspace files has no entry point, so the loader never
+sees it; `plugins_overview` still lists it from the ledger, with state
+`assets only`. All three are read-only and never create `.robothor/`.
+
 ### Scan verdict
 
 A wheel whose manifest declares **any** workspace asset is graded `review`,
@@ -966,7 +996,7 @@ acts with identifiers only.
 
 | route (bridge) | engine | what it does |
 |---|---|---|
-| `GET /api/plugins` | `GET /api/admin/plugins` | generation, lockfile state, one row per distribution |
+| `GET /api/plugins` | `GET /api/admin/plugins` | generation, lockfile state, one row per distribution, each with the `assets` it wrote into the workspace |
 | `POST /api/plugins/sync` | `POST /api/admin/plugins/sync` | record what is installed; **409** when the existing file's contents cannot be read (`--force` is CLI-only), **503** when the path itself cannot be written |
 | `POST /api/plugins/{name}/enable` | `POST /api/admin/plugins/{name}/enable` | flip the row; 404 if unrecorded; does **not** reload |
 | `POST /api/plugins/{name}/disable` | `POST /api/admin/plugins/{name}/disable` | as above |
