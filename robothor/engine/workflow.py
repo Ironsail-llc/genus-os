@@ -189,6 +189,12 @@ _TEMPLATE_RE = re.compile(r"\{\{\s*(.+?)\s*\}\}")
 _RETRY_BACKOFF_SECONDS: tuple[int, ...] = (60, 300)
 
 
+# A step the tool-call rate limit blocks polls it again after 5 s, doubling
+# to 30 s, until it is admitted or the workflow deadline ends the wait.
+_RATE_LIMIT_WAIT_SECONDS = 5
+_MAX_RATE_LIMIT_WAIT_SECONDS = 30
+
+
 def _retry_delay(attempt: int) -> int:
     """Backoff before retry ``attempt`` (0-based): 60s, then 300s thereafter."""
     if not _RETRY_BACKOFF_SECONDS:
@@ -504,9 +510,10 @@ class WorkflowEngine:
         ``run_id`` lets a caller that starts the run in the background name it
         up front, so it can report the id before the run finishes.
 
-        ``requeue_on_rate_limit`` says the caller will requeue a run the
-        tool-call rate limit stops, so that run ends ``skipped`` (deferred)
-        instead of ``failed``. Only the hook consumer passes it.
+        ``requeue_on_rate_limit`` says the caller will requeue the event of a
+        run the tool-call rate limit blocks at its first step, before anything
+        has acted, so that run ends ``skipped`` (deferred) instead of waiting
+        in place. Only the hook consumer passes it.
         """
         from robothor.engine.dedup import release, try_acquire
 
@@ -890,19 +897,13 @@ class WorkflowEngine:
                 run.error_message = result.error_message
                 return
 
-            # A rate-limit block is transient and the tool never ran, so
-            # on_failure does not apply: the run stops here. It is deferred
-            # only when its caller will requeue it (the hook consumer, on the
-            # busy-requeue budget). Nothing requeues any other run, a resumed
-            # hook run included, so it fails visibly.
+            # Deferred at its first step, before anything acted: the run
+            # stops and its caller (the hook consumer) requeues the event.
+            # on_failure does not apply; the tool never ran.
             if result.status == WorkflowStepStatus.FAILED and result.rate_limited:
                 run.rate_limited = True
-                if run.requeue_on_rate_limit:
-                    run.status = RunStatus.SKIPPED
-                    run.error_message = f"Step '{step.id}' deferred: {result.error_message}"
-                else:
-                    run.status = RunStatus.FAILED
-                    run.error_message = f"Step '{step.id}' failed: {result.error_message}"
+                run.status = RunStatus.SKIPPED
+                run.error_message = f"Step '{step.id}' deferred: {result.error_message}"
                 return
 
             # Handle failure
@@ -980,12 +981,7 @@ class WorkflowEngine:
                 await asyncio.sleep(delay)
                 attempt += 1
                 branch_result = await once()
-            # A rate-limited branch did nothing; skip must not swallow it.
-            if (
-                branch_result.status == WorkflowStepStatus.FAILED
-                and branch.on_failure == "skip"
-                and not branch_result.rate_limited
-            ):
+            if branch_result.status == WorkflowStepStatus.FAILED and branch.on_failure == "skip":
                 branch_result.status = WorkflowStepStatus.SKIPPED
             return branch_result
 
@@ -1012,12 +1008,7 @@ class WorkflowEngine:
                 f"{len(failed)} of {len(step.parallel_steps)} parallel branch(es) "
                 f"failed: {', '.join(failed)}"
             )
-            # A blocked branch makes the join rate-limited, so the top-level
-            # loop defers or fails the run as it would for a top-level step.
-            result.rate_limited = any(
-                r.rate_limited for r in branch_results if r.status == WorkflowStepStatus.FAILED
-            )
-            if step.on_failure == "skip" and not result.rate_limited:
+            if step.on_failure == "skip":
                 # The top-level loop will recast THIS result to SKIPPED and
                 # continue — the same object-mutation contract every step
                 # follows. The absorbed branch failures must be recast too:
@@ -1223,14 +1214,34 @@ class WorkflowEngine:
         # ── [GUARDRAILS] Pre-execution check (workflow steps are otherwise unguarded) ──
         wf = self._workflows.get(run.workflow_id)
         guardrails = self._workflow_guardrails(wf.rate_limit_per_minute if wf else 0)
-        gr = guardrails.check_pre_execution(
-            step.tool_name, rendered_args, agent_id=f"workflow:{run.workflow_id}"
-        )
+        # A blocked call is only early. Replaying the event would run every
+        # earlier step again, so a step waits in place for the limiter (the
+        # workflow deadline bounds the wait) — unless it is the run's first
+        # step and nothing has acted yet, when a caller that requeues gets
+        # the worker back and the event is re-added instead.
+        first_step = bool(wf and wf.steps and wf.steps[0] is step and not run.step_results)
+        wait = _RATE_LIMIT_WAIT_SECONDS
+        while True:
+            gr = guardrails.check_pre_execution(
+                step.tool_name, rendered_args, agent_id=f"workflow:{run.workflow_id}"
+            )
+            if gr.allowed or gr.guardrail_name != "rate_limit":
+                break
+            if first_step and run.requeue_on_rate_limit:
+                result.rate_limited = True
+                break
+            logger.info(
+                "Workflow %s step %s rate limited; waiting %ds",
+                _sanitize(run.workflow_id),
+                step.id,
+                wait,
+            )
+            await asyncio.sleep(wait)
+            wait = min(wait * 2, _MAX_RATE_LIMIT_WAIT_SECONDS)
         if not gr.allowed:
             result.status = WorkflowStepStatus.FAILED
             result.error_message = f"Blocked by guardrail ({gr.guardrail_name}): {gr.reason}"
             result.output_text = result.error_message
-            result.rate_limited = gr.guardrail_name == "rate_limit"
             return
 
         tool_result = await self.runner.registry.execute(
