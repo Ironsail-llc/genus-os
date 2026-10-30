@@ -302,3 +302,34 @@ class TestProviderDefaults:
         response = _client().put("/api/admin/defaults", json={"model": unlisted, "fallbacks": []})
         assert response.status_code == 200
         assert response.json()["primary"] == unlisted
+
+
+class TestUnwritableManifestDir:
+    """A read-only or full manifest dir (a ConfigMap-backed workspace, say)
+    must answer JSON that names what to check, not a plain-text 500 the
+    bridge can only call "a non-JSON response"."""
+
+    BODY = {"model": "openrouter/openai/gpt-5.4", "fallbacks": []}
+
+    def _put_with_write_raising(self, exc: BaseException):
+        with patch.object(admin_providers, "_write_defaults_atomically", side_effect=exc):
+            return _client().put("/api/admin/defaults", json=self.BODY)
+
+    def test_a_permission_error_answers_503_naming_the_dir(self, agents) -> None:
+        path = _write(agents, {"model": {"primary": "old/model", "fallbacks": []}})
+        before = path.read_text()
+
+        response = self._put_with_write_raising(PermissionError(13, "Permission denied"))
+
+        assert response.status_code == 503
+        detail = response.json()["detail"]
+        assert "manifest directory is not writable" in detail
+        assert str(agents) in detail
+        assert "PermissionError" in detail
+        assert "workspace volume" in detail
+        assert path.read_text() == before
+
+    def test_a_full_disk_answers_503_too(self, agents) -> None:
+        response = self._put_with_write_raising(OSError(28, "No space left on device"))
+        assert response.status_code == 503
+        assert "OSError" in response.json()["detail"]
