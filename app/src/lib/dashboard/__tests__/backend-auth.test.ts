@@ -195,4 +195,42 @@ describe("fetchWelcomeContext", () => {
     // The sources that did answer are still there.
     expect(context.inbox).not.toBeNull();
   });
+
+  // The stream counts span every tenant's events on the shared streams, the
+  // same numbers /api/events/stats refuses to a non-root session.
+  it("shows the event-bus counts to a root session at home", async () => {
+    vi.stubEnv("ROBOTHOR_PLATFORM_TENANT", "");
+    vi.stubEnv("ROBOTHOR_DEFAULT_TENANT", "");
+    mockAuth.mockResolvedValue({
+      user: { id: "user-1" },
+      bridgeAccess: "bridge-token-abc",
+      tenantId: "default",
+      homeTenantId: "default",
+    });
+    const { fetchWelcomeContext } = await import("../welcome-context");
+
+    const context = await fetchWelcomeContext();
+
+    expect(context.eventBus).toEqual({ streams: { agent: 1, email: 0 }, total: 1 });
+    vi.unstubAllEnvs();
+  });
+
+  it("skips the event-bus counts for a child-tenant session, without reading them", async () => {
+    vi.stubEnv("ROBOTHOR_PLATFORM_TENANT", "");
+    vi.stubEnv("ROBOTHOR_DEFAULT_TENANT", "");
+    mockAuth.mockResolvedValue({
+      user: { id: "user-2" },
+      bridgeAccess: "bridge-token-child",
+      tenantId: "acme-child-a",
+      homeTenantId: "acme-child-a",
+    });
+    const { fetchWelcomeContext } = await import("../welcome-context");
+
+    const context = await fetchWelcomeContext();
+
+    expect(context.eventBus).toBeNull();
+    expect(mockStreamLengths).not.toHaveBeenCalled();
+    expect(context.inbox).not.toBeNull();
+    vi.unstubAllEnvs();
+  });
 });
