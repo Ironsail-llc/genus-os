@@ -69,6 +69,14 @@ function isSlaOverdue(slaDeadlineAt?: string): boolean {
   return new Date(slaDeadlineAt) < new Date();
 }
 
+function hasBadges(task: Task): boolean {
+  return (
+    (!!task.priority && task.priority !== "normal") ||
+    !!task.requiresHuman ||
+    (task.escalationCount != null && task.escalationCount > 0)
+  );
+}
+
 export function TaskBoard({ tasks, onApprove, onReject, onResolve, onAnswer }: TaskBoardProps) {
   const [actionPending, setActionPending] = useState<string | null>(null);
   const [resolvingTaskId, setResolvingTaskId] = useState<string | null>(null);
@@ -171,7 +179,7 @@ export function TaskBoard({ tasks, onApprove, onReject, onResolve, onAnswer }: T
   };
 
   return (
-    <div className="grid grid-cols-[repeat(auto-fit,minmax(15rem,1fr))] gap-4" data-testid="task-board">
+    <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,15rem),1fr))] gap-4" data-testid="task-board">
       {statusColumns.map((status) => {
         const columnTasks = tasks.filter((t) => t.status === status);
         return (
@@ -188,27 +196,29 @@ export function TaskBoard({ tasks, onApprove, onReject, onResolve, onAnswer }: T
               >
                 <CardHeader className="pb-1 pt-3 px-3">
                   <CardTitle className="text-sm break-words">{task.title}</CardTitle>
-                  <div className="flex flex-wrap gap-1" data-testid="task-card-badges">
-                    {task.priority && task.priority !== "normal" && (
-                      <Badge className={`text-[10px] px-1 py-0 ${priorityColors[task.priority] || ""}`} data-testid="priority-badge">
-                        {task.priority}
-                      </Badge>
-                    )}
-                    {task.requiresHuman && (
-                      <Badge className="text-[10px] px-1 py-0 bg-destructive/20 text-destructive" data-testid="requires-human-badge">
-                        needs you
-                      </Badge>
-                    )}
-                    {task.escalationCount != null && task.escalationCount > 0 && (
-                      <Badge
-                        className="text-[10px] px-1 py-0 bg-warning/20 text-warning"
-                        data-testid="escalation-badge"
-                        title={`Escalated ${task.escalationCount}× since last operator answer`}
-                      >
-                        ↑{task.escalationCount}
-                      </Badge>
-                    )}
-                  </div>
+                  {hasBadges(task) && (
+                    <div className="flex flex-wrap gap-1" data-testid="task-card-badges">
+                      {task.priority && task.priority !== "normal" && (
+                        <Badge className={`text-[10px] px-1 py-0 ${priorityColors[task.priority] || ""}`} data-testid="priority-badge">
+                          {task.priority}
+                        </Badge>
+                      )}
+                      {task.requiresHuman && (
+                        <Badge className="text-[10px] px-1 py-0 bg-destructive/20 text-destructive" data-testid="requires-human-badge">
+                          needs you
+                        </Badge>
+                      )}
+                      {task.escalationCount != null && task.escalationCount > 0 && (
+                        <Badge
+                          className="text-[10px] px-1 py-0 bg-warning/20 text-warning"
+                          data-testid="escalation-badge"
+                          title={`Escalated ${task.escalationCount}× since last operator answer`}
+                        >
+                          ↑{task.escalationCount}
+                        </Badge>
+                      )}
+                    </div>
+                  )}
                 </CardHeader>
                 <CardContent className="px-3 pb-3">
                   {task.body && (
