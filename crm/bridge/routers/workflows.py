@@ -1,18 +1,24 @@
 """Operator-scoped, read-only workflow accounting, from workflow_runs.
 
 Deliberately bridge-side: the engine's /api/workflows* is not operator-scoped and
-the dashboard proxy targets the bridge. Lists workflows that have RUN (distinct
-workflow_id in workflow_runs); a defined-but-never-run workflow is not shown, and
-the tab states that limitation rather than implying full registry coverage.
+the dashboard proxy targets the bridge. Lists every workflow that has RUN
+(distinct workflow_id in workflow_runs) and every workflow DEFINED in the
+engine's workflow directory (``docs/workflows/*.yaml``) that has not, with
+``runs: 0``. A defined workflow carries ``source``: ``plugin:<dist>`` when the
+plugin asset ledger records that a plugin wrote it, else ``workspace``.
 """
 
 from __future__ import annotations
+
+import logging
 
 import psycopg2.extras
 from fastapi import APIRouter, Request
 
 from robothor.db.connection import get_connection
 from routers._operator import require_operator
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/workflows", tags=["workflows"])
 
@@ -50,6 +56,78 @@ def _list_workflows() -> list[dict]:
     return out
 
 
+def _defined_workflows() -> list[dict]:
+    """Every parseable workflow in the engine's workflow directory, with its source."""
+    from robothor.engine.config import EngineConfig
+    from robothor.plugins.overview import parse_workflow_file, workflow_sources
+
+    config = EngineConfig.from_env()
+    if not config.workflow_dir.is_dir():
+        return []
+    warnings: list[str] = []
+    sources = workflow_sources(config.workspace, warnings=warnings)
+    # Unreadable ledger: no label rather than a confident wrong one.
+    fallback = None if warnings else "workspace"
+    if warnings:
+        # A fixed sentence: nothing read from the workspace reaches the log.
+        logger.warning(
+            "the plugin asset ledger (.robothor/plugin-assets.yaml) could not be read; "
+            "workflows are listed without a source"
+        )
+    out = []
+    for path in sorted(config.workflow_dir.glob("*.yaml")):
+        parsed = parse_workflow_file(path)
+        if parsed is None:
+            continue
+        out.append(
+            {
+                "workflow_id": parsed["id"],
+                "name": parsed["name"],
+                "triggers": parsed["triggers"],
+                "source": sources.get(path.name, fallback),
+            }
+        )
+    return out
+
+
+def _merged() -> list[dict]:
+    """Workflows that ran, most recent first, then defined ones that never ran."""
+    try:
+        found = _defined_workflows()
+    except Exception as exc:  # noqa: BLE001 - run history must still answer
+        # A config, environment or directory fault reading the definitions
+        # must not take the run history down with it.
+        logger.warning("defined workflows could not be read: %s", type(exc).__name__)
+        found = []
+    defined = {d["workflow_id"]: d for d in found}
+    out = []
+    for row in _list_workflows():
+        known = defined.pop(row["workflow_id"], None)
+        out.append(
+            {
+                **row,
+                "name": known["name"] if known else None,
+                "triggers": known["triggers"] if known else [],
+                "source": known["source"] if known else None,
+            }
+        )
+    for workflow_id in sorted(defined):
+        d = defined[workflow_id]
+        out.append(
+            {
+                "workflow_id": workflow_id,
+                "runs": 0,
+                "last_run_at": None,
+                "last_status": None,
+                "failures": 0,
+                "name": d["name"],
+                "triggers": d["triggers"],
+                "source": d["source"],
+            }
+        )
+    return out
+
+
 def _workflow_runs(workflow_id: str, limit: int) -> list[dict]:
     rows = _rows(
         "SELECT id, workflow_id, status, trigger_type, steps_total, steps_completed, "
@@ -64,7 +142,7 @@ def _workflow_runs(workflow_id: str, limit: int) -> list[dict]:
 @router.get("")
 def list_workflows(request: Request) -> list[dict]:
     require_operator(request)
-    return _list_workflows()
+    return _merged()
 
 
 @router.get("/{workflow_id}/runs")

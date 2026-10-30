@@ -613,6 +613,26 @@ _CONFIG_SCHEMAS: dict[str, dict[str, Any]] = {
 }
 
 
+#: What installed plugins contribute (``handlers/plugins.py``). Its own block,
+#: outside ``get_engine_schemas``, for the size-ratchet reason above.
+_PLUGIN_SCHEMAS: dict[str, dict[str, Any]] = {
+    "plugins_overview": {
+        "type": "function",
+        "function": {
+            "name": "plugins_overview",
+            "description": (
+                "List every installed plugin and what it contributes to this instance: "
+                "its tools (with descriptions), doctor checks, agents (id, name, "
+                "schedule), workflows (id, name, triggers), the agent manifests it "
+                "patched, and other workspace files it wrote. Read-only. Use this to "
+                "answer 'what does plugin X give us?' or 'which plugin ships agent or "
+                "workflow Y?'; use tool_search to find a tool by what it does."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+}
+
 #: The secrets vault's four tools, as one cluster.
 #:
 #: Lifted out of ``get_engine_schemas`` when ``vault_test`` was added: the
@@ -2049,7 +2069,7 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
         },
     }
 
-    schemas.update(_VAULT_SCHEMAS | _CONFIG_SCHEMAS)
+    schemas.update(_VAULT_SCHEMAS | _CONFIG_SCHEMAS | _PLUGIN_SCHEMAS)
 
     # ── Knowledge Vault (verbatim memory store; RIP 12) ──
     # Distinct from the secrets vault above. Stores reference data the agent

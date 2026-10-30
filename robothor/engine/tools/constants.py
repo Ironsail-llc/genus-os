@@ -405,6 +405,8 @@ READONLY_TOOLS: frozenset[str] = frozenset(
         "memory_write_status",
         # Settings read (GEN-42): value, source, restart flag; secrets masked.
         "config_get",
+        # What each installed plugin contributes (tools, agents, workflows...).
+        "plugins_overview",
         # Vault read-only tools
         "vault_get",
         "vault_list",
