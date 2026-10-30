@@ -25,7 +25,7 @@ EVENT = "platform.order.created"
 
 
 def _definition(**extra: Any) -> dict[str, Any]:
-    step: dict[str, Any] = {"id": "claim", "type": "tool", "tool": "create_task"}
+    step: dict[str, Any] = {"id": "claim", "type": "tool", "tool_name": "create_task"}
     step.update(extra.pop("step", {}))
     return {
         "id": "order-flow",
@@ -111,6 +111,7 @@ class TestRateLimitField:
         assert [r.status for r in runs[:2]] == [RunStatus.COMPLETED] * 2
         assert runs[2].rate_limited is True
         assert engine.runner.registry.execute.await_count == 2
+        assert engine.runner.registry.execute.await_args.args[0] == "create_task"
 
     @pytest.mark.asyncio
     async def test_each_workflow_has_its_own_limit(self, engine_config, clock, no_dedup):
