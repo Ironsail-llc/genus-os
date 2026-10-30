@@ -81,7 +81,7 @@ An empty list renders nothing.
 {{- end -}}
 
 {{- /* A cell may read one provider class of its own, and no other cell's. */ -}}
-{{- $ownProviders := printf "engine-providers-%s" $id -}}
+{{- $ownProviders := include "genus-os.cellProviderClass" $id -}}
 {{- range $ref := ($cv.secretRefs | default list) -}}
 {{- if and (hasPrefix "engine-providers-" (toString $ref)) (ne (toString $ref) $ownProviders) -}}
 {{- fail (printf "tenants[%d].secretRefs names %q, but a cell may read only its own %q" $i (toString $ref) $ownProviders) -}}
