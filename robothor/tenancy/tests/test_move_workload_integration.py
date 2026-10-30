@@ -103,7 +103,7 @@ def world() -> Iterator[dict[str, Any]]:
     run_step = _run(cur, parent, stepper, status="completed", trigger_type="workflow")
     for n in (1, 2):
         cur.execute(
-            "INSERT INTO agent_run_steps (run_id, step_number, step_type) VALUES (%s, %s, 'llm')",
+            "INSERT INTO agent_run_steps (run_id, step_number, step_type) VALUES (%s, %s, 'llm_call')",
             (run_a1, n),
         )
     cur.execute(

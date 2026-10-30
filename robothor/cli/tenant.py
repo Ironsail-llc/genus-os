@@ -1,4 +1,4 @@
-"""Tenant management CLI — create, list, inspect, claim SSO domains, move accounts."""
+"""Tenant management CLI — create, list, inspect, claim SSO domains, move accounts and workloads."""
 
 from __future__ import annotations
 
@@ -23,8 +23,10 @@ def cmd_tenant(args: argparse.Namespace) -> int:
         return _cmd_set_domains(args)
     if subcmd == "move-account":
         return _cmd_move_account(args)
+    if subcmd == "move-workload":
+        return _cmd_move_workload(args)
 
-    print("Usage: robothor tenant {create|list|status|set-domains|move-account}")
+    print("Usage: robothor tenant {create|list|status|set-domains|move-account|move-workload}")
     return 1
 
 
@@ -231,4 +233,45 @@ def _cmd_move_account(args: argparse.Namespace) -> int:
         print(f"  New CRM contact: {report.new_person_id} (the old one stays in the source)")
     if not report.dry_run:
         print(f"  Sessions revoked: {report.sessions_revoked}")
+    return 0
+
+
+def _cmd_move_workload(args: argparse.Namespace) -> int:
+    """Move the named agents' and workflows' history to another tenant."""
+    from robothor.cli import cli_actor
+    from robothor.tenancy import move_workload as mw
+
+    try:
+        report = mw.move_workload(
+            from_tenant=args.from_tenant,
+            to_tenant=args.to,
+            agents=list(args.agent or []),
+            workflows=list(args.workflow or []),
+            actor=cli_actor(),
+            dry_run=args.dry_run,
+        )
+    except mw.WorkloadMoveError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+    if args.json:
+        print(json.dumps(report.to_dict(), indent=2))
+        return 0
+    verb = "Would move" if report.dry_run else "Moved"
+    print(f"{verb} workload from '{report.from_tenant}' to '{report.to_tenant}'")
+    print(f"  Agents:    {', '.join(report.agents) or '-'}")
+    print(f"  Workflows: {', '.join(report.workflows) or '-'}")
+    print("  Rows re-tenanted:")
+    for table, n in report.counts.items():
+        print(f"    {table:<28} {n}")
+    if report.followed:
+        print("  Rows that follow their parent (no tenant column):")
+        for table, n in report.followed.items():
+            print(f"    {table:<28} {n}")
+    if report.links_cleared:
+        print("  Links cleared (they named a row that stays in another tenant):")
+        for link, n in report.links_cleared.items():
+            print(f"    {link:<28} {n}")
+    if report.audit_id is not None:
+        print(f"  Audit row: {report.audit_id}")
     return 0
