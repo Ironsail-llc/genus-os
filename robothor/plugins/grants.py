@@ -159,6 +159,10 @@ _lock = threading.Lock()
 _cache: tuple[int, str, dict[str, str]] | None = None
 #: Per tenant, what the last SUCCESSFUL read said. What a failed read falls back on.
 _last_good: dict[str, dict[str, str]] = {}
+#: Tenants whose read failed with nothing to fall back on. The registries built
+#: meanwhile may hold a plugin the root forced off, so the first successful
+#: read for one of these bumps the plugin generation to rebuild them.
+_unknown_since_failure: set[str] = set()
 
 
 def reset_forced_cache() -> None:
@@ -167,6 +171,7 @@ def reset_forced_cache() -> None:
     with _lock:
         _cache = None
         _last_good.clear()
+        _unknown_since_failure.clear()
 
 
 def _persisted_path() -> Path | None:
@@ -237,7 +242,10 @@ def forced_states(tenant_id: str | None = None) -> dict[str, str]:
     A failed read with a fallback is kept for the rest of the generation, so an
     outage costs one read per generation, not one per load. A failed read with
     NO fallback (no earlier read, nothing persisted) is not cached: the next
-    load asks again, so the grants apply as soon as the database answers.
+    load asks again, and the first read that then succeeds with anything forced
+    off bumps the plugin generation, so the registries built in the meantime
+    rebuild without it. (A module that was already imported has run; it is no
+    longer registered.)
     """
     global _cache
     from robothor.plugins.loader import generation
@@ -260,9 +268,11 @@ def forced_states(tenant_id: str | None = None) -> dict[str, str]:
             off = _load_persisted(tenant)
         known = off is not None
         kept = dict.fromkeys(off or (), "off")
-        if known:
-            with _lock:
+        with _lock:
+            if known:
                 _cache = (gen, tenant, kept)
+            else:
+                _unknown_since_failure.add(tenant)
         logger.warning(
             "Plugin grants for this tenant could not be read (%s); keeping %d plugin(s) "
             "forced off from the last successful read%s",
@@ -271,8 +281,22 @@ def forced_states(tenant_id: str | None = None) -> dict[str, str]:
             "" if known else "; none known yet, so the next load retries",
         )
         return dict(kept)
+    forced_off = {name for name, state in fresh.items() if state == "off"}
+    with _lock:
+        recovering = tenant in _unknown_since_failure
+        _unknown_since_failure.discard(tenant)
+    if recovering and forced_off:
+        # Whatever was built while the grants were unknown may hold a plugin
+        # the root forced off. Mark every plugin cache stale; each rebuilds on
+        # its next read, through this function, at the new generation.
+        from robothor.plugins.loader import reload_plugins
+
+        logger.warning(
+            "Plugin grants readable again; reloading to apply %d refusal(s)", len(forced_off)
+        )
+        gen = reload_plugins()
     with _lock:
         _last_good[tenant] = dict(fresh)
         _cache = (gen, tenant, fresh)
-    _persist(tenant, {name for name, state in fresh.items() if state == "off"})
+    _persist(tenant, forced_off)
     return dict(fresh)

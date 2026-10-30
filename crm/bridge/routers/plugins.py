@@ -117,6 +117,18 @@ async def _root_tree() -> tuple[str, ...]:
     return tuple(await asyncio.to_thread(resolve_accessible_tenants, root, "owner"))
 
 
+def _audit_target(tenant: str) -> dict[str, Any]:
+    """Audit fields naming whose engine a root act reached.
+
+    Filed under the child when it is one, so that child's admins see what the
+    root did to their engine, the way ``grant_plugin`` files its rows.
+    """
+    fields: dict[str, Any] = {"tenant": tenant}
+    if tenant != _operator.PLATFORM_TENANT:
+        fields["audit_tenant_id"] = tenant
+    return fields
+
+
 async def _target_tenant(body: dict[str, Any]) -> str:
     """Whose engine a root-only act is for: ``tenant_id`` in the body, else the root.
 
@@ -167,6 +179,7 @@ async def sync_plugins(request: Request) -> JSONResponse:
         "plugin.sync",
         action="sync",
         status="ok" if status < 400 else "error",
+        **_audit_target(tenant),
     )
     return _proxied(status, body)
 
@@ -243,6 +256,7 @@ async def install_plugin(request: Request) -> JSONResponse:
         version=str((plan or {}).get("version") or ""),
         verdict=str((plan or {}).get("verdict") or ""),
         status="ok" if status < 400 else "error",
+        **_audit_target(tenant),
     )
     return _proxied(status, payload)
 
@@ -266,6 +280,7 @@ async def remove_plugin(name: str, request: Request) -> JSONResponse:
         action=plugin,
         plugin=plugin,
         status="ok" if status < 400 else "error",
+        **_audit_target(tenant),
     )
     return _proxied(status, payload)
 
