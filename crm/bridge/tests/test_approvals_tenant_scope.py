@@ -245,7 +245,9 @@ def test_a_proposal_with_a_body_shows_every_other_field_too(child_admin, stores,
     assert rest == {"to": "bob@example.com", "cc": ["carol@example.com"], "urgent": True}
 
 
-def test_an_envelope_key_the_envelope_cannot_show_is_printed_with_the_rest(child_admin, stores, ops):
+def test_an_envelope_key_the_envelope_cannot_show_is_printed_with_the_rest(
+    child_admin, stores, ops
+):
     """A recipient given as an object is not an envelope string, so it goes in the detail."""
     payload = {"recipient": {"email": "bob@example.com", "name": "Bob"}, "body": "Hello Bob"}
     ops.review = [{**_email_proposal(""), "kind": "acme-plugin.email", "payload": payload}]

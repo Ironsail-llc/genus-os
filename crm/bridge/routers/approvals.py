@@ -143,15 +143,16 @@ _BODY_ONLY_KINDS = frozenset({"sales.email"})
 
 def _action_detail(kind: str, payload: Any) -> str:
     """The proposal's whole content: its body, then every field the envelope
-    does not name (``_BODY_ONLY_KINDS`` excepted); the whole payload when
-    there is no body.
+    does not actually show (``_BODY_ONLY_KINDS`` excepted); the whole payload
+    when there is no body.
 
     Never truncated. What is approved is the full payload, so a card that
     showed a prefix, or the body alone of a payload that also says who it goes
     to, would ask for a verdict on text nobody read.
     """
     if isinstance(payload, dict) and isinstance(payload.get("body"), str) and payload["body"]:
-        shown = {"body", *(key for _, key in _ENVELOPE_FIELDS)}
+        named = _action_envelope(payload)
+        shown = {"body", *(key for label, key in _ENVELOPE_FIELDS if label in named)}
         rest = {key: value for key, value in payload.items() if key not in shown}
         if not rest or kind in _BODY_ONLY_KINDS:
             return str(payload["body"])
