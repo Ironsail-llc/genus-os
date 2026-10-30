@@ -12,11 +12,15 @@ import remarkGfm from "remark-gfm";
 export const CHAT_PROSE = "prose prose-sm dark:prose-invert max-w-none break-words";
 
 const components: Components = {
-  a: ({ href, title, children }) => (
-    <a href={href} title={title} target="_blank" rel="noopener noreferrer">
-      {children}
-    </a>
-  ),
+  // Same-page anchors (footnote references and back-links) stay in the tab;
+  // every other link opens a new one.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  a: ({ node, ...props }) =>
+    props.href?.startsWith("#") ? (
+      <a {...props} />
+    ) : (
+      <a {...props} target="_blank" rel="noopener noreferrer" />
+    ),
 };
 
 export function ChatMarkdown({ content }: { content: string }) {

@@ -50,4 +50,19 @@ describe("ChatMarkdown", () => {
     expect(link.getAttribute("target")).toBe("_blank");
     expect(link.getAttribute("rel")).toContain("noopener");
   });
+
+  it("keeps same-page footnote anchors in the same tab, with their targets", () => {
+    const { container } = render(
+      <ChatMarkdown content={"A claim.[^1]\n\n[^1]: The source."} />,
+    );
+    const anchors = Array.from(container.querySelectorAll("a")).filter((a) =>
+      (a.getAttribute("href") ?? "").startsWith("#"),
+    );
+    expect(anchors.length).toBeGreaterThanOrEqual(2);
+    for (const a of anchors) {
+      expect(a.hasAttribute("target")).toBe(false);
+      const id = (a.getAttribute("href") ?? "").slice(1);
+      expect(container.querySelector(`[id="${id}"]`)).not.toBeNull();
+    }
+  });
 });

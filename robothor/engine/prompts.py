@@ -230,15 +230,14 @@ TELEGRAM_SURFACE_NOTE = (
 )
 
 
-#: Engine-context line for a dashboard chat turn. The reply renders as
-#: Markdown in a narrow chat panel; without guidance a simple question gets a
-#: multi-section overview.
+#: Engine-context line for a webchat turn: the dashboard's chat panel, and the
+#: terminal client, which shows plain text. Without guidance a simple question
+#: gets a multi-section overview.
 WEBCHAT_SURFACE_NOTE = (
-    "This reply is read in the Genus OS chat panel, which renders Markdown. "
-    "Answer the question first. Use short paragraphs with a blank line "
-    "between them. Use headings and lists only when they help the reader, "
-    "and bold sparingly. Do not give a multi-section overview of what you "
-    "can do unless asked."
+    "This reply is read in a chat view. Answer the question first. Use short "
+    "paragraphs with a blank line between them. Use headings and lists only "
+    "when they help the reader, and bold sparingly. Do not give a "
+    "multi-section overview of what you can do unless asked."
 )
 
 

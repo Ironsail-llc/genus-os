@@ -55,3 +55,11 @@ def test_the_webchat_note_is_short_and_names_the_rules_that_matter() -> None:
     for rule in ("answer", "paragraph", "heading", "list", "bold"):
         assert rule in note
     assert len(WEBCHAT_SURFACE_NOTE) < 600
+
+
+def test_the_webchat_note_does_not_name_one_surface() -> None:
+    # WEBCHAT also carries the terminal client, which shows plain text: the
+    # note must not claim the dashboard panel or a Markdown renderer.
+    note = WEBCHAT_SURFACE_NOTE.lower()
+    for claim in ("genus os", "panel", "renders markdown"):
+        assert claim not in note
