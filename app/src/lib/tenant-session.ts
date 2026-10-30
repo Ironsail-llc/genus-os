@@ -39,3 +39,19 @@ export function actingTenantId(
   if (!tenant || !home || tenant === home) return null;
   return tenant;
 }
+
+/**
+ * Whether the session is the ROOT tenant's, at home: acting, home and root are
+ * one tenant. The bridge's root-only routes (`require_root_operator`) admit
+ * exactly this, so a control for one of them is offered on exactly this — a
+ * root admin acting in a child is that child's administrator for the request.
+ */
+export function isRootAtHome(
+  session:
+    | { tenantId?: string | null; homeTenantId?: string | null; rootTenantId?: string | null }
+    | null
+    | undefined,
+): boolean {
+  const root = session?.rootTenantId;
+  return Boolean(root) && session?.tenantId === root && session?.homeTenantId === root;
+}

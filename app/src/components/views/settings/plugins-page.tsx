@@ -1,15 +1,21 @@
 "use client";
 
-import { Fragment, useCallback, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { Loader2, Puzzle, RefreshCw } from "lucide-react";
+import { useSession } from "next-auth/react";
 
 import { PageHeader } from "@/components/business/page-header";
 import { EmptyState } from "@/components/business/empty-state";
 import { Button } from "@/components/ui/button";
 import { PluginInstallCard } from "@/components/views/settings/plugins-install";
+import {
+  type ChildTenant,
+  PluginTenantGrant,
+} from "@/components/views/settings/plugins-tenant-grant";
 import { refusalSentence, unreachableSentence } from "@/lib/bridge/hop-sentence";
 import { useRowActions } from "@/lib/bridge/row-actions";
 import { BRIDGE_UNREACHABLE, useBridgePoll } from "@/lib/bridge/use-bridge-poll";
+import { isRootAtHome } from "@/lib/tenant-session";
 
 /**
  * Settings › Plugins — the third-party code this instance runs, and the acts an
@@ -60,6 +66,14 @@ import { BRIDGE_UNREACHABLE, useBridgePoll } from "@/lib/bridge/use-bridge-poll"
  * `reloaded: false`; the running engine keeps serving the set it discovered at
  * boot. So the switch moves and the STATE pill does not, and a bar comes up
  * saying the change is recorded but not live. One reload after N toggles.
+ *
+ * **Every tenant has its own engine, and the root may decide for a child.**
+ * The listing is the ACTING tenant's (the bridge follows the token). A plugin
+ * the root tenant forced on or off carries `forced`, and its switch is locked
+ * at the forced position with "Set by the root tenant" — the engine answers a
+ * toggle on it with 409. The root operator at home (`isRootAtHome`) also gets a
+ * per-child control on every card; nobody else is offered it, because the
+ * grant route refuses everybody else.
  */
 
 const BRIDGE = "/api/bridge";
@@ -67,6 +81,14 @@ const LISTING_URL = `${BRIDGE}/api/plugins`;
 
 /** The reason string the engine writes for a plugin its operator turned off. */
 const BY_OPERATOR = "disabled by operator";
+
+/** The reason the engine writes for a plugin the root tenant forced off. */
+const BY_ROOT = "disabled by the root tenant";
+
+/** A refusal that is somebody's decision rather than a fault. */
+function isDecision(reason: string | null): boolean {
+  return reason === BY_OPERATOR || reason === BY_ROOT;
+}
 
 export interface Lockfile {
   pathConfigured: boolean;
@@ -141,6 +163,11 @@ export interface Plugin {
   source: PluginSource | null;
   /** Empty lists from an older engine that sends no `assets`. */
   assets: PluginAssets;
+  /**
+   * What the root tenant forced for this tenant, or null when this tenant
+   * decides. An older engine sends nothing, which reads as null.
+   */
+  forced: "on" | "off" | null;
 }
 
 export interface Listing {
@@ -256,6 +283,7 @@ export function normalizePlugin(value: unknown): Plugin | null {
     manifest: normalizeManifest(row.manifest),
     source: normalizeSource(row.source),
     assets: normalizeAssets(row.assets),
+    forced: row.forced === "on" || row.forced === "off" ? row.forced : null,
   };
 }
 
@@ -365,6 +393,40 @@ export interface PluginsPageProps {
 
 export function PluginsPage({ visible = true }: PluginsPageProps) {
   const [listing, setListing] = useState<Listing | null>(null);
+  const { data: session } = useSession();
+  const rootAtHome = isRootAtHome(session);
+  /** The root's children, for the per-child grant control. Root at home only. */
+  const [childTenants, setChildTenants] = useState<ChildTenant[]>([]);
+
+  useEffect(() => {
+    if (!visible || !rootAtHome) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch(`${BRIDGE}/api/tenants/accessible`);
+        if (!res.ok) return;
+        const rows: unknown = await res.json();
+        if (cancelled || !Array.isArray(rows)) return;
+        setChildTenants(
+          rows
+            .filter((r): r is Record<string, unknown> => !!r && typeof r === "object")
+            .filter((r) => typeof r.id === "string" && r.id && r.is_home !== true)
+            .map((r) => ({
+              id: r.id as string,
+              displayName:
+                typeof r.display_name === "string" && r.display_name
+                  ? r.display_name
+                  : (r.id as string),
+            })),
+        );
+      } catch {
+        // No picker is the honest answer when the tree cannot be read.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [visible, rootAtHome]);
 
   const [syncing, setSyncing] = useState(false);
   const [syncReport, setSyncReport] = useState<SyncReport | null>(null);
@@ -708,9 +770,9 @@ export function PluginsPage({ visible = true }: PluginsPageProps) {
 
       {poll.forbidden ? (
         <p className="text-xs text-muted-foreground" data-testid="plugins-forbidden">
-          Plugins are operator-only on this appliance, so there is nothing to show here. A role that
-          looks like an operator in this browser can still be refused by the bridge — it also
-          requires the platform tenant and a human session. Ask an owner or admin on this instance.
+          Plugins are managed by an owner or admin of this tenant, so there is nothing to show
+          here. A role that looks like one in this browser can still be refused by the bridge — it
+          also requires a human session. Ask an owner or admin of this tenant.
         </p>
       ) : null}
 
@@ -956,6 +1018,9 @@ export function PluginsPage({ visible = true }: PluginsPageProps) {
           {data.plugins.map((plugin) => {
             const pill = statePill(plugin.state);
             const busy = busyRow === plugin.name;
+            // Where the switch sits: the root's grant when there is one, else
+            // what this tenant's own lock row says.
+            const on = plugin.forced !== null ? plugin.forced === "on" : plugin.enabled;
             return (
               <div
                 key={plugin.name}
@@ -1047,7 +1112,7 @@ export function PluginsPage({ visible = true }: PluginsPageProps) {
                   <p
                     data-testid={`plugin-failure-${plugin.name}`}
                     className={`break-words text-[11px] ${
-                      plugin.failureReason === BY_OPERATOR
+                      isDecision(plugin.failureReason)
                         ? "text-muted-foreground"
                         : "text-destructive"
                     }`}
@@ -1147,27 +1212,37 @@ export function PluginsPage({ visible = true }: PluginsPageProps) {
                   <button
                     type="button"
                     role="switch"
-                    aria-checked={plugin.enabled}
+                    aria-checked={on}
                     aria-label={`${plugin.name} enabled`}
                     data-testid={`plugin-switch-${plugin.name}`}
-                    disabled={!plugin.recorded || busy || stale}
+                    // A forced plugin is the root tenant's decision: the engine
+                    // answers a toggle on it with 409, so it is locked here.
+                    disabled={plugin.forced !== null || !plugin.recorded || busy || stale}
                     onClick={() => toggle(plugin)}
                     className={`inline-flex h-5 w-9 shrink-0 items-center rounded-full border transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
-                      plugin.enabled ? "border-primary/40 bg-primary/70" : "border-border bg-muted"
+                      on ? "border-primary/40 bg-primary/70" : "border-border bg-muted"
                     }`}
                   >
                     <span
                       aria-hidden
                       className={`size-3.5 rounded-full bg-background transition-transform ${
-                        plugin.enabled ? "translate-x-[18px]" : "translate-x-[2px]"
+                        on ? "translate-x-[18px]" : "translate-x-[2px]"
                       }`}
                     />
                   </button>
                   <span className="text-[11px] text-muted-foreground">
-                    {plugin.enabled ? "Enabled" : "Disabled"}
+                    {plugin.forced !== null ? `Forced ${plugin.forced}` : on ? "Enabled" : "Disabled"}
                     {busy ? " · saving…" : ""}
                   </span>
-                  {!plugin.recorded ? (
+                  {plugin.forced !== null ? (
+                    <span
+                      data-testid={`plugin-forced-${plugin.name}`}
+                      className="break-words text-[11px] text-muted-foreground"
+                    >
+                      Set by the root tenant — only a root administrator can change it.
+                    </span>
+                  ) : null}
+                  {!plugin.recorded && plugin.forced === null ? (
                     <span
                       data-testid={`plugin-hint-${plugin.name}`}
                       className="break-words text-[11px] text-muted-foreground"
@@ -1197,6 +1272,10 @@ export function PluginsPage({ visible = true }: PluginsPageProps) {
                     </Button>
                   ) : null}
                 </div>
+
+                {rootAtHome && childTenants.length > 0 ? (
+                  <PluginTenantGrant plugin={plugin.name} childTenants={childTenants} />
+                ) : null}
 
                 {confirmRemove === plugin.name ? (
                   <div
@@ -1315,8 +1394,9 @@ export function PluginsPage({ visible = true }: PluginsPageProps) {
                 line without it would read as the same refusal reported twice.
               */}
               {attributed.byPlugin.map(({ name, failures }) => {
-                const intended = failures.filter((f) => f.reason === BY_OPERATOR);
-                const faults = failures.filter((f) => f.reason !== BY_OPERATOR);
+                const intended = failures.filter((f) => isDecision(f.reason));
+                const faults = failures.filter((f) => !isDecision(f.reason));
+                const byRoot = intended.some((f) => f.reason === BY_ROOT);
                 return (
                   <Fragment key={name}>
                     {intended.length ? (
@@ -1324,9 +1404,10 @@ export function PluginsPage({ visible = true }: PluginsPageProps) {
                         data-testid={`plugins-reload-intended-${name}`}
                         className="break-words text-muted-foreground"
                       >
-                        <span className="font-medium">{name}</span> — not loaded, because you
-                        turned it off ({intended.map((f) => `${f.group}/${f.name}`).join(", ")}).
-                        That is the decision arriving back, not a fault.
+                        <span className="font-medium">{name}</span> — not loaded, because{" "}
+                        {byRoot ? "the root tenant turned it off" : "you turned it off"} (
+                        {intended.map((f) => `${f.group}/${f.name}`).join(", ")}). That is the
+                        decision arriving back, not a fault.
                       </p>
                     ) : null}
                     {faults.length ? (
