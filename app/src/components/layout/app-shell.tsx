@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { flushSync } from "react-dom";
 import dynamic from "next/dynamic";
 import { useSession } from "next-auth/react";
 import { Sidebar } from "./sidebar";
@@ -86,15 +87,37 @@ export function AppShell() {
   // The dock's open state is remembered per browser. The server cannot see that
   // choice, so it renders open and the stored value is adopted right after
   // hydration (a lazy useState read would leave the server's attributes on the
-  // sidebar toggle). Another tab's choice applies when that tab writes it (the
-  // `storage` event). A choice made on this page wins, and is written where the
-  // operator acts rather than in an effect.
-  const storedChatOpen = useSyncExternalStore(subscribeChatDockOpen, readChatDockOpen, () => true);
+  // sidebar toggle). A choice made on this page applies at once and is written
+  // where the operator acts rather than in an effect; it holds even if storage
+  // refuses the write. Another tab's write (the `storage` event) drops that
+  // choice, so the latest decision in any tab wins.
   const [chosenChatOpen, setChosenChatOpen] = useState<boolean | null>(null);
+  const subscribeStoredChatOpen = useCallback(
+    (onChange: () => void) =>
+      subscribeChatDockOpen(() => {
+        setChosenChatOpen(null);
+        onChange();
+      }),
+    [],
+  );
+  const storedChatOpen = useSyncExternalStore(subscribeStoredChatOpen, readChatDockOpen, () => true);
   const chatOpen = chosenChatOpen ?? storedChatOpen;
   const setChatDockOpen = (open: boolean) => {
     setChosenChatOpen(open);
     writeChatDockOpen(open);
+  };
+  // Focus follows the dock: collapsing from the panel's own header would leave
+  // it on a button nobody can see, and reopening from the edge tab would drop
+  // it on the page when the tab goes away.
+  const dockRef = useRef<HTMLDivElement>(null);
+  const dockTabRef = useRef<HTMLButtonElement>(null);
+  const collapseDockFromPanel = () => {
+    flushSync(() => setChatDockOpen(false));
+    dockTabRef.current?.focus();
+  };
+  const reopenDockFromTab = () => {
+    flushSync(() => setChatDockOpen(true));
+    dockRef.current?.focus();
   };
   const [canvasRailOpen, setCanvasRailOpen] = useState(false);
   const { viewStack, pendingAgentData } = useVisualState();
@@ -324,20 +347,25 @@ export function AppShell() {
                 style={isChatView ? undefined : { width: chatOpen ? 400 : 0 }}
                 data-testid="chat-container"
               >
+                {/* A collapsed dock stays mounted (the chat keeps its state), so
+                    it is made inert: nothing hidden stays in the tab order. */}
                 <div
-                  className={
+                  ref={dockRef}
+                  tabIndex={-1}
+                  inert={!isChatView && !chatOpen}
+                  className={`focus:outline-none ${
                     isChatView && !showCanvasRail
                       ? "h-full mx-auto w-full max-w-5xl"
                       : isChatView
                         ? "h-full w-full"
                         : "h-full w-[400px]"
-                  }
+                  }`}
                 >
                   <ChatPanel
                     variant={isChatView && !showCanvasRail ? "page" : "dock"}
                     ownerName={ownerName}
                     docked={!isChatView}
-                    onCollapse={() => setChatDockOpen(false)}
+                    onCollapse={collapseDockFromPanel}
                   />
                 </div>
               </div>
@@ -348,7 +376,8 @@ export function AppShell() {
             {!isMobile && !isChatView && !chatOpen && (
               <button
                 type="button"
-                onClick={() => setChatDockOpen(true)}
+                ref={dockTabRef}
+                onClick={reopenDockFromTab}
                 aria-label="Open chat panel"
                 title="Open chat panel"
                 className="shrink-0 w-7 flex items-start justify-center pt-3 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus:outline-none focus-visible:ring-1 focus-visible:ring-ring"
