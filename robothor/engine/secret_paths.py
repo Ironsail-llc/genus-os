@@ -581,43 +581,114 @@ _FILE_ONLY_PRINTERS = frozenset(
         "base32",
     }
 )
-_SEARCHERS = frozenset({"grep", "egrep", "fgrep", "rg", "ag", "ack"})
 
 
-def _names_a_pattern(arg: str) -> bool:
-    """Whether ``arg`` supplies a search pattern (or a file of them) itself.
+def _long_option(arg: str, known: tuple[str, ...]) -> str | None:
+    """The long option ``arg`` spells, GNU abbreviations included.
 
-    Every spelling: ``-e x`` / ``-f x``, attached ``-ex`` / ``-fx``, inside a
-    short-option cluster (``-rnex``), and ``--regexp[=x]`` / ``--file[=x]``.
-    Over-matching only treats one more argument as a file, which fails closed.
+    ``getopt_long`` accepts any unambiguous prefix, so ``--back`` and
+    ``--su`` are ``--backup`` and ``--suffix`` to ``cp``. Resolved against the
+    options this module knows for the tool; an ambiguous or unknown prefix is
+    None. The ``=value`` part is ignored.
     """
-    if arg in ("--regexp", "--file") or arg.startswith(("--regexp=", "--file=")):
-        return True
-    return arg.startswith("-") and not arg.startswith("--") and any(ch in "ef" for ch in arg[1:])
+    name = arg.partition("=")[0]
+    if name in known:
+        return name
+    if len(name) < 3:
+        return None
+    matches = [option for option in known if option.startswith(name)]
+    return matches[0] if len(matches) == 1 else None
 
 
-#: Tools whose first positional argument is a PROGRAM, not a file:
-#: ``sed 's/[a-z]//' f``, ``awk '{print $1}' f``, ``jq '.[0]' f``. Like a
-#: search pattern it is skipped by the glob rule, which would otherwise read
-#: its brackets and braces as filename expansion.
-_PROGRAM_TAKERS = frozenset({"sed", "awk", "gawk", "jq", "yq"})
+#: Per tool: the short options and long options that supply its PROGRAM (a
+#: search pattern, a sed script, an awk source, a jq filter) instead of the
+#: first positional argument. A short option takes the rest of its cluster as
+#: the value (``-es/x//``) or the next argument when it ends the cluster
+#: (``-ne 'p'``); a long option takes ``=value`` or the next argument. Once
+#: any is present, every positional argument is a FILE. ``jq -e`` is
+#: ``--exit-status``, not a program, so jq lists only ``-f``.
+_PROGRAM_OPTIONS: dict[str, tuple[str, tuple[str, ...]]] = {
+    "grep": ("ef", ("--regexp", "--file")),
+    "egrep": ("ef", ("--regexp", "--file")),
+    "fgrep": ("ef", ("--regexp", "--file")),
+    "rg": ("ef", ("--regexp", "--file")),
+    "ag": ("ef", ("--regexp", "--file")),
+    "ack": ("ef", ("--regexp", "--file")),
+    "sed": ("ef", ("--expression", "--file")),
+    "awk": ("fe", ("--file", "--source")),
+    "gawk": ("fe", ("--file", "--source")),
+    "jq": ("f", ("--from-file",)),
+    "yq": ("f", ("--from-file",)),
+}
 
 
-def _search_pattern_index(word: str, args: list[str]) -> int | None:
-    """Index in ``args`` of a searcher's positional PATTERN, or None.
+def _program_indices(word: str, args: list[str]) -> set[int] | None:
+    """Indices in ``args`` that are PROGRAM text, not files; None for other tools.
 
-    None when the pattern was given by an option (``-e``, ``-f``,
-    ``--regexp``, ``--file``, in any spelling: then every positional argument is
-    a file), or when ``word`` is not a searcher.
+    The program's text is never filename expansion (its brackets are regex
+    classes) and never a path, so those indices skip the glob rule and the
+    moved-key rule. When the program came through an option, its value index
+    (if separate) is program text and every positional is a file; otherwise the
+    first positional is the program.
     """
-    if word not in _SEARCHERS and word not in _PROGRAM_TAKERS:
+    table = _PROGRAM_OPTIONS.get(word)
+    if table is None:
         return None
-    if any(_names_a_pattern(a) for a in args):
-        return None
+    shorts, longs = table
+    indices: set[int] = set()
+    supplied = False
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg == "--":
+            break
+        if arg.startswith("--"):
+            canonical = _long_option(arg, longs)
+            if canonical is not None:
+                supplied = True
+                if "=" not in arg and i + 1 < len(args):
+                    indices.add(i + 1)
+                    i += 1
+        elif arg.startswith("-") and len(arg) > 1:
+            cluster = arg[1:]
+            for j, ch in enumerate(cluster):
+                if ch in shorts:
+                    supplied = True
+                    if j == len(cluster) - 1 and i + 1 < len(args):
+                        indices.add(i + 1)
+                        i += 1
+                    break
+        i += 1
+    if supplied:
+        return indices
     for index, arg in enumerate(args):
         if not arg.startswith("-"):
-            return index
-    return None
+            return {index}
+    return set()
+
+
+def _quoted_texts(command: str) -> set[str]:
+    """Words that appear in the command ONLY inside quotes.
+
+    The shell never expands a quoted word, so ``'[0-9]'`` in a sed program is
+    a regex class, not filename expansion. A text that also appears unquoted
+    somewhere is not exempt: that spelling would be expanded.
+    """
+    quoted: set[str] = set()
+    bare: set[str] = set()
+    for line in command.splitlines():
+        lexer = shlex.shlex(line, posix=False, punctuation_chars=True)
+        lexer.whitespace_split = True
+        try:
+            raw = list(lexer)
+        except ValueError:
+            continue
+        for tok in raw:
+            if len(tok) >= 2 and tok[0] in "'\"" and tok[-1] == tok[0]:
+                quoted.add(tok[1:-1])
+            else:
+                bare.add(tok)
+    return quoted - bare
 
 
 def _relative_names_moved_key(
@@ -663,18 +734,40 @@ class _CopyScan(NamedTuple):
     destination: int | None
 
 
-#: Short options of the copy tools that take a value: the value is the rest of
-#: the cluster when there is one, else the next argument.
-_COPY_VALUE_OPTIONS = frozenset("tSmog")
+class _CopyGrammar(NamedTuple):
+    """One copy tool's option grammar: the letters that take a value, the
+    letters that mean "back the destination up first", whether ``t`` is a
+    target directory, and the long options this module knows."""
+
+    values: str
+    backup: str
+    target_short: bool
+    longs: tuple[str, ...]
 
 
-def _scan_copy(args: list[str]) -> _CopyScan:
-    """Positional operands of ``cp``/``mv``/``install``/``ln``/``rsync``/``scp``.
+#: Each tool's own grammar. The GNU file tools share ``-t DIR``, ``-b`` and
+#: ``-S SUFFIX``; rsync's ``t``/``S``/``m``/``o``/``g`` are plain switches
+#: (times, sparse, prune-empty-dirs, owner, group) and only ``-b`` backs up;
+#: scp has neither target nor backup, but several value-taking letters.
+_COPY_GRAMMAR: dict[str, _CopyGrammar] = {
+    "cp": _CopyGrammar("tS", "bS", True, ("--backup", "--suffix", "--target-directory")),
+    "mv": _CopyGrammar("tS", "bS", True, ("--backup", "--suffix", "--target-directory")),
+    "install": _CopyGrammar("tSmog", "bS", True, ("--backup", "--suffix", "--target-directory")),
+    "ln": _CopyGrammar("tS", "bS", True, ("--backup", "--suffix", "--target-directory")),
+    "rsync": _CopyGrammar("eTBfM", "b", False, ("--backup", "--suffix", "--backup-dir")),
+    "scp": _CopyGrammar("PiocFJSl", "", False, ()),
+}
 
-    Clusters are expanded (``-rt`` is ``-r -t``) and attached values
-    recognised (``-t/tmp``, ``--target-directory=/tmp``), so no spelling of
-    the target option leaves a source unchecked.
+
+def _scan_copy(word: str, args: list[str]) -> _CopyScan:
+    """Positional operands of a copy tool, read with THAT tool's grammar.
+
+    Clusters are expanded (``-rt`` is ``-r -t``), attached values recognised
+    (``-t/tmp``, ``--target-directory=/tmp``) and GNU long-option
+    abbreviations resolved (``--back``, ``--su``, ``--target``), so no
+    spelling of an option leaves a source unchecked or a backup unnoticed.
     """
+    grammar = _COPY_GRAMMAR[word]
     positional: list[int] = []
     values: set[int] = set()
     backup = False
@@ -687,31 +780,31 @@ def _scan_copy(args: list[str]) -> _CopyScan:
             positional.extend(range(i + 1, len(args)))
             break
         if arg.startswith("--"):
-            name, equals, _ = arg.partition("=")
-            if name.startswith(("--backup", "--suffix")):
+            canonical = _long_option(arg, grammar.longs)
+            takes_value = "=" not in arg and i + 1 < len(args)
+            if canonical in ("--backup", "--suffix", "--backup-dir"):
                 backup = True
-            if name == "--suffix" and not equals and i + 1 < len(args):
+            if canonical in ("--suffix", "--backup-dir") and takes_value:
                 values.add(i + 1)
                 i += 1
-            elif name == "--target-directory":
+            elif canonical == "--target-directory":
                 target_given = True
-                if not equals and i + 1 < len(args):
+                if takes_value:
                     target_index = i + 1
                     values.add(i + 1)
                     i += 1
         elif arg.startswith("-") and len(arg) > 1:
             cluster = arg[1:]
             for j, ch in enumerate(cluster):
-                if ch == "b":
+                if ch in grammar.backup:
                     backup = True
-                if ch in _COPY_VALUE_OPTIONS:
-                    if ch == "S":
-                        backup = True
-                    if ch == "t":
+                if ch in grammar.values:
+                    is_target = ch == "t" and grammar.target_short
+                    if is_target:
                         target_given = True
                     if j == len(cluster) - 1 and i + 1 < len(args):
                         values.add(i + 1)
-                        if ch == "t":
+                        if is_target:
                             target_index = i + 1
                         i += 1
                     break
@@ -787,7 +880,7 @@ def _read_argument_indices(word: str, args: list[str]) -> set[int] | None:
         return None
     positional = [i for i, a in enumerate(args) if not a.startswith("-")]
     if word in _COPIERS:
-        return _scan_copy(args).reads
+        return _scan_copy(word, args).reads
     if word in _ALL_BUT_LAST:
         return set(positional[:-1]) if len(positional) > 1 else set(positional)
     if word == "openssl":
@@ -1039,6 +1132,7 @@ def exec_reads_secret(command: str) -> str | None:
             )
 
     moved_names = _moved_key_basenames()
+    quoted = _quoted_texts(command)
     for tokens in segments:
         word, args = _command_word(tokens)
         if word is None:
@@ -1051,13 +1145,13 @@ def exec_reads_secret(command: str) -> str | None:
         ):
             return f"refused: `{word}` prints the process environment, which holds credentials"
         if word in _PRINTERS:
-            pattern_at = _search_pattern_index(word, args)
+            program_at = _program_indices(word, args) or set()
             reads = _read_argument_indices(word, args)
             if word in _COPIERS:
-                scan = _scan_copy(args)
+                scan = _scan_copy(word, args)
                 if scan.backup and scan.destination is not None:
                     destination = args[scan.destination].strip("'\"")
-                    if is_secret_path(destination):
+                    if is_secret_path(destination) or PurePath(destination).name in moved_names:
                         return (
                             f"refused: `{word}` with a backup option would rename "
                             f"{PurePath(destination).name}, a secrets file, to a name this "
@@ -1069,8 +1163,17 @@ def exec_reads_secret(command: str) -> str | None:
                 candidate = arg.strip("'\"")
                 # Any position, a destination included: `cp {.env,leak.txt}`
                 # is ONE argument until the shell expands it into a source.
+                # Program text is not filename expansion: an interpreter's
+                # one-liner, a searcher's pattern, a sed/awk/jq program — and
+                # nothing the shell saw quoted is expanded at all.
+                is_program = (
+                    word in _INTERPRETERS
+                    or index in program_at
+                    or candidate in quoted
+                    or any(ch.isspace() for ch in candidate)
+                )
                 if (
-                    index != pattern_at
+                    not is_program
                     and any(ch in candidate for ch in _GLOB_CHARS)
                     and _glob_names_secret(candidate, shell_dirs)
                 ):
@@ -1080,7 +1183,7 @@ def exec_reads_secret(command: str) -> str | None:
                     )
                 if reads is not None and index not in reads:
                     continue
-                moved = index != pattern_at and _relative_names_moved_key(
+                moved = index not in program_at and _relative_names_moved_key(
                     candidate, shell_dirs, moved_names, file_only=word in _FILE_ONLY_PRINTERS
                 )
                 if is_secret_path(candidate) or moved:
