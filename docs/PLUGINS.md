@@ -1116,7 +1116,10 @@ What happens, in order, each step a refusal:
    built by uv (the container image's) has none, so the installer runs
    `uv pip install --python <that interpreter>` with the same flags instead.
    With neither pip nor `uv` on PATH, the install is refused with a sentence
-   naming both.
+   naming both. `genus plugin remove` uninstalls through the same choice
+   (`uv pip uninstall --python <that interpreter>` without pip). With neither,
+   it refuses; `--force` then retires the plugin's workspace files and drops
+   its lockfile row without uninstalling the package.
 8. **Record** the row: verdict, wheel hash, and where it came from.
 
 Nothing signals the engine. The running daemon keeps serving the plugin set it

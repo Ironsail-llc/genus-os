@@ -318,6 +318,26 @@ def _uv_executable() -> str | None:
     return shutil.which("uv")
 
 
+#: Neither front end is available. A fixed sentence the install and the
+#: remove refusals both start with.
+_NO_INSTALLER = (
+    "No installer is available: this Python has no pip module (`python -m pip`) "
+    "and `uv` is not on PATH."
+)
+
+
+def _installer_front(verb: str) -> list[str]:
+    """``python -m pip <verb>``, else ``uv pip <verb> --python <this
+    interpreter>``; an :class:`InstallError` when neither exists. Install and
+    remove share it, so what one front end put in, the same one takes out."""
+    if _pip_module_available():
+        return [sys.executable, "-m", "pip", verb]
+    uv = _uv_executable()
+    if not uv:
+        raise InstallError(f"{_NO_INSTALLER} Install one of them, then run it again.")
+    return [uv, "pip", verb, "--python", sys.executable]
+
+
 def _pip_install_command(name: str, version: str, find_links: Path) -> list[str]:
     """The exact command, and nothing that could turn into another one.
 
@@ -331,18 +351,10 @@ def _pip_install_command(name: str, version: str, find_links: Path) -> list[str]
     venv is built by uv and ships no pip). Neither is a refusal naming both.
     """
     local = ["--no-deps", "--no-index", "--find-links", str(find_links)]
-    if _pip_module_available():
-        command = [sys.executable, "-m", "pip", "install", *local]
+    front = _installer_front("install")
+    command = [*front, *local]
+    if front[1:3] == ["-m", "pip"]:
         command += ["--disable-pip-version-check", "--no-input"]
-    else:
-        uv = _uv_executable()
-        if not uv:
-            raise InstallError(
-                "No installer is available: this Python has no pip module "
-                "(`python -m pip`) and `uv` is not on PATH. Install one of them, "
-                "then run the install again."
-            )
-        command = [uv, "pip", "install", "--python", sys.executable, *local]
     target = _plugin_target_dir()
     if target:
         command += ["--target", target, "--upgrade"]
@@ -913,11 +925,36 @@ def remove(
         result = SimpleNamespace(returncode=0, stdout="", stderr="")
         note = "the distribution was not installed; its workspace files were retired"
     else:
-        result = runner([sys.executable, "-m", "pip", "uninstall", "-y", name])
+        try:
+            front = _installer_front("uninstall")
+        except InstallError:
+            if not force:
+                raise InstallError(
+                    f"{name} was not removed. {_NO_INSTALLER} Install one of them, or "
+                    "re-run with --force to retire its workspace files and drop its "
+                    "lockfile row without uninstalling the package."
+                ) from None
+            front = []
+        if front:
+            # pip asks for confirmation; uv does not, and has no -y.
+            yes = ["-y"] if front[1:3] == ["-m", "pip"] else []
+            result = runner([*front, *yes, name])
+        else:
+            result = SimpleNamespace(returncode=0, stdout="", stderr="")
+            note = (
+                "neither pip nor uv is available, so the package was not uninstalled; "
+                "its workspace files were retired and its row dropped (--force)"
+            )
     if getattr(result, "returncode", 1) != 0:
         detail = (getattr(result, "stderr", "") or getattr(result, "stdout", "") or "").strip()
         lowered = detail.lower()
-        if "not installed" in lowered or "skipping" in lowered:
+        # pip: "Skipping X as it is not installed"; uv: the same, or
+        # "No packages to uninstall".
+        if (
+            "not installed" in lowered
+            or "skipping" in lowered
+            or "no packages to uninstall" in lowered
+        ):
             # pip exits non-zero for "it was not there". Keeping the row in that
             # case would leave the lockfile permanently describing something the
             # environment does not have.
