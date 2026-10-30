@@ -305,8 +305,10 @@ minted for the new tenant; and writes one `auth.account_moved` row to the
 audit log. If any step fails, none of it happened.
 
 Run it from a root shell: `ROBOTHOR_TENANT_ID` unset or the root's id, and
-`ROBOTHOR_DEFAULT_TENANT` the root. Unlike `move-workload`, `move-account`
-does not check this itself yet, so check it before you run the command.
+`ROBOTHOR_DEFAULT_TENANT` the root. The command refuses, dry run included,
+unless the shell's engine tenant is the root of both the account's tenant and
+the target. That also refuses a move between tenants under two different
+roots.
 
 | Flag | Use |
 |------|-----|
@@ -347,6 +349,7 @@ A move is refused, with nothing written, when:
 - the account is an `owner` and the target is a child (children have no
   owner; pass `--role admin`);
 - the target already has an account with that address;
+- the shell's engine tenant is not the root of both tenants;
 - the account's CRM contact has history in the source tenant and
   `--detach-person` was not given.
 
@@ -388,7 +391,7 @@ everything in **one transaction** and writes one `tenant.workload_moved` row
 to the audit log, filed under the root of the source tenant (the details name
 both tenants, the agents, the workflows and the counts). If any step fails,
 none of it happened. A run that finds nothing to move (a re-run of a move
-that already happened) reports zeros and writes no audit row.
+that already happened) prints `Nothing to move` and writes no audit row.
 
 Run it from the root's shell: the command refuses unless the shell's engine
 tenant (`ROBOTHOR_TENANT_ID`, else `ROBOTHOR_DEFAULT_TENANT`) is the root of
