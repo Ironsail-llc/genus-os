@@ -368,3 +368,72 @@ def test_the_chain_stops_when_its_budget_is_spent(completion_client, monkeypatch
     assert response.status_code == 503
     assert response.json() == {"detail": "dashboard completion unavailable"}
     assert time.monotonic() - started < 5
+
+
+def _timeouts_for(client, config, purpose: str, monkeypatch) -> tuple[float, float]:
+    """(per-model timeout handed to llm_call, overall deadline around it)."""
+    import asyncio
+
+    deadlines: list[float] = []
+    real_wait_for = asyncio.wait_for
+
+    async def _recording_wait_for(awaitable, timeout):
+        deadlines.append(timeout)
+        return await real_wait_for(awaitable, timeout)
+
+    monkeypatch.setattr(completions.asyncio, "wait_for", _recording_wait_for)
+    with patch(
+        "robothor.engine.dashboards.completions.llm_call",
+        new_callable=AsyncMock,
+        return_value=_response('{"shouldUpdate":false}'),
+    ) as call:
+        response = client.post(
+            "/api/dashboard/completions",
+            json=_payload(purpose),
+            headers=_headers(config.tenant_id),
+        )
+    monkeypatch.setattr(completions.asyncio, "wait_for", real_wait_for)
+    assert response.status_code == 200
+    return call.await_args.kwargs["timeout"], deadlines[-1]
+
+
+def _four_model_chain(config, monkeypatch) -> None:
+    _defaults(
+        config.manifest_dir,
+        {"primary": "anthropic/claude-big", "canvas": "vertex_ai/gemini-fast"},
+    )
+    monkeypatch.setenv("DASHBOARD_MODEL", "gemini/override")
+    monkeypatch.setenv("ROBOTHOR_LAST_RESORT_MODEL", "ollama_chat/local")
+    # The app factory already resolved settings; read the new env.
+    from robothor.settings import reset_settings
+
+    reset_settings()
+    assert len(completions.dashboard_model_chain()) == 4
+
+
+def test_a_long_triage_chain_gives_each_model_its_floor(completion_client, monkeypatch) -> None:
+    """15s split four ways is 3.75s, too short for a slow primary to answer a
+    JSON classification; each model keeps the floor and the tail of the chain
+    may simply not get a turn before the overall deadline."""
+    client, config = completion_client
+    _four_model_chain(config, monkeypatch)
+    assert _timeouts_for(client, config, "triage", monkeypatch) == (
+        completions.TRIAGE_MIN_PER_MODEL_SECONDS,
+        completions.TRIAGE_BUDGET_SECONDS,
+    )
+    assert completions.TRIAGE_MIN_PER_MODEL_SECONDS == 5
+
+
+def test_a_single_model_triage_keeps_the_whole_budget(completion_client, monkeypatch) -> None:
+    client, config = completion_client
+    assert _timeouts_for(client, config, "triage", monkeypatch) == (15, 15)
+
+
+def test_a_long_render_chain_gives_each_model_its_floor(completion_client, monkeypatch) -> None:
+    client, config = completion_client
+    _four_model_chain(config, monkeypatch)
+    assert _timeouts_for(client, config, "render", monkeypatch) == (
+        completions.RENDER_MIN_PER_MODEL_SECONDS,
+        completions.RENDER_BUDGET_SECONDS,
+    )
+    assert completions.RENDER_MIN_PER_MODEL_SECONDS == 30
