@@ -38,16 +38,28 @@ vi.mock("@/components/chat-panel", () => ({
     ownerName,
     docked,
     onCollapse,
+    onViewOpened,
   }: {
     variant?: string;
     ownerName?: string;
     docked?: boolean;
     onCollapse?: () => void;
+    onViewOpened?: () => void;
   }) => (
-    <div data-testid="chat-panel" data-variant={variant ?? ""} data-owner={ownerName ?? ""}>
+    <div
+      data-testid="chat-panel"
+      data-variant={variant ?? ""}
+      data-owner={ownerName ?? ""}
+      data-view-opened-handler={onViewOpened ? "yes" : "no"}
+    >
       ChatPanel
       {docked && (
         <button data-testid="chat-dock-close" aria-label="Collapse chat panel" onClick={onCollapse} />
+      )}
+      {onViewOpened && (
+        <button data-testid="panel-view-opened" onClick={onViewOpened}>
+          opened
+        </button>
       )}
     </div>
   ),
@@ -103,9 +115,10 @@ vi.mock("@/lib/event-bus/use-event-stream", () => ({
   useEventStream: () => ({ events: [] }),
 }));
 
+const mockScreenSize = vi.fn(() => "desktop");
 vi.mock("@/hooks/use-mobile", () => ({
-  useScreenSize: () => "desktop",
-  useIsMobile: () => false,
+  useScreenSize: () => mockScreenSize(),
+  useIsMobile: () => mockScreenSize() === "mobile",
 }));
 
 import { AppShell } from "@/components/layout/app-shell";
@@ -117,6 +130,7 @@ describe("AppShell", () => {
     mockUseSession.mockReturnValue({ data: null, status: "unauthenticated", update: vi.fn() });
     // The dock's open state is remembered per browser — start every test fresh.
     window.localStorage.clear();
+    mockScreenSize.mockReturnValue("desktop");
     mockUseTasks.mockReturnValue({
       tasks: [
         { id: "1", title: "Test Task", status: "REVIEW" },
@@ -225,6 +239,21 @@ describe("AppShell", () => {
     });
     render(<AppShell />);
     expect(screen.getByTestId("chat-panel")).toHaveAttribute("data-owner", "");
+  });
+
+  it("on mobile, a landing quick action that opened a view takes the operator to it", () => {
+    mockScreenSize.mockReturnValue("mobile");
+    render(<AppShell />);
+    // The mobile chat home has no canvas, so the pushed view must be shown
+    // where it renders: the Dashboard view.
+    fireEvent.click(screen.getByTestId("panel-view-opened"));
+    expect(new URL(window.location.href).searchParams.get("v")).toBe("dashboard");
+    expect(screen.getByTestId("dashboard-view").style.display).toBe("flex");
+  });
+
+  it("on desktop, the canvas rail shows an opened view, so the chat home is not navigated away", () => {
+    render(<AppShell />);
+    expect(screen.getByTestId("chat-panel")).toHaveAttribute("data-view-opened-handler", "no");
   });
 
   it("switches to tasks view", () => {

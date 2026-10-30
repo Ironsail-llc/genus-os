@@ -92,11 +92,15 @@ export function useQuickActions() {
   const [failure, setFailure] = useState<SectionFailure | null>(null);
   const actions = buildQuickActions(pushView);
 
-  const run = (action: QuickAction) => {
+  /** `onOpened` runs once the action's view has been pushed, never on failure. */
+  const run = (action: QuickAction, onOpened?: () => void) => {
     setFailure(null);
-    action.handler().catch((err) => {
-      setFailure(toSectionFailure(action.failureLabel, action.endpoint, err));
-    });
+    action
+      .handler()
+      .then(() => onOpened?.())
+      .catch((err) => {
+        setFailure(toSectionFailure(action.failureLabel, action.endpoint, err));
+      });
   };
 
   return { actions, failure, run };

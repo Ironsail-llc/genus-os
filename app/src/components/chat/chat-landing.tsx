@@ -12,6 +12,12 @@ interface ChatLandingProps {
   suggestedPrompts: string[];
   /** A chip hands its text to the composer. */
   onPrompt: (prompt: string) => void;
+  /**
+   * Called once a quick action has opened its view. On desktop the canvas
+   * rail shows it by itself; on mobile the caller has to take the operator
+   * to where it renders.
+   */
+  onViewOpened?: () => void;
 }
 
 function MetricTile({ label, testId, children }: { label: string; testId: string; children: ReactNode }) {
@@ -30,7 +36,7 @@ function MetricTile({ label, testId, children }: { label: string; testId: string
  * Dashboard view's three figures, its quick actions and the suggested
  * prompts. Read-only, no model call; the composer stays below it.
  */
-export function ChatLanding({ ownerName, suggestedPrompts, onPrompt }: ChatLandingProps) {
+export function ChatLanding({ ownerName, suggestedPrompts, onPrompt, onViewOpened }: ChatLandingProps) {
   const {
     healthFailure,
     healthyCount,
@@ -108,7 +114,7 @@ export function ChatLanding({ ownerName, suggestedPrompts, onPrompt }: ChatLandi
             return (
               <button
                 key={action.label}
-                onClick={() => run(action)}
+                onClick={() => run(action, onViewOpened)}
                 className="flex items-center gap-2 rounded-lg bg-accent/50 px-3 py-2.5 text-left text-muted-foreground transition-colors hover:bg-accent hover:text-foreground min-h-[44px]"
                 data-testid="quick-action"
               >

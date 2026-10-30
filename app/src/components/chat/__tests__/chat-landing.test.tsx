@@ -13,6 +13,7 @@ vi.mock("@/hooks/use-visual-state", () => ({
 }));
 
 import { ChatLanding } from "../chat-landing";
+import { DefaultDashboard } from "@/components/business/default-dashboard";
 
 function jsonResponse(body: unknown, status = 200): Response {
   const text = JSON.stringify(body);
@@ -79,12 +80,15 @@ function routedFetch(overrides: RouteOverrides = {}) {
 
 const PROMPTS = ["How's everything running?", "What happened today?"];
 
-function renderLanding(props: { ownerName?: string; onPrompt?: (p: string) => void } = {}) {
+function renderLanding(
+  props: { ownerName?: string; onPrompt?: (p: string) => void; onViewOpened?: () => void } = {},
+) {
   return render(
     <ChatLanding
       ownerName={props.ownerName}
       suggestedPrompts={PROMPTS}
       onPrompt={props.onPrompt ?? vi.fn()}
+      onViewOpened={props.onViewOpened}
     />,
   );
 }
@@ -157,13 +161,45 @@ describe("ChatLanding", () => {
     );
   });
 
-  it("reports a failed quick action", async () => {
+  it("reports a failed quick action, and says no view opened", async () => {
     vi.stubGlobal("fetch", routedFetch({ people: jsonResponse({}, 401) }));
-    renderLanding();
+    const onViewOpened = vi.fn();
+    renderLanding({ onViewOpened });
     fireEvent.click(screen.getByRole("button", { name: /show my contacts/i }));
     const error = await screen.findByTestId("section-error-actions");
     expect(error.textContent).toMatch(/unavailable \(401\)/i);
     expect(error.textContent).toContain("/api/bridge/api/people");
+    expect(onViewOpened).not.toHaveBeenCalled();
+  });
+
+  it("tells its caller once a quick action has opened its view", async () => {
+    const onViewOpened = vi.fn();
+    renderLanding({ onViewOpened });
+    fireEvent.click(screen.getByRole("button", { name: /show my contacts/i }));
+    await vi.waitFor(() => expect(onViewOpened).toHaveBeenCalledTimes(1));
+    expect(mockPushView).toHaveBeenCalledWith(
+      expect.objectContaining({ toolName: "render_contact_table" }),
+    );
+  });
+
+  it("shares one health poll with the Dashboard view mounted beside it", () => {
+    vi.useFakeTimers();
+    const fetchMock = routedFetch();
+    vi.stubGlobal("fetch", fetchMock);
+    const healthCalls = () =>
+      fetchMock.mock.calls.filter(([input]) => String(input).includes("/api/health")).length;
+
+    render(
+      <>
+        <DefaultDashboard />
+        <ChatLanding suggestedPrompts={PROMPTS} onPrompt={vi.fn()} />
+      </>,
+    );
+    expect(healthCalls()).toBe(1);
+    act(() => {
+      vi.advanceTimersByTime(30000);
+    });
+    expect(healthCalls()).toBe(2);
   });
 
   it("keeps the suggested prompts, and a chip hands its text to the composer", () => {

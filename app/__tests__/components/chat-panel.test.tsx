@@ -69,10 +69,12 @@ vi.mock("@/components/chat/chat-landing", () => ({
     ownerName,
     suggestedPrompts,
     onPrompt,
+    onViewOpened,
   }: {
     ownerName?: string;
     suggestedPrompts: string[];
     onPrompt: (prompt: string) => void;
+    onViewOpened?: () => void;
   }) => (
     <div
       data-testid="chat-landing"
@@ -81,6 +83,9 @@ vi.mock("@/components/chat/chat-landing", () => ({
     >
       <button data-testid="landing-prompt" onClick={() => onPrompt(suggestedPrompts[0])}>
         {suggestedPrompts[0]}
+      </button>
+      <button data-testid="landing-view-opened" onClick={() => onViewOpened?.()}>
+        opened
       </button>
     </div>
   ),
@@ -161,17 +166,17 @@ describe("ChatPanel", () => {
   });
 
   describe("home landing", () => {
-    it("shows the landing, not the compact empty state, when the panel is the page", () => {
+    it("shows the landing, not the compact empty state, when the panel is the page", async () => {
       render(<ChatPanel variant="page" ownerName="Alice" />);
-      expect(screen.getByTestId("chat-landing")).toBeInTheDocument();
+      expect(await screen.findByTestId("chat-landing")).toBeInTheDocument();
       expect(screen.getByTestId("chat-landing")).toHaveAttribute("data-owner", "Alice");
       expect(screen.queryByTestId("empty-state")).not.toBeInTheDocument();
     });
 
-    it("gives the landing no prompt that repeats one of its quick actions", () => {
+    it("gives the landing no prompt that repeats one of its quick actions", async () => {
       render(<ChatPanel variant="page" />);
       const prompts = JSON.parse(
-        screen.getByTestId("chat-landing").getAttribute("data-prompts") ?? "[]",
+        (await screen.findByTestId("chat-landing")).getAttribute("data-prompts") ?? "[]",
       ) as string[];
       // "Show my contacts" and "Check the inbox" are quick actions on the landing.
       expect(prompts).toEqual(["How's everything running?", "What happened today?"]);
@@ -193,11 +198,46 @@ describe("ChatPanel", () => {
       expect(screen.queryByTestId("chat-landing")).not.toBeInTheDocument();
     });
 
-    it("hands a landing prompt to the composer", () => {
+    it("hands a landing prompt to the composer", async () => {
       render(<ChatPanel variant="page" />);
-      fireEvent.click(screen.getByTestId("landing-prompt"));
+      fireEvent.click(await screen.findByTestId("landing-prompt"));
       const input = screen.getByTestId("chat-input") as HTMLTextAreaElement;
       expect(input.value).toBe("How's everything running?");
+    });
+
+    it("waits for the history before showing the landing, so a conversation does not flash it", async () => {
+      let answerHistory: (value: unknown) => void = () => {};
+      mockFetch.mockImplementation((url: string) => {
+        if (String(url).startsWith("/api/chat/history")) {
+          return new Promise((resolve) => {
+            answerHistory = resolve;
+          });
+        }
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
+      });
+      render(<ChatPanel variant="page" />);
+      await new Promise((r) => setTimeout(r, 20));
+      expect(screen.queryByTestId("chat-landing")).not.toBeInTheDocument();
+
+      answerHistory({ ok: true, json: () => Promise.resolve({ messages: [] }) });
+      expect(await screen.findByTestId("chat-landing")).toBeInTheDocument();
+    });
+
+    it("shows the landing when the history cannot be read", async () => {
+      mockFetch.mockImplementation((url: string) =>
+        String(url).startsWith("/api/chat/history")
+          ? Promise.resolve({ ok: false, json: () => Promise.resolve({}) })
+          : Promise.resolve({ ok: true, json: () => Promise.resolve({}) }),
+      );
+      render(<ChatPanel variant="page" />);
+      expect(await screen.findByTestId("chat-landing")).toBeInTheDocument();
+    });
+
+    it("passes on that a landing quick action opened a view", async () => {
+      const onViewOpened = vi.fn();
+      render(<ChatPanel variant="page" onViewOpened={onViewOpened} />);
+      fireEvent.click(await screen.findByTestId("landing-view-opened"));
+      expect(onViewOpened).toHaveBeenCalledTimes(1);
     });
 
     it("gives way to the conversation once a message arrives", async () => {
