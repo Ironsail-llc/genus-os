@@ -1,3 +1,9 @@
+## [1.119.0](https://github.com/Ironsail-llc/genus-os/compare/v1.118.0...v1.119.0) (2026-10-30)
+
+### Features
+
+* **engine:** tenant inbox decisions, policy actors, approved trigger (GEN-85) ([#751](https://github.com/Ironsail-llc/genus-os/issues/751)) ([d8bc68f](https://github.com/Ironsail-llc/genus-os/commit/d8bc68f70e6d09bdf188d855f6399aa576ea2b64)), closes [#750](https://github.com/Ironsail-llc/genus-os/issues/750) [#750](https://github.com/Ironsail-llc/genus-os/issues/750) [#750](https://github.com/Ironsail-llc/genus-os/issues/750) [#763](https://github.com/Ironsail-llc/genus-os/issues/763)
+
 ## [1.118.0](https://github.com/Ironsail-llc/genus-os/compare/v1.117.0...v1.118.0) (2026-10-30)
 
 ### Features
