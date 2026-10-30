@@ -73,7 +73,11 @@ vi.mock("@/components/chat/chat-landing", () => ({
     suggestedPrompts: string[];
     onPrompt: (prompt: string) => void;
   }) => (
-    <div data-testid="chat-landing" data-owner={ownerName ?? ""}>
+    <div
+      data-testid="chat-landing"
+      data-owner={ownerName ?? ""}
+      data-prompts={JSON.stringify(suggestedPrompts)}
+    >
       <button data-testid="landing-prompt" onClick={() => onPrompt(suggestedPrompts[0])}>
         {suggestedPrompts[0]}
       </button>
@@ -161,6 +165,25 @@ describe("ChatPanel", () => {
       expect(screen.getByTestId("chat-landing")).toBeInTheDocument();
       expect(screen.getByTestId("chat-landing")).toHaveAttribute("data-owner", "Alice");
       expect(screen.queryByTestId("empty-state")).not.toBeInTheDocument();
+    });
+
+    it("gives the landing no prompt that repeats one of its quick actions", () => {
+      render(<ChatPanel variant="page" />);
+      const prompts = JSON.parse(
+        screen.getByTestId("chat-landing").getAttribute("data-prompts") ?? "[]",
+      ) as string[];
+      // "Show my contacts" and "Check the inbox" are quick actions on the landing.
+      expect(prompts).toEqual(["How's everything running?", "What happened today?"]);
+    });
+
+    it("keeps every suggested prompt in the dock", () => {
+      render(<ChatPanel variant="dock" />);
+      expect(screen.getAllByTestId("suggested-prompt").map((b) => b.textContent)).toEqual([
+        "How's everything running?",
+        "Show my contacts",
+        "Check the inbox",
+        "What happened today?",
+      ]);
     });
 
     it("keeps the compact empty state in the dock", () => {
