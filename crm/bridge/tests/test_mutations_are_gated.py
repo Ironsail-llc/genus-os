@@ -240,7 +240,12 @@ def _justification(path: str) -> str | None:
 #: The handler-body gates that count. ``require_tenant_audit_reader`` and
 #: ``require_root_audit_reader`` are deliberately absent: they admit the
 #: read-only ``auditor`` role and must never guard a mutation.
-MUTATION_GATES = ("require_operator(", "require_root_operator(", "require_tenant_admin(")
+MUTATION_GATES = (
+    "require_operator(",
+    "require_root_operator(",
+    "require_tenant_admin(",
+    "require_tenant_operator(",
+)
 
 #: Appliance-wide mutation surfaces: guardrail flags, settings, plugins, the
 #: marketplace install state (which writes the bridge host's own workspace) and
