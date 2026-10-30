@@ -753,6 +753,7 @@ describe("ProvidersPage — the fleet default model", () => {
     expect(call.body).toEqual({
       model: "anthropic/claude-sonnet-4.6",
       fallbacks: ["openrouter/openai/gpt-5.4"],
+      canvas: null,
     });
     expect(await screen.findByTestId("fleet-default-status")).toHaveTextContent(/in use|applied/i);
   });
@@ -790,6 +791,108 @@ describe("ProvidersPage — the fleet default model", () => {
   it("says that agents pinning a model keep it", async () => {
     await renderPage();
     expect(screen.getByTestId("fleet-defaults")).toHaveTextContent(/pin/i);
+  });
+});
+
+describe("ProvidersPage — the canvas model", () => {
+  it("offers 'same as the fleet default' and every catalog model", async () => {
+    await renderPage();
+    const select = screen.getByTestId("canvas-model") as HTMLSelectElement;
+    const options = Array.from(select.options).map((option) => option.value);
+    expect(options[0]).toBe("");
+    expect(select.options[0]).toHaveTextContent("Same as the fleet default");
+    expect(options).toEqual(
+      expect.arrayContaining([
+        "openrouter/openai/gpt-5.4",
+        "anthropic/claude-sonnet-4.6",
+        "ollama_chat/qwen3:8b",
+      ])
+    );
+    expect(screen.getByTestId("fleet-defaults")).toHaveTextContent(
+      "The model that draws the visual canvas. A fast model is enough here."
+    );
+  });
+
+  it("is pre-filled with the canvas model the engine reports", async () => {
+    await renderPage({
+      "GET /api/bridge/api/providers/defaults": {
+        body: {
+          primary: "openrouter/openai/gpt-5.4",
+          fallbacks: [],
+          canvas: "ollama_chat/qwen3:8b",
+        },
+      },
+    });
+    await vi.waitFor(() => {
+      expect((screen.getByTestId("canvas-model") as HTMLSelectElement).value).toBe(
+        "ollama_chat/qwen3:8b"
+      );
+    });
+  });
+
+  it("defaults to the fleet model when none is configured", async () => {
+    await renderPage({
+      "GET /api/bridge/api/providers/defaults": {
+        body: { primary: "openrouter/openai/gpt-5.4", fallbacks: [] },
+      },
+    });
+    await vi.waitFor(() => {
+      expect((screen.getByTestId("fleet-default-model") as HTMLSelectElement).value).toBe(
+        "openrouter/openai/gpt-5.4"
+      );
+    });
+    expect((screen.getByTestId("canvas-model") as HTMLSelectElement).value).toBe("");
+  });
+
+  it("is saved by Save default", async () => {
+    await renderPage({
+      "GET /api/bridge/api/providers/defaults": {
+        body: { primary: "openrouter/openai/gpt-5.4", fallbacks: [] },
+      },
+      "PATCH /api/bridge/api/providers/defaults": {
+        body: {
+          model: "openrouter/openai/gpt-5.4",
+          fallbacks: [],
+          canvas: "ollama_chat/qwen3:8b",
+          applied: true,
+        },
+      },
+    });
+    await vi.waitFor(() => {
+      expect((screen.getByTestId("fleet-default-model") as HTMLSelectElement).value).toBe(
+        "openrouter/openai/gpt-5.4"
+      );
+    });
+    fireEvent.change(screen.getByTestId("canvas-model"), {
+      target: { value: "ollama_chat/qwen3:8b" },
+    });
+    fireEvent.click(screen.getByTestId("fleet-default-save"));
+
+    const call = await vi.waitFor(() => {
+      const found = calls.find((c) => c.method === "PATCH");
+      expect(found).toBeDefined();
+      return found!;
+    });
+    expect(call.body).toEqual({
+      model: "openrouter/openai/gpt-5.4",
+      fallbacks: [],
+      canvas: "ollama_chat/qwen3:8b",
+    });
+  });
+
+  it("keeps an off-catalog canvas model visible and blocks the save", async () => {
+    await renderPage({
+      "GET /api/bridge/api/providers/defaults": {
+        body: { primary: "openrouter/openai/gpt-5.4", fallbacks: [], canvas: "vertex_ai/unlisted" },
+      },
+    });
+    await vi.waitFor(() => {
+      expect((screen.getByTestId("canvas-model") as HTMLSelectElement).value).toBe(
+        "vertex_ai/unlisted"
+      );
+    });
+    expect(screen.getByTestId("fleet-default-blocked")).toHaveTextContent("vertex_ai/unlisted");
+    expect(screen.getByTestId("fleet-default-save")).toBeDisabled();
   });
 });
 
