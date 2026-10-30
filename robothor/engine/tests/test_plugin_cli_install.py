@@ -238,3 +238,52 @@ def test_install_accepts_the_index_and_review_flags() -> None:
     assert args.index == "https://example.invalid/index.json"
     assert args.accept_review is True
     assert args.scan_prompts is True
+
+
+# ---------------------------------------------------------------------------
+# the installer front end: pip, else uv, else a sentence naming both
+# ---------------------------------------------------------------------------
+
+
+def _install_with(isolated, monkeypatch, *, pip_module: bool, uv: str | None) -> tuple[int, _Pip]:
+    monkeypatch.setattr(installer, "_pip_module_available", lambda: pip_module, raising=False)
+    monkeypatch.setattr(installer, "_uv_executable", lambda: uv, raising=False)
+    path = isolated / "acme_tools-1.2.3-py3-none-any.whl"
+    data = _wheel(path)
+    pip = _Pip()
+    monkeypatch.setattr(installer, "_run_pip", pip)
+    code = cmd_plugin(_args("install", name=str(path), sha256=hashlib.sha256(data).hexdigest()))
+    return code, pip
+
+
+def test_python_m_pip_is_used_when_the_interpreter_has_pip(isolated, capsys, monkeypatch) -> None:
+    import sys
+
+    code, pip = _install_with(isolated, monkeypatch, pip_module=True, uv="/opt/bin/uv")
+    assert code == 0, capsys.readouterr().err
+    assert pip.calls[0][:4] == [sys.executable, "-m", "pip", "install"]
+
+
+def test_uv_pip_installs_into_this_interpreter_when_it_has_no_pip(
+    isolated, capsys, monkeypatch
+) -> None:
+    """A uv-built venv ships no pip; `uv pip --python` installs into it."""
+    import sys
+
+    code, pip = _install_with(isolated, monkeypatch, pip_module=False, uv="/opt/bin/uv")
+    assert code == 0, capsys.readouterr().err
+    (command,) = pip.calls
+    assert command[:5] == ["/opt/bin/uv", "pip", "install", "--python", sys.executable]
+    assert "--no-deps" in command and "--no-index" in command and "--find-links" in command
+    assert command[-1] == "acme-tools==1.2.3"
+    # pip-only flags uv does not accept
+    assert "--disable-pip-version-check" not in command and "--no-input" not in command
+
+
+def test_neither_pip_nor_uv_is_a_sentence_naming_both(isolated, capsys, monkeypatch) -> None:
+    code, pip = _install_with(isolated, monkeypatch, pip_module=False, uv=None)
+    err = capsys.readouterr().err
+    assert code == 2
+    assert "pip" in err and "uv" in err
+    assert "Traceback" not in err
+    assert pip.calls == []
