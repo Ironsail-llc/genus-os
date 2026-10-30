@@ -891,6 +891,47 @@ class TestProvider:
         assert FINGERPRINT_PREFIX in blob
 
 
+class TestStoreDefaultModel:
+    """The wizard's model choice goes to the engine, which owns ``_defaults.yaml``.
+
+    In a container deployment the bridge has no workspace volume, so a file
+    written here never reached the process that reads it.
+    """
+
+    async def test_it_sends_the_model_to_the_engines_write_route(self, tmp_path, monkeypatch):
+        import routers.setup as setup_router
+
+        calls: list[tuple[str, str, object]] = []
+
+        async def fake_engine(method, path, *, json=None, timeout=30):
+            calls.append((method, path, json))
+            return 200, {"primary": "openrouter/openai/gpt-5.4", "fallbacks": []}
+
+        manifests = tmp_path / "manifests"
+        manifests.mkdir()
+        monkeypatch.setenv("ROBOTHOR_MANIFEST_DIR", str(manifests))
+        with patch("routers.providers.engine_request", new=fake_engine):
+            await setup_router._store_default_model("openrouter/openai/gpt-5.4")
+
+        assert calls == [
+            ("PUT", "/api/admin/defaults", {"model": "openrouter/openai/gpt-5.4", "fallbacks": []})
+        ]
+        assert list(manifests.iterdir()) == [], "the bridge wrote the file itself"
+
+    async def test_an_engine_refusal_does_not_abort_the_step(self, monkeypatch, caplog):
+        """The test connection that follows reports the verdict the operator
+        acts on; a refused write is logged, not raised."""
+        import routers.setup as setup_router
+
+        async def refusing_engine(method, path, *, json=None, timeout=30):
+            return 502, {"error": "engine unavailable"}
+
+        with patch("routers.providers.engine_request", new=refusing_engine):
+            await setup_router._store_default_model("openrouter/openai/gpt-5.4")
+
+        assert "default model" in caplog.text
+
+
 async def _noop() -> None:
     return None
 

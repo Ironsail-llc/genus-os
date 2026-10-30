@@ -1124,7 +1124,8 @@ under that prefix inherits the requirement rather than having to remember it.
 
 | Route | Module | Purpose |
 |-------|--------|---------|
-| `GET /api/admin/providers`, `POST .../{id}/test`, `GET /api/admin/models`, `POST /api/admin/secrets/reload`, `POST /api/admin/defaults/reload` | `admin_providers.py` | Credentials, the model catalogue, a real test completion |
+| `GET /api/admin/providers`, `POST .../{id}/test`, `GET /api/admin/models`, `POST /api/admin/secrets/reload` | `admin_providers.py` | Credentials, the model catalogue, a real test completion |
+| `GET /api/admin/defaults`, `PUT /api/admin/defaults`, `POST /api/admin/defaults/reload` | `admin_providers.py` | The fleet default model block in `_defaults.yaml`. `PUT` is the only writer: it validates the ids against the engine's catalogue, replaces `model.primary` / `model.fallbacks` atomically (every other key survives) in the engine's manifest dir, and reloads before it answers. The bridge's `PATCH /api/providers/defaults` (the Providers page) and the setup wizard proxy to it, because the bridge may have no workspace volume. `reload` is for a file changed by hand on the engine's volume |
 | `POST /api/admin/scheduler/reconcile` | `admin_scheduler.py` | Re-derive the job set; answers `{added, replaced, refreshed, pruned, blocked, clean}`, or 503 when this process holds no scheduler |
 | `GET /api/admin/tools` | `admin_scheduler.py` | The registered tool names a manifest may name. The bridge's manifest validator reads this rather than importing `ToolRegistry`, because only the engine process knows what its plugins contributed |
 | `POST /api/admin/approvals/escalation/{id}` | `admin_approvals.py` | Settle a pending permission escalation. The request is an `asyncio.Event` in **this** process, so the bridge proxies here rather than writing a row; 404 when the prompt is gone (timed out, already decided, previous process), 503 when this engine holds no manager |

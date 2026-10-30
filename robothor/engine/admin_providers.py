@@ -30,18 +30,21 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import re
+import tempfile
+import threading
 import time
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import yaml
 from pydantic import BaseModel, Field, SecretStr
 
 from robothor.engine import key_pool
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from fastapi import FastAPI
 
 logger = logging.getLogger(__name__)
@@ -96,6 +99,13 @@ class TestConnectionRequest(BaseModel):
     # formats an exception. A plain str would put an unstored credential into
     # the journal the first time anything below this line raised.
     api_key: SecretStr | None = Field(default=None)
+
+
+class DefaultsWrite(BaseModel):
+    """The fleet default model block the Providers page saves."""
+
+    model: str = Field(min_length=1)
+    fallbacks: list[str] = Field(default_factory=list)
 
 
 def _timestamps_for_vault_slots() -> dict[str, str]:
@@ -257,13 +267,79 @@ def known_models() -> list[dict[str, Any]]:
     return models
 
 
+#: One read-modify-write of ``_defaults.yaml`` at a time. Two saves racing
+#: would otherwise each read the old file and the second rename would drop
+#: whatever the first one changed.
+_DEFAULTS_WRITE_LOCK = threading.Lock()
+
+
+def _write_defaults_atomically(path: Path, data: dict[str, Any]) -> None:
+    """Replace ``_defaults.yaml`` in one step.
+
+    A torn write here is not a lost setting, it is an unparseable manifest
+    layer that every agent on the instance inherits. Temp file in the same
+    directory (so the rename stays atomic), fsync, then rename; on any failure
+    the temp file goes and the previous file is untouched.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    temp_path = Path(name)
+    try:
+        with os.fdopen(descriptor, "w") as handle:
+            yaml.safe_dump(data, handle, sort_keys=False, allow_unicode=True)
+            handle.flush()
+            os.fsync(handle.fileno())
+        temp_path.replace(path)
+    except BaseException:
+        temp_path.unlink(missing_ok=True)
+        raise
+
+
+def _merge_model_block(path: Path, primary: str, fallbacks: list[str]) -> None:
+    """Set ``model.primary`` / ``model.fallbacks`` and change nothing else.
+
+    Everything already in the file survives, including the other keys inside
+    ``model:``: a hand-written ``temperature`` is not collateral for changing a
+    model id. Comments do not survive — PyYAML is what the engine parses this
+    file with, and a second YAML library on the write side would be a second
+    opinion about what the file means.
+    """
+    from fastapi import HTTPException
+
+    with _DEFAULTS_WRITE_LOCK:
+        existing: dict[str, Any] = {}
+        if path.exists():
+            loaded = yaml.safe_load(path.read_text()) or {}
+            if not isinstance(loaded, dict):
+                raise HTTPException(status_code=500, detail="_defaults.yaml is not a mapping")
+            existing = loaded
+
+        model_block = dict(existing.get("model") or {})
+        model_block["primary"] = primary
+        model_block["fallbacks"] = list(fallbacks)
+        existing["model"] = model_block
+        _write_defaults_atomically(path, existing)
+
+
+def _routable_model_ids() -> set[str]:
+    """The model ids a test connection or a fleet default may name.
+
+    The model registry plus the providers' own defaults: some of the defaults
+    are not registry entries (nothing has pinned pricing for them), and the
+    setup wizard offers exactly those.
+    """
+    catalog = {entry["id"] for entry in known_models()}
+    catalog.update(provider.default_model for provider in key_pool.PROVIDERS)
+    return catalog
+
+
 def _validate_test_model(spec: key_pool.ProviderSpec, model: str) -> None:
     """Refuse a model this provider's key has no business dialling.
 
     Two separate checks, because they stop two different things. The prefix
     check stops one provider's credential being sent to another provider's
     endpoint — the only part of this that is a security property. The catalog
-    check is the same validation ``PATCH /defaults`` applies, so a typo is a
+    check is the same validation ``PUT /defaults`` applies, so a typo is a
     422 naming the field rather than a 30-second wait for an upstream 404.
 
     The catalog is the model registry plus the providers' own defaults: three
@@ -278,9 +354,7 @@ def _validate_test_model(spec: key_pool.ProviderSpec, model: str) -> None:
             status_code=422,
             detail=f"model {model!r} does not belong to provider {spec.id!r}",
         )
-    catalog = {entry["id"] for entry in known_models()}
-    catalog.update(provider.default_model for provider in key_pool.PROVIDERS)
-    if model not in catalog:
+    if model not in _routable_model_ids():
         raise HTTPException(status_code=422, detail=f"unknown model id: {model}")
 
 
@@ -485,11 +559,11 @@ def register(app: FastAPI) -> None:
     async def read_defaults() -> dict[str, Any]:
         """The fleet's current default model block, as ``_defaults.yaml`` has it.
 
-        The Providers page writes this block (``PATCH /api/providers/defaults``)
-        but had nothing to READ it from, so it could not pre-select the current
-        default; the first version shipped with the field blank (B6 review,
-        2026-09-14). A missing file is an instance with no defaults, not an
-        error.
+        The Providers page writes this block (``PUT /defaults``, through the
+        bridge's ``PATCH /api/providers/defaults``) but had nothing to READ it
+        from, so it could not pre-select the current default; the first
+        version shipped with the field blank (B6 review, 2026-09-14). A
+        missing file is an instance with no defaults, not an error.
         """
         from robothor.engine import config as engine_config
 
@@ -500,16 +574,53 @@ def register(app: FastAPI) -> None:
             "fallbacks": list(model_block.get("fallbacks") or []),
         }
 
+    @router.put("/defaults")
+    async def write_defaults(body: DefaultsWrite) -> dict[str, Any]:
+        """Point the fleet at a different primary model and fallback chain.
+
+        The engine writes ``_defaults.yaml`` because it is the process that
+        reads it: in a container deployment the bridge has no workspace volume,
+        so a write made there never reached the fleet. Manifests stay the
+        source of truth (design decision D5) — this writes the ``model:``
+        block, reloads it in-process, and answers with what the engine now
+        runs, in the shape ``GET /defaults`` uses.
+        """
+        from robothor.engine import config as engine_config
+
+        known = _routable_model_ids()
+        unknown = [name for name in [body.model, *body.fallbacks] if name not in known]
+        if unknown:
+            raise HTTPException(
+                status_code=422,
+                detail=f"unknown model id(s): {', '.join(sorted(unknown))}",
+            )
+
+        manifest_dir = _manifest_dir()
+        # Read-modify-write plus an fsync: filesystem work, off the event loop.
+        await asyncio.to_thread(
+            _merge_model_block,
+            manifest_dir / "_defaults.yaml",
+            body.model,
+            list(body.fallbacks),
+        )
+        engine_config.reset_defaults_cache()
+        defaults = engine_config._load_defaults(manifest_dir)
+        model_block = defaults.get("model") or {}
+        return {
+            "primary": model_block.get("primary"),
+            "fallbacks": list(model_block.get("fallbacks") or []),
+        }
+
     @router.post("/defaults/reload")
     async def reload_defaults() -> dict[str, Any]:
-        """Re-read ``_defaults.yaml`` after the UI has rewritten it.
+        """Re-read ``_defaults.yaml`` after something else has rewritten it.
 
-        Manifests stay the source of truth (design decision D5), so a UI that
-        writes YAML has to tell the engine — otherwise the fleet keeps running
-        on the model block it parsed at boot. ``_load_defaults`` caches on
-        mtime, which usually notices a rename; this makes "usually" into
-        "always", and gives the writer something to await so the response can
-        honestly say the change is live.
+        ``PUT /defaults`` reloads on its own; this is for a file changed by
+        hand or by a tool on the engine's own volume. Manifests stay the
+        source of truth (design decision D5), so whoever writes the YAML has
+        to tell the engine — otherwise the fleet keeps running on the model
+        block it parsed at boot. ``_load_defaults`` caches on mtime, which
+        usually notices a rename; this makes "usually" into "always".
         """
         from robothor.engine import config as engine_config
 

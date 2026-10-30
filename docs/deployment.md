@@ -367,6 +367,11 @@ name, and the credential for each provider comes from the environment. Set one
 key per provider you use and name none you do not: a provider whose key is
 absent is simply never tried.
 
+The fleet default can also be changed from the dashboard's Providers page
+(**Save default**) or the setup wizard. The engine writes `_defaults.yaml` into
+its own manifest directory and reloads it before it answers, so the bridge
+needs no access to the workspace volume for this.
+
 | Models | Environment |
 |---|---|
 | `openai/*` | `OPENAI_API_KEY`; `OPENAI_API_BASE` when the key belongs to a regional project (for example a US data-residency key, which `api.openai.com` rejects) |

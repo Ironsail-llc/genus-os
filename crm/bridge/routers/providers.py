@@ -18,12 +18,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
-import tempfile
-from pathlib import Path
 from typing import Any
 
-import yaml
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, SecretStr
@@ -91,21 +87,6 @@ class TestConnectionProxy(BaseModel):
 class DefaultsWrite(BaseModel):
     model: str = Field(min_length=1)
     fallbacks: list[str] = Field(default_factory=list)
-
-
-def _manifest_dir() -> Path:
-    """The directory the ENGINE loads manifests from.
-
-    Resolved through ``EngineConfig`` — the same authority
-    ``admin_providers`` reads — because the bridge's own
-    ``ROBOTHOR_AGENTS_DIR`` is the legacy *fleet-listing* override and is not
-    necessarily where the engine looks. Writing ``_defaults.yaml`` to the
-    listing directory produced a save that reported success, survived a
-    reload, and changed nothing about which model the fleet actually ran.
-    """
-    from robothor.engine.config import EngineConfig
-
-    return EngineConfig.from_env().manifest_dir
 
 
 def _known_provider(provider_id: str) -> Any:
@@ -212,13 +193,18 @@ async def _refuse_to_strand_a_spare(provider_id: str, slot: int) -> None:
         )
 
 
-async def _reload_engine_defaults() -> bool:
-    """Ask the engine to re-read ``_defaults.yaml``. True if it confirmed."""
-    status, body = await engine_request("POST", "/api/admin/defaults/reload")
-    if status >= 400:
-        logger.warning("Engine refused a defaults reload (status %s)", status)
-        return False
-    return bool(isinstance(body, dict) and body.get("reloaded"))
+async def _write_engine_defaults(primary: str, fallbacks: list[str]) -> tuple[int, Any]:
+    """Ask the engine to write the fleet's default model block and reload it.
+
+    One call, because the engine validates, writes and reloads in the same
+    request: there is no window in which the file says one model and the fleet
+    runs another. ``(status, body)`` exactly as the engine answered.
+    """
+    return await engine_request(
+        "PUT",
+        "/api/admin/defaults",
+        json={"model": primary, "fallbacks": list(fallbacks)},
+    )
 
 
 @router.get("/api/providers")
@@ -322,51 +308,6 @@ async def test_provider(
     return _proxied(status, result)
 
 
-def _write_defaults_atomically(path: Path, data: dict[str, Any]) -> None:
-    """Replace ``_defaults.yaml`` in one step.
-
-    A torn write here is not a lost setting, it is an unparseable manifest
-    layer that every agent on the instance inherits — the same shape as the
-    YAML typo that deleted the main agent for nearly four hours. Temp file in
-    the same directory (so ``os.replace`` stays atomic) and rename.
-    """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
-    temp_path = Path(name)
-    try:
-        with os.fdopen(descriptor, "w") as handle:
-            yaml.safe_dump(data, handle, sort_keys=False, allow_unicode=True)
-            handle.flush()
-            os.fsync(handle.fileno())
-        temp_path.replace(path)
-    except BaseException:
-        temp_path.unlink(missing_ok=True)
-        raise
-
-
-def _merge_model_block(path: Path, primary: str, fallbacks: list[str]) -> None:
-    """Set ``model.primary`` / ``model.fallbacks`` and change nothing else.
-
-    Everything already in the file survives, including the other keys inside
-    ``model:``: a hand-written ``temperature`` is not collateral for changing a
-    model id. Comments do not survive — PyYAML is what the engine parses this
-    file with, and a second YAML library on the write side would be a second
-    opinion about what the file means.
-    """
-    existing: dict[str, Any] = {}
-    if path.exists():
-        loaded = yaml.safe_load(path.read_text()) or {}
-        if not isinstance(loaded, dict):
-            raise HTTPException(status_code=500, detail="_defaults.yaml is not a mapping")
-        existing = loaded
-
-    model_block = dict(existing.get("model") or {})
-    model_block["primary"] = primary
-    model_block["fallbacks"] = list(fallbacks)
-    existing["model"] = model_block
-    _write_defaults_atomically(path, existing)
-
-
 @router.get("/api/providers/defaults")
 async def get_default_models(request: Request) -> JSONResponse:
     """The fleet's current default model and fallback chain, for the form to pre-select."""
@@ -376,44 +317,21 @@ async def get_default_models(request: Request) -> JSONResponse:
 
 
 @router.patch("/api/providers/defaults")
-async def set_default_models(body: DefaultsWrite, request: Request) -> dict[str, Any]:
+async def set_default_models(body: DefaultsWrite, request: Request) -> JSONResponse:
     """Point the fleet at a different primary model and fallback chain.
 
-    Manifests stay the source of truth (design decision D5), so this writes
-    the ``model:`` block of ``_defaults.yaml`` and nothing else — every other
-    key in that file, and every other key inside ``model:``, survives
-    untouched. A hand-written ``temperature`` is not collateral for changing a
-    model id.
+    Manifests stay the source of truth (design decision D5): the engine writes
+    the ``model:`` block of ``_defaults.yaml`` — every other key in that file,
+    and every other key inside ``model:``, survives — validates the ids against
+    its own catalog, and reloads before it answers. The bridge never touches
+    the file. An engine refusal (an unknown model id, or the engine being
+    unreachable) is passed through as the engine gave it.
     """
     actor = require_operator(request)
 
-    status, catalog = await engine_request("GET", "/api/admin/models")
-    if status >= 400 or not isinstance(catalog, dict):
-        raise HTTPException(status_code=502, detail="could not read the model catalog")
-    known = {entry["id"] for entry in catalog.get("models", [])}
-
-    unknown = [name for name in [body.model, *body.fallbacks] if name not in known]
-    if unknown:
-        raise HTTPException(
-            status_code=422,
-            detail=f"unknown model id(s): {', '.join(sorted(unknown))}",
-        )
-
-    # Read-modify-write plus an fsync: filesystem work, off the event loop for
-    # the same reason the vault write is.
-    await asyncio.to_thread(
-        _merge_model_block,
-        _manifest_dir() / "_defaults.yaml",
-        body.model,
-        list(body.fallbacks),
-    )
-
-    # Manifests are the source of truth, so the write is only half the act:
-    # the engine parsed the model block at boot and caches it, and until it is
-    # told, the fleet keeps running on the model the operator just replaced.
-    # This is design decision D5's "write validated YAML, then call engine
-    # reconcile".
-    in_effect = await _reload_engine_defaults()
+    status, result = await _write_engine_defaults(body.model, list(body.fallbacks))
+    if status >= 400 or not isinstance(result, dict):
+        return _proxied(status, result)
 
     audited(
         request,
@@ -421,14 +339,17 @@ async def set_default_models(body: DefaultsWrite, request: Request) -> dict[str,
         action=body.model,
         primary=body.model,
         fallback_count=len(body.fallbacks),
-        applied=in_effect,
+        applied=True,
         actor_hint=actor,
     )
-    return {
-        "model": body.model,
-        "fallbacks": list(body.fallbacks),
-        # Whether the ENGINE is running on it, not merely whether the file says
-        # so. "Saved" and "in use" have been two different states on this
-        # appliance often enough to be worth one boolean.
-        "applied": in_effect,
-    }
+    return _proxied(
+        status,
+        {
+            "model": result.get("primary"),
+            "fallbacks": list(result.get("fallbacks") or []),
+            # Whether the ENGINE is running on it, not merely whether the file
+            # says so. The engine reloads before it answers, so a success here
+            # is "in use"; the field stays because the dashboard reads it.
+            "applied": True,
+        },
+    )
