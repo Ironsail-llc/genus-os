@@ -245,6 +245,20 @@ def test_a_proposal_with_a_body_shows_every_other_field_too(child_admin, stores,
     assert rest == {"to": "bob@example.com", "cc": ["carol@example.com"], "urgent": True}
 
 
+def test_an_envelope_key_the_envelope_cannot_show_is_printed_with_the_rest(child_admin, stores, ops):
+    """A recipient given as an object is not an envelope string, so it goes in the detail."""
+    payload = {"recipient": {"email": "bob@example.com", "name": "Bob"}, "body": "Hello Bob"}
+    ops.review = [{**_email_proposal(""), "kind": "acme-plugin.email", "payload": payload}]
+
+    [action] = [
+        i for i in child_admin.get("/api/approvals").json()["pending"] if i["kind"] == "action"
+    ]
+
+    assert action["envelope"] == {}
+    rest = json.loads(action["detail"][len("Hello Bob") :])
+    assert rest == {"recipient": {"email": "bob@example.com", "name": "Bob"}}
+
+
 def test_a_proposal_without_a_body_shows_its_whole_payload(child_admin, stores, ops):
     big = {"items": ["x" * 50] * 40}
     ops.review = [{**_email_proposal(""), "kind": "crm.update", "payload": big}]
