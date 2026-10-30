@@ -100,6 +100,10 @@ export function LiveCanvas() {
           reportDashboardError("welcome", String(err));
           setError(err instanceof Error ? err.message : String(err));
           setCanvasMode("error");
+        })
+        .finally(() => {
+          // Settled: nothing left in flight for the unmount cleanup to abort.
+          if (welcomeAbortRef.current === abort) welcomeAbortRef.current = null;
         });
     },
     [setCanvasMode, setDashboardCode],
@@ -119,7 +123,15 @@ export function LiveCanvas() {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    return () => welcomeAbortRef.current?.abort();
+    return () => {
+      if (!welcomeAbortRef.current) return;
+      welcomeAbortRef.current.abort();
+      welcomeAbortRef.current = null;
+      // A load cut off before it settled never happened: StrictMode's
+      // mount, cleanup, mount must start it again, not find it "done" and
+      // leave the canvas on its skeleton.
+      welcomeLoadedRef.current = false;
+    };
   }, []);
 
   // Save dashboard to session when it changes (debounced to avoid rapid-fire POSTs)
