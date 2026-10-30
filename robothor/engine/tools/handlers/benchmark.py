@@ -312,6 +312,10 @@ _BENCHMARK_EXCLUDED_TOOLS: frozenset[str] = _BENCHMARK_WITHHELD_READS | frozense
         "leave_breadcrumb",
         "record_procedure",
         "report_procedure_outcome",
+        # Knowledge-base writes: fixture text stored as a curated reference
+        # document would be read back by later real runs as fact.
+        "kb_upsert_document",
+        "kb_delete_document",
         # Task-system writes beyond the sandbox CRM set.
         "approve_task",
         "reject_task",
