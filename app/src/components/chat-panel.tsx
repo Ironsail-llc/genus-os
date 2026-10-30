@@ -18,6 +18,7 @@ import { MarkerInterceptor, stripMarkers } from "@/lib/engine/marker-interceptor
 import { ChatRecovery, type ChatRecoveryRequest } from "@/components/chat-recovery";
 import { ChatAskCard, type ApprovalKind } from "@/components/chat-ask-card";
 import { ChatLanding } from "@/components/chat/chat-landing";
+import { repeatsQuickAction } from "@/components/business/quick-action-labels";
 import {
   isKeyableAgentId,
   readStoredChatAgent,
@@ -1303,6 +1304,10 @@ export function ChatPanel({ mobile = false, variant = "dock", ownerName }: ChatP
     "What happened today?",
   ];
 
+  // The landing shows the quick actions beside the prompts; a prompt that says
+  // the same thing as one of them would be a second button with one name.
+  const landingPrompts = suggestedPrompts.filter((prompt) => !repeatsQuickAction(prompt));
+
   // A suggested prompt fills the composer; it is never sent on its own.
   const applyPrompt = (prompt: string) => {
     setInput(prompt);
@@ -1385,7 +1390,7 @@ export function ChatPanel({ mobile = false, variant = "dock", ownerName }: ChatP
           {messages.length === 0 && !isStreaming && variant === "page" && (
             <ChatLanding
               ownerName={ownerName}
-              suggestedPrompts={suggestedPrompts}
+              suggestedPrompts={landingPrompts}
               onPrompt={applyPrompt}
             />
           )}
