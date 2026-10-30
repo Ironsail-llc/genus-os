@@ -527,16 +527,21 @@ def _tokens(text: str) -> list[str]:
     except ValueError:
         pass
     # The complete lines before the bad quote are lexed properly, one at a
-    # time; only the line that raises is split on whitespace.
+    # time. From the line that raises on, the quote state is unknown — a
+    # continuation line may close the quote and run a command — so that
+    # line and every later one are split on whitespace.
     out: list[str] = []
+    loose = False
     for line in text.splitlines():
         if out:
             out.append("\n")
-        try:
-            tokens = list(_lexer(line))
-        except ValueError:
-            tokens = _split_loosely(line)
-        out.extend(tokens)
+        if not loose:
+            try:
+                out.extend(list(_lexer(line)))
+                continue
+            except ValueError:
+                loose = True
+        out.extend(_split_loosely(line))
     return out
 
 
