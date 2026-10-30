@@ -142,6 +142,39 @@ def test_only_unquoted_globs_in_file_operands_are_exempt(workspace, command) -> 
     assert exec_reads_secret(command), command
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        # A shell quote may span a newline: the glob after it is NOT quoted.
+        "echo 'a\n' ; cat .en?",
+        'echo "a\n" ; cat .en*',
+        # An unclosed quote cannot be judged at all: fail closed.
+        "echo 'a ; cat .en?",
+    ],
+)
+def test_quote_state_follows_the_whole_command(workspace, command) -> None:
+    assert exec_reads_secret(command), command
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        # A cluster that ENDS in e/c may be an option with an attached value
+        # (-rtime), not the program option: the file after it is still a file.
+        "ruby -ne print -rtime .en?",
+        "perl -ne print -Mstrict .en?",
+    ],
+)
+def test_an_attached_option_value_is_not_the_program(workspace, command) -> None:
+    assert exec_reads_secret(command), command
+
+
+def test_multi_line_commands_with_closed_quotes_still_run(workspace) -> None:
+    assert exec_reads_secret("echo 'a\n' ; cat notes.txt") is None
+    assert exec_reads_secret("perl -ne 'print if /[0-9]/' log") is None
+    assert exec_reads_secret("ruby -ne 'puts $_' -rtime log") is None
+
+
 # -- 3. a program given by option makes every positional a file ------------
 
 
