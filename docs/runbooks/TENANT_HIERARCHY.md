@@ -165,7 +165,9 @@ applies on that engine's next reload or restart.
 What the child sees: a forced plugin's switch is locked with "Set by the root
 tenant", and enable or disable on it is refused (409). A plugin forced off is
 not imported at all, and a read error on the grants keeps it refused (fail
-closed). The full rules are in [PLUGINS.md, Per tenant](../PLUGINS.md#per-tenant).
+closed), across a restart too, from the copy each engine keeps in its
+workspace (`plugins.lock.grants.json`). The child can read its grants but not
+change them: row-level security lets only the root write them. The full rules are in [PLUGINS.md, Per tenant](../PLUGINS.md#per-tenant).
 
 To check a child's grants directly:
 

@@ -1140,8 +1140,8 @@ workspace (the chart gives each cell one; on a single host, set
 To catch a shared one, each engine claims its lockfile for its tenant at boot
 in a `plugins.lock.tenant` marker beside it, and the first write claims an
 unclaimed file. A root tenant's engine (its tenant row has no parent) takes a
-claim back from any other tenant, so on a shared workspace the child is the
-one refused, whichever engine booted first. An engine whose lockfile another tenant claimed logs an error
+claim back from a child, so on a shared workspace the child is the one
+refused, whichever engine booted first; it never takes another root's claim. An engine whose lockfile another tenant claimed logs an error
 and answers enable, disable and sync with **409** naming the fix. The root tenant can override that for one child:
 a **grant** forces one plugin `on` or `off` for one child tenant.
 
@@ -1175,13 +1175,26 @@ How it works:
   grant saved; it applies on that engine's next reload or restart.
 * **Fail closed.** If the grant read errors, every plugin that was forced off
   at the last successful read stays refused, a forced `on` falls back to the
-  child's lockfile, and the error is logged. The last forced-off set is also
-  persisted beside the lockfile (`plugins.lock.forced-off.json`), so it holds
-  across a restart with the database down. With nothing to fall back on at all
-  (a brand-new engine whose first read fails), the failure is not cached and
-  the next load asks again.
+  child's lockfile, and the error is logged. The last successful read is also
+  persisted in the engine's own workspace beside the lockfile
+  (`plugins.lock.grants.json`, mode 0600, written atomically when it changes),
+  so it holds across a restart with the database down. With nothing to fall
+  back on at all (a brand-new engine whose first read fails), what the root
+  forced off cannot be known: the engine logs an **error**, forces nothing, and
+  asks again on the next load; the first read that then succeeds with anything
+  forced off reloads the plugin registries.
+* **Only the root writes a grant.** Row-level security on
+  `tenant_plugin_grants` lets a connection scoped to the child read its own
+  rows but not insert, change or delete them; only a connection scoped to the
+  row's root tenant (or an unbound one, such as the migration runner) can. The
+  bridge writes as the root.
+* **The CLI does not read them from the database.** Every `genus` command
+  registers plugin verbs at start-up, and that load applies only the persisted
+  forced-off set, with no database read and no warning. The engine, and
+  `genus plugin list`, read the grants.
 * **The audit trail.** Every grant writes a `plugin.grant` event filed under
-  the CHILD tenant, so the child's admins can see who decided.
+  the CHILD tenant, so the child's admins can see who decided; `state` is
+  `on`, `off` or `cleared`.
 * **What the root can name.** The child tenant must be a descendant of the
   root (404 otherwise); the root itself is a 422, because it decides for itself
   with enable and disable. A grant names a distribution, stored and matched in
