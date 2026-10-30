@@ -341,7 +341,10 @@ store is intended. The check never depends on the environment's name. See
 [Trusting the database's CA](../../docs/deployment.md#trusting-the-databases-ca).
 
 Production and staging NetworkPolicies default-deny ingress and egress, then
-rebuild only the declared component graph. In-chart PostgreSQL/Redis are selected by pod labels. Managed
+rebuild only the declared component graph: the dashboard calls engine, bridge
+and orchestrator; the engine calls bridge, orchestrator and NATS; the bridge calls the
+engine's admin API (at `ROBOTHOR_ENGINE_URL`, which the chart points at the
+engine Service whenever `engine.enabled`) and the orchestrator. In-chart PostgreSQL/Redis are selected by pod labels. Managed
 database, Redis, Ollama, HTTPS API, or egress-proxy access requires exact CIDRs
 and ports in Layer 3:
 
