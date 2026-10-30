@@ -54,8 +54,11 @@ def _is_root_tenant(tenant: str) -> bool:
 
     Not ``PLATFORM_TENANT``: in a child engine that constant is the child's own
     id unless ``ROBOTHOR_PLATFORM_TENANT`` is set, so comparing against it
-    would let every child take the file. False when the row cannot be read,
-    so an unreadable database never lets anybody take a claim over.
+    would let every child take the file. False when the row cannot be read:
+    for the engine's own tenant that means it takes nothing over. For the
+    current owner it would read as "not root"; that needs the owner's read to
+    fail just after this engine's succeeded, and the owner is then refused on
+    its next write, which is where the sharing surfaces anyway.
     """
     try:
         from robothor.crm.dal import get_tenant

@@ -211,8 +211,12 @@ def _persisted_path() -> Path | None:
     return None if lock is None else lock.with_name(lock.name + ".grants.json")
 
 
-def _load_persisted(tenant: str) -> dict[str, str] | None:
-    """The persisted grants for ``tenant``, or None when there is no record of them."""
+def _load_persisted(tenant: str, *, quiet: bool = False) -> dict[str, str] | None:
+    """The persisted grants for ``tenant``, or None when there is no record of them.
+
+    ``quiet`` logs an unreadable record at DEBUG instead of WARNING, for the
+    CLI path, where another user's ``genus`` meets the engine's 0600 file.
+    """
     try:
         path = _persisted_path()
         if path is None:
@@ -221,7 +225,9 @@ def _load_persisted(tenant: str) -> dict[str, str] | None:
     except FileNotFoundError:
         return None
     except Exception as exc:  # noqa: BLE001 - an unreadable record is no record
-        logger.warning("Persisted plugin grants could not be read (%s)", type(exc).__name__)
+        (logger.debug if quiet else logger.warning)(
+            "Persisted plugin grants could not be read (%s)", type(exc).__name__
+        )
         return None
     if not isinstance(data, dict) or data.get("tenant") != tenant:
         return None
@@ -270,7 +276,7 @@ def persisted_forced_off(tenant_id: str | None = None) -> dict[str, str]:
     connection timeout to print a grant warning is the wrong trade.
     """
     try:
-        grants = _load_persisted(tenant_id or _engine_tenant()) or {}
+        grants = _load_persisted(tenant_id or _engine_tenant(), quiet=True) or {}
     except Exception:  # noqa: BLE001 - quiet by contract
         return {}
     return {name: "off" for name, state in grants.items() if state == "off"}
