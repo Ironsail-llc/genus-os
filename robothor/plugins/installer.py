@@ -304,6 +304,20 @@ def _validated_requirement(name: str, version: str) -> tuple[str, str]:
     return clean_name, clean_version
 
 
+def _pip_module_available() -> bool:
+    """Whether this interpreter can run ``-m pip`` (a uv-built venv cannot)."""
+    import importlib.util
+
+    return importlib.util.find_spec("pip") is not None
+
+
+def _uv_executable() -> str | None:
+    """``uv`` on PATH, which installs into an interpreter that has no pip."""
+    import shutil
+
+    return shutil.which("uv")
+
+
 def _pip_install_command(name: str, version: str, find_links: Path) -> list[str]:
     """The exact command, and nothing that could turn into another one.
 
@@ -311,19 +325,24 @@ def _pip_install_command(name: str, version: str, find_links: Path) -> list[str]
     this a local install of one verified file rather than a network resolve.
     ``--no-deps`` is what keeps a plugin's metadata from naming the next
     download.
+
+    ``python -m pip`` when this interpreter has pip; otherwise ``uv pip
+    install --python <this interpreter>`` with the same flags (the image's
+    venv is built by uv and ships no pip). Neither is a refusal naming both.
     """
-    command = [
-        sys.executable,
-        "-m",
-        "pip",
-        "install",
-        "--no-deps",
-        "--no-index",
-        "--find-links",
-        str(find_links),
-        "--disable-pip-version-check",
-        "--no-input",
-    ]
+    local = ["--no-deps", "--no-index", "--find-links", str(find_links)]
+    if _pip_module_available():
+        command = [sys.executable, "-m", "pip", "install", *local]
+        command += ["--disable-pip-version-check", "--no-input"]
+    else:
+        uv = _uv_executable()
+        if not uv:
+            raise InstallError(
+                "No installer is available: this Python has no pip module "
+                "(`python -m pip`) and `uv` is not on PATH. Install one of them, "
+                "then run the install again."
+            )
+        command = [uv, "pip", "install", "--python", sys.executable, *local]
     target = _plugin_target_dir()
     if target:
         command += ["--target", target, "--upgrade"]
