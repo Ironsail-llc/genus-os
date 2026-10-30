@@ -173,5 +173,12 @@ test.describe("Workflows › run detail", () => {
     // The drawer itself does not scroll sideways either: long values wrap.
     const drawerOverflow = await drawer.evaluate((el) => el.scrollWidth - el.clientWidth);
     expect(drawerOverflow).toBeLessThanOrEqual(0);
+
+    // Nor does a payload box: a long value wraps instead of hiding behind a
+    // sideways scrollbar inside the <pre>.
+    const preOverflow = await drawer
+      .locator("pre")
+      .evaluateAll((els) => Math.max(...els.map((el) => el.scrollWidth - el.clientWidth)));
+    expect(preOverflow).toBeLessThanOrEqual(0);
   });
 });
