@@ -335,7 +335,14 @@ export function AppShell() {
       {mobileInChat && (
         <div className="flex-1 min-h-0 pb-14" data-testid="chat-container">
           <div className="h-full">
-            <ChatPanel mobile variant="page" ownerName={ownerName} />
+            <ChatPanel
+              mobile
+              variant="page"
+              ownerName={ownerName}
+              // No canvas on the mobile chat home: a quick action's view
+              // renders in the Dashboard view, so go there.
+              onViewOpened={() => navigate("dashboard")}
+            />
           </div>
         </div>
       )}

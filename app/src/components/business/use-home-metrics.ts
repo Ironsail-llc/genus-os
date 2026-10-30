@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useSyncExternalStore } from "react";
 import { toSectionFailure, type SectionFailure } from "./section-error";
 import { fetchHealth } from "@/lib/api/health";
 import { useTasks } from "@/hooks/use-tasks";
@@ -10,43 +10,72 @@ import type { HealthResponse } from "@/lib/api/types";
 export const HEALTH_ENDPOINT = "/api/health";
 const HEALTH_POLL_MS = 30000;
 
-// Module-level stale-while-revalidate cache: the last good health snapshot
-// paints instantly on a remount while a fresh probe runs, and survives a
-// failed refresh — so a 401 shows an inline error *next to* the last known
-// numbers instead of blanking the tile.
-let healthCache: HealthResponse | null = null;
+// One health poll for every consumer. The Dashboard view stays mounted while
+// hidden, so on the chat home it and the landing both read health; a module
+// store with one interval keeps them on the same figure and the same request.
+//
+// The last good snapshot survives a remount and a failed refresh (stale-while-
+// revalidate), so a 401 shows an inline error *next to* the last known numbers
+// instead of blanking the tile. The failure is cleared when the last consumer
+// goes, so a later mount reports only what its own probes find.
+interface HealthState {
+  health: HealthResponse | null;
+  failure: SectionFailure | null;
+}
+
+let healthState: HealthState = { health: null, failure: null };
+const healthListeners = new Set<() => void>();
+let healthInterval: ReturnType<typeof setInterval> | null = null;
+
+function setHealthState(next: HealthState) {
+  healthState = next;
+  healthListeners.forEach((listener) => listener());
+}
+
+function probeHealth() {
+  fetchHealth()
+    .then((next) => setHealthState({ health: next, failure: null }))
+    .catch((err: unknown) =>
+      setHealthState({
+        health: healthState.health,
+        failure: toSectionFailure("System health", HEALTH_ENDPOINT, err),
+      }),
+    );
+}
+
+function subscribeHealth(listener: () => void) {
+  healthListeners.add(listener);
+  if (healthListeners.size === 1) {
+    probeHealth();
+    healthInterval = setInterval(probeHealth, HEALTH_POLL_MS);
+  }
+  return () => {
+    healthListeners.delete(listener);
+    if (healthListeners.size === 0) {
+      if (healthInterval) clearInterval(healthInterval);
+      healthInterval = null;
+      healthState = { health: healthState.health, failure: null };
+    }
+  };
+}
+
+const getHealthState = () => healthState;
+const SERVER_HEALTH_STATE: HealthState = { health: null, failure: null };
+const getServerHealthState = () => SERVER_HEALTH_STATE;
 
 /**
  * The home figures the Dashboard view and the chat landing both show:
  * services healthy of total, active tasks, agents online. Read-only, no model
- * call. Health is polled every 30 seconds while a consumer is mounted.
+ * call. Health is polled every 30 seconds while any consumer is mounted.
  */
 export function useHomeMetrics() {
-  const [health, setHealth] = useState<HealthResponse | null>(healthCache);
-  const [healthFailure, setHealthFailure] = useState<SectionFailure | null>(null);
+  const { health, failure: healthFailure } = useSyncExternalStore(
+    subscribeHealth,
+    getHealthState,
+    getServerHealthState,
+  );
   const { tasks, error: tasksError } = useTasks({ live: false });
   const { summary: agentSummary, error: agentsError } = useAgents();
-
-  // A failed probe is reported, never swallowed into `null` — an empty card
-  // and an unreachable service are not the same statement. State is only ever
-  // set from the promise's callbacks, never synchronously in the effect body.
-  useEffect(() => {
-    const applyHealth = (next: HealthResponse) => {
-      healthCache = next;
-      setHealth(next);
-      setHealthFailure(null);
-    };
-    const reportFailure = (err: unknown) => {
-      setHealthFailure(toSectionFailure("System health", HEALTH_ENDPOINT, err));
-    };
-
-    fetchHealth().then(applyHealth).catch(reportFailure);
-    const interval = setInterval(() => {
-      fetchHealth().then(applyHealth).catch(reportFailure);
-    }, HEALTH_POLL_MS);
-
-    return () => clearInterval(interval);
-  }, []);
 
   const activeTasks = tasks.filter(
     (t) => t.status === "TODO" || t.status === "IN_PROGRESS" || t.status === "REVIEW"

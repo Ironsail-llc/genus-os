@@ -100,9 +100,11 @@ interface ChatPanelProps {
   variant?: "page" | "dock";
   /** The owner's first name, for the landing's greeting. */
   ownerName?: string;
+  /** A landing quick action opened its view (the shell decides where to show it). */
+  onViewOpened?: () => void;
 }
 
-export function ChatPanel({ mobile = false, variant = "dock", ownerName }: ChatPanelProps) {
+export function ChatPanel({ mobile = false, variant = "dock", ownerName, onViewOpened }: ChatPanelProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const recoveryScopes = useRef<Record<string, string>>({});
   const requestScopes = useRef<Record<string, string>>({});
@@ -392,6 +394,11 @@ export function ChatPanel({ mobile = false, variant = "dock", ownerName }: ChatP
     [agent, chattable, defaultAgent]
   );
 
+  // Which chat's history has answered (or failed). The landing waits for it:
+  // shown before the transcript arrives, it would flash and fire its requests
+  // on every load of an existing conversation.
+  const [historySettledFor, setHistorySettledFor] = useState<string | null>(null);
+
   // Load history on mount, and again whenever the chat is pointed elsewhere
   //
   // Cancelled on the way out, like the listing above it. Both the abandoned
@@ -442,10 +449,13 @@ export function ChatPanel({ mobile = false, variant = "dock", ownerName }: ChatP
               timestamp: new Date(), recovery: { requestId, agent, scope },
             })) : [];
           setMessages([...loaded, ...restored]);
+          setHistorySettledFor(agentQuery);
         }
       })
       .catch(() => {
-        // Engine not available on mount
+        // Engine not available on mount. The conversation is unknown, not
+        // known to be long, so the landing may show.
+        if (!cancelled) setHistorySettledFor(agentQuery);
       });
     return () => {
       cancelled = true;
@@ -1387,11 +1397,12 @@ export function ChatPanel({ mobile = false, variant = "dock", ownerName }: ChatP
       {/* Messages */}
       <div className="flex-1 overflow-y-auto p-4">
         <div className="space-y-4" data-testid="message-list">
-          {messages.length === 0 && !isStreaming && variant === "page" && (
+          {messages.length === 0 && !isStreaming && variant === "page" && historySettledFor === agentQuery && (
             <ChatLanding
               ownerName={ownerName}
               suggestedPrompts={landingPrompts}
               onPrompt={applyPrompt}
+              onViewOpened={onViewOpened}
             />
           )}
           {messages.length === 0 && !isStreaming && variant === "dock" && (
