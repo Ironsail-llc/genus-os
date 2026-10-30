@@ -184,6 +184,30 @@ describe("resolveRedisConnection", () => {
     ).toEqual({ host: "cache.example.com", port: 6379, db: 0 });
   });
 
+  it("selects the DB from ROBOTHOR_REDIS_DB, as the Python services do", () => {
+    expect(
+      resolveRedisConnection({
+        ROBOTHOR_REDIS_HOST: "cache.example.com",
+        ROBOTHOR_REDIS_DB: "3",
+      })
+    ).toEqual({ host: "cache.example.com", port: 6379, db: 3 });
+  });
+
+  it("applies ROBOTHOR_REDIS_DB to the localhost default too", () => {
+    expect(resolveRedisConnection({ ROBOTHOR_REDIS_DB: "2" })).toEqual({
+      url: "redis://localhost:6379/2",
+    });
+  });
+
+  it("falls back to DB 0 when ROBOTHOR_REDIS_DB is not an integer", () => {
+    expect(
+      resolveRedisConnection({
+        ROBOTHOR_REDIS_HOST: "cache.example.com",
+        ROBOTHOR_REDIS_DB: "two",
+      })
+    ).toEqual({ host: "cache.example.com", port: 6379, db: 0 });
+  });
+
   it("lets REDIS_URL win over ROBOTHOR_REDIS_*", () => {
     expect(
       resolveRedisConnection({
