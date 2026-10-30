@@ -133,14 +133,31 @@ def _action_envelope(payload: Any) -> dict[str, str]:
     return out
 
 
-def _action_detail(payload: Any) -> str:
-    """The proposal's whole content: its body if it has one, else the payload.
+#: Kinds whose payload, beyond the body and the envelope, holds only the
+#: version pins and hashes their own review checks (``Sales.draft``): the card
+#: shows the body alone. Every other kind shows the body and the rest of the
+#: payload, because a plugin may address people in keys the envelope does not
+#: name.
+_BODY_ONLY_KINDS = frozenset({"sales.email"})
+
+
+def _action_detail(kind: str, payload: Any) -> str:
+    """The proposal's whole content: its body, then every field the envelope
+    does not name (``_BODY_ONLY_KINDS`` excepted); the whole payload when
+    there is no body.
 
     Never truncated. What is approved is the full payload, so a card that
-    showed a prefix would ask for a verdict on text nobody read.
+    showed a prefix, or the body alone of a payload that also says who it goes
+    to, would ask for a verdict on text nobody read.
     """
     if isinstance(payload, dict) and isinstance(payload.get("body"), str) and payload["body"]:
-        return str(payload["body"])
+        shown = {"body", *(key for _, key in _ENVELOPE_FIELDS)}
+        rest = {key: value for key, value in payload.items() if key not in shown}
+        if not rest or kind in _BODY_ONLY_KINDS:
+            return str(payload["body"])
+        return (
+            str(payload["body"]) + "\n\n" + json.dumps(rest, sort_keys=True, indent=2, default=str)
+        )
     return json.dumps(payload, sort_keys=True, indent=2, default=str)
 
 
@@ -189,7 +206,7 @@ def _pending(tenant_id: str) -> list[dict]:
             "agent_id": "",
             "action_kind": row["kind"],
             "question": _action_summary(row["kind"], row["payload"]),
-            "detail": _action_detail(row["payload"]),
+            "detail": _action_detail(str(row["kind"]), row["payload"]),
             "envelope": _action_envelope(row["payload"]),
             "options": [],
             "expires_at": _iso(row["expires_at"]),

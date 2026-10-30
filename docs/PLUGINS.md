@@ -263,6 +263,11 @@ async def acme_execute_action(args, ctx=None):
   decide the draft. Without it, only an operator can.
 - **Policy actor.** `policy:<plugin>:<version>` is accepted only for drafts the
   same plugin proposed; the audit trail records the version.
+- **The Inbox card.** A tenant admin decides your draft from the card, which
+  names `sender`, `recipient`, `purpose`, `subject`, `claim_ids` and
+  `evidence_ids` above the `body` and prints every other payload key after it
+  (the whole payload when there is no body). Approve authorizes the exact
+  payload, so put whoever it goes to in the payload, not in the kind.
 - **Executing.** An approval publishes `operation_action.approved` on the
   `operations` stream, so a workflow your plugin ships can run the execute tool
   as soon as a draft is approved, by an operator or by your policy.

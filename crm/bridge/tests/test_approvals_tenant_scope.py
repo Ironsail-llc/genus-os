@@ -227,7 +227,12 @@ def test_a_proposed_email_shows_who_it_goes_to_and_its_whole_body(child_admin, s
 def test_a_proposal_with_a_body_shows_every_other_field_too(child_admin, stores, ops):
     """A plugin's payload may address people in keys the envelope does not name;
     Approve authorizes all of it, so the card shows the body and the rest."""
-    payload = {"to": "bob@example.com", "cc": ["carol@example.com"], "body": "Hello Bob", "urgent": True}
+    payload = {
+        "to": "bob@example.com",
+        "cc": ["carol@example.com"],
+        "body": "Hello Bob",
+        "urgent": True,
+    }
     ops.review = [{**_email_proposal(""), "kind": "acme-plugin.email", "payload": payload}]
 
     [action] = [
