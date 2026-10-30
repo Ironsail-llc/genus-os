@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import { VisualStateProvider } from "@/hooks/use-visual-state";
+import { VisualStateProvider, useVisualState } from "@/hooks/use-visual-state";
 
 /**
  * The canvas used to hide every generation failure: a welcome answer with no
@@ -54,11 +54,22 @@ function installFetch(session: Reply, welcome: Reply[]) {
 const welcomeCalls = () =>
   fetchMock.mock.calls.filter(([url]) => String(url) === "/api/dashboard/welcome");
 
+/** Stands in for the dashboard agent landing a new page. */
+function Replacer() {
+  const { setDashboardCode } = useVisualState();
+  return (
+    <button data-testid="replace" onClick={() => setDashboardCode("<div>updated view</div>", "html")}>
+      replace
+    </button>
+  );
+}
+
 async function renderCanvas() {
   const { LiveCanvas } = await import("../live-canvas");
   return render(
     <VisualStateProvider>
       <LiveCanvas />
+      <Replacer />
     </VisualStateProvider>,
   );
 }
@@ -117,6 +128,17 @@ describe("LiveCanvas — a failed generation is visible and retryable", () => {
 
     await waitFor(() => expect(welcomeCalls()).toHaveLength(1));
     await waitFor(() => expect(screen.getByTestId("srcdoc")).toHaveTextContent("fresh view"));
+  });
+
+  it("stops offering to regenerate once the restored page is replaced", async () => {
+    installFetch({ body: { html: "<div>saved view</div>" } }, [{ body: {} }]);
+    await renderCanvas();
+    await screen.findByTestId("canvas-regenerate");
+
+    fireEvent.click(screen.getByTestId("replace"));
+
+    await waitFor(() => expect(screen.getByTestId("srcdoc")).toHaveTextContent("updated view"));
+    expect(screen.queryByTestId("canvas-regenerate")).not.toBeInTheDocument();
   });
 
   it("shows a failed conversation update with its reason and a Retry", async () => {
