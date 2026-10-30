@@ -31,7 +31,18 @@ vi.mock("@/components/canvas/live-canvas", () => ({
 }));
 
 vi.mock("@/components/chat-panel", () => ({
-  ChatPanel: () => <div data-testid="chat-panel">ChatPanel</div>,
+  ChatPanel: ({ variant, ownerName }: { variant?: string; ownerName?: string }) => (
+    <div data-testid="chat-panel" data-variant={variant ?? ""} data-owner={ownerName ?? ""}>
+      ChatPanel
+    </div>
+  ),
+}));
+
+// The session the shell reads the owner's name from; no session by default.
+const mockUseSession = vi.fn();
+vi.mock("next-auth/react", () => ({
+  useSession: () => mockUseSession(),
+  SessionProvider: ({ children }: { children: React.ReactNode }) => children,
 }));
 
 vi.mock("@/components/business/task-board", () => ({
@@ -88,6 +99,7 @@ describe("AppShell", () => {
   beforeEach(() => {
     // The active view lives in the query string now — reset it between tests.
     window.history.replaceState(null, "", "/");
+    mockUseSession.mockReturnValue({ data: null, status: "unauthenticated", update: vi.fn() });
     mockUseTasks.mockReturnValue({
       tasks: [
         { id: "1", title: "Test Task", status: "REVIEW" },
@@ -153,6 +165,49 @@ describe("AppShell", () => {
     fireEvent.click(screen.getByTestId("nav-dashboard"));
     expect(screen.getByTestId("dashboard-view").style.display).toBe("flex");
     expect(screen.getByTestId("tasks-view").style.display).toBe("none");
+  });
+
+  it("centres the chat home stage at a readable width", () => {
+    render(<AppShell />);
+    const stage = screen.getByTestId("chat-container");
+    const wrapper = stage.querySelector(".max-w-5xl");
+    expect(wrapper).not.toBeNull();
+    expect(wrapper!.className).toContain("mx-auto");
+    expect(wrapper!.className).toContain("w-full");
+    expect(wrapper!.contains(screen.getByTestId("chat-panel"))).toBe(true);
+  });
+
+  it("does not cap the docked chat beside another view", () => {
+    render(<AppShell />);
+    fireEvent.click(screen.getByTestId("nav-dashboard"));
+    expect(screen.getByTestId("chat-container").querySelector(".max-w-5xl")).toBeNull();
+  });
+
+  it("tells the chat panel it is the page on the chat home and the dock elsewhere", () => {
+    render(<AppShell />);
+    expect(screen.getByTestId("chat-panel")).toHaveAttribute("data-variant", "page");
+    fireEvent.click(screen.getByTestId("nav-dashboard"));
+    expect(screen.getByTestId("chat-panel")).toHaveAttribute("data-variant", "dock");
+  });
+
+  it("passes the owner's first name from the session to the chat panel", () => {
+    mockUseSession.mockReturnValue({
+      data: { user: { name: "Alice Example" } },
+      status: "authenticated",
+      update: vi.fn(),
+    });
+    render(<AppShell />);
+    expect(screen.getByTestId("chat-panel")).toHaveAttribute("data-owner", "Alice");
+  });
+
+  it("passes no owner name when the session has none", () => {
+    mockUseSession.mockReturnValue({
+      data: { user: { email: "agent@example.com" } },
+      status: "authenticated",
+      update: vi.fn(),
+    });
+    render(<AppShell />);
+    expect(screen.getByTestId("chat-panel")).toHaveAttribute("data-owner", "");
   });
 
   it("switches to tasks view", () => {

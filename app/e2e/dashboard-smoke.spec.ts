@@ -237,6 +237,17 @@ test.describe("Navigation", () => {
     await expect(page.locator('[data-testid="chat-panel"]')).toBeVisible({ timeout: 10000 });
     await expect(page.locator('[data-testid="default-dashboard"]')).not.toBeVisible();
 
+    // Before the first message the chat home is a landing: a greeting, the
+    // dashboard's figures and its quick actions, with the composer below.
+    await expect(page.locator('[data-testid="chat-landing-greeting"]')).toHaveText(
+      /^Good (morning|afternoon|evening)/,
+    );
+    await expect(page.locator('[data-testid="chat-landing-metrics"]')).toContainText("2/2");
+    await expect(
+      page.locator('[data-testid="chat-landing"] [data-testid="quick-action"]'),
+    ).toHaveCount(4);
+    await expect(page.locator('[data-testid="chat-input"]')).toBeVisible();
+
     // The dashboard is reachable by URL...
     await page.goto(DASHBOARD_URL, { waitUntil: "networkidle" });
     await expect(page.locator('[data-testid="default-dashboard"]')).toBeVisible({ timeout: 10000 });
