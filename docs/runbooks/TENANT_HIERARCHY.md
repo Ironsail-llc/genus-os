@@ -139,9 +139,12 @@ Each tenant's engine loads plugins from its own lockfile, so the child decides
 which installed plugins it runs. The chart gives every cell its own workspace,
 and with it its own lockfile; on a single host that is the `ROBOTHOR_WORKSPACE`
 row above. Each engine claims its lockfile for its tenant at boot (a
-`plugins.lock.tenant` marker beside it), and an engine whose lockfile another
-tenant's engine claimed logs an error and refuses enable, disable and record
-with a 409 until it has a workspace of its own. Its admins manage that on the Helm's
+`plugins.lock.tenant` marker beside it; the root's engine takes the claim
+back from a child), and an engine whose lockfile another tenant's engine
+claimed logs an error and refuses enable, disable and record with a 409 until
+it has a workspace of its own. A child's workspace starts empty: point it at a
+new directory, and the child's agent manifests and plugin lockfile live
+there. Its admins manage that on the Helm's
 Settings › Plugins page, which lists and toggles the **acting** tenant's
 engine. A root admin switched into the child manages the child's plugins the
 same way.

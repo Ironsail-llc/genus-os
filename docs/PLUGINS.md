@@ -1139,7 +1139,9 @@ workspace (the chart gives each cell one; on a single host, set
 [TENANT_HIERARCHY.md](runbooks/TENANT_HIERARCHY.md#add-the-childs-engine)).
 To catch a shared one, each engine claims its lockfile for its tenant at boot
 in a `plugins.lock.tenant` marker beside it, and the first write claims an
-unclaimed file. An engine whose lockfile another tenant claimed logs an error
+unclaimed file. A root tenant's engine (its tenant row has no parent) takes a
+claim back from any other tenant, so on a shared workspace the child is the
+one refused, whichever engine booted first. An engine whose lockfile another tenant claimed logs an error
 and answers enable, disable and sync with **409** naming the fix. The root tenant can override that for one child:
 a **grant** forces one plugin `on` or `off` for one child tenant.
 
