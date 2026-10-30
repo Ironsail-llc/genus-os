@@ -68,6 +68,9 @@ Renders:
 {{- $_ := set $serviceEnv "ROBOTHOR_ENGINE_URL" (include "genus-os.engineUrl" $root) -}}
 {{- $_ := set $serviceEnv "GENUS_TENANT_ENGINE_URL_TEMPLATE" (include "genus-os.tenantEngineUrlTemplate" $root) -}}
 {{- end -}}
+{{- /* The bridge gates and routes on the root tenant: it must agree with the
+       root engine (and the dashboard) about which tenant that is. */ -}}
+{{- $_ := set $serviceEnv "ROBOTHOR_DEFAULT_TENANT" (include "genus-os.rootTenant" $root) -}}
 {{- end -}}
 {{- /* Tenant switching: the bridge issues the acting token and every engine
        enforces it, so one value reaches all of them. Rendered only when set,

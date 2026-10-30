@@ -391,7 +391,9 @@ def stats(
         if conn is not None:
             with contextlib.suppress(Exception):
                 conn.rollback()
-        return {"total_events": 0, "error": str(e)}
+        # The body reaches a tenant admin's browser; the database's own words
+        # (hosts, roles, SQL) stay in the log line above.
+        return {"total_events": 0, "error": "audit statistics unavailable"}
     finally:
         if conn is not None:
             _release_connection(conn)

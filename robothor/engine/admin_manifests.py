@@ -29,6 +29,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+#: What a browser is told when a manifest id or a path in the request fails
+#: the template safety rules. The rule itself is logged, never echoed.
+REFUSED = "refused: the agent id or a path in the request is not allowed"
+
 
 class WriteBody(BaseModel):
     """A manifest's full text, and on a create its instruction file."""
@@ -62,8 +66,10 @@ def register(app: FastAPI) -> None:
     router = APIRouter(prefix="/api/admin/manifests", tags=["admin"])
 
     def _refused(error: Exception) -> JSONResponse:
-        # safety.py's message names the rule, never the path.
-        return JSONResponse({"error": str(error)}, status_code=422)
+        # The rule that fired is logged; the browser gets the route's own
+        # words rather than the validator's exception text.
+        logger.warning("manifest request refused: %s", error)
+        return JSONResponse({"error": REFUSED}, status_code=422)
 
     @router.get("")
     async def scan_manifests() -> Any:

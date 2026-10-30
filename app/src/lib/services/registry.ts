@@ -163,8 +163,16 @@ const DEFAULT_ENGINE_URL = "http://127.0.0.1:18800";
 // actually name. Anything else would be spliced into a URL as-is.
 const TENANT_ID = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 
+// The same resolution as the bridge's PLATFORM_TENANT (robothor/constants.py):
+// ROBOTHOR_PLATFORM_TENANT when set, else ROBOTHOR_DEFAULT_TENANT, else
+// `default`. The two must agree, or a root user's token is templated into a
+// Service that does not exist.
 function rootTenant(): string {
-  return process.env.ROBOTHOR_DEFAULT_TENANT?.trim() || "default";
+  return (
+    process.env.ROBOTHOR_PLATFORM_TENANT?.trim() ||
+    process.env.ROBOTHOR_DEFAULT_TENANT?.trim() ||
+    "default"
+  );
 }
 
 /** A setting by its GENUS_ name, else its ROBOTHOR_ alias. */

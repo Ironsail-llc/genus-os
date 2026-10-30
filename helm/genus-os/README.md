@@ -268,7 +268,11 @@ stream as its own consumer group.
 `{tenant}` is literal text that the application replaces with a tenant id.
 The chart refuses an id that would make `<fullname>-engine-<id>` longer than 63
 characters, because the template could then name a Service that does not
-exist.
+exist. Both also get `ROBOTHOR_DEFAULT_TENANT=<global.rootTenant>`, so the
+bridge, the dashboard and the root engine agree on which tenant is root and a
+root user's requests go to the root engine rather than to a cell that does not
+exist. If you set `ROBOTHOR_PLATFORM_TENANT`, set it on the bridge and the
+dashboard alike: both read it before `ROBOTHOR_DEFAULT_TENANT`.
 
 **Tenant switching.** Whether a root-tenant owner or admin may act in a
 descendant tenant is one setting, read by the bridge (which issues the acting
