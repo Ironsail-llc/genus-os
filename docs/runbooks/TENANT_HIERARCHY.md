@@ -99,6 +99,7 @@ set on each:
 |---|---|---|
 | The child's engine | `ROBOTHOR_TENANT_ID` and `ROBOTHOR_DEFAULT_TENANT` | the child's id (both the same) |
 | The child's engine | `GENUS_EVENT_CONSUMER_GROUP` | `engine-<child id>`, so engines do not share one event-consumer group |
+| The child's engine | `ROBOTHOR_WORKSPACE` | a directory of its own, never the root's. The engine keeps its plugin lockfile there, and a child admin enables and disables plugins in it; on a shared workspace that would reach the root and every sibling. (`ROBOTHOR_PLUGIN_LOCKFILE` alone also separates the lockfile.) |
 | The bridge | `GENUS_TENANT_ENGINE_URLS` | a JSON object mapping each child id to its engine's URL, e.g. `{"acme-child-a": "http://127.0.0.1:18811"}` |
 | The bridge AND every engine | `GENUS_TENANT_SWITCH_MODE` | the same value everywhere (`off`, `observe` or `enforce`) |
 
@@ -135,7 +136,12 @@ Every tenant shares one vault master key. A credential the bridge stores while a
 ## Plugins are per tenant
 
 Each tenant's engine loads plugins from its own lockfile, so the child decides
-which installed plugins it runs. Its admins manage that on the Helm's
+which installed plugins it runs. The chart gives every cell its own workspace,
+and with it its own lockfile; on a single host that is the `ROBOTHOR_WORKSPACE`
+row above. Each engine claims its lockfile for its tenant at boot (a
+`plugins.lock.tenant` marker beside it), and an engine whose lockfile another
+tenant's engine claimed logs an error and refuses enable, disable and record
+with a 409 until it has a workspace of its own. Its admins manage that on the Helm's
 Settings › Plugins page, which lists and toggles the **acting** tenant's
 engine. A root admin switched into the child manages the child's plugins the
 same way.

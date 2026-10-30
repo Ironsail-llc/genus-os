@@ -1133,7 +1133,14 @@ distinguishes a plugin `remove` will act on from one it refuses.
 ### Per tenant
 
 Each tenant's engine reads **its own** lockfile, so a child decides for itself
-which installed plugins load. The root tenant can override that for one child:
+which installed plugins load. That holds only while every engine has its own
+workspace (the chart gives each cell one; on a single host, set
+`ROBOTHOR_WORKSPACE` per engine, see
+[TENANT_HIERARCHY.md](runbooks/TENANT_HIERARCHY.md#add-the-childs-engine)).
+To catch a shared one, each engine claims its lockfile for its tenant at boot
+in a `plugins.lock.tenant` marker beside it, and the first write claims an
+unclaimed file. An engine whose lockfile another tenant claimed logs an error
+and answers enable, disable and sync with **409** naming the fix. The root tenant can override that for one child:
 a **grant** forces one plugin `on` or `off` for one child tenant.
 
 ```bash
@@ -1166,15 +1173,20 @@ How it works:
   grant saved; it applies on that engine's next reload or restart.
 * **Fail closed.** If the grant read errors, every plugin that was forced off
   at the last successful read stays refused, a forced `on` falls back to the
-  child's lockfile, and the error is logged. An engine that has never read the
-  grants successfully since it started has nothing to fall back on and forces
-  nothing until its next reload reads them.
+  child's lockfile, and the error is logged. The last forced-off set is also
+  persisted beside the lockfile (`plugins.lock.forced-off.json`), so it holds
+  across a restart with the database down. With nothing to fall back on at all
+  (a brand-new engine whose first read fails), the failure is not cached and
+  the next load asks again.
 * **The audit trail.** Every grant writes a `plugin.grant` event filed under
   the CHILD tenant, so the child's admins can see who decided.
 * **What the root can name.** The child tenant must be a descendant of the
   root (404 otherwise); the root itself is a 422, because it decides for itself
-  with enable and disable. A grant names a distribution; the child's engine
+  with enable and disable. A grant names a distribution, stored and matched in
+  its PEP 503 canonical form (`Acme_Tools` is `acme-tools`); the child's engine
   needs that distribution installed for `on` to load anything.
+* **Who sees what on the page.** Install, record and remove appear only for
+  the root operator at home, since the bridge refuses them to anybody else.
 
 #### Three namespaces, and the field that keeps them apart
 
