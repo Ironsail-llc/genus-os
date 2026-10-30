@@ -175,6 +175,34 @@ def test_multi_line_commands_with_closed_quotes_still_run(workspace) -> None:
     assert exec_reads_secret("ruby -ne 'puts $_' -rtime log") is None
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        # After a quote that spans lines the later arguments must still be
+        # tokenised with their quotes removed, so `.e"n"v` is `.env`.
+        "echo 'a\n' ; cat .e\"n\"v",
+        "echo 'a\n' ; head .e'n'v",
+    ],
+)
+def test_arguments_after_a_multi_line_quote_are_still_judged(workspace, command) -> None:
+    assert exec_reads_secret(command), command
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        # -f / --file / --from-file name a program FILE, not program text:
+        # the value stays under the glob and moved-key rules.
+        "awk -f .en? /dev/null",
+        "sed -f .env notes.txt",
+        "jq --from-file=.en? data.json",
+        "grep -f .en? notes.txt",
+    ],
+)
+def test_a_program_file_option_value_is_a_file(workspace, command) -> None:
+    assert exec_reads_secret(command), command
+
+
 # -- 3. a program given by option makes every positional a file ------------
 
 
