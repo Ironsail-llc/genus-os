@@ -1,0 +1,44 @@
+suite: bridge workload
+templates:
+  - bridge/workload.yaml
+release:
+  name: gos
+  namespace: genus
+tests:
+  - it: bridge calls the engine through its in-cluster Service
+    documentIndex: 0
+    asserts:
+      - isKind:
+          of: Deployment
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ROBOTHOR_ENGINE_URL
+            value: http://gos-genus-os-engine:18800
+
+  - it: bridge gets no engine URL when the engine is disabled
+    set:
+      engine.enabled: false
+    documentIndex: 0
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ROBOTHOR_ENGINE_URL
+          any: true
+
+  - it: operator-set bridge env overrides the derived engine URL
+    set:
+      bridge.env.ROBOTHOR_ENGINE_URL: http://engine.example.test:18800
+    documentIndex: 0
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ROBOTHOR_ENGINE_URL
+            value: http://engine.example.test:18800
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ROBOTHOR_ENGINE_URL
+            value: http://gos-genus-os-engine:18800

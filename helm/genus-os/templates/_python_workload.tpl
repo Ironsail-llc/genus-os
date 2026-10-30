@@ -34,6 +34,9 @@ Renders:
 {{- end -}}
 {{- if eq $component "bridge" -}}
 {{- $_ := set $serviceEnv "ROBOTHOR_BRIDGE_HOST" "0.0.0.0" -}}
+{{- if $root.Values.engine.enabled -}}
+{{- $_ := set $serviceEnv "ROBOTHOR_ENGINE_URL" (printf "http://%s-engine:%v" (include "genus-os.fullname" $root) $root.Values.engine.service.port) -}}
+{{- end -}}
 {{- if $root.Values.orchestrator.enabled -}}
 {{- $_ := set $serviceEnv "MEMORY_URL" (printf "http://%s-orchestrator:%v" (include "genus-os.fullname" $root) $root.Values.orchestrator.service.port) -}}
 {{- end -}}
