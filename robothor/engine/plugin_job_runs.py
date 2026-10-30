@@ -35,7 +35,10 @@ RESULT_CAP_CHARS = 16_000
 
 
 def _context(result: Any) -> str:
-    text = json.dumps(result, default=str)
+    try:
+        text = json.dumps(result, default=str)
+    except (TypeError, ValueError):  # e.g. a circular reference
+        text = json.dumps(repr(result))
     if len(text) <= RESULT_CAP_CHARS:
         return json.dumps({"result": json.loads(text)})
     return json.dumps({"result": text[:RESULT_CAP_CHARS], "result_truncated": True})
