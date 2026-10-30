@@ -481,13 +481,18 @@ class WorkflowEngine:
         correlation_id: str | None = None,
         user_id: str = "",
         user_role: str = "",
+        run_id: str | None = None,
     ) -> WorkflowRun:
         """Execute a workflow by ID under an explicit caller identity.
 
-        Cron and hook executions are trusted Engine workloads and receive a
-        narrow, auditable service identity.  Interactive/manual callers must
-        propagate their verified user identity; a missing identity fails
-        closed outside the explicit loopback development mode.
+        Cron, hook and agent executions are trusted Engine workloads and
+        receive a narrow, auditable service identity when no user is given.
+        Interactive/manual callers must propagate their verified user
+        identity; a missing identity fails closed outside the explicit
+        loopback development mode.
+
+        ``run_id`` lets a caller that starts the run in the background name it
+        up front, so it can report the id before the run finishes.
         """
         from robothor.engine.dedup import release, try_acquire
 
@@ -504,7 +509,7 @@ class WorkflowEngine:
 
         effective_user_id = user_id
         effective_user_role = user_role
-        if trigger_type in {"cron", "hook"}:
+        if trigger_type in {"cron", "hook", "agent"}:
             effective_user_id = effective_user_id or f"service:workflow:{workflow_id}"
             effective_user_role = effective_user_role or "service"
         elif not effective_user_id or not effective_user_role:
@@ -565,6 +570,8 @@ class WorkflowEngine:
             started_at=datetime.now(UTC),
             context={"steps": {}, **(initial_context or {})},
         )
+        if run_id:
+            run.id = run_id
 
         # Record run in DB
         self._persist_run_start(run, wf)

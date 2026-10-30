@@ -232,6 +232,7 @@ def builtin_handlers() -> dict[str, Any]:
         voice,
         web,
         web_render,
+        workflows,
     )
 
     all_handlers: dict[str, Any] = {}
@@ -280,6 +281,7 @@ def builtin_handlers() -> dict[str, Any]:
         attachments,
         claude_code,
         pr_review,
+        workflows,
     ]:
         all_handlers.update(mod.HANDLERS)
 
