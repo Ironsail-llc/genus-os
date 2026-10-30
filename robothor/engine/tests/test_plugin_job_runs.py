@@ -77,7 +77,9 @@ class _JobEP:
 def scheduled(monkeypatch):
     """Install plugin jobs, register them, return the callable APScheduler holds."""
 
-    def _scheduled(name: str, func):
+    def _scheduled(name: str, func, tenant_id: str = "test-tenant"):
+        from types import SimpleNamespace
+
         from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
         from robothor.engine.scheduler import CronScheduler
@@ -89,6 +91,7 @@ def scheduled(monkeypatch):
         reload_plugins()
         s = CronScheduler.__new__(CronScheduler)
         s.scheduler = AsyncIOScheduler()
+        s.config = SimpleNamespace(tenant_id=tenant_id)
         assert s.register_plugin_jobs() == 1
         return s.scheduler.get_job(f"plugin:{name}").func
 
@@ -161,6 +164,19 @@ class TestASuccessfulRunIsRecorded:
         assert func() == {"processed": 3}
 
 
+class TestTheRowBelongsToTheEnginesTenant:
+    """Review: the row was tagged DEFAULT_TENANT, not the engine's tenant.
+
+    With row-level security on, a row tagged with another tenant is refused
+    (and the refusal swallowed); without it, the row lands where the
+    tenant-scoped reaper and run listings never look."""
+
+    def test_the_configured_tenant_reaches_the_insert(self, scheduled, db):
+        func = scheduled("sweep", lambda: None, tenant_id="tenant-b")
+        func()
+        assert _row(db)["tenant_id"] == "tenant-b"
+
+
 class TestAFailureIsRecorded:
     """AC1: an exception marks the run failed."""
 
@@ -207,6 +223,22 @@ class TestTheReturnValueIsCapped:
         assert row["status"] == "completed"
         assert "self" in json.loads(row["context"])["result"]
 
+    def test_a_non_finite_float_does_not_leave_the_run_running(self, scheduled, db):
+        """Postgres JSONB rejects NaN and Infinity; the UPDATE must not carry them."""
+        func = scheduled("sweep", lambda: {"ratio": float("nan"), "top": float("inf")})
+        func()
+        context = _row(db)["context"]
+        assert "NaN" not in context and "Infinity" not in context
+        json.loads(context)
+
+    def test_a_nul_character_does_not_leave_the_run_running(self, scheduled, db):
+        """Postgres JSONB rejects the \\u0000 escape."""
+        func = scheduled("sweep", lambda: {"note": "a\x00b"})
+        func()
+        context = _row(db)["context"]
+        assert "\\u0000" not in context
+        assert json.loads(context)["result"]["note"] == "ab"
+
 
 class TestAsyncJobs:
     def test_a_coroutine_job_stays_a_coroutine_function(self, scheduled, db):
@@ -237,6 +269,40 @@ class TestAsyncJobs:
         with pytest.raises(ValueError):
             asyncio.run(func())
         assert _row(db)["status"] == "failed"
+
+    def test_a_cancelled_coroutine_job_is_recorded_cancelled(self, scheduled, db):
+        """Review: an engine shutdown mid-job is a cancellation, as it is for a
+        workflow, not a failure the failure-streak detector would count."""
+
+        async def job():
+            raise asyncio.CancelledError
+
+        func = scheduled("sweep", job)
+        with pytest.raises(asyncio.CancelledError):
+            asyncio.run(func())
+        row = _row(db)
+        assert row["status"] == "cancelled"
+        assert "cancelled" in row["error_message"].lower()
+
+    def test_the_cancelled_row_is_written_without_the_thread_pool(self, scheduled, db, monkeypatch):
+        """A task being torn down may find the default executor already shut."""
+
+        async def job():
+            raise asyncio.CancelledError
+
+        func = scheduled("sweep", job)
+        real_to_thread = asyncio.to_thread
+        calls: list[int] = []
+
+        async def _counting_to_thread(f, *a, **kw):
+            calls.append(1)
+            return await real_to_thread(f, *a, **kw)
+
+        monkeypatch.setattr(asyncio, "to_thread", _counting_to_thread)
+        with pytest.raises(asyncio.CancelledError):
+            asyncio.run(func())
+        assert _row(db)["status"] == "cancelled"
+        assert len(calls) == 1, "only the start row may go through the thread pool"
 
 
 class TestRecordingNeverBreaksTheJob:
