@@ -208,18 +208,22 @@ id: order-events
 rate_limit_per_minute: 120
 ```
 
-A step the limit blocks has not run, so it is treated as transient. It
-retries per its `retry_count` and backoff. With no retry left the run stops
-there whatever its `on_failure` says; a blocked branch of a `parallel` step
-counts the same, and neither the branch's nor the parallel step's
-`on_failure: skip` absorbs it. A run started by a hook event is then recorded
-as `skipped` and its event is requeued for this workflow on the same budget
-and backoff as `requeue_if_busy`, whether or not the trigger sets that, so a
-burst slows down instead of failing; the event goes to `<stream>:dlq` only
-once that budget is spent. A requeued run starts again from its first step,
-so steps before the blocked one run again: keep them idempotent. Any other
-run has nothing to requeue it, so it fails: a cron, agent or manual run, and
-a hook run resumed after an approval step. A cron failure pages as usual.
+A call the limit blocks is only early, so the step waits in place: it asks
+the limiter again after 5 seconds, then 10, 20 and every 30, and runs once it
+is admitted. A run can therefore make more calls than its limit, spread over
+time, and no step ever runs twice. The wait counts against the workflow's
+`timeout_seconds`; a step still waiting at the deadline ends the run as
+`timeout`, naming that step. Branches of a `parallel` step wait the same way.
+While a run waits it holds the workflow, so an event that arrives meanwhile is
+handled as for any busy run (see `requeue_if_busy` above).
+
+There is one exception. A hook-triggered run blocked at its first step, before
+anything has acted, does not wait: it is recorded as `skipped` and its event
+is requeued for this workflow on the same budget and backoff as
+`requeue_if_busy`, whether or not the trigger sets that, and goes to
+`<stream>:dlq` only once that budget is spent. That is the usual shape of a
+burst, and it frees the workflow for the next event instead of holding it. A
+run resumed after an approval step always waits.
 
 #### Asking a human mid-workflow
 
