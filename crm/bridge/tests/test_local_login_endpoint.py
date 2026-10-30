@@ -142,6 +142,9 @@ async def test_a_sign_in_is_audited_under_the_accounts_own_tenant(test_client):
     logins = [c for c in log_event.call_args_list if c.args and c.args[0] == "auth.login"]
     assert len(logins) == 1
     assert logins[0].kwargs["tenant_id"] == "acme-child-a"
+    # The row's details agree with where it is filed: a reader of the child's
+    # trail must not see the root named as the sign-in's tenant.
+    assert logins[0].kwargs["details"]["tenant_id"] == "acme-child-a"
 
 
 @pytest.mark.asyncio

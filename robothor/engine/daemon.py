@@ -1360,6 +1360,19 @@ async def _bootstrap_owner_links() -> None:
         logger.exception("bootstrap_owner_person_links failed (non-fatal)")
 
 
+async def _claim_lockfile_owner() -> None:
+    """Claim this engine's plugin lockfile for its tenant, at boot.
+
+    A child engine started on another tenant's workspace then refuses to change
+    the plugins the other engine reads (``robothor.plugins.lockfile_owner``).
+    Off the loop, and never fatal: a marker that cannot be written is logged.
+    """
+    from robothor.plugins import lockfile_owner
+
+    if await asyncio.to_thread(lockfile_owner.foreign_owner):
+        logger.error("Plugin lockfile: %s", lockfile_owner.SHARED_REMEDY)
+
+
 async def main() -> int:
     """Start all engine subsystems. Returns the process exit code."""
     # Own SIGTERM/SIGINT before anything slow, so a stop during startup also
@@ -1402,14 +1415,7 @@ async def main() -> int:
     # Load config
     config = EngineConfig.from_env()
     logger.info("Tenant: %s", config.tenant_id)
-
-    # Claim this engine's plugin lockfile for its tenant, so a child engine
-    # started on another tenant's workspace refuses to change the plugins the
-    # other engine reads (robothor.plugins.lockfile_owner). Never fatal.
-    from robothor.plugins import lockfile_owner
-
-    if await asyncio.to_thread(lockfile_owner.foreign_owner):
-        logger.error("Plugin lockfile: %s", lockfile_owner.SHARED_REMEDY)
+    await _claim_lockfile_owner()
     logger.info("Workspace: %s", config.workspace)
     logger.info("Health port: %d", config.port)
     logger.info("Telegram bot: %s", "configured" if config.bot_token else "disabled")
