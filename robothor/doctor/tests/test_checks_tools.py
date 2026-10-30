@@ -419,7 +419,6 @@ class TestPluginToolsResolve:
         assert result.status == "fail"
         assert "acme_probe" in result.detail
 
-
     @pytest.mark.asyncio
     async def test_one_doctor_run_measures_the_plugin_inventory_once(
         self, instance: Path, monkeypatch: pytest.MonkeyPatch
