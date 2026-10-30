@@ -284,3 +284,21 @@ class TestAuth:
         )
         assert response.status_code == 200
         assert (config.manifest_dir / "_defaults.yaml").exists()
+
+
+class TestProviderDefaults:
+    def test_a_providers_own_default_model_is_accepted(self, agents) -> None:
+        """The setup wizard offers each provider's default model, and some of
+        those are not registry entries. Refusing the model the wizard itself
+        suggested would break first-run setup; the test-connection route
+        accepts the same set for the same reason."""
+        from robothor.engine import key_pool
+
+        unlisted = next(
+            spec.default_model
+            for spec in key_pool.PROVIDERS
+            if spec.default_model not in {entry["id"] for entry in CATALOG}
+        )
+        response = _client().put("/api/admin/defaults", json={"model": unlisted, "fallbacks": []})
+        assert response.status_code == 200
+        assert response.json()["primary"] == unlisted
