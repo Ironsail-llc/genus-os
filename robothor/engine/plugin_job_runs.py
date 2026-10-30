@@ -22,8 +22,6 @@ import uuid
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
-from robothor.constants import DEFAULT_TENANT
-
 if TYPE_CHECKING:
     from collections.abc import Callable
 
@@ -35,11 +33,24 @@ TRIGGER_TYPE = "plugin_job"
 RESULT_CAP_CHARS = 16_000
 
 
+def _without_nul(value: Any) -> Any:
+    if isinstance(value, str):
+        return value.replace("\x00", "")
+    if isinstance(value, list):
+        return [_without_nul(v) for v in value]
+    if isinstance(value, dict):
+        return {_without_nul(k): _without_nul(v) for k, v in value.items()}
+    return value
+
+
 def _context(result: Any) -> str:
     try:
-        text = json.dumps(result, default=str)
-    except (TypeError, ValueError):  # e.g. a circular reference
+        # allow_nan=False: Postgres JSONB rejects NaN and Infinity.
+        text = json.dumps(result, default=str, allow_nan=False)
+    except (TypeError, ValueError):  # a circular reference, a non-finite float
         text = json.dumps(repr(result))
+    if "\\u0000" in text:  # Postgres JSONB rejects the NUL escape
+        text = json.dumps(_without_nul(json.loads(text)))
     if len(text) <= RESULT_CAP_CHARS:
         return json.dumps({"result": json.loads(text)})
     return json.dumps({"result": text[:RESULT_CAP_CHARS], "result_truncated": True})
@@ -48,8 +59,9 @@ def _context(result: Any) -> str:
 class _Run:
     """One execution of one plugin job, and the row that records it."""
 
-    def __init__(self, job_id: str) -> None:
+    def __init__(self, job_id: str, tenant_id: str) -> None:
         self.job_id = job_id
+        self.tenant_id = tenant_id
         self.run_id = str(uuid.uuid4())
         self.started = time.monotonic()
 
@@ -61,7 +73,7 @@ class _Run:
                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
             (
                 self.run_id,
-                DEFAULT_TENANT,
+                self.tenant_id,
                 self.job_id,
                 TRIGGER_TYPE,
                 self.job_id,
@@ -74,6 +86,9 @@ class _Run:
 
     def completed(self, result: Any) -> None:
         self._finish("completed", None, _context(result))
+
+    def cancelled(self) -> None:
+        self._finish("cancelled", "Cancelled: engine shutdown mid-run", json.dumps({}))
 
     def failed(self, error: BaseException) -> None:
         self._finish("failed", f"{type(error).__name__}: {error}", json.dumps({}))
@@ -105,7 +120,7 @@ class _Run:
             logger.warning("Failed to record a run of plugin job %s: %s", self.job_id, exc)
 
 
-def recorded(job_id: str, func: Callable[..., Any]) -> Callable[..., Any]:
+def recorded(job_id: str, func: Callable[..., Any], *, tenant_id: str) -> Callable[..., Any]:
     """Wrap ``func`` so each call writes a run row; coroutines stay coroutines.
 
     A coroutine job is awaited by AsyncIOScheduler on the event loop, so its
@@ -117,10 +132,15 @@ def recorded(job_id: str, func: Callable[..., Any]) -> Callable[..., Any]:
 
         @functools.wraps(func)
         async def _async_job(*args: Any, **kwargs: Any) -> Any:
-            run = _Run(job_id)
+            run = _Run(job_id, tenant_id)
             await asyncio.to_thread(run.start)
             try:
                 result = await func(*args, **kwargs)
+            except asyncio.CancelledError:
+                # Engine shutdown: recorded as a workflow's would be, and
+                # written inline, since the executor may already be gone.
+                run.cancelled()
+                raise
             except BaseException as exc:
                 await asyncio.to_thread(run.failed, exc)
                 raise
@@ -131,7 +151,7 @@ def recorded(job_id: str, func: Callable[..., Any]) -> Callable[..., Any]:
 
     @functools.wraps(func)
     def _job(*args: Any, **kwargs: Any) -> Any:
-        run = _Run(job_id)
+        run = _Run(job_id, tenant_id)
         run.start()
         try:
             result = func(*args, **kwargs)

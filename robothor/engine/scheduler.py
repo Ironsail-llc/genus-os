@@ -17,6 +17,7 @@ from zoneinfo import ZoneInfo
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from croniter import croniter  # type: ignore[import-untyped,unused-ignore]
 
+from robothor.constants import DEFAULT_TENANT
 from robothor.engine.admission import admit, complete, register
 from robothor.engine.config import (
     ManifestScan,
@@ -1391,11 +1392,14 @@ class CronScheduler:
 
         from robothor.engine.plugin_job_runs import recorded
 
+        # The engine's tenant, as its other run writes use: with row-level
+        # security on, a row tagged with any other tenant is refused.
+        tenant_id = self.config.tenant_id or DEFAULT_TENANT
         registered = 0
         for job_id, spec in specs.items():
             try:
                 self.scheduler.add_job(
-                    recorded(job_id, spec["func"]),
+                    recorded(job_id, spec["func"], tenant_id=tenant_id),
                     trigger=cron_trigger(spec["cron"]),
                     id=job_id,
                     name=job_id,
