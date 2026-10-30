@@ -275,3 +275,159 @@ class TestAdminToggleRefusesAForcedPlugin:
         response = client.post("/api/admin/plugins/acme-extra/disable")
         assert response.status_code == 200
         assert response.json()["enabled"] is False
+
+
+# ─── review follow-ups ────────────────────────────────────────────────
+
+
+class TestNamesAreCanonical:
+    """A grant names a distribution the way a person types it; the loader sees
+    the metadata ``Name``. PEP 503 canonical form on both sides, or a grant of
+    ``off`` reports "live" and forces nothing."""
+
+    def test_a_grant_written_in_another_spelling_still_refuses(self, grants_db, two_plugins):
+        from robothor.plugins.grants import ROOT_DISABLED_REASON
+
+        grants_db.rows = {"Acme_Tools": "off"}
+        result = loader.load_plugins(entry_points=two_plugins)
+        assert _reason(result, "acme-tools") == ROOT_DISABLED_REASON
+        assert two_plugins[0].loads == 0
+
+    def test_a_distribution_whose_metadata_spells_it_differently_is_refused(
+        self, grants_db, plugin_lockfile
+    ):
+        from robothor.plugins.grants import ROOT_DISABLED_REASON
+
+        grants_db.rows = {"acme-tools": "off"}
+        ep = _EP(_Dist("Acme_Tools"))
+        result = loader.load_plugins(entry_points=[ep])
+        assert _reason(result, "Acme_Tools") == ROOT_DISABLED_REASON
+        assert ep.loads == 0
+
+    def test_the_admin_toggle_sees_the_grant_under_either_spelling(
+        self, client, grants_db, two_plugins
+    ):
+        grants_db.rows = {"Acme_Tools": "on"}
+        assert client.post("/api/admin/plugins/acme-tools/disable").status_code == 409
+        row = next(
+            p
+            for p in client.get("/api/admin/plugins").json()["plugins"]
+            if p["name"] == "acme-tools"
+        )
+        assert row["forced"] == "on"
+
+
+class TestColdStartFailsClosed:
+    def test_a_failed_first_read_is_not_cached_so_the_next_load_retries(
+        self, grants_db, two_plugins
+    ):
+        from robothor.plugins.grants import ROOT_DISABLED_REASON
+
+        grants_db.error = RuntimeError("database starting")
+        loader.load_plugins(entry_points=two_plugins)
+
+        grants_db.error = None
+        grants_db.rows = {"acme-tools": "off"}
+        result = loader.load_plugins(entry_points=two_plugins)
+        assert len(grants_db.calls) == 2
+        assert _reason(result, "acme-tools") == ROOT_DISABLED_REASON
+
+    def test_a_restart_with_the_database_down_keeps_the_last_forced_off_set(
+        self, grants_db, two_plugins
+    ):
+        """The forced-off set is persisted beside the lockfile, so "the last
+        successful read" survives a restart."""
+        from robothor.plugins import grants
+        from robothor.plugins.grants import ROOT_DISABLED_REASON
+
+        grants_db.rows = {"acme-tools": "off", "acme-extra": "on"}
+        loader.load_plugins(entry_points=two_plugins)
+
+        grants.reset_forced_cache()  # a new process: nothing in memory
+        loader.reload_plugins()
+        grants_db.error = RuntimeError("connection refused")
+        result = loader.load_plugins(entry_points=two_plugins)
+
+        assert _reason(result, "acme-tools") == ROOT_DISABLED_REASON
+        assert two_plugins[0].loads == 0
+        assert two_plugins[1] in result.loaded
+
+    def test_a_persisted_set_for_another_tenant_is_ignored(
+        self, grants_db, two_plugins, monkeypatch
+    ):
+        from robothor.plugins import grants
+
+        grants_db.rows = {"acme-tools": "off"}
+        grants.forced_states(tenant_id="acme-child-b")
+
+        grants.reset_forced_cache()
+        grants_db.error = RuntimeError("connection refused")
+        assert grants.forced_states(tenant_id="acme-child-a") == {}
+
+    def test_the_persisted_file_never_lands_outside_the_lockfile_directory(
+        self, grants_db, two_plugins, plugin_lockfile
+    ):
+        grants_db.rows = {"acme-tools": "off"}
+        loader.load_plugins(entry_points=two_plugins)
+        written = sorted(p.name for p in plugin_lockfile.parent.iterdir())
+        assert any("forced-off" in name for name in written), written
+
+
+class TestASharedLockfileIsRefused:
+    """Each engine must have its own lockfile. A single-host child engine left
+    on the root's workspace would otherwise let a child admin's disable turn a
+    plugin off for the root and every sibling."""
+
+    def test_the_first_claim_names_this_engines_tenant(self, plugin_lockfile):
+        from robothor import constants
+        from robothor.plugins import lockfile_owner
+
+        assert lockfile_owner.claim() == constants.DEFAULT_TENANT
+        assert lockfile_owner.claim() == constants.DEFAULT_TENANT
+        assert lockfile_owner.foreign_owner() is None
+
+    def test_a_lockfile_owned_by_another_tenant_is_named(self, plugin_lockfile):
+        from robothor.plugins import lockfile_owner
+
+        lockfile_owner.claim(tenant="acme-parent")
+        assert lockfile_owner.foreign_owner(tenant="acme-child-a") == "acme-parent"
+
+    @pytest.mark.parametrize("act", ["enable", "disable"])
+    def test_a_toggle_on_another_tenants_lockfile_is_a_409(
+        self, client, grants_db, two_plugins, act
+    ):
+        from robothor.plugins import lockfile_owner
+
+        lockfile_owner.claim(tenant="acme-other")
+        before = lockfile.read_lockfile().row("acme-tools").enabled
+
+        response = client.post(f"/api/admin/plugins/acme-tools/{act}")
+
+        assert response.status_code == 409
+        detail = response.json()["detail"]
+        assert "another tenant" in detail
+        assert "ROBOTHOR_WORKSPACE" in detail
+        assert "/" not in detail.replace("ROBOTHOR_WORKSPACE", ""), "no path in the answer"
+        assert lockfile.read_lockfile().row("acme-tools").enabled is before
+
+    def test_a_sync_on_another_tenants_lockfile_is_a_409(self, client, grants_db, two_plugins):
+        from robothor.plugins import lockfile_owner
+
+        lockfile_owner.claim(tenant="acme-other")
+        assert client.post("/api/admin/plugins/sync").status_code == 409
+
+    def test_an_unclaimed_lockfile_is_claimed_by_the_first_toggle(
+        self, client, grants_db, two_plugins
+    ):
+        from robothor import constants
+        from robothor.plugins import lockfile_owner
+
+        assert client.post("/api/admin/plugins/acme-tools/disable").status_code == 200
+        assert lockfile_owner.claim(tenant="acme-other") == constants.DEFAULT_TENANT
+
+    def test_the_engine_claims_its_lockfile_at_boot(self):
+        import inspect
+
+        from robothor.engine import daemon
+
+        assert "lockfile_owner" in inspect.getsource(daemon.main)

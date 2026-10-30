@@ -96,6 +96,22 @@ def test_set_grant_upserts_and_records_who_set_it():
     assert params[:4] == ("acme-child-a", "acme-tools", "off", "operator:alice")
 
 
+def test_a_plugin_name_is_stored_in_canonical_form():
+    """``Acme_Tools`` and ``acme-tools`` are one distribution (PEP 503)."""
+    from robothor.plugins.grants import clear_grant, get_grants, set_grant
+
+    connect, cur = _recording_connect()
+    set_grant("acme-child-a", "Acme_Tools", "off", "operator:alice", connect=connect)
+    assert cur.execute.call_args.args[1][1] == "acme-tools"
+
+    connect, cur = _recording_connect(rowcount=1)
+    clear_grant("acme-child-a", "Acme.Tools", connect=connect)
+    assert cur.execute.call_args.args[1][1] == "acme-tools"
+
+    connect, _cur = _recording_connect(fetchall=[("Acme_Tools", "on")])
+    assert get_grants("acme-child-a", connect=connect) == {"acme-tools": "on"}
+
+
 def test_clear_grant_says_whether_a_row_went():
     from robothor.plugins.grants import clear_grant
 
