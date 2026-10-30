@@ -529,6 +529,16 @@ describe("ChannelsPage", () => {
     );
   });
 
+  it("prints the bridge's cause under the listing failure, word for word", async () => {
+    const cause =
+      "the engine refused the bridge's request (HTTP 401); check the shared signing key";
+    const bridge = mockBridge();
+    bridge.reply("/api/channels", 502, { detail: cause });
+    render(<ChannelsPage visible />);
+    const banner = await screen.findByTestId("channels-error");
+    expect(banner.textContent).toContain(`The channel listing failed${cause}`);
+  });
+
   it("says the engine carries no channels rather than showing an empty page", async () => {
     mockBridge({ channels: [] });
     render(<ChannelsPage visible />);
@@ -561,6 +571,26 @@ describe("ChannelsPage polling", () => {
     const before = callsTo(bridge.calls, "/api/channels", "GET").length;
     await vi.advanceTimersByTimeAsync(180_000);
     expect(callsTo(bridge.calls, "/api/channels", "GET")).toHaveLength(before);
+  });
+
+  it("keeps the last cards and says they may be stale when a later poll fails", async () => {
+    const bridge = mockBridge();
+    await renderPage();
+    expect(screen.queryByTestId("channels-error")).toBeNull();
+
+    const cause =
+      "the bridge could not reach the engine at its configured URL (ROBOTHOR_ENGINE_URL); " +
+      "check that the engine is running and that the network path from the bridge to the " +
+      "engine is allowed";
+    bridge.reply("/api/channels", 502, { detail: cause }, "GET");
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    const banner = await screen.findByTestId("channels-error");
+    expect(banner.textContent).toContain(cause);
+    expect(banner.textContent).toContain(
+      "The cards below are what the bridge last answered with, and may be out of date."
+    );
+    expect(screen.getByTestId("channel-card-telegram")).toBeTruthy();
   });
 
   it("Refresh re-reads on demand", async () => {
