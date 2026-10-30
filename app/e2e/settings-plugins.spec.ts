@@ -517,4 +517,59 @@ test.describe("Settings › Plugins", () => {
     });
     expect(worst).toBeLessThanOrEqual(1);
   });
+  test("the root operator forces a plugin off for one child tenant", async ({ page }) => {
+    await setupMocks(page);
+    const grants: Array<{ url: string; body: unknown }> = [];
+    // Registered after setupMocks, so these win.
+    await page.route("**/api/auth/session", (route) =>
+      json(route, {
+        user: { name: "Operator", email: "operator@example.com" },
+        role: "owner",
+        tenantId: "acme-parent",
+        homeTenantId: "acme-parent",
+        rootTenantId: "acme-parent",
+        backendAuthorized: true,
+        expires: "2099-01-01T00:00:00.000Z",
+      })
+    );
+    await page.route("**/api/bridge/api/tenants/accessible", (route) =>
+      json(route, [
+        { id: "acme-parent", display_name: "Acme Parent", parent_tenant_id: null, is_home: true },
+        {
+          id: "acme-child-a",
+          display_name: "Acme Child A",
+          parent_tenant_id: "acme-parent",
+          is_home: false,
+        },
+      ])
+    );
+    await page.route("**/api/bridge/api/plugins", (route) => json(route, RECORDED));
+    await page.route("**/api/bridge/api/plugins/*/tenants/*", (route) => {
+      grants.push({ url: route.request().url(), body: route.request().postDataJSON() });
+      return json(route, {
+        plugin: "genus-ledger",
+        tenant_id: "acme-child-a",
+        state: "off",
+        reloaded: true,
+        reload_status: 200,
+        reload: { generation: 3, loaded: 0, failures: [] },
+      });
+    });
+
+    await page.goto(PLUGINS_URL, { waitUntil: "networkidle" });
+    const control = page.locator('[data-testid="plugin-grant-genus-ledger"]');
+    await expect(control).toBeVisible({ timeout: 15000 });
+    await expect(control.locator('[data-testid="plugin-grant-tenant-genus-ledger"]')).toHaveValue(
+      "acme-child-a"
+    );
+
+    await control.locator('[data-testid="plugin-grant-off-genus-ledger"]').click();
+
+    await expect(
+      control.locator('[data-testid="plugin-grant-result-genus-ledger"]')
+    ).toContainText("acme-child-a");
+    expect(grants).toHaveLength(1);
+    expect(grants[0].url).toContain("/api/bridge/api/plugins/genus-ledger/tenants/acme-child-a");
+    expect(grants[0].body).toEqual({ state: "off" });
+  });
 });

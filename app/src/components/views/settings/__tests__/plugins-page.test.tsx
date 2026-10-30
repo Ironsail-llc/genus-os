@@ -38,6 +38,11 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+// No session: the per-tenant controls are covered in plugins-tenant-grants.test.tsx.
+vi.mock("next-auth/react", () => ({
+  useSession: () => ({ data: null, status: "unauthenticated", update: vi.fn() }),
+}));
+
 import { PluginsPage } from "../plugins-page";
 
 /** The two 502 bodies, one per hop: the bridge's and the app proxy's. */
