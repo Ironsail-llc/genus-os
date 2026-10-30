@@ -112,6 +112,33 @@ def test_a_plugin_name_is_stored_in_canonical_form():
     assert get_grants("acme-child-a", connect=connect) == {"acme-tools": "on"}
 
 
+@pytest.mark.parametrize("fn", ["set_grant", "clear_grant"])
+def test_a_write_binds_to_the_root_tenant_not_the_child(fn, monkeypatch):
+    """Grants are the root's authority, and RLS lets only the root write them."""
+    from robothor import constants
+    from robothor.plugins import grants
+
+    bound: list[str] = []
+    connect, _cur = _recording_connect(rowcount=1)
+
+    def fake_platform_connect(tenant_id):
+        bound.append(tenant_id)
+        return connect
+
+    monkeypatch.setattr(grants, "_platform_connect", fake_platform_connect)
+    args = (
+        ("acme-child-a", "acme-tools", "off", "operator:alice")
+        if fn == "set_grant"
+        else (
+            "acme-child-a",
+            "acme-tools",
+        )
+    )
+    getattr(grants, fn)(*args, root_tenant="acme-parent")
+    getattr(grants, fn)(*args)
+    assert bound == ["acme-parent", constants.PLATFORM_TENANT]
+
+
 def test_clear_grant_says_whether_a_row_went():
     from robothor.plugins.grants import clear_grant
 
@@ -128,6 +155,14 @@ def test_clear_grant_says_whether_a_row_went():
 def test_migration_file_exists_and_is_in_the_manifest():
     assert (MIGRATIONS_DIR / f"{MIGRATION}.sql").exists()
     assert f"crm/{MIGRATION}.sql" in MANIFEST.read_text().splitlines()
+
+
+def test_the_migration_lets_only_the_root_write():
+    sql = (MIGRATIONS_DIR / f"{MIGRATION}.sql").read_text()
+    assert "AS RESTRICTIVE" in sql
+    for verb in ("INSERT", "UPDATE", "DELETE"):
+        assert f"FOR {verb}" in sql
+    assert "tenant_plugin_grants_root" in sql
 
 
 def test_the_migration_constrains_the_state_and_policies_the_table():
@@ -211,3 +246,138 @@ def test_the_database_refuses_a_state_the_dal_would_not_write(pg):
             "INSERT INTO tenant_plugin_grants (tenant_id, plugin, state, set_by) "
             "VALUES ('acme-child-a', 'acme-tools', 'maybe', 'operator:alice')"
         )
+
+
+# ─── integration: only the root writes, under real RLS ──────────────────
+
+
+@pytest.fixture
+def rls(scratch_db):
+    """The scratch database seen as ``robothor_app`` (no BYPASSRLS), with a
+    root and one child, and a way to act as a given tenant."""
+    import psycopg2
+
+    db, dsn = scratch_db(through=MIGRATION)
+    with db.cursor() as cur:
+        cur.execute(
+            "INSERT INTO crm_tenants (id, display_name, parent_tenant_id) VALUES "
+            "('acme-parent', 'Acme Parent', NULL), ('acme-child-a', 'Acme Child A', 'acme-parent')"
+        )
+
+    def as_tenant(tenant: str | None):
+        conn = psycopg2.connect(dsn)
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            cur.execute("SET ROLE robothor_app")
+            cur.execute("SELECT set_config('app.tenant_id', %s, false)", (tenant or "",))
+        return conn
+
+    return db, as_tenant
+
+
+def _row(db, tenant: str = "acme-child-a"):
+    with db.cursor() as cur:
+        cur.execute(
+            "SELECT state FROM tenant_plugin_grants WHERE tenant_id = %s AND plugin = 'acme-tools'",
+            (tenant,),
+        )
+        found = cur.fetchone()
+    return None if found is None else found[0]
+
+
+_INSERT = (
+    "INSERT INTO tenant_plugin_grants (tenant_id, plugin, state, set_by) "
+    "VALUES ('acme-child-a', 'acme-tools', 'off', 'operator:alice')"
+)
+
+
+@pytest.mark.integration
+def test_the_root_can_write_a_childs_grant(rls):
+    db, as_tenant = rls
+    conn = as_tenant("acme-parent")
+    with conn.cursor() as cur:
+        cur.execute(_INSERT)
+        cur.execute("UPDATE tenant_plugin_grants SET state = 'on' WHERE tenant_id = 'acme-child-a'")
+    assert _row(db) == "on"
+    with conn.cursor() as cur:
+        cur.execute("DELETE FROM tenant_plugin_grants WHERE tenant_id = 'acme-child-a'")
+    assert _row(db) is None
+
+
+@pytest.mark.integration
+def test_the_child_reads_its_own_grant(rls):
+    db, as_tenant = rls
+    with db.cursor() as cur:
+        cur.execute(_INSERT)
+    with as_tenant("acme-child-a").cursor() as cur:
+        cur.execute("SELECT plugin, state FROM tenant_plugin_grants")
+        assert cur.fetchall() == [("acme-tools", "off")]
+
+
+@pytest.mark.integration
+def test_the_child_cannot_insert_its_own_grant(rls):
+    import psycopg2
+
+    db, as_tenant = rls
+    with (
+        pytest.raises(psycopg2.errors.InsufficientPrivilege),
+        as_tenant("acme-child-a").cursor() as cur,
+    ):
+        cur.execute(_INSERT)
+    assert _row(db) is None
+
+
+@pytest.mark.integration
+def test_the_child_cannot_change_or_delete_its_own_grant(rls):
+    db, as_tenant = rls
+    with db.cursor() as cur:
+        cur.execute(_INSERT)
+    with as_tenant("acme-child-a").cursor() as cur:
+        cur.execute("UPDATE tenant_plugin_grants SET state = 'on' WHERE tenant_id = 'acme-child-a'")
+        assert cur.rowcount == 0
+        cur.execute("DELETE FROM tenant_plugin_grants WHERE tenant_id = 'acme-child-a'")
+        assert cur.rowcount == 0
+    assert _row(db) == "off"
+
+
+@pytest.mark.integration
+def test_an_unbound_connection_can_still_write(rls):
+    """The migration runner and an admin shell are unbound; they keep working."""
+    db, as_tenant = rls
+    with as_tenant(None).cursor() as cur:
+        cur.execute(_INSERT)
+    assert _row(db) == "off"
+
+
+@pytest.mark.integration
+def test_the_dal_writes_as_the_root(rls):
+    """``set_grant`` through a connection bound the way the DAL binds it."""
+    from robothor.plugins.grants import clear_grant, set_grant
+
+    db, as_tenant = rls
+    bound: list[str] = []
+
+    def platform_connect(tenant_id):
+        bound.append(tenant_id)
+
+        @contextlib.contextmanager
+        def connect():
+            conn = as_tenant(tenant_id)
+            try:
+                yield conn
+            finally:
+                conn.close()
+
+        return connect
+
+    from robothor.plugins import grants
+
+    original = grants._platform_connect
+    grants._platform_connect = platform_connect
+    try:
+        set_grant("acme-child-a", "acme-tools", "off", "operator:alice", root_tenant="acme-parent")
+        assert _row(db) == "off"
+        assert clear_grant("acme-child-a", "acme-tools", root_tenant="acme-parent") is True
+    finally:
+        grants._platform_connect = original
+    assert bound == ["acme-parent", "acme-parent"]
