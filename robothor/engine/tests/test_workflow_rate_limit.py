@@ -291,6 +291,24 @@ class TestFirstStepDefers:
         assert engine._persist_step.call_count == 1
 
     @pytest.mark.asyncio
+    async def test_a_first_step_with_retries_is_deferred_without_retrying(
+        self, engine_config, clock, no_dedup, waits
+    ):
+        # The deferral happens before any step runs, so the step's retry_count
+        # never comes into play: no wait, no second attempt.
+        engine = _engine(
+            engine_config, _definition(rate_limit_per_minute=1, step={"retry_count": 2})
+        )
+        await _run(engine, requeue=True)
+        run = await _run(engine, requeue=True)
+        assert run.status == RunStatus.SKIPPED
+        assert run.rate_limited is True
+        assert run.step_results == []
+        assert not waits
+        assert engine.runner.registry.execute.await_count == 1
+        assert engine._persist_step_start.call_count == 1
+
+    @pytest.mark.asyncio
     async def test_a_deferral_is_logged_once(self, engine_config, clock, no_dedup, caplog):
         import logging
 
