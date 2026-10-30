@@ -928,6 +928,8 @@ class WorkflowDef:
     triggers: list[WorkflowTriggerDef] = field(default_factory=list)
     steps: list[WorkflowStepDef] = field(default_factory=list)
     timeout_seconds: int = 900
+    #: Tool calls a minute across this workflow's steps; 0 is the fleet default.
+    rate_limit_per_minute: int = 0
     delivery_mode: str = "none"
     delivery_channel: str = ""
     delivery_to: str = ""
@@ -948,6 +950,8 @@ class WorkflowStepResult:
     duration_ms: int = 0
     started_at: datetime | None = None
     completed_at: datetime | None = None
+    #: The tool-call rate limit blocked this step before the tool ran.
+    rate_limited: bool = False
 
 
 @dataclass
@@ -969,3 +973,5 @@ class WorkflowRun:
     duration_ms: int = 0
     started_at: datetime | None = None
     completed_at: datetime | None = None
+    #: The run stopped at a step the tool-call rate limit blocked. Not persisted.
+    rate_limited: bool = False

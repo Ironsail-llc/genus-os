@@ -315,6 +315,14 @@ def parse_workflow(data: dict[str, Any]) -> WorkflowDef:
                 raise ValueError(f"duplicate step id {sid!r} in workflow {data.get('id')!r}")
             seen_ids.add(sid)
 
+    rate_limit = data.get("rate_limit_per_minute", 0)
+    if "rate_limit_per_minute" in data and (
+        not isinstance(rate_limit, int) or isinstance(rate_limit, bool) or rate_limit < 1
+    ):
+        raise ValueError(
+            f"workflow {data.get('id')!r}: rate_limit_per_minute must be a positive integer"
+        )
+
     delivery = data.get("delivery", {})
 
     return WorkflowDef(
@@ -325,6 +333,7 @@ def parse_workflow(data: dict[str, Any]) -> WorkflowDef:
         triggers=triggers,
         steps=steps,
         timeout_seconds=data.get("timeout_seconds", 900),
+        rate_limit_per_minute=rate_limit,
         delivery_mode=delivery.get("mode", "none"),
         delivery_channel=delivery.get("channel", ""),
         delivery_to=delivery.get("to", ""),
@@ -875,6 +884,16 @@ class WorkflowEngine:
                 run.error_message = result.error_message
                 return
 
+            # A rate-limit block is transient and the tool never ran, so
+            # on_failure does not apply: the run stops here. A hook run is
+            # deferred for the hook consumer to requeue (on the busy-requeue
+            # budget); nothing requeues any other run, so it fails visibly.
+            if result.status == WorkflowStepStatus.FAILED and result.rate_limited:
+                run.rate_limited = True
+                run.error_message = f"Step '{step.id}' deferred: {result.error_message}"
+                run.status = RunStatus.SKIPPED if run.trigger_type == "hook" else RunStatus.FAILED
+                return
+
             # Handle failure
             if result.status == WorkflowStepStatus.FAILED:
                 if step.on_failure == "abort":
@@ -1139,7 +1158,7 @@ class WorkflowEngine:
         finally:
             await release(step.agent_id)
 
-    def _workflow_guardrails(self) -> Any:
+    def _workflow_guardrails(self, rate_limit_per_minute: int = 0) -> Any:
         """Baseline guardrails for workflow tool steps.
 
         Workflow YAML steps call tools directly via ``registry.execute`` — they
@@ -1147,8 +1166,14 @@ class WorkflowEngine:
         workflow step could run ``exec``/``git_push``/cold email unguarded;
         audit 2026-05-29). Apply the fleet defaults plus protected-branch
         safety so this path is no longer a hole.
+
+        One engine per rate limit (0 is the fleet default): the workflow's
+        own ``rate_limit_per_minute`` stands in for the manifest field a
+        workflow does not have. Calls are counted per ``workflow:<id>``, so
+        workflows sharing an engine never share a budget.
         """
-        cached = getattr(self, "_wf_guardrail_engine", None)
+        engines: dict[int, Any] = self.__dict__.setdefault("_wf_guardrail_engines", {})
+        cached = engines.get(rate_limit_per_minute)
         if cached is not None:
             return cached
         from robothor.engine.guardrails import DEFAULT_GUARDRAILS, GuardrailEngine
@@ -1157,8 +1182,9 @@ class WorkflowEngine:
         engine = GuardrailEngine(
             enabled_policies=policies,
             workspace=str(self.config.workspace) + "/",
+            rate_limit_per_minute=rate_limit_per_minute,
         )
-        self._wf_guardrail_engine = engine
+        engines[rate_limit_per_minute] = engine
         return engine
 
     async def _run_tool_step(
@@ -1174,7 +1200,8 @@ class WorkflowEngine:
                 rendered_args[k] = v
 
         # ── [GUARDRAILS] Pre-execution check (workflow steps are otherwise unguarded) ──
-        guardrails = self._workflow_guardrails()
+        wf = self._workflows.get(run.workflow_id)
+        guardrails = self._workflow_guardrails(wf.rate_limit_per_minute if wf else 0)
         gr = guardrails.check_pre_execution(
             step.tool_name, rendered_args, agent_id=f"workflow:{run.workflow_id}"
         )
@@ -1182,6 +1209,7 @@ class WorkflowEngine:
             result.status = WorkflowStepStatus.FAILED
             result.error_message = f"Blocked by guardrail ({gr.guardrail_name}): {gr.reason}"
             result.output_text = result.error_message
+            result.rate_limited = gr.guardrail_name == "rate_limit"
             return
 
         tool_result = await self.runner.registry.execute(

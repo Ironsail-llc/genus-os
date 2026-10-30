@@ -195,6 +195,30 @@ steps:
 The payload comes from outside: a tool that receives it validates what it
 is given.
 
+#### Tool-call rate limit
+
+A workflow's tool steps share one ceiling of tool calls a minute, counted
+for the whole workflow across all its runs. It is the fleet default (30)
+unless the workflow sets its own with a top-level `rate_limit_per_minute`
+(a positive integer). Raise it for a workflow that takes bursts, such as a
+hook workflow whose run makes several tool calls:
+
+```yaml
+id: order-events
+rate_limit_per_minute: 120
+```
+
+A step the limit blocks has not run, so it is treated as transient. It
+retries per its `retry_count` and backoff. With no retry left the run stops
+there whatever its `on_failure` says. A hook run is then recorded as
+`skipped` and its event is requeued for this workflow on the same budget and
+backoff as `requeue_if_busy`, whether or not the trigger sets that, so a
+burst slows down instead of failing; the event goes to `<stream>:dlq` only
+once that budget is spent. A requeued run starts again from its first step,
+so steps before the blocked one run again: keep them idempotent. A cron,
+agent or manual run has nothing to requeue it, so it fails, and a cron
+failure pages as usual.
+
 #### Asking a human mid-workflow
 
 An `approval` step suspends the run until a person decides. The run stops
