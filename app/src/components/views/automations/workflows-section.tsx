@@ -1,10 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Workflow } from "lucide-react";
+import { ChevronDown, Workflow } from "lucide-react";
 import { EmptyState } from "@/components/business/empty-state";
 import { StatusBadge, fromEngineStatus } from "@/components/business/status-badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { WorkflowRunDrawer } from "@/components/views/automations/workflow-run-drawer";
+import { WorkflowRunsList } from "@/components/views/automations/workflow-runs";
 
 /**
  * Workflows — the multi-agent flows, below the scheduled agents.
@@ -20,6 +22,9 @@ import { Skeleton } from "@/components/ui/skeleton";
  * halves come from two different bridge routes with two different failure
  * modes, and a workflow listing that is down must not take the automations with
  * it.
+ *
+ * A workflow that has run can be expanded to list its recent runs; selecting a
+ * run opens the run-detail drawer with each step's input, output and error.
  */
 
 const BRIDGE = "/api/bridge";
@@ -38,6 +43,16 @@ export function WorkflowsSection({ visible = true }: { visible?: boolean }) {
   const [workflows, setWorkflows] = useState<WorkflowRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
+  const [opened, setOpened] = useState<{ workflowId: string; runId: string } | null>(null);
+
+  const toggle = (workflowId: string) =>
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(workflowId)) next.delete(workflowId);
+      else next.add(workflowId);
+      return next;
+    });
 
   useEffect(() => {
     if (!visible) return;
@@ -103,6 +118,7 @@ export function WorkflowsSection({ visible = true }: { visible?: boolean }) {
         {workflows.map((w) => {
           const failed = (w.failures ?? 0) > 0;
           const runs = w.runs ?? 0;
+          const isOpen = expanded.has(w.workflow_id);
           return (
             <div
               key={w.workflow_id}
@@ -132,13 +148,46 @@ export function WorkflowsSection({ visible = true }: { visible?: boolean }) {
                   label={w.last_status ?? undefined}
                 />
               </div>
-              <div className="mt-1 font-mono text-xs text-muted-foreground">
-                {runs === 0 ? "never run" : `${runs} run(s), ${w.failures ?? 0} failed`}
+              <div className="mt-1 flex flex-wrap items-center justify-between gap-2">
+                <span className="font-mono text-xs text-muted-foreground">
+                  {runs === 0 ? "never run" : `${runs} run(s), ${w.failures ?? 0} failed`}
+                </span>
+                {runs > 0 ? (
+                  <button
+                    type="button"
+                    data-testid={`workflow-runs-toggle-${w.workflow_id}`}
+                    aria-expanded={isOpen}
+                    aria-controls={`workflow-runs-${w.workflow_id}`}
+                    onClick={() => toggle(w.workflow_id)}
+                    className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
+                  >
+                    {isOpen ? "Hide runs" : "Runs"}
+                    <ChevronDown
+                      aria-hidden
+                      className={`size-3 transition-transform ${isOpen ? "rotate-180" : ""}`}
+                    />
+                  </button>
+                ) : null}
               </div>
+              {isOpen ? (
+                <WorkflowRunsList
+                  workflowId={w.workflow_id}
+                  onOpenRun={(runId) => setOpened({ workflowId: w.workflow_id, runId })}
+                />
+              ) : null}
             </div>
           );
         })}
       </div>
+
+      <WorkflowRunDrawer
+        workflowId={opened?.workflowId ?? ""}
+        runId={opened?.runId ?? null}
+        open={opened !== null}
+        onOpenChange={(open) => {
+          if (!open) setOpened(null);
+        }}
+      />
     </section>
   );
 }
