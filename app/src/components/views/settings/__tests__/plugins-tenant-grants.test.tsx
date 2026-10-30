@@ -289,6 +289,71 @@ describe("forcing a plugin for a child", () => {
   });
 });
 
+describe("what is installed stays root", () => {
+  const WITH_SOURCE = {
+    ...LISTING,
+    plugins: [
+      {
+        ...FREE,
+        source: {
+          origin: "registry",
+          installed_at: "2026-09-15T10:00:00+00:00",
+          index_url: "https://plugins.example.org/index.json",
+          publisher_key_id: "genus-2026",
+        },
+      },
+    ],
+  };
+
+  function listing(body: unknown) {
+    vi.spyOn(global, "fetch").mockImplementation((async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const payload = url.endsWith("/api/tenants/accessible") ? ACCESSIBLE : body;
+      return { ok: true, status: 200, json: async () => payload } as Response;
+    }) as typeof fetch);
+  }
+
+  it.each([
+    ["a child admin", () => sessionFor(CHILD_A, CHILD_A)],
+    ["a root admin acting in a child", () => sessionFor(CHILD_A, ROOT)],
+  ])("%s is not offered install, record or remove", async (_who, session) => {
+    mockSession.data = session();
+    listing(WITH_SOURCE);
+    render(<PluginsPage visible />);
+
+    await screen.findByTestId("plugin-genus-hostinfo");
+    expect(screen.queryByTestId("plugins-install-card")).toBeNull();
+    expect(screen.queryByTestId("plugins-record")).toBeNull();
+    expect(screen.queryByTestId("plugin-remove-genus-hostinfo")).toBeNull();
+    // Their own acts are still there.
+    expect(screen.getByTestId("plugins-reload")).toBeInTheDocument();
+    expect(screen.getByTestId("plugin-switch-genus-hostinfo")).toBeEnabled();
+  });
+
+  it("tells a child admin on a fresh box who records plugins", async () => {
+    listing({
+      ...LISTING,
+      lockfile: { path_configured: true, present: false, malformed: false, rows: 0, problem: null },
+    });
+    render(<PluginsPage visible />);
+
+    const note = await screen.findByTestId("plugins-record-root-only");
+    expect(note.textContent).toContain("root administrator");
+    expect(screen.queryByTestId("plugins-record")).toBeNull();
+  });
+
+  it("the root operator at home still gets all three", async () => {
+    mockSession.data = sessionFor(ROOT, ROOT);
+    listing(WITH_SOURCE);
+    render(<PluginsPage visible />);
+
+    await screen.findByTestId("plugin-genus-hostinfo");
+    expect(screen.getByTestId("plugins-install-card")).toBeInTheDocument();
+    expect(screen.getByTestId("plugins-record")).toBeInTheDocument();
+    expect(screen.getByTestId("plugin-remove-genus-hostinfo")).toBeInTheDocument();
+  });
+});
+
 describe("a refused listing", () => {
   it("explains that plugins belong to each tenant's owners and admins", async () => {
     mockBridge({ listStatus: 403 });

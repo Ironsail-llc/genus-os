@@ -118,6 +118,12 @@ async function setupMocks(page: Page): Promise<Recorded> {
     json(route, {
       user: { name: "Operator", email: "operator@example.com" },
       role: "owner",
+      // The root operator at home: the only session offered install, record
+      // and remove.
+      tenantId: "acme-parent",
+      homeTenantId: "acme-parent",
+      rootTenantId: "acme-parent",
+      backendAuthorized: true,
       expires: "2099-01-01T00:00:00.000Z",
     })
   );
