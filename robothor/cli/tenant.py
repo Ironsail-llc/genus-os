@@ -257,6 +257,13 @@ def _cmd_move_workload(args: argparse.Namespace) -> int:
     if args.json:
         print(json.dumps(report.to_dict(), indent=2))
         return 0
+    if not any(report.counts.values()) and not report.links_cleared:
+        print(
+            f"Nothing to move: '{report.from_tenant}' holds no rows of this workload "
+            f"(agents: {', '.join(report.agents) or '-'}; "
+            f"workflows: {', '.join(report.workflows) or '-'}). Nothing was written."
+        )
+        return 0
     verb = "Would move" if report.dry_run else "Moved"
     print(f"{verb} workload from '{report.from_tenant}' to '{report.to_tenant}'")
     print(f"  Agents:    {', '.join(report.agents) or '-'}")

@@ -29,7 +29,6 @@ integration tests red on it too).
 from __future__ import annotations
 
 import logging
-import os
 from dataclasses import asdict, dataclass
 from dataclasses import field as dataclass_field
 from typing import Any
@@ -39,6 +38,7 @@ from psycopg2 import sql
 from psycopg2.extras import Json, RealDictCursor
 
 from robothor.db.connection import get_connection, read_every_tenant_in_transaction
+from robothor.tenancy.root_shell import root_shell_refusal, tenant_ancestry
 
 logger = logging.getLogger(__name__)
 
@@ -335,21 +335,6 @@ def _names(values: list[str] | tuple[str, ...] | None) -> list[str]:
     return sorted({v.strip() for v in values or () if v and v.strip()})
 
 
-def _ancestry(cur: Any, tenant: str) -> list[str]:
-    """``tenant`` and its ancestors, nearest first; the last is its root."""
-    cur.execute(
-        """WITH RECURSIVE up(id, parent, depth) AS (
-               SELECT id, parent_tenant_id, 0 FROM crm_tenants WHERE id = %s
-               UNION ALL
-               SELECT t.id, t.parent_tenant_id, up.depth + 1
-               FROM crm_tenants t JOIN up ON t.id = up.parent
-               WHERE up.depth < 32)
-           SELECT id FROM up ORDER BY depth""",
-        (tenant,),
-    )
-    return [r["id"] for r in cur.fetchall()]
-
-
 def _refuse_tenants(cur: Any, source: str, target: str) -> str:
     """Raise for an unusable pair of tenants; return the root they share."""
     cur.execute("SELECT id, active FROM crm_tenants WHERE id IN (%s, %s)", (source, target))
@@ -362,7 +347,7 @@ def _refuse_tenants(cur: Any, source: str, target: str) -> str:
         raise WorkloadMoveError(f"--from and --to name the same tenant ({source!r})")
     if not found[target]["active"]:
         raise WorkloadMoveError(f"target tenant {target!r} is not active")
-    up_source, up_target = _ancestry(cur, source), _ancestry(cur, target)
+    up_source, up_target = tenant_ancestry(cur, source), tenant_ancestry(cur, target)
     if up_source[-1] != up_target[-1]:
         raise WorkloadMoveError(
             f"tenant {target!r} is not under the same root as {source!r} "
@@ -374,28 +359,6 @@ def _refuse_tenants(cur: Any, source: str, target: str) -> str:
             "descendant or a sibling under the same root"
         )
     return up_source[-1]
-
-
-def _shell_tenant() -> str:
-    """The tenant this process's engine runs as: what a root shell must be."""
-    from robothor.constants import DEFAULT_TENANT
-
-    return (
-        os.environ.get("ROBOTHOR_TENANT_ID", "")
-        or os.environ.get("ROBOTHOR_DEFAULT_TENANT", "")
-        or DEFAULT_TENANT
-    )
-
-
-def _refuse_foreign_shell(root: str) -> None:
-    """The move is the root operator's; refuse a shell bound to any other tenant."""
-    shell = _shell_tenant()
-    if shell != root:
-        raise WorkloadMoveError(
-            f"this shell's engine tenant is {shell!r}, but both tenants are under the root "
-            f"{root!r}; run move-workload from a root shell (ROBOTHOR_TENANT_ID unset or "
-            f"{root!r}, and ROBOTHOR_DEFAULT_TENANT {root!r})"
-        )
 
 
 def _refuse_unclassified(cur: Any) -> None:
@@ -748,7 +711,9 @@ def move_workload(
             read_every_tenant_in_transaction(conn)
             cur = conn.cursor(cursor_factory=RealDictCursor)
             root = _refuse_tenants(cur, from_tenant, to_tenant)
-            _refuse_foreign_shell(root)
+            refusal = root_shell_refusal("move-workload", {root})
+            if refusal:
+                raise WorkloadMoveError(refusal)
             _refuse_unclassified(cur)
             _select(cur, params)
             _refuse_live(cur, params)
