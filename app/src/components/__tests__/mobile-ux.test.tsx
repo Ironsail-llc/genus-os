@@ -228,9 +228,9 @@ describe("Mobile UX — TaskBoard", () => {
       <TaskBoard tasks={mockTasks} onApprove={vi.fn()} onReject={vi.fn()} />
     );
     const board = screen.getByTestId("task-board");
-    // auto-fit with a minimum column width yields a single column when the
-    // board is narrower than two minimums; no viewport breakpoint forces four.
-    expect(board.className).toMatch(/grid-cols-\[repeat\(auto-fit,minmax\(/);
+    // One column below the board's 31rem container step; no viewport
+    // breakpoint forces four.
+    expect(board.className.split(/\s+/)).toContain("grid-cols-1");
     expect(board.className).not.toMatch(/md:grid-cols-4/);
   });
 
@@ -453,9 +453,9 @@ describe("Mobile UX — MetricGrid", () => {
       />
     );
     const grid = screen.getByTestId("metric-grid");
-    // auto-fit with a minimum card width small enough that two counters fit
-    // side by side on a phone, guarded so one track never overflows.
-    expect(grid.className).toContain("grid-cols-[repeat(auto-fit,minmax(min(100%,9.5rem),1fr))]");
+    // Two counters side by side on a phone; four only when the grid's own
+    // container is wide enough.
+    expect(grid.className.split(/\s+/)).toContain("grid-cols-2");
     expect(grid.className).not.toMatch(/(md|lg):grid-cols-/);
   });
 });
