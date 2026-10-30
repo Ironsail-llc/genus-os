@@ -515,7 +515,7 @@ class WorkflowEngine:
         deferred (``skipped``, ``rate_limited``) before it is recorded instead
         of waiting in place. Only the hook consumer passes it.
         """
-        from robothor.engine.dedup import release, try_acquire
+        from robothor.engine.dedup import release
 
         wf = self._workflows.get(workflow_id)
         if not wf:
@@ -528,80 +528,24 @@ class WorkflowEngine:
             )
             return run
 
-        effective_user_id = user_id
-        effective_user_role = user_role
-        if trigger_type in {"cron", "hook", "agent"}:
-            effective_user_id = effective_user_id or f"service:workflow:{workflow_id}"
-            effective_user_role = effective_user_role or "service"
-        elif not effective_user_id or not effective_user_role:
-            import os
+        identity = self._resolve_identity(
+            workflow_id, trigger_type, trigger_detail, user_id, user_role
+        )
+        if isinstance(identity, WorkflowRun):
+            return identity
+        effective_user_id, effective_user_role = identity
 
-            from robothor.auth.runtime import auth_required
-
-            bind_host = os.environ.get("ROBOTHOR_ENGINE_HOST", "127.0.0.1")
-            if not auth_required(bind_host=bind_host):
-                effective_user_id = effective_user_id or "loopback-development-operator"
-                effective_user_role = effective_user_role or "owner"
-            else:
-                logger.warning(
-                    "Rejected workflow without verified identity: workflow=%s trigger=%s",
-                    _sanitize(workflow_id),
-                    _sanitize(trigger_type),
-                )
-                return WorkflowRun(
-                    workflow_id=workflow_id,
-                    tenant_id=self.config.tenant_id,
-                    trigger_type=trigger_type,
-                    trigger_detail=trigger_detail,
-                    user_id=effective_user_id,
-                    user_role=effective_user_role,
-                    status=RunStatus.FAILED,
-                    error_message="Authentication identity required for workflow execution",
-                )
-
-        # Prevent concurrent runs of the same workflow
+        refused = await self._admit_or_defer(
+            wf,
+            trigger_type=trigger_type,
+            trigger_detail=trigger_detail,
+            user_id=effective_user_id,
+            user_role=effective_user_role,
+            requeue_on_rate_limit=requeue_on_rate_limit,
+        )
+        if refused is not None:
+            return refused
         dedup_key = f"workflow:{workflow_id}"
-        if not await try_acquire(dedup_key):
-            logger.info(
-                "Workflow %s already running, skipping duplicate",
-                _sanitize(workflow_id),
-            )
-            run = WorkflowRun(
-                workflow_id=workflow_id,
-                tenant_id=self.config.tenant_id,
-                user_id=effective_user_id,
-                user_role=effective_user_role,
-                trigger_type=trigger_type,
-                trigger_detail=trigger_detail,
-                status=RunStatus.SKIPPED,
-                error_message="Skipped: workflow already running",
-            )
-            return run
-
-        # A hook run whose first step the tool-call rate limit would block is
-        # deferred before anything is recorded: the hook consumer requeues the
-        # event, and a deferral is a log line, not a workflow_runs row. Busy
-        # is checked first, so a busy workflow keeps its trigger's own busy
-        # handling (requeue_if_busy) whatever the window holds.
-        if requeue_on_rate_limit and self._first_step_rate_limited(wf):
-            await release(dedup_key)
-            logger.info(
-                "Workflow %s deferred: tool-call rate limit reached at first step %s (%s)",
-                _sanitize(workflow_id),
-                wf.steps[0].id,
-                _sanitize(trigger_detail),
-            )
-            return WorkflowRun(
-                workflow_id=workflow_id,
-                tenant_id=self.config.tenant_id,
-                user_id=effective_user_id,
-                user_role=effective_user_role,
-                trigger_type=trigger_type,
-                trigger_detail=trigger_detail,
-                status=RunStatus.SKIPPED,
-                error_message=f"Deferred: tool-call rate limit reached at step '{wf.steps[0].id}'",
-                rate_limited=True,
-            )
 
         # Initialize run
         run = WorkflowRun(
@@ -705,6 +649,114 @@ class WorkflowEngine:
             return run
         finally:
             await release(dedup_key)
+
+    def _resolve_identity(
+        self,
+        workflow_id: str,
+        trigger_type: str,
+        trigger_detail: str,
+        user_id: str,
+        user_role: str,
+    ) -> tuple[str, str] | WorkflowRun:
+        """The identity a run executes under, or the failed run that refuses it.
+
+        Cron, hook and agent runs get ``service:workflow:<id>`` when no user is
+        given. Any other caller must bring a verified identity, except in the
+        explicit loopback development mode.
+        """
+        effective_user_id = user_id
+        effective_user_role = user_role
+        if trigger_type in {"cron", "hook", "agent"}:
+            effective_user_id = effective_user_id or f"service:workflow:{workflow_id}"
+            effective_user_role = effective_user_role or "service"
+        elif not effective_user_id or not effective_user_role:
+            import os
+
+            from robothor.auth.runtime import auth_required
+
+            bind_host = os.environ.get("ROBOTHOR_ENGINE_HOST", "127.0.0.1")
+            if not auth_required(bind_host=bind_host):
+                effective_user_id = effective_user_id or "loopback-development-operator"
+                effective_user_role = effective_user_role or "owner"
+            else:
+                logger.warning(
+                    "Rejected workflow without verified identity: workflow=%s trigger=%s",
+                    _sanitize(workflow_id),
+                    _sanitize(trigger_type),
+                )
+                return WorkflowRun(
+                    workflow_id=workflow_id,
+                    tenant_id=self.config.tenant_id,
+                    trigger_type=trigger_type,
+                    trigger_detail=trigger_detail,
+                    user_id=effective_user_id,
+                    user_role=effective_user_role,
+                    status=RunStatus.FAILED,
+                    error_message="Authentication identity required for workflow execution",
+                )
+        return effective_user_id, effective_user_role
+
+    async def _admit_or_defer(
+        self,
+        wf: WorkflowDef,
+        *,
+        trigger_type: str,
+        trigger_detail: str,
+        user_id: str,
+        user_role: str,
+        requeue_on_rate_limit: bool,
+    ) -> WorkflowRun | None:
+        """Take the workflow's run lock, or say why this run will not start.
+
+        Returns None with the lock held, or an unrecorded ``skipped`` run with
+        the lock free: the workflow is already running, or (for a caller that
+        requeues) the tool-call rate limit would block its first step.
+        """
+        from robothor.engine.dedup import release, try_acquire
+
+        # Prevent concurrent runs of the same workflow
+        dedup_key = f"workflow:{wf.id}"
+        if not await try_acquire(dedup_key):
+            logger.info(
+                "Workflow %s already running, skipping duplicate",
+                _sanitize(wf.id),
+            )
+            return WorkflowRun(
+                workflow_id=wf.id,
+                tenant_id=self.config.tenant_id,
+                user_id=user_id,
+                user_role=user_role,
+                trigger_type=trigger_type,
+                trigger_detail=trigger_detail,
+                status=RunStatus.SKIPPED,
+                error_message="Skipped: workflow already running",
+            )
+
+        # A hook run whose first step the tool-call rate limit would block is
+        # deferred before anything is recorded: the hook consumer requeues the
+        # event, and a deferral is a log line, not a workflow_runs row. Busy
+        # is checked first, so a busy workflow keeps its trigger's own busy
+        # handling (requeue_if_busy) whatever the window holds.
+        if requeue_on_rate_limit and self._first_step_rate_limited(wf):
+            await release(dedup_key)
+            logger.info(
+                "Workflow %s deferred: tool-call rate limit reached at first step %s (%s)",
+                _sanitize(wf.id),
+                wf.steps[0].id,
+                _sanitize(trigger_detail),
+            )
+            return WorkflowRun(
+                workflow_id=wf.id,
+                tenant_id=self.config.tenant_id,
+                user_id=user_id,
+                user_role=user_role,
+                trigger_type=trigger_type,
+                trigger_detail=trigger_detail,
+                status=RunStatus.SKIPPED,
+                error_message=f"Deferred: tool-call rate limit reached at step '{wf.steps[0].id}'",
+                rate_limited=True,
+            )
+        return None
 
     def _first_step_rate_limited(self, wf: WorkflowDef) -> bool:
         """Whether the workflow's first step is a tool call the limiter would block now."""
