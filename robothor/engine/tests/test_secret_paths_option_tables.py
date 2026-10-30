@@ -200,6 +200,10 @@ def test_arguments_after_a_multi_line_quote_are_still_judged(workspace, command)
         # The shell runs the complete lines before it reports an unclosed
         # quote, so the fallback must keep the line boundary too.
         "ls\ncat .env\necho 'x",
+        # A trailing comment ends at the newline; it must not swallow it.
+        "cd repo  # go there\ncat .env",
+        "ls # x\nprintenv",
+        "echo ok # don't\nhead .env",
     ],
 )
 def test_an_unquoted_newline_separates_commands(workspace, command) -> None:
