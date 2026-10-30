@@ -330,14 +330,15 @@ export function AppShell() {
               </div>
             )}
 
-            {/* A collapsed dock leaves a slim tab at the right edge to reopen it. */}
+            {/* A collapsed dock leaves a slim tab at the right edge to reopen it; the
+                collapsed rail's own left border draws its edge. */}
             {!isMobile && !isChatView && !chatOpen && (
               <button
                 type="button"
                 onClick={() => setChatDockOpen(true)}
                 aria-label="Open chat panel"
                 title="Open chat panel"
-                className="shrink-0 w-7 flex items-start justify-center pt-3 border-l border-border text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                className="shrink-0 w-7 flex items-start justify-center pt-3 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 data-testid="chat-dock-open"
               >
                 <PanelRightOpen className="size-4" />
