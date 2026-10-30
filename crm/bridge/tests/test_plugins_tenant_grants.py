@@ -96,10 +96,12 @@ def grant_store():
     """``tenant_plugin_grants``, in memory, patched where the router reads it."""
     store: dict[tuple[str, str], tuple[str, str]] = {}
 
-    def set_grant(tenant_id, plugin, state, set_by, **_kw):
+    def set_grant(tenant_id, plugin, state, set_by, **kw):
+        assert kw.get("root_tenant") == ROOT, "a grant must be written as the root"
         store[(tenant_id, plugin)] = (state, set_by)
 
-    def clear_grant(tenant_id, plugin, **_kw):
+    def clear_grant(tenant_id, plugin, **kw):
+        assert kw.get("root_tenant") == ROOT, "a grant must be cleared as the root"
         return store.pop((tenant_id, plugin), None) is not None
 
     with (
@@ -308,6 +310,14 @@ class TestTheGrant:
         assert response.status_code == 503
         assert "database unavailable" not in response.text
         assert not engines.calls
+
+    def test_a_cleared_grant_is_audited_as_cleared(self, engines, grant_store):
+        """``audited`` drops None values, so "no state" would leave a row that
+        does not say what happened."""
+        grant_store[(CHILD_A, "acme-tools")] = ("off", "operator:bob")
+        with patch("routers.plugins.audited") as audited:
+            root_admin().put(GRANT, json={"state": None})
+        assert audited.call_args.kwargs["state"] == "cleared"
 
     def test_it_is_audited_with_identifiers_and_filed_under_the_child(self, engines, grant_store):
         with patch("routers.plugins.audited") as audited:

@@ -374,6 +374,31 @@ class TestColdStartFailsClosed:
         assert two_plugins[0].loads == 0
         assert two_plugins[1] in result.loaded
 
+    def test_the_last_read_is_persisted_whole_and_owner_only(
+        self, grants_db, two_plugins, plugin_lockfile
+    ):
+        import json
+        import stat
+
+        from robothor import constants
+        from robothor.plugins import grants
+
+        grants_db.rows = {"acme-tools": "off", "acme-extra": "on"}
+        loader.load_plugins(entry_points=two_plugins)
+
+        path = grants._persisted_path()
+        assert path is not None and path.parent == plugin_lockfile.parent
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
+        data = json.loads(path.read_text())
+        assert data["tenant"] == constants.DEFAULT_TENANT
+        assert data["grants"] == {"acme-tools": "off", "acme-extra": "on"}
+
+    def test_nothing_known_at_all_is_logged_as_an_error(self, grants_db, two_plugins, caplog):
+        grants_db.error = RuntimeError("database starting")
+        with caplog.at_level(logging.WARNING, logger="robothor.plugins.grants"):
+            loader.load_plugins(entry_points=two_plugins)
+        assert any(r.levelno == logging.ERROR for r in caplog.records), caplog.text
+
     def test_a_persisted_set_for_another_tenant_is_ignored(
         self, grants_db, two_plugins, monkeypatch
     ):
@@ -391,8 +416,11 @@ class TestColdStartFailsClosed:
     ):
         grants_db.rows = {"acme-tools": "off"}
         loader.load_plugins(entry_points=two_plugins)
-        written = sorted(p.name for p in plugin_lockfile.parent.iterdir())
-        assert any("forced-off" in name for name in written), written
+        from robothor.plugins import grants
+
+        path = grants._persisted_path()
+        assert path is not None and path.exists()
+        assert path.parent == plugin_lockfile.parent
 
 
 class TestASharedLockfileIsRefused:
@@ -466,6 +494,16 @@ class TestASharedLockfileIsRefused:
         assert lockfile_owner.claim(tenant="acme-parent") == "acme-parent"
         assert lockfile_owner.foreign_owner(tenant="acme-child-a") == "acme-parent"
 
+    def test_a_root_never_overrides_another_roots_claim(self, plugin_lockfile, monkeypatch):
+        """Two parentless tenants can exist; two root engines on one workspace
+        must still be refused rather than take the file back on every write."""
+        from robothor.plugins import lockfile_owner
+
+        monkeypatch.setattr(lockfile_owner, "_is_root_tenant", lambda t: t.startswith("acme-root"))
+        lockfile_owner.claim(tenant="acme-root-one")
+        assert lockfile_owner.claim(tenant="acme-root-two") == "acme-root-one"
+        assert lockfile_owner.foreign_owner(tenant="acme-root-two") == "acme-root-one"
+
     def test_a_child_never_overrides_another_tenants_claim(self, plugin_lockfile, monkeypatch):
         from robothor.plugins import lockfile_owner
 
@@ -502,3 +540,61 @@ class TestASharedLockfileIsRefused:
         from robothor.engine import daemon
 
         assert "lockfile_owner" in inspect.getsource(daemon.main)
+
+
+class TestTheCliDoesNotReadTheDatabase:
+    """Every `genus` command registers plugin verbs at start-up. That load must
+    not dial the database (a `--help` that waits on a connection timeout and
+    then prints a grant warning), but it still honours the persisted
+    forced-off set."""
+
+    def test_a_load_without_reading_uses_only_the_persisted_set(self, grants_db, two_plugins):
+        from robothor.plugins import grants
+        from robothor.plugins.grants import ROOT_DISABLED_REASON
+
+        grants_db.rows = {"acme-tools": "off"}
+        loader.load_plugins(entry_points=two_plugins)  # persists the set
+        grants.reset_forced_cache()
+        loader.reload_plugins()
+        calls = len(grants_db.calls)
+
+        result = loader.load_plugins(entry_points=two_plugins, read_grants=False)
+
+        assert len(grants_db.calls) == calls, "the CLI path read the database"
+        assert _reason(result, "acme-tools") == ROOT_DISABLED_REASON
+
+    def test_a_load_without_reading_logs_nothing(self, grants_db, two_plugins, caplog):
+        grants_db.error = RuntimeError("unreachable")
+        with caplog.at_level(logging.DEBUG, logger="robothor.plugins.grants"):
+            loader.load_plugins(entry_points=two_plugins, read_grants=False)
+        assert not grants_db.calls
+        assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+    def test_an_unreadable_persisted_record_is_quiet_on_the_cli_path(
+        self, grants_db, two_plugins, caplog
+    ):
+        """Another user running `genus` against a workspace whose record the
+        engine wrote 0600 gets a PermissionError on every command."""
+        from robothor.plugins import grants
+
+        grants_db.rows = {"acme-tools": "off"}
+        loader.load_plugins(entry_points=two_plugins)
+        path = grants._persisted_path()
+        path.write_text("{not json")
+        with caplog.at_level(logging.DEBUG, logger="robothor.plugins.grants"):
+            assert grants.persisted_forced_off() == {}
+        assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+    def test_cli_verb_registration_does_not_read_grants(self, monkeypatch):
+        from robothor import cli
+        from robothor.plugins import loader as plugin_loader
+
+        seen = {}
+
+        def spy(*args, **kwargs):
+            seen.update(kwargs)
+            return plugin_loader.PluginSet()
+
+        monkeypatch.setattr("robothor.plugins.load_plugins", spy)
+        cli.plugin_commands()
+        assert seen.get("read_grants") is False

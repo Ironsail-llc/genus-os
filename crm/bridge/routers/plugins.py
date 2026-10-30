@@ -358,9 +358,18 @@ async def grant_plugin(name: str, tenant_id: str, request: Request) -> JSONRespo
     written = True
     try:
         if state is None:
-            await asyncio.to_thread(plugin_grants.clear_grant, tenant_id, plugin)
+            await asyncio.to_thread(
+                plugin_grants.clear_grant, tenant_id, plugin, root_tenant=_operator.PLATFORM_TENANT
+            )
         else:
-            await asyncio.to_thread(plugin_grants.set_grant, tenant_id, plugin, state, actor)
+            await asyncio.to_thread(
+                plugin_grants.set_grant,
+                tenant_id,
+                plugin,
+                state,
+                actor,
+                root_tenant=_operator.PLATFORM_TENANT,
+            )
     except Exception as exc:  # noqa: BLE001 - the class only; the text can carry a DSN
         logger.warning("Plugin grant could not be written (%s)", type(exc).__name__)
         written = False
@@ -370,7 +379,8 @@ async def grant_plugin(name: str, tenant_id: str, request: Request) -> JSONRespo
         action=plugin,
         plugin=plugin,
         tenant=tenant_id,
-        state=state,
+        # Explicit: `audited` drops None, and a clear must say it was a clear.
+        state=state if state is not None else "cleared",
         status="ok" if written else "error",
         audit_tenant_id=tenant_id,
     )

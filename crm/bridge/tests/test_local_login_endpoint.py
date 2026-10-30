@@ -121,6 +121,30 @@ async def test_methods_is_reachable_without_a_token(test_client, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_a_sign_in_is_audited_under_the_accounts_own_tenant(test_client):
+    """A child tenant's admins read their own tenant's audit trail, so a
+    sign-in by one of that tenant's accounts is filed under that tenant, not
+    under whatever scope the unauthenticated request had."""
+    child_tokens = {**TOKENS, "user": {**TOKENS["user"], "tenant_id": "acme-child-a"}}
+    with (
+        patch(
+            "routers.auth.local_login.authenticate",
+            return_value=LoginResult(
+                ok=True, tokens=child_tokens, mfa_setup_required=False, error=""
+            ),
+        ),
+        patch("routers._audit.log_event") as log_event,
+    ):
+        r = await test_client.post(
+            "/api/auth/login", json={"email": "alice@example.com", "password": "x" * 12}
+        )
+    assert r.status_code == 200
+    logins = [c for c in log_event.call_args_list if c.args and c.args[0] == "auth.login"]
+    assert len(logins) == 1
+    assert logins[0].kwargs["tenant_id"] == "acme-child-a"
+
+
+@pytest.mark.asyncio
 async def test_login_returns_the_same_shape_as_sso(test_client):
     with patch(
         "routers.auth.local_login.authenticate",

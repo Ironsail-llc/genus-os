@@ -882,10 +882,13 @@ def local_login_route(body: _LoginBody, request: Request) -> dict[str, Any] | JS
         # because the reason is derived from the submitted credential.
         audited(request, "auth.login", action="local", status="denied", subject=subject, ip=ip)
         return _UNAUTHORIZED
+    # Filed under the account's own tenant: an unauthenticated request has
+    # no tenant scope, and a child tenant's admins read their own trail.
     audited(
         request,
         "auth.login",
         action="local",
+        audit_tenant_id=result.tokens["user"].get("tenant_id") or None,
         user_id=result.tokens["user"]["id"],
         mfa_setup_required=result.mfa_setup_required,
         subject=subject,

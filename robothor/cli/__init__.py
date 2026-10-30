@@ -73,7 +73,9 @@ def plugin_commands() -> dict[str, dict[str, Any]]:
     try:
         from robothor.plugins import load_plugins
 
-        loaded = load_plugins(reserved_names=builtin_command_names())
+        # Persisted grants only: every `genus` command (even --help) passes
+        # here, and must not dial the database or warn when it cannot.
+        loaded = load_plugins(reserved_names=builtin_command_names(), read_grants=False)
     except Exception as exc:  # noqa: BLE001 - a plugin must not break the CLI
         logger.warning("Plugin commands unavailable: %s", exc)
         return {}
