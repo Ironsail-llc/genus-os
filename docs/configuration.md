@@ -672,8 +672,9 @@ engine-context turn, so the model writes for a phone in the first place.
 The dashboard's chat panel renders agent replies as Markdown — paragraphs,
 lists, headings, tables and links (which open in a new tab) — with typography
 that follows the light or dark theme. A dashboard chat turn is told so in its
-engine-context turn: "Answer the question first. Use short paragraphs with a
-blank line between them. Use headings and lists only when they help the
+engine-context turn, in these words: "This reply is read in the Genus OS chat
+panel, which renders Markdown. Answer the question first. Use short paragraphs
+with a blank line between them. Use headings and lists only when they help the
 reader, and bold sparingly. Do not give a multi-section overview of what you
 can do unless asked." The note lives in `WEBCHAT_SURFACE_NOTE` in
 `robothor/engine/prompts.py`.
