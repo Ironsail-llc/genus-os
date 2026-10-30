@@ -274,3 +274,41 @@ def test_endpoint_refuses(mock_publish, mock_rate, make_headers, reason, ts_clie
     assert reason in caplog.text
     assert SECRET not in caplog.text
     mock_publish.assert_not_called()
+
+
+# ── drop-in ────────────────────────────────────────────────────────
+
+
+@patch.dict("os.environ", {"TEST_TS_HEX_SECRET": SECRET})
+@patch("robothor.engine.webhooks._check_rate_limit", new_callable=AsyncMock, return_value=True)
+@patch("robothor.engine.webhooks._publish_to_stream", new_callable=AsyncMock, return_value="e-1")
+def test_drop_in_channel_keeps_scheme_and_timestamp_header(mock_publish, mock_rate, tmp_path):
+    """A ``webhooks.d`` drop-in channel is loaded with its own timestamp header."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    (tmp_path / "webhooks.yaml").write_text("channels: {}\n")
+    (tmp_path / "webhooks.d").mkdir()
+    (tmp_path / "webhooks.d" / "desk-plugin.yaml").write_text(YAML)
+
+    cfg = load_webhook_config(tmp_path / "webhooks.yaml")
+    assert cfg.channels["desk"].signature_scheme == "hmac_ts_hex"
+    assert cfg.channels["desk"].timestamp_header == "X-Desk-Timestamp"
+    assert cfg.channels["desk-default-ts"].timestamp_header == "X-Webhook-Timestamp"
+
+    _channel_stats.clear()
+    app = FastAPI()
+    app.include_router(get_webhook_router(cfg))
+    payload = json.dumps({"event": "ticket.created"}).encode()
+    ts = int(time.time())
+    resp = TestClient(app).post(
+        "/api/webhooks/desk",
+        content=payload,
+        headers={
+            "Content-Type": "application/json",
+            "X-Desk-Signature": _digest(payload, SECRET, ts),
+            "X-Desk-Timestamp": str(ts),
+        },
+    )
+    _channel_stats.clear()
+    assert resp.status_code == 200, resp.text
