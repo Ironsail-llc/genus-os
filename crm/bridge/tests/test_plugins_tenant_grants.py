@@ -151,9 +151,7 @@ class TestTheActingTenantsEngine:
         assert response.status_code == 200, response.text
         assert engines.tenants() == [CHILD_A]
 
-    def test_a_root_admin_acting_in_a_child_reaches_the_childs_engine(
-        self, engines, method, path
-    ):
+    def test_a_root_admin_acting_in_a_child_reaches_the_childs_engine(self, engines, method, path):
         response = getattr(root_admin_in_child(), method)(path)
         assert response.status_code == 200, response.text
         assert engines.tenants() == [CHILD_A]
@@ -253,18 +251,24 @@ class TestTheGrant:
         assert not grant_store and not engines.calls
 
     def test_a_tenant_outside_the_roots_tree_is_a_404(self, engines, grant_store):
-        response = root_admin().put(f"/api/plugins/acme-tools/tenants/{OUTSIDER}", json={"state": "off"})
+        response = root_admin().put(
+            f"/api/plugins/acme-tools/tenants/{OUTSIDER}", json={"state": "off"}
+        )
         assert response.status_code == 404
         assert not grant_store and not engines.calls
 
     def test_the_root_cannot_grant_itself(self, engines, grant_store):
         """The root decides for itself with enable and disable; a grant is for a child."""
-        response = root_admin().put(f"/api/plugins/acme-tools/tenants/{ROOT}", json={"state": "off"})
+        response = root_admin().put(
+            f"/api/plugins/acme-tools/tenants/{ROOT}", json={"state": "off"}
+        )
         assert response.status_code == 422
         assert not grant_store and not engines.calls
 
     def test_a_name_that_is_not_a_distribution_is_refused(self, engines, grant_store):
-        response = root_admin().put(f"/api/plugins/bad name/tenants/{CHILD_A}", json={"state": "on"})
+        response = root_admin().put(
+            f"/api/plugins/bad name/tenants/{CHILD_A}", json={"state": "on"}
+        )
         assert response.status_code in (404, 422)
         assert not grant_store and not engines.calls
 

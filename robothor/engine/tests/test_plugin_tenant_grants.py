@@ -137,9 +137,7 @@ class TestReadOncePerGeneration:
         loader.load_plugins(entry_points=two_plugins)
         assert grants_db.calls == [constants.DEFAULT_TENANT]
 
-    def test_a_second_load_in_the_same_generation_does_not_read_again(
-        self, grants_db, two_plugins
-    ):
+    def test_a_second_load_in_the_same_generation_does_not_read_again(self, grants_db, two_plugins):
         loader.load_plugins(entry_points=two_plugins)
         loader.load_plugins(entry_points=two_plugins)
         loader.load_plugins(entry_points=two_plugins)
@@ -232,9 +230,7 @@ def client():
 
 
 class TestAdminListing:
-    def test_each_row_says_whether_and_how_the_root_forced_it(
-        self, client, grants_db, two_plugins
-    ):
+    def test_each_row_says_whether_and_how_the_root_forced_it(self, client, grants_db, two_plugins):
         grants_db.rows = {"acme-tools": "off", "acme-extra": "on"}
         rows = {p["name"]: p for p in client.get("/api/admin/plugins").json()["plugins"]}
         assert rows["acme-tools"]["forced"] == "off"
@@ -251,7 +247,9 @@ class TestAdminListing:
 
         grants_db.rows = {"acme-tools": "off"}
         row = next(
-            p for p in client.get("/api/admin/plugins").json()["plugins"] if p["name"] == "acme-tools"
+            p
+            for p in client.get("/api/admin/plugins").json()["plugins"]
+            if p["name"] == "acme-tools"
         )
         assert row["state"] == "disabled"
         assert row["failure_reason"] == ROOT_DISABLED_REASON
