@@ -235,6 +235,8 @@ export function ProvidersPage() {
 
   const [models, setModels] = useState<ModelEntry[]>([]);
   const [modelsError, setModelsError] = useState<string | null>(null);
+  // Until the first models read settles, an empty list means "not yet", not "none".
+  const [modelsLoaded, setModelsLoaded] = useState(false);
 
   const [verdicts, setVerdicts] = useState<Record<string, TestVerdict>>({});
   const [testing, setTesting] = useState<string | null>(null);
@@ -280,6 +282,8 @@ export function ProvidersPage() {
       setModelsError(null);
     } catch {
       setModelsError("The dashboard could not reach the bridge to read the model catalog.");
+    } finally {
+      setModelsLoaded(true);
     }
   }, []);
 
@@ -548,9 +552,13 @@ export function ProvidersPage() {
    */
   const saveReason = primary
     ? null
-    : models.length === 0
-      ? "Save is unavailable: the engine's model catalog did not load, so there is no model to choose. Use Refresh once the engine answers."
-      : "Choose a primary model to enable Save.";
+    : models.length > 0
+      ? "Choose a primary model to enable Save."
+      : modelsError
+        ? "Save is unavailable: the engine's model catalog did not load, so there is no model to choose. Use Refresh once the engine answers."
+        : modelsLoaded
+          ? "Save is unavailable: the engine reports no models, so there is no model to choose."
+          : "Reading the model catalog…";
 
   const saveDescribedBy =
     [
@@ -1029,7 +1037,7 @@ export function ProvidersPage() {
           </p>
         ) : null}
 
-        {!modelsError && models.length === 0 ? (
+        {modelsLoaded && !modelsError && models.length === 0 ? (
           <p className="text-xs text-warning" data-testid="fleet-models-empty">
             The engine reports no models at all, so there is nothing to choose from. Its registry is
             empty or no plugin has contributed one — check the engine before changing this.
