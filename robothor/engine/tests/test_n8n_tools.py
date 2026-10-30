@@ -13,7 +13,8 @@ from robothor.integrations.n8n.store import MemoryN8nStore
 BASE = "https://n8n.example.com"
 T = "test-tenant"
 CTX = ToolContext(agent_id="main", tenant_id=T)
-NOW = datetime.now(UTC)
+#: A fixed clock: the full suite runs long enough that a wall-clock seed goes stale.
+NOW = datetime(2026, 10, 29, 12, 0, tzinfo=UTC)
 
 
 @pytest.fixture
@@ -39,8 +40,9 @@ def store(monkeypatch, configure):
     from robothor.engine.tools.handlers import n8n as handler
 
     configure(ROBOTHOR_N8N_ENABLED="true", ROBOTHOR_N8N_BASE_URL=BASE)
-    memory = MemoryN8nStore()
+    memory = MemoryN8nStore(now=lambda: NOW)
     monkeypatch.setattr(handler, "_store", lambda: memory)
+    monkeypatch.setattr(handler, "_now", lambda: NOW, raising=False)
 
     def no_network(*_a, **_k):
         raise AssertionError("the n8n tools read the snapshot; they never call n8n")
@@ -114,6 +116,15 @@ async def test_list_workflows_defaults_to_active_ones_with_counts(store) -> None
     assert invoice["last_error"] == "HTTP 500 from billing API"
     assert invoice["url"] == f"{BASE}/workflow/wf1"
     assert result["count"] == 2
+
+
+async def test_a_snapshot_older_than_three_polls_reads_unknown(store, monkeypatch) -> None:
+    from robothor.engine.tools.handlers import n8n as handler
+
+    await _seed(store)
+    monkeypatch.setattr(handler, "_now", lambda: NOW + timedelta(minutes=40))
+    result = await handler.HANDLERS["n8n_list_workflows"]({}, CTX)
+    assert result["status"] == "unknown"
 
 
 async def test_list_workflows_filters_by_name_or_tag_and_can_include_inactive(store) -> None:
