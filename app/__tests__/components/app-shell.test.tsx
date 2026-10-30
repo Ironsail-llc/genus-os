@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, act } from "@testing-library/react";
 
 // Mock hooks
 const mockUseTasks = vi.fn();
@@ -234,6 +234,35 @@ describe("AppShell", () => {
     expect(screen.getByTestId("chat-container").style.width).toBe("0px");
     expect(screen.getByTestId("chat-panel-toggle")).toHaveAttribute("aria-pressed", "false");
     expect(screen.getByTestId("chat-dock-open")).toBeInTheDocument();
+  });
+
+  it("follows a collapse made in another tab when it is written", () => {
+    render(<AppShell />);
+    fireEvent.click(screen.getByTestId("nav-dashboard"));
+    const chatContainer = screen.getByTestId("chat-container");
+    expect(chatContainer.style.width).toBe("400px");
+    // Another tab writes the key; this tab hears it through the storage event.
+    window.localStorage.setItem("genus.chatDockOpen", "false");
+    act(() => {
+      window.dispatchEvent(
+        new StorageEvent("storage", { key: "genus.chatDockOpen", newValue: "false" }),
+      );
+    });
+    expect(chatContainer.style.width).toBe("0px");
+    expect(screen.getByTestId("chat-panel-toggle")).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("ignores another tab's write to a different key", () => {
+    render(<AppShell />);
+    fireEvent.click(screen.getByTestId("nav-dashboard"));
+    const chatContainer = screen.getByTestId("chat-container");
+    window.localStorage.setItem("genus.chatDockOpen", "false");
+    act(() => {
+      window.dispatchEvent(
+        new StorageEvent("storage", { key: "some.other.key", newValue: "x" }),
+      );
+    });
+    expect(chatContainer.style.width).toBe("400px");
   });
 
   it("offers no collapse or reopen control on the chat home", () => {
