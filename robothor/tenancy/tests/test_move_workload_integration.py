@@ -55,12 +55,13 @@ def _run(cur: Any, tenant: str, agent: str, **cols: Any) -> str:
 
 
 @pytest.fixture
-def world() -> Iterator[dict[str, Any]]:
+def world(monkeypatch) -> Iterator[dict[str, Any]]:
     """acme-parent (root) with children acme-child-a and acme-child-b, and a
     second root acme-other. The parent holds the workload (agent ``tri_…``,
     workflow ``intake-…``) and a neighbour's history (agent ``bob-…``) that
-    must stay put. Everything is removed afterwards."""
+    must stay put. The shell is the root's. Everything is removed afterwards."""
     sfx = uuid.uuid4().hex[:8]
+    monkeypatch.setenv("ROBOTHOR_TENANT_ID", f"acme-parent-{sfx}")
     parent, child_a, child_b, other = (
         f"acme-parent-{sfx}",
         f"acme-child-a-{sfx}",
@@ -349,6 +350,16 @@ def test_a_move_between_siblings_is_audited_under_their_root(world) -> None:
     assert [r[0] for r in cur.fetchall()] == [world["parent"]]
 
 
+def test_a_second_run_moves_nothing_and_writes_no_audit_row(world) -> None:
+    """Re-running a move that already happened is a no-op: zero rows, and no
+    second ``tenant.workload_moved`` row claiming a move that did not happen."""
+    _move(world)
+    again = _move(world)
+    assert _nonzero(again.counts) == {}
+    assert again.audit_id is None
+    assert len(_audit(world["cur"], world)) == 1
+
+
 def test_dry_run_reports_the_same_counts_and_writes_nothing(world) -> None:
     cur, runs = world["cur"], world["runs"]
     report = _move(world, dry_run=True)
@@ -402,6 +413,42 @@ def test_refusals(world, overrides, message) -> None:
     with pytest.raises(mw.WorkloadMoveError, match=message):
         _move(world, to=to, **overrides)
     _assert_untouched(world)
+
+
+@pytest.mark.parametrize(
+    ("tenant_id", "default_tenant"),
+    [("CHILD", None), (None, "OTHER"), ("OTHER", "PARENT")],
+)
+def test_a_shell_that_is_not_the_roots_is_refused(
+    world, monkeypatch, tenant_id, default_tenant
+) -> None:
+    """The move is the root operator's: from a shell bound to a child (or to
+    another root) it would act in tenants that shell does not administer."""
+    names = {"CHILD": world["child_a"], "OTHER": world["other"], "PARENT": world["parent"]}
+    for var, value in (
+        ("ROBOTHOR_TENANT_ID", tenant_id),
+        ("ROBOTHOR_DEFAULT_TENANT", default_tenant),
+    ):
+        if value is None:
+            monkeypatch.delenv(var, raising=False)
+        else:
+            monkeypatch.setenv(var, names[value])
+    with pytest.raises(mw.WorkloadMoveError, match="root") as exc:
+        _move(world)
+    assert world["parent"] in str(exc.value)
+    _assert_untouched(world)
+
+
+def test_a_dry_run_from_the_wrong_shell_is_refused_too(world, monkeypatch) -> None:
+    monkeypatch.setenv("ROBOTHOR_TENANT_ID", world["child_a"])
+    with pytest.raises(mw.WorkloadMoveError, match="root"):
+        _move(world, dry_run=True)
+
+
+def test_the_default_tenant_names_the_shell_when_no_tenant_id_is_set(world, monkeypatch) -> None:
+    monkeypatch.delenv("ROBOTHOR_TENANT_ID", raising=False)
+    monkeypatch.setenv("ROBOTHOR_DEFAULT_TENANT", world["parent"])
+    assert _nonzero(_move(world).counts) == EXPECTED_MOVED
 
 
 def test_a_move_up_to_an_ancestor_is_refused(world) -> None:
