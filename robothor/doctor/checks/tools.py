@@ -160,17 +160,41 @@ def _adapter_names() -> set[str]:
         return set()
 
 
+def _plugin_tool_names() -> set[str]:
+    """Tools every LOADED plugin declares, from the same inventory the
+    ``plugins_overview`` tool and ``genus plugin list`` read.
+
+    A disabled or failed plugin's tools are not served, so they stay out: an
+    agent granted one still resolves it to nothing.
+    """
+    try:
+        from robothor.plugins.inventory import inventory
+
+        names: set[str] = set()
+        for row in inventory():
+            if row.state != "loaded":
+                continue
+            declared = (row.manifest or {}).get("declared") or {}
+            handlers = declared.get("handlers") if isinstance(declared, dict) else None
+            if isinstance(handlers, list | tuple | set):
+                names |= {str(name) for name in handlers}
+        return names
+    except Exception:  # noqa: BLE001 - an unreadable plugin set is not a doctor failure
+        return set()
+
+
 def _registered_names() -> set[str]:
     """Every tool name this instance can actually resolve.
 
-    Built-ins AND adapter routes. Judging ``tools_allowed`` against the
-    built-ins alone reported every MCP-adapter tool an instance grants as
-    "resolves to nothing" — a permanent red on any instance with an adapter,
-    which is how an operator learns to ignore a check.
+    Built-ins, adapter routes AND loaded plugins' tools. Judging
+    ``tools_allowed`` against the built-ins alone reported every MCP-adapter or
+    plugin tool an instance grants as "resolves to nothing" — a permanent red
+    on any instance with an adapter or a plugin, which is how an operator
+    learns to ignore a check.
     """
     from robothor.engine.tools.registry import builtin_schema_names
 
-    return builtin_schema_names() | _adapter_names()
+    return builtin_schema_names() | _adapter_names() | _plugin_tool_names()
 
 
 def mentioned_tools(text: str, registered: set[str]) -> set[str]:
