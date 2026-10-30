@@ -311,3 +311,60 @@ def test_the_endpoint_hands_the_whole_chain_to_llm_call(completion_client) -> No
     assert response.status_code == 200
     call.assert_awaited_once()
     assert call.await_args.kwargs["model"] == ["vertex_ai/gemini-fast", "anthropic/claude-big"]
+
+
+# ── One deadline for the whole chain ──────────────────────────────────────
+#
+# The dashboard's client aborts a triage after 20s and a render after 130s,
+# for the WHOLE request. A per-model timeout equal to that window meant a
+# first model that hung used it all up: the fallbacks were never reached in
+# time, and the engine went on calling them for a client that had given up.
+
+
+def test_the_budget_is_split_across_the_chain(completion_client) -> None:
+    client, config = completion_client
+    _defaults(
+        config.manifest_dir,
+        {"primary": "anthropic/claude-big", "canvas": "vertex_ai/gemini-fast"},
+    )
+    timeouts: dict[str, float] = {}
+    for purpose in ("triage", "render"):
+        with patch(
+            "robothor.engine.dashboards.completions.llm_call",
+            new_callable=AsyncMock,
+            return_value=_response('{"shouldUpdate":false}'),
+        ) as call:
+            client.post(
+                "/api/dashboard/completions",
+                json=_payload(purpose),
+                headers=_headers(config.tenant_id),
+            )
+        timeouts[purpose] = call.await_args.kwargs["timeout"]
+
+    assert timeouts == {
+        "triage": completions.TRIAGE_BUDGET_SECONDS / 2,
+        "render": completions.RENDER_BUDGET_SECONDS / 2,
+    }
+
+
+def test_the_chain_stops_when_its_budget_is_spent(completion_client, monkeypatch) -> None:
+    import asyncio
+    import time
+
+    client, config = completion_client
+    monkeypatch.setattr(completions, "RENDER_BUDGET_SECONDS", 0.2)
+
+    async def _hang(*args, **kwargs):
+        await asyncio.sleep(10)
+
+    started = time.monotonic()
+    with patch("robothor.engine.dashboards.completions.llm_call", side_effect=_hang):
+        response = client.post(
+            "/api/dashboard/completions",
+            json=_payload(),
+            headers=_headers(config.tenant_id),
+        )
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "dashboard completion unavailable"}
+    assert time.monotonic() - started < 5
