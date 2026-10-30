@@ -755,7 +755,13 @@ export function PluginsPage({ visible = true }: PluginsPageProps) {
         discovered until it is reloaded.
       </p>
 
-      {listing !== null && !poll.forbidden ? (
+      {/*
+        Install, record and remove change what is on the box, and the bridge
+        keeps them root-only (`require_root_operator`). Anybody else gets the
+        acting tenant's own acts — toggle and reload — and nothing that could
+        only answer 403.
+      */}
+      {listing !== null && !poll.forbidden && rootAtHome ? (
         <PluginInstallCard
           indexes={data.indexes}
           onAct={retireReports}
@@ -839,7 +845,7 @@ export function PluginsPage({ visible = true }: PluginsPageProps) {
             errand and becomes the thing the operator came to do.
           */}
           <div className="flex max-w-3xl flex-wrap items-center gap-2">
-            {data.lockfile.present || !data.lockfile.pathConfigured ? (
+            {rootAtHome && (data.lockfile.present || !data.lockfile.pathConfigured) ? (
               <Button
                 variant="outline"
                 size="sm"
@@ -940,7 +946,17 @@ export function PluginsPage({ visible = true }: PluginsPageProps) {
             </p>
           ) : null}
 
-          {!data.lockfile.present && data.lockfile.pathConfigured ? (
+          {!rootAtHome && !data.lockfile.present && data.lockfile.pathConfigured ? (
+            <p
+              data-testid="plugins-record-root-only"
+              className="max-w-3xl text-xs text-muted-foreground"
+            >
+              Nothing is recorded for this tenant yet, so its plugins cannot be turned off from
+              here. Recording installed plugins is done by a root administrator.
+            </p>
+          ) : null}
+
+          {rootAtHome && !data.lockfile.present && data.lockfile.pathConfigured ? (
             <div
               data-testid="plugins-record-empty"
               className="flex max-w-3xl flex-col gap-2 rounded-lg border border-primary/25 bg-primary/5 p-3"
@@ -1259,7 +1275,7 @@ export function PluginsPage({ visible = true }: PluginsPageProps) {
                     somebody else put on the box is not a thing to do from a
                     browser by accident.
                   */}
-                  {plugin.source ? (
+                  {plugin.source && rootAtHome ? (
                     <Button
                       size="sm"
                       variant="outline"
