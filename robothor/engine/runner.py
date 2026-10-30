@@ -977,7 +977,8 @@ class AgentRunner(
         # Deferral is otherwise invisible from inside the turn: a short schema
         # list and no statement that a longer one exists.
         engine_preamble = with_discovery_note(engine_preamble, _prepared)
-        # Telegram is read on a phone; say so, or the model writes for the Helm.
+        # Say where the reply is read: Telegram on a phone, or the dashboard's
+        # chat panel. Otherwise the model writes one shape for every surface.
         engine_preamble = with_surface_note(engine_preamble, trigger_type, agent_config)
         watchdog.touch("adapters_loaded")
 
