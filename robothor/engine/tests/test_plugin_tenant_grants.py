@@ -447,6 +447,49 @@ class TestASharedLockfileIsRefused:
         assert client.post("/api/admin/plugins/acme-tools/disable").status_code == 200
         assert lockfile_owner.claim(tenant="acme-other") == constants.DEFAULT_TENANT
 
+    def test_the_root_engines_claim_overrides_a_child_that_booted_first(
+        self, plugin_lockfile, monkeypatch
+    ):
+        """Boot order on a shared workspace is random after an upgrade; the
+        child is the side that must be refused, whoever started first."""
+        from robothor.plugins import lockfile_owner
+
+        monkeypatch.setattr(lockfile_owner, "_is_root_tenant", lambda t: t == "acme-parent")
+        lockfile_owner.claim(tenant="acme-child-a")
+
+        assert lockfile_owner.claim(tenant="acme-parent") == "acme-parent"
+        assert lockfile_owner.foreign_owner(tenant="acme-child-a") == "acme-parent"
+
+    def test_a_child_never_overrides_another_tenants_claim(self, plugin_lockfile, monkeypatch):
+        from robothor.plugins import lockfile_owner
+
+        monkeypatch.setattr(lockfile_owner, "_is_root_tenant", lambda t: False)
+        lockfile_owner.claim(tenant="acme-parent")
+        assert lockfile_owner.claim(tenant="acme-child-a") == "acme-parent"
+
+    @pytest.mark.parametrize(
+        ("row", "expected"),
+        [
+            ({"id": "acme-parent", "parentTenantId": None}, True),
+            ({"id": "acme-child-a", "parentTenantId": "acme-parent"}, False),
+            (None, False),
+        ],
+    )
+    def test_root_means_a_tenant_row_with_no_parent(self, row, expected):
+        """Not PLATFORM_TENANT: in a child engine that constant is the child's
+        own id unless ROBOTHOR_PLATFORM_TENANT is set, so it would let every
+        child take the file."""
+        from robothor.plugins import lockfile_owner
+
+        with patch("robothor.crm.dal.get_tenant", return_value=row):
+            assert lockfile_owner._is_root_tenant("acme-parent") is expected
+
+    def test_an_unreadable_tenant_row_is_not_root(self):
+        from robothor.plugins import lockfile_owner
+
+        with patch("robothor.crm.dal.get_tenant", side_effect=RuntimeError("db down")):
+            assert lockfile_owner._is_root_tenant("acme-parent") is False
+
     def test_the_engine_claims_its_lockfile_at_boot(self):
         import inspect
 
