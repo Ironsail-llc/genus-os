@@ -556,19 +556,25 @@ _LOOSE_PARTS = re.compile(r"[;&|()<>]+|[^;&|()<>]+")
 
 
 def _split_loosely(line: str) -> list[str]:
-    """Whitespace words with their quotes stripped and operator characters
-    split off (``hi;cat`` is two commands), for a line the shell lexer
-    cannot read; a word starting ``#`` ends the line as a comment."""
+    """Tokens for a line the shell lexer cannot read, judged BOTH ways.
+
+    Whitespace words with their quotes stripped; a word starting ``#`` ends
+    the line as a comment. The line is emitted twice, separated: once with
+    operator characters split off each word (``hi;cat`` is two commands)
+    and once unsplit (a ``;`` inside a quoted ``sed`` program is not a
+    separator, and splitting there would lose the file operand after it).
+    Whichever reading names a secret refuses the command (fail closed).
+    """
     words = line.split()
     for index, word in enumerate(words):
         if word.startswith("#"):
             words = words[:index]
             break
-    return [
-        part
-        for piece in words
-        for part in _LOOSE_PARTS.findall(piece.replace("'", "").replace('"', ""))
-    ]
+    unquoted = [piece.replace("'", "").replace('"', "") for piece in words]
+    split = [part for piece in unquoted for part in _LOOSE_PARTS.findall(piece)]
+    if split == unquoted:
+        return unquoted
+    return [*split, "\n", *unquoted]
 
 
 def _segments(command: str) -> list[list[str]]:
@@ -1240,7 +1246,9 @@ def _read_operands(command: str) -> list[str]:
     found: list[str] = [m.group(1) for m in _READ_SUBSTITUTION.finditer(command)]
     tokens = _tokens(command)
     for index, token in enumerate(tokens):
-        if token in _INPUT_REDIRECTS and index + 1 < len(tokens):
+        # shlex merges a redirect with the separator before it (`\n<`, `;<`,
+        # `|<`): the redirect is whatever is left once that is stripped.
+        if token.lstrip(";|&\n()") in _INPUT_REDIRECTS and index + 1 < len(tokens):
             found.append(tokens[index + 1])
         elif token.startswith("if="):
             # `of=` is a WRITE: creating a secrets-named file is the send
