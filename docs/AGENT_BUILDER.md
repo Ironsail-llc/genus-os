@@ -210,14 +210,16 @@ rate_limit_per_minute: 120
 
 A step the limit blocks has not run, so it is treated as transient. It
 retries per its `retry_count` and backoff. With no retry left the run stops
-there whatever its `on_failure` says. A hook run is then recorded as
-`skipped` and its event is requeued for this workflow on the same budget and
-backoff as `requeue_if_busy`, whether or not the trigger sets that, so a
+there whatever its `on_failure` says; a blocked branch of a `parallel` step
+counts the same, and neither the branch's nor the parallel step's
+`on_failure: skip` absorbs it. A run started by a hook event is then recorded
+as `skipped` and its event is requeued for this workflow on the same budget
+and backoff as `requeue_if_busy`, whether or not the trigger sets that, so a
 burst slows down instead of failing; the event goes to `<stream>:dlq` only
 once that budget is spent. A requeued run starts again from its first step,
-so steps before the blocked one run again: keep them idempotent. A cron,
-agent or manual run has nothing to requeue it, so it fails, and a cron
-failure pages as usual.
+so steps before the blocked one run again: keep them idempotent. Any other
+run has nothing to requeue it, so it fails: a cron, agent or manual run, and
+a hook run resumed after an approval step. A cron failure pages as usual.
 
 #### Asking a human mid-workflow
 
