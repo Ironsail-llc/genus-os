@@ -35,6 +35,7 @@ def _wf(requeue: bool = False) -> MagicMock:
 def _run(status: RunStatus) -> MagicMock:
     run = MagicMock()
     run.status = status
+    run.rate_limited = False
     return run
 
 
