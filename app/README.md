@@ -86,8 +86,11 @@ App Router route per view.
   or a pasted link lands on the same screen and back/forward move between
   views. An unknown value falls back to the chat view rather than a blank shell.
 - **Chat is home.** Desktop and mobile both open on chat. Beside other views the
-  chat panel stays docked on the right (toggle at the foot of the sidebar); on
-  the chat view it takes the column and the AI canvas becomes an optional right
+  chat panel stays docked on the right. It collapses from the button in its own
+  header or the toggle at the foot of the sidebar, and a collapsed dock leaves a
+  slim tab at the right edge to reopen it; the browser remembers the choice
+  (`lib/chat/dock-state.ts`, `localStorage` key `genus.chatDockOpen`). On the
+  chat view it takes the column and the AI canvas becomes an optional right
   rail (the "Canvas" button in the header).
 - **The chat home opens on a landing.** Before the first message the chat view
   (not the docked panel) shows `components/chat/chat-landing.tsx`: a greeting

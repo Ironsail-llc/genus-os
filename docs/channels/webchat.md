@@ -157,6 +157,18 @@ starts a run itself; without the flag the endpoint behaves as it always has. The
 running turn's own stream adds two events: `interim` (a superseded answer) and
 `pending_followups` (messages the turn never took, to send as the next turn).
 
+## The docked chat panel
+
+Chat is the Helm's home view. On any other view the chat stays docked as a
+panel on the right, so the conversation is one glance away. To give that view
+the whole width, collapse the panel with the button at the right of its header
+or with **Chat panel** at the foot of the sidebar. A collapsed panel leaves a
+slim tab at the right edge; click it to bring the chat back.
+
+The Helm remembers the choice in this browser, so a reload keeps the panel the
+way you left it. The panel opens by default, and on a phone the chat is always
+a view of its own.
+
 ## `genus channel verify webchat` exits 2
 
 Exit code 2 means "there was nothing to verify", and this channel declares no

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useSyncExternalStore } from "react";
 import dynamic from "next/dynamic";
 import { useSession } from "next-auth/react";
 import { Sidebar } from "./sidebar";
@@ -32,7 +32,8 @@ import { useInbox } from "@/hooks/use-inbox";
 import { useScreenSize } from "@/hooks/use-mobile";
 import { useViewRoute } from "@/hooks/use-view-route";
 import { useVisualState } from "@/hooks/use-visual-state";
-import { PanelRight, Zap } from "lucide-react";
+import { PanelRight, PanelRightOpen, Zap } from "lucide-react";
+import { readChatDockOpen, writeChatDockOpen } from "@/lib/chat/dock-state";
 
 // The conversation canvas (agent-pushed components + chat-driven dashboards)
 // loads only when the rail first opens, keeping it out of the chat bundle.
@@ -62,6 +63,9 @@ function HeaderClock() {
   return <span className="text-xs text-muted-foreground tabular-nums">{time} ET</span>;
 }
 
+/** Only this page's own controls change the stored dock state: nothing to subscribe to. */
+const subscribeNever = () => () => {};
+
 export function AppShell() {
   const screenSize = useScreenSize();
   const isMobile = screenSize === "mobile";
@@ -82,7 +86,18 @@ export function AppShell() {
   // The landing greets the owner by first name; none when the session has none.
   const ownerName = session?.user?.name?.trim().split(/\s+/)[0] || undefined;
 
-  const [chatOpen, setChatOpen] = useState(true);
+  // The dock's open state is remembered per browser. The server cannot see that
+  // choice, so it renders open and the stored value is adopted right after
+  // hydration (a lazy useState read would leave the server's attributes on the
+  // sidebar toggle). A choice made on this page wins, and is written where the
+  // operator acts rather than in an effect.
+  const storedChatOpen = useSyncExternalStore(subscribeNever, readChatDockOpen, () => true);
+  const [chosenChatOpen, setChosenChatOpen] = useState<boolean | null>(null);
+  const chatOpen = chosenChatOpen ?? storedChatOpen;
+  const setChatDockOpen = (open: boolean) => {
+    setChosenChatOpen(open);
+    writeChatDockOpen(open);
+  };
   const [canvasRailOpen, setCanvasRailOpen] = useState(false);
   const { viewStack, pendingAgentData } = useVisualState();
   const [seenVisualCount, setSeenVisualCount] = useState(viewStack.length);
@@ -144,7 +159,7 @@ export function AppShell() {
           activeSettingsPage={settingsPage}
           onNavigate={navigate}
           chatOpen={chatOpen}
-          onChatToggle={() => setChatOpen((prev) => !prev)}
+          onChatToggle={() => setChatDockOpen(!chatOpen)}
           reviewCount={reviewCount}
           unhealthyCount={unhealthyCount}
           inboxCount={inbox.count}
@@ -323,9 +338,26 @@ export function AppShell() {
                   <ChatPanel
                     variant={isChatView && !showCanvasRail ? "page" : "dock"}
                     ownerName={ownerName}
+                    docked={!isChatView}
+                    onCollapse={() => setChatDockOpen(false)}
                   />
                 </div>
               </div>
+            )}
+
+            {/* A collapsed dock leaves a slim tab at the right edge to reopen it; the
+                collapsed rail's own left border draws its edge. */}
+            {!isMobile && !isChatView && !chatOpen && (
+              <button
+                type="button"
+                onClick={() => setChatDockOpen(true)}
+                aria-label="Open chat panel"
+                title="Open chat panel"
+                className="shrink-0 w-7 flex items-start justify-center pt-3 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                data-testid="chat-dock-open"
+              >
+                <PanelRightOpen className="size-4" />
+              </button>
             )}
           </div>
         </div>
