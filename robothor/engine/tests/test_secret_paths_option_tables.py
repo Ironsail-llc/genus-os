@@ -191,6 +191,29 @@ def test_arguments_after_a_multi_line_quote_are_still_judged(workspace, command)
 @pytest.mark.parametrize(
     "command",
     [
+        # An UNQUOTED newline ends a command like `;` does: the second line
+        # is its own command, whatever the first line was.
+        "ls\ncat .env",
+        "true\nprintenv",
+        "echo hi\nhead .env",
+        "cd sub\ncat .env",
+        # The shell runs the complete lines before it reports an unclosed
+        # quote, so the fallback must keep the line boundary too.
+        "ls\ncat .env\necho 'x",
+    ],
+)
+def test_an_unquoted_newline_separates_commands(workspace, command) -> None:
+    assert exec_reads_secret(command), command
+
+
+def test_a_newline_separated_command_without_a_secret_runs(workspace) -> None:
+    assert exec_reads_secret("ls\ncat notes.txt") is None
+    assert exec_reads_secret("true\n\nhead config.yaml") is None
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
         # -f / --file / --from-file name a program FILE, not program text:
         # the value stays under the glob and moved-key rules.
         "awk -f .en? /dev/null",
