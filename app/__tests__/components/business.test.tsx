@@ -205,6 +205,13 @@ describe("MetricGrid", () => {
     const cards = screen.getAllByTestId("metric-card");
     expect(cards).toHaveLength(2);
   });
+
+  it("fits its columns to its own width, not viewport breakpoints", () => {
+    render(<MetricGrid metrics={[{ title: "A", value: 1 }]} />);
+    const grid = screen.getByTestId("metric-grid");
+    expect(grid.className).toContain("grid-cols-[repeat(auto-fit,minmax(11rem,1fr))]");
+    expect(grid.className).not.toMatch(/(md|lg):grid-cols-/);
+  });
 });
 
 describe("BarChart", () => {

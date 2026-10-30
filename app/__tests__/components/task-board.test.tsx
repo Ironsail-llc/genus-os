@@ -19,10 +19,50 @@ describe("TaskBoard", () => {
     expect(screen.getByText("Done")).toBeDefined();
   });
 
-  it("has 4-column grid layout", () => {
+  it("lays its columns out by the board's own width, not the window's", () => {
     render(<TaskBoard tasks={mockTasks} />);
     const board = screen.getByTestId("task-board");
-    expect(board.className).toContain("grid-cols-4");
+    expect(board.className).toContain("auto-fit");
+    expect(board.className).toContain("minmax(");
+    expect(board.className).not.toContain("grid-cols-4");
+  });
+
+  it("lets columns and cards shrink below their content width", () => {
+    render(<TaskBoard tasks={mockTasks} />);
+    const board = screen.getByTestId("task-board");
+    for (const column of Array.from(board.children)) {
+      expect(column.className).toContain("min-w-0");
+    }
+    for (const card of screen.getAllByTestId("task-card")) {
+      expect(card.className).toContain("min-w-0");
+    }
+  });
+
+  it("puts the title on its own line and the badges on a wrapping row beneath", () => {
+    const t = [
+      {
+        id: "20",
+        title: "A long task title that must wrap",
+        status: "REVIEW" as const,
+        priority: "urgent",
+        requiresHuman: true,
+        escalationCount: 2,
+      },
+    ];
+    render(<TaskBoard tasks={t} />);
+    const title = screen.getByText("A long task title that must wrap");
+    expect(title.className).toContain("break-words");
+    expect(title.className).not.toContain("truncate");
+
+    const badgeRow = screen.getByTestId("task-card-badges");
+    expect(badgeRow.className).toContain("flex-wrap");
+    for (const id of ["priority-badge", "requires-human-badge", "escalation-badge"]) {
+      expect(badgeRow.contains(screen.getByTestId(id))).toBe(true);
+    }
+    // Title and badge row are separate siblings: the title is not inside the
+    // badge row, and the badge row comes after it.
+    expect(badgeRow.contains(title)).toBe(false);
+    expect(title.nextElementSibling).toBe(badgeRow);
   });
 
   it("renders task cards", () => {

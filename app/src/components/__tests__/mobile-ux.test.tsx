@@ -222,13 +222,16 @@ describe("Mobile UX — AppShell", () => {
 });
 
 describe("Mobile UX — TaskBoard", () => {
-  it("renders as stacked list on mobile viewports, not 4-column grid", async () => {
+  it("stacks into one column on narrow screens by fitting columns to its own width", async () => {
     const { TaskBoard } = await import("../business/task-board");
     render(
       <TaskBoard tasks={mockTasks} onApprove={vi.fn()} onReject={vi.fn()} />
     );
     const board = screen.getByTestId("task-board");
-    expect(board.className).toMatch(/grid-cols-1/);
+    // auto-fit with a minimum column width yields a single column when the
+    // board is narrower than two minimums; no viewport breakpoint forces four.
+    expect(board.className).toMatch(/grid-cols-\[repeat\(auto-fit,minmax\(/);
+    expect(board.className).not.toMatch(/md:grid-cols-4/);
   });
 
   it("task cards are readable width", async () => {
@@ -438,7 +441,7 @@ describe("Mobile UX — DefaultDashboard", () => {
 });
 
 describe("Mobile UX — MetricGrid", () => {
-  it("uses 2 columns on mobile", async () => {
+  it("fits its columns to the width it has on mobile", async () => {
     const { MetricGrid } = await import("../business/metric-grid");
     render(
       <MetricGrid
@@ -450,7 +453,10 @@ describe("Mobile UX — MetricGrid", () => {
       />
     );
     const grid = screen.getByTestId("metric-grid");
-    expect(grid.className).toContain("grid-cols-2");
+    // auto-fit with a minimum card width: as many columns as fit, no viewport
+    // breakpoint deciding the count.
+    expect(grid.className).toMatch(/grid-cols-\[repeat\(auto-fit,minmax\(/);
+    expect(grid.className).not.toMatch(/(md|lg):grid-cols-/);
   });
 });
 
