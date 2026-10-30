@@ -400,6 +400,12 @@ class TestASharedLockfileIsRefused:
     on the root's workspace would otherwise let a child admin's disable turn a
     plugin off for the root and every sibling."""
 
+    @pytest.fixture(autouse=True)
+    def _no_tenant_rows(self):
+        """No database: no tenant reads as a root unless a test says so."""
+        with patch("robothor.crm.dal.get_tenant", return_value=None):
+            yield
+
     def test_the_first_claim_names_this_engines_tenant(self, plugin_lockfile):
         from robothor import constants
         from robothor.plugins import lockfile_owner
