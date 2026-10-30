@@ -222,3 +222,42 @@ def test_the_doctor_url_is_scheme_host_and_port_only(
     assert "s3cret" not in response.text
     assert "alice" not in response.text
     assert "qz9-token-value" not in response.text
+
+
+# ── a hung engine ────────────────────────────────────────────────────────────
+
+#: The chart's bridge readiness probe gives /ready five seconds
+#: (helm/genus-os/values.yaml, bridge.probes.readiness.timeoutSeconds).
+READINESS_PROBE_TIMEOUT_S = 5.0
+
+
+def test_the_engine_probe_finishes_well_inside_the_readiness_probe() -> None:
+    """A blackholed engine -- packets dropped, not refused -- is a hang, not a
+    ConnectError. If the engine probe could use the probe's whole budget, the
+    kubelet would time out /ready and pull the bridge from its Service: the
+    exact outcome the engine check must never cause."""
+    from routers.health import ENGINE_CHECK_TIMEOUT_S
+
+    assert ENGINE_CHECK_TIMEOUT_S <= READINESS_PROBE_TIMEOUT_S / 2
+
+
+@pytest.mark.asyncio
+async def test_a_hung_engine_reads_as_a_timeout(test_client, mock_http_client, monkeypatch):
+    import asyncio
+
+    import routers.health as health_module
+
+    monkeypatch.setattr(health_module, "ENGINE_CHECK_TIMEOUT_S", 0.05)
+
+    async def get(url, **_kwargs):
+        if url.startswith(ENGINE):
+            await asyncio.sleep(10)
+        return _response(200)
+
+    mock_http_client.get = AsyncMock(side_effect=get)
+
+    r = await _ready(test_client)
+
+    assert r.status_code == 200
+    assert r.json()["engine"] == "unreachable:timeout"
+    assert r.json()["degraded"] is True
