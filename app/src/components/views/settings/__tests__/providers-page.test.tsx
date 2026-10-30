@@ -825,9 +825,35 @@ describe("ProvidersPage — the bridge cannot reach the engine", () => {
     const save = screen.getByTestId("fleet-default-save");
     expect(save).toBeDisabled();
     const reason = await screen.findByTestId("fleet-default-save-reason");
-    expect(reason).toHaveTextContent(/model catalog/i);
+    expect(reason).toHaveTextContent(/model catalog did not load/i);
     expect(reason.id).toBeTruthy();
     expect(save.getAttribute("aria-describedby") ?? "").toContain(reason.id);
+  });
+
+  it("does not blame a failed read when the catalog answered with no models", async () => {
+    await renderPage({ "GET /api/bridge/api/models": { body: { models: [] } } });
+    const reason = await screen.findByTestId("fleet-default-save-reason");
+    expect(reason).toHaveTextContent(/no model to choose/i);
+    expect(reason).not.toHaveTextContent(/did not load/i);
+    expect(screen.getByTestId("fleet-default-save")).toBeDisabled();
+  });
+
+  it("says the catalog is still being read before the models read answers", async () => {
+    const base = installFetch();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) =>
+        String(input) === "/api/bridge/api/models"
+          ? new Promise<Response>(() => {})
+          : base(input, init)
+      )
+    );
+    render(<ProvidersPage />);
+    await screen.findByTestId("provider-row-openrouter");
+    const reason = screen.getByTestId("fleet-default-save-reason");
+    expect(reason).toHaveTextContent(/reading the model catalog/i);
+    expect(reason).not.toHaveTextContent(/did not load|no model to choose/i);
+    expect(screen.getByTestId("fleet-default-save")).toBeDisabled();
   });
 
   it("leaves the form usable when only the default could not be read", async () => {
