@@ -32,15 +32,45 @@ export interface EventEnvelope {
   correlation_id: string;
 }
 
+export type RedisConnection =
+  | { url: string }
+  | { host: string; port: number; password?: string; db: number };
+
+const DEFAULT_REDIS_URL = "redis://localhost:6379/0";
+
+/**
+ * Where the event bus lives, by the same rules as the Python services:
+ * REDIS_URL wins when set; otherwise ROBOTHOR_REDIS_HOST/PORT/PASSWORD on
+ * DB 0 (what the Helm chart supplies); otherwise the localhost default.
+ */
+export function resolveRedisConnection(
+  env: Record<string, string | undefined> = process.env
+): RedisConnection {
+  if (env.REDIS_URL) return { url: env.REDIS_URL };
+  const host = env.ROBOTHOR_REDIS_HOST;
+  if (!host) return { url: DEFAULT_REDIS_URL };
+  const port = Number.parseInt(env.ROBOTHOR_REDIS_PORT ?? "", 10);
+  const connection: RedisConnection = {
+    host,
+    port: Number.isNaN(port) ? 6379 : port,
+    db: 0,
+  };
+  if (env.ROBOTHOR_REDIS_PASSWORD) {
+    connection.password = env.ROBOTHOR_REDIS_PASSWORD;
+  }
+  return connection;
+}
+
 let redisClient: Redis | null = null;
 
 function getRedis(): Redis {
   if (!redisClient) {
-    const url = process.env.REDIS_URL || "redis://localhost:6379/0";
-    redisClient = new Redis(url, {
-      maxRetriesPerRequest: 3,
-      lazyConnect: true,
-    });
+    const connection = resolveRedisConnection();
+    const options = { maxRetriesPerRequest: 3, lazyConnect: true };
+    redisClient =
+      "url" in connection
+        ? new Redis(connection.url, options)
+        : new Redis({ ...connection, ...options });
   }
   return redisClient;
 }

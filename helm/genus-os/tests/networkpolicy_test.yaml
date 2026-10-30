@@ -86,83 +86,6 @@ tests:
                     app.kubernetes.io/instance: gos
           any: true
 
-  - it: bridge internal egress reaches the engine admin port
-    set:
-      networkPolicy.enabled: true
-      networkPolicy.egress.enabled: true
-    documentSelector:
-      path: metadata.name
-      value: gos-genus-os-bridge-internal-egress
-    asserts:
-      - contains:
-          path: spec.egress
-          content:
-            to:
-              - podSelector:
-                  matchLabels:
-                    app.kubernetes.io/name: genus-os
-                    app.kubernetes.io/instance: gos
-                    app.kubernetes.io/component: engine
-            ports:
-              - protocol: TCP
-                port: 18800
-
-  - it: bridge internal egress omits the engine when the engine is disabled
-    set:
-      networkPolicy.enabled: true
-      networkPolicy.egress.enabled: true
-      engine.enabled: false
-    documentSelector:
-      path: metadata.name
-      value: gos-genus-os-bridge-internal-egress
-    asserts:
-      - notContains:
-          path: spec.egress
-          content:
-            to:
-              - podSelector:
-                  matchLabels:
-                    app.kubernetes.io/name: genus-os
-                    app.kubernetes.io/instance: gos
-                    app.kubernetes.io/component: engine
-          any: true
-
-  - it: engine internal ingress admits the bridge
-    set:
-      networkPolicy.enabled: true
-    documentSelector:
-      path: metadata.name
-      value: gos-genus-os-engine-internal-ingress
-    asserts:
-      - contains:
-          path: spec.ingress[0].from
-          content:
-            podSelector:
-              matchLabels:
-                app.kubernetes.io/name: genus-os
-                app.kubernetes.io/instance: gos
-                app.kubernetes.io/component: bridge
-      - equal:
-          path: spec.ingress[0].ports[0].port
-          value: 18800
-
-  - it: engine internal ingress omits the bridge when the bridge is disabled
-    set:
-      networkPolicy.enabled: true
-      bridge.enabled: false
-    documentSelector:
-      path: metadata.name
-      value: gos-genus-os-engine-internal-ingress
-    asserts:
-      - notContains:
-          path: spec.ingress[0].from
-          content:
-            podSelector:
-              matchLabels:
-                app.kubernetes.io/name: genus-os
-                app.kubernetes.io/instance: gos
-                app.kubernetes.io/component: bridge
-
   - it: in-chart Postgres ingress excludes the dashboard
     set:
       networkPolicy.enabled: true
@@ -324,3 +247,145 @@ tests:
       - equal:
           path: spec.ingress[0].ports[0].port
           value: 3000
+  - it: bridge internal egress reaches the engine admin port
+    set:
+      networkPolicy.enabled: true
+      networkPolicy.egress.enabled: true
+    documentSelector:
+      path: metadata.name
+      value: gos-genus-os-bridge-internal-egress
+    asserts:
+      - contains:
+          path: spec.egress
+          content:
+            to:
+              - podSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: genus-os
+                    app.kubernetes.io/instance: gos
+                    app.kubernetes.io/component: engine
+            ports:
+              - protocol: TCP
+                port: 18800
+
+  - it: bridge internal egress omits the engine when the engine is disabled
+    set:
+      networkPolicy.enabled: true
+      networkPolicy.egress.enabled: true
+      engine.enabled: false
+    documentSelector:
+      path: metadata.name
+      value: gos-genus-os-bridge-internal-egress
+    asserts:
+      - notContains:
+          path: spec.egress
+          content:
+            to:
+              - podSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: genus-os
+                    app.kubernetes.io/instance: gos
+                    app.kubernetes.io/component: engine
+          any: true
+
+  - it: engine internal ingress admits the bridge
+    set:
+      networkPolicy.enabled: true
+    documentSelector:
+      path: metadata.name
+      value: gos-genus-os-engine-internal-ingress
+    asserts:
+      - contains:
+          path: spec.ingress[0].from
+          content:
+            podSelector:
+              matchLabels:
+                app.kubernetes.io/name: genus-os
+                app.kubernetes.io/instance: gos
+                app.kubernetes.io/component: bridge
+      - equal:
+          path: spec.ingress[0].ports[0].port
+          value: 18800
+
+  - it: engine internal ingress omits the bridge when the bridge is disabled
+    set:
+      networkPolicy.enabled: true
+      bridge.enabled: false
+    documentSelector:
+      path: metadata.name
+      value: gos-genus-os-engine-internal-ingress
+    asserts:
+      - notContains:
+          path: spec.ingress[0].from
+          content:
+            podSelector:
+              matchLabels:
+                app.kubernetes.io/name: genus-os
+                app.kubernetes.io/instance: gos
+                app.kubernetes.io/component: bridge
+
+  - it: dashboard egress reaches the in-chart cache on the cache port
+    set:
+      networkPolicy.enabled: true
+      networkPolicy.egress.enabled: true
+      redis.port: 6380
+    documentSelector:
+      path: metadata.name
+      value: gos-genus-os-dashboard-internal-egress
+    asserts:
+      - contains:
+          path: spec.egress
+          content:
+            to:
+              - podSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: valkey
+                    app.kubernetes.io/instance: gos
+            ports:
+              - protocol: TCP
+                port: 6380
+
+  - it: dashboard egress has no cache rule when the in-chart cache is disabled
+    set:
+      networkPolicy.enabled: true
+      networkPolicy.egress.enabled: true
+      valkey.enabled: false
+    documentSelector:
+      path: metadata.name
+      value: gos-genus-os-dashboard-internal-egress
+    asserts:
+      - notContains:
+          path: spec.egress
+          content:
+            to:
+              - podSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: valkey
+                    app.kubernetes.io/instance: gos
+          any: true
+
+  - it: cache ingress admits the dashboard
+    set:
+      networkPolicy.enabled: true
+      networkPolicy.egress.enabled: true
+    documentSelector:
+      path: metadata.name
+      value: gos-genus-os-redis-ingress
+    asserts:
+      - contains:
+          path: spec.ingress[0].from
+          content:
+            podSelector:
+              matchLabels:
+                app.kubernetes.io/name: genus-os
+                app.kubernetes.io/instance: gos
+                app.kubernetes.io/component: dashboard
+      - contains:
+          path: spec.ingress[0].from
+          content:
+            podSelector:
+              matchLabels:
+                app.kubernetes.io/name: genus-os
+                app.kubernetes.io/instance: gos
+                app.kubernetes.io/component: bridge
+
