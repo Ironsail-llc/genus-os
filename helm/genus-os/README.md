@@ -412,6 +412,23 @@ workspace gets neither variable: an install there would be lost on restart, or
 could not be written at all. The root engine renders exactly as before, so a
 deployment that sets these variables in `engine.env` keeps doing so.
 
+The plugin directory is on the workspace, which the cell's agents can write
+to, and `PYTHONPATH` comes before site-packages. A file an agent writes there
+(a `sitecustomize.py`, or a package shadowing a real dependency) runs inside
+the engine process on its next restart, with every secret the cell reads.
+Give the cell's agents a `write_path_allowlist` in their manifests that leaves
+out `.plugins/`, with `write_path_restrict` in their `guardrails` list, which
+the allowlist needs before it is enforced. To turn
+the plugin directory off for a cell, set both variables to empty in its
+`env`, which installs into the image's own environment as on a default root
+engine:
+
+```yaml
+tenants:
+  - id: child-a
+    env: {ROBOTHOR_PLUGIN_DIR: "", PYTHONPATH: ""}
+```
+
 State a plugin keeps outside the workspace goes on a volume the entry declares
 itself in `extraVolumes` and `extraVolumeMounts`: a cell never inherits the
 root engine's, so give each cell its own claim.
