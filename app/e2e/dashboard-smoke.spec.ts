@@ -158,18 +158,19 @@ test.describe("Chat dock", () => {
     const toggle = page.locator('[data-testid="chat-panel-toggle"]');
     await expect(page.locator('[data-testid="chat-panel"]')).toBeVisible({ timeout: 10000 });
 
+    // The rail keeps its 1px left border when collapsed, so read the width it was given.
     await page.locator('[data-testid="chat-dock-close"]').click();
-    await expect(chatContainer).toHaveCSS("width", "0px");
+    await expect(chatContainer).toHaveAttribute("style", /width:\s*0px/);
     await expect(toggle).toHaveAttribute("aria-pressed", "false");
 
     // The choice survives a reload, server render and hydration included.
     await page.reload({ waitUntil: "networkidle" });
     await expect(page.locator('[data-testid="default-dashboard"]')).toBeVisible({ timeout: 10000 });
-    await expect(chatContainer).toHaveCSS("width", "0px");
+    await expect(chatContainer).toHaveAttribute("style", /width:\s*0px/);
     await expect(toggle).toHaveAttribute("aria-pressed", "false");
 
     await page.locator('[data-testid="chat-dock-open"]').click();
-    await expect(chatContainer).toHaveCSS("width", "400px");
+    await expect(chatContainer).toHaveAttribute("style", /width:\s*400px/);
     await expect(toggle).toHaveAttribute("aria-pressed", "true");
   });
 });

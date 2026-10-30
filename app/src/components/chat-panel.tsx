@@ -22,7 +22,7 @@ import {
   readStoredChatAgent,
   storeChatAgent,
 } from "@/lib/chat/agent-session";
-import { Send, Square, Check, X, ClipboardList, MessageSquareText, Brain } from "lucide-react";
+import { Send, Square, Check, X, ClipboardList, MessageSquareText, Brain, PanelRightClose } from "lucide-react";
 
 import { forgetRequest, journalRequest, pendingRequests } from "@/lib/chat/request-journal";
 
@@ -91,9 +91,13 @@ function stripResidualMarkers(text: string): string {
 interface ChatPanelProps {
   /** When true, renders in mobile-optimized layout (no duplicate header, labeled controls) */
   mobile?: boolean;
+  /** When true, the panel is docked beside another view and offers to collapse itself */
+  docked?: boolean;
+  /** Called by the header's collapse control; only used when `docked` */
+  onCollapse?: () => void;
 }
 
-export function ChatPanel({ mobile = false }: ChatPanelProps) {
+export function ChatPanel({ mobile = false, docked = false, onCollapse }: ChatPanelProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const recoveryScopes = useRef<Record<string, string>>({});
   const requestScopes = useRef<Record<string, string>>({});
@@ -1362,6 +1366,18 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
             <Brain className="w-3 h-3 mr-1 inline" />
             Deep reasoning... {deepElapsed}s
           </Badge>
+        )}
+        {docked && (
+          <button
+            type="button"
+            onClick={onCollapse}
+            aria-label="Collapse chat panel"
+            title="Collapse chat panel"
+            className="ml-auto rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            data-testid="chat-dock-close"
+          >
+            <PanelRightClose className="size-4" />
+          </button>
         )}
       </div>
 
