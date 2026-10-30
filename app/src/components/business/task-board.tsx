@@ -171,11 +171,11 @@ export function TaskBoard({ tasks, onApprove, onReject, onResolve, onAnswer }: T
   };
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-4 gap-4" data-testid="task-board">
+    <div className="grid grid-cols-[repeat(auto-fit,minmax(15rem,1fr))] gap-4" data-testid="task-board">
       {statusColumns.map((status) => {
         const columnTasks = tasks.filter((t) => t.status === status);
         return (
-          <div key={status} className={`space-y-2 rounded-lg p-2 ${columnTints[status]}`}>
+          <div key={status} className={`min-w-0 space-y-2 rounded-lg p-2 ${columnTints[status]}`}>
             <div className={`flex items-center gap-2 mb-2 border-t-2 pt-2 ${statusColors[status]}`}>
               <h4 className="text-sm font-medium">{statusLabels[status]}</h4>
               <Badge variant="secondary">{columnTasks.length}</Badge>
@@ -183,11 +183,12 @@ export function TaskBoard({ tasks, onApprove, onReject, onResolve, onAnswer }: T
             {columnTasks.map((task) => (
               <Card
                 key={task.id}
-                className={`glass-panel ${isSlaOverdue(task.slaDeadlineAt) && status !== "DONE" ? "ring-1 ring-destructive/50 animate-pulse" : ""}`}
+                className={`glass-panel min-w-0 ${isSlaOverdue(task.slaDeadlineAt) && status !== "DONE" ? "ring-1 ring-destructive/50 animate-pulse" : ""}`}
                 data-testid="task-card"
               >
                 <CardHeader className="pb-1 pt-3 px-3">
-                  <div className="flex items-center gap-1.5">
+                  <CardTitle className="text-sm break-words">{task.title}</CardTitle>
+                  <div className="flex flex-wrap gap-1" data-testid="task-card-badges">
                     {task.priority && task.priority !== "normal" && (
                       <Badge className={`text-[10px] px-1 py-0 ${priorityColors[task.priority] || ""}`} data-testid="priority-badge">
                         {task.priority}
@@ -207,7 +208,6 @@ export function TaskBoard({ tasks, onApprove, onReject, onResolve, onAnswer }: T
                         ↑{task.escalationCount}
                       </Badge>
                     )}
-                    <CardTitle className="text-sm flex-1">{task.title}</CardTitle>
                   </div>
                 </CardHeader>
                 <CardContent className="px-3 pb-3">

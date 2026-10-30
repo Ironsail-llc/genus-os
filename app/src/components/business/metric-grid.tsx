@@ -17,7 +17,7 @@ interface MetricGridProps {
 export function MetricGrid({ metrics }: MetricGridProps) {
   return (
     <div
-      className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4"
+      className="grid grid-cols-[repeat(auto-fit,minmax(11rem,1fr))] gap-4"
       data-testid="metric-grid"
     >
       {metrics.map((metric, i) => (
