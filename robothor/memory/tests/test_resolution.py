@@ -76,6 +76,50 @@ class TestRecordResolution:
         assert out["superseded_ids"] == []
         find.assert_not_awaited()  # the risky retirement is gated off
 
+    @pytest.mark.asyncio
+    async def test_a_refused_store_is_an_error_not_a_success(self) -> None:
+        """store_fact answers 0 when it keeps nothing (the quality gate refused
+        the fact). Reporting ``resolution_id: 0`` as success hides that the
+        resolution was never recorded."""
+        ctx, cur = _mock_conn()
+        with (
+            patch.object(res, "store_fact", new=AsyncMock(return_value=0)),
+            patch.object(res, "get_connection", return_value=ctx),
+        ):
+            out = await record_resolution("the X alert", "confirmed safe")
+        assert "error" in out
+        assert "not stored" in out["error"]
+        cur.execute.assert_not_called()
+
+
+class TestHandlerArguments:
+    """An agent that sends the wrong argument names gets told which ones."""
+
+    @staticmethod
+    async def _call(args: dict[str, Any]) -> dict[str, Any]:
+        from robothor.engine.tools.dispatch import ToolContext
+        from robothor.engine.tools.handlers.memory import HANDLERS
+
+        return await HANDLERS["record_resolution"](
+            args, ToolContext(agent_id="example-agent", tenant_id="test-tenant")
+        )
+
+    @pytest.mark.asyncio
+    async def test_wrong_argument_names_are_named_in_the_error(self) -> None:
+        store = AsyncMock()
+        with patch.object(res, "store_fact", new=store):
+            out = await self._call({"item": "the X alert", "resolution": "closed"})
+        assert "missing: open_item, outcome" in out["error"]
+        assert "received: item, resolution" in out["error"]
+        store.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_only_the_blank_argument_is_reported_missing(self) -> None:
+        with patch.object(res, "store_fact", new=AsyncMock()):
+            out = await self._call({"open_item": "the X alert", "outcome": "  "})
+        assert "missing: outcome" in out["error"]
+        assert "open_item," not in out["error"].split("missing:")[1]
+
 
 class TestExtractionAwareness:
     def test_resolution_is_a_valid_category(self) -> None:
