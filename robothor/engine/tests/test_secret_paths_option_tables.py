@@ -210,6 +210,11 @@ def test_arguments_after_a_multi_line_quote_are_still_judged(workspace, command)
         "# Let's look at the config\ncat .env\n# That's all",
         "ls  # don't care\ncat .env\necho ok  # that's it",
         "cat .env  # it's here",
+        # Once a later line leaves a quote unclosed, the complete lines
+        # before it are still lexed properly: a `#` inside quotes is not a
+        # comment and an operator stuck to a word still separates commands.
+        "echo \"a # b\" ; cat .env\necho '",
+        "echo hi; cat .env\necho '",
     ],
 )
 def test_an_unquoted_newline_separates_commands(workspace, command) -> None:
