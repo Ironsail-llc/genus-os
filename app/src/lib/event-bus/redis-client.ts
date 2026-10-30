@@ -36,24 +36,29 @@ export type RedisConnection =
   | { url: string }
   | { host: string; port: number; password?: string; db: number };
 
-const DEFAULT_REDIS_URL = "redis://localhost:6379/0";
+const DEFAULT_REDIS_URL = "redis://localhost:6379";
 
 /**
  * Where the event bus lives, by the same rules as the Python services:
- * REDIS_URL wins when set; otherwise ROBOTHOR_REDIS_HOST/PORT/PASSWORD on
- * DB 0 (what the Helm chart supplies); otherwise the localhost default.
+ * REDIS_URL wins when set; otherwise ROBOTHOR_REDIS_HOST/PORT/PASSWORD
+ * (what the Helm chart supplies); otherwise the localhost default. Both of
+ * the latter use ROBOTHOR_REDIS_DB (default 0), as RedisConfig does: an
+ * engine writing DB N while the dashboard read DB 0 left the live views
+ * empty with nothing logged.
  */
 export function resolveRedisConnection(
   env: Record<string, string | undefined> = process.env
 ): RedisConnection {
   if (env.REDIS_URL) return { url: env.REDIS_URL };
+  const parsedDb = Number.parseInt(env.ROBOTHOR_REDIS_DB ?? "", 10);
+  const db = Number.isNaN(parsedDb) ? 0 : parsedDb;
   const host = env.ROBOTHOR_REDIS_HOST;
-  if (!host) return { url: DEFAULT_REDIS_URL };
+  if (!host) return { url: `${DEFAULT_REDIS_URL}/${db}` };
   const port = Number.parseInt(env.ROBOTHOR_REDIS_PORT ?? "", 10);
   const connection: RedisConnection = {
     host,
     port: Number.isNaN(port) ? 6379 : port,
-    db: 0,
+    db,
   };
   if (env.ROBOTHOR_REDIS_PASSWORD) {
     connection.password = env.ROBOTHOR_REDIS_PASSWORD;
