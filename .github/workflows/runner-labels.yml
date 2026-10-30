@@ -14,7 +14,7 @@ jobs:
   pinned-runners:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       # Floating label silently moves to a new OS image (RD-2286).
       - name: Fail on floating runner label
         run: |
