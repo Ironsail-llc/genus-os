@@ -1,3 +1,4 @@
+import { StrictMode } from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { VisualStateProvider, useVisualState } from "@/hooks/use-visual-state";
@@ -36,6 +37,9 @@ function installFetch(session: Reply, welcome: Reply[]) {
   fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     const method = (init?.method ?? "GET").toUpperCase();
+    // Like a real fetch: an abort that lands before the answer rejects it.
+    await Promise.resolve();
+    if (init?.signal?.aborted) throw new DOMException("The operation was aborted.", "AbortError");
     if (url === "/api/session" && method === "GET") {
       return new Response(JSON.stringify(session.body), { status: session.status ?? 200 });
     }
@@ -151,5 +155,25 @@ describe("LiveCanvas — a failed generation is visible and retryable", () => {
 
     fireEvent.click(screen.getByTestId("canvas-update-retry"));
     expect(agent.retry).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("LiveCanvas — under StrictMode", () => {
+  it("still loads the welcome page once when the first effect is run twice", async () => {
+    // Development mounts, cleans up and mounts again. The cleanup aborts the
+    // first load; the second mount must start it again rather than leave the
+    // canvas on its loading skeleton for good.
+    installFetch({ body: {} }, [{ body: { html: "<div>fresh view</div>", type: "html" } }]);
+    const { LiveCanvas } = await import("../live-canvas");
+    render(
+      <StrictMode>
+        <VisualStateProvider>
+          <LiveCanvas />
+        </VisualStateProvider>
+      </StrictMode>,
+    );
+
+    expect(await screen.findByTestId("srcdoc")).toHaveTextContent("fresh view");
+    expect(welcomeCalls()).toHaveLength(1);
   });
 });
