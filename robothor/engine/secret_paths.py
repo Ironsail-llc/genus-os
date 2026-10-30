@@ -505,6 +505,12 @@ def _tokens(text: str) -> list[str]:
     lexer = shlex.shlex(text, posix=True, punctuation_chars="();<>|&\n")
     lexer.whitespace = " \t\r"
     lexer.whitespace_split = True
+    # shlex consumes a `#` comment with readline(), newline included, which
+    # would merge the next line into this command. With no commenters the
+    # comment words are plain arguments of their own command and the
+    # newline token survives; a secret named in a comment is, at worst,
+    # refused (fail closed).
+    lexer.commenters = ""
     try:
         return list(lexer)
     except ValueError:
