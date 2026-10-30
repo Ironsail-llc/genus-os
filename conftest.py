@@ -11,10 +11,11 @@ can request them by name without per-suite duplication.
 
 from __future__ import annotations
 
+import os as _os
+
 # Pin DEFAULT_TENANT before any robothor import — the value is captured by
 # function-default kwargs at dal.py import time.
 import pytest
-import os as _os
 
 _os.environ["ROBOTHOR_DEFAULT_TENANT"] = "default"
 
@@ -38,8 +39,6 @@ _os.environ.setdefault("ROBOTHOR_DB_NAME", "robothor_test")
 
 import contextlib  # noqa: E402
 import uuid  # noqa: E402
-
-import pytest  # noqa: E402
 
 # Bridge tests are run from crm/bridge/ as their own rootdir; the tests
 # package isn't on their sys.path. Integration fixtures are optional there,
