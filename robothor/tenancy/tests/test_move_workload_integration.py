@@ -158,6 +158,30 @@ def world(monkeypatch) -> Iterator[dict[str, Any]]:
             "INSERT INTO chat_messages (session_id, message) VALUES (%s, %s)",
             (sessions[f"agent:{agent}:primary"], f'{{"n": {n}}}'),
         )
+    # The channel bus surfaces a non-main agent's delivery into MAIN's session
+    # and maps it with the workload's run as author (channel_bus.on_post_delivery).
+    # That row belongs to main's conversation, which stays; the map row for the
+    # workload's own session moves with it.
+    main_key = "agent:main:primary"
+    cur.execute(
+        "INSERT INTO chat_sessions (tenant_id, session_key) VALUES (%s, %s) RETURNING id",
+        (parent, main_key),
+    )
+    sessions[main_key] = str(cur.fetchone()[0])
+    maps: dict[str, str] = {}
+    for label, key in (("main", main_key), ("own", f"agent:{agent}:primary")):
+        cur.execute(
+            "INSERT INTO chat_messages (session_id, message) VALUES (%s, '{}') RETURNING id",
+            (sessions[key],),
+        )
+        message_id = cur.fetchone()[0]
+        cur.execute(
+            "INSERT INTO channel_message_map (tenant_id, channel, chat_id, platform_message_id, "
+            "session_key, chat_message_id, author_agent_id, author_run_id, direction) "
+            "VALUES (%s, 'telegram', 'c1', %s, %s, %s, %s, %s, 'outbound') RETURNING id",
+            (parent, f"{label}-{sfx}", key, message_id, agent, run_a1),
+        )
+        maps[label] = str(cur.fetchone()[0])
     cur.execute(
         "INSERT INTO chat_approval_receipts (tenant_id, request_id, session_key, plan_id, "
         "plan_state) VALUES (%s, %s, %s, 'p1', '{}')",
@@ -189,6 +213,7 @@ def world(monkeypatch) -> Iterator[dict[str, Any]]:
             "wf_run": wf_run,
             "other_wf_run": other_wf_run,
             "sessions": sessions,
+            "maps": maps,
             "person": person,
             "task": task,
             "cur": cur,
@@ -202,6 +227,7 @@ def world(monkeypatch) -> Iterator[dict[str, Any]]:
             (tenants,),
         )
         for table in (
+            "channel_message_map",
             "agent_breadcrumbs",
             "agent_runtime_effects",
             "memory_write_jobs",
@@ -259,8 +285,9 @@ EXPECTED_MOVED = {
     "workflow_approvals": 1,
     "chat_sessions": 2,
     "chat_approval_receipts": 1,
+    "channel_message_map": 1,  # the workload's own session's; not main's
 }
-EXPECTED_FOLLOWED = {"agent_run_steps": 2, "workflow_run_steps": 1, "chat_messages": 3}
+EXPECTED_FOLLOWED = {"agent_run_steps": 2, "workflow_run_steps": 1, "chat_messages": 4}
 EXPECTED_CLEARED = {
     "agent_runs.person_id": 1,
     "agent_runs.task_id": 1,
@@ -319,6 +346,19 @@ def test_live_move_moves_the_workloads_history_and_nothing_else(world) -> None:
 
     # The audit trail keeps its original tenant.
     assert _tenant_of(cur, "audit_log", "target", f"agent:{world['agent']}") == [world["parent"]]
+
+
+def test_a_delivery_surfaced_into_mains_session_stays_with_main(world) -> None:
+    """Main's session stays, so the map row pointing into it stays too: a reply
+    in the root still finds the quoted message, and no moved row points at a
+    chat message in the source."""
+    cur = world["cur"]
+    _move(world)
+    assert _tenant_of(cur, "chat_sessions", "id", world["sessions"]["agent:main:primary"]) == [
+        world["parent"]
+    ]
+    assert _tenant_of(cur, "channel_message_map", "id", world["maps"]["main"]) == [world["parent"]]
+    assert _tenant_of(cur, "channel_message_map", "id", world["maps"]["own"]) == [world["child_a"]]
 
 
 def test_the_move_is_audited_once_under_the_source_root(world) -> None:
