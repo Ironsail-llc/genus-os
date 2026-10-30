@@ -349,6 +349,9 @@ async def set_default_models(body: DefaultsWrite, request: Request) -> JSONRespo
         action=body.model,
         primary=body.model,
         fallback_count=len(body.fallbacks),
+        canvas=body.canvas,
+        # ``None`` details are dropped, so a clear needs its own marker.
+        canvas_cleared=True if "canvas" in extra and body.canvas is None else None,
         applied=True,
         actor_hint=actor,
     )
