@@ -450,6 +450,14 @@ from everything else. Under pytest the resolved destination, whichever way it
 was reached, must be the test namespace (`ROBOTHOR_TEST_REDIS_URL`) or listed
 in `ROBOTHOR_EVENT_BUS_ALLOW`.
 
+The dashboard reads the same streams (its live event views) and resolves its
+connection in the same order: `REDIS_URL` when set, otherwise
+`ROBOTHOR_REDIS_HOST`, `ROBOTHOR_REDIS_PORT` and `ROBOTHOR_REDIS_PASSWORD`,
+otherwise `redis://localhost:6379`; in both of the latter it selects the DB
+from `ROBOTHOR_REDIS_DB` (default 0), as the Python services do. On Kubernetes
+the Helm chart supplies the host, port and password variables to the dashboard
+when the in-chart cache is enabled.
+
 ## Feature Flag
 
 Disable the event bus entirely by setting `EVENT_BUS_ENABLED=false`. All publish calls return `None`, subscribe calls return immediately. Useful for testing or minimal deployments without Redis.

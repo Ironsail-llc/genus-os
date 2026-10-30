@@ -86,6 +86,7 @@ spec:
             - name: {{ $k }}
               value: {{ $v | quote }}
             {{- end }}
+            {{- include "genus-os.dashboardCacheEnv" . | nindent 12 }}
           envFrom:
             {{- include "genus-os.envFromSecret" (dict "root" . "component" "dashboard") | nindent 12 }}
           {{- $liveness := include "genus-os.httpProbe" (dict "root" . "component" "dashboard" "probe" "liveness" "port" "http") }}

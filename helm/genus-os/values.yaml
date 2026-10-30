@@ -291,7 +291,8 @@ valkey:
 
   # OFF by default, deliberately. The exporter sidecar listens on 9121, but
   # `networkPolicy.enabled: true` renders default-deny ingress and the only rule
-  # for these pods admits the cache port from the Python services — nothing
+  # for these pods admits the cache port from the Python services and the
+  # dashboard — nothing
   # admits 9121. Enabled without a matching rule it costs a container and
   # delivers no metrics.
   #
@@ -648,7 +649,10 @@ dashboard:
   image:
     repository: app
   # The dashboard/BFF receives only Auth.js/OIDC and the Bridge exchange
-  # secret. Provider, payment, JWT-signing, DB, and cache paths are forbidden.
+  # secret. Provider, payment, JWT-signing, and DB paths are forbidden, and so
+  # is the cache class as a whole: the dashboard reads the cache password key
+  # only, for the event-bus stream reads, as one secretKeyRef the chart wires
+  # itself (genus-os.dashboardCacheEnv), never through secretRefs.
   secretRefs: [dashboard-auth, bridge-sso]
   service:
     port: 3000

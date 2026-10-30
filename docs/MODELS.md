@@ -19,7 +19,9 @@ conservative limits and is not offered anywhere a person picks a model.
 
 The instance's actual default lives in `docs/agents/_defaults.yaml` (instance
 data, not in git): `model.primary` and `model.fallbacks`. Change it there, or
-with `scripts/set-fleet-model.py`, and restart the engine. A per-chat override
+with `scripts/set-fleet-model.py`, and restart the engine — or use **Save
+default** on the dashboard's Providers page, which has the engine write the
+file into its own manifest directory and reload it, with no restart. A per-chat override
 (`chat_sessions.model_override`, set by the Telegram `/model` picker) beats the
 manifest for that chat until it is cleared.
 

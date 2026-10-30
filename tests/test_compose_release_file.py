@@ -166,6 +166,19 @@ class TestNothingStartsBeforeTheSchemaExists:
         assert depends.get("bridge") == {"condition": "service_healthy"}
 
 
+class TestTheDashboardFindsTheEventBus:
+    def test_the_dashboard_reads_the_event_bus_on_the_cache_service(self, services):
+        # The dashboard does not share the Python services' env anchor, so
+        # without these its event-bus client dials localhost inside its own
+        # container and logs a reconnect error every second. The port is
+        # pinned too: an env file can carry a host-published port, which is
+        # not the port the cache listens on inside the compose network.
+        env = services["dashboard"].get("environment") or {}
+
+        assert env.get("ROBOTHOR_REDIS_HOST") == "redis"
+        assert str(env.get("ROBOTHOR_REDIS_PORT")) == "6379"
+
+
 class TestTheHealthchecksProbeThePortsThePlatformServes:
     @pytest.mark.parametrize(
         ("name", "port", "path"),

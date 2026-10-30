@@ -828,7 +828,7 @@ class EngineSettings(SettingsGroup):
     url: str = declare(
         "http://127.0.0.1:18800",
         "ROBOTHOR_ENGINE_URL",
-        "Base URL the dashboard's server-side client calls the engine on.",
+        "Base URL the dashboard's server-side client and the bridge call the engine on.",
     )
     max_concurrent_agents: int = declare(
         3,

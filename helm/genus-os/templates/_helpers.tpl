@@ -282,7 +282,7 @@ missing Secrets fail closed with CreateContainerConfigError.
 {{- fail (printf "%s.secretRefs contains unknown vault.secrets entry %q" $component $secretName) -}}
 {{- end }}
 {{- if and (eq $component "dashboard") (not (has $secretName (list "dashboard-auth" "bridge-sso"))) -}}
-{{- fail (printf "dashboard.secretRefs forbids privileged secret class %q; only dashboard-auth and bridge-sso are allowed" $secretName) -}}
+{{- fail (printf "dashboard.secretRefs forbids privileged secret class %q; only dashboard-auth and bridge-sso are allowed (the chart wires the one cache password key itself)" $secretName) -}}
 {{- end }}
 {{- if and (eq $component "migrations") (ne $secretName "database") -}}
 {{- fail (printf "migrations.secretRefs is DB-only and forbids secret class %q" $secretName) -}}
@@ -292,6 +292,31 @@ missing Secrets fail closed with CreateContainerConfigError.
 {{- end }}
 - secretRef:
     name: {{ include "genus-os.fullname" $root }}-{{ $secretName }}
+{{- end }}
+{{- end -}}
+
+{{/*
+The dashboard's event-bus connection. It reads Redis Streams (XREAD,
+XREVRANGE, XLEN) for the live event views, so it needs the cache endpoint and
+its password, and nothing else from the `cache` class: the password arrives as
+ONE secretKeyRef, never as envFrom of the whole Secret, and
+dashboard.secretRefs still refuses `cache`. Rendered only when the in-chart
+cache is deployed (the chart cannot name an external cache's Service), and the
+password only while the server enforces auth.
+*/}}
+{{- define "genus-os.dashboardCacheEnv" -}}
+{{- if eq (include "genus-os.cacheEnabled" .) "true" }}
+- name: ROBOTHOR_REDIS_HOST
+  value: {{ include "genus-os.redisHost" . | quote }}
+- name: ROBOTHOR_REDIS_PORT
+  value: {{ .Values.redis.port | quote }}
+{{- if ((.Values.valkey | default dict).auth | default dict).enabled }}
+- name: ROBOTHOR_REDIS_PASSWORD
+  valueFrom:
+    secretKeyRef:
+      name: {{ include "genus-os.fullname" . }}-cache
+      key: ROBOTHOR_REDIS_PASSWORD
+{{- end }}
 {{- end }}
 {{- end -}}
 

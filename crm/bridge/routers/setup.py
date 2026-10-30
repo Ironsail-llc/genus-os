@@ -929,11 +929,33 @@ async def _store_provider_key(provider_id: str, api_key: str) -> None:
 
 
 async def _store_default_model(model: str) -> None:
-    """Point the fleet's manifest defaults at the chosen model, then reload."""
-    from routers.providers import _manifest_dir, _merge_model_block, _reload_engine_defaults
+    """Point the fleet's manifest defaults at the chosen model.
 
-    await asyncio.to_thread(_merge_model_block, _manifest_dir() / "_defaults.yaml", model, [])
-    await _reload_engine_defaults()
+    The engine writes ``_defaults.yaml`` and reloads it — the same route the
+    Settings page uses — because it is the process that reads the file.
+
+    Two refusals are logged rather than raised, because the test connection
+    that follows fails for the same reason and gives the operator the verdict
+    to act on: an unreachable engine, and a 4xx (a model the catalog does not
+    list). Anything else — a write the engine could not make, or an answer
+    that is not the defaults block — fails the step with the engine's detail:
+    the test connection cannot see it, and would report ``ok: true`` while the
+    fleet kept its old default.
+    """
+    from routers.providers import _write_engine_defaults
+
+    status, body = await _write_engine_defaults(model, [])
+    if status < 400 and isinstance(body, dict):
+        return
+    unreachable = status == 502 and body == {"error": "engine unavailable"}
+    if unreachable or 400 <= status < 500:
+        logger.warning("setup: the engine did not store the default model (status %s)", status)
+        return
+    detail = (body.get("detail") or body.get("error")) if isinstance(body, dict) else None
+    raise HTTPException(
+        status_code=status if status >= 500 else 502,
+        detail=f"the engine did not store the default model: {detail or 'unexpected answer'}",
+    )
 
 
 async def _test_provider(provider_id: str, model: str) -> tuple[int, dict[str, Any]]:
