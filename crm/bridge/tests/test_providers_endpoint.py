@@ -11,20 +11,18 @@ What these tests hold down:
 * the operator gate on every route, reads included — the listing enumerates
   which credentials this appliance holds;
 * a key goes IN and never comes OUT, in a response or in a log line;
-* the defaults write preserves the manifest keys it was not asked about, and
-  refuses a model the engine does not know.
+* the defaults write is a proxy to the engine, which owns ``_defaults.yaml``;
+  the bridge never touches the filesystem for it.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-from pathlib import Path  # noqa: TC003
 from unittest.mock import patch
 from urllib.parse import quote
 
 import pytest
-import yaml
 
 FAKE_KEY = "sk-test-9999999999999999999999999"
 
@@ -86,9 +84,9 @@ class FakeEngine:
             ("GET", "/api/admin/providers"): (200, ENGINE_PROVIDERS),
             ("GET", "/api/admin/models"): (200, ENGINE_MODELS),
             ("POST", "/api/admin/secrets/reload"): (200, {"reloaded": ["openrouter"], "slots": 1}),
-            ("POST", "/api/admin/defaults/reload"): (
+            ("PUT", "/api/admin/defaults"): (
                 200,
-                {"reloaded": True, "primary": None, "fallbacks": []},
+                {"primary": "openrouter/openai/gpt-5.4", "fallbacks": ["ollama_chat/qwen3:8b"]},
             ),
             ("GET", "/api/admin/defaults"): (
                 200,
@@ -136,10 +134,6 @@ class FakeEngine:
     def reload_count(self) -> int:
         return sum(1 for m, p, _ in self.calls if p == "/api/admin/secrets/reload")
 
-    @property
-    def defaults_reload_count(self) -> int:
-        return sum(1 for m, p, _ in self.calls if p == "/api/admin/defaults/reload")
-
 
 class FakeVault:
     def __init__(self) -> None:
@@ -169,19 +163,6 @@ def fake_vault():
         patch("robothor.vault.delete", new=vault.delete),
     ):
         yield vault
-
-
-@pytest.fixture
-def agents_dir(tmp_path, monkeypatch):
-    """A throwaway manifest dir. ``_defaults.yaml`` is instance data (CLAUDE.md
-    rule 11) and must never be read from — or written to — the real one."""
-    directory = tmp_path / "agents"
-    directory.mkdir()
-    monkeypatch.setenv("ROBOTHOR_AGENTS_DIR", str(directory))
-    import routers.providers as providers_module
-
-    monkeypatch.setattr(providers_module, "_manifest_dir", lambda: directory)
-    return directory
 
 
 def _assert_no_secret(*payloads: object) -> None:
@@ -561,95 +542,132 @@ class TestModelsProxy:
 
 
 class TestDefaults:
-    def _write_defaults(self, directory: Path, data: dict) -> Path:
-        path = directory / "_defaults.yaml"
-        path.write_text(yaml.safe_dump(data, sort_keys=False))
-        return path
+    """``PATCH /api/providers/defaults`` is a proxy; the engine owns the write.
 
-    def test_it_writes_the_model_block(
-        self, controls_client_as_operator, fake_engine, agents_dir
+    The bridge used to write ``_defaults.yaml`` itself and then ask the engine
+    to reload. In a container deployment the bridge has no workspace volume,
+    so that write landed in the bridge's own filesystem and the engine never
+    saw it. Key preservation, catalog validation and atomicity are now the
+    engine's, and are tested there.
+    """
+
+    BODY = {"model": "openrouter/openai/gpt-5.4", "fallbacks": ["ollama_chat/qwen3:8b"]}
+
+    def test_it_sends_the_body_to_the_engines_write_route(
+        self, controls_client_as_operator, fake_engine
     ) -> None:
-        path = self._write_defaults(
-            agents_dir, {"model": {"primary": "old/model", "fallbacks": []}}
-        )
-        response = controls_client_as_operator.patch(
-            "/api/providers/defaults",
-            json={"model": "openrouter/openai/gpt-5.4", "fallbacks": ["ollama_chat/qwen3:8b"]},
-        )
+        response = controls_client_as_operator.patch("/api/providers/defaults", json=self.BODY)
         assert response.status_code == 200
-        written = yaml.safe_load(path.read_text())
-        assert written["model"]["primary"] == "openrouter/openai/gpt-5.4"
-        assert written["model"]["fallbacks"] == ["ollama_chat/qwen3:8b"]
+        assert ("PUT", "/api/admin/defaults", self.BODY) in fake_engine.calls
 
-    def test_it_preserves_every_other_key(
-        self, controls_client_as_operator, fake_engine, agents_dir
+    def test_the_engine_is_called_once_and_reloads_on_its_own(
+        self, controls_client_as_operator, fake_engine
     ) -> None:
-        path = self._write_defaults(
-            agents_dir,
-            {
-                "delivery": {"mode": "summary"},
-                "model": {"primary": "old/model", "temperature": 0.4},
-                "v2": {"sandbox": {"enabled": True}},
-            },
-        )
+        """No catalog read and no separate reload: the engine validates and
+        reloads inside the write, so one call is the whole act."""
+        controls_client_as_operator.patch("/api/providers/defaults", json=self.BODY)
+        assert [(method, path) for method, path, _ in fake_engine.calls] == [
+            ("PUT", "/api/admin/defaults")
+        ]
+
+    def test_the_response_keeps_the_shape_the_dashboard_reads(
+        self, controls_client_as_operator, fake_engine
+    ) -> None:
+        body = controls_client_as_operator.patch("/api/providers/defaults", json=self.BODY).json()
+        assert body == {
+            "model": "openrouter/openai/gpt-5.4",
+            "fallbacks": ["ollama_chat/qwen3:8b"],
+            "applied": True,
+        }
+
+    def test_a_missing_fallbacks_field_is_sent_as_an_empty_list(
+        self, controls_client_as_operator, fake_engine
+    ) -> None:
         controls_client_as_operator.patch(
-            "/api/providers/defaults",
-            json={"model": "openrouter/openai/gpt-5.4", "fallbacks": []},
+            "/api/providers/defaults", json={"model": "openrouter/openai/gpt-5.4"}
         )
-        written = yaml.safe_load(path.read_text())
-        assert written["delivery"] == {"mode": "summary"}
-        assert written["v2"] == {"sandbox": {"enabled": True}}
-        assert written["model"]["temperature"] == 0.4, "an unrelated model key was dropped"
+        assert (
+            "PUT",
+            "/api/admin/defaults",
+            {"model": "openrouter/openai/gpt-5.4", "fallbacks": []},
+        ) in fake_engine.calls
 
-    def test_it_creates_the_file_when_there_is_none(
-        self, controls_client_as_operator, fake_engine, agents_dir
+    def test_an_engine_refusal_is_passed_through(
+        self, controls_client_as_operator, fake_engine
     ) -> None:
-        response = controls_client_as_operator.patch(
-            "/api/providers/defaults",
-            json={"model": "openrouter/openai/gpt-5.4", "fallbacks": []},
+        fake_engine.responses[("PUT", "/api/admin/defaults")] = (
+            422,
+            {"detail": "unknown model id(s): made/up"},
         )
-        assert response.status_code == 200
-        assert (agents_dir / "_defaults.yaml").exists()
-
-    def test_an_unknown_primary_model_is_refused(
-        self, controls_client_as_operator, fake_engine, agents_dir
-    ) -> None:
         response = controls_client_as_operator.patch(
             "/api/providers/defaults", json={"model": "made/up", "fallbacks": []}
         )
         assert response.status_code == 422
-        assert not (agents_dir / "_defaults.yaml").exists()
+        assert response.json() == {"detail": "unknown model id(s): made/up"}
 
-    def test_an_unknown_fallback_is_refused(
-        self, controls_client_as_operator, fake_engine, agents_dir
+    def test_an_unreachable_engine_is_a_502_passed_through(
+        self, controls_client_as_operator, fake_engine
+    ) -> None:
+        fake_engine.responses[("PUT", "/api/admin/defaults")] = (
+            502,
+            {"error": "engine unavailable"},
+        )
+        response = controls_client_as_operator.patch("/api/providers/defaults", json=self.BODY)
+        assert response.status_code == 502
+        assert response.json() == {"error": "engine unavailable"}
+
+    def test_an_empty_model_is_refused_before_the_engine_is_called(
+        self, controls_client_as_operator, fake_engine
     ) -> None:
         response = controls_client_as_operator.patch(
-            "/api/providers/defaults",
-            json={"model": "openrouter/openai/gpt-5.4", "fallbacks": ["made/up"]},
+            "/api/providers/defaults", json={"model": "", "fallbacks": []}
         )
         assert response.status_code == 422
-        assert not (agents_dir / "_defaults.yaml").exists()
+        assert fake_engine.calls == []
 
     def test_a_viewer_cannot_change_the_defaults(
-        self, controls_client_as_viewer, agents_dir
+        self, controls_client_as_viewer, fake_engine
     ) -> None:
-        response = controls_client_as_viewer.patch(
-            "/api/providers/defaults",
-            json={"model": "openrouter/openai/gpt-5.4", "fallbacks": []},
-        )
+        response = controls_client_as_viewer.patch("/api/providers/defaults", json=self.BODY)
         assert response.status_code == 403
-        assert not (agents_dir / "_defaults.yaml").exists()
+        assert fake_engine.calls == []
 
-    def test_the_write_leaves_no_temp_file_behind(
-        self, controls_client_as_operator, fake_engine, agents_dir
+    def test_a_successful_write_is_audited(self, controls_client_as_operator, fake_engine) -> None:
+        with patch("routers._audit.log_event") as log_event:
+            controls_client_as_operator.patch("/api/providers/defaults", json=self.BODY)
+        assert log_event.called
+
+    def test_it_never_touches_the_filesystem(
+        self, controls_client_as_operator, fake_engine, tmp_path, monkeypatch
     ) -> None:
-        """Atomic means temp-then-rename; a crash between them must not leave
-        a half-written manifest the engine would then fail to parse."""
-        controls_client_as_operator.patch(
-            "/api/providers/defaults",
-            json={"model": "openrouter/openai/gpt-5.4", "fallbacks": []},
-        )
-        assert [p.name for p in agents_dir.iterdir()] == ["_defaults.yaml"]
+        """Even where a manifest dir is configured and writable, the bridge
+        leaves it alone: the engine's copy is the only one that counts."""
+        manifests = tmp_path / "manifests"
+        manifests.mkdir()
+        monkeypatch.setenv("ROBOTHOR_MANIFEST_DIR", str(manifests))
+        monkeypatch.setenv("ROBOTHOR_AGENTS_DIR", str(manifests))
+
+        def _refuse(*args, **kwargs):
+            raise AssertionError("the bridge wrote to the filesystem")
+
+        with (
+            patch("tempfile.mkstemp", side_effect=_refuse),
+            patch("os.replace", side_effect=_refuse),
+            patch("pathlib.Path.replace", side_effect=_refuse),
+            patch("pathlib.Path.write_text", side_effect=_refuse),
+        ):
+            response = controls_client_as_operator.patch("/api/providers/defaults", json=self.BODY)
+        assert response.status_code == 200
+        assert list(manifests.iterdir()) == []
+
+    def test_the_bridge_has_no_manifest_dir_or_write_helpers(self) -> None:
+        import inspect
+
+        import routers.providers as providers_module
+
+        for name in ("_manifest_dir", "_merge_model_block", "_write_defaults_atomically"):
+            assert not hasattr(providers_module, name), name
+        assert "manifest_dir" not in inspect.getsource(providers_module)
 
 
 class TestRequestModelRedaction:
@@ -741,49 +759,6 @@ class TestNumberingGaps:
         fake_engine.set_slots([1, 3])
         controls_client_as_operator.delete("/api/providers/openrouter/keys/3")
         assert fake_vault.deleted == ["providers/openrouter/api_key_3"]
-
-
-class TestDefaultsReachTheEngine:
-    def test_the_write_is_followed_by_an_engine_reload(
-        self, controls_client_as_operator, fake_engine, agents_dir
-    ) -> None:
-        """Manifests are the source of truth, so writing the file is half the
-        act: until the engine is told, the fleet runs on the old model."""
-        response = controls_client_as_operator.patch(
-            "/api/providers/defaults",
-            json={"model": "openrouter/openai/gpt-5.4", "fallbacks": []},
-        )
-        assert response.status_code == 200
-        assert fake_engine.defaults_reload_count == 1
-        assert response.json()["applied"] is True
-
-    def test_the_reload_happens_after_the_file_is_written(
-        self, controls_client_as_operator, fake_engine, agents_dir
-    ) -> None:
-        seen: list[bool] = []
-        original = fake_engine.__call__
-
-        async def _watch(method, path, *, json=None, timeout=30):
-            if path == "/api/admin/defaults/reload":
-                seen.append((agents_dir / "_defaults.yaml").exists())
-            return await original(method, path, json=json, timeout=timeout)
-
-        with patch("routers.providers.engine_request", new=_watch):
-            controls_client_as_operator.patch(
-                "/api/providers/defaults",
-                json={"model": "openrouter/openai/gpt-5.4", "fallbacks": []},
-            )
-        assert seen == [True], "the engine was told before there was anything to read"
-
-    def test_an_engine_that_refuses_is_reported_not_hidden(
-        self, controls_client_as_operator, fake_engine, agents_dir
-    ) -> None:
-        fake_engine.responses[("POST", "/api/admin/defaults/reload")] = (503, {"error": "down"})
-        body = controls_client_as_operator.patch(
-            "/api/providers/defaults",
-            json={"model": "openrouter/openai/gpt-5.4", "fallbacks": []},
-        ).json()
-        assert body["applied"] is False, "saved and in-use are different states — say which"
 
 
 class TestEngineBaseUrl:
@@ -899,39 +874,6 @@ class TestTestConnectionBodyIsTyped:
         controls_client_as_operator.post("/api/providers/openrouter/test", json={})
         _, _, body = fake_engine.calls[-1]
         assert body == {}
-
-
-class TestTheBridgeWritesWhereTheEngineReads:
-    def test_the_defaults_file_lands_in_the_engines_manifest_dir(
-        self, tmp_path, monkeypatch
-    ) -> None:
-        """`ROBOTHOR_AGENTS_DIR` is the fleet LISTING override. Writing
-        `_defaults.yaml` there while the engine reads `ROBOTHOR_MANIFEST_DIR`
-        is a save that reports success and changes nothing."""
-        import routers.providers as providers_module
-
-        from robothor.engine.config import EngineConfig
-
-        monkeypatch.setenv("ROBOTHOR_MANIFEST_DIR", str(tmp_path / "engine-manifests"))
-        monkeypatch.setenv("ROBOTHOR_AGENTS_DIR", str(tmp_path / "bridge-listing"))
-        assert providers_module._manifest_dir() == EngineConfig.from_env().manifest_dir
-
-    def test_it_writes_the_file_the_engine_would_reload(
-        self, controls_client_as_operator, fake_engine, tmp_path, monkeypatch
-    ) -> None:
-        from robothor.engine import admin_providers
-
-        engine_dir = tmp_path / "engine-manifests"
-        engine_dir.mkdir()
-        monkeypatch.setenv("ROBOTHOR_MANIFEST_DIR", str(engine_dir))
-        monkeypatch.setenv("ROBOTHOR_AGENTS_DIR", str(tmp_path / "bridge-listing"))
-
-        response = controls_client_as_operator.patch(
-            "/api/providers/defaults",
-            json={"model": "openrouter/openai/gpt-5.4", "fallbacks": []},
-        )
-        assert response.status_code == 200
-        assert (admin_providers._manifest_dir() / "_defaults.yaml").exists()
 
 
 class TestDefaultsRead:
