@@ -32,6 +32,10 @@ describe("kindLabel", () => {
     expect(kindLabel("workflow")).toBe("Approval");
     expect(kindLabel("question")).toBe("Question");
   });
+
+  it("names a proposed action as a proposal", () => {
+    expect(kindLabel("action")).toBe("Proposal");
+  });
 });
 
 describe("whoRaised", () => {
@@ -42,6 +46,13 @@ describe("whoRaised", () => {
   it("says workflow when no agent owns the row", () => {
     // The approvals route sends `agent_id: ""` for every workflow item.
     expect(whoRaised(item({ kind: "workflow", agent_id: "" }))).toBe("workflow");
+  });
+
+  it("names what a proposed action would do", () => {
+    expect(whoRaised(item({ kind: "action", agent_id: "", action_kind: "sales.email" }))).toBe(
+      "sales.email"
+    );
+    expect(whoRaised(item({ kind: "action", agent_id: "" }))).toBe("proposal");
   });
 });
 
@@ -125,6 +136,45 @@ describe("normalizePending", () => {
     });
 
     expect(rows.map((row) => row.kind)).toEqual(["question"]);
+  });
+
+  it("reads a proposed action in review alongside approvals and questions", () => {
+    const rows = normalizePending({
+      count: 3,
+      pending: [
+        { kind: "workflow", id: "22222222-2222-4222-8222-222222222222", question: "Send?" },
+        { kind: "question", id: "33333333-3333-4333-8333-333333333333", question: "Which?" },
+        {
+          kind: "action",
+          id: "44444444-4444-4444-8444-444444444444",
+          run_id: "",
+          agent_id: "",
+          action_kind: "sales.email",
+          question: "sales.email: Intro to Acme",
+          detail: '{"subject": "Intro to Acme"}',
+          options: [],
+          expires_at: "2026-06-16T11:00:00Z",
+          created_at: "2026-06-15T11:00:00Z",
+        },
+      ],
+    });
+
+    expect(rows.map((row) => row.kind)).toEqual(["workflow", "question", "action"]);
+    expect(rows[2].action_kind).toBe("sales.email");
+    expect(rows[2].question).toBe("sales.email: Intro to Acme");
+  });
+
+  it("keeps a proposal's envelope, and only its string fields", () => {
+    const [row] = normalizePending({
+      pending: [
+        {
+          kind: "action",
+          id: "44444444-4444-4444-8444-444444444444",
+          envelope: { sender: "agent@example.com", recipient: "bob@example.com", bad: 3 },
+        },
+      ],
+    });
+    expect(row.envelope).toEqual({ sender: "agent@example.com", recipient: "bob@example.com" });
   });
 
   it("survives a body that is not the shape it promised", () => {

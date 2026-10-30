@@ -8,12 +8,13 @@
  * than inside the view:
  *
  * * `normalizePending` is the only place that decides which rows this screen
- *   may render. The route today lists `workflow` and `question`; `escalation`
+ *   may render. The route today lists `workflow`, `question` and `action` (a
+ *   proposed effect in review, decided like an approval); `escalation`
  *   lives in the engine's RAM and CANNOT be settled by writing a row. If one
  *   ever appeared in that listing, a card offering Approve/Reject would answer
  *   nothing while showing a green tick, and the agent would wait for its own
- *   timeout to deny it. So the filter is positive — these two kinds, nothing
- *   else — instead of a blocklist that a third kind would walk straight past.
+ *   timeout to deny it. So the filter is positive — these three kinds, nothing
+ *   else — instead of a blocklist that a fourth kind would walk straight past.
  * * It drops a row with no `id` and KEEPS a row with no `question`. The first
  *   has nothing to POST an answer to; the second has something to answer and
  *   merely nothing to print, and `workflow_approvals.prompt` is `TEXT NOT NULL`
@@ -26,9 +27,9 @@
  */
 
 /** The kinds this screen may render and answer. */
-export type PendingKind = "workflow" | "question";
+export type PendingKind = "workflow" | "question" | "action";
 
-const ANSWERABLE_KINDS: readonly string[] = ["workflow", "question"];
+const ANSWERABLE_KINDS: readonly string[] = ["workflow", "question", "action"];
 
 /** One row of `GET /api/approvals` — see `_pending`. */
 export interface PendingItem {
@@ -37,6 +38,14 @@ export interface PendingItem {
   run_id: string;
   /** Empty for every `workflow` row: the approval belongs to a run, not an agent. */
   agent_id: string;
+  /** Only on an `action` row: what the proposal would do, e.g. `sales.email`. */
+  action_kind?: string;
+  /**
+   * Only on an `action` row: who and what the proposal addresses (sender,
+   * recipient, purpose, subject, claims, evidence — whichever it carries).
+   * Approve authorizes the exact payload, so the card shows these before it.
+   */
+  envelope?: Record<string, string>;
   question: string;
   detail: string;
   options: string[];
@@ -59,19 +68,23 @@ export interface AnswerOutcome {
 
 /** How the operator reads each kind. "workflow" is plumbing; "Approval" is the act. */
 export function kindLabel(kind: PendingKind): string {
+  if (kind === "action") return "Proposal";
   return kind === "workflow" ? "Approval" : "Question";
 }
 
 /** Token classes per kind. Colour carries the kind; the label still says it. */
 export function kindClass(kind: PendingKind): string {
+  if (kind === "action") return "border-success/30 bg-success/10 text-success";
   return kind === "workflow"
     ? "border-warning/30 bg-warning/10 text-warning"
     : "border-primary/30 bg-primary/10 text-primary";
 }
 
 /** Who is waiting. A workflow approval has no agent, and saying so beats a blank. */
-export function whoRaised(item: Pick<PendingItem, "agent_id">): string {
-  return item.agent_id || "workflow";
+export function whoRaised(item: Pick<PendingItem, "agent_id" | "kind" | "action_kind">): string {
+  if (item.agent_id) return item.agent_id;
+  if (item.kind === "action") return item.action_kind || "proposal";
+  return "workflow";
 }
 
 /** The run id as the Runs view abbreviates it. */
@@ -121,6 +134,15 @@ function text(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
 
+function stringFields(value: unknown): Record<string, string> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const out: Record<string, string> = {};
+  for (const [key, field] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof field === "string" && field) out[key] = field;
+  }
+  return out;
+}
+
 function optionalText(value: unknown): string | null {
   return typeof value === "string" && value ? value : null;
 }
@@ -150,6 +172,9 @@ export function normalizePending(body: unknown): PendingItem[] {
       id,
       run_id: text(row.run_id),
       agent_id: text(row.agent_id),
+      ...(kind === "action"
+        ? { action_kind: text(row.action_kind), envelope: stringFields(row.envelope) }
+        : {}),
       question: text(row.question),
       detail: text(row.detail),
       // A blank label would be an unlabelled button that POSTs an empty

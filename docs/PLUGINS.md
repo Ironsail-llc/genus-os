@@ -218,6 +218,82 @@ for at most five minutes per engine lifetime before anyone noticed.
 An entry needs a five-field cron expression and a callable. Anything
 malformed is skipped with a warning rather than raised.
 
+## Proposing an external effect
+
+A tool or job that sends something into the world — an email, a payment, a
+write to someone else's system — should not send it directly. It proposes the
+exact payload to the operations ledger, and sends only what was approved:
+
+```python
+# acme_tools/__init__.py
+from robothor.operations.store import Operations
+
+PLUGIN_NAME = "acme-plugin"
+POLICY = "policy:acme-plugin:2026-10-29"   # bump the version when the rule changes
+
+
+async def acme_propose_note(args, ctx=None):
+    ops = Operations(ctx.tenant_id)          # always the caller's tenant
+    action = ops.propose(
+        "acme-plugin.note", args["key"], {"body": args["body"]}, proposed_by=PLUGIN_NAME
+    )
+    if args.get("rule_says_safe"):           # an enforce-mode rule, no human needed
+        ops.decide(action, True, POLICY)
+    return {"action_id": action}
+
+
+async def acme_execute_action(args, ctx=None):
+    ops = Operations(ctx.tenant_id)
+    row = ops.get_action(args["action_id"])               # from the approval event
+    if row is None or row["kind"] != "acme-plugin.note":
+        return {"skipped": "not ours"}                    # never claim another plugin's
+    claimed = ops.claim_action_by_id(args["action_id"])
+    if claimed is None:
+        return {"skipped": "nothing approved"}
+    receipt = {"id": "..."}                  # the provider's acknowledgement
+    ops.finish_action(str(claimed["id"]), claimed["lease_token"], "completed", receipt)
+    return {"executed": str(claimed["id"])}
+```
+
+- **Tenant.** Build `Operations` from `ctx.tenant_id` in a tool. A job has no
+  tool context; it takes its tenant from configuration, never from input.
+- **Kind.** Prefix it with the plugin name (`acme-plugin.note`), and claim by
+  that kind, so one plugin never claims another's actions.
+- **Proposer.** `proposed_by=PLUGIN_NAME` is what lets the plugin's own policy
+  decide the draft. Without it, only an operator can.
+- **Policy actor.** `policy:<plugin>:<version>` is accepted only for drafts the
+  same plugin proposed; the audit trail records the version.
+- **The Inbox card.** A tenant admin decides your draft from the card, which
+  names `sender`, `recipient`, `purpose`, `subject`, `claim_ids` and
+  `evidence_ids` above the `body` and prints every other payload key after it
+  (the whole payload when there is no body). Approve authorizes the exact
+  payload, so put whoever it goes to in the payload, not in the kind.
+- **Executing.** An approval publishes `operation_action.approved` on the
+  `operations` stream, so a workflow your plugin ships can run the execute tool
+  as soon as a draft is approved, by an operator or by your policy.
+  Ship a scheduled sweep calling `claim_action(kind=...)` as well: the event
+  is best effort and reaches one engine.
+
+Everything a plugin needs is a method on `Operations`, so it never writes SQL
+against `operation_actions` or `operation_audit` itself:
+
+| Method | Does |
+|---|---|
+| `propose(kind, key, payload, proposed_by=...)` | Creates an immutable draft, idempotent on `kind` + `key` |
+| `decide(action_id, approved, actor)` | Approves or rejects; `policy:<plugin>:<version>` for your own drafts |
+| `get_action(action_id)` | One row, or `None` |
+| `list_actions(kinds=None, status=None, proposed_by=None, limit=100)` | Rows, newest first; `limit` is 1–1000 |
+| `claim_action(kind=...)` | Leases the oldest approved action of a kind |
+| `claim_action_by_id(action_id)` | Leases that approved action, or `None` |
+| `finish_action(action_id, lease_token, status, receipt)` | Records the outcome of a claim |
+| `cancel_action(action_id, reason, proposed_by=...)` | Withdraws your draft or unclaimed approval (superseded, or refused by your rule). Only the proposer can; an action with no proposer needs `actor="operator:<id>"` |
+
+Every method is scoped to the tenant `Operations` was built with, and every
+transition writes `operation_audit`.
+
+[Operations ledger](OPERATIONS.md) has the statuses, the event's payload and a
+complete workflow.
+
 ## An operator command
 
 ```python
