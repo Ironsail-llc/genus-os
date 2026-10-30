@@ -494,6 +494,16 @@ class TestASharedLockfileIsRefused:
         assert lockfile_owner.claim(tenant="acme-parent") == "acme-parent"
         assert lockfile_owner.foreign_owner(tenant="acme-child-a") == "acme-parent"
 
+    def test_a_root_never_overrides_another_roots_claim(self, plugin_lockfile, monkeypatch):
+        """Two parentless tenants can exist; two root engines on one workspace
+        must still be refused rather than take the file back on every write."""
+        from robothor.plugins import lockfile_owner
+
+        monkeypatch.setattr(lockfile_owner, "_is_root_tenant", lambda t: t.startswith("acme-root"))
+        lockfile_owner.claim(tenant="acme-root-one")
+        assert lockfile_owner.claim(tenant="acme-root-two") == "acme-root-one"
+        assert lockfile_owner.foreign_owner(tenant="acme-root-two") == "acme-root-one"
+
     def test_a_child_never_overrides_another_tenants_claim(self, plugin_lockfile, monkeypatch):
         from robothor.plugins import lockfile_owner
 
