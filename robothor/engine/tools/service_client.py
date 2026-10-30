@@ -82,6 +82,21 @@ def _reset_breaker(state: _BreakerState) -> None:
     state.opened_at = None
 
 
+def _refusal_reason(resp: httpx.Response) -> str:
+    """The service's own short reason for refusing, or "" when it gave none."""
+    try:
+        body = resp.json()
+    except ValueError:
+        return ""
+    if not isinstance(body, dict):
+        return ""
+    for key in ("error", "detail"):
+        value = body.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()[:200]
+    return ""
+
+
 async def call_service(
     service: str,
     method: str,
@@ -139,9 +154,13 @@ async def call_service(
 
     code = resp.status_code
     if code in (401, 403):
-        logger.warning("%s rejected engine credentials (HTTP %d)", service, code)
+        reason = _refusal_reason(resp)
+        logger.warning("%s rejected engine credentials (HTTP %d) %s", service, code, reason)
+        message = f"{service} rejected engine credentials — check service auth config"
+        if reason:
+            message += f" (HTTP {code}: {reason})"
         return {
-            "error": f"{service} rejected engine credentials — check service auth config",
+            "error": message,
             "service": service,
             "retryable": False,
         }
