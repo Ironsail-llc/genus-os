@@ -155,10 +155,10 @@ async def call_service(
     code = resp.status_code
     if code in (401, 403):
         reason = _refusal_reason(resp)
-        logger.warning("%s rejected engine credentials (HTTP %d) %s", service, code, reason)
         message = f"{service} rejected engine credentials — check service auth config"
         if reason:
             message += f" (HTTP {code}: {reason})"
+        logger.warning("%s rejected engine credentials (HTTP %d: %s)", service, code, reason or "-")
         return {
             "error": message,
             "service": service,
