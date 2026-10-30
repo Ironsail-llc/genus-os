@@ -132,6 +132,39 @@ Every tenant shares one vault master key. A credential the bridge stores while a
   engine (`engine.googleWorkspace` in the chart). Give each tenant's engine its
   own secret. Two engines sharing one would read and send one mailbox for both.
 
+## Plugins are per tenant
+
+Each tenant's engine loads plugins from its own lockfile, so the child decides
+which installed plugins it runs. Its admins manage that on the Helm's
+Settings › Plugins page, which lists and toggles the **acting** tenant's
+engine. A root admin switched into the child manages the child's plugins the
+same way.
+
+What is installed stays root: install, remove and record (sync) are root-only
+and act on the root's engine unless the request names a tenant in the root's
+tree.
+
+The root can also force a plugin for one child. As a root owner or admin
+**at home** (not switched in), the Plugins page shows a "For a child tenant"
+control on each plugin card: pick the child, then **Force on**, **Force off**
+or **Let it decide**. Over HTTP it is
+`PUT /api/plugins/{name}/tenants/{tenant_id}` with `{"state": "on" | "off" | null}`.
+The bridge writes the grant, audits it under the child, and reloads the
+child's engine. If that reload fails the answer says so, and the grant
+applies on that engine's next reload or restart.
+
+What the child sees: a forced plugin's switch is locked with "Set by the root
+tenant", and enable or disable on it is refused (409). A plugin forced off is
+not imported at all, and a read error on the grants keeps it refused (fail
+closed). The full rules are in [PLUGINS.md, Per tenant](../PLUGINS.md#per-tenant).
+
+To check a child's grants directly:
+
+```sql
+SELECT plugin, state, set_by, set_at FROM tenant_plugin_grants
+WHERE tenant_id = 'acme-child-a' ORDER BY plugin;
+```
+
 ## Add people to a child
 
 From a root shell (`--tenant` runs each command in the child's scope). Pick
