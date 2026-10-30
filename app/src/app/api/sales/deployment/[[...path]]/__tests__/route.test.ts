@@ -47,3 +47,17 @@ describe("deployment proxy", () => {
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("deployment proxy tenant routing", () => {
+  afterEach(() => vi.unstubAllEnvs());
+  it("sends an acting session to its tenant's engine", async () => {
+    vi.stubEnv("ROBOTHOR_ENGINE_URL", "http://engine.root.test:18800");
+    vi.stubEnv("GENUS_TENANT_ENGINE_URL_TEMPLATE", "http://genus-engine-{tenant}:18800");
+    const part = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
+    const claims = { tid: "acme-child-a", home_tid: "acme-parent", act: true };
+    identity.mockResolvedValue({ Authorization: `Bearer ${part({ alg: "HS256" })}.${part(claims)}.sig` });
+    const fetcher = vi.spyOn(global, "fetch").mockResolvedValue(Response.json({}));
+    await GET(new Request("http://dashboard/api/sales/deployment"), context([]));
+    expect(fetcher.mock.calls[0][0]).toBe("http://genus-engine-acme-child-a:18800/api/admin/sales-deployment");
+  });
+});

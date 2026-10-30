@@ -1,0 +1,234 @@
+suite: shared vault key
+release:
+  name: gos
+  namespace: genus
+# What every engine and the bridge must agree on: one vault master key and one
+# fingerprint salt. A credential the bridge stores for a child tenant is read
+# back by that child's engine, so a key per workspace makes it undecryptable.
+tests:
+  # ─── Off by default: nothing new ───────────────────────────────────────────
+  - it: the root engine mounts no vault key by default
+    template: engine/workload.yaml
+    documentIndex: 0
+    asserts:
+      - notContains:
+          path: spec.template.spec.volumes
+          content: {name: vault-key}
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content: {name: GENUS_VAULT_KEY_FILE}
+          any: true
+
+  - it: the bridge mounts no vault key by default
+    template: bridge/workload.yaml
+    documentIndex: 0
+    asserts:
+      - notContains:
+          path: spec.template.spec.volumes
+          content: {name: vault-key}
+          any: true
+
+  # ─── Enabled: one Secret, mounted everywhere it is used ────────────────────
+  - it: the root engine mounts the shared key read-only and points at it
+    template: engine/workload.yaml
+    documentIndex: 0
+    set:
+      vaultKey.enabled: true
+      vault.secrets.vault-key.path: genus-os/test/vault-key
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: vault-key
+            secret:
+              secretName: gos-genus-os-vault-key
+              defaultMode: 0400
+              items:
+                - {key: key, path: .vault-key}
+                - {key: fingerprint-salt, path: .fingerprint-salt}
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content: {name: vault-key, mountPath: /etc/genus/vault, readOnly: true}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: GENUS_VAULT_KEY_FILE, value: /etc/genus/vault/.vault-key}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: GENUS_FINGERPRINT_SALT_FILE, value: /etc/genus/vault/.fingerprint-salt}
+
+  - it: the bridge mounts the same key
+    template: bridge/workload.yaml
+    documentIndex: 0
+    set:
+      vaultKey.enabled: true
+      vault.secrets.vault-key.path: genus-os/test/vault-key
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: vault-key
+            secret:
+              secretName: gos-genus-os-vault-key
+              defaultMode: 0400
+              items:
+                - {key: key, path: .vault-key}
+                - {key: fingerprint-salt, path: .fingerprint-salt}
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content: {name: vault-key, mountPath: /etc/genus/vault, readOnly: true}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: GENUS_VAULT_KEY_FILE, value: /etc/genus/vault/.vault-key}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: GENUS_FINGERPRINT_SALT_FILE, value: /etc/genus/vault/.fingerprint-salt}
+
+  - it: every tenant cell mounts the same key, not one of its own
+    template: engine/tenants.yaml
+    set:
+      vaultKey.enabled: true
+      vault.secrets.vault-key.path: genus-os/test/vault-key
+      tenants:
+        - id: acme-child-a
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: vault-key
+            secret:
+              secretName: gos-genus-os-vault-key
+              defaultMode: 0400
+              items:
+                - {key: key, path: .vault-key}
+                - {key: fingerprint-salt, path: .fingerprint-salt}
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content: {name: vault-key, mountPath: /etc/genus/vault, readOnly: true}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: GENUS_VAULT_KEY_FILE, value: /etc/genus/vault/.vault-key}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: GENUS_FINGERPRINT_SALT_FILE, value: /etc/genus/vault/.fingerprint-salt}
+
+  - it: the orchestrator never gets the vault key
+    template: orchestrator/workload.yaml
+    documentIndex: 0
+    set:
+      vaultKey.enabled: true
+      vault.secrets.vault-key.path: genus-os/test/vault-key
+    asserts:
+      - notContains:
+          path: spec.template.spec.volumes
+          content: {name: vault-key}
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content: {name: GENUS_VAULT_KEY_FILE}
+          any: true
+
+  # The agent secret-file denylist (robothor/engine/secret_paths.py) refuses
+  # these basenames, so an agent with exec or read_file cannot print the key
+  # even if a path check is missed. Pinned on every reader.
+  - it: the key files keep the basenames the agent denylist guards
+    template: engine/tenants.yaml
+    set:
+      vaultKey.enabled: true
+      vault.secrets.vault-key.path: genus-os/test/vault-key
+      tenants:
+        - id: acme-child-a
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content: {name: GENUS_VAULT_KEY_FILE, value: /etc/genus/vault/key}
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content: {name: GENUS_FINGERPRINT_SALT_FILE, value: /etc/genus/vault/fingerprint-salt}
+
+  # ─── The VSO class ─────────────────────────────────────────────────────────
+  # Vault KV holds strings, so the key and salt are stored base64-encoded and
+  # decoded into the raw bytes the files must hold.
+  - it: the vault-key class decodes the stored base64 into raw key files
+    template: vaultstaticsecret.yaml
+    set:
+      vaultKey.enabled: true
+      vault.secrets.vault-key.path: genus-os/test/vault-key
+    documentSelector:
+      path: metadata.name
+      value: gos-genus-os-vault-key
+    asserts:
+      - equal:
+          path: spec.path
+          value: genus-os/test/vault-key
+      - equal:
+          path: spec.destination.name
+          value: gos-genus-os-vault-key
+      - equal:
+          path: spec.destination.transformation.excludeRaw
+          value: true
+      - equal:
+          path: spec.destination.transformation.templates.key.text
+          value: '{{- get .Secrets "key" | b64dec -}}'
+      - equal:
+          path: spec.destination.transformation.templates["fingerprint-salt"].text
+          value: '{{- get .Secrets "fingerprint-salt" | b64dec -}}'
+
+  - it: rotating the key restarts the bridge, the root engine and every cell
+    template: vaultstaticsecret.yaml
+    set:
+      vaultKey.enabled: true
+      vault.secrets.vault-key.path: genus-os/test/vault-key
+      tenants:
+        - id: acme-child-a
+    documentSelector:
+      path: metadata.name
+      value: gos-genus-os-vault-key
+    asserts:
+      - equal:
+          path: spec.rolloutRestartTargets
+          value:
+            - {kind: Deployment, name: gos-genus-os-engine}
+            - {kind: Deployment, name: gos-genus-os-bridge}
+            - {kind: Deployment, name: gos-genus-os-engine-acme-child-a}
+
+  # Cells use the engine's secretRefs, so rotating one of those must restart
+  # the cells too, not only the root engine.
+  - it: rotating an engine secret class restarts every cell as well
+    template: vaultstaticsecret.yaml
+    set:
+      vaultKey.enabled: true
+      vault.secrets.vault-key.path: genus-os/test/vault-key
+      tenants:
+        - id: acme-child-a
+    documentSelector:
+      path: metadata.name
+      value: gos-genus-os-engine-providers
+    asserts:
+      - contains:
+          path: spec.rolloutRestartTargets
+          content: {kind: Deployment, name: gos-genus-os-engine-acme-child-a}
+
+  - it: enabling the shared key without its Vault path fails
+    template: engine/workload.yaml
+    set:
+      vaultKey.enabled: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "vaultKey.enabled requires vault.secrets.vault-key"
+
+  # ─── The guard ─────────────────────────────────────────────────────────────
+  - it: tenant cells without the shared key are refused
+    template: engine/tenants.yaml
+    set:
+      tenants:
+        - id: acme-child-a
+    asserts:
+      - failedTemplate:
+          errorPattern: "tenants requires vaultKey.enabled"

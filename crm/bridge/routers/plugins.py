@@ -8,7 +8,7 @@ nothing else — a gate, a proxy, and an audit trail.
 The gate is the half worth arguing about. ``disable`` takes a capability out of
 service on the next reload, and ``reload`` re-imports third-party code into a
 running daemon; a non-operator reaching either would be changing what the
-appliance executes. So every route's first statement is ``require_operator``,
+appliance executes. So every route's first statement is ``require_root_operator``,
 and the tenant dependency refuses a second tenant outright: one engine runs one
 set of plugins, and another tenant's operator disabling one would be acting on
 somebody else's instance. The same shape ``agent_manifests`` and
@@ -26,37 +26,19 @@ import logging
 import re
 from typing import Any
 
-from deps import get_tenant_id
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from routers._audit import audited
 from routers._engine_client import engine_request
-from routers._operator import require_operator
+from routers._operator import require_root_operator
 
 logger = logging.getLogger(__name__)
-
-
-def _require_primary_tenant(tenant_id: str = Depends(get_tenant_id)) -> None:
-    """Plugins are appliance-global, so deny secondary tenants.
-
-    Symmetric with ``agent_manifests`` and ``channel_access``: one engine runs
-    one set of plugins, and a second tenant's operator disabling one would be
-    taking a capability out of somebody else's instance.
-    """
-    from robothor.constants import DEFAULT_TENANT
-
-    if tenant_id != DEFAULT_TENANT:
-        raise HTTPException(
-            status_code=403,
-            detail="appliance administration not authorized for tenant",
-        )
 
 
 router = APIRouter(
     prefix="/api/plugins",
     tags=["plugins"],
-    dependencies=[Depends(_require_primary_tenant)],
 )
 
 #: What a distribution name may look like. PyPI names are letters and digits
@@ -118,7 +100,7 @@ async def list_plugins(request: Request) -> JSONResponse:
     Not audited: a listing is not an act, and an audit row per page load would
     bury the disable that matters.
     """
-    require_operator(request)
+    require_root_operator(request)
     status, body = await engine_request("GET", "/api/admin/plugins")
     return _proxied(status, body)
 
@@ -138,7 +120,7 @@ async def sync_plugins(request: Request) -> JSONResponse:
 
     Declared before ``/{name}/...`` so the literal path is matched as itself.
     """
-    require_operator(request)
+    require_root_operator(request)
     status, body = await engine_request("POST", "/api/admin/plugins/sync")
     audited(
         request,
@@ -155,7 +137,7 @@ async def reload_plugins(request: Request) -> JSONResponse:
 
     Declared before ``/{name}/...`` so the literal path is matched as itself.
     """
-    require_operator(request)
+    require_root_operator(request)
     status, body = await engine_request("POST", "/api/admin/plugins/reload")
     audited(
         request,
@@ -179,7 +161,7 @@ async def install_plugin(request: Request) -> JSONResponse:
     say-so. Installing a wheel from disk stays on the CLI, where the operator
     is standing at the box.
     """
-    require_operator(request)
+    require_root_operator(request)
     body = await _body(request)
     name = str(body.get("name") or "").strip()
     if not _INSTALL_SPEC.match(name):
@@ -224,7 +206,7 @@ async def install_plugin(request: Request) -> JSONResponse:
 @router.post("/{name}/remove")
 async def remove_plugin(name: str, request: Request) -> JSONResponse:
     """Uninstall a plugin this platform installed and drop its lockfile row."""
-    require_operator(request)
+    require_root_operator(request)
     plugin = _name(name)
     body = await _body(request)
     status, payload = await engine_request(
@@ -245,7 +227,7 @@ async def remove_plugin(name: str, request: Request) -> JSONResponse:
 @router.post("/{name}/enable")
 async def enable_plugin(name: str, request: Request) -> JSONResponse:
     """Let a recorded plugin load again on the next reload."""
-    require_operator(request)
+    require_root_operator(request)
     plugin = _name(name)
     status, body = await engine_request("POST", f"/api/admin/plugins/{plugin}/enable")
     audited(
@@ -261,7 +243,7 @@ async def enable_plugin(name: str, request: Request) -> JSONResponse:
 @router.post("/{name}/disable")
 async def disable_plugin(name: str, request: Request) -> JSONResponse:
     """Stop a plugin being imported at all, from the next reload on."""
-    require_operator(request)
+    require_root_operator(request)
     plugin = _name(name)
     status, body = await engine_request("POST", f"/api/admin/plugins/{plugin}/disable")
     audited(

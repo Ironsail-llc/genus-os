@@ -81,6 +81,31 @@ def current_warmup_kind() -> str | None:
     return _CURRENT_WARMUP_KIND.get()
 
 
+# ── Warmup tenant ─────────────────────────────────────────────────
+# Context hooks take no arguments, so the preamble builders publish whose run
+# this is here. Hooks read it instead of the process environment: one engine
+# per tenant shares the database, and a run can be scoped to another tenant.
+
+_CURRENT_WARMUP_TENANT: ContextVar[str | None] = ContextVar("robothor_warmup_tenant", default=None)
+
+
+@contextmanager
+def set_warmup_tenant(tenant_id: str | None) -> Iterator[None]:
+    token = _CURRENT_WARMUP_TENANT.set(tenant_id or None)
+    try:
+        yield
+    finally:
+        _CURRENT_WARMUP_TENANT.reset(token)
+
+
+def current_warmup_tenant() -> str:
+    """The tenant of the run being warmed up: the warmup's, the scope's, or the default."""
+    from robothor import constants
+    from robothor.db.connection import current_tenant_scope
+
+    return _CURRENT_WARMUP_TENANT.get() or current_tenant_scope() or constants.DEFAULT_TENANT
+
+
 # ── Dynamic context hooks ─────────────────────────────────────────
 # Callables that return optional context strings. Called during warmup
 # preamble construction. Each hook has a 100ms timeout.
@@ -99,8 +124,13 @@ def register_agent_context_hook(fn: Callable[[AgentConfig], str | None]) -> None
     _AGENT_CONTEXT_HOOKS.append(fn)
 
 
-def _run_context_hooks() -> str:
+def _run_context_hooks(tenant_id: str | None = None) -> str:
     """Run all context hooks, collecting results within 100ms timeout each."""
+    with set_warmup_tenant(tenant_id or _CURRENT_WARMUP_TENANT.get()):
+        return _collect_context_hooks()
+
+
+def _collect_context_hooks() -> str:
     import time
 
     results: list[str] = []
@@ -201,7 +231,7 @@ def build_warmth_preamble(
         ),
     )
     _run_section("peers", lambda: _build_peer_section(config.warmup_peer_agents))
-    _run_section("context_hooks", _run_context_hooks)
+    _run_section("context_hooks", lambda: _run_context_hooks(tenant_id))
 
     def _breadcrumbs() -> str | None:
         from robothor.memory.breadcrumbs import (
@@ -225,7 +255,7 @@ def build_warmth_preamble(
         return "\n".join(lines)
 
     _run_section("preferences", _preferences)
-    _run_section("agent_hooks", lambda: _run_agent_context_hooks(config))
+    _run_section("agent_hooks", lambda: _run_agent_context_hooks(config, tenant_id))
 
     def _agent_goal() -> str | None:
         # Late import: session_goal + goals import robothor.crm.dal which
@@ -958,7 +988,7 @@ def build_interactive_preamble(
 
     # Dynamic context hooks (date, travel, weather, etc.)
     try:
-        situational = _run_context_hooks()
+        situational = _run_context_hooks(tenant_id)
         if situational:
             sections.append(situational)
     except Exception as e:
@@ -1263,8 +1293,7 @@ def _travel_status() -> str | None:
     try:
         from robothor.memory.blocks import read_block
 
-        _tid = os.environ.get("ROBOTHOR_TENANT_ID", "") or DEFAULT_TENANT
-        result = read_block("travel_status", tenant_id=_tid)
+        result = read_block("travel_status", tenant_id=current_warmup_tenant())
         content = (
             result.get("content", "") if isinstance(result, dict) else str(result) if result else ""
         )
@@ -1289,8 +1318,13 @@ def _weather_context() -> str | None:
     return None
 
 
-def _run_agent_context_hooks(config: AgentConfig) -> str:
+def _run_agent_context_hooks(config: AgentConfig, tenant_id: str | None = None) -> str:
     """Run agent-aware context hooks, collecting results."""
+    with set_warmup_tenant(tenant_id or _CURRENT_WARMUP_TENANT.get()):
+        return _collect_agent_context_hooks(config)
+
+
+def _collect_agent_context_hooks(config: AgentConfig) -> str:
     results: list[str] = []
     for hook in _AGENT_CONTEXT_HOOKS:
         try:

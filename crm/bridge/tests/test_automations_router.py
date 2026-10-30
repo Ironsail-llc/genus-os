@@ -15,7 +15,7 @@ from contextlib import contextmanager
 from typing import TYPE_CHECKING
 
 import pytest
-from routers import automations
+from routers import _operator, automations
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -160,7 +160,7 @@ def fake_sources(monkeypatch):
         "schedules": [dict(SCHEDULE)],
         "runs": {"invoice-chaser": dict(RUN)},
     }
-    monkeypatch.setattr(automations, "_manifests", lambda: state["manifests"])
+    monkeypatch.setattr(automations, "_manifests", lambda tenant_id: state["manifests"])
     monkeypatch.setattr(automations, "_schedule_rows", lambda tenant_id: state["schedules"])
     monkeypatch.setattr(automations, "_latest_runs", lambda ids, tenant_id: state["runs"])
     return state
@@ -193,7 +193,7 @@ def test_a_manifest_scheduled_only_by_heartbeat_and_worker_still_has_cards(env_w
     (_manifest_dir(env_workspace) / "orchestrator.yaml").write_text(
         MAIN_SHAPED_YAML, encoding="utf-8"
     )
-    rows = {row["id"]: row for row in automations._manifests()}
+    rows = {row["id"]: row for row in automations._manifests(_operator.PLATFORM_TENANT)}
 
     assert "orchestrator:heartbeat" in rows
     assert "orchestrator:worker" in rows
@@ -213,7 +213,7 @@ def test_a_manifest_scheduled_only_by_heartbeat_and_worker_still_has_cards(env_w
 
 def test_an_ordinary_cron_agent_is_one_card_of_kind_agent(env_workspace):
     (_manifest_dir(env_workspace) / "nightly-report.yaml").write_text(PLAIN_YAML, encoding="utf-8")
-    rows = {row["id"]: row for row in automations._manifests()}
+    rows = {row["id"]: row for row in automations._manifests(_operator.PLATFORM_TENANT)}
 
     assert rows["nightly-report"]["kind"] == "agent"
     assert rows["nightly-report"]["agent_id"] == "nightly-report"
@@ -224,7 +224,11 @@ def test_a_manifest_with_no_schedule_of_any_kind_yields_no_job(env_workspace):
     (_manifest_dir(env_workspace) / "on-demand.yaml").write_text(
         "id: on-demand\nname: On Demand\nversion: 1.0.0\n", encoding="utf-8"
     )
-    assert [row["id"] for row in automations._manifests() if row["agent_id"] == "on-demand"] == []
+    assert [
+        row["id"]
+        for row in automations._manifests(_operator.PLATFORM_TENANT)
+        if row["agent_id"] == "on-demand"
+    ] == []
 
 
 # ─── The gate ────────────────────────────────────────────────────────
@@ -239,8 +243,18 @@ def test_reset_requires_operator(controls_client_as_viewer):
     assert response.status_code == 403
 
 
-def test_another_tenants_operator_is_refused(controls_client_as_other_tenant_owner):
-    assert controls_client_as_other_tenant_owner.get("/api/automations").status_code == 403
+def test_another_tenants_operator_sees_only_their_own_tenant(
+    controls_client_as_other_tenant_owner, monkeypatch
+):
+    """Automations are per tenant now: another tenant's owner is not refused,
+    it is shown ITS tenant's schedule and nobody else's."""
+    asked: list[str] = []
+    monkeypatch.setattr(
+        automations, "_automations", lambda tenant_id: asked.append(tenant_id) or []
+    )
+    response = controls_client_as_other_tenant_owner.get("/api/automations")
+    assert response.status_code == 200
+    assert asked == ["acme-corp"]
 
 
 # ─── Composition ─────────────────────────────────────────────────────
@@ -433,13 +447,13 @@ def test_the_listing_asks_both_queries_for_the_platform_tenant(
         asked["runs"] = tenant_id
         return {}
 
-    monkeypatch.setattr(automations, "_manifests", lambda: [])
+    monkeypatch.setattr(automations, "_manifests", lambda tenant_id: [])
     monkeypatch.setattr(automations, "_schedule_rows", _schedules)
     monkeypatch.setattr(automations, "_latest_runs", _runs)
 
     controls_client_as_operator.get("/api/automations")
-    assert asked["schedules"] == automations.PLATFORM_TENANT
-    assert asked["runs"] == automations.PLATFORM_TENANT
+    assert asked["schedules"] == _operator.PLATFORM_TENANT
+    assert asked["runs"] == _operator.PLATFORM_TENANT
 
 
 # ─── The breaker ─────────────────────────────────────────────────────
@@ -480,7 +494,7 @@ def test_reset_breaker_zeroes_the_row_for_this_tenant(controls_client_as_operato
     assert "agent_schedules" in recorder["sql"]
     assert "tenant_id = %s" in recorder["sql"]
     assert recorder["params"][0] == "invoice-chaser"
-    assert recorder["params"][1] == automations.PLATFORM_TENANT
+    assert recorder["params"][1] == _operator.PLATFORM_TENANT
 
 
 def test_reset_breaker_addresses_the_job_id_the_engine_wrote(

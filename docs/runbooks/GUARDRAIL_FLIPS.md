@@ -249,6 +249,7 @@ fails if one is re-dated without a reason.
 | `ROBOTHOR_PLUGIN_MANIFEST_MODE` | observe, permanent | `promotion: n/a-on-this-instance` — zero plugins installed, so enforce is a no-op here |
 | `ROBOTHOR_DNC_MODE` | enforce | shipped enforcing — **no ladder**, see below. Pinned in the drop-in 2026-09-17; it had only ever had a code default |
 | `ROBOTHOR_PER_USER_SESSIONS` | enforce | isolation control, three rungs, no `planned_promotion`. Pinned in the drop-in 2026-09-17 — until then the only live setter was the env file (`SHADOW-LAYER:envfile`). `docs/runbooks/IDENTITY_ROLLOUT.md` |
+| `GENUS_TENANT_SWITCH_MODE` | off | new in 1.118.0. Read by the **bridge** (which issues acting tokens) and by **every engine** (which refuses them unless `enforce`); restart both. Not governed. Go to `observe` and read the `tenant.switch` rows with status `would-allow` / `would-deny` / `would-refuse` in the audit log (`GET /api/audit/events?event_type=tenant.switch`); move to `enforce` only on an instance where row-level security is genuinely enforcing — `enforce` answers 503 otherwise (the gate shared with federation). Roll back by setting `off` on the bridge and every engine and restarting them: once restarted they refuse every acting token already issued (403, IDE WebSocket 4403). `docs/runbooks/TENANT_RLS.md` |
 
 ### `ROBOTHOR_DNC_MODE` — the one flag with no ladder
 

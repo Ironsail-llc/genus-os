@@ -121,6 +121,82 @@ class TestPublish:
             assert msg_id == "1-0"
 
 
+class TestPublishStampsTenant:
+    """Every event names the tenant it belongs to.
+
+    One engine runs per tenant and every engine reads every stream, so an
+    event without a tenant cannot be routed: a child engine would react to the
+    root's ``task.created`` and vice versa.
+    """
+
+    @staticmethod
+    def _published_envelope(mock_redis: MagicMock) -> dict:
+        mock_redis.xadd.assert_called_once()
+        return mock_redis.xadd.call_args.args[1]
+
+    def test_untagged_publish_is_stamped_with_the_default_tenant(self, monkeypatch):
+        monkeypatch.delenv("ROBOTHOR_TENANT_ID", raising=False)
+        monkeypatch.setenv("ROBOTHOR_DEFAULT_TENANT", "acme-parent")
+        mock_redis = MagicMock()
+        set_redis_client(mock_redis)
+
+        publish("crm", "task.created", {"task_id": "t1"}, source="test")
+
+        assert self._published_envelope(mock_redis)["tenant_id"] == "acme-parent"
+
+    def test_the_stamp_is_the_tenant_the_process_operates_as(self, monkeypatch):
+        """Engines filter on ``ROBOTHOR_TENANT_ID``; the stamp must agree with it.
+
+        When the two tenant variables disagree (the case
+        ``constants.tenant_env_conflict`` exists for), stamping the write
+        default would tag an engine's own unscoped events -- its webhooks --
+        with another tenant, and every engine would drop or misroute them.
+        """
+        monkeypatch.setenv("ROBOTHOR_TENANT_ID", "acme-child-a")
+        monkeypatch.setenv("ROBOTHOR_DEFAULT_TENANT", "acme-parent")
+        mock_redis = MagicMock()
+        set_redis_client(mock_redis)
+
+        publish("crm", "task.created", {"task_id": "t1"}, source="test")
+
+        assert self._published_envelope(mock_redis)["tenant_id"] == "acme-child-a"
+
+    def test_a_process_with_no_tenant_configured_publishes_untagged(self, monkeypatch):
+        """Untagged means "the root's": a sync script started with no tenant
+        variables must keep reaching the root engine, whatever its tenant is
+        called, rather than being tagged with the literal fallback ``default``."""
+        monkeypatch.delenv("ROBOTHOR_TENANT_ID", raising=False)
+        monkeypatch.delenv("ROBOTHOR_DEFAULT_TENANT", raising=False)
+        mock_redis = MagicMock()
+        set_redis_client(mock_redis)
+
+        publish("crm", "task.created", {"task_id": "t1"}, source="test")
+
+        assert self._published_envelope(mock_redis)["tenant_id"] == ""
+
+    def test_publish_inside_a_tenant_scope_is_stamped_with_that_tenant(self):
+        from robothor.db.connection import tenant_scope
+
+        mock_redis = MagicMock()
+        set_redis_client(mock_redis)
+
+        with tenant_scope("acme-child-a"):
+            publish("crm", "task.created", {"task_id": "t1"}, source="test")
+
+        assert self._published_envelope(mock_redis)["tenant_id"] == "acme-child-a"
+
+    def test_an_explicit_tenant_wins_over_the_scope(self):
+        from robothor.db.connection import tenant_scope
+
+        mock_redis = MagicMock()
+        set_redis_client(mock_redis)
+
+        with tenant_scope("acme-child-a"):
+            publish("crm", "task.created", {}, source="test", tenant_id="acme-parent")
+
+        assert self._published_envelope(mock_redis)["tenant_id"] == "acme-parent"
+
+
 # Namespaces used by the guard tests. ``.invalid`` is reserved by RFC 2606 and
 # never resolves, so a guard regression cannot silently reach a real host.
 PROD_LOCAL_URL = "redis://localhost:6379/0"

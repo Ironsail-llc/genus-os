@@ -44,6 +44,11 @@ from robothor.crm.models import (
     task_to_dict,
     tenant_to_dict,
 )
+from robothor.crm.tenant_domains import (
+    SsoDomainConflictError,
+    normalize_sso_domains,
+    sso_domains_of,
+)
 from robothor.crm.validation import (
     COMPANY_BLOCKLIST,
     normalize_email,
@@ -3482,9 +3487,17 @@ def create_tenant(
     parent_tenant_id: str | None = None,
     settings: dict[str, Any] | None = None,
 ) -> str | None:
-    """Create a tenant. Returns tenant ID."""
+    """Create a tenant. Returns tenant ID.
+
+    Raises ``InvalidSsoDomainError`` / ``SsoDomainConflictError`` when
+    ``settings.sso_domains`` is malformed or names a domain another tenant
+    already claims (see :mod:`robothor.crm.tenant_domains`).
+    """
+    settings = _validated_sso_settings(settings)
     with get_connection() as conn:
         cur = conn.cursor()
+        if settings is not None and "sso_domains" in settings:
+            _assert_sso_domains_unclaimed(cur, tenant_id, settings["sso_domains"])
         try:
             cur.execute(
                 """INSERT INTO crm_tenants (id, display_name, parent_tenant_id, settings)
@@ -3510,8 +3523,14 @@ def create_tenant_with_user(
     """Create a tenant and its first user in a single transaction.
 
     Returns tenant ID on success, None on failure.
+
+    Bound to the NEW tenant: the caller is usually a root shell, and with RLS
+    enforcing the ``tenant_users`` row is refused under any other binding.
+    (``crm_tenants`` has no RLS, so the tenant row itself is unaffected.)
     """
-    with get_connection() as conn:
+    from robothor.db.connection import tenant_scope
+
+    with tenant_scope(tenant_id), get_connection() as conn:
         cur = conn.cursor()
         try:
             cur.execute(
@@ -3573,8 +3592,94 @@ def list_tenants(parent_id: str | None = None, active_only: bool = True) -> list
         return [tenant_to_dict(r) for r in cur.fetchall()]
 
 
+#: How deep the tenant hierarchy may go below a root. ``resolve_accessible_
+#: tenants`` walks descendants to this depth, so a tenant hung deeper would be
+#: unreachable by the root operator who is supposed to administer it.
+MAX_TENANT_DEPTH = 3
+
+
+def tenant_parent_problem(tenant_id: str, parent_id: str) -> str | None:
+    """Why ``parent_id`` may not become ``tenant_id``'s parent, or None.
+
+    Refuses a missing parent, a tenant parented to itself or to one of its own
+    descendants (a cycle), and a move that would put any tenant in the moved
+    subtree deeper than :data:`MAX_TENANT_DEPTH`. ``tenant_id`` need not exist
+    yet (a create), in which case its subtree is just itself.
+    """
+    if parent_id == tenant_id:
+        return "a tenant cannot be its own parent"
+    parent = get_tenant(parent_id)
+    if not parent:
+        return "parent tenant not found"
+
+    # Depth of the new parent, and the cycle check, by walking its ancestors.
+    depth = 0
+    seen = {parent_id}
+    current = parent.get("parentTenantId")
+    while current:
+        if current == tenant_id:
+            return "that parent would create a cycle"
+        if current in seen:
+            return "the existing hierarchy already contains a cycle"
+        seen.add(current)
+        depth += 1
+        if depth > MAX_TENANT_DEPTH:
+            break
+        row = get_tenant(current)
+        current = row.get("parentTenantId") if row else None
+
+    # Height of the subtree being moved (0 for a leaf or a new tenant).
+    height = 0
+    level = [tenant_id]
+    while level and height <= MAX_TENANT_DEPTH:
+        children = [c["id"] for t in level for c in list_tenants(parent_id=t, active_only=False)]
+        if not children:
+            break
+        height += 1
+        level = children
+
+    if depth + 1 + height > MAX_TENANT_DEPTH:
+        return f"the hierarchy may be at most {MAX_TENANT_DEPTH} levels below a root"
+    return None
+
+
+def _validated_sso_settings(settings: dict[str, Any] | None) -> dict[str, Any] | None:
+    """``settings`` with its ``sso_domains`` normalized, or raise if malformed."""
+    if settings is None or "sso_domains" not in settings:
+        return settings
+    return {**settings, "sso_domains": normalize_sso_domains(settings["sso_domains"])}
+
+
+def _assert_sso_domains_unclaimed(cur: Any, tenant_id: str, domains: list[str]) -> None:
+    """Raise ``SsoDomainConflictError`` if another tenant claims any of ``domains``.
+
+    Takes a table lock first, in the caller's transaction, so two concurrent
+    saves cannot both pass the check and leave one domain claimed twice. The
+    lock is ``SHARE ROW EXCLUSIVE``: it conflicts with itself and with writes,
+    never with reads, and is held only until this save commits.
+    """
+    if not domains:
+        return
+    cur.execute("LOCK TABLE crm_tenants IN SHARE ROW EXCLUSIVE MODE")
+    cur.execute("SELECT id, settings FROM crm_tenants WHERE id <> %s", (tenant_id,))
+    for other_id, other_settings in cur.fetchall():
+        if isinstance(other_settings, str):
+            other_settings = json.loads(other_settings)
+        claimed = set(sso_domains_of({"settings": other_settings}))
+        for domain in domains:
+            if domain in claimed:
+                raise SsoDomainConflictError(domain, other_id)
+
+
 def update_tenant(tenant_id: str, **fields: Any) -> bool:
-    """Update a tenant's fields."""
+    """Update a tenant's fields.
+
+    Raises ``InvalidSsoDomainError`` / ``SsoDomainConflictError`` when
+    ``settings.sso_domains`` is malformed or names a domain another tenant
+    already claims; every other failure is logged and returns ``False``.
+    """
+    if fields.get("settings") is not None:
+        fields["settings"] = _validated_sso_settings(fields["settings"])
     col_map = {
         "display_name": "display_name",
         "parent_tenant_id": "parent_tenant_id",
@@ -3596,6 +3701,9 @@ def update_tenant(tenant_id: str, **fields: Any) -> bool:
     with get_connection() as conn:
         cur = conn.cursor()
         try:
+            settings = fields.get("settings")
+            if settings is not None and "sso_domains" in settings:
+                _assert_sso_domains_unclaimed(cur, tenant_id, settings["sso_domains"])
             cur.execute(
                 f"UPDATE crm_tenants SET {', '.join(sets)} WHERE id = %s",
                 vals,
@@ -3603,6 +3711,9 @@ def update_tenant(tenant_id: str, **fields: Any) -> bool:
             ok: bool = cur.rowcount > 0
             conn.commit()
             return ok
+        except SsoDomainConflictError:
+            conn.rollback()
+            raise
         except Exception as e:
             conn.rollback()
             logger.error("Failed to update tenant %s: %s", sanitize_log(tenant_id), e)

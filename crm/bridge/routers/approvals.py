@@ -28,8 +28,10 @@ The three durable kinds are tenant-local. Every route asks
 the session acts in and returns that tenant; every store call then filters on it
 AND runs inside ``tenant_scope`` so row-level security binds the same tenant. An
 id that is not the acting tenant's is a 404 and settles nothing. An
-``escalation`` lives in the one engine process, which is not tenant-scoped, so
-it additionally needs the platform gate, ``require_operator``. Every *answer* — including one that
+``escalation`` lives in the engine process that raised it, and with one engine
+per tenant that is the ACTING tenant's engine, so it is proxied there — the
+engine client names the tenant and mints the control token for it, which any
+other engine refuses. Every *answer* — including one that
 is refused — also writes exactly one ``audited`` event, identifiers only, so the
 free-text answer never lands in the audit store that gets exported to a SIEM.
 The listing does not: it changes nothing, and a read that writes a row per poll
@@ -59,7 +61,7 @@ from robothor.engine.approvals import (
 from robothor.operations.store import Conflict, Operations
 from routers._audit import audited
 from routers._engine_client import engine_request
-from routers._operator import TenantOperator, require_operator, require_tenant_operator
+from routers._operator import TenantOperator, require_tenant_operator
 
 router = APIRouter(prefix="/api/approvals", tags=["approvals"])
 
@@ -239,9 +241,6 @@ def list_approvals(request: Request) -> dict:
 async def answer_approval(kind: str, approval_id: str, request: Request) -> Any:
     """Answer one waiting question. ``kind`` decides where the answer goes."""
     who = require_tenant_operator(request)
-    if kind == "escalation":
-        # The engine holds escalations in RAM, in one process, with no tenant.
-        require_operator(request)
 
     if kind not in KINDS:
         return _refuse(request, kind, approval_id, 400, f"kind must be one of {KINDS}")
@@ -260,7 +259,7 @@ async def answer_approval(kind: str, approval_id: str, request: Request) -> Any:
         return _refuse(request, kind, approval_id, 400, "invalid request body")
 
     if kind == "escalation":
-        return await _resolve_escalation(request, approval_id, body)
+        return await _resolve_escalation(request, approval_id, body, who)
     with tenant_scope(who.tenant_id):
         if kind == "question":
             return await _answer_question(request, approval_id, body, who)
@@ -377,8 +376,10 @@ async def _decide_action(
     return {"settled": True, "kind": "action", "id": action_id, "decision": decision}
 
 
-async def _resolve_escalation(request: Request, request_id: str, body: AnswerRequest) -> Any:
-    """Proxy to the engine, because the pending request lives in that process."""
+async def _resolve_escalation(
+    request: Request, request_id: str, body: AnswerRequest, who: TenantOperator
+) -> Any:
+    """Proxy to the ACTING tenant's engine, where the pending request lives."""
     if body.approved is None:
         return _refuse(request, "escalation", request_id, 400, "approved is required")
 
@@ -386,6 +387,7 @@ async def _resolve_escalation(request: Request, request_id: str, body: AnswerReq
         "POST",
         f"/api/admin/approvals/escalation/{request_id}",
         json={"approved": bool(body.approved), "remember_session": bool(body.remember_session)},
+        tenant=who.tenant_id,
     )
     ok = status == 200
     audited(
