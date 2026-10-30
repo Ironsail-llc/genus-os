@@ -510,10 +510,10 @@ class WorkflowEngine:
         ``run_id`` lets a caller that starts the run in the background name it
         up front, so it can report the id before the run finishes.
 
-        ``requeue_on_rate_limit`` says the caller will requeue the event of a
-        run the tool-call rate limit blocks at its first step, before anything
-        has acted, so that run ends ``skipped`` (deferred) instead of waiting
-        in place. Only the hook consumer passes it.
+        ``requeue_on_rate_limit`` says the caller will requeue the event when
+        the tool-call rate limit would block the first step, so the run is
+        deferred (``skipped``, ``rate_limited``) before it is recorded instead
+        of waiting in place. Only the hook consumer passes it.
         """
         from robothor.engine.dedup import release, try_acquire
 
@@ -559,6 +559,28 @@ class WorkflowEngine:
                     error_message="Authentication identity required for workflow execution",
                 )
 
+        # A hook run whose first step the tool-call rate limit would block is
+        # deferred before anything is recorded: the hook consumer requeues the
+        # event, and a deferral is a log line, not a workflow_runs row.
+        if requeue_on_rate_limit and self._first_step_rate_limited(wf):
+            logger.info(
+                "Workflow %s deferred: tool-call rate limit reached at first step %s (%s)",
+                _sanitize(workflow_id),
+                wf.steps[0].id,
+                _sanitize(trigger_detail),
+            )
+            return WorkflowRun(
+                workflow_id=workflow_id,
+                tenant_id=self.config.tenant_id,
+                user_id=effective_user_id,
+                user_role=effective_user_role,
+                trigger_type=trigger_type,
+                trigger_detail=trigger_detail,
+                status=RunStatus.SKIPPED,
+                error_message=f"Deferred: tool-call rate limit reached at step '{wf.steps[0].id}'",
+                rate_limited=True,
+            )
+
         # Prevent concurrent runs of the same workflow
         dedup_key = f"workflow:{workflow_id}"
         if not await try_acquire(dedup_key):
@@ -590,7 +612,6 @@ class WorkflowEngine:
             status=RunStatus.RUNNING,
             started_at=datetime.now(UTC),
             context={"steps": {}, **(initial_context or {})},
-            requeue_on_rate_limit=requeue_on_rate_limit,
         )
         if run_id:
             run.id = run_id
@@ -681,6 +702,13 @@ class WorkflowEngine:
             return run
         finally:
             await release(dedup_key)
+
+    def _first_step_rate_limited(self, wf: WorkflowDef) -> bool:
+        """Whether the workflow's first step is a tool call the limiter would block now."""
+        if not wf.steps or wf.steps[0].type != WorkflowStepType.TOOL:
+            return False
+        guardrails = self._workflow_guardrails(wf.rate_limit_per_minute)
+        return bool(guardrails.rate_limit_full(f"workflow:{wf.id}"))
 
     def _timeout_message(self, run: WorkflowRun, wf: WorkflowDef) -> str:
         """Say WHICH step was in flight when the budget expired.
@@ -895,15 +923,6 @@ class WorkflowEngine:
             if result.status == WorkflowStepStatus.TIMEOUT:
                 run.status = RunStatus.TIMEOUT
                 run.error_message = result.error_message
-                return
-
-            # Deferred at its first step, before anything acted: the run
-            # stops and its caller (the hook consumer) requeues the event.
-            # on_failure does not apply; the tool never ran.
-            if result.status == WorkflowStepStatus.FAILED and result.rate_limited:
-                run.rate_limited = True
-                run.status = RunStatus.SKIPPED
-                run.error_message = f"Step '{step.id}' deferred: {result.error_message}"
                 return
 
             # Handle failure
@@ -1216,19 +1235,14 @@ class WorkflowEngine:
         guardrails = self._workflow_guardrails(wf.rate_limit_per_minute if wf else 0)
         # A blocked call is only early. Replaying the event would run every
         # earlier step again, so a step waits in place for the limiter (the
-        # workflow deadline bounds the wait) — unless it is the run's first
-        # step and nothing has acted yet, when a caller that requeues gets
-        # the worker back and the event is re-added instead.
-        first_step = bool(wf and wf.steps and wf.steps[0] is step and not run.step_results)
+        # workflow deadline bounds the wait). A hook run blocked at its first
+        # step never gets here: execute() defers it before it is recorded.
         wait = _RATE_LIMIT_WAIT_SECONDS
         while True:
             gr = guardrails.check_pre_execution(
                 step.tool_name, rendered_args, agent_id=f"workflow:{run.workflow_id}"
             )
             if gr.allowed or gr.guardrail_name != "rate_limit":
-                break
-            if first_step and run.requeue_on_rate_limit:
-                result.rate_limited = True
                 break
             logger.info(
                 "Workflow %s step %s rate limited; waiting %ds",

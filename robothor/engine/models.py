@@ -950,8 +950,6 @@ class WorkflowStepResult:
     duration_ms: int = 0
     started_at: datetime | None = None
     completed_at: datetime | None = None
-    #: Deferred by the tool-call rate limit before the tool ran.
-    rate_limited: bool = False
 
 
 @dataclass
@@ -973,8 +971,6 @@ class WorkflowRun:
     duration_ms: int = 0
     started_at: datetime | None = None
     completed_at: datetime | None = None
-    #: Deferred at its first step by the tool-call rate limit. Not persisted.
+    #: Deferred before it was recorded: the tool-call rate limit would have
+    #: blocked its first step. Never persisted.
     rate_limited: bool = False
-    #: The caller requeues a run deferred at its first step (the hook
-    #: consumer). Not persisted: a resumed run never has it, so it waits.
-    requeue_on_rate_limit: bool = False
