@@ -252,6 +252,43 @@ describe("AppShell", () => {
     expect(screen.getByTestId("chat-panel-toggle")).toHaveAttribute("aria-pressed", "false");
   });
 
+  it("follows another tab's write even after a dock control was used here", () => {
+    render(<AppShell />);
+    fireEvent.click(screen.getByTestId("nav-dashboard"));
+    const chatContainer = screen.getByTestId("chat-container");
+    fireEvent.click(screen.getByTestId("chat-dock-close"));
+    expect(chatContainer.style.width).toBe("0px");
+    // Another tab reopens the dock after this tab collapsed it.
+    window.localStorage.setItem("genus.chatDockOpen", "true");
+    act(() => {
+      window.dispatchEvent(
+        new StorageEvent("storage", { key: "genus.chatDockOpen", newValue: "true" }),
+      );
+    });
+    expect(chatContainer.style.width).toBe("400px");
+  });
+
+  it("moves focus to the reopen tab when the dock collapses from its header", () => {
+    render(<AppShell />);
+    fireEvent.click(screen.getByTestId("nav-dashboard"));
+    const close = screen.getByTestId("chat-dock-close");
+    close.focus();
+    fireEvent.click(close);
+    expect(document.activeElement).toBe(screen.getByTestId("chat-dock-open"));
+  });
+
+  it("takes a collapsed dock's controls out of reach, and gives focus back on reopen", () => {
+    render(<AppShell />);
+    fireEvent.click(screen.getByTestId("nav-dashboard"));
+    const dock = screen.getByTestId("chat-panel").parentElement!;
+    expect(dock).not.toHaveAttribute("inert");
+    fireEvent.click(screen.getByTestId("chat-dock-close"));
+    expect(dock).toHaveAttribute("inert");
+    fireEvent.click(screen.getByTestId("chat-dock-open"));
+    expect(dock).not.toHaveAttribute("inert");
+    expect(screen.getByTestId("chat-container").contains(document.activeElement)).toBe(true);
+  });
+
   it("ignores another tab's write to a different key", () => {
     render(<AppShell />);
     fireEvent.click(screen.getByTestId("nav-dashboard"));
