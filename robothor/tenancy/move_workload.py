@@ -557,23 +557,22 @@ def _links(
             "WHERE m.tenant_id = %(source)s AND ({pred}) AND m.{col} IS NOT NULL AND {out}"
         ).format(pred=sql.SQL(MOVED_TABLES[child]), col=col, out=stays_out)
         target = sql.SQL("{} AS m ").format(sql.Identifier(child))
+        cur.execute(sql.SQL("SELECT COUNT(*) AS n FROM ") + target + where, params)
+        n = int(cur.fetchone()["n"])
+        if not n:
+            continue
+        if fk["notnull"]:
+            raise WorkloadMoveError(
+                f"{n} row(s) of {child} reference {parent} rows that stay outside "
+                f"{params['target']!r} through the required column {fk['col']}"
+            )
         if clear:
             cur.execute(
                 sql.SQL("UPDATE ") + target + sql.SQL("SET {} = NULL ").format(col) + where,
                 params,
             )
-            n = int(cur.rowcount or 0)
-        else:
-            cur.execute(sql.SQL("SELECT COUNT(*) AS n FROM ") + target + where, params)
-            n = int(cur.fetchone()["n"])
-        if n and fk["notnull"]:
-            raise WorkloadMoveError(
-                f"{n} row(s) of {child} reference {parent} rows that stay outside "
-                f"{params['target']!r} through the required column {fk['col']}"
-            )
-        if n:
-            key = f"{child}.{fk['col']}"
-            found[key] = found.get(key, 0) + n
+        key = f"{child}.{fk['col']}"
+        found[key] = found.get(key, 0) + n
     return found
 
 
