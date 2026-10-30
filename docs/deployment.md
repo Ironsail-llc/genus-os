@@ -904,6 +904,26 @@ reported as a failure and the run continues.
 gated on the operator role. Its `status` and `checks` keys mirror the readiness
 contract so the Helm's Health view renders either payload.
 
+The bridge adds one row of its own, `bridge.engine` (severity `recommended`):
+whether it reaches the engine's `GET /live`. Its `detail` names the address it
+tried as `scheme://host:port/live` — never credentials, a path or a query from
+`ROBOTHOR_ENGINE_URL` — and, on failure, the failure class (`ConnectError`,
+`HTTP 403`, `timeout`). The probe has a two-second budget and runs on every
+request, outside the memo.
+
+The bridge's `/ready` probes the same address but does **not** gate on it: an
+unreachable engine breaks every Helm call the bridge proxies, but not sign-in,
+the CRM or this report, and pulling the bridge out of its Service would take
+those down too. So `/ready` still answers by its own checks and adds two keys:
+
+| Key | Value |
+|-----|-------|
+| `engine` | `"ok"`, or `"unreachable:<class>"` (`unreachable:ConnectError`, `unreachable:HTTP 503`) |
+| `degraded` | `true` when the engine is unreachable; absent otherwise |
+
+Alert on `degraded`, not on the status code. Each failed probe also logs
+`Readiness check engine failed: <class>` at warning level.
+
 It runs **offline**, under a 30-second budget for the whole run on top of the
 per-check five seconds, and its report is **memoised for 30 seconds behind a
 single-flight lock** — concurrent polls share one run, and a poll inside the
@@ -1031,7 +1051,7 @@ plugin that was turned off is loading again. See
 |---------|----------|----------|
 | Engine | `GET /health` on :18800 | `{"status": "ok"}`; `/ready` is the one an orchestrator gates on, and it carries the fleet check |
 | Orchestrator (RAG API) | `GET /health` on :9099 | `{"status": "ok"}` |
-| Bridge | `GET /health` on :9100 | `{"status": "ok"}`; its `/ready` also checks the orchestrator and the SSO secret |
+| Bridge | `GET /health` on :9100 | `{"status": "ok"}`; its `/ready` also checks the orchestrator and the SSO secret, and reports the engine without gating on it (see below) |
 | Dashboard | `GET /api/health` on :3004 | 200; `/api/ready` is what the compose healthcheck polls |
 | Vision | `GET /health` on :8600 | `{"status": "ok", "mode": "..."}` |
 

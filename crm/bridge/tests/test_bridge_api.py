@@ -42,7 +42,8 @@ async def test_ready_checks_crm_and_orchestrator(test_client, mock_http_client, 
 
     assert r.status_code == 200
     assert r.json()["checks"] == {"crm": "ok", "memory": "ok", "sso_secret": "ok"}
-    mock_http_client.get.assert_awaited_once_with("http://localhost:9099/ready")
+    # The engine is probed too (test_ready_engine.py), but outside the gate.
+    mock_http_client.get.assert_any_await("http://localhost:9099/ready")
 
 
 @pytest.mark.asyncio
