@@ -135,7 +135,7 @@ def test_filename_brackets_and_globs_are_still_refused(workspace, command) -> No
         # not exempt an unquoted spelling of it elsewhere.
         "cat .en[v' ']",
         "cat '.en?' '.e'n?",
-        "head .e\"n\"?",
+        'head .e"n"?',
     ],
 )
 def test_only_unquoted_globs_in_file_operands_are_exempt(workspace, command) -> None:
