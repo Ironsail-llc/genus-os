@@ -1389,11 +1389,13 @@ class CronScheduler:
                 with contextlib.suppress(Exception):
                     job.remove()
 
+        from robothor.engine.plugin_job_runs import recorded
+
         registered = 0
         for job_id, spec in specs.items():
             try:
                 self.scheduler.add_job(
-                    spec["func"],
+                    recorded(job_id, spec["func"]),
                     trigger=cron_trigger(spec["cron"]),
                     id=job_id,
                     name=job_id,
