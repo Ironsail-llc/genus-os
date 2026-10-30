@@ -87,9 +87,10 @@ def _cmd_list() -> int:
     print(f"{'ID':<25} {'Name':<30} {'Active':<8} {'Parent'}")
     print("-" * 80)
     for t in tenants:
+        # list_tenants returns the API shape (models.tenant_to_dict).
         active = "yes" if t.get("active", True) else "no"
-        parent = t.get("parent_tenant_id") or "-"
-        print(f"{t['id']:<25} {t.get('display_name', ''):<30} {active:<8} {parent}")
+        parent = t.get("parentTenantId") or "-"
+        print(f"{t['id']:<25} {t.get('displayName') or '':<30} {active:<8} {parent}")
     return 0
 
 
