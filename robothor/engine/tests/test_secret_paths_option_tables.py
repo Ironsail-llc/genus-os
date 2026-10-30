@@ -222,6 +222,16 @@ def test_arguments_after_a_multi_line_quote_are_still_judged(workspace, command)
         # The loose split still separates a command glued to an operator.
         "echo '\n'\necho hi;cat .env\necho '",
         "echo hi;cat .env; echo '",
+        # A redirect glued to the separator before it (`\n<`, `;<`, `|<`)
+        # is still a redirect.
+        "ls\n<.env cat",
+        "ls;<.env cat",
+        "true |<.env cat",
+        # Splitting operators out of a loose line must not lose the file
+        # when the operator was inside a quoted program: the line is judged
+        # unsplit as well.
+        "echo '\n'\nsed -n '1p;2p' .env\necho '",
+        "echo '\n'\ngrep -E 'a|.' .env\necho '",
     ],
 )
 def test_an_unquoted_newline_separates_commands(workspace, command) -> None:
