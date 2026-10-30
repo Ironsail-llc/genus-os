@@ -1002,7 +1002,12 @@ What happens, in order, each step a refusal:
 7. **Install** with pip — and pip is allowed to do nothing at all:
    `--no-deps --no-index --find-links <the temp directory>`. It resolves
    nothing, reaches nowhere, and installs exactly the one file that survived
-   the steps above. It never sees a URL, an `--index-url` or `--pre`.
+   the steps above. It never sees a URL, an `--index-url` or `--pre`. The
+   engine's interpreter runs it as `python -m pip` when it has pip; a venv
+   built by uv (the container image's) has none, so the installer runs
+   `uv pip install --python <that interpreter>` with the same flags instead.
+   With neither pip nor `uv` on PATH, the install is refused with a sentence
+   naming both.
 8. **Record** the row: verdict, wheel hash, and where it came from.
 
 Nothing signals the engine. The running daemon keeps serving the plugin set it

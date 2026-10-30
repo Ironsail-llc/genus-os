@@ -353,7 +353,9 @@ def test_the_result_tells_the_operator_to_reload(registry_fixture) -> None:
 # --------------------------------------------------------------------------
 
 
-def test_pip_is_called_with_a_list_that_resolves_nothing(registry_fixture) -> None:
+def test_pip_is_called_with_a_list_that_resolves_nothing(registry_fixture, monkeypatch) -> None:
+    # The interpreter has pip here; the uv fallback is pinned in test_plugin_cli_install.
+    monkeypatch.setattr(installer, "_pip_module_available", lambda: True)
     pip = _Pip()
     _install(registry_fixture, pip=pip)
     assert len(pip.calls) == 1
