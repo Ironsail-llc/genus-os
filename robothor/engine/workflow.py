@@ -1504,8 +1504,6 @@ class WorkflowEngine:
 
     def _load_suspended_run(self, run_id: str) -> tuple[WorkflowRun, str] | None:
         """Rebuild a suspended run from the ledger. Sync — called via to_thread."""
-        import json
-
         from robothor.db.connection import get_connection
 
         with get_connection() as conn:
@@ -1813,8 +1811,6 @@ class WorkflowEngine:
     def _persist_run_end(self, run: WorkflowRun) -> None:
         """Update workflow run with final status."""
         try:
-            import json
-
             from robothor.db.connection import get_connection
 
             completed = sum(1 for r in run.step_results if r.status == WorkflowStepStatus.COMPLETED)

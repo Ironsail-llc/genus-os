@@ -1,5 +1,9 @@
 """Operator-scoped, read-only workflow accounting, from workflow_runs.
 
+A run's detail (``/{workflow_id}/runs/{run_id}``) adds each step's tool name,
+input, output and error from workflow_run_steps. Those payloads carry whatever
+the tools saw, so the response is marked ``Cache-Control: no-store``.
+
 Deliberately bridge-side: the engine's /api/workflows* is not operator-scoped and
 the dashboard proxy targets the bridge. Lists every workflow that has RUN
 (distinct workflow_id in workflow_runs) and every workflow DEFINED in the
@@ -25,6 +29,15 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/workflows", tags=["workflows"])
 
 _MAX_LIMIT = 100
+_NO_STORE = {"Cache-Control": "no-store"}
+
+
+def _is_uuid(value: str) -> bool:
+    try:
+        uuid.UUID(value)
+    except ValueError:
+        return False
+    return True
 
 
 def _rows(sql: str, params: tuple) -> list[dict]:
@@ -186,12 +199,7 @@ def workflow_run(workflow_id: str, run_id: str, request: Request) -> JSONRespons
     """A run's step detail. Operator-only and never cached: the step inputs and
     outputs carry whatever the tools saw."""
     require_operator(request)
-    no_store = {"Cache-Control": "no-store"}
-    try:
-        uuid.UUID(run_id)
-    except ValueError:
-        return JSONResponse({"detail": "run not found"}, status_code=404, headers=no_store)
-    detail = _workflow_run(workflow_id, run_id)
+    detail = _workflow_run(workflow_id, run_id) if _is_uuid(run_id) else None
     if detail is None:
-        return JSONResponse({"detail": "run not found"}, status_code=404, headers=no_store)
-    return JSONResponse(detail, headers=no_store)
+        return JSONResponse({"detail": "run not found"}, status_code=404, headers=_NO_STORE)
+    return JSONResponse(detail, headers=_NO_STORE)
