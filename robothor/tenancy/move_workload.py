@@ -208,6 +208,10 @@ UNTOUCHED_TABLES: dict[str, str] = {
     "operation_reservations": _OPERATIONS,
     "password_reset_tokens": _IDENTITY,
     "plugin_state": "plugin state of the tenant, keyed by plugin, not by agent",
+    "tenant_plugin_grants": (
+        "a tenant's plugin grants belong to the tenant, set by its root; "
+        "they do not move with a workload"
+    ),
     "pr_review_cursors": "PR review state of the tenant's repositories",
     "pr_review_messages": "PR review state of the tenant's repositories",
     "pr_reviews": "PR review state of the tenant's repositories",
