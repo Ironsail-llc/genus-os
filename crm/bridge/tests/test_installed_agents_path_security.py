@@ -16,6 +16,24 @@ from robothor.templates.description_optimizer import HubReadinessReport
 from robothor.templates.safety import TemplateSecurityError
 
 
+def _root_request():
+    """A verified root operator at home: these handlers carry the root gate."""
+    from types import SimpleNamespace
+
+    from routers._operator import PLATFORM_TENANT
+
+    from robothor.auth.deps import AuthContext
+
+    auth = AuthContext(
+        user_id="operator-1",
+        tenant_id=PLATFORM_TENANT,
+        role="owner",
+        typ="user",
+        audience="genus-bridge",
+    )
+    return SimpleNamespace(state=SimpleNamespace(auth=auth))
+
+
 def test_catalog_lookup_rejects_path_syntax_before_catalog_access() -> None:
     with patch("robothor.templates.catalog.Catalog") as catalog:
         with pytest.raises(TemplateSecurityError, match="agent ID"):
@@ -26,7 +44,7 @@ def test_catalog_lookup_rejects_path_syntax_before_catalog_access() -> None:
 def test_readiness_rejects_path_injection_without_scoring() -> None:
     with patch("robothor.templates.description_optimizer.score_hub_readiness") as score:
         with pytest.raises(HTTPException) as raised:
-            check_readiness("../../etc")
+            check_readiness("../../etc", _root_request())
     assert raised.value.status_code == 400
     score.assert_not_called()
 
@@ -43,7 +61,7 @@ def test_readiness_scores_only_the_catalog_discovered_bundle(tmp_path) -> None:
             return_value=report,
         ) as score,
     ):
-        result = check_readiness("safe-agent")
+        result = check_readiness("safe-agent", _root_request())
 
     score.assert_called_once_with(bundle)
     assert result["readiness"] == {
@@ -91,7 +109,7 @@ def test_list_skips_mutable_registry_ids_that_are_not_safe_paths(monkeypatch, tm
     )
 
     with patch("robothor.templates.instance.InstanceConfig.load", return_value=config):
-        result = list_installed_agents()
+        result = list_installed_agents(_root_request())
 
     assert result == {
         "agents": [

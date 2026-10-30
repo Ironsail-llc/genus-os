@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import urllib.error
 import urllib.request
 from typing import Any
@@ -55,22 +56,98 @@ class EngineUnreachableError(RuntimeError):
     """The engine did not answer. Its state is unknown, not "fine"."""
 
 
-def engine_base_url() -> str:
-    """Where the engine answers. Loopback unless deployment says otherwise."""
+def _checked_url(value: str, setting: str) -> str:
+    parsed = urlsplit(value)
+    if parsed.scheme not in _ALLOWED_SCHEMES or not parsed.netloc:
+        # Names the SETTING, not the value: the operator has to go and edit
+        # something, and "the engine URL" is not a thing they can find.
+        raise ValueError(f"{setting} must be an http(s) URL with a host, got {value!r}")
+    return value.rstrip("/")
+
+
+def _single_url() -> str:
     from robothor.settings import get_settings
 
     engine = get_settings().engine
     explicit = (engine.url or "").strip()
     if explicit:
-        parsed = urlsplit(explicit)
-        if parsed.scheme not in _ALLOWED_SCHEMES or not parsed.netloc:
-            # Names the SETTING, not the value: the operator has to go and edit
-            # something, and "the engine URL" is not a thing they can find.
-            raise ValueError(
-                f"ROBOTHOR_ENGINE_URL must be an http(s) URL with a host, got {explicit!r}"
-            )
-        return explicit.rstrip("/")
+        return _checked_url(explicit, "ROBOTHOR_ENGINE_URL")
     return f"http://{engine.host}:{engine.port}"
+
+
+def _platform_tenant() -> str:
+    from robothor.constants import DEFAULT_TENANT
+    from robothor.settings import get_settings
+
+    return (get_settings().database.platform_tenant or "").strip() or DEFAULT_TENANT
+
+
+#: A tenant id that may be substituted into a URL template. Tenant ids are
+#: kebab-case slugs; anything else (a dot, a slash, a colon) would change which
+#: HOST the template names, and the template is the operator's, not the caller's.
+_TEMPLATE_SAFE_TENANT = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,62}")
+
+_warned_fallback = False
+
+
+def reset_tenant_url_warning() -> None:
+    """Forget that the single-URL fallback was warned about (tests)."""
+    global _warned_fallback  # noqa: PLW0603
+    _warned_fallback = False
+
+
+def _tenant_engine_map(raw: str) -> dict[str, str]:
+    raw = (raw or "").strip()
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except ValueError:
+        parsed = None
+    if not isinstance(parsed, dict) or not all(
+        isinstance(k, str) and isinstance(v, str) for k, v in parsed.items()
+    ):
+        raise ValueError("GENUS_TENANT_ENGINE_URLS must be a JSON object of {tenant: url}")
+    return parsed
+
+
+def engine_base_url(tenant: str | None = None) -> str:
+    """Where the engine for *tenant* answers. Loopback unless deployment says otherwise.
+
+    One engine per tenant: ``engine/auth.py`` refuses a token minted for any
+    tenant but its own. The platform tenant (and ``None``) is the single
+    ``ROBOTHOR_ENGINE_URL``. Any other tenant resolves, in order, through the
+    explicit ``GENUS_TENANT_ENGINE_URLS`` map (local development, where every
+    engine is loopback on its own port), the ``GENUS_TENANT_ENGINE_URL_TEMPLATE``
+    with its literal ``{tenant}`` placeholder, and finally the single URL —
+    with one warning per process, because that engine will refuse the call and
+    the operator needs to know why.
+    """
+    global _warned_fallback  # noqa: PLW0603
+    if tenant is None or tenant == _platform_tenant():
+        return _single_url()
+
+    from robothor.settings import get_settings
+
+    auth = get_settings().auth
+    mapped = _tenant_engine_map(auth.tenant_engine_urls).get(tenant)
+    if mapped:
+        return _checked_url(mapped.strip(), "GENUS_TENANT_ENGINE_URLS")
+    template = (auth.tenant_engine_url_template or "").strip()
+    if template:
+        if not _TEMPLATE_SAFE_TENANT.fullmatch(tenant):
+            raise ValueError("tenant id cannot be substituted into an engine URL")
+        return _checked_url(
+            template.replace("{tenant}", tenant), "GENUS_TENANT_ENGINE_URL_TEMPLATE"
+        )
+    if not _warned_fallback:
+        _warned_fallback = True
+        logger.warning(
+            "No engine URL for a non-root tenant: set GENUS_TENANT_ENGINE_URLS or "
+            "GENUS_TENANT_ENGINE_URL_TEMPLATE. Falling back to the single engine, "
+            "which refuses another tenant's token."
+        )
+    return _single_url()
 
 
 def control_token(

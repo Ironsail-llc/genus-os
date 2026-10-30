@@ -115,6 +115,19 @@ App Router route per view.
   auth layer already exposes. Authorization itself stays server-side: the
   bridge checks the caller's role on every request regardless of what the nav
   shows.
+- **Tenant switching.** `components/layout/tenant-switcher.tsx` puts a picker in
+  the header when `/api/tenants/accessible` lists more than one tenant, and the
+  "Acting as … — Switch back" banner above the shell while the session's
+  `tenantId` differs from `homeTenantId`. A switch goes through
+  `POST /api/session/switch-tenant`, which runs an Auth.js session update with
+  the request carried in async context (never the update payload, which a
+  browser can also send), so the acting bearer replaces the old one in the same
+  cookie. The generic bridge proxy refuses `/api/auth/switch-tenant`, whose
+  reply is a bearer. A refresh returns a home token, so `lib/auth.ts`
+  re-switches after it and records `tenantNotice` if that is refused. Engine
+  calls resolve their base through `engineUrlFor` in `lib/services/registry.ts`
+  from the bearer's `tid` — see
+  [Acting in another tenant](../docs/deployment.md#acting-in-another-tenant-from-the-helm).
 
 ## Authentication
 

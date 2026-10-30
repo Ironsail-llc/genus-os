@@ -17,7 +17,7 @@ def _bind(monkeypatch, db_conn):
 
 def test_list_runs_sql_valid(db_conn, monkeypatch):
     _bind(monkeypatch, db_conn)
-    assert isinstance(runs._list_runs(None, 5), list)
+    assert isinstance(runs._list_runs(None, 5, "test-tenant"), list)
 
 
 def test_steps_and_events_sql_valid(db_conn, monkeypatch):

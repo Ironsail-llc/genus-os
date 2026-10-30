@@ -96,13 +96,25 @@ DISCOVERY_SCRIPT = REPO_ROOT / "scripts" / "list_env_reads.py"
 #: `genus config` could not show it. A pre-existing raw read that MOVED into a
 #: new module during this change, which is the cheap moment to route it through
 #: the declaration rather than carry it across untouched.
+#: 472 -> 471: `ROBOTHOR_PLATFORM_TENANT` was read twice, once by the bridge's
+#: operator gate and again by local sign-in's duplicate preference. It is now
+#: one constant, `robothor.constants.PLATFORM_TENANT`, that both import.
 #:
 #: The two 482 -> N runs above happened on branches that did not see each other
 #: (the vault work reached 474, the attachment work 480). Neither figure is
 #: right for the merged tree, so the number here is the MEASURED count from
 #: `scripts/list_env_reads.py --count-sites` after the rebase; both histories
 #: are kept because both sets of removals are real.
-ENV_READ_SITE_BASELINE = 472
+#: 472 -> 466 (measured): thread_pool, warmup, autodream and telegram_handlers
+#: each read ROBOTHOR_TENANT_ID straight from the environment. With one engine
+#: per tenant the engine's tenant is `EngineConfig.tenant_id`, and inside a
+#: warmup it is the run's; robothor/engine/tests/test_engine_tenant_source.py
+#: keeps the engine package to the one read in engine/config.py.
+#: 466 -> 467 (measured) on rebasing onto the tenant-switch branch, which reads
+#: ROBOTHOR_BRIDGE_HOST for the bridge's legacy-header gate.
+#: 467 (measured) with the tenant-onboarding branch folded in: ROBOTHOR_PLATFORM_TENANT
+#: is read once, in robothor/constants.py, and re-exported by the bridge's _operator.
+ENV_READ_SITE_BASELINE = 467
 
 
 def _discovery():

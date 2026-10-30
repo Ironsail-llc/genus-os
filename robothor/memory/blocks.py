@@ -189,11 +189,20 @@ def list_blocks(tenant_id: str = DEFAULT_TENANT) -> dict[str, Any]:
 def seed_blocks_for_tenant(tenant_id: str) -> int:
     """Create the default memory blocks for a new tenant.
 
+    Idempotent: a block that already exists is left alone, so re-running it
+    finishes a tenant whose seeding was interrupted.
+
+    Runs bound to ``tenant_id``, not to the caller's tenant: the caller is
+    usually a root shell creating a CHILD, and with RLS enforcing the policy's
+    ``WITH CHECK`` refuses a row for any tenant but the bound one.
+
     Returns:
         Number of blocks seeded.
     """
+    from robothor.db.connection import tenant_scope
+
     count = 0
-    with get_connection() as conn:
+    with tenant_scope(tenant_id), get_connection() as conn:
         with conn.cursor() as cur:
             for block_name, block_type, max_chars in DEFAULT_BLOCK_SEEDS:
                 cur.execute(

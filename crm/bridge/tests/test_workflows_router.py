@@ -12,7 +12,7 @@ def fake_workflows(monkeypatch):
     monkeypatch.setattr(
         workflows,
         "_list_workflows",
-        lambda: [
+        lambda tenant_id: [
             {
                 "workflow_id": "intel",
                 "runs": 3,
@@ -25,7 +25,9 @@ def fake_workflows(monkeypatch):
     monkeypatch.setattr(
         workflows,
         "_workflow_runs",
-        lambda wid, limit: [{"id": "wr1", "status": "completed"}] if wid == "intel" else [],
+        lambda wid, limit, tenant_id: (
+            [{"id": "wr1", "status": "completed"}] if wid == "intel" else []
+        ),
     )
     monkeypatch.setattr(workflows, "_defined_workflows", lambda: [])
 
@@ -56,7 +58,7 @@ def ran_and_defined(monkeypatch):
     monkeypatch.setattr(
         workflows,
         "_list_workflows",
-        lambda: [
+        lambda tenant_id: [
             {
                 "workflow_id": "intel",
                 "runs": 3,
@@ -140,6 +142,19 @@ def test_defined_workflows_are_read_from_the_workspace(env_workspace):
     assert rows["local-flow"]["name"] == "local-flow"
 
 
+def test_a_child_tenant_lists_only_what_ran_there(_controls_auth_key, ran_and_defined):
+    """The workflow directory the bridge can read is the ROOT engine's, so a
+    child tenant's admin sees that tenant's run history and no definitions
+    borrowed from the root workspace."""
+    from tests.conftest import _make_controls_client_as_role
+
+    client = _make_controls_client_as_role("admin", "acme-child-a")
+    r = client.get("/api/workflows")
+    assert r.status_code == 200
+    assert [row["workflow_id"] for row in r.json()] == ["intel"]
+    assert r.json()[0]["source"] is None
+
+
 def test_a_workflow_directory_fault_does_not_break_the_listing(
     controls_client_as_operator, monkeypatch
 ):
@@ -147,7 +162,7 @@ def test_a_workflow_directory_fault_does_not_break_the_listing(
     monkeypatch.setattr(
         workflows,
         "_list_workflows",
-        lambda: [{"workflow_id": "intel", "runs": 1, "last_run_at": None, "failures": 0}],
+        lambda tenant_id: [{"workflow_id": "intel", "runs": 1, "last_run_at": None, "failures": 0}],
     )
 
     def boom():

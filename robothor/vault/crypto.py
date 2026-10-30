@@ -1,8 +1,14 @@
 """
 AES-256-GCM encryption for vault secrets.
 
-Master key is a 32-byte random key stored at $WORKSPACE/.vault-key (chmod 600).
-Each secret gets a unique 12-byte nonce prepended to the ciphertext.
+Master key is a 32-byte random key stored at $WORKSPACE/.vault-key (chmod 600),
+or at the file ``GENUS_VAULT_KEY_FILE`` names. Each secret gets a unique 12-byte
+nonce prepended to the ciphertext.
+
+The override exists so the bridge and every engine cell of one deployment can
+share ONE key, mounted read-only from a Secret. Under it nothing is generated:
+a key written beside a missing mount would encrypt new secrets under a key no
+other process has, and orphan them the moment the mount appeared.
 """
 
 from __future__ import annotations
@@ -14,9 +20,55 @@ from pathlib import Path
 
 _cached_key: bytes | None = None
 
+KEY_FILE_ENV = "GENUS_VAULT_KEY_FILE"
+_KEY_FILE_ALIAS = "ROBOTHOR_VAULT_KEY_FILE"
+
+
+def key_file_override() -> Path | None:
+    """The key file ``GENUS_VAULT_KEY_FILE`` names, or None when it is unset."""
+    from robothor.settings.env import process_env_get
+
+    value = (process_env_get(KEY_FILE_ENV, "") or "").strip()
+    if not value:
+        value = (process_env_get(_KEY_FILE_ALIAS, "") or "").strip()
+        if value:
+            from robothor.settings.aliases import warn_deprecated_alias
+
+            warn_deprecated_alias(_KEY_FILE_ALIAS)
+    return Path(value) if value else None
+
+
+def _read_override(path: Path) -> bytes:
+    """The overriding key, validated. Raises naming the variable; never writes."""
+    try:
+        key = path.read_bytes()
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(
+            f"Vault master key not found at {path} ({KEY_FILE_ENV}). It is never "
+            "generated under that setting: mount the deployment's shared key there, "
+            f"or unset {KEY_FILE_ENV} to use the workspace key."
+        ) from exc
+    except OSError as exc:
+        raise PermissionError(
+            f"Vault master key at {path} ({KEY_FILE_ENV}) cannot be read: {type(exc).__name__}."
+        ) from exc
+    if len(key) != 32:
+        raise ValueError(
+            f"Vault master key at {path} ({KEY_FILE_ENV}) must be 32 bytes, got {len(key)}"
+        )
+    return key
+
 
 def init_master_key(workspace: Path | str) -> Path:
-    """Generate a new master key file. Returns the path. Idempotent — skips if exists."""
+    """Generate a new master key file. Returns the path. Idempotent — skips if exists.
+
+    Under ``GENUS_VAULT_KEY_FILE`` it only validates that file and returns its
+    path: first-boot generation is for the workspace key alone.
+    """
+    override = key_file_override()
+    if override is not None:
+        _read_override(override)
+        return override
     key_path = Path(workspace) / ".vault-key"
     if key_path.exists():
         return key_path
@@ -30,6 +82,11 @@ def get_master_key(workspace: Path | str | None = None) -> bytes:
     """Load the master key from disk (cached after first read)."""
     global _cached_key
     if _cached_key is not None:
+        return _cached_key
+
+    override = key_file_override()
+    if override is not None:
+        _cached_key = _read_override(override)
         return _cached_key
 
     if workspace is None:

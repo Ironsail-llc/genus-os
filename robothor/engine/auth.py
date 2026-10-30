@@ -20,8 +20,28 @@ import re
 from typing import TYPE_CHECKING
 
 from robothor.auth.deps import AuthContext, bearer_from_header, verify_token
-from robothor.auth.runtime import auth_required
+from robothor.auth.runtime import auth_required, tenant_switch_mode
 from robothor.auth.tokens import TokenError
+
+#: The answer to an acting token while tenant switching is not enforced.
+SWITCHING_DISABLED = "tenant switching disabled"
+
+
+class SwitchingDisabledError(TokenError):
+    """An acting token arrived while ``GENUS_TENANT_SWITCH_MODE`` is not ``enforce``."""
+
+
+def _acting_refused(context: AuthContext) -> bool:
+    """Whether this is an acting token the switch flag no longer honours.
+
+    The bridge refuses an acting token (``act: true``, ``tid != home_tid``)
+    unless switching is enforced, and so must every engine: the dashboard
+    forwards the user's own token to ``/chat/*``, and a child tenant's engine
+    accepts a token for its own tenant whatever the token's home. Service
+    tokens cannot act; home tokens are unaffected.
+    """
+    return context.is_acting and tenant_switch_mode() != "enforce"
+
 
 if TYPE_CHECKING:
     from fastapi import Request, WebSocket
@@ -166,11 +186,40 @@ def authenticate_http_request(request: Request, *, tenant_id: str) -> AuthContex
     # tenant and fail closed at this boundary.
     if context.tenant_id != tenant_id:
         raise HTTPException(status_code=403, detail="tenant not authorized for this engine")
+    if _acting_refused(context):
+        raise HTTPException(status_code=403, detail=SWITCHING_DISABLED)
 
     scope = required_scope(request.method, path)
     if not context.has_scope(scope):
         raise HTTPException(status_code=403, detail="insufficient scope")
     return context
+
+
+#: The answer an engine route gives a human token whose account no longer stands.
+SESSION_NO_LONGER_VALID = "session no longer valid"
+
+
+def session_stands(context: AuthContext) -> bool:
+    """Whether a verified identity's account still stands where its token says.
+
+    The same check the bridge makes (``robothor.auth.session_standing``): a
+    HUMAN token is honoured only while its account still lives in the token's
+    home tenant and is active. The dashboard forwards the user's own bridge
+    token to ``/chat/*`` and ``/api/dashboard/completions``, so without this a
+    disabled or moved account kept engine chat until the token expired.
+
+    Service tokens and the loopback-development identity are not accounts and
+    are not looked up. Blocking (a SELECT on a cache miss): async callers run it
+    with ``asyncio.to_thread``. The import is guarded so an engine without the
+    module (a stubbed test environment) still serves.
+    """
+    if context.is_service or context.audience == "loopback-development":
+        return True
+    try:
+        from robothor.auth import session_standing
+    except ImportError:  # pragma: no cover - the module ships with the platform
+        return True
+    return session_standing.stands(context.user_id, context.home_tenant_id)
 
 
 def request_context(request: Request) -> AuthContext:
@@ -196,6 +245,8 @@ def authenticate_websocket(websocket: WebSocket, *, tenant_id: str) -> AuthConte
     context = verify_engine_token(token)
     if context.tenant_id != tenant_id:
         raise TokenError("tenant not authorized for this engine")
+    if _acting_refused(context):
+        raise SwitchingDisabledError(SWITCHING_DISABLED)
     if not context.has_scope("engine:chat"):
         raise TokenError("insufficient scope")
     return context

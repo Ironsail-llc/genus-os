@@ -1,0 +1,122 @@
+{{- /*
+Tenant engine cells: one engine per entry in `tenants:`, beside the root
+engine (engine/workload.yaml), all in this release.
+
+Each cell is engine.* overlaid with its entry and renders, as
+<fullname>-engine-<id>, a Deployment and a Service, plus its own workspace PVC
+<fullname>-workspace-<id> unless it mounts a ConfigMap or an existing claim.
+
+Cell pods carry app.kubernetes.io/component=engine, like the root engine's, so
+every NetworkPolicy written for "the engine" covers them with no change; they
+are told apart by genus-os/tenant=<id>, which is in each cell's selectors.
+
+An empty list renders nothing.
+*/ -}}
+{{- if .Values.engine.enabled -}}
+{{- if and (.Values.tenants | default list) (not (.Values.vaultKey | default dict).enabled) -}}
+{{- fail "tenants requires vaultKey.enabled: a credential the bridge stores for a child tenant is encrypted with the vault master key, and without one shared key (the vault-key Secret, mounted on the bridge and every engine) each engine would look for its own <workspace>/.vault-key, so the child's engine could not decrypt it. See \"Shared vault key\" in the chart README." -}}
+{{- end -}}
+{{- $root := . -}}
+{{- $fullName := include "genus-os.fullname" . -}}
+{{- $rootTenant := include "genus-os.rootTenant" . -}}
+{{- $seen := dict -}}
+{{- range $i, $t := .Values.tenants | default list -}}
+{{- $id := toString ($t.id | default "") -}}
+{{- if not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" $id) -}}
+{{- fail (printf "tenants[%d].id must be a lowercase DNS label (a-z, 0-9 and '-', starting and ending alphanumeric), got %q" $i $id) -}}
+{{- end -}}
+{{- if hasKey $seen $id -}}
+{{- fail (printf "tenants[%d].id %q is a duplicate; each tenant gets exactly one engine cell" $i $id) -}}
+{{- end -}}
+{{- $_ := set $seen $id true -}}
+{{- if eq $id $rootTenant -}}
+{{- fail (printf "tenants[%d].id %q is global.rootTenant, which the root engine (engine:) already serves" $i $id) -}}
+{{- end -}}
+{{- $name := printf "%s-engine-%s" $fullName $id -}}
+{{- if gt (len $name) 63 -}}
+{{- fail (printf "tenants[%d].id %q makes the engine name %q longer than 63 characters; shorten the id or fullnameOverride" $i $id $name) -}}
+{{- end -}}
+
+{{- /* Values: engine.* with the tenant's overrides. */ -}}
+{{- $cv := deepCopy $root.Values.engine -}}
+{{- range $key := list "replicaCount" "resources" "secretRefs" "podLabels" "podAnnotations" "nodeSelector" "tolerations" "affinity" -}}
+{{- if hasKey $t $key -}}{{- $_ := set $cv $key (index $t $key) -}}{{- end -}}
+{{- end -}}
+{{- $env := deepCopy ($cv.env | default dict) -}}
+{{- range $k, $v := ($t.env | default dict) -}}{{- $_ := set $env $k $v -}}{{- end -}}
+{{- $_ := set $cv "env" $env -}}
+{{- /* Extra volumes name the root engine's own resources (often a
+       ReadWriteOnce claim), so a cell gets only the ones its entry declares. */ -}}
+{{- $_ := set $cv "extraVolumes" ($t.extraVolumes | default list) -}}
+{{- $_ := set $cv "extraVolumeMounts" ($t.extraVolumeMounts | default list) -}}
+{{- /* One Ingress host cannot front several engines; cells are internal. */ -}}
+{{- $_ := set $cv "ingress" (dict "enabled" false) -}}
+{{- /* Credentials are per mailbox, so the root engine's never carry over. */ -}}
+{{- $gw := $t.googleWorkspace | default dict -}}
+{{- $_ := set $cv "googleWorkspace" $gw -}}
+
+{{- /* Workspace: the root's settings, its own volume. */ -}}
+{{- $tw := $t.workspace | default dict -}}
+{{- $ws := deepCopy (omit $root.Values.workspace "persistence" "configMap") -}}
+{{- range $key := list "allowEmptyFleet" "minAgentCount" "requiredAgentIds" "readOnly" -}}
+{{- if hasKey $tw $key -}}{{- $_ := set $ws $key (index $tw $key) -}}{{- end -}}
+{{- end -}}
+{{- $persistence := omit (deepCopy $root.Values.workspace.persistence) "existingClaim" -}}
+{{- range $k, $v := ($tw.persistence | default dict) -}}{{- $_ := set $persistence $k $v -}}{{- end -}}
+{{- $_ := set $ws "persistence" $persistence -}}
+{{- $configMap := dict "name" "" "items" list -}}
+{{- range $k, $v := ($tw.configMap | default dict) -}}{{- $_ := set $configMap $k $v -}}{{- end -}}
+{{- $_ := set $ws "configMap" $configMap -}}
+{{- $claimName := $persistence.existingClaim | default (printf "%s-workspace-%s" $fullName $id) -}}
+
+{{- /* The workload opens with `---`; keep it off the previous cell's last line. */ -}}
+{{- "\n" }}
+{{- include "genus-os.pythonWorkload" (dict
+      "root" $root
+      "component" "engine"
+      "values" $cv
+      "name" $name
+      "tenant" $id
+      "workspace" $ws
+      "workspaceKey" (printf "tenants[%d].workspace" $i)
+      "claimName" $claimName
+      "googleSecretName" ($gw.secretName | default (printf "%s-google" $name))
+      "pinnedEnv" (dict
+        "ROBOTHOR_TENANT_ID" $id
+        "ROBOTHOR_DEFAULT_TENANT" $id
+        "GENUS_EVENT_CONSUMER_GROUP" (printf "engine-%s" $id))
+    ) }}
+{{- if and $persistence.enabled (not $persistence.existingClaim) (not $configMap.name) }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $claimName }}
+  labels:
+    {{- include "genus-os.labels" (dict "root" $root "component" "workspace" "tenant" $id) | nindent 4 }}
+  {{- /* No removal path deletes a tenant's workspace. `helm` honours
+         resource-policy; Argo CD ignores it and needs Prune=false (an entry
+         removed from tenants:) and Delete=false (a cascading delete of the
+         Application). An operator deletes the claim by hand. */}}
+  {{- $pvcAnnotations := deepCopy ($persistence.annotations | default dict) }}
+  {{- $_ := set $pvcAnnotations "helm.sh/resource-policy" "keep" }}
+  {{- $syncOptions := list }}
+  {{- range $opt := splitList "," (toString (index $pvcAnnotations "argocd.argoproj.io/sync-options" | default "")) }}
+  {{- $opt = trim $opt }}
+  {{- if and $opt (not (hasPrefix "Prune=" $opt)) (not (hasPrefix "Delete=" $opt)) }}{{- $syncOptions = append $syncOptions $opt }}{{- end }}
+  {{- end }}
+  {{- $_ := set $pvcAnnotations "argocd.argoproj.io/sync-options" (concat $syncOptions (list "Prune=false" "Delete=false") | join ",") }}
+  annotations:
+    {{- toYaml $pvcAnnotations | nindent 4 }}
+spec:
+  accessModes:
+    {{- toYaml $persistence.accessModes | nindent 4 }}
+  {{- with $persistence.storageClassName }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ $persistence.size }}
+{{- end }}
+{{- end -}}
+{{- end -}}

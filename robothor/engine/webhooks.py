@@ -40,6 +40,8 @@ import yaml
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
+from robothor.events.bus import publishing_tenant
+
 logger = logging.getLogger(__name__)
 
 # Must match hooks.py / event_bus.py
@@ -635,6 +637,8 @@ async def _publish_to_stream(
         "actor": "external",
         "event_type": event_type,
         "payload": json.dumps(payload),
+        # The engine that received it is the tenant it belongs to.
+        "tenant_id": publishing_tenant(),
     }
     if delivery_id:
         envelope["delivery_id"] = delivery_id

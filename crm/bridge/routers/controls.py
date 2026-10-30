@@ -40,10 +40,8 @@ from routers._operator import (  # noqa: F401 - re-exported for existing importe
     OPERATOR_ROLES,
     PLATFORM_TENANT,
     require_operator,
+    require_root_operator,
 )
-
-# keep the private name the handlers already call:
-_require_operator = require_operator
 
 router = APIRouter(prefix="/api/controls", tags=["controls"])
 
@@ -70,7 +68,7 @@ _normalise = store.normalise
 
 @router.get("")
 def list_controls(request: Request) -> list[dict[str, object]]:
-    _require_operator(request)
+    require_root_operator(request)
     out: list[dict[str, object]] = []
     for name in sorted(store.GOVERNED_FLAGS):
         # ``normalise`` subsumes the old ``resolve(name) or _default_value_for(name)``
@@ -98,7 +96,7 @@ def list_controls(request: Request) -> list[dict[str, object]]:
 
 @router.patch("/{name}")
 def set_control(name: str, patch: FlagPatch, request: Request) -> dict[str, str]:
-    actor = _require_operator(request)
+    actor = require_root_operator(request)
     if name not in store.GOVERNED_FLAGS:
         raise HTTPException(status_code=404, detail="unknown flag")
     if patch.value not in store.valid_values_for(name):

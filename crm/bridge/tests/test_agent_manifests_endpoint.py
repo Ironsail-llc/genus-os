@@ -71,7 +71,7 @@ class FakeEngine:
         self.reconcile_body: dict = dict(RECONCILED)
         self.trigger_body: dict = {"status": "triggered", "agent_id": "demo-agent"}
 
-    async def __call__(self, method, path, *, json=None, timeout=30):
+    async def __call__(self, method, path, *, json=None, timeout=30, tenant=None):
         self.calls.append((method, path))
         if path == "/api/admin/tools":
             return 200, ENGINE_TOOLS
@@ -296,9 +296,10 @@ class TestNoTestReachesARealWorkspace:
 
 
 class TestEveryRouteIsOperatorGated:
-    def test_every_route_calls_require_operator_including_the_gets(self):
+    def test_every_route_calls_the_tenant_admin_gate_including_the_gets(self):
         """A GET here enumerates the fleet, its models and its delivery
-        targets. That is appliance state, not member data."""
+        targets. That is the acting tenant's administration, not member data
+        (``test_tenant_admin_gates.py`` holds the full gate matrix)."""
         import inspect
 
         from routers import agent_manifests
@@ -306,9 +307,9 @@ class TestEveryRouteIsOperatorGated:
         ungated = [
             f"{sorted(route.methods)} {route.path}"
             for route in agent_manifests.router.routes
-            if "require_operator(" not in inspect.getsource(route.endpoint)
+            if "require_tenant_admin(" not in inspect.getsource(route.endpoint)
         ]
-        assert not ungated, f"routes without the operator gate: {ungated}"
+        assert not ungated, f"routes without the tenant admin gate: {ungated}"
 
     def test_a_viewer_session_cannot_list(self, controls_client_as_viewer, workspace):
         assert controls_client_as_viewer.get("/api/agent-manifests").status_code == 403
@@ -589,7 +590,7 @@ class TestValidate:
         """An operator must be able to edit an agent while the engine is down —
         that is precisely when they want to."""
 
-        async def _dead(method, path, *, json=None, timeout=30):
+        async def _dead(method, path, *, json=None, timeout=30, tenant=None):
             return 502, {"error": "engine unavailable"}
 
         with patch("routers.agent_manifests.engine_request", new=_dead):
