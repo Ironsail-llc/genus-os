@@ -23,6 +23,7 @@ from __future__ import annotations
 import ast as _ast
 import asyncio
 import contextlib
+import json
 import logging
 import operator as _op
 import re
@@ -71,6 +72,36 @@ IN_FLIGHT_STEP_KEY = "_in_flight_steps"
 #: first dispatch does not pay for a close-out UPDATE that can only ever match
 #: zero rows. Survives suspend/resume with the rest of the context.
 DISPATCHED_STEPS_KEY = "_dispatched_steps"
+
+#: Ceiling on the JSON stored for one step's ``tool_input`` or ``tool_output``.
+#: A larger payload is replaced by a truncation marker carrying a preview, so
+#: one oversized tool call can neither bloat the table nor fail the run.
+STEP_IO_MAX_BYTES = 64 * 1024
+
+
+def _capped_json(value: Any, limit: int = STEP_IO_MAX_BYTES) -> str | None:
+    """Serialise a step input or output for JSONB, capped at ``limit`` bytes.
+
+    Over the cap, the value becomes ``{"_truncated": true, "original_bytes":
+    N, "preview": "<the start of its JSON>"}``, still valid JSON and still
+    within the cap.
+    """
+    if value is None:
+        return None
+    text = json.dumps(value, default=str)
+    size = len(text.encode())
+    if size <= limit:
+        return text
+    preview = text.encode()[:limit].decode("utf-8", "ignore")
+    while True:
+        marker = json.dumps(
+            {"_truncated": True, "original_bytes": size, "preview": preview},
+            ensure_ascii=False,
+        )
+        excess = len(marker.encode()) - limit
+        if excess <= 0 or not preview:
+            return marker
+        preview = preview[: max(0, len(preview) - excess)]
 
 
 # Safe expression evaluator for workflow templates/conditions. Replaces raw
@@ -1134,6 +1165,11 @@ class WorkflowEngine:
         redispatch = step.id in dispatched
         if not redispatch:
             dispatched.append(step.id)
+        if step.type == WorkflowStepType.TOOL:
+            # Known before dispatch, so the running row already says what the
+            # step was asked to do — even if it never returns.
+            result.tool_name = step.tool_name
+            result.tool_input = self._render_tool_args(step, run)
         self._persist_step_start(run, result, redispatch=redispatch)
         run.context.setdefault(IN_FLIGHT_STEP_KEY, []).append(step.id)
 
@@ -1278,17 +1314,22 @@ class WorkflowEngine:
         engines[rate_limit_per_minute] = engine
         return engine
 
+    @staticmethod
+    def _render_tool_args(step: WorkflowStepDef, run: WorkflowRun) -> dict[str, Any]:
+        """The step's arguments with ``{{ }}`` templates rendered against the run."""
+        return {
+            k: _render_template(v, run.context) if isinstance(v, str) else v
+            for k, v in step.tool_args.items()
+        }
+
     async def _run_tool_step(
         self, step: WorkflowStepDef, run: WorkflowRun, result: WorkflowStepResult
     ) -> None:
         """Execute a tool step directly via registry."""
-        # Render template args
-        rendered_args = {}
-        for k, v in step.tool_args.items():
-            if isinstance(v, str):
-                rendered_args[k] = _render_template(v, run.context)
-            else:
-                rendered_args[k] = v
+        if result.tool_input is None:
+            result.tool_name = step.tool_name
+            result.tool_input = self._render_tool_args(step, run)
+        rendered_args = result.tool_input
 
         # ── [GUARDRAILS] Pre-execution check (workflow steps are otherwise unguarded) ──
         wf = self._workflows.get(run.workflow_id)
@@ -1841,14 +1882,17 @@ class WorkflowEngine:
                 cur = conn.cursor()
                 cur.execute(
                     """INSERT INTO workflow_run_steps
-                       (run_id, step_id, step_type, status, started_at)
-                       VALUES (%s, %s, %s, %s, %s)""",
+                       (run_id, step_id, step_type, status, started_at,
+                        tool_name, tool_input)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s)""",
                     (
                         run.id,
                         result.step_id,
                         result.step_type.value,
                         WorkflowStepStatus.RUNNING.value,
                         result.started_at,
+                        result.tool_name,
+                        _capped_json(result.tool_input),
                     ),
                 )
                 conn.commit()
@@ -1908,11 +1952,9 @@ class WorkflowEngine:
         never started it.
         """
         try:
-            import json
-
             from robothor.db.connection import get_connection
 
-            output = json.dumps(result.tool_output, default=str) if result.tool_output else None
+            output = _capped_json(result.tool_output) if result.tool_output else None
             text = result.output_text[:2000] if result.output_text else None
 
             with get_connection() as conn:
@@ -1954,8 +1996,8 @@ class WorkflowEngine:
                             result.status.value,
                             None,
                             result.agent_run_id,
-                            None,
-                            None,
+                            result.tool_name,
+                            _capped_json(result.tool_input),
                             output,
                             result.condition_branch,
                             text,

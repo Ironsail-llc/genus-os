@@ -11,9 +11,11 @@ plugin asset ledger records that a plugin wrote it, else ``workspace``.
 from __future__ import annotations
 
 import logging
+import uuid
 
 import psycopg2.extras
 from fastapi import APIRouter, Request
+from fastapi.responses import JSONResponse
 
 from robothor.db.connection import get_connection
 from routers._operator import require_operator
@@ -139,6 +141,33 @@ def _workflow_runs(workflow_id: str, limit: int) -> list[dict]:
     return [_iso(r) for r in rows]
 
 
+def _workflow_run(workflow_id: str, run_id: str) -> dict | None:
+    """One run of one workflow, with each step's tool name, input, output and error."""
+    runs = _rows(
+        "SELECT id, workflow_id, status, trigger_type, trigger_detail, steps_total, "
+        "steps_completed, steps_failed, steps_skipped, duration_ms, started_at, "
+        "completed_at, error_message "
+        "FROM workflow_runs WHERE id = %s AND workflow_id = %s",
+        (run_id, workflow_id),
+    )
+    if not runs:
+        return None
+    steps = _rows(
+        "SELECT step_id, step_type, status, agent_id, agent_run_id, tool_name, "
+        "tool_input, tool_output, condition_branch, output_text, error_message, "
+        "duration_ms, started_at, completed_at "
+        "FROM workflow_run_steps WHERE run_id = %s ORDER BY created_at",
+        (run_id,),
+    )
+    detail = _iso(runs[0])
+    detail["id"] = str(detail["id"])
+    detail["steps"] = [
+        {k: (str(v) if k == "agent_run_id" and v is not None else v) for k, v in _iso(s).items()}
+        for s in steps
+    ]
+    return detail
+
+
 @router.get("")
 def list_workflows(request: Request) -> list[dict]:
     require_operator(request)
@@ -150,3 +179,19 @@ def workflow_runs(workflow_id: str, request: Request, limit: int = 20) -> list[d
     require_operator(request)
     limit = max(1, min(limit, _MAX_LIMIT))
     return _workflow_runs(workflow_id, limit)
+
+
+@router.get("/{workflow_id}/runs/{run_id}")
+def workflow_run(workflow_id: str, run_id: str, request: Request) -> JSONResponse:
+    """A run's step detail. Operator-only and never cached: the step inputs and
+    outputs carry whatever the tools saw."""
+    require_operator(request)
+    no_store = {"Cache-Control": "no-store"}
+    try:
+        uuid.UUID(run_id)
+    except ValueError:
+        return JSONResponse({"detail": "run not found"}, status_code=404, headers=no_store)
+    detail = _workflow_run(workflow_id, run_id)
+    if detail is None:
+        return JSONResponse({"detail": "run not found"}, status_code=404, headers=no_store)
+    return JSONResponse(detail, headers=no_store)
