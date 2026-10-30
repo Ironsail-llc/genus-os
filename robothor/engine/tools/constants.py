@@ -252,6 +252,14 @@ DEVOPS_METRICS_TOOLS = frozenset(
     }
 )
 
+# n8n monitor tools: read the snapshot the n8n poller keeps (never n8n itself)
+N8N_TOOLS = frozenset(
+    {
+        "n8n_list_workflows",
+        "n8n_recent_failures",
+    }
+)
+
 # Identity mapping tools (CRM contact_identifiers)
 IDENTITY_TOOLS = frozenset(
     {
@@ -448,6 +456,9 @@ READONLY_TOOLS: frozenset[str] = frozenset(
         "github_compare",
         # DevOps metrics read-only tools
         "devops_query_metrics",
+        # n8n monitor: the poller's snapshot, read-only
+        "n8n_list_workflows",
+        "n8n_recent_failures",
         # Identity read-only tools
         "resolve_identities",
         # Report rendering (pure output, no side effects)

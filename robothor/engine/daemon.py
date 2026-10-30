@@ -623,11 +623,12 @@ def _cleanup_stale_runs(tenant_id: str | None = None) -> int:
 
 
 def _background_workers(tenant_id: str) -> list[asyncio.Task[Any]]:
-    """Calendar write recovery, plus the workspace ingest.
+    """Calendar write recovery, the workspace ingest, and the n8n monitor.
 
     The ingest starts no task unless workspace_provider=microsoft365, or the
     provider is google with Gmail push switched on: otherwise a Google
-    instance's own sync scripts publish email.new / calendar.*.
+    instance's own sync scripts publish email.new / calendar.*. The n8n
+    monitor starts no task unless ROBOTHOR_N8N_ENABLED is on.
     """
     from robothor.engine.calendar_recovery_worker import run as recover_calendar
 
@@ -640,6 +641,12 @@ def _background_workers(tenant_id: str) -> list[asyncio.Task[Any]]:
         tasks.extend(ingest_worker.start_tasks(tenant_id))
     except Exception as e:  # noqa: BLE001 - ingest must never keep the engine down
         logger.warning("Workspace ingest not started: %s", type(e).__name__)
+    try:
+        from robothor.integrations.n8n import poller as n8n_poller
+
+        tasks.extend(n8n_poller.start_tasks(tenant_id))
+    except Exception as e:  # noqa: BLE001 - the n8n monitor must never keep the engine down
+        logger.warning("n8n monitor not started: %s", type(e).__name__)
     return tasks
 
 
