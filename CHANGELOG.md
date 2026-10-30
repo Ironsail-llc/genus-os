@@ -1,3 +1,9 @@
+## [1.120.0](https://github.com/Ironsail-llc/genus-os/compare/v1.119.0...v1.120.0) (2026-10-30)
+
+### Features
+
+* **dashboard:** side chat panel and the pages beside it (GEN-125) ([#779](https://github.com/Ironsail-llc/genus-os/issues/779)) ([a8e3211](https://github.com/Ironsail-llc/genus-os/commit/a8e32116b3a356381cdcb5cc3a2a5ef01acb37ea))
+
 ## [1.119.0](https://github.com/Ironsail-llc/genus-os/compare/v1.118.0...v1.119.0) (2026-10-30)
 
 ### Features
