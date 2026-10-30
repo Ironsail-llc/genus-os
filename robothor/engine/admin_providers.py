@@ -560,10 +560,10 @@ def register(app: FastAPI) -> None:
         """The fleet's current default model block, as ``_defaults.yaml`` has it.
 
         The Providers page writes this block (``PUT /defaults``, through the
-        bridge's ``PATCH /api/providers/defaults``) but had nothing to READ it from, so it could not pre-select the current
-        default; the first version shipped with the field blank (B6 review,
-        2026-09-14). A missing file is an instance with no defaults, not an
-        error.
+        bridge's ``PATCH /api/providers/defaults``) but had nothing to READ it
+        from, so it could not pre-select the current default; the first
+        version shipped with the field blank (B6 review, 2026-09-14). A
+        missing file is an instance with no defaults, not an error.
         """
         from robothor.engine import config as engine_config
 
