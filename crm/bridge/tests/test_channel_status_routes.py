@@ -62,12 +62,14 @@ class FakeEngine:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str, dict | None]] = []
         self.status = 200
+        # The listing's body; ``None`` means the stock ``ENGINE_CHANNELS``.
+        self.listing: object = None
 
     async def __call__(self, method, path, *, json=None, timeout=30):
         self.calls.append((method, path, json))
         if path.endswith("/verify"):
             return self.status, ENGINE_VERIFY
-        return self.status, ENGINE_CHANNELS
+        return self.status, ENGINE_CHANNELS if self.listing is None else self.listing
 
 
 @pytest.fixture
@@ -182,6 +184,82 @@ def test_a_database_that_is_down_makes_the_count_null_not_zero(
 def test_an_unreachable_engine_is_a_502(controls_client_as_operator, fake_engine, local_state):
     fake_engine.status = 502
     assert controls_client_as_operator.get("/api/channels").status_code == 502
+
+
+# One sentence for every failure hid the cause the operator has to act on: a
+# network path that is closed, a key the engine refuses, or a version skew are
+# three different fixes. Each stays a 502 (the page treats it as a listing
+# failure) but names its own cause.
+
+
+def test_an_engine_the_bridge_cannot_reach_names_the_url_setting(
+    controls_client_as_operator, fake_engine, local_state
+):
+    fake_engine.status = 502
+    fake_engine.listing = {"error": "engine unavailable"}
+
+    response = controls_client_as_operator.get("/api/channels")
+
+    assert response.status_code == 502
+    assert response.json()["detail"] == (
+        "the bridge could not reach the engine at its configured URL (ROBOTHOR_ENGINE_URL); "
+        "check that the engine is running and that the network path from the bridge to the "
+        "engine is allowed"
+    )
+
+
+@pytest.mark.parametrize("code", [401, 403])
+def test_an_engine_that_refuses_the_bridge_names_the_signing_key(
+    controls_client_as_operator, fake_engine, local_state, code
+):
+    fake_engine.status = code
+    fake_engine.listing = {"detail": "unauthorized"}
+
+    response = controls_client_as_operator.get("/api/channels")
+
+    assert response.status_code == 502
+    assert response.json()["detail"] == (
+        f"the engine refused the bridge's request (HTTP {code}); check the shared signing key"
+    )
+
+
+def test_an_engine_without_the_listing_route_names_a_version_skew(
+    controls_client_as_operator, fake_engine, local_state
+):
+    fake_engine.status = 404
+    fake_engine.listing = {"detail": "Not Found"}
+
+    response = controls_client_as_operator.get("/api/channels")
+
+    assert response.status_code == 502
+    assert response.json()["detail"] == (
+        "the engine does not serve the channel listing (HTTP 404); the bridge and the engine "
+        "may be different versions"
+    )
+
+
+@pytest.mark.parametrize("code", [500, 503])
+def test_any_other_engine_failure_names_its_status(
+    controls_client_as_operator, fake_engine, local_state, code
+):
+    fake_engine.status = code
+    fake_engine.listing = {"detail": "boom"}
+
+    response = controls_client_as_operator.get("/api/channels")
+
+    assert response.status_code == 502
+    assert response.json()["detail"] == f"the engine answered HTTP {code} to the channel listing"
+
+
+def test_a_listing_that_is_not_an_object_names_its_status(
+    controls_client_as_operator, fake_engine, local_state
+):
+    fake_engine.listing = ["not", "an", "object"]
+
+    response = controls_client_as_operator.get("/api/channels")
+
+    assert response.status_code == 502
+    assert response.json()["detail"] == "the engine answered HTTP 200 to the channel listing"
 
 
 # ── Verify ──────────────────────────────────────────────────────────────
