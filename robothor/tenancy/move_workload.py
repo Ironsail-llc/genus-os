@@ -29,6 +29,7 @@ integration tests red on it too).
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import asdict, dataclass
 from dataclasses import field as dataclass_field
 from typing import Any
@@ -372,6 +373,28 @@ def _refuse_tenants(cur: Any, source: str, target: str) -> str:
     return up_source[-1]
 
 
+def _shell_tenant() -> str:
+    """The tenant this process's engine runs as: what a root shell must be."""
+    from robothor.constants import DEFAULT_TENANT
+
+    return (
+        os.environ.get("ROBOTHOR_TENANT_ID", "")
+        or os.environ.get("ROBOTHOR_DEFAULT_TENANT", "")
+        or DEFAULT_TENANT
+    )
+
+
+def _refuse_foreign_shell(root: str) -> None:
+    """The move is the root operator's; refuse a shell bound to any other tenant."""
+    shell = _shell_tenant()
+    if shell != root:
+        raise WorkloadMoveError(
+            f"this shell's engine tenant is {shell!r}, but both tenants are under the root "
+            f"{root!r}; run move-workload from a root shell (ROBOTHOR_TENANT_ID unset or "
+            f"{root!r}, and ROBOTHOR_DEFAULT_TENANT {root!r})"
+        )
+
+
 def _refuse_unclassified(cur: Any) -> None:
     cur.execute(_TENANT_TABLES_SQL)
     tables = {r["tbl"] for r in cur.fetchall()}
@@ -686,13 +709,15 @@ def move_workload(
     reads the source tenant and writes the target; a connection bound to
     either would see half of it). Every refusal is checked before the first
     write: the tenants (both exist, the target is active, both sit under the
-    same root, and the target is a descendant or sibling, never an ancestor),
+    same root, the target is a descendant or sibling, never an ancestor, and
+    this shell's engine tenant is that root),
     every tenant table is classified, nothing of the workload is still running,
     nothing in :data:`REFUSED_IF_PRESENT` is present, no moved row's unique key
     already exists in the target, and no row that stays references a row that
     moves. Then each table in :data:`MOVED_TABLES` is re-tenanted in place, a
     moved row's link to a row that stays in another tenant is cleared, and one
-    ``audit_log`` row records the move. Any failure rolls all of it back.
+    ``audit_log`` row records the move (none when nothing moved, as on a
+    re-run). Any failure rolls all of it back.
 
     ``dry_run`` runs every refusal and reports the same counts, then rolls back.
     Raises ``WorkloadMoveError`` for a refusal; database errors propagate after
@@ -720,6 +745,7 @@ def move_workload(
             read_every_tenant_in_transaction(conn)
             cur = conn.cursor(cursor_factory=RealDictCursor)
             root = _refuse_tenants(cur, from_tenant, to_tenant)
+            _refuse_foreign_shell(root)
             _refuse_unclassified(cur)
             _select(cur, params)
             _refuse_live(cur, params)
@@ -745,7 +771,10 @@ def move_workload(
                     params,
                 )
                 report.counts[table] = int(cur.rowcount or 0)
-            report.audit_id = _record_audit(cur, actor=actor, root=root, report=report)
+            # A re-run of a move that already happened changes nothing and
+            # records nothing: the trail lists only moves that moved rows.
+            if any(report.counts.values()) or report.links_cleared:
+                report.audit_id = _record_audit(cur, actor=actor, root=root, report=report)
             conn.commit()
         except Exception:
             conn.rollback()
