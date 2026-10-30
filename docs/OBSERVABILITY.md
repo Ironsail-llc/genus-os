@@ -170,7 +170,8 @@ scheduled run. Before this the only way back was an `UPDATE` typed into psql.
 A workflow run records what each tool step was given and what it returned: the
 tool name and its rendered arguments are written to `workflow_run_steps` when
 the step starts (so a step that never returns still shows what it was asked to
-do), and the tool's output when it ends. Each is capped at 64 KB of JSON; a
+do), and the tool's output when it ends. A credential-named argument, or the
+value of a `vault_set` step, is stored as `<redacted>`. Each is capped at 64 KB of JSON; a
 larger payload is stored as `{"_truncated": true, "original_bytes": N,
 "preview": "..."}` and the run carries on.
 

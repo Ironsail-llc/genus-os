@@ -104,6 +104,22 @@ def _capped_json(value: Any, limit: int = STEP_IO_MAX_BYTES) -> str | None:
         preview = preview[: max(0, len(preview) - excess)]
 
 
+def _stored_tool_input(result: WorkflowStepResult) -> str | None:
+    """A step's tool input as it is persisted: redacted, then capped.
+
+    The same rule as ``agent_run_steps.tool_input``
+    (``session.record_tool_call``): the row outlives the run and is served by
+    the run-detail routes, so a credential-named argument or a ``vault_set``
+    value is stored as the placeholder. The tool itself still receives the
+    real arguments from ``result.tool_input``.
+    """
+    from robothor.secrets.redaction import redact_tool_arguments
+
+    if result.tool_input is None:
+        return None
+    return _capped_json(redact_tool_arguments(result.tool_name or "", result.tool_input))
+
+
 # Safe expression evaluator for workflow templates/conditions. Replaces raw
 # eval(): even with __builtins__={} the old approach allowed attribute chains
 # like value.__class__.__bases__[0].__subclasses__() to escape. This whitelists
@@ -330,7 +346,7 @@ def parse_workflow(data: dict[str, Any]) -> WorkflowDef:
             agent_id=s.get("agent_id", ""),
             message=s.get("message", ""),
             tool_name=s.get("tool_name", ""),
-            tool_args=s.get("tool_args", {}),
+            tool_args=s.get("tool_args") or {},
             tool_timeout_seconds=tool_timeout,
             input_expr=s.get("input", ""),
             branches=branches,
@@ -1319,7 +1335,7 @@ class WorkflowEngine:
         """The step's arguments with ``{{ }}`` templates rendered against the run."""
         return {
             k: _render_template(v, run.context) if isinstance(v, str) else v
-            for k, v in step.tool_args.items()
+            for k, v in (step.tool_args or {}).items()
         }
 
     async def _run_tool_step(
@@ -1888,7 +1904,7 @@ class WorkflowEngine:
                         WorkflowStepStatus.RUNNING.value,
                         result.started_at,
                         result.tool_name,
-                        _capped_json(result.tool_input),
+                        _stored_tool_input(result),
                     ),
                 )
                 conn.commit()
@@ -1993,7 +2009,7 @@ class WorkflowEngine:
                             None,
                             result.agent_run_id,
                             result.tool_name,
-                            _capped_json(result.tool_input),
+                            _stored_tool_input(result),
                             output,
                             result.condition_branch,
                             text,
