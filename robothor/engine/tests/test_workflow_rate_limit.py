@@ -465,3 +465,22 @@ class TestBusyFirst:
             run = await _run(engine, requeue=True)
         assert run.rate_limited is True
         release.assert_awaited_once_with("workflow:order-flow")
+
+    @pytest.mark.asyncio
+    async def test_the_run_lock_released_is_the_one_acquired(self, engine_config, clock):
+        # A registry key that differs from the definition's id must not make
+        # execute release a lock it never took.
+        engine = _engine(engine_config, _definition())
+        engine._workflows["order-flow-alias"] = engine._workflows["order-flow"]
+        acquire, release = AsyncMock(return_value=True), AsyncMock()
+        with (
+            patch("robothor.engine.dedup.try_acquire", new=acquire),
+            patch("robothor.engine.dedup.release", new=release),
+        ):
+            run = await engine.execute(
+                "order-flow-alias", trigger_type="hook", user_id="service:workflow:order-flow"
+            )
+        assert run.status == RunStatus.COMPLETED
+        assert [c.args[0] for c in acquire.await_args_list] == [
+            c.args[0] for c in release.await_args_list
+        ]

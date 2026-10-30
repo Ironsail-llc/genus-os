@@ -195,6 +195,11 @@ _RATE_LIMIT_WAIT_SECONDS = 5
 _MAX_RATE_LIMIT_WAIT_SECONDS = 30
 
 
+def _run_lock_key(wf: WorkflowDef) -> str:
+    """The one lock key a workflow's runs take and release."""
+    return f"workflow:{wf.id}"
+
+
 def _retry_delay(attempt: int) -> int:
     """Backoff before retry ``attempt`` (0-based): 60s, then 300s thereafter."""
     if not _RETRY_BACKOFF_SECONDS:
@@ -545,7 +550,7 @@ class WorkflowEngine:
         )
         if refused is not None:
             return refused
-        dedup_key = f"workflow:{workflow_id}"
+        dedup_key = _run_lock_key(wf)
 
         # Initialize run
         run = WorkflowRun(
@@ -715,7 +720,7 @@ class WorkflowEngine:
         from robothor.engine.dedup import release, try_acquire
 
         # Prevent concurrent runs of the same workflow
-        dedup_key = f"workflow:{wf.id}"
+        dedup_key = _run_lock_key(wf)
         if not await try_acquire(dedup_key):
             logger.info(
                 "Workflow %s already running, skipping duplicate",
