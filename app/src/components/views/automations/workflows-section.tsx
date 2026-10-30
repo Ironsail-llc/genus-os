@@ -44,7 +44,10 @@ export function WorkflowsSection({ visible = true }: { visible?: boolean }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
-  const [opened, setOpened] = useState<{ workflowId: string; runId: string } | null>(null);
+  // The run stays selected after the drawer closes, so its title does not
+  // blank out while the sheet slides away.
+  const [selected, setSelected] = useState<{ workflowId: string; runId: string } | null>(null);
+  const [drawerOpen, setDrawerOpen] = useState(false);
 
   const toggle = (workflowId: string) =>
     setExpanded((prev) => {
@@ -172,7 +175,10 @@ export function WorkflowsSection({ visible = true }: { visible?: boolean }) {
               {isOpen ? (
                 <WorkflowRunsList
                   workflowId={w.workflow_id}
-                  onOpenRun={(runId) => setOpened({ workflowId: w.workflow_id, runId })}
+                  onOpenRun={(runId) => {
+                    setSelected({ workflowId: w.workflow_id, runId });
+                    setDrawerOpen(true);
+                  }}
                 />
               ) : null}
             </div>
@@ -181,12 +187,10 @@ export function WorkflowsSection({ visible = true }: { visible?: boolean }) {
       </div>
 
       <WorkflowRunDrawer
-        workflowId={opened?.workflowId ?? ""}
-        runId={opened?.runId ?? null}
-        open={opened !== null}
-        onOpenChange={(open) => {
-          if (!open) setOpened(null);
-        }}
+        workflowId={selected?.workflowId ?? ""}
+        runId={selected?.runId ?? null}
+        open={drawerOpen && selected !== null}
+        onOpenChange={setDrawerOpen}
       />
     </section>
   );

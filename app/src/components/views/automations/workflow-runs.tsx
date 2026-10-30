@@ -1,20 +1,27 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { History } from "lucide-react";
 import { EmptyState } from "@/components/business/empty-state";
 import { StatusBadge, fromEngineStatus } from "@/components/business/status-badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { durationText } from "@/lib/automations/run-truth";
-import { runsUrl, stepTally, type WorkflowRun } from "@/lib/automations/workflow-runs";
+import {
+  OPERATOR_ONLY,
+  runsUrl,
+  stepTally,
+  type WorkflowRun,
+} from "@/lib/automations/workflow-runs";
+import { useBridgePoll } from "@/lib/bridge/use-bridge-poll";
 import { absoluteTime, relativeTime } from "@/lib/inbox/pending";
 
 /**
  * One workflow's recent runs, drawn under its row in the Workflows section.
  *
  * Each run is a button: selecting it hands its id to the caller, which opens
- * the run-detail drawer. Fetched when mounted, which is when the operator
- * expands the workflow, so a collapsed listing costs no request per workflow.
+ * the run-detail drawer. Read when mounted, which is when the operator expands
+ * the workflow, so a collapsed listing costs no request per workflow; while it
+ * stays expanded it refreshes on the Helm's usual beat.
  */
 export function WorkflowRunsList({
   workflowId,
@@ -24,44 +31,22 @@ export function WorkflowRunsList({
   onOpenRun: (runId: string) => void;
 }) {
   const [runs, setRuns] = useState<WorkflowRun[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let active = true;
-    (async () => {
-      setLoading(true);
-      try {
-        const res = await fetch(runsUrl(workflowId));
-        if (!active) return;
-        if (!res.ok) {
-          setError(res.status === 403 ? "Operator access required." : `Error ${res.status}`);
-          return;
-        }
-        const data = await res.json();
-        if (!active) return;
-        setRuns(Array.isArray(data) ? data : []);
-        setError(null);
-      } catch {
-        if (active) setError("Could not reach the bridge.");
-      } finally {
-        if (active) setLoading(false);
-      }
-    })();
-    return () => {
-      active = false;
-    };
-  }, [workflowId]);
+  const { loading, error, forbidden } = useBridgePoll({
+    visible: true,
+    url: runsUrl(workflowId),
+    onData: (body) => setRuns(Array.isArray(body) ? (body as WorkflowRun[]) : []),
+  });
+  const refusal = forbidden ? OPERATOR_ONLY : error;
 
   return (
     <div data-testid={`workflow-runs-${workflowId}`} className="mt-2 flex flex-col gap-1.5">
-      {error && (
+      {refusal && (
         <p data-testid="workflow-runs-error" className="text-xs text-destructive">
-          {error}
+          {refusal}
         </p>
       )}
 
-      {loading && !error && (
+      {loading && (
         <div data-testid="workflow-runs-loading" className="flex flex-col gap-1.5" aria-hidden>
           {[0, 1].map((i) => (
             <Skeleton key={i} className="h-9 w-full" />
@@ -69,7 +54,7 @@ export function WorkflowRunsList({
         </div>
       )}
 
-      {!loading && !error && runs.length === 0 && (
+      {!loading && !refusal && runs.length === 0 && (
         <EmptyState
           testId="workflow-runs-empty"
           icon={History}

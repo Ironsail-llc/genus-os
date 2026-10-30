@@ -11,6 +11,9 @@
 
 const BRIDGE = "/api/bridge";
 
+/** Both routes are operator-only; a 403 says so rather than reading as a fault. */
+export const OPERATOR_ONLY = "Operator access required.";
+
 export type WorkflowRun = {
   id: string;
   workflow_id: string;

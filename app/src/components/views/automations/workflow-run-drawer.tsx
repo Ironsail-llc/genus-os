@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { ListX } from "lucide-react";
 import { EmptyState } from "@/components/business/empty-state";
 import { StatusBadge, fromEngineStatus } from "@/components/business/status-badge";
@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/sheet";
 import { durationText } from "@/lib/automations/run-truth";
 import {
+  OPERATOR_ONLY,
   prettyJson,
   runUrl,
   stepTally,
@@ -21,6 +22,7 @@ import {
   type WorkflowRunDetail,
   type WorkflowRunStep,
 } from "@/lib/automations/workflow-runs";
+import { useBridgePoll } from "@/lib/bridge/use-bridge-poll";
 import { absoluteTime, relativeTime } from "@/lib/inbox/pending";
 
 /**
@@ -46,78 +48,63 @@ export function WorkflowRunDrawer({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
-  const [detail, setDetail] = useState<WorkflowRunDetail | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!open || !runId) return;
-    let active = true;
-    (async () => {
-      setDetail(null);
-      setError(null);
-      setLoading(true);
-      try {
-        const res = await fetch(runUrl(workflowId, runId));
-        if (!active) return;
-        if (!res.ok) {
-          setError(
-            res.status === 403
-              ? "Operator access required."
-              : res.status === 404
-                ? "Run not found."
-                : `Error ${res.status}`
-          );
-          return;
-        }
-        const data = (await res.json()) as WorkflowRunDetail;
-        if (active) setDetail(data);
-      } catch {
-        if (active) setError("Could not reach the bridge.");
-      } finally {
-        if (active) setLoading(false);
-      }
-    })();
-    return () => {
-      active = false;
-    };
-  }, [open, workflowId, runId]);
-
-  const steps = Array.isArray(detail?.steps) ? detail.steps : [];
-  const tally = detail ? stepTally(detail) : null;
-  const duration = durationText(detail?.duration_ms);
-
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
         data-testid="workflow-run-drawer"
         className="@container w-full gap-0 overflow-y-auto overflow-x-hidden sm:max-w-xl"
       >
-        <SheetHeader className="gap-2 border-b border-border px-4 py-3 pr-10">
+        <SheetHeader className="gap-1 border-b border-border px-4 py-3 pr-10">
           <SheetTitle className="break-all text-sm">{workflowId}</SheetTitle>
-          <SheetDescription className="break-all font-mono text-xs">
-            Run {runId}
-          </SheetDescription>
-          {detail ? (
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
-              <StatusBadge
-                status={fromEngineStatus(detail.status)}
-                label={detail.status ?? undefined}
-              />
-              {detail.started_at ? (
-                <time
-                  dateTime={detail.started_at}
-                  title={absoluteTime(detail.started_at)}
-                  className="text-muted-foreground"
-                >
-                  {relativeTime(detail.started_at)}
-                </time>
-              ) : null}
-              {duration ? <span className="font-mono text-muted-foreground">{duration}</span> : null}
-              {tally ? <span className="font-mono text-muted-foreground">{tally}</span> : null}
-            </div>
-          ) : null}
-          {detail?.error_message ? (
+          <SheetDescription className="break-all font-mono text-xs">Run {runId}</SheetDescription>
+        </SheetHeader>
+        {/* Keyed by run: another run starts from its own loading state rather
+            than showing the last run's steps until the new ones arrive. The
+            sheet mounts its content only while open, so a closed drawer reads
+            nothing. */}
+        {runId ? <RunDetail key={runId} workflowId={workflowId} runId={runId} /> : null}
+      </SheetContent>
+    </Sheet>
+  );
+}
+
+function RunDetail({ workflowId, runId }: { workflowId: string; runId: string }) {
+  const [detail, setDetail] = useState<WorkflowRunDetail | null>(null);
+  // One read, no beat: a run the operator is reading should not reflow under them.
+  const { loading, error, forbidden, status } = useBridgePoll({
+    visible: true,
+    paused: true,
+    url: runUrl(workflowId, runId),
+    onData: (body) => setDetail(body as WorkflowRunDetail),
+  });
+  const refusal = forbidden ? OPERATOR_ONLY : status === 404 ? "Run not found." : error;
+
+  const steps = Array.isArray(detail?.steps) ? detail.steps : [];
+  const tally = detail ? stepTally(detail) : null;
+  const duration = durationText(detail?.duration_ms);
+
+  return (
+    <div className="flex flex-col gap-3 px-4 py-3">
+      {detail ? (
+        <div className="flex flex-col gap-2">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+            <StatusBadge
+              status={fromEngineStatus(detail.status)}
+              label={detail.status ?? undefined}
+            />
+            {detail.started_at ? (
+              <time
+                dateTime={detail.started_at}
+                title={absoluteTime(detail.started_at)}
+                className="text-muted-foreground"
+              >
+                {relativeTime(detail.started_at)}
+              </time>
+            ) : null}
+            {duration ? <span className="font-mono text-muted-foreground">{duration}</span> : null}
+            {tally ? <span className="font-mono text-muted-foreground">{tally}</span> : null}
+          </div>
+          {detail.error_message ? (
             <p
               data-testid="run-drawer-error-message"
               className="whitespace-pre-wrap break-words text-xs text-destructive"
@@ -125,42 +112,40 @@ export function WorkflowRunDrawer({
               {detail.error_message}
             </p>
           ) : null}
-        </SheetHeader>
-
-        <div className="flex flex-col gap-3 px-4 py-3">
-          {loading && (
-            <div data-testid="run-drawer-loading" className="flex flex-col gap-2" aria-hidden>
-              {[0, 1, 2].map((i) => (
-                <Skeleton key={i} className="h-16 w-full" />
-              ))}
-            </div>
-          )}
-
-          {error && (
-            <p data-testid="run-drawer-error" className="text-sm text-destructive">
-              {error}
-            </p>
-          )}
-
-          {detail && steps.length === 0 && (
-            <EmptyState
-              testId="run-drawer-empty"
-              icon={ListX}
-              title="No steps recorded"
-              description="This run ended before any step was recorded."
-            />
-          )}
-
-          {steps.length > 0 && (
-            <ol className="flex flex-col gap-2">
-              {steps.map((step) => (
-                <StepCard key={step.step_id} step={step} />
-              ))}
-            </ol>
-          )}
         </div>
-      </SheetContent>
-    </Sheet>
+      ) : null}
+
+      {loading && (
+        <div data-testid="run-drawer-loading" className="flex flex-col gap-2" aria-hidden>
+          {[0, 1, 2].map((i) => (
+            <Skeleton key={i} className="h-16 w-full" />
+          ))}
+        </div>
+      )}
+
+      {refusal && (
+        <p data-testid="run-drawer-error" className="text-sm text-destructive">
+          {refusal}
+        </p>
+      )}
+
+      {detail && steps.length === 0 && (
+        <EmptyState
+          testId="run-drawer-empty"
+          icon={ListX}
+          title="No steps recorded"
+          description="This run ended before any step was recorded."
+        />
+      )}
+
+      {steps.length > 0 && (
+        <ol className="flex flex-col gap-2">
+          {steps.map((step) => (
+            <StepCard key={step.step_id} step={step} />
+          ))}
+        </ol>
+      )}
+    </div>
   );
 }
 
@@ -249,7 +234,7 @@ function Payload({
           start.
         </p>
       ) : null}
-      <pre className="max-h-80 overflow-y-auto whitespace-pre-wrap break-all px-2 pb-2 font-mono text-[11px] leading-relaxed text-foreground">
+      <pre className="max-h-80 overflow-y-auto whitespace-pre-wrap wrap-anywhere px-2 pb-2 font-mono text-[11px] leading-relaxed text-foreground">
         {text}
       </pre>
     </details>
