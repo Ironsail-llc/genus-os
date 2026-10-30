@@ -68,15 +68,37 @@ def _pending_workflow_approval():
     )
 
 
+class _NoProposals:
+    """An ``Operations`` ledger with nothing in review, recording its tenant."""
+
+    tenants: list[str] = []
+
+    def __init__(self, tenant_id):
+        _NoProposals.tenants.append(tenant_id)
+
+    def list_review(self, **kw):
+        return []
+
+
 @pytest.fixture
 def stores(monkeypatch):
     from routers import approvals
 
-    monkeypatch.setattr(
-        approvals, "list_pending_approvals", lambda **kw: [_pending_workflow_approval()]
-    )
-    monkeypatch.setattr(approvals, "list_pending_questions", lambda **kw: [_pending_question()])
-    return approvals
+    _NoProposals.tenants = []
+    asked: dict[str, object] = {}
+
+    def _approvals(**kw):
+        asked["approvals"] = kw.get("tenant_id")
+        return [_pending_workflow_approval()]
+
+    def _questions(**kw):
+        asked["questions"] = kw.get("tenant_id")
+        return [_pending_question()]
+
+    monkeypatch.setattr(approvals, "list_pending_approvals", _approvals)
+    monkeypatch.setattr(approvals, "list_pending_questions", _questions)
+    monkeypatch.setattr(approvals, "Operations", _NoProposals)
+    return asked
 
 
 # ─── The gate ───────────────────────────────────────────────────────
@@ -110,6 +132,15 @@ def test_listing_composes_both_kinds(controls_client_as_operator, stores):
     kinds = {item["kind"] for item in body["pending"]}
     assert kinds == {"workflow", "question"}
     assert body["count"] == 2
+
+
+def test_the_platform_operator_lists_the_platform_tenant(controls_client_as_operator, stores):
+    from routers._operator import PLATFORM_TENANT
+
+    controls_client_as_operator.get("/api/approvals")
+
+    assert stores == {"approvals": PLATFORM_TENANT, "questions": PLATFORM_TENANT}
+    assert _NoProposals.tenants == [PLATFORM_TENANT]
 
 
 def test_listing_names_the_id_the_answer_endpoint_takes(controls_client_as_operator, stores):
@@ -147,8 +178,11 @@ def test_answering_a_question_writes_the_answer_and_audits_it(controls_client_as
 
 
 def test_a_question_already_answered_is_reported_not_faked(controls_client_as_operator):
+    # The row exists — it is this tenant's, and already answered — which is
+    # what separates "already answered" from "not yours" (a 404).
     with (
         patch("routers.approvals.answer_question", return_value=False),
+        patch("routers.approvals.get_question", return_value=_pending_question()),
         patch("routers._audit.log_event") as log_event,
     ):
         body = controls_client_as_operator.post(

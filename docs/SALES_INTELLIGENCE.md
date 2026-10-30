@@ -5,6 +5,11 @@ review exact outreach drafts, pause integration stages, stop outreach to a
 contact, and take over a conversation. Agents can research and propose work;
 they cannot approve messages or select another tenant.
 
+Drafts waiting on a verdict also appear in the Helm's Inbox as proposals, beside
+workflow approvals and agent questions; approving or rejecting one there is the
+same decision as in the Sales view, recorded with the deciding operator and the
+tenant.
+
 Structured workers cover discovery, research, independent evidence assessment and deterministic qualification,
 contact research, provider verification, initial and follow-up drafting, inbound conversation
 classification and activation guidance. Discovery admits at most 20 new domains

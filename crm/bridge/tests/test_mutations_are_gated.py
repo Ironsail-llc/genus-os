@@ -416,3 +416,14 @@ def test_every_allowlist_entry_still_matches_a_live_route() -> None:
 def test_every_allowlist_entry_cites_a_reason() -> None:
     for prefix, reason in JUSTIFIED_WITHOUT_OPERATOR_GATE.items():
         assert len(reason.strip()) > 40, f"{prefix} needs a real justification, not {reason!r}"
+
+
+def test_inbox_decisions_carry_the_tenant_operator_gate() -> None:
+    """The Inbox answers are tenant-local: pinned, so the escalation branch's
+    ``require_operator`` cannot be what keeps this route green on its own."""
+    routes = [route for route in _mutation_routes() if _matches(route.path, "/api/approvals")]
+    assert routes, "no /api/approvals mutation route enumerated"
+    for route in routes:
+        assert "require_tenant_operator(request)" in inspect.getsource(route.endpoint), _describe(
+            route
+        )

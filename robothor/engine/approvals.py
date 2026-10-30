@@ -188,6 +188,22 @@ def get_approval(
     return _row(row) if row else None
 
 
+def get_approval_by_id(
+    approval_id: str, *, tenant_id: str = DEFAULT_TENANT
+) -> ApprovalRequest | None:
+    """One request by its row id, or None if this tenant never asked it."""
+    from robothor.db.connection import get_connection
+
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            f"SELECT {_COLUMNS} FROM workflow_approvals WHERE id = %s AND tenant_id = %s",
+            (approval_id, tenant_id or DEFAULT_TENANT),
+        )
+        row = cur.fetchone()
+    return _row(row) if row else None
+
+
 def decide_approval(
     run_id: str,
     step_id: str,

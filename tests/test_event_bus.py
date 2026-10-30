@@ -96,8 +96,18 @@ class TestPublish:
         assert msg_id is None
 
     def test_valid_streams(self):
-        """All 8 expected streams exist."""
-        expected = {"email", "calendar", "crm", "vision", "health", "agent", "system", "channel"}
+        """All 9 expected streams exist."""
+        expected = {
+            "email",
+            "calendar",
+            "crm",
+            "vision",
+            "health",
+            "agent",
+            "system",
+            "channel",
+            "operations",
+        }
         assert expected == VALID_STREAMS
 
     def test_publish_all_streams(self):

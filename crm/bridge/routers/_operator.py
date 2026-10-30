@@ -19,11 +19,18 @@ and provider keys — and every query behind it is scoped by that tenant.
 HOME (``home_tenant_id == tenant_id``), because a root admin acting in a child
 is that child's administrator for the request, not the appliance's.
 ``require_operator`` is the root gate under its old name.
+
+``require_tenant_operator`` is the tenant-LOCAL sibling, for surfaces whose
+rows each belong to one tenant (the Inbox: workflow approvals, agent questions,
+proposed actions). It keeps conditions 1-3 and replaces 4 with "the session
+names a tenant", and it hands that tenant back so the route reads and writes
+only the acting tenant's rows. It is never sufficient for a platform-global
+surface.
 """
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, NamedTuple
 
 from fastapi import HTTPException, Request
 
@@ -107,6 +114,28 @@ def require_root_operator(request: Request) -> str:
     if not _human_with_role(auth, OPERATOR_ROLES) or not is_root(auth):
         raise HTTPException(status_code=403, detail="operator role required")
     return f"operator:{auth.actor_id}"
+
+
+class TenantOperator(NamedTuple):
+    """Who may decide, and the one tenant whose rows they may decide."""
+
+    actor: str
+    tenant_id: str
+
+
+def require_tenant_operator(request: Request) -> TenantOperator:
+    """Gate for TENANT-LOCAL decisions: an owner or admin of the acting tenant.
+
+    The tenant comes from the verified session (``auth.tenant_id``), never from
+    the request, so a caller cannot name someone else's tenant. With tenant
+    switching, that is the tenant the token acts in. The platform tenant's
+    operator passes too, with the platform tenant, so their Inbox is unchanged.
+    """
+    auth = getattr(request.state, "auth", None)
+    tenant_id = (getattr(auth, "tenant_id", None) or "").strip()
+    if auth is None or auth.is_service or auth.role not in OPERATOR_ROLES or not tenant_id:
+        raise HTTPException(status_code=403, detail="operator role required")
+    return TenantOperator(actor=f"operator:{auth.actor_id}", tenant_id=tenant_id)
 
 
 def require_root_audit_reader(request: Request) -> str:

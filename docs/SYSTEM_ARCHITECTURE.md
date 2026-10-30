@@ -72,8 +72,10 @@ The Helm deployment has a different boundary from the systemd appliance:
   (`app/src/app/api/bridge/[...path]`) will not forward the path at all. Humans
   set and rotate secrets with `robothor vault` on the appliance.
   `/api/vault/list` stays open to operators because it returns key names only.
-- Bridge mutations under `/api/` either call an operator gate or are
-  scope-gated by the middleware; `crm/bridge/tests/test_mutations_are_gated.py`
+- Bridge mutations under `/api/` either call an operator gate (the root gate
+  `require_root_operator`, the per-tenant `require_tenant_admin`, or the Inbox's
+  tenant-local `require_tenant_operator`) or are scope-gated by the middleware;
+  `crm/bridge/tests/test_mutations_are_gated.py`
   enumerates the assembled app and fails on any route that is neither, so a new
   ungated mutation cannot ship unnoticed. There are two gates
   (`crm/bridge/routers/_operator.py`): `require_tenant_admin` for the *acting*
@@ -1425,11 +1427,20 @@ identity caches (60 s, and 300 s for `tenant_users`), both callers finish by
 posting `/api/admin/identities/reload`, best effort. Full rules, tables and CLI:
 [Channel access](channels/access.md).
 
-**Answering from the Helm.** `GET /api/approvals` lists both durable kinds;
-`POST /api/approvals/{kind}/{id}` answers one, with `kind` in `workflow`,
-`question`, `escalation`. Operator-scoped and audited (identifiers only — the
-answer text is content, not an identifier). `escalation` is proxied to the
-engine, because settling it means waking a coroutine in that process.
+**Answering from the Helm.** `GET /api/approvals` lists the three durable
+kinds; `POST /api/approvals/{kind}/{id}` answers one, with `kind` in
+`workflow`, `question`, `action` (an `operation_actions` row in `review`,
+decided through `Operations.decide`), `escalation`. An `action` row carries
+its `envelope` (sender, recipient, purpose, subject, claims, evidence) and its
+whole body, never truncated: approving authorizes the exact payload, so the
+Inbox card shows all of it before Approve, as the Sales review does. The durable kinds are
+tenant-local: `require_tenant_operator` admits an owner or admin of the tenant
+the session acts in, every store call filters on that tenant and runs inside
+`tenant_scope` so RLS binds it too, and another tenant's id is a 404 that
+settles nothing. Audited with `decided_by` and `tenant_id` (identifiers only —
+the answer text is content, not an identifier). `escalation` stays
+platform-only (`require_operator`) and is proxied to the engine, because
+settling it means waking a coroutine in that process.
 
 #### Claude Code driver (`robothor/engine/coding/`)
 

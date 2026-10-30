@@ -77,6 +77,7 @@ ADMIN_ROUTER_MODULES = (
 #: so that passing it is observable as a 418.
 GATE_NAMES = (
     "require_tenant_admin",
+    "require_tenant_operator",
     "require_tenant_audit_reader",
     "require_root_operator",
     "require_root_audit_reader",
@@ -616,11 +617,14 @@ class TestActingTenantIsTheScope:
         with (
             patch("routers.approvals.list_pending_approvals", return_value=[]) as approvals,
             patch("routers.approvals.list_pending_questions", return_value=[]) as questions,
+            patch("routers.approvals.Operations") as operations,
         ):
+            operations.return_value.list_review.return_value = []
             response = _client(CHILD_A).get("/api/approvals")
         assert response.status_code == 200, response.text
         assert approvals.call_args.kwargs["tenant_id"] == CHILD_A
         assert questions.call_args.kwargs["tenant_id"] == CHILD_A
+        assert operations.call_args.args == (CHILD_A,)
 
     def test_a_provider_key_lands_in_the_acting_tenants_vault(self, root_is_parent):
         calls: list[tuple[str, str, str | None]] = []

@@ -30,6 +30,7 @@ def sales():
                 "136_sales_pipedrive_scope.sql",
                 "137_sales_analyst_permissions.sql",
                 "138_opt_in_tool_denies.sql",
+                "158_operation_action_proposer.sql",
             ):
                 cur.execute((Path(__file__).parents[3] / "crm/migrations" / filename).read_text())
         conn.commit()

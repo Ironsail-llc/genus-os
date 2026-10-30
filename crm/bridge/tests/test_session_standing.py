@@ -303,7 +303,7 @@ async def test_a_crm_write_while_acting_is_audited_as_the_owner_in_the_child(
     from robothor.auth import tokens
     from robothor.settings import reset_settings
 
-    migration = Path(__file__).resolve().parents[2] / "migrations" / "158_audit_log_tenant.sql"
+    migration = Path(__file__).resolve().parents[2] / "migrations" / "159_audit_log_tenant.sql"
     with db_conn.cursor() as cur:
         cur.execute(migration.read_text(encoding="utf-8"))
 
