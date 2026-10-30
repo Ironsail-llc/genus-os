@@ -377,6 +377,49 @@ class TestAdapterToolsResolve:
         assert "acme_search" in result.detail
 
 
+class TestPluginToolsResolve:
+    """A loaded plugin's tools are registered tools: the engine serves them."""
+
+    @staticmethod
+    def _plugins(monkeypatch: pytest.MonkeyPatch, state: str = "loaded") -> None:
+        from robothor.plugins.inventory import PluginStatus
+
+        rows = (
+            PluginStatus(
+                name="acme-desk",
+                version="1.0.0",
+                groups=("genus.tools",),
+                state=state,
+                manifest={"contract_version": 1, "declared": {"handlers": ["acme_probe"]}},
+            ),
+        )
+        monkeypatch.setattr("robothor.plugins.inventory.inventory", lambda: rows)
+
+    @pytest.mark.asyncio
+    async def test_a_loaded_plugins_tool_resolves(
+        self, instance: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._plugins(monkeypatch)
+        _write_agent(
+            instance,
+            "desk",
+            {"tools_allowed": ["read_file", "acme_probe"]},
+            instructions="Use `acme_probe` to check the desk.",
+        )
+        result = await _run("agents.tools_named_but_not_granted")
+        assert result.status == "pass", result.detail
+
+    @pytest.mark.asyncio
+    async def test_a_disabled_plugins_tool_still_resolves_to_nothing(
+        self, instance: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._plugins(monkeypatch, state="disabled")
+        _write_agent(instance, "desk", {"tools_allowed": ["read_file", "acme_probe"]})
+        result = await _run("agents.tools_named_but_not_granted")
+        assert result.status == "fail"
+        assert "acme_probe" in result.detail
+
+
 # ── agents.tools_named_but_not_granted ────────────────────────────────
 
 
