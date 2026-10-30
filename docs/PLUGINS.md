@@ -71,10 +71,19 @@ keeps those in separate registries and so does the loader.
 
 ## The rules, and why
 
-**The contract version is checked and mismatches are refused.** `1.0` today.
-A plugin built against a different contract is not loaded — an agent
-platform running third-party code that expects a different tool-calling
-contract is a security problem, not a compatibility inconvenience.
+**The contract version is checked and mismatches are refused.** This engine
+speaks `1.0` and `2.0`. A plugin built against a different contract is not
+loaded — an agent platform running third-party code that expects a different
+tool-calling contract is a security problem, not a compatibility inconvenience.
+
+`2.0` is `1.0` plus [composable patches](#composable-patches-append-and-detach)
+(`append:`/`detach:`), `docs/webhooks.d/` drop-ins (instance files) and
+`brain/agents/<agent>.d/` instruction fragments. Declare `contract_version: 2`
+in `genus-plugin.yaml` and `genus_contract_version: "2.0"` in the payload when
+your plugin uses any of them; engines before this release refuse it with the
+contract-mismatch message instead of installing it without its hooks. A plugin
+that uses none of them stays on `1.0` and still loads on older engines.
+`genus plugin new` scaffolds `1.0`.
 
 **A plugin cannot shadow a built-in.** Claiming `exec` or `write_file` is
 refused and logged. That is a takeover, not an extension.
@@ -92,7 +101,7 @@ broken package must never stop the engine booting.
 Plugin failures are logged at WARNING with the plugin name and the reason:
 
 ```
-Plugin 'acme' declares contract '0.9', this engine speaks '1.0' — refused
+Plugin 'acme' declares contract '0.9', this engine speaks '1.0' or '2.0' — refused
 Plugin 'acme' tried to shadow built-in(s) ['exec']
 ```
 
@@ -446,8 +455,86 @@ example_agent = ["genus-plugin.yaml", "agents/**/*", "workflows/*", "patches/*",
 |---|---|---|
 | `agents` | a directory laid out like `templates/agents/core/main`: `manifest.template.yaml`, `instructions.template.md`, optional `setup.yaml` and `SKILL.md` | rendered by the agent-template installer — the same code as `genus agent install` — into `docs/agents/<id>.yaml` and the instruction file under the instance's `brain/`, and recorded in `.robothor/installed.yaml` with `source: plugin:<distribution>`. With no `setup.yaml`, the agent id is the directory name and the version is the plugin's. `.robothor/overrides/<id>.yaml` applies exactly as it does to any template |
 | `workflows` | a file | copied to `docs/workflows/<basename>` |
-| `patches` | `agent:` an agent id the plugin does **not** ship, `file:` a YAML file with top-level `install:` and `remove:` sections | each section has `set:` — a deep merge for mappings; any other value, lists included, replaces — and `delete:`, a list of keys, dotted for nested ones. `set` runs before `delete`. A patch may not touch `id`. A patch whose target agent does not exist is skipped with a warning. **A list replaces**: `set: {tools_allowed: [x]}` on an agent with no `tools_allowed` (which means every non-opt-in tool) narrows it to `x` |
-| `files` | `src`, `dest`, `mode` (`overwrite`, the default, or `if_missing`) | `dest` must be under `brain/`, `docs/workflows/` or `docs/hooks/`, or be exactly `docs/webhooks.yaml`. `if_missing` never replaces a file that exists. `brain/` has ownership rules, below (all of these are instance paths) |
+| `patches` | `agent:` an agent id the plugin does **not** ship, `file:` a YAML file with top-level `install:` and `remove:` sections | each section has `set:` — a deep merge for mappings; any other value, lists included, replaces — `delete:`, a list of keys, dotted for nested ones, and `append:` / `detach:`, which add or take out single list items (see [Composable patches](#composable-patches-append-and-detach)). The order is `set`, `append`, `delete`, `detach`. A patch may not touch `id`. A patch whose target agent does not exist is skipped with a warning. **A list replaces**: `set: {tools_allowed: [x]}` on an agent with no `tools_allowed` (which means every non-opt-in tool) narrows it to `x`. `append:` does not help there either: it refuses to create or fill an absent or empty `tools_allowed` (or `heartbeat_tools_allowed` / `worker_tools_allowed`), and only adds `x` to an allowlist the agent already has. To give an unrestricted agent a plugin tool that is opt-in, append it to `tools_opt_in` |
+| `files` | `src`, `dest`, `mode` (`overwrite`, the default, or `if_missing`) | `dest` must be under `brain/`, `docs/workflows/` or `docs/hooks/`, be exactly `docs/webhooks.yaml`, or be one `<name>.yaml` directly in `docs/webhooks.d/`. `if_missing` never replaces a file that exists. `brain/` has ownership rules, below (all of these are instance paths) |
+
+### Composable patches: `append` and `detach`
+
+`set:` owns a key wholesale, so only one plugin can `set: hooks` on an agent.
+To let several plugins extend one agent — each giving `main` its own event
+hook, instruction fragment or webhook channel — a patch names list **items**
+instead:
+
+```yaml
+# example_agent/patches/main.patch.yaml
+install:
+  append:
+    hooks:
+      - stream: email
+        event_type: email.new
+        message: "A new email arrived; triage it."
+    bootstrap_files: [brain/agents/main.d/example-agent.md]
+    warmup.memory_blocks: [example_notes]
+remove:                 # optional: without a detach, remove takes back what install appended
+  detach:
+    hooks:
+      - {stream: email, event_type: email.new}
+```
+
+* **`append: {key: [items]}`** upserts each item into the list at `key` (dotted
+  for nested), creating the list — and any missing mapping above it — when it
+  is absent. A key that holds something other than a list is refused, and the
+  patch is not applied.
+* **Tool allowlists are never created.** An absent or empty `tools_allowed`
+  (and `heartbeat.heartbeat_tools_allowed`, `worker.worker_tools_allowed`)
+  means every non-opt-in tool, so appending to one would strip every other
+  tool. `append:` refuses that, naming the key, and adds to an allowlist only
+  where the agent already has a non-empty one. The same rule holds the other
+  way: a `detach:` (or a removal) that would leave an allowlist empty is
+  refused and the list is left as it is, so removing a plugin never widens an
+  agent to every tool; the removal reports it, naming the key. Every one of
+  these refusals is taken at plan time, before pip runs.
+* **Identity.** A `hooks` item is identified by its `(stream, event_type)` and
+  must have both (a `stream` may not contain `:`); an item of any other list (`bootstrap_files`,
+  `warmup.memory_blocks`, `tools_allowed`, `tools_opt_in`, …) must be a scalar
+  and is identified by its value. An item already present with the same
+  identity is replaced in place, never duplicated, so a re-apply changes
+  nothing.
+* **`detach: {key: [items]}`** removes the entries whose identity matches and
+  leaves the rest; an identity that is not there is a no-op. A `hooks` item in
+  `detach` needs only `stream` and `event_type`.
+* **Remove.** `genus plugin remove` applies the `remove:` section; when it has
+  no `detach:`, the items the plugin last appended (recorded in the ledger) are
+  detached for it. An upgrade that stops appending an item detaches it too,
+  unless that would leave a tool allowlist empty: then the item is kept, the
+  upgrade goes ahead with a warning naming the key, and the item is the
+  operator's from then on (a later removal does not take it back).
+  Detach removes every identity the plugin declared — including one that was
+  already in the list before the plugin was installed (the original manifest is
+  kept once as `.pre-<distribution>`).
+* **Claims.** The ledger records each appended item as `hooks[<stream>:<event_type>]`
+  or `<key>[<value>]`. Two plugins appending different items to the same list
+  coexist; two appending the same identity are refused, as is one plugin
+  appending to a list another `set`s or `delete`s (and the reverse).
+
+A patch that uses `append:` or `detach:` belongs to a plugin that declares
+contract `2.0` (see [The rules, and why](#the-rules-and-why)).
+
+Two drop-in locations make the rest composable without a shared file:
+
+* **Instruction fragments:** ship `brain/agents/<agent>/…` or
+  `brain/agents/<agent>.d/<distribution>.md` as a `files:` entry (allowed for an
+  agent the plugin patches) and `append` it to the agent's `bootstrap_files`;
+  bootstrap files are read on every run.
+* **Webhook channels:** ship `docs/webhooks.d/<distribution>.yaml` (same shape
+  as `docs/webhooks.yaml`, a `channels:` mapping). The engine merges every
+  `*.yaml` there, in name order, after `docs/webhooks.yaml`. Install refuses a
+  drop-in that does not parse, has a `rate_limit_per_min` or
+  `timestamp_tolerance_seconds` that is not a whole number, or declares a
+  channel the base file or another drop-in already has. If a bad drop-in still
+  turns up (an operator edit), the engine logs an error naming the file, skips
+  it, and keeps serving the rest. `docs/webhooks.yaml` itself stays strict: a
+  broken base file stops the engine from starting, as it always has.
 
 ### Ownership
 
@@ -500,7 +587,9 @@ instruction-file check already applies to agents.
 * **Files** another plugin wrote are refused.
 * **Patch keys.** Each patched key (agent plus dotted key, prefix-aware) is
   recorded per plugin; a second plugin that sets or deletes a key another
-  plugin already patches is refused, naming both.
+  plugin already patches is refused, naming both. Appended list items are
+  claimed one by one, by identity (see
+  [Composable patches](#composable-patches-append-and-detach)).
 * **Operator edits.** A file the plugin wrote and the operator has since edited
   is left alone by sync (with a warning) and by remove. That covers a plugin
   agent's manifest and instruction file as well as `files:` and `workflows:`:
@@ -650,7 +739,7 @@ the way the installer reads it (`./brain/x` is `brain/x`, an instance path):
 | `agents` | a rendered manifest can declare lifecycle hooks, including `command` hooks the engine runs as shell |
 | `workflows`, `files` → `docs/workflows/` | the engine runs them |
 | `files` → `docs/hooks/` | the engine executes them |
-| `files` → `docs/webhooks.yaml` | configuration the engine loads |
+| `files` → `docs/webhooks.yaml`, `docs/webhooks.d/` (instance drop-ins) | configuration the engine loads |
 | `files` → `brain/` (instance) | text a model reads |
 | `patches` | they change an agent the plugin does not own |
 
@@ -913,7 +1002,19 @@ What happens, in order, each step a refusal:
 7. **Install** with pip — and pip is allowed to do nothing at all:
    `--no-deps --no-index --find-links <the temp directory>`. It resolves
    nothing, reaches nowhere, and installs exactly the one file that survived
-   the steps above. It never sees a URL, an `--index-url` or `--pre`.
+   the steps above. It never sees a URL, an `--index-url` or `--pre`. The
+   engine's interpreter runs it as `python -m pip` when it has pip; a venv
+   built by uv (the container image's) has none, so the installer runs
+   `uv pip install --python <that interpreter>` with the same flags instead.
+   With neither pip nor `uv` on PATH, the install is refused with a sentence
+   naming both. Either way it reinstalls without a cache (`--force-reinstall
+   --no-cache-dir` for pip, `--reinstall --no-cache` for uv), so installing a
+   rebuilt wheel of a version already installed replaces its files, and what
+   lands on disk is the file whose hash was checked, never a cached copy of
+   the same name and version. `genus plugin remove` uninstalls through the same choice
+   (`uv pip uninstall --python <that interpreter>` without pip). With neither,
+   it refuses; `--force` then retires the plugin's workspace files and drops
+   its lockfile row without uninstalling the package.
 8. **Record** the row: verdict, wheel hash, and where it came from.
 
 Nothing signals the engine. The running daemon keeps serving the plugin set it

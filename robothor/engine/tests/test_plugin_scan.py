@@ -295,7 +295,14 @@ def test_a_wrong_contract_version_is_blocked(tmp_path) -> None:
     assert CONTRACT_VERSION in _reasons(result)
 
 
-@pytest.mark.parametrize("spelling", ["1", "1.0"])
+def test_contract_3_is_blocked_naming_every_accepted_version(tmp_path) -> None:
+    manifest = "name: acme-tools\ncontract_version: 3\nhandlers:\n  - probe\n"
+    result = _scanned(tmp_path, manifest=manifest)
+    assert result.verdict == "blocked", _reasons(result)
+    assert "'1.0'" in _reasons(result) and "'2.0'" in _reasons(result)
+
+
+@pytest.mark.parametrize("spelling", ["1", "1.0", "2", "2.0"])
 def test_the_shipped_contract_version_spellings_still_match(tmp_path, spelling) -> None:
     """Every plugin published so far writes ``contract_version: 1`` while the
     engine's constant is the string ``"1.0"``. Blocking all of them on a

@@ -353,7 +353,9 @@ def test_the_result_tells_the_operator_to_reload(registry_fixture) -> None:
 # --------------------------------------------------------------------------
 
 
-def test_pip_is_called_with_a_list_that_resolves_nothing(registry_fixture) -> None:
+def test_pip_is_called_with_a_list_that_resolves_nothing(registry_fixture, monkeypatch) -> None:
+    # The interpreter has pip here; the uv fallback is pinned in test_plugin_cli_install.
+    monkeypatch.setattr(installer, "_pip_module_available", lambda: True)
     pip = _Pip()
     _install(registry_fixture, pip=pip)
     assert len(pip.calls) == 1
@@ -636,6 +638,10 @@ def test_no_pip_token_after_our_own_flags_can_look_like_an_option(tmp_path) -> N
         "--no-input",
         "--target",
         "--upgrade",
+        "--force-reinstall",
+        "--no-cache-dir",
+        "--reinstall",
+        "--no-cache",
     }
     tail = command[command.index("--find-links") + 2 :]
     assert [t for t in tail if t.startswith("-") and t not in ours] == []
@@ -848,7 +854,9 @@ def test_a_wheel_path_that_does_not_exist_is_a_sentence(tmp_path) -> None:
 # --------------------------------------------------------------------------
 
 
-def test_remove_uninstalls_and_drops_the_row(registry_fixture) -> None:
+def test_remove_uninstalls_and_drops_the_row(registry_fixture, monkeypatch) -> None:
+    # The interpreter has pip here; the uv path is pinned below.
+    monkeypatch.setattr(installer, "_pip_module_available", lambda: True)
     _install(registry_fixture)
     pip = _Pip()
     result = installer.remove("acme-tools", lock_path=registry_fixture.lock, pip=pip)
@@ -917,6 +925,67 @@ def test_remove_drops_the_row_even_when_pip_says_it_was_not_installed(
     assert result["removed"] is True
     assert lockfile.read_lockfile(registry_fixture.lock).row("acme-tools") is None
     assert "not installed" in result["note"]
+
+
+def _front(monkeypatch, *, pip_module: bool, uv: str | None) -> None:
+    monkeypatch.setattr(installer, "_pip_module_available", lambda: pip_module)
+    monkeypatch.setattr(installer, "_uv_executable", lambda: uv)
+
+
+def test_remove_uninstalls_with_uv_when_the_interpreter_has_no_pip(
+    registry_fixture, monkeypatch
+) -> None:
+    """What the uv fallback installs, it must be able to take back out."""
+    import sys
+
+    _front(monkeypatch, pip_module=False, uv="/opt/bin/uv")
+    _install(registry_fixture)
+    pip = _Pip()
+    result = installer.remove("acme-tools", lock_path=registry_fixture.lock, pip=pip)
+    assert result["removed"] is True
+    assert pip.calls == [
+        ["/opt/bin/uv", "pip", "uninstall", "--python", sys.executable, "acme-tools"]
+    ]
+    assert lockfile.read_lockfile(registry_fixture.lock).row("acme-tools") is None
+
+
+def test_remove_drops_the_row_when_uv_says_there_was_nothing_to_uninstall(
+    registry_fixture, monkeypatch
+) -> None:
+    _front(monkeypatch, pip_module=False, uv="/opt/bin/uv")
+    _install(registry_fixture)
+    pip = _Pip(returncode=2, stderr="warning: No packages to uninstall")
+    result = installer.remove("acme-tools", lock_path=registry_fixture.lock, pip=pip)
+    assert result["removed"] is True
+    assert lockfile.read_lockfile(registry_fixture.lock).row("acme-tools") is None
+    assert "not installed" in result["note"]
+
+
+def test_with_neither_pip_nor_uv_remove_refuses_and_names_force(
+    registry_fixture, monkeypatch
+) -> None:
+    _install(registry_fixture)
+    _front(monkeypatch, pip_module=False, uv=None)
+    pip = _Pip()
+    with pytest.raises(installer.InstallError) as excinfo:
+        installer.remove("acme-tools", lock_path=registry_fixture.lock, pip=pip)
+    message = str(excinfo.value)
+    assert "pip" in message and "uv" in message and "--force" in message
+    assert pip.calls == []
+    assert lockfile.read_lockfile(registry_fixture.lock).row("acme-tools") is not None
+
+
+def test_force_with_neither_pip_nor_uv_still_retires_and_drops_the_row(
+    registry_fixture, monkeypatch
+) -> None:
+    _install(registry_fixture)
+    _front(monkeypatch, pip_module=False, uv=None)
+    pip = _Pip()
+    result = installer.remove("acme-tools", force=True, lock_path=registry_fixture.lock, pip=pip)
+    assert result["removed"] is True
+    assert pip.calls == []
+    assert lockfile.read_lockfile(registry_fixture.lock).row("acme-tools") is None
+    assert "pip" in result["note"] and "uv" in result["note"]
 
 
 # --------------------------------------------------------------------------
