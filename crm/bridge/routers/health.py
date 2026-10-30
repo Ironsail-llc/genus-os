@@ -6,6 +6,7 @@ import asyncio
 import logging
 import threading
 import time
+from typing import Any
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Query, Request  # noqa: TC002 — FastAPI needs it at runtime
@@ -144,7 +145,13 @@ def reset_doctor_cache() -> None:
     _doctor_cache = None
 
 
-def _cached_or_run() -> DoctorReport:
+def _cached_or_run() -> dict[str, Any]:
+    """The memoised report as its JSON payload. The setup wizard's strip reads
+    this; :func:`_cached_report` is the same run as a :class:`DoctorReport`."""
+    return _cached_report().as_dict()
+
+
+def _cached_report() -> DoctorReport:
     """The memoised report, running the doctor only if nobody else just did.
 
     Runs on a worker thread (``asyncio.to_thread``) because everything under a
@@ -302,18 +309,19 @@ async def api_doctor(request: Request):
     # not wait out a cache window. It runs while the doctor does.
     async def _doctor() -> DoctorReport:
         try:
-            return await asyncio.to_thread(_cached_or_run)
+            return await asyncio.to_thread(_cached_report)
         except Exception as exc:  # noqa: BLE001 - a broken doctor is a report, not a 500
             logger.warning("doctor route failed: %s", type(exc).__name__)
             # Deliberately not cached: see _doctor_cache.
             return DoctorReport(errored=True, error_detail=f"{type(exc).__name__}: {exc}")
 
     report, (origin, failure) = await asyncio.gather(_doctor(), probe_engine())
-    combined = DoctorReport(
-        results=[*report.results, _engine_row(origin, failure)],
-        errored=report.errored,
-        error_detail=report.error_detail,
-    )
+    if report.errored:
+        # An errored report means the checks did not run, and its results stay
+        # empty (DoctorReport's contract): an engine row would read as
+        # "passed: 1" beside the error.
+        return JSONResponse(report.as_dict(), status_code=200)
+    combined = DoctorReport(results=[*report.results, _engine_row(origin, failure)])
     return JSONResponse(combined.as_dict(), status_code=200)
 
 
