@@ -29,3 +29,16 @@ export function writeChatDockOpen(open: boolean): void {
     // still holds for this page.
   }
 }
+
+/**
+ * Call `onChange` when another tab writes the dock's key, so its choice applies
+ * here exactly when it is made. Returns the unsubscribe. The browser fires
+ * `storage` only in other tabs; this page's own writes go through its state.
+ */
+export function subscribeChatDockOpen(onChange: () => void): () => void {
+  const listener = (event: StorageEvent) => {
+    if (event.key === CHAT_DOCK_STORAGE_KEY) onChange();
+  };
+  window.addEventListener("storage", listener);
+  return () => window.removeEventListener("storage", listener);
+}
