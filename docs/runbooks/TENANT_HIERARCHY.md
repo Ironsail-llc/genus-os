@@ -402,7 +402,10 @@ jobs, fact-access records and message reactions. The agents' schedules,
 user cron jobs, benchmark results and managed-agent runs. The workflows'
 runs, their steps and their approvals. The agents' chat sessions (keys of
 the form `agent:<id>:…`), with their messages, approval receipts and channel
-message map. The report lists every one of these tables, zeros included.
+message map. A delivery the channel bus surfaced into another agent's session
+(main's, usually) stays with that session, so a reply in the source still
+finds the message it quotes. The report lists every one of these tables,
+zeros included.
 
 **What stays.** Everything that belongs to the tenant rather than to one
 workload: the CRM, tenant memory and the knowledge base, identities and
