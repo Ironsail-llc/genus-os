@@ -232,6 +232,24 @@ def plugin_lockfile(monkeypatch, tmp_path):
 
 
 @pytest.fixture(autouse=True)
+def _no_plugin_grants(monkeypatch):
+    """Never let ``load_plugins()`` reach a database for the root's plugin grants.
+
+    The loader asks ``robothor.plugins.grants.forced_states()`` on every load,
+    which reads ``tenant_plugin_grants`` once per plugin generation. Left alone,
+    every plugin test would open a connection to whatever database this box
+    points at, and a grant on it would change what the suite measures. A test
+    that wants grants replaces ``grants._read`` itself.
+    """
+    from robothor.plugins import grants
+
+    monkeypatch.setattr(grants, "_read", lambda tenant_id: {})
+    grants.reset_forced_cache()
+    yield
+    grants.reset_forced_cache()
+
+
+@pytest.fixture(autouse=True)
 def _reset_validation_warning_log():
     """Never let one test's config warnings suppress the next test's.
 

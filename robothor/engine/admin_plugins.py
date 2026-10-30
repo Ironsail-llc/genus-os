@@ -177,13 +177,29 @@ def _with_assets(
     return row
 
 
+class PluginForcedError(Exception):
+    """The root tenant forced this plugin; the child may not toggle it. A 409."""
+
+
 def set_plugin_enabled(name: str, enabled: bool) -> dict[str, Any] | None:
     """Flip one lock row, or None when nothing recorded that distribution.
 
     None is a 404 rather than a created row: a disable that invented a row for
     a name nothing installed would report success and change nothing.
+
+    Raises :class:`PluginForcedError` for a plugin the root tenant forced on or
+    off for this engine's tenant: the row would change and nothing would, which
+    is a control that lies. Only a root operator clearing the grant frees it.
     """
+    from robothor.plugins.grants import forced_states
     from robothor.plugins.lockfile import set_enabled
+
+    forced = forced_states().get(name)
+    if forced is not None:
+        raise PluginForcedError(
+            f"this plugin is forced {forced} by the root tenant; only a root "
+            "administrator can change it, by clearing the grant"
+        )
 
     row = set_enabled(name, enabled)
     if row is None:
@@ -452,7 +468,7 @@ def register(app: FastAPI) -> None:
 
         try:
             return await _bounded(fn, *args, **kwargs)
-        except LockfileRefusedError as exc:
+        except (LockfileRefusedError, PluginForcedError) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except (InstallError, RegistryError) as exc:
             # A blocked wheel, an unverifiable index, a hash that did not

@@ -81,6 +81,9 @@ class PluginStatus:
     #: platform owns. An operator surface that could not tell the two apart
     #: would offer a button whose only outcome is a 422.
     source: dict[str, Any] | None = None
+    #: What the root tenant forced for this engine's tenant: ``"on"``,
+    #: ``"off"``, or None when the child decides (``robothor.plugins.grants``).
+    forced: str | None = None
 
     def as_json(self) -> dict[str, Any]:
         """The wire shape the admin API and the Helm read.
@@ -101,6 +104,7 @@ class PluginStatus:
             "failure_reason": self.failure_reason or None,
             "manifest": self.manifest,
             "source": self.source,
+            "forced": self.forced,
         }
 
 
@@ -119,6 +123,7 @@ def _manifest_json(dist: Any) -> dict[str, Any] | None:
 def status_for(name: str, dist: Any, eps: list[Any]) -> PluginStatus:
     """Measure one distribution by loading exactly its entry points."""
     from robothor.plugins import lockfile
+    from robothor.plugins.grants import ROOT_DISABLED_REASON, forced_states
     from robothor.plugins.loader import load_plugins
 
     lock = lockfile.read_lockfile()
@@ -133,7 +138,8 @@ def status_for(name: str, dist: Any, eps: list[Any]) -> PluginStatus:
         kind: len(getattr(loaded, kind, {}) or {}) for kind in KINDS if getattr(loaded, kind, None)
     }
     reason = loaded.failures[0].reason if loaded.failures else ""
-    if reason == lockfile.DISABLED_REASON:
+    # Both are decisions, not faults: the child's own, or the root tenant's.
+    if reason in (lockfile.DISABLED_REASON, ROOT_DISABLED_REASON):
         state = "disabled"
     elif loaded.failures:
         state = "failed"
@@ -153,6 +159,7 @@ def status_for(name: str, dist: Any, eps: list[Any]) -> PluginStatus:
         contributions=contributions,
         manifest=_manifest_json(dist),
         source=row.source.as_json() if row is not None and row.source is not None else None,
+        forced=forced_states().get(name),
     )
 
 
