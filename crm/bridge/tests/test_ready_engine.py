@@ -210,7 +210,7 @@ def test_the_doctor_url_is_scheme_host_and_port_only(
     """Whatever else the setting carries -- credentials, a path, a query -- the
     report names only where it knocked."""
     monkeypatch.setenv(
-        "ROBOTHOR_ENGINE_URL", "http://alice:s3cret@engine.example.com:18800/x?t=qz9-token-value"
+        "ROBOTHOR_ENGINE_URL", "http://alice:token-qz9@example.com:18800/x?t=qz9-token-value"
     )
     mock_http_client.get = AsyncMock(side_effect=httpx.ConnectError("refused"))
 
@@ -218,8 +218,8 @@ def test_the_doctor_url_is_scheme_host_and_port_only(
         response = controls_client_as_operator.get("/api/doctor")
 
     row = _engine_row(response.json())
-    assert row["detail"].startswith(f"{ENGINE}/live")
-    assert "s3cret" not in response.text
+    assert row["detail"].startswith("http://example.com:18800/live")
+    assert "token-qz9" not in response.text
     assert "alice" not in response.text
     assert "qz9-token-value" not in response.text
 
@@ -261,3 +261,18 @@ async def test_a_hung_engine_reads_as_a_timeout(test_client, mock_http_client, m
     assert r.status_code == 200
     assert r.json()["engine"] == "unreachable:timeout"
     assert r.json()["degraded"] is True
+
+
+def test_an_errored_doctor_carries_no_engine_row(controls_client_as_operator, mock_http_client):
+    """An errored report is "the checks did not run": its results are empty
+    (DoctorReport's contract). A lone engine row would read as "passed: 1"
+    next to the error."""
+    mock_http_client.get = _router(200)
+    errored = DoctorReport(errored=True, error_detail="RuntimeError: the registry is broken")
+
+    with patch("routers.health.run_sync", return_value=errored):
+        body = controls_client_as_operator.get("/api/doctor").json()
+
+    assert body["checks"] == []
+    assert body["summary"]["passed"] == 0
+    assert body["status"] == "degraded"

@@ -1526,3 +1526,37 @@ def test_telegram_getme_url_keeps_the_token_colon_but_no_path_characters():
     assert hardened.startswith("https://api.telegram.org/bot123:abc")
     assert "/../" not in hardened and "?" not in hardened and "#" not in hardened
     assert hardened.endswith("/getMe")
+
+
+def test_required_check_rows_reads_the_real_memoised_doctor():
+    """The wizard's strip shares the Health view's memoised doctor run. Every
+    other test here stubs ``_required_check_rows`` away, so this one runs it
+    against the real memo with only the doctor itself stubbed: a change to the
+    memo's contract must not turn /api/setup/detect into a 500."""
+    from routers import setup as setup_router
+    from routers.health import reset_doctor_cache
+
+    from robothor.doctor.runner import CheckResult, DoctorReport
+
+    def row(check_id: str, severity: str, status: str) -> CheckResult:
+        return CheckResult(
+            id=check_id,
+            title=check_id,
+            category="database",
+            severity=severity,
+            status=status,
+            detail="",
+            fixable=False,
+        )
+
+    report = DoctorReport(
+        results=[row("db.connect", "required", "pass"), row("redis.ping", "recommended", "fail")]
+    )
+    reset_doctor_cache()
+    try:
+        with patch("routers.health.run_sync", return_value=report):
+            rows = setup_router._required_check_rows()
+    finally:
+        reset_doctor_cache()
+
+    assert rows == [{"id": "db.connect", "status": "pass"}]
