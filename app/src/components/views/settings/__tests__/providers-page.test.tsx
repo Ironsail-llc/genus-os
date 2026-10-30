@@ -813,6 +813,13 @@ describe("ProvidersPage — the canvas model", () => {
     );
   });
 
+  it("sits below the fallback controls, so Add fallback stays next to its list", async () => {
+    await renderPage();
+    const addFallback = screen.getByTestId("fleet-fallback-add");
+    const canvas = screen.getByTestId("canvas-model");
+    expect(addFallback.compareDocumentPosition(canvas) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it("is pre-filled with the canvas model the engine reports", async () => {
     await renderPage({
       "GET /api/bridge/api/providers/defaults": {

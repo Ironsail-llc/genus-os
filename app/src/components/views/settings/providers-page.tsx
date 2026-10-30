@@ -1112,6 +1112,19 @@ export function ProvidersPage() {
           </div>
         ))}
 
+        <div className="flex flex-wrap items-center gap-1.5">
+          <Button
+            variant="outline"
+            size="xs"
+            data-testid="fleet-fallback-add"
+            disabled={models.length === 0}
+            onClick={() => setFallbacks((prev) => [...prev, ""])}
+          >
+            <Plus aria-hidden />
+            Add fallback
+          </Button>
+        </div>
+
         <div className="flex flex-col gap-1">
           <div className="flex flex-wrap items-center gap-2">
             <label
@@ -1148,16 +1161,6 @@ export function ProvidersPage() {
         </div>
 
         <div className="flex flex-wrap items-center gap-1.5">
-          <Button
-            variant="outline"
-            size="xs"
-            data-testid="fleet-fallback-add"
-            disabled={models.length === 0}
-            onClick={() => setFallbacks((prev) => [...prev, ""])}
-          >
-            <Plus aria-hidden />
-            Add fallback
-          </Button>
           <Button
             size="xs"
             disabled={!primary || savingDefaults || unlistedSelections.length > 0}

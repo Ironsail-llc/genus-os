@@ -125,7 +125,7 @@ export function useDashboardAgent(): DashboardAgentState {
         if ((err as Error).name !== "AbortError") {
           console.error("[dashboard-agent] Error:", err);
           reportDashboardError("generate-exception", String(err));
-          setError(String(err));
+          setError(err instanceof Error ? err.message : String(err));
         }
       } finally {
         if (!abort.signal.aborted) {
