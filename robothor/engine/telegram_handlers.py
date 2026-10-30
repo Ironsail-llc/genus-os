@@ -512,7 +512,7 @@ class TelegramHandlersMixin:
     async def cmd_goals(self, message: Message) -> None:
         """Show each agent's job grade — pass rate on its benchmark suite."""
         try:
-            tenant_id = os.environ.get("ROBOTHOR_TENANT_ID", DEFAULT_TENANT)
+            tenant_id = self.config.tenant_id or DEFAULT_TENANT
             grades = fetch_agent_grades(tenant_id, self.config.workspace)
             if not grades:
                 await message.answer(

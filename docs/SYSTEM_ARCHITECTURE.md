@@ -1002,7 +1002,7 @@ Single daemon handling agent orchestration, Telegram delivery, and cron scheduli
 |-----------|------|---------|
 | Engine | 18800 | Agent execution, Telegram bot, health API |
 | Scheduler | — | APScheduler cron jobs from YAML manifests |
-| Event Hooks | — | Redis Stream consumers (email, calendar triggers) |
+| Event Hooks | — | Redis Stream consumers (email, calendar triggers). One consumer group per engine; events are tenant-tagged and each engine acts only on its own tenant's ([Event Bus](event-bus.md#one-engine-per-tenant)) |
 | Tool Registry | — | 54 tools, direct DAL calls (no HTTP roundtrip) |
 
 #### Schedule reconciliation
