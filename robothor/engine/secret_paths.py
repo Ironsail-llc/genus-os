@@ -16,6 +16,7 @@ to open the file to decide has already lost. Documentation and examples
 
 from __future__ import annotations
 
+import io
 import re
 import shlex
 from pathlib import Path, PurePath
@@ -490,6 +491,24 @@ _OPERATORS = frozenset(
 )
 
 
+class _CommentKeepsNewline(io.StringIO):
+    """An input stream whose ``readline()`` stops BEFORE the newline.
+
+    shlex consumes a ``#`` comment with ``readline()``, which would swallow
+    the newline too and merge the next line into the commented command.
+    Leaving the newline in the stream lets it come back as the punctuation
+    token that separates commands, while the comment itself stays a
+    comment: an apostrophe in it is not a quote.
+    """
+
+    def readline(self, size: int = -1) -> str:  # type: ignore[override]
+        line = super().readline(size)
+        if line.endswith("\n"):
+            self.seek(self.tell() - 1)
+            return line[:-1]
+        return line
+
+
 def _tokens(text: str) -> list[str]:
     """Shell-aware tokens with operators split out, so a quoted ``\\|`` inside
     a grep pattern is data and a bare ``|`` is a pipe.
@@ -502,15 +521,9 @@ def _tokens(text: str) -> list[str]:
     ``.env`` and the complete lines before the bad quote — which the shell
     runs before it reports the error — keep their boundaries (fail closed).
     """
-    lexer = shlex.shlex(text, posix=True, punctuation_chars="();<>|&\n")
+    lexer = shlex.shlex(_CommentKeepsNewline(text), posix=True, punctuation_chars="();<>|&\n")
     lexer.whitespace = " \t\r"
     lexer.whitespace_split = True
-    # shlex consumes a `#` comment with readline(), newline included, which
-    # would merge the next line into this command. With no commenters the
-    # comment words are plain arguments of their own command and the
-    # newline token survives; a secret named in a comment is, at worst,
-    # refused (fail closed).
-    lexer.commenters = ""
     try:
         return list(lexer)
     except ValueError:
@@ -518,7 +531,14 @@ def _tokens(text: str) -> list[str]:
         for line in text.splitlines():
             if out:
                 out.append("\n")
-            out.extend(piece.replace("'", "").replace('"', "") for piece in line.split())
+            words = line.split()
+            # The fallback keeps shlex's comment rule: a word starting `#`
+            # ends the line's commands.
+            for index, word in enumerate(words):
+                if word.startswith("#"):
+                    words = words[:index]
+                    break
+            out.extend(piece.replace("'", "").replace('"', "") for piece in words)
         return out
 
 
