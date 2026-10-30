@@ -577,8 +577,31 @@ class TestDefaults:
         assert body == {
             "model": "openrouter/openai/gpt-5.4",
             "fallbacks": ["ollama_chat/qwen3:8b"],
+            "canvas": None,
             "applied": True,
         }
+
+    def test_it_forwards_the_canvas_model(self, controls_client_as_operator, fake_engine) -> None:
+        body = {**self.BODY, "canvas": "ollama_chat/qwen3:8b"}
+        fake_engine.responses[("PUT", "/api/admin/defaults")] = (
+            200,
+            {
+                "primary": "openrouter/openai/gpt-5.4",
+                "fallbacks": ["ollama_chat/qwen3:8b"],
+                "canvas": "ollama_chat/qwen3:8b",
+            },
+        )
+        response = controls_client_as_operator.patch("/api/providers/defaults", json=body)
+        assert response.status_code == 200
+        assert ("PUT", "/api/admin/defaults", body) in fake_engine.calls
+        assert response.json()["canvas"] == "ollama_chat/qwen3:8b"
+
+    def test_an_explicit_null_canvas_is_forwarded_so_the_engine_clears_it(
+        self, controls_client_as_operator, fake_engine
+    ) -> None:
+        body = {**self.BODY, "canvas": None}
+        controls_client_as_operator.patch("/api/providers/defaults", json=body)
+        assert ("PUT", "/api/admin/defaults", body) in fake_engine.calls
 
     def test_a_missing_fallbacks_field_is_sent_as_an_empty_list(
         self, controls_client_as_operator, fake_engine
