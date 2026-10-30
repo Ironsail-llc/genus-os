@@ -215,7 +215,8 @@ time, and no step ever runs twice. The wait counts against the workflow's
 `timeout_seconds`; a step still waiting at the deadline ends the run as
 `timeout`, naming that step. Branches of a `parallel` step wait the same way.
 While a run waits it holds the workflow, so an event that arrives meanwhile is
-handled as for any busy run (see `requeue_if_busy` above).
+handled as for any busy run (see `requeue_if_busy` above), whatever the
+limit's window holds.
 
 There is one exception. When the limit would block a hook-triggered run's
 first step, which is a tool step, the run does not start: the engine checks
