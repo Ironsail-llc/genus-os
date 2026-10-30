@@ -887,6 +887,53 @@ describe("ProvidersPage — the canvas model", () => {
     });
   });
 
+  it("keeps a chosen 'same as the fleet default' across a refresh", async () => {
+    await renderPage({
+      "GET /api/bridge/api/providers/defaults": {
+        body: {
+          primary: "openrouter/openai/gpt-5.4",
+          fallbacks: [],
+          canvas: "ollama_chat/qwen3:8b",
+        },
+      },
+    });
+    await vi.waitFor(() => {
+      expect((screen.getByTestId("canvas-model") as HTMLSelectElement).value).toBe(
+        "ollama_chat/qwen3:8b"
+      );
+    });
+    fireEvent.change(screen.getByTestId("canvas-model"), { target: { value: "" } });
+
+    const reads = () =>
+      calls.filter((c) => c.method === "GET" && c.url.endsWith("/providers/defaults")).length;
+    const before = reads();
+    fireEvent.click(screen.getByTestId("providers-refresh"));
+    await vi.waitFor(() => expect(reads()).toBeGreaterThan(before));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect((screen.getByTestId("canvas-model") as HTMLSelectElement).value).toBe("");
+  });
+
+  it("leaves the canvas model out of the save when the current one was never read", async () => {
+    await renderPage({
+      "GET /api/bridge/api/providers/defaults": { status: 503, body: { detail: "engine busy" } },
+      "PATCH /api/bridge/api/providers/defaults": {
+        body: { model: "anthropic/claude-sonnet-4.6", fallbacks: [], applied: true },
+      },
+    });
+    fireEvent.change(screen.getByTestId("fleet-default-model"), {
+      target: { value: "anthropic/claude-sonnet-4.6" },
+    });
+    fireEvent.click(screen.getByTestId("fleet-default-save"));
+
+    const call = await vi.waitFor(() => {
+      const found = calls.find((c) => c.method === "PATCH");
+      expect(found).toBeDefined();
+      return found!;
+    });
+    expect(call.body).not.toHaveProperty("canvas");
+  });
+
   it("keeps an off-catalog canvas model visible and blocks the save", async () => {
     await renderPage({
       "GET /api/bridge/api/providers/defaults": {
