@@ -17,6 +17,7 @@ import { useThrottle } from "@/hooks/use-throttle";
 import { MarkerInterceptor, stripMarkers } from "@/lib/engine/marker-interceptor";
 import { ChatRecovery, type ChatRecoveryRequest } from "@/components/chat-recovery";
 import { ChatAskCard, type ApprovalKind } from "@/components/chat-ask-card";
+import { ChatLanding } from "@/components/chat/chat-landing";
 import {
   isKeyableAgentId,
   readStoredChatAgent,
@@ -91,9 +92,16 @@ function stripResidualMarkers(text: string): string {
 interface ChatPanelProps {
   /** When true, renders in mobile-optimized layout (no duplicate header, labeled controls) */
   mobile?: boolean;
+  /**
+   * "page" when the panel is the chat home (shows the landing before the
+   * first message); "dock" beside another view (a compact empty state).
+   */
+  variant?: "page" | "dock";
+  /** The owner's first name, for the landing's greeting. */
+  ownerName?: string;
 }
 
-export function ChatPanel({ mobile = false }: ChatPanelProps) {
+export function ChatPanel({ mobile = false, variant = "dock", ownerName }: ChatPanelProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const recoveryScopes = useRef<Record<string, string>>({});
   const requestScopes = useRef<Record<string, string>>({});
@@ -1295,6 +1303,12 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
     "What happened today?",
   ];
 
+  // A suggested prompt fills the composer; it is never sent on its own.
+  const applyPrompt = (prompt: string) => {
+    setInput(prompt);
+    setTimeout(() => inputRef.current?.focus(), 0);
+  };
+
   return (
     <div className="h-full w-full flex flex-col bg-background" data-testid="chat-panel">
       {/* Header — richer on mobile since there's no app header above */}
@@ -1368,7 +1382,14 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
       {/* Messages */}
       <div className="flex-1 overflow-y-auto p-4">
         <div className="space-y-4" data-testid="message-list">
-          {messages.length === 0 && !isStreaming && (
+          {messages.length === 0 && !isStreaming && variant === "page" && (
+            <ChatLanding
+              ownerName={ownerName}
+              suggestedPrompts={suggestedPrompts}
+              onPrompt={applyPrompt}
+            />
+          )}
+          {messages.length === 0 && !isStreaming && variant === "dock" && (
             <div className="space-y-4" data-testid="empty-state">
               <p className="text-sm text-muted-foreground">
                 Ready when you are.
@@ -1377,10 +1398,7 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
                 {suggestedPrompts.map((prompt) => (
                   <button
                     key={prompt}
-                    onClick={() => {
-                      setInput(prompt);
-                      setTimeout(() => inputRef.current?.focus(), 0);
-                    }}
+                    onClick={() => applyPrompt(prompt)}
                     className="text-xs px-3 py-2 md:py-1.5 rounded-full border border-border text-muted-foreground hover:text-foreground hover:bg-accent transition-colors min-h-[44px] md:min-h-0"
                     data-testid="suggested-prompt"
                   >

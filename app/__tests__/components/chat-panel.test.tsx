@@ -62,6 +62,25 @@ vi.mock("@/hooks/use-visual-state", () => ({
   }),
 }));
 
+// The landing has its own tests; here only where ChatPanel shows it matters.
+vi.mock("@/components/chat/chat-landing", () => ({
+  ChatLanding: ({
+    ownerName,
+    suggestedPrompts,
+    onPrompt,
+  }: {
+    ownerName?: string;
+    suggestedPrompts: string[];
+    onPrompt: (prompt: string) => void;
+  }) => (
+    <div data-testid="chat-landing" data-owner={ownerName ?? ""}>
+      <button data-testid="landing-prompt" onClick={() => onPrompt(suggestedPrompts[0])}>
+        {suggestedPrompts[0]}
+      </button>
+    </div>
+  ),
+}));
+
 // Mock fetch
 const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
@@ -134,6 +153,38 @@ describe("ChatPanel", () => {
   it("renders Robothor header", () => {
     render(<ChatPanel />);
     expect(screen.getByText("Robothor")).toBeInTheDocument();
+  });
+
+  describe("home landing", () => {
+    it("shows the landing, not the compact empty state, when the panel is the page", () => {
+      render(<ChatPanel variant="page" ownerName="Alice" />);
+      expect(screen.getByTestId("chat-landing")).toBeInTheDocument();
+      expect(screen.getByTestId("chat-landing")).toHaveAttribute("data-owner", "Alice");
+      expect(screen.queryByTestId("empty-state")).not.toBeInTheDocument();
+    });
+
+    it("keeps the compact empty state in the dock", () => {
+      render(<ChatPanel variant="dock" ownerName="Alice" />);
+      expect(screen.getByTestId("empty-state")).toBeInTheDocument();
+      expect(screen.queryByTestId("chat-landing")).not.toBeInTheDocument();
+    });
+
+    it("hands a landing prompt to the composer", () => {
+      render(<ChatPanel variant="page" />);
+      fireEvent.click(screen.getByTestId("landing-prompt"));
+      const input = screen.getByTestId("chat-input") as HTMLTextAreaElement;
+      expect(input.value).toBe("How's everything running?");
+    });
+
+    it("gives way to the conversation once a message arrives", async () => {
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ messages: [{ role: "user", content: "Hello there" }] }),
+      });
+      render(<ChatPanel variant="page" />);
+      expect(await screen.findByTestId("message-user")).toBeInTheDocument();
+      expect(screen.queryByTestId("chat-landing")).not.toBeInTheDocument();
+    });
   });
 
   describe("conversation-driven dashboard", () => {
