@@ -114,6 +114,10 @@ def test_only_genuinely_async_routes_run_on_the_event_loop():
         # asyncio.to_thread and a 60s cap; this side is one HTTP call.
         ("POST", "/api/plugins/install"),
         ("POST", "/api/plugins/{name}/remove"),
+        # The root's per-child grant: the grant write and the tenant-tree read
+        # go through asyncio.to_thread, then the child's engine is reloaded
+        # over HTTP.
+        ("PUT", "/api/plugins/{name}/tenants/{tenant_id}"),
         # The doctor route awaits asyncio.to_thread and nothing else. Every
         # check underneath it is synchronous -- psycopg2, urllib, a subprocess
         # -- and run_sync opens its own event loop, which it cannot do on the

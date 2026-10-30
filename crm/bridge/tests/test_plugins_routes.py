@@ -148,6 +148,8 @@ class FakeEngine:
 
     def __init__(self) -> None:
         self.calls: list[tuple[str, str, dict | None]] = []
+        #: Which tenant's engine each call was for, in call order.
+        self.tenants: list[str | None] = []
         self.status = 200
         #: Overridable so a test can hand the proxy a different engine answer
         #: without patching a second time.
@@ -156,6 +158,7 @@ class FakeEngine:
 
     async def __call__(self, method, path, *, json=None, timeout=30, tenant=None):
         self.calls.append((method, path, json))
+        self.tenants.append(tenant)
         if path.endswith("/reload"):
             return self.status, self.reload
         if path.endswith("/sync"):
@@ -200,20 +203,49 @@ def test_a_non_operator_is_refused_before_the_engine_is_called(
     assert not fake_engine.calls, "a rejected caller reached the engine"
 
 
-def test_another_tenants_operator_is_refused(controls_client_as_other_tenant_owner, fake_engine):
-    """One engine runs one set of plugins. A second tenant's operator disabling
-    one would be taking a capability out of somebody else's instance."""
-    assert controls_client_as_other_tenant_owner.get("/api/plugins").status_code == 403
+def test_another_tenants_operator_reads_its_own_engine(
+    controls_client_as_other_tenant_owner, fake_engine
+):
+    """Each tenant runs its own engine, so a second tenant's operator listing
+    plugins is asking ITS engine — never the platform tenant's."""
+    assert controls_client_as_other_tenant_owner.get("/api/plugins").status_code == 200
+    assert fake_engine.tenants == ["acme-corp"]
+
+
+@pytest.mark.parametrize(
+    "path", ["/api/plugins/install", "/api/plugins/sync", "/api/plugins/acme-tools/remove"]
+)
+def test_another_tenants_operator_cannot_change_what_is_installed(
+    controls_client_as_other_tenant_owner, fake_engine, path
+):
+    """Installing, removing and recording distributions stay root-only."""
+    response = controls_client_as_other_tenant_owner.post(path, json={"name": "acme-tools"})
+    assert response.status_code == 403
+    assert not fake_engine.calls
 
 
 # ── The listing ─────────────────────────────────────────────────────────
 
 
 def test_it_proxies_the_engine_listing_verbatim(controls_client_as_operator, fake_engine):
+    from routers._operator import PLATFORM_TENANT
+
     response = controls_client_as_operator.get("/api/plugins")
     assert response.status_code == 200
     assert response.json() == ENGINE_LISTING
     assert ("GET", "/api/admin/plugins", None) in fake_engine.calls
+    assert fake_engine.tenants == [PLATFORM_TENANT]
+
+
+def test_the_forced_state_survives_the_proxy(controls_client_as_operator, fake_engine):
+    """``forced`` is what locks the page's switch; a proxy that dropped it would
+    offer a child admin a toggle the engine answers 409 to."""
+    fake_engine.listing = {
+        **ENGINE_LISTING,
+        "plugins": [{**ENGINE_LISTING["plugins"][0], "forced": "off"}],
+    }
+    row = controls_client_as_operator.get("/api/plugins").json()["plugins"][0]
+    assert row["forced"] == "off"
 
 
 def test_an_unreachable_engine_is_a_502(controls_client_as_operator, fake_engine):
