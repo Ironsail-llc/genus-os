@@ -103,6 +103,16 @@ describe("useDashboardAgent — failures reach the canvas", () => {
     await waitFor(() => expect(screen.getByTestId("agent-error")).toBeEmptyDOMElement());
   });
 
+  it("shows a thrown error's message, not its class name", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("network down")));
+    renderProbe();
+
+    fireEvent.click(screen.getByTestId("notify"));
+
+    await waitFor(() => expect(screen.getByTestId("agent-error")).toHaveTextContent("network down"));
+    expect(screen.getByTestId("agent-error")).not.toHaveTextContent("Error:");
+  });
+
   it("can be dismissed", async () => {
     vi.stubGlobal(
       "fetch",
