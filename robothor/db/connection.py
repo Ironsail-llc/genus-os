@@ -386,18 +386,22 @@ connection already checked out.
     ``set_config(..., is_local => true)``, so the relaxation reverts on
     commit or rollback and a pooled connection cannot carry it to the next
     borrower. Refuses an autocommit connection, where it would revert before
-    the next statement. Pinned to three callers by
+    the next statement. Pinned to its callers by
     ``test_benchmark_decontamination.py::
-    TestTheRlsWideningHasExactlyThreeCallers``: the benchmark **audit and
+    TestTheRlsWideningCallersArePinned``. Three are the benchmark **audit and
     spend** queries ``analytics._benchmark_spend``,
-    ``analytics.get_fleet_health`` and ``tracking.get_agent_stats``. From
+    ``analytics.get_fleet_health`` and ``tracking.get_agent_stats``. Two are
+    the operator-only account move, ``accounts.move_account`` and its lookup
+    ``accounts.accounts_for_email`` (``genus tenant move-account``), which by
+    definition reads one tenant and writes another. From
     2026-09-13 every graded task run executes as the ``benchmark-sandbox``
     tenant, so a query bound to the owning tenant cannot see the fleet's own
     benchmark traffic at all — ``/costs`` reported ``benchmark_cost_usd =
     0.0`` and the decontamination rollout's observe rung went silent.
     Widening the WHERE clause alone does not fix that: RLS filters the rows
     before the predicate is reached. Use it only for a query already
-    restricted to rows no tenant owns in the ordinary sense. Deliberately not
+    restricted to rows no tenant owns in the ordinary sense, or for an
+    operator action that must span tenants by definition. Deliberately not
     suppressed on error: a query that believes it can see every tenant and
     cannot returns a wrong number silently.
 
@@ -414,8 +418,9 @@ connection already checked out.
     duplicate, and sign-in 500s on a UniqueViolation. Pinned by
     ``tests/test_unbound_scope_callers.py`` to the sign-in paths only: the
     bridge's ``/api/auth`` sso, login, refresh, logout and switch-tenant
-    routes, and ``accounts.get_account_by_idp``, ``jit_provision`` and
-    ``consume_active_session``. ``current_tenant_scope()`` reports ``None``
+    routes, and ``accounts.get_account_by_idp``, ``jit_provision``,
+    ``consume_active_session`` and ``login_account_for_email`` (password
+    sign-in for an account in any tenant). ``current_tenant_scope()`` reports ``None``
     inside it, so nothing that defaults a tenant from the scope writes under
     the sentinel.
 

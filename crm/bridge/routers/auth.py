@@ -28,7 +28,6 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool
 
 from robothor.auth import accounts, local_login, tokens
 from robothor.auth.deps import get_current_user
-from robothor.constants import DEFAULT_TENANT
 from robothor.db.connection import tenant_scope, unbound_scope
 from robothor.sanitize import sanitize_log
 
@@ -213,20 +212,39 @@ def _sso_exchange(
         return JSONResponse({"error": "identity provider not authorized"}, status_code=403)
     if body.email_verified is not True:
         return JSONResponse({"error": "verified email required"}, status_code=403)
+    # Tenant selection is operator-controlled — a tenant's claimed SSO
+    # domains, else ROBOTHOR_DEFAULT_TENANT — and never accepted from the SSO
+    # caller. It decides where a NEW account is created and which tenant's
+    # email match and binding grant are consulted.
+    tenant_id = accounts.tenant_for_email(body.email)
+    # No tenant_scope here. The caller's unbound_scope covers both halves: the
+    # (issuer, subject) lookup sees an account bound in ANY tenant, so a
+    # bound account signs in where it lives however its domain is routed;
+    # and the policy's permissive branch accepts the INSERT into the routed
+    # tenant, which jit_provision names explicitly.
     try:
         account = accounts.jit_provision(
             issuer=body.issuer.strip(),
             subject=body.subject.strip(),
             email=body.email,
             display_name=body.display_name,
-            # Tenant selection is operator-controlled through
-            # ROBOTHOR_DEFAULT_TENANT, never accepted from the SSO caller.
-            tenant_id=DEFAULT_TENANT,
+            tenant_id=tenant_id,
         )
     except accounts.AccountProvisioningError:
         # Do not reveal whether an email maps to a privileged, invited, or
         # disabled local account.
         return JSONResponse({"error": "account not eligible for SSO"}, status_code=403)
+    routed_over = account.pop(accounts.GRANT_OVERRODE_ROUTING, None)
+    if routed_over is not None:
+        # A binding grant put this person in the tenant holding their account,
+        # not the one their domain routes to: record both, ids only.
+        audited(
+            request,
+            "auth.sso.grant_bound",
+            action=str(account["id"]),
+            account_tenant=account["tenant_id"],
+            routed_tenant=routed_over,
+        )
     ip = request.client.host if request.client else None
     try:
         return _issue_for_account(account, user_agent=request.headers.get("user-agent"), ip=ip)
@@ -816,9 +834,11 @@ def local_login_route(body: _LoginBody, request: Request) -> dict[str, Any] | JS
         return _BAD_REQUEST
     ip = _client_ip(request)
     # Unbound, like /sso: the sign-in has no tenant until it has an account.
+    # tenant_id=None: the address is looked up in every tenant, and a child
+    # tenant's account signs in to its own tenant (one active match only).
     with unbound_scope():
         result = local_login.authenticate(
-            DEFAULT_TENANT,
+            None,
             body["email"],
             body["password"],
             body.get("code"),

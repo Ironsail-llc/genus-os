@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from fastapi import APIRouter, Query, Request
@@ -15,6 +16,15 @@ from robothor.crm.dal import (
     list_tenants,
     update_tenant,
 )
+from robothor.crm.tenant_domains import (
+    InvalidSsoDomainError,
+    SsoDomainConflictError,
+    normalize_sso_domains,
+    sso_domains_of,
+)
+from robothor.sanitize import sanitize_log
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/tenants", tags=["tenants"])
 
@@ -70,6 +80,38 @@ def _may_edit_tenant(request: Request, tenant_id: str) -> bool:
     return tenant_id in resolve_accessible_tenants(auth.home_tenant_id, auth.role)
 
 
+def _changes_sso_domains(tenant_id: str, settings: dict | None) -> bool:
+    """Whether saving ``settings`` would add, change or drop the SSO domain claim.
+
+    ``settings`` replaces the stored object, so a body without ``sso_domains``
+    drops an existing claim. Compared as normalized sets, so a case or order
+    change alone is not a change. A malformed list counts as a change: only a
+    root operator gets as far as the 422 for it.
+    """
+    if settings is None:
+        return False
+    stored = set(sso_domains_of(crm_dal.get_tenant(tenant_id) or {}))
+    try:
+        incoming = set(normalize_sso_domains(settings.get("sso_domains", [])))
+    except InvalidSsoDomainError:
+        return True
+    return incoming != stored
+
+
+def _domain_error(exc: ValueError) -> JSONResponse:
+    """409 for a domain another tenant claims, 422 for a malformed one.
+
+    A fixed message, never the exception text: which tenant holds a domain
+    is not this caller's to learn. The detail goes to the server log.
+    """
+    logger.info("tenant sso_domains refused: %s", sanitize_log(exc))
+    if isinstance(exc, SsoDomainConflictError):
+        return JSONResponse(
+            {"error": "an sso domain is already claimed by another tenant"}, status_code=409
+        )
+    return JSONResponse({"error": "invalid sso_domains"}, status_code=422)
+
+
 @router.get("")
 def api_list_tenants(
     parentId: str | None = Query(None),
@@ -91,12 +133,15 @@ def api_create_tenant(body: CreateTenantRequest, request: Request):
         problem = crm_dal.tenant_parent_problem(body.id, body.parentTenantId)
         if problem:
             return JSONResponse({"error": problem}, status_code=422)
-    tenant_id = create_tenant(
-        tenant_id=body.id,
-        display_name=body.displayName,
-        parent_tenant_id=body.parentTenantId,
-        settings=body.settings,
-    )
+    try:
+        tenant_id = create_tenant(
+            tenant_id=body.id,
+            display_name=body.displayName,
+            parent_tenant_id=body.parentTenantId,
+            settings=body.settings,
+        )
+    except (SsoDomainConflictError, InvalidSsoDomainError) as exc:
+        return _domain_error(exc)
     if tenant_id:
         return {"id": tenant_id, "displayName": body.displayName}
     return JSONResponse({"error": "failed to create tenant (may already exist)"}, status_code=409)
@@ -157,7 +202,14 @@ def api_update_tenant(tenant_id: str, body: UpdateTenantRequest, request: Reques
         if body.active is not None and body.active != stored.get("active", True)
         else None
     )
-    reshapes = new_parent is not None or new_active is not None
+    # A claim routes every new SSO user from a domain, deployment-wide, so
+    # changing one is a root decision like re-parenting (also compared with
+    # what is stored: an unchanged claim is not a change).
+    reshapes = (
+        new_parent is not None
+        or new_active is not None
+        or _changes_sso_domains(tenant_id, body.settings)
+    )
     if reshapes:
         if not _is_root_tenant_operator(request):
             return _ROOT_REQUIRED
@@ -178,6 +230,17 @@ def api_update_tenant(tenant_id: str, body: UpdateTenantRequest, request: Reques
     if new_active is not None:
         kwargs["active"] = new_active
 
-    if update_tenant(tenant_id, **kwargs):
+    if not kwargs:
+        # Nothing to change (e.g. {"parentTenantId": null}): a no-op is not a
+        # missing tenant. update_tenant answers False for an empty change.
+        if crm_dal.get_tenant(tenant_id):
+            return {"success": True, "id": tenant_id}
+        return JSONResponse({"error": "tenant not found"}, status_code=404)
+
+    try:
+        updated = update_tenant(tenant_id, **kwargs)
+    except (SsoDomainConflictError, InvalidSsoDomainError) as exc:
+        return _domain_error(exc)
+    if updated:
         return {"success": True, "id": tenant_id}
     return JSONResponse({"error": "tenant not found"}, status_code=404)

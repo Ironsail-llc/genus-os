@@ -350,6 +350,26 @@ def _load(user_id: str, tenant_id: str) -> dict[str, Any]:
     return row
 
 
+def _grant_creator(request: Request, actor: str) -> str:
+    """How a grant records who armed it.
+
+    ``root:<actor>`` only when the caller's home AND acting tenant are both
+    the platform tenant: SSO sign-in honours such a grant even where the
+    address routes elsewhere (``accounts._jit_provision``). Any other
+    operator's grant is spent only when the address routes to its tenant.
+    """
+    from routers import _operator
+
+    auth = getattr(request.state, "auth", None)
+    is_root = (
+        auth is not None
+        and not auth.is_service
+        and auth.tenant_id == _operator.PLATFORM_TENANT
+        and getattr(auth, "home_tenant_id", auth.tenant_id) == _operator.PLATFORM_TENANT
+    )
+    return f"{accounts.ROOT_GRANT_PREFIX}{actor}" if is_root else actor
+
+
 def _arm_grant(request: Request, email: str, tenant_id: str, actor: str) -> dict[str, Any]:
     """Arm one binding grant, turning the DAL's refusals into answers.
 
@@ -363,7 +383,7 @@ def _arm_grant(request: Request, email: str, tenant_id: str, actor: str) -> dict
             email=email,
             ttl_seconds=_grant_ttl_seconds(),
             reason="armed from the Helm",
-            created_by=actor,
+            created_by=_grant_creator(request, actor),
             issuer=_issuer_pin(),
         )
     except accounts.GrantTargetError as exc:
