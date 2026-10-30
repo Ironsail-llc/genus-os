@@ -32,6 +32,12 @@ DEFAULT_DASHBOARD_MODEL = "openrouter/google/gemini-2.5-flash-lite"
 #: slice of it: a first model that hangs must leave time for the next.
 TRIAGE_BUDGET_SECONDS = 15
 RENDER_BUDGET_SECONDS = 120
+#: No model's slice drops below these. On a long chain an equal split would
+#: leave a slow but healthy primary too little time to answer, so it would
+#: fall through to the last resort; with a floor the tail of the chain may
+#: simply not get a turn before the overall deadline, which is the better loss.
+TRIAGE_MIN_PER_MODEL_SECONDS = 5
+RENDER_MIN_PER_MODEL_SECONDS = 30
 MAX_SYSTEM_PROMPT_CHARS = 12_000
 MAX_USER_PROMPT_CHARS = 40_000
 MAX_REQUEST_BYTES = 64 * 1024
@@ -165,11 +171,13 @@ async def dashboard_completion(request: Request) -> DashboardCompletionResponse:
         json_mode = True
         temperature = 0.1
         budget: float = TRIAGE_BUDGET_SECONDS
+        floor: float = TRIAGE_MIN_PER_MODEL_SECONDS
     else:
         max_tokens = 4096
         json_mode = False
         temperature = 0.3
         budget = RENDER_BUDGET_SECONDS
+        floor = RENDER_MIN_PER_MODEL_SECONDS
 
     try:
         chain = dashboard_model_chain()
@@ -181,7 +189,7 @@ async def dashboard_completion(request: Request) -> DashboardCompletionResponse:
             model=chain,
             temperature=temperature,
             json_mode=json_mode,
-            timeout=budget / len(chain),
+            timeout=max(budget / len(chain), floor),
             max_retries=1,
             max_tokens=max_tokens,
         )
