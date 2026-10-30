@@ -100,7 +100,21 @@ export function InboxCard({ item, canWrite, onAnswer, onOpenRuns }: InboxCardPro
   // nothing is noise on every card with a one-line detail, which is most of
   // them; the threshold is a reading of the text, not a measurement, because
   // the rendered line count is not knowable before paint.
-  const clampable = item.detail.length > CLAMP_AT_CHARS || item.detail.includes("\n");
+  //
+  // A proposal is never clamped: Approve authorizes its exact content, so the
+  // whole of it is on the card before the button, as in the Sales review.
+  const isProposal = item.kind === "action";
+  const clampable =
+    !isProposal && (item.detail.length > CLAMP_AT_CHARS || item.detail.includes("\n"));
+  const envelope = item.envelope ?? {};
+  const addressed = [envelope.sender, envelope.recipient].filter(Boolean).join(" → ");
+  const envelopeLine = [addressed, envelope.purpose].filter(Boolean).join(" · ");
+  const references = [
+    envelope.claims ? `Claims: ${envelope.claims}` : "",
+    envelope.evidence ? `Evidence: ${envelope.evidence}` : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
 
   return (
     <article
@@ -134,11 +148,17 @@ export function InboxCard({ item, canWrite, onAnswer, onOpenRuns }: InboxCardPro
         {item.question || "(no prompt recorded)"}
       </p>
 
+      {isProposal && envelopeLine ? (
+        <p data-testid={`inbox-envelope-${item.id}`} className="text-xs text-foreground">
+          {envelopeLine}
+        </p>
+      ) : null}
+
       {item.detail ? (
         <div className="flex flex-col items-start gap-1">
           <p
             data-testid={`inbox-detail-${item.id}`}
-            className={`text-xs text-muted-foreground ${clampable && !detailOpen ? "line-clamp-3" : ""}`}
+            className={`text-xs text-muted-foreground ${isProposal ? "whitespace-pre-wrap" : ""} ${clampable && !detailOpen ? "line-clamp-3" : ""}`}
           >
             {item.detail}
           </p>
@@ -153,6 +173,15 @@ export function InboxCard({ item, canWrite, onAnswer, onOpenRuns }: InboxCardPro
             </button>
           ) : null}
         </div>
+      ) : null}
+
+      {isProposal && references ? (
+        <p
+          data-testid={`inbox-references-${item.id}`}
+          className="text-[11px] text-muted-foreground"
+        >
+          {references}
+        </p>
       ) : null}
 
       {runId ? (

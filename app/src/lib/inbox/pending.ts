@@ -40,6 +40,12 @@ export interface PendingItem {
   agent_id: string;
   /** Only on an `action` row: what the proposal would do, e.g. `sales.email`. */
   action_kind?: string;
+  /**
+   * Only on an `action` row: who and what the proposal addresses (sender,
+   * recipient, purpose, subject, claims, evidence — whichever it carries).
+   * Approve authorizes the exact payload, so the card shows these before it.
+   */
+  envelope?: Record<string, string>;
   question: string;
   detail: string;
   options: string[];
@@ -128,6 +134,15 @@ function text(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
 
+function stringFields(value: unknown): Record<string, string> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const out: Record<string, string> = {};
+  for (const [key, field] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof field === "string" && field) out[key] = field;
+  }
+  return out;
+}
+
 function optionalText(value: unknown): string | null {
   return typeof value === "string" && value ? value : null;
 }
@@ -157,7 +172,9 @@ export function normalizePending(body: unknown): PendingItem[] {
       id,
       run_id: text(row.run_id),
       agent_id: text(row.agent_id),
-      ...(kind === "action" ? { action_kind: text(row.action_kind) } : {}),
+      ...(kind === "action"
+        ? { action_kind: text(row.action_kind), envelope: stringFields(row.envelope) }
+        : {}),
       question: text(row.question),
       detail: text(row.detail),
       // A blank label would be an unlabelled button that POSTs an empty
