@@ -19,8 +19,12 @@ connection and commits on a clean exit.
 from __future__ import annotations
 
 import contextlib
+import json
 import logging
+import os
+import tempfile
 import threading
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -31,6 +35,7 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "GRANT_STATES",
     "ROOT_DISABLED_REASON",
+    "canonical",
     "clear_grant",
     "forced_states",
     "get_grants",
@@ -45,6 +50,18 @@ GRANT_STATES = ("on", "off")
 #: lockfile's ``DISABLED_REASON`` ("disabled by operator"), and deliberately
 #: different: the child's operator did not make this decision and cannot undo it.
 ROOT_DISABLED_REASON = "disabled by the root tenant"
+
+
+def canonical(name: str) -> str:
+    """A distribution name in PEP 503 form: ``Acme_Tools`` and ``acme-tools`` are one.
+
+    Grants are written by a person and matched against the metadata ``Name``,
+    so both sides go through this, or a grant of ``off`` would report "live"
+    and force nothing.
+    """
+    from packaging.utils import canonicalize_name
+
+    return str(canonicalize_name(name))
 
 
 def _platform_connect(tenant_id: str) -> Callable[[], Any]:
@@ -83,7 +100,7 @@ def get_grants(tenant_id: str, *, connect: Callable[[], Any] | None = None) -> d
             (tenant,),
         )
         rows = cur.fetchall()
-    return {str(plugin): str(state) for plugin, state in rows}
+    return {canonical(str(plugin)): str(state) for plugin, state in rows}
 
 
 def set_grant(
@@ -96,7 +113,7 @@ def set_grant(
 ) -> None:
     """Force ``plugin`` to ``state`` for ``tenant_id``, replacing any earlier grant."""
     tenant = _name(tenant_id, "tenant id")
-    name = _name(plugin, "plugin name")
+    name = canonical(_name(plugin, "plugin name"))
     if not isinstance(state, str) or state not in GRANT_STATES:
         raise ValueError(f"a plugin grant's state is 'on' or 'off', not {state!r}")
     actor = _name(set_by, "actor")
@@ -113,7 +130,7 @@ def set_grant(
 def clear_grant(tenant_id: str, plugin: str, *, connect: Callable[[], Any] | None = None) -> bool:
     """Drop the grant, so the child decides again. True when a row was removed."""
     tenant = _name(tenant_id, "tenant id")
-    name = _name(plugin, "plugin name")
+    name = canonical(_name(plugin, "plugin name"))
     with _connection(tenant, connect) as conn, conn.cursor() as cur:
         cur.execute(
             "DELETE FROM tenant_plugin_grants WHERE tenant_id = %s AND plugin = %s",
@@ -152,22 +169,75 @@ def reset_forced_cache() -> None:
         _last_good.clear()
 
 
+def _persisted_path() -> Path | None:
+    """Beside the lockfile: the forced-off set of the last successful read."""
+    from robothor.plugins.lockfile import lockfile_path
+
+    lock = lockfile_path()
+    return None if lock is None else lock.with_name(lock.name + ".forced-off.json")
+
+
+def _load_persisted(tenant: str) -> set[str] | None:
+    """The persisted forced-off set for ``tenant``, or None when there is none."""
+    try:
+        path = _persisted_path()
+        if path is None:
+            return None
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except Exception as exc:  # noqa: BLE001 - an unreadable record is no record
+        logger.warning("Persisted plugin grants could not be read (%s)", type(exc).__name__)
+        return None
+    if not isinstance(data, dict) or data.get("tenant") != tenant:
+        return None
+    names = data.get("forced_off")
+    return {canonical(n) for n in names if isinstance(n, str)} if isinstance(names, list) else None
+
+
+def _persist(tenant: str, forced_off: set[str]) -> None:
+    """Record the forced-off set, so a restart with the database down keeps it."""
+    try:
+        path = _persisted_path()
+        if path is None or _load_persisted(tenant) == forced_off:
+            return
+        if not forced_off and not path.exists():
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        handle, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=".plugins.forced-off.")
+        tmp = Path(tmp_name)
+        try:
+            with os.fdopen(handle, "w", encoding="utf-8") as fh:
+                json.dump({"tenant": tenant, "forced_off": sorted(forced_off)}, fh)
+            tmp.chmod(0o600)
+            tmp.replace(path)
+        except Exception:
+            tmp.unlink(missing_ok=True)
+            raise
+    except Exception as exc:  # noqa: BLE001 - a record we could not keep is logged, not fatal
+        logger.warning("Plugin grants could not be persisted (%s)", type(exc).__name__)
+
+
 def forced_states(tenant_id: str | None = None) -> dict[str, str]:
     """``{plugin: "on" | "off"}`` the root tenant forced for this engine's tenant.
 
-    Read once per plugin-registry generation (``loader.generation()``), so the
-    loader may ask on every ``load_plugins`` call without a database read per
-    call; a reload bumps the generation and the next ask reads again. That is
-    why the bridge reloads a child's engine after writing a grant.
+    Keys are canonical distribution names (:func:`canonical`). Read once per
+    plugin-registry generation (``loader.generation()``), so the loader may ask
+    on every ``load_plugins`` call without a database read per call; a reload
+    bumps the generation and the next ask reads again. That is why the bridge
+    reloads a child's engine after writing a grant.
 
     **Fail closed.** When the read errors, every plugin that was forced ``off``
-    at the last successful read stays refused, and the error is logged. A
-    forced ``on`` is dropped instead, so the plugin falls back to the child's
-    own lockfile: losing an override is the safe direction, losing a refusal
-    is not. With no earlier successful read in this process there is nothing
-    to fall back on and nothing is forced; the error is still logged, and the
-    next reload reads again. The failed answer is kept for the rest of the
-    generation, so an outage costs one read per generation, not one per load.
+    at the last successful read stays refused, and the error is logged. The
+    last successful read is kept in memory and persisted beside the lockfile,
+    so it survives a restart with the database down. A forced ``on`` is
+    dropped instead, so the plugin falls back to the child's own lockfile:
+    losing an override is the safe direction, losing a refusal is not.
+
+    A failed read with a fallback is kept for the rest of the generation, so an
+    outage costs one read per generation, not one per load. A failed read with
+    NO fallback (no earlier read, nothing persisted) is not cached: the next
+    load asks again, so the grants apply as soon as the database answers.
     """
     global _cache
     from robothor.plugins.loader import generation
@@ -178,21 +248,31 @@ def forced_states(tenant_id: str | None = None) -> dict[str, str]:
         if _cache is not None and _cache[0] == gen and _cache[1] == tenant:
             return dict(_cache[2])
     try:
-        fresh = {name: state for name, state in _read(tenant).items() if state in GRANT_STATES}
+        fresh = {
+            canonical(name): state for name, state in _read(tenant).items() if state in GRANT_STATES
+        }
     except Exception as exc:  # noqa: BLE001 - governance must never block boot
         with _lock:
-            kept = {
-                name: "off" for name, state in _last_good.get(tenant, {}).items() if state == "off"
-            }
-            _cache = (gen, tenant, kept)
+            remembered = _last_good.get(tenant)
+        if remembered is not None:
+            off: set[str] | None = {n for n, state in remembered.items() if state == "off"}
+        else:
+            off = _load_persisted(tenant)
+        known = off is not None
+        kept = dict.fromkeys(off or (), "off")
+        if known:
+            with _lock:
+                _cache = (gen, tenant, kept)
         logger.warning(
             "Plugin grants for this tenant could not be read (%s); keeping %d plugin(s) "
-            "forced off from the last successful read",
+            "forced off from the last successful read%s",
             type(exc).__name__,
             len(kept),
+            "" if known else "; none known yet, so the next load retries",
         )
         return dict(kept)
     with _lock:
         _last_good[tenant] = dict(fresh)
         _cache = (gen, tenant, fresh)
+    _persist(tenant, {name for name, state in fresh.items() if state == "off"})
     return dict(fresh)

@@ -1402,6 +1402,14 @@ async def main() -> int:
     # Load config
     config = EngineConfig.from_env()
     logger.info("Tenant: %s", config.tenant_id)
+
+    # Claim this engine's plugin lockfile for its tenant, so a child engine
+    # started on another tenant's workspace refuses to change the plugins the
+    # other engine reads (robothor.plugins.lockfile_owner). Never fatal.
+    from robothor.plugins import lockfile_owner
+
+    if await asyncio.to_thread(lockfile_owner.foreign_owner):
+        logger.error("Plugin lockfile: %s", lockfile_owner.SHARED_REMEDY)
     logger.info("Workspace: %s", config.workspace)
     logger.info("Health port: %d", config.port)
     logger.info("Telegram bot: %s", "configured" if config.bot_token else "disabled")

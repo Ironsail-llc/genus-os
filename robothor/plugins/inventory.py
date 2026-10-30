@@ -123,7 +123,7 @@ def _manifest_json(dist: Any) -> dict[str, Any] | None:
 def status_for(name: str, dist: Any, eps: list[Any]) -> PluginStatus:
     """Measure one distribution by loading exactly its entry points."""
     from robothor.plugins import lockfile
-    from robothor.plugins.grants import ROOT_DISABLED_REASON, forced_states
+    from robothor.plugins.grants import ROOT_DISABLED_REASON, canonical, forced_states
     from robothor.plugins.loader import load_plugins
 
     lock = lockfile.read_lockfile()
@@ -159,7 +159,7 @@ def status_for(name: str, dist: Any, eps: list[Any]) -> PluginStatus:
         contributions=contributions,
         manifest=_manifest_json(dist),
         source=row.source.as_json() if row is not None and row.source is not None else None,
-        forced=forced_states().get(name),
+        forced=forced_states().get(canonical(name)),
     )
 
 

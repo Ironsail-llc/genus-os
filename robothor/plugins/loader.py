@@ -407,7 +407,7 @@ def load_plugins(
         # The ROOT's decision before the child's: a plugin forced off is
         # refused whatever the child's lockfile says (a missing row included),
         # and one forced on skips only the row's `enabled: false`.
-        forced = forced_by_root.get(distribution) if distribution else None
+        forced = forced_by_root.get(_grants.canonical(distribution)) if distribution else None
         if forced == "off":
             result.failures.append(
                 PluginFailure(name, group, _grants.ROOT_DISABLED_REASON, distribution)
