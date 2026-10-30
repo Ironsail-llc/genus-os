@@ -908,7 +908,8 @@ The bridge adds one row of its own, `bridge.engine` (severity `recommended`):
 whether it reaches the engine's `GET /live`. Its `detail` names the address it
 tried as `scheme://host:port/live` — never credentials, a path or a query from
 `ROBOTHOR_ENGINE_URL` — and, on failure, the failure class (`ConnectError`,
-`HTTP 403`, `timeout`). The row is probed on every request, outside the memo.
+`HTTP 403`, `timeout`). The probe has a two-second budget and runs on every
+request, outside the memo.
 
 The bridge's `/ready` probes the same address but does **not** gate on it: an
 unreachable engine breaks every Helm call the bridge proxies, but not sign-in,

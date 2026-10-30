@@ -67,9 +67,12 @@ _doctor_cache: tuple[float, DoctorReport] | None = None
 #: length of a run that is itself bounded at DOCTOR_TOTAL_TIMEOUT_S.
 _doctor_guard = threading.Lock()
 
-#: The engine probe's budget: the same five seconds readiness gives each of its
-#: own checks.
-ENGINE_CHECK_TIMEOUT_S = 5.0
+#: The engine probe's budget. Shorter than the five seconds readiness gives its
+#: own checks, on purpose: the chart's readiness probe also allows five, so a
+#: blackholed engine (dropped, not refused) probed for that long would time out
+#: /ready itself -- making the bridge Not Ready by the back door. A live engine
+#: answers /live in milliseconds.
+ENGINE_CHECK_TIMEOUT_S = 2.0
 
 
 def _engine_origin(base: str) -> str:
