@@ -611,26 +611,30 @@ def _long_option(arg: str, known: tuple[str, ...]) -> str | None:
 #: option supplied one. True for the searchers and the stream editors
 #: (``grep x f``, ``sed 's/x//' f``); False for the interpreters, whose first
 #: positional is a script FILE (``python3 script.py .en?`` names a file).
-_PROGRAM_OPTIONS: dict[str, tuple[str, tuple[str, ...], bool]] = {
-    "grep": ("ef", ("--regexp", "--file"), True),
-    "egrep": ("ef", ("--regexp", "--file"), True),
-    "fgrep": ("ef", ("--regexp", "--file"), True),
-    "rg": ("ef", ("--regexp", "--file"), True),
-    "ag": ("ef", ("--regexp", "--file"), True),
-    "ack": ("ef", ("--regexp", "--file"), True),
-    "sed": ("ef", ("--expression", "--file"), True),
-    "awk": ("fe", ("--file", "--source"), True),
-    "gawk": ("fe", ("--file", "--source"), True),
-    "jq": ("f", ("--from-file",), True),
-    "yq": ("f", ("--from-file",), True),
+#: The fourth field, when set, lists the letters a short-option CLUSTER may
+#: consist of for the program letter at its end to count: perl's ``-ne``,
+#: ``-pe``, ``-lne`` are switches plus ``e``, but ``-rtime`` is ``-r`` with an
+#: attached value that happens to end in ``e``. None means any cluster.
+_PROGRAM_OPTIONS: dict[str, tuple[str, tuple[str, ...], bool, str | None]] = {
+    "grep": ("ef", ("--regexp", "--file"), True, None),
+    "egrep": ("ef", ("--regexp", "--file"), True, None),
+    "fgrep": ("ef", ("--regexp", "--file"), True, None),
+    "rg": ("ef", ("--regexp", "--file"), True, None),
+    "ag": ("ef", ("--regexp", "--file"), True, None),
+    "ack": ("ef", ("--regexp", "--file"), True, None),
+    "sed": ("ef", ("--expression", "--file"), True, None),
+    "awk": ("fe", ("--file", "--source"), True, None),
+    "gawk": ("fe", ("--file", "--source"), True, None),
+    "jq": ("f", ("--from-file",), True, None),
+    "yq": ("f", ("--from-file",), True, None),
     # Interpreters: only the one-liner given by -c / -e (perl's -ne, -pe,
     # -lne clusters included) is program text; every other operand is a file,
     # and the one-liner's string literals are checked by _read_operands.
-    "python": ("c", (), False),
-    "python3": ("c", (), False),
-    "perl": ("eE", (), False),
-    "ruby": ("e", (), False),
-    "node": ("ep", ("--eval", "--print"), False),
+    "python": ("c", (), False, "c"),
+    "python3": ("c", (), False, "c"),
+    "perl": ("eE", (), False, "nplwaseE"),
+    "ruby": ("e", (), False, "nplwase"),
+    "node": ("ep", ("--eval", "--print"), False, "ep"),
 }
 
 
@@ -646,7 +650,7 @@ def _program_indices(word: str, args: list[str]) -> set[int] | None:
     table = _PROGRAM_OPTIONS.get(word)
     if table is None:
         return None
-    shorts, longs, positional_program = table
+    shorts, longs, positional_program, cluster_letters = table
     indices: set[int] = set()
     supplied = False
     i = 0
@@ -663,6 +667,11 @@ def _program_indices(word: str, args: list[str]) -> set[int] | None:
                     i += 1
         elif arg.startswith("-") and len(arg) > 1:
             cluster = arg[1:]
+            if cluster_letters is not None and any(ch not in cluster_letters for ch in cluster):
+                # Not a switch cluster: an option with an attached value
+                # (`-rtime`, `-Mstrict`). Whatever follows is an operand.
+                i += 1
+                continue
             for j, ch in enumerate(cluster):
                 if ch in shorts:
                     supplied = True
@@ -679,64 +688,68 @@ def _program_indices(word: str, args: list[str]) -> set[int] | None:
     return set()
 
 
-def _expandable_words(command: str) -> set[str]:
+def _expandable_words(command: str) -> set[str] | None:
     """The words (as the shell would see them after quote removal) that carry
     at least one UNQUOTED glob or brace character, i.e. the words the shell
-    will actually expand.
+    will actually expand. None when the command cannot be judged at all.
 
     Quoting is judged character by character — ``'…'``, ``"…"`` and ``\\`` —
-    because whether a word is expanded depends on whether its glob characters
-    are unquoted, not on the word having been quoted somewhere: ``.en[v' ']``
-    still globs on its bare ``[``, and ``'.en?'`` beside ``'.e'n?`` leaves the
-    second spelling expandable. A text that is expandable in any one place is
-    treated as expandable everywhere (fail closed).
+    over the WHOLE command, because a quote may span a newline and whether a
+    word is expanded depends on whether its glob characters are unquoted, not
+    on the word having been quoted somewhere: ``.en[v' ']`` still globs on its
+    bare ``[``, and ``'.en?'`` beside ``'.e'n?`` leaves the second spelling
+    expandable. A text that is expandable in any one place is treated as
+    expandable everywhere, and a command that ends inside a quote (or in a
+    trailing backslash) returns None so the caller treats every word as
+    expandable: both fail closed.
     """
     out: set[str] = set()
-    for line in command.splitlines():
-        word: list[str] = []
+    word: list[str] = []
+    expandable = False
+    quote: str | None = None
+    escaped = False
+
+    def flush() -> None:
+        nonlocal word, expandable
+        if word and expandable:
+            out.add("".join(word))
+        word = []
         expandable = False
-        quote: str | None = None
-        escaped = False
 
-        def flush() -> None:
-            nonlocal word, expandable
-            if word and expandable:
-                out.add("".join(word))
-            word = []
-            expandable = False
-
-        for ch in line:
-            if escaped:
-                word.append(ch)
-                escaped = False
-                continue
-            if quote == "'":
-                if ch == "'":
-                    quote = None
-                else:
-                    word.append(ch)
-                continue
-            if quote == '"':
-                if ch == '"':
-                    quote = None
-                elif ch == "\\":
-                    escaped = True
-                else:
-                    word.append(ch)
-                continue
-            if ch == "\\":
-                escaped = True
-                continue
-            if ch in "'\"":
-                quote = ch
-                continue
-            if ch.isspace() or ch in "|&;()<>":
-                flush()
-                continue
-            if ch in "*?[{":
-                expandable = True
+    for ch in command:
+        if escaped:
             word.append(ch)
-        flush()
+            escaped = False
+            continue
+        if quote == "'":
+            if ch == "'":
+                quote = None
+            else:
+                word.append(ch)
+            continue
+        if quote == '"':
+            if ch == '"':
+                quote = None
+            elif ch == "\\":
+                escaped = True
+            else:
+                word.append(ch)
+            continue
+        if ch == "\\":
+            escaped = True
+            continue
+        if ch in "'\"":
+            quote = ch
+            continue
+        if ch.isspace() or ch in "|&;()<>":
+            flush()
+            continue
+        if ch in "*?[{":
+            expandable = True
+        word.append(ch)
+    flush()
+    if quote is not None or escaped:
+        return None
     return out
 
 
@@ -1217,7 +1230,8 @@ def exec_reads_secret(command: str) -> str | None:
                 # neither is a word whose glob characters are all quoted.
                 if (
                     index not in program_at
-                    and candidate in expandable
+                    and (expandable is None or candidate in expandable)
+                    and any(ch in candidate for ch in _GLOB_CHARS)
                     and _glob_names_secret(candidate, shell_dirs)
                 ):
                     return (
