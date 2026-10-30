@@ -287,3 +287,25 @@ def test_neither_pip_nor_uv_is_a_sentence_naming_both(isolated, capsys, monkeypa
     assert "pip" in err and "uv" in err
     assert "Traceback" not in err
     assert pip.calls == []
+
+
+def test_pip_reinstalls_the_verified_file_even_at_the_same_version(
+    isolated, capsys, monkeypatch
+) -> None:
+    """A rebuilt wheel of the same version must replace the files, and no
+    cache may substitute other bytes for the file whose hash was checked."""
+    code, pip = _install_with(isolated, monkeypatch, pip_module=True, uv="/opt/bin/uv")
+    assert code == 0, capsys.readouterr().err
+    (command,) = pip.calls
+    assert "--force-reinstall" in command and "--no-cache-dir" in command
+
+
+def test_uv_reinstalls_the_verified_file_even_at_the_same_version(
+    isolated, capsys, monkeypatch
+) -> None:
+    """uv treats name+version as installed and caches wheels by name+version."""
+    code, pip = _install_with(isolated, monkeypatch, pip_module=False, uv="/opt/bin/uv")
+    assert code == 0, capsys.readouterr().err
+    (command,) = pip.calls
+    assert "--reinstall" in command and "--no-cache" in command
+    assert command[-1] == "acme-tools==1.2.3"
