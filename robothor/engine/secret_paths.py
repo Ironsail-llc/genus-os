@@ -607,18 +607,30 @@ def _long_option(arg: str, known: tuple[str, ...]) -> str | None:
 #: (``-ne 'p'``); a long option takes ``=value`` or the next argument. Once
 #: any is present, every positional argument is a FILE. ``jq -e`` is
 #: ``--exit-status``, not a program, so jq lists only ``-f``.
-_PROGRAM_OPTIONS: dict[str, tuple[str, tuple[str, ...]]] = {
-    "grep": ("ef", ("--regexp", "--file")),
-    "egrep": ("ef", ("--regexp", "--file")),
-    "fgrep": ("ef", ("--regexp", "--file")),
-    "rg": ("ef", ("--regexp", "--file")),
-    "ag": ("ef", ("--regexp", "--file")),
-    "ack": ("ef", ("--regexp", "--file")),
-    "sed": ("ef", ("--expression", "--file")),
-    "awk": ("fe", ("--file", "--source")),
-    "gawk": ("fe", ("--file", "--source")),
-    "jq": ("f", ("--from-file",)),
-    "yq": ("f", ("--from-file",)),
+#: The third field says whether the FIRST POSITIONAL is the program when no
+#: option supplied one. True for the searchers and the stream editors
+#: (``grep x f``, ``sed 's/x//' f``); False for the interpreters, whose first
+#: positional is a script FILE (``python3 script.py .en?`` names a file).
+_PROGRAM_OPTIONS: dict[str, tuple[str, tuple[str, ...], bool]] = {
+    "grep": ("ef", ("--regexp", "--file"), True),
+    "egrep": ("ef", ("--regexp", "--file"), True),
+    "fgrep": ("ef", ("--regexp", "--file"), True),
+    "rg": ("ef", ("--regexp", "--file"), True),
+    "ag": ("ef", ("--regexp", "--file"), True),
+    "ack": ("ef", ("--regexp", "--file"), True),
+    "sed": ("ef", ("--expression", "--file"), True),
+    "awk": ("fe", ("--file", "--source"), True),
+    "gawk": ("fe", ("--file", "--source"), True),
+    "jq": ("f", ("--from-file",), True),
+    "yq": ("f", ("--from-file",), True),
+    # Interpreters: only the one-liner given by -c / -e (perl's -ne, -pe,
+    # -lne clusters included) is program text; every other operand is a file,
+    # and the one-liner's string literals are checked by _read_operands.
+    "python": ("c", (), False),
+    "python3": ("c", (), False),
+    "perl": ("eE", (), False),
+    "ruby": ("e", (), False),
+    "node": ("ep", ("--eval", "--print"), False),
 }
 
 
@@ -629,12 +641,12 @@ def _program_indices(word: str, args: list[str]) -> set[int] | None:
     classes) and never a path, so those indices skip the glob rule and the
     moved-key rule. When the program came through an option, its value index
     (if separate) is program text and every positional is a file; otherwise the
-    first positional is the program.
+    first positional is the program for the tools whose grammar says so.
     """
     table = _PROGRAM_OPTIONS.get(word)
     if table is None:
         return None
-    shorts, longs = table
+    shorts, longs, positional_program = table
     indices: set[int] = set()
     supplied = False
     i = 0
@@ -659,7 +671,7 @@ def _program_indices(word: str, args: list[str]) -> set[int] | None:
                         i += 1
                     break
         i += 1
-    if supplied:
+    if supplied or not positional_program:
         return indices
     for index, arg in enumerate(args):
         if not arg.startswith("-"):
@@ -667,28 +679,65 @@ def _program_indices(word: str, args: list[str]) -> set[int] | None:
     return set()
 
 
-def _quoted_texts(command: str) -> set[str]:
-    """Words that appear in the command ONLY inside quotes.
+def _expandable_words(command: str) -> set[str]:
+    """The words (as the shell would see them after quote removal) that carry
+    at least one UNQUOTED glob or brace character, i.e. the words the shell
+    will actually expand.
 
-    The shell never expands a quoted word, so ``'[0-9]'`` in a sed program is
-    a regex class, not filename expansion. A text that also appears unquoted
-    somewhere is not exempt: that spelling would be expanded.
+    Quoting is judged character by character — ``'…'``, ``"…"`` and ``\\`` —
+    because whether a word is expanded depends on whether its glob characters
+    are unquoted, not on the word having been quoted somewhere: ``.en[v' ']``
+    still globs on its bare ``[``, and ``'.en?'`` beside ``'.e'n?`` leaves the
+    second spelling expandable. A text that is expandable in any one place is
+    treated as expandable everywhere (fail closed).
     """
-    quoted: set[str] = set()
-    bare: set[str] = set()
+    out: set[str] = set()
     for line in command.splitlines():
-        lexer = shlex.shlex(line, posix=False, punctuation_chars=True)
-        lexer.whitespace_split = True
-        try:
-            raw = list(lexer)
-        except ValueError:
-            continue
-        for tok in raw:
-            if len(tok) >= 2 and tok[0] in "'\"" and tok[-1] == tok[0]:
-                quoted.add(tok[1:-1])
-            else:
-                bare.add(tok)
-    return quoted - bare
+        word: list[str] = []
+        expandable = False
+        quote: str | None = None
+        escaped = False
+
+        def flush() -> None:
+            nonlocal word, expandable
+            if word and expandable:
+                out.add("".join(word))
+            word = []
+            expandable = False
+
+        for ch in line:
+            if escaped:
+                word.append(ch)
+                escaped = False
+                continue
+            if quote == "'":
+                if ch == "'":
+                    quote = None
+                else:
+                    word.append(ch)
+                continue
+            if quote == '"':
+                if ch == '"':
+                    quote = None
+                elif ch == "\\":
+                    escaped = True
+                else:
+                    word.append(ch)
+                continue
+            if ch == "\\":
+                escaped = True
+                continue
+            if ch in "'\"":
+                quote = ch
+                continue
+            if ch.isspace() or ch in "|&;()<>":
+                flush()
+                continue
+            if ch in "*?[{":
+                expandable = True
+            word.append(ch)
+        flush()
+    return out
 
 
 def _relative_names_moved_key(
@@ -1132,7 +1181,7 @@ def exec_reads_secret(command: str) -> str | None:
             )
 
     moved_names = _moved_key_basenames()
-    quoted = _quoted_texts(command)
+    expandable = _expandable_words(command)
     for tokens in segments:
         word, args = _command_word(tokens)
         if word is None:
@@ -1163,18 +1212,12 @@ def exec_reads_secret(command: str) -> str | None:
                 candidate = arg.strip("'\"")
                 # Any position, a destination included: `cp {.env,leak.txt}`
                 # is ONE argument until the shell expands it into a source.
-                # Program text is not filename expansion: an interpreter's
-                # one-liner, a searcher's pattern, a sed/awk/jq program — and
-                # nothing the shell saw quoted is expanded at all.
-                is_program = (
-                    word in _INTERPRETERS
-                    or index in program_at
-                    or candidate in quoted
-                    or any(ch.isspace() for ch in candidate)
-                )
+                # Program text is not filename expansion (an interpreter's
+                # one-liner, a searcher's pattern, a sed/awk/jq program), and
+                # neither is a word whose glob characters are all quoted.
                 if (
-                    not is_program
-                    and any(ch in candidate for ch in _GLOB_CHARS)
+                    index not in program_at
+                    and candidate in expandable
                     and _glob_names_secret(candidate, shell_dirs)
                 ):
                     return (
