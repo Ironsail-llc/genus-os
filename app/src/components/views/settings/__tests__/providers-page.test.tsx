@@ -688,7 +688,7 @@ describe("ProvidersPage — the fleet default model", () => {
       expect(found).toBeDefined();
       return found!;
     });
-    expect(call.body).toEqual({ model: "anthropic/claude-sonnet-4.6", fallbacks: [] });
+    expect(call.body).toEqual({ model: "anthropic/claude-sonnet-4.6", fallbacks: [], canvas: null });
   });
 
   it("keeps an off-catalog fallback visible and blocks the save too", async () => {
