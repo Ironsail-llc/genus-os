@@ -328,11 +328,15 @@ async def test_a_grant_wins_over_a_claim_by_another_child(
     assert _bound(db_conn, email) == [(tenants["a"], "active", f"sub-{sfx}")]
     with db_conn.cursor() as cur:
         cur.execute(
-            "SELECT details->>'account_tenant' FROM audit_log "
+            "SELECT tenant_id FROM audit_log "
             "WHERE event_type = 'auth.sso.grant_bound' AND details->>'account_tenant' = %s",
             (tenants["a"],),
         )
-        assert cur.fetchone() is not None
+        row = cur.fetchone()
+        assert row is not None
+        # Filed under the tenant now holding the account, so that tenant's
+        # admins see in their own trail that a grant overrode domain routing.
+        assert row[0] == tenants["a"]
 
 
 # ─── only a ROOT-armed grant may override routing ────────────────────────
