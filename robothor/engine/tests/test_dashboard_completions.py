@@ -231,11 +231,12 @@ class TestDashboardModelChain:
         _defaults(fleet, {"primary": "vertex_ai/gemini-fast", "fallbacks": ["x/y"]})
         assert completions.dashboard_model_chain() == ["vertex_ai/gemini-fast"]
 
-    def test_a_configured_canvas_model_is_tried_first_then_the_fleet_primary(
-        self, fleet
-    ) -> None:
+    def test_a_configured_canvas_model_is_tried_first_then_the_fleet_primary(self, fleet) -> None:
         _defaults(fleet, {"primary": "anthropic/claude-big", "canvas": "vertex_ai/gemini-fast"})
-        assert completions.dashboard_model_chain() == ["vertex_ai/gemini-fast", "anthropic/claude-big"]
+        assert completions.dashboard_model_chain() == [
+            "vertex_ai/gemini-fast",
+            "anthropic/claude-big",
+        ]
 
     def test_the_last_resort_model_ends_the_chain(self, fleet, monkeypatch) -> None:
         _defaults(fleet, {"primary": "anthropic/claude-big", "canvas": "vertex_ai/gemini-fast"})
@@ -279,7 +280,10 @@ class TestDashboardModelChain:
         _defaults(fleet, {"primary": "anthropic/claude-big"})
         assert completions.dashboard_model_chain() == ["anthropic/claude-big"]
         _defaults(fleet, {"primary": "anthropic/claude-big", "canvas": "vertex_ai/gemini-fast"})
-        assert completions.dashboard_model_chain() == ["vertex_ai/gemini-fast", "anthropic/claude-big"]
+        assert completions.dashboard_model_chain() == [
+            "vertex_ai/gemini-fast",
+            "anthropic/claude-big",
+        ]
 
     def test_an_invalid_env_override_fails_closed(self, fleet, monkeypatch) -> None:
         monkeypatch.setenv("DASHBOARD_MODEL", "not a model id")
