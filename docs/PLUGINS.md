@@ -1007,7 +1007,11 @@ What happens, in order, each step a refusal:
    built by uv (the container image's) has none, so the installer runs
    `uv pip install --python <that interpreter>` with the same flags instead.
    With neither pip nor `uv` on PATH, the install is refused with a sentence
-   naming both. `genus plugin remove` uninstalls through the same choice
+   naming both. Either way it reinstalls without a cache (`--force-reinstall
+   --no-cache-dir` for pip, `--reinstall --no-cache` for uv), so installing a
+   rebuilt wheel of a version already installed replaces its files, and what
+   lands on disk is the file whose hash was checked, never a cached copy of
+   the same name and version. `genus plugin remove` uninstalls through the same choice
    (`uv pip uninstall --python <that interpreter>` without pip). With neither,
    it refuses; `--force` then retires the plugin's workspace files and drops
    its lockfile row without uninstalling the package.

@@ -353,8 +353,15 @@ def _pip_install_command(name: str, version: str, find_links: Path) -> list[str]
     local = ["--no-deps", "--no-index", "--find-links", str(find_links)]
     front = _installer_front("install")
     command = [*front, *local]
+    # Reinstall, uncached: both pip and uv treat a matching name+version as
+    # already installed (a rebuilt wheel of the same version changed no files),
+    # and uv's cache keys wheels by name+version, so a cached copy could stand
+    # in for the file whose hash was just checked.
     if front[1:3] == ["-m", "pip"]:
+        command += ["--force-reinstall", "--no-cache-dir"]
         command += ["--disable-pip-version-check", "--no-input"]
+    else:
+        command += ["--reinstall", "--no-cache"]
     target = _plugin_target_dir()
     if target:
         command += ["--target", target, "--upgrade"]
