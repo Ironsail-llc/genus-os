@@ -416,8 +416,11 @@ class TestColdStartFailsClosed:
     ):
         grants_db.rows = {"acme-tools": "off"}
         loader.load_plugins(entry_points=two_plugins)
-        written = sorted(p.name for p in plugin_lockfile.parent.iterdir())
-        assert any("forced-off" in name for name in written), written
+        from robothor.plugins import grants
+
+        path = grants._persisted_path()
+        assert path is not None and path.exists()
+        assert path.parent == plugin_lockfile.parent
 
 
 class TestASharedLockfileIsRefused:
