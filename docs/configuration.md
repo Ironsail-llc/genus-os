@@ -109,6 +109,12 @@ environment file is never shown — only the file's path — and a value from an
 `Environment=` line is masked when the setting is a secret or the name reads
 like a credential. `--json` carries the same under `systemd`.
 
+The operator's assistant has the same verbs as tools: `config_get` and
+`config_set` (with `apply`, which runs through host exec). Both are owner-only.
+The owner's assistant can also `read_file` the instance env file, with the secret
+values masked; every other caller is refused.
+See [The instance's own settings](TOOLS.md#the-instances-own-settings-config_get-config_set-and-reading-an-env-file).
+
 `genus config set NAME VALUE` without `--apply` still writes `config.yaml`,
 and warns on stderr when a unit's own value will keep winning. **`--apply`**
 changes it in the layer that wins:
@@ -579,7 +585,7 @@ also have a home of their own, named in the row:
 | `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `DEEPSEEK_API_KEY` (+ `_2`…`_16`) | Provider credentials. They belong to the providers, not to this platform, so they keep the providers' names rather than being renamed into a Genus namespace |
 | `BRAVE_SEARCH_API_KEY` | Brave Search API key. Set it and `web_search` prefers the Brave API; unset means the provider is absent — no call, no error |
 | `AUTH_SECRET` | The dashboard's own Auth.js secret. Read by Next.js, not by the Python settings model. Required, with `GENUS_BRIDGE_SSO_SECRET`, before the dashboard reports ready — see [Deployment](deployment.md#docker-compose) |
-| `REDIS_URL` | A full Redis URL, read by the **event bus** and the service registry only — `RedisConfig.url` in `robothor/config.py` is composed from `ROBOTHOR_REDIS_*` and never reads it. The hazard is the inverse of an override: set one and the other stays on its own default, so set both or neither |
+| `REDIS_URL` | An optional full Redis URL that overrides the `ROBOTHOR_REDIS_*` settings for the **event bus** (and is the service registry's override for the `redis` entry). Unset, the bus composes its URL from `ROBOTHOR_REDIS_HOST`, `_PORT`, `_DB` and `_PASSWORD` — the same settings every other Redis client in the engine uses — so configure the cache through those and leave this unset. Set it and the bus alone follows it: the rest of the engine stays on the settings |
 | `EVENT_BUS_ENABLED`, `EVENT_BUS_MAXLEN` | The Redis Streams event bus: **on** by default, 10,000 entries per stream. Its own page is [Event Bus](event-bus.md) |
 | `BRIDGE_URL`, `ORCHESTRATOR_URL`, `VISION_URL`, `SEARXNG_URL`, `HELM_URL`, `RTSP_URL` | Per-service base-URL overrides in the service registry, which outrank `robothor-services.json`. The MCP server reads `VISION_SERVICE_URL` for the same service — a separate name, and a real trap |
 | `ROBOTHOR_MEMORY_GENERATION_PROVIDER`, `_REMOTE_MODEL`, `_MIN_INTERVAL_S` | Offload memory generation (fact extraction, episode summaries, insight discovery) from the local GPU to a remote provider. Embeddings and reranking always stay local; a remote failure falls back to local Ollama with a `MEMORY_GENERATION_REMOTE_FALLBACK` WARNING |
@@ -618,6 +624,31 @@ fingerprint. **Adding a channel's token is still `genus channel add` on the
 box** (and `genus init --telegram-token` for Telegram) — there is no API that
 writes channel credentials, by design.
 
+### Many conversations at once
+
+A receiving channel — Slack, or a plugin channel such as a public chat widget —
+runs every inbound message through one shared pipeline, and that pipeline keeps
+three promises. Different conversations run concurrently and never wait on each
+other. Two messages in **one** conversation (one session key) run one after the
+other, so the second sees the first's exchange in its history. And all receiving
+channels together have at most `ROBOTHOR_CHANNEL_MAX_CONCURRENT_RUNS` runs in
+flight (default 8): a message over the cap waits for a slot rather than being
+refused. A run waiting on `ask_user` keeps its slot until it is answered or its
+bounded wait times out, so a few unanswered questions can hold the cap. The
+pipeline reads the cap on every message rather than once at start,
+so it is declared `restart: no`: a new value applies as soon as the engine's
+settings are re-read.
+
+Each successful exchange is appended to the conversation's session history
+(trimmed to the platform's usual window) and saved through the same chat store
+the Helm uses, so a channel conversation is remembered across restarts; only a
+run that completed with output is recorded — a refused, failed, timed-out or
+empty one records nothing. Ordering and the cap are per engine
+process: a deployment with several replicas orders and caps within each one. A channel
+can opt out per message, or hand the run only the last few turns, through
+`handle_message`'s `record_turn` and `history_limit` arguments
+([Plugins](PLUGINS.md)).
+
 ### How replies look in Telegram
 
 Agents write Markdown; Telegram is read on a phone. Every Telegram send goes
@@ -635,6 +666,16 @@ goes out. `ROBOTHOR_TELEGRAM_RICH_MESSAGES=0` turns the rich path off. Runs
 whose words reach Telegram (an interactive Telegram turn, or a manifest with
 `delivery.mode: announce` to `channel: telegram`) are also told so in their
 engine-context turn, so the model writes for a phone in the first place.
+
+## Integrations
+
+The `integrations` group holds the settings for external systems the instance
+watches. Today that is one n8n instance: `ROBOTHOR_N8N_ENABLED`,
+`ROBOTHOR_N8N_BASE_URL`, `ROBOTHOR_N8N_API_KEY` (a secret, resolved from the
+vault first) and `ROBOTHOR_N8N_POLL_SECONDS`. All are off or empty by default.
+See [n8n monitoring](integrations/n8n.md) for setup, what is polled and what
+alerts, and the [settings reference](reference/configuration.md#integrations)
+for the full table.
 
 ## Plugins
 
@@ -707,7 +748,8 @@ What the settings do not tell you:
 accounts any more. Six operator-only Bridge routes, all scoped to the caller's
 own tenant — an account in another tenant answers 404, never 403. The Helm's
 **Settings › Users & roles** page is built on exactly these, and adds nothing of
-its own: it shows an SSO grant's expiry and issuer once, because a binding grant
+its own: an invite defaults to SSO when the instance has an identity provider,
+and it shows an SSO grant's expiry and issuer once, because a binding grant
 carries no secret to re-read — the first verified sign-in for that address spends
 it. No mail is sent by any of this; the operator passes the invitation on.
 
@@ -717,7 +759,7 @@ it. No mail is sent by any of this; the operator passes the invitation on.
 | `GET /api/users` | Every account in the tenant: id, address, display name, role, status, whether it is bound to an identity provider, whether MFA is enrolled, last sign-in. Never a password hash, an MFA secret or an IdP subject. |
 | `POST /api/users` | Creates the `user_accounts` row — **narrower than `genus user add`**, which also writes the CRM person, the tenant membership and the channel identifiers. `{"sso": true}` also arms a one-shot SSO binding grant and returns its id, expiry and issuer pin. |
 | `PATCH /api/users/{id}` | Role, display name, `status: active\|disabled`. |
-| `POST /api/users/{id}/binding-grant` | Arms a fresh one-hour binding grant for an existing account, pinned to the configured issuer when the appliance has exactly one. |
+| `POST /api/users/{id}/binding-grant` | Arms a fresh binding grant for an existing account (seven days unless `GENUS_INVITE_GRANT_TTL_SECONDS` says otherwise), pinned to the configured issuer when the appliance has exactly one. |
 | `GET /api/users/{id}/binding-grants` | Every grant armed for that account, live or spent. |
 
 **The owner role is not an ordinary role here.** Only an owner may grant or
@@ -732,7 +774,9 @@ refresh token keeps working for up to thirty days. Changing the owner is
 
 Not here, and still `genus user` on the box: setting a password, resetting a
 second factor, and deleting an account. Nothing on this surface sends mail, so
-an invited person has to be told out of band.
+an invited person has to be told out of band: the page offers instructions to
+copy that send them to the dashboard to choose "Sign in with SSO", never to the
+identity provider's own address.
 
 ### The forwarded client address needs two allowlists to agree
 

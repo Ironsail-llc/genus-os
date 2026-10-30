@@ -26,9 +26,21 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 logger = logging.getLogger(__name__)
 
 #: The extension contract. Bump on any breaking change to what a plugin
-#: receives or must return; plugins declaring a different version are
-#: refused rather than loaded and hoped for.
+#: receives or must return; plugins declaring a version not in
+#: CONTRACT_VERSIONS are refused rather than loaded and hoped for.
 CONTRACT_VERSION = "1.0"
+
+#: Every contract this engine speaks. 2.0 is 1.0 plus composable patches
+#: (`append:`/`detach:`), `docs/webhooks.d/` drop-ins and agent instruction
+#: fragments: a plugin that relies on them declares 2.0, so an engine that
+#: predates them refuses it instead of installing it without them.
+CONTRACT_VERSIONS = ("1.0", "2.0")
+
+
+def accepted_contracts() -> str:
+    """The versions this engine speaks, as a refusal names them."""
+    return " or ".join(repr(v) for v in CONTRACT_VERSIONS)
+
 
 #: Entry-point group -> the payload key it contributes.
 _GROUPS = {
@@ -443,20 +455,20 @@ def load_plugins(
             continue
 
         declared = payload.get("genus_contract_version")
-        if declared != CONTRACT_VERSION:
+        if declared not in CONTRACT_VERSIONS:
             result.failures.append(
                 PluginFailure(
                     name,
                     group,
-                    f"contract version {declared!r} != {CONTRACT_VERSION!r} — refused",
+                    f"contract version {declared!r} is not {accepted_contracts()} — refused",
                     distribution,
                 )
             )
             logger.warning(
-                "Plugin %r declares contract %r, this engine speaks %r — refused",
+                "Plugin %r declares contract %r, this engine speaks %s — refused",
                 name,
                 declared,
-                CONTRACT_VERSION,
+                accepted_contracts(),
             )
             continue
 

@@ -89,6 +89,10 @@ class PrReviewRow:
     job_id: str = ""
     #: When the last review attempt failed (retry cooldown), or None.
     failed_at: datetime | None = None
+    #: When the pending request was made (migration 150): set when a trigger
+    #: goes from none to one, never on a later touch. The queue's order, and
+    #: the start of pr_review_status's request-to-answer latency.
+    requested_at: datetime | None = None
     created_at: datetime = field(default_factory=_now)
     updated_at: datetime = field(default_factory=_now)
 
@@ -143,6 +147,8 @@ class PrReviewStore(Protocol):
     async def list_active(self, tenant_id: str) -> list[PrReviewRow]: ...
     async def list_failed(self, tenant_id: str) -> list[PrReviewRow]: ...
     async def list_with_findings(self, tenant_id: str) -> list[PrReviewRow]: ...
+    async def list_all(self, tenant_id: str) -> list[PrReviewRow]: ...
+    async def list_messages(self, tenant_id: str, since: datetime) -> list[dict[str, Any]]: ...
     async def message_seen(self, tenant_id: str, name: str) -> bool: ...
     async def record_message(
         self, tenant_id: str, name: str, kind: str, outcome: str = "", error: str = ""
@@ -156,7 +162,7 @@ class MemoryStore:
 
     def __init__(self) -> None:
         self.rows: dict[tuple[str, str, int], PrReviewRow] = {}
-        self.messages: dict[tuple[str, str], dict[str, str]] = {}
+        self.messages: dict[tuple[str, str], dict[str, Any]] = {}
         self.cursors: dict[tuple[str, str], str] = {}
         self.locked: set[str] = set()
 
@@ -226,7 +232,8 @@ class MemoryStore:
 
     async def list_pending(self, tenant_id: str) -> list[PrReviewRow]:
         # A closed row is never dispatched, whatever trigger it still carries.
-        return [r for r in self._all(tenant_id) if r.pending_trigger and r.status != "closed"]
+        rows = [r for r in self._all(tenant_id) if r.pending_trigger and r.status != "closed"]
+        return sorted(rows, key=_request_order)
 
     async def list_active(self, tenant_id: str) -> list[PrReviewRow]:
         return [r for r in self._all(tenant_id) if r.status in ACTIVE_STATUSES]
@@ -237,6 +244,16 @@ class MemoryStore:
     async def list_with_findings(self, tenant_id: str) -> list[PrReviewRow]:
         return [r for r in self._all(tenant_id) if r.status in FINDINGS_OPEN_STATUSES]
 
+    async def list_all(self, tenant_id: str) -> list[PrReviewRow]:
+        return self._all(tenant_id)
+
+    async def list_messages(self, tenant_id: str, since: datetime) -> list[dict[str, Any]]:
+        return [
+            {"message_name": name, **m}
+            for (t, name), m in self.messages.items()
+            if t == tenant_id and m["created_at"] >= since
+        ]
+
     async def message_seen(self, tenant_id: str, name: str) -> bool:
         return (tenant_id, name) in self.messages
 
@@ -244,7 +261,8 @@ class MemoryStore:
         self, tenant_id: str, name: str, kind: str, outcome: str = "", error: str = ""
     ) -> None:
         self.messages.setdefault(
-            (tenant_id, name), {"kind": kind, "outcome": outcome, "error": error}
+            (tenant_id, name),
+            {"kind": kind, "outcome": outcome, "error": error, "created_at": _now()},
         )
 
     async def get_cursor(self, tenant_id: str, source: str) -> str:
@@ -252,6 +270,11 @@ class MemoryStore:
 
     async def set_cursor(self, tenant_id: str, source: str, cursor: str) -> None:
         self.cursors[(tenant_id, source)] = cursor
+
+
+def _request_order(row: PrReviewRow) -> tuple[bool, datetime, datetime]:
+    """Oldest request first; rows from before migration 150 (no time) last."""
+    return (row.requested_at is None, row.requested_at or row.updated_at, row.updated_at)
 
 
 def _row_from_db(data: dict[str, Any]) -> PrReviewRow:
@@ -281,14 +304,19 @@ class PgStore:
 
         return _scoped()
 
-    def _select(self, tenant_id: str, where: str, params: tuple[Any, ...]) -> list[PrReviewRow]:
+    def _select(
+        self,
+        tenant_id: str,
+        where: str,
+        params: tuple[Any, ...],
+        order: str = "updated_at",
+    ) -> list[PrReviewRow]:
         from psycopg2.extras import RealDictCursor
 
         cols = ", ".join((*_COLUMNS, "created_at", "updated_at"))
         with self._connect(tenant_id) as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
-                f"SELECT {cols} FROM pr_reviews WHERE tenant_id = %s AND {where} "
-                "ORDER BY updated_at",
+                f"SELECT {cols} FROM pr_reviews WHERE tenant_id = %s AND {where} ORDER BY {order}",
                 (tenant_id, *params),
             )
             return [_row_from_db(dict(r)) for r in cur.fetchall()]
@@ -371,6 +399,17 @@ class PgStore:
                 (tenant_id, name, kind, outcome[:500], error[:1000]),
             )
             conn.commit()
+
+    def _list_messages(self, tenant_id: str, since: datetime) -> list[dict[str, Any]]:
+        from psycopg2.extras import RealDictCursor
+
+        with self._connect(tenant_id) as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                "SELECT message_name, kind, outcome, error, created_at FROM pr_review_messages "
+                "WHERE tenant_id = %s AND created_at >= %s ORDER BY created_at",
+                (tenant_id, since),
+            )
+            return [dict(r) for r in cur.fetchall()]
 
     def _get_cursor(self, tenant_id: str, source: str) -> str:
         with self._connect(tenant_id) as conn, conn.cursor() as cur:
@@ -469,7 +508,11 @@ class PgStore:
     async def list_pending(self, tenant_id: str) -> list[PrReviewRow]:
         # A closed row is never dispatched, whatever trigger it still carries.
         return await asyncio.to_thread(
-            self._select, tenant_id, "pending_trigger <> '' AND status <> 'closed'", ()
+            self._select,
+            tenant_id,
+            "pending_trigger <> '' AND status <> 'closed'",
+            (),
+            "requested_at NULLS LAST, updated_at",
         )
 
     async def list_active(self, tenant_id: str) -> list[PrReviewRow]:
@@ -484,6 +527,12 @@ class PgStore:
         return await asyncio.to_thread(
             self._select, tenant_id, "status IN ('changes_requested', 'commented')", ()
         )
+
+    async def list_all(self, tenant_id: str) -> list[PrReviewRow]:
+        return await asyncio.to_thread(self._select, tenant_id, "TRUE", ())
+
+    async def list_messages(self, tenant_id: str, since: datetime) -> list[dict[str, Any]]:
+        return await asyncio.to_thread(self._list_messages, tenant_id, since)
 
     async def message_seen(self, tenant_id: str, name: str) -> bool:
         return await asyncio.to_thread(self._message_seen, tenant_id, name)

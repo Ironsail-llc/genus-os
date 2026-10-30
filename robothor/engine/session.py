@@ -181,6 +181,10 @@ EXTERNAL_DATA_TOOLS: frozenset[str] = frozenset(
         "get_entity",
         "get_conversation",
         "list_messages",
+        # n8n monitor snapshot: error text, workflow names and tags come from
+        # the operator's automations and whatever systems they call.
+        "n8n_list_workflows",
+        "n8n_recent_failures",
     }
 )
 

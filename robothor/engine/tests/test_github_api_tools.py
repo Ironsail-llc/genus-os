@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -586,3 +587,99 @@ class TestGithubReviewStats:
         with patch.dict("os.environ", _ENV):
             result = await _github_review_stats({}, _CTX)
             assert "required" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_reviews_before_window_and_self_reviews_not_counted(self):
+        from robothor.engine.tools.handlers.github_api import _github_review_stats
+
+        now = datetime.now(UTC)
+        recent = (now - timedelta(days=1)).isoformat()
+        old = (now - timedelta(days=60)).isoformat()
+        prs = MagicMock()
+        prs.status_code = 200
+        prs.raise_for_status = lambda: None
+        prs.headers = {}
+        prs.json.return_value = [
+            {"number": 1, "user": {"login": "alice"}, "created_at": old, "updated_at": recent}
+        ]
+        reviews = MagicMock()
+        reviews.status_code = 200
+        reviews.json.return_value = [
+            {"user": {"login": "bob"}, "state": "APPROVED", "submitted_at": old},
+            {"user": {"login": "bob"}, "state": "APPROVED", "submitted_at": recent},
+            {"user": {"login": "alice"}, "state": "COMMENTED", "submitted_at": recent},
+        ]
+        client = _mock_async_client([prs, reviews])
+        with (
+            patch.dict("os.environ", _ENV),
+            patch(
+                "robothor.engine.tools.handlers.github_api.httpx.AsyncClient",
+                return_value=client,
+            ),
+        ):
+            result = await _github_review_stats({"repo": "acme/test", "days": 7}, _CTX)
+        assert [r["reviewer"] for r in result["reviewers"]] == ["bob"]
+        assert result["reviewers"][0]["reviews_given"] == 1
+
+    @pytest.mark.asyncio
+    async def test_failed_review_fetch_is_reported(self):
+        from robothor.engine.tools.handlers.github_api import _github_review_stats
+
+        now = datetime.now(UTC).isoformat()
+        prs = MagicMock()
+        prs.status_code = 200
+        prs.raise_for_status = lambda: None
+        prs.headers = {}
+        prs.json.return_value = [
+            {"number": 7, "user": {"login": "alice"}, "created_at": now, "updated_at": now}
+        ]
+        bad = MagicMock()
+        bad.status_code = 403
+        client = _mock_async_client([prs, bad])
+        with (
+            patch.dict("os.environ", _ENV),
+            patch(
+                "robothor.engine.tools.handlers.github_api.httpx.AsyncClient",
+                return_value=client,
+            ),
+        ):
+            result = await _github_review_stats({"repo": "acme/test", "days": 7}, _CTX)
+        assert result["incomplete"] is True
+        assert result["review_fetch_failures"] == [{"pr": 7, "status": 403}]
+
+
+class TestGithubPrStatsHonesty:
+    @pytest.mark.asyncio
+    async def test_detail_fetch_failure_is_reported_not_dropped(self):
+        from robothor.engine.tools.handlers.github_api import _github_pr_stats
+
+        search = _mk_search_resp([{"number": 1}, {"number": 2}])
+        ok = _mk_pr_detail_resp(
+            1, "alice", "2026-05-13T10:00:00+00:00", "2026-05-14T10:00:00+00:00"
+        )
+        bad = MagicMock()
+        bad.status_code = 403
+
+        def _raise():
+            raise httpx.HTTPStatusError("403", request=MagicMock(), response=bad)
+
+        bad.raise_for_status = _raise
+        client = _mock_async_client([search, ok, bad])
+        with (
+            patch.dict("os.environ", _ENV),
+            patch(
+                "robothor.engine.tools.handlers.github_api.httpx.AsyncClient",
+                return_value=client,
+            ),
+        ):
+            result = await _github_pr_stats(
+                {
+                    "repo": "acme/test",
+                    "since": "2026-05-12T04:00:00+00:00",
+                    "until": "2026-05-19T04:00:00+00:00",
+                },
+                _CTX,
+            )
+        assert result["merged_total"] == 2
+        assert result["detail_fetch_failures"] == [2]
+        assert result["incomplete"] is True

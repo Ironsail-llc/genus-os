@@ -65,8 +65,9 @@ The Python dependency gate runs `pip-audit` without standing advisory
 exceptions. Dependency floors are raised when a fix is available, and any new
 advisory fails CI and release builds until it is remediated. If an advisory
 cannot be fixed immediately, its temporary, time-bounded disposition must be
-documented here and approved through security review; there are currently no
-such exceptions.
+documented here and approved through security review, with an expiry date; an
+entry past its expiry date must be removed or renewed through the same review,
+never left in place. There are currently no such exceptions.
 
 ## Scope
 

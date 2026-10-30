@@ -1,20 +1,37 @@
 """Webhook ingress — receive external events and publish to Redis event bus.
 
 External services POST to /api/webhooks/{channel} with an HMAC-SHA256 signature.
-The payload is normalized and published to the appropriate Redis stream.
+Each channel picks its signature scheme: ``hmac_hex`` (hex digest of the raw
+body, GitHub-style), ``stripe_t_v1`` (``t=<unix>,v1=<hex>`` over
+``"<t>." + body`` with a timestamp window) or ``hmac_ts_hex`` (hex digest of
+``"<timestamp>." + body`` in the signature header, optionally ``sha256=``
+prefixed, with the integer unix-seconds timestamp in the channel's
+``timestamp_header`` and the same timestamp window; the signed string uses the
+canonical integer, so a zero-padded timestamp fails the digest rather than
+passing). A channel may also name a delivery id header, in which case a replayed delivery is answered as a duplicate and
+not re-published. A ``google_oidc`` channel takes Google Cloud Pub/Sub push
+instead: the ``Authorization: Bearer`` ID token is verified against the
+channel's audience and service account, the Pub/Sub ``messageId`` is the
+delivery id, and the base64 ``message.data`` is decoded into the payload. The
+payload is normalized and published to the appropriate Redis stream.
 Agents pick up events via the existing EventHooks system.
 """
 
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import hashlib
 import hmac
 import json
 import logging
 import os
+import re
+import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -27,6 +44,17 @@ logger = logging.getLogger(__name__)
 
 # Must match hooks.py / event_bus.py
 STREAM_PREFIX = "robothor:events:"
+
+SIGNATURE_SCHEMES = ("hmac_hex", "stripe_t_v1", "hmac_ts_hex", "google_oidc")
+
+# Headers tried in order when a channel names no signature_header.
+DEFAULT_SIGNATURE_HEADERS = ("X-Hub-Signature-256", "X-Signature-256", "X-Webhook-Signature")
+
+# hmac_ts_hex: header carrying the signed timestamp when a channel names none.
+DEFAULT_TIMESTAMP_HEADER = "X-Webhook-Timestamp"
+
+# How long a delivery id is remembered for replay detection.
+DELIVERY_ID_TTL_SECONDS = 86400
 
 
 @dataclass
@@ -41,6 +69,19 @@ class WebhookChannel:
     event_type_prefix: str = ""
     enabled: bool = True
     rate_limit_per_min: int = 60
+    # When set, the signature is read from this header only.
+    signature_header: str = ""
+    # One of SIGNATURE_SCHEMES.
+    signature_scheme: str = "hmac_hex"
+    # stripe_t_v1 and hmac_ts_hex: how far the signed timestamp may drift from now.
+    timestamp_tolerance_seconds: int = 300
+    # hmac_ts_hex only: header carrying the signed timestamp (unix seconds).
+    timestamp_header: str = DEFAULT_TIMESTAMP_HEADER
+    # When set and present on a request, replays of the same id are dropped.
+    delivery_id_header: str = ""
+    # google_oidc only: the token's required audience and signing service account.
+    oidc_audience: str = ""
+    oidc_service_account: str = ""
 
 
 @dataclass
@@ -50,32 +91,117 @@ class WebhookConfig:
     channels: dict[str, WebhookChannel] = field(default_factory=dict)
 
 
+def _dropin_dir(path: Path) -> Path:
+    """``docs/webhooks.yaml`` -> ``docs/webhooks.d``."""
+    return path.with_name(f"{path.stem}.d")
+
+
+def _read_channels(path: Path) -> dict[str, Any]:
+    with path.open() as f:
+        data = yaml.safe_load(f) or {}
+    raw = data.get("channels") if isinstance(data, dict) else None
+    return raw if isinstance(raw, dict) else {}
+
+
 def load_webhook_config(path: str | Path) -> WebhookConfig:
-    """Load webhook channel definitions from a YAML file."""
-    path = Path(path)
-    if not path.exists():
+    """Load webhook channel definitions from a YAML file and its drop-ins.
+
+    Every ``*.yaml`` in the sibling ``<stem>.d/`` directory (``docs/webhooks.d/``
+    beside ``docs/webhooks.yaml``) is merged after the base file, in name
+    order, so a plugin can own a file of its own channels. A channel declared
+    twice -- in the base file and a drop-in, or in two drop-ins -- is a
+    ``ValueError`` naming both files, and a file that does not parse raises. A
+    missing directory is fine.
+    """
+    return _load_webhook_config(Path(path), strict=True)
+
+
+def _load_webhook_config(path: Path, *, strict: bool) -> WebhookConfig:
+    """:func:`load_webhook_config`; with ``strict=False`` a DROP-IN that does not
+    parse, a channel a drop-in declares again, or a malformed drop-in channel is
+    logged and skipped, so the router still serves every channel it can. The
+    base file is the operator's and stays strict either way."""
+    dropins = _dropin_dir(path)
+    sources = sorted(dropins.glob("*.yaml")) if dropins.is_dir() else []
+    if path.exists():
+        sources.insert(0, path)
+    elif not sources:
         logger.warning("Webhook config not found: %s", path)
         return WebhookConfig()
 
-    with path.open() as f:
-        data = yaml.safe_load(f) or {}
+    declared: dict[str, Path] = {}
+    merged: dict[str, Any] = {}
+    for source in sources:
+        try:
+            found = _read_channels(source)
+        except (yaml.YAMLError, OSError, UnicodeDecodeError) as exc:
+            if strict or source == path:
+                raise
+            logger.error(
+                "Webhook config %s is not readable (%s); none of its channels are served",
+                source,
+                type(exc).__name__,
+            )
+            continue
+        for name, raw in found.items():
+            if name in declared:
+                message = (
+                    f"Webhook channel {name!r} is declared in both {declared[name]} and "
+                    f"{source}; rename one of them."
+                )
+                if strict:
+                    raise ValueError(message)
+                logger.error("%s Serving the one in %s.", message, declared[name])
+                continue
+            declared[name] = source
+            merged[name] = raw
 
     channels: dict[str, WebhookChannel] = {}
-    for name, raw in (data.get("channels") or {}).items():
+    for name, raw in merged.items():
         if not isinstance(raw, dict):
             continue
-        channels[name] = WebhookChannel(
-            name=name,
-            stream=raw.get("stream", name),
-            secret_env=raw.get("secret_env", ""),
-            event_type_header=raw.get("event_type_header", ""),
-            event_type_field=raw.get("event_type_field", ""),
-            event_type_prefix=raw.get("event_type_prefix", ""),
-            enabled=raw.get("enabled", True),
-            rate_limit_per_min=int(raw.get("rate_limit_per_min", 60)),
-        )
+        try:
+            channels[name] = _channel(name, raw)
+        except (ValueError, TypeError) as exc:
+            if strict or declared[name] == path:
+                raise
+            logger.error(
+                "Webhook channel %r in %s is malformed (%s); it is not served",
+                name,
+                declared[name],
+                type(exc).__name__,
+            )
+            continue
+        if channels[name].signature_scheme not in SIGNATURE_SCHEMES:
+            logger.warning(
+                "Webhook channel '%s' has unknown signature_scheme %r; every request will be "
+                "rejected",
+                name,
+                channels[name].signature_scheme,
+            )
 
     return WebhookConfig(channels=channels)
+
+
+def _channel(name: str, raw: dict[str, Any]) -> WebhookChannel:
+    return WebhookChannel(
+        name=name,
+        stream=raw.get("stream", name),
+        secret_env=raw.get("secret_env", ""),
+        event_type_header=raw.get("event_type_header", ""),
+        event_type_field=raw.get("event_type_field", ""),
+        event_type_prefix=raw.get("event_type_prefix", ""),
+        enabled=raw.get("enabled", True),
+        rate_limit_per_min=int(raw.get("rate_limit_per_min", 60)),
+        signature_header=raw.get("signature_header", "") or "",
+        signature_scheme=raw.get("signature_scheme", "hmac_hex") or "hmac_hex",
+        timestamp_tolerance_seconds=int(raw.get("timestamp_tolerance_seconds", 300)),
+        timestamp_header=str(raw.get("timestamp_header", "") or "").strip()
+        or DEFAULT_TIMESTAMP_HEADER,
+        delivery_id_header=raw.get("delivery_id_header", "") or "",
+        oidc_audience=str(raw.get("oidc_audience", "") or ""),
+        oidc_service_account=str(raw.get("oidc_service_account", "") or ""),
+    )
 
 
 def _verify_hmac(payload_bytes: bytes, signature: str, secret: str) -> bool:
@@ -95,7 +221,273 @@ def _verify_hmac(payload_bytes: bytes, signature: str, secret: str) -> bool:
         hashlib.sha256,
     ).hexdigest()
 
+    if not signature.isascii():
+        return False
     return hmac.compare_digest(expected, signature)
+
+
+def _verify_stripe_t_v1(
+    payload_bytes: bytes,
+    header: str,
+    secret: str,
+    tolerance_seconds: int,
+    now: float | None = None,
+) -> tuple[bool, str]:
+    """Verify a ``t=<unix seconds>,v1=<hex>[,v1=<hex>...]`` signature.
+
+    The signed content is ``f"{t}."`` followed by the raw body. Valid when the
+    timestamp is within ``tolerance_seconds`` of now and any ``v1`` matches.
+    Returns ``(ok, reason)``; the reason never contains the secret.
+    """
+    if not header or not secret:
+        return False, "missing signature or secret"
+
+    timestamp: int | None = None
+    candidates: list[str] = []
+    for part in header.split(","):
+        key, sep, value = part.strip().partition("=")
+        if not sep:
+            continue
+        if key == "t":
+            # Unix seconds; bounded so the float comparison below cannot overflow
+            if not (value.isascii() and value.isdigit() and len(value) <= 12):
+                return False, "malformed timestamp"
+            timestamp = int(value)
+        elif key == "v1" and value and value.isascii():
+            candidates.append(value)
+
+    if timestamp is None or not candidates:
+        return False, "malformed signature header"
+
+    current = time.time() if now is None else now
+    if abs(current - timestamp) > tolerance_seconds:
+        return False, f"timestamp outside tolerance ({tolerance_seconds}s)"
+
+    expected = hmac.new(
+        secret.encode("utf-8"),
+        f"{timestamp}.".encode() + payload_bytes,
+        hashlib.sha256,
+    ).hexdigest()
+    if any(hmac.compare_digest(expected, c) for c in candidates):
+        return True, ""
+    return False, "no v1 signature matched"
+
+
+_HEX_SHA256 = re.compile(r"[0-9a-fA-F]{64}")
+
+
+def _verify_hmac_ts_hex(
+    payload_bytes: bytes,
+    signature: str,
+    timestamp: str,
+    secret: str,
+    tolerance_seconds: int,
+    now: float | None = None,
+) -> tuple[bool, str]:
+    """Verify a hex HMAC-SHA256 over ``f"{timestamp}."`` followed by the raw body.
+
+    ``timestamp`` is the value of the channel's timestamp header, in integer
+    unix seconds (milliseconds are not accepted: they read as far in the
+    future). The signed string uses the canonical integer (``str(int(...))``),
+    not the raw header text, so a zero-padded timestamp fails safe as a bad
+    digest. The signature may carry a ``sha256=`` prefix in any case. Returns
+    ``(ok, reason)``; the reason names the failed check, never the secret.
+    """
+    if not secret:
+        return False, "missing secret"
+    if not timestamp:
+        return False, "missing timestamp"
+    # Bounded so the float comparison cannot overflow; 13 digits lets a
+    # millisecond value through to be refused as stale rather than malformed.
+    if not (timestamp.isascii() and timestamp.isdigit() and len(timestamp) <= 13):
+        return False, "malformed timestamp"
+    ts = int(timestamp)
+    current = time.time() if now is None else now
+    if abs(current - ts) > tolerance_seconds:
+        return False, f"stale timestamp (outside {tolerance_seconds}s)"
+
+    if signature[:7].lower() == "sha256=":
+        signature = signature[7:]
+    if not signature:
+        return False, "missing signature"
+    if not _HEX_SHA256.fullmatch(signature):
+        return False, "malformed signature"
+    expected = hmac.new(
+        secret.encode("utf-8"),
+        f"{ts}.".encode() + payload_bytes,
+        hashlib.sha256,
+    ).hexdigest()
+    if hmac.compare_digest(expected, signature.lower()):
+        return True, ""
+    return False, "bad digest"
+
+
+def _verify_signature(
+    channel: WebhookChannel,
+    payload_bytes: bytes,
+    signature: str,
+    secret: str,
+    timestamp: str = "",
+) -> tuple[bool, str]:
+    """Dispatch to the channel's signature scheme. Returns ``(ok, reason)``."""
+    if channel.signature_scheme == "hmac_hex":
+        if _verify_hmac(payload_bytes, signature, secret):
+            return True, ""
+        return False, "missing signature" if not signature else "hmac mismatch"
+    if channel.signature_scheme == "stripe_t_v1":
+        return _verify_stripe_t_v1(
+            payload_bytes, signature, secret, channel.timestamp_tolerance_seconds
+        )
+    if channel.signature_scheme == "hmac_ts_hex":
+        return _verify_hmac_ts_hex(
+            payload_bytes, signature, timestamp, secret, channel.timestamp_tolerance_seconds
+        )
+    return False, f"unknown signature scheme {channel.signature_scheme!r}"
+
+
+#: google_oidc verification runs on its own small pool, never the default
+#: executor the rest of the engine's ``to_thread`` work shares.
+OIDC_MAX_WORKERS = 4
+OIDC_THREAD_PREFIX = "webhook-oidc"
+#: Timeout for fetching Google's signing certificates.
+OIDC_CERT_TIMEOUT_SECONDS = 5
+#: How long fetched certificates are reused. Google publishes a new key well
+#: before it signs with it, so a cached set stays valid across a rotation.
+OIDC_CERT_TTL_SECONDS = 1800
+#: Longest bearer token considered at all (a Google ID token is ~1 KB).
+MAX_OIDC_TOKEN_CHARS = 8192
+
+_JWT_SEGMENT = re.compile(r"[A-Za-z0-9_-]+")
+
+
+def _looks_like_jwt(token: str) -> bool:
+    """Three non-empty base64url segments, bounded in size: cheap, before any thread."""
+    if not token or len(token) > MAX_OIDC_TOKEN_CHARS:
+        return False
+    parts = token.split(".")
+    return len(parts) == 3 and all(_JWT_SEGMENT.fullmatch(p) for p in parts)
+
+
+class CachedCertsRequest:
+    """A google-auth transport that reuses a successful GET for ``ttl_seconds``.
+
+    google-auth fetches the signing certificates on every verification; this
+    answers a repeat GET of the same URL from memory and gives every real
+    fetch a short timeout. Failed fetches are not cached.
+    """
+
+    def __init__(
+        self,
+        inner: Any,
+        *,
+        ttl_seconds: float = OIDC_CERT_TTL_SECONDS,
+        clock: Any = time.monotonic,
+    ) -> None:
+        self._inner = inner
+        self._ttl = ttl_seconds
+        self._clock = clock
+        self._cache: dict[str, tuple[float, Any]] = {}
+        self._lock = threading.Lock()
+
+    def __call__(self, url: str, method: str = "GET", **kwargs: Any) -> Any:
+        if method.upper() != "GET":
+            kwargs["timeout"] = OIDC_CERT_TIMEOUT_SECONDS
+            return self._inner(url, method=method, **kwargs)
+        with self._lock:
+            hit = self._cache.get(url)
+            if hit is not None and self._clock() < hit[0]:
+                return hit[1]
+        kwargs["timeout"] = OIDC_CERT_TIMEOUT_SECONDS
+        response = self._inner(url, method=method, **kwargs)
+        if getattr(response, "status", None) == 200:
+            with self._lock:
+                self._cache[url] = (self._clock() + self._ttl, response)
+        return response
+
+
+_google_request: CachedCertsRequest | None = None
+_oidc_pool: ThreadPoolExecutor | None = None
+
+
+def _google_transport() -> CachedCertsRequest:
+    """One shared, certificate-caching google-auth transport."""
+    global _google_request
+    if _google_request is None:
+        from google.auth.transport.requests import Request
+
+        _google_request = CachedCertsRequest(Request())
+    return _google_request
+
+
+def _oidc_executor() -> ThreadPoolExecutor:
+    global _oidc_pool
+    if _oidc_pool is None:
+        _oidc_pool = ThreadPoolExecutor(
+            max_workers=OIDC_MAX_WORKERS, thread_name_prefix=OIDC_THREAD_PREFIX
+        )
+    return _oidc_pool
+
+
+def _bearer_token(authorization: str) -> str:
+    scheme, _, token = authorization.strip().partition(" ")
+    return token.strip() if scheme.lower() == "bearer" else ""
+
+
+def _check_google_oidc(channel: WebhookChannel, authorization: str) -> tuple[bool, str]:
+    """Verify a Pub/Sub push ``Authorization: Bearer <ID token>``. Blocking (cert fetch).
+
+    Valid when google-auth accepts the token for the channel's audience and
+    its ``email`` claim is the channel's service account, verified.
+    """
+    token = _bearer_token(authorization)
+    if not _looks_like_jwt(token):
+        return False, "missing or malformed bearer token"
+    try:
+        from google.oauth2 import id_token
+
+        claims = id_token.verify_oauth2_token(  # type: ignore[no-untyped-call]
+            token, _google_transport(), audience=channel.oidc_audience
+        )
+    except Exception as exc:  # noqa: BLE001 - any verifier failure is a rejection
+        return False, f"token rejected ({type(exc).__name__})"
+    if not isinstance(claims, dict):
+        return False, "token carried no claims"
+    email = str(claims.get("email") or "")
+    if email.lower() != channel.oidc_service_account.lower():
+        return False, "token is not from the configured service account"
+    if claims.get("email_verified") is not True:
+        return False, "token email is not verified"
+    return True, ""
+
+
+def _unwrap_pubsub(body: Any) -> tuple[dict[str, Any], str] | None:
+    """A Pub/Sub push envelope -> ``(payload, messageId)``; ``None`` when malformed.
+
+    The payload is ``message.data`` decoded (a JSON object's keys, or
+    ``{"data": <text>}``) plus ``pubsub``: the message id, publish time,
+    attributes and subscription.
+    """
+    if not isinstance(body, dict) or not isinstance(body.get("message"), dict):
+        return None
+    message = body["message"]
+    message_id = str(message.get("messageId") or message.get("message_id") or "")
+    try:
+        raw = base64.b64decode(str(message.get("data") or ""), validate=True)
+        text = raw.decode("utf-8")
+    except (binascii.Error, ValueError):
+        return None
+    try:
+        decoded = json.loads(text) if text else {}
+    except ValueError:
+        decoded = None
+    payload: dict[str, Any] = dict(decoded) if isinstance(decoded, dict) else {"data": text}
+    payload["pubsub"] = {
+        "message_id": message_id,
+        "publish_time": str(message.get("publishTime") or message.get("publish_time") or ""),
+        "attributes": message.get("attributes") or {},
+        "subscription": str(body.get("subscription") or ""),
+    }
+    return payload, message_id
 
 
 # ── Channel stats (in-memory, reset on restart) ────────────────────
@@ -189,10 +581,50 @@ async def _check_rate_limit(channel: WebhookChannel) -> bool:
         return False
 
 
-async def _publish_to_stream(stream: str, event_type: str, payload: dict[str, Any]) -> str:
+def _delivery_key(channel: WebhookChannel, delivery_id: str) -> str:
+    return f"robothor:webhook:delivery:{channel.name}:{delivery_id}"
+
+
+async def _claim_delivery(channel: WebhookChannel, delivery_id: str) -> bool | None:
+    """Record a delivery id; ``True`` when first seen, ``False`` for a replay.
+
+    Returns ``None`` when Redis is unavailable — the caller fails closed, as
+    the rate limiter does.
+    """
+    try:
+        r = await _get_async_redis()
+        if r is None:
+            logger.warning("Delivery check: Redis unavailable, rejecting request")
+            return None
+        claimed = await r.set(
+            _delivery_key(channel, delivery_id), 1, nx=True, ex=DELIVERY_ID_TTL_SECONDS
+        )
+        return bool(claimed)
+    except Exception as e:
+        logger.warning("Delivery check failed (rejecting): %s", e)
+        return None
+
+
+async def _release_delivery(channel: WebhookChannel, delivery_id: str) -> None:
+    """Forget a claimed delivery id so the sender's retry is accepted."""
+    try:
+        r = await _get_async_redis()
+        if r is not None:
+            await r.delete(_delivery_key(channel, delivery_id))
+    except Exception as e:
+        logger.warning("Failed to release delivery id: %s", e)
+
+
+async def _publish_to_stream(
+    stream: str,
+    event_type: str,
+    payload: dict[str, Any],
+    *,
+    delivery_id: str = "",
+) -> str:
     """Publish a webhook event to a Redis stream.
 
-    Returns the event ID.
+    Returns the event ID, or ``""`` when the event could not be published.
     """
     event_id = str(uuid.uuid4())
     envelope: dict[str, str] = {
@@ -201,21 +633,57 @@ async def _publish_to_stream(stream: str, event_type: str, payload: dict[str, An
         "type": event_type,
         "source": "webhook",
         "actor": "external",
+        "event_type": event_type,
         "payload": json.dumps(payload),
     }
+    if delivery_id:
+        envelope["delivery_id"] = delivery_id
 
     try:
         r = await _get_async_redis()
         if r is None:
-            return event_id
+            logger.error("Failed to publish webhook event: Redis unavailable")
+            return ""
 
         stream_key = f"{STREAM_PREFIX}{stream}"
         await r.xadd(stream_key, envelope, maxlen=10000)
         logger.info("Published webhook event %s to %s", event_id, stream_key)
     except Exception as e:
         logger.error("Failed to publish webhook event: %s", e)
+        return ""
 
     return event_id
+
+
+async def _authenticate_google_oidc(ch: WebhookChannel, request: Request) -> JSONResponse | None:
+    """Authenticate a Pub/Sub push; ``None`` when accepted, else the refusal.
+
+    Cheap refusals come first (configuration, rate limit, token shape): the
+    verifier costs a thread on :func:`_oidc_executor` and may fetch certs.
+    """
+    if not (ch.oidc_audience and ch.oidc_service_account):
+        logger.warning(
+            "Webhook channel rejected: oidc_audience/oidc_service_account not "
+            "configured for channel '%s'",
+            ch.name,
+        )
+        return JSONResponse(
+            {"error": "Channel not configured: OIDC audience or account not set"},
+            status_code=503,
+        )
+    if not await _check_rate_limit(ch):
+        return JSONResponse({"error": "Rate limit exceeded"}, status_code=429)
+    authorization = request.headers.get("authorization", "")
+    if not _looks_like_jwt(_bearer_token(authorization)):
+        logger.warning("Webhook token rejected for channel '%s': malformed", ch.name)
+        return JSONResponse({"error": "Invalid signature"}, status_code=401)
+    ok, reason = await asyncio.get_running_loop().run_in_executor(
+        _oidc_executor(), _check_google_oidc, ch, authorization
+    )
+    if not ok:
+        logger.warning("Webhook token rejected for channel '%s': %s", ch.name, reason)
+        return JSONResponse({"error": "Invalid signature"}, status_code=401)
+    return None
 
 
 def get_webhook_router(config: WebhookConfig | None = None) -> APIRouter:
@@ -230,7 +698,8 @@ def get_webhook_router(config: WebhookConfig | None = None) -> APIRouter:
             / "docs"
             / "webhooks.yaml"
         )
-        config = load_webhook_config(default_path)
+        # Lenient: one bad drop-in must not take the engine's HTTP app down.
+        config = _load_webhook_config(default_path, strict=False)
 
     router = APIRouter(tags=["webhooks"])
 
@@ -269,15 +738,25 @@ def get_webhook_router(config: WebhookConfig | None = None) -> APIRouter:
                 status_code=413,
             )
 
-        # Verify HMAC signature
-        secret = os.getenv(ch.secret_env, "")
-        signature = (
-            request.headers.get("X-Hub-Signature-256", "")
-            or request.headers.get("X-Signature-256", "")
-            or request.headers.get("X-Webhook-Signature", "")
-        )
+        oidc = ch.signature_scheme == "google_oidc"
+        if oidc:
+            refused = await _authenticate_google_oidc(ch, request)
+            if refused is not None:
+                return refused
 
-        if not secret:
+        # Verify HMAC signature
+        secret = "" if oidc else os.getenv(ch.secret_env, "")
+        if oidc:
+            signature = ""
+        elif ch.signature_header:
+            signature = request.headers.get(ch.signature_header, "")
+        else:
+            signature = next(
+                (v for h in DEFAULT_SIGNATURE_HEADERS if (v := request.headers.get(h, ""))),
+                "",
+            )
+
+        if not oidc and not secret:
             # Secret env var not set — reject to prevent unauthenticated ingress
             logger.warning(
                 "Webhook channel rejected: secret not configured for channel '%s'",
@@ -288,14 +767,23 @@ def get_webhook_router(config: WebhookConfig | None = None) -> APIRouter:
                 status_code=503,
             )
 
-        if not _verify_hmac(body, signature, secret):
+        timestamp = (
+            request.headers.get(ch.timestamp_header, "")
+            if ch.signature_scheme == "hmac_ts_hex"
+            else ""
+        )
+        ok, reason = (
+            (True, "") if oidc else _verify_signature(ch, body, signature, secret, timestamp)
+        )
+        if not ok:
+            logger.warning("Webhook signature rejected for channel '%s': %s", ch.name, reason)
             return JSONResponse(
                 {"error": "Invalid signature"},
                 status_code=401,
             )
 
-        # Rate limiting
-        if not await _check_rate_limit(ch):
+        # Rate limiting (google_oidc channels were limited before verifying)
+        if not oidc and not await _check_rate_limit(ch):
             return JSONResponse(
                 {"error": "Rate limit exceeded"},
                 status_code=429,
@@ -310,6 +798,16 @@ def get_webhook_router(config: WebhookConfig | None = None) -> APIRouter:
                 status_code=400,
             )
 
+        pubsub_message_id = ""
+        if oidc:
+            unwrapped = _unwrap_pubsub(payload)
+            if unwrapped is None:
+                return JSONResponse(
+                    {"error": "Invalid Pub/Sub push envelope"},
+                    status_code=400,
+                )
+            payload, pubsub_message_id = unwrapped
+
         # Extract event type
         event_type = ""
         if ch.event_type_header:
@@ -323,8 +821,34 @@ def get_webhook_router(config: WebhookConfig | None = None) -> APIRouter:
         elif ch.event_type_prefix:
             event_type = ch.event_type_prefix.rstrip(".")
 
+        # Delivery idempotency: a replayed delivery id is acknowledged, not re-published
+        delivery_id = ""
+        if ch.delivery_id_header:
+            delivery_id = request.headers.get(ch.delivery_id_header, "").strip()
+        if not delivery_id and pubsub_message_id:
+            delivery_id = pubsub_message_id
+        if delivery_id:
+            claimed = await _claim_delivery(ch, delivery_id)
+            if claimed is None:
+                return JSONResponse(
+                    {"error": "Delivery check unavailable"},
+                    status_code=503,
+                )
+            if not claimed:
+                logger.info("Duplicate webhook delivery on channel '%s'", ch.name)
+                return JSONResponse({"status": "duplicate"}, status_code=200)
+
         # Publish to Redis
-        event_id = await _publish_to_stream(ch.stream, event_type, payload)
+        event_id = await _publish_to_stream(ch.stream, event_type, payload, delivery_id=delivery_id)
+        if not event_id:
+            # Ask the sender to retry; a claimed delivery id is released so the
+            # retry is not answered as a duplicate
+            if delivery_id:
+                await _release_delivery(ch, delivery_id)
+            return JSONResponse(
+                {"error": "Event could not be published"},
+                status_code=503,
+            )
 
         # Record stats
         _record_received(channel)

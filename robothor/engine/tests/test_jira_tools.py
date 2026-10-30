@@ -45,7 +45,7 @@ class TestJiraToolSchemas:
     def test_jira_tools_in_set(self):
         from robothor.engine.tools import JIRA_TOOLS
 
-        assert len(JIRA_TOOLS) == 5
+        assert len(JIRA_TOOLS) == 9
         assert "jira_search" in JIRA_TOOLS
         assert "jira_list_boards" in JIRA_TOOLS
 
@@ -250,6 +250,32 @@ class TestJiraSearch:
 
         assert result["count"] == 1
         assert result["issues"][0]["key"] == "ENG-1"
+
+    @pytest.mark.asyncio
+    async def test_search_passes_and_returns_page_token(self):
+        from robothor.engine.tools.handlers.jira import _jira_search
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = {"issues": [], "isLast": False, "nextPageToken": "tok2"}
+        mock_client = AsyncMock()
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_client.post = AsyncMock(return_value=mock_resp)
+
+        with (
+            patch.dict("os.environ", _ENV),
+            patch(
+                "robothor.engine.tools.handlers.jira.httpx.AsyncClient",
+                return_value=mock_client,
+            ),
+        ):
+            result = await _jira_search({"jql": "project = ENG", "next_page_token": "tok1"}, _CTX)
+
+        assert mock_client.post.call_args.kwargs["json"]["nextPageToken"] == "tok1"
+        assert result["next_page_token"] == "tok2"
+        assert result["is_last"] is False
 
     @pytest.mark.asyncio
     async def test_search_invalid_jql(self):

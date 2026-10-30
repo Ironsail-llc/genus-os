@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from unittest.mock import patch
 
 import pytest
@@ -10,71 +11,72 @@ from robothor.engine.tools.dispatch import ToolContext
 
 _CTX = ToolContext(agent_id="test", tenant_id="test-tenant")
 
+_PERIOD = {
+    "week_start": "2026-04-06",
+    "week_end": "2026-04-12",
+    "report_label": "Week of 2026-04-06",
+}
+
+
+def _metrics(**over):
+    base = {
+        "tickets_resolved": 0,
+        "tickets_by_type": {},
+        "in_progress": 0,
+        "prs_merged": 0,
+        "commits": 0,
+        "lines_added": 0,
+        "lines_deleted": 0,
+        "reviews_given": 0,
+        "reviews_approved": 0,
+        "reviews_changes_requested": 0,
+        "reviews_commented": 0,
+        "review_turnaround_median_h": None,
+        "changes_requested_received": 0,
+        "merged_without_review": 0,
+        "stale_prs": 0,
+    }
+    base.update(over)
+    return base
+
+
 SAMPLE_DATA = {
-    "period": "Week of April 7, 2026",
-    "executive_summary": {
-        "tickets_resolved": 86,
-        "prs_merged": 335,
-        "pr_to_ticket_ratio": "3.9",
-        "open_backlog": "394+",
-        "throughput_rate": "20 tickets/week | 78 PRs/week",
-    },
-    "jira": {
-        "resolved": [
-            {
-                "project": "ENG",
-                "count": 82,
-                "types": "45 Tasks, 21 Bugs, 12 Stories",
-                "top_contributors": "Alice (18), Bob (18), Charlie (14)",
-            },
-        ],
-        "stale_tickets": [
-            {
-                "key": "ENG-51",
-                "status": "To Do",
-                "assignee": "Unassigned",
-                "summary": "Add dashboard metrics endpoint",
-            },
-        ],
-    },
-    "github": {
-        "repo_stats": [
-            {
-                "name": "acme/repo-alpha",
-                "merged": 188,
-                "avg_cycle": "2.7h",
-                "avg_cycle_hours": 2.7,
-                "median_cycle": "0.0h",
-            },
-            {
-                "name": "acme/repo-beta",
-                "merged": 22,
-                "avg_cycle": "95.8h",
-                "avg_cycle_hours": 95.8,
-                "median_cycle": "1.6h",
-            },
-        ],
-        "total_merged": 335,
-        "review_coverage": 11.0,
-        "total_reviews": 37,
-        "no_review_repos": ["acme/repo-beta", "acme/repo-gamma"],
-    },
-    "people": [
-        {"name": "Alice Smith", "tickets": 1, "prs": 97, "reviews": 0, "pr_per_ticket": "97.0"},
-        {"name": "Bob Johnson", "tickets": 19, "prs": 10, "reviews": 28, "pr_per_ticket": "0.5"},
-    ],
-    "bottlenecks": [
+    "period": _PERIOD,
+    "roles": [{"key": "eng", "title": "Software Engineer", "focus": "Ships features"}],
+    "members": [
         {
-            "severity": "high",
-            "text": "Only 11% of PRs receive any code review",
-            "recommendation": "Require 1 reviewer on all repos",
+            "id": "alice",
+            "name": "Alice Smith",
+            "role": "eng",
+            "role_title": "Software Engineer",
+            "metrics": _metrics(prs_merged=97, tickets_resolved=1, commits=40),
+            "unavailable": {},
+            "trend": {},
+            "usage": [],
+            "no_activity": False,
         },
         {
-            "severity": "medium",
-            "text": "acme/repo-beta has 95.8h avg cycle time",
-            "recommendation": "Investigate what's blocking merges",
+            "id": "bob",
+            "name": "Bob Johnson",
+            "role": "eng",
+            "role_title": "Software Engineer",
+            "metrics": _metrics(tickets_resolved=19, reviews_given=28),
+            "unavailable": {},
+            "trend": {},
+            "usage": [],
+            "no_activity": False,
         },
     ],
+    "team": {"prs_merged": 97, "commits": 40, "tickets_resolved": 20, "reviews_given": 28},
+    "usage": {"available": False, "reason": "no email"},
+    "data_quality": {},
+    "analyst": {
+        "summary": "A busy week.",
+        "per_person": {"alice": "Alice merged 97 PRs."},
+        "bottlenecks": [
+            {"severity": "high", "text": "Only one reviewer", "recommendation": "Add one"}
+        ],
+    },
 }
 
 
@@ -96,32 +98,26 @@ class TestRenderDevopsReport:
         assert "error" in result
 
     @pytest.mark.asyncio
+    async def test_old_analyst_shape_is_refused(self):
+        from robothor.engine.tools.handlers.reports import _render_devops_report
+
+        result = await _render_devops_report(
+            {"report_data": {"executive_summary": {}, "people": []}}, _CTX
+        )
+        assert "error" in result
+
+    @pytest.mark.asyncio
     async def test_render_success(self):
         from robothor.engine.tools.handlers.reports import _render_devops_report
 
         result = await _render_devops_report({"report_data": SAMPLE_DATA}, _CTX)
-
-        assert "html" in result
-        assert "subject" in result
-        assert "plain_summary" in result
-        assert "Dev Team Operations Report" in result["subject"]
-        assert "April 7" in result["subject"]
-
-    @pytest.mark.asyncio
-    async def test_html_contains_sections(self):
-        from robothor.engine.tools.handlers.reports import _render_devops_report
-
-        result = await _render_devops_report({"report_data": SAMPLE_DATA}, _CTX)
+        assert result["subject"] == "Dev Team Operations Report — Week of 2026-04-06"
         html = result["html"]
-
-        assert "Executive Summary" in html
-        assert "86" in html  # tickets resolved
-        assert "335" in html  # prs merged
-        assert "acme/repo-alpha" in html
-        assert "acme/repo-beta" in html
         assert "Alice Smith" in html
-        assert "11%" in html  # review coverage
+        assert "Software Engineer" in html
+        assert "97" in html
         assert "Bottlenecks" in html
+        assert "Unavailable: no email" in html
 
     @pytest.mark.asyncio
     async def test_plain_summary(self):
@@ -129,119 +125,39 @@ class TestRenderDevopsReport:
 
         result = await _render_devops_report({"report_data": SAMPLE_DATA}, _CTX)
         plain = result["plain_summary"]
-
-        assert "86" in plain
-        assert "335" in plain
+        assert "PRs merged: 97" in plain
         assert "Bottlenecks:" in plain
+        assert "'tz'" not in plain
 
     @pytest.mark.asyncio
     async def test_data_quality_panel_hidden_when_clean(self):
-        """Report Quality panel must not appear when there are no anomalies."""
         from robothor.engine.tools.handlers.reports import _render_devops_report
 
-        result = await _render_devops_report({"report_data": SAMPLE_DATA}, _CTX)
-        # Sentinel string from the rendered <h2> only appears when the block fires
-        assert "unresolved handle(s)" not in result["html"]
-        assert "engineer(s) on roster" not in result["html"]
+        data = dict(SAMPLE_DATA)
+        data["usage"] = {"available": True, "rows": []}
+        result = await _render_devops_report({"report_data": data}, _CTX)
+        assert "Data quality</h2>" not in result["html"]
 
     @pytest.mark.asyncio
-    async def test_data_quality_panel_shows_when_unresolved(self):
-        """Report Quality panel must surface unresolved handles."""
+    async def test_data_quality_panel_shows_outside_roster(self):
         from robothor.engine.tools.handlers.reports import _render_devops_report
 
         data = dict(SAMPLE_DATA)
         data["data_quality"] = {
-            "unresolved_handles": [
-                {
-                    "channel": "github",
-                    "identifier": "newhire-dev",
-                    "occurrences": 4,
-                    "sources": ["acme-erp/pr_stats_current_week/authors"],
-                }
-            ],
-            "missing_from_roster": [],
+            "outside_roster": [
+                {"handle": "newhire-dev", "source": "github", "counts": {"prs_merged": 4}}
+            ]
         }
         result = await _render_devops_report({"report_data": data}, _CTX)
         assert "newhire-dev" in result["html"]
-        assert "unresolved handle" in result["html"]
-
-    @pytest.mark.asyncio
-    async def test_data_quality_panel_shows_missing_roster(self):
-        from robothor.engine.tools.handlers.reports import _render_devops_report
-
-        data = dict(SAMPLE_DATA)
-        data["data_quality"] = {
-            "unresolved_handles": [],
-            "missing_from_roster": [
-                {
-                    "person_id": "p2",
-                    "name": "Bob Smith",
-                    "job_title": "Engineer",
-                    "reason": "no activity this period",
-                }
-            ],
-        }
-        result = await _render_devops_report({"report_data": data}, _CTX)
-        assert "Report Quality" in result["html"]
-        assert "Bob Smith" in result["html"]
-
-    @pytest.mark.asyncio
-    async def test_dict_period_subject_and_html_use_label(self):
-        """A period_block dict must render as a clean label, never a dict-repr."""
-        from robothor.engine.tools.handlers.reports import _render_devops_report
-
-        data = dict(SAMPLE_DATA)
-        data["period"] = {
-            "tz": "America/New_York",
-            "current_week_start_et": "2026-04-13T00:00:00-04:00",
-            "last_week_start_et": "2026-04-06T00:00:00-04:00",
-            "last_week_end_et": "2026-04-13T00:00:00-04:00",
-            "generated_at_et": "2026-04-13T09:00:00-04:00",
-            "report_label": "Week of 2026-04-06",
-        }
-        result = await _render_devops_report({"report_data": data}, _CTX)
-        assert "Week of 2026-04-06" in result["subject"]
-        assert "'tz'" not in result["subject"]
-        assert "report_label" not in result["subject"]
-        # HTML header is clean too (no raw dict-repr leaked)
-        assert "'tz'" not in result["html"]
-        assert "Week of 2026-04-06" in result["html"]
-
-    @pytest.mark.asyncio
-    async def test_dict_period_without_report_label_derives_label(self):
-        from robothor.engine.tools.handlers.reports import _render_devops_report
-
-        data = dict(SAMPLE_DATA)
-        data["period"] = {"last_week_start_et": "2026-04-06T00:00:00-04:00"}
-        result = await _render_devops_report({"report_data": data}, _CTX)
-        assert "Week of 2026-04-06" in result["subject"]
-        assert "'last_week_start_et'" not in result["plain_summary"]
-
-    @pytest.mark.asyncio
-    async def test_plain_summary_omits_nested_last_week(self):
-        """_build_plain_summary must skip nested objects, not dump their dict-repr."""
-        from robothor.engine.tools.handlers.reports import _render_devops_report
-
-        data = dict(SAMPLE_DATA)
-        es = dict(SAMPLE_DATA["executive_summary"])
-        es["last_week"] = {"tickets_resolved": 10, "prs_merged": 25}
-        data["executive_summary"] = es
-        result = await _render_devops_report({"report_data": data}, _CTX)
-        plain = result["plain_summary"]
-        assert "{'tickets_resolved'" not in plain
-        assert "Last Week:" not in plain
-        # flat scalar fields still present
-        assert "86" in plain
+        assert "not on the team roster" in result["html"]
 
     @pytest.mark.asyncio
     async def test_accepts_json_string(self):
-        import json
-
         from robothor.engine.tools.handlers.reports import _render_devops_report
 
         result = await _render_devops_report({"report_data": json.dumps(SAMPLE_DATA)}, _CTX)
         assert "html" in result
-        assert "Executive Summary" in result["html"]
 
     @pytest.mark.asyncio
     async def test_invalid_json_string(self):

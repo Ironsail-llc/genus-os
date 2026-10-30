@@ -11,6 +11,7 @@ from robothor.engine.exec_spill import shape_exec_result
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from pathlib import Path
 
     from robothor.engine.tools.dispatch import ToolContext
 
@@ -320,12 +321,58 @@ async def _search_files(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
     return await asyncio.to_thread(_run)
 
 
+#: A dotenv file larger than this is not an env file anyone wrote by hand.
+_MASKED_READ_MAX_BYTES = 1_000_000
+
+
+def _masked_dotenv_read(path: Any, ctx: ToolContext) -> dict[str, Any]:
+    """``read_file`` for a plain dotenv secrets path: keys shown, credentials masked.
+
+    Synchronous; the caller is already off the event loop. Anything the masker
+    cannot vouch for -- SOPS ciphertext, a body that is not ``KEY=VALUE``
+    lines, an oversized file -- is refused with the ordinary refusal text.
+    """
+    from robothor.engine.attachments import is_inbox_secret
+    from robothor.engine.env_masking import mask_dotenv
+    from robothor.engine.secret_paths import refusal_for
+
+    if is_inbox_secret(path, workspace=ctx.workspace or None):
+        return {"error": refusal_for(path)}
+    try:
+        if path.stat().st_size > _MASKED_READ_MAX_BYTES:
+            return {"error": refusal_for(path)}
+        text = path.read_text()
+    except Exception as e:
+        return {"error": f"Failed to read file: {e}"}
+    masked = mask_dotenv(text)
+    if masked is None:
+        return {
+            "error": refusal_for(path)
+            + " (It is not a plain KEY=VALUE file, so it cannot be shown masked.)"
+        }
+    return {
+        "content": masked[:50000],
+        "path": str(path),
+        "chars": len(masked),
+        "masked": True,
+        "note": (
+            "Secret values are masked as **** plus their last 4 characters. Use "
+            "config_get for a setting's effective value and source, and vault_get "
+            "for whether a credential is configured."
+        ),
+    }
+
+
 @_handler("read_file")
 async def _read_file(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from pathlib import Path
 
     def _run() -> dict[str, Any]:
-        from robothor.engine.secret_paths import is_secret_path, refusal_for
+        from robothor.engine.secret_paths import (
+            is_maskable_dotenv_path,
+            is_secret_path,
+            refusal_for,
+        )
 
         path = Path(args.get("path", "")).expanduser()
         if not path.is_absolute() and ctx.workspace:
@@ -333,8 +380,18 @@ async def _read_file(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         # Before touching the filesystem: the refusal must not reveal whether
         # the file exists, and a credential file is never opened for a model
         # (see robothor/engine/secret_paths.py for the live reads behind this).
+        # One exception: a plain dotenv file (the instance env file above all)
+        # is returned to the verified OWNER with every credential value masked,
+        # so the operator's assistant can say what its own settings are
+        # (robothor/engine/env_masking.py). The same owner rule as config_get:
+        # every other caller -- sub-agents, cron and service runs, other roles,
+        # benchmarks -- gets the plain refusal, as before GEN-42.
         if is_secret_path(path):
-            return {"error": refusal_for(path)}
+            from robothor.engine.owner_gate import is_verified_owner
+
+            if not is_maskable_dotenv_path(path) or not is_verified_owner(ctx):
+                return {"error": refusal_for(path)}
+            return _masked_dotenv_read(path, ctx)
         # The same question for a file the OPERATOR sent over a channel.
         # `secret_paths` cannot answer it: the inbox stores a sanitised name and
         # `.env` sanitises to `env`, so the rules see nothing to object to. The
@@ -346,13 +403,63 @@ async def _read_file(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 
         if is_inbox_secret(path, workspace=ctx.workspace or None):
             return {"error": refusal_for(path)}
-        try:
-            content = path.read_text()
-            return {"content": content[:50000], "path": str(path), "chars": len(content)}
-        except Exception as e:
-            return {"error": f"Failed to read file: {e}"}
+        return _read_any(path)
 
     return await asyncio.to_thread(_run)
+
+
+#: Characters of a file's text returned to the model, extracted or not.
+_READ_FILE_CHARS = 50_000
+
+#: Bytes sniffed for a NUL before a file of unknown type is decoded as text.
+_BINARY_SNIFF_BYTES = 8192
+
+
+def _read_any(path: Path) -> dict[str, Any]:
+    """Text for a text file, extracted text for a document, a note otherwise.
+
+    Called only after the secret-path refusals above: nothing here may run on
+    a file those would refuse.
+    """
+    from robothor.engine import attachments, file_extract
+
+    try:
+        doc_kind = file_extract.document_kind(path.suffix)
+        if doc_kind is not None:
+            if not path.is_file():
+                return {"error": f"Failed to read file: no such file: {path}"}
+            try:
+                text = file_extract.extract_path(path, doc_kind, max_chars=_READ_FILE_CHARS)
+            except file_extract.ExtractionError as e:
+                return {"error": f"Failed to read {doc_kind} file: {e}"}
+            out: dict[str, Any] = {
+                "content": text if file_extract.STOPPED_EARLY in text else text[:_READ_FILE_CHARS],
+                "path": str(path),
+                "chars": len(text),
+                "format": doc_kind,
+            }
+            if file_extract.STOPPED_EARLY in text:
+                # Extraction stopped at the cap: the true length is unknown.
+                out["truncated"] = True
+            return out
+        if attachments.kind_for("", path.name) == "image" and path.is_file():
+            return {
+                "path": str(path),
+                "image": True,
+                "size": path.stat().st_size,
+                "message": "This is an image. Call view_image with this path to look at it.",
+            }
+        with path.open("rb") as fh:
+            sample = fh.read(_BINARY_SNIFF_BYTES)
+        if file_extract.looks_binary(sample):
+            return file_extract.binary_summary(path)
+        try:
+            content = path.read_text()
+        except UnicodeDecodeError:
+            return file_extract.binary_summary(path)
+        return {"content": content[:_READ_FILE_CHARS], "path": str(path), "chars": len(content)}
+    except Exception as e:
+        return {"error": f"Failed to read file: {e}"}
 
 
 @_handler("list_directory")

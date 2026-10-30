@@ -47,6 +47,32 @@ class EffectScope(Protocol):
     def principal_id(self) -> str: ...
 
 
+# Tools whose uncertain effects a host-owned verifier can read back and settle
+# (task_recovery, note_recovery). Defined here, not in effect_recovery, because
+# begin() needs it and effect_recovery imports this module.
+READBACK_TOOLS: frozenset[str] = frozenset({"create_task", "create_note"})
+
+# Tools the agent drives directly and whose result it can usually check itself:
+# list the directory, read the file back, look at the page again. They are NOT
+# confined to this host -- a shell command can run `curl -X POST` or `gh pr
+# create`, and the browser can submit a form -- so exempting them is a trade-off,
+# not a proof of safety: an uncertain call never fences a reworded call of the
+# tool in a later request (its own request and identical arguments stay
+# fenced), and a duplicate outside effect is accepted to keep the assistant's
+# basic tools usable. Fencing them for the full window wedged an operator's
+# shell for two weeks. Named here rather than taken from
+# benchmark_sandbox.EXTERNAL_SIDE_EFFECT_TOOLS: that set is the benchmark's
+# deny-list and deliberately includes exec and file writes.
+HOST_LOCAL_TOOLS: frozenset[str] = frozenset({"exec", "execute_code", "browser", "write_file"})
+
+# How long an uncertain effect from a tool with no verifier fences a reworded
+# call of the same tool in a later request. Every other tool (mail, calendar,
+# CRM writes, messages) cannot be read back, so a "send that again" after a
+# timed-out send waits this long for reconciliation instead of sending twice.
+# After it, effect_recovery.reconcile_unverifiable() releases the row as
+# expired. One value for both, so the fence and the sweep cannot disagree.
+UNCERTAIN_FENCE_WINDOW = "24 hours"
+
 active_effect: ContextVar[dict[str, Any] | None] = ContextVar("active_effect", default=None)
 
 
@@ -110,11 +136,17 @@ def begin(
         confirmed = cur.fetchone()
         if confirmed:
             return dict(confirmed)
+        # The bare cross-request same-tool fence: unbounded for tools a verifier
+        # settles, never for host-local tools, and for every other tool only
+        # while the uncertain row is younger than UNCERTAIN_FENCE_WINDOW. Before
+        # that bound nothing could clear it, and one uncertain call refused
+        # every later call of the tool indefinitely.
         cur.execute(
             """SELECT id FROM agent_runtime_effects WHERE tenant_id=%s AND principal_id=%s
                AND (state IN ('prepared','dispatching','uncertain') AND fingerprint=%s
                  OR state='uncertain' AND (request_id=%s OR goal_id=%s OR budget_id=%s
-                   OR (goal_id IS NULL AND budget_id IS NULL AND tool_name=%s)))
+                   OR (goal_id IS NULL AND budget_id IS NULL AND tool_name=%s AND NOT %s
+                       AND (%s OR updated_at > now() - %s::interval))))
                ORDER BY created_at LIMIT 1""",
             (
                 context.tenant_id,
@@ -124,6 +156,9 @@ def begin(
                 context.goal_id,
                 context.budget_id,
                 tool_name,
+                tool_name in HOST_LOCAL_TOOLS,
+                tool_name in READBACK_TOOLS,
+                UNCERTAIN_FENCE_WINDOW,
             ),
         )
         pending = cur.fetchone()
@@ -257,6 +292,19 @@ def attest(context: EffectScope, effect_id: Any, *, actor: str, note: str) -> bo
     Callers must establish operator authority. Active dispatches cannot be
     attested: their workers must first stop and leave an uncertain receipt.
     """
+    return _release(context, effect_id, source="reconciled", actor=actor, note=note)
+
+
+def expire(context: EffectScope, effect_id: Any, *, actor: str, note: str) -> bool:
+    """Release a goal-less uncertain effect whose fence window lapsed unverified.
+
+    The system's housekeeping, not an operator decision: recorded with source
+    ``expired`` so no receipt can present it as a human reconciliation.
+    """
+    return _release(context, effect_id, source="expired", actor=actor, note=note)
+
+
+def _release(context: EffectScope, effect_id: Any, *, source: str, actor: str, note: str) -> bool:
     if not actor.strip() or not note.strip():
         raise ValueError("reconciliation requires an actor and an audit note")
     with tenant_scope(context.tenant_id), get_connection() as conn, conn.cursor() as cur:
@@ -265,7 +313,7 @@ def attest(context: EffectScope, effect_id: Any, *, actor: str, note: str) -> bo
                version=version+1,updated_at=now()
                WHERE id=%s AND tenant_id=%s AND principal_id=%s AND goal_id IS NULL AND state='uncertain'""",
             (
-                Json({"source": "reconciled", "verified": False, "actor": actor, "note": note}),
+                Json({"source": source, "verified": False, "actor": actor, "note": note}),
                 effect_id,
                 context.tenant_id,
                 context.principal_id,

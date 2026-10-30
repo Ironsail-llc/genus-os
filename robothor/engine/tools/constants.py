@@ -57,7 +57,15 @@ CLAUDE_CODE_TOOLS = frozenset(
 )
 
 # pr-reviewer suite (robothor/pr_review/). Opt-in: listed in OPT_IN_TOOLS.
-PR_REVIEW_TOOLS = frozenset({"pr_review_intake", "pr_review_prepare", "pr_review_finalize"})
+PR_REVIEW_TOOLS = frozenset(
+    {
+        "pr_review_intake",
+        "pr_review_prepare",
+        "pr_review_finalize",
+        "pr_review_work",
+        "pr_review_status",
+    }
+)
 
 # ── Workspace tool families (mail, calendar, chat) ──────────────────────
 #
@@ -68,6 +76,7 @@ PR_REVIEW_TOOLS = frozenset({"pr_review_intake", "pr_review_prepare", "pr_review
 
 MAIL_SEARCH_TOOL = "gws_gmail_search"
 MAIL_GET_TOOL = "gws_gmail_get"
+MAIL_ATTACHMENT_TOOL = "gws_gmail_get_attachment"
 MAIL_SEND_TOOL = "gws_gmail_send"
 MAIL_REPLY_TOOL = "gws_gmail_reply"
 MAIL_MODIFY_TOOL = "gws_gmail_modify"
@@ -81,7 +90,7 @@ CHAT_SEND_TOOL = "gws_chat_send"
 CHAT_LIST_SPACES_TOOL = "gws_chat_list_spaces"
 CHAT_LIST_MESSAGES_TOOL = "gws_chat_list_messages"
 
-MAIL_READ_TOOLS: frozenset[str] = frozenset({MAIL_SEARCH_TOOL, MAIL_GET_TOOL})
+MAIL_READ_TOOLS: frozenset[str] = frozenset({MAIL_SEARCH_TOOL, MAIL_GET_TOOL, MAIL_ATTACHMENT_TOOL})
 #: Tools that put a message in someone's inbox.
 MAIL_SEND_TOOLS: frozenset[str] = frozenset({MAIL_SEND_TOOL, MAIL_REPLY_TOOL})
 MAIL_WRITE_TOOLS: frozenset[str] = MAIL_SEND_TOOLS | {MAIL_MODIFY_TOOL}
@@ -186,8 +195,30 @@ JIRA_TOOLS = frozenset(
         "jira_get_sprint",
         "jira_get_board_velocity",
         "jira_list_boards",
+        "jira_create_issue",
+        "jira_add_comment",
+        "jira_transition_issue",
+        "jira_update_issue",
     }
 )
+
+# JIRA write tools: they create, edit, comment on and move tickets as the
+# instance's account, so they are OPT_IN_TOOLS (below): offered only to a
+# manifest that names them. Migration 153 is the RBAC half.
+JIRA_WRITE_TOOLS = frozenset(
+    {
+        "jira_create_issue",
+        "jira_add_comment",
+        "jira_transition_issue",
+        "jira_update_issue",
+    }
+)
+
+# Settings tools (GEN-42): the owner's assistant reads and changes the
+# instance's declared settings through robothor.settings.operator — the same
+# functions `genus config` and the bridge call. Owner-only in the handler and
+# in RBAC (migration 152).
+CONFIG_TOOLS = frozenset({"config_get", "config_set"})
 
 # GitHub REST API tools (dev team operations)
 GITHUB_API_TOOLS = frozenset(
@@ -218,6 +249,14 @@ DEVOPS_METRICS_TOOLS = frozenset(
     {
         "devops_store_metric",
         "devops_query_metrics",
+    }
+)
+
+# n8n monitor tools: read the snapshot the n8n poller keeps (never n8n itself)
+N8N_TOOLS = frozenset(
+    {
+        "n8n_list_workflows",
+        "n8n_recent_failures",
     }
 )
 
@@ -287,6 +326,11 @@ READONLY_TOOLS: frozenset[str] = frozenset(
         # File/system
         "read_file",
         "list_directory",
+        # Regex over workspace file contents; opens files read-only.
+        "search_files",
+        # Sleeps up to 300s and returns; touches nothing. A wait cut short was
+        # journalled as an uncertain write and fenced every later wait.
+        "wait_seconds",
         # Looking at an image reads a file and mutates nothing. Asking a
         # vision model about a batch of them spends tokens, which is a cost
         # and not a side effect: nothing on this box or anywhere else changes.
@@ -309,6 +353,9 @@ READONLY_TOOLS: frozenset[str] = frozenset(
         # Intent memory: search/list are read-only.
         "intent_search",
         "intent_list",
+        # Knowledge base: search and list read curated documents.
+        "kb_search",
+        "kb_list_collections",
         # Symbolic memory: reads a stored tool-output file.
         "recall_node",
         # CRM read
@@ -356,6 +403,10 @@ READONLY_TOOLS: frozenset[str] = frozenset(
         "get_stats",
         # Memory write-status probe (read-only)
         "memory_write_status",
+        # Settings read (GEN-42): value, source, restart flag; secrets masked.
+        "config_get",
+        # What each installed plugin contributes (tools, agents, workflows...).
+        "plugins_overview",
         # Vault read-only tools
         "vault_get",
         "vault_list",
@@ -410,6 +461,9 @@ READONLY_TOOLS: frozenset[str] = frozenset(
         "github_compare",
         # DevOps metrics read-only tools
         "devops_query_metrics",
+        # n8n monitor: the poller's snapshot, read-only
+        "n8n_list_workflows",
+        "n8n_recent_failures",
         # Identity read-only tools
         "resolve_identities",
         # Report rendering (pure output, no side effects)
@@ -421,6 +475,10 @@ READONLY_TOOLS: frozenset[str] = frozenset(
         # then refused every later wait for that principal across runs.
         "claude_code_status",
         "claude_code_wait",
+        # Workflow status: definitions plus SELECT-only run history.
+        # `run_workflow` is deliberately NOT here — it starts a real run.
+        "list_workflows",
+        "workflow_runs",
     }
 )
 
@@ -429,6 +487,10 @@ READONLY_TOOLS: frozenset[str] = frozenset(
 # The meta-tools that drive tools-as-code. Excluded from the normal advertised
 # set; injected only when an agent's toolset is deferred (see registry).
 TOOLSEARCH_TOOLS = frozenset({"tool_search", "tool_describe", "tool_call"})
+
+# Workflow control tools that start work. `list_workflows` and `workflow_runs`
+# are reads and are not in this family.
+WORKFLOW_WRITE_TOOLS: frozenset[str] = frozenset({"run_workflow"})
 
 # Registered, but never part of the default "everything" set an agent with no
 # `tools_allowed` receives. An agent gets one of these only by naming it in its
@@ -455,12 +517,21 @@ TOOLSEARCH_TOOLS = frozenset({"tool_search", "tool_describe", "tool_call"})
 # says so. Their RBAC half is NOT added yet: a `service`-role deny would also
 # stop the reviewer agent that names them, so it waits for a dedicated role.
 #
+# The four JIRA write tools create, edit, comment on and transition tickets as
+# the instance's account; same rule. Migration 153 denies them to `user` and
+# `member`; `service` keeps them, so an unattended agent that names them works.
+#
+# `run_workflow` starts any declared workflow, which can do anything its steps
+# do; the HTTP route it mirrors needs `engine:control`. Same rule again:
+# migration 157 denies it to `user` and `member`. Its two reads stay default.
+#
 # Spelled out rather than imported from robothor.sales so this module stays
 # import-light; test_opt_in_tools_are_not_default pins the two together.
 OPT_IN_TOOLS: frozenset[str] = frozenset(
     {
         "web_render",
         *GITHUB_REVIEW_WRITE_TOOLS,
+        *JIRA_WRITE_TOOLS,
         "sales_create_request",
         "sales_discover",
         "sales_get_context",
@@ -473,6 +544,7 @@ OPT_IN_TOOLS: frozenset[str] = frozenset(
         "sales_research_parallel",
         *CLAUDE_CODE_TOOLS,
         *PR_REVIEW_TOOLS,
+        *WORKFLOW_WRITE_TOOLS,
     }
 )
 

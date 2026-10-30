@@ -283,3 +283,101 @@ def test_effect_rows_obey_database_tenant_policy(effect_db):
         cur.execute("SELECT set_config('app.tenant_id',%s,true)", (ctx.tenant_id,))
         cur.execute("SELECT id FROM agent_runtime_effects WHERE id=%s", (record["id"],))
         assert str(cur.fetchone()[0]) == str(record["id"])
+
+
+def _uncertain(ctx, tool, args, *, run="worker"):
+    row = effects.begin(ctx, run, "main", tool, args)
+    assert effects.mark_dispatched(ctx, row["id"], run)
+    assert effects.finish(ctx, row["id"], run, uncertain=True)
+    return row
+
+
+def _age(effect_db, row, interval):  # noqa: F811
+    with effect_db() as conn, conn.cursor() as cur:
+        cur.execute(
+            "UPDATE agent_runtime_effects SET updated_at=now()-%s::interval WHERE id=%s",
+            (interval, row["id"]),
+        )
+
+
+@pytest.mark.parametrize("tool", sorted(effects.HOST_LOCAL_TOOLS))
+def test_host_local_uncertainty_does_not_fence_the_tool_across_requests(effect_db, tool):  # noqa: F811
+    """No verifier can settle an uncertain ``exec``, and the agent can look at
+    the box itself, so a same-tool fence would only refuse every later ``exec``
+    by that principal until the sweep ran."""
+    ctx = context()
+    _uncertain(ctx, tool, {"command": "first"})
+    later = replace(ctx, request_id="later")
+    assert effects.begin(later, "worker", "main", tool, {"command": "second"})["state"] == (
+        "prepared"
+    )
+
+
+@pytest.mark.parametrize("tool", ["gws_gmail_send", "gws_calendar_create", "update_person"])
+def test_outside_world_uncertainty_fences_the_tool_until_the_window_lapses(effect_db, tool):  # noqa: F811
+    """A timed-out send cannot be read back; a reworded "send that again" in a
+    new request must wait, but only for the bounded window, not for ever."""
+    ctx = context()
+    row = _uncertain(ctx, tool, {"body": "first wording"})
+    later = replace(ctx, request_id="later")
+    with pytest.raises(effects.EffectPendingError):
+        effects.begin(later, "worker", "main", tool, {"body": "reworded"})
+    _age(effect_db, row, "23 hours")
+    with pytest.raises(effects.EffectPendingError):
+        effects.begin(later, "worker", "main", tool, {"body": "reworded"})
+    _age(effect_db, row, "25 hours")
+    assert effects.begin(later, "worker", "main", tool, {"body": "reworded"})["state"] == (
+        "prepared"
+    )
+
+
+def test_lapsed_window_still_fences_the_identical_call(effect_db):  # noqa: F811
+    """Only the reworded-call fence is bounded; the same intent stays fenced."""
+    ctx = context()
+    row = _uncertain(ctx, "gws_gmail_send", {"body": "first"})
+    _age(effect_db, row, "25 hours")
+    with pytest.raises(effects.EffectPendingError):
+        effects.begin(
+            replace(ctx, request_id="later"), "worker", "main", "gws_gmail_send", {"body": "first"}
+        )
+
+
+def test_fence_window_is_the_sweep_threshold():
+    from robothor.engine.runtime import effect_recovery
+
+    assert effects.UNCERTAIN_FENCE_WINDOW == "24 hours"
+    assert effect_recovery.UNVERIFIABLE_GRACE is effects.UNCERTAIN_FENCE_WINDOW
+    assert not (effects.HOST_LOCAL_TOOLS & effects.READBACK_TOOLS)
+    assert {"exec", "execute_code", "browser", "write_file"} <= effects.HOST_LOCAL_TOOLS
+    assert "gws_gmail_send" not in effects.HOST_LOCAL_TOOLS
+
+
+def test_unverifiable_uncertainty_still_fences_its_own_request_and_identity(effect_db):
+    ctx = context()
+    _uncertain(ctx, "exec", {"command": "first"})
+    with pytest.raises(effects.EffectPendingError):
+        effects.begin(ctx, "worker", "main", "exec", {"command": "other, same request"})
+    with pytest.raises(effects.EffectPendingError):
+        effects.begin(
+            replace(ctx, request_id="later"), "worker", "main", "exec", {"command": "first"}
+        )
+
+
+def test_verifiable_uncertainty_keeps_the_cross_request_tool_fence(effect_db):
+    """A verifier settles these, so their fence is not bounded by age."""
+    ctx = context()
+    row = _uncertain(ctx, "create_task", {"title": "first"})
+    _age(effect_db, row, "25 hours")
+    with pytest.raises(effects.EffectPendingError):
+        effects.begin(
+            replace(ctx, request_id="later"), "worker", "main", "create_task", {"title": "second"}
+        )
+
+
+def test_readback_tools_are_the_registered_verifiers():
+    from robothor.engine.runtime import effect_recovery
+
+    assert frozenset({"create_task", "create_note"}) == effects.READBACK_TOOLS
+    assert effect_recovery.has_verifier("create_task")
+    assert effect_recovery.has_verifier("create_note")
+    assert not effect_recovery.has_verifier("exec")

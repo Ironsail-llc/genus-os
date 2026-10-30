@@ -459,3 +459,43 @@ class TestAgentReferenceValidation:
 
         assert loaded == 1
         assert "no registered agent" not in " | ".join(str(r.message) for r in caplog.records)
+
+
+# ── 6. Agent-triggered runs: service identity and a caller-chosen run id ─
+
+
+class TestAgentTrigger:
+    @pytest.mark.asyncio
+    async def test_agent_trigger_without_user_gets_service_identity(
+        self, engine_config, monkeypatch
+    ) -> None:
+        monkeypatch.setenv("GENUS_AUTH_ENFORCE", "1")
+        engine = _make_engine(engine_config, [_agent_step()])
+        engine._execute_step = AsyncMock(  # type: ignore[method-assign]
+            side_effect=[_completed_result()]
+        )
+
+        acquire, release = _dedup_patches()
+        with acquire, release:
+            run = await engine.execute("test-wf", "agent", trigger_detail="agent:main:r1")
+
+        assert run.status == RunStatus.COMPLETED
+        assert run.user_id == "service:workflow:test-wf"
+        assert run.user_role == "service"
+
+    @pytest.mark.asyncio
+    async def test_caller_supplied_run_id_is_the_runs_id(self, engine_config) -> None:
+        engine = _make_engine(engine_config, [_agent_step()])
+        engine._execute_step = AsyncMock(  # type: ignore[method-assign]
+            side_effect=[_completed_result()]
+        )
+
+        acquire, release = _dedup_patches()
+        with acquire, release:
+            run = await engine.execute(
+                "test-wf", "manual", user_id="u", user_role="owner", run_id="run-fixed-1"
+            )
+
+        assert run.id == "run-fixed-1"
+        persisted = engine._persist_run_start.call_args.args[0]
+        assert persisted.id == "run-fixed-1"

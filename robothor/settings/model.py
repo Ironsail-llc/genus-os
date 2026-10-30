@@ -458,7 +458,13 @@ class DatabaseSettings(SettingsGroup):
 
 
 class RedisSettings(SettingsGroup):
-    """Redis connection and the event-bus streams it carries."""
+    """Redis connection and the event-bus streams it carries.
+
+    Every Redis client in the engine, the event bus included, connects with
+    these settings. The bus also honours ``REDIS_URL`` as an explicit override:
+    set, it wins for the bus alone; unset, the bus composes its URL from host,
+    port, db and password here (password percent-encoded).
+    """
 
     host: str = declare("127.0.0.1", "ROBOTHOR_REDIS_HOST", "Redis host.")
     port: int = declare(6379, "ROBOTHOR_REDIS_PORT", "Redis TCP port.")
@@ -1266,6 +1272,18 @@ class ChannelSettings(SettingsGroup):
         "Provisional name until adding a channel persists it to config.yaml.",
         since="1.70.0",
     )
+    inbound_max_concurrent_runs: int = declare(
+        8,
+        "ROBOTHOR_CHANNEL_MAX_CONCURRENT_RUNS",
+        "How many runs every receiving channel together may have in flight at "
+        "once. A message over the cap waits its turn rather than being refused; "
+        "messages within one conversation always run one after another. A value "
+        "below 1 is treated as 1. A changed value applies to messages that arrive "
+        "after it, not to ones already queued. A run waiting on ask_user holds "
+        "its slot until it is answered or its bounded wait times out.",
+        since="unreleased",
+        restart_required=False,
+    )
     telegram_bot_token: str = declare(
         "",
         "ROBOTHOR_TELEGRAM_BOT_TOKEN",
@@ -1608,6 +1626,15 @@ class AuthSettings(SettingsGroup):
         "long window turns a terminal scrollback into a standing credential; "
         "raise it only for an install someone has to walk away from.",
         since="1.69.0",
+    )
+    invite_grant_ttl_seconds: int = declare(
+        7 * 24 * 3600,
+        "GENUS_INVITE_GRANT_TTL_SECONDS",
+        "How long the one-shot SSO binding grant armed with an invite (or from "
+        "the Helm) stays usable. An invite is handed over out of band, so a "
+        "short window sends the invitee back to an operator. The grant is "
+        "still spent by one verified sign-in for exactly that address.",
+        since="1.117.0",
     )
     trusted_proxies: str = declare(
         "",
@@ -2527,6 +2554,18 @@ class SubstrateSettings(SettingsGroup):
         "trails the released one. An escape hatch for a deliberate hold, not "
         "a way to stop noticing that a promotion was lost.",
     )
+    version_baseline_ref: str = declare(
+        "",
+        "GENUS_VERSION_BASELINE_REF",
+        "Git ref the version-consistency check compares the deployment tags "
+        "against on a pull request (the base branch, fetched by the release "
+        "workflow). Empty means a release run: the tags are compared against "
+        "the version the repository claims instead. Read by "
+        "scripts/check-version-consistency.js only.",
+        since="unreleased",
+        restart_required=False,
+        restart_units=(),
+    )
     installer_version: str = declare(
         "",
         "GENUS_VERSION",
@@ -3247,10 +3286,13 @@ class PrReviewSettings(SettingsGroup):
     repos: str = declare(
         "",
         "ROBOTHOR_PR_REVIEW_REPOS",
-        "Comma-separated owner/repo list the pr-reviewer may review. Pull-request links "
-        "posted in the Chat space count only for these repositories. An entry may carry "
-        "its ticket prefix as owner/repo:PREFIX (another review bot's ALLOWED_REPOS "
-        "format). Empty disables the repository sources.",
+        "Comma-separated owner/repo list the pr-reviewer watches (with "
+        "ROBOTHOR_PR_REVIEW_WATCH_REPOS) and its ticket prefixes. Not a limit on "
+        "requests: a pull request requesting the bot login's review, asked for by the "
+        "operator, or linked in the Chat space is reviewed in any repository the token "
+        "can read (a Chat link counts for these repositories, other repositories of "
+        "their owners, and pull requests already tracked). An entry may carry its ticket "
+        "prefix as owner/repo:PREFIX (another review bot's ALLOWED_REPOS format).",
         restart_required=False,
         since="unreleased",
     )
@@ -3362,8 +3404,8 @@ class PrReviewSettings(SettingsGroup):
     telegram_digest: bool = declare(
         False,
         "ROBOTHOR_PR_REVIEW_TELEGRAM_DIGEST",
-        "pr_review_finalize returns a one-line digest per posted review for the agent to "
-        "deliver; the agent's delivery must announce on Telegram for it to arrive.",
+        "pr_review_work sends a one-line Telegram digest per posted review (and per "
+        "failure on a pull request with no Chat thread) to ROBOTHOR_TELEGRAM_CHAT_ID.",
         restart_required=False,
         since="unreleased",
     )
@@ -3371,7 +3413,9 @@ class PrReviewSettings(SettingsGroup):
         False,
         "ROBOTHOR_PR_REVIEW_REQUIRE_TICKET",
         "A pull request with no ticket key in its title, branch, description or commit "
-        "messages gets a blocking [no-ticket] finding and is never approved.",
+        "messages gets a blocking [no-ticket] finding and is never approved. Applies to "
+        "the repositories in ROBOTHOR_PR_REVIEW_REPOS and those with their own prefix; "
+        "one reviewed only on request, with no prefix of its own, is not blocked.",
         restart_required=False,
         since="unreleased",
     )
@@ -3393,10 +3437,28 @@ class PrReviewSettings(SettingsGroup):
         since="unreleased",
     )
     max_concurrent: int = declare(
-        2,
+        6,
         "ROBOTHOR_PR_REVIEW_MAX_CONCURRENT",
         "Review tasks the intake keeps open at once; further pull requests wait and are "
-        "queued on a later poll.",
+        "queued on a later poll. Above ROBOTHOR_PR_REVIEW_WORKERS, so the next review is "
+        "ready the moment a worker frees.",
+        restart_required=False,
+        since="unreleased",
+    )
+    workers: int = declare(
+        3,
+        "ROBOTHOR_PR_REVIEW_WORKERS",
+        "Reviews pr_review_work runs at once. Each is a Claude Code job, so "
+        "ROBOTHOR_CODING_MAX_CONCURRENT must be at least this (one more leaves a slot "
+        "for other coding work), or the extra reviews wait as queued jobs.",
+        restart_required=False,
+        since="unreleased",
+    )
+    status_file: str = declare(
+        "",
+        "ROBOTHOR_PR_REVIEW_STATUS_FILE",
+        "Markdown file pr_review_work rewrites after each run with what it reviewed. "
+        "Empty means <workspace>/brain/memory/pr-reviewer-status.md.",
         restart_required=False,
         since="unreleased",
     )
@@ -3509,6 +3571,38 @@ class WorkspaceSettings(SettingsGroup):
         "Has no effect on google, where the instance's own sync scripts publish these events.",
         since="unreleased",
     )
+    gmail_push_enabled: bool = declare(
+        False,
+        "ROBOTHOR_GMAIL_PUSH_ENABLED",
+        "Ingest the assistant's Gmail inbox on push when the workspace provider is google: a "
+        "Pub/Sub push to the google_oidc webhook channel wakes one Gmail history round, which "
+        "publishes email.new for each new unread inbox message, merges it into the email log "
+        "and logs it to the CRM. Turn off the instance sync script's mail half first, or every "
+        "message is published twice. Has no effect on microsoft365.",
+        since="unreleased",
+    )
+    gmail_push_mailbox: str = declare(
+        "",
+        "ROBOTHOR_GMAIL_PUSH_MAILBOX",
+        "The Gmail address gws is signed in as, when Gmail push is on. Pushes for any other "
+        "address are ignored. Empty means the address Gmail's profile reports at start.",
+        since="unreleased",
+    )
+    gmail_push_topic: str = declare(
+        "",
+        "ROBOTHOR_GMAIL_PUSH_TOPIC",
+        "The Pub/Sub topic Gmail publishes inbox changes to (projects/<project>/topics/<topic>), "
+        "when Gmail push is on. The engine calls Gmail's users.watch on it at start and daily. "
+        "Empty means the watch is renewed elsewhere and the engine only consumes pushes.",
+        since="unreleased",
+    )
+    gmail_push_stream: str = declare(
+        "gmail",
+        "ROBOTHOR_GMAIL_PUSH_STREAM",
+        "The event-bus stream the google_oidc webhook channel for Gmail publishes to (its "
+        "`stream:` in webhooks.yaml). The Gmail push consumer reads it.",
+        since="unreleased",
+    )
     workspace_email_log_path: str = declare(
         "",
         "ROBOTHOR_EMAIL_LOG_PATH",
@@ -3523,6 +3617,51 @@ class WorkspaceSettings(SettingsGroup):
         "every five minutes: the pending email, calendar and jira items the email classifier "
         "and calendar monitor read. Empty means triage-inbox.json beside the email log. Has no "
         "effect on google, where the instance's own sync script writes it.",
+        since="unreleased",
+    )
+
+
+class IntegrationSettings(SettingsGroup):
+    """External systems the instance watches (robothor/integrations/)."""
+
+    n8n_enabled: bool = declare(
+        False,
+        "ROBOTHOR_N8N_ENABLED",
+        "Watch an external n8n instance: the engine's scheduler leader polls its workflows "
+        "and failed executions, keeps a snapshot for the dashboard and the n8n_* agent "
+        "tools, and notifies the main agent once per failed execution. Off: nothing is "
+        "polled and the n8n section reads not configured.",
+        since="unreleased",
+    )
+    n8n_base_url: str = declare(
+        "",
+        "ROBOTHOR_N8N_BASE_URL",
+        "Root URL of the n8n instance, e.g. https://n8n.example.com (no /api/v1). The poller "
+        "calls its public API under it, and execution links in notifications point into it.",
+        since="unreleased",
+    )
+    n8n_api_key: str = declare(
+        "",
+        "ROBOTHOR_N8N_API_KEY",
+        "An n8n public-API key (Settings > n8n API in n8n), sent as X-N8N-API-KEY. Resolved "
+        "vault-first. Read-only use: the monitor never changes a workflow.",
+        secret=True,
+        since="unreleased",
+    )
+    n8n_poll_seconds: int = declare(
+        120,
+        "ROBOTHOR_N8N_POLL_SECONDS",
+        "Seconds between n8n polls (minimum 30). The doctor's poll-freshness check and the "
+        "dashboard's status allow three intervals before a snapshot counts as stale.",
+        restart_required=False,
+        since="unreleased",
+    )
+    n8n_allow_insecure_http: bool = declare(
+        False,
+        "ROBOTHOR_N8N_ALLOW_INSECURE_HTTP",
+        "Let ROBOTHOR_N8N_BASE_URL be plain http:// on a host that is not loopback, for a "
+        "self-hosted n8n reachable only on a private network. Off: the base URL must be "
+        "https:// (http:// only for localhost), because the API key travels in every request.",
         since="unreleased",
     )
 
@@ -3546,6 +3685,7 @@ class GenusSettings(BaseSettings):
     coding: CodingSettings = Field(default_factory=CodingSettings)
     pr_review: PrReviewSettings = Field(default_factory=PrReviewSettings)
     workspace: WorkspaceSettings = Field(default_factory=WorkspaceSettings)
+    integrations: IntegrationSettings = Field(default_factory=IntegrationSettings)
     paths: PathsSettings = Field(default_factory=PathsSettings)
     database: DatabaseSettings = Field(default_factory=DatabaseSettings)
     redis: RedisSettings = Field(default_factory=RedisSettings)

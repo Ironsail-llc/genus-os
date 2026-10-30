@@ -6,17 +6,25 @@ anywhere in here; every decision is a rule.
 **Sources.**
 
 1. GitHub — every open, non-draft pull request in the configured repositories
-   (``watch_repos``), plus pull requests requesting the bot login's review —
-   in the configured repositories only (a request from a fork or any other
-   repository the token can read is ignored). A
+   (``watch_repos``), plus every pull request requesting the bot login's
+   review, in any repository the token can read: someone asking for the
+   review is the invitation, and the configured list only names what is
+   watched proactively. A requested pull request the token cannot read is
+   logged and listed under ``unreadable`` in the summary, never dropped
+   silently. A
    pull request whose head differs from the head we last reviewed (and from the
    head a task was already filed for) gets a trigger.
 2. Google Chat — messages in the configured space since the stored cursor. A
-   top-level message linking a pull request in an allowed repository claims it
-   (reaction) and triggers an initial review. A thread reply from the person
-   who posted the link is classified by :func:`classify_rereview`: a clear
-   request triggers a re-review; an ambiguous one is handed to the agent as a
-   task to decide; a reviewer's status line ("#12: Approved") does nothing. In
+   top-level message linking a pull request claims it (reaction) and triggers
+   an initial review when the link is to a configured repository, to another
+   repository of a configured repository's owner, or to a pull request already
+   tracked (requested on GitHub or by the operator). A link to anyone else's
+   project — an upstream fix mentioned in passing — is not a request. A thread
+   reply from the person who posted the link is classified by
+   :func:`classify_rereview`: a clear request (or the bare links again)
+   triggers a re-review; an ambiguous one is answered in its thread — 'Want a
+   re-review? Reply "re-review".' — and files nothing; a reviewer's status line
+   ("#12: Approved") does nothing. In
    a thread that posted several pull requests, a reply naming some of them
    ("12 is ready for re-review") re-reviews only those. Every message is
    handled once; one that raises is recorded with its error and skipped —
@@ -49,9 +57,9 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Literal
 
 from robothor.pr_review.classify import (
+    MatchedPr,
     classify_rereview,
     extract_pr_refs,
-    match_allowed_prs,
     mentioned_numbers,
     message_search_text,
 )
@@ -72,13 +80,18 @@ logger = logging.getLogger(__name__)
 __all__ = ["MAX_ATTEMPTS", "Intake", "parse_chat_time", "parse_pr_ref"]
 
 #: Strongest first. A weaker trigger never replaces a stronger pending one.
-_TRIGGER_RANK = {"initial": 4, "rereview": 3, "new_head": 2, "retry": 2, "ambiguous": 1, "": 0}
+_TRIGGER_RANK = {"initial": 4, "rereview": 3, "new_head": 2, "retry": 2, "": 0}
 #: Failed review attempts on one head before the intake stops retrying it.
 MAX_ATTEMPTS = 3
 #: A review that was written but failed to post (GitHub 5xx) is re-posted, not
 #: re-reviewed, so it costs nothing to retry soon. GitHub's 500s cleared within
 #: minutes (2026-10-06/07); the hour a fresh review waits left PRs unreviewed.
 POST_RETRY_COOLDOWN = timedelta(minutes=5)
+#: How a prepare that failed before binding a job starts its row's ``error``.
+#: Both are transient — two fetches of one clone racing, a busy worktree — so
+#: they are retried on the short cooldown too.
+CHECKOUT_FAILED = "checkout failed:"
+START_FAILED = "claude_code_start failed:"
 _DRAFT_NOTE = "draft: waiting until it is ready for review"
 #: Re-read this much before the cursor: Chat's createTime filter is strict and
 #: clocks are not; per-message dedupe makes the overlap free.
@@ -90,6 +103,9 @@ NO_CHANGES_REPLY = "No changes?"
 IN_PROGRESS_REPLY = (
     "A review is already running for this PR. I'll check for newer commits once it's posted."
 )
+#: The answer to a reply the keyword check cannot read as a request ("not
+#: fixed yet", a question). No model decides it, and it is never dropped silently.
+ASK_REPLY = 'Want a re-review? Reply "re-review".'
 #: ``error`` of a row the operator closed with ``action="skip"``: a closed row
 #: is otherwise reopened when a poll finds its pull request open again.
 OPERATOR_SKIP_NOTE = "stopped by the operator (pr_review_intake action=skip)"
@@ -163,11 +179,22 @@ def post_only(row: PrReviewRow) -> bool:
     return bool(row.job_id) and pending.get("job_id") == row.job_id
 
 
-def _raise_trigger(row: PrReviewRow, trigger: str, text: str = "") -> bool:
+def quick_retry(row: PrReviewRow) -> bool:
+    """Whether a failed row is retried on the short cooldown: a written review
+    that only failed to post, or a prepare that failed for a passing reason."""
+    return post_only(row) or row.error.startswith((CHECKOUT_FAILED, START_FAILED))
+
+
+def _raise_trigger(row: PrReviewRow, trigger: str, now: datetime | None = None) -> bool:
     if _TRIGGER_RANK[trigger] <= _TRIGGER_RANK.get(row.pending_trigger, 0):
         return False
+    if not row.pending_trigger and not (trigger == "retry" and row.requested_at):
+        # The request's place in the queue: a stronger trigger on a row that
+        # is already waiting, or any later touch, keeps it. A retry is the
+        # same unanswered request, so it keeps its time too.
+        row.requested_at = now or datetime.now(UTC)
     row.pending_trigger = trigger
-    row.trigger_text = text if trigger == "ambiguous" else ""
+    row.trigger_text = ""
     if row.status in ACTIVE_STATUSES:
         row.followup = True
     return True
@@ -209,12 +236,38 @@ class Intake:
             "stale": 0,
             "retries": 0,
             "errors": [],
+            "unreadable": [],
         }
 
     def _error(self, where: str, exc: BaseException | str) -> None:
         msg = f"{where}: {exc}"[:_ERROR_MAX]
         logger.warning("pr_review intake %s", msg)
         self.summary["errors"].append(msg)
+
+    def _unreadable(self, repo: str, number: int) -> None:
+        """A requested pull request GitHub would not show: say so, once per intake."""
+        ref = f"{repo}#{number}"
+        if ref in self.summary["unreadable"]:
+            return
+        logger.warning(
+            "pr_review intake: %s was requested but GitHub returned nothing "
+            "(not found, or the token cannot read it); not reviewing it",
+            ref,
+        )
+        self.summary["unreadable"].append(ref)
+
+    async def _lookup(self, repo: str, number: int) -> tuple[str, dict[str, Any] | None]:
+        """``(repo, pull request)``: the repo in its configured casing when
+        listed, else in GitHub's own casing (``base.repo.full_name``), so the
+        row and the clone directory never follow how someone typed it."""
+        assert self.github is not None
+        found = await self.github.get_pr(repo, number)
+        configured = self.cfg.configured_repo(repo)
+        if configured is not None:
+            return configured, found
+        base_repo = ((found or {}).get("base") or {}).get("repo") or {}
+        full_name = str(base_repo.get("full_name") or "")
+        return (full_name if "/" in full_name else repo), found
 
     def _new_row(self, repo: str, number: int, source: str) -> PrReviewRow:
         return PrReviewRow(
@@ -262,17 +315,18 @@ class Intake:
         if parsed is None:
             return {"error": f"not a pull request: {pr!r} (use a URL or owner/repo#N)"}
         repo, number = parsed
-        configured = next((r for r in self.cfg.repos if r.lower() == repo.lower()), None)
-        if configured is None:
-            return {"error": f"{repo} is not in ROBOTHOR_PR_REVIEW_REPOS; not reviewing it"}
         if self.github is None:
             return {"error": "GITHUB_TOKEN not configured"}
         async with self.store.intake_lock(self.tenant_id) as held:
             if not held:
                 return {"skipped": "locked", "note": "an intake run is in progress; ask again"}
-            found = await self.github.get_pr(configured, number)
+            # Any repository the token can read: the operator asking is the request.
+            configured, found = await self._lookup(repo, number)
             if found is None:
-                return {"error": f"{configured}#{number} not found on GitHub"}
+                self._unreadable(repo, number)
+                return {
+                    "error": f"{repo}#{number} not found on GitHub, or the token cannot read it"
+                }
             row = await self.store.get(self.tenant_id, configured, number)
             if row is None:
                 row = self._new_row(configured, number, "operator")
@@ -290,7 +344,7 @@ class Intake:
                         row.error = ""  # an explicit request lifts the operator's skip
                 if not row.chat_thread:
                     row.source = "operator"  # no thread to answer in: the digest reports it
-                _raise_trigger(row, "rereview" if row.last_reviewed_sha else "initial")
+                _raise_trigger(row, "rereview" if row.last_reviewed_sha else "initial", self.now)
                 await self.store.save(row)
                 await self._dispatch()
             row = await self.store.get(self.tenant_id, configured, number) or row
@@ -318,12 +372,15 @@ class Intake:
         pending = await self.store.list_pending(self.tenant_id)
         resumable = await self._resumable(active)
         self.summary["open_tasks"] = len(active)
-        # Every task waiting for the agent — the run workflow's wake condition.
-        # A resumable review counts: no run is attending it, and nothing else
-        # would wake one before the stale timeout fails it.
-        self.summary["queued_tasks"] = sum(1 for r in active if r.status == "queued") + len(
-            resumable
-        )
+        # Every task the review worker has to take — the run workflow's wake
+        # condition. A review in flight counts too: its task is IN_PROGRESS,
+        # and when the run attending it ended (its deadline, a restart) the
+        # next tick's worker resumes it at once instead of after the job ends
+        # plus ORPHAN_GRACE. A run still attending it makes the new one return
+        # skipped: running, so nothing is reviewed twice.
+        in_flight = sum(1 for r in active if r.status in ("reviewing", "posting"))
+        self.summary["in_flight_tasks"] = in_flight
+        self.summary["queued_tasks"] = sum(1 for r in active if r.status == "queued") + in_flight
         self.summary["resumable_tasks"] = len(resumable)
         self.summary["pending"] = len(pending)
         return self.summary
@@ -389,15 +446,20 @@ class Intake:
             except Exception as exc:  # noqa: BLE001
                 self._error("github review-requested search", exc)
                 requested = []
+            # Asking the bot for its review is the invitation, in any
+            # repository: the configured list is only what is watched.
             for repo, number in requested:
-                if (repo.lower(), number) in candidates or not self.cfg.allows_repo(repo):
+                if (repo.lower(), number) in candidates:
                     continue
                 try:
-                    found = await self.github.get_pr(repo, number)
+                    canonical, found = await self._lookup(repo, number)
                 except Exception as exc:  # noqa: BLE001
                     self._error(f"github get {repo}#{number}", exc)
                     continue
-                candidates[(repo.lower(), number)] = (repo, "review_request", found)
+                if found is None:
+                    self._unreadable(repo, number)
+                    continue
+                candidates[(canonical.lower(), number)] = (canonical, "review_request", found)
 
         for (_key, number), (repo, source, pr) in candidates.items():
             if not pr or pr.get("draft") or str(pr.get("state") or "open") != "open":
@@ -419,7 +481,7 @@ class Intake:
             row.url = str(pr.get("html_url") or row.url)
             if head != row.last_reviewed_sha and head != row.queued_sha:
                 trigger = "new_head" if row.last_reviewed_sha else "initial"
-                if _raise_trigger(row, trigger):
+                if _raise_trigger(row, trigger, self.now):
                     self.summary["triggers"] += 1
             await self.store.save(row)
 
@@ -431,7 +493,7 @@ class Intake:
         for row in await self.store.list_with_findings(self.tenant_id):
             if row.pending_trigger or not await replies_pending(self.github, row):
                 continue
-            if _raise_trigger(row, "rereview"):
+            if _raise_trigger(row, "rereview", self.now):
                 await self.store.save(row)
                 self.summary["triggers"] += 1
                 self.summary["replies"] = self.summary.get("replies", 0) + 1
@@ -491,10 +553,11 @@ class Intake:
     async def _handle_top_level(
         self, message: dict[str, Any], thread: str, sender: str, space: str
     ) -> tuple[str, str]:
-        found = match_allowed_prs(message_search_text(message), self.cfg.repos)
+        found = await self._chat_prs(message_search_text(message))
         if not found:
             return "ignored", "no allowed pull-request link"
         claimed = 0
+        unclear: list[PrReviewRow] = []
         for pr in found:
             row = await self.store.get(self.tenant_id, pr.repo_full, pr.number)
             if row is None:
@@ -512,20 +575,52 @@ class Intake:
             row.chat_message = str(message.get("name") or "")
             row.chat_poster = sender
             if repost:
-                text = message_search_text(message)
-                trigger = "ambiguous" if classify_rereview(text) == "ambiguous" else "rereview"
-                if _raise_trigger(row, trigger, text):
+                if classify_rereview(message_search_text(message)) == "ambiguous":
+                    unclear.append(row)
+                elif _raise_trigger(row, "rereview", self._when(message)):
                     self.summary["triggers"] += 1
-                    if trigger == "rereview" and row.status in ACTIVE_STATUSES:
+                    if row.status in ACTIVE_STATUSES:
                         await self.store.save(row)
                         await self._say(row, IN_PROGRESS_REPLY)
-            elif not row.last_reviewed_sha and _raise_trigger(row, "initial"):
+            elif not row.last_reviewed_sha and _raise_trigger(row, "initial", self._when(message)):
                 self.summary["triggers"] += 1
             await self.store.save(row)
             claimed += 1
+        await self._ask(unclear)
         if claimed and self.chat is not None and self.cfg.claim_reaction:
             await self.chat.react(str(message.get("name") or ""), self.cfg.claim_reaction)
         return ("pr", f"claimed {claimed}") if claimed else ("ignored", "already tracked")
+
+    async def _chat_prs(self, text: str) -> list[MatchedPr]:
+        """The pull-request links in a review-space message that ask for a review.
+
+        A configured repository, another repository of a configured owner, or
+        a pull request already tracked. A link to anyone else's project is a
+        mention, not a request: posting a review there is never wanted.
+        """
+        out: list[MatchedPr] = []
+        for ref in extract_pr_refs(text):
+            repo = f"{ref.owner}/{ref.repo}"
+            configured = self.cfg.configured_repo(repo)
+            if configured is not None:
+                out.append(MatchedPr(repo_full=configured, number=ref.number))
+                continue
+            row = await self.store.get(self.tenant_id, repo, ref.number)
+            if row is not None:
+                out.append(MatchedPr(repo_full=row.repo, number=ref.number))
+                continue
+            if self.github is None or not self.cfg.lists_owner(repo):
+                continue
+            try:
+                canonical, found = await self._lookup(repo, ref.number)
+            except Exception as exc:  # noqa: BLE001 - the other links still count
+                self._error(f"github get {repo}#{ref.number}", exc)
+                continue
+            if found is None:
+                self._unreadable(repo, ref.number)
+                continue
+            out.append(MatchedPr(repo_full=canonical, number=ref.number))
+        return out
 
     async def _handle_reply(
         self, message: dict[str, Any], thread: str, sender: str
@@ -544,31 +639,47 @@ class Intake:
             rows = [r for r in rows if r.number in named]
         if intent == "other":
             return "reply", "not a re-review request"
-        trigger = "rereview" if intent == "rereview" else "ambiguous"
+        if intent == "ambiguous":
+            await self._ask(rows)
+            return "reply", f"asked x{len(rows)}"
         raised = 0
         for row in rows:
-            if _raise_trigger(row, trigger, text):
+            if _raise_trigger(row, "rereview", self._when(message)):
                 raised += 1
                 await self.store.save(row)
-                if trigger == "rereview" and row.status in ACTIVE_STATUSES:
+                if row.status in ACTIVE_STATUSES:
                     await self._say(row, IN_PROGRESS_REPLY)
         self.summary["triggers"] += raised
-        if raised and trigger == "rereview" and self.chat is not None and self.cfg.claim_reaction:
+        if raised and self.chat is not None and self.cfg.claim_reaction:
             await self.chat.react(str(message.get("name") or ""), self.cfg.claim_reaction)
-        return "reply", f"{trigger} x{raised}"
+        return "reply", f"rereview x{raised}"
 
-    async def _say(self, row: PrReviewRow, text: str) -> None:
+    def _when(self, message: dict[str, Any]) -> datetime:
+        """When a Chat request was made: the message's own time, else now."""
+        return parse_chat_time(str(message.get("createTime") or "")) or self.now
+
+    async def _ask(self, rows: list[PrReviewRow]) -> None:
+        """Answer a message the keyword check could not read: ask once in its
+        thread, naming every pull request it covers, and file nothing."""
+        if not rows:
+            return
+        self.summary["asked"] = self.summary.get("asked", 0) + 1
+        await self._say(rows[0], ASK_REPLY, also=rows[1:])
+
+    async def _say(
+        self, row: PrReviewRow, text: str, also: list[PrReviewRow] | None = None
+    ) -> None:
         if not (self.chat and row.chat_space and row.chat_thread):
             return
+        named = ", ".join(f"<{r.url}|#{r.number}>" for r in [row, *(also or [])])
         try:
-            name = await self.chat.reply(
-                row.chat_space, row.chat_thread, f"<{row.url}|#{row.number}>: {text}"
-            )
+            name = await self.chat.reply(row.chat_space, row.chat_thread, f"{named}: {text}")
         except Exception as exc:  # noqa: BLE001 - an announcement is not the review
             self._error(f"chat reply {row.key}", exc)
             return
         if name:
-            await self.store.record_message(self.tenant_id, name, "self", "intake reply")
+            # The reply's text, so pr_review_status can count the answers given.
+            await self.store.record_message(self.tenant_id, name, "self", f"intake reply: {text}")
 
     # ── Dispatch ────────────────────────────────────────────────────
 
@@ -591,11 +702,11 @@ class Intake:
                 continue
             new_head = bool(row.head_sha and row.queued_sha and row.head_sha != row.queued_sha)
             cooldown = (
-                min(POST_RETRY_COOLDOWN, review_cooldown) if post_only(row) else review_cooldown
+                min(POST_RETRY_COOLDOWN, review_cooldown) if quick_retry(row) else review_cooldown
             )
             cooled = row.failed_at is None or row.failed_at <= self.now - cooldown
             if (new_head or (row.attempts < MAX_ATTEMPTS and cooled)) and _raise_trigger(
-                row, "retry"
+                row, "retry", self.now
             ):
                 await self.store.save(row)
                 self.summary["retries"] += 1
@@ -644,15 +755,18 @@ class Intake:
         if parsed is None:
             return {"error": f"not a pull request: {pr!r} (use a URL or owner/repo#N)"}
         repo, number = parsed
-        configured = next((r for r in self.cfg.repos if r.lower() == repo.lower()), None)
-        if configured is None:
-            return {"error": f"{repo} is not in ROBOTHOR_PR_REVIEW_REPOS"}
         async with self.store.intake_lock(self.tenant_id) as held:
             if not held:
                 return {"skipped": "locked", "note": "an intake run is in progress; ask again"}
-            row = await self.store.get(self.tenant_id, configured, number)
+            row = await self.store.get(self.tenant_id, repo, number)
             if row is None:
-                row = self._new_row(configured, number, "operator")
+                canonical = self.cfg.configured_repo(repo)
+                if canonical is None and self.github is not None:
+                    try:
+                        canonical, _found = await self._lookup(repo, number)
+                    except Exception as exc:  # noqa: BLE001 - stopping needs no GitHub
+                        self._error(f"github get {repo}#{number}", exc)
+                row = self._new_row(canonical or repo, number, "operator")
             was = row.status
             row.status = "closed"
             row.error = OPERATOR_SKIP_NOTE

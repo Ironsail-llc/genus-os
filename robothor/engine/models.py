@@ -113,6 +113,10 @@ class AgentHook:
     stream: str  # Redis Stream name (e.g., "email", "calendar")
     event_type: str  # Event type filter (e.g., "email.new")
     message: str = ""  # Initial prompt sent to agent when triggered
+    # Append the event type, delivery id and JSON payload to the message
+    include_payload: bool = False
+    # When the agent is already running, retry the event instead of dropping it
+    requeue_if_busy: bool = False
 
 
 @dataclass
@@ -910,6 +914,7 @@ class WorkflowTriggerDef:
     event_type: str = ""
     cron: str = ""
     timezone: str = "America/New_York"
+    requeue_if_busy: bool = False  # hook only: re-add an event that found the workflow running
 
 
 @dataclass
@@ -923,6 +928,8 @@ class WorkflowDef:
     triggers: list[WorkflowTriggerDef] = field(default_factory=list)
     steps: list[WorkflowStepDef] = field(default_factory=list)
     timeout_seconds: int = 900
+    #: Tool calls a minute across this workflow's steps; 0 is the fleet default.
+    rate_limit_per_minute: int = 0
     delivery_mode: str = "none"
     delivery_channel: str = ""
     delivery_to: str = ""
@@ -964,3 +971,6 @@ class WorkflowRun:
     duration_ms: int = 0
     started_at: datetime | None = None
     completed_at: datetime | None = None
+    #: Deferred before it was recorded: the tool-call rate limit would have
+    #: blocked its first step. Never persisted.
+    rate_limited: bool = False

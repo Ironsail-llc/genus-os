@@ -61,9 +61,16 @@ def _kwargs(model: str, *, temperature: float = 0.3) -> dict:
 
 
 def _thinking_models() -> list[str]:
+    """Models that take a ``thinking`` block. An OpenAI reasoning model takes
+    ``reasoning_effort`` instead; test_openai_reasoning_params pins its rungs."""
+    from robothor.engine.llm_client import is_openai_reasoning_model
     from robothor.engine.model_registry import _MODEL_REGISTRY
 
-    return [m for m, limits in _MODEL_REGISTRY.items() if limits.supports_thinking]
+    return [
+        m
+        for m, limits in _MODEL_REGISTRY.items()
+        if limits.supports_thinking and not is_openai_reasoning_model(m)
+    ]
 
 
 def test_there_are_thinking_models_to_test() -> None:

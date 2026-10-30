@@ -1,3 +1,125 @@
+## [1.117.0](https://github.com/Ironsail-llc/genus-os/compare/v1.116.2...v1.117.0) (2026-10-29)
+
+### Features
+
+* **engine:** unlock the assistant's tools, files, settings and jira (GEN-37) ([#741](https://github.com/Ironsail-llc/genus-os/issues/741)) ([a0a82bb](https://github.com/Ironsail-llc/genus-os/commit/a0a82bb964a643d1e8d3cd4b2b1281c15ad39af8)), closes [#742](https://github.com/Ironsail-llc/genus-os/issues/742) [#737](https://github.com/Ironsail-llc/genus-os/issues/737) [#735](https://github.com/Ironsail-llc/genus-os/issues/735) [#738](https://github.com/Ironsail-llc/genus-os/issues/738) [#736](https://github.com/Ironsail-llc/genus-os/issues/736) [#742](https://github.com/Ironsail-llc/genus-os/issues/742)
+
+## [1.116.2](https://github.com/Ironsail-llc/genus-os/compare/v1.116.1...v1.116.2) (2026-10-29)
+
+### Bug Fixes
+
+* **deps:** patch frontend advisories published 2026-10-28 ([#743](https://github.com/Ironsail-llc/genus-os/issues/743)) ([2afe2a2](https://github.com/Ironsail-llc/genus-os/commit/2afe2a2194afa26c6cea27df82b4207f2acab098))
+
+## [1.116.1](https://github.com/Ironsail-llc/genus-os/compare/v1.116.0...v1.116.1) (2026-10-28)
+
+### Bug Fixes
+
+* **app:** invites default to SSO, last a week, explain refusals (GEN-52) ([#740](https://github.com/Ironsail-llc/genus-os/issues/740)) ([59689ce](https://github.com/Ironsail-llc/genus-os/commit/59689ce1273b6f47a445c88ab273498742536db4))
+
+### Performance Improvements
+
+* **ci:** stop the release gate re-running what CI already ran ([#704](https://github.com/Ironsail-llc/genus-os/issues/704)) ([242b88a](https://github.com/Ironsail-llc/genus-os/commit/242b88ad7e74513d712a00c80a0b89b35e91b160))
+
+## [1.116.0](https://github.com/Ironsail-llc/genus-os/compare/v1.115.0...v1.116.0) (2026-10-28)
+
+### Features
+
+* **engine:** gmail push ingest via pub/sub (GEN-36) ([#734](https://github.com/Ironsail-llc/genus-os/issues/734)) ([873ae97](https://github.com/Ironsail-llc/genus-os/commit/873ae970ee4022edf7342943f6348e7fb2aa6f4e))
+
+### Bug Fixes
+
+* **engine:** log a template that renders empty, document bounded replay (GEN-36) ([#733](https://github.com/Ironsail-llc/genus-os/issues/733)) ([445b8a1](https://github.com/Ironsail-llc/genus-os/commit/445b8a1b19316863245728ed477675227a4f1308)), closes [#732](https://github.com/Ironsail-llc/genus-os/issues/732)
+
+## [1.115.0](https://github.com/Ironsail-llc/genus-os/compare/v1.114.0...v1.115.0) (2026-10-28)
+
+### Features
+
+* **engine:** hook-triggered workflows get the event and can requeue (GEN-36) ([#732](https://github.com/Ironsail-llc/genus-os/issues/732)) ([f405191](https://github.com/Ironsail-llc/genus-os/commit/f405191c306054bb70b91a26c93aeae05630c55a))
+
+### Documentation
+
+* **helm:** note the Google endpoints gws needs under default-deny egress ([#731](https://github.com/Ironsail-llc/genus-os/issues/731)) ([37b4d48](https://github.com/Ironsail-llc/genus-os/commit/37b4d4870b5541c846eddf6504f7e698ff9d0f40))
+
+## [1.114.0](https://github.com/Ironsail-llc/genus-os/compare/v1.113.0...v1.114.0) (2026-10-28)
+
+### Features
+
+* **engine:** ship gws and Google Workspace creds (GEN-23) ([#729](https://github.com/Ironsail-llc/genus-os/issues/729)) ([baf133c](https://github.com/Ironsail-llc/genus-os/commit/baf133c3fc7405aa347e7471ef9b3d14b7933fcc)), closes [#726](https://github.com/Ironsail-llc/genus-os/issues/726) [#718](https://github.com/Ironsail-llc/genus-os/issues/718) [#720](https://github.com/Ironsail-llc/genus-os/issues/720) [#720](https://github.com/Ironsail-llc/genus-os/issues/720) [#721](https://github.com/Ironsail-llc/genus-os/issues/721)
+
+## [1.113.0](https://github.com/Ironsail-llc/genus-os/compare/v1.112.0...v1.113.0) (2026-10-28)
+
+### Features
+
+* **plugins:** plugin agents, scaffold, cve bump, docs ([GO-22](https://ironsail.atlassian.net/browse/GO-22),[GO-29](https://ironsail.atlassian.net/browse/GO-29),[GO-30](https://ironsail.atlassian.net/browse/GO-30),[GO-32](https://ironsail.atlassian.net/browse/GO-32),GEN-3) ([#726](https://github.com/Ironsail-llc/genus-os/issues/726)) ([ea1afff](https://github.com/Ironsail-llc/genus-os/commit/ea1afff66404680533b51a3fb0cbf7086a3cb691)), closes [#714](https://github.com/Ironsail-llc/genus-os/issues/714) [#715](https://github.com/Ironsail-llc/genus-os/issues/715) [#713](https://github.com/Ironsail-llc/genus-os/issues/713) [#715](https://github.com/Ironsail-llc/genus-os/issues/715) [#716](https://github.com/Ironsail-llc/genus-os/issues/716)
+
+## [1.112.0](https://github.com/Ironsail-llc/genus-os/compare/v1.111.0...v1.112.0) (2026-10-27)
+
+### Features
+
+* **engine:** per-channel webhook signature schemes and hook event payloads ([#711](https://github.com/Ironsail-llc/genus-os/issues/711)) ([379fa66](https://github.com/Ironsail-llc/genus-os/commit/379fa667106bf78e6e364c0bbc25fc1777127470))
+
+### Bug Fixes
+
+* **pr-review:** survive engine restarts and fetch heads the pull ref lags ([#719](https://github.com/Ironsail-llc/genus-os/issues/719)) ([44b5676](https://github.com/Ironsail-llc/genus-os/commit/44b56763dcbf4d0af8c24b23987fa12ba43c4e46))
+
+## [1.111.0](https://github.com/Ironsail-llc/genus-os/compare/v1.110.2...v1.111.0) (2026-10-27)
+
+### Features
+
+* **helm:** extra volumes and mounts for the python workloads ([#710](https://github.com/Ironsail-llc/genus-os/issues/710)) ([c21a3a6](https://github.com/Ironsail-llc/genus-os/commit/c21a3a698f6af4a8aef347f4986973cf53a306ba))
+
+## [1.110.2](https://github.com/Ironsail-llc/genus-os/compare/v1.110.1...v1.110.2) (2026-10-27)
+
+### Bug Fixes
+
+* **engine:** resolve the event bus redis url from redis settings ([#708](https://github.com/Ironsail-llc/genus-os/issues/708)) ([711e6c7](https://github.com/Ironsail-llc/genus-os/commit/711e6c746cef69f614744cd0d4503beafd612276))
+
+## [1.110.1](https://github.com/Ironsail-llc/genus-os/compare/v1.110.0...v1.110.1) (2026-10-26)
+
+### Bug Fixes
+
+* **engine:** send reasoning_effort, not temperature, to OpenAI reasoners ([#707](https://github.com/Ironsail-llc/genus-os/issues/707)) ([d51bc69](https://github.com/Ironsail-llc/genus-os/commit/d51bc6966d23643c508fd89adfbf9e7b594f09ec))
+* **engine:** ship google-auth so vertex_ai models can authenticate ([#699](https://github.com/Ironsail-llc/genus-os/issues/699)) ([b8e58da](https://github.com/Ironsail-llc/genus-os/commit/b8e58da48489ed301437cb3711566168e89ca79f))
+* **helm:** mount DB CA bundle, env-hash migration Job, probe timeouts ([#706](https://github.com/Ironsail-llc/genus-os/issues/706)) ([afd4ac4](https://github.com/Ironsail-llc/genus-os/commit/afd4ac47f6da1f0870cac77ef4614d52dcea0460))
+
+## [1.110.0](https://github.com/Ironsail-llc/genus-os/compare/v1.109.1...v1.110.0) (2026-10-26)
+
+### Features
+
+* **helm:** replace the Redis subchart with per-app Valkey ([#687](https://github.com/Ironsail-llc/genus-os/issues/687)) ([efbdd35](https://github.com/Ironsail-llc/genus-os/commit/efbdd3572d8d7c15e153a6a39db8cfda607be87b)), closes [#682](https://github.com/Ironsail-llc/genus-os/issues/682) [#686](https://github.com/Ironsail-llc/genus-os/issues/686)
+
+### Bug Fixes
+
+* **tests:** stop the fallback-wire test racing its own deadline ([#705](https://github.com/Ironsail-llc/genus-os/issues/705)) ([106efb2](https://github.com/Ironsail-llc/genus-os/commit/106efb29f3d1880266433311d94baa5ae67c6e26)), closes [#687](https://github.com/Ironsail-llc/genus-os/issues/687)
+
+## [1.109.1](https://github.com/Ironsail-llc/genus-os/compare/v1.109.0...v1.109.1) (2026-10-26)
+
+### Bug Fixes
+
+* **app:** patch two CRITICAL advisories blocking the dashboard image ([#701](https://github.com/Ironsail-llc/genus-os/issues/701)) ([a0a6b58](https://github.com/Ironsail-llc/genus-os/commit/a0a6b5804971a88d603864bfacfea44563d36d4a))
+
+### Documentation
+
+* say that this repository is public, and that the boundary covers prose ([#685](https://github.com/Ironsail-llc/genus-os/issues/685)) ([da377cf](https://github.com/Ironsail-llc/genus-os/commit/da377cfb12a41920724bd7b13d11bcf23c00815f)), closes [#682](https://github.com/Ironsail-llc/genus-os/issues/682)
+
+## [1.109.0](https://github.com/Ironsail-llc/genus-os/compare/v1.108.2...v1.109.0) (2026-10-26)
+
+### Features
+
+* **pr-review:** pr_review_status lists each posted review with its link ([#684](https://github.com/Ironsail-llc/genus-os/issues/684)) ([1faf922](https://github.com/Ironsail-llc/genus-os/commit/1faf9224de9a05e7c03343cf163603ea3801daee))
+* **tasks:** opt-in guard reserving requires_human for money and signature work ([#675](https://github.com/Ironsail-llc/genus-os/issues/675)) ([fe7defb](https://github.com/Ironsail-llc/genus-os/commit/fe7defbc949db1ebfe21c9456961b1d76aa0d4c3))
+
+### Bug Fixes
+
+* **calendar:** the assistant organizes the meetings it books and turns transcription on ([#676](https://github.com/Ironsail-llc/genus-os/issues/676)) ([e455a4c](https://github.com/Ironsail-llc/genus-os/commit/e455a4cbafb520d52da6d8d57402bff0a0985f07)), closes [#579](https://github.com/Ironsail-llc/genus-os/issues/579)
+* **ci:** cap litellm below 1.105.3 so completions work without mcp ([#691](https://github.com/Ironsail-llc/genus-os/issues/691)) ([6b2cdb2](https://github.com/Ironsail-llc/genus-os/commit/6b2cdb25325ba5d364fe4881eb758100df99e9d5))
+* **ci:** test the locked dependency set and rescope the version gate ([#686](https://github.com/Ironsail-llc/genus-os/issues/686)) ([58f28f9](https://github.com/Ironsail-llc/genus-os/commit/58f28f9401501f849f4e13b90a00ce3e3e48f367)), closes [#682](https://github.com/Ironsail-llc/genus-os/issues/682) [#675](https://github.com/Ironsail-llc/genus-os/issues/675) [#676](https://github.com/Ironsail-llc/genus-os/issues/676) [#681](https://github.com/Ironsail-llc/genus-os/issues/681) [#682](https://github.com/Ironsail-llc/genus-os/issues/682)
+* **devops-report:** deterministic weekly metrics, HR Claude-usage ingest, honest failures ([#688](https://github.com/Ironsail-llc/genus-os/issues/688)) ([2664321](https://github.com/Ironsail-llc/genus-os/commit/266432164685d50e76dfc66c04743b73c544b20e))
+* **devops-report:** guard accepts trend and in-progress values a note cites ([#690](https://github.com/Ironsail-llc/genus-os/issues/690)) ([5bc67a6](https://github.com/Ironsail-llc/genus-os/commit/5bc67a6b878c3d65802a9038fcdfad54778d56d4))
+* **pr-review:** review any pull request the bot is asked to review ([#681](https://github.com/Ironsail-llc/genus-os/issues/681)) ([b5cfb71](https://github.com/Ironsail-llc/genus-os/commit/b5cfb71f2dc530f2e7049ba440c694edd8075524))
+* **pr-review:** review three at once and never drop a re-review request ([#677](https://github.com/Ironsail-llc/genus-os/issues/677)) ([cb5d5e2](https://github.com/Ironsail-llc/genus-os/commit/cb5d5e21c9f7357934683f0a5582b4433358547d))
+* **scheduler:** crontab weekday numbers follow crontab (0/7 = Sunday) ([#689](https://github.com/Ironsail-llc/genus-os/issues/689)) ([e5b1c30](https://github.com/Ironsail-llc/genus-os/commit/e5b1c307c8272a6ab8eca4505e446d805ec3e1a5))
+
 ## [1.108.2](https://github.com/Ironsail-llc/genus-os/compare/v1.108.1...v1.108.2) (2026-10-09)
 
 ### Bug Fixes

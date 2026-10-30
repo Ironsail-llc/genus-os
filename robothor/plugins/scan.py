@@ -34,9 +34,10 @@ from __future__ import annotations
 import ast
 import logging
 from dataclasses import dataclass
+from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, Any
 
-from robothor.plugins.loader import _GROUPS, CONTRACT_VERSION
+from robothor.plugins.loader import _GROUPS, CONTRACT_VERSIONS, accepted_contracts
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from pathlib import Path
@@ -320,9 +321,9 @@ def _builtin_names(group: str) -> set[str]:
 
 
 def _contract_matches(declared: Any) -> bool:
-    """Whether a manifest's ``contract_version`` is the one this engine speaks.
+    """Whether a manifest's ``contract_version`` is one this engine speaks.
 
-    ``CONTRACT_VERSION`` is the string ``"1.0"`` and every manifest published so
+    ``CONTRACT_VERSIONS`` are strings (``"1.0"``) and every manifest published so
     far writes the integer ``1``; the loader never compared them because it
     checks the PAYLOAD's version instead. Comparing them as numbers is what
     keeps this scanner from blocking every plugin that exists on a spelling.
@@ -330,9 +331,9 @@ def _contract_matches(declared: Any) -> bool:
     if declared is None:
         return False
     try:
-        return float(str(declared)) == float(CONTRACT_VERSION)
+        return float(str(declared)) in {float(v) for v in CONTRACT_VERSIONS}
     except (TypeError, ValueError):
-        return str(declared) == CONTRACT_VERSION
+        return str(declared) in CONTRACT_VERSIONS
 
 
 def _declared_contract(manifest_text: str, parsed: Any) -> Any:
@@ -966,7 +967,7 @@ def _declaration_reasons(contents: WheelContents) -> tuple[list[str], list[str]]
     if not _contract_matches(declared_contract):
         blocked.append(
             f"{MANIFEST_NAME} declares contract_version "
-            f"{declared_contract!r}; this engine speaks {CONTRACT_VERSION!r}."
+            f"{declared_contract!r}; this engine speaks {accepted_contracts()}."
         )
 
     names_declared = False
@@ -1131,6 +1132,8 @@ def scan_wheel(contents: WheelContents, *, scan_prompts: bool = False) -> ScanRe
             f"instruction channel; prompt screening here is {prompt_scan}."
         )
 
+    review.extend(_workspace_review(contents.manifest_text))
+
     verdict = BLOCKED if blocked else (REVIEW if review else SAFE)
     return ScanResult(
         verdict=verdict,
@@ -1140,6 +1143,90 @@ def scan_wheel(contents: WheelContents, *, scan_prompts: bool = False) -> ScanRe
         prompt_files=tuple(prompt_files),
         members_accounted=members,
     )
+
+
+def _normalised(value: Any) -> str:
+    """A declared path as ``assets.parse`` will read it (``./brain/x`` -> ``brain/x``).
+
+    A path parse would refuse is returned as-is: the install refuses it anyway,
+    and the reason should still name what was declared.
+    """
+    from robothor.templates.safety import TemplateSecurityError, safe_relative_path
+
+    try:
+        return safe_relative_path(str(value), label="declared path").as_posix()
+    except TemplateSecurityError:
+        return str(value)
+
+
+def _workspace_review(manifest_text: str) -> list[str]:
+    """``review`` reasons for every workspace asset the manifest declares.
+
+    Before plugins could ship workspace files, a packaged ``.yaml`` was inert
+    data and :func:`_classify_member` rightly waved it through. A declared
+    asset is not inert: an agent manifest can register lifecycle hooks that run
+    shell commands, ``docs/hooks/`` and workflows are executed by the engine,
+    ``docs/webhooks.yaml`` and ``docs/webhooks.d/`` are loaded by it, a ``brain/`` file is text a model
+    reads, and a patch changes an agent the plugin does not own. None of that is
+    visible from member names, so it is read from the declaration -- normalised
+    the way the installer normalises it, so ``./brain/x`` is ``brain/x``.
+    """
+    try:
+        import yaml
+
+        data = yaml.safe_load(manifest_text or "") or {}
+    except Exception:  # noqa: BLE001 - an unreadable manifest is judged elsewhere
+        return []
+    if not isinstance(data, dict):
+        return []
+
+    def listed(key: str) -> list[Any]:
+        value = data.get(key)
+        return value if isinstance(value, list) else []
+
+    reasons: list[str] = []
+    agents = sorted(
+        PurePosixPath(_normalised(a)).name for a in listed("agents") if isinstance(a, str)
+    )
+    if agents:
+        reasons.append(
+            f"The manifest ships agent(s) {', '.join(agents)}. A rendered agent manifest "
+            "can declare lifecycle hooks, including `command` hooks the engine runs as "
+            "shell; read the templates before accepting."
+        )
+    workflows = sorted(_normalised(w) for w in listed("workflows") if isinstance(w, str))
+    if workflows:
+        reasons.append(
+            f"The manifest ships workflow(s) ({', '.join(workflows)}), which the engine runs."
+        )
+    patched = sorted(
+        str(p.get("agent")) for p in listed("patches") if isinstance(p, dict) and p.get("agent")
+    )
+    if patched:
+        reasons.append(
+            f"The manifest patches agent(s) it does not own ({', '.join(patched)}), "
+            "changing what they are told or allowed to do."
+        )
+    dests = sorted(
+        _normalised(f.get("dest")) for f in listed("files") if isinstance(f, dict) and f.get("dest")
+    )
+    by_kind = {
+        "brain/": "writes brain/ files a model reads",
+        "docs/hooks/": "writes docs/hooks/ files, which the engine executes (a `command` "
+        "hook runs shell)",
+        "docs/workflows/": "writes workflow files the engine runs",
+        "docs/webhooks.yaml": "writes docs/webhooks.yaml, configuration the engine loads",
+        "docs/webhooks.d/": "writes docs/webhooks.d/ channel drop-ins, configuration the "
+        "engine loads",
+    }
+    for prefix, what in by_kind.items():
+        hits = [d for d in dests if d == prefix or d.startswith(prefix)]
+        if hits:
+            reasons.append(f"The manifest {what} ({', '.join(hits)}).")
+    other = [d for d in dests if not any(d == p or d.startswith(p) for p in by_kind)]
+    if other:
+        reasons.append(f"The manifest writes workspace files ({', '.join(other)}).")
+    return reasons
 
 
 def _text_members(root: Path) -> list[str]:

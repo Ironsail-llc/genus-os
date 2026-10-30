@@ -357,6 +357,105 @@ describe("Settings › Plugins — the listing", () => {
   });
 });
 
+describe("Settings › Plugins — agents and workflows", () => {
+  /** A plugin that ships an agent and a workflow, from the engine's `assets`. */
+  const WITH_ASSETS = {
+    ...FROM_REGISTRY,
+    assets: {
+      agents: [{ id: "weather-watch", name: "Weather Watch", schedule: "0 * * * *" }],
+      workflows: [
+        {
+          id: "weather-pass",
+          name: "Weather pass",
+          triggers: ["cron 0 7 * * *", "hook weather:alert"],
+        },
+      ],
+      patches: ["main"],
+      files: [],
+    },
+  };
+
+  it("lists each agent with its schedule and each workflow with its triggers", async () => {
+    mockBridge({ listings: [{ ...LISTING, plugins: [WITH_ASSETS, LOADED] }] });
+    render(<PluginsPage visible />);
+
+    const assets = await screen.findByTestId("plugin-assets-genus-weather");
+    expect(assets.textContent).toContain("Agents and workflows");
+    const agent = within(assets).getByTestId("plugin-asset-agent-weather-watch");
+    expect(agent.textContent).toContain("weather-watch");
+    expect(agent.textContent).toContain("0 * * * *");
+    const workflow = within(assets).getByTestId("plugin-asset-workflow-weather-pass");
+    expect(workflow.textContent).toContain("weather-pass");
+    expect(workflow.textContent).toContain("cron 0 7 * * *");
+    expect(workflow.textContent).toContain("hook weather:alert");
+  });
+
+  it("says none for a plugin that ships no agent or workflow", async () => {
+    mockBridge({ listings: [{ ...LISTING, plugins: [WITH_ASSETS, LOADED] }] });
+    render(<PluginsPage visible />);
+
+    const assets = await screen.findByTestId("plugin-assets-genus-hostinfo");
+    expect(assets.textContent).toContain("none");
+  });
+
+  it("says unavailable with the engine's reason, not none, when the assets could not be read", async () => {
+    const unreadable = {
+      ...WITH_ASSETS,
+      assets: {
+        agents: [],
+        workflows: [],
+        patches: [],
+        files: [],
+        error: "The plugin asset ledger (.robothor/plugin-assets.yaml) could not be read.",
+      },
+    };
+    mockBridge({ listings: [{ ...LISTING, plugins: [unreadable] }] });
+    render(<PluginsPage visible />);
+
+    const assets = await screen.findByTestId("plugin-assets-genus-weather");
+    expect(assets.textContent).toContain(
+      "unavailable: The plugin asset ledger (.robothor/plugin-assets.yaml) could not be read.",
+    );
+    expect(assets.textContent).not.toContain("none");
+  });
+
+  it("keeps the lists it could read and notes only the part that failed", async () => {
+    const partial = {
+      ...WITH_ASSETS,
+      assets: {
+        ...WITH_ASSETS.assets,
+        error: "The installed agent registry (.robothor/installed.yaml) is not readable.",
+        partial: true,
+      },
+    };
+    mockBridge({ listings: [{ ...LISTING, plugins: [partial] }] });
+    render(<PluginsPage visible />);
+
+    const assets = await screen.findByTestId("plugin-assets-genus-weather");
+    expect(within(assets).getByTestId("plugin-asset-workflow-weather-pass")).toBeTruthy();
+    expect(within(assets).getByTestId("plugin-asset-agent-weather-watch")).toBeTruthy();
+    expect(assets.textContent).toContain(
+      "unavailable: The installed agent registry (.robothor/installed.yaml) is not readable.",
+    );
+    expect(assets.textContent).not.toContain("none");
+  });
+
+  it("an agent with no schedule says so rather than printing nothing", async () => {
+    const unscheduled = {
+      ...WITH_ASSETS,
+      assets: {
+        ...WITH_ASSETS.assets,
+        agents: [{ id: "weather-watch", name: "Weather Watch", schedule: null }],
+      },
+    };
+    mockBridge({ listings: [{ ...LISTING, plugins: [unscheduled] }] });
+    render(<PluginsPage visible />);
+
+    const agent = await screen.findByTestId("plugin-asset-agent-weather-watch");
+    expect(agent.textContent).toContain("no schedule");
+  });
+});
+
 describe("Settings › Plugins — recording", () => {
   it("makes Record the primary affordance when the lockfile does not exist", async () => {
     const recorded = mockBridge({

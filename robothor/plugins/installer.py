@@ -26,6 +26,11 @@ each step is a refusal, and the step that executes anything is last:
    ``--accept-review``; ``safe`` proceeds
 7. **install** — pip, as a list, ``shell=False``
 8. **record** — ``sync()``, then the row's verdict, artifact hash and source
+9. **workspace** — the agents, workflows, manifest patches and files the
+   manifest declares (:mod:`robothor.plugins.assets`), written from the
+   REVIEWED wheel. Every refusal for them -- unsafe paths, a destination
+   outside the allowlist, an agent somebody else installed -- is taken at
+   step 5, before pip, like every other refusal here
 
 **What pip is allowed to do: nothing.** ``--no-deps --no-index --find-links
 <our temp dir>`` means pip resolves nothing, reaches nowhere, and installs
@@ -52,6 +57,7 @@ import tempfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
 from robothor.plugins import registry, scan, wheel
@@ -152,6 +158,10 @@ class InstallPlan:
     files_scanned: int = 0
     members_accounted: int = 0
     pip_command: tuple[str, ...] = ()
+    #: The workspace files the manifest declares, one line each, as
+    #: :func:`robothor.plugins.assets.plan` describes them. Workspace-relative,
+    #: so it carries no instance path.
+    workspace: tuple[str, ...] = ()
 
     def as_json(self, *, include_command: bool = False) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -171,6 +181,7 @@ class InstallPlan:
             "accept_review": self.accept_review,
             "files_scanned": self.files_scanned,
             "members_accounted": self.members_accounted,
+            "workspace": list(self.workspace),
         }
         if include_command:
             payload["pip_command"] = list(self.pip_command)
@@ -187,6 +198,9 @@ class InstallOutcome:
     row: dict[str, Any] | None = None
     reload_hint: str = RELOAD_HINT
     note: str = ""
+    #: What was written to the workspace, and any validation warnings.
+    workspace: tuple[str, ...] = ()
+    warnings: tuple[str, ...] = ()
 
     def as_json(self, *, include_command: bool = False) -> dict[str, Any]:
         return {
@@ -196,6 +210,8 @@ class InstallOutcome:
             "row": self.row,
             "reload_hint": self.reload_hint,
             "note": self.note,
+            "workspace": list(self.workspace),
+            "warnings": list(self.warnings),
         }
 
 
@@ -288,6 +304,40 @@ def _validated_requirement(name: str, version: str) -> tuple[str, str]:
     return clean_name, clean_version
 
 
+def _pip_module_available() -> bool:
+    """Whether this interpreter can run ``-m pip`` (a uv-built venv cannot)."""
+    import importlib.util
+
+    return importlib.util.find_spec("pip") is not None
+
+
+def _uv_executable() -> str | None:
+    """``uv`` on PATH, which installs into an interpreter that has no pip."""
+    import shutil
+
+    return shutil.which("uv")
+
+
+#: Neither front end is available. A fixed sentence the install and the
+#: remove refusals both start with.
+_NO_INSTALLER = (
+    "No installer is available: this Python has no pip module (`python -m pip`) "
+    "and `uv` is not on PATH."
+)
+
+
+def _installer_front(verb: str) -> list[str]:
+    """``python -m pip <verb>``, else ``uv pip <verb> --python <this
+    interpreter>``; an :class:`InstallError` when neither exists. Install and
+    remove share it, so what one front end put in, the same one takes out."""
+    if _pip_module_available():
+        return [sys.executable, "-m", "pip", verb]
+    uv = _uv_executable()
+    if not uv:
+        raise InstallError(f"{_NO_INSTALLER} Install one of them, then run it again.")
+    return [uv, "pip", verb, "--python", sys.executable]
+
+
 def _pip_install_command(name: str, version: str, find_links: Path) -> list[str]:
     """The exact command, and nothing that could turn into another one.
 
@@ -295,19 +345,23 @@ def _pip_install_command(name: str, version: str, find_links: Path) -> list[str]
     this a local install of one verified file rather than a network resolve.
     ``--no-deps`` is what keeps a plugin's metadata from naming the next
     download.
+
+    ``python -m pip`` when this interpreter has pip; otherwise ``uv pip
+    install --python <this interpreter>`` with the same flags (the image's
+    venv is built by uv and ships no pip). Neither is a refusal naming both.
     """
-    command = [
-        sys.executable,
-        "-m",
-        "pip",
-        "install",
-        "--no-deps",
-        "--no-index",
-        "--find-links",
-        str(find_links),
-        "--disable-pip-version-check",
-        "--no-input",
-    ]
+    local = ["--no-deps", "--no-index", "--find-links", str(find_links)]
+    front = _installer_front("install")
+    command = [*front, *local]
+    # Reinstall, uncached: both pip and uv treat a matching name+version as
+    # already installed (a rebuilt wheel of the same version changed no files),
+    # and uv's cache keys wheels by name+version, so a cached copy could stand
+    # in for the file whose hash was just checked.
+    if front[1:3] == ["-m", "pip"]:
+        command += ["--force-reinstall", "--no-cache-dir"]
+        command += ["--disable-pip-version-check", "--no-input"]
+    else:
+        command += ["--reinstall", "--no-cache"]
     target = _plugin_target_dir()
     if target:
         command += ["--target", target, "--upgrade"]
@@ -425,7 +479,9 @@ def install(
 
     checkpoint("it started")
     with tempfile.TemporaryDirectory(prefix="genus-plugin-") as staging_name:
-        staging = Path(staging_name)
+        # Resolved: the platform temp root may run through a symlink (macOS:
+        # /var -> /private/var), and the extractor refuses an aliased root.
+        staging = Path(staging_name).resolve(strict=True)
         if _looks_like_wheel(spec):
             plan_base, data, filename = _resolve_wheel(spec, sha256=sha256, client=client)
         else:
@@ -449,6 +505,7 @@ def install(
         # attacker's file.
         dist_name, dist_version = _validated_requirement(contents.name, contents.version)
         verdict = scan.scan_wheel(contents, scan_prompts=scan_prompts)
+        declared, workspace_plan = _plan_workspace(contents, dist_name)
 
         plan = InstallPlan(
             name=dist_name,
@@ -468,6 +525,7 @@ def install(
             files_scanned=verdict.files_scanned,
             members_accounted=verdict.members_accounted,
             pip_command=tuple(_pip_install_command(dist_name, dist_version, staging)),
+            workspace=workspace_plan,
         )
 
         _enforce_verdict(plan, accept_review=accept_review)
@@ -491,6 +549,7 @@ def install(
             )
 
         row = _record(plan, contents, lock_path=lock_path)
+        report = _apply_workspace(declared, plan)
         return InstallOutcome(
             plan=plan,
             installed=True,
@@ -498,7 +557,38 @@ def install(
             note=""
             if row
             else "the lockfile has no path on this instance, so nothing was recorded",
+            workspace=tuple(report.lines),
+            warnings=tuple(report.warnings),
         )
+
+
+def _plan_workspace(contents: Any, dist_name: str) -> tuple[Any, tuple[str, ...]]:
+    """The manifest's workspace declaration and what it would write, or a refusal."""
+    from robothor.plugins import assets
+
+    try:
+        declared = assets.declaration_from_wheel(contents)
+        return declared, assets.plan(declared, dist_name, version=contents.version)
+    except assets.AssetError as exc:
+        raise InstallError(f"{dist_name}: {exc}") from exc
+
+
+def _apply_workspace(declared: Any, plan: InstallPlan) -> Any:
+    """Write the workspace files from the reviewed wheel, after pip and the row.
+
+    A failure here leaves the distribution installed and recorded -- pip has
+    run -- so the sentence says how to finish: fix the cause, then ``genus
+    plugin sync`` writes them from the installed copy.
+    """
+    from robothor.plugins import assets
+
+    try:
+        return assets.apply(declared, plan.name, plan.version)
+    except (assets.AssetError, OSError) as exc:
+        raise InstallError(
+            f"{plan.name} {plan.version} was installed, but its workspace files were not "
+            f"all written: {exc}. Fix the cause, then run `genus plugin sync`."
+        ) from exc
 
 
 def _resolve_wheel(
@@ -688,6 +778,77 @@ def _record(plan: InstallPlan, contents: Any, *, lock_path: Path | None) -> dict
 # ---------------------------------------------------------------------------
 
 
+def _plugin_dir_distribution(name: str) -> Any:
+    """The distribution *name* as installed in ``ROBOTHOR_PLUGIN_DIR``, or None."""
+    from importlib import metadata
+
+    target = _plugin_target_dir()
+    if not target or not Path(target).is_dir():
+        return None
+    wanted = _canonical(name)
+    for dist in metadata.distributions(path=[target]):
+        try:
+            found = dist.metadata["Name"]
+        except Exception:  # noqa: BLE001 - unreadable metadata is not this plugin
+            continue
+        if found and _canonical(str(found)) == wanted:
+            return dist
+    return None
+
+
+def _delete_from_plugin_dir(dist: Any) -> int:
+    """Delete the files *dist*'s RECORD lists, inside the plugin dir only.
+
+    Every path is contained under the plugin directory before it is touched; a
+    RECORD entry pointing elsewhere (``../../bin/x``) is skipped, never
+    followed. Symlinks are never unlinked through. Byte-code caches of the
+    deleted modules and directories left empty go too, so nothing of the
+    distribution remains for discovery to find.
+    """
+    import importlib
+
+    from robothor.templates.safety import TemplateSecurityError, contained_path, trusted_directory
+
+    root = trusted_directory(Path(_plugin_target_dir()), label="plugin directory")
+    deleted = 0
+    dirs: set[Path] = set()
+    for member in dist.files or ():
+        try:
+            path = contained_path(root, Path(str(member)).as_posix(), label="plugin file")
+        except TemplateSecurityError:
+            continue
+        if path.is_file():
+            if path.suffix == ".py":
+                for cached in (path.parent / "__pycache__").glob(f"{path.stem}.*.pyc"):
+                    cached.unlink()
+            path.unlink()
+            deleted += 1
+        parent = path.parent
+        while parent != root and root in parent.parents:
+            dirs.add(parent)
+            parent = parent.parent
+    for directory in sorted(dirs, key=lambda d: len(d.parts), reverse=True):
+        cache = directory / "__pycache__"
+        if cache.is_dir() and not any(cache.iterdir()):
+            cache.rmdir()
+        if directory.is_dir() and not directory.is_symlink() and not any(directory.iterdir()):
+            directory.rmdir()
+    importlib.invalidate_caches()
+    return deleted
+
+
+def _distribution_present(name: str) -> bool:
+    from importlib import metadata
+
+    try:
+        metadata.distribution(name)
+    except metadata.PackageNotFoundError:
+        return False
+    except Exception:  # noqa: BLE001 - unreadable metadata: let pip decide
+        return True
+    return True
+
+
 def remove(
     name: str,
     *,
@@ -702,6 +863,15 @@ def remove(
     it because it appears in the platform's lockfile would be the platform
     reaching outside what it owns. ``--force`` is the operator saying they know
     which one it is.
+
+    **Except inside ``ROBOTHOR_PLUGIN_DIR``.** That directory is the
+    platform's own (``pip install --target`` puts plugins there, and so does
+    the platform's installer), so a distribution found there is removed without
+    ``--force``, by deleting the files its RECORD lists from that directory.
+    pip is not used for it: ``pip uninstall`` does not see a ``--target``
+    install at all, and the engine image ships no pip. Leaving the files would
+    let the next ``genus plugin sync`` rediscover the plugin and write its
+    agents straight back.
     """
     from robothor.plugins import lockfile
 
@@ -717,25 +887,81 @@ def remove(
     name = name.strip()
     lock = lockfile.read_lockfile(lock_path)
     row = lock.row(name)
-    if row is None and not force:
+    in_plugin_dir = _plugin_dir_distribution(name)
+    # Gone from the platform-owned plugin directory and from the path: a
+    # previous remove that deleted the package and stopped before dropping the
+    # row. Finishing it needs no pip (the image has none) and no --force.
+    gone = (
+        in_plugin_dir is None
+        and bool(_plugin_target_dir())
+        and row is not None
+        and not _distribution_present(name)
+    )
+    platform_owned = in_plugin_dir is not None or gone
+    if row is None and not force and in_plugin_dir is None:
         raise InstallError(
             f"Nothing in the lockfile records {name!r}. Run `genus plugin list` to "
             "see what is installed, or `genus plugin remove --force` if you are "
             "sure the distribution is there."
         )
-    if row is not None and row.source is None and not force:
+    if row is not None and row.source is None and not force and not platform_owned:
         raise InstallError(
             f"{name} is recorded but this platform did not install it — there is no "
             "source on its lockfile row, so it was installed by hand. Uninstall it "
             "the same way, or re-run with --force."
         )
 
-    result = runner([sys.executable, "-m", "pip", "uninstall", "-y", name])
+    # Everything that can refuse runs BEFORE anything is deleted, so a refusal
+    # leaves the plugin, its row and its workspace files exactly as they were.
+    from robothor.plugins import assets
+
+    try:
+        assets.check_retire(name)
+    except (assets.AssetError, OSError) as exc:
+        raise InstallError(f"{name} was not removed: {exc}") from exc
+
     note = ""
+    if in_plugin_dir is not None:
+        deleted = _delete_from_plugin_dir(in_plugin_dir)
+        result: Any = SimpleNamespace(returncode=0, stdout="", stderr="")
+        note = f"deleted {deleted} file(s) from the plugin directory"
+    elif gone or (row is None and force and not _distribution_present(name)):
+        # Nothing for pip to do: the distribution is not installed. This is how
+        # the workspace files of a plugin that disappeared since the last sync
+        # are retired -- sync reports them and leaves them.
+        result = SimpleNamespace(returncode=0, stdout="", stderr="")
+        note = "the distribution was not installed; its workspace files were retired"
+    else:
+        try:
+            front = _installer_front("uninstall")
+        except InstallError:
+            if not force:
+                raise InstallError(
+                    f"{name} was not removed. {_NO_INSTALLER} Install one of them, or "
+                    "re-run with --force to retire its workspace files and drop its "
+                    "lockfile row without uninstalling the package."
+                ) from None
+            front = []
+        if front:
+            # pip asks for confirmation; uv does not, and has no -y.
+            yes = ["-y"] if front[1:3] == ["-m", "pip"] else []
+            result = runner([*front, *yes, name])
+        else:
+            result = SimpleNamespace(returncode=0, stdout="", stderr="")
+            note = (
+                "neither pip nor uv is available, so the package was not uninstalled; "
+                "its workspace files were retired and its row dropped (--force)"
+            )
     if getattr(result, "returncode", 1) != 0:
         detail = (getattr(result, "stderr", "") or getattr(result, "stdout", "") or "").strip()
         lowered = detail.lower()
-        if "not installed" in lowered or "skipping" in lowered:
+        # pip: "Skipping X as it is not installed"; uv: the same, or
+        # "No packages to uninstall".
+        if (
+            "not installed" in lowered
+            or "skipping" in lowered
+            or "no packages to uninstall" in lowered
+        ):
             # pip exits non-zero for "it was not there". Keeping the row in that
             # case would leave the lockfile permanently describing something the
             # environment does not have.
@@ -746,6 +972,14 @@ def remove(
                 + (f": {detail.splitlines()[-1]}" if detail else ".")
             )
 
+    # From the ledger, not the wheel: pip has just deleted the patch files
+    # that said how to undo themselves.
+    try:
+        report = assets.retire(name)
+    except (assets.AssetError, OSError) as exc:
+        raise InstallError(
+            f"{name} was uninstalled, but its workspace files were not all retired: {exc}"
+        ) from exc
     dropped = lockfile.drop_row(name, lock_path)
     return {
         "name": name,
@@ -753,4 +987,6 @@ def remove(
         "row_dropped": dropped,
         "reload_hint": RELOAD_HINT,
         "note": note,
+        "workspace": list(report.lines),
+        "warnings": list(report.warnings),
     }

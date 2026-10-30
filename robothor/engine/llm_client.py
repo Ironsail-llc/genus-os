@@ -31,6 +31,7 @@ import json
 import logging
 import math
 import random
+import re
 import time
 import time as _time
 from collections.abc import Awaitable, Callable  # noqa: TC003
@@ -112,6 +113,7 @@ from robothor.engine.workflow_budget import bound_call_timeout
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
+    from pathlib import Path
 
     from robothor.engine.session import AgentSession
     from robothor.engine.stall_watchdog import _StallWatchdog
@@ -613,9 +615,137 @@ def thinking_kwargs_for_call(
     """
     from robothor.engine.model_registry import get_model_limits
 
+    if is_openai_reasoning_model(model):
+        return {"reasoning_effort": _openai_reasoning_effort(model, reduced=reduced)}
     if not get_model_limits(model).supports_thinking:
         return {}
     return _thinking_kwargs(model, max_tokens, reduced=reduced)
+
+
+#: The agent's reasoning-effort rung in OpenAI's vocabulary. ``max`` asks for
+#: ``xhigh`` only where litellm's catalog says the model offers it.
+_OPENAI_EFFORT: dict[str, str] = {
+    "low": "low",
+    "medium": "medium",
+    "high": "high",
+    "max": "high",
+}
+
+
+_OPENAI_BARE_ID = re.compile(r"^(gpt-\d|o\d)")
+
+
+def _is_openai_direct(model: str) -> bool:
+    """True for the OpenAI API itself: ``openai/…`` or a bare id litellm routes there.
+
+    Deliberately narrow. ``openrouter/openai/…`` speaks OpenRouter's dialect
+    and ``codex/…`` has its own adapter; neither is changed here.
+    """
+    if model.startswith("openai/"):
+        return True
+    if "/" in model:
+        return False
+    # A bare id newer than litellm's bundled catalog is not routable by it, so
+    # OpenAI's own naming answers first and the catalog covers the rest.
+    if _OPENAI_BARE_ID.match(model):
+        return True
+    try:
+        return bool(litellm.get_llm_provider(model)[1] == "openai")
+    except Exception:  # noqa: BLE001 - an id litellm cannot route is not OpenAI's
+        return False
+
+
+def is_openai_reasoning_model(model: str) -> bool:
+    """A model on the OpenAI API that reasons (GPT-5 family, o-series).
+
+    Such a model takes ``reasoning_effort``, refuses the Anthropic-style
+    ``thinking`` block (litellm raises before the request leaves the process),
+    refuses tool calls without an effort, and rejects a sampling
+    ``temperature``. Reasoning support is read from the curated registry first
+    and then litellm's catalog, so a model with no registry row is still
+    recognised — that gap is how a GPT-5 fallback came to fail every call.
+    """
+    if not _is_openai_direct(model):
+        return False
+    from robothor.engine.model_registry import get_model_limits
+
+    if get_model_limits(model).supports_thinking:
+        return True
+    try:
+        return bool(litellm.supports_reasoning(model=model))
+    except Exception:  # noqa: BLE001 - unknown to the catalog means not known to reason
+        return False
+
+
+def _openai_reasoning_effort(model: str, *, reduced: bool = False) -> str:
+    """``reasoning_effort`` for one OpenAI call, from the running agent's own rung.
+
+    ``reduced`` is the re-ask after a reasoning-only reply, mirroring
+    ``_thinking_budget``: always the lowest rung.
+    """
+    from robothor.engine.model_registry import current_reasoning_effort
+
+    if reduced:
+        return "low"
+    rung = (current_reasoning_effort() or "medium").strip().lower()
+    if rung == "max":
+        bare = model.removeprefix("openai/")
+        if (litellm.model_cost.get(bare) or {}).get("supports_xhigh_reasoning_effort"):
+            return "xhigh"
+    return _OPENAI_EFFORT.get(rung, "medium")
+
+
+#: Extra completion room a short auxiliary call (planner, verifier) gets on a
+#: reasoning model. Reasoning tokens count against ``max_tokens``: a 300-token
+#: verifier cap on a reasoning model came back ``finish_reason=length`` with no
+#: content at all. A ceiling is billed only for what is used.
+REASONING_ANSWER_HEADROOM = 8_192
+
+_GEMINI_THINKING_ID = re.compile(r"gemini-(2\.5|[3-9])")
+
+
+def _is_gemini_thinking_model(model: str) -> bool:
+    """Gemini 2.5 and later think by default, catalogued or not."""
+    from robothor.engine.model_registry import get_model_limits, is_gemini_route
+
+    if not is_gemini_route(model):
+        return False
+    if _GEMINI_THINKING_ID.search(model) or get_model_limits(model).supports_thinking:
+        return True
+    try:
+        return bool(litellm.supports_reasoning(model=model))
+    except Exception:  # noqa: BLE001 - unknown to the catalog means not known to reason
+        return False
+
+
+def short_answer_kwargs(model: str, answer_tokens: int) -> dict[str, Any]:
+    """``max_tokens`` (and the effort) for a short JSON answer from ``model``.
+
+    For an OpenAI reasoning model: ``reasoning_effort="low"`` plus headroom.
+    For a Gemini thinking model: headroom only — litellm's bundled catalog
+    may not know the model reasons and then refuses any reasoning parameter,
+    so the ceiling is what moves. Every other model: ``answer_tokens``.
+    """
+    if is_openai_reasoning_model(model):
+        return {
+            "max_tokens": answer_tokens + REASONING_ANSWER_HEADROOM,
+            "reasoning_effort": "low",
+        }
+    if _is_gemini_thinking_model(model):
+        return {"max_tokens": answer_tokens + REASONING_ANSWER_HEADROOM}
+    return {"max_tokens": answer_tokens}
+
+
+def drop_unsupported_sampling(model: str, kwargs: dict[str, Any]) -> dict[str, Any]:
+    """Remove ``temperature`` from a call to an OpenAI reasoning model, in place.
+
+    GPT-5-family reasoning calls reject any sampling temperature, and every
+    engine call site passes one (0.3 for agents, 0.1 for compaction and
+    planning). Every other model keeps its temperature untouched.
+    """
+    if "temperature" in kwargs and is_openai_reasoning_model(model):
+        kwargs.pop("temperature")
+    return kwargs
 
 
 #: Shortest attempt worth dialling. A model whose shared allowance has less
@@ -1190,6 +1320,26 @@ def _log_reasoning_replay_rejection(
         logger.warning("reasoning-replay history digest failed: %s", _sanitize(digest_error))
 
 
+def fleet_model_chain(manifest_dir: Path | str | None = None) -> list[str]:
+    """The fleet's model chain, primary first: what a plugin should dial.
+
+    A plugin tool must never pin a model name -- the operator chooses the
+    fleet's models in ``_defaults.yaml`` and a pinned name goes stale the day
+    they change it. This is ``[primary, *fallbacks]`` from that file (the
+    engine's manifest directory unless ``manifest_dir`` is given), ending in
+    the instance's model of last resort when one is set. With no defaults file
+    the chain is that last-resort model alone, the one model the engine dials
+    regardless of manifests; it is empty only when neither exists.
+
+    One reader with the engine's readiness check
+    (:func:`robothor.engine.config.fleet_model_chain`), so the chain a plugin
+    walks is the chain the engine itself would.
+    """
+    from robothor.engine.config import fleet_model_chain as _chain
+
+    return _chain(manifest_dir)
+
+
 async def llm_call(
     messages: list[dict[str, Any]],
     *,
@@ -1246,10 +1396,13 @@ async def llm_call(
 
     async def _attempt() -> Any:
         model = kwargs["model"]
+        # A copy: the chain walk reuses ``kwargs`` for the next model, which
+        # may well want the temperature this one cannot take.
+        call_kwargs = drop_unsupported_sampling(model, dict(kwargs))
         t0 = _time.monotonic()
         try:
             call = codex_acompletion if is_codex_model(model) else litellm.acompletion
-            resp = await asyncio.wait_for(bounded_completion(call, **kwargs), timeout=timeout)
+            resp = await asyncio.wait_for(bounded_completion(call, **call_kwargs), timeout=timeout)
             LLM_CALLS_TOTAL.labels(model=model, status="success").inc()
             LLM_CALL_DURATION.labels(model=model).observe(_time.monotonic() - t0)
             usage = getattr(resp, "usage", None)
@@ -1786,9 +1939,16 @@ class LLMClient:
         was needed most. Normalizing here, *before* the guard, keeps the context
         in the conversation and leaves a legitimate user turn at the tail.
 
-        Non-anthropic models are returned untouched (same list object), so their
+        Gemini (``gemini/``, ``vertex_ai/gemini…``) hoists system turns into
+        ``system_instruction`` the same way and refuses a request that then
+        ends on the model turn ("Requests ending with a model turn are not
+        supported") — which is what a verification retry, ending
+        ``[assistant, developer]``, used to send. It gets the same rewrite.
+
+        Other models are returned untouched (same list object), so their
         payloads stay byte-identical.
         """
+        from robothor.engine.model_registry import is_gemini_route
         from robothor.engine.session import ENGINE_CONTEXT_ROLE
 
         marker_text = ENGINE_CONTEXT_PREFIX.strip()
@@ -1806,7 +1966,7 @@ class LLMClient:
         # and identity turns, folded next to the user text without a name on
         # them. Behavioural rule 6 then made the agent report its own engine
         # as an attacker. Only the ROLE rewrite stays Anthropic-specific.
-        to_user = LLMClient._is_anthropic_family(model)
+        to_user = LLMClient._is_anthropic_family(model) or is_gemini_route(model)
         marker = ENGINE_CONTEXT_PREFIX.strip()
         normalized: list[dict[str, Any]] = []
         converted = 0
@@ -2077,6 +2237,7 @@ class LLMClient:
         kwargs.update(
             thinking_kwargs_for_call(model, kwargs["max_tokens"], reduced=thinking_reduced)
         )
+        drop_unsupported_sampling(model, kwargs)
         from robothor.engine.provider_routing import apply_provider_order
 
         apply_provider_order(model, kwargs)

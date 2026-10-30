@@ -87,6 +87,7 @@ exclude_docs: |
   !/features/runtime-recovery.md
   !/TOOLS.md
   !/PR_REVIEWER.md
+  !/DEVOPS_REPORT.md
   !/AUTONOMOUS_EXECUTION.md
   !/SALES_INTELLIGENCE.md
   !/PLUGINS.md
@@ -105,11 +106,13 @@ exclude_docs: |
   !/channels/access.md
   !/channels/webchat.md
   !/workspace/microsoft365.md
+  !/integrations/n8n.md
   !/runbooks/BENCHMARK_SANDBOX.md
   !/runbooks/LOCAL_FALLBACK.md
   !/runbooks/INTERACTIVE_REQUEST_PERFORMANCE.md
   !/architecture.md
   !/memory-system.md
+  !/knowledge-base.md
   !/event-bus.md
   !/PLATFORM_INSTANCE.md
   !/READING_GUIDE.md
@@ -146,6 +149,7 @@ nav:
       - Engine recovery: features/runtime-recovery.md
       - Tools: TOOLS.md
       - PR reviewer: PR_REVIEWER.md
+      - Dev team report: DEVOPS_REPORT.md
       - Personal autonomy: AUTONOMOUS_EXECUTION.md
       - Sales intelligence: SALES_INTELLIGENCE.md
       - Plugins: PLUGINS.md
@@ -157,6 +161,7 @@ nav:
       - Channel access: channels/access.md
       - Web chat channel: channels/webchat.md
       - Microsoft 365 workspace: workspace/microsoft365.md
+      - n8n monitoring: integrations/n8n.md
       - Observability: OBSERVABILITY.md
       - Snapshot and restore: runbooks/SNAPSHOT_RESTORE.md
       - Benchmark sandbox: runbooks/BENCHMARK_SANDBOX.md
@@ -169,6 +174,7 @@ nav:
   - Architecture:
       - Overview: architecture.md
       - Memory System: memory-system.md
+      - Knowledge Base: knowledge-base.md
       - Event Bus: event-bus.md
       - Platform vs Instance: PLATFORM_INSTANCE.md
   - Releases:

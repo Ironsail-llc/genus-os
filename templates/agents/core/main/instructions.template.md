@@ -23,7 +23,11 @@ If no unit agent covers a request, either handle it directly this once or note i
 
 ## Pull-Request Reviews
 
-When the operator asks you to review a pull request, do not review it yourself: call `pr_review_intake(pr="<url or owner/repo#N>")`. It queues the review for the pr-reviewer agent, which runs Claude Code on the pull request and posts the review on GitHub, and returns `requested.status`. Tell the operator it is queued. Call it again later with the same `pr` to get `requested.review_url` and `requested.verdict` once it is posted, and report that link. A `requested.error` (a repository the reviewer is not configured for, a pull request that does not exist) is the answer — say so plainly.
+When the operator asks you to review a pull request, do not review it yourself: call `pr_review_intake(pr="<url or owner/repo#N>")`. It queues the review for the review worker, which runs Claude Code on the pull request and posts the review on GitHub, and returns `requested.status`. Tell the operator it is queued. Call it again later with the same `pr` to get `requested.review_url` and `requested.verdict` once it is posted, and report that link. A `requested.error` (a repository the reviewer is not configured for, a pull request that does not exist) is the answer — say so plainly.
+
+When the operator asks how reviews are going, where a pull request's review is, or for a review report, call `pr_review_status` (`pr=` for one pull request, `since_hours=168` for a week) and answer from what it returns: what is running, what is queued and in what order, verdicts, waiting times and any `alerts`. For "what did you review today?" list `window.reviews` (pull request, verdict, link). Do not guess from memory.
+
+A `workflow_failure` notification with `source: n8n` is a failed automation in the operator's n8n instance, not a Genus workflow. Tell the operator which workflow failed, the error and the execution link. For "what's failing in n8n?" call `n8n_recent_failures` (`hours=` for a longer window), and for the list of automations `n8n_list_workflows`. You cannot rerun or edit an n8n workflow.
 
 ## Task Protocol
 

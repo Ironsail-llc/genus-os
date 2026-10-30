@@ -69,8 +69,13 @@ global:
   # `ghcr-secret` VaultStaticSecret (argocd/ironsail-<env>/manifests/).
   # Reference it so the engine/bridge/orchestrator/dashboard/migration pods
   # can pull from ghcr.io/ironsail-llc/genus-os/*.
+  # A list of secret NAMES, not {name: ...} maps. Subcharts (valkey) read
+  # global.imagePullSecrets and render `- name: {{ . }}` per entry, so maps
+  # would render as `name: map[name:ghcr-credentials]` — an invalid secret name
+  # the API server rejects. The chart's own templates render the `- name:`
+  # wrapper themselves.
   imagePullSecrets:
-    - name: ghcr-credentials
+    - ghcr-credentials
 
   # Pod-level metadata applied to every workload.
   podAnnotations: {}
@@ -125,6 +130,23 @@ database:
   name: robothor_memory
   user: robothor
   sslMode: prefer
+  tls:
+    # Name of a ConfigMap in the release namespace holding the CA bundle
+    # (PEM) that signs the database server's certificate. Empty: no bundle
+    # is mounted and libpq's default root.crt lookup applies.
+    #
+    # When set, engine, bridge, orchestrator and the migrations Job mount
+    # the key read-only at /etc/genus/db-ca/<caKey> and export
+    # PGSSLROOTCERT pointing at it. Required in EVERY environment whenever
+    # sslMode is verify-ca or verify-full: a managed Postgres presents a
+    # private CA that no default trust store holds, and the chart refuses to
+    # render a configuration that could never connect.
+    caConfigMap: ""
+    caKey: ca.pem
+    # Explicit opt-out of the check above, for an environment whose image or
+    # home directory really provides libpq's default ~/.postgresql/root.crt.
+    # Leave false unless you have verified that file exists in the pods.
+    allowDefaultTrustStore: false
 
 # ─── Instance workspace ──────────────────────────────────────────────────────
 # The workspace contains the entity's manifests, instructions, memory, and
@@ -150,35 +172,107 @@ workspace:
     # path: docs/agents/main.yaml}.
     items: []
 
-# Same shape for Redis — `redis.enabled` flips both the subchart deployment
-# (via Chart.yaml dependencies.condition) and the python services' use of
-# in-cluster Redis. Set `redis.enabled: false` + `redis.host: <elasticache>`
-# for cloud envs.
+# Cache / event-bus endpoint the Python services connect to.
 #
-# Subchart docs: https://github.com/groundhog2k/helm-charts/tree/master/charts/redis
-# Anything under `redis.*` that isn't `enabled`/`host`/`port` is passed
-# through to the subchart. Our parent templates ignore subchart-only keys
-# (image, storage) and the subchart ignores our connection-config keys.
+# This block stays named `redis` and the env vars stay ROBOTHOR_REDIS_*: the
+# server is Valkey, which is RESP wire-compatible, so renaming would be an
+# app-code change for no behavioural gain. The *server* is configured under
+# `valkey:` below.
+#
+# `host: ""` means "derive from the in-chart valkey subchart" — see the
+# genus-os.redisHost helper. Set it to a hostname only to point at a cache this
+# chart does not deploy.
 redis:
+  # The cache toggle. Named `redis` for continuity: values files written against
+  # the old Redis subchart keep working unchanged, and the env vars the app reads
+  # are ROBOTHOR_REDIS_* either way because Valkey speaks RESP. `valkey.enabled`
+  # is the canonical name and overrides this when set — see Chart.yaml.
   enabled: true
   host: ""
   port: 6379
-  # ↓ subchart overrides ↓
-  image:
-    registry: docker.io
-    repository: redis
-    tag: "7-alpine"
-    pullPolicy: IfNotPresent
-  storage:
-    requestedSize: 5Gi
+
+# ─── Valkey (cache + event bus) ─────────────────────────────────────────────
+# Valkey, never Redis, and never Bitnami — org policy. Subchart values are
+# passed straight through to the official valkey-io chart pinned in Chart.yaml.
+#
+# ONE VALKEY PER DEPLOYMENT. This instance belongs to this release; any other
+# application sharing the namespace should run its own rather than point at
+# this one. Sharing would mean sharing the ACL `default` user's `~* &* +@all`
+# grant over the whole keyspace, and a neighbour filling memory under
+# `noeviction` would start refusing this instance's writes.
+#
+# With the standard releaseName `genus-os`, the subchart's Service is
+# `genus-os-valkey` — which is what genus-os.redisHost derives.
+valkey:
+
+  # ACL auth. The password is NOT a second copy: `usersExistingSecret` points
+  # at the chart's own `cache` Secret, so the server and the Python clients read
+  # the identical ROBOTHOR_REDIS_PASSWORD and cannot drift on rotation.
+  #
+  # The subchart runs `tpl` over this field, so it is DERIVED rather than
+  # written out: the expression below reproduces genus-os.fullname using
+  # .Release.Name, which the subchart shares with the parent. A literal would
+  # only be correct for one release name — under any other the chart creates
+  # `{fullname}-cache` while the pod mounts the literal, and the pod sits in
+  # CreateContainerConfigError with nothing failing in lint or unittest.
+  #
+  # templates/validate.yaml fails the render if this ever stops matching the
+  # parent's fullname (setting nameOverride or fullnameOverride breaks it).
+  auth:
+    # On by default. NOTE the failure mode if you supply the Secret yourself:
+    # the subchart hashes whatever it reads, so ROBOTHOR_REDIS_PASSWORD="" is
+    # written as `user default on #<sha256 of "">` while clients with an empty
+    # password send no AUTH — every connection fails NOAUTH and nothing fails
+    # at install. Supply a real password, or set `enabled: false` (what
+    # values-local.yaml does) if you want an unauthenticated local cache.
+    enabled: true
+    usersExistingSecret: >-
+      {{ if contains "genus-os" .Release.Name }}{{ .Release.Name }}{{ else
+      }}{{ .Release.Name }}-genus-os{{ end }}-cache
+    aclUsers:
+      default:
+        permissions: "~* &* +@all"
+        passwordKey: ROBOTHOR_REDIS_PASSWORD
+
+  # Not a disposable cache, so it gets a volume: robothor/events/bus.py
+  # (xadd/xgroup_create/xreadgroup/xack) and robothor/engine/hooks.py (retry
+  # stream + dead-letter queue) keep stream state with consumer-group offsets,
+  # which Postgres cannot reconstruct.
+  dataStorage:
+    enabled: true
+    requestedSize: 8Gi
     accessModes: [ReadWriteOnce]
+    # Streams are not reconstructible — keep the claim if the release goes away.
+    keepPvc: true
+
+  # A ReadWriteOnce volume plus RollingUpdate would try to attach one PVC to two
+  # pods and deadlock. Upstream makes Recreate the default in 1.0 for exactly
+  # this reason; 0.12.0 still defaults to RollingUpdate, so set it explicitly.
+  deploymentStrategy: Recreate
+
+  # maxmemory-policy MUST stay noeviction: under any allkeys-* policy the server
+  # would evict stream entries to reclaim memory, silently dropping events. The
+  # app already bounds its own streams (MAXLEN on the bus, maxlen 1000 on the
+  # DLQ), so bounded growth is handled above the server.
+  # appendonly gives crash-consistency across pod restarts now there is a PVC.
+  valkeyConfig: |
+    maxmemory 1gb
+    maxmemory-policy noeviction
+    appendonly yes
+
   resources:
     requests:
       cpu: 100m
-      memory: 128Mi
+      memory: 1280Mi
     limits:
-      cpu: 500m
-      memory: 512Mi
+      # Above maxmemory, to leave headroom for AOF buffers, client output
+      # buffers and copy-on-write during rewrite. A limit at exactly maxmemory
+      # turns write-refusal into an OOMKill.
+      memory: 1536Mi
+
+  # The subchart's init container renders the config and the ACL file. Left
+  # unset it has no CPU request and no memory limit, which kube-linter rejects
+  # (unset-cpu-requirements / unset-memory-requirements).
   initResources:
     requests:
       cpu: 10m
@@ -186,12 +280,53 @@ redis:
     limits:
       cpu: 100m
       memory: 128Mi
-  # Tag subchart pods with our part-of label so the NetworkPolicy's
-  # default-deny + intra-chart allow cover them. podLabels lands on the
-  # pod template (what NetworkPolicy.spec.podSelector matches);
-  # customLabels lands on the StatefulSet itself for audit clarity.
-  customLabels:
-    app.kubernetes.io/part-of: genus-os
+
+  # OFF by default, deliberately. The exporter sidecar listens on 9121, but
+  # `networkPolicy.enabled: true` renders default-deny ingress and the only rule
+  # for these pods admits the cache port from the Python services — nothing
+  # admits 9121. Enabled without a matching rule it costs a container and
+  # delivers no metrics.
+  #
+  # To turn it on: add an ingress rule admitting 9121 from whatever scrapes this
+  # deployment (its namespace and pod labels are deployment-specific, so they do
+  # not belong in this chart), then set metrics.enabled here. Worth doing —
+  # `used_memory / maxmemory` is the signal that matters, because `noeviction`
+  # means a full cache refuses event-bus writes rather than evicting.
+  #
+  # Resources and securityContext below are kept ready for that.
+  metrics:
+    enabled: false
+    exporter:
+      # Unset, the sidecar has no CPU request and no memory limit, which
+      # kube-linter rejects (unset-cpu-requirements/unset-memory-requirements).
+      resources:
+        requests:
+          cpu: 10m
+          memory: 32Mi
+        limits:
+          cpu: 100m
+          memory: 64Mi
+      # The chart hardens its own Valkey containers but leaves the exporter's
+      # securityContext empty in this version (upstream hardens it by default
+      # only in the unreleased 1.0). Mirror the chart's `securityContext` so the
+      # sidecar is not the weak spot in an otherwise restricted pod, and so
+      # kube-linter's no-read-only-root-fs check passes. The exporter only
+      # scrapes over the network and writes nothing to disk.
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop:
+            - ALL
+        readOnlyRootFilesystem: true
+        runAsNonRoot: true
+        runAsUser: 1000
+
+  # Tag subchart PODS with our part-of label so the NetworkPolicy's default-deny
+  # + intra-chart allow cover them. NetworkPolicy.spec.podSelector matches pod
+  # labels, so `podLabels` is both sufficient and the only safe choice:
+  # `commonLabels` would also land on the chart's metrics Service, which already
+  # hardcodes `app.kubernetes.io/part-of: valkey` — two different values for one
+  # key in one labels block, and the manifest fails to parse.
   podLabels:
     app.kubernetes.io/part-of: genus-os
 
@@ -296,6 +431,24 @@ engine:
   env:
     ROBOTHOR_APPROVAL_FAILCLOSED_ENABLED: "1"
     ROBOTHOR_APPROVAL_MODE: observe
+  # Additional volumes for this component's pod, as lists of raw Kubernetes
+  # objects rendered verbatim with toYaml: `extraVolumes` entries go into
+  # spec.volumes (e.g. a persistentVolumeClaim for a plugin's state directory)
+  # and `extraVolumeMounts` entries into the container's volumeMounts. Each
+  # mount's `name` must match a volume; names must not collide with the
+  # chart's own (workspace, tmp, runtime-cache, db-ca, migration-api-token,
+  # google-workspace).
+  extraVolumes: []
+  extraVolumeMounts: []
+  # Google Workspace credentials for the gws_* tools (mail, calendar, chat).
+  # When enabled, the `engine-google` Secret's `credentials.json` key (an
+  # authorized-user OAuth file) is mounted read-only at /etc/genus/gws and
+  # GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE points at it. Declare
+  # vault.secrets.engine-google in the environment layer. The class is a file
+  # mount only: engine.secretRefs refuses it, so the refresh token never
+  # becomes an environment variable. See the chart README.
+  googleWorkspace:
+    enabled: false
   resources:
     requests:
       cpu: 500m
@@ -347,6 +500,9 @@ bridge:
     tls: []
     annotations: {}
   env: {}
+  # Additional volumes and mounts; see engine.extraVolumes.
+  extraVolumes: []
+  extraVolumeMounts: []
   resources:
     requests:
       cpu: 250m
@@ -391,6 +547,9 @@ orchestrator:
     tls: []
     annotations: {}
   env: {}
+  # Additional volumes and mounts; see engine.extraVolumes.
+  extraVolumes: []
+  extraVolumeMounts: []
   resources:
     requests:
       cpu: 250m
@@ -436,6 +595,9 @@ dashboard:
   env:
     NEXT_PUBLIC_OWNER_NAME: "there"
     NEXT_PUBLIC_AI_NAME: "Robothor"
+    # Marketplace host behind the Browse and per-agent links. Matches the
+    # CLI's PROGRAMMATIC_RESOURCES_URL default; a trailing slash is dropped.
+    NEXT_PUBLIC_PROGRAMMATIC_RESOURCES_URL: "https://programmaticresources.io"
     # AUTH_URL is the dashboard's PUBLIC origin and its source is
     # dashboard.ingress.host above — set it to "https://<that host>". It is
     # left unset here because the host is layer 3's to provide.
@@ -458,10 +620,17 @@ dashboard:
       enabled: true
       path: /api/live
       initialDelaySeconds: 20
+      # /api/live is process-only; 3 s absorbs a GC pause or a busy event
+      # loop without masking a hung process for long.
+      timeoutSeconds: 3
     readiness:
       enabled: true
       path: /api/ready
       initialDelaySeconds: 5
+      # /api/ready checks each backend and can wait ~5 s on one that is
+      # unreachable; a shorter timeout fails the probe before the check
+      # can report.
+      timeoutSeconds: 6
   podDisruptionBudget:
     enabled: true
     minAvailable: 1

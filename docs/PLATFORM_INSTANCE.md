@@ -4,11 +4,11 @@ Genus OS separates **platform code** (what ships to everyone) from **instance co
 
 ## Three Layers
 
-| Layer | What | Tracked in git? | Examples |
-|-------|------|-----------------|----------|
-| **Platform** | Core engine, tools, migrations, dashboard, docs | Yes | `robothor/`, `crm/`, `infra/`, `app/`, `docs/*.md` |
-| **Instance** | Identity, agent configs, learned skills, memory, secrets | No | `brain/`, `brain/skills/`, `docs/agents/*.yaml`, `local/`, `.env` |
-| **Runtime** | Session state, assembled prompts, tenant context | No (in-memory) | System prompts, warmup blocks, scratchpad |
+| Layer        | What                                                     | Tracked in git? | Examples                                                          |
+| ------------ | -------------------------------------------------------- | --------------- | ----------------------------------------------------------------- |
+| **Platform** | Core engine, tools, migrations, dashboard, docs          | Yes             | `robothor/`, `crm/`, `infra/`, `app/`, `docs/*.md`                |
+| **Instance** | Identity, agent configs, learned skills, memory, secrets | No              | `brain/`, `brain/skills/`, `docs/agents/*.yaml`, `local/`, `.env` |
+| **Runtime**  | Session state, assembled prompts, tenant context         | No (in-memory)  | System prompts, warmup blocks, scratchpad                         |
 
 A platform upgrade — a new wheel, or a new image tag — only touches Layer 1. Layers 2 and 3 are untouched.
 
@@ -77,6 +77,46 @@ Three mechanisms prevent instance data from leaking into platform code:
 
 3. **`DEFAULT_TENANT`** (`robothor/constants.py`) — All code uses `DEFAULT_TENANT` (from `ROBOTHOR_DEFAULT_TENANT` env var, default `"default"`) instead of hardcoding a tenant name.
 
+## This Repository Is Public
+
+Everything tracked here is world-readable. The platform/instance boundary above
+is therefore not only an architectural preference — it is the line between what
+ships as a product and what describes one organisation's private estate.
+
+**The boundary applies to prose, not just files.** Commit messages, pull request
+titles and bodies, release-note fragments, code comments and test docstrings are
+all published. A deployment detail scrubbed from a values file still leaks if it
+survives in the commit message that changed it.
+
+Keep the following out of anything tracked or written in a pull request, and
+describe them generically instead:
+
+| Instead of                                      | Write                                                   |
+| ----------------------------------------------- | ------------------------------------------------------- |
+| Another application's name from the same estate | "another application in the same namespace"             |
+| An issue-tracker id (`ABC-1234`)                | the behaviour, and why it changed (the one exception: the ticket key at the end of a PR title and commit subject, see `CLAUDE.md`) |
+| A deployment hostname                           | `<dashboard-host>`, or the values key that sets it      |
+| A cluster namespace or GitOps application name  | "the deployment namespace", "the deploying application" |
+| A secret-store path or database endpoint        | the values key, or the secret class name                |
+| A link to a private infrastructure repository   | the pattern itself, inline                              |
+
+Describing _our_ deployment is what the downstream, private infrastructure
+repository is for. This one describes the product.
+
+### The automated gate does not cover prose
+
+`scripts/check_instance_leak.py` (and its pre-commit hook) scan **changed files
+only**, and their patterns target personal data — home directories, emails,
+phone numbers, addresses. They will not catch a hostname, a namespace, an issue
+id, or a sibling application's name, and they never see a commit message or a
+pull request body at all. Those are on the author.
+
+If something has already been pushed to an open branch: edit the pull request
+body, reword the commits (`git filter-branch --msg-filter`), and
+`git push --force-with-lease` after confirming `git ls-remote` still matches
+your local head. Squash-merging means branch commit messages never reach the
+default branch, but they are public in the meantime.
+
 ## Operator Identity
 
 The operator (the human who owns this Genus OS instance) is a first-class concept, but their personal data never enters the platform repo.
@@ -88,12 +128,12 @@ The operator (the human who owns this Genus OS instance) is a first-class concep
 
 **Rules of thumb:**
 
-| I want to... | Do this | Not this |
-|--------------|---------|----------|
-| Know who the operator is | `get_owner_person(tenant_id)` | `search_people("<first-name>")` |
-| Send to the operator's email | `OwnerConfig.email` / `all_emails()` | Hardcode an email |
-| Check "is the speaker the operator?" | `OwnerConfig.matches_name(name)` | First-name string equality |
-| Refuse a write unless approved by the operator | `resolve_task()`'s `requires_human` path | Custom string checks |
+| I want to...                                   | Do this                                  | Not this                        |
+| ---------------------------------------------- | ---------------------------------------- | ------------------------------- |
+| Know who the operator is                       | `get_owner_person(tenant_id)`            | `search_people("<first-name>")` |
+| Send to the operator's email                   | `OwnerConfig.email` / `all_emails()`     | Hardcode an email               |
+| Check "is the speaker the operator?"           | `OwnerConfig.matches_name(name)`         | First-name string equality      |
+| Refuse a write unless approved by the operator | `resolve_task()`'s `requires_human` path | Custom string checks            |
 
 Legacy env vars `ROBOTHOR_OWNER_EMAIL` / `ROBOTHOR_OWNER_NAME` remain as a fallback for one release cycle; the loader emits a `DeprecationWarning` when it falls back.
 
@@ -115,10 +155,10 @@ Agent manifests and instructions are instance data — they stay in `docs/agents
 
 Two sub-directories of `docs/agents/` are instance-owned and gitignored too:
 
-| Directory | Written by | What it holds |
-|-----------|-----------|---------------|
-| `docs/agents/retired/` (instance) | `DELETE /api/agent-manifests/{id}` | Manifests taken off the fleet. Moved, never unlinked — re-instating an agent is a `mv` back. |
-| `docs/agents/.history/<id>/` | every manifest write | The five previous versions of that agent's manifest, newest last. A convenience over `git`, not the backup story. |
+| Directory                         | Written by                         | What it holds                                                                                                     |
+| --------------------------------- | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `docs/agents/retired/` (instance) | `DELETE /api/agent-manifests/{id}` | Manifests taken off the fleet. Moved, never unlinked — re-instating an agent is a `mv` back.                      |
+| `docs/agents/.history/<id>/`      | every manifest write               | The five previous versions of that agent's manifest, newest last. A convenience over `git`, not the backup story. |
 
 Neither is visible to the engine: `load_manifest_dir` globs `*.yaml` one level
 deep and non-recursively, so a retired or historical manifest can never be
@@ -130,10 +170,10 @@ Skills split the same way, and for the same reason: an agent writes them while
 it works, so they are instance data even though the platform ships a library of
 its own.
 
-| Directory | Layer | Tracked | Written by |
-|-----------|-------|---------|------------|
-| `agents/skills/` | Platform | Yes | Humans, in a pull request. The engine only ever reads it. |
-| `brain/skills/` (`ROBOTHOR_INSTANCE_SKILLS_DIR`) | Instance | No | `create_skill`, `update_skill`, `skill_archive`, `genus import` |
+| Directory                                        | Layer    | Tracked | Written by                                                      |
+| ------------------------------------------------ | -------- | ------- | --------------------------------------------------------------- |
+| `agents/skills/`                                 | Platform | Yes     | Humans, in a pull request. The engine only ever reads it.       |
+| `brain/skills/` (`ROBOTHOR_INSTANCE_SKILLS_DIR`) | Instance | No      | `create_skill`, `update_skill`, `skill_archive`, `genus import` |
 
 The engine reads the bundled directory first and the instance directory second,
 so a skill in the instance **shadows** a bundled one of the same name. That makes
@@ -186,13 +226,13 @@ Which layer a skill belongs to is recorded in its `meta.json` as
   It walks `SKILL.md`, not `meta.json`, so nothing is invisible to it, and it
   moves only what says whose it is:
 
-  | Bucket | What it means |
-  |--------|---------------|
-  | `moved` | `origin: instance`, or a pre-marker skill carrying `auto_generated` / `write_origin` / `is_agent_created`. |
-  | `skipped` | `origin: platform`. The platform's own. |
-  | `unmarked` | A `meta.json` with no origin and no legacy marker — left in place; nothing says whose it is. |
+  | Bucket         | What it means                                                                                                                                                                                                                    |
+  | -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+  | `moved`        | `origin: instance`, or a pre-marker skill carrying `auto_generated` / `write_origin` / `is_agent_created`.                                                                                                                       |
+  | `skipped`      | `origin: platform`. The platform's own.                                                                                                                                                                                          |
+  | `unmarked`     | A `meta.json` with no origin and no legacy marker — left in place; nothing says whose it is.                                                                                                                                     |
   | `needs-review` | A `SKILL.md` with no `meta.json` at all — left in place, for the operator to place by hand. Most bundled skills are here; so would be a stray written before `meta.json` existed, which is why the pass will not decide for you. |
-  | `conflicts` | The instance already has that name. Nothing is overwritten. |
+  | `conflicts`    | The instance already has that name. Nothing is overwritten.                                                                                                                                                                      |
 
 ## Upgrade Path
 

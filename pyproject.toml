@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "genusos"
-version = "1.108.2"
+version = "1.117.0"
 description = "Self-hosted AI agent operating system: deterministic engine, plugin-style skills and connectors, multi-tenant CRM and memory. Everything is a plugin."
 readme = "PYPI_README.md"
 license = "MIT"
@@ -46,10 +46,35 @@ dependencies = [
     "requests~=2.31",
     "pyyaml~=6.0",
     # Floor pins past the LiteLLM SQL-injection advisory (GHSA-vh4m-vp44-3rgq,
-    # fixed in 1.61.17). No upper cap below 2.0: litellm 1.84+ relaxed its
-    # transitive aiohttp pin again, so the latest 1.x (1.87.0) resolves cleanly
-    # with aiohttp>=3.13.4. The 1.84 floor also clears later 2026 advisories.
-    "litellm>=1.84.0,<2.0",
+    # fixed in 1.61.17); the 1.84 floor also clears later 2026 advisories.
+    # Ceiling below 1.105.3, for two releases that broke us (main's CI went red
+    # on 2026-10-20 and nothing released until this cap):
+    # * 1.106.0 imports the `mcp` package on every completion call
+    #   (main.completion -> responses.mcp -> proxy mcp_server.catalog ->
+    #   `from mcp.types import ...`) without declaring it, so a core install
+    #   cannot make a single LLM call: "No module named 'mcp'".
+    # * 1.105.3 dropped the openrouter/anthropic/* rows from its bundled
+    #   catalog; claude-sonnet-4.6 and claude-opus-4.7 then resolve through a
+    #   family wildcard to a 200,000 window. OpenRouter serves both at
+    #   1,000,000 (api/v1/models, 2026-10-23); test_model_registry_drift
+    #   catches the disagreement.
+    # The host venv runs 1.97.0. Raise the ceiling only after the fresh-install
+    # gate and the drift test pass on the new release.
+    # Floor at 1.100.4, the first release on its line carrying the fix for
+    # CVE-2026-114612. The later lines were fixed only in 1.101.3, 1.102.2
+    # and 1.103.1, so the releases before those inside the range (1.101.0-2,
+    # 1.102.0-1, 1.103.0) are excluded by name. Every one of them fails
+    # pip-audit in the `security` gate, so no resolve, fresh or held back by
+    # another constraint, may pick one.
+    "litellm>=1.100.4,<1.105.3,!=1.101.0,!=1.101.1,!=1.101.2,!=1.102.0,!=1.102.1,!=1.103.0",
+    # litellm authenticates `vertex_ai/*` models with a Google service account
+    # through google-auth, but declares it only inside its `google` extra,
+    # which drags in all of google-cloud-aiplatform. Core, not an extra: an
+    # instance whose fleet runs on Vertex AI (VERTEXAI_CREDENTIALS, the
+    # service-account JSON) otherwise fails every call with "Google Cloud SDK
+    # not found" while the OpenAI and OpenRouter paths work, and nothing in
+    # the image build or the doctor says why.
+    "google-auth>=2.40,<3",
     "aiohttp>=3.14.3",
     # `view_image` decodes and downscales before an image reaches a model.
     # A core dependency, not an extra: an agent that cannot look at a picture
@@ -57,6 +82,15 @@ dependencies = [
     # check must be a real decode (a text file named .png must not be sent
     # to a model as an image).
     "Pillow>=10.0",
+    # `read_file` and the Telegram intake turn documents into text
+    # (robothor/engine/file_extract.py). Core, for the same reason as Pillow:
+    # an assistant that cannot open the PDF, Word document, spreadsheet or deck
+    # the operator sent is missing a basic capability. Each is imported lazily
+    # and a missing one degrades to a message naming the package.
+    "pypdf>=6.0",
+    "python-docx>=1.1",
+    "openpyxl>=3.1",
+    "python-pptx>=1.0",
     # litellm's aiohttp transport imports orjson and does not declare it.
     # The host venv happens to run a litellm new enough not to need it, so
     # this only ever bit the CONTAINER: the production image resolved 1.92.0

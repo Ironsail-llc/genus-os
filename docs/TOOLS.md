@@ -74,7 +74,7 @@ mailbox is empty when it is not.
 
 | You want | Use | What it is |
 |---|---|---|
-| Live email — what is in the mailbox right now | `gws_gmail_search`, then `gws_gmail_get` | The real Gmail account, through the `gws` CLI. The only tools that see an unread message. |
+| Live email — what is in the mailbox right now | `gws_gmail_search`, then `gws_gmail_get` (and `gws_gmail_get_attachment` to open a file attached to it) | The real Gmail account, through the `gws` CLI. The only tools that see an unread message. |
 | The CRM's record of past correspondence with a contact | `list_messages`, `get_conversation` | Ingested into the CRM by the email pipeline. Can be hours or days behind, and holds no unread state. |
 | The agent's own notification queue | `get_inbox`, `ack_notification` | Notifications other agents and the engine raised for this agent. Not email at all. |
 
@@ -367,7 +367,7 @@ engine unit, `.genus/` is gitignored, and the other writable home
 
 ### Google Workspace (`gws_*`)
 
-Eleven tools, all shelling out to the `gws` CLI with the instance's Workspace
+Fifteen tools, all shelling out to the `gws` CLI with the instance's Workspace
 credentials. Every one of them is refused on a benchmark run — reads included:
 a graded agent that can read the operator's mail can put the operator's mail in
 its answer.
@@ -375,7 +375,8 @@ its answer.
 | Tool | Returns |
 |---|---|
 | `gws_gmail_search` | One entry per matching message: `id`, `thread_id`, `date`, `from`, `to`, `subject`, `snippet`, `labels`. Already readable — you usually do not need `gws_gmail_get` after it. Drops results rather than letting them be cut (`truncated: true` says so). |
-| `gws_gmail_get` | Headers (`from`/`to`/`cc`/`date`/`subject`/`message_id`), `labels`, `snippet`, and a **decoded** `body_text` — plain text, never base64. Attachments listed by `filename`, `mime_type`, `size_bytes`, never inlined. `body_truncated` + `body_chars` when it had to cut. A `thread_id` returns every message in the thread, oldest first. |
+| `gws_gmail_get` | Headers (`from`/`to`/`cc`/`date`/`subject`/`message_id`), `labels`, `snippet`, and a **decoded** `body_text` — plain text, never base64. Attachments listed by `filename`, `mime_type`, `size_bytes` and `attachment_id`, never inlined. `body_truncated` + `body_chars` when it had to cut. A `thread_id` returns every message in the thread, oldest first. |
+| `gws_gmail_get_attachment` | Downloads one attachment (`message_id` + `attachment_id` from `gws_gmail_get`) and returns `path`, `filename`, `mime_type`, `size_bytes`, `format` and, for a PDF, Word, Excel, PowerPoint or text file, its `text` (up to 50,000 characters; `truncated` says if it was cut). An image returns its path to pass to `view_image`. See [Email attachments](#email-attachments). |
 | `gws_gmail_reply` | The sent message id and thread id. Threads correctly, replies to all original recipients, refuses a second reply on the same thread. **Use this, not `gws_gmail_send`, for anything that answers an existing thread.** |
 | `gws_gmail_send` | The sent message id and thread id. New conversations only. |
 | `gws_gmail_modify` | The message id and its labels after the change. Mark read/unread, archive, add or remove labels. |
@@ -388,6 +389,31 @@ its answer.
 | `gws_chat_send` | The created message's resource name. |
 | `gws_chat_list_spaces` | Each space's resource name and display name. |
 | `gws_chat_list_messages` | Each message's sender, time and text, newest last. |
+
+#### Email attachments
+
+`gws_gmail_get_attachment` works on either mailbox provider. On Gmail the
+`attachment_id` is the MIME part id (`"1"`, `"0.2"`): Gmail re-issues its own
+`attachmentId` on every read, so that one cannot be matched later; the raw
+`attachmentId` is accepted too. On Microsoft 365 it is the Graph attachment
+id. Only real files download: an Outlook attached message (`itemAttachment`)
+or cloud link (`referenceAttachment`) is refused with a sentence saying which
+it is.
+
+The file is kept exactly like a Telegram attachment, through the same code
+(`robothor/engine/attachments.py`): at
+`<workspace>/inbox/email/<provider>/<YYYY-MM-DD>/<id>-<name>`, owner-only,
+deduplicated per message and attachment, pruned with the rest of the inbox
+after `inbox_retention_days`. The 20 MB ceiling is checked against the size
+the provider reports before anything is downloaded, and against the bytes
+after. A file named like a credentials file (`.env`, `id_rsa`, ...) is saved
+under `secret/` and its contents are never returned — `read_file` and
+`send_file` refuse it too. Text comes from the same extractor `read_file` uses
+(see [`read_file`](#read_file-documents-not-just-text)).
+
+The tool writes only that local file and changes nothing in the mailbox, so it
+is classified read-only (plan mode may use it). Like every `gws_*` tool it is
+refused on a benchmark run.
 
 #### Errors
 
@@ -511,14 +537,16 @@ though it has the same author.
 
 ### pr-reviewer suite (`pr_review_*`)
 
-Three opt-in tools that hold the deterministic halves of the pr-reviewer agent
+Five opt-in tools that run the pull-request reviewer without a model
 (docs/PR_REVIEWER.md). They are refused on a benchmark run.
 
 | Tool | Purpose |
 |---|---|
-| `pr_review_intake` | Poll the configured repositories (`ROBOTHOR_PR_REVIEW_REPOS`), pull requests requesting `ROBOTHOR_PR_REVIEW_BOT_LOGIN`'s review, and the Chat spaces (`ROBOTHOR_PR_REVIEW_CHAT_SPACE`, comma-separated); claim new links with a reaction; file one `pr-review` CRM task per pull-request head. No model; one run per tenant at a time (a concurrent run returns `skipped: locked`). `count_only: true` only reports the queue (the `pr-review-run` workflow). Returns counts including `open_tasks` and `queued_tasks`. Run by the `pr-review-intake` workflow. |
+| `pr_review_intake` | Poll the configured repositories (`ROBOTHOR_PR_REVIEW_REPOS`), pull requests requesting `ROBOTHOR_PR_REVIEW_BOT_LOGIN`'s review (in any repository the token can read; one it cannot read is listed under `unreadable`), and the Chat spaces (`ROBOTHOR_PR_REVIEW_CHAT_SPACE`, comma-separated); claim new links with a reaction; file one `pr-review` CRM task per pull-request head. No model; one run per tenant at a time (a concurrent run returns `skipped: locked`). `count_only: true` only reports the queue (the `pr-review-run` workflow). Returns counts including `open_tasks` and `queued_tasks`. Run by the `pr-review-intake` workflow. |
 | `pr_review_prepare` | Fetch the head into a local clone, build the review prompt (repository rules read from the base branch) and start the read-only Claude Code review job itself; returns its `job_id`, bound to the pull request. `skip: true` means nothing to review; `already_started: true` returns the job a previous call started; `resumed: true` returns a finished job whose post failed, to finalize again without a new review. |
 | `pr_review_finalize` | For the `job_id` prepare bound, and no other: read the job's structured output from the job itself, validate and redact it, recompute the verdict, post through the `github_create_review` handler (once — a repeat call returns the posted review), reply on our previous threads, resolve our own threads on approval, announce in the Chat thread and record the state. Returns `review_url`. `dismiss: true` closes an ambiguous re-review request that was not one. |
+| `pr_review_work` | The review worker: take the open `pr-review` tasks oldest first, up to `ROBOTHOR_PR_REVIEW_WORKERS` (3) at once, and run each through `pr_review_prepare`, the job and `pr_review_finalize`, then resolve it with `<VERDICT>: <review_url>` or `<status>: <error>`. Jobs start as `ROBOTHOR_PR_REVIEW_AGENT`, whose manifest names `GITHUB_TOKEN`. Re-reads the queue every 30 s, takes nothing new after 45 min, returns per-task `outcomes`, sends finalize's digest lines to Telegram and rewrites the status file. Run by the `pr-review-run` workflow. |
+| `pr_review_status` | Read-only report, no model: `now` (in flight, the queue in order, free slots), the `window` (`since_hours`, 24 by default: reviews by verdict, request-to-answer latency median and p90, failures, retries, "No changes?" and "Want a re-review?" replies, and `reviews`: each posted review newest first with its pull request, title, verdict and link, up to 50, `reviews_not_listed` counting the rest), `problems` (stuck reviews, failures out of retries, dropped requests, the oldest queued request) and `alerts`, one line each, empty when all is well. `pr=` adds one pull request's state and history. |
 
 **Choosing.** A pr-reviewer agent never calls `github_create_review` itself:
 `pr_review_finalize` is the only path that applies the policy (any blocker or
@@ -526,6 +554,26 @@ major means `REQUEST_CHANGES`, or `COMMENT` with
 `ROBOTHOR_PR_REVIEW_BLOCKING_EVENT=COMMENT`; `APPROVE` only when the model
 approved and nothing blocking remains; the optional ticket rule). Use the
 `github_*` review tools directly only for a one-off review outside the suite.
+For "how are reviews going?" or "where is #123?", call `pr_review_status`; to
+queue or re-queue one pull request, `pr_review_intake(pr=...)`.
+
+### n8n automations (`n8n_*`)
+
+Two read-only tools over the snapshot the n8n monitor keeps
+([n8n monitoring](integrations/n8n.md)). They answer from the database, so they
+cost no n8n call, still answer while n8n is down, and match the dashboard.
+With the monitor off they return `status: not_configured` and nothing else.
+
+| Tool | Purpose |
+|---|---|
+| `n8n_list_workflows` | The n8n workflows with `failures_24h`, `failures_7d`, `last_failure_at`, `last_error`, a link to each and `last_failure_url` (the newest failed execution, empty when there is none), as of the last poll, plus the section `status` (`ok`, `warn`, `unknown`) and `last_ok_at`. `active_only` (default true) hides switched-off workflows; `query` matches a name or tag, case-insensitive. |
+| `n8n_recent_failures` | Failed executions in the last `hours` (default 24, max 720), newest first, up to 100: workflow id and name, `error_message`, `mode`, start and stop times and a link to the execution in n8n. `workflow_id` narrows it to one workflow. |
+
+**Choosing.** These are about the operator's **n8n** automations, not Genus
+workflows (`docs/workflows/*.yaml`) or agent runs. When a `workflow_failure`
+notification carries `source: n8n`, answer from `n8n_recent_failures` and give
+the operator the execution link: the agent cannot rerun or edit an n8n
+workflow, and neither tool calls n8n.
 
 ### Vision: `view_image` and `analyze_image`
 
@@ -1115,6 +1163,187 @@ the native workflow runner IS that role; its gate is the handler's
 service-workflow identity check. See
 [Native sales intelligence](SALES_INTELLIGENCE.md).
 
+### Dev-team metrics: `github_*`, `jira_search`, `render_devops_report`
+
+These are the interactive tools; the weekly report itself is built by
+deterministic scripts (see [Dev team report](DEVOPS_REPORT.md)), and its
+numbers never come from an agent.
+
+- `github_pr_stats` returns `merged_total` (every PR the search found) next to
+  the per-author counts, and lists any PR whose detail fetch failed in
+  `detail_fetch_failures` with `incomplete: true` — a failed fetch is never a
+  silently smaller count.
+- `github_review_stats` counts only reviews **submitted** inside the `days`
+  window, never self-reviews or pending reviews, over every PR updated in the
+  window (open or closed). A PR whose reviews could not be read is listed in
+  `review_fetch_failures` with `incomplete: true`.
+- `jira_search` pages: pass a result's `next_page_token` back as
+  `next_page_token` until `is_last` is true. One call returns at most 100.
+- JIRA writes: `jira_create_issue` (Task by default; `parent_key` for an epic),
+  `jira_add_comment`, `jira_transition_issue` (by target status or transition
+  name; an unknown status returns the reachable ones) and `jira_update_issue`.
+  Plain-text bodies become Atlassian Document Format, blank lines splitting
+  paragraphs. They are opt-in (`OPT_IN_TOOLS`): an agent gets them only by
+  naming them in `tools_allowed` or, on top of the default set, in
+  `tools_opt_in`. Migration 153 denies them to the `user` and `member` roles;
+  `service` and the operator's roles keep them. Within those gates there is no
+  project allow-list: the API token's Jira permissions decide. Issue and parent
+  keys must look like `ABC-123` (or a numeric id) and project keys like `ABC`.
+  A create that times out after sending says the issue may exist and to
+  `jira_search` for it before retrying. They are external side effects, so
+  benchmark runs never get them and each handler refuses one.
+- `render_devops_report` takes the week's `people.json` aggregate with the
+  analyst's narrative under `analyst`; the old free-form analyst report is
+  refused.
+
+### The instance's own settings: `config_get`, `config_set`, and reading an env file
+
+The operator's assistant can read and change the instance's declared settings
+without `exec`. Both tools call the same `robothor.settings.operator` functions
+as `genus config` and the dashboard, so every surface gives the same answer.
+
+- `config_get` takes `key` (one setting, e.g. `ROBOTHOR_LOG_LEVEL`) or `prefix`
+  (every setting whose name starts with it, at most 100). It returns the
+  effective value, its `source` (default, `config.yaml`, environment, runtime
+  flag), the description, and whether a change needs a restart. A secret
+  comes back as `<set, b2:…>` or `<unset>`, never as its value.
+- `config_set` takes `key`, `value` and optionally `apply`. The value is
+  checked against the setting's declared type and written where the setting
+  lives: `config.yaml`, or the flag store for a governed flag. The reply lists
+  the units that need a restart, and warns when an environment variable will
+  keep winning over `config.yaml`. A credential is refused, and the refusal
+  does not echo it back; store credentials with `vault_set`. `apply=true` runs
+  `genus config set --apply` through the authenticated host-exec service,
+  because the engine process cannot write `/etc`. That writes the systemd
+  drop-in and schedules the restart 15 s out. The host-exec service is only
+  available to the verified owner on a top-level main run. Anywhere else,
+  `apply=true` returns an error saying it needs host exec.
+- Both tools are **owner-only**. The handler requires a verified identity with
+  role `owner` in the run's tenant and refuses benchmark runs. RBAC also
+  denies both tools to every other role (migration 152).
+
+**Which to use.** For "what is X set to and why", use `config_get`. Use
+`read_file` on the env file only to see the file itself. A plain dotenv
+file (`.env`, `.env.local`, `robothor.env`, `connectors.env`, and the instance
+env file `ROBOTHOR_ENV_FILE`) is no longer refused to the owner: a verified
+owner identity in the run's own tenant, outside a benchmark run, the same
+rule as `config_get`. Every other caller (sub-agents, cron and service runs,
+other roles, benchmarks) still gets the refusal. For the owner it comes back with every
+key and every non-secret value visible, and every secret value masked as
+`****` plus its last four characters, or `****` alone for a short value. A
+value counts as secret when its key says so (a declared secret setting, or
+a name holding `TOKEN`, `SECRET`, `PASSWORD`, `KEY`, `AUTH`, `COOKIE`,
+`PRIVATE`, `DSN` …) or when the value looks like a credential (vendor token
+shapes, a URL carrying `user:password@`). These checks use the shared
+redactors. A comment is shown only when it is a commented-out `KEY=VALUE`
+line, masked by the same rules; any other comment text is replaced by
+`# [comment hidden]`, since free text can hold a credential no rule
+recognises. SOPS-encrypted files, `secrets*` files, key files (`*.pem`,
+`id_rsa` …), files under secret directories, and any body that is not plain
+`KEY=VALUE` lines are still refused. `exec` checks are unchanged:
+`cat robothor.env` is still refused.
+
+### Workflows: `list_workflows`, `run_workflow`, `workflow_runs`
+
+An agent can start the instance's declared workflows and report on them from a
+chat, instead of asking the operator to open the dashboard.
+
+- `list_workflows` returns each loaded workflow: id, name, description, its
+  triggers (cron schedule, or the stream and event type it listens on), the
+  last run's status, start time and trigger, and how many runs failed or timed
+  out in the last 7 days.
+- `run_workflow` takes `workflow_id`, an optional `payload` object and
+  `wait_seconds` (0–120). The run's steps see the payload as
+  `{{ event.payload.<key> }}`, the same shape a hook-triggered run gets. The run
+  always goes on in the background; the call only waits for it. It returns
+  `{status: "started", run_id}` while the run is still going, `{status, run_id,
+  error_message}` once it has finished, `{status: "already_running"}` when a
+  run of that workflow is in progress, and `{error: "unknown_workflow"}` for an
+  id that is not loaded. With `wait_seconds: 0` it still waits about 2 seconds,
+  so a run refused at once is not reported as started. A run that stops at an
+  approval step returns `awaiting_approval`; it goes on once someone decides
+  (`list_pending_approvals`). A workflow normally triggered by a hook gets only
+  `event.payload` when started this way: there is no `event.type` or
+  `event.stream`, so a step that reads either finds nothing there.
+  A caller whose tenant is not the engine's own gets
+  `{error: "workflow_tenant_mismatch", run_tenant}`, because the run would be
+  recorded under a tenant the caller cannot read.
+- `workflow_runs` takes `workflow_id` and `limit` (default 10, at most 50) and
+  returns recent runs, newest first, with each step's status.
+
+The run is recorded with trigger type `agent` and trigger detail
+`agent:<agent id>:<agent run id>`. It runs as the workflow, exactly as a cron
+or hook run does: under `service:workflow:<workflow id>` with the `service`
+role, and in a fresh context, with none of the calling agent run's runtime
+state. Its steps never act as the chat user or the calling agent, so a tool
+that accepts only the workflow's own identity works the same whoever started
+the run. The caller is recorded only in that trigger detail and in the
+tool-call audit of the `run_workflow` call. Run history is always limited to
+the caller's tenant. `list_workflows` and `workflow_runs` are read-only;
+`run_workflow` is not, and benchmark runs get none of the three.
+
+The three tools belong to no tool group. `run_workflow` is opt-in: an agent is
+offered it only when its manifest names it, in `tools_allowed` or, for an agent
+with no `tools_allowed` list, in `tools_opt_in`. The two reads are offered to an
+agent with no `tools_allowed` list; an agent with one must name each tool it
+should have. Migration 157 denies `run_workflow` to the `user` and `member`
+roles, as the HTTP route it mirrors needs `engine:control`. `owner`, `admin`
+and `service` keep it, so the operator's chat and an unattended agent that
+names it can both start workflows. This permission is the whole gate: because
+the run takes the workflow's identity, not the caller's, whoever may call
+`run_workflow` may start any loaded workflow in its tenant. A tenant that wants it back for a role adds
+a tenant-scoped `role_permissions` row.
+
+**Which to use.** Use `run_workflow` when the work is a workflow that is already
+declared: a fixed, repeatable pipeline with its own steps, timeout and run
+history. Use `spawn_agent` for open-ended work that one agent should reason
+through.
+
+### Knowledge base (`kb_*`)
+
+Curated reference documents, grouped in collections named `<plugin>/<topic>`
+(`helpdesk/policies`). Each tenant has its own collections.
+
+| Tool | Use |
+|---|---|
+| `kb_search` | Hybrid search (vector + keyword, RRF) within one `collection`. Returns chunks with `doc_id`, `title`, `text`, `score`, `source_uri`. Read-only. |
+| `kb_list_collections` | Which collections exist, with document and chunk counts. Read-only. |
+| `kb_upsert_document` | Add or replace a document. An identical re-send is `unchanged`; a changed one replaces its chunks and bumps `version`. |
+| `kb_delete_document` | Remove a document and its chunks. |
+
+**Which to use.** Use `kb_search` for curated reference documents scoped to a
+collection, and `search_memory` for the agent's own remembered facts.
+`kb_search` never returns memory facts, and `search_memory` never returns
+knowledge-base documents. The writes are refused in a benchmark run. How
+collections are named and how documents are versioned:
+[Knowledge Base](knowledge-base.md).
+
+### What plugins contribute: `plugins_overview`
+
+`plugins_overview` takes no arguments and lists every installed plugin:
+
+- `name`, `version`, and `state` (`loaded`, `failed`, `disabled`, or
+  `assets only` for a plugin that ships workspace files and no entry point);
+- `tools`: each tool the plugin's manifest declares, with the description from
+  its registered schema (empty when no schema is registered);
+- `checks`: the doctor check ids it declares;
+- `agents`: `{id, name, schedule}` for each agent the plugin installed, from the
+  asset ledger and every `installed.yaml` entry with `source: plugin:<dist>`.
+  `schedule` is the manifest's cron, or `null`;
+- `workflows`: `{id, name, triggers}` for each workflow it copied into
+  `docs/workflows/`; a trigger reads like `cron 0 7 * * *` or
+  `hook email:email.new`;
+- `patches`: ids of existing agent manifests it patched;
+- `files`: every other workspace-relative file it wrote.
+
+A `warnings` list appears when the asset ledger or `installed.yaml` cannot be
+read; the plugins the loader reports are still listed. The tool is read-only.
+
+**Which to use.** Use `plugins_overview` for "what does plugin X give us?" or
+"which plugin ships agent or workflow Y?". Use `tool_search` to find a tool by
+what it does, whatever provides it. [Plugins](PLUGINS.md#seeing-what-a-plugin-shipped)
+covers the same data on the dashboard and the admin API.
+
 ### Everything else
 
 The full registry is large and changes with the release; `tool_search` over the
@@ -1125,12 +1354,35 @@ agent's own allow-set is the authoritative answer. The families:
 | Files and shell | `read_file`, `write_file`, `list_directory`, `exec`, [`execute_code`](#execute_code-calling-tools-from-inside-python) |
 | Web | `web_fetch`, `web_render`, `web_search`, `browser` |
 | Memory | `search_memory`, `memory_block_read`, `memory_block_write`, `store_memory` |
+| Knowledge base | [`kb_search`, `kb_upsert_document`, `kb_delete_document`, `kb_list_collections`](#knowledge-base-kb_) |
 | CRM | `search_records`, `get_person`, `create_task`, `list_my_tasks`, `resolve_task` |
 | Notifications | `get_inbox`, `ack_notification`, `send_notification` |
 | Skills | `list_skills`, `invoke_skill` |
+| Plugins | [`plugins_overview`](#what-plugins-contribute-plugins_overview) |
 | Sub-agents | `spawn_agent`, `spawn_agents` (only with `can_spawn_agents`) |
+| Workflows | [`list_workflows`, `run_workflow`, `workflow_runs`](#workflows-list_workflows-run_workflow-workflow_runs) |
 | Vision | `view_image`, `analyze_image` (image files — see above); `look`, `who_is_here` (a real camera) |
 | Desktop | `desktop_*` (a real screen) |
+| n8n automations | `n8n_list_workflows`, `n8n_recent_failures` (the n8n monitor's snapshot — see above) |
+
+### `read_file` — documents, not just text
+
+`read_file` returns a text file as it is, and turns the common document formats
+into text: PDF (pypdf; the `pdftotext` command, when installed, is tried
+instead if pypdf is missing, raises on a malformed file or finds no text),
+Word `.docx` and macro-enabled `.docm` (paragraphs, tables and body-level
+content controls in document order; macros are never run), Excel `.xlsx` /
+`.xlsm` (every sheet, rows tab-separated, capped per sheet) and PowerPoint
+`.pptx` / `.pptm` (text per slide, including grouped shapes, with speaker
+notes). Extraction stops once the 50,000-character cap is reached, so a long
+document is not parsed whole: such a result ends with an
+`[... extraction stopped at ...]` note and carries `"truncated": true`, and its
+`chars` is the length returned, not the document's. The result carries a
+`format` field. An image returns a
+pointer to `view_image`; any other binary file returns its size and guessed MIME
+type instead of a decode error. Telegram attachments in these formats are
+extracted into the agent's first turn by the same code
+(`robothor/engine/file_extract.py`). Secret-path refusals run first, unchanged.
 
 ---
 
@@ -1170,7 +1422,9 @@ names that appear in its instruction and bootstrap files but are absent from
 schema. Both halves are silent in production: the agent cannot see its own
 manifest, so a tool it was told to use simply stops working and it finds
 another way; and an unresolvable name is dropped after one journald warning.
-Results name agents and tools, never instruction text.
+Results name agents and tools, never instruction text. "Registered" means a
+built-in, an adapter route, or a tool a loaded plugin declares; a disabled or
+failed plugin's tools still resolve to nothing.
 
 **`calendar.operator_calendar_writable`** (required, and skipped entirely on an
 instance where no agent holds a calendar tool) — the instance's Google account

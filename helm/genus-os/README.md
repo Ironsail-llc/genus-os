@@ -129,6 +129,7 @@ boundary. Keep them limited to these classes:
 | `engine-providers` | LLM, delivery, and tool-provider tokens required by Engine only — including `BRAVE_SEARCH_API_KEY`, which `web_search` prefers over scraped engines (from a datacenter IP most of those are blocked, so in-cluster this key is the reliable path) |
 | `bridge-integrations` | Bridge webhook/integration tokens only |
 | `orchestrator-providers` | retrieval/reranking provider tokens required by Orchestrator only |
+| `engine-google` | `credentials.json` only: an authorized-user OAuth file (`type`, `client_id`, `client_secret`, `refresh_token`) for the `gws_*` tools. Engine only, and only as a file mount through `engine.googleWorkspace`: `engine.secretRefs` refuses it, so the refresh token never becomes an environment variable. Declare it only where `engine.googleWorkspace.enabled` is on. |
 
 Never put raw PAN/CVV, customer payment data, JWT signing material, database
 credentials, or provider tokens into a dashboard-readable path. Owner/entity
@@ -211,6 +212,92 @@ ready.
 configuration. Legacy `/health` and `/liveness` endpoints remain available for
 older integrations.
 
+## Google Workspace credentials
+
+The engine's mail, calendar and chat tools (`gws_*`) run the `gws` CLI, which
+the image ships at a pinned version (`Dockerfile.python`, the `gws` stage). The
+CLI needs an authorized-user OAuth file for the mailbox the assistant uses:
+
+| Value | Default | Meaning |
+|-------|---------|---------|
+| `engine.googleWorkspace.enabled` | `false` | Mount the `engine-google` Secret's `credentials.json` read-only at `/etc/genus/gws/` and set `GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE` to it. `GOOGLE_WORKSPACE_CLI_CONFIG_DIR` goes to `/app/.cache/gws`, on the writable `runtime-cache` volume, because the CLI rewrites a token cache and the root filesystem is read-only. |
+
+```yaml
+vault:
+  secrets:
+    engine-google: {path: genus-os/production/engine-google}
+engine:
+  googleWorkspace:
+    enabled: true
+```
+
+Enabling it without `vault.secrets.engine-google` fails at template time. The
+mount itself is `optional`: until the Secret exists the engine starts normally
+and the `gws_*` tools return an `auth` error, so turning the switch on before
+the credentials are written cannot hold the engine in `ContainerCreating`. VSO
+restarts the engine when the credentials rotate.
+
+**Minting the file.** In a Google Cloud project owned by the Workspace, enable
+the Gmail API (and Calendar or Chat if those tools are used), set the OAuth
+consent screen to **Internal** (an External app in testing mode expires refresh
+tokens after seven days), and create an OAuth client of type *Desktop app*.
+Then, on a workstation, with the same `gws` version the image pins:
+
+```sh
+gws auth login            # sign in as the assistant's mailbox, grant the scopes
+gws auth export --unmasked > credentials.json
+vault kv put <mount>/<path>/engine-google credentials.json=@credentials.json
+rm credentials.json
+```
+
+Set `ROBOTHOR_AI_EMAIL` to the same mailbox in `engine-providers`: the reply
+tools use it to tell the assistant's own address apart from the people on a
+thread. Check from the pod with
+`gws gmail users getProfile --params '{"userId":"me"}'`.
+
+**Egress.** `gws` calls `oauth2.googleapis.com` (token refresh),
+`gmail.googleapis.com`, `www.googleapis.com` (Calendar) and
+`chat.googleapis.com` (Chat) on 443. It loads each API's discovery document
+from that same host and caches it under `GOOGLE_WORKSPACE_CLI_CONFIG_DIR`.
+`networkPolicy.egress.destinations.https` matches CIDRs, not hostnames, and
+Google's API ranges are large and move, so in practice put these hosts in the
+egress proxy's allowlist, set `HTTPS_PROXY` in `engine.env`, and allow the
+proxy's CIDR in `destinations.https`. A NetworkPolicy that drops the packets
+shows up as the `timeout` hint; a proxy that refuses a host usually answers at
+once and shows up as `auth` (a 403) or `unclassified`. A `Mail service not enabled` error
+instead means the mailbox has no Gmail license in the Workspace admin console;
+the credentials are fine and start working once Gmail is on.
+
+## Extra volumes
+
+Each Python workload can mount additional volumes, rendered verbatim with
+`toYaml` into the same lists as the chart's own. The order within a list is
+not part of the contract (on the engine they follow `workspace`), so refer to
+entries by `name`, not by position:
+
+| Value | Default | Meaning |
+|-------|---------|---------|
+| `engine.extraVolumes` | `[]` | Raw Kubernetes `volume` objects added to the engine pod's `spec.volumes`. |
+| `engine.extraVolumeMounts` | `[]` | Raw Kubernetes `volumeMount` objects added to the engine container's `volumeMounts`. |
+| `bridge.extraVolumes` / `bridge.extraVolumeMounts` | `[]` | The same, for the bridge. |
+| `orchestrator.extraVolumes` / `orchestrator.extraVolumeMounts` | `[]` | The same, for the orchestrator. |
+
+```yaml
+engine:
+  extraVolumes:
+    - name: plugin-state
+      persistentVolumeClaim:
+        claimName: plugin-state
+  extraVolumeMounts:
+    - name: plugin-state
+      mountPath: /var/lib/plugin-state
+```
+
+Names must not collide with the chart's own volumes (`workspace`, `tmp`,
+`runtime-cache`, `db-ca`, `migration-api-token`, `google-workspace`), and the chart does not create
+the claim. The bridge and orchestrator run several replicas with rolling
+updates, so a `ReadWriteOnce` claim belongs on the single-replica engine only.
+
 ## Database migration prerequisites
 
 The migration Job uses the sole packaged, checksummed migration manifest
@@ -220,6 +307,15 @@ history. Upgrade safeguards preserve legacy memory tables as archives and
 require a 30-day replacement-data gate plus a full-row archive before removing
 legacy score columns.
 
+The Job's name hashes its whole rendered pod template: image, command,
+resources, environment, `database.tls`, labels (so every chart or app version
+bump), ServiceAccount, security context, scheduling and pull secrets. A Job's
+pod template is immutable, so any change there produces a new Job that runs
+once; an upgrade that changes none of it keeps the completed Job and does not
+re-run it. Rotating the CA inside its ConfigMap changes no part of the
+template, so it does not rename the Job: kubelet refreshes the mounted file
+and libpq reads it on the next connection.
+
 The chain requires PostgreSQL extensions `vector`, `uuid-ossp`, `citext`, and
 `pgcrypto`. Managed services must pre-provision them or grant the migration
 identity sufficient extension permission. Before rollout, run the full chain
@@ -228,9 +324,24 @@ encrypted snapshot, and rehearse restore. The migration chain is forward-only;
 rolling back an image does not reverse schema or external side effects.
 
 Production and staging set PostgreSQL `sslmode=verify-full`; the database
-endpoint must present a certificate trusted by the container's CA bundle. Their
-NetworkPolicies default-deny ingress and egress, then rebuild only the declared
-component graph. In-chart PostgreSQL/Redis are selected by pod labels. Managed
+endpoint must present a certificate signed by a CA the clients trust. Supply
+that CA as a ConfigMap and name it in `database.tls`:
+
+| Value | Default | Meaning |
+|-------|---------|---------|
+| `database.tls.caConfigMap` | `""` | ConfigMap in the release namespace holding the PEM CA bundle that signs the database server certificate. Empty: nothing is mounted and libpq's default `root.crt` lookup applies. |
+| `database.tls.caKey` | `ca.pem` | Key in that ConfigMap. |
+| `database.tls.allowDefaultTrustStore` | `false` | Explicit opt-out of the render-time check below, for an environment whose pods really provide libpq's default `root.crt`. |
+
+When set, engine, bridge, orchestrator and the migration Job mount the key
+read-only at `/etc/genus/db-ca/<caKey>` and set `PGSSLROOTCERT` to it. In any
+environment, `sslMode: verify-ca` or `verify-full` without `caConfigMap` fails
+at render time unless `allowDefaultTrustStore: true` says the default trust
+store is intended. The check never depends on the environment's name. See
+[Trusting the database's CA](../../docs/deployment.md#trusting-the-databases-ca).
+
+Production and staging NetworkPolicies default-deny ingress and egress, then
+rebuild only the declared component graph. In-chart PostgreSQL/Redis are selected by pod labels. Managed
 database, Redis, Ollama, HTTPS API, or egress-proxy access requires exact CIDRs
 and ports in Layer 3:
 
@@ -282,8 +393,14 @@ helm install gos helm/genus-os \
 # never combine them into one broad local Secret. At minimum:
 kubectl -n genus create secret generic gos-genus-os-database \
   --from-literal=ROBOTHOR_DB_PASSWORD=devpass
+# Must be NON-EMPTY while valkey.auth.enabled is true (the default). The
+# subchart hashes whatever it finds, so an empty value becomes
+# `user default on #<sha256 of "">` in the ACL while clients with an empty
+# password send no AUTH at all — every connection then fails NOAUTH, with
+# nothing failing at install time. Either set a real value here or turn the
+# server's auth off with `valkey.auth.enabled: false`, as values-local.yaml does.
 kubectl -n genus create secret generic gos-genus-os-cache \
-  --from-literal=ROBOTHOR_REDIS_PASSWORD=""
+  --from-literal=ROBOTHOR_REDIS_PASSWORD='local-only-cache-password'
 kubectl -n genus create secret generic gos-genus-os-auth-signing \
   --from-literal=GENUS_AUTH_SIGNING_KEY='local-only-32-byte-minimum-key-value'
 # Create the remaining component-specific Secrets named in `secretRefs` with

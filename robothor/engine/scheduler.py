@@ -15,7 +15,6 @@ from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.triggers.cron import CronTrigger
 from croniter import croniter  # type: ignore[import-untyped,unused-ignore]
 
 from robothor.engine.admission import admit, complete, register
@@ -25,6 +24,7 @@ from robothor.engine.config import (
     load_manifest_dir,
     manifest_to_agent_config,
 )
+from robothor.engine.crontab import cron_trigger
 from robothor.engine.dedup import release, try_acquire
 from robothor.engine.delivery import _beat_incomplete, _looks_like_mid_thought, deliver
 from robothor.engine.manifest_guard import alert_manifest_scan
@@ -62,6 +62,8 @@ from robothor.sanitize import sanitize_log
 CIRCUIT_BREAKER_THRESHOLD = 5
 
 if TYPE_CHECKING:
+    from apscheduler.triggers.cron import CronTrigger
+
     from robothor.engine.config import EngineConfig
     from robothor.engine.runner import AgentRunner
 
@@ -121,7 +123,7 @@ def plugin_job_specs() -> dict[str, dict[str, Any]]:
             logger.warning("Plugin job %r skipped: 'func' is not callable", name)
             continue
         try:
-            CronTrigger.from_crontab(cron)
+            cron_trigger(cron)
         except Exception as exc:  # noqa: BLE001 - a bad cron is the plugin's bug
             logger.warning("Plugin job %r skipped: bad cron %r (%s)", name, cron, exc)
             continue
@@ -1040,7 +1042,7 @@ class CronScheduler:
         for wf, wf_trigger in cron_workflows:
             expected[wf.id] = wf_trigger.cron
             try:
-                wf_cron_trigger = CronTrigger.from_crontab(
+                wf_cron_trigger = cron_trigger(
                     wf_trigger.cron,
                     timezone=wf_trigger.timezone,
                 )
@@ -1392,7 +1394,7 @@ class CronScheduler:
             try:
                 self.scheduler.add_job(
                     spec["func"],
-                    trigger=CronTrigger.from_crontab(spec["cron"]),
+                    trigger=cron_trigger(spec["cron"]),
                     id=job_id,
                     name=job_id,
                     max_instances=1,

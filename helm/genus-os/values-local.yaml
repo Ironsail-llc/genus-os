@@ -26,10 +26,18 @@ postgres:
       cpu: 500m
       memory: 1Gi
 
-redis:
+valkey:
   enabled: true
-  storage:
+  dataStorage:
     requestedSize: 1Gi
+    keepPvc: false
+  # Vault/VSO is off locally, so the `cache` Secret the ACL password would
+  # come from does not exist. Run without auth rather than wedge the pod in
+  # CreateContainerConfigError.
+  auth:
+    enabled: false
+  metrics:
+    enabled: false
 
 engine:
   replicaCount: 1

@@ -256,6 +256,23 @@ async def test_ticket_in_a_commit_trailer_satisfies_the_rule(env):
     assert (await _finalize(env, job, cfg))["verdict"] == "APPROVE"
 
 
+async def test_ticket_rule_skips_an_unlisted_repo_without_its_own_prefixes(env):
+    # Reviewed on request, not watched: there are no prefixes to match it to.
+    job = FakeJob(result={"structured_output": _output("APPROVE", [])})
+    cfg = ReviewerConfig(repos=("acme/other",), require_ticket=True, ticket_prefixes=("ABC",))
+    result = await _finalize(env, job, cfg)
+    assert result["verdict"] == "APPROVE"
+    assert not any("[no-ticket]" in i["title"] for i in env["poster"].reviews[0]["issues"])
+
+
+async def test_ticket_rule_holds_for_an_unlisted_repo_with_its_own_prefixes(env):
+    job = FakeJob(result={"structured_output": _output("APPROVE", [])})
+    cfg = ReviewerConfig(
+        repos=("acme/other",), require_ticket=True, repo_ticket_prefixes=((REPO, "XYZ"),)
+    )
+    assert (await _finalize(env, job, cfg))["verdict"] == "REQUEST_CHANGES"
+
+
 async def test_blocking_event_comment(env):
     job = FakeJob(result={"structured_output": _output("APPROVE", [_issue("major")])})
     cfg = ReviewerConfig(repos=(REPO,), blocking_event="COMMENT")
@@ -736,3 +753,108 @@ def test_a_comment_without_its_line_still_maps_by_path_in_order():
     ]
     posted = {"comments": [{"id": 11, "path": "a.py", "line": None}, {"id": 12, "path": "b.py"}]}
     assert map_comment_ids(issues, posted) == [11, 12]
+
+
+# ── A prepare that fails before a job is bound ──────────────────────────
+# Live QA on #677: a fetch failed ("cannot lock ref"), the worker resolved the
+# task "Prepare failed", and the row stayed queued with no open task — wedged
+# until the 180-minute stale expiry, and pr_review_intake(pr=...) refused to
+# re-queue it. The row now fails like any review, and the intake retries it.
+
+
+async def _prepare_with(env, checkout, start=None):
+    async def fake_read(path, sha, rel):
+        return None
+
+    return await prepare(
+        ReviewerConfig(repos=(REPO,)),
+        env["store"],
+        TENANT,
+        REPO,
+        7,
+        github=env["github"],
+        skill_text="g",
+        token="",
+        checkout=checkout,
+        reader=fake_read,
+        start_job=start or StartRecorder(),
+    )
+
+
+async def test_a_checkout_failure_fails_the_row_and_is_retried_within_minutes(env):
+    from robothor.pr_review.checkout import CheckoutError
+
+    await _queue(env)
+
+    async def broken_checkout(dest, **kw):
+        raise CheckoutError("git fetch failed: error: cannot lock ref 'refs/remotes/origin/main'")
+
+    result = await _prepare_with(env, broken_checkout)
+    assert result["error"].startswith("checkout failed: git fetch failed")
+    row = await env["store"].get(TENANT, REPO, 7)
+    assert row.status == "failed" and row.attempts == 1 and row.failed_at is not None
+    assert row.error.startswith("checkout failed:")
+    await _intake_retry(env, 6)  # the short cooldown, not the hour
+    assert (await env["store"].get(TENANT, REPO, 7)).status == "queued"
+
+
+async def test_a_prepare_that_raises_fails_the_row_too(env):
+    await _queue(env)
+
+    async def broken_checkout(dest, **kw):
+        raise RuntimeError("disk full")
+
+    result = await _prepare_with(env, broken_checkout)
+    assert "disk full" in result["error"]
+    row = await env["store"].get(TENANT, REPO, 7)
+    assert row.status == "failed" and row.attempts == 1
+    await _intake_retry(env, 6)  # not a known-transient error: the full cooldown
+    assert (await env["store"].get(TENANT, REPO, 7)).status == "failed"
+
+
+async def test_a_failed_job_start_fails_the_row(env, tmp_path):
+    await _queue(env)
+
+    async def fake_checkout(dest, **kw):
+        return tmp_path
+
+    async def no_start(args):
+        return {"error": "worktree add failed"}
+
+    result = await _prepare_with(env, fake_checkout, no_start)
+    assert "worktree add failed" in result["error"]
+    row = await env["store"].get(TENANT, REPO, 7)
+    assert row.status == "failed" and row.job_id == ""
+    await _intake_retry(env, 6)
+    assert (await env["store"].get(TENANT, REPO, 7)).status == "queued"
+
+
+async def test_the_job_starts_under_the_clones_lock(env, tmp_path):
+    """git worktree add writes into the shared clone too."""
+    from robothor.pr_review.checkout import clone_lock
+
+    await _queue(env)
+    seen: list[bool] = []
+
+    async def fake_checkout(dest, **kw):
+        return tmp_path
+
+    async def start(args):
+        seen.append(clone_lock(args["repo_path"]).locked())
+        return {"job_id": "job-9"}
+
+    await _prepare_with(env, fake_checkout, start)
+    assert seen == [True]
+
+
+async def test_a_busy_row_is_not_failed_by_a_refused_prepare(env):
+    # Another prepare holds it (reviewing, job bound): the error is not ours.
+    row = await env["store"].get(TENANT, REPO, 7)
+    assert row.status == "reviewing"
+
+    async def unused_checkout(dest, **kw):
+        raise AssertionError("not reached")
+
+    result = await _prepare_with(env, unused_checkout)
+    assert result.get("already_started") is True
+    assert (await env["store"].get(TENANT, REPO, 7)).status == "reviewing"

@@ -119,8 +119,11 @@ class RuntimeAssets:
                 raise ValueError("Runtime plugin artifact changed")
             dist = metadata.distribution(name)
             installed_root = Path(str(dist.locate_file("."))).resolve()
-            with tempfile.TemporaryDirectory(prefix="genus-runtime-plugin-") as folder:
-                wheel_path = Path(folder) / Path(contract["path"]).name
+            with tempfile.TemporaryDirectory(prefix="genus-runtime-plugin-") as scratch:
+                # Resolved: the platform temp root may run through a symlink
+                # (macOS: /var -> /private/var), which the containment checks refuse.
+                folder = Path(scratch).resolve(strict=True)
+                wheel_path = folder / Path(contract["path"]).name
                 wheel_path.write_bytes(wheel_bytes)
                 lock_path = self.plugin_boot.path
                 if lock_path is None:
@@ -130,7 +133,7 @@ class RuntimeAssets:
                     expected_digest=digest,
                     lock_path=lock_path,
                 )
-                wheel = open_wheel(wheel_path, Path(folder) / "wheel")
+                wheel = open_wheel(wheel_path, folder / "wheel")
                 manifest = yaml.safe_load(wheel.manifest_text)
                 if set(manifest.get("entry_points", {})) != {"genus.services"}:
                     raise ValueError("Managed fleet currently supports service-only plugins")

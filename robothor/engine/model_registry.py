@@ -212,7 +212,12 @@ _MODEL_REGISTRY: dict[str, ModelLimits] = {
     ),
     # GLM-5 via OpenRouter
     "openrouter/z-ai/glm-5": ModelLimits(
-        max_input_tokens=204_800,
+        # 202,752 (198 x 1024) is what litellm's shipped catalog reports.
+        # CORRECTED 2026-10-22 from 204,800, which carried no source comment —
+        # unlike glm-5.2 below, which cites the OpenRouter endpoint it came
+        # from. With nothing backing the larger figure, the catalog wins, and
+        # the smaller window is the conservative direction for a limit anyway.
+        max_input_tokens=202_752,
         max_output_tokens=65_536,
         default_output_tokens=8_192,
         input_cost_per_token=0.000_000_8,  # $0.80/M
@@ -452,7 +457,44 @@ _MODEL_REGISTRY: dict[str, ModelLimits] = {
         status="deprecated",
         replaced_by="openrouter/google/gemini-3.1-pro-preview",
     ),
+    # Gemini 3.8 Flash on Vertex AI. Figures from litellm's catalog
+    # (2026-10). supports_thinking stays False although the catalog says it
+    # reasons: the engine has always sent this route no thinking block and it
+    # answers that way; switching on Anthropic-style `thinking` for Vertex is a
+    # separate, measured change.
+    "vertex_ai/gemini-3.8-flash": ModelLimits(
+        max_input_tokens=1_048_576,
+        max_output_tokens=65_536,
+        default_output_tokens=16_384,
+        input_cost_per_token=0.000_000_75,  # $0.75/M
+        output_cost_per_token=0.000_003_75,  # $3.75/M
+        cache_read_cost_per_token=0.000_000_075,  # $0.075/M
+        ttft_hint_ms=1000,
+        accepts_images=True,
+        # The catalog says it caches prompts, but a marker here becomes Gemini
+        # explicit caching, which Vertex refuses on every agent call.
+        supports_cache_control=False,
+    ),
+    # GPT-5.6 Luna on the OpenAI API. Figures from litellm's catalog (2026-10).
+    # A reasoning model: llm_client sends it `reasoning_effort`, never the
+    # Anthropic `thinking` block, and no `temperature`.
+    "openai/gpt-5.6-luna": ModelLimits(
+        max_input_tokens=922_000,
+        max_output_tokens=128_000,
+        default_output_tokens=16_384,
+        input_cost_per_token=0.000_000_2,  # $0.20/M
+        output_cost_per_token=0.000_001_2,  # $1.20/M
+        cache_write_cost_per_token=0.000_000_25,  # $0.25/M
+        cache_read_cost_per_token=0.000_000_02,  # $0.02/M
+        supports_thinking=True,
+        ttft_hint_ms=2000,
+        accepts_images=True,
+    ),
 }
+
+# OpenAI reports the bare id back on a response, and cost accounting looks the
+# response id up; _registry_candidates does not strip the `openai/` prefix.
+_MODEL_REGISTRY["gpt-5.6-luna"] = _MODEL_REGISTRY["openai/gpt-5.6-luna"]
 
 # Conservative fallback for unknown models
 _FALLBACK = ModelLimits(
@@ -859,10 +901,15 @@ def supports_cache_control(model_id: str) -> bool:
        caching, but OpenRouter's transport doesn't accept our content-block
        format for it. (Historically documented at the old gate's call site in
        ``llm_client.py``; this is now the single source of truth.)
-    3. litellm's bundled ``supports_prompt_caching`` — safe against unmapped
+    3. Gemini on Google's own routes (``gemini/``, ``vertex_ai/gemini…``)
+       defaults to False. litellm turns a ``cache_control`` marker there into
+       Gemini *explicit* context caching, which the API refuses below 4,096
+       tokens and always alongside tools or a system instruction — every
+       agent call. Gemini caches implicitly; it needs no marker.
+    4. litellm's bundled ``supports_prompt_caching`` — safe against unmapped
        custom providers (e.g. ``codex/*``, a subscription provider litellm
        doesn't catalog; it reports False rather than raising).
-    4. Default False.
+    5. Default False.
 
     Deliberately NO ``anthropic/``-prefix fallback: litellm returns False
     both for models explicitly marked unsupported and for ids it simply
@@ -880,7 +927,19 @@ def supports_cache_control(model_id: str) -> bool:
     if model_id.startswith("openrouter/"):
         return False
 
+    if is_gemini_route(model_id):
+        return False
+
     return _cache_control_from_litellm(model_id)
+
+
+def is_gemini_route(model_id: str) -> bool:
+    """A Gemini model on Google's own routes (``gemini/…``, ``vertex_ai/gemini…``).
+
+    Not ``openrouter/google/…``, which speaks OpenRouter's dialect, and not
+    Anthropic models served through ``vertex_ai/``.
+    """
+    return model_id.startswith("gemini/") or model_id.startswith("vertex_ai/gemini")
 
 
 @lru_cache(maxsize=256)

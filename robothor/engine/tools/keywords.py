@@ -160,6 +160,25 @@ TOOL_HINTS: dict[str, ToolHint] = {
             "the email itself."
         ),
     ),
+    "gws_gmail_get_attachment": ToolHint(
+        keywords=(
+            *_MAIL,
+            "attachment",
+            "attached",
+            "file",
+            "download",
+            "pdf",
+            "spreadsheet",
+            "excel",
+            "word",
+            "document",
+            "open",
+        ),
+        when_to_use=(
+            "Use this to open or read a file attached to an email, once gws_gmail_get "
+            "has listed its attachment_id."
+        ),
+    ),
     "gws_gmail_reply": ToolHint(
         keywords=(*_MAIL, "reply", "respond", "answer", "thread", "follow"),
         when_to_use="Use this instead of gws_gmail_send for every reply to an existing thread.",
@@ -524,6 +543,16 @@ TOOL_HINTS: dict[str, ToolHint] = {
     ),
     "pr_review_finalize": ToolHint(
         keywords=(*_PR, "review", "finalize", "post", "verdict", "result")
+    ),
+    "pr_review_work": ToolHint(keywords=(*_PR, "review", "worker", "run", "queue", "drain")),
+    "pr_review_status": ToolHint(
+        keywords=(*_PR, "review", "status", "report", "queue", "latency", "stuck", "how")
+    ),
+    "n8n_list_workflows": ToolHint(
+        keywords=("n8n", "automation", "workflow", "list", "active", "health", "status")
+    ),
+    "n8n_recent_failures": ToolHint(
+        keywords=("n8n", "automation", "workflow", "failure", "failed", "error", "broken", "run")
     ),
 }
 

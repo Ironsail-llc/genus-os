@@ -25,6 +25,7 @@ OUTPUT = REPO_ROOT / "docs" / "reference" / "configuration.md"
 #: One sentence per group, in the order the model declares them.
 GROUP_BLURBS = {
     "autonomy": "Host paths for the isolated personal browser service and clients.",
+    "integrations": "External systems the instance watches, such as an n8n instance.",
     "paths": "Where the instance keeps its files. Every path defaults under the workspace.",
     "database": "PostgreSQL connection, tenancy and row-level security.",
     "redis": "Redis connection and the event-bus streams it carries.",

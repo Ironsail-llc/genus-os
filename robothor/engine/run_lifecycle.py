@@ -602,15 +602,21 @@ class RunLifecycleMixin:
             session.messages.append({"role": ENGINE_CONTEXT_ROLE, "content": feedback})
             logger.info("Verification failed, retrying once")
 
-            await self._run_loop(
-                session,
-                models,
-                tool_schemas,
-                agent_config,
-                on_content,
-                on_tool,
-                **loop_kwargs,
-            )
+            # The retry is a full tool loop, so it is a live run again: the
+            # registry is what host exec, the owner gate and ask_user look the
+            # run up in, and the main loop already left it.
+            from robothor.engine.request_runtime import observe_request
+
+            async with observe_request(session, loop_kwargs.get("on_status")) as report_status:
+                await self._run_loop(
+                    session,
+                    models,
+                    tool_schemas,
+                    agent_config,
+                    on_content,
+                    on_tool,
+                    **{**loop_kwargs, "on_status": report_status},
+                )
             # A retry that yields nothing must not turn a delivered report
             # into nothing: the original output is still the best we have.
             return session.get_final_text() or output_text

@@ -52,5 +52,23 @@
     "package": "braces",
     "reason": "release tooling only (node_modules/braces via semantic-release/micromatch, never in product runtime); every published braces is affected (<=3.0.3, latest 3.0.3) and npm's only offered fix is a semver-major DOWNGRADE of the release toolchain — remove when a patched braces is published",
     "added": "2026-10-07"
+  },
+  {
+    "id": "GHSA-xjj6-f33q-929c",
+    "package": "undici",
+    "reason": "bundled inside the npm CLI package (node_modules/npm/node_modules/undici, dep of @semantic-release/npm — release tooling, not product runtime, unused by our release config); the lockfile cannot change a bundled copy and the pinned npm 11.21.0 ships 6.28.0 — the two lockfile-resolvable copies (node_modules/undici 7.30.1, @actions/http-client's 6.29.1) are patched — remove when a published npm ships a patched bundle",
+    "added": "2026-10-26"
+  },
+  {
+    "id": "GHSA-2m5v-pch6-74hx",
+    "package": "undici",
+    "reason": "bundled inside the npm CLI package (node_modules/npm/node_modules/undici, dep of @semantic-release/npm — release tooling, not product runtime, unused by our release config); the lockfile cannot change a bundled copy and the pinned npm 11.21.0 ships 6.28.0 — the two lockfile-resolvable copies (node_modules/undici 7.30.1, @actions/http-client's 6.29.1) are already outside the affected range (<6.29.1) — remove when a published npm ships a patched bundle",
+    "added": "2026-10-27"
+  },
+  {
+    "id": "GHSA-qrxm-fqhp-jwvm",
+    "package": "undici",
+    "reason": "bundled inside the npm CLI package (node_modules/npm/node_modules/undici, dep of @semantic-release/npm — release tooling, not product runtime, unused by our release config); the lockfile cannot change a bundled copy and the pinned npm 11.21.0 ships 6.28.0 — the two lockfile-resolvable copies (node_modules/undici 7.30.1, @actions/http-client's 6.29.1) are already outside the affected range (<6.29.1) — remove when a published npm ships a patched bundle",
+    "added": "2026-10-27"
   }
 ]

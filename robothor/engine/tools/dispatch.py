@@ -195,6 +195,7 @@ def builtin_handlers() -> dict[str, Any]:
         browser,
         claude_code,
         code_exec,
+        config_tools,
         crm,
         desktop,
         devops_metrics,
@@ -210,12 +211,15 @@ def builtin_handlers() -> dict[str, Any]:
         intents,
         jira,
         judge,
+        knowledge,
         mcp_client,
         memory,
         memory_vault,
         messaging,
+        n8n,
         observability,
         pdf,
+        plugins,
         pr_review,
         reasoning,
         reports,
@@ -231,6 +235,7 @@ def builtin_handlers() -> dict[str, Any]:
         voice,
         web,
         web_render,
+        workflows,
     )
 
     all_handlers: dict[str, Any] = {}
@@ -238,6 +243,7 @@ def builtin_handlers() -> dict[str, Any]:
         memory,
         memory_vault,
         intents,
+        knowledge,
         symbolic,
         vision,
         web,
@@ -253,6 +259,7 @@ def builtin_handlers() -> dict[str, Any]:
         git,
         gws,
         vault,
+        config_tools,
         observability,
         voice,
         spawn,
@@ -265,6 +272,7 @@ def builtin_handlers() -> dict[str, Any]:
         judge,
         github_api,
         devops_metrics,
+        n8n,
         identity,
         reports,
         sales,
@@ -278,6 +286,8 @@ def builtin_handlers() -> dict[str, Any]:
         attachments,
         claude_code,
         pr_review,
+        workflows,
+        plugins,
     ]:
         all_handlers.update(mod.HANDLERS)
 

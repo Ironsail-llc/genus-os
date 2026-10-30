@@ -43,6 +43,8 @@ jobs:
         # reviewed lock instead of re-resolving versions like `update`.
         run: |
           helm repo add groundhog2k https://groundhog2k.github.io/helm-charts/
+          # Official valkey-io chart repo — the per-app cache subchart.
+          helm repo add valkey https://valkey.io/valkey-helm/
           helm dependency build helm/genus-os
 
       - name: helm lint
@@ -137,9 +139,29 @@ jobs:
             --directory "$RUNNER_TEMP/bin" kube-linter
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
 
+      # kube-linter sees everything this chart renders except the cache
+      # subchart's own test hook, which upstream hardcodes with no resource
+      # limits that any value of ours can set. `--no-hooks` was the first
+      # attempt and took too much with it: templates/test-connection.yaml is a
+      # helm-test hook too, it is first-party, and it was linted before. So
+      # filter by provenance — see scripts/strip_subchart_test_hooks.py.
+      # kubeconform still validates the untouched render, hooks included.
+      - name: Render for kube-linter, minus the subchart's test hook
+        run: |
+          mkdir -p _lintable
+          for env in staging production local; do
+            helm template gos helm/genus-os \
+              --namespace genus \
+              --values helm/genus-os/values.yaml \
+              --values "helm/genus-os/values-$env.yaml" \
+              --set dashboard.ingress.host=genus-os.example.invalid \
+              | python3 scripts/strip_subchart_test_hooks.py valkey \
+              > "_lintable/$env.yaml"
+          done
+
       - name: kube-linter (best practices)
         run: |
-          for f in _rendered/*.yaml; do
+          for f in _lintable/*.yaml; do
             echo "→ $f"
             kube-linter lint "$f"
           done

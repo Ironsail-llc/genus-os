@@ -89,6 +89,26 @@ async def test_unknown_head_is_an_error(tmp_path, remote):
         )
 
 
+async def test_a_stale_pull_ref_falls_back_to_fetching_the_head_by_sha(tmp_path, remote):
+    # GitHub moves refs/pull/N/head asynchronously, and stops moving it once a
+    # PR closes: the API's head sha can be an hour ahead of the ref.
+    bare, head, _base = remote
+    dest = tmp_path / "c"
+    await ensure_checkout(
+        dest, number=7, head_sha=head, base_branch="main", remote_url=str(bare), token=""
+    )
+    work = tmp_path / "work"  # a new commit lands on the branch; the ref stays put
+    (work / "a.py").write_text("x = 2\n")
+    _git(work, "commit", "-qam", "follow-up")
+    new_head = _git(work, "rev-parse", "HEAD")
+    _git(work, "push", "-q", str(bare), "feature")
+    _git(bare, "config", "uploadpack.allowReachableSHA1InWant", "true")  # as GitHub
+    await ensure_checkout(
+        dest, number=7, head_sha=new_head, base_branch="main", remote_url=str(bare), token=""
+    )
+    assert _git(dest, "rev-parse", f"{new_head}^{{commit}}") == new_head
+
+
 async def test_rejects_option_like_refs(tmp_path, remote):
     bare, head, _ = remote
     with pytest.raises(CheckoutError):
@@ -184,3 +204,64 @@ async def test_merge_conflicts_lists_conflicting_files(tmp_path):
     assert await merge_conflicts(repo, "main", "no-such-ref") is None
     assert await merge_conflicts(repo, "--output=x", pr) is None
     assert await merge_conflicts(tmp_path / "not-a-repo", "main", pr) is None
+
+
+# Live QA on #677: two reviews of one repository started together and both
+# fetched into the shared clone at once — "cannot lock ref
+# 'refs/remotes/origin/main'". Git work on one clone is serialized; different
+# repositories still run in parallel.
+
+
+class _Recorder:
+    def __init__(self) -> None:
+        self.inside: dict[str, int] = {}
+        self.overlapped: set[str] = set()
+
+    async def __call__(self, cwd, *args, token="", check=True):
+        import asyncio
+
+        key = str(cwd)
+        self.inside[key] = self.inside.get(key, 0) + 1
+        if self.inside[key] > 1 or len([k for k, n in self.inside.items() if n]) > 1:
+            self.overlapped.add(key)
+        await asyncio.sleep(0.02)
+        self.inside[key] -= 1
+        return 0, ""
+
+
+def _clone(path: Path) -> Path:
+    (path / ".git").mkdir(parents=True)
+    return path
+
+
+async def test_two_checkouts_of_one_clone_never_overlap(monkeypatch, tmp_path):
+    import asyncio
+
+    from robothor.pr_review import checkout
+    from robothor.pr_review.checkout import merge_conflicts
+
+    git = _Recorder()
+    monkeypatch.setattr(checkout, "_git", git)
+    dest = _clone(tmp_path / "acme" / "widgets")
+    kw = {"head_sha": "a" * 40, "base_branch": "main", "remote_url": "u", "token": ""}
+    await asyncio.gather(
+        ensure_checkout(dest, number=1, **kw),
+        ensure_checkout(dest, number=2, **kw),
+        merge_conflicts(dest, "origin/main", "a" * 40),
+    )
+    assert git.overlapped == set()
+
+
+async def test_checkouts_of_different_repositories_run_in_parallel(monkeypatch, tmp_path):
+    import asyncio
+
+    from robothor.pr_review import checkout
+
+    git = _Recorder()
+    monkeypatch.setattr(checkout, "_git", git)
+    kw = {"head_sha": "a" * 40, "base_branch": "main", "remote_url": "u", "token": ""}
+    await asyncio.gather(
+        ensure_checkout(_clone(tmp_path / "acme" / "widgets"), number=1, **kw),
+        ensure_checkout(_clone(tmp_path / "acme" / "gadgets"), number=2, **kw),
+    )
+    assert git.overlapped  # both were inside git at the same time

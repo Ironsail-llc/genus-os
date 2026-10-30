@@ -9,7 +9,13 @@ on:
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # Cancel superseded runs on a pull request — a new push makes the old one
+  # irrelevant. Never on main: every commit there is permanently in history and
+  # has to stay verified. Two merges landing seconds apart used to cancel the
+  # earlier commit's run, leaving it unverified with nothing to say so — and the
+  # release gate now asserts this workflow's conclusion for the commit being
+  # released, so a cancelled run would block a release over code that is fine.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   security:
@@ -61,7 +67,20 @@ jobs:
           cache: "pip"
       - run: pip install --upgrade pip
       - run: pip install pip-audit==2.10.1
-      - run: pip install -e ".[api]"
+      # Audit the set the image ships (Dockerfile.python: `uv export --frozen
+      # --extra api --extra federation`), not a fresh resolution. `pip install
+      # -e ".[api]"` re-resolved litellm to the newest allowed release, whose
+      # `filelock<4` pin dragged filelock down to a version carrying three
+      # advisories the locked set (filelock 4.x) does not ship. That failed
+      # this job on every branch with no commit touching the repo.
+      - name: Install the locked runtime set
+        run: |
+          pip install uv==0.13.4
+          uv export --frozen --no-emit-project --no-hashes \
+            --extra api --extra federation \
+            --output-file /tmp/requirements.txt
+          uv pip install --system -r /tmp/requirements.txt
+          uv pip install --system --no-deps -e .
       # No standing advisory exceptions: a newly reported dependency issue
       # must fail the gate and receive an explicit, reviewed remediation.
       - run: pip-audit
@@ -123,8 +142,10 @@ jobs:
       # harness decides the project's competitive numbers and scripts/ holds
       # the backup and release machinery — neither is less load-bearing than
       # the package.
-      - run: ruff check robothor/ bench/ scripts/
-      - run: ruff format --check robothor/ bench/ scripts/
+      # crm/bridge/ is included deliberately: the release gate used to be the
+      # only thing linting it, and this job is now lint's single home.
+      - run: ruff check robothor/ bench/ scripts/ crm/bridge/
+      - run: ruff format --check robothor/ bench/ scripts/ crm/bridge/
       # The shell in scripts/ is release and backup machinery, and the
       # installer in particular is piped straight into bash from a URL. It was
       # outside every gate: ruff cannot read shell, and nothing else looked.
@@ -183,7 +204,40 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache: "pip"
-      - run: pip install -e ".[dev,api,vision,tui]" opencv-python-headless
+      # Install the set uv.lock pins — the same resolution Dockerfile.python
+      # ships. `pip install -e` re-resolves on every run, so an upstream release
+      # can turn this job red with no commit touching the repo. That is what
+      # happened: litellm drifted 1.92.2 (locked) -> 1.106.2 (resolved), which
+      # both reorganized its model catalog (breaking the registry-drift test
+      # against values that still match the shipped version) and added a proxy
+      # MCP module importing `mcp.types` unconditionally, so every provider call
+      # raised APIConnectionError. Testing the locked set means CI exercises
+      # what production runs.
+      - name: Install the locked dependency set
+        run: |
+          # 0.13.4, not an older pin: `pip install uv` puts uv in the same
+          # environment the gate's pip-audit step later scans, so uv's own
+          # version has to be non-vulnerable (0.11.21 carries
+          # PYSEC-2026-4321). Verified that 0.13.4 reads this lock and exports
+          # byte-identically to the version the pins were generated with.
+          pip install uv==0.13.4
+          # --output-file, not a shell redirect: uv colorizes the comment
+          # lines it writes, and the ANSI escapes make `uv pip install -r`
+          # fail with "Unexpected '', expected ... the start of a requirement".
+          uv export --frozen --no-emit-project --no-hashes \
+            --extra dev --extra api --extra vision --extra tui \
+            --output-file /tmp/requirements.txt
+          # opencv-python-headless is not a declared dependency — it is the
+          # headless wheel CI needs in place of the GUI one `vision` pulls — so
+          # it is resolved TOGETHER with the pins. Installed as a separate step
+          # it dragged numpy to 2.5.x, past the deliberate `numpy<2` constraint
+          # for Python < 3.13, which broke mypy: numpy 2 stubs use PEP 695
+          # `type` statements and mypy rejects those at the configured
+          # python_version = 3.11. Resolved jointly, the pin holds numpy at
+          # 1.26.4 and opencv lands on 4.11.0.86.
+          uv pip install --system -r /tmp/requirements.txt opencv-python-headless
+          # The project itself, without re-resolving what the lock just pinned.
+          uv pip install --system --no-deps -e .
       - name: Run the complete Python unit suite
         run: >-
           pytest tests/ robothor/

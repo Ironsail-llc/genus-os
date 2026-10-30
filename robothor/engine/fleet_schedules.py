@@ -15,6 +15,7 @@ from uuid import uuid4
 from apscheduler.schedulers.base import STATE_RUNNING
 from apscheduler.triggers.cron import CronTrigger
 
+from robothor.engine.crontab import cron_trigger
 from robothor.engine.fleet_context import FleetInvocation, invocation
 from robothor.engine.workflow import parse_workflow
 from robothor.operations.store import Conflict
@@ -89,7 +90,7 @@ class FleetSchedules:
                 trigger = definition.triggers[0]
                 if trigger.type != "cron" or not trigger.cron:
                     raise Conflict("Managed workflow requires a cron trigger")
-                cron = CronTrigger.from_crontab(trigger.cron, timezone=trigger.timezone)
+                cron = cron_trigger(trigger.cron, timezone=trigger.timezone)
                 desired[definition.id] = (deepcopy(definition), cron)
         scheduler = self.native.scheduler
         for workflow_id in desired.keys() - self._owned.keys():

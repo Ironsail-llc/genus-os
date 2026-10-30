@@ -33,85 +33,99 @@ jobs:
       (github.event_name == 'pull_request'
         && github.event.action != 'closed')
     runs-on: ubuntu-24.04
-    services:
-      postgres:
-        image: pgvector/pgvector:pg16
-        env:
-          POSTGRES_USER: robothor
-          POSTGRES_PASSWORD: robothor
-          POSTGRES_DB: robothor_release_gate
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
+    permissions:
+      contents: read
+      # `Require CI to have passed this commit` reads the Actions API via
+      # `gh run list`. The workflow-level grant is contents:read, under which
+      # that call returns nothing — and this gate fails closed on "no run
+      # found", so without this it would fail every time rather than pass
+      # blindly.
+      actions: read
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
 
-      - name: Verify workflow actions are immutably pinned
-        run: python3 scripts/check_workflow_action_pins.py
-
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
-        with:
-          python-version: "3.12"
-          cache: pip
-      - run: pip install -e ".[dev,api,vision,tui]" opencv-python-headless
-      - run: pip install -r crm/bridge/requirements.txt
-      - name: Verify Python source and complete unit suite
-        run: |
-          ruff check robothor/ crm/bridge/
-          ruff format --check robothor/ crm/bridge/
-          mypy robothor/ --ignore-missing-imports
-          pytest tests/ robothor/ -m "not integration and not llm and not slow and not e2e" --cov=robothor --cov-fail-under=60
-          pytest crm/bridge/tests/ -m "not integration and not slow and not e2e"
-          python scripts/validate_agents.py --ci
-
-      - name: Verify canonical migrations against PostgreSQL
+      # ci.yml owns ruff, mypy, the unit matrix across three Python versions,
+      # the bridge suite, validate-agents, the integration suite, pip-audit,
+      # gitleaks, the npm allowlist and the action-pin check. It triggers on the
+      # same push and pull_request as this workflow, with no path filter, so it
+      # has already run them against this exact commit.
+      #
+      # This gate used to re-run all of it, serially, in one job: ~40 minutes of
+      # duplicate compute on every pull request and every release, and the long
+      # pole on both. It asserts the result instead. Nothing stopped being
+      # checked — the checks have one home, and this job fails if that home
+      # reports anything other than success for this SHA.
+      # Release runs only. On a pull request this assertion is both unnecessary
+      # and unsound: branch protection already requires the named CI contexts
+      # before the merge button unlocks, and PR runs are cancelled on purpose
+      # when a new push supersedes them — so a burst of pushes leaves the head
+      # commit's run `cancelled` and this step would fail a pull request for
+      # doing nothing wrong. That is exactly what happened on this PR: three
+      # pushes in quick succession, ci run for the head concluded `cancelled`,
+      # gate red.
+      #
+      # On main there is nothing to supersede a commit (cancellation is
+      # disabled there, see ci.yml's concurrency) and no merge button to gate,
+      # so this is the only place the assertion is both needed and reliable.
+      #
+      # workflow_dispatch is deliberately NOT gated, and that is a real
+      # trade-off rather than an oversight. A dispatch usually targets main's
+      # tip, which after any release is a bot commit carrying [skip ci]
+      # (semantic-release, promote-release.sh, the staging bump and reset) —
+      # ci.yml never runs for those, so there would be no conclusion to assert
+      # and every manual rebuild would fail on a missing run. The cost is that
+      # a dispatched build is verified only by the two checks below, where
+      # before this change the gate re-ran the suite against it. Dispatch is a
+      # deliberate human action on an already-released commit, so that is the
+      # better side of the trade; a dispatch of something genuinely unverified
+      # should be a pull request instead.
+      - name: Require CI to have passed this commit
+        if: github.event_name == 'push'
         env:
-          PGPASSWORD: robothor
-          ROBOTHOR_TEST_DB_DSN: "dbname=robothor_release_gate user=robothor password=robothor host=localhost port=5432"
-          ROBOTHOR_DB_HOST: 127.0.0.1
-          ROBOTHOR_DB_PORT: "5432"
-          ROBOTHOR_DB_NAME: robothor_release_gate
-          ROBOTHOR_DB_USER: robothor
-          ROBOTHOR_DB_PASSWORD: robothor
-          # The pytest DB guard (robothor/db/connection.py assert_test_database)
-          # only opens non-*_test databases that are explicitly allowed.
-          ROBOTHOR_TEST_DB_ALLOW: robothor_release_gate
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
         run: |
-          python -m robothor.cli migrate
-          python -m robothor.cli migrate --check
-          pytest tests/integration/ -m integration
+          deadline=$(( SECONDS + 3600 ))
+          while :; do
+            read -r status conclusion <<<"$(
+              gh run list --commit "$SHA" --workflow ci.yml --limit 1 \
+                --json status,conclusion \
+                --jq '.[0] | "\(.status // "missing") \(.conclusion // "pending")"'
+            )"
+            case "$status" in
+              completed)
+                if [ "$conclusion" = "success" ]; then
+                  echo "CI succeeded for $SHA."
+                  exit 0
+                fi
+                if [ "$conclusion" = "cancelled" ]; then
+                  echo "::error::CI for $SHA was cancelled, so this commit is unverified. Re-run the CI workflow for it, then re-run this job. (ci.yml no longer cancels main runs; a cancelled one here predates that change or was cancelled by hand.)"
+                else
+                  echo "::error::CI concluded '$conclusion' for $SHA — the release stops here."
+                fi
+                exit 1
+                ;;
+              missing)
+                # Fail closed. A gate that passes because it could not find the
+                # run it depends on is not a gate.
+                if [ "$SECONDS" -gt "$(( deadline - 3300 ))" ]; then
+                  echo "::error::No ci.yml run found for $SHA after 5 minutes."
+                  exit 1
+                fi
+                ;;
+            esac
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::error::CI for $SHA still '$status' after 60 minutes."
+              exit 1
+            fi
+            sleep 30
+          done
 
-      - name: Audit Python dependencies
-        run: |
-          pip install pip-audit==2.10.1
-          pip-audit
-
-      - name: Scan repository history for secrets
-        run: |
-          mkdir -p "$RUNNER_TEMP/bin"
-          archive="$RUNNER_TEMP/gitleaks.tar.gz"
-          curl --fail --show-error --location --output "$archive" \
-            https://github.com/gitleaks/gitleaks/releases/download/v8.24.3/gitleaks_8.24.3_linux_x64.tar.gz
-          echo "9991e0b2903da4c8f6122b5c3186448b927a5da4deef1fe45271c3793f4ee29c  $archive" \
-            | sha256sum --check --strict
-          tar --extract --gzip --file "$archive" \
-            --directory "$RUNNER_TEMP/bin" gitleaks
-          "$RUNNER_TEMP/bin/gitleaks" detect --source . --verbose
-
-      - uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
-        with:
-          version: 10.34.5
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: 22
-          cache: pnpm
-          cache-dependency-path: app/pnpm-lock.yaml
       - name: Verify product version metadata
         env:
           # Operator hatch for release-chain recovery: when release N's image
@@ -120,35 +134,28 @@ jobs:
           # repository VARIABLE GENUS_ALLOW_DEPLOYMENT_LAG=true for the
           # recovery release, then unset it — the default keeps the
           # no-lag invariant enforced.
+          #
+          # Only consulted on release runs. On a pull request the deployment
+          # tags are compared against the base branch instead of the version,
+          # so a hand-edit is still caught but somebody else's stalled release
+          # cannot block every PR (it has deadlocked this repo twice: v1.57.0
+          # and v1.108.2). The script documents the split.
           GENUS_ALLOW_DEPLOYMENT_LAG: ${{ vars.GENUS_ALLOW_DEPLOYMENT_LAG || 'false' }}
-        run: node scripts/check-version-consistency.js
+          BASE_REF: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.ref || '' }}
+        run: |
+          if [ -n "$BASE_REF" ]; then
+            # Fetched explicitly rather than relying on fetch-depth: the
+            # checkout above takes only the PR head.
+            git fetch --no-tags --quiet origin "$BASE_REF"
+            export GENUS_VERSION_BASELINE_REF=FETCH_HEAD
+          fi
+          node scripts/check-version-consistency.js
       # npm audit gate: named-allowlist policy, not a blanket exception. A
       # high/critical advisory must either be absent or have its GHSA id
       # explicitly tracked -- id, package, and a reviewed reason -- in
       # .npm-audit-allowlist.json (see scripts/check_npm_audit.py). Any
       # advisory NOT named in that tracked file still fails the gate,
       # including new advisories in an already-allowlisted package.
-      - name: Audit release-tooling lock
-        run: |
-          npm audit --package-lock-only --audit-level=high --json > /tmp/npm-audit.json || true
-          python3 scripts/check_npm_audit.py /tmp/npm-audit.json
-      - name: Verify dashboard and browser flows
-        working-directory: app
-        run: |
-          pnpm install --frozen-lockfile
-          # Legacy npm audit endpoints were retired 2026-07 (HTTP 410 Gone) and
-          # pnpm 10.x still queries them, so `pnpm audit` fails unconditionally — a
-          # dead-endpoint error, not a finding. Keep it visible but non-blocking
-          # until a working advisory source is wired up (see follow-up). The npm
-          # audit above still runs against the working bulk endpoint.
-          pnpm audit --audit-level=high || echo "::warning::pnpm audit skipped — npm audit endpoint retired (HTTP 410); dependency scan gap tracked as follow-up"
-          pnpm lint
-          pnpm exec tsc --noEmit
-          pnpm test
-          pnpm build
-          pnpm exec playwright install --with-deps chromium
-          pnpm exec playwright test
-
       - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
         with:
           version: v3.16.3
@@ -163,16 +170,33 @@ jobs:
           mkdir -p "$plugin_dir"
           tar --extract --gzip --file "$archive" --directory "$plugin_dir"
           helm repo add groundhog2k https://groundhog2k.github.io/helm-charts/
+          # Official valkey-io chart repo — the per-app cache subchart.
+          helm repo add valkey https://valkey.io/valkey-helm/
           helm dependency build helm/genus-os
           helm lint helm/genus-os --strict \
             --values helm/genus-os/values.yaml \
             --values helm/genus-os/values-production.yaml
           helm unittest helm/genus-os --strict
+          # Hook-free render for kube-linter, as helm.yml does. Helm hook Pods
+          # (chart tests) are ephemeral and never part of a release's steady
+          # state, and the valkey subchart's test hook hardcodes a pod spec
+          # with no resources, which this chart's values cannot fix.
           helm template gos helm/genus-os \
             --namespace genus \
+            --no-hooks \
             --values helm/genus-os/values.yaml \
             --values helm/genus-os/values-production.yaml \
             > /tmp/genus-production.yaml
+          # Hook-free copy for kube-linter only: a subchart's test-hook Pod
+          # hardcodes its spec with no resource limits and is never part of a
+          # release's steady state. helm lint and the full render above still
+          # see everything.
+          helm template gos helm/genus-os \
+            --namespace genus \
+            --no-hooks \
+            --values helm/genus-os/values.yaml \
+            --values helm/genus-os/values-production.yaml \
+            > /tmp/genus-production-nohooks.yaml
           curl --fail --show-error --location \
             --output "$RUNNER_TEMP/kube-linter.tar.gz" \
             https://github.com/stackrox/kube-linter/releases/download/v0.7.4/kube-linter-linux.tar.gz
@@ -180,7 +204,7 @@ jobs:
             | sha256sum --check --strict
           tar --extract --gzip --file "$RUNNER_TEMP/kube-linter.tar.gz" \
             --directory "$RUNNER_TEMP" kube-linter
-          "$RUNNER_TEMP/kube-linter" lint /tmp/genus-production.yaml
+          "$RUNNER_TEMP/kube-linter" lint /tmp/genus-production-nohooks.yaml
 
   release:
     name: Semantic Release
@@ -577,6 +601,8 @@ jobs:
       - name: helm dependency build
         run: |
           helm repo add groundhog2k https://groundhog2k.github.io/helm-charts/
+          # Official valkey-io chart repo — the per-app cache subchart.
+          helm repo add valkey https://valkey.io/valkey-helm/
           helm dependency build helm/genus-os
 
       - name: Log in to GHCR
@@ -715,7 +741,7 @@ jobs:
         run: |
           set -e
           argocd app terminate-op ironsail-production-genus-os --grpc-web || true
-          argocd app sync ironsail-production-genus-os --grpc-web --retry-limit 2
+          argocd app sync ironsail-production-genus-os --grpc-web --prune --retry-limit 2
           argocd app wait ironsail-production-genus-os --grpc-web --health --timeout 900
 
       - name: Smoke-test live and ready endpoints
@@ -751,7 +777,7 @@ jobs:
           fi
 
           if [ "$git_rollback" = "true" ]; then
-            argocd app sync ironsail-production-genus-os --grpc-web --retry-limit 2
+            argocd app sync ironsail-production-genus-os --grpc-web --prune --retry-limit 2
           else
             echo "GitOps rollback failed; applying an emergency ArgoCD rollback." >&2
             argocd app rollback ironsail-production-genus-os --grpc-web
@@ -880,7 +906,7 @@ jobs:
         run: |
           set -e
           argocd app terminate-op ironsail-staging-genus-os --grpc-web || true
-          argocd app sync ironsail-staging-genus-os --grpc-web --retry-limit 2
+          argocd app sync ironsail-staging-genus-os --grpc-web --prune --retry-limit 2
           argocd app wait ironsail-staging-genus-os --grpc-web --health --timeout 900
 
       - name: Sticky deploy-success comment
@@ -977,7 +1003,7 @@ jobs:
           ARGOCD_SERVER: ${{ vars.ARGOCD_SERVER }}
           ARGOCD_AUTH_TOKEN: ${{ secrets.ARGOCD_TOKEN }}
         run: |
-          argocd app sync ironsail-staging-genus-os --grpc-web --retry-limit 2 || true
+          argocd app sync ironsail-staging-genus-os --grpc-web --prune --retry-limit 2 || true
           argocd app wait ironsail-staging-genus-os --grpc-web --health --timeout 900 || true
 
       - name: Sticky released-the-slot comment

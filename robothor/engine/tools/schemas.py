@@ -552,6 +552,87 @@ _ATTACHMENT_SCHEMAS: dict[str, dict[str, Any]] = {
 }
 
 
+#: The settings tools (GEN-42), outside ``get_engine_schemas`` for the same
+#: size-ratchet reason as the vault cluster below. Owner-only; see
+#: ``handlers/config_tools.py``.
+_CONFIG_SCHEMAS: dict[str, dict[str, Any]] = {
+    "config_get": {
+        "type": "function",
+        "function": {
+            "name": "config_get",
+            "description": (
+                "Read this instance's own settings: the effective value, where it comes "
+                "from (default, config.yaml, environment, runtime flag), its "
+                "description, and whether changing it needs a restart. Pass `key` for "
+                "one setting (its environment variable name, e.g. ROBOTHOR_LOG_LEVEL) "
+                "or `prefix` to list every setting whose name starts with it. Secret "
+                "values are never returned: they show as <set, fingerprint> or <unset>. "
+                "Owner only."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "key": {"type": "string", "description": "Exact setting name"},
+                    "prefix": {
+                        "type": "string",
+                        "description": "List settings whose name starts with this",
+                    },
+                },
+            },
+        },
+    },
+    "config_set": {
+        "type": "function",
+        "function": {
+            "name": "config_set",
+            "description": (
+                "Change one of this instance's settings, exactly as `genus config set` "
+                "does: the value is validated against the setting's declared type and "
+                "written to config.yaml (or the live flag store for a governed flag). "
+                "The reply says which services need a restart. Credentials are refused "
+                "-- store those with vault_set. apply=true also changes the value where "
+                "the running service actually reads it (a systemd drop-in) and "
+                "schedules the restart 15 s later; that needs host exec and is only "
+                "available to the verified owner's top-level run. Owner only."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "key": {"type": "string", "description": "Setting name (env var)"},
+                    "value": {"type": "string", "description": "New value, as text"},
+                    "apply": {
+                        "type": "boolean",
+                        "description": "Apply where the service reads it and restart",
+                        "default": False,
+                    },
+                },
+                "required": ["key", "value"],
+            },
+        },
+    },
+}
+
+
+#: What installed plugins contribute (``handlers/plugins.py``). Its own block,
+#: outside ``get_engine_schemas``, for the size-ratchet reason above.
+_PLUGIN_SCHEMAS: dict[str, dict[str, Any]] = {
+    "plugins_overview": {
+        "type": "function",
+        "function": {
+            "name": "plugins_overview",
+            "description": (
+                "List every installed plugin and what it contributes to this instance: "
+                "its tools (with descriptions), doctor checks, agents (id, name, "
+                "schedule), workflows (id, name, triggers), the agent manifests it "
+                "patched, and other workspace files it wrote. Read-only. Use this to "
+                "answer 'what does plugin X give us?' or 'which plugin ships agent or "
+                "workflow Y?'; use tool_search to find a tool by what it does."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+}
+
 #: The secrets vault's four tools, as one cluster.
 #:
 #: Lifted out of ``get_engine_schemas`` when ``vault_test`` was added: the
@@ -960,6 +1041,74 @@ _HUMAN_IN_THE_LOOP_SCHEMAS: dict[str, dict[str, Any]] = {
             },
         },
     },
+    # ── Workflow control: list, start, report ──
+    "list_workflows": {
+        "type": "function",
+        "function": {
+            "name": "list_workflows",
+            "description": (
+                "List the workflows this instance has loaded: id, name, description, "
+                "triggers (cron schedule or event), the last run's status and start time, "
+                "and how many runs failed in the last 7 days. Use it to find a workflow id "
+                "before run_workflow or workflow_runs."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    "run_workflow": {
+        "type": "function",
+        "function": {
+            "name": "run_workflow",
+            "description": (
+                "Start a workflow now. The run continues in the background; this call "
+                "waits up to wait_seconds (max 120) for it to finish. With wait_seconds 0 "
+                "it still waits about 2 seconds so an immediate refusal is reported. "
+                'Returns {status: "started", run_id} if still running, {status, run_id, '
+                'error_message} if it finished, {status: "already_running"} if a run of '
+                'this workflow is in progress, or {error: "unknown_workflow"}. Check '
+                "progress later with workflow_runs. Use this for a defined, repeatable "
+                "workflow; use spawn_agent for open-ended work."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "workflow_id": {"type": "string", "description": "Workflow id"},
+                    "payload": {
+                        "type": "object",
+                        "description": (
+                            "Input for the run, available to its steps as event.payload"
+                        ),
+                    },
+                    "wait_seconds": {
+                        "type": "integer",
+                        "description": "Seconds to wait for completion (0-120, default 0)",
+                    },
+                },
+                "required": ["workflow_id"],
+            },
+        },
+    },
+    "workflow_runs": {
+        "type": "function",
+        "function": {
+            "name": "workflow_runs",
+            "description": (
+                "Recent runs of one workflow, newest first: status, trigger, start and "
+                "end time, error message, and each step's status."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "workflow_id": {"type": "string", "description": "Workflow id"},
+                    "limit": {
+                        "type": "integer",
+                        "description": "How many runs (1-50, default 10)",
+                    },
+                },
+                "required": ["workflow_id"],
+            },
+        },
+    },
 }
 
 
@@ -1309,6 +1458,92 @@ _CLAUDE_CODE_SCHEMAS: dict[str, dict[str, Any]] = {
 }
 
 
+_KB_COLLECTION: dict[str, Any] = {
+    "type": "string",
+    "description": "Collection name, <plugin>/<topic> (e.g. helpdesk/policies)",
+}
+
+#: Knowledge base (robothor/knowledge/, docs/knowledge-base.md): curated
+#: reference documents per collection. Kept out of get_engine_schemas() so the
+#: function-size ratchet holds.
+_KB_SCHEMAS: dict[str, dict[str, Any]] = {
+    "kb_search": {
+        "type": "function",
+        "function": {
+            "name": "kb_search",
+            "description": (
+                "Search a knowledge-base collection of curated reference documents "
+                "(policies, product docs, playbooks) — hybrid semantic + keyword. Use it "
+                "for reference material scoped to a collection; use search_memory for "
+                "facts you have remembered yourself. Returns matching chunks with "
+                "doc_id, title, text, score and source_uri."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "collection": _KB_COLLECTION,
+                    "query": {"type": "string", "description": "What to look for"},
+                    "limit": {"type": "integer", "default": 5, "description": "1..50"},
+                },
+                "required": ["collection", "query"],
+            },
+        },
+    },
+    "kb_upsert_document": {
+        "type": "function",
+        "function": {
+            "name": "kb_upsert_document",
+            "description": (
+                "Add or replace a reference document in a knowledge-base collection. "
+                "Re-sending an identical document is a no-op (status unchanged); a "
+                "changed one replaces its chunks and bumps its version."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "collection": _KB_COLLECTION,
+                    "doc_id": {"type": "string", "description": "Stable id within the collection"},
+                    "title": {"type": "string", "default": ""},
+                    "text": {
+                        "type": "string",
+                        "description": "The full document text (at most 200,000 characters)",
+                    },
+                    "source_uri": {
+                        "type": "string",
+                        "description": "Where the document came from (optional)",
+                        "default": "",
+                    },
+                },
+                "required": ["collection", "doc_id", "text"],
+            },
+        },
+    },
+    "kb_delete_document": {
+        "type": "function",
+        "function": {
+            "name": "kb_delete_document",
+            "description": "Remove a document and its chunks from a knowledge-base collection.",
+            "parameters": {
+                "type": "object",
+                "properties": {"collection": _KB_COLLECTION, "doc_id": {"type": "string"}},
+                "required": ["collection", "doc_id"],
+            },
+        },
+    },
+    "kb_list_collections": {
+        "type": "function",
+        "function": {
+            "name": "kb_list_collections",
+            "description": (
+                "List this tenant's knowledge-base collections with their document "
+                "and chunk counts and when each last changed."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+}
+
+
 #: The pr-reviewer suite (robothor/pr_review/). Opt-in: see OPT_IN_TOOLS.
 _PR_REVIEW_SCHEMAS: dict[str, dict[str, Any]] = {
     "pr_review_intake": {
@@ -1338,8 +1573,9 @@ _PR_REVIEW_SCHEMAS: dict[str, dict[str, Any]] = {
                     "pr": {
                         "type": "string",
                         "description": (
-                            "Review this one pull request now (URL or owner/repo#N, a "
-                            "configured repository only). Returns requested.status; call "
+                            "Review this one pull request now (URL or owner/repo#N, any "
+                            "repository the GitHub token can read). Returns "
+                            "requested.status; call "
                             "again later with the same pr for requested.review_url"
                         ),
                     },
@@ -1402,6 +1638,102 @@ _PR_REVIEW_SCHEMAS: dict[str, dict[str, Any]] = {
             },
         },
     },
+    "pr_review_work": {
+        "type": "function",
+        "function": {
+            "name": "pr_review_work",
+            "description": (
+                "Run the queued pr-review tasks: up to ROBOTHOR_PR_REVIEW_WORKERS at once, "
+                "oldest first, each through pr_review_prepare, the review job and "
+                "pr_review_finalize, then resolves the task with the review URL. No model. "
+                "Normally run by the pr-review-run workflow; takes no new task after 45 "
+                "minutes and returns per-task outcomes."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    "pr_review_status": {
+        "type": "function",
+        "function": {
+            "name": "pr_review_status",
+            "description": (
+                "Use this when asked how pull-request reviews are going, where a pull "
+                "request's review is, or for a review report. Read-only, no model. Returns "
+                "now (reviews in flight, the queue in order, free slots), the window's "
+                "reviews by verdict and each posted review (pull request, title, verdict, link, "
+                "time; newest 50), request-to-answer latency (median, p90), failures and "
+                "retries, problems (stuck, out of retries, dropped requests, an old queue) "
+                "and alerts — one line per problem, empty when all is well. pr=<url or "
+                "owner/repo#N> adds that pull request's state and history."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "since_hours": {
+                        "type": "number",
+                        "description": "The report window in hours (default 24; 168 for a week)",
+                    },
+                    "pr": {
+                        "type": "string",
+                        "description": "One pull request (URL or owner/repo#N) to report on",
+                    },
+                },
+            },
+        },
+    },
+}
+
+
+#: The n8n monitor's read tools (handlers/n8n.py): the snapshot, never n8n itself.
+_N8N_SCHEMAS: dict[str, dict[str, Any]] = {
+    "n8n_list_workflows": {
+        "type": "function",
+        "function": {
+            "name": "n8n_list_workflows",
+            "description": (
+                "List the operator's n8n automations (the external n8n instance, not Genus "
+                "workflows) with failures in the last 24h and 7 days, the last error and a link, "
+                "as of the n8n monitor's last poll. Reads the snapshot; never calls n8n."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "active_only": {
+                        "type": "boolean",
+                        "description": "Only workflows that are switched on in n8n (default true).",
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "Case-insensitive match on the workflow name or a tag.",
+                    },
+                },
+            },
+        },
+    },
+    "n8n_recent_failures": {
+        "type": "function",
+        "function": {
+            "name": "n8n_recent_failures",
+            "description": (
+                "Failed n8n executions (the external n8n instance) in the last `hours`, newest "
+                "first: workflow, error message, mode, times and a link to the execution in n8n. "
+                "Reads the n8n monitor's snapshot; never calls n8n."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "hours": {
+                        "type": "integer",
+                        "description": "Look-back window in hours (default 24, max 720).",
+                    },
+                    "workflow_id": {
+                        "type": "string",
+                        "description": "Only this n8n workflow id (from n8n_list_workflows).",
+                    },
+                },
+            },
+        },
+    },
 }
 
 
@@ -1417,7 +1749,12 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
         "type": "function",
         "function": {
             "name": "read_file",
-            "description": "Read the contents of a file.",
+            "description": (
+                "Read the contents of a file. Text files come back as-is; PDF, "
+                "Word (.docx), Excel (.xlsx) and PowerPoint (.pptx) files come "
+                "back as extracted text. For an image, call view_image instead; "
+                "any other binary file returns its size and type."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1732,7 +2069,7 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
         },
     }
 
-    schemas.update(_VAULT_SCHEMAS)
+    schemas.update(_VAULT_SCHEMAS | _CONFIG_SCHEMAS | _PLUGIN_SCHEMAS)
 
     # ── Knowledge Vault (verbatim memory store; RIP 12) ──
     # Distinct from the secrets vault above. Stores reference data the agent
@@ -1831,6 +2168,8 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
                 },
             },
         }
+
+    schemas.update(_KB_SCHEMAS)
 
     # ── Intent memory (prospective objectives; RIP 14) ──
     if is_rip_enabled(14):
@@ -2211,9 +2550,9 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
                 "Use this when you already have a message or thread id and need the text "
                 "of the email itself. Returns headers (from/to/cc/date/subject/"
                 "message_id), labels, snippet and the DECODED body_text — plain text, "
-                "never base64 — with attachments listed by filename, size and type and "
-                "never inlined. Given a thread_id it returns every message in the thread, "
-                "oldest first."
+                "never base64 — with attachments listed (filename, size, type, "
+                "attachment_id), never inlined. Given a thread_id it returns every "
+                "message in the thread, oldest first."
             ),
             "parameters": {
                 "type": "object",
@@ -2234,6 +2573,34 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
                         "description": "Cap on decoded body characters per message. Defaults to a value that fits the engine's tool-output limit; a cut body says body_truncated: true and body_chars.",
                     },
                 },
+            },
+        },
+    }
+    schemas["gws_gmail_get_attachment"] = {
+        "type": "function",
+        "function": {
+            "name": "gws_gmail_get_attachment",
+            "description": (
+                "Use this to open or read a file attached to an email, once "
+                "gws_gmail_get has listed its attachment_id. Downloads it (up to 20 MB) "
+                "into the local inbox and returns path, filename, mime_type, size_bytes, "
+                "format and the text of a PDF, Word, Excel, PowerPoint or text file (up "
+                "to 50,000 chars; truncated says if cut). An image returns a path for "
+                "view_image."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "message_id": {
+                        "type": "string",
+                        "description": "The id of the message carrying the attachment",
+                    },
+                    "attachment_id": {
+                        "type": "string",
+                        "description": "The attachment's attachment_id from gws_gmail_get",
+                    },
+                },
+                "required": ["message_id", "attachment_id"],
             },
         },
     }
@@ -3634,7 +4001,13 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
                 "type": "object",
                 "properties": {
                     "report_data": {
-                        "description": "Structured report data with keys: period, executive_summary, jira, github, people, bottlenecks",
+                        "description": (
+                            "The deterministic people.json aggregate of one report week "
+                            "(period, roles, members, team, usage, data_quality, ...), "
+                            "optionally with the analyst narrative under 'analyst': "
+                            "{summary, per_person: {member_id: note}, bottlenecks, "
+                            "si_vs_output}. Numbers are only ever taken from the aggregate."
+                        ),
                     },
                 },
                 "required": ["report_data"],
@@ -3655,7 +4028,14 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
                     "jql": {"type": "string", "description": "JQL query string"},
                     "max_results": {
                         "type": "integer",
-                        "description": "Max results (default 50, max 100)",
+                        "description": "Max results per page (default 50, max 100)",
+                    },
+                    "next_page_token": {
+                        "type": "string",
+                        "description": (
+                            "Token from a previous result's next_page_token, to fetch the "
+                            "next page (is_last=false means more pages exist)"
+                        ),
                     },
                 },
                 "required": ["jql"],
@@ -3732,6 +4112,99 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
                         "description": "Filter by project key (optional)",
                     },
                 },
+            },
+        },
+    }
+    schemas["jira_create_issue"] = {
+        "type": "function",
+        "function": {
+            "name": "jira_create_issue",
+            "description": (
+                "Create a JIRA issue in any project the account can write to. Returns the "
+                "new key and its browse URL."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_key": {"type": "string", "description": "Project key, e.g. ABC"},
+                    "summary": {"type": "string", "description": "Issue title"},
+                    "description": {
+                        "type": "string",
+                        "description": "Plain text body; blank lines separate paragraphs",
+                    },
+                    "issue_type": {
+                        "type": "string",
+                        "description": "Task (default), Bug, Story, Epic or Sub-task",
+                    },
+                    "labels": {"type": "array", "items": {"type": "string"}},
+                    "parent_key": {
+                        "type": "string",
+                        "description": "Parent epic or issue key (optional)",
+                    },
+                    "priority": {"type": "string", "description": "Priority name (optional)"},
+                },
+                "required": ["project_key", "summary"],
+            },
+        },
+    }
+    schemas["jira_add_comment"] = {
+        "type": "function",
+        "function": {
+            "name": "jira_add_comment",
+            "description": "Add a comment to a JIRA issue.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "issue_key": {"type": "string", "description": "Issue key, e.g. ABC-123"},
+                    "body": {"type": "string", "description": "Plain text comment"},
+                },
+                "required": ["issue_key", "body"],
+            },
+        },
+    }
+    schemas["jira_transition_issue"] = {
+        "type": "function",
+        "function": {
+            "name": "jira_transition_issue",
+            "description": (
+                "Move a JIRA issue to a status, e.g. 'In Progress' or 'Done'. An unknown "
+                "status returns the statuses reachable from the current one."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "issue_key": {"type": "string", "description": "Issue key, e.g. ABC-123"},
+                    "status": {
+                        "type": "string",
+                        "description": "Target status or transition name",
+                    },
+                },
+                "required": ["issue_key", "status"],
+            },
+        },
+    }
+    schemas["jira_update_issue"] = {
+        "type": "function",
+        "function": {
+            "name": "jira_update_issue",
+            "description": "Edit a JIRA issue's summary, description, labels or priority.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "issue_key": {"type": "string", "description": "Issue key, e.g. ABC-123"},
+                    "summary": {"type": "string"},
+                    "description": {
+                        "type": "string",
+                        "description": "Plain text body; replaces the existing description",
+                    },
+                    "labels": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Replaces the existing labels",
+                    },
+                    "priority": {"type": "string"},
+                },
+                "required": ["issue_key"],
             },
         },
     }
@@ -3897,6 +4370,8 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
             },
         },
     }
+
+    schemas.update(_N8N_SCHEMAS)
 
     schemas["buddy_refresh"] = {
         "type": "function",

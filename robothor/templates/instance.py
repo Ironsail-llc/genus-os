@@ -10,6 +10,7 @@ The .robothor/ directory tracks:
 from __future__ import annotations
 
 import os
+import re
 import shutil
 from datetime import UTC, datetime
 from pathlib import Path
@@ -17,7 +18,23 @@ from typing import Any
 
 import yaml
 
-from robothor.templates.safety import contained_path, validate_identifier, validate_sha256
+from robothor.templates.safety import (
+    TemplateSecurityError,
+    contained_path,
+    validate_identifier,
+    validate_sha256,
+)
+
+#: PEP 503's name grammar, for the ``plugin:<dist>`` source an agent a plugin
+#: ships is recorded with.
+_PLUGIN_NAME = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$")
+
+
+def validate_plugin_source(value: object) -> str:
+    """A plugin distribution name fit to record as an agent's source."""
+    if not isinstance(value, str) or not _PLUGIN_NAME.fullmatch(value) or len(value) > 128:
+        raise TemplateSecurityError("Invalid plugin distribution name for an agent source")
+    return value
 
 
 def _find_instance_dir() -> Path:
@@ -81,6 +98,8 @@ class InstanceConfig:
         installed_path = self._path("installed.yaml", label="install registry path")
         if installed_path.exists():
             data = yaml.safe_load(installed_path.read_text()) or {}
+            if not isinstance(data, dict):
+                raise ValueError("Invalid installed agent registry: expected a mapping")
             agents = data.get("agents", {})
             if not isinstance(agents, dict):
                 raise ValueError("Invalid installed agent registry: agents must be a mapping")
@@ -107,7 +126,10 @@ class InstanceConfig:
     ) -> None:
         """Record an agent installation."""
         agent_id = validate_identifier(agent_id, label="agent ID")
-        if source not in {"local", "hub", "bundle"}:
+        if source.startswith("plugin:"):
+            if validate_plugin_source(source.partition(":")[2]) != source_path:
+                raise ValueError("A plugin agent's source_path must be its distribution name")
+        elif source not in {"local", "hub", "bundle"}:
             raise ValueError(f"Unsupported agent source: {source}")
         if source == "hub":
             validate_identifier(source_path, label="hub bundle slug")

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import os
+import re
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -197,6 +198,9 @@ async def _jira_search(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]
         return {"error": "jql is required"}
 
     max_results = min(args.get("max_results", 50), 100)
+    body: dict[str, Any] = {"jql": jql, "maxResults": max_results}
+    if args.get("next_page_token"):
+        body["nextPageToken"] = args["next_page_token"]
 
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
@@ -204,8 +208,7 @@ async def _jira_search(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]
                 f"{base_url}/rest/api/3/search/jql",
                 headers=_headers(auth),
                 json={
-                    "jql": jql,
-                    "maxResults": max_results,
+                    **body,
                     "fields": [
                         "summary",
                         "status",
@@ -241,6 +244,7 @@ async def _jira_search(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]
         "count": len(issues),
         "total": data.get("total", len(issues)),
         "is_last": data.get("isLast", True),
+        "next_page_token": data.get("nextPageToken"),
     }
 
 
@@ -492,3 +496,264 @@ async def _jira_list_boards(args: dict[str, Any], ctx: ToolContext) -> dict[str,
         "boards": boards,
         "count": len(boards),
     }
+
+
+# ─── Write tools ────────────────────────────────────────────────────
+
+_NO_CREDENTIALS = {
+    "error": "JIRA credentials not configured (JIRA_BASE_URL, JIRA_USER_EMAIL, JIRA_API_TOKEN)"
+}
+
+# A key goes into the URL path, and httpx normalises `..` segments, so anything
+# looser would let a model-supplied key aim this tool's body at another endpoint.
+_ISSUE_KEY = re.compile(r"[A-Z][A-Z0-9_]*-\d+|\d+")
+_PROJECT_KEY = re.compile(r"[A-Z][A-Z0-9_]*")
+
+
+def _refuse_benchmark(name: str, ctx: ToolContext) -> dict[str, Any] | None:
+    """Defence in depth beside EXTERNAL_SIDE_EFFECT_TOOLS: never touch the real tracker."""
+    if ctx.is_benchmark:
+        return {"error": f"{name} is refused on a benchmark run"}
+    return None
+
+
+def _bad_key(field: str, value: str) -> dict[str, Any] | None:
+    if _ISSUE_KEY.fullmatch(value):
+        return None
+    return {"error": f"{field} must be an issue key like ABC-123 or a numeric id, got {value!r}"}
+
+
+def text_to_adf(text: str) -> dict[str, Any]:
+    """Plain text → Atlassian Document Format: blank lines split paragraphs."""
+    paragraphs = []
+    for block in str(text).split("\n\n"):
+        lines = block.strip("\n").split("\n")
+        if not any(line.strip() for line in lines):
+            continue
+        content: list[dict[str, Any]] = []
+        for i, line in enumerate(lines):
+            if i:
+                content.append({"type": "hardBreak"})
+            if line:
+                content.append({"type": "text", "text": line})
+        paragraphs.append({"type": "paragraph", "content": content})
+    return {"type": "doc", "version": 1, "content": paragraphs}
+
+
+def _write_error(resp: Any) -> dict[str, Any] | None:
+    """Map a failed write response to an error the model can act on."""
+    if resp.status_code == 401:
+        return {"error": "JIRA authentication failed — check API token"}
+    if resp.status_code == 403:
+        return {"error": "JIRA refused: the account lacks permission for this action"}
+    if resp.status_code == 404:
+        return {"error": "JIRA issue or project not found"}
+    if resp.status_code == 400:
+        return {"error": f"JIRA rejected the request: {resp.text}"}
+    if resp.status_code == 429:
+        return {"error": "JIRA rate limit exceeded. Try again later."}
+    return None
+
+
+@_handler("jira_create_issue")
+async def _jira_create_issue(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    """Create a JIRA issue (Task by default) in any project the account can write to."""
+    if refused := _refuse_benchmark("jira_create_issue", ctx):
+        return refused
+    base_url = _get_base_url()
+    auth = _get_auth_header()
+    if not base_url or not auth:
+        return dict(_NO_CREDENTIALS)
+
+    project_key = str(args.get("project_key") or "").strip()
+    summary = str(args.get("summary") or "").strip()
+    if not project_key or not summary:
+        return {"error": "project_key and summary are required"}
+    if not _PROJECT_KEY.fullmatch(project_key):
+        return {"error": f"project_key must be a project key like ABC, got {project_key!r}"}
+    parent_key = str(args.get("parent_key") or "").strip()
+    if parent_key and (error := _bad_key("parent_key", parent_key)):
+        return error
+
+    fields: dict[str, Any] = {
+        "project": {"key": project_key},
+        "summary": summary,
+        "issuetype": {"name": args.get("issue_type") or "Task"},
+    }
+    if args.get("description"):
+        fields["description"] = text_to_adf(args["description"])
+    if args.get("labels"):
+        fields["labels"] = list(args["labels"])
+    if parent_key:
+        fields["parent"] = {"key": parent_key}
+    if args.get("priority"):
+        fields["priority"] = {"name": args["priority"]}
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(
+                f"{base_url}/rest/api/3/issue", headers=_headers(auth), json={"fields": fields}
+            )
+            if error := _write_error(resp):
+                return error
+            resp.raise_for_status()
+            data = resp.json()
+    except httpx.HTTPStatusError as e:
+        return {"error": f"JIRA API error: {e.response.status_code}"}
+    except (httpx.ConnectError, httpx.ConnectTimeout) as e:
+        # Never connected, so nothing was sent: a retry is safe.
+        return {"error": f"JIRA request failed: {e}"}
+    except httpx.TransportError as e:
+        # The POST may have landed before the timeout or disconnect; a blind
+        # retry is how a tracker gets two copies of the same ticket.
+        return {
+            "error": (
+                f"JIRA request failed ({type(e).__name__}): the issue may have been created. "
+                f"Before retrying, jira_search project {project_key} for the summary "
+                f"{summary!r} and only create it if nothing matches."
+            )
+        }
+    except Exception as e:
+        return {"error": f"JIRA request failed: {e}"}
+
+    key = data.get("key", "")
+    return {"key": key, "id": data.get("id", ""), "url": f"{base_url}/browse/{key}"}
+
+
+@_handler("jira_add_comment")
+async def _jira_add_comment(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    """Add a comment to a JIRA issue."""
+    if refused := _refuse_benchmark("jira_add_comment", ctx):
+        return refused
+    base_url = _get_base_url()
+    auth = _get_auth_header()
+    if not base_url or not auth:
+        return dict(_NO_CREDENTIALS)
+
+    issue_key = str(args.get("issue_key") or "").strip()
+    body = str(args.get("body") or "").strip()
+    if not issue_key or not body:
+        return {"error": "issue_key and body are required"}
+    if error := _bad_key("issue_key", issue_key):
+        return error
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(
+                f"{base_url}/rest/api/3/issue/{issue_key}/comment",
+                headers=_headers(auth),
+                json={"body": text_to_adf(body)},
+            )
+            if error := _write_error(resp):
+                return error
+            resp.raise_for_status()
+            data = resp.json()
+    except httpx.HTTPStatusError as e:
+        return {"error": f"JIRA API error: {e.response.status_code}"}
+    except Exception as e:
+        return {"error": f"JIRA request failed: {e}"}
+
+    return {"issue_key": issue_key, "comment_id": str(data.get("id", ""))}
+
+
+@_handler("jira_transition_issue")
+async def _jira_transition_issue(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    """Move a JIRA issue to a status (matched by target status or transition name)."""
+    if refused := _refuse_benchmark("jira_transition_issue", ctx):
+        return refused
+    base_url = _get_base_url()
+    auth = _get_auth_header()
+    if not base_url or not auth:
+        return dict(_NO_CREDENTIALS)
+
+    issue_key = str(args.get("issue_key") or "").strip()
+    wanted = str(args.get("status") or "").strip().lower()
+    if not issue_key or not wanted:
+        return {"error": "issue_key and status are required"}
+    if error := _bad_key("issue_key", issue_key):
+        return error
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            url = f"{base_url}/rest/api/3/issue/{issue_key}/transitions"
+            resp = await client.get(url, headers=_headers(auth))
+            if error := _write_error(resp):
+                return error
+            resp.raise_for_status()
+            transitions = resp.json().get("transitions") or []
+            match = next(
+                (
+                    t
+                    for t in transitions
+                    if wanted
+                    in {
+                        str((t.get("to") or {}).get("name", "")).lower(),
+                        str(t.get("name", "")).lower(),
+                    }
+                ),
+                None,
+            )
+            if match is None:
+                options = sorted({(t.get("to") or {}).get("name", "") for t in transitions})
+                return {
+                    "error": f"No transition to '{args.get('status')}' from the current status; "
+                    f"available: {', '.join(o for o in options if o) or 'none'}"
+                }
+            resp = await client.post(
+                url, headers=_headers(auth), json={"transition": {"id": match["id"]}}
+            )
+            if error := _write_error(resp):
+                return error
+            resp.raise_for_status()
+    except httpx.HTTPStatusError as e:
+        return {"error": f"JIRA API error: {e.response.status_code}"}
+    except Exception as e:
+        return {"error": f"JIRA request failed: {e}"}
+
+    return {"issue_key": issue_key, "status": (match.get("to") or {}).get("name", "")}
+
+
+@_handler("jira_update_issue")
+async def _jira_update_issue(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    """Edit a JIRA issue's summary, description, labels or priority."""
+    if refused := _refuse_benchmark("jira_update_issue", ctx):
+        return refused
+    base_url = _get_base_url()
+    auth = _get_auth_header()
+    if not base_url or not auth:
+        return dict(_NO_CREDENTIALS)
+
+    issue_key = str(args.get("issue_key") or "").strip()
+    if not issue_key:
+        return {"error": "issue_key is required"}
+    if error := _bad_key("issue_key", issue_key):
+        return error
+
+    fields: dict[str, Any] = {}
+    if args.get("summary"):
+        fields["summary"] = str(args["summary"])
+    if args.get("description"):
+        fields["description"] = text_to_adf(args["description"])
+    if args.get("labels") is not None:
+        fields["labels"] = list(args["labels"])
+    if args.get("priority"):
+        fields["priority"] = {"name": args["priority"]}
+    if not fields:
+        return {"error": "nothing to update: pass summary, description, labels or priority"}
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.put(
+                f"{base_url}/rest/api/3/issue/{issue_key}",
+                headers=_headers(auth),
+                json={"fields": fields},
+            )
+            if error := _write_error(resp):
+                return error
+            resp.raise_for_status()
+    except httpx.HTTPStatusError as e:
+        return {"error": f"JIRA API error: {e.response.status_code}"}
+    except Exception as e:
+        return {"error": f"JIRA request failed: {e}"}
+
+    return {"issue_key": issue_key, "updated": sorted(fields)}

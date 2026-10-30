@@ -6,16 +6,27 @@ global:
   # Union: main ships the release tag; this branch ships the hardening flags.
   # Dropping either side is a silent regression — the tag rolls production
   # backwards, the flags disable auth. Keep both.
-  imageTag: "v1.108.1"
+  imageTag: "v1.117.0"
   environment: production
   authEnforce: true
 # Cloud env — never run the in-cluster subcharts. Fail-closed defaults.
 postgres:
   enabled: false
-redis:
-  enabled: false
+# Cache: in-cluster Valkey from the chart's own subchart, one per deployment.
+# Deliberately not a managed cache service: the pinned chart has no Sentinel,
+# so a single managed node would buy failover the chart cannot yet express
+# anyway, and a dedicated instance keeps the ACL grant and the memory budget
+# scoped to this release. Host is derived as {release}-valkey; the ACL password
+# is the same ROBOTHOR_REDIS_PASSWORD the clients read.
+valkey:
+  enabled: true
 database:
   sslMode: verify-full
+  tls:
+    # verify-full needs the CA that signs the managed database's certificate.
+    # The deployment supplies this ConfigMap in the release namespace; the
+    # chart refuses to render verify-full here without it.
+    caConfigMap: genus-os-db-ca
 workspace:
   allowEmptyFleet: false
   minAgentCount: 1
@@ -51,6 +62,9 @@ vault:
       path: ironsail-production/genus-os/bridge-integrations
     orchestrator-providers:
       path: ironsail-production/genus-os/orchestrator-providers
+    # Mounted as a file by engine.googleWorkspace, never through secretRefs.
+    engine-google:
+      path: ironsail-production/genus-os/engine-google
 dashboard:
   enabled: true
   replicaCount: 2
@@ -67,6 +81,10 @@ dashboard:
 engine:
   enabled: true
   replicaCount: 1
+  # The assistant's mailbox for the gws_* tools. The mount is optional, so the
+  # engine starts even before the engine-google path is written.
+  googleWorkspace:
+    enabled: true
 bridge:
   enabled: true
   replicaCount: 3

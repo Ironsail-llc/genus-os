@@ -453,7 +453,13 @@ class TestGmailGet:
 
         assert out["body_text"].strip() == "See attached contract."
         assert out["attachments"] == [
-            {"filename": "contract.pdf", "mime_type": "application/pdf", "size_bytes": 20481}
+            {
+                "filename": "contract.pdf",
+                "mime_type": "application/pdf",
+                "size_bytes": 20481,
+                # What gws_gmail_get_attachment takes back; the bytes stay out.
+                "attachment_id": "att-1",
+            }
         ]
         assert "attachmentId" not in json.dumps(out)
 
@@ -1177,6 +1183,22 @@ class TestGwsErrors:
         assert "auth" in out["hint"]
         assert "not signed in" in out["hint"]
         assert "401 Unauthorized" in out["error"], "stderr is kept when there is any"
+
+    def test_the_clis_own_auth_tag_beats_the_words_in_its_message(self, monkeypatch) -> None:
+        """A container with no credentials file got `not_found: the id does not
+        exist in this mailbox` — the message says the FILE "does not exist" —
+        and an agent would retry with another id instead of reporting that the
+        mailbox is not signed in. gws tags its own failure class; trust it."""
+        out = self._run(
+            monkeypatch,
+            code=1,
+            stderr=(
+                "error[auth]: Authentication failed: GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE "
+                "points to /etc/genus/gws/credentials.json, but file does not exist"
+            ),
+        )
+        assert out["hint"].startswith("auth")
+        assert "not signed in" in out["hint"]
 
     def test_bad_parameters_are_named(self, monkeypatch) -> None:
         out = self._run(monkeypatch, code=2, stderr="invalid value for --params")

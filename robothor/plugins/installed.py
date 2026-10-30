@@ -53,10 +53,13 @@ def verify_installed_wheel(
             or hashlib.sha256(wheel_bytes).hexdigest() != expected_digest
         ):
             raise ValueError("Plugin wheel differs from reviewed artifact")
-        with tempfile.TemporaryDirectory(prefix="genus-installed-check-") as folder:
-            captured = Path(folder) / wheel_path.name
+        with tempfile.TemporaryDirectory(prefix="genus-installed-check-") as scratch:
+            # Resolved: the platform temp root may run through a symlink (macOS:
+            # /var -> /private/var), and the extractor refuses an aliased root.
+            folder = Path(scratch).resolve(strict=True)
+            captured = folder / wheel_path.name
             captured.write_bytes(wheel_bytes)
-            wheel = open_wheel(captured, Path(folder) / "contents")
+            wheel = open_wheel(captured, folder / "contents")
             lock = read_lockfile(lock_path)
             rows = [
                 row

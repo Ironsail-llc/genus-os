@@ -1,8 +1,12 @@
 suite: layer-2 values files fail closed
 # Guards against the "production silently runs in-cluster pgvector with
 # default password" regression. If someone removes `postgres.enabled: false`
-# or `redis.enabled: false` from values-production / values-staging, these
-# tests catch it.
+# from values-production / values-staging, these tests catch it.
+#
+# NOTE: the cache is deliberately the opposite. Postgres must stay external
+# (RDS) because an ephemeral in-cluster DB loses data; the per-app Valkey is
+# intentionally in-cluster in every environment, so these tests assert
+# `valkey.enabled: true` rather than false.
 release:
   name: gos
   namespace: genus
@@ -20,7 +24,7 @@ tests:
       - isKind:
           of: VaultStaticSecret
 
-  - it: values-staging resolves postgres.enabled=false + redis.enabled=false
+  - it: values-staging resolves postgres.enabled=false
     values:
       - ../values-staging.yaml
     template: vaultstaticsecret.yaml
@@ -176,7 +180,7 @@ tests:
             value: gos-postgres
           any: true
 
-  - it: values-local keeps postgres + redis enabled (in-cluster dev DBs)
+  - it: values-local keeps postgres + valkey enabled (in-cluster dev DBs)
     values:
       - ../values-local.yaml
     template: vaultstaticsecret.yaml
@@ -185,3 +189,30 @@ tests:
     asserts:
       - isKind:
           of: VaultStaticSecret
+
+  - it: cloud envs keep the per-app valkey enabled
+    # Inverse of the postgres guard: if someone sets valkey.enabled=false in a
+    # cloud values file without supplying redis.host, the chart stops rendering
+    # ROBOTHOR_REDIS_HOST and the services silently lose their event bus.
+    values:
+      - ../values-staging.yaml
+    template: engine/workload.yaml
+    documentIndex: 0
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ROBOTHOR_REDIS_HOST
+            value: gos-valkey
+
+  - it: production also keeps the per-app valkey enabled
+    values:
+      - ../values-production.yaml
+    template: engine/workload.yaml
+    documentIndex: 0
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ROBOTHOR_REDIS_HOST
+            value: gos-valkey

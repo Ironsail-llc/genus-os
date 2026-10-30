@@ -88,8 +88,7 @@ def _read(root: Path, path: str) -> bytes:
 
 
 def _contracts(root: Path, spec: ReleaseSpec) -> dict[str, Any]:
-    from apscheduler.triggers.cron import CronTrigger
-
+    from robothor.engine.crontab import cron_trigger
     from robothor.engine.manifest_schema import validate
     from robothor.engine.workflow import parse_workflow
     from robothor.plugins.manifest import parse_manifest
@@ -148,16 +147,18 @@ def _contracts(root: Path, spec: ReleaseSpec) -> dict[str, Any]:
             steps.extend(step.parallel_steps)
         for trigger in workflow.triggers:
             if trigger.type == "cron":
-                CronTrigger.from_crontab(trigger.cron, timezone=trigger.timezone)
+                cron_trigger(trigger.cron, timezone=trigger.timezone)
         workflows[workflow.id] = workflow
     for path in spec.plugins:
         with tempfile.TemporaryDirectory(prefix="genus-release-wheel-") as folder:
-            wheel = open_wheel(contained_path(root, path), Path(folder))
+            # Resolved: the platform temp root may run through a symlink (macOS:
+            # /var -> /private/var), and the extractor refuses an aliased root.
+            wheel = open_wheel(contained_path(root, path), Path(folder).resolve(strict=True))
             manifest = parse_manifest(wheel.manifest_text)
             if (
                 manifest is None
                 or len(wheel.manifest_candidates) != 1
-                or manifest.contract_version != 1
+                or manifest.contract_version not in (1, 2)
             ):
                 raise ReleaseError("Plugin wheel needs one supported native manifest")
             if any(

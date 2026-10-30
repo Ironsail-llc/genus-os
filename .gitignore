@@ -48,6 +48,8 @@ brain/*.sqlite3
 docs/agents/*.yaml
 docs/agents/*.md
 docs/agents/retired/
+# Webhook channel drop-ins: instance data a plugin or the operator writes.
+docs/webhooks.d/
 # Per-agent snapshot ring the Helm's agent builder writes before every edit.
 # Instance data like every other manifest here, and invisible to the engine:
 # load_manifest_dir globs *.yaml one level deep, non-recursively.
@@ -205,8 +207,10 @@ brain/.aider.chat.history.md
 
 # Personal business data (brain/memory/ covered above)
 
-# Claude Code artifacts
-.claude/
+# Claude Code artifacts. .claude/rules/ is tracked: it is the shared agent
+# instruction set CLAUDE.md loads (settings and local state stay ignored).
+**/.claude/*
+!/.claude/rules/
 .plan
 robothor.db
 # The bridge's local SQLite scratch DB, same class as robothor.db above: it is
