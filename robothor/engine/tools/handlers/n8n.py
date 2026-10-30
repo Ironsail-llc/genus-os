@@ -30,6 +30,11 @@ _NOT_CONFIGURED = (
 )
 
 
+def _now() -> datetime:
+    """The tools' clock; tests replace it so a seeded snapshot never goes stale."""
+    return datetime.now(UTC)
+
+
 def _handler(name: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
         HANDLERS[name] = fn
@@ -85,6 +90,7 @@ async def _n8n_list_workflows(args: dict[str, Any], ctx: ToolContext) -> dict[st
         base_url=group.n8n_base_url,
         poll_seconds=group.n8n_poll_seconds,
         configured=True,
+        now=_now(),
     )
     active_only = _flag(args.get("active_only"), True)
     query = str(args.get("query") or "").strip().lower()
@@ -113,7 +119,7 @@ async def _n8n_recent_failures(args: dict[str, Any], ctx: ToolContext) -> dict[s
     base_url = settings.integrations.n8n_base_url
     workflow_id = str(args.get("workflow_id") or "").strip() or None
     store = _store()
-    since = datetime.now(UTC) - timedelta(hours=hours)
+    since = _now() - timedelta(hours=hours)
     rows = await store.list_executions(ctx.tenant_id, workflow_id, MAX_FAILURES, since=since)
     names = {w["workflow_id"]: w["name"] for w in await store.list_workflows(ctx.tenant_id)}
     failures = [
