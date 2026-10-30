@@ -149,6 +149,31 @@ test.describe("Dashboard Layout", () => {
   });
 });
 
+test.describe("Chat dock", () => {
+  test("collapses from its header, stays collapsed on reload, reopens from the edge", async ({ page }) => {
+    await setupMocks(page);
+    await page.goto(DASHBOARD_URL, { waitUntil: "networkidle" });
+
+    const chatContainer = page.locator('[data-testid="chat-container"]');
+    const toggle = page.locator('[data-testid="chat-panel-toggle"]');
+    await expect(page.locator('[data-testid="chat-panel"]')).toBeVisible({ timeout: 10000 });
+
+    await page.locator('[data-testid="chat-dock-close"]').click();
+    await expect(chatContainer).toHaveCSS("width", "0px");
+    await expect(toggle).toHaveAttribute("aria-pressed", "false");
+
+    // The choice survives a reload, server render and hydration included.
+    await page.reload({ waitUntil: "networkidle" });
+    await expect(page.locator('[data-testid="default-dashboard"]')).toBeVisible({ timeout: 10000 });
+    await expect(chatContainer).toHaveCSS("width", "0px");
+    await expect(toggle).toHaveAttribute("aria-pressed", "false");
+
+    await page.locator('[data-testid="chat-dock-open"]').click();
+    await expect(chatContainer).toHaveCSS("width", "400px");
+    await expect(toggle).toHaveAttribute("aria-pressed", "true");
+  });
+});
+
 test.describe("Generated canvas (iframe sizing)", () => {
   test("generated dashboard renders and iframe is not cut off", async ({ page }) => {
     await setupMocks(page);

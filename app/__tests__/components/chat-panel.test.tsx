@@ -17,6 +17,7 @@ vi.mock("lucide-react", () => ({
   ClipboardList: () => <span>ClipboardList</span>,
   MessageSquareText: () => <span>MessageSquareText</span>,
   Brain: () => <span>Brain</span>,
+  PanelRightClose: () => <span>PanelRightClose</span>,
 }));
 
 // Mock UI components that use radix-ui internally
@@ -134,6 +135,20 @@ describe("ChatPanel", () => {
   it("renders Robothor header", () => {
     render(<ChatPanel />);
     expect(screen.getByText("Robothor")).toBeInTheDocument();
+  });
+
+  it("offers a collapse control when docked beside another view", () => {
+    const onCollapse = vi.fn();
+    render(<ChatPanel docked onCollapse={onCollapse} />);
+    const close = screen.getByTestId("chat-dock-close");
+    expect(close).toHaveAttribute("aria-label", "Collapse chat panel");
+    fireEvent.click(close);
+    expect(onCollapse).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers no collapse control when it is the page", () => {
+    render(<ChatPanel />);
+    expect(screen.queryByTestId("chat-dock-close")).not.toBeInTheDocument();
   });
 
   describe("conversation-driven dashboard", () => {
