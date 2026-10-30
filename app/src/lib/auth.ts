@@ -16,6 +16,7 @@
  * the bridge credential before allowing private traffic.
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import NextAuth, { CredentialsSignin } from "next-auth";
 import type { NextAuthConfig, Profile, Session, User } from "next-auth";
@@ -63,7 +64,22 @@ type JwtCallbackParams = {
   profile?: Profile;
   user?: User;
   trigger?: "signIn" | "signUp" | "update";
+  // The `update()` payload. A browser can send one (`useSession().update`),
+  // so nothing in it is trusted beyond the notice acknowledgement.
+  session?: unknown;
 };
+
+type SwitchResult = {
+  access_token: string;
+  user: { tenant_id: string; home_tenant_id: string; role: string };
+};
+
+export type TenantSwitchOutcome =
+  | { ok: true; tenant: string; homeTenant: string }
+  | { ok: false; status: number; error: string };
+
+/** Shown once after a refresh could not re-enter the acting tenant. */
+export const TENANT_REVERTED_NOTICE = "acting-tenant-reverted";
 
 type SignInCallbackParams = {
   account?: { provider?: string } | null;
@@ -194,6 +210,103 @@ async function bridgeRefresh(refreshToken: string): Promise<SsoResult | null> {
   }
 }
 
+function isSwitchResult(value: unknown): value is SwitchResult {
+  if (!value || typeof value !== "object") return false;
+  const result = value as Partial<SwitchResult>;
+  const user = result.user as Partial<SwitchResult["user"]> | undefined;
+  return (
+    typeof result.access_token === "string" &&
+    result.access_token.length > 0 &&
+    !!user &&
+    typeof user.tenant_id === "string" &&
+    user.tenant_id.length > 0 &&
+    typeof user.home_tenant_id === "string" &&
+    user.home_tenant_id.length > 0 &&
+    typeof user.role === "string"
+  );
+}
+
+/**
+ * Ask the bridge for an access token acting in `tenant`, presenting the
+ * session's current bearer. The bridge decides everything — role, ancestry,
+ * the `GENUS_TENANT_SWITCH_MODE` flag — and its refusal is returned as-is.
+ */
+async function bridgeSwitchTenant(
+  access: string,
+  tenant: string,
+): Promise<{ ok: true; result: SwitchResult } | { ok: false; status: number; error: string }> {
+  try {
+    const res = await fetch(`${BRIDGE_URL()}/api/auth/switch-tenant`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${access}` },
+      body: JSON.stringify({ tenant }),
+    });
+    const body: unknown = await res.json().catch(() => null);
+    if (res.ok && isSwitchResult(body)) return { ok: true, result: body };
+    const error = (body as { error?: unknown } | null)?.error;
+    return {
+      ok: false,
+      status: res.ok ? 502 : res.status,
+      error: typeof error === "string" && error ? error : "tenant switch failed",
+    };
+  } catch {
+    return { ok: false, status: 502, error: "bridge unavailable" };
+  }
+}
+
+function applySwitchedToken(token: JWT, result: SwitchResult): JWT {
+  token.bridgeAccess = result.access_token;
+  token.role = result.user.role;
+  token.tenantId = result.user.tenant_id;
+  token.homeTenantId = result.user.home_tenant_id;
+  token.accessExpiresAt = Date.now() + ACCESS_SKEW_MS;
+  if (result.user.tenant_id === result.user.home_tenant_id) delete token.actingTenant;
+  else token.actingTenant = result.user.tenant_id;
+  return token;
+}
+
+/**
+ * A switch request travels from the BFF route to the jwt callback through
+ * async context, never through the `update()` payload: the payload is also
+ * reachable from the browser (`POST /api/auth/session`), the context is not.
+ */
+type SwitchRequest = { tenant: string; outcome?: TenantSwitchOutcome };
+const switchRequests = new AsyncLocalStorage<SwitchRequest>();
+
+/**
+ * Run `update` (an Auth.js session update) with a tenant switch armed, and
+ * report what the bridge decided. On refusal the token is left exactly as it
+ * was, so the re-encoded cookie carries the same session.
+ */
+export async function withTenantSwitch(
+  tenant: string,
+  update: () => Promise<unknown>,
+): Promise<TenantSwitchOutcome> {
+  const request: SwitchRequest = { tenant };
+  await switchRequests.run(request, update);
+  return request.outcome ?? { ok: false, status: 401, error: "authentication required" };
+}
+
+async function performSwitch(token: JWT, request: SwitchRequest): Promise<JWT> {
+  if (typeof token.bridgeAccess !== "string" || token.bridgeAuthError) {
+    request.outcome = { ok: false, status: 401, error: "authentication required" };
+    return token;
+  }
+  const switched = await bridgeSwitchTenant(token.bridgeAccess, request.tenant);
+  if (!switched.ok) {
+    request.outcome = switched;
+    return token;
+  }
+  applySwitchedToken(token, switched.result);
+  delete token.tenantNotice;
+  request.outcome = {
+    ok: true,
+    tenant: switched.result.user.tenant_id,
+    homeTenant: switched.result.user.home_tenant_id,
+  };
+  return token;
+}
+
 /**
  * The bridge refresh token is single-use, but one page fires several requests
  * at once — so as the access token expires they all present the same refresh
@@ -236,6 +349,8 @@ function applyBridgeTokens(token: JWT, result: SsoResult): JWT {
   token.bridgeRefresh = result.refresh_token;
   token.role = result.user.role;
   token.tenantId = result.user.tenant_id;
+  // Sign-in and refresh always answer with a HOME token.
+  token.homeTenantId = result.user.tenant_id;
   token.accessExpiresAt = Date.now() + ACCESS_SKEW_MS;
   // Refreshed, or dropped. Left untouched, the hint set at local sign-in
   // survived every refresh for the life of the Auth.js cookie and could end up
@@ -254,6 +369,8 @@ function invalidateBridgeToken(token: JWT, error: BridgeAuthError): JWT {
   delete token.bridgeRefresh;
   delete token.role;
   delete token.tenantId;
+  delete token.homeTenantId;
+  delete token.actingTenant;
   delete token.accessExpiresAt;
   token.bridgeAuthError = error;
   return token;
@@ -264,6 +381,7 @@ function applyLocalTokens(token: JWT, result: LocalLoginResult): JWT {
   token.bridgeRefresh = result.refresh_token;
   token.role = result.user.role;
   token.tenantId = result.user.tenant_id;
+  token.homeTenantId = result.user.tenant_id;
   token.accessExpiresAt = Date.now() + ACCESS_SKEW_MS;
   token.mfaSetupRequired = result.mfa_setup_required === true;
   delete token.bridgeAuthError;
@@ -288,6 +406,7 @@ export async function bridgeJwtCallback({
   account,
   user,
   trigger,
+  session,
 }: JwtCallbackParams): Promise<JWT> {
   // First sign-in: exchange only a verified, complete identity — OIDC profile
   // claims or a validated Cloudflare Access JWT. Throwing aborts Auth.js
@@ -331,13 +450,36 @@ export async function bridgeJwtCallback({
     return invalidateBridgeToken(token, "BridgeSessionInvalid");
   }
 
-  if (Date.now() <= token.accessExpiresAt) return token;
-
-  const refreshed = await sharedBridgeRefresh(token.bridgeRefresh);
-  if (!refreshed) {
-    return invalidateBridgeToken(token, "BridgeRefreshFailed");
+  if (
+    trigger === "update" &&
+    (session as { tenantNoticeSeen?: unknown } | null | undefined)?.tenantNoticeSeen === true
+  ) {
+    delete token.tenantNotice;
   }
-  return applyBridgeTokens(token, refreshed);
+
+  if (Date.now() > token.accessExpiresAt) {
+    const acting = token.actingTenant;
+    const refreshed = await sharedBridgeRefresh(token.bridgeRefresh);
+    if (!refreshed) {
+      return invalidateBridgeToken(token, "BridgeRefreshFailed");
+    }
+    applyBridgeTokens(token, refreshed);
+    // The refresh token keeps the home tenant, so a refresh hands back a home
+    // token: re-enter the acting tenant, or drop to home and say so.
+    if (typeof acting === "string" && acting !== refreshed.user.tenant_id) {
+      const switched = await bridgeSwitchTenant(refreshed.access_token, acting);
+      if (switched.ok) {
+        applySwitchedToken(token, switched.result);
+      } else {
+        delete token.actingTenant;
+        token.tenantNotice = TENANT_REVERTED_NOTICE;
+      }
+    }
+  }
+
+  const switchRequest = trigger === "update" ? switchRequests.getStore() : undefined;
+  if (switchRequest) return performSwitch(token, switchRequest);
+  return token;
 }
 
 export async function bridgeSessionCallback({
@@ -360,6 +502,8 @@ export async function bridgeSessionCallback({
     delete session.bridgeAccess;
     delete session.role;
     delete session.tenantId;
+    delete session.homeTenantId;
+    delete session.tenantNotice;
     delete session.mfaSetupRequired;
     delete session.bridgeRefresh;
     session.authError =
@@ -377,6 +521,11 @@ export async function bridgeSessionCallback({
     typeof token.bridgeRefresh === "string" ? token.bridgeRefresh : undefined;
   session.role = token.role as string | undefined;
   session.tenantId = token.tenantId as string | undefined;
+  // Non-secret: the switcher and the "Acting as" banner compare the two.
+  session.homeTenantId =
+    typeof token.homeTenantId === "string" ? token.homeTenantId : undefined;
+  if (token.tenantNotice === TENANT_REVERTED_NOTICE) session.tenantNotice = TENANT_REVERTED_NOTICE;
+  else delete session.tenantNotice;
   // Not a credential — a policy flag. /api/auth/me stays authoritative; this
   // only lets the first render draw the banner without waiting on a fetch.
   session.mfaSetupRequired = token.mfaSetupRequired === true;
@@ -536,4 +685,14 @@ const serverAuthConfig = {
   },
 } satisfies NextAuthConfig;
 
-export const { auth } = NextAuth(serverAuthConfig);
+const serverAuth = NextAuth(serverAuthConfig);
+export const { auth } = serverAuth;
+
+/**
+ * Switch the caller's session to act in `tenant` (its home tenant restores).
+ * The acting token replaces the bridge bearer inside the same Auth.js cookie;
+ * a refusal leaves the session as it was.
+ */
+export function switchSessionTenant(tenant: string): Promise<TenantSwitchOutcome> {
+  return withTenantSwitch(tenant, () => serverAuth.unstable_update({}));
+}
