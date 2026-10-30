@@ -219,6 +219,9 @@ def test_arguments_after_a_multi_line_quote_are_still_judged(workspace, command)
         # unknown: a continuation line may close the quote and run a
         # command, so every later line is judged loosely too.
         "echo '\n\"' ; cat .env #\"\necho '",
+        # The loose split still separates a command glued to an operator.
+        "echo '\n'\necho hi;cat .env\necho '",
+        "echo hi;cat .env; echo '",
     ],
 )
 def test_an_unquoted_newline_separates_commands(workspace, command) -> None:
