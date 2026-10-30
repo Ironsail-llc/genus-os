@@ -333,6 +333,8 @@ def load_plugins(
     entry_points: list[Any] | None = None,
     reserved_names: set[str] | None = None,
     lockfile_path: Path | None = None,
+    *,
+    read_grants: bool = True,
 ) -> PluginSet:
     """Load every installed plugin, refusing anything that does not fit.
 
@@ -351,6 +353,11 @@ def load_plugins(
     `lockfile_path` is likewise injectable, and it is what keeps a test off the
     operator's real `plugins.lock`: the default resolves through the config-dir
     setting to a file that exists on any box where `genus plugin sync` has run.
+
+    `read_grants=False` applies the root tenant's grants from their persisted
+    record only (`grants.persisted_forced_off`): no database read and no log
+    line, for the CLI's start-up verb registration. Engines and `genus plugin`
+    keep the default and read the grants.
     """
     result = PluginSet()
     per_group_reserved = reserved_names is None
@@ -376,7 +383,7 @@ def load_plugins(
     # a read that errors keeps the last forced-off set refused.
     from robothor.plugins import grants as _grants
 
-    forced_by_root = _grants.forced_states()
+    forced_by_root = _grants.forced_states() if read_grants else _grants.persisted_forced_off()
 
     # One manifest digest per DISTRIBUTION, not per entry point. `genus-hostinfo`
     # publishes into three groups, so the un-memoized version read and hashed
