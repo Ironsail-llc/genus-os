@@ -23,6 +23,7 @@ describe("engineUrlFor", () => {
     vi.stubEnv("ROBOTHOR_TENANT_ENGINE_URLS", "");
     vi.stubEnv("ROBOTHOR_TENANT_ENGINE_URL_TEMPLATE", "");
     vi.stubEnv("ROBOTHOR_DEFAULT_TENANT", "");
+    vi.stubEnv("ROBOTHOR_PLATFORM_TENANT", "");
   });
 
   afterEach(() => {
@@ -119,6 +120,19 @@ describe("engineUrlFor", () => {
     vi.stubEnv("GENUS_TENANT_ENGINE_URL_TEMPLATE", TEMPLATE);
 
     expect(engineUrlFor("acme-parent")).toBe(ROOT);
+    expect(engineUrlFor("default")).toBe("http://genus-engine-default:18800");
+  });
+
+  // The bridge gates and routes on PLATFORM_TENANT, which is
+  // ROBOTHOR_PLATFORM_TENANT when set and ROBOTHOR_DEFAULT_TENANT otherwise.
+  // The dashboard must agree, or a root user's token (tid = the platform
+  // tenant) is templated into a Service that does not exist.
+  it("reads the root tenant from ROBOTHOR_PLATFORM_TENANT before ROBOTHOR_DEFAULT_TENANT", () => {
+    vi.stubEnv("ROBOTHOR_PLATFORM_TENANT", "acme-root");
+    vi.stubEnv("ROBOTHOR_DEFAULT_TENANT", "default");
+    vi.stubEnv("GENUS_TENANT_ENGINE_URL_TEMPLATE", TEMPLATE);
+
+    expect(engineUrlFor("acme-root")).toBe(ROOT);
     expect(engineUrlFor("default")).toBe("http://genus-engine-default:18800");
   });
 

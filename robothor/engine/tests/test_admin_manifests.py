@@ -128,6 +128,12 @@ def test_an_instruction_file_outside_brain_is_refused(client, workspace):
     )
     assert response.status_code == 422
     assert not (workspace.parent / "outside.md").exists()
+    # The refusal says what kind of thing was refused, in the route's own
+    # words; the validator's exception text is not echoed to the browser.
+    body = response.json()
+    assert body["error"]
+    assert "Invalid" not in body["error"]
+    assert "instruction_file" not in body["error"]
 
 
 def test_a_path_shaped_agent_id_is_refused(client, workspace):

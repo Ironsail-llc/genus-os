@@ -680,6 +680,37 @@ tests:
           path: spec.template.spec.containers[0].env
           content: {name: ROBOTHOR_ENGINE_URL, value: "http://gos-genus-os-engine:18800"}
 
+  # The bridge gates and routes on the root tenant, and the dashboard decides
+  # by it which token goes to the root engine rather than through the
+  # template. Both must agree with the root engine about which tenant that is.
+  - it: the bridge knows which tenant is root
+    template: bridge/workload.yaml
+    documentIndex: 0
+    set:
+      global.rootTenant: acme-root
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: ROBOTHOR_DEFAULT_TENANT, value: acme-root}
+
+  - it: the dashboard knows which tenant is root
+    template: dashboard/deployment.yaml
+    documentIndex: 0
+    set:
+      global.rootTenant: acme-root
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: ROBOTHOR_DEFAULT_TENANT, value: acme-root}
+
+  - it: the bridge and dashboard name the default root tenant when none is set
+    template: bridge/workload.yaml
+    documentIndex: 0
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: ROBOTHOR_DEFAULT_TENANT, value: default}
+
   # ─── NetworkPolicy ─────────────────────────────────────────────────────────
   - it: engine ingress admits the bridge and dashboard for every engine pod
     template: networkpolicy.yaml

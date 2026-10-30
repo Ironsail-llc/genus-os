@@ -113,6 +113,20 @@ class TestReadsAreFiltered:
             assert "tenant_id = ANY(%s)" in sql
             assert "IS NULL" not in sql
 
+    def test_a_failed_stats_read_does_not_echo_the_exception(self, caplog):
+        """The stats body reaches a tenant admin's browser: the database's
+        error text (which can name hosts, roles or SQL) stays in the log."""
+        conn, cursor = _mock_conn()
+        cursor.execute.side_effect = RuntimeError('relation "audit_log" at db-host-7 as role x')
+        audit.set_connection_factory(lambda: conn)
+        with caplog.at_level("WARNING"):
+            result = audit.stats(tenants=["acme-child-a"])
+        assert result["total_events"] == 0
+        assert "db-host-7" not in result["error"]
+        assert "audit_log" not in result["error"]
+        assert result["error"]
+        assert "db-host-7" in caplog.text
+
 
 # ─── Real Postgres ────────────────────────────────────────────────────
 
