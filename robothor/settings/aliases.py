@@ -40,6 +40,17 @@ DEPRECATED_ALIASES: dict[str, str] = {
     "ROBOTHOR_OWNER_EMAIL": "~/.robothor/owner.yaml",
     # The codex provider's own variable, kept working but no longer canonical.
     "CODEX_HOME": "ROBOTHOR_CODEX_HOME",
+    # Tenant switching is a bridge (GENUS_) setting; the ROBOTHOR_ spellings
+    # are accepted so an operator who guesses the engine's prefix is not
+    # silently left on the default.
+    "ROBOTHOR_TENANT_SWITCH_MODE": "GENUS_TENANT_SWITCH_MODE",
+    "ROBOTHOR_TENANT_SWITCH_ALLOW_INERT_RLS": "GENUS_TENANT_SWITCH_ALLOW_INERT_RLS",
+    # Per-tenant engine addressing, read by the bridge and the dashboard.
+    "ROBOTHOR_TENANT_ENGINE_URLS": "GENUS_TENANT_ENGINE_URLS",
+    "ROBOTHOR_TENANT_ENGINE_URL_TEMPLATE": "GENUS_TENANT_ENGINE_URL_TEMPLATE",
+    # One vault key and one fingerprint salt shared across pods.
+    "ROBOTHOR_VAULT_KEY_FILE": "GENUS_VAULT_KEY_FILE",
+    "ROBOTHOR_FINGERPRINT_SALT_FILE": "GENUS_FINGERPRINT_SALT_FILE",
 }
 
 #: Names already warned about in this process. One warning per name per

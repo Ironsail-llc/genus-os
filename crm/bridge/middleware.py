@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from fastapi import Request
     from starlette.middleware.base import RequestResponseEndpoint
     from starlette.responses import Response
+    from starlette.types import ASGIApp, Receive, Scope, Send
 
     from robothor.auth.deps import AuthContext
 from robothor.events.capabilities import check_endpoint_access, load_capabilities
@@ -75,6 +76,42 @@ class TenantMiddleware(BaseHTTPMiddleware):
         if auth is not None or _legacy_headers_allowed():
             response.headers["X-Tenant-Id"] = tenant_id
         return response
+
+
+class TenantScopeMiddleware:
+    """Bind every authenticated request's database scope to its token's tenant.
+
+    Pure ASGI, and registered so it runs INSIDE ``AuthMiddleware`` (Starlette
+    applies ``add_middleware`` in reverse), so ``scope["state"]["auth"]`` is
+    already the verified identity when it runs. The handler then executes
+    inside ``tenant_scope(auth.tenant_id)``: every pooled connection checked
+    out for this request binds ``app.tenant_id`` to the ACTING tenant, and the
+    migration-081 policy refuses another tenant's rows even where a query
+    forgot its WHERE. The scope is a ContextVar; anyio copies the context into
+    the threadpool, so sync handlers see it too.
+
+    Unauthenticated requests get no scope. With ``ROBOTHOR_RLS_ENABLED`` unset
+    nothing binds at all, so this changes no query on an instance that has not
+    turned RLS on.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] not in ("http", "websocket"):
+            await self.app(scope, receive, send)
+            return
+        auth = (scope.get("state") or {}).get("auth")
+        tenant_id = getattr(auth, "tenant_id", None) if auth is not None else None
+        if not tenant_id:
+            await self.app(scope, receive, send)
+            return
+
+        from robothor.db.connection import tenant_scope
+
+        with tenant_scope(str(tenant_id)):
+            await self.app(scope, receive, send)
 
 
 class RBACMiddleware(BaseHTTPMiddleware):
@@ -244,6 +281,9 @@ def _bridge_bind_host() -> str:
     return os.environ.get("ROBOTHOR_BRIDGE_HOST", "127.0.0.1")
 
 
+_ACCESSIBLE_TENANTS_PATH = "/api/tenants/accessible"
+
+
 def _authorization_denial(auth: AuthContext, method: str, path: str) -> str | None:
     """Return a stable public denial reason for a verified identity."""
     if path.startswith("/api/auth/"):
@@ -261,6 +301,12 @@ def _authorization_denial(auth: AuthContext, method: str, path: str) -> str | No
         auth.is_service or auth.role not in {"owner", "admin"}
     ):
         return "human tenant operator required"
+
+    if path == _ACCESSIBLE_TENANTS_PATH:
+        # The tenant picker: what THIS human may switch into. Every human role
+        # may ask (a single-tenant user gets only their home); an agent has no
+        # picker and no business enumerating the hierarchy.
+        return "human user required" if auth.is_service else None
 
     if path.startswith("/api/tenants"):
         if auth.is_service:

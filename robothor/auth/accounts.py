@@ -14,7 +14,7 @@ from typing import Any
 from psycopg2.extras import RealDictCursor
 
 from robothor.constants import DEFAULT_TENANT
-from robothor.db.connection import get_connection
+from robothor.db.connection import get_connection, unbound_scope
 
 logger = logging.getLogger(__name__)
 
@@ -291,7 +291,14 @@ def update_account(
 
 
 def get_account_by_idp(issuer: str, subject: str) -> dict[str, Any] | None:
-    with get_connection() as conn:
+    """The account bound to ``(issuer, subject)``, in whichever tenant it lives.
+
+    Unbound (``robothor.db.connection.unbound_scope``): the pair is unique
+    platform-wide, and a lookup bound to one tenant misses every other
+    tenant's account — after which ``jit_provision`` INSERTs a duplicate and
+    sign-in fails on a UniqueViolation.
+    """
+    with unbound_scope(), get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
         cur.execute(
             "SELECT * FROM user_accounts WHERE idp_issuer = %s AND idp_subject = %s",
@@ -324,6 +331,29 @@ def jit_provision(
     if default_role not in JIT_PROVISIONABLE_ROLES:
         raise UnsafeProvisioningRoleError("privileged roles cannot be JIT provisioned")
 
+    # Unbound throughout: the bound account may live in a child tenant, and
+    # the login stamp, grant consumption and bind must all see the row the
+    # lookup found. The INSERT names its tenant explicitly.
+    with unbound_scope():
+        return _jit_provision(
+            issuer=issuer,
+            subject=subject,
+            email=email,
+            display_name=display_name,
+            tenant_id=tenant_id,
+            default_role=default_role,
+        )
+
+
+def _jit_provision(
+    *,
+    issuer: str,
+    subject: str,
+    email: str,
+    display_name: str,
+    tenant_id: str,
+    default_role: str,
+) -> dict[str, Any]:
     email = canonical_email(email)
     existing = get_account_by_idp(issuer, subject)
     if existing:
@@ -600,8 +630,11 @@ def consume_active_session(refresh_token_hash: str) -> dict[str, Any] | None:
 
     Rotation must be a single database operation: a separate read followed by
     a revoke allows two concurrent requests to reuse the same refresh token.
+
+    Unbound: a refresh carries no access token, so nothing says which tenant
+    the session's account lives in until this has answered.
     """
-    with get_connection() as conn:
+    with unbound_scope(), get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
         cur.execute(
             """UPDATE user_sessions

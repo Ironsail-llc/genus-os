@@ -25,6 +25,7 @@ import logging
 import httpx
 from fastapi import Depends, FastAPI
 
+from robothor.logging_setup import ensure_logging_configured
 from robothor.sales.api import router as sales_router
 from robothor.sales.ingestion import router as sales_ingestion_router
 
@@ -38,7 +39,13 @@ def _default_tenant() -> str:
     return DEFAULT_TENANT
 
 
-from middleware import AuthMiddleware, CorrelationMiddleware, RBACMiddleware, TenantMiddleware
+from middleware import (
+    AuthMiddleware,
+    CorrelationMiddleware,
+    RBACMiddleware,
+    TenantMiddleware,
+    TenantScopeMiddleware,
+)
 from routers.agent_manifests import router as agent_manifests_router
 from routers.agents import router as agents_router
 from routers.approvals import router as approvals_router
@@ -128,6 +135,12 @@ async def lifespan(app: FastAPI):
     global http_client
     from robothor.auth.runtime import validate_auth_configuration
 
+    # First, so everything below can be heard. The bridge never configured
+    # logging, and with no handler on the root logger the stdlib drops every
+    # INFO line — the observe rung of tenant switching included. Respects a
+    # handler something else already installed.
+    ensure_logging_configured()
+
     validate_auth_configuration(bind_host=os.environ.get("ROBOTHOR_BRIDGE_HOST", "127.0.0.1"))
     # Say at boot, once, whether this process can complete a sign-in at all.
     # Outside production the missing secret is not fatal (dev/loopback modes do
@@ -164,11 +177,14 @@ app = FastAPI(
 )
 
 # Middleware (applied in reverse order — correlation runs first, then auth,
-# then tenant, then RBAC). AuthMiddleware verifies a bridge-issued token and
-# sets request.state.auth. Authentication is fail-closed unless the bridge is
-# explicitly placed in loopback-only insecure development mode.
+# then the tenant scope, then tenant, then RBAC). AuthMiddleware verifies a
+# bridge-issued token and sets request.state.auth. Authentication is
+# fail-closed unless the bridge is explicitly placed in loopback-only insecure
+# development mode. TenantScopeMiddleware sits directly inside it: everything
+# after authentication runs bound to the token's tenant for RLS.
 app.add_middleware(RBACMiddleware)
 app.add_middleware(TenantMiddleware)
+app.add_middleware(TenantScopeMiddleware)
 app.add_middleware(AuthMiddleware)
 app.add_middleware(CorrelationMiddleware)
 

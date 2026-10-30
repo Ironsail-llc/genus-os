@@ -136,3 +136,79 @@ lying about its isolation.
 journalctl -u robothor-engine -u robothor-bridge -u robothor-orchestrator \
            -u robothor-vision -u robothor-delphi-engine | grep "RLS IS INERT"
 ```
+
+## Per-request binding in the bridge
+
+The bridge binds every **authenticated** request to its token's tenant.
+`TenantScopeMiddleware` (`crm/bridge/middleware.py`) runs directly inside
+`AuthMiddleware` and wraps the handler in `tenant_scope(auth.tenant_id)`, so
+every pooled connection checked out for that request sets `app.tenant_id` to
+the token's `tid` — sync handlers included, because anyio copies the context
+into the threadpool. A route that forgets its tenant `WHERE` then gets only
+that tenant's rows from the database. Unauthenticated requests get no scope.
+With `ROBOTHOR_RLS_ENABLED` unset nothing is bound at all, as before.
+
+The vault follows the same scope: `robothor.vault` defaults `tenant_id` to the
+enclosing `tenant_scope` (the default tenant outside one), and its connection
+is bound like a pooled one. An **explicit** `tenant_id` wins: the connection is
+then bound to that tenant, so the instance's own credentials (the SIEM webhook,
+provider keys, the Telegram token, all asked for with the default tenant by
+`robothor.secrets`) are still found inside a child-scoped request or a
+sandboxed run. The session signing key and the provider key pool are always
+read in the default tenant, whatever scope asks for them.
+
+**One key for the bridge and every engine cell.** The vault master key and the
+credential-fingerprint salt normally live in the workspace (`.vault-key`,
+`.fingerprint-salt`), which gives each pod its own. `GENUS_VAULT_KEY_FILE` and
+`GENUS_FINGERPRINT_SALT_FILE` name the files outright; the chart mounts them
+from the `vault-key` secret, so every process reads the same key and salt.
+Under either setting nothing is ever generated: a missing or wrong-length key
+fails with an error naming the variable, and a missing salt logs an error and
+fingerprints unsalted until the file appears. Unset, both behave as before.
+
+**Sign-in is the exception.** A login has no token yet, and the account may
+live in any tenant — `(idp_issuer, idp_subject)` is unique platform-wide. The
+`/api/auth` sso, login, refresh, logout and switch-tenant routes and
+`accounts.get_account_by_idp` / `jit_provision` / `consume_active_session`
+therefore run inside `unbound_scope()`, which binds `app.tenant_id = ''` (the
+permissive branch of the policy). Without it, an SSO sign-in for an account
+outside the default tenant misses the existing row, inserts a duplicate and
+fails with a `UniqueViolation`. The caller list is pinned by
+`tests/test_unbound_scope_callers.py`; see the shared docstring on
+`unbound_scope` and `read_every_tenant_in_transaction` in
+`robothor/db/connection.py` for how the two widenings differ.
+
+### Tenant switching
+
+A root-tenant owner or admin may act in a descendant tenant:
+`POST /api/auth/switch-tenant {"tenant": "<id>"}` returns an access token with
+`tid` set to the target, `home_tid` set to the home tenant and `act: true`. The
+acting tenant is carried in the token, never in a header — an `X-Tenant-Id`
+that disagrees with `tid` is still refused. The target must be one of the
+HOME tenant's descendants (depth 3), so a child admin can reach neither its
+parent nor a sibling, and switching from an acting token is checked against
+home. `GET /api/tenants/accessible` lists the choices, home first. The refresh
+token is not touched: a refresh always returns a home token.
+
+Because switching trusts `crm_tenants.parent_tenant_id`, and that table has no
+RLS, only a **root operator** — a human owner/admin whose home and acting
+tenant are both the platform tenant — may create a tenant or change its
+`parentTenantId` or `active` flag (`crm/bridge/routers/tenants.py`). A new
+parent that would make a cycle, or put any tenant more than three levels below
+a root, is refused with 422 (`robothor.crm.dal.tenant_parent_problem`). Any
+owner/admin may still edit the display name and settings of a tenant it can
+reach. The caller's own-account routes (`/me`, `/password`, `/mfa/*`) always
+run in the home tenant, where the account lives.
+
+`GENUS_TENANT_SWITCH_MODE` is `off` by default (every switch is refused);
+`observe` runs the full check and still refuses, recording what it would have
+done as a `tenant.switch` audit row with status `would-allow`, `would-deny` or
+`would-refuse` and both tenant ids. Read those rows in the audit log —
+`GET /api/audit/events?event_type=tenant.switch` — rather than grepping logs
+(a WARNING line is written too); `enforce` issues the token — **only while row-level security is
+genuinely enforcing**. That check is the same gate federation activation uses
+(`robothor/federation/rls_gate.py`): it refuses with 503 when
+`ROBOTHOR_RLS_ENABLED` is unset or the connection is a superuser.
+`GENUS_TENANT_SWITCH_ALLOW_INERT_RLS=1` is the deliberate escape hatch, and is
+logged at WARNING every time it admits a switch. Promote the ladder as in
+[Guardrail flips](GUARDRAIL_FLIPS.md).

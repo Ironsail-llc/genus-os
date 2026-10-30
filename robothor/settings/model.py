@@ -1670,6 +1670,49 @@ class AuthSettings(SettingsGroup):
         "Role assigned to internal service callers. A fresh install with this "
         "unseeded denies every agent every tool.",
     )
+    tenant_switch_mode: str = declare(
+        "off",
+        "GENUS_TENANT_SWITCH_MODE",
+        "Whether a root-tenant owner or admin may switch into a descendant "
+        "tenant (POST /api/auth/switch-tenant). 'off' refuses every switch; "
+        "'observe' runs the full check, records a would-allow / would-deny "
+        "tenant.switch audit row and still refuses; 'enforce' issues the acting token — and only while row-level "
+        "security is genuinely enforcing. Any other value reads as 'off'.",
+        aliases=("ROBOTHOR_TENANT_SWITCH_MODE",),
+        restart_units=("robothor-bridge",),
+        since="1.118.0",
+    )
+    tenant_switch_allow_inert_rls: bool = declare(
+        False,
+        "GENUS_TENANT_SWITCH_ALLOW_INERT_RLS",
+        "Let tenant switching issue tokens while row-level security is inert "
+        "(ROBOTHOR_RLS_ENABLED unset, or a superuser connection). A deliberate "
+        "escape hatch: without RLS the acting tenant is enforced only by each "
+        "query's own WHERE clause.",
+        aliases=("ROBOTHOR_TENANT_SWITCH_ALLOW_INERT_RLS",),
+        restart_units=("robothor-bridge",),
+        since="1.118.0",
+    )
+    tenant_engine_urls: str = declare(
+        "",
+        "GENUS_TENANT_ENGINE_URLS",
+        "Optional JSON object mapping a tenant id to the base URL of that "
+        'tenant\'s engine, e.g. {"acme-child-a": "http://127.0.0.1:18801"}. '
+        "An explicit entry wins over GENUS_TENANT_ENGINE_URL_TEMPLATE; meant "
+        "for local development and one-off overrides. Empty means none.",
+        aliases=("ROBOTHOR_TENANT_ENGINE_URLS",),
+        since="1.118.0",
+    )
+    tenant_engine_url_template: str = declare(
+        "",
+        "GENUS_TENANT_ENGINE_URL_TEMPLATE",
+        "Base URL of a child tenant's engine, with the literal {tenant} "
+        "placeholder the bridge and dashboard substitute with the tenant id, "
+        "e.g. http://engine-{tenant}:18800. Empty means every tenant is "
+        "served by the instance's own engine.",
+        aliases=("ROBOTHOR_TENANT_ENGINE_URL_TEMPLATE",),
+        since="1.118.0",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -2211,6 +2254,36 @@ class SecretSettings(SettingsGroup):
         "Signing raises rather than falling back when it is unset.",
         secret=True,
         bootstrap=True,
+    )
+    vault_key_file: str = declare(
+        "",
+        "GENUS_VAULT_KEY_FILE",
+        "Path of THE vault master key file (32 bytes), instead of "
+        "<workspace>/.vault-key, so the bridge and every engine cell share one "
+        "key (typically a read-only Secret mount). Under it nothing is ever "
+        "generated: a missing or wrong-length file is an error naming this "
+        "variable. Empty keeps the workspace key, generated on first boot.",
+        aliases=("ROBOTHOR_VAULT_KEY_FILE",),
+        # Bootstrap: it says where the vault's own key is, so it can only ever
+        # come from the environment (and never reaches an agent's shell).
+        secret=True,
+        bootstrap=True,
+        since="1.118.0",
+    )
+    fingerprint_salt_file: str = declare(
+        "",
+        "GENUS_FINGERPRINT_SALT_FILE",
+        "Path of THE credential-fingerprint salt file, instead of "
+        "<workspace>/.fingerprint-salt, so fingerprints agree across the "
+        "bridge and every engine cell. Never generated under an override: a "
+        "missing file logs an error and fingerprints degrade to the unsalted "
+        "form. Empty keeps the workspace salt, created on first use.",
+        aliases=("ROBOTHOR_FINGERPRINT_SALT_FILE",),
+        # Bootstrap for the same reason as the vault key file beside it: read
+        # before the vault, from the environment only, never by an agent.
+        secret=True,
+        bootstrap=True,
+        since="1.118.0",
     )
     env_file: str = declare(
         "/etc/robothor/robothor.env",
