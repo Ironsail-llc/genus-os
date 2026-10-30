@@ -33,7 +33,7 @@ import { useScreenSize } from "@/hooks/use-mobile";
 import { useViewRoute } from "@/hooks/use-view-route";
 import { useVisualState } from "@/hooks/use-visual-state";
 import { PanelRight, PanelRightOpen, Zap } from "lucide-react";
-import { readChatDockOpen, writeChatDockOpen } from "@/lib/chat/dock-state";
+import { readChatDockOpen, subscribeChatDockOpen, writeChatDockOpen } from "@/lib/chat/dock-state";
 
 // The conversation canvas (agent-pushed components + chat-driven dashboards)
 // loads only when the rail first opens, keeping it out of the chat bundle.
@@ -63,9 +63,6 @@ function HeaderClock() {
   return <span className="text-xs text-muted-foreground tabular-nums">{time} ET</span>;
 }
 
-/** Only this page's own controls change the stored dock state: nothing to subscribe to. */
-const subscribeNever = () => () => {};
-
 export function AppShell() {
   const screenSize = useScreenSize();
   const isMobile = screenSize === "mobile";
@@ -87,9 +84,10 @@ export function AppShell() {
   // The dock's open state is remembered per browser. The server cannot see that
   // choice, so it renders open and the stored value is adopted right after
   // hydration (a lazy useState read would leave the server's attributes on the
-  // sidebar toggle). A choice made on this page wins, and is written where the
+  // sidebar toggle). Another tab's choice applies when that tab writes it (the
+  // `storage` event). A choice made on this page wins, and is written where the
   // operator acts rather than in an effect.
-  const storedChatOpen = useSyncExternalStore(subscribeNever, readChatDockOpen, () => true);
+  const storedChatOpen = useSyncExternalStore(subscribeChatDockOpen, readChatDockOpen, () => true);
   const [chosenChatOpen, setChosenChatOpen] = useState<boolean | null>(null);
   const chatOpen = chosenChatOpen ?? storedChatOpen;
   const setChatDockOpen = (open: boolean) => {
