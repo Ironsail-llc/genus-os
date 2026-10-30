@@ -5,6 +5,7 @@ const mockXrevrange = vi.fn();
 const mockXread = vi.fn();
 const mockXlen = vi.fn();
 const mockQuit = vi.fn();
+const mockConstructor = vi.fn();
 
 // Mock ioredis — use a real class so `new Redis()` works
 vi.mock("ioredis", () => {
@@ -13,6 +14,9 @@ vi.mock("ioredis", () => {
     xread = mockXread;
     xlen = mockXlen;
     quit = mockQuit;
+    constructor(...args: unknown[]) {
+      mockConstructor(...args);
+    }
   }
   return { default: MockRedis };
 });
@@ -25,6 +29,7 @@ import {
   isValidStream,
   streamKey,
   closeRedis,
+  resolveRedisConnection,
 } from "../redis-client";
 
 beforeEach(async () => {
@@ -145,5 +150,97 @@ describe("streamLengths", () => {
     mockXlen.mockRejectedValue(new Error("fail"));
     const lengths = await streamLengths();
     expect(lengths.email).toBe(0);
+  });
+});
+
+describe("resolveRedisConnection", () => {
+  it("falls back to the localhost default when nothing is set", () => {
+    expect(resolveRedisConnection({})).toEqual({
+      url: "redis://localhost:6379/0",
+    });
+  });
+
+  it("builds host, port, password and DB 0 from ROBOTHOR_REDIS_*", () => {
+    expect(
+      resolveRedisConnection({
+        ROBOTHOR_REDIS_HOST: "cache.example.com",
+        ROBOTHOR_REDIS_PORT: "6380",
+        ROBOTHOR_REDIS_PASSWORD: "p@ss:w/rd",
+      })
+    ).toEqual({
+      host: "cache.example.com",
+      port: 6380,
+      password: "p@ss:w/rd",
+      db: 0,
+    });
+  });
+
+  it("defaults the port to 6379 and omits an empty password", () => {
+    expect(
+      resolveRedisConnection({
+        ROBOTHOR_REDIS_HOST: "cache.example.com",
+        ROBOTHOR_REDIS_PASSWORD: "",
+      })
+    ).toEqual({ host: "cache.example.com", port: 6379, db: 0 });
+  });
+
+  it("selects the DB from ROBOTHOR_REDIS_DB, as the Python services do", () => {
+    expect(
+      resolveRedisConnection({
+        ROBOTHOR_REDIS_HOST: "cache.example.com",
+        ROBOTHOR_REDIS_DB: "3",
+      })
+    ).toEqual({ host: "cache.example.com", port: 6379, db: 3 });
+  });
+
+  it("applies ROBOTHOR_REDIS_DB to the localhost default too", () => {
+    expect(resolveRedisConnection({ ROBOTHOR_REDIS_DB: "2" })).toEqual({
+      url: "redis://localhost:6379/2",
+    });
+  });
+
+  it("falls back to DB 0 when ROBOTHOR_REDIS_DB is not an integer", () => {
+    expect(
+      resolveRedisConnection({
+        ROBOTHOR_REDIS_HOST: "cache.example.com",
+        ROBOTHOR_REDIS_DB: "two",
+      })
+    ).toEqual({ host: "cache.example.com", port: 6379, db: 0 });
+  });
+
+  it("lets REDIS_URL win over ROBOTHOR_REDIS_*", () => {
+    expect(
+      resolveRedisConnection({
+        REDIS_URL: "redis://override.example.com:6390/2",
+        ROBOTHOR_REDIS_HOST: "cache.example.com",
+        ROBOTHOR_REDIS_PORT: "6380",
+        ROBOTHOR_REDIS_PASSWORD: "secret",
+      })
+    ).toEqual({ url: "redis://override.example.com:6390/2" });
+  });
+});
+
+describe("client construction", () => {
+  it("connects with the ROBOTHOR_REDIS_* settings when REDIS_URL is unset", async () => {
+    vi.stubEnv("REDIS_URL", "");
+    vi.stubEnv("ROBOTHOR_REDIS_HOST", "cache.example.com");
+    vi.stubEnv("ROBOTHOR_REDIS_PORT", "6380");
+    vi.stubEnv("ROBOTHOR_REDIS_PASSWORD", "secret");
+    try {
+      mockXrevrange.mockResolvedValue([]);
+      await readRecent("email");
+      expect(mockConstructor).toHaveBeenCalledTimes(1);
+      expect(mockConstructor).toHaveBeenCalledWith(
+        expect.objectContaining({
+          host: "cache.example.com",
+          port: 6380,
+          password: "secret",
+          db: 0,
+          lazyConnect: true,
+        })
+      );
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });

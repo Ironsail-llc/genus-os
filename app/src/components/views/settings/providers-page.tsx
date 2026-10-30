@@ -29,6 +29,27 @@ import { readBridgeReply } from "@/lib/bridge/read-reply";
 
 const BRIDGE = "/api/bridge";
 
+/**
+ * What the bridge says when it cannot reach the engine at all.
+ *
+ * The words are accurate and useless: they name no setting and no place to
+ * look. Every read on this page depends on the engine, so when one of them
+ * comes back with exactly this, the page says which setting the bridge dials
+ * and what to check instead. Any other refusal keeps the server's own words.
+ */
+const ENGINE_UNAVAILABLE = "engine unavailable";
+const ENGINE_UNREACHABLE_HELP =
+  "The bridge could not reach the engine at its configured URL (ROBOTHOR_ENGINE_URL). Check that the engine is running and that the network path from the bridge to the engine is allowed.";
+
+function explainRefusal(message: string): string {
+  return message.trim() === ENGINE_UNAVAILABLE ? ENGINE_UNREACHABLE_HELP : message;
+}
+
+/** `readBridgeReply`, with the one refusal an operator cannot act on rewritten. */
+async function readReply(res: Response): Promise<string> {
+  return explainRefusal(await readBridgeReply(res));
+}
+
 /** Mirrors robothor/engine/key_pool.py::MAX_KEY_SLOTS. */
 const MAX_KEY_SLOTS = 16;
 
@@ -214,6 +235,8 @@ export function ProvidersPage() {
 
   const [models, setModels] = useState<ModelEntry[]>([]);
   const [modelsError, setModelsError] = useState<string | null>(null);
+  // Until the first models read settles, an empty list means "not yet", not "none".
+  const [modelsLoaded, setModelsLoaded] = useState(false);
 
   const [verdicts, setVerdicts] = useState<Record<string, TestVerdict>>({});
   const [testing, setTesting] = useState<string | null>(null);
@@ -234,7 +257,7 @@ export function ProvidersPage() {
     try {
       const res = await fetch(`${BRIDGE}/api/providers`);
       if (!res.ok) {
-        setListError(await readBridgeReply(res));
+        setListError(await readReply(res));
         return;
       }
       const body = (await res.json()) as { providers?: Provider[] };
@@ -251,7 +274,7 @@ export function ProvidersPage() {
     try {
       const res = await fetch(`${BRIDGE}/api/models`);
       if (!res.ok) {
-        setModelsError(await readBridgeReply(res));
+        setModelsError(await readReply(res));
         return;
       }
       const body = (await res.json()) as { models?: ModelEntry[] };
@@ -259,6 +282,8 @@ export function ProvidersPage() {
       setModelsError(null);
     } catch {
       setModelsError("The dashboard could not reach the bridge to read the model catalog.");
+    } finally {
+      setModelsLoaded(true);
     }
   }, []);
 
@@ -272,7 +297,7 @@ export function ProvidersPage() {
     try {
       const res = await fetch(`${BRIDGE}/api/providers/defaults`);
       if (!res.ok) {
-        setDefaultsReadError(await readBridgeReply(res));
+        setDefaultsReadError(await readReply(res));
         return;
       }
       const body = (await res.json()) as Partial<FleetDefaults>;
@@ -291,11 +316,16 @@ export function ProvidersPage() {
     }
   }, []);
 
-  useEffect(() => {
+  /** Every read this page makes. A retry that re-ran only one would leave the rest stale. */
+  const reloadAll = useCallback(() => {
     void loadProviders();
     void loadModels();
     void loadDefaults();
   }, [loadProviders, loadModels, loadDefaults]);
+
+  useEffect(() => {
+    reloadAll();
+  }, [reloadAll]);
 
   const providerLabels = useMemo(() => {
     const labels: Record<string, string> = {};
@@ -346,7 +376,7 @@ export function ProvidersPage() {
         body: JSON.stringify({}),
       });
       if (!res.ok) {
-        setRowError(provider.id, await readBridgeReply(res));
+        setRowError(provider.id, await readReply(res));
         return;
       }
       const verdict = (await res.json()) as TestVerdict;
@@ -392,7 +422,7 @@ export function ProvidersPage() {
         // Scrubbed with the value the operator typed: no bridge route echoes a
         // credential back today, and the page holds the only copy, so it can
         // always take it out again before anything reaches the screen.
-        const message = scrub(await readBridgeReply(res), form.value);
+        const message = scrub(await readReply(res), form.value);
         setForm((prev) => (prev ? { ...prev, busy: null, error: message } : prev));
         return;
       }
@@ -420,7 +450,7 @@ export function ProvidersPage() {
         // Scrubbed with the value the operator typed: no bridge route echoes a
         // credential back today, and the page holds the only copy, so it can
         // always take it out again before anything reaches the screen.
-        const message = scrub(await readBridgeReply(res), form.value);
+        const message = scrub(await readReply(res), form.value);
         setForm((prev) => (prev ? { ...prev, busy: null, error: message } : prev));
         return;
       }
@@ -442,7 +472,7 @@ export function ProvidersPage() {
         method: "DELETE",
       });
       if (!res.ok) {
-        setRowError(provider.id, await readBridgeReply(res));
+        setRowError(provider.id, await readReply(res));
         return;
       }
       setConfirming(null);
@@ -463,7 +493,7 @@ export function ProvidersPage() {
         body: JSON.stringify({ model: primary, fallbacks: fallbacks.filter(Boolean) }),
       });
       if (!res.ok) {
-        setDefaultsError(await readBridgeReply(res));
+        setDefaultsError(await readReply(res));
         return;
       }
       setDefaultsResult((await res.json()) as DefaultsResult);
@@ -505,7 +535,7 @@ export function ProvidersPage() {
       ? `${defaultsResult.model} is in use by the fleet.`
       : `${defaultsResult.model} was written to _defaults.yaml, but the engine did not confirm the reload — it may still be running the previous model.`
     : defaultsReadError
-      ? `The bridge could not report the model the fleet is running on (${defaultsReadError}), so nothing is pre-selected here.`
+      ? `The bridge could not report the model the fleet is running on, so nothing is pre-selected here. ${defaultsReadError}`
       : defaults
         ? defaults.primary
           ? `The fleet is running on ${defaults.primary}${
@@ -516,6 +546,28 @@ export function ProvidersPage() {
           : "No default is set on this instance — every agent runs on the model its own manifest pins."
         : "Reading the fleet default…";
 
+  /**
+   * Why Save is disabled when nothing is chosen. A disabled button cannot be
+   * focused, so the reason is printed beside it and attached to it.
+   */
+  const saveReason = primary
+    ? null
+    : models.length > 0
+      ? "Choose a primary model to enable Save."
+      : modelsError
+        ? "Save is unavailable: the engine's model catalog did not load, so there is no model to choose. Use Refresh once the engine answers."
+        : modelsLoaded
+          ? "Save is unavailable: the engine reports no models, so there is no model to choose."
+          : "Reading the model catalog…";
+
+  const saveDescribedBy =
+    [
+      unlistedSelections.length > 0 ? "fleet-default-blocked" : null,
+      saveReason ? "fleet-default-save-reason" : null,
+    ]
+      .filter(Boolean)
+      .join(" ") || undefined;
+
   return (
     <div className="flex flex-col gap-5 p-4" data-testid="settings-page-providers">
       <PageHeader
@@ -525,11 +577,7 @@ export function ProvidersPage() {
         <Button
           variant="outline"
           size="sm"
-          onClick={() => {
-            void loadProviders();
-            void loadModels();
-            void loadDefaults();
-          }}
+          onClick={reloadAll}
           data-testid="providers-refresh"
         >
           <RefreshCw aria-hidden />
@@ -568,7 +616,7 @@ export function ProvidersPage() {
               </p>
             ) : null}
             <div>
-              <Button variant="outline" size="sm" onClick={() => void loadProviders()}>
+              <Button variant="outline" size="sm" onClick={reloadAll}>
                 Try again
               </Button>
             </div>
@@ -989,7 +1037,7 @@ export function ProvidersPage() {
           </p>
         ) : null}
 
-        {!modelsError && models.length === 0 ? (
+        {modelsLoaded && !modelsError && models.length === 0 ? (
           <p className="text-xs text-warning" data-testid="fleet-models-empty">
             The engine reports no models at all, so there is nothing to choose from. Its registry is
             empty or no plugin has contributed one — check the engine before changing this.
@@ -1067,7 +1115,7 @@ export function ProvidersPage() {
             disabled={!primary || savingDefaults || unlistedSelections.length > 0}
             // A disabled button is not focusable, so the reason it is disabled
             // has to be attached to it rather than merely printed underneath.
-            aria-describedby={unlistedSelections.length > 0 ? "fleet-default-blocked" : undefined}
+            aria-describedby={saveDescribedBy}
             data-testid="fleet-default-save"
             onClick={() => void saveDefaults()}
           >
@@ -1075,6 +1123,16 @@ export function ProvidersPage() {
             Save default
           </Button>
         </div>
+
+        {saveReason ? (
+          <span
+            id="fleet-default-save-reason"
+            className="text-xs text-muted-foreground"
+            data-testid="fleet-default-save-reason"
+          >
+            {saveReason}
+          </span>
+        ) : null}
 
         <span
           aria-live="polite"

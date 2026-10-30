@@ -54,7 +54,7 @@ spec:
         - {protocol: TCP, port: 53}
 {{- end }}
 
-{{- /* Dashboard may call only its three internal backends. */}}
+{{- /* Dashboard may call only its three internal backends and the in-chart cache. */}}
 {{- if and .Values.networkPolicy.egress.enabled .Values.dashboard.enabled }}
 ---
 apiVersion: networking.k8s.io/v1
@@ -79,6 +79,14 @@ spec:
       ports:
         - {protocol: TCP, port: {{ $cv.service.port }}}
     {{- end }}
+    {{- end }}
+    {{- if eq (include "genus-os.cacheEnabled" .) "true" }}
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: valkey
+              app.kubernetes.io/instance: {{ .Release.Name }}
+      ports: [{protocol: TCP, port: {{ .Values.redis.port }}}]
     {{- end }}
 {{- end }}
 
@@ -133,7 +141,7 @@ spec:
     {{- end }}
 {{- end }}
 
-{{- /* Bridge calls Orchestrator and the in-chart data services only. */}}
+{{- /* Bridge calls the engine's admin API, Orchestrator and the in-chart data services only. */}}
 {{- if and .Values.networkPolicy.egress.enabled .Values.bridge.enabled }}
 ---
 apiVersion: networking.k8s.io/v1
@@ -148,6 +156,13 @@ spec:
       {{- include "genus-os.selectorLabels" (dict "root" . "component" "bridge") | nindent 6 }}
   policyTypes: [Egress]
   egress:
+    {{- if .Values.engine.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "genus-os.selectorLabels" (dict "root" . "component" "engine") | nindent 14 }}
+      ports: [{protocol: TCP, port: {{ .Values.engine.service.port }}}]
+    {{- end }}
     {{- if .Values.orchestrator.enabled }}
     - to:
         - podSelector:
@@ -249,10 +264,12 @@ spec:
             matchLabels:
               {{- include "genus-os.selectorLabels" (dict "root" $root "component" "helm-test") | nindent 14 }}
         {{- if eq $component "engine" }}
-        {{- if $root.Values.dashboard.enabled }}
+        {{- range $source := list "dashboard" "bridge" }}
+        {{- if (index $root.Values $source).enabled }}
         - podSelector:
             matchLabels:
-              {{- include "genus-os.selectorLabels" (dict "root" $root "component" "dashboard") | nindent 14 }}
+              {{- include "genus-os.selectorLabels" (dict "root" $root "component" $source) | nindent 14 }}
+        {{- end }}
         {{- end }}
         {{- else if eq $component "bridge" }}
         {{- range $source := list "dashboard" "engine" }}
@@ -318,7 +335,7 @@ spec:
   policyTypes: [Ingress]
   ingress:
     - from:
-        {{- range $component := list "engine" "bridge" "orchestrator" }}
+        {{- range $component := list "engine" "bridge" "orchestrator" "dashboard" }}
         {{- if (index $root.Values $component).enabled }}
         - podSelector:
             matchLabels:

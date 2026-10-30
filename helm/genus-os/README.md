@@ -121,7 +121,7 @@ boundary. Keep them limited to these classes:
 | Class | Intended keys / consumers |
 |---|---|
 | `database` | `ROBOTHOR_DB_HOST`, `ROBOTHOR_DB_PORT`, `ROBOTHOR_DB_NAME`, `ROBOTHOR_DB_USER`, `ROBOTHOR_DB_PASSWORD`; Python services and migrations |
-| `cache` | `ROBOTHOR_REDIS_HOST`, `ROBOTHOR_REDIS_PORT`, `ROBOTHOR_REDIS_PASSWORD`; Python services only |
+| `cache` | `ROBOTHOR_REDIS_HOST`, `ROBOTHOR_REDIS_PORT`, `ROBOTHOR_REDIS_PASSWORD`; Python services through `secretRefs`. The dashboard reads the cache password key only, for the event-bus stream reads: the chart wires that one key as a `secretKeyRef` (with `ROBOTHOR_REDIS_HOST`/`PORT` when the in-chart cache is enabled), and `dashboard.secretRefs` still refuses `cache` |
 | `auth-signing` | `GENUS_AUTH_SIGNING_KEY`; Engine and Bridge enforce signed identity. It is currently also mounted to Orchestrator, which must remain network-restricted until it independently verifies tokens. |
 | `bridge-sso` | `GENUS_BRIDGE_SSO_SECRET`; Bridge and dashboard BFF only |
 | `bridge-oidc` | `GENUS_OIDC_ISSUERS`; Bridge only |
@@ -341,7 +341,13 @@ store is intended. The check never depends on the environment's name. See
 [Trusting the database's CA](../../docs/deployment.md#trusting-the-databases-ca).
 
 Production and staging NetworkPolicies default-deny ingress and egress, then
-rebuild only the declared component graph. In-chart PostgreSQL/Redis are selected by pod labels. Managed
+rebuild only the declared component graph: the dashboard calls engine, bridge,
+orchestrator and, when the in-chart cache is enabled, the cache port; the engine
+calls bridge, orchestrator and NATS; the bridge calls the engine's admin API (at
+`ROBOTHOR_ENGINE_URL`, which the chart points at the engine Service whenever
+`engine.enabled`) and the orchestrator. In-chart PostgreSQL/Redis are selected by
+pod labels; the cache's ingress admits the Python services and the dashboard, and
+nothing else. Managed
 database, Redis, Ollama, HTTPS API, or egress-proxy access requires exact CIDRs
 and ports in Layer 3:
 
