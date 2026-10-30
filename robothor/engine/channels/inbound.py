@@ -29,6 +29,8 @@ delivery window — would send the same activity again.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -36,10 +38,11 @@ from typing import TYPE_CHECKING, Any
 from robothor.constants import DEFAULT_TENANT
 from robothor.engine.channels import access
 from robothor.engine.chat import get_shared_session
-from robothor.engine.models import TriggerType
+from robothor.engine.chat_history import append_turn
+from robothor.engine.models import RunStatus, TriggerType
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from collections.abc import Callable
+    from collections.abc import AsyncIterator, Callable
 
     from robothor.identity import IdentityContext
 
@@ -50,6 +53,7 @@ __all__ = [
     "FAILED_REPLY",
     "NO_OUTPUT_REPLY",
     "InboundResult",
+    "conversation_turn",
     "handle_message",
     "run_as",
 ]
@@ -100,6 +104,64 @@ class InboundResult:
     kind: str = "refused"
 
 
+#: One lock per conversation, held across its run, so a visitor's second
+#: message reads the history their first one wrote instead of racing it. Keyed
+#: by ``session_key``; an entry lives only while a message for it is running or
+#: waiting, because a public channel's visitors are unbounded and a lock kept
+#: per visitor forever is a leak.
+_session_locks: dict[str, asyncio.Lock] = {}
+_session_waiters: dict[str, int] = {}
+
+#: The fleet-wide cap: ``(limit, loop, semaphore)``. Rebuilt when the setting
+#: changes, so a new value applies without a restart; runs already holding a
+#: slot of the old one finish on it.
+_fleet: tuple[int, asyncio.AbstractEventLoop, asyncio.Semaphore] | None = None
+
+
+@contextlib.asynccontextmanager
+async def conversation_turn(session_key: str) -> AsyncIterator[None]:
+    """Hold ``session_key``'s turn; different keys never wait on each other.
+
+    Public so a channel's own commands that change a conversation's history
+    (Slack's ``/clear``) wait for a run in flight rather than racing its
+    write-back.
+    """
+    lock = _session_locks.setdefault(session_key, asyncio.Lock())
+    _session_waiters[session_key] = _session_waiters.get(session_key, 0) + 1
+    try:
+        async with lock:
+            yield
+    finally:
+        _session_waiters[session_key] -= 1
+        if not _session_waiters[session_key]:
+            del _session_waiters[session_key]
+            _session_locks.pop(session_key, None)
+
+
+def _fleet_slots() -> asyncio.Semaphore:
+    """The semaphore every channel run takes a slot of. Read lazily, each time."""
+    global _fleet
+    from robothor.settings import get_settings
+
+    limit = max(1, int(get_settings().channels.inbound_max_concurrent_runs))
+    loop = asyncio.get_running_loop()
+    if _fleet is None or _fleet[0] != limit or _fleet[1] is not loop:
+        _fleet = (limit, loop, asyncio.Semaphore(limit))
+    return _fleet[2]
+
+
+def _last_turns(history: list[Any], turns: int) -> list[Any]:
+    """The rows of the last ``turns`` exchanges, each starting at a user row."""
+    if turns <= 0:
+        return []
+    starts = [
+        i for i, row in enumerate(history) if isinstance(row, dict) and row.get("role") == "user"
+    ]
+    if len(starts) <= turns:
+        return list(history)
+    return list(history[starts[-turns] :])
+
+
 def run_as(identity: IdentityContext | None, channel: str, native_id: str) -> str:
     """The ``user_id`` an inbound run is attributed to.
 
@@ -130,6 +192,8 @@ async def handle_message(
     surface: str = access.DIRECT_SURFACE,
     allowlist: Callable[[], bool] | None = None,
     mode: str | None = None,
+    record_turn: bool = True,
+    history_limit: int | None = None,
 ) -> InboundResult:
     """Gate one inbound message and, if it is allowed, run it.
 
@@ -155,6 +219,16 @@ async def handle_message(
         mode: the mode the channel resolved for itself, when it has a
             compatibility clause the gate cannot know about (Slack does). Left
             ``None``, the gate reads it.
+        record_turn: append the exchange to the session's history after a
+            run that COMPLETED with output and persist it through the chat
+            store, so the conversation remembers it across restarts. A refused,
+            failed, timed-out or empty run records nothing.
+        history_limit: hand the run only the last N turns (user + assistant
+            pairs) of the session's history. ``None`` hands it all of it.
+
+    Messages sharing a ``session_key`` run one after another; different
+    conversations run concurrently, up to the fleet-wide
+    ``ROBOTHOR_CHANNEL_MAX_CONCURRENT_RUNS`` — beyond it they queue.
 
     Returns:
         :class:`InboundResult`. Never raises.
@@ -173,7 +247,6 @@ async def handle_message(
 
     identity = decision.identity
     resolved_tenant = identity.tenant_id if identity else tenant_id
-    session = get_shared_session(session_key)
 
     # `channel:<name>:<target>` — the only place this string is written. A
     # channel-triggered run cannot say which channel it was from the enum (there
@@ -188,27 +261,64 @@ async def handle_message(
         else None
     )
 
-    try:
-        run = await runner.execute(
-            agent_id=agent_id,
-            message=text,
-            trigger_type=trigger_type,
-            trigger_detail=detail,
-            tenant_id=resolved_tenant,
-            user_id=run_as(identity, channel, native_id),
-            user_role=(identity.role if identity else "") or "user",
-            identity=identity,
-            conversation_history=list(session.history) if session.history else None,
-        )
-    except Exception:
-        # Logged with a traceback here, where it reaches the journal; the
-        # SENDER gets FAILED_REPLY, which names nothing.
-        logger.exception("channel %s could not run an inbound message", channel)
-        return InboundResult(
-            reply=FAILED_REPLY, ran=False, failed=True, identity=identity, kind="failed"
-        )
+    # The conversation's turn outside, the fleet slot inside: a message queued
+    # behind its own conversation must not hold a slot another visitor could use.
+    async with conversation_turn(session_key):
+        session = get_shared_session(session_key)
+        history = list(session.history) if session.history else []
+        if history_limit is not None:
+            history = _last_turns(history, history_limit)
+        try:
+            async with _fleet_slots():
+                run = await runner.execute(
+                    agent_id=agent_id,
+                    message=text,
+                    trigger_type=trigger_type,
+                    trigger_detail=detail,
+                    tenant_id=resolved_tenant,
+                    user_id=run_as(identity, channel, native_id),
+                    user_role=(identity.role if identity else "") or "user",
+                    identity=identity,
+                    conversation_history=history or None,
+                )
+        except Exception:
+            # Logged with a traceback here, where it reaches the journal; the
+            # SENDER gets FAILED_REPLY, which names nothing.
+            logger.exception("channel %s could not run an inbound message", channel)
+            return InboundResult(
+                reply=FAILED_REPLY, ran=False, failed=True, identity=identity, kind="failed"
+            )
 
-    output = str(getattr(run, "output_text", "") or "")
+        output = str(getattr(run, "output_text", "") or "")
+        # Only a COMPLETED run with something to say is remembered. The runner
+        # reports most failures by RETURNING the run (failed, timeout,
+        # cancelled), and a timed-out run can carry partial text; recording
+        # either would teach the next turn an answer that was never given.
+        if record_turn and output and getattr(run, "status", None) == RunStatus.COMPLETED:
+            # Guarded: this function never raises, and the answer is already
+            # made — a history that could not be written loses memory, not it.
+            try:
+                append_turn(session, user_message=text, assistant_text=output)
+            except Exception:
+                logger.exception("channel %s could not record a turn", channel)
+            # Persisted the way the Helm's turns are, so the conversation is
+            # restored after a restart. Awaited inside the conversation's turn
+            # so two exchanges are stored in the order they happened; the call
+            # logs its own store failures; the guard is for anything else.
+            from robothor.engine.chat_store import save_exchange_async
+
+            try:
+                await save_exchange_async(
+                    session_key,
+                    text,
+                    output,
+                    channel=channel,
+                    model_override=getattr(session, "model_override", None),
+                    tenant_id=resolved_tenant,
+                )
+            except Exception:
+                logger.exception("channel %s could not persist a turn", channel)
+
     return InboundResult(
         reply=output or NO_OUTPUT_REPLY,
         ran=True,

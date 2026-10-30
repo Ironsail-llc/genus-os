@@ -106,7 +106,7 @@ agents:
 # patches:                         # edit an agent this plugin does not own
 #   - agent: main
 #     file: patches/main.patch.yaml
-# files:                           # brain/**, docs/workflows/**, docs/hooks/**, docs/webhooks.yaml
+# files:                           # brain/**, docs/workflows/**, docs/hooks/**, docs/webhooks.yaml, docs/webhooks.d/*.yaml
 #   - src: files/notes.md
 #     dest: brain/{name}/notes.md
 #     mode: if_missing
@@ -267,9 +267,13 @@ A Genus OS plugin. Docs: `docs/PLUGINS.md` in the Genus OS repository.
   `manifest.template.yaml` `id` must equal the directory name. Template
   variables (`{{{{ timezone }}}}`) resolve at install; operators override them in
   `.robothor/overrides/<id>.yaml`.
-- `files:` may only write `brain/**`, `docs/workflows/**`, `docs/hooks/**`
-  or `docs/webhooks.yaml`. Patches use `install:`/`remove:` sections of
-  `set:`/`delete:`.
+- `files:` may only write `brain/**`, `docs/workflows/**`, `docs/hooks/**`,
+  `docs/webhooks.yaml` or `docs/webhooks.d/<name>.yaml`. Patches use
+  `install:`/`remove:` sections of `set:`/`append:`/`delete:`/`detach:`.
+- The plugin declares contract 1. If it uses `append:`/`detach:`, a
+  `docs/webhooks.d/` drop-in or a `brain/agents/<agent>.d/` fragment, declare
+  `contract_version: 2` here and `"genus_contract_version": "2.0"` in `PLUGIN`
+  (and its test), so an engine that predates them refuses it loudly.
 - Dependencies are not installed (`--no-deps`): vendor them.
 - No personal names, emails, hosts or secrets in this repo.
 

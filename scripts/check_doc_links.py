@@ -71,6 +71,7 @@ INSTANCE_PATH_PREFIXES = (
     "docs/workflows/delphi/",
     "docs/experiments/",
     "docs/CRON_MAP.md",
+    "docs/webhooks.d/",
     "local/",
     ".robothor/",
 )

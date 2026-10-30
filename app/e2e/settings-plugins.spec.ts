@@ -58,6 +58,13 @@ const LEDGER = {
   failure_reason: null,
   manifest: null,
   source: null,
+  // What the plugin wrote into the workspace, from the engine's asset ledger.
+  assets: {
+    agents: [{ id: "ledger-watch", name: "Ledger Watch", schedule: "*/30 * * * *" }],
+    workflows: [{ id: "ledger-close", name: "Ledger close", triggers: ["cron 0 18 * * *"] }],
+    patches: [],
+    files: [],
+  },
 };
 
 const INDEX = "https://plugins.example.org/index.json";
@@ -246,6 +253,27 @@ test.describe("Settings › Plugins", () => {
     await expect(page.locator('[data-testid="plugins-reload-bar"]')).toHaveCount(0);
   });
 
+  test("shows the agents and workflows each plugin ships", async ({ page }) => {
+    await setupMocks(page);
+    await page.goto(PLUGINS_URL, { waitUntil: "networkidle" });
+    await expect(page.locator('[data-testid="settings-page-plugins"]')).toBeVisible({
+      timeout: 15000,
+    });
+
+    const ledger = page.locator('[data-testid="plugin-assets-genus-ledger"]');
+    await expect(ledger).toContainText("Agents and workflows");
+    await expect(page.locator('[data-testid="plugin-asset-agent-ledger-watch"]')).toContainText(
+      "*/30 * * * *"
+    );
+    await expect(
+      page.locator('[data-testid="plugin-asset-workflow-ledger-close"]')
+    ).toContainText("cron 0 18 * * *");
+    // A plugin that ships neither says so.
+    await expect(page.locator('[data-testid="plugin-assets-genus-hostinfo"]')).toContainText(
+      "none"
+    );
+  });
+
   /**
    * Install from the registry, end to end: preview, read the findings, accept
    * them, install, and be told the engine has not loaded it yet.
@@ -425,6 +453,18 @@ test.describe("Settings › Plugins", () => {
             drifted: true,
             contributions: {},
             failure_reason: LONG_REASON,
+            assets: {
+              agents: [
+                {
+                  id: "acme-observability-instrumentation-contrib-extensions-collector",
+                  name: "Collector",
+                  schedule: "*/5 * * * *",
+                },
+              ],
+              workflows: [],
+              patches: [],
+              files: [],
+            },
             manifest: {
               contract_version: 1,
               declared: {

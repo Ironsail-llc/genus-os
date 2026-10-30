@@ -120,6 +120,9 @@ class DoctorContext:
     #: when each check asked independently. Per-RUN rather than per-process, so
     #: a ``--fix`` re-run still measures the repaired state.
     _plugin_inventory: Any = field(default=None, repr=False)
+    #: Every tool name the instance resolves (built-ins, adapters, loaded
+    #: plugins), memoized for the run: five checks judge names against it.
+    _registered_tool_names: Any = field(default=None, repr=False)
 
     def budget(self) -> float:
         """Seconds the next thing may take: the per-check box, narrowed by

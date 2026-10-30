@@ -1722,3 +1722,494 @@ def test_an_identical_unrecorded_instruction_file_is_taken_over_and_later_upgrad
     extra = {f"{pkg}/agents/desk-monitor/instructions.template.md": newer}
     assert _install(ws, version="1.1.0", extra=extra) == 0
     assert (ws / _DESK_MD).read_text() == newer
+
+
+# ---------------------------------------------------------------------------
+# composable patches: `append` and `detach`
+# ---------------------------------------------------------------------------
+
+_ALPHA = "alpha-plugin"
+_BETA = "beta-plugin"
+_MAIN_YAML = "docs/agents/main.yaml"
+
+_HOOK_A = "      - stream: email\n        event_type: email.new\n        message: alpha\n"
+_HOOK_B = "      - stream: crm\n        event_type: crm.task.created\n        message: beta\n"
+
+
+def _patcher(dist: str, patch: str, *, agent: str = "main", version: str = "1.0.0") -> dict:
+    """The wheel of a plugin whose only asset is one patch for *agent*."""
+    pkg = dist.replace("-", "_")
+    manifest = (
+        f"name: {dist}\ncontract_version: 1\nhandlers:\n  - {pkg}_probe\n"
+        f"patches:\n  - agent: {agent}\n    file: patches/main.patch.yaml\n"
+    )
+    return {
+        "dist": dist,
+        "version": version,
+        "manifest": manifest,
+        "extra": {f"{pkg}/patches/main.patch.yaml": patch},
+    }
+
+
+def _main(ws: Path) -> dict:
+    return yaml.safe_load((ws / _MAIN_YAML).read_text())
+
+
+def _hook_ids(ws: Path) -> list[tuple[str, str]]:
+    return [(h["stream"], h["event_type"]) for h in _main(ws).get("hooks") or []]
+
+
+def test_append_creates_the_list(ws, capsys) -> None:
+    assert _install(ws, **_patcher(_ALPHA, "install:\n  append:\n    hooks:\n" + _HOOK_A)) == 0, (
+        capsys.readouterr().err
+    )
+    assert _main(ws)["hooks"] == [
+        {"stream": "email", "event_type": "email.new", "message": "alpha"}
+    ]
+    assert _main(ws)["schedule"]["heartbeat_minutes"] == 60  # nothing else changed
+
+
+def test_append_upserts_by_identity_and_is_idempotent(ws, capsys) -> None:
+    (ws / _MAIN_YAML).write_text(
+        _MAIN
+        + "hooks:\n"
+        + "  - stream: email\n    event_type: email.new\n    message: the operator's\n"
+        + "  - stream: calendar\n    event_type: calendar.changed\n    message: keep me\n"
+    )
+    assert _install(ws, **_patcher(_ALPHA, "install:\n  append:\n    hooks:\n" + _HOOK_A)) == 0, (
+        capsys.readouterr().err
+    )
+    hooks = _main(ws)["hooks"]
+    assert [(h["stream"], h["event_type"], h["message"]) for h in hooks] == [
+        ("email", "email.new", "alpha"),  # upserted in place, not duplicated
+        ("calendar", "calendar.changed", "keep me"),
+    ]
+    main = ws / _MAIN_YAML
+    before = (main.read_bytes(), main.stat().st_mtime_ns)
+    assert _install(ws, **_patcher(_ALPHA, "install:\n  append:\n    hooks:\n" + _HOOK_A)) == 0
+    assert (main.read_bytes(), main.stat().st_mtime_ns) == before
+
+
+def test_two_plugins_appending_distinct_hooks_coexist_and_remove_separately(ws, capsys) -> None:
+    from robothor.plugins import assets
+
+    alpha = _patcher(_ALPHA, "install:\n  append:\n    hooks:\n" + _HOOK_A)
+    beta = _patcher(_BETA, "install:\n  append:\n    hooks:\n" + _HOOK_B)
+    assert _install(ws, **alpha) == 0, capsys.readouterr().err
+    assert _install(ws, **beta) == 0, capsys.readouterr().err
+    assert _hook_ids(ws) == [("email", "email.new"), ("crm", "crm.task.created")]
+
+    assets.retire(_ALPHA)
+    assert _hook_ids(ws) == [("crm", "crm.task.created")]
+
+    assert _install(ws, **alpha) == 0, capsys.readouterr().err
+    assets.retire(_BETA)
+    assert _hook_ids(ws) == [("email", "email.new")]
+
+
+def test_the_ledger_records_appended_items_by_identity(ws) -> None:
+    assert _install(ws, **_patcher(_ALPHA, "install:\n  append:\n    hooks:\n" + _HOOK_A)) == 0
+    keys = _ledger(ws)[_ALPHA]["patches"][0]["keys"]
+    assert "hooks[email:email.new]" in keys
+    assert "hooks" not in keys
+
+
+def test_set_hooks_is_refused_when_another_plugin_appends_to_hooks(ws, capsys) -> None:
+    assert _install(ws, **_patcher(_ALPHA, "install:\n  append:\n    hooks:\n" + _HOOK_A)) == 0
+    capsys.readouterr()
+    beta = _patcher(_BETA, "install:\n  set:\n    hooks: []\n")
+    assert _install(ws, **beta) == 2
+    err = capsys.readouterr().err
+    assert "hooks" in err and _ALPHA in err and _BETA in err
+    assert "Two plugins may not patch the same key" in err
+    assert _hook_ids(ws) == [("email", "email.new")]
+
+
+def test_delete_hooks_is_refused_when_another_plugin_appends_to_hooks(ws, capsys) -> None:
+    assert _install(ws, **_patcher(_ALPHA, "install:\n  append:\n    hooks:\n" + _HOOK_A)) == 0
+    capsys.readouterr()
+    assert _install(ws, **_patcher(_BETA, "install:\n  delete:\n    - hooks\n")) == 2
+    assert "hooks" in capsys.readouterr().err
+    assert _hook_ids(ws) == [("email", "email.new")]
+
+
+def test_append_is_refused_when_another_plugin_sets_the_whole_list(ws, capsys) -> None:
+    owner = _patcher(_ALPHA, "install:\n  set:\n    hooks:\n" + _HOOK_A)
+    assert _install(ws, **owner) == 0, capsys.readouterr().err
+    capsys.readouterr()
+    assert _install(ws, **_patcher(_BETA, "install:\n  append:\n    hooks:\n" + _HOOK_B)) == 2
+    err = capsys.readouterr().err
+    assert "hooks" in err and _ALPHA in err and _BETA in err
+    assert _hook_ids(ws) == [("email", "email.new")]
+
+
+def test_two_plugins_appending_the_same_identity_is_refused(ws, capsys) -> None:
+    assert _install(ws, **_patcher(_ALPHA, "install:\n  append:\n    hooks:\n" + _HOOK_A)) == 0
+    capsys.readouterr()
+    same = _HOOK_A.replace("message: alpha", "message: beta")
+    assert _install(ws, **_patcher(_BETA, "install:\n  append:\n    hooks:\n" + same)) == 2
+    err = capsys.readouterr().err
+    assert "hooks[email:email.new]" in err and _ALPHA in err
+    assert _main(ws)["hooks"][0]["message"] == "alpha"
+
+
+def test_detach_of_an_unknown_identity_is_a_no_op(ws, capsys) -> None:
+    from robothor.plugins import assets
+
+    (ws / _MAIN_YAML).write_text(
+        _MAIN + "hooks:\n  - stream: calendar\n    event_type: calendar.changed\n"
+    )
+    patch = (
+        "install:\n  append:\n    hooks:\n"
+        + _HOOK_A
+        + "remove:\n  detach:\n    hooks:\n"
+        + "      - {stream: email, event_type: email.new}\n"
+        + "      - {stream: nowhere, event_type: never.seen}\n"
+    )
+    assert _install(ws, **_patcher(_ALPHA, patch)) == 0, capsys.readouterr().err
+    report = assets.retire(_ALPHA)
+    assert report.warnings == []
+    assert _hook_ids(ws) == [("calendar", "calendar.changed")]
+
+
+def test_append_to_a_scalar_list_upserts_by_value(ws, capsys) -> None:
+    from robothor.plugins import assets
+
+    (ws / _MAIN_YAML).write_text(_MAIN + "bootstrap_files:\n  - brain/agents/main.d/base.md\n")
+    patch = (
+        "install:\n  append:\n"
+        "    bootstrap_files: [brain/agents/main.d/alpha-plugin.md, brain/agents/main.d/base.md]\n"
+        "    warmup.memory_blocks: [alpha_notes]\n"
+    )
+    assert _install(ws, **_patcher(_ALPHA, patch)) == 0, capsys.readouterr().err
+    data = _main(ws)
+    assert data["bootstrap_files"] == [
+        "brain/agents/main.d/base.md",
+        "brain/agents/main.d/alpha-plugin.md",
+    ]
+    assert data["warmup"]["memory_blocks"] == ["alpha_notes"]
+    keys = _ledger(ws)[_ALPHA]["patches"][0]["keys"]
+    assert "bootstrap_files[brain/agents/main.d/alpha-plugin.md]" in keys
+    assert "warmup.memory_blocks[alpha_notes]" in keys
+
+    beta = "install:\n  append:\n    bootstrap_files: [brain/agents/main.d/beta-plugin.md]\n"
+    assert _install(ws, **_patcher(_BETA, beta)) == 0, capsys.readouterr().err
+    assets.retire(_ALPHA)
+    data = _main(ws)
+    # the derived detach takes back exactly what alpha appended
+    assert data["bootstrap_files"] == ["brain/agents/main.d/beta-plugin.md"]
+    assert data["warmup"]["memory_blocks"] == []
+
+
+def test_an_upgrade_that_drops_an_appended_item_detaches_it(ws, capsys) -> None:
+    both = "install:\n  append:\n    hooks:\n" + _HOOK_A + _HOOK_B
+    assert _install(ws, **_patcher(_ALPHA, both)) == 0, capsys.readouterr().err
+    one = "install:\n  append:\n    hooks:\n" + _HOOK_B
+    assert _install(ws, **_patcher(_ALPHA, one, version="1.1.0")) == 0, capsys.readouterr().err
+    assert _hook_ids(ws) == [("crm", "crm.task.created")]
+    assert _ledger(ws)[_ALPHA]["patches"][0]["keys"] == ["hooks[crm:crm.task.created]"]
+
+
+def test_another_plugins_appended_hook_is_not_an_operator_edit(ws, capsys) -> None:
+    """A hook whose event type has a dot is still a `hooks` key, not `hooks[x:y`."""
+    assert _install(ws) == 0, capsys.readouterr().err
+    hooks = "install:\n  append:\n    hooks:\n" + _HOOK_A
+    assert _install(ws, **_patcher(_ALPHA, hooks, agent="desk-monitor")) == 0
+    capsys.readouterr()
+    assert _install(ws, version="1.1.0", description="Release two") == 0
+    captured = capsys.readouterr()
+    assert "edited since" not in captured.out + captured.err
+    desk = yaml.safe_load((ws / "docs" / "agents" / "desk-monitor.yaml").read_text())
+    assert desk["description"] == "Release two"
+
+
+@pytest.mark.parametrize(
+    "patch",
+    [
+        "install:\n  append:\n    hooks:\n      - {stream: email}\n",  # no event_type
+        "install:\n  append:\n    hooks: {stream: email, event_type: email.new}\n",  # not a list
+        "install:\n  append:\n    tools_allowed:\n      - {nested: mapping}\n",
+        "install:\n  append:\n    id: [x]\n",
+        # a `:` in the stream would make hooks[<stream>:<event_type>] ambiguous
+        "install:\n  append:\n    hooks:\n      - {stream: 'a:b', event_type: c}\n",
+    ],
+)
+def test_a_malformed_append_is_refused_before_pip(ws, capsys, patch) -> None:
+    pip = installer._run_pip
+    assert _install(ws, **_patcher(_ALPHA, patch)) == 2
+    assert pip.calls == []
+    assert (ws / _MAIN_YAML).read_text() == _MAIN
+
+
+def test_append_to_a_key_that_is_not_a_list_is_refused(ws, capsys) -> None:
+    (ws / _MAIN_YAML).write_text(_MAIN + "hooks: not-a-list\n")
+    assert _install(ws, **_patcher(_ALPHA, "install:\n  append:\n    hooks:\n" + _HOOK_A)) == 2
+    assert "hooks" in capsys.readouterr().err
+    assert (ws / _MAIN_YAML).read_text() == _MAIN + "hooks: not-a-list\n"
+    assert installer._run_pip.calls == []  # refused at plan, before pip
+
+
+_FRAGMENT = "# Alpha\n\nWhen an email arrives, file it.\n"
+_CHANNELS = "channels:\n  alpha:\n    stream: alpha\n    secret_env: ALPHA_WEBHOOK_SECRET\n"
+
+
+def _fragment_plugin(files: str, patch: str = "") -> dict:
+    """A plugin that patches `main` (optionally) and writes *files*."""
+    pkg = _ALPHA.replace("-", "_")
+    manifest = f"name: {_ALPHA}\ncontract_version: 1\nhandlers:\n  - {pkg}_probe\n"
+    if patch:
+        manifest += "patches:\n  - agent: main\n    file: patches/main.patch.yaml\n"
+    manifest += "files:\n" + files
+    return {
+        "dist": _ALPHA,
+        "manifest": manifest,
+        "extra": {
+            f"{pkg}/patches/main.patch.yaml": patch or "install: {}\n",
+            f"{pkg}/extra/fragment.md": _FRAGMENT,
+            f"{pkg}/extra/channels.yaml": _CHANNELS,
+        },
+    }
+
+
+def test_a_plugin_adds_an_instruction_fragment_and_a_webhook_drop_in(ws, capsys) -> None:
+    """The composable way to extend `main`: its own instruction fragment under
+    brain/agents/main.d/, named in bootstrap_files by `append`, and its own
+    channel file under docs/webhooks.d/ -- nothing another plugin owns."""
+    from robothor.plugins import assets
+
+    fragment = "brain/agents/main.d/alpha-plugin.md"
+    channels = "docs/webhooks.d/alpha-plugin.yaml"
+    plugin = _fragment_plugin(
+        f"  - src: extra/fragment.md\n    dest: {fragment}\n"
+        f"  - src: extra/channels.yaml\n    dest: {channels}\n",
+        f"install:\n  append:\n    bootstrap_files: [{fragment}]\n",
+    )
+    assert _install(ws, **plugin) == 0, capsys.readouterr().err
+    assert (ws / fragment).read_text() == _FRAGMENT
+    assert (ws / channels).read_text() == _CHANNELS
+    assert _main(ws)["bootstrap_files"] == [fragment]
+
+    assets.retire(_ALPHA)
+    assert not (ws / fragment).exists()
+    assert not (ws / channels).exists()
+    assert _main(ws)["bootstrap_files"] == []
+
+
+def test_a_fragment_for_an_agent_the_plugin_does_not_patch_is_refused(ws, capsys) -> None:
+    plugin = _fragment_plugin("  - src: extra/fragment.md\n    dest: brain/agents/main.d/x.md\n")
+    assert _install(ws, **plugin) == 2
+    assert "main" in capsys.readouterr().err
+    assert not (ws / "brain" / "agents" / "main.d").exists()
+
+
+@pytest.mark.parametrize("dest", ["docs/webhooks.d/nested/alpha.yaml", "docs/webhooks.d/alpha.txt"])
+def test_a_webhook_drop_in_is_one_yaml_file_directly_in_the_directory(ws, capsys, dest) -> None:
+    plugin = _fragment_plugin(f"  - src: extra/channels.yaml\n    dest: {dest}\n")
+    assert _install(ws, **plugin) == 2
+    assert "docs/webhooks.d" in capsys.readouterr().err
+    assert not (ws / "docs" / "webhooks.d").exists()
+
+
+def test_the_scan_names_a_webhook_drop_in_as_engine_loaded_config(tmp_path) -> None:
+    from robothor.plugins import scan
+    from robothor.plugins.wheel import open_wheel
+
+    plugin = _fragment_plugin(
+        "  - src: extra/channels.yaml\n    dest: docs/webhooks.d/alpha-plugin.yaml\n"
+    )
+    path = tmp_path / "alpha_plugin-1.0.0-py3-none-any.whl"
+    _wheel(path, dist=_ALPHA, manifest=plugin["manifest"], extra=plugin["extra"])
+    result = scan.scan_wheel(open_wheel(path, tmp_path / "u"))
+    assert result.verdict == scan.REVIEW
+    assert any(
+        "docs/webhooks.d/alpha-plugin.yaml" in r and "configuration the engine loads" in r
+        for r in result.reasons
+    )
+
+
+def test_a_quoted_entry_is_the_same_item_under_the_round_trip_loader(ws, capsys) -> None:
+    """ruamel keeps quotes as str subclasses; identity is still the plain value."""
+    pytest.importorskip("ruamel.yaml")
+    from robothor.plugins import assets
+
+    fragment = "brain/agents/main.d/alpha-plugin.md"
+    (ws / _MAIN_YAML).write_text(_MAIN + f'bootstrap_files:\n  - "{fragment}"\n  - other.md\n')
+    patch = f"install:\n  append:\n    bootstrap_files: [{fragment}]\n"
+    assert _install(ws, **_patcher(_ALPHA, patch)) == 0, capsys.readouterr().err
+    assert _main(ws)["bootstrap_files"] == [fragment, "other.md"]
+    assets.retire(_ALPHA)
+    assert _main(ws)["bootstrap_files"] == ["other.md"]
+
+
+def test_the_round_trip_identity_matches_the_plain_one(tmp_path) -> None:
+    pytest.importorskip("ruamel.yaml")
+    from robothor.cli.agent import _load_manifest
+    from robothor.plugins.assets import _identity
+
+    path = tmp_path / "m.yaml"
+    path.write_text("items:\n  - \"quoted\"\n  - 'single'\n  - 1.5\n  - 3\n  - true\n")
+    document, _ = _load_manifest(path)
+    loaded = yaml.safe_load(path.read_text())["items"]
+    assert [_identity("items", i) for i in document["items"]] == [
+        _identity("items", i) for i in loaded
+    ]
+
+
+_BASE_CHANNELS = "channels:\n  github:\n    stream: github\n    secret_env: GH_SECRET\n"
+
+
+@pytest.mark.parametrize(
+    ("body", "what"),
+    [
+        ("channels:\n  github:\n    stream: x\n", "github"),  # collides with the base file
+        ("channels: [unclosed\n", "alpha-plugin.yaml"),  # does not parse
+        # a number the engine cannot read: the router would skip the channel
+        ("channels:\n  alpha:\n    rate_limit_per_min: lots\n", "rate_limit_per_min"),
+    ],
+)
+def test_a_webhook_drop_in_that_would_break_the_channel_map_is_refused(
+    ws, capsys, body, what
+) -> None:
+    (ws / "docs" / "webhooks.yaml").write_text(_BASE_CHANNELS)
+    plugin = _fragment_plugin(
+        "  - src: extra/channels.yaml\n    dest: docs/webhooks.d/alpha-plugin.yaml\n"
+    )
+    plugin["extra"][f"{_ALPHA.replace('-', '_')}/extra/channels.yaml"] = body
+    pip = installer._run_pip
+    assert _install(ws, **plugin) == 2
+    err = capsys.readouterr().err
+    assert what in err and "docs/webhooks.d/alpha-plugin.yaml" in err
+    assert str(ws.parent) not in err  # names workspace files, not scratch paths
+    assert pip.calls == []
+    assert not (ws / "docs" / "webhooks.d").exists()
+
+
+def test_a_webhook_drop_in_colliding_with_another_plugins_is_refused(ws, capsys) -> None:
+    dropins = ws / "docs" / "webhooks.d"
+    dropins.mkdir()
+    (dropins / "beta-plugin.yaml").write_text("channels:\n  alpha:\n    stream: beta\n")
+    plugin = _fragment_plugin(
+        "  - src: extra/channels.yaml\n    dest: docs/webhooks.d/alpha-plugin.yaml\n"
+    )
+    assert _install(ws, **plugin) == 2
+    err = capsys.readouterr().err
+    assert "alpha" in err and "beta-plugin.yaml" in err
+    assert not (dropins / "alpha-plugin.yaml").exists()
+
+
+def _contract(plugin: dict, manifest_version: str, payload_version: str) -> dict:
+    """*plugin* re-declared at another contract version, manifest and payload."""
+    pkg = plugin["dist"].replace("-", "_")
+    plugin["manifest"] = plugin["manifest"].replace(
+        "contract_version: 1", f"contract_version: {manifest_version}"
+    )
+    plugin["extra"][f"{pkg}/__init__.py"] = _CODE.replace('"1.0"', f'"{payload_version}"')
+    return plugin
+
+
+def test_a_contract_2_plugin_using_append_installs(ws, capsys) -> None:
+    plugin = _contract(_patcher(_ALPHA, "install:\n  append:\n    hooks:\n" + _HOOK_A), "2", "2.0")
+    assert "contract_version: 2" in plugin["manifest"]
+    assert _install(ws, **plugin) == 0, capsys.readouterr().err
+    assert _hook_ids(ws) == [("email", "email.new")]
+
+
+def test_a_contract_3_plugin_is_refused_naming_every_accepted_version(ws, capsys) -> None:
+    plugin = _contract(_patcher(_ALPHA, "install:\n  append:\n    hooks:\n" + _HOOK_A), "3", "3.0")
+    pip = installer._run_pip
+    assert _install(ws, **plugin) == 2
+    err = capsys.readouterr().err
+    assert "'1.0'" in err and "'2.0'" in err
+    assert pip.calls == []
+    assert "hooks" not in _main(ws)
+
+
+@pytest.mark.parametrize(
+    "key", ["tools_allowed", "heartbeat.heartbeat_tools_allowed", "worker.worker_tools_allowed"]
+)
+def test_append_never_creates_an_allowlist_whose_absence_means_everything(ws, capsys, key) -> None:
+    """No `tools_allowed` means every non-opt-in tool; creating it with one
+    item would strip the rest."""
+    patch = f"install:\n  append:\n    {key}: [alpha_probe]\n"
+    assert _install(ws, **_patcher(_ALPHA, patch)) == 2
+    err = capsys.readouterr().err
+    assert key in err and "absent" in err
+    assert installer._run_pip.calls == []  # refused at plan, before pip
+    assert (ws / _MAIN_YAML).read_text() == _MAIN
+
+
+def test_append_adds_to_an_allowlist_that_exists(ws, capsys) -> None:
+    from robothor.plugins import assets
+
+    (ws / _MAIN_YAML).write_text(_MAIN + "tools_allowed: [read_file]\n")
+    patch = "install:\n  append:\n    tools_allowed: [alpha_probe]\n"
+    assert _install(ws, **_patcher(_ALPHA, patch)) == 0, capsys.readouterr().err
+    assert _main(ws)["tools_allowed"] == ["read_file", "alpha_probe"]
+    assets.retire(_ALPHA)
+    assert _main(ws)["tools_allowed"] == ["read_file"]
+
+
+def test_append_never_fills_an_empty_allowlist(ws, capsys) -> None:
+    """An empty `tools_allowed` also means every tool (the registry filters
+    only on a non-empty one)."""
+    (ws / _MAIN_YAML).write_text(_MAIN + "tools_allowed: []\n")
+    patch = "install:\n  append:\n    tools_allowed: [alpha_probe]\n"
+    assert _install(ws, **_patcher(_ALPHA, patch)) == 2
+    assert "tools_allowed" in capsys.readouterr().err
+    assert _main(ws)["tools_allowed"] == []
+
+
+def test_removal_never_empties_a_tool_allowlist(ws, capsys) -> None:
+    """Detaching the last item would turn "only these tools" into "every tool"."""
+    from robothor.plugins import assets
+
+    (ws / _MAIN_YAML).write_text(_MAIN + "tools_allowed: [alpha_probe]\n")
+    patch = "install:\n  append:\n    tools_allowed: [alpha_probe]\n"
+    assert _install(ws, **_patcher(_ALPHA, patch)) == 0, capsys.readouterr().err
+    report = assets.retire(_ALPHA)
+    assert _main(ws)["tools_allowed"] == ["alpha_probe"]
+    assert any("tools_allowed" in w and "every tool" in w for w in report.warnings)
+
+
+def test_an_upgrade_that_drops_the_last_allowlist_item_keeps_it_and_proceeds(ws, capsys) -> None:
+    """The operator already restricted the agent to the one tool v1 appended;
+    v2 stops appending it. Detaching it would empty the allowlist (every
+    tool), so the item stays, the upgrade goes ahead and says so."""
+    (ws / _MAIN_YAML).write_text(_MAIN + "tools_allowed: [alpha_probe]\n")
+    v1 = "install:\n  append:\n    tools_allowed: [alpha_probe]\n    hooks:\n" + _HOOK_A
+    assert _install(ws, **_patcher(_ALPHA, v1)) == 0, capsys.readouterr().err
+    capsys.readouterr()
+    v2 = "install:\n  append:\n    hooks:\n" + _HOOK_A
+    assert _install(ws, **_patcher(_ALPHA, v2, version="1.1.0")) == 0, capsys.readouterr().err
+    out = capsys.readouterr().out
+    assert _main(ws)["tools_allowed"] == ["alpha_probe"]
+    assert "tools_allowed" in out and "every tool" in out
+    assert "was left as it is" not in out
+    # the item is the operator's now: a later removal does not take it back
+    assert "tools_allowed" not in _ledger(ws)[_ALPHA]["patches"][0].get("appended", {})
+
+
+def test_an_upgrade_that_drops_an_allowlist_item_others_remain_beside_detaches_it(
+    ws, capsys
+) -> None:
+    (ws / _MAIN_YAML).write_text(_MAIN + "tools_allowed: [read_file]\n")
+    v1 = "install:\n  append:\n    tools_allowed: [alpha_probe]\n    hooks:\n" + _HOOK_A
+    assert _install(ws, **_patcher(_ALPHA, v1)) == 0, capsys.readouterr().err
+    v2 = "install:\n  append:\n    hooks:\n" + _HOOK_A
+    assert _install(ws, **_patcher(_ALPHA, v2, version="1.1.0")) == 0, capsys.readouterr().err
+    assert _main(ws)["tools_allowed"] == ["read_file"]
+
+
+def test_an_upgrade_that_drops_the_whole_patch_keeps_the_last_allowlist_item(ws, capsys) -> None:
+    """The stale-patch path: v2 ships no patch for the agent at all."""
+    (ws / _MAIN_YAML).write_text(_MAIN + "tools_allowed: [alpha_probe]\n")
+    v1 = "install:\n  append:\n    tools_allowed: [alpha_probe]\n"
+    assert _install(ws, **_patcher(_ALPHA, v1)) == 0, capsys.readouterr().err
+    capsys.readouterr()
+    v2 = _patcher(_ALPHA, v1, version="1.1.0")
+    v2["manifest"] = v2["manifest"].split("patches:")[0]
+    assert _install(ws, **v2) == 0, capsys.readouterr().err
+    out = capsys.readouterr().out
+    assert _main(ws)["tools_allowed"] == ["alpha_probe"]
+    assert "tools_allowed" in out and "every tool" in out
+    assert "was left as it is" not in out

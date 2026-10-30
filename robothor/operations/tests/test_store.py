@@ -11,7 +11,7 @@ from robothor.db.connection import get_connection
 from robothor.operations.store import BudgetExceeded, Conflict, Operations
 
 #: The operations ledger's schema, in order. Other suites' fixtures reuse it.
-OPERATIONS_MIGRATIONS = ("126_durable_operations.sql", "154_operation_action_proposer.sql")
+OPERATIONS_MIGRATIONS = ("126_durable_operations.sql", "158_operation_action_proposer.sql")
 
 
 @pytest.fixture

@@ -557,6 +557,24 @@ approved and nothing blocking remains; the optional ticket rule). Use the
 For "how are reviews going?" or "where is #123?", call `pr_review_status`; to
 queue or re-queue one pull request, `pr_review_intake(pr=...)`.
 
+### n8n automations (`n8n_*`)
+
+Two read-only tools over the snapshot the n8n monitor keeps
+([n8n monitoring](integrations/n8n.md)). They answer from the database, so they
+cost no n8n call, still answer while n8n is down, and match the dashboard.
+With the monitor off they return `status: not_configured` and nothing else.
+
+| Tool | Purpose |
+|---|---|
+| `n8n_list_workflows` | The n8n workflows with `failures_24h`, `failures_7d`, `last_failure_at`, `last_error`, a link to each and `last_failure_url` (the newest failed execution, empty when there is none), as of the last poll, plus the section `status` (`ok`, `warn`, `unknown`) and `last_ok_at`. `active_only` (default true) hides switched-off workflows; `query` matches a name or tag, case-insensitive. |
+| `n8n_recent_failures` | Failed executions in the last `hours` (default 24, max 720), newest first, up to 100: workflow id and name, `error_message`, `mode`, start and stop times and a link to the execution in n8n. `workflow_id` narrows it to one workflow. |
+
+**Choosing.** These are about the operator's **n8n** automations, not Genus
+workflows (`docs/workflows/*.yaml`) or agent runs. When a `workflow_failure`
+notification carries `source: n8n`, answer from `n8n_recent_failures` and give
+the operator the execution link: the agent cannot rerun or edit an n8n
+workflow, and neither tool calls n8n.
+
 ### Vision: `view_image` and `analyze_image`
 
 Two tools, one rule:
@@ -1225,6 +1243,107 @@ recognises. SOPS-encrypted files, `secrets*` files, key files (`*.pem`,
 `KEY=VALUE` lines are still refused. `exec` checks are unchanged:
 `cat robothor.env` is still refused.
 
+### Workflows: `list_workflows`, `run_workflow`, `workflow_runs`
+
+An agent can start the instance's declared workflows and report on them from a
+chat, instead of asking the operator to open the dashboard.
+
+- `list_workflows` returns each loaded workflow: id, name, description, its
+  triggers (cron schedule, or the stream and event type it listens on), the
+  last run's status, start time and trigger, and how many runs failed or timed
+  out in the last 7 days.
+- `run_workflow` takes `workflow_id`, an optional `payload` object and
+  `wait_seconds` (0–120). The run's steps see the payload as
+  `{{ event.payload.<key> }}`, the same shape a hook-triggered run gets. The run
+  always goes on in the background; the call only waits for it. It returns
+  `{status: "started", run_id}` while the run is still going, `{status, run_id,
+  error_message}` once it has finished, `{status: "already_running"}` when a
+  run of that workflow is in progress, and `{error: "unknown_workflow"}` for an
+  id that is not loaded. With `wait_seconds: 0` it still waits about 2 seconds,
+  so a run refused at once is not reported as started. A run that stops at an
+  approval step returns `awaiting_approval`; it goes on once someone decides
+  (`list_pending_approvals`). A workflow normally triggered by a hook gets only
+  `event.payload` when started this way: there is no `event.type` or
+  `event.stream`, so a step that reads either finds nothing there.
+  A caller whose tenant is not the engine's own gets
+  `{error: "workflow_tenant_mismatch", run_tenant}`, because the run would be
+  recorded under a tenant the caller cannot read.
+- `workflow_runs` takes `workflow_id` and `limit` (default 10, at most 50) and
+  returns recent runs, newest first, with each step's status.
+
+The run is recorded with trigger type `agent` and trigger detail
+`agent:<agent id>:<agent run id>`. It runs as the workflow, exactly as a cron
+or hook run does: under `service:workflow:<workflow id>` with the `service`
+role, and in a fresh context, with none of the calling agent run's runtime
+state. Its steps never act as the chat user or the calling agent, so a tool
+that accepts only the workflow's own identity works the same whoever started
+the run. The caller is recorded only in that trigger detail and in the
+tool-call audit of the `run_workflow` call. Run history is always limited to
+the caller's tenant. `list_workflows` and `workflow_runs` are read-only;
+`run_workflow` is not, and benchmark runs get none of the three.
+
+The three tools belong to no tool group. `run_workflow` is opt-in: an agent is
+offered it only when its manifest names it, in `tools_allowed` or, for an agent
+with no `tools_allowed` list, in `tools_opt_in`. The two reads are offered to an
+agent with no `tools_allowed` list; an agent with one must name each tool it
+should have. Migration 157 denies `run_workflow` to the `user` and `member`
+roles, as the HTTP route it mirrors needs `engine:control`. `owner`, `admin`
+and `service` keep it, so the operator's chat and an unattended agent that
+names it can both start workflows. This permission is the whole gate: because
+the run takes the workflow's identity, not the caller's, whoever may call
+`run_workflow` may start any loaded workflow in its tenant. A tenant that wants it back for a role adds
+a tenant-scoped `role_permissions` row.
+
+**Which to use.** Use `run_workflow` when the work is a workflow that is already
+declared: a fixed, repeatable pipeline with its own steps, timeout and run
+history. Use `spawn_agent` for open-ended work that one agent should reason
+through.
+
+### Knowledge base (`kb_*`)
+
+Curated reference documents, grouped in collections named `<plugin>/<topic>`
+(`helpdesk/policies`). Each tenant has its own collections.
+
+| Tool | Use |
+|---|---|
+| `kb_search` | Hybrid search (vector + keyword, RRF) within one `collection`. Returns chunks with `doc_id`, `title`, `text`, `score`, `source_uri`. Read-only. |
+| `kb_list_collections` | Which collections exist, with document and chunk counts. Read-only. |
+| `kb_upsert_document` | Add or replace a document. An identical re-send is `unchanged`; a changed one replaces its chunks and bumps `version`. |
+| `kb_delete_document` | Remove a document and its chunks. |
+
+**Which to use.** Use `kb_search` for curated reference documents scoped to a
+collection, and `search_memory` for the agent's own remembered facts.
+`kb_search` never returns memory facts, and `search_memory` never returns
+knowledge-base documents. The writes are refused in a benchmark run. How
+collections are named and how documents are versioned:
+[Knowledge Base](knowledge-base.md).
+
+### What plugins contribute: `plugins_overview`
+
+`plugins_overview` takes no arguments and lists every installed plugin:
+
+- `name`, `version`, and `state` (`loaded`, `failed`, `disabled`, or
+  `assets only` for a plugin that ships workspace files and no entry point);
+- `tools`: each tool the plugin's manifest declares, with the description from
+  its registered schema (empty when no schema is registered);
+- `checks`: the doctor check ids it declares;
+- `agents`: `{id, name, schedule}` for each agent the plugin installed, from the
+  asset ledger and every `installed.yaml` entry with `source: plugin:<dist>`.
+  `schedule` is the manifest's cron, or `null`;
+- `workflows`: `{id, name, triggers}` for each workflow it copied into
+  `docs/workflows/`; a trigger reads like `cron 0 7 * * *` or
+  `hook email:email.new`;
+- `patches`: ids of existing agent manifests it patched;
+- `files`: every other workspace-relative file it wrote.
+
+A `warnings` list appears when the asset ledger or `installed.yaml` cannot be
+read; the plugins the loader reports are still listed. The tool is read-only.
+
+**Which to use.** Use `plugins_overview` for "what does plugin X give us?" or
+"which plugin ships agent or workflow Y?". Use `tool_search` to find a tool by
+what it does, whatever provides it. [Plugins](PLUGINS.md#seeing-what-a-plugin-shipped)
+covers the same data on the dashboard and the admin API.
+
 ### Everything else
 
 The full registry is large and changes with the release; `tool_search` over the
@@ -1235,12 +1354,16 @@ agent's own allow-set is the authoritative answer. The families:
 | Files and shell | `read_file`, `write_file`, `list_directory`, `exec`, [`execute_code`](#execute_code-calling-tools-from-inside-python) |
 | Web | `web_fetch`, `web_render`, `web_search`, `browser` |
 | Memory | `search_memory`, `memory_block_read`, `memory_block_write`, `store_memory` |
+| Knowledge base | [`kb_search`, `kb_upsert_document`, `kb_delete_document`, `kb_list_collections`](#knowledge-base-kb_) |
 | CRM | `search_records`, `get_person`, `create_task`, `list_my_tasks`, `resolve_task` |
 | Notifications | `get_inbox`, `ack_notification`, `send_notification` |
 | Skills | `list_skills`, `invoke_skill` |
+| Plugins | [`plugins_overview`](#what-plugins-contribute-plugins_overview) |
 | Sub-agents | `spawn_agent`, `spawn_agents` (only with `can_spawn_agents`) |
+| Workflows | [`list_workflows`, `run_workflow`, `workflow_runs`](#workflows-list_workflows-run_workflow-workflow_runs) |
 | Vision | `view_image`, `analyze_image` (image files — see above); `look`, `who_is_here` (a real camera) |
 | Desktop | `desktop_*` (a real screen) |
+| n8n automations | `n8n_list_workflows`, `n8n_recent_failures` (the n8n monitor's snapshot — see above) |
 
 ### `read_file` — documents, not just text
 
@@ -1299,7 +1422,9 @@ names that appear in its instruction and bootstrap files but are absent from
 schema. Both halves are silent in production: the agent cannot see its own
 manifest, so a tool it was told to use simply stops working and it finds
 another way; and an unresolvable name is dropped after one journald warning.
-Results name agents and tools, never instruction text.
+Results name agents and tools, never instruction text. "Registered" means a
+built-in, an adapter route, or a tool a loaded plugin declares; a disabled or
+failed plugin's tools still resolve to nothing.
 
 **`calendar.operator_calendar_writable`** (required, and skipped entirely on an
 instance where no agent holds a calendar tool) — the instance's Google account

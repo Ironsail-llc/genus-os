@@ -107,11 +107,13 @@ exclude_docs: |
   !/channels/access.md
   !/channels/webchat.md
   !/workspace/microsoft365.md
+  !/integrations/n8n.md
   !/runbooks/BENCHMARK_SANDBOX.md
   !/runbooks/LOCAL_FALLBACK.md
   !/runbooks/INTERACTIVE_REQUEST_PERFORMANCE.md
   !/architecture.md
   !/memory-system.md
+  !/knowledge-base.md
   !/event-bus.md
   !/PLATFORM_INSTANCE.md
   !/READING_GUIDE.md
@@ -161,6 +163,7 @@ nav:
       - Channel access: channels/access.md
       - Web chat channel: channels/webchat.md
       - Microsoft 365 workspace: workspace/microsoft365.md
+      - n8n monitoring: integrations/n8n.md
       - Observability: OBSERVABILITY.md
       - Snapshot and restore: runbooks/SNAPSHOT_RESTORE.md
       - Benchmark sandbox: runbooks/BENCHMARK_SANDBOX.md
@@ -173,6 +176,7 @@ nav:
   - Architecture:
       - Overview: architecture.md
       - Memory System: memory-system.md
+      - Knowledge Base: knowledge-base.md
       - Event Bus: event-bus.md
       - Platform vs Instance: PLATFORM_INSTANCE.md
   - Releases:

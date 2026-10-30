@@ -8,7 +8,7 @@ directory that holds it (package data inside the wheel)::
     workflows:         # copied to <workspace>/docs/workflows/<basename>
       - workflows/example-pass.yaml
     patches:           # edit an EXISTING agent manifest the plugin does not own
-      - agent: main
+      - agent: main    # (set/delete own a key; append/detach add or take out list items)
         file: patches/main.patch.yaml
     files:             # other workspace files, inside an allowlist
       - src: extra/webhooks.yaml
@@ -91,7 +91,9 @@ LEDGER_NAME = "plugin-assets.yaml"
 #: it; ``docs/webhooks.yaml`` is the one exact file. ``docs/agents/`` is NOT
 #: here: an agent arrives through ``agents:`` and the template installer, or
 #: changes through ``patches:``, never as a raw file copy.
-FILE_PREFIXES = ("brain", "docs/workflows", "docs/hooks")
+#: Webhook channel drop-ins: one ``<name>.yaml`` directly inside, never nested.
+WEBHOOK_DROPINS = "docs/webhooks.d"
+FILE_PREFIXES = ("brain", "docs/workflows", "docs/hooks", WEBHOOK_DROPINS)
 FILE_EXACT = ("docs/webhooks.yaml",)
 
 #: The modes a ``files:`` entry may ask for.
@@ -104,6 +106,10 @@ _PROTECTED_KEYS = frozenset({"id"})
 
 class AssetError(ValueError):
     """A refusal, in the sentence the operator gets told."""
+
+
+class _AllowlistError(AssetError):
+    """A tool-allowlist edit refused; its text names only the key, never a path."""
 
 
 @dataclass(frozen=True)
@@ -360,11 +366,82 @@ def reserved_agent_ids() -> frozenset[str]:
     return ALWAYS_RESERVED | {str(agent) for agent in core}
 
 
+#: The list key whose items are identified by ``(stream, event_type)``; every
+#: other list an ``append:`` names holds scalars, identified by their value.
+_HOOKS_KEY = "hooks"
+
+
+def _identity(key: str, item: Any) -> tuple[Any, ...] | None:
+    """What makes *item* the same entry of list *key*, or None when it has none."""
+    if key == _HOOKS_KEY:
+        if isinstance(item, dict):
+            stream, event_type = item.get("stream"), item.get("event_type")
+            if isinstance(stream, str) and stream and isinstance(event_type, str) and event_type:
+                return ("hook", stream, event_type)
+        return None
+    # Normalised to the builtin type: the round-trip loader hands back str and
+    # float subclasses (a quoted scalar, a ScalarFloat) that safe_load does not.
+    # bool first, as it is an int; the type is kept so `true` and `1` differ.
+    for kind in (bool, str, int, float):
+        if isinstance(item, kind):
+            return ("value", kind.__name__, kind(item))
+    return None
+
+
+def _claim(key: str, item: Any) -> str:
+    """The ledger key for one appended item: ``hooks[<stream>:<event_type>]``,
+    ``<key>[<value>]`` for a scalar."""
+    identity = _identity(key, item)
+    assert identity is not None
+    if identity[0] == "hook":
+        return f"{key}[{identity[1]}:{identity[2]}]"
+    return f"{key}[{identity[2]}]"
+
+
+def _split_claim(claim: str) -> tuple[str, str | None]:
+    """``hooks[a:b.c]`` -> ``("hooks", "a:b.c")``; a plain dotted key -> ``(key, None)``."""
+    if claim.endswith("]") and "[" in claim:
+        base, _, rest = claim.partition("[")
+        return base, rest[:-1]
+    return claim, None
+
+
+def _top_key(claim: str) -> str:
+    return _split_claim(claim)[0].split(".", 1)[0]
+
+
+def _list_section(raw: Any, where: str) -> dict[str, list[Any]]:
+    """An ``append:`` or ``detach:`` section: ``{dotted_key: [items]}``."""
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise AssetError(f"{where} must be a mapping of a key (dotted for nested) to a list.")
+    out: dict[str, list[Any]] = {}
+    for key, items in raw.items():
+        if not (isinstance(key, str) and key and all(key.split(".")) and not set(key) & {"[", "]"}):
+            raise AssetError(f"{where}: {key!r} is not a key (dotted for nested).")
+        if not isinstance(items, list):
+            raise AssetError(f"{where}.{key} must be a list.")
+        for item in items:
+            if key == _HOOKS_KEY and isinstance(item, dict) and ":" in str(item.get("stream")):
+                raise AssetError(f"{where}.{key}: a hook's `stream` may not contain `:`.")
+            if _identity(key, item) is None:
+                if key == _HOOKS_KEY:
+                    raise AssetError(
+                        f"{where}.{key}: each hook needs a `stream` and an `event_type`."
+                    )
+                raise AssetError(f"{where}.{key}: each item must be a scalar value.")
+        out[key] = list(items)
+    return out
+
+
 def _patch_section(raw: Any, where: str) -> dict[str, Any]:
     if raw is None:
         return {"set": {}, "delete": []}
-    if not isinstance(raw, dict) or set(raw) - {"set", "delete"}:
-        raise AssetError(f"{where} must be a mapping with only `set:` and `delete:`.")
+    if not isinstance(raw, dict) or set(raw) - {"set", "delete", "append", "detach"}:
+        raise AssetError(
+            f"{where} must be a mapping with only `set:`, `append:`, `delete:` and `detach:`."
+        )
     to_set = raw.get("set") or {}
     to_delete = raw.get("delete") or []
     if not isinstance(to_set, dict):
@@ -373,10 +450,19 @@ def _patch_section(raw: Any, where: str) -> dict[str, Any]:
         isinstance(k, str) and k and all(k.split(".")) for k in to_delete
     ):
         raise AssetError(f"{where}.delete must be a list of keys (dotted for nested).")
-    touched = {str(k) for k in to_set} | {k.split(".")[0] for k in to_delete}
+    to_append = _list_section(raw.get("append"), f"{where}.append")
+    to_detach = _list_section(raw.get("detach"), f"{where}.detach")
+    touched = {str(k) for k in to_set} | {
+        k.split(".")[0] for k in [*to_delete, *to_append, *to_detach]
+    }
     if touched & _PROTECTED_KEYS:
         raise AssetError(f"{where} may not change an agent's `id`.")
-    return {"set": to_set, "delete": list(to_delete)}
+    section: dict[str, Any] = {"set": to_set, "delete": list(to_delete)}
+    if to_append:
+        section["append"] = to_append
+    if to_detach:
+        section["detach"] = to_detach
+    return section
 
 
 def parse(manifest_text: str | None, base: Path) -> PluginAssets:
@@ -499,6 +585,13 @@ def _check_dest_shape(dest: str) -> str:
     if parsed not in FILE_EXACT and not any(parsed.startswith(p + "/") for p in FILE_PREFIXES):
         allowed = ", ".join([*(p + "/**" for p in FILE_PREFIXES), *FILE_EXACT])
         raise AssetError(f"{dest!r} is outside the paths a plugin may write ({allowed}).")
+    if parsed.startswith(WEBHOOK_DROPINS + "/"):
+        name = parsed[len(WEBHOOK_DROPINS) + 1 :]
+        if "/" in name or not name.endswith(".yaml"):
+            raise AssetError(
+                f"{dest!r}: a webhook drop-in is one file directly in "
+                f"{WEBHOOK_DROPINS}/, named <name>.yaml."
+            )
     return parsed
 
 
@@ -661,12 +754,10 @@ def _patched_keys(ledger: dict[str, Any], agent_id: str, patches: tuple[Any, ...
             continue
         for recorded in entry.get("patches") or []:
             if isinstance(recorded, dict) and recorded.get("agent") == agent_id:
-                keys.update(str(k).split(".", 1)[0] for k in recorded.get("keys") or [])
+                keys.update(_top_key(str(k)) for k in recorded.get("keys") or [])
     for patch in patches:
         if patch.agent == agent_id:
-            keys.update(
-                k.split(".", 1)[0] for k in patch_keys(patch.install) | patch_keys(patch.remove)
-            )
+            keys.update(_top_key(k) for k in patch_keys(patch.install) | patch_keys(patch.remove))
     return keys
 
 
@@ -703,16 +794,22 @@ def _reclaimable(
 
 
 def _brain_agent(dest: str) -> str | None:
-    """The agent id a ``brain/agents/<id>.md`` or ``brain/agents/<id>/...`` path belongs to."""
+    """The agent id a ``brain/agents/<id>.md``, ``brain/agents/<id>/...`` or
+    ``brain/agents/<id>.d/...`` (instruction fragments) path belongs to."""
     parts = pathlib.PurePosixPath(dest).parts
     if len(parts) < 3 or parts[:2] != ("brain", "agents"):
         return None
-    return pathlib.PurePosixPath(parts[2]).stem if len(parts) == 3 else parts[2]
+    if len(parts) == 3:
+        return pathlib.PurePosixPath(parts[2]).stem
+    return parts[2].removesuffix(".d")
 
 
 def patch_keys(section: dict[str, Any]) -> set[str]:
     """The dotted keys a patch section sets or deletes. A mapping under
-    ``set`` is a deep merge, so its LEAVES are what it touches."""
+    ``set`` is a deep merge, so its LEAVES are what it touches. An item
+    ``append:`` or ``detach:`` names is claimed by its identity alone --
+    ``hooks[<stream>:<event_type>]``, ``<key>[<value>]`` -- so plugins adding
+    different items to one list do not collide."""
 
     def leaves(mapping: dict[str, Any], prefix: str) -> set[str]:
         out: set[str] = set()
@@ -724,11 +821,24 @@ def patch_keys(section: dict[str, Any]) -> set[str]:
                 out.add(dotted)
         return out
 
-    return leaves(section.get("set") or {}, "") | set(section.get("delete") or [])
+    items = {
+        _claim(key, item)
+        for part in ("append", "detach")
+        for key, listed in (section.get(part) or {}).items()
+        for item in listed
+    }
+    return leaves(section.get("set") or {}, "") | set(section.get("delete") or []) | items
 
 
 def _overlaps(a: str, b: str) -> bool:
-    return a == b or a.startswith(b + ".") or b.startswith(a + ".")
+    """Whether two claims touch the same thing. Two items of one list overlap
+    only when their identities are equal; an item overlaps whatever owns its
+    list (or a key above it) wholesale."""
+    a_key, a_item = _split_claim(a)
+    b_key, b_item = _split_claim(b)
+    if a_item is not None and b_item is not None and a_key == b_key:
+        return a_item == b_item
+    return a_key == b_key or a_key.startswith(b_key + ".") or b_key.startswith(a_key + ".")
 
 
 def _leftover_instruction(
@@ -913,11 +1023,13 @@ def plan(
         suffix = " (if missing)" if item.mode == "if_missing" else ""
         if replaces:
             suffix = f" (replaces an existing file; the original is kept as .pre-{dist})"
-        if item.dest == "docs/webhooks.yaml":
+        if item.dest == "docs/webhooks.yaml" or item.dest.startswith(WEBHOOK_DROPINS + "/"):
             suffix += " [engine-loaded config]"
         elif item.dest.startswith("docs/hooks/"):
             suffix += " [hooks the engine executes]"
         lines.append(f"{label} {item.dest}{suffix}")
+
+    _check_webhook_map(assets, dist, root, own_files)
 
     claimed: dict[tuple[str, str], str] = {}
     for owner, entry in ledger.items():
@@ -927,9 +1039,12 @@ def plan(
             if isinstance(recorded, dict):
                 for key in recorded.get("keys") or []:
                     claimed[(str(recorded.get("agent")), str(key))] = owner
+    own_patches = {
+        p.get("agent"): p for p in (own_ledger or {}).get("patches") or [] if isinstance(p, dict)
+    }
     for patch in assets.patches:
         try:
-            workspace_path(
+            target = workspace_path(
                 root,
                 f"docs/agents/{patch.agent}.yaml",
                 allowed_prefix="docs/agents",
@@ -937,6 +1052,13 @@ def plan(
             )
         except TemplateSecurityError as exc:
             raise AssetError(str(exc)) from exc
+        if target.is_file():
+            # Dry-run the edit on a copy: a list that is not one, or an
+            # allowlist append would narrow, is refused here, before pip.
+            kept: list[str] = []
+            section = _with_dropped(patch.install, own_patches.get(patch.agent), target, kept)
+            _patch_would_change(target, section)
+            lines.extend(f"warning  docs/agents/{patch.agent}.yaml: {w}" for w in kept)
         for key in sorted(patch_keys(patch.install) | patch_keys(patch.remove)):
             for (target_agent, theirs), owner in claimed.items():
                 if target_agent == patch.agent and _overlaps(key, theirs):
@@ -948,6 +1070,86 @@ def plan(
         keys = ", ".join(sorted(patch_keys(patch.install)))
         lines.append(f"patch    docs/agents/{patch.agent}.yaml ({keys})")
     return tuple(lines)
+
+
+#: Channel fields the engine reads with ``int()``.
+_WEBHOOK_INT_FIELDS = ("rate_limit_per_min", "timestamp_tolerance_seconds")
+
+
+def _webhook_channels(data: bytes, where: str) -> list[str]:
+    try:
+        parsed = yaml.safe_load(data.decode("utf-8")) or {}
+    except (yaml.YAMLError, UnicodeDecodeError) as exc:
+        raise AssetError(f"{where} is not valid YAML, so the engine could not load it.") from exc
+    channels = parsed.get("channels") if isinstance(parsed, dict) else None
+    if not isinstance(channels, dict):
+        return []
+    for name, raw in channels.items():
+        # The coercions the engine applies; one that fails there skips the channel.
+        for key in _WEBHOOK_INT_FIELDS:
+            if isinstance(raw, dict) and key in raw:
+                try:
+                    int(raw[key])
+                except (TypeError, ValueError) as exc:
+                    raise AssetError(
+                        f"{where}: channel {name!r} has a `{key}` that is not a whole number."
+                    ) from exc
+    return [str(name) for name in channels]
+
+
+def _check_webhook_map(assets: PluginAssets, dist: str, root: Path, own_files: set[str]) -> None:
+    """Refuse a webhook file whose channels would collide once written.
+
+    The engine merges ``docs/webhooks.yaml`` and every ``docs/webhooks.d/*.yaml``
+    into one channel map, and a channel declared twice is an error there. This
+    reads the map as it would be after the install -- the plugin's own files in
+    place of what it wrote before -- and refuses a collision or a file that does
+    not parse, when the plugin's file is one of those involved. The same merge
+    rule as ``robothor.engine.webhooks.load_webhook_config``, without importing
+    the engine (and its web stack) into the installer.
+    """
+    ours = {
+        f.dest: f
+        for f in assets.files
+        if f.dest == "docs/webhooks.yaml" or f.dest.startswith(WEBHOOK_DROPINS + "/")
+    }
+    if not ours:
+        return
+    would_be: dict[str, bytes] = {}
+    dropins = root / WEBHOOK_DROPINS
+    candidates = ["docs/webhooks.yaml"]
+    if dropins.is_dir() and not dropins.is_symlink():
+        candidates += [f"{WEBHOOK_DROPINS}/{p.name}" for p in sorted(dropins.glob("*.yaml"))]
+    candidates += [d for d in ours if d not in candidates]
+    for relative in candidates:
+        on_disk = root / relative
+        present = on_disk.is_file() and not on_disk.is_symlink()
+        item = ours.get(relative)
+        if item is not None and not (item.mode == "if_missing" and present):
+            would_be[relative] = item.source.read_bytes()
+        elif present and relative not in own_files:
+            would_be[relative] = on_disk.read_bytes()
+    base = [k for k in would_be if k == "docs/webhooks.yaml"]
+    order = base + sorted(k for k in would_be if k not in base)
+    declared: dict[str, str] = {}
+    for relative in order:
+        mine = relative in ours
+        try:
+            names = _webhook_channels(would_be[relative], relative)
+        except AssetError:
+            if mine:
+                raise
+            continue
+        for name in names:
+            first = declared.get(name)
+            if first is None:
+                declared[name] = relative
+            elif mine or first in ours:
+                raise AssetError(
+                    f"Webhook channel {name!r} would be declared in both {first} and "
+                    f"{relative}, which the engine refuses; {dist} will not write "
+                    f"{relative if mine else first}. Rename one of the channels."
+                )
 
 
 # ---------------------------------------------------------------------------
@@ -976,10 +1178,104 @@ def _delete(target: Any, dotted: str) -> None:
         del node[leaf]
 
 
+def _list_at(target: Any, dotted: str, *, create: bool) -> list[Any] | None:
+    """The list at *dotted*, created (with any missing parents) when *create*."""
+    *parents, leaf = dotted.split(".")
+    node = target
+    for part in parents:
+        child = node.get(part)
+        if child is None:
+            if not create:
+                return None
+            child = node[part] = {}
+        if not isinstance(child, dict):
+            raise AssetError(f"`{dotted}` is not under a mapping; it was not patched.")
+        node = child
+    found = node.get(leaf)
+    if found is None:
+        if not create:
+            return None
+        found = node[leaf] = []
+    if not isinstance(found, list):
+        raise AssetError(f"`{dotted}` is not a list; it was not patched.")
+    return found
+
+
+def _is_allowlist(dotted: str) -> bool:
+    """``tools_allowed``, ``heartbeat.heartbeat_tools_allowed`` and the like: a
+    list whose absence -- or emptiness -- means every (non-opt-in) tool."""
+    leaf = dotted.rsplit(".", 1)[-1]
+    return leaf == "tools_allowed" or leaf.endswith("_tools_allowed")
+
+
+def _append(target: Any, dotted: str, items: list[Any]) -> None:
+    """Upsert *items* into the list at *dotted*, matching by identity."""
+    if _is_allowlist(dotted) and not _list_at(target, dotted, create=False):
+        raise _AllowlistError(
+            f"`{dotted}` is absent or empty, which allows every tool; appending would "
+            "narrow the agent to only the appended tools. It was not patched: append "
+            "to it only where the agent already restricts its tools, or opt the tool in "
+            "with `tools_opt_in`."
+        )
+    current = _list_at(target, dotted, create=True)
+    assert current is not None
+    for item in items:
+        identity = _identity(dotted, item)
+        for index, existing in enumerate(current):
+            if _identity(dotted, existing) == identity:
+                if existing != item:
+                    current[index] = copy.deepcopy(item)
+                break
+        else:
+            current.append(copy.deepcopy(item))
+
+
+def _detach(target: Any, dotted: str, items: list[Any]) -> None:
+    """Remove the entries of the list at *dotted* whose identity *items* name."""
+    current = _list_at(target, dotted, create=False)
+    if current is None:
+        return
+    gone = {_identity(dotted, item) for item in items}
+    if (
+        _is_allowlist(dotted)
+        and current
+        and all(_identity(dotted, entry) in gone for entry in current)
+    ):
+        raise _AllowlistError(
+            f"removing these entries would leave `{dotted}` empty, which allows every "
+            "tool, so none of them were removed. Edit the agent's allowlist by hand if "
+            "it should change."
+        )
+    for index in reversed(range(len(current))):
+        if _identity(dotted, current[index]) in gone:
+            del current[index]
+
+
 def _edit(document: Any, section: dict[str, Any]) -> None:
+    """Apply one section: ``set``, then ``append``, then ``delete`` and ``detach``."""
     _merge(document, section.get("set") or {})
+    for key, items in (section.get("append") or {}).items():
+        _append(document, key, items)
     for key in section.get("delete") or []:
         _delete(document, key)
+    for key, items in (section.get("detach") or {}).items():
+        _detach(document, key, items)
+
+
+def _after_edit(path: Path, section: dict[str, Any]) -> dict[str, Any] | None:
+    """The manifest at *path* as *section* would leave it, or None when it is
+    absent, unreadable, or the edit is refused (its callers report that)."""
+    try:
+        before = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError, UnicodeDecodeError):
+        return None
+    if not isinstance(before, dict):
+        return None
+    try:
+        _edit(before, section)
+    except AssetError:
+        return None
+    return before
 
 
 def _patch_would_change(path: Path, section: dict[str, Any]) -> bool:
@@ -1465,18 +1761,22 @@ def apply(
                     "does not exist"
                 )
                 continue
-            if _patch_would_change(target, patch.install):
+            kept: list[str] = []
+            section = _with_dropped(patch.install, before_patches.get(patch.agent), target, kept)
+            report.warnings.extend(f"patch for {patch.agent!r}: {w}" for w in kept)
+            if _patch_would_change(target, section):
                 if patch.agent not in before_patches:
                     _backup_once(target, dist, root)
-                _patch_manifest(target, patch.install)
+                _patch_manifest(target, section)
                 report.lines.append(f"patched  docs/agents/{patch.agent}.yaml")
-            entry["patches"].append(
-                {
-                    "agent": patch.agent,
-                    "keys": sorted(patch_keys(patch.install) | patch_keys(patch.remove)),
-                    "remove": patch.remove,
-                }
-            )
+            recorded = {
+                "agent": patch.agent,
+                "keys": sorted(patch_keys(patch.install) | patch_keys(patch.remove)),
+                "remove": patch.remove,
+            }
+            if patch.install.get("append"):
+                recorded["appended"] = patch.install["append"]
+            entry["patches"].append(recorded)
 
         # What an upgrade stopped shipping is retired like a removal would.
         patched = {x["agent"] for x in entry["patches"]}
@@ -1503,6 +1803,65 @@ def apply(
     finally:
         _JOURNAL.reset(token)
     return report
+
+
+def _with_dropped(
+    install: dict[str, Any],
+    previous: Any,
+    target: Path | None = None,
+    warnings: list[str] | None = None,
+) -> dict[str, Any]:
+    """*install*, plus a ``detach`` of every item the plugin's last release
+    appended (the ledger's ``appended``) that this release no longer does.
+
+    A dropped allowlist item whose detach would leave the allowlist at
+    *target* empty -- which allows every tool -- is kept instead (fail
+    closed), and a line saying so goes to *warnings*: the upgrade proceeds.
+    """
+    appended = previous.get("appended") if isinstance(previous, dict) else None
+    if not isinstance(appended, dict):
+        return install
+    now = install.get("append") or {}
+    dropped: dict[str, list[Any]] = {}
+    for key, items in appended.items():
+        if not isinstance(items, list):
+            continue
+        kept = {_identity(key, item) for item in now.get(key) or []} | {None}
+        gone = [item for item in items if _identity(key, item) not in kept]
+        if gone:
+            dropped[key] = gone
+    after = _after_edit(target, install) if target is not None else None
+    for key in [k for k in dropped if _is_allowlist(k) and after is not None]:
+        try:
+            current = _list_at(after, key, create=False)
+        except AssetError:
+            continue  # the edit itself refuses it, with its own message
+        gone_ids = {_identity(key, item) for item in dropped[key]}
+        if current and all(_identity(key, entry) in gone_ids for entry in current):
+            names = ", ".join(str(_identity(key, item)) for item in dropped.pop(key))
+            if warnings is not None:
+                warnings.append(
+                    f"this release no longer adds {names} to `{key}`, but removing it "
+                    "would leave the allowlist empty, which allows every tool, so it was "
+                    "kept. Edit the agent's allowlist by hand if it should go."
+                )
+    if not dropped:
+        return install
+    section = copy.deepcopy(install)
+    detach = section.setdefault("detach", {})
+    for key, items in dropped.items():
+        detach[key] = [*detach.get(key, []), *items]
+    return section
+
+
+def _removal(recorded: dict[str, Any]) -> dict[str, Any]:
+    """The section that undoes one recorded patch: its own ``remove:``, which
+    detaches what it appended unless it names its own ``detach:``."""
+    section = _patch_section(recorded.get("remove"), "ledger remove")
+    appended = recorded.get("appended")
+    if not section.get("detach") and appended:
+        section["detach"] = _list_section(appended, "ledger appended")
+    return section
 
 
 # ---------------------------------------------------------------------------
@@ -1610,6 +1969,8 @@ def _remove_file(
 def _why(exc: BaseException) -> str:
     """A fixed phrase for a report line, never the exception's own text (which
     can carry a resolved path)."""
+    if isinstance(exc, _AllowlistError):
+        return str(exc)
     if isinstance(exc, AssetError):
         return "its manifest is not valid YAML, or the patch is malformed"
     return type(exc).__name__
@@ -1650,7 +2011,7 @@ def _undo(
                 allowed_prefix="docs/agents",
                 label="patched manifest",
             )
-            section = _patch_section(patch.get("remove"), "ledger remove")
+            section = _removal(patch)
         except (TemplateSecurityError, AssetError) as exc:
             report.warnings.append(f"patch for {agent!r}: not undone ({_why(exc)})")
             continue

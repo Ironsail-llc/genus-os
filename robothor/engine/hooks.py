@@ -710,7 +710,8 @@ class EventHooks:
 
         The event is the run's ``event`` context, so steps can template its
         fields. A run skipped because the workflow was already running is
-        re-added for that workflow when its trigger sets ``requeue_if_busy``.
+        re-added for that workflow when its trigger sets ``requeue_if_busy``;
+        a run deferred by the tool-call rate limit is re-added always.
         """
         workflow_id = wf.id
         try:
@@ -721,6 +722,7 @@ class EventHooks:
                 initial_context={"event": _workflow_event(stream, envelope)},
                 user_id=f"service:workflow:{workflow_id}",
                 user_role="service",
+                requeue_on_rate_limit=True,
             )
         except Exception as e:
             logger.error(
@@ -732,13 +734,21 @@ class EventHooks:
             )
             return
 
-        if run.status != RunStatus.SKIPPED or not _requeues_when_busy(wf, stream, event_type):
+        # A busy workflow is requeued when its trigger asks for it; a run the
+        # tool-call rate limit deferred always is, so a burst slows down
+        # instead of losing events. Both spend the same busy-requeue budget.
+        if run.status != RunStatus.SKIPPED:
+            return
+        if not run.rate_limited and not _requeues_when_busy(wf, stream, event_type):
             return
         busy_count = int(envelope.get("_busy_requeue_count", "0"))
         busy_data = {k: v for k, v in envelope.items() if k != RETRY_AGENTS_FIELD}
         busy_data[RETRY_WORKFLOWS_FIELD] = workflow_id
         if busy_count < MAX_BUSY_REQUEUES:
-            logger.info("Requeueing %s:%s — workflow %s busy", stream, event_type, workflow_id)
+            reason = "rate limited" if run.rate_limited else "busy"
+            logger.info(
+                "Requeueing %s:%s — workflow %s %s", stream, event_type, workflow_id, reason
+            )
             busy_data["_busy_requeue_count"] = str(busy_count + 1)
             await self._delayed_requeue(
                 redis_client, prefixed_stream, busy_data, busy_requeue_delay(busy_count)

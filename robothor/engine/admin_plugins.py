@@ -98,9 +98,29 @@ def plugin_listing() -> dict[str, Any]:
     from robothor.plugins.inventory import inventory
     from robothor.plugins.loader import generation
     from robothor.plugins.lockfile import lockfile_path, read_lockfile
+    from robothor.plugins.overview import workspace_assets
     from robothor.plugins.registry import configured_indexes
 
     lock = read_lockfile()
+    assets_error: str | None = None
+    partial = False
+    warnings: list[str] = []
+    try:
+        assets = workspace_assets(warnings=warnings)
+    except Exception as exc:  # noqa: BLE001 - one unreadable file must not hide every plugin
+        # The class only: an OSError's text carries the absolute path.
+        logger.warning("plugin workspace assets could not be read (%s)", type(exc).__name__)
+        assets = {}
+        assets_error = f"The plugin workspace assets could not be read ({type(exc).__name__})."
+    else:
+        # Each warning is a fixed sentence naming a workspace-relative record
+        # and at most an exception class, never a value or an absolute path.
+        for warning in warnings:
+            logger.warning("plugin workspace assets: %s", warning)
+        if warnings:
+            # One record failed; the lists still hold what the others gave.
+            assets_error = " ".join(warnings)
+            partial = True
     return {
         "generation": generation(),
         # The indexes this instance reads, in order, so an install form can
@@ -126,8 +146,35 @@ def plugin_listing() -> dict[str, Any]:
             # `Lockfile.problem` is built from the error class, not the file.
             "problem": lock.problem or None,
         },
-        "plugins": [row.as_json() for row in inventory()],
+        "plugins": [
+            _with_assets(row.as_json(), assets, assets_error, partial=partial)
+            for row in inventory()
+        ],
     }
+
+
+def _with_assets(
+    row: dict[str, Any],
+    assets: dict[str, dict[str, Any]],
+    error: str | None = None,
+    *,
+    partial: bool = False,
+) -> dict[str, Any]:
+    """Add what the plugin wrote into the workspace, from the asset ledger.
+
+    Workspace-relative destinations only, never where the workspace is: the
+    same rule as the rest of this response. ``error`` names a record that
+    could not be read. With ``partial`` the lists still hold what the readable
+    records gave; without it nothing was read and the lists are empty.
+    """
+    from robothor.plugins.overview import assets_for
+
+    written: dict[str, Any] = assets_for(assets, str(row.get("name") or ""))
+    if error:
+        written["error"] = error
+        written["partial"] = partial
+    row["assets"] = written
+    return row
 
 
 def set_plugin_enabled(name: str, enabled: bool) -> dict[str, Any] | None:

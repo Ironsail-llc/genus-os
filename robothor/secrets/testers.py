@@ -68,6 +68,7 @@ _KINDS: dict[str, str] = {
     "twilio": "twilio",
     "cloudflare": "cloudflare",
     "jira": "jira",
+    "n8n": "n8n",
 }
 
 
@@ -116,6 +117,22 @@ def _classify(status: int) -> str:
     if status >= 500:
         return "network"
     return "unknown"
+
+
+def _n8n_url(settings: Any) -> str:
+    """The n8n monitor's instance, at the cheapest authenticated endpoint."""
+    from robothor.integrations.n8n.client import N8nError, checked_root
+
+    group = settings.integrations
+    try:
+        # The same policy the poller applies: never send the key over plain
+        # http to a host that is not loopback unless the operator opted in.
+        root = checked_root(
+            group.n8n_base_url or "", allow_insecure_http=bool(group.n8n_allow_insecure_http)
+        )
+    except N8nError:
+        return ""
+    return f"{root}/api/v1/workflows?limit=1"
 
 
 #: Per kind: the request to make, and how to read an identity out of a 200.
@@ -168,6 +185,14 @@ _PROBES: dict[str, dict[str, Any]] = {
         "auth": lambda value: {"Authorization": f"Basic {value}"},
         "identity": lambda body: body.get("displayName") or body.get("accountId"),
     },
+    "n8n": {
+        # The instance is the operator's own, so the probe aims at the base URL
+        # the n8n monitor polls. Filled in by :func:`_aim`.
+        "url": "",
+        "url_from_settings": _n8n_url,
+        "auth": lambda value: {"X-N8N-API-KEY": value, "Accept": "application/json"},
+        "identity": lambda body: f"{len(body.get('data') or [])} workflow(s)",
+    },
     "twilio": {
         # Twilio's account SID is half the credential pair and is not a secret;
         # the probe needs it to build the URL, so it is read from settings.
@@ -178,17 +203,31 @@ _PROBES: dict[str, dict[str, Any]] = {
 }
 
 
-async def probe(kind: str, value: str) -> TestOutcome:
+def _aim(spec: dict[str, Any]) -> str:
+    """The URL to dial: fixed, or built from settings for an instance-hosted vendor."""
+    from_settings = spec.get("url_from_settings")
+    if from_settings is None:
+        return str(spec["url"])
+    try:
+        from robothor.settings import get_settings
+
+        return str(from_settings(get_settings()))
+    except Exception:  # noqa: BLE001 - unreadable settings = cannot be aimed
+        return ""
+
+
+async def probe(kind: str, value: str, *, transport: Any = None) -> TestOutcome:
     """Dial ``kind``'s identity endpoint with ``value``.
 
     Never raises and never returns anything derived from the vendor's response
     body other than the identity hint its own ``identity`` reader extracts.
+    ``transport`` is an ``httpx`` transport for tests.
     """
     spec = _PROBES.get(kind)
     if spec is None:
         return TestOutcome(ok=False, error_class="unknown_kind")
 
-    url = spec["url"]
+    url = _aim(spec)
     if not url:
         # A kind whose endpoint depends on instance configuration we do not
         # have. Saying "unknown_kind" would be a lie ("we have no probe"); this
@@ -198,7 +237,7 @@ async def probe(kind: str, value: str) -> TestOutcome:
     import httpx
 
     try:
-        async with httpx.AsyncClient(timeout=TIMEOUT_SECONDS) as client:
+        async with httpx.AsyncClient(timeout=TIMEOUT_SECONDS, transport=transport) as client:
             response = await client.get(url, headers=spec["auth"](value))
     except Exception as exc:  # noqa: BLE001 - the class is the whole answer
         # The TYPE, never the text: an httpx error can carry the request it

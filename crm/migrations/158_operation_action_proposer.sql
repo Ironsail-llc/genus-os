@@ -1,4 +1,4 @@
--- Migration 154: who proposed an operation action.
+-- Migration 158: who proposed an operation action.
 --
 -- A policy actor (policy:<plugin>:<version>) may decide only the actions its
 -- own plugin proposed, so the proposer is recorded on the row. Rows proposed

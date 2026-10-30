@@ -39,6 +39,7 @@ from robothor.engine.shutdown_budget import (
 )
 from robothor.engine.telegram import TelegramBot
 from robothor.engine.workflow import WorkflowEngine
+from robothor.engine.workflow_registry import set_workflow_engine
 from robothor.plugins import reload_plugins
 
 if TYPE_CHECKING:
@@ -622,11 +623,12 @@ def _cleanup_stale_runs(tenant_id: str | None = None) -> int:
 
 
 def _background_workers(tenant_id: str) -> list[asyncio.Task[Any]]:
-    """Calendar write recovery, plus the workspace ingest.
+    """Calendar write recovery, the workspace ingest, and the n8n monitor.
 
     The ingest starts no task unless workspace_provider=microsoft365, or the
     provider is google with Gmail push switched on: otherwise a Google
-    instance's own sync scripts publish email.new / calendar.*.
+    instance's own sync scripts publish email.new / calendar.*. The n8n
+    monitor starts no task unless ROBOTHOR_N8N_ENABLED is on.
     """
     from robothor.engine.calendar_recovery_worker import run as recover_calendar
 
@@ -639,6 +641,12 @@ def _background_workers(tenant_id: str) -> list[asyncio.Task[Any]]:
         tasks.extend(ingest_worker.start_tasks(tenant_id))
     except Exception as e:  # noqa: BLE001 - ingest must never keep the engine down
         logger.warning("Workspace ingest not started: %s", type(e).__name__)
+    try:
+        from robothor.integrations.n8n import poller as n8n_poller
+
+        tasks.extend(n8n_poller.start_tasks(tenant_id))
+    except Exception as e:  # noqa: BLE001 - the n8n monitor must never keep the engine down
+        logger.warning("n8n monitor not started: %s", type(e).__name__)
     return tasks
 
 
@@ -1562,6 +1570,8 @@ async def main() -> int:
     set_runner(runner, config)
 
     workflow_engine = WorkflowEngine(config, runner)
+    # Agent tools (list_workflows, run_workflow, workflow_runs) reach the engine here.
+    set_workflow_engine(workflow_engine)
     wf_count = workflow_engine.load_workflows(config.workflow_dir)
     logger.info("Loaded %d workflows", wf_count)
 
@@ -1964,6 +1974,25 @@ async def _sweep_stale_questions() -> dict[str, int]:
     return {"prompts": prompts, "questions": questions}
 
 
+async def _purge_expired_plugin_state(tenant_id: str) -> int:
+    """Delete expired ``plugin_state`` rows for the instance's tenant.
+
+    An expired row is already invisible to ``PluginState`` reads, so this is
+    about storage: a plugin caching with a short TTL writes rows nothing else
+    would delete. Never raises, like every other watchdog sweep.
+    """
+    try:
+        from robothor.plugins.state import purge_expired
+
+        purged = await asyncio.to_thread(purge_expired, tenant_id)
+    except Exception as exc:  # noqa: BLE001 -- housekeeping must not stop the engine
+        logger.warning("Watchdog: plugin state purge failed: %s", exc)
+        return 0
+    if purged:
+        logger.info("Watchdog: purged %d expired plugin state row(s)", purged)
+    return int(purged)
+
+
 async def _run_outage_detectors(tenant_id: str) -> None:
     """The slow, multi-day detectors the watchdog runs on its outage tick.
 
@@ -2087,6 +2116,10 @@ async def _watchdog(
         # indexed scans; on a box with no pending approvals it is a no-op.
         if tick_count % 2 == 0:
             await _drive_approvals_and_sweep(workflow_engine)
+
+        # Expired plugin_state rows (every 120 ticks = 1 hour).
+        if tick_count % 120 == 0:
+            await _purge_expired_plugin_state(config.tenant_id)
 
         # Zombie run reaper (every 40 ticks = 20 minutes)
         if tick_count % 40 == 0:

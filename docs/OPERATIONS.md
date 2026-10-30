@@ -126,6 +126,6 @@ policy decision, claim and finish against PostgreSQL.
 ## Schema
 
 The tables are created by `crm/migrations/126_durable_operations.sql`;
-`crm/migrations/154_operation_action_proposer.sql` adds
+`crm/migrations/158_operation_action_proposer.sql` adds
 `operation_actions.proposed_by`. Rows proposed before that migration have no
 proposer and remain operator-only.

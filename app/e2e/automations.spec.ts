@@ -161,6 +161,16 @@ async function setupMocks(page: Page): Promise<Recorded> {
   );
   await page.route("**/api/bridge/api/approvals", (route) => json(route, { count: 0, pending: [] }));
   await page.route("**/api/bridge/api/workflows", (route) => json(route, []));
+  await page.route("**/api/bridge/api/integrations/n8n/**", (route) =>
+    json(route, {
+      status: "not_configured",
+      base_url: "",
+      last_poll_at: null,
+      last_ok_at: null,
+      last_error: null,
+      workflows: [],
+    })
+  );
 
   await page.route("**/api/bridge/api/automations", (route) => {
     const automations = [...store.values()];

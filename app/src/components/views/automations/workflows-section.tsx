@@ -9,11 +9,12 @@ import { Skeleton } from "@/components/ui/skeleton";
 /**
  * Workflows — the multi-agent flows, below the scheduled agents.
  *
- * Lifted verbatim out of `workflows-view.tsx` when Automations took over the
- * `?v=workflows` route. Unchanged in substance, including the honesty
- * limitation in the footer: `GET /api/workflows` groups `workflow_runs`, so a
- * workflow that has been DEFINED and never RUN is not in this list and the copy
- * says so rather than implying full registry coverage.
+ * Lifted out of `workflows-view.tsx` when Automations took over the
+ * `?v=workflows` route. `GET /api/workflows` lists every workflow that has run
+ * AND every one defined in `docs/workflows/` that has not (`runs: 0`), each
+ * with a `source`: `plugin:<dist>` when a plugin shipped it, else `workspace`.
+ * The source is drawn as a small label so an operator can tell a workflow they
+ * wrote from one a plugin installed.
  *
  * It keeps its own fetch rather than being fed by the page above it: the two
  * halves come from two different bridge routes with two different failure
@@ -29,6 +30,8 @@ export type WorkflowRow = {
   last_run_at?: string | null;
   last_status?: string | null;
   failures?: number;
+  /** `plugin:<dist>` or `workspace`; null/absent for a workflow no file defines. */
+  source?: string | null;
 };
 
 export function WorkflowsSection({ visible = true }: { visible?: boolean }) {
@@ -69,7 +72,7 @@ export function WorkflowsSection({ visible = true }: { visible?: boolean }) {
         <h3 className="text-sm font-medium text-foreground">Workflows</h3>
         <p className="text-xs text-muted-foreground">
           {workflows.length > 0
-            ? `${workflows.length} with run history`
+            ? `${workflows.length} defined or run`
             : "Multi-agent flows, and what they have run."}
         </p>
       </div>
@@ -91,14 +94,15 @@ export function WorkflowsSection({ visible = true }: { visible?: boolean }) {
         <EmptyState
           testId="workflows-empty"
           icon={Workflow}
-          title="No workflow runs yet"
-          description="A workflow appears here after its first run — defined-but-never-run workflows are not listed."
+          title="No workflows yet"
+          description="A workflow appears here once it is defined in docs/workflows/ or has run."
         />
       )}
 
       <div className="flex flex-col gap-2">
         {workflows.map((w) => {
           const failed = (w.failures ?? 0) > 0;
+          const runs = w.runs ?? 0;
           return (
             <div
               key={w.workflow_id}
@@ -110,26 +114,31 @@ export function WorkflowsSection({ visible = true }: { visible?: boolean }) {
               }`}
             >
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <span className="text-sm font-semibold text-foreground">{w.workflow_id}</span>
+                <div className="flex min-w-0 flex-wrap items-center gap-2">
+                  <span className="break-all text-sm font-semibold text-foreground">
+                    {w.workflow_id}
+                  </span>
+                  {w.source ? (
+                    <span
+                      data-testid={`workflow-source-${w.workflow_id}`}
+                      className="break-all rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground"
+                    >
+                      {w.source}
+                    </span>
+                  ) : null}
+                </div>
                 <StatusBadge
                   status={failed ? "degraded" : fromEngineStatus(w.last_status)}
                   label={w.last_status ?? undefined}
                 />
               </div>
               <div className="mt-1 font-mono text-xs text-muted-foreground">
-                {w.runs ?? 0} run(s), {w.failures ?? 0} failed
+                {runs === 0 ? "never run" : `${runs} run(s), ${w.failures ?? 0} failed`}
               </div>
             </div>
           );
         })}
       </div>
-
-      {workflows.length > 0 && (
-        <p className="text-xs text-muted-foreground/70">
-          Shows workflows that have run at least once. A defined-but-never-run workflow will not
-          appear here.
-        </p>
-      )}
     </section>
   );
 }
