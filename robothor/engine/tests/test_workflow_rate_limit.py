@@ -291,6 +291,24 @@ class TestFirstStepDefers:
         assert engine._persist_step.call_count == 1
 
     @pytest.mark.asyncio
+    async def test_a_first_step_with_retries_is_deferred_without_retrying(
+        self, engine_config, clock, no_dedup, waits
+    ):
+        # The deferral happens before any step runs, so the step's retry_count
+        # never comes into play: no wait, no second attempt.
+        engine = _engine(
+            engine_config, _definition(rate_limit_per_minute=1, step={"retry_count": 2})
+        )
+        await _run(engine, requeue=True)
+        run = await _run(engine, requeue=True)
+        assert run.status == RunStatus.SKIPPED
+        assert run.rate_limited is True
+        assert run.step_results == []
+        assert not waits
+        assert engine.runner.registry.execute.await_count == 1
+        assert engine._persist_step_start.call_count == 1
+
+    @pytest.mark.asyncio
     async def test_a_deferral_is_logged_once(self, engine_config, clock, no_dedup, caplog):
         import logging
 
@@ -385,3 +403,65 @@ class TestBurst:
         for run in runs:
             if run.status == RunStatus.SKIPPED:
                 assert run.step_results == []
+
+
+# ── busy comes before the rate limit ─────────────────────────────────────
+
+
+class TestBusyFirst:
+    async def _event_while_busy(self, engine_config: Any, clock: _Clock) -> tuple[Any, Any]:
+        """Fill the window, then deliver an event while another run holds the workflow."""
+        engine = _engine(engine_config, _definition(rate_limit_per_minute=1))
+        with (
+            patch("robothor.engine.dedup.try_acquire", new=AsyncMock(return_value=True)),
+            patch("robothor.engine.dedup.release", new=AsyncMock()),
+        ):
+            await _run(engine, requeue=True)  # the window is now full
+        hooks = EventHooks(engine_config, MagicMock())
+        hooks.workflow_engine = engine
+        hooks._delayed_requeue = AsyncMock()  # type: ignore[method-assign]
+        runs: list[Any] = []
+        real_execute = engine.execute
+
+        async def execute(*args: Any, **kwargs: Any) -> Any:
+            runs.append(await real_execute(*args, **kwargs))
+            return runs[-1]
+
+        engine.execute = execute  # type: ignore[method-assign]
+        with (
+            patch("robothor.engine.dedup.try_acquire", new=AsyncMock(return_value=False)),
+            patch("robothor.engine.dedup.release", new=AsyncMock()),
+        ):
+            await hooks._run_workflow(
+                engine.get_workflow("order-flow"),
+                "platform",
+                EVENT,
+                {"id": "evt-late", "type": EVENT, "payload": "{}"},
+                AsyncMock(),
+                STREAM,
+            )
+        return hooks, runs[0]
+
+    @pytest.mark.asyncio
+    async def test_a_busy_workflow_is_busy_not_rate_limited(self, engine_config, clock):
+        # The trigger does not set requeue_if_busy: the event is dropped as
+        # busy, exactly as before, even though the window is also full.
+        hooks, run = await self._event_while_busy(engine_config, clock)
+        assert run.status == RunStatus.SKIPPED
+        assert run.rate_limited is False
+        assert "already running" in (run.error_message or "")
+        hooks._delayed_requeue.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_a_deferral_releases_the_workflow(self, engine_config, clock):
+        engine = _engine(engine_config, _definition(rate_limit_per_minute=1))
+        release = AsyncMock()
+        with (
+            patch("robothor.engine.dedup.try_acquire", new=AsyncMock(return_value=True)),
+            patch("robothor.engine.dedup.release", new=release),
+        ):
+            await _run(engine, requeue=True)
+            release.reset_mock()
+            run = await _run(engine, requeue=True)
+        assert run.rate_limited is True
+        release.assert_awaited_once_with("workflow:order-flow")
