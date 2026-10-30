@@ -81,7 +81,10 @@ MOVED_TABLES: dict[str, str] = {
     "workflow_approvals": f"run_id IN {_WF_RUNS}",
     "chat_sessions": "id IN (SELECT id FROM _mw_sessions)",
     "chat_approval_receipts": f"session_key IN {_SESSION_KEYS}",
-    "channel_message_map": f"session_key IN {_SESSION_KEYS} OR author_run_id IN {_RUNS}",
+    # By session only. The channel bus maps a non-main agent's delivery into
+    # MAIN's session with the workload's run as author; that row belongs to
+    # main's conversation, which stays (``author_run_id`` has no foreign key).
+    "channel_message_map": f"session_key IN {_SESSION_KEYS}",
 }
 
 #: Untenanted child table -> (the moved table it hangs off, its key column).
