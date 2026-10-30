@@ -414,6 +414,11 @@ jobs:
       - name: docker meta
         id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        env:
+          # On a pull_request event github.sha is GitHub's merge commit, not
+          # the head this job checked out; {{sha}} must name the head, because
+          # deploy-staging writes pr-N-sha-<head> into values-staging.yaml.
+          DOCKER_METADATA_PR_HEAD_SHA: "true"
         with:
           images: ghcr.io/ironsail-llc/genus-os/${{ matrix.image.name }}
           flavor: |
@@ -667,7 +672,10 @@ jobs:
     steps:
       - name: Compute short SHA
         id: sha
-        run: echo "short=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+        env:
+          # The PR head, as the build tags it (not the merge commit).
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: echo "short=${HEAD_SHA::7}" >> "$GITHUB_OUTPUT"
       # Third-party action SHA-pinned + tag-commented.
       - uses: marocchino/sticky-pull-request-comment@0ea0beb66eb9baf113663a64ec522f60e49231c0 # v3.0.4
         with:
