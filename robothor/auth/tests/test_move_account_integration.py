@@ -211,7 +211,7 @@ def test_live_move_moves_every_linked_row_revokes_sessions_and_audits(world) -> 
 
 
 def test_the_audit_row_is_filed_under_the_target_tenant(world) -> None:
-    """``audit_log.tenant_id`` (migration 154, from the tenant admin gates
+    """``audit_log.tenant_id`` (migration 158, from the tenant admin gates
     work) is how a tenant's own trail is read. Skipped where that column has
     not been migrated yet."""
     cur = world["cur"]

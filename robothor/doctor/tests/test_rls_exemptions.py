@@ -1,6 +1,6 @@
 """A tenant_id table may be deliberately exempt from row-level security.
 
-``audit_log`` records the tenant each event happened in (migration 154) but
+``audit_log`` records the tenant each event happened in (migration 158) but
 carries no ``tenant_isolation`` policy, on purpose: it is the appliance-wide
 trail the platform's root operator reads unrestricted, and per-tenant reads are
 scoped in the bridge (``routers._operator.audit_scope``). With RLS on it, the
@@ -65,7 +65,7 @@ def _check(check_id: str):
 
 
 @pytest.mark.integration
-def test_the_coverage_check_passes_on_a_schema_with_migration_154(db_conn) -> None:
+def test_the_coverage_check_passes_on_a_schema_with_migration_158(db_conn) -> None:
     from pathlib import Path
 
     migration = (

@@ -983,7 +983,7 @@ anything a spreadsheet would evaluate is prefixed with an apostrophe, so an
 audit detail cannot become a formula or carry a credential off the box. A
 failed export is a real `500` rather than an empty file.
 
-**Who sees which rows.** Since migration 154 every `audit_log` row records the
+**Who sees which rows.** Since migration 158 every `audit_log` row records the
 tenant it happened in — a bridge request's *acting* tenant, else the writing
 process's own. The platform tenant's operator or auditor, **at home**, still
 reads the appliance-wide trail: every tenant, independent root tenants such as
