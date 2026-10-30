@@ -688,7 +688,7 @@ describe("ProvidersPage — the fleet default model", () => {
       expect(found).toBeDefined();
       return found!;
     });
-    expect(call.body).toEqual({ model: "anthropic/claude-sonnet-4.6", fallbacks: [] });
+    expect(call.body).toEqual({ model: "anthropic/claude-sonnet-4.6", fallbacks: [], canvas: null });
   });
 
   it("keeps an off-catalog fallback visible and blocks the save too", async () => {
@@ -753,6 +753,7 @@ describe("ProvidersPage — the fleet default model", () => {
     expect(call.body).toEqual({
       model: "anthropic/claude-sonnet-4.6",
       fallbacks: ["openrouter/openai/gpt-5.4"],
+      canvas: null,
     });
     expect(await screen.findByTestId("fleet-default-status")).toHaveTextContent(/in use|applied/i);
   });
@@ -790,6 +791,162 @@ describe("ProvidersPage — the fleet default model", () => {
   it("says that agents pinning a model keep it", async () => {
     await renderPage();
     expect(screen.getByTestId("fleet-defaults")).toHaveTextContent(/pin/i);
+  });
+});
+
+describe("ProvidersPage — the canvas model", () => {
+  it("offers 'same as the fleet default' and every catalog model", async () => {
+    await renderPage();
+    const select = screen.getByTestId("canvas-model") as HTMLSelectElement;
+    const options = Array.from(select.options).map((option) => option.value);
+    expect(options[0]).toBe("");
+    expect(select.options[0]).toHaveTextContent("Same as the fleet default");
+    expect(options).toEqual(
+      expect.arrayContaining([
+        "openrouter/openai/gpt-5.4",
+        "anthropic/claude-sonnet-4.6",
+        "ollama_chat/qwen3:8b",
+      ])
+    );
+    expect(screen.getByTestId("fleet-defaults")).toHaveTextContent(
+      "The model that draws the visual canvas. A fast model is enough here."
+    );
+  });
+
+  it("sits below the fallback controls, so Add fallback stays next to its list", async () => {
+    await renderPage();
+    const addFallback = screen.getByTestId("fleet-fallback-add");
+    const canvas = screen.getByTestId("canvas-model");
+    expect(addFallback.compareDocumentPosition(canvas) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("is pre-filled with the canvas model the engine reports", async () => {
+    await renderPage({
+      "GET /api/bridge/api/providers/defaults": {
+        body: {
+          primary: "openrouter/openai/gpt-5.4",
+          fallbacks: [],
+          canvas: "ollama_chat/qwen3:8b",
+        },
+      },
+    });
+    await vi.waitFor(() => {
+      expect((screen.getByTestId("canvas-model") as HTMLSelectElement).value).toBe(
+        "ollama_chat/qwen3:8b"
+      );
+    });
+  });
+
+  it("defaults to the fleet model when none is configured", async () => {
+    await renderPage({
+      "GET /api/bridge/api/providers/defaults": {
+        body: { primary: "openrouter/openai/gpt-5.4", fallbacks: [] },
+      },
+    });
+    await vi.waitFor(() => {
+      expect((screen.getByTestId("fleet-default-model") as HTMLSelectElement).value).toBe(
+        "openrouter/openai/gpt-5.4"
+      );
+    });
+    expect((screen.getByTestId("canvas-model") as HTMLSelectElement).value).toBe("");
+  });
+
+  it("is saved by Save default", async () => {
+    await renderPage({
+      "GET /api/bridge/api/providers/defaults": {
+        body: { primary: "openrouter/openai/gpt-5.4", fallbacks: [] },
+      },
+      "PATCH /api/bridge/api/providers/defaults": {
+        body: {
+          model: "openrouter/openai/gpt-5.4",
+          fallbacks: [],
+          canvas: "ollama_chat/qwen3:8b",
+          applied: true,
+        },
+      },
+    });
+    await vi.waitFor(() => {
+      expect((screen.getByTestId("fleet-default-model") as HTMLSelectElement).value).toBe(
+        "openrouter/openai/gpt-5.4"
+      );
+    });
+    fireEvent.change(screen.getByTestId("canvas-model"), {
+      target: { value: "ollama_chat/qwen3:8b" },
+    });
+    fireEvent.click(screen.getByTestId("fleet-default-save"));
+
+    const call = await vi.waitFor(() => {
+      const found = calls.find((c) => c.method === "PATCH");
+      expect(found).toBeDefined();
+      return found!;
+    });
+    expect(call.body).toEqual({
+      model: "openrouter/openai/gpt-5.4",
+      fallbacks: [],
+      canvas: "ollama_chat/qwen3:8b",
+    });
+  });
+
+  it("keeps a chosen 'same as the fleet default' across a refresh", async () => {
+    await renderPage({
+      "GET /api/bridge/api/providers/defaults": {
+        body: {
+          primary: "openrouter/openai/gpt-5.4",
+          fallbacks: [],
+          canvas: "ollama_chat/qwen3:8b",
+        },
+      },
+    });
+    await vi.waitFor(() => {
+      expect((screen.getByTestId("canvas-model") as HTMLSelectElement).value).toBe(
+        "ollama_chat/qwen3:8b"
+      );
+    });
+    fireEvent.change(screen.getByTestId("canvas-model"), { target: { value: "" } });
+
+    const reads = () =>
+      calls.filter((c) => c.method === "GET" && c.url.endsWith("/providers/defaults")).length;
+    const before = reads();
+    fireEvent.click(screen.getByTestId("providers-refresh"));
+    await vi.waitFor(() => expect(reads()).toBeGreaterThan(before));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect((screen.getByTestId("canvas-model") as HTMLSelectElement).value).toBe("");
+  });
+
+  it("leaves the canvas model out of the save when the current one was never read", async () => {
+    await renderPage({
+      "GET /api/bridge/api/providers/defaults": { status: 503, body: { detail: "engine busy" } },
+      "PATCH /api/bridge/api/providers/defaults": {
+        body: { model: "anthropic/claude-sonnet-4.6", fallbacks: [], applied: true },
+      },
+    });
+    fireEvent.change(screen.getByTestId("fleet-default-model"), {
+      target: { value: "anthropic/claude-sonnet-4.6" },
+    });
+    fireEvent.click(screen.getByTestId("fleet-default-save"));
+
+    const call = await vi.waitFor(() => {
+      const found = calls.find((c) => c.method === "PATCH");
+      expect(found).toBeDefined();
+      return found!;
+    });
+    expect(call.body).not.toHaveProperty("canvas");
+  });
+
+  it("keeps an off-catalog canvas model visible and blocks the save", async () => {
+    await renderPage({
+      "GET /api/bridge/api/providers/defaults": {
+        body: { primary: "openrouter/openai/gpt-5.4", fallbacks: [], canvas: "vertex_ai/unlisted" },
+      },
+    });
+    await vi.waitFor(() => {
+      expect((screen.getByTestId("canvas-model") as HTMLSelectElement).value).toBe(
+        "vertex_ai/unlisted"
+      );
+    });
+    expect(screen.getByTestId("fleet-default-blocked")).toHaveTextContent("vertex_ai/unlisted");
+    expect(screen.getByTestId("fleet-default-save")).toBeDisabled();
   });
 });
 

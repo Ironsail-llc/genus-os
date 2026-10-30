@@ -44,7 +44,7 @@ vi.mock("@/hooks/use-agents", () => ({
 }));
 
 vi.mock("@/hooks/use-dashboard-agent", () => ({
-  useDashboardAgent: vi.fn(),
+  useDashboardAgent: () => ({ error: null, retry: vi.fn(), dismiss: vi.fn() }),
 }));
 
 vi.mock("@/lib/api/health", () => ({
@@ -222,13 +222,16 @@ describe("Mobile UX — AppShell", () => {
 });
 
 describe("Mobile UX — TaskBoard", () => {
-  it("renders as stacked list on mobile viewports, not 4-column grid", async () => {
+  it("stacks into one column on narrow screens by fitting columns to its own width", async () => {
     const { TaskBoard } = await import("../business/task-board");
     render(
       <TaskBoard tasks={mockTasks} onApprove={vi.fn()} onReject={vi.fn()} />
     );
     const board = screen.getByTestId("task-board");
-    expect(board.className).toMatch(/grid-cols-1/);
+    // One column below the board's 31rem container step; no viewport
+    // breakpoint forces four.
+    expect(board.className.split(/\s+/)).toContain("grid-cols-1");
+    expect(board.className).not.toMatch(/md:grid-cols-4/);
   });
 
   it("task cards are readable width", async () => {
@@ -438,7 +441,7 @@ describe("Mobile UX — DefaultDashboard", () => {
 });
 
 describe("Mobile UX — MetricGrid", () => {
-  it("uses 2 columns on mobile", async () => {
+  it("fits its columns to the width it has on mobile", async () => {
     const { MetricGrid } = await import("../business/metric-grid");
     render(
       <MetricGrid
@@ -450,7 +453,10 @@ describe("Mobile UX — MetricGrid", () => {
       />
     );
     const grid = screen.getByTestId("metric-grid");
-    expect(grid.className).toContain("grid-cols-2");
+    // Two counters side by side on a phone; four only when the grid's own
+    // container is wide enough.
+    expect(grid.className.split(/\s+/)).toContain("grid-cols-2");
+    expect(grid.className).not.toMatch(/(md|lg):grid-cols-/);
   });
 });
 

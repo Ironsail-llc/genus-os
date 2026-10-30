@@ -372,6 +372,22 @@ The fleet default can also be changed from the dashboard's Providers page
 its own manifest directory and reloads it before it answers, so the bridge
 needs no access to the workspace volume for this.
 
+The visual canvas (the dashboard's AI-generated view) has its own, optional
+model: **Canvas model** on the same page, saved by the same **Save default**
+as `model: canvas` in `_defaults.yaml`. A fast model is enough for it. The
+canvas tries, in order, the `DASHBOARD_MODEL` environment variable (an
+override, unset by default), the canvas model, the fleet's `primary`, and
+`ROBOTHOR_LAST_RESORT_MODEL`; the first that answers draws the page. The
+whole chain has one deadline, 15 seconds to decide whether the page needs
+updating and 120 seconds to draw it, shared equally among the models but
+never less than 5 and 30 seconds each, so on a long chain the last models
+may not get a turn: that is why a fast canvas model is worth setting. Leave the
+canvas model at "Same as the fleet default" and the canvas runs on whatever
+the fleet runs on. Every id is dialled exactly as written, with no provider
+prefix added, so the canvas works on any provider the instance has a key for.
+When none of these is set, the canvas falls back to
+`openrouter/google/gemini-2.5-flash-lite`, which needs an OpenRouter key.
+
 | Models | Environment |
 |---|---|
 | `openai/*` | `OPENAI_API_KEY`; `OPENAI_API_BASE` when the key belongs to a regional project (for example a US data-residency key, which `api.openai.com` rejects) |

@@ -94,6 +94,24 @@ def test_a_defaults_fragment_is_not_judged_as_an_agent(manifest_dir) -> None:
     assert "1 manifest" in row.detail
 
 
+def test_a_canvas_model_in_the_fleet_defaults_validates(manifest_dir) -> None:
+    """``model.canvas`` is a fleet-defaults key (the visual canvas's model).
+    ``_defaults.yaml`` is merged into every agent, so an undeclared key here
+    would turn the strict scan red for the whole fleet the moment an operator
+    picked a canvas model."""
+    from robothor.engine import config as engine_config
+
+    engine_config.reset_defaults_cache()
+    _write(manifest_dir, "alice", _GOOD_MANIFEST)
+    (manifest_dir / "_defaults.yaml").write_text(
+        yaml.safe_dump(
+            {"model": {"primary": "openrouter/test/model", "canvas": "openrouter/test/fast"}}
+        )
+    )
+    row = _run(manifest_checks.CHECKS, "manifests.schema")[0]
+    assert row.status == "pass", row.detail
+
+
 def test_the_merged_document_is_what_is_judged(manifest_dir) -> None:
     """``enforce`` refuses the document a run BUILDS, defaults included, so a
     doctor validating the raw file would disagree with the loader."""

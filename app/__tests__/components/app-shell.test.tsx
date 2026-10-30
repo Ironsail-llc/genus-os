@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, act } from "@testing-library/react";
 
 // Mock hooks
 const mockUseTasks = vi.fn();
@@ -30,8 +30,46 @@ vi.mock("@/components/canvas/live-canvas", () => ({
   LiveCanvas: () => <div data-testid="live-canvas">LiveCanvas</div>,
 }));
 
+// The real panel draws its own collapse button when told it is docked; the
+// stand-in does the same so these tests exercise the shell's wiring.
 vi.mock("@/components/chat-panel", () => ({
-  ChatPanel: () => <div data-testid="chat-panel">ChatPanel</div>,
+  ChatPanel: ({
+    variant,
+    ownerName,
+    docked,
+    onCollapse,
+    onViewOpened,
+  }: {
+    variant?: string;
+    ownerName?: string;
+    docked?: boolean;
+    onCollapse?: () => void;
+    onViewOpened?: () => void;
+  }) => (
+    <div
+      data-testid="chat-panel"
+      data-variant={variant ?? ""}
+      data-owner={ownerName ?? ""}
+      data-view-opened-handler={onViewOpened ? "yes" : "no"}
+    >
+      ChatPanel
+      {docked && (
+        <button data-testid="chat-dock-close" aria-label="Collapse chat panel" onClick={onCollapse} />
+      )}
+      {onViewOpened && (
+        <button data-testid="panel-view-opened" onClick={onViewOpened}>
+          opened
+        </button>
+      )}
+    </div>
+  ),
+}));
+
+// The session the shell reads the owner's name from; no session by default.
+const mockUseSession = vi.fn();
+vi.mock("next-auth/react", () => ({
+  useSession: () => mockUseSession(),
+  SessionProvider: ({ children }: { children: React.ReactNode }) => children,
 }));
 
 vi.mock("@/components/business/task-board", () => ({
@@ -77,9 +115,10 @@ vi.mock("@/lib/event-bus/use-event-stream", () => ({
   useEventStream: () => ({ events: [] }),
 }));
 
+const mockScreenSize = vi.fn(() => "desktop");
 vi.mock("@/hooks/use-mobile", () => ({
-  useScreenSize: () => "desktop",
-  useIsMobile: () => false,
+  useScreenSize: () => mockScreenSize(),
+  useIsMobile: () => mockScreenSize() === "mobile",
 }));
 
 import { AppShell } from "@/components/layout/app-shell";
@@ -88,6 +127,10 @@ describe("AppShell", () => {
   beforeEach(() => {
     // The active view lives in the query string now — reset it between tests.
     window.history.replaceState(null, "", "/");
+    mockUseSession.mockReturnValue({ data: null, status: "unauthenticated", update: vi.fn() });
+    // The dock's open state is remembered per browser — start every test fresh.
+    window.localStorage.clear();
+    mockScreenSize.mockReturnValue("desktop");
     mockUseTasks.mockReturnValue({
       tasks: [
         { id: "1", title: "Test Task", status: "REVIEW" },
@@ -155,6 +198,64 @@ describe("AppShell", () => {
     expect(screen.getByTestId("tasks-view").style.display).toBe("none");
   });
 
+  it("centres the chat home stage at a readable width", () => {
+    render(<AppShell />);
+    const stage = screen.getByTestId("chat-container");
+    const wrapper = stage.querySelector(".max-w-5xl");
+    expect(wrapper).not.toBeNull();
+    expect(wrapper!.className).toContain("mx-auto");
+    expect(wrapper!.className).toContain("w-full");
+    expect(wrapper!.contains(screen.getByTestId("chat-panel"))).toBe(true);
+  });
+
+  it("does not cap the docked chat beside another view", () => {
+    render(<AppShell />);
+    fireEvent.click(screen.getByTestId("nav-dashboard"));
+    expect(screen.getByTestId("chat-container").querySelector(".max-w-5xl")).toBeNull();
+  });
+
+  it("tells the chat panel it is the page on the chat home and the dock elsewhere", () => {
+    render(<AppShell />);
+    expect(screen.getByTestId("chat-panel")).toHaveAttribute("data-variant", "page");
+    fireEvent.click(screen.getByTestId("nav-dashboard"));
+    expect(screen.getByTestId("chat-panel")).toHaveAttribute("data-variant", "dock");
+  });
+
+  it("passes the owner's first name from the session to the chat panel", () => {
+    mockUseSession.mockReturnValue({
+      data: { user: { name: "Alice Example" } },
+      status: "authenticated",
+      update: vi.fn(),
+    });
+    render(<AppShell />);
+    expect(screen.getByTestId("chat-panel")).toHaveAttribute("data-owner", "Alice");
+  });
+
+  it("passes no owner name when the session has none", () => {
+    mockUseSession.mockReturnValue({
+      data: { user: { email: "agent@example.com" } },
+      status: "authenticated",
+      update: vi.fn(),
+    });
+    render(<AppShell />);
+    expect(screen.getByTestId("chat-panel")).toHaveAttribute("data-owner", "");
+  });
+
+  it("on mobile, a landing quick action that opened a view takes the operator to it", () => {
+    mockScreenSize.mockReturnValue("mobile");
+    render(<AppShell />);
+    // The mobile chat home has no canvas, so the pushed view must be shown
+    // where it renders: the Dashboard view.
+    fireEvent.click(screen.getByTestId("panel-view-opened"));
+    expect(new URL(window.location.href).searchParams.get("v")).toBe("dashboard");
+    expect(screen.getByTestId("dashboard-view").style.display).toBe("flex");
+  });
+
+  it("on desktop, the canvas rail shows an opened view, so the chat home is not navigated away", () => {
+    render(<AppShell />);
+    expect(screen.getByTestId("chat-panel")).toHaveAttribute("data-view-opened-handler", "no");
+  });
+
   it("switches to tasks view", () => {
     render(<AppShell />);
     fireEvent.click(screen.getByTestId("nav-tasks"));
@@ -179,6 +280,125 @@ describe("AppShell", () => {
     expect(chatContainer.style.width).toBe("0px");
     fireEvent.click(screen.getByTestId("chat-panel-toggle"));
     expect(chatContainer.style.width).toBe("400px");
+  });
+
+  it("collapses the docked chat from the panel's own header", () => {
+    render(<AppShell />);
+    fireEvent.click(screen.getByTestId("nav-dashboard"));
+    const chatContainer = screen.getByTestId("chat-container");
+    expect(chatContainer.style.width).toBe("400px");
+    fireEvent.click(screen.getByTestId("chat-dock-close"));
+    expect(chatContainer.style.width).toBe("0px");
+    // The sidebar toggle reports the same state.
+    expect(screen.getByTestId("chat-panel-toggle")).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("reopens a collapsed dock from the tab at the right edge", () => {
+    render(<AppShell />);
+    fireEvent.click(screen.getByTestId("nav-dashboard"));
+    expect(screen.queryByTestId("chat-dock-open")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("chat-dock-close"));
+    const tab = screen.getByTestId("chat-dock-open");
+    expect(tab).toHaveAttribute("aria-label", "Open chat panel");
+    fireEvent.click(tab);
+    expect(screen.getByTestId("chat-container").style.width).toBe("400px");
+    expect(screen.getByTestId("chat-panel-toggle")).toHaveAttribute("aria-pressed", "true");
+    expect(screen.queryByTestId("chat-dock-open")).not.toBeInTheDocument();
+  });
+
+  it("remembers a collapse and a reopen across loads", () => {
+    render(<AppShell />);
+    fireEvent.click(screen.getByTestId("nav-dashboard"));
+    fireEvent.click(screen.getByTestId("chat-dock-close"));
+    expect(window.localStorage.getItem("genus.chatDockOpen")).toBe("false");
+    fireEvent.click(screen.getByTestId("chat-dock-open"));
+    expect(window.localStorage.getItem("genus.chatDockOpen")).toBe("true");
+    fireEvent.click(screen.getByTestId("chat-panel-toggle"));
+    expect(window.localStorage.getItem("genus.chatDockOpen")).toBe("false");
+  });
+
+  it("starts collapsed when the browser remembered a collapse", () => {
+    window.localStorage.setItem("genus.chatDockOpen", "false");
+    render(<AppShell />);
+    fireEvent.click(screen.getByTestId("nav-dashboard"));
+    expect(screen.getByTestId("chat-container").style.width).toBe("0px");
+    expect(screen.getByTestId("chat-panel-toggle")).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByTestId("chat-dock-open")).toBeInTheDocument();
+  });
+
+  it("follows a collapse made in another tab when it is written", () => {
+    render(<AppShell />);
+    fireEvent.click(screen.getByTestId("nav-dashboard"));
+    const chatContainer = screen.getByTestId("chat-container");
+    expect(chatContainer.style.width).toBe("400px");
+    // Another tab writes the key; this tab hears it through the storage event.
+    window.localStorage.setItem("genus.chatDockOpen", "false");
+    act(() => {
+      window.dispatchEvent(
+        new StorageEvent("storage", { key: "genus.chatDockOpen", newValue: "false" }),
+      );
+    });
+    expect(chatContainer.style.width).toBe("0px");
+    expect(screen.getByTestId("chat-panel-toggle")).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("follows another tab's write even after a dock control was used here", () => {
+    render(<AppShell />);
+    fireEvent.click(screen.getByTestId("nav-dashboard"));
+    const chatContainer = screen.getByTestId("chat-container");
+    fireEvent.click(screen.getByTestId("chat-dock-close"));
+    expect(chatContainer.style.width).toBe("0px");
+    // Another tab reopens the dock after this tab collapsed it.
+    window.localStorage.setItem("genus.chatDockOpen", "true");
+    act(() => {
+      window.dispatchEvent(
+        new StorageEvent("storage", { key: "genus.chatDockOpen", newValue: "true" }),
+      );
+    });
+    expect(chatContainer.style.width).toBe("400px");
+  });
+
+  it("moves focus to the reopen tab when the dock collapses from its header", () => {
+    render(<AppShell />);
+    fireEvent.click(screen.getByTestId("nav-dashboard"));
+    const close = screen.getByTestId("chat-dock-close");
+    close.focus();
+    fireEvent.click(close);
+    expect(document.activeElement).toBe(screen.getByTestId("chat-dock-open"));
+  });
+
+  it("takes a collapsed dock's controls out of reach, and gives focus back on reopen", () => {
+    render(<AppShell />);
+    fireEvent.click(screen.getByTestId("nav-dashboard"));
+    const dock = screen.getByTestId("chat-panel").parentElement!;
+    expect(dock).not.toHaveAttribute("inert");
+    fireEvent.click(screen.getByTestId("chat-dock-close"));
+    expect(dock).toHaveAttribute("inert");
+    fireEvent.click(screen.getByTestId("chat-dock-open"));
+    expect(dock).not.toHaveAttribute("inert");
+    expect(screen.getByTestId("chat-container").contains(document.activeElement)).toBe(true);
+  });
+
+  it("ignores another tab's write to a different key", () => {
+    render(<AppShell />);
+    fireEvent.click(screen.getByTestId("nav-dashboard"));
+    const chatContainer = screen.getByTestId("chat-container");
+    window.localStorage.setItem("genus.chatDockOpen", "false");
+    act(() => {
+      window.dispatchEvent(
+        new StorageEvent("storage", { key: "some.other.key", newValue: "x" }),
+      );
+    });
+    expect(chatContainer.style.width).toBe("400px");
+  });
+
+  it("offers no collapse or reopen control on the chat home", () => {
+    window.localStorage.setItem("genus.chatDockOpen", "false");
+    render(<AppShell />);
+    expect(screen.getByTestId("header-title")).toHaveTextContent("Chat");
+    expect(screen.getByTestId("chat-panel")).toBeInTheDocument();
+    expect(screen.queryByTestId("chat-dock-close")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("chat-dock-open")).not.toBeInTheDocument();
   });
 
   it("shows review badge count from tasks", () => {

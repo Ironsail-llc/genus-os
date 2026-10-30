@@ -41,11 +41,11 @@ export function TasksView({
 
   return (
     <div
-      className="h-full w-full flex flex-col overflow-y-auto"
+      className="h-full w-full min-w-0 flex flex-col overflow-y-auto"
       style={{ display: visible ? "flex" : "none" }}
       data-testid="tasks-view"
     >
-      <div className="p-4 space-y-4">
+      <div className="min-w-0 p-4 space-y-4">
         <MetricGrid metrics={metrics} />
         {isLoading && tasks.length === 0 ? (
           <div className="flex items-center justify-center py-12 text-muted-foreground text-sm">

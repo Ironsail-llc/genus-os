@@ -1,7 +1,6 @@
 "use client";
 
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { ChatMarkdown } from "@/components/chat/chat-markdown";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
@@ -20,11 +19,7 @@ export function MarkdownView({ content, title }: MarkdownViewProps) {
       )}
       <CardContent>
         <ScrollArea className="h-full">
-          <div className="prose prose-invert prose-sm max-w-none">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>
-              {content}
-            </ReactMarkdown>
-          </div>
+          <ChatMarkdown content={content} />
         </ScrollArea>
       </CardContent>
     </Card>

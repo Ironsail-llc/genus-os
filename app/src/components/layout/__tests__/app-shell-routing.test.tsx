@@ -47,7 +47,9 @@ vi.mock("@/hooks/use-agents", () => ({
   }),
 }));
 
-vi.mock("@/hooks/use-dashboard-agent", () => ({ useDashboardAgent: vi.fn() }));
+vi.mock("@/hooks/use-dashboard-agent", () => ({
+  useDashboardAgent: () => ({ error: null, retry: vi.fn(), dismiss: vi.fn() }),
+}));
 vi.mock("@/components/canvas/live-canvas", () => ({
   LiveCanvas: () => <div data-testid="live-canvas" />,
 }));

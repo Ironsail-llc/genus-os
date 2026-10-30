@@ -17,6 +17,7 @@ vi.mock("lucide-react", () => ({
   ClipboardList: () => <span>ClipboardList</span>,
   MessageSquareText: () => <span>MessageSquareText</span>,
   Brain: () => <span>Brain</span>,
+  PanelRightClose: () => <span>PanelRightClose</span>,
 }));
 
 // Mock UI components that use radix-ui internally
@@ -60,6 +61,34 @@ vi.mock("@/hooks/use-visual-state", () => ({
     pendingMessages: null,
     pendingAgentData: null,
   }),
+}));
+
+// The landing has its own tests; here only where ChatPanel shows it matters.
+vi.mock("@/components/chat/chat-landing", () => ({
+  ChatLanding: ({
+    ownerName,
+    suggestedPrompts,
+    onPrompt,
+    onViewOpened,
+  }: {
+    ownerName?: string;
+    suggestedPrompts: string[];
+    onPrompt: (prompt: string) => void;
+    onViewOpened?: () => void;
+  }) => (
+    <div
+      data-testid="chat-landing"
+      data-owner={ownerName ?? ""}
+      data-prompts={JSON.stringify(suggestedPrompts)}
+    >
+      <button data-testid="landing-prompt" onClick={() => onPrompt(suggestedPrompts[0])}>
+        {suggestedPrompts[0]}
+      </button>
+      <button data-testid="landing-view-opened" onClick={() => onViewOpened?.()}>
+        opened
+      </button>
+    </div>
+  ),
 }));
 
 // Mock fetch
@@ -134,6 +163,106 @@ describe("ChatPanel", () => {
   it("renders Robothor header", () => {
     render(<ChatPanel />);
     expect(screen.getByText("Robothor")).toBeInTheDocument();
+  });
+
+  describe("home landing", () => {
+    it("shows the landing, not the compact empty state, when the panel is the page", async () => {
+      render(<ChatPanel variant="page" ownerName="Alice" />);
+      expect(await screen.findByTestId("chat-landing")).toBeInTheDocument();
+      expect(screen.getByTestId("chat-landing")).toHaveAttribute("data-owner", "Alice");
+      expect(screen.queryByTestId("empty-state")).not.toBeInTheDocument();
+    });
+
+    it("gives the landing no prompt that repeats one of its quick actions", async () => {
+      render(<ChatPanel variant="page" />);
+      const prompts = JSON.parse(
+        (await screen.findByTestId("chat-landing")).getAttribute("data-prompts") ?? "[]",
+      ) as string[];
+      // "Show my contacts" and "Check the inbox" are quick actions on the landing.
+      expect(prompts).toEqual(["How's everything running?", "What happened today?"]);
+    });
+
+    it("keeps every suggested prompt in the dock", () => {
+      render(<ChatPanel variant="dock" />);
+      expect(screen.getAllByTestId("suggested-prompt").map((b) => b.textContent)).toEqual([
+        "How's everything running?",
+        "Show my contacts",
+        "Check the inbox",
+        "What happened today?",
+      ]);
+    });
+
+    it("keeps the compact empty state in the dock", () => {
+      render(<ChatPanel variant="dock" ownerName="Alice" />);
+      expect(screen.getByTestId("empty-state")).toBeInTheDocument();
+      expect(screen.queryByTestId("chat-landing")).not.toBeInTheDocument();
+    });
+
+    it("hands a landing prompt to the composer", async () => {
+      render(<ChatPanel variant="page" />);
+      fireEvent.click(await screen.findByTestId("landing-prompt"));
+      const input = screen.getByTestId("chat-input") as HTMLTextAreaElement;
+      expect(input.value).toBe("How's everything running?");
+    });
+
+    it("waits for the history before showing the landing, so a conversation does not flash it", async () => {
+      let answerHistory: (value: unknown) => void = () => {};
+      mockFetch.mockImplementation((url: string) => {
+        if (String(url).startsWith("/api/chat/history")) {
+          return new Promise((resolve) => {
+            answerHistory = resolve;
+          });
+        }
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
+      });
+      render(<ChatPanel variant="page" />);
+      await new Promise((r) => setTimeout(r, 20));
+      expect(screen.queryByTestId("chat-landing")).not.toBeInTheDocument();
+
+      answerHistory({ ok: true, json: () => Promise.resolve({ messages: [] }) });
+      expect(await screen.findByTestId("chat-landing")).toBeInTheDocument();
+    });
+
+    it("shows the landing when the history cannot be read", async () => {
+      mockFetch.mockImplementation((url: string) =>
+        String(url).startsWith("/api/chat/history")
+          ? Promise.resolve({ ok: false, json: () => Promise.resolve({}) })
+          : Promise.resolve({ ok: true, json: () => Promise.resolve({}) }),
+      );
+      render(<ChatPanel variant="page" />);
+      expect(await screen.findByTestId("chat-landing")).toBeInTheDocument();
+    });
+
+    it("passes on that a landing quick action opened a view", async () => {
+      const onViewOpened = vi.fn();
+      render(<ChatPanel variant="page" onViewOpened={onViewOpened} />);
+      fireEvent.click(await screen.findByTestId("landing-view-opened"));
+      expect(onViewOpened).toHaveBeenCalledTimes(1);
+    });
+
+    it("gives way to the conversation once a message arrives", async () => {
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ messages: [{ role: "user", content: "Hello there" }] }),
+      });
+      render(<ChatPanel variant="page" />);
+      expect(await screen.findByTestId("message-user")).toBeInTheDocument();
+      expect(screen.queryByTestId("chat-landing")).not.toBeInTheDocument();
+    });
+  });
+
+  it("offers a collapse control when docked beside another view", () => {
+    const onCollapse = vi.fn();
+    render(<ChatPanel docked onCollapse={onCollapse} />);
+    const close = screen.getByTestId("chat-dock-close");
+    expect(close).toHaveAttribute("aria-label", "Collapse chat panel");
+    fireEvent.click(close);
+    expect(onCollapse).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers no collapse control when it is the page", () => {
+    render(<ChatPanel />);
+    expect(screen.queryByTestId("chat-dock-close")).not.toBeInTheDocument();
   });
 
   describe("conversation-driven dashboard", () => {

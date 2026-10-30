@@ -97,6 +97,7 @@ interface RememberedTest extends TestVerdict {
 interface DefaultsResult {
   model: string;
   fallbacks: string[];
+  canvas?: string | null;
   applied: boolean;
 }
 
@@ -104,6 +105,8 @@ interface DefaultsResult {
 interface FleetDefaults {
   primary: string | null;
   fallbacks: string[];
+  /** The visual canvas's model; null means it follows the fleet default. */
+  canvas: string | null;
 }
 
 /**
@@ -246,6 +249,10 @@ export function ProvidersPage() {
 
   const [primary, setPrimary] = useState("");
   const [fallbacks, setFallbacks] = useState<string[]>([]);
+  // null: not read from the engine and not touched, so a save leaves the
+  // engine's value alone. "" is the operator's choice "Same as the fleet
+  // default", sent as null; a refresh must not overwrite either choice.
+  const [canvasModel, setCanvasModel] = useState<string | null>(null);
   const [savingDefaults, setSavingDefaults] = useState(false);
   const [defaults, setDefaults] = useState<FleetDefaults | null>(null);
   const [defaultsReadError, setDefaultsReadError] = useState<string | null>(null);
@@ -304,11 +311,13 @@ export function ProvidersPage() {
       const current: FleetDefaults = {
         primary: body.primary ?? null,
         fallbacks: Array.isArray(body.fallbacks) ? body.fallbacks : [],
+        canvas: body.canvas ?? null,
       };
       setDefaults(current);
       setDefaultsReadError(null);
       setPrimary((prev) => (prev ? prev : (current.primary ?? "")));
       setFallbacks((prev) => (prev.length ? prev : current.fallbacks));
+      setCanvasModel((prev) => (prev !== null ? prev : (current.canvas ?? "")));
     } catch {
       setDefaultsReadError(
         "The dashboard could not reach the bridge to read the fleet default."
@@ -490,7 +499,12 @@ export function ProvidersPage() {
       const res = await fetch(`${BRIDGE}/api/providers/defaults`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model: primary, fallbacks: fallbacks.filter(Boolean) }),
+        body: JSON.stringify({
+          model: primary,
+          fallbacks: fallbacks.filter(Boolean),
+          // Absent leaves the engine's canvas model as it is.
+          ...(canvasModel !== null ? { canvas: canvasModel || null } : {}),
+        }),
       });
       if (!res.ok) {
         setDefaultsError(await readReply(res));
@@ -520,7 +534,9 @@ export function ProvidersPage() {
   const unlistedSelections = [
     // Deduped: the same id is commonly both the primary and a fallback, and
     // naming it twice reads as two separate problems.
-    ...new Set([primary, ...fallbacks].filter((value) => value && !catalogIds.has(value))),
+    ...new Set(
+      [primary, ...fallbacks, canvasModel].filter((value) => value && !catalogIds.has(value))
+    ),
   ];
 
   /**
@@ -1110,6 +1126,44 @@ export function ProvidersPage() {
             <Plus aria-hidden />
             Add fallback
           </Button>
+        </div>
+
+        <div className="flex flex-col gap-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <label
+              className="text-[11px] uppercase tracking-[0.08em] text-muted-foreground"
+              htmlFor="canvas-model"
+            >
+              Canvas model
+            </label>
+            <NativeSelect
+              id="canvas-model"
+              data-testid="canvas-model"
+              aria-describedby="canvas-model-hint"
+              value={canvasModel ?? ""}
+              onChange={(event) => setCanvasModel(event.target.value)}
+            >
+              <option value="">Same as the fleet default</option>
+              {canvasModel && !catalogIds.has(canvasModel) ? (
+                <option value={canvasModel}>{`${canvasModel} (not in the catalog)`}</option>
+              ) : null}
+              {modelGroups.map((group) => (
+                <optgroup key={group.id} label={group.label}>
+                  {group.models.map((model) => (
+                    <option key={model.id} value={model.id}>
+                      {`${model.id} · ${formatContext(model.context_window)}`}
+                    </option>
+                  ))}
+                </optgroup>
+              ))}
+            </NativeSelect>
+          </div>
+          <span id="canvas-model-hint" className="text-xs text-muted-foreground">
+            The model that draws the visual canvas. A fast model is enough here.
+          </span>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-1.5">
           <Button
             size="xs"
             disabled={!primary || savingDefaults || unlistedSelections.length > 0}

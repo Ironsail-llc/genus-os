@@ -87,6 +87,8 @@ class TestConnectionProxy(BaseModel):
 class DefaultsWrite(BaseModel):
     model: str = Field(min_length=1)
     fallbacks: list[str] = Field(default_factory=list)
+    # The visual canvas's model; ``null`` means "same as the fleet default".
+    canvas: str | None = Field(default=None, min_length=1)
 
 
 def _known_provider(provider_id: str) -> Any:
@@ -193,17 +195,22 @@ async def _refuse_to_strand_a_spare(provider_id: str, slot: int) -> None:
         )
 
 
-async def _write_engine_defaults(primary: str, fallbacks: list[str]) -> tuple[int, Any]:
+async def _write_engine_defaults(
+    primary: str, fallbacks: list[str], **extra: Any
+) -> tuple[int, Any]:
     """Ask the engine to write the fleet's default model block and reload it.
 
     One call, because the engine validates, writes and reloads in the same
     request: there is no window in which the file says one model and the fleet
     runs another. ``(status, body)`` exactly as the engine answered.
+
+    ``extra`` carries the optional keys (``canvas``) only when the caller
+    names them, so a caller that does not know about them cannot clear them.
     """
     return await engine_request(
         "PUT",
         "/api/admin/defaults",
-        json={"model": primary, "fallbacks": list(fallbacks)},
+        json={"model": primary, "fallbacks": list(fallbacks), **extra},
     )
 
 
@@ -329,7 +336,10 @@ async def set_default_models(body: DefaultsWrite, request: Request) -> JSONRespo
     """
     actor = require_operator(request)
 
-    status, result = await _write_engine_defaults(body.model, list(body.fallbacks))
+    # Forwarded only when the body names it: absent leaves the engine's value
+    # alone, null clears it.
+    extra = {"canvas": body.canvas} if "canvas" in body.model_fields_set else {}
+    status, result = await _write_engine_defaults(body.model, list(body.fallbacks), **extra)
     if status >= 400 or not isinstance(result, dict):
         return _proxied(status, result)
 
@@ -339,6 +349,9 @@ async def set_default_models(body: DefaultsWrite, request: Request) -> JSONRespo
         action=body.model,
         primary=body.model,
         fallback_count=len(body.fallbacks),
+        canvas=body.canvas,
+        # ``None`` details are dropped, so a clear needs its own marker.
+        canvas_cleared=True if "canvas" in extra and body.canvas is None else None,
         applied=True,
         actor_hint=actor,
     )
@@ -347,6 +360,7 @@ async def set_default_models(body: DefaultsWrite, request: Request) -> JSONRespo
         {
             "model": result.get("primary"),
             "fallbacks": list(result.get("fallbacks") or []),
+            "canvas": result.get("canvas"),
             # Whether the ENGINE is running on it, not merely whether the file
             # says so. The engine reloads before it answers, so a success here
             # is "in use"; the field stays because the dashboard reads it.

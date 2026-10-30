@@ -86,9 +86,20 @@ App Router route per view.
   or a pasted link lands on the same screen and back/forward move between
   views. An unknown value falls back to the chat view rather than a blank shell.
 - **Chat is home.** Desktop and mobile both open on chat. Beside other views the
-  chat panel stays docked on the right (toggle at the foot of the sidebar); on
-  the chat view it takes the column and the AI canvas becomes an optional right
+  chat panel stays docked on the right. It collapses from the button in its own
+  header or the toggle at the foot of the sidebar, and a collapsed dock leaves a
+  slim tab at the right edge to reopen it; the browser remembers the choice
+  (`lib/chat/dock-state.ts`, `localStorage` key `genus.chatDockOpen`). On the
+  chat view it takes the column and the AI canvas becomes an optional right
   rail (the "Canvas" button in the header).
+- **The chat home opens on a landing.** Before the first message the chat view
+  (not the docked panel) shows `components/chat/chat-landing.tsx`: a greeting
+  with the owner's first name from the session, the Dashboard view's three
+  figures (services healthy of total, active tasks, agents online), its quick
+  actions and the suggested prompts, above the composer. The figures and quick
+  actions come from `business/use-home-metrics.ts` and
+  `business/quick-actions.ts`, shared with the Dashboard view; no model call.
+  The chat stage is centred at `max-w-5xl` on wide screens.
 - **One nav config.** `components/layout/nav-config.ts` is the only description
   of the navigation — Chat, Workspace, Observe, Settings. The sidebar, the
   mobile "More" sheet and the ⌘K palette all read it, so they cannot drift.

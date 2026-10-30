@@ -667,6 +667,19 @@ whose words reach Telegram (an interactive Telegram turn, or a manifest with
 `delivery.mode: announce` to `channel: telegram`) are also told so in their
 engine-context turn, so the model writes for a phone in the first place.
 
+### How replies look in the chat panel
+
+The dashboard's chat panel renders agent replies as Markdown — paragraphs,
+lists, headings, tables and links (which open in a new tab; footnote anchors
+stay on the page) — with typography that follows the light or dark theme. A
+webchat turn (the chat panel, and the terminal client, which shows plain text)
+gets a note in its engine-context turn, in these words: "This reply is read in
+a chat view. Answer the question first. Use short paragraphs with a blank line
+between them. Use headings and lists only when they help the reader, and bold
+sparingly. Do not give a multi-section overview of what you can do unless
+asked." The note lives in `WEBCHAT_SURFACE_NOTE` in
+`robothor/engine/prompts.py`.
+
 ## Integrations
 
 The `integrations` group holds the settings for external systems the instance
