@@ -260,6 +260,11 @@ environment's vault.secrets.cache.path is authoritative.
   value: {{ .Values.global.imageTag | quote }}
 {{- end -}}
 
+{{/* A tenant engine cell's own provider class. Pass the cell id. */}}
+{{- define "genus-os.cellProviderClass" -}}
+{{- printf "engine-providers-%s" . -}}
+{{- end -}}
+
 {{/*
 Render only the named Secret classes declared by one component's secretRefs.
 Pass .root + .component, and optionally .values and .tenant (a tenant engine
@@ -281,7 +286,7 @@ CreateContainerConfigError.
 {{- $allowedRefs := index $allowedByComponent $component -}}
 {{- /* A tenant engine cell also reads its own provider class. */ -}}
 {{- if and (eq $component "engine") .tenant -}}
-{{- $allowedRefs = append $allowedRefs (printf "engine-providers-%s" .tenant) -}}
+{{- $allowedRefs = append $allowedRefs (include "genus-os.cellProviderClass" .tenant) -}}
 {{- end -}}
 {{- range $secretName := ($cv.secretRefs | default list) -}}
 {{- if not (hasKey $root.Values.vault.secrets $secretName) -}}
