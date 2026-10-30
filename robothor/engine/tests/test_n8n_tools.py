@@ -42,7 +42,7 @@ def store(monkeypatch, configure):
     configure(ROBOTHOR_N8N_ENABLED="true", ROBOTHOR_N8N_BASE_URL=BASE)
     memory = MemoryN8nStore(now=lambda: NOW)
     monkeypatch.setattr(handler, "_store", lambda: memory)
-    monkeypatch.setattr(handler, "_now", lambda: NOW, raising=False)
+    monkeypatch.setattr(handler, "_now", lambda: NOW)
 
     def no_network(*_a, **_k):
         raise AssertionError("the n8n tools read the snapshot; they never call n8n")
