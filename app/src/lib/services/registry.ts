@@ -167,7 +167,7 @@ const TENANT_ID = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 // ROBOTHOR_PLATFORM_TENANT when set, else ROBOTHOR_DEFAULT_TENANT, else
 // `default`. The two must agree, or a root user's token is templated into a
 // Service that does not exist.
-function rootTenant(): string {
+export function rootTenant(): string {
   return (
     process.env.ROBOTHOR_PLATFORM_TENANT?.trim() ||
     process.env.ROBOTHOR_DEFAULT_TENANT?.trim() ||
