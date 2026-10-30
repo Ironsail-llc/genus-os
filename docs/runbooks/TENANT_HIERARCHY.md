@@ -319,7 +319,12 @@ deployed; with it, the bridge and every engine refuse the token within 30 s
 A workload is a set of agents and workflows. When it moves from the tenant
 it ran in (usually the root) to another tenant's engine (usually a child),
 move its history with it, after the child's engine is in place and BEFORE
-the child's engine runs it for the first time:
+the child's engine runs it for the first time. Stop the workload in the
+source first: remove the agents and workflows from the source engine's
+manifests (or disable their schedules) and let anything running finish. The
+move runs at `REPEATABLE READ`, so a write the source engine commits during
+the move is never split between the tenants: it stays in the source, or the
+move fails and changes nothing.
 
 ```bash
 genus tenant move-workload --from acme-parent --to acme-child-a \
@@ -371,7 +376,11 @@ A move is refused, with nothing written, when:
 - a tenant table in the database has no move classification (a migration
   newer than the command: upgrade first);
 - any of the workload's runs, workflow runs or coding jobs is still pending,
-  running or awaiting approval;
+  running or awaiting approval, or a run has an unresolved runtime effect
+  (`prepared`, `dispatching`, `uncertain`) or an unfinished memory write
+  (`pending`, `running`);
+- a step of a workflow that is not being moved started one of the
+  workload's runs (name that workflow with `--workflow` too);
 - the workload has an attempt in a goal pursuit, or an open autonomy
   operation, workflow or handoff;
 - the target already holds a row with the same unique key as a moved row
@@ -382,7 +391,9 @@ A move is refused, with nothing written, when:
 The command never moves a workload up to an ancestor, so it cannot return a
 workload to the root once it has moved: do the dry run first and read it.
 Between children it moves both ways (`--from acme-child-a --to acme-child-b`
-and back).
+and back). Moving back does not restore the links the first move cleared:
+they stay empty, and the audit row records only how many were cleared per
+column.
 
 ## Verification queries
 
@@ -442,7 +453,7 @@ SELECT DISTINCT tenant_id FROM crm_tasks;
   Users page of the root tenant).
 - A workload move between children: move it back with `move-workload`. A
   move to a child cannot be undone with the command (it refuses an ancestor
-  as the target).
+  as the target). Links a move cleared stay cleared either way.
 - Switching: set `GENUS_TENANT_SWITCH_MODE=off` on the bridge and every
   engine, and restart them. No new switch is issued from then on. An acting
   token issued before the flip is rejected by the bridge once it has restarted
