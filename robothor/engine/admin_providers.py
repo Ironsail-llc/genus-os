@@ -597,12 +597,24 @@ def register(app: FastAPI) -> None:
 
         manifest_dir = _manifest_dir()
         # Read-modify-write plus an fsync: filesystem work, off the event loop.
-        await asyncio.to_thread(
-            _merge_model_block,
-            manifest_dir / "_defaults.yaml",
-            body.model,
-            list(body.fallbacks),
-        )
+        try:
+            await asyncio.to_thread(
+                _merge_model_block,
+                manifest_dir / "_defaults.yaml",
+                body.model,
+                list(body.fallbacks),
+            )
+        except OSError as exc:
+            # A read-only or full manifest dir (a ConfigMap-backed workspace,
+            # say). Unhandled, this is a plain-text 500 the bridge can only
+            # report as "a non-JSON response"; name what to check instead.
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    f"the engine's manifest directory is not writable ({manifest_dir}): "
+                    f"{type(exc).__name__}; check the workspace volume"
+                ),
+            ) from exc
         engine_config.reset_defaults_cache()
         defaults = engine_config._load_defaults(manifest_dir)
         model_block = defaults.get("model") or {}
