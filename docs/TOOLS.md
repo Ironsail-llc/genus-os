@@ -1326,7 +1326,9 @@ names that appear in its instruction and bootstrap files but are absent from
 schema. Both halves are silent in production: the agent cannot see its own
 manifest, so a tool it was told to use simply stops working and it finds
 another way; and an unresolvable name is dropped after one journald warning.
-Results name agents and tools, never instruction text.
+Results name agents and tools, never instruction text. "Registered" means a
+built-in, an adapter route, or a tool a loaded plugin declares; a disabled or
+failed plugin's tools still resolve to nothing.
 
 **`calendar.operator_calendar_writable`** (required, and skipped entirely on an
 instance where no agent holds a calendar tool) — the instance's Google account
