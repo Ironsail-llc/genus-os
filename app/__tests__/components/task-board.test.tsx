@@ -22,8 +22,14 @@ describe("TaskBoard", () => {
   it("lays its columns out by the board's own width, not the window's", () => {
     render(<TaskBoard tasks={mockTasks} />);
     const board = screen.getByTestId("task-board");
-    expect(board.className).toContain("grid-cols-[repeat(auto-fit,minmax(min(100%,15rem),1fr))]");
-    expect(board.className).not.toContain("grid-cols-4");
+    // Four, two or one columns, chosen by the board's container width (never
+    // three, which would leave Done alone on a second row).
+    expect(board.parentElement?.className).toContain("@container");
+    const classes = board.className.split(/\s+/);
+    expect(classes).toContain("grid-cols-1");
+    expect(classes).toContain("@[31rem]:grid-cols-2");
+    expect(classes).toContain("@[63rem]:grid-cols-4");
+    expect(board.className).not.toMatch(/grid-cols-3|auto-fit|(sm|md|lg|xl):grid-cols-/);
   });
 
   it("lets columns and cards shrink below their content width", () => {
@@ -56,7 +62,10 @@ describe("TaskBoard", () => {
     ];
     render(<TaskBoard tasks={t} />);
     const title = screen.getByText("A long task title that must wrap");
-    expect(title.className).toContain("break-words");
+    // The title is a grid item of the card header: min-w-0 lets it shrink
+    // below its longest word, and wrap-anywhere breaks an unbroken word.
+    expect(title.className).toContain("min-w-0");
+    expect(title.className).toContain("wrap-anywhere");
     expect(title.className).not.toContain("truncate");
 
     const badgeRow = screen.getByTestId("task-card-badges");
