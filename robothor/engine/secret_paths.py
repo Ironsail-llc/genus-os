@@ -516,30 +516,46 @@ def _tokens(text: str) -> list[str]:
     Lexed as ONE text because a quote may span a line, with an UNQUOTED
     newline kept as an operator token (it ends a command like ``;`` does)
     rather than swallowed as whitespace. When the shell lexer gives up (an
-    unclosed quote), the fallback splits each line on whitespace and strips
-    every quote character from each piece, so ``.e"n"v`` is still judged as
-    ``.env`` and the complete lines before the bad quote — which the shell
-    runs before it reports the error — keep their boundaries (fail closed).
+    unclosed quote), the complete lines before the bad quote — which the
+    shell runs before it reports the error — are lexed one at a time as on
+    their own, and only the line that cannot be read is split on whitespace
+    with its quote characters stripped, so ``.e"n"v`` is still judged as
+    ``.env`` (fail closed).
     """
+    try:
+        return list(_lexer(text))
+    except ValueError:
+        pass
+    # The complete lines before the bad quote are lexed properly, one at a
+    # time; only the line that raises is split on whitespace.
+    out: list[str] = []
+    for line in text.splitlines():
+        if out:
+            out.append("\n")
+        try:
+            tokens = list(_lexer(line))
+        except ValueError:
+            tokens = _split_loosely(line)
+        out.extend(tokens)
+    return out
+
+
+def _lexer(text: str) -> shlex.shlex:
     lexer = shlex.shlex(_CommentKeepsNewline(text), posix=True, punctuation_chars="();<>|&\n")
     lexer.whitespace = " \t\r"
     lexer.whitespace_split = True
-    try:
-        return list(lexer)
-    except ValueError:
-        out: list[str] = []
-        for line in text.splitlines():
-            if out:
-                out.append("\n")
-            words = line.split()
-            # The fallback keeps shlex's comment rule: a word starting `#`
-            # ends the line's commands.
-            for index, word in enumerate(words):
-                if word.startswith("#"):
-                    words = words[:index]
-                    break
-            out.extend(piece.replace("'", "").replace('"', "") for piece in words)
-        return out
+    return lexer
+
+
+def _split_loosely(line: str) -> list[str]:
+    """Whitespace words with their quotes stripped, for a line the shell
+    lexer cannot read; a word starting ``#`` ends the line as a comment."""
+    words = line.split()
+    for index, word in enumerate(words):
+        if word.startswith("#"):
+            words = words[:index]
+            break
+    return [piece.replace("'", "").replace('"', "") for piece in words]
 
 
 def _segments(command: str) -> list[list[str]]:

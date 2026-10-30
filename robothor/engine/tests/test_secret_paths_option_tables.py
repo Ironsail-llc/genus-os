@@ -213,7 +213,7 @@ def test_arguments_after_a_multi_line_quote_are_still_judged(workspace, command)
         # Once a later line leaves a quote unclosed, the complete lines
         # before it are still lexed properly: a `#` inside quotes is not a
         # comment and an operator stuck to a word still separates commands.
-        "echo \"a # b\" ; cat .env\necho '",
+        'echo "a # b" ; cat .env\necho \'',
         "echo hi; cat .env\necho '",
     ],
 )
