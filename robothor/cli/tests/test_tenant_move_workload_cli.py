@@ -91,6 +91,26 @@ def test_dry_run_says_would_move(capsys) -> None:
     assert "Would move workload" in capsys.readouterr().out
 
 
+_NOTHING = {"counts": {"agent_runs": 0, "chat_sessions": 0}, "followed": {}, "links_cleared": {}}
+
+
+def test_a_move_with_nothing_to_move_says_so(capsys) -> None:
+    with patch(MOVE, return_value=_report(audit_id=None, **_NOTHING)):
+        assert cmd_tenant(_parse(*BASE, "--agent", "triage")) == 0
+    out = capsys.readouterr().out
+    assert "Nothing to move" in out
+    assert "Moved workload" not in out
+    assert "agent_runs" not in out
+
+
+def test_a_dry_run_with_nothing_to_move_says_so(capsys) -> None:
+    with patch(MOVE, return_value=_report(dry_run=True, audit_id=None, **_NOTHING)):
+        assert cmd_tenant(_parse(*BASE, "--agent", "triage", "--dry-run")) == 0
+    out = capsys.readouterr().out
+    assert "Nothing to move" in out
+    assert "Would move workload" not in out
+
+
 def test_json_output(capsys) -> None:
     with patch(MOVE, return_value=_report()):
         assert cmd_tenant(_parse(*BASE, "--agent", "triage", "--json")) == 0
