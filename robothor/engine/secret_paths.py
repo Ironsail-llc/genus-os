@@ -518,9 +518,9 @@ def _tokens(text: str) -> list[str]:
     rather than swallowed as whitespace. When the shell lexer gives up (an
     unclosed quote), the complete lines before the bad quote — which the
     shell runs before it reports the error — are lexed one at a time as on
-    their own, and only the line that cannot be read is split on whitespace
-    with its quote characters stripped, so ``.e"n"v`` is still judged as
-    ``.env`` (fail closed).
+    their own; that line and every line after it are split loosely on
+    whitespace and operators with their quote characters stripped, so
+    ``.e"n"v`` is still judged as ``.env`` (fail closed).
     """
     try:
         return list(_lexer(text))
@@ -552,15 +552,23 @@ def _lexer(text: str) -> shlex.shlex:
     return lexer
 
 
+_LOOSE_PARTS = re.compile(r"[;&|()<>]+|[^;&|()<>]+")
+
+
 def _split_loosely(line: str) -> list[str]:
-    """Whitespace words with their quotes stripped, for a line the shell
-    lexer cannot read; a word starting ``#`` ends the line as a comment."""
+    """Whitespace words with their quotes stripped and operator characters
+    split off (``hi;cat`` is two commands), for a line the shell lexer
+    cannot read; a word starting ``#`` ends the line as a comment."""
     words = line.split()
     for index, word in enumerate(words):
         if word.startswith("#"):
             words = words[:index]
             break
-    return [piece.replace("'", "").replace('"', "") for piece in words]
+    return [
+        part
+        for piece in words
+        for part in _LOOSE_PARTS.findall(piece.replace("'", "").replace('"', ""))
+    ]
 
 
 def _segments(command: str) -> list[list[str]]:
