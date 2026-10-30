@@ -284,6 +284,23 @@ class TestFirstStepDefers:
         assert run.rate_limited is True
         assert "rate limit" in (run.error_message or "").lower()
         assert not waits  # it gives the worker back rather than holding it
+        # A deferral is not a run: no workflow_runs row, no step row.
+        assert engine._persist_run_start.call_count == 1
+        assert engine._persist_run_end.call_count == 1
+        assert engine._persist_step_start.call_count == 1
+        assert engine._persist_step.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_a_deferral_is_logged_once(self, engine_config, clock, no_dedup, caplog):
+        import logging
+
+        engine = _engine(engine_config, _definition(rate_limit_per_minute=1))
+        await _run(engine, requeue=True)
+        with caplog.at_level(logging.INFO, logger="robothor.engine.workflow"):
+            await _run(engine, requeue=True)
+        lines = [r for r in caplog.records if "deferred" in r.getMessage()]
+        assert len(lines) == 1
+        assert "order-flow" in lines[0].getMessage()
 
     @pytest.mark.asyncio
     async def test_a_parallel_first_step_waits_not_defers(
@@ -345,6 +362,7 @@ class TestBurst:
     ):
         engine, runs = await _burst(engine_config, clock, _definition(rate_limit_per_minute=2), 6)
         assert len([r for r in runs if r.status == RunStatus.COMPLETED]) == 6
+        assert engine._persist_run_start.call_count == 6  # one run row per event
         assert not [r for r in runs if r.status == RunStatus.FAILED]
         assert engine.runner.registry.execute.await_count == 6
         assert clock.now - 1000.0 >= 120  # six calls at two a minute
@@ -357,12 +375,13 @@ class TestBurst:
 
         engine, runs = await _burst(engine_config, clock, _three_steps(rate_limit_per_minute=2), 5)
         assert len([r for r in runs if r.status == RunStatus.COMPLETED]) == 5
+        assert engine._persist_run_start.call_count == 5  # one run row per event
         assert not [r for r in runs if r.status == RunStatus.FAILED]
         counts = Counter(_effects(engine))
         expected = {f"evt-{i}:{s}" for i in range(5) for s in ("s1", "s2", "s3")}
         assert set(counts) == expected
         assert set(counts.values()) == {1}
-        # A deferred run never acted: every skipped attempt stopped at s1.
+        # A deferred attempt never acted: it ran no step at all.
         for run in runs:
             if run.status == RunStatus.SKIPPED:
-                assert [r.step_id for r in run.step_results] == ["s1"]
+                assert run.step_results == []

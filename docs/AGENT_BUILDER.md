@@ -217,13 +217,15 @@ time, and no step ever runs twice. The wait counts against the workflow's
 While a run waits it holds the workflow, so an event that arrives meanwhile is
 handled as for any busy run (see `requeue_if_busy` above).
 
-There is one exception. A hook-triggered run blocked at its first step, before
-anything has acted, does not wait: it is recorded as `skipped` and its event
-is requeued for this workflow on the same budget and backoff as
-`requeue_if_busy`, whether or not the trigger sets that, and goes to
-`<stream>:dlq` only once that budget is spent. That is the usual shape of a
-burst, and it frees the workflow for the next event instead of holding it. A
-run resumed after an approval step always waits.
+There is one exception. When the limit would block a hook-triggered run's
+first step, which is a tool step, the run does not start: it is deferred
+before it is recorded, so it leaves no `workflow_runs` row, only an engine log
+line ("deferred: tool-call rate limit reached"). Its event is requeued for
+this workflow on the same budget and backoff as `requeue_if_busy`, whether or
+not the trigger sets that, and goes to `<stream>:dlq` only once that budget
+is spent. That is the usual shape of a burst, and it frees the workflow for
+the next event instead of holding it; a burst leaves one run row per event.
+A run resumed after an approval step always waits.
 
 #### Asking a human mid-workflow
 
