@@ -570,6 +570,21 @@ class TestTheCliDoesNotReadTheDatabase:
         assert not grants_db.calls
         assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
 
+    def test_an_unreadable_persisted_record_is_quiet_on_the_cli_path(
+        self, grants_db, two_plugins, caplog
+    ):
+        """Another user running `genus` against a workspace whose record the
+        engine wrote 0600 gets a PermissionError on every command."""
+        from robothor.plugins import grants
+
+        grants_db.rows = {"acme-tools": "off"}
+        loader.load_plugins(entry_points=two_plugins)
+        path = grants._persisted_path()
+        path.write_text("{not json")
+        with caplog.at_level(logging.DEBUG, logger="robothor.plugins.grants"):
+            assert grants.persisted_forced_off() == {}
+        assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+
     def test_cli_verb_registration_does_not_read_grants(self, monkeypatch):
         from robothor import cli
         from robothor.plugins import loader as plugin_loader
