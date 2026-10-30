@@ -262,9 +262,11 @@ environment's vault.secrets.cache.path is authoritative.
 
 {{/*
 Render only the named Secret classes declared by one component's secretRefs.
-Pass .root + .component. Unknown references are a hard template error. The
-Secret may be materialized by VSO or supplied out-of-band when Vault is off;
-missing Secrets fail closed with CreateContainerConfigError.
+Pass .root + .component, and optionally .values and .tenant (a tenant engine
+cell, which may also read its own engine-providers-<tenant>). Unknown
+references are a hard template error. The Secret may be materialized by VSO
+or supplied out-of-band when Vault is off; missing Secrets fail closed with
+CreateContainerConfigError.
 */}}
 {{- define "genus-os.envFromSecret" -}}
 {{- $root := .root -}}
@@ -277,6 +279,10 @@ missing Secrets fail closed with CreateContainerConfigError.
       "dashboard" (list "dashboard-auth" "bridge-sso")
       "migrations" (list "database") -}}
 {{- $allowedRefs := index $allowedByComponent $component -}}
+{{- /* A tenant engine cell also reads its own provider class. */ -}}
+{{- if and (eq $component "engine") .tenant -}}
+{{- $allowedRefs = append $allowedRefs (printf "engine-providers-%s" .tenant) -}}
+{{- end -}}
 {{- range $secretName := ($cv.secretRefs | default list) -}}
 {{- if not (hasKey $root.Values.vault.secrets $secretName) -}}
 {{- fail (printf "%s.secretRefs contains unknown vault.secrets entry %q" $component $secretName) -}}
