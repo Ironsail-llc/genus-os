@@ -122,6 +122,26 @@ def test_filename_brackets_and_globs_are_still_refused(workspace, command) -> No
     assert exec_reads_secret(command), command
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        # An interpreter's FILE operands are still files: only its program
+        # text (the value of -c / -e / -pe …) is exempt from the glob rule.
+        "perl -ne print .en?",
+        "python3 script.py .en?",
+        "ruby -e 'puts 1' .en*",
+        # The shell expands a glob character only where it is UNQUOTED: a
+        # partly quoted word still globs, and a quoted copy of a word does
+        # not exempt an unquoted spelling of it elsewhere.
+        "cat .en[v' ']",
+        "cat '.en?' '.e'n?",
+        "head .e\"n\"?",
+    ],
+)
+def test_only_unquoted_globs_in_file_operands_are_exempt(workspace, command) -> None:
+    assert exec_reads_secret(command), command
+
+
 # -- 3. a program given by option makes every positional a file ------------
 
 
