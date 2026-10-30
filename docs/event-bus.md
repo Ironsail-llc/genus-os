@@ -135,15 +135,21 @@ JSON body, delivery id, then published.
 
 | Field | Default | Meaning |
 |-------|---------|---------|
-| `signature_scheme` | `hmac_hex` | `hmac_hex`: hex HMAC-SHA256 of the raw body (an optional `sha256=` prefix is accepted). `stripe_t_v1`: a header of the form `t=<unix seconds>,v1=<hex>[,v1=<hex>...]`, valid when the timestamp is within the tolerance and some `v1` equals HMAC-SHA256 of `"<t>."` followed by the raw body. |
+| `signature_scheme` | `hmac_hex` | `hmac_hex`: hex HMAC-SHA256 of the raw body (an optional `sha256=` prefix is accepted). `stripe_t_v1`: a header of the form `t=<unix seconds>,v1=<hex>[,v1=<hex>...]`, valid when the timestamp is within the tolerance and some `v1` equals HMAC-SHA256 of `"<t>."` followed by the raw body. `hmac_ts_hex`: the signature header carries a hex HMAC-SHA256 of `"<timestamp>."` followed by the raw body (an optional `sha256=` prefix, in any case, is accepted), and `timestamp_header` carries the timestamp in integer unix seconds, which must be within the tolerance. `google_oidc`: see below. |
 | `signature_header` | _(unset)_ | Read the signature from this header only. Unset tries `X-Hub-Signature-256`, `X-Signature-256` and `X-Webhook-Signature`, in that order. |
-| `timestamp_tolerance_seconds` | `300` | `stripe_t_v1` only: how far `t` may be from the receiver's clock, either way. |
+| `timestamp_tolerance_seconds` | `300` | `stripe_t_v1` and `hmac_ts_hex`: how far the signed timestamp may be from the receiver's clock, either way. |
+| `timestamp_header` | `X-Webhook-Timestamp` | `hmac_ts_hex` only: the header carrying the signed timestamp. Seconds only: a millisecond value is refused as stale. |
 | `oidc_audience` | _(unset)_ | `google_oidc` only, required: the audience the push's ID token must carry (the push subscription's audience, usually this channel's URL). |
 | `oidc_service_account` | _(unset)_ | `google_oidc` only, required: the service account the push subscription signs as. The token's `email` claim must equal it and `email_verified` must be true. |
 | `delivery_id_header` | _(unset)_ | When set and present, the id is recorded in Redis for 24 hours (`robothor:webhook:delivery:<channel>:<id>`). A repeat answers `200 {"status": "duplicate"}` and is not published again. If Redis cannot be reached the request is refused with `503`, as the rate limiter refuses it, so the sender retries. |
 
 A bad, stale or malformed signature answers `401 {"error": "Invalid
 signature"}` whatever the scheme; the reason is logged, the secret never is.
+For `hmac_ts_hex` the logged reason names the check that failed: `missing
+timestamp`, `malformed timestamp`, `stale timestamp`, `missing signature`,
+`malformed signature` (not 64 hex characters after the optional prefix) or
+`bad digest` (well formed, but no match). The signed string uses the timestamp
+as a plain integer, so a sender that zero-pads it is refused.
 
 **`google_oidc`** is for Google Cloud Pub/Sub push subscriptions with
 authentication on. There is no shared secret, so `secret_env` is not used;
@@ -171,7 +177,7 @@ event type (`gmail.push` below).
 
 The delivery id is a redelivery filter, not replay protection: it is not
 covered by the signature, so a captured request resent under another id is
-caught only by the `stripe_t_v1` timestamp window. If the event cannot be
+caught only by the `stripe_t_v1` or `hmac_ts_hex` timestamp window. If the event cannot be
 written to the stream the request answers `503` so the sender retries; a
 claimed delivery id is released first.
 

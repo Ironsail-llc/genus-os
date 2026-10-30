@@ -24,12 +24,25 @@ channels:
   #   stream: platform
   #   secret_env: PLATFORM_WEBHOOK_SECRET
   #   signature_header: X-Platform-Signature
-  #   signature_scheme: stripe_t_v1        # hmac_hex (default) | stripe_t_v1
+  #   signature_scheme: stripe_t_v1        # hmac_hex (default) | stripe_t_v1 | hmac_ts_hex | google_oidc
   #   timestamp_tolerance_seconds: 300
   #   delivery_id_header: X-Platform-Delivery-Id
   #   event_type_field: type
   #   event_type_prefix: "platform."
   #   rate_limit_per_min: 120
+
+  # A sender that puts a hex HMAC-SHA256 of "<timestamp>." + raw body in one
+  # header (optionally "sha256="-prefixed) and the unix-seconds timestamp in
+  # another. The timestamp must be within timestamp_tolerance_seconds.
+  # helpdesk:
+  #   stream: helpdesk
+  #   secret_env: HELPDESK_WEBHOOK_SECRET
+  #   signature_scheme: hmac_ts_hex
+  #   signature_header: X-Helpdesk-Signature
+  #   timestamp_header: X-Helpdesk-Timestamp  # default X-Webhook-Timestamp
+  #   timestamp_tolerance_seconds: 300
+  #   event_type_field: event
+  #   event_type_prefix: "helpdesk."
 
   # Google Cloud Pub/Sub push with authentication on (Gmail push ingest, see
   # docs/event-bus.md "Gmail push"). No shared secret: the push's ID token is
