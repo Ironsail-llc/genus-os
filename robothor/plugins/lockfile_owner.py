@@ -8,7 +8,9 @@ its own workspace, so its lockfile is its own; a single-host deployment that
 starts a child engine on the root's workspace would not be.
 
 So a small marker beside the lockfile names the tenant whose engine owns it.
-The engine claims it at boot, and the first write claims an unclaimed file.
+The engine claims it at boot, and the first write claims an unclaimed file. A
+ROOT tenant's engine (its tenant row has no parent) takes a claim over from
+another tenant, so the child is refused whichever engine booted first.
 An engine whose lockfile names a DIFFERENT tenant refuses to change it (the
 engine admin API answers 409), and the remedy is a workspace of its own.
 
@@ -44,6 +46,24 @@ def _engine_tenant() -> str:
     from robothor import constants
 
     return constants.DEFAULT_TENANT
+
+
+def _is_root_tenant(tenant: str) -> bool:
+    """Whether ``tenant`` is a root: its ``crm_tenants`` row has no parent.
+
+    Not ``PLATFORM_TENANT``: in a child engine that constant is the child's own
+    id unless ``ROBOTHOR_PLATFORM_TENANT`` is set, so comparing against it
+    would let every child take the file. False when the row cannot be read,
+    so an unreadable database never lets anybody take a claim over.
+    """
+    try:
+        from robothor.crm.dal import get_tenant
+
+        row = get_tenant(tenant)
+    except Exception as exc:  # noqa: BLE001 - unknown is "not root", never fatal
+        logger.debug("Tenant row unreadable for the lockfile claim (%s)", type(exc).__name__)
+        return False
+    return row is not None and not row.get("parentTenantId")
 
 
 def _marker() -> Path | None:
@@ -88,6 +108,17 @@ def claim(tenant: str | None = None) -> str | None:
             return None
         owner = _read(marker)
         if owner is None:
+            _write(marker, me)
+            return me
+        if owner != me and _is_root_tenant(me):
+            # The root's claim is authoritative. Boot order on a shared
+            # workspace is random after an upgrade, and the child is the side
+            # that must be refused, whoever started first.
+            logger.error(
+                "Plugin lockfile was claimed by tenant %r; the root engine takes it back. "
+                "Give that engine a workspace of its own.",
+                owner,
+            )
             _write(marker, me)
             return me
         return owner
