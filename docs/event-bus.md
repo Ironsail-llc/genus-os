@@ -31,75 +31,11 @@ Every message uses a standard envelope:
   "source": "email-sync",
   "actor": "robothor",
   "payload": "{\"from\": \"alice@example.com\", \"subject\": \"Meeting\"}",
-  "correlation_id": "trace-abc-123",
-  "tenant_id": "default"
+  "correlation_id": "trace-abc-123"
 }
 ```
 
 The `payload` field is a JSON string (Redis Streams require flat field values).
-
-`tenant_id` is the tenant the event belongs to. `publish()` stamps it when the
-caller passes none: the enclosing `tenant_scope`, else the tenant the process
-operates as (`ROBOTHOR_TENANT_ID`, then `ROBOTHOR_DEFAULT_TENANT`), the same
-order an engine identifies itself by. A process with neither variable set
-publishes untagged events, which go to the root engine. A service that acts
-for several tenants from one process (the bridge) passes `tenant_id=` on every
-call.
-
-## One engine per tenant
-
-Several engines (one per tenant) can share one Redis. Each reads the streams
-with a consumer group of its own, `GENUS_EVENT_CONSUMER_GROUP`, because Redis
-hands each stream entry to only one reader in a group: engines sharing a group
-would split the events between them. The root tenant's engine keeps the
-historical group `engine`, so its stream offsets survive the upgrade. Each
-child engine's deployment must give it a group of its own, for example
-`engine-<tenant>`.
-
-A child engine left on the root's group would take about half of the root's
-events and drop them, so the engines on a group are not equals:
-
-- **Only a root tenant may hold the root group.** On every check an engine
-  looks up its tenant in `crm_tenants`, so a row created or re-parented later
-  takes effect without a restart. A tenant with a parent never claims or reads
-  `engine`, whatever its setting says. A tenant with no row counts as a root,
-  so a single-engine install keeps working, and the engine logs that once at
-  WARNING. If the lookup fails, an engine already verified keeps its last
-  verdict for up to two consecutive failures, so a database blip does not
-  stop it. On the third, or at once if it was never verified, it does not
-  claim or read `engine`, and asks again on the next check.
-- **Among roots, the recorded owner holds it.** A root claims `engine` in
-  Redis (`robothor:events:group-owner:engine`) if nobody has, even while a
-  child is reading it, unless its own `ROBOTHOR_TENANT_ID` and
-  `ROBOTHOR_DEFAULT_TENANT` disagree. Only the owner reads `engine`. The
-  claim has a 180-second TTL. The owner refreshes it from its own task every
-  60 seconds, separately from the read loop, so a slow read cannot let it
-  lapse. An owner that is re-parented, or that fails closed after repeated
-  lookup failures, stops refreshing and deletes the key on its next check, but
-  only while the key still names its own tenant. A dead owner's claim lapses
-  within one TTL. Either way, another root then takes the group. To hand it
-  over at once, delete the key.
-- **An engine always reads its own `engine-<tenant>` group.** On any other
-  group it reads only while no other tenant is reading.
-- **The engine that is not entitled to the group stops.** It logs an ERROR
-  telling it to set `GENUS_EVENT_CONSUMER_GROUP=engine-<tenant>`. The entitled
-  engine keeps reading and logs an ERROR naming the intruder.
-
-Consumer names carry the tenant (`engine-<tenant>`), and a consumer counts as
-reading if it read in the last minute. Every engine checks again every minute
-while it runs, so an engine that joins later is caught too. Replicas of one
-engine share a consumer name and are not affected.
-
-Every engine therefore sees every event, and acts only on those whose
-`tenant_id` is its own `ROBOTHOR_TENANT_ID`. The others are acknowledged and
-dropped (logged at DEBUG, counted in `EventHooks.foreign_events_dropped`). An
-event with no `tenant_id` was published before tagging and belongs to the
-root: only the engine on the `engine` group takes it.
-
-Retry and busy-requeue copies don't go back onto the shared stream. Each
-engine writes them to its own retry stream, `robothor:events:<stream>:retry:<group>`,
-which only that engine reads, so other engines never see them. An event whose
-retries run out goes to `robothor:events:<stream>:dlq`, which no engine reads.
 
 ## Email and calendar event contract
 

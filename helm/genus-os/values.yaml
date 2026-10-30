@@ -115,14 +115,6 @@ global:
   deployedFromPR: ""
   deployedAt: ""
 
-  # The tenant the root engine (`engine:`) operates as: the chart sets both
-  # ROBOTHOR_TENANT_ID and ROBOTHOR_DEFAULT_TENANT on it to this value, which
-  # must equal a crm_tenants id. `default` is what the code assumes when
-  # neither is set, so the default changes nothing. Set this, not engine.env,
-  # to change it: engine.env naming either variable with another value fails
-  # at template time.
-  rootTenant: default
-
 # ─── Database connection (used by every Python service) ─────────────────────
 # The Python services read host/port/name/user from here; password comes
 # from the VSO-materialized `{fullname}-database` Secret as
@@ -488,69 +480,6 @@ engine:
   nodeSelector: {}
   tolerations: []
   affinity: {}
-
-# ─── Shared vault key ────────────────────────────────────────────────────────
-# The vault master key and fingerprint salt every vault reader shares: the
-# bridge, the root engine and every tenant cell. Without it each process looks
-# for `<workspace>/.vault-key`, and the bridge has no workspace at all, so a
-# credential the bridge stores for a child tenant could not be decrypted by
-# that child's engine. Required whenever `tenants` is non-empty.
-#
-# When enabled, the `vault-key` Secret class (declare
-# vault.secrets.vault-key.path in the environment layer) holds two fields,
-# each 32 random bytes stored base64-encoded (`openssl rand -base64 32`):
-# `key` and `fingerprint-salt`. VSO decodes them into raw files mounted
-# read-only as /etc/genus/vault/.vault-key and .fingerprint-salt (basenames the
-# agent secret-file denylist guards), and GENUS_VAULT_KEY_FILE /
-# GENUS_FINGERPRINT_SALT_FILE point at them. See the chart README.
-vaultKey:
-  enabled: false
-
-# ─── Tenant switching ────────────────────────────────────────────────────────
-# Whether a root-tenant owner or admin may act in a descendant tenant. The
-# bridge issues the acting token and every engine enforces it, so these reach
-# the bridge, the root engine and every tenant cell alike (a component's own
-# `env` still wins). Unset renders nothing, and the code's default applies.
-tenancy:
-  # GENUS_TENANT_SWITCH_MODE: off | observe | enforce. Empty: not set (off).
-  switchMode: ""
-  # GENUS_TENANT_SWITCH_ALLOW_INERT_RLS: let switching issue tokens while
-  # row-level security is inert. Unset: not set (false). A deliberate escape
-  # hatch; see the setting's description before turning it on.
-  # allowInertRls: false
-
-# ─── Tenant engine cells ─────────────────────────────────────────────────────
-# Additional engines, one per child tenant, in this release. The root engine
-# (`engine:`) is unchanged. Each entry renders <fullname>-engine-<id> (a
-# Deployment and a Service) and, unless it mounts a ConfigMap or an existing
-# claim, a workspace PVC <fullname>-workspace-<id>. Every key but `id` is
-# optional; see "Tenant cells" in the chart README.
-#
-# The list itself is deployment data: keep it in the environment layer, never
-# in this chart.
-tenants: []
-#  - id: child-a                 # a crm_tenants id: lowercase DNS label
-#    replicaCount: 1             # default engine.replicaCount
-#    env: {}                     # merged over engine.env
-#    resources: {}               # default engine.resources (replaced, not merged)
-#    secretRefs: []              # default engine.secretRefs; same allow-list
-#    podLabels: {}               # also podAnnotations, nodeSelector, tolerations, affinity
-#    workspace:                  # unset keys come from the top-level workspace:
-#      allowEmptyFleet: true
-#      minAgentCount: 1
-#      requiredAgentIds: []
-#      persistence:              # merged over workspace.persistence, minus existingClaim
-#        enabled: true
-#        existingClaim: ""
-#        size: 20Gi
-#      configMap:                # never inherited from workspace.configMap
-#        name: ""
-#        items: []
-#    extraVolumes: []            # never inherited from engine.extraVolumes
-#    extraVolumeMounts: []       # never inherited from engine.extraVolumeMounts
-#    googleWorkspace:            # never inherited from engine.googleWorkspace
-#      enabled: false
-#      secretName: ""            # default <fullname>-engine-<id>-google
 
 # ─── Bridge (CRM API + webhooks + multi-tenancy) ─────────────────────────────
 bridge:

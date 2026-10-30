@@ -60,22 +60,11 @@ def test_every_route_rejects_a_non_operator_human(controls_client_as_viewer, no_
     assert controls_client_as_viewer.post(FORGET, json={"reason": "spam"}).status_code == 403
 
 
-def test_another_tenants_owner_passes_the_gate_into_its_own_tenant():
-    """Memory is per tenant: another tenant's owner is not refused at the gate.
-    Every query below it is scoped by ``get_tenant_id(request)``, which the
-    query tests pin; here, structurally, that each handler derives it."""
-    import inspect
-
-    from routers import memory_facts
-
-    for handler in (
-        memory_facts.list_facts,
-        memory_facts.preview_forget,
-        memory_facts.forget_fact,
-    ):
-        source = inspect.getsource(handler)
-        assert "require_tenant_admin(request)" in source, handler.__name__
-        assert "get_tenant_id(request)" in source, handler.__name__
+def test_every_route_rejects_another_tenants_owner(controls_client_as_other_tenant_owner, no_db):
+    client = controls_client_as_other_tenant_owner
+    assert client.get(FACTS).status_code == 403
+    assert client.post(PREVIEW).status_code == 403
+    assert client.post(FORGET, json={"reason": "spam"}).status_code == 403
 
 
 def test_an_auditor_may_not_touch_memory(controls_client_as_auditor, no_db):

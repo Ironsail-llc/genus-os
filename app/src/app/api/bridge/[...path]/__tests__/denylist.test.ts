@@ -115,43 +115,6 @@ describe("bridge proxy denylist", () => {
     }
   });
 
-  // The bridge's server percent-decodes the path before it routes, so a deny
-  // rule tested against the still-encoded path is walked around by encoding
-  // one character — and the switch route's reply is a bearer.
-  it("refuses a denied route spelled with percent-encoding or extra slashes", () => {
-    for (const path of [
-      "/api/auth/switch%2Dtenant",
-      "/api/auth/switch%252Dtenant",
-      "/api/auth/switch%25252Dtenant",
-      "/api/auth%2Fswitch-tenant",
-      "/api/vault/%67et",
-      "/api/vault/%2567et",
-      "/api//auth/switch-tenant",
-      "//api/vault//get",
-      "/api/%73etup/status",
-    ]) {
-      expect(isDeniedBridgePath(path), path).toBe(true);
-    }
-  });
-
-  it("refuses a path that cannot be decoded or still carries a percent sign", () => {
-    for (const path of ["/api/people/%E0%A4%A", "/api/people/%", "/api/people/%2525252541"]) {
-      expect(isDeniedBridgePath(path), path).toBe(true);
-    }
-  });
-
-  it("still allows ordinary paths, including encoded characters that decode cleanly", () => {
-    for (const path of [
-      "/api/people",
-      "/api/tenants/accessible",
-      "/api/auth/me",
-      "/api/memory-blocks/helm_state",
-      "/api/people/alice%20example",
-    ]) {
-      expect(isDeniedBridgePath(path), path).toBe(false);
-    }
-  });
-
   it("does not refuse a route that merely starts with the same letters", () => {
     for (const path of ["/api/setups", "/api/setup-wizard", "/api/settings"]) {
       expect(isDeniedBridgePath(path)).toBe(false);

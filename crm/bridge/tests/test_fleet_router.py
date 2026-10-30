@@ -41,8 +41,8 @@ def fake_fleet(monkeypatch):
     }
     run_stats = {"main": {"runs_7d": 5, "failures_7d": 1}}
     monkeypatch.setattr(fleet, "_load_manifests", lambda: manifests)
-    monkeypatch.setattr(fleet, "_schedule_rows", lambda tenant_id: schedule_rows)
-    monkeypatch.setattr(fleet, "_run_stats", lambda tenant_id: run_stats)
+    monkeypatch.setattr(fleet, "_schedule_rows", lambda: schedule_rows)
+    monkeypatch.setattr(fleet, "_run_stats", lambda: run_stats)
 
 
 def test_list_requires_operator(controls_client_as_viewer):

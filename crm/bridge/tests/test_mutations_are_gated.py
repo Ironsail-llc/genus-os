@@ -4,10 +4,7 @@ A per-router test only proves the routers someone remembered to test.  This
 test walks the *assembled* FastAPI app instead, so a new POST/PUT/PATCH/DELETE
 fails the suite the moment it is added unless it either
 
-  * calls one of the human operator gates in its handler body
-    (``require_tenant_admin(request)`` for the acting tenant's own
-    administration, ``require_root_operator(request)`` — or its legacy alias
-    ``require_operator(request)`` — for appliance-wide state), or
+  * calls ``require_operator(request)`` in its handler body, or
   * appears in ``JUSTIFIED_WITHOUT_OPERATOR_GATE`` or the exact-method/path
     exception table below with a reason.
 
@@ -237,36 +234,6 @@ def _justification(path: str) -> str | None:
     return None
 
 
-#: The handler-body gates that count. ``require_tenant_audit_reader`` and
-#: ``require_root_audit_reader`` are deliberately absent: they admit the
-#: read-only ``auditor`` role and must never guard a mutation.
-MUTATION_GATES = (
-    "require_operator(",
-    "require_root_operator(",
-    "require_tenant_admin(",
-    "require_tenant_operator(",
-)
-
-#: Appliance-wide mutation surfaces: guardrail flags, settings, plugins, the
-#: marketplace install state (which writes the bridge host's own workspace) and
-#: the fleet-default model file. These must carry the ROOT gate — a tenant
-#: admin gate would let a child tenant's admin change every tenant's appliance.
-ROOT_ONLY_PREFIXES = (
-    "/api/controls",
-    "/api/settings",
-    "/api/plugins",
-    "/api/installed-agents",
-    "/api/providers/defaults",
-)
-
-ROOT_GATES = ("require_operator(", "require_root_operator(")
-
-
-def _gated(route: Any) -> bool:
-    source = inspect.getsource(route.endpoint)
-    return any(gate in source for gate in MUTATION_GATES)
-
-
 def _describe(route: Any) -> str:
     methods = ",".join(sorted(set(route.methods) & MUTATION_METHODS))
     endpoint = route.endpoint
@@ -345,12 +312,12 @@ def test_every_mutation_route_is_operator_gated_or_justified() -> None:
     ungated = [
         _describe(route)
         for route in _mutation_routes()
-        if not _gated(route)
+        if "require_operator(" not in inspect.getsource(route.endpoint)
         and _justification(route.path) is None
         and not _has_exact_justification(route)
     ]
     assert not ungated, (
-        "Mutation routes with neither an operator gate nor a justified "
+        "Mutation routes with neither require_operator(request) nor a justified "
         "allowlist entry:\n  " + "\n  ".join(sorted(ungated))
     )
 
@@ -378,33 +345,7 @@ def test_install_state_mutations_are_gated_in_the_handler() -> None:
     ]
     assert len(install_routes) == 4, f"expected install/update/remove/export, got {install_routes}"
     for route in install_routes:
-        source = inspect.getsource(route.endpoint)
-        assert "require_root_operator(" in source, _describe(route)
-
-
-def test_appliance_wide_mutations_carry_the_root_gate() -> None:
-    """A child tenant's admin passes ``require_tenant_admin``; these must not."""
-    routes = [
-        route
-        for route in _mutation_routes()
-        if any(_matches(route.path, prefix) for prefix in ROOT_ONLY_PREFIXES)
-    ]
-    assert len(routes) >= 12, f"root-only enumeration collapsed: {len(routes)}"
-    wrong = [
-        _describe(route)
-        for route in routes
-        if not any(gate in inspect.getsource(route.endpoint) for gate in ROOT_GATES)
-        or "require_tenant_admin(" in inspect.getsource(route.endpoint)
-    ]
-    assert not wrong, "appliance-wide mutations without the root gate:\n  " + "\n  ".join(wrong)
-
-
-def test_the_legacy_gate_name_is_the_root_gate() -> None:
-    """Every route still calling ``require_operator`` keeps its old meaning."""
-    from routers import _operator
-
-    assert _operator.require_operator is _operator.require_root_operator
-    assert _operator.require_audit_reader is _operator.require_root_audit_reader
+        assert "require_operator(" in inspect.getsource(route.endpoint), _describe(route)
 
 
 def test_every_allowlist_entry_still_matches_a_live_route() -> None:

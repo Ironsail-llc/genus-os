@@ -12,7 +12,8 @@ import os
 import tempfile
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Request, Response
+from deps import get_tenant_id
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 
 from robothor.engine.sanitize import sanitize_log
@@ -23,17 +24,28 @@ from robothor.templates.safety import (
     validate_identifier,
 )
 from routers._audit import audited
-from routers._operator import require_root_operator
+from routers._operator import require_operator
 from routers.agent_manifests import reconcile_engine_schedules
 
 logger = logging.getLogger(__name__)
 
 
-#: Root-only, every route: installs write the bridge host's OWN workspace — the
-#: platform tenant's fleet. A child tenant's workspace is its engine's volume,
-#: which nothing here can reach, so a child admin (or a root admin acting in a
-#: child) installing here would be writing an agent into somebody else's fleet.
-router = APIRouter(prefix="/api/installed-agents", tags=["installed-agents"])
+def _require_primary_tenant(tenant_id: str = Depends(get_tenant_id)) -> None:
+    """Installed-agent state is appliance-global, so deny secondary tenants."""
+    from robothor.constants import DEFAULT_TENANT
+
+    if tenant_id != DEFAULT_TENANT:
+        raise HTTPException(
+            status_code=403,
+            detail="appliance administration not authorized for tenant",
+        )
+
+
+router = APIRouter(
+    prefix="/api/installed-agents",
+    tags=["installed-agents"],
+    dependencies=[Depends(_require_primary_tenant)],
+)
 
 _WORKSPACE = os.environ.get("ROBOTHOR_WORKSPACE", str(Path("~/robothor").expanduser()))
 MANIFEST_DIR = Path(
@@ -99,9 +111,8 @@ class UpdateRequest(BaseModel):
 
 
 @router.get("")
-def list_installed_agents(request: Request) -> dict[str, object]:
+def list_installed_agents() -> dict[str, object]:
     """List all installed agents with version and status info."""
-    require_root_operator(request)
     try:
         from robothor.templates.instance import InstanceConfig
 
@@ -149,7 +160,7 @@ async def install_agent(req: InstallRequest, request: Request) -> dict[str, obje
     sits inert until somebody restarts the engine, which is the whole reason the
     marketplace "installed" an agent that never ran.
     """
-    require_root_operator(request)
+    require_operator(request)
     result = await asyncio.to_thread(_install_from_hub, req, request)
     result["reconcile"] = await reconcile_engine_schedules()
     return result
@@ -198,7 +209,7 @@ async def update_agent(agent_id: str, request: Request) -> dict[str, object]:
     Reconciles afterwards: an update can change the agent's cron, and the
     engine is holding the trigger it parsed at boot until it is told otherwise.
     """
-    require_root_operator(request)
+    require_operator(request)
     result = await asyncio.to_thread(_update_from_hub, agent_id, request)
     result["reconcile"] = await reconcile_engine_schedules()
     return result
@@ -248,7 +259,7 @@ async def remove_agent(agent_id: str, request: Request) -> dict[str, object]:
     Reconciles afterwards so the schedule goes with the manifest, instead of the
     engine firing a job for an agent whose config no longer exists.
     """
-    require_root_operator(request)
+    require_operator(request)
     result = await asyncio.to_thread(_remove_installed, agent_id, request)
     result["reconcile"] = await reconcile_engine_schedules()
     return result
@@ -305,7 +316,7 @@ async def export_installed_agent(agent_id: str, request: Request) -> Response:
     export is the agent's instructions, and an audit store read by auditors and
     shipped to a SIEM is the last place any of it should appear.
     """
-    require_root_operator(request)
+    require_operator(request)
     return await asyncio.to_thread(_export_archive, agent_id, request)
 
 
@@ -347,7 +358,7 @@ async def export_installed_agent_plan(agent_id: str, request: Request) -> dict[s
     cheaper code path is a plan that can disagree with the thing it describes —
     and the one field that must never disagree is the secret gate's verdict.
     """
-    require_root_operator(request)
+    require_operator(request)
     return await asyncio.to_thread(_export_plan, agent_id, request)
 
 
@@ -399,9 +410,8 @@ def _export_plan(agent_id: str, request: Request) -> dict[str, object]:
 
 
 @router.get("/{agent_id}/readiness")
-def check_readiness(agent_id: str, request: Request) -> dict[str, object]:
+def check_readiness(agent_id: str) -> dict[str, object]:
     """Check hub readiness score for an agent."""
-    require_root_operator(request)
     try:
         from dataclasses import asdict
 

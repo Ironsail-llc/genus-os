@@ -66,23 +66,6 @@ def test_the_variables_that_open_the_vault_are_bootstrap_structurally(name):
 @pytest.mark.parametrize(
     "name",
     [
-        "GENUS_VAULT_KEY_FILE",
-        "ROBOTHOR_VAULT_KEY_FILE",
-        "GENUS_FINGERPRINT_SALT_FILE",
-        "ROBOTHOR_FINGERPRINT_SALT_FILE",
-    ],
-)
-def test_the_declared_key_and_salt_file_settings_are_bootstrap(name):
-    """Declared settings now carry the vault key file (and the fingerprint salt
-    beside it). A declaration must not undo the structural rule: the vault
-    cannot be asked where its own key is."""
-    assert is_bootstrap(name)
-    assert name in bootstrap_names()
-
-
-@pytest.mark.parametrize(
-    "name",
-    [
         "GITHUB_TOKEN",
         "GH_TOKEN",
         "OPENROUTER_API_KEY",

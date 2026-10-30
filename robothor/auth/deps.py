@@ -35,19 +35,6 @@ class AuthContext:
     scopes: frozenset[str] = field(default_factory=frozenset)
     agent_id: str | None = None
     token_id: str = ""
-    #: The tenant the account belongs to. Equal to ``tenant_id`` except on a
-    #: token minted by ``POST /api/auth/switch-tenant``, where ``tenant_id`` is
-    #: the tenant being acted in. Empty means "the same as tenant_id".
-    home_tenant_id: str = ""
-
-    def __post_init__(self) -> None:
-        if not self.home_tenant_id:
-            object.__setattr__(self, "home_tenant_id", self.tenant_id)
-
-    @property
-    def is_acting(self) -> bool:
-        """Whether this identity is acting in a tenant other than its home."""
-        return self.home_tenant_id != self.tenant_id
 
     @property
     def is_service(self) -> bool:
@@ -102,18 +89,6 @@ def verify_token(token: str, *, expected_audience: str = "genus-bridge") -> Auth
     if not isinstance(audience, str):
         raise TokenError("token audience must be a string")
 
-    # Tokens minted before home_tid existed carry only tid: they are home
-    # tokens, and verify exactly as they always did.
-    home = claims.get("home_tid")
-    home_tenant = str(home) if home else str(tid)
-    acting = home_tenant != str(tid)
-    if acting and claims.get("act") is not True:
-        raise TokenError("cross-tenant token missing act claim")
-    if not acting and claims.get("act") not in (None, False):
-        raise TokenError("act claim on a home-tenant token")
-    if acting and typ == "service":
-        raise TokenError("service token cannot act in another tenant")
-
     return AuthContext(
         user_id=str(sub),
         tenant_id=str(tid),
@@ -123,7 +98,6 @@ def verify_token(token: str, *, expected_audience: str = "genus-bridge") -> Auth
         scopes=scopes,
         agent_id=str(agent_id) if agent_id is not None else None,
         token_id=str(token_id),
-        home_tenant_id=home_tenant,
     )
 
 

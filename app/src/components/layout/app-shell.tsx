@@ -25,7 +25,6 @@ import { LogsView } from "@/components/views/logs-view";
 import { ComingSoonView } from "@/components/views/coming-soon-view";
 import { SettingsView } from "@/components/views/settings-view";
 import { MfaSetupBanner } from "@/components/mfa-setup-banner";
-import { ActingTenantBanner, TenantSwitcher } from "@/components/layout/tenant-switcher";
 import { ThemeToggle } from "@/components/business/theme-toggle";
 import { CommandPalette } from "@/components/business/command-palette";
 import { useTasks } from "@/hooks/use-tasks";
@@ -169,10 +168,6 @@ export function AppShell() {
       {/* Above the shell, not inside a view: an owner who owes a second factor
           must see it whatever they navigate to, and it has no dismiss. */}
       <MfaSetupBanner />
-      {/* Above the shell for the same reason: whatever view is open, and on
-          mobile chat where there is no header, the operator must see that
-          every page is another tenant's data. */}
-      <ActingTenantBanner />
       <div
         className="flex flex-col md:flex-row flex-1 min-h-0 w-full"
         data-testid="app-shell"
@@ -221,7 +216,6 @@ export function AppShell() {
             </div>
 
             <div className="ml-auto flex items-center gap-3">
-              <TenantSwitcher />
               {!isMobile && isChatView && (
                 <button
                   onClick={() => setCanvasRailOpen((prev) => !prev)}

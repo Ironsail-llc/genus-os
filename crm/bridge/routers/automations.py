@@ -11,8 +11,7 @@ So this router joins them, and the join is the whole of what it is:
 
 ``_manifests``
     What the automation IS — name, cron, timezone, enabled, delivery target.
-    Read through ``_manifest_backend.scan_from_worker_thread`` /
-    ``_manifest_rows._summary``, imported rather than
+    Read through ``agent_manifests._scan`` / ``_manifest_rows._summary``, imported rather than
     re-derived: a second reader of the manifest directory is a second set of
     rules about what a manifest means, and the two would drift.
 ``_schedule_rows``
@@ -46,7 +45,6 @@ import logging
 from typing import Any
 
 import psycopg2.extras
-from deps import get_tenant_id
 from fastapi import APIRouter, HTTPException, Request
 
 from robothor.db.connection import get_connection
@@ -54,9 +52,8 @@ from robothor.engine.sanitize import sanitize_log
 from robothor.engine.schedule_reconcile import KIND_AGENT, KIND_HEARTBEAT, KIND_WORKER
 from routers import agent_manifests
 from routers._audit import audited
-from routers._manifest_backend import scan_from_worker_thread
 from routers._manifest_rows import _block, _summary
-from routers._operator import require_tenant_admin
+from routers._operator import PLATFORM_TENANT, require_operator
 
 logger = logging.getLogger(__name__)
 
@@ -186,15 +183,15 @@ def _jobs_of(document: dict[str, Any]) -> list[dict[str, Any]]:
     return jobs
 
 
-def _manifests(tenant_id: str) -> list[dict[str, Any]]:
-    """Every job every readable manifest of the acting tenant declares.
+def _manifests() -> list[dict[str, Any]]:
+    """Every job every readable manifest declares.
 
     One unreadable manifest is skipped rather than 500ing the page, the same
     bargain ``list_manifests`` already makes — and a manifest the loader could
     not parse at all still reaches the operator, as a degraded card built from
     its schedule row (see ``_automations``).
     """
-    scan = scan_from_worker_thread(tenant_id)
+    scan = agent_manifests._scan()
     rows: list[dict[str, Any]] = []
     for document in scan.manifests:
         try:
@@ -351,7 +348,7 @@ def _automations(tenant_id: str) -> list[dict[str, Any]]:
     parse — it belongs on screen even more.
     """
     schedules = {str(row.get("agent_id") or ""): row for row in _schedule_rows(tenant_id)}
-    manifests = _manifests(tenant_id)
+    manifests = _manifests()
 
     # A manifest job with neither a cron nor a schedule row is not an
     # automation: it is an agent that only runs when something triggers it, and
@@ -412,12 +409,12 @@ def _reset_breaker(agent_id: str, tenant_id: str) -> bool:
 def list_automations(request: Request) -> dict[str, Any]:
     """Every scheduled agent, with what its last run did.
 
-    Gated on a GET for the same reason the fleet listing is: this enumerates
-    the acting tenant's schedule and its delivery targets, which is not member
-    data.
+    ``require_operator`` on a GET for the same reason the fleet listing has
+    one: this enumerates the appliance's schedule and its delivery targets,
+    which is not member data.
     """
-    require_tenant_admin(request)
-    rows = _automations(get_tenant_id(request))
+    require_operator(request)
+    rows = _automations(PLATFORM_TENANT)
     return {"automations": rows, "count": len(rows)}
 
 
@@ -431,9 +428,9 @@ def reset_breaker(agent_id: str, request: Request) -> dict[str, Any]:
     audited because it is an act that makes an agent start doing things again,
     and the trail has to name who decided that.
     """
-    require_tenant_admin(request)
+    require_operator(request)
     agent_id = _safe_job_id(agent_id)
-    if not _reset_breaker(agent_id, get_tenant_id(request)):
+    if not _reset_breaker(agent_id, PLATFORM_TENANT):
         audited(
             request,
             "automation.reset_breaker",

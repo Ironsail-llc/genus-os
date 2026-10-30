@@ -101,11 +101,6 @@ MANIFEST_ONLY_FLAGS: dict[str, str] = {
         "read by robothor/engine/manifest_schema.py straight from os.environ; "
         "route it through feature_flags first, then govern it"
     ),
-    "GENUS_TENANT_SWITCH_MODE": (
-        "read by the bridge's switch-tenant route through robothor.settings, "
-        "not by the engine through feature_flags, so a Controls row would write "
-        "a value nothing reads"
-    ),
 }
 
 

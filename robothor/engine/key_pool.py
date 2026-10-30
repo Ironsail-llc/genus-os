@@ -265,18 +265,10 @@ def _vault_export() -> dict[str, str]:
     """Every vault secret as ``{ENV_NAME: value}``. Raises if unusable.
 
     The single seam through which this module touches the database.
-
-    Pinned to the default tenant, row and RLS binding both: provider keys are
-    the instance's, and the vault otherwise follows the enclosing
-    ``tenant_scope`` — so a refresh inside a scoped run (the benchmark
-    sandbox, a bridge request acting in a child tenant) would come back empty.
     """
     from robothor import vault
-    from robothor.constants import DEFAULT_TENANT
-    from robothor.db.connection import tenant_scope
 
-    with tenant_scope(DEFAULT_TENANT):
-        return vault.export_env(tenant_id=DEFAULT_TENANT)
+    return vault.export_env()
 
 
 def _provider_env_names() -> set[str]:

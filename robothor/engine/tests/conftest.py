@@ -28,22 +28,6 @@ if TYPE_CHECKING:
 
 
 @pytest.fixture(autouse=True)
-def sessions_stand(request, monkeypatch):
-    """Every human token in the engine suite names an account that still stands.
-
-    The engine refuses a human token whose account left its home tenant or was
-    disabled (``robothor.auth.session_standing``). These tests mint tokens for
-    accounts no database holds, so the check is stubbed to "stands";
-    ``test_engine_session_standing.py`` runs the real one.
-    """
-    if request.module.__name__.endswith("test_engine_session_standing"):
-        return
-    from robothor.auth import session_standing
-
-    monkeypatch.setattr(session_standing, "stands", lambda user_id, home_tenant_id: True)
-
-
-@pytest.fixture(autouse=True)
 def isolated_model_breaker(monkeypatch: pytest.MonkeyPatch):
     """Swap the global model breaker for a fresh, alert-less one per test.
 

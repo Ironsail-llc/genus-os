@@ -74,7 +74,6 @@ def api_create_routine(
                 "tenant_id": tenant_id,
             },
             source="bridge",
-            tenant_id=tenant_id,
         )
         return {"id": routine_id, "title": body.title}
     return JSONResponse({"error": "failed to create routine"}, status_code=500)
@@ -163,7 +162,6 @@ def api_manual_trigger(
                     "tenant_id": tenant_id,
                 },
                 source="bridge",
-                tenant_id=tenant_id,
             )
             triggered.append({"routineId": routine["id"], "taskId": task_id})
     return {"triggered": triggered, "count": len(triggered)}

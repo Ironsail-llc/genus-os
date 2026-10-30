@@ -323,18 +323,8 @@ def test_a_non_operator_cannot_list_users(request, client_name, store):
     assert client.get("/api/users").status_code == 403
 
 
-def test_another_tenants_operator_lists_only_its_own_users(
-    controls_client_as_other_tenant_owner, store, monkeypatch
-):
-    """Accounts are per tenant: another tenant's owner sees ITS accounts."""
-    from routers import users
-
-    asked: list[str] = []
-    monkeypatch.setattr(
-        users.accounts, "list_accounts", lambda tenant_id: asked.append(tenant_id) or []
-    )
-    assert controls_client_as_other_tenant_owner.get("/api/users").status_code == 200
-    assert asked == ["acme-corp"]
+def test_another_tenants_operator_cannot_list_users(controls_client_as_other_tenant_owner, store):
+    assert controls_client_as_other_tenant_owner.get("/api/users").status_code == 403
 
 
 # ── Invite ──────────────────────────────────────────────────────────────
@@ -865,13 +855,3 @@ def test_a_non_operator_cannot_arm_a_grant(request, client_name, store):
 
     assert client.post(f"/api/users/{MEMBER_ID}/binding-grant").status_code == 403
     assert not store.grants
-
-
-# ── who armed a grant: only a root operator's may override SSO routing ──
-
-
-def test_a_root_operators_grant_is_recorded_as_root(operator, store):
-    """A grant armed by an operator whose home and acting tenant are both the
-    platform tenant is the root's, and sign-in may honour it off-route."""
-    assert operator.post(f"/api/users/{MEMBER_ID}/binding-grant").status_code == 201
-    assert store.grants[0]["created_by"].startswith("root:")

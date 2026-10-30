@@ -9,14 +9,14 @@ def fake_runs(monkeypatch):
     monkeypatch.setattr(
         runs,
         "_list_runs",
-        lambda agent, limit, tenant_id: [
+        lambda agent, limit: [
             {"id": "r1", "agent_id": "main", "status": "completed", "total_cost_usd": 0.01},
         ],
     )
     monkeypatch.setattr(
         runs,
         "_get_run",
-        lambda run_id, tenant_id: (
+        lambda run_id: (
             {"id": "r1", "agent_id": "main", "status": "completed"} if run_id == "r1" else None
         ),
     )
@@ -49,7 +49,7 @@ def test_list_returns_runs(controls_client_as_operator, fake_runs):
 def test_list_clamps_limit(controls_client_as_operator, monkeypatch):
     seen = {}
 
-    def _fake_list_runs(agent, limit, tenant_id):
+    def _fake_list_runs(agent, limit):
         seen["limit"] = limit
         return []
 

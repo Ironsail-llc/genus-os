@@ -39,7 +39,17 @@ async def memory_store(
     body: MemoryStoreRequest,
     tenant_id: str = Depends(get_tenant_id),
 ):
-    """Store content and extract facts, in the ACTING tenant."""
+    """Store content and extract facts."""
+    from robothor.constants import DEFAULT_TENANT
+
+    # ``ingest_content`` is not tenant-aware yet.  Do not silently route a
+    # secondary tenant's content into the primary tenant while that boundary
+    # remains unresolved.
+    if tenant_id != DEFAULT_TENANT:
+        return JSONResponse(
+            {"error": "memory ingestion is not available for this tenant"},
+            status_code=403,
+        )
     try:
         from robothor.memory.ingestion import ingest_content
 
@@ -48,7 +58,6 @@ async def memory_store(
             source_channel="api",
             content_type=body.content_type,
             metadata={"tenant_id": tenant_id},
-            tenant_id=tenant_id,
         )
         return {"status": "ok", "facts_extracted": result}
     except Exception as e:
@@ -224,12 +233,9 @@ def pipeline_trigger(
     import subprocess
 
     from robothor.config import get_config
-    from routers._operator import PLATFORM_TENANT
+    from robothor.constants import DEFAULT_TENANT
 
-    # Root-only, enforced in ``middleware._authorization_denial`` (the scripts
-    # read the platform tenant's sources). Repeated here so the handler cannot
-    # run them for another tenant on any path that skipped the middleware.
-    if tenant_id != PLATFORM_TENANT:
+    if tenant_id != DEFAULT_TENANT:
         return JSONResponse(
             {"error": "pipeline trigger is not available for this tenant"},
             status_code=403,

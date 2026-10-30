@@ -2,13 +2,6 @@
 Vault DAL — CRUD operations on vault_secrets table.
 
 Uses psycopg2 directly (same pattern as robothor.crm.dal).
-
-Tenant: every function takes ``tenant_id: str | None = None``. ``None`` means
-the enclosing :func:`robothor.db.connection.tenant_scope` — the bridge binds
-each request to its token's tenant — and the default tenant outside one. The
-connection is bound for RLS the same way ``get_connection`` binds a pooled
-one, so with ``ROBOTHOR_RLS_ENABLED`` set the database itself refuses another
-tenant's rows even if a WHERE clause names them.
 """
 
 from __future__ import annotations
@@ -25,55 +18,13 @@ logger = logging.getLogger(__name__)
 
 
 def _get_conn() -> Any:
-    """A database connection using the standard Genus OS config, RLS-bound.
-
-    Not pooled (the vault predates the pool and is read rarely), but bound
-    exactly as a pooled checkout is: ``_apply_tenant_scope`` sets
-    ``app.tenant_id`` from the enclosing scope, so the vault was no longer the
-    one tenant table the policy could not protect.
-
-    Callers take it inside :func:`_bound_conn`, so an explicit tenant binds it.
-    """
+    """Get a database connection using the standard Genus OS config."""
     import psycopg2
 
     from robothor.config import get_config
-    from robothor.db.connection import _apply_tenant_scope
 
     cfg = get_config().db
-    conn = psycopg2.connect(**cfg.dict, connect_timeout=5)
-    try:
-        _apply_tenant_scope(conn)
-    except Exception:
-        conn.close()
-        raise
-    return conn
-
-
-def _bound_conn(explicit_tenant: str | None) -> Any:
-    """``_get_conn()``, bound to ``explicit_tenant`` when one was passed.
-
-    An EXPLICIT tenant wins over the ambient scope for the RLS binding too.
-    The instance's own credentials — the SIEM webhook, provider keys, the
-    Telegram token — are asked for with ``tenant_id=DEFAULT_TENANT`` through
-    ``robothor.secrets``; inside a child-scoped request or a sandboxed run, a
-    WHERE naming the root row under a binding that hides it would read as
-    "missing". ``None`` follows the enclosing scope.
-    """
-    if explicit_tenant is None:
-        return _get_conn()
-    from robothor.db.connection import tenant_scope
-
-    with tenant_scope(explicit_tenant):
-        return _get_conn()
-
-
-def _tenant(tenant_id: str | None) -> str:
-    """An explicit tenant, else the enclosing scope's, else the default."""
-    if tenant_id is not None:
-        return tenant_id
-    from robothor.db.connection import current_tenant_scope
-
-    return current_tenant_scope() or DEFAULT_TENANT
+    return psycopg2.connect(**cfg.dict, connect_timeout=5)
 
 
 def set_secret(
@@ -83,14 +34,13 @@ def set_secret(
     *,
     category: str = "credential",
     metadata: dict[str, Any] | None = None,
-    tenant_id: str | None = None,
+    tenant_id: str = DEFAULT_TENANT,
 ) -> None:
     """Encrypt and upsert a secret."""
-    explicit, tenant_id = tenant_id, _tenant(tenant_id)
     encrypted = encrypt(value, master_key)
     meta_json = json.dumps(metadata or {})
 
-    conn = _bound_conn(explicit)
+    conn = _get_conn()
     try:
         with conn.cursor() as cur:
             cur.execute(
@@ -114,11 +64,10 @@ def get_secret(
     key: str,
     master_key: bytes,
     *,
-    tenant_id: str | None = None,
+    tenant_id: str = DEFAULT_TENANT,
 ) -> str | None:
     """Retrieve and decrypt a secret. Returns None if not found."""
-    explicit, tenant_id = tenant_id, _tenant(tenant_id)
-    conn = _bound_conn(explicit)
+    conn = _get_conn()
     try:
         with conn.cursor() as cur:
             cur.execute(
@@ -136,7 +85,7 @@ def get_secret(
 def get_secrets_updated_at(
     keys: list[str],
     *,
-    tenant_id: str | None = None,
+    tenant_id: str = DEFAULT_TENANT,
 ) -> dict[str, datetime]:
     """When each of these secrets was last written, without decrypting any.
 
@@ -149,10 +98,9 @@ def get_secrets_updated_at(
 
     Keys with no row are simply absent from the result.
     """
-    explicit, tenant_id = tenant_id, _tenant(tenant_id)
     if not keys:
         return {}
-    conn = _bound_conn(explicit)
+    conn = _get_conn()
     try:
         with conn.cursor() as cur:
             cur.execute(
@@ -164,10 +112,9 @@ def get_secrets_updated_at(
         conn.close()
 
 
-def delete_secret(key: str, *, tenant_id: str | None = None) -> bool:
+def delete_secret(key: str, *, tenant_id: str = DEFAULT_TENANT) -> bool:
     """Delete a secret. Returns True if a row was deleted."""
-    explicit, tenant_id = tenant_id, _tenant(tenant_id)
-    conn = _bound_conn(explicit)
+    conn = _get_conn()
     try:
         with conn.cursor() as cur:
             cur.execute(
@@ -184,11 +131,10 @@ def delete_secret(key: str, *, tenant_id: str | None = None) -> bool:
 def list_keys(
     *,
     category: str | None = None,
-    tenant_id: str | None = None,
+    tenant_id: str = DEFAULT_TENANT,
 ) -> list[str]:
     """List all secret keys, optionally filtered by category."""
-    explicit, tenant_id = tenant_id, _tenant(tenant_id)
-    conn = _bound_conn(explicit)
+    conn = _get_conn()
     try:
         with conn.cursor() as cur:
             if category:
@@ -209,11 +155,10 @@ def list_keys(
 def export_secrets(
     master_key: bytes,
     *,
-    tenant_id: str | None = None,
+    tenant_id: str = DEFAULT_TENANT,
 ) -> dict[str, str]:
     """Export all secrets as {KEY: VALUE}. Keys are uppercased with / → _."""
-    explicit, tenant_id = tenant_id, _tenant(tenant_id)
-    conn = _bound_conn(explicit)
+    conn = _get_conn()
     try:
         result: dict[str, str] = {}
         with conn.cursor() as cur:
@@ -229,10 +174,9 @@ def export_secrets(
         conn.close()
 
 
-def count_secrets(*, tenant_id: str | None = None) -> int:
+def count_secrets(*, tenant_id: str = DEFAULT_TENANT) -> int:
     """Count secrets in the vault."""
-    explicit, tenant_id = tenant_id, _tenant(tenant_id)
-    conn = _bound_conn(explicit)
+    conn = _get_conn()
     try:
         with conn.cursor() as cur:
             cur.execute(

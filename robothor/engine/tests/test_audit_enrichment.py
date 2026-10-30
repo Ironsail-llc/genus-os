@@ -56,12 +56,9 @@ class TestLogEventUserId:
 
         log_event("agent.tool_call", "web_fetch", actor="main")
 
-        sql, params = mock_cur.execute.call_args[0]
-        # The user_id parameter, found by its column's position in the INSERT
-        # list, should be "" (the row also carries tenant_id after it).
-        columns = sql.split("(", 1)[1].split(")", 1)[0].replace("\n", " ").split(",")
-        position = [c.strip() for c in columns].index("user_id")
-        assert params[position] == ""
+        params = mock_cur.execute.call_args[0][1]
+        # Last param should be user_id=""
+        assert params[-1] == ""
 
 
 # ─── _audit_tool_call passes user_id through ────────────────────────

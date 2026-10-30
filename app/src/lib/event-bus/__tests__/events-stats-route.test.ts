@@ -4,15 +4,6 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 vi.mock("@/lib/event-bus/redis-client", () => ({
   streamLengths: vi.fn(),
 }));
-// The counts are appliance-wide, so the route serves a root session at home
-// (the tenant rules themselves are covered in src/app/api/events/stats/__tests__).
-vi.mock("@/lib/auth", () => ({
-  auth: vi.fn().mockResolvedValue({
-    bridgeAccess: "t",
-    tenantId: "default",
-    homeTenantId: "default",
-  }),
-}));
 
 // Must import after mock
 import { GET } from "@/app/api/events/stats/route";

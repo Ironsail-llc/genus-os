@@ -23,15 +23,14 @@ def _mock_conn(fetchone_seq, rowcount=1):
 
 
 def test_jit_provision_creates_new_account():
-    # idp lookup -> None; email lookup in the routed tenant -> None; the same
-    # address in any other tenant -> None; INSERT RETURNING -> new row.
+    # idp lookup -> None; email lookup -> None; INSERT RETURNING -> new row.
     new_row = {
         "id": "uid-1",
         "email": "alice@example.com",
         "role": "member",
         "tenant_id": "default",
     }
-    conn, cur = _mock_conn([None, None, None, new_row])
+    conn, cur = _mock_conn([None, None, new_row])
     with patch("robothor.auth.accounts.get_connection", return_value=conn):
         out = accounts.jit_provision(
             issuer="https://idp",

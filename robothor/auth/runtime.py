@@ -92,24 +92,6 @@ def local_login_enabled() -> bool:
     return bool(get_settings().auth.local_login)
 
 
-#: The values ``GENUS_TENANT_SWITCH_MODE`` may take. Anything else reads as off.
-TENANT_SWITCH_MODES = frozenset({"off", "observe", "enforce"})
-
-
-def tenant_switch_mode() -> str:
-    """``off`` | ``observe`` | ``enforce``: whether acting tokens are issued AND honoured.
-
-    One answer for both halves: ``POST /api/auth/switch-tenant`` mints acting
-    tokens only under ``enforce``, and the bridge's ``AuthMiddleware`` refuses
-    an acting token under anything else — so turning the flag back off ends
-    every acting session at once instead of leaving them to expire.
-    """
-    from robothor.settings import get_settings
-
-    mode = str(get_settings().auth.tenant_switch_mode or "").strip().lower()
-    return mode if mode in TENANT_SWITCH_MODES else "off"
-
-
 def legacy_headers_allowed(*, bind_host: str = "127.0.0.1") -> bool:
     """Return whether unverified identity headers may be used."""
     return not auth_required(bind_host=bind_host)

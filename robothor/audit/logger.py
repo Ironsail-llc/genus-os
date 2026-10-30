@@ -19,48 +19,15 @@ from __future__ import annotations
 
 import contextlib
 import logging
-from contextvars import ContextVar
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import psycopg2
 from psycopg2.extras import Json
-
-if TYPE_CHECKING:
-    from collections.abc import Iterator, Sequence
 
 logger = logging.getLogger(__name__)
 
 # Lazy connection resolution — don't import config at module level so tests can mock
 _conn_factory = None
-
-
-@dataclass(frozen=True)
-class RequestActor:
-    """Who a request acts as, for audit rows written beneath it."""
-
-    user_id: str
-    home_tenant_id: str
-    tenant_id: str
-
-
-#: The verified caller of the request this context is serving, if any. Set by
-#: the bridge's ``TenantScopeMiddleware``; read by :func:`log_event` when its
-#: caller names no actor — the DAL's CRM audit (``_safe_audit``) never does, so
-#: before this a root owner's write in a child tenant was filed as ``robothor``.
-_request_actor: ContextVar[RequestActor | None] = ContextVar("audit_request_actor", default=None)
-
-
-@contextlib.contextmanager
-def request_actor(*, user_id: str, home_tenant_id: str, tenant_id: str) -> Iterator[None]:
-    """Attribute every audit row written in this context to this caller."""
-    token = _request_actor.set(
-        RequestActor(user_id=user_id, home_tenant_id=home_tenant_id, tenant_id=tenant_id)
-    )
-    try:
-        yield
-    finally:
-        _request_actor.reset(token)
 
 
 def _get_connection() -> Any:
@@ -96,36 +63,6 @@ def _release_connection(conn: Any) -> None:
         conn.close()
 
 
-def _writing_tenant(explicit: str | None) -> str:
-    """The tenant an audit row is recorded under.
-
-    The caller's, if it names one; else the enclosing ``tenant_scope`` — which
-    for a bridge request is the ACTING tenant; else this process's own tenant.
-    """
-    if explicit:
-        return explicit
-    from robothor.constants import DEFAULT_TENANT
-    from robothor.db.connection import current_tenant_scope, effective_tenant
-
-    return current_tenant_scope() or effective_tenant() or DEFAULT_TENANT
-
-
-def _tenant_clause(
-    tenants: Sequence[str] | None, include_untenanted: bool
-) -> tuple[str, list[Any]]:
-    """``(" AND ...", params)`` restricting a read to these tenants, or nothing.
-
-    ``tenants=None`` is an unfiltered read (internal callers). An EMPTY list
-    reads nothing rather than everything. Rows written before ``audit_log``
-    had a tenant are NULL — appliance-wide — and are included only on request.
-    """
-    if tenants is None:
-        return "", []
-    if include_untenanted:
-        return " AND (tenant_id = ANY(%s) OR tenant_id IS NULL)", [list(tenants)]
-    return " AND tenant_id = ANY(%s)", [list(tenants)]
-
-
 def set_connection_factory(factory: Any) -> None:
     """Override connection factory for testing."""
     global _conn_factory
@@ -150,30 +87,13 @@ def log_event(
     source_channel: str | None = None,
     target: str | None = None,
     status: str = "ok",
-    tenant_id: str | None = None,
 ) -> dict[str, Any] | None:
     """Log a structured audit event.
-
-    ``tenant_id`` defaults to the enclosing ``tenant_scope`` (a bridge
-    request's acting tenant), then the process's own tenant — see
-    :func:`_writing_tenant`. Inside a request (:func:`request_actor`), a
-    caller that names no ``actor`` / ``user_id`` gets the request's verified
-    caller instead of ``robothor`` / ``""``, and an acting caller's home tenant
-    is added to ``details``.
 
     Returns {"id": int, "timestamp": str} on success, None on failure.
     Failures are logged but never raise — audit must not break callers.
     """
-    requester = _request_actor.get()
-    if requester is not None:
-        if actor == "robothor":
-            actor = requester.user_id
-        if not user_id:
-            user_id = requester.user_id
-        if requester.home_tenant_id != requester.tenant_id:
-            details = {"home_tenant_id": requester.home_tenant_id, **(details or {})}
     conn = None
-    tenant = _writing_tenant(tenant_id)
     try:
         conn = _get_connection()
         cur = conn.cursor()
@@ -181,8 +101,8 @@ def log_event(
             """
             INSERT INTO audit_log
                 (event_type, category, actor, action, details,
-                 source_channel, target, status, session_key, user_id, tenant_id)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                 source_channel, target, status, session_key, user_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id, timestamp
             """,
             (
@@ -196,7 +116,6 @@ def log_event(
                 status,
                 session_key,
                 user_id,
-                tenant,
             ),
         )
         row = cur.fetchone()
@@ -221,7 +140,6 @@ def log_event(
                         "status": status,
                         "session_key": session_key,
                         "user_id": user_id,
-                        "tenant_id": tenant,
                     }
                 )
         return result
@@ -275,15 +193,8 @@ def query_log(
     since: str | None = None,
     status: str | None = None,
     user_id: str | None = None,
-    *,
-    tenants: Sequence[str] | None = None,
-    include_untenanted: bool = False,
 ) -> list[dict[str, Any]]:
-    """Query audit log with filters.
-
-    ``tenants`` restricts the read to rows recorded under those tenants (and,
-    with ``include_untenanted``, to the NULL rows that predate the column).
-    """
+    """Query audit log with filters."""
     conn = None
     try:
         conn = _get_connection()
@@ -317,9 +228,6 @@ def query_log(
         if user_id:
             query += " AND user_id = %s"
             params.append(user_id)
-        clause, clause_params = _tenant_clause(tenants, include_untenanted)
-        query += clause
-        params.extend(clause_params)
 
         query += " ORDER BY timestamp DESC LIMIT %s"
         params.append(limit)
@@ -355,28 +263,26 @@ def query_log(
             _release_connection(conn)
 
 
-def stats(
-    *, tenants: Sequence[str] | None = None, include_untenanted: bool = False
-) -> dict[str, Any]:
-    """Get audit log statistics, over the same tenant filter as :func:`query_log`."""
-    clause, params = _tenant_clause(tenants, include_untenanted)
+def stats() -> dict[str, Any]:
+    """Get audit log statistics."""
     conn = None
     try:
         conn = _get_connection()
         cur = conn.cursor()
-        cur.execute(
-            "SELECT COUNT(*) AS total, COUNT(DISTINCT event_type) AS event_types, "
-            "MIN(timestamp) AS earliest, MAX(timestamp) AS latest "
-            "FROM audit_log WHERE 1=1" + clause,
-            params,
-        )
+        cur.execute("""
+            SELECT
+                COUNT(*) as total,
+                COUNT(DISTINCT event_type) as event_types,
+                MIN(timestamp) as earliest,
+                MAX(timestamp) as latest
+            FROM audit_log
+        """)
         row = cur.fetchone()
 
-        cur.execute(
-            "SELECT event_type, COUNT(*) FROM audit_log WHERE 1=1" + clause + " "
-            "GROUP BY event_type ORDER BY COUNT(*) DESC LIMIT 20",
-            params,
-        )
+        cur.execute("""
+            SELECT event_type, COUNT(*) FROM audit_log
+            GROUP BY event_type ORDER BY COUNT(*) DESC LIMIT 20
+        """)
         by_type = cur.fetchall()
 
         return {
@@ -391,9 +297,7 @@ def stats(
         if conn is not None:
             with contextlib.suppress(Exception):
                 conn.rollback()
-        # The body reaches a tenant admin's browser; the database's own words
-        # (hosts, roles, SQL) stay in the log line above.
-        return {"total_events": 0, "error": "audit statistics unavailable"}
+        return {"total_events": 0, "error": str(e)}
     finally:
         if conn is not None:
             _release_connection(conn)
