@@ -47,8 +47,12 @@ class _Clock:
 
 @pytest.fixture
 def clock():
+    # Only the limiter's clock: patching time.monotonic itself would freeze
+    # the event loop's clock too, and with it every asyncio timeout.
+    from types import SimpleNamespace
+
     c = _Clock()
-    with patch("robothor.engine.guardrails.time.monotonic", c):
+    with patch("robothor.engine.guardrails.time", SimpleNamespace(monotonic=c)):
         yield c
 
 
