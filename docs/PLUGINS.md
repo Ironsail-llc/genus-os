@@ -1059,26 +1059,41 @@ an I/O error — exit 2 on the CLI, **503** over HTTP — rather than offering
 | `plugins.load` | required | every installed plugin loaded, or is disabled on purpose |
 | `plugins.drift` | required | no recorded manifest differs from what is on disk |
 
-`plugins.load` accepts exactly one refusal — `disabled by operator`, which is
-the operator's own decision arriving back at them. `plugins.drift` overlaps it
+`plugins.load` accepts two refusals — `disabled by operator`, which is the
+operator's own decision arriving back at them, and `disabled by the root
+tenant` (see [Per tenant](#per-tenant)), which is the root's. `plugins.drift` overlaps it
 deliberately: both go red for a drifted plugin, and this is the one that names
 `genus plugin sync`.
 
 ### Over HTTP
 
-The engine owns all four answers, because a plugin is an object in *that*
-process; the bridge proxies them behind `require_operator` and audits the three
-acts with identifiers only.
+The engine owns every answer, because a plugin is an object in *that*
+process; the bridge proxies them and audits the acts with identifiers only.
+Every tenant runs its own engine, so the bridge sends each call to **one
+tenant's engine**, and the gate depends on whose decision the act is:
 
-| route (bridge) | engine | what it does |
-|---|---|---|
-| `GET /api/plugins` | `GET /api/admin/plugins` | generation, lockfile state, one row per distribution, each with the `assets` it wrote into the workspace |
-| `POST /api/plugins/sync` | `POST /api/admin/plugins/sync` | record what is installed; **409** when the existing file's contents cannot be read (`--force` is CLI-only), **503** when the path itself cannot be written |
-| `POST /api/plugins/{name}/enable` | `POST /api/admin/plugins/{name}/enable` | flip the row; 404 if unrecorded; does **not** reload |
-| `POST /api/plugins/{name}/disable` | `POST /api/admin/plugins/{name}/disable` | as above |
-| `POST /api/plugins/reload` | `POST /api/admin/plugins/reload` | runs the SIGHUP body; returns `{generation, loaded, failures}` |
-| `POST /api/plugins/install` | `POST /api/admin/plugins/install` | `{name, version?, index?, accept_review?, dry_run?}` → the install plan and its verdict; **422** for a blocked or unreviewed wheel, an unverifiable index, or a `name` that is not a distribution name |
-| `POST /api/plugins/{name}/remove` | `POST /api/admin/plugins/{name}/remove` | `{force?}` → `{name, removed, row_dropped, reload_hint, note}` |
+* **The acting tenant's own plugins** — the listing, enable, disable and
+  reload — take `require_tenant_admin` and go to the acting tenant's engine.
+  A child's admin, or a root admin who switched into the child, reaches the
+  child's engine and no other.
+* **What is installed** — install, remove, sync — stays root-only
+  (`require_root_operator`: a root owner or admin, at home). The body may name
+  a `tenant_id` in the root's tree to act on that tenant's engine; without one
+  it is the root's. A tenant outside the tree is a 404.
+* **The root's per-child grant** is root-only too; see [Per tenant](#per-tenant).
+
+| route (bridge) | engine | gate | what it does |
+|---|---|---|---|
+| `GET /api/plugins` | `GET /api/admin/plugins` | tenant admin | generation, lockfile state, one row per distribution, each with the `assets` it wrote into the workspace and its `forced` state |
+| `POST /api/plugins/sync` | `POST /api/admin/plugins/sync` | root | `{tenant_id?}`; record what is installed; **409** when the existing file's contents cannot be read (`--force` is CLI-only), **503** when the path itself cannot be written |
+| `POST /api/plugins/{name}/enable` | `POST /api/admin/plugins/{name}/enable` | tenant admin | flip the row; 404 if unrecorded; **409** if the root tenant forced it; does **not** reload |
+| `POST /api/plugins/{name}/disable` | `POST /api/admin/plugins/{name}/disable` | tenant admin | as above |
+| `POST /api/plugins/reload` | `POST /api/admin/plugins/reload` | tenant admin | runs the SIGHUP body; returns `{generation, loaded, failures}` |
+| `POST /api/plugins/install` | `POST /api/admin/plugins/install` | root | `{name, version?, index?, accept_review?, dry_run?, tenant_id?}` → the install plan and its verdict; **422** for a blocked or unreviewed wheel, an unverifiable index, or a `name` that is not a distribution name |
+| `POST /api/plugins/{name}/remove` | `POST /api/admin/plugins/{name}/remove` | root | `{force?, tenant_id?}` → `{name, removed, row_dropped, reload_hint, note}` |
+| `PUT /api/plugins/{name}/tenants/{tenant_id}` | `POST /api/admin/plugins/reload` on that tenant | root | `{state: "on" \| "off" \| null}` → write or clear the grant, then reload that tenant's engine; see [Per tenant](#per-tenant) |
+
+`tenant_id` is the bridge's routing field and is never forwarded to the engine.
 
 The listing also answers **`indexes`** — the index URLs this instance reads, in
 order, **exactly as configured**, including one the install route would refuse.
@@ -1114,6 +1129,66 @@ counts only the readable ones, and every other field looks healthy.
 Each plugin row carries **`source`** — the lock row's origin block, or `null`
 for anything this platform did not install, which is the only thing that
 distinguishes a plugin `remove` will act on from one it refuses.
+
+### Per tenant
+
+Each tenant's engine reads **its own** lockfile, so a child decides for itself
+which installed plugins load. That holds only while every engine has its own
+workspace (the chart gives each cell one; on a single host, set
+`ROBOTHOR_WORKSPACE` per engine, see
+[TENANT_HIERARCHY.md](runbooks/TENANT_HIERARCHY.md#add-the-childs-engine)).
+To catch a shared one, each engine claims its lockfile for its tenant at boot
+in a `plugins.lock.tenant` marker beside it, and the first write claims an
+unclaimed file. A root tenant's engine (its tenant row has no parent) takes a
+claim back from any other tenant, so on a shared workspace the child is the
+one refused, whichever engine booted first. An engine whose lockfile another tenant claimed logs an error
+and answers enable, disable and sync with **409** naming the fix. The root tenant can override that for one child:
+a **grant** forces one plugin `on` or `off` for one child tenant.
+
+```bash
+# As a root owner or admin, at home (not switched into the child):
+curl -X PUT "$BRIDGE/api/plugins/acme-tools/tenants/acme-child-a" \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"state": "off"}'          # "on", "off", or null to clear
+```
+
+| grant | what the child's engine does |
+|---|---|
+| none | the child's lockfile decides, exactly as before |
+| `off` | refused **before import**, with the reason `disabled by the root tenant` — whatever the child's lockfile says, a missing row included |
+| `on` | loads even though the child's lockfile row says disabled. It never excuses a manifest that **drifted**: a grant overrides a decision, not the record of what was reviewed |
+
+The child's admin sees a forced plugin with its switch locked and "Set by the
+root tenant"; its engine answers enable or disable on one with **409**. Only a
+root operator clearing the grant (`{"state": null}`) gives the decision back.
+
+How it works:
+
+* **Where it lives.** `tenant_plugin_grants` (migration 160,
+  `robothor/plugins/grants.py`), one row per `(tenant_id, plugin)` with who set
+  it and when. Not in `crm_tenants.settings`: a child admin may PATCH its own
+  tenant's settings, and a save replaces the whole object.
+* **When it applies.** The engine reads its own tenant's grants **once per
+  plugin generation**, not per load. The bridge reloads the child's engine
+  right after writing the grant and says in the answer whether that worked
+  (`reloaded`, `reload_status`, `reload`). A reload that failed leaves the
+  grant saved; it applies on that engine's next reload or restart.
+* **Fail closed.** If the grant read errors, every plugin that was forced off
+  at the last successful read stays refused, a forced `on` falls back to the
+  child's lockfile, and the error is logged. The last forced-off set is also
+  persisted beside the lockfile (`plugins.lock.forced-off.json`), so it holds
+  across a restart with the database down. With nothing to fall back on at all
+  (a brand-new engine whose first read fails), the failure is not cached and
+  the next load asks again.
+* **The audit trail.** Every grant writes a `plugin.grant` event filed under
+  the CHILD tenant, so the child's admins can see who decided.
+* **What the root can name.** The child tenant must be a descendant of the
+  root (404 otherwise); the root itself is a 422, because it decides for itself
+  with enable and disable. A grant names a distribution, stored and matched in
+  its PEP 503 canonical form (`Acme_Tools` is `acme-tools`); the child's engine
+  needs that distribution installed for `on` to load anything.
+* **Who sees what on the page.** Install, record and remove appear only for
+  the root operator at home, since the bridge refuses them to anybody else.
 
 #### Three namespaces, and the field that keeps them apart
 

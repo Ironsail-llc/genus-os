@@ -99,6 +99,7 @@ set on each:
 |---|---|---|
 | The child's engine | `ROBOTHOR_TENANT_ID` and `ROBOTHOR_DEFAULT_TENANT` | the child's id (both the same) |
 | The child's engine | `GENUS_EVENT_CONSUMER_GROUP` | `engine-<child id>`, so engines do not share one event-consumer group |
+| The child's engine | `ROBOTHOR_WORKSPACE` | a directory of its own, never the root's. The engine keeps its plugin lockfile there, and a child admin enables and disables plugins in it; on a shared workspace that would reach the root and every sibling. (`ROBOTHOR_PLUGIN_LOCKFILE` alone also separates the lockfile.) |
 | The bridge | `GENUS_TENANT_ENGINE_URLS` | a JSON object mapping each child id to its engine's URL, e.g. `{"acme-child-a": "http://127.0.0.1:18811"}` |
 | The bridge AND every engine | `GENUS_TENANT_SWITCH_MODE` | the same value everywhere (`off`, `observe` or `enforce`) |
 
@@ -131,6 +132,47 @@ Every tenant shares one vault master key. A credential the bridge stores while a
 - **Google Workspace** is not a vault row: it is a file secret mounted into one
   engine (`engine.googleWorkspace` in the chart). Give each tenant's engine its
   own secret. Two engines sharing one would read and send one mailbox for both.
+
+## Plugins are per tenant
+
+Each tenant's engine loads plugins from its own lockfile, so the child decides
+which installed plugins it runs. The chart gives every cell its own workspace,
+and with it its own lockfile; on a single host that is the `ROBOTHOR_WORKSPACE`
+row above. Each engine claims its lockfile for its tenant at boot (a
+`plugins.lock.tenant` marker beside it; the root's engine takes the claim
+back from a child), and an engine whose lockfile another tenant's engine
+claimed logs an error and refuses enable, disable and record with a 409 until
+it has a workspace of its own. A child's workspace starts empty: point it at a
+new directory, and the child's agent manifests and plugin lockfile live
+there. Its admins manage that on the Helm's
+Settings › Plugins page, which lists and toggles the **acting** tenant's
+engine. A root admin switched into the child manages the child's plugins the
+same way.
+
+What is installed stays root: install, remove and record (sync) are root-only
+and act on the root's engine unless the request names a tenant in the root's
+tree.
+
+The root can also force a plugin for one child. As a root owner or admin
+**at home** (not switched in), the Plugins page shows a "For a child tenant"
+control on each plugin card: pick the child, then **Force on**, **Force off**
+or **Let it decide**. Over HTTP it is
+`PUT /api/plugins/{name}/tenants/{tenant_id}` with `{"state": "on" | "off" | null}`.
+The bridge writes the grant, audits it under the child, and reloads the
+child's engine. If that reload fails the answer says so, and the grant
+applies on that engine's next reload or restart.
+
+What the child sees: a forced plugin's switch is locked with "Set by the root
+tenant", and enable or disable on it is refused (409). A plugin forced off is
+not imported at all, and a read error on the grants keeps it refused (fail
+closed). The full rules are in [PLUGINS.md, Per tenant](../PLUGINS.md#per-tenant).
+
+To check a child's grants directly:
+
+```sql
+SELECT plugin, state, set_by, set_at FROM tenant_plugin_grants
+WHERE tenant_id = 'acme-child-a' ORDER BY plugin;
+```
 
 ## Add people to a child
 

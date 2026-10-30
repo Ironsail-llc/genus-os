@@ -371,6 +371,13 @@ def load_plugins(
         logger.warning("Plugin lockfile could not be read (%s); ignoring it", type(exc).__name__)
         lock = _lockfile.Lockfile()
 
+    # The root tenant's grants for this engine's tenant, cached per generation
+    # in `grants.forced_states` (no database read per call), and fail closed:
+    # a read that errors keeps the last forced-off set refused.
+    from robothor.plugins import grants as _grants
+
+    forced_by_root = _grants.forced_states()
+
     # One manifest digest per DISTRIBUTION, not per entry point. `genus-hostinfo`
     # publishes into three groups, so the un-memoized version read and hashed
     # its manifest three times per load on top of the three the parse costs.
@@ -397,7 +404,19 @@ def load_plugins(
         # has already run. A distribution with no row is unconstrained -- the
         # lockfile governs what it has been told about, and `genus plugin sync`
         # is what tells it.
-        refusal = _lockfile.refusal_for(getattr(ep, "dist", None), lock, digests=digests)
+        # The ROOT's decision before the child's: a plugin forced off is
+        # refused whatever the child's lockfile says (a missing row included),
+        # and one forced on skips only the row's `enabled: false`.
+        forced = forced_by_root.get(_grants.canonical(distribution)) if distribution else None
+        if forced == "off":
+            result.failures.append(
+                PluginFailure(name, group, _grants.ROOT_DISABLED_REASON, distribution)
+            )
+            logger.info("Plugin %r not loaded: %s", name, _grants.ROOT_DISABLED_REASON)
+            continue
+        refusal = _lockfile.refusal_for(
+            getattr(ep, "dist", None), lock, digests=digests, ignore_disabled=forced == "on"
+        )
         if refusal is not None:
             result.failures.append(PluginFailure(name, group, refusal, distribution))
             logger.info("Plugin %r not loaded: %s", name, refusal)

@@ -271,6 +271,26 @@ describe("what the session exposes about the acting tenant", () => {
     expect(JSON.stringify(session)).not.toContain("acting-acme-child-a-token");
   });
 
+  it("names the root tenant, so the page can tell a root operator at home", async () => {
+    vi.stubEnv("ROBOTHOR_PLATFORM_TENANT", "acme-parent");
+    const session = await publicBridgeSessionCallback({
+      session: { user: { name: "Alice" }, expires: "2099-01-01T00:00:00.000Z" } as Session,
+      token: homeToken(),
+    });
+
+    expect(session.rootTenantId).toBe("acme-parent");
+  });
+
+  it("drops the root tenant with the rest when the bridge session is gone", async () => {
+    vi.stubEnv("ROBOTHOR_PLATFORM_TENANT", "acme-parent");
+    const session = await publicBridgeSessionCallback({
+      session: { user: { name: "Alice" }, expires: "2099-01-01T00:00:00.000Z" } as Session,
+      token: homeToken({ bridgeAccess: undefined }),
+    });
+
+    expect(session.rootTenantId).toBeUndefined();
+  });
+
   it("server-side session keeps the bearer for the BFF", async () => {
     const session = await bridgeSessionCallback({
       session: { user: { name: "Alice" }, expires: "2099-01-01T00:00:00.000Z" } as Session,
