@@ -44,7 +44,7 @@ vi.mock("@/hooks/use-agents", () => ({
 }));
 
 vi.mock("@/hooks/use-dashboard-agent", () => ({
-  useDashboardAgent: vi.fn(),
+  useDashboardAgent: () => ({ error: null, retry: vi.fn(), dismiss: vi.fn() }),
 }));
 
 vi.mock("@/lib/api/health", () => ({

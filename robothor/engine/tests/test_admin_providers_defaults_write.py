@@ -10,7 +10,8 @@ What these tests hold down:
 
 * the write lands in the engine's manifest dir and the read route then
   returns it, with no restart and no second call;
-* only the ``model.primary`` / ``model.fallbacks`` keys change;
+* only the ``model.primary`` / ``model.fallbacks`` keys change, plus
+  ``model.canvas`` (the visual canvas's model) when the body names it;
 * a model the engine's catalog does not list is refused before anything is
   written;
 * the write is atomic: a failure mid-write leaves the old file intact and no
@@ -91,6 +92,7 @@ class TestWrite:
         assert body == {
             "primary": "openrouter/openai/gpt-5.4",
             "fallbacks": ["ollama_chat/qwen3:8b"],
+            "canvas": None,
         }
 
     def test_the_read_route_returns_what_was_just_written(self, agents) -> None:
@@ -107,6 +109,7 @@ class TestWrite:
         assert client.get("/api/admin/defaults").json() == {
             "primary": "openrouter/openai/gpt-5.4",
             "fallbacks": [],
+            "canvas": None,
         }
 
     def test_the_write_resets_the_defaults_cache(self, agents, monkeypatch) -> None:
@@ -333,3 +336,91 @@ class TestUnwritableManifestDir:
         response = self._put_with_write_raising(OSError(28, "No space left on device"))
         assert response.status_code == 503
         assert "OSError" in response.json()["detail"]
+
+
+class TestCanvasModel:
+    """``model.canvas``: the model the visual canvas draws with.
+
+    Optional and validated like the primary. Absent from the body means "leave
+    it as it is", so a caller that only knows about the primary cannot wipe
+    it; an explicit null means "same as the fleet default" and removes it.
+    """
+
+    def test_a_canvas_model_is_written_and_read_back(self, agents) -> None:
+        client = _client()
+        response = client.put(
+            "/api/admin/defaults",
+            json={
+                "model": "openrouter/openai/gpt-5.4",
+                "fallbacks": [],
+                "canvas": "ollama_chat/qwen3:8b",
+            },
+        )
+        assert response.status_code == 200
+        assert response.json()["canvas"] == "ollama_chat/qwen3:8b"
+        written = yaml.safe_load((agents / "_defaults.yaml").read_text())
+        assert written["model"]["canvas"] == "ollama_chat/qwen3:8b"
+        assert client.get("/api/admin/defaults").json() == {
+            "primary": "openrouter/openai/gpt-5.4",
+            "fallbacks": [],
+            "canvas": "ollama_chat/qwen3:8b",
+        }
+
+    def test_an_unknown_canvas_model_is_refused_like_an_unknown_primary(self, agents) -> None:
+        response = _client().put(
+            "/api/admin/defaults",
+            json={"model": "openrouter/openai/gpt-5.4", "fallbacks": [], "canvas": "made/up"},
+        )
+        assert response.status_code == 422
+        assert response.json()["detail"] == "unknown model id(s): made/up"
+        assert not (agents / "_defaults.yaml").exists()
+
+    def test_a_body_without_canvas_leaves_the_configured_one_alone(self, agents) -> None:
+        path = _write(
+            agents,
+            {"model": {"primary": "old/model", "canvas": "ollama_chat/qwen3:8b"}},
+        )
+        _client().put(
+            "/api/admin/defaults",
+            json={"model": "openrouter/openai/gpt-5.4", "fallbacks": []},
+        )
+        assert yaml.safe_load(path.read_text())["model"]["canvas"] == "ollama_chat/qwen3:8b"
+
+    def test_a_null_canvas_means_same_as_the_fleet_and_removes_the_key(self, agents) -> None:
+        path = _write(
+            agents,
+            {"model": {"primary": "old/model", "canvas": "ollama_chat/qwen3:8b"}},
+        )
+        response = _client().put(
+            "/api/admin/defaults",
+            json={"model": "openrouter/openai/gpt-5.4", "fallbacks": [], "canvas": None},
+        )
+        assert response.status_code == 200
+        assert response.json()["canvas"] is None
+        assert "canvas" not in yaml.safe_load(path.read_text())["model"]
+
+    def test_the_canvas_chain_sees_the_new_model_without_a_restart(
+        self, agents, monkeypatch
+    ) -> None:
+        """The write reloads the defaults the canvas reads, in the same request."""
+        from robothor.engine.dashboards import completions
+
+        monkeypatch.delenv("DASHBOARD_MODEL", raising=False)
+        monkeypatch.delenv("ROBOTHOR_LAST_RESORT_MODEL", raising=False)
+        monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(agents.parent))
+        monkeypatch.setenv("ROBOTHOR_MANIFEST_DIR", str(agents))
+        _write(agents, {"model": {"primary": "old/model"}})
+        assert completions.dashboard_model_chain() == ["old/model"]
+
+        _client().put(
+            "/api/admin/defaults",
+            json={
+                "model": "openrouter/openai/gpt-5.4",
+                "fallbacks": [],
+                "canvas": "ollama_chat/qwen3:8b",
+            },
+        )
+        assert completions.dashboard_model_chain() == [
+            "ollama_chat/qwen3:8b",
+            "openrouter/openai/gpt-5.4",
+        ]

@@ -106,6 +106,9 @@ class DefaultsWrite(BaseModel):
 
     model: str = Field(min_length=1)
     fallbacks: list[str] = Field(default_factory=list)
+    #: The model the visual canvas draws with. Absent leaves the configured
+    #: one alone; ``null`` means "same as the fleet default" and removes it.
+    canvas: str | None = Field(default=None, min_length=1)
 
 
 def _timestamps_for_vault_slots() -> dict[str, str]:
@@ -295,8 +298,17 @@ def _write_defaults_atomically(path: Path, data: dict[str, Any]) -> None:
         raise
 
 
-def _merge_model_block(path: Path, primary: str, fallbacks: list[str]) -> None:
+#: ``_merge_model_block``'s "leave ``model.canvas`` as it is".
+_KEEP: Any = object()
+
+
+def _merge_model_block(
+    path: Path, primary: str, fallbacks: list[str], canvas: str | None = _KEEP
+) -> None:
     """Set ``model.primary`` / ``model.fallbacks`` and change nothing else.
+
+    ``canvas`` sets ``model.canvas`` (the visual canvas's model) when given;
+    ``None`` removes it, so the canvas follows the fleet default again.
 
     Everything already in the file survives, including the other keys inside
     ``model:``: a hand-written ``temperature`` is not collateral for changing a
@@ -317,6 +329,10 @@ def _merge_model_block(path: Path, primary: str, fallbacks: list[str]) -> None:
         model_block = dict(existing.get("model") or {})
         model_block["primary"] = primary
         model_block["fallbacks"] = list(fallbacks)
+        if canvas is None:
+            model_block.pop("canvas", None)
+        elif canvas is not _KEEP:
+            model_block["canvas"] = canvas
         existing["model"] = model_block
         _write_defaults_atomically(path, existing)
 
@@ -331,6 +347,16 @@ def _routable_model_ids() -> set[str]:
     catalog = {entry["id"] for entry in known_models()}
     catalog.update(provider.default_model for provider in key_pool.PROVIDERS)
     return catalog
+
+
+def _defaults_payload(defaults: dict[str, Any]) -> dict[str, Any]:
+    """The fleet default model block in the shape ``GET /defaults`` answers."""
+    model_block = defaults.get("model") or {}
+    return {
+        "primary": model_block.get("primary"),
+        "fallbacks": list(model_block.get("fallbacks") or []),
+        "canvas": model_block.get("canvas") or None,
+    }
 
 
 def _validate_test_model(spec: key_pool.ProviderSpec, model: str) -> None:
@@ -567,12 +593,7 @@ def register(app: FastAPI) -> None:
         """
         from robothor.engine import config as engine_config
 
-        defaults = engine_config._load_defaults(_manifest_dir())
-        model_block = defaults.get("model") or {}
-        return {
-            "primary": model_block.get("primary"),
-            "fallbacks": list(model_block.get("fallbacks") or []),
-        }
+        return _defaults_payload(engine_config._load_defaults(_manifest_dir()))
 
     @router.put("/defaults")
     async def write_defaults(body: DefaultsWrite) -> dict[str, Any]:
@@ -588,11 +609,14 @@ def register(app: FastAPI) -> None:
         from robothor.engine import config as engine_config
 
         known = _routable_model_ids()
-        unknown = [name for name in [body.model, *body.fallbacks] if name not in known]
+        named = [body.model, *body.fallbacks]
+        if body.canvas is not None:
+            named.append(body.canvas)
+        unknown = sorted({name for name in named if name not in known})
         if unknown:
             raise HTTPException(
                 status_code=422,
-                detail=f"unknown model id(s): {', '.join(sorted(unknown))}",
+                detail=f"unknown model id(s): {', '.join(unknown)}",
             )
 
         manifest_dir = _manifest_dir()
@@ -603,6 +627,7 @@ def register(app: FastAPI) -> None:
                 manifest_dir / "_defaults.yaml",
                 body.model,
                 list(body.fallbacks),
+                body.canvas if "canvas" in body.model_fields_set else _KEEP,
             )
         except OSError as exc:
             # A read-only or full manifest dir (a ConfigMap-backed workspace,
@@ -616,12 +641,7 @@ def register(app: FastAPI) -> None:
                 ),
             ) from exc
         engine_config.reset_defaults_cache()
-        defaults = engine_config._load_defaults(manifest_dir)
-        model_block = defaults.get("model") or {}
-        return {
-            "primary": model_block.get("primary"),
-            "fallbacks": list(model_block.get("fallbacks") or []),
-        }
+        return _defaults_payload(engine_config._load_defaults(manifest_dir))
 
     @router.post("/defaults/reload")
     async def reload_defaults() -> dict[str, Any]:

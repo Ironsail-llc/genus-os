@@ -30,7 +30,7 @@ def test_it_returns_the_primary_and_fallbacks_from_the_defaults_file(tmp_path, m
 
     engine_config.reset_defaults_cache()
     body = _client().get("/api/admin/defaults").json()
-    assert body == {"primary": "openrouter/z-ai/glm-5", "fallbacks": ["x/y"]}
+    assert body == {"primary": "openrouter/z-ai/glm-5", "fallbacks": ["x/y"], "canvas": None}
 
 
 def test_a_missing_defaults_file_is_an_instance_without_defaults_not_an_error(
@@ -44,7 +44,7 @@ def test_a_missing_defaults_file_is_an_instance_without_defaults_not_an_error(
     engine_config.reset_defaults_cache()
     response = _client().get("/api/admin/defaults")
     assert response.status_code == 200
-    assert response.json() == {"primary": None, "fallbacks": []}
+    assert response.json() == {"primary": None, "fallbacks": [], "canvas": None}
 
 
 def test_reading_does_not_change_the_file(tmp_path, monkeypatch) -> None:
@@ -59,3 +59,17 @@ def test_reading_does_not_change_the_file(tmp_path, monkeypatch) -> None:
     engine_config.reset_defaults_cache()
     _client().get("/api/admin/defaults")
     assert path.read_text() == before
+
+
+def test_it_returns_the_canvas_model_when_one_is_configured(tmp_path, monkeypatch) -> None:
+    agents = tmp_path / "agents"
+    agents.mkdir()
+    (agents / "_defaults.yaml").write_text(
+        yaml.safe_dump({"model": {"primary": "a/b", "canvas": "vertex_ai/fast"}})
+    )
+    monkeypatch.setattr(admin_providers, "_manifest_dir", lambda: agents)
+    from robothor.engine import config as engine_config
+
+    engine_config.reset_defaults_cache()
+    body = _client().get("/api/admin/defaults").json()
+    assert body == {"primary": "a/b", "fallbacks": [], "canvas": "vertex_ai/fast"}

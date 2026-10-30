@@ -20,7 +20,9 @@ vi.mock("@/hooks/use-visual-state", () => ({
     pendingAgentData: mockVisual.pendingAgentData,
   }),
 }));
-vi.mock("@/hooks/use-dashboard-agent", () => ({ useDashboardAgent: vi.fn() }));
+vi.mock("@/hooks/use-dashboard-agent", () => ({
+  useDashboardAgent: () => ({ error: null, retry: vi.fn(), dismiss: vi.fn() }),
+}));
 vi.mock("@/lib/dashboard/error-reporter", () => ({ reportDashboardError: vi.fn() }));
 
 describe("LiveCanvas — first load", () => {

@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import re
+from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Request
@@ -62,17 +63,48 @@ class DashboardCompletionResponse(BaseModel):
     content: str
 
 
-def dashboard_model() -> str:
-    """Return the operator-selected OpenRouter model in LiteLLM format."""
+def dashboard_model_chain(manifest_dir: Path | None = None) -> list[str]:
+    """The models the canvas tries, in order; the first that answers wins.
 
-    configured = os.environ.get("DASHBOARD_MODEL", "").strip()
-    model = configured or DEFAULT_DASHBOARD_MODEL
-    if not _MODEL_ID_RE.fullmatch(model):
+    ``DASHBOARD_MODEL`` (an operator override) first, then the fleet defaults'
+    ``model.canvas`` (the Providers page's "Canvas model"), then the fleet's
+    own ``model.primary``, then the instance's model of last resort. No
+    provider prefix is added: an id is dialled as written, so the canvas
+    works on whichever provider the instance holds a key for. Only when
+    nothing at all is configured does the historical default apply.
+
+    The defaults are read through the same cached loader the admin defaults
+    routes use, so a ``PUT /api/admin/defaults`` or a reload is seen here
+    without a restart.
+    """
+    from robothor.engine import config as engine_config
+
+    override = os.environ.get("DASHBOARD_MODEL", "").strip()
+    if override and not _MODEL_ID_RE.fullmatch(override):
         logger.error("DASHBOARD_MODEL is not a valid model identifier")
         raise RuntimeError("invalid dashboard model configuration")
-    if not model.startswith("openrouter/"):
-        model = f"openrouter/{model}"
-    return model
+
+    directory = manifest_dir or engine_config.EngineConfig.from_env().manifest_dir
+    block = engine_config._load_defaults(Path(directory)).get("model") or {}
+    if not isinstance(block, dict):
+        block = {}
+
+    candidates = [
+        override,
+        block.get("canvas"),
+        block.get("primary"),
+        engine_config.last_resort_model(),
+    ]
+    chain: list[str] = []
+    for candidate in candidates:
+        model = str(candidate).strip() if candidate else ""
+        if not model or model in chain:
+            continue
+        if not _MODEL_ID_RE.fullmatch(model):
+            logger.warning("Skipping an invalid model id in the dashboard model chain")
+            continue
+        chain.append(model)
+    return chain or [DEFAULT_DASHBOARD_MODEL]
 
 
 def _completion_content(response: Any) -> str:
@@ -138,7 +170,7 @@ async def dashboard_completion(request: Request) -> DashboardCompletionResponse:
                 {"role": "system", "content": payload.system_prompt},
                 {"role": "user", "content": payload.user_prompt},
             ],
-            model=dashboard_model(),
+            model=dashboard_model_chain(),
             temperature=temperature,
             json_mode=json_mode,
             timeout=timeout,
