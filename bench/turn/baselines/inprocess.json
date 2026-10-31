@@ -1,6 +1,61 @@
 {
-  "empty": true,
   "half": "inprocess",
-  "note": "No baseline recorded yet. Record one on the reference machine with `python -m bench.turn ... --update-baseline` and commit this file.",
-  "summary": {}
+  "host": {
+    "machine": "aarch64",
+    "python": "3.12.16"
+  },
+  "recorded_at": "2026-10-31T14:04:42+00:00",
+  "runs": 20,
+  "summary": {
+    "db_statements": {
+      "n": 20,
+      "p50": 64.0,
+      "p95": 80.0
+    },
+    "done_ms": {
+      "n": 20,
+      "p50": 56.385145988315344,
+      "p95": 66.80332502292003
+    },
+    "finalize_tail_ms": {
+      "n": 20,
+      "p50": 1.6208750021178275,
+      "p95": 4.353101790184156
+    },
+    "first_llm_ms": {
+      "n": 20,
+      "p50": 37.88587500457652,
+      "p95": 43.863589619286365
+    },
+    "prompt_tokens": {
+      "n": 20,
+      "p50": 38439.0,
+      "p95": 38439.0
+    },
+    "setup_ms": {
+      "n": 20,
+      "p50": 10.0,
+      "p95": 14.100000000000001
+    },
+    "setup_total_ms": {
+      "n": 20,
+      "p50": 14.0,
+      "p95": 17.200000000000003
+    },
+    "tool_ms": {
+      "n": 20,
+      "p50": 0.0,
+      "p95": 0.0
+    },
+    "tool_overhead_ms": {
+      "n": 20,
+      "p50": 5.877,
+      "p95": 7.1690000000000005
+    },
+    "tool_schemas": {
+      "n": 20,
+      "p50": 216.0,
+      "p95": 216.0
+    }
+  }
 }
