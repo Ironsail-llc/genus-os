@@ -54,7 +54,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_INTERACTIVE_LIMIT = 3
+#: 0 = uncapped. Interactive turns were never queued before lanes, and a cap
+#: held by open ``ask_user`` questions would queue a person silently.
+DEFAULT_INTERACTIVE_LIMIT = 0
 DEFAULT_BACKGROUND_LIMIT = 2
 DEFAULT_BACKGROUND_YIELD_MS = 200
 
@@ -66,8 +68,23 @@ class Lane(StrEnum):
 
 #: The lane the current task's work belongs to. Unset means background.
 _LANE: contextvars.ContextVar[Lane | None] = contextvars.ContextVar("execution_lane", default=None)
-#: True inside a run that already holds a lane slot.
-_HOLDING: contextvars.ContextVar[bool] = contextvars.ContextVar("lane_slot_held", default=False)
+
+
+class _Holder:
+    """The slot a run holds. Tasks the run creates copy a reference to it, and
+    see ``released`` once the run ends, so leftover work stops riding on it."""
+
+    __slots__ = ("lane", "released")
+
+    def __init__(self, lane: Lane) -> None:
+        self.lane = lane
+        self.released = False
+
+
+#: The slot held by the run this task belongs to, if any.
+_HOLDING: contextvars.ContextVar[_Holder | None] = contextvars.ContextVar(
+    "lane_slot_held", default=None
+)
 
 
 def lanes_enabled() -> bool:
@@ -79,11 +96,16 @@ def lanes_enabled() -> bool:
 
 
 def current_lane() -> Lane | None:
+    """The lane of the current work. Work still running after the run that
+    created it has ended is background, whatever lane that run was in."""
+    holder = _HOLDING.get()
+    if holder is not None and holder.released:
+        return Lane.BACKGROUND
     return _LANE.get()
 
 
 def is_interactive() -> bool:
-    return _LANE.get() is Lane.INTERACTIVE
+    return current_lane() is Lane.INTERACTIVE
 
 
 @contextmanager
@@ -94,6 +116,18 @@ def in_lane(lane: Lane) -> Iterator[None]:
         yield
     finally:
         _LANE.reset(token)
+
+
+@contextmanager
+def detached() -> Iterator[None]:
+    """Create fire-and-forget work here: it runs in the background lane and any
+    run it starts takes its own background slot instead of the creator's."""
+    lane, held = _LANE.set(Lane.BACKGROUND), _HOLDING.set(None)
+    try:
+        yield
+    finally:
+        _HOLDING.reset(held)
+        _LANE.reset(lane)
 
 
 def lane_for_trigger(trigger_type: Any) -> Lane:
@@ -109,7 +143,7 @@ def _publish(lane: Lane, active: int, waiting: int) -> None:
 
 class _LaneState:
     def __init__(self, limit: int) -> None:
-        self.limit = max(1, int(limit))
+        self.limit = max(0, int(limit))  # 0 = uncapped
         self.active = 0
         self.waiters: deque[asyncio.Future[None]] = deque()
         # Waiters a freed slot was handed to, until they resume or are cancelled.
@@ -148,7 +182,14 @@ class ExecutionLanes:
         _publish(lane, st.active, st.waiting)
 
     async def _yield_to_interactive(self) -> None:
-        """Wait (bounded) while an interactive turn is queued for a slot."""
+        """Wait (bounded) while an interactive turn is queued for a slot.
+
+        The lanes' slots are separate, so this frees no interactive slot. What
+        the two lanes still share is the event loop, the CPU and local
+        inference; starting background work later leaves those to the turns
+        already running. It only applies when the interactive lane is capped
+        (ROBOTHOR_MAX_CONCURRENT_INTERACTIVE > 0): uncapped, nothing waits.
+        """
         with self._lock:
             if self._yield_s <= 0 or not self._states[Lane.INTERACTIVE].waiters:
                 return
@@ -179,7 +220,7 @@ class ExecutionLanes:
             await self._yield_to_interactive()
         st = self._states[lane]
         with self._lock:
-            if st.active < st.limit and not st.waiters:
+            if (st.limit == 0 or st.active < st.limit) and not st.waiters:
                 st.active += 1
                 self._publish_locked(lane)
                 return
@@ -299,7 +340,8 @@ def lane_gated(
 
     @functools.wraps(fn)
     async def gated(*args: _P.args, **kwargs: _P.kwargs) -> _R:
-        if _HOLDING.get() or not lanes_enabled():
+        holder = _HOLDING.get()
+        if (holder is not None and not holder.released) or not lanes_enabled():
             return await fn(*args, **kwargs)
         try:
             bound = parameters.bind_partial(*args, **kwargs).arguments
@@ -307,10 +349,12 @@ def lane_gated(
             return await fn(*args, **kwargs)
         lane = lane_for_trigger(bound.get("trigger_type", default))
         async with get_lanes().slot(lane):
-            held, current = _HOLDING.set(True), _LANE.set(lane)
+            mine = _Holder(lane)
+            held, current = _HOLDING.set(mine), _LANE.set(lane)
             try:
                 return await fn(*args, **kwargs)
             finally:
+                mine.released = True
                 _LANE.reset(current)
                 _HOLDING.reset(held)
 
@@ -344,7 +388,7 @@ class LaneExecutor(ThreadPoolExecutor):
         )
 
     def submit(self, fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Future[Any]:
-        if _LANE.get() is Lane.INTERACTIVE:
+        if current_lane() is Lane.INTERACTIVE:
             return self._interactive.submit(fn, *args, **kwargs)
         return super().submit(fn, *args, **kwargs)
 
