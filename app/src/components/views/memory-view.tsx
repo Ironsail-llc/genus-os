@@ -88,6 +88,8 @@ export interface Fact {
   supersededBy: number | null;
   /** Set by an operator's edit: when, and by whom. */
   operatorConfirmed: { at: string | null; by: string | null } | null;
+  /** An edit the embedding provider could not embed: ranked by the old wording. */
+  embeddingStale: boolean;
 }
 
 /** What the operator is typing into one fact's editor. */
@@ -164,6 +166,7 @@ export function normalizeFact(entry: unknown): Fact | null {
     createdAt: str(row.created_at),
     supersededBy: typeof row.superseded_by === "number" ? row.superseded_by : null,
     operatorConfirmed: confirmation(row.operator_confirmed),
+    embeddingStale: row.embedding_stale === true,
   };
 }
 
@@ -665,6 +668,14 @@ export function MemoryView({ visible = true, role, roleLoading = false }: Memory
                     className="shrink-0 rounded-full border border-primary/30 bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary"
                   >
                     Operator-confirmed
+                  </span>
+                ) : null}
+                {fact.embeddingStale ? (
+                  <span
+                    data-testid={`memory-index-pending-${fact.id}`}
+                    className="min-w-0 break-words text-[10px] text-muted-foreground"
+                  >
+                    search index pending: ranked by the previous wording until re-indexed
                   </span>
                 ) : null}
               </div>
