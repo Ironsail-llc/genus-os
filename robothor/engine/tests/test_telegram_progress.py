@@ -74,6 +74,7 @@ async def test_one_message_is_edited_on_a_throttle_then_finalised():
     progress = _progress(bot)
 
     text = await _stream(progress, deltas=20, every=0.06)
+    await asyncio.sleep(INTERVAL * 1.5)  # the throttle catches up before the run ends
     sent = await progress.finalise("**Done.** The answer.")
 
     ids = {e[1] for e in bot.edits}

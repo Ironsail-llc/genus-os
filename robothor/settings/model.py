@@ -1303,6 +1303,19 @@ class ChannelSettings(SettingsGroup):
         "@name of the Telegram bot, shown on the dashboard so an operator can "
         "find the right conversation.",
     )
+    channel_streaming: bool = declare(
+        False,
+        "ROBOTHOR_CHANNEL_STREAMING",
+        "Stream replies into Telegram and into plugin channels that pass a "
+        "stream callback: Telegram edits one progress message in place, at "
+        "most once a second, with a line for the tool that is running, and "
+        "finalises it as the formatted answer. A transient stream failure "
+        "(connection reset, 5xx, 529) is retried once on the same model before "
+        "the chain falls back. Off, Telegram sends the answer as one new "
+        "message after the run, as before. The dashboard chat is unaffected.",
+        since="unreleased",
+        restart_required=False,
+    )
     telegram_rich_messages: bool = declare(
         True,
         "ROBOTHOR_TELEGRAM_RICH_MESSAGES",

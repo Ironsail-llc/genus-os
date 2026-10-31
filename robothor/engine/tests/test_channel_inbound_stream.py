@@ -75,8 +75,10 @@ async def test_flag_off_ignores_the_stream(monkeypatch, flag):
     flag(False)
     plain, streamed = _ScopeRecordingRunner(), _ScopeRecordingRunner()
 
-    await _handle(monkeypatch, _allow(), plain)
-    await _handle(monkeypatch, _allow(), streamed, stream=_stream)
+    # record_turn=False: the harness's fake session is shared, and the first
+    # call's recorded turn would otherwise become the second call's history.
+    await _handle(monkeypatch, _allow(), plain, record_turn=False)
+    await _handle(monkeypatch, _allow(), streamed, stream=_stream, record_turn=False)
 
     assert "on_content" not in streamed.calls[0]
     assert streamed.calls[0] == plain.calls[0]
