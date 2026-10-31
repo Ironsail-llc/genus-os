@@ -82,6 +82,24 @@ describe("useBridgePoll", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("does not read on reload while the caller is hidden", async () => {
+    // A Refresh button on a pane that is not showing (the Logs lines pane while
+    // journald is unavailable) must not send the request the pane would send.
+    const fetchMock = mockFetch(() => ({ status: 200, body: { count: 1 } }));
+    render(<Probe visible={false} />);
+    screen.getByTestId("reload").click();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("reads on reload while the caller is visible", async () => {
+    const fetchMock = mockFetch((n) => ({ status: 200, body: { count: n } }));
+    render(<Probe visible paused />);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    screen.getByTestId("reload").click();
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+  });
+
   it("reads once on mount and again every 60 seconds", async () => {
     const fetchMock = mockFetch((n) => ({ status: 200, body: { count: n } }));
     render(<Probe visible />);

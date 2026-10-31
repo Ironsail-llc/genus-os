@@ -372,6 +372,10 @@ length = stream_length("email")
 
 Define per-agent permissions in `agent_capabilities.json`:
 
+The bridge refuses a request carrying an agent's service token (for example
+`log_interaction`) with 403 `agent not authorized` unless that agent is listed
+under `agents`; `default_policy` does not apply to it.
+
 ```json
 {
   "default_policy": "allow",

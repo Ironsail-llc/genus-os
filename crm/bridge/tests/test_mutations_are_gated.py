@@ -313,8 +313,8 @@ EXPECTED_ROUTER_MODULES = frozenset(
         # above — a mount that silently stopped contributing these routes would
         # leave every gate assertion in test_users_router.py vacuously green.
         "routers.users",
-        # Forgetting a fact: the only network-reachable way to change what the
-        # fleet believes. Named rather than only counted because /api/memory is
+        # Forgetting or editing a fact: the only network-reachable ways to change
+        # what the fleet believes. Named rather than only counted because /api/memory is
         # on the justification allowlist below — so if this router stopped
         # contributing routes, the prefix would keep the count honest while the
         # one gated route under it disappeared.
@@ -338,9 +338,10 @@ def test_the_app_actually_exposes_mutation_routes() -> None:
     # is to notice an enumeration collapse, and one set 28 routes below reality
     # would have let nearly half the mutation surface disappear silently. Raise
     # it whenever routes are added, the same way the module ratchets are kept
-    # tight. -> 73 with the memory forget preview and the forget itself.
+    # tight. -> 73 with the memory forget preview and the forget itself. -> 74 with
+    # the memory edit.
     routes = _mutation_routes()
-    assert len(routes) >= 73, f"route enumeration collapsed — only found {len(routes)}"
+    assert len(routes) >= 74, f"route enumeration collapsed — only found {len(routes)}"
 
     seen = {route.endpoint.__module__ for route in routes}
     missing = EXPECTED_ROUTER_MODULES - seen

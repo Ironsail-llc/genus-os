@@ -31,11 +31,14 @@ must run them in its worker threadpool rather than the event loop (see
 
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from robothor.flags import store
 from robothor.flags.evidence import verdict
+from routers._audit import audited
 from routers._operator import (  # noqa: F401 - re-exported for existing importers (e.g. conftest.py)
     OPERATOR_ROLES,
     PLATFORM_TENANT,
@@ -48,7 +51,36 @@ router = APIRouter(prefix="/api/controls", tags=["controls"])
 
 class FlagPatch(BaseModel):
     value: str
-    reason: str
+    # ``Any`` and checked in the handler, as ``memory_facts.ForgetRequest``
+    # does: a ``str`` annotation turns a missing or non-text reason into
+    # pydantic's nested ``{"detail": [...]}`` body, and every refusal of a
+    # reason on this route is one flat sentence.
+    reason: Any = None
+
+
+#: The longest reason accepted. It is stored in ``feature_flag_audit`` and
+#: carried in the ``control.set`` audit event, which is exported to a SIEM; a
+#: sentence explaining a guardrail change fits in far less.
+MAX_REASON = 500
+
+
+def _reason(raw: Any) -> str:
+    """The operator's sentence, trimmed, or a flat 422.
+
+    The UI already refuses a blank reason; this is the rule, the button is
+    the hint. ``feature_flag_audit.reason`` and the audit event answer "who
+    widened this, and why" months later, and whitespace answers neither.
+    """
+    if raw is not None and not isinstance(raw, str):
+        raise HTTPException(status_code=422, detail="a reason must be text")
+    text = (raw or "").strip()
+    if not text:
+        raise HTTPException(status_code=422, detail="a reason is required to change a flag")
+    if len(text) > MAX_REASON:
+        raise HTTPException(
+            status_code=422, detail=f"a reason must be at most {MAX_REASON} characters"
+        )
+    return text
 
 
 # The unset-default rule moved WHOLE into ``robothor.flags.store``, beside
@@ -101,5 +133,8 @@ def set_control(name: str, patch: FlagPatch, request: Request) -> dict[str, str]
         raise HTTPException(status_code=404, detail="unknown flag")
     if patch.value not in store.valid_values_for(name):
         raise HTTPException(status_code=422, detail="invalid value")
-    store.set_flag(name, patch.value, actor=actor, reason=patch.reason)
+    reason = _reason(patch.reason)
+    store.set_flag(name, patch.value, actor=actor, reason=reason)
+    # Identifiers and the chosen rung only, plus the operator's own sentence.
+    audited(request, "control.set", action=name, value=patch.value, reason=reason)
     return {"name": name, "value": patch.value}

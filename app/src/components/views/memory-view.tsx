@@ -41,8 +41,14 @@ import { BRIDGE_UNREACHABLE } from "@/lib/bridge/use-bridge-poll";
  * A warning that cries wolf is the one that gets ignored, so a short fact says
  * "too short to check" and warns about nothing.
  *
- * No optimistic updates anywhere: a row changes because the forget's own
- * response said so, or because a 409 said the row was already stale.
+ * `PATCH …/facts/{id}` **corrects** one active fact — its text, its entities
+ * or both — with a reason. The bridge keeps the original in the fact history
+ * first and marks the row `operator_confirmed`, which is the badge here. A
+ * correction that would duplicate another active fact is a 409, and the
+ * editor stays open with the draft so the operator can change it.
+ *
+ * No optimistic updates anywhere: a row changes because the forget's or the
+ * edit's own response said so, or because a 409 said the row was already stale.
  */
 
 const BRIDGE = "/api/bridge";
@@ -56,6 +62,10 @@ const WIDE_LIMIT = 200;
 
 const REASON_MIN = 3;
 const REASON_MAX = 500;
+/** The bridge's ceilings for an edited fact: trimmed text, entity count, one name. */
+const FACT_TEXT_MAX = 2000;
+const ENTITIES_MAX = 50;
+const ENTITY_CHARS_MAX = 200;
 
 type ActiveFilter = "true" | "false" | "all";
 
@@ -76,6 +86,36 @@ export interface Fact {
   source: string | null;
   createdAt: string | null;
   supersededBy: number | null;
+  /** Set by an operator's edit: when, and by whom. */
+  operatorConfirmed: { at: string | null; by: string | null } | null;
+  /** An edit the embedding provider could not embed: ranked by the old wording. */
+  embeddingStale: boolean;
+}
+
+/** What the operator is typing into one fact's editor. */
+interface EditDraft {
+  text: string;
+  /** Comma-separated, as typed; {@link entityList} is what is saved. */
+  entities: string;
+  reason: string;
+}
+
+/**
+ * The comma-separated entities field as the list it saves: trimmed, no blanks,
+ * and no repeats ignoring case (the bridge's rule), keeping the first spelling.
+ */
+export function entityList(raw: string): string[] {
+  const names: string[] = [];
+  const seen = new Set<string>();
+  for (const part of raw.split(",")) {
+    const name = part.trim();
+    const key = name.toLowerCase();
+    if (name && !seen.has(key)) {
+      seen.add(key);
+      names.push(name);
+    }
+  }
+  return names;
 }
 
 interface References {
@@ -90,6 +130,13 @@ interface Preview {
   wouldDeactivate: number[];
   references: References;
   alreadyInactive: boolean;
+}
+
+/** `record` without the row `id` — a closed card or editor, by key. */
+function without<T>(record: Record<number, T>, id: number): Record<number, T> {
+  const next = { ...record };
+  delete next[id];
+  return next;
 }
 
 function str(value: unknown): string | null {
@@ -118,7 +165,15 @@ export function normalizeFact(entry: unknown): Fact | null {
     source: str(row.source),
     createdAt: str(row.created_at),
     supersededBy: typeof row.superseded_by === "number" ? row.superseded_by : null,
+    operatorConfirmed: confirmation(row.operator_confirmed),
+    embeddingStale: row.embedding_stale === true,
   };
+}
+
+function confirmation(value: unknown): Fact["operatorConfirmed"] {
+  if (!value || typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  return { at: str(record.at), by: str(record.by) };
 }
 
 function normalizePreview(body: unknown): Preview {
@@ -221,6 +276,9 @@ export function MemoryView({ visible = true, role, roleLoading = false }: Memory
   const [previews, setPreviews] = useState<Record<number, Preview>>({});
   const [reasons, setReasons] = useState<Record<number, string>>({});
   const reasonRefs = useRef<Record<number, HTMLInputElement | null>>({});
+  const [drafts, setDrafts] = useState<Record<number, EditDraft>>({});
+  const editReasonRefs = useRef<Record<number, HTMLInputElement | null>>({});
+  const editTextRefs = useRef<Record<number, HTMLTextAreaElement | null>>({});
 
   const { busyRow, rowErrors, act, clearRow } = useRowActions();
 
@@ -302,11 +360,7 @@ export function MemoryView({ visible = true, role, roleLoading = false }: Memory
 
   const closePreview = useCallback(
     (id: number) => {
-      setPreviews((previous) => {
-        const next = { ...previous };
-        delete next[id];
-        return next;
-      });
+      setPreviews((previous) => without(previous, id));
       clearRow(String(id));
     },
     [clearRow]
@@ -322,11 +376,7 @@ export function MemoryView({ visible = true, role, roleLoading = false }: Memory
         (body) => {
           const fact = normalizeFact((body as Record<string, unknown>)?.fact);
           if (fact) replaceFact(fact);
-          setPreviews((previous) => {
-            const next = { ...previous };
-            delete next[id];
-            return next;
-          });
+          setPreviews((previous) => without(previous, id));
           setReasons((previous) => ({ ...previous, [id]: "" }));
         },
         (res) => {
@@ -341,11 +391,7 @@ export function MemoryView({ visible = true, role, roleLoading = false }: Memory
             setFacts((previous) =>
               previous.map((row) => (row.id === id ? { ...row, isActive: false } : row))
             );
-            setPreviews((previous) => {
-              const next = { ...previous };
-              delete next[id];
-              return next;
-            });
+            setPreviews((previous) => without(previous, id));
           }
           // Anything the server refused about the request itself belongs beside
           // the only field the operator can change.
@@ -354,6 +400,79 @@ export function MemoryView({ visible = true, role, roleLoading = false }: Memory
       );
     },
     [act, reasons, replaceFact]
+  );
+
+  const openEditor = useCallback(
+    (fact: Fact) => {
+      clearRow(String(fact.id));
+      setDrafts((previous) => ({
+        ...previous,
+        [fact.id]: { text: fact.factText, entities: fact.entities.join(", "), reason: "" },
+      }));
+    },
+    [clearRow]
+  );
+
+  const closeEditor = useCallback(
+    (id: number) => {
+      setDrafts((previous) => without(previous, id));
+      clearRow(String(id));
+    },
+    [clearRow]
+  );
+
+  const updateDraft = useCallback((id: number, change: Partial<EditDraft>) => {
+    setDrafts((previous) => {
+      const current = previous[id];
+      return current ? { ...previous, [id]: { ...current, ...change } } : previous;
+    });
+  }, []);
+
+  const saveEdit = useCallback(
+    (id: number) => {
+      const draft = drafts[id];
+      if (!draft) return;
+      void act(
+        String(id),
+        `${BRIDGE}/api/memory/facts/${id}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            fact_text: draft.text,
+            entities: entityList(draft.entities),
+            reason: draft.reason,
+          }),
+        },
+        (body) => {
+          const fact = normalizeFact((body as Record<string, unknown>)?.fact);
+          if (fact) replaceFact(fact);
+          setDrafts((previous) => without(previous, id));
+        },
+        (res, message) => {
+          // A 409 that says the fact is inactive is Forget's 409: the page's
+          // row is stale. The row catches up and the editor closes with it —
+          // the sentence stays on the row — because nothing can be done to a
+          // fact that is no longer believed.
+          if (res.status === 409 && /inactive/i.test(message)) {
+            setFacts((previous) =>
+              previous.map((row) => (row.id === id ? { ...row, isActive: false } : row))
+            );
+            setDrafts((previous) => without(previous, id));
+            return;
+          }
+          // Otherwise the draft stays, and the operator is put back in the
+          // field the refusal is about: the reason when it names the reason,
+          // the text for everything else (a duplicate, a text the prune would
+          // retire).
+          if (res.status === 422 && /reason/i.test(message)) {
+            editReasonRefs.current[id]?.focus();
+          } else {
+            editTextRefs.current[id]?.focus();
+          }
+        }
+      );
+    },
+    [act, drafts, replaceFact]
   );
 
   const searching = query.length > 0;
@@ -517,6 +636,7 @@ export function MemoryView({ visible = true, role, roleLoading = false }: Memory
           const reason = reasons[fact.id] ?? "";
           const trimmed = reason.trim().length;
           const reasonOk = trimmed >= REASON_MIN && reason.length <= REASON_MAX;
+          const draft = drafts[fact.id];
 
           return (
             <div
@@ -534,6 +654,28 @@ export function MemoryView({ visible = true, role, roleLoading = false }: Memory
                     className="shrink-0 rounded-full border border-warning/30 bg-warning/10 px-2 py-0.5 text-[10px] font-medium text-warning"
                   >
                     inactive
+                  </span>
+                ) : null}
+                {fact.operatorConfirmed ? (
+                  <span
+                    data-testid={`memory-confirmed-${fact.id}`}
+                    title={[
+                      fact.operatorConfirmed.by,
+                      fact.operatorConfirmed.at ? when(fact.operatorConfirmed.at) : null,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")}
+                    className="shrink-0 rounded-full border border-primary/30 bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary"
+                  >
+                    Operator-confirmed
+                  </span>
+                ) : null}
+                {fact.embeddingStale ? (
+                  <span
+                    data-testid={`memory-index-pending-${fact.id}`}
+                    className="min-w-0 break-words text-[10px] text-muted-foreground"
+                  >
+                    search index pending: ranked by the previous wording until re-indexed
                   </span>
                 ) : null}
               </div>
@@ -588,8 +730,17 @@ export function MemoryView({ visible = true, role, roleLoading = false }: Memory
                 </p>
               ) : null}
 
-              {fact.isActive && !preview ? (
+              {fact.isActive && !preview && !draft ? (
                 <div className="flex items-center gap-2 pt-0.5">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    data-testid={`memory-edit-${fact.id}`}
+                    disabled={busyRow === id}
+                    onClick={() => openEditor(fact)}
+                  >
+                    Edit
+                  </Button>
                   <Button
                     variant="outline"
                     size="sm"
@@ -600,6 +751,23 @@ export function MemoryView({ visible = true, role, roleLoading = false }: Memory
                     {busyRow === id ? "Checking…" : "Forget"}
                   </Button>
                 </div>
+              ) : null}
+
+              {draft ? (
+                <FactEditor
+                  id={fact.id}
+                  draft={draft}
+                  busy={busyRow === id}
+                  onChange={(change) => updateDraft(fact.id, change)}
+                  onSave={() => saveEdit(fact.id)}
+                  onCancel={() => closeEditor(fact.id)}
+                  reasonRef={(element) => {
+                    editReasonRefs.current[fact.id] = element;
+                  }}
+                  textRef={(element) => {
+                    editTextRefs.current[fact.id] = element;
+                  }}
+                />
               ) : null}
 
               {preview ? (
@@ -721,9 +889,147 @@ export function MemoryView({ visible = true, role, roleLoading = false }: Memory
 
       <p className="max-w-3xl pb-2 text-[11px] text-muted-foreground">
         Forgetting bounds a fact; it never deletes one. The row keeps its text and its provenance,
-        gains an end date, and stops being retrieved. The audit record carries the fact id and the
-        reason — never the text.
+        gains an end date, and stops being retrieved. Editing keeps the original text in the
+        fact&rsquo;s history and marks the fact operator-confirmed. Either way the audit record
+        carries the fact id and the reason — never the text.
       </p>
+    </div>
+  );
+}
+
+interface FactEditorProps {
+  id: number;
+  draft: EditDraft;
+  busy: boolean;
+  onChange: (change: Partial<EditDraft>) => void;
+  onSave: () => void;
+  onCancel: () => void;
+  reasonRef: (element: HTMLInputElement | null) => void;
+  textRef: (element: HTMLTextAreaElement | null) => void;
+}
+
+/** One fact's inline editor. The draft lives in the view; this only renders it. */
+function FactEditor({
+  id,
+  draft,
+  busy,
+  onChange,
+  onSave,
+  onCancel,
+  reasonRef,
+  textRef,
+}: FactEditorProps) {
+  const chips = entityList(draft.entities);
+  // Counted trimmed, as the bridge counts it.
+  const text = draft.text.trim();
+  const textOk = text.length > 0 && text.length <= FACT_TEXT_MAX;
+  const entitiesNote =
+    chips.length > ENTITIES_MAX
+      ? `A fact may carry at most ${ENTITIES_MAX} entities.`
+      : chips.some((name) => name.length > ENTITY_CHARS_MAX)
+        ? `An entity name may be at most ${ENTITY_CHARS_MAX} characters.`
+        : null;
+  const reasonLength = draft.reason.trim().length;
+  const reasonOk = reasonLength >= REASON_MIN && draft.reason.length <= REASON_MAX;
+
+  return (
+    <div
+      data-testid={`memory-editor-${id}`}
+      className="flex min-w-0 flex-col gap-2 rounded-md border border-border bg-muted/40 p-3"
+    >
+      <p className="text-[11px] text-muted-foreground">
+        The current text is kept in the fact&rsquo;s history before it changes, and the fact is
+        marked operator-confirmed.
+      </p>
+      <textarea
+        data-testid={`memory-edit-text-${id}`}
+        aria-label="Fact text"
+        value={draft.text}
+        ref={textRef}
+        rows={3}
+        onChange={(event) => onChange({ text: event.target.value })}
+        className="w-full min-w-0 resize-y rounded-md border border-input bg-background px-2 py-1.5 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      />
+      {!textOk ? (
+        <span data-testid={`memory-edit-text-note-${id}`} className="text-[10px] text-destructive">
+          {text.length === 0
+            ? "A fact cannot be edited into nothing — forget it instead."
+            : `A fact may be at most ${FACT_TEXT_MAX} characters (${text.length} now).`}
+        </span>
+      ) : null}
+
+      <div className="flex min-w-0 flex-col gap-1">
+        <Input
+          data-testid={`memory-edit-entities-${id}`}
+          aria-label="Entities, separated by commas"
+          placeholder="Entities, separated by commas"
+          value={draft.entities}
+          onChange={(event) => onChange({ entities: event.target.value })}
+          className="h-8 w-full text-sm"
+        />
+        <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+          {chips.length === 0 ? (
+            <span className="text-[10px] text-muted-foreground">Filed under no entity</span>
+          ) : (
+            chips.map((name) => (
+              <span
+                key={name}
+                data-testid={`memory-edit-chip-${id}-${name}`}
+                className="rounded-full border border-border bg-muted px-2 py-0.5 text-[10px] text-muted-foreground"
+              >
+                {name}
+              </span>
+            ))
+          )}
+        </div>
+        {entitiesNote ? (
+          <span
+            data-testid={`memory-edit-entities-note-${id}`}
+            className="text-[10px] text-destructive"
+          >
+            {entitiesNote}
+          </span>
+        ) : null}
+      </div>
+
+      <div className="flex min-w-0 flex-col gap-1">
+        <Input
+          data-testid={`memory-edit-reason-${id}`}
+          aria-label="Reason for the edit"
+          placeholder="Why is this being corrected? (recorded in the audit log)"
+          value={draft.reason}
+          ref={reasonRef}
+          onChange={(event) => onChange({ reason: event.target.value })}
+          className="h-8 w-full text-sm"
+        />
+        <span
+          data-testid={`memory-edit-reason-count-${id}`}
+          className={`text-[10px] ${
+            draft.reason.length > REASON_MAX ? "text-destructive" : "text-muted-foreground"
+          }`}
+        >
+          {draft.reason.length} / {REASON_MAX} — at least {REASON_MIN} characters
+        </span>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <Button
+          size="sm"
+          data-testid={`memory-edit-save-${id}`}
+          disabled={!textOk || entitiesNote !== null || !reasonOk || busy}
+          onClick={onSave}
+        >
+          {busy ? "Saving…" : "Save"}
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          data-testid={`memory-edit-cancel-${id}`}
+          onClick={onCancel}
+        >
+          Cancel
+        </Button>
+      </div>
     </div>
   );
 }

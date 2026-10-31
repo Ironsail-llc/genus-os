@@ -456,6 +456,114 @@ def test_no_journalctl_is_available_false_with_a_reason(
     assert controls_client_as_operator.get(UNITS).status_code == 200
 
 
+def test_the_logs_url_is_a_declared_credential_free_setting():
+    """``GENUS_LOGS_URL`` is declared, optional, and never held as a secret.
+
+    It is a link an operator's browser opens, so it must be credential-free: a
+    value that needed redacting would be a value the page could not show.
+    """
+    from robothor.settings.registry import field_index
+
+    info = field_index()["GENUS_LOGS_URL"]
+    assert info["secret"] is False
+    assert info["default"] in ("", None)
+
+
+def test_unavailable_units_say_where_the_logs_are_instead(
+    controls_client_as_operator, journal, monkeypatch
+):
+    """The container case is not a fault: the payload says what to do."""
+    from routers import logs
+
+    monkeypatch.setattr(logs, "_which", lambda _name: None)
+    monkeypatch.delenv("GENUS_LOGS_URL", raising=False)
+    response = controls_client_as_operator.get(UNITS)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["available"] is False
+    assert body["units"] == []
+    assert "standard output" in body["hint"]
+    assert "log tool" in body["hint"]
+    assert body["logs_url"] is None
+
+
+def test_unavailable_units_carry_the_configured_logs_url(
+    controls_client_as_operator, journal, monkeypatch
+):
+    from routers import logs
+
+    from robothor.settings import reset_settings
+
+    monkeypatch.setattr(logs, "_which", lambda _name: None)
+    monkeypatch.setenv("GENUS_LOGS_URL", "https://logs.example.invalid/search")
+    reset_settings()
+    body = controls_client_as_operator.get(UNITS).json()
+    assert body["available"] is False
+    assert body["logs_url"] == "https://logs.example.invalid/search"
+    assert body["hint"].strip()
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://alice:hunter2@example.com/search",
+        "https://alice@example.com/search",
+        "https://:hunter2@example.com/search",
+    ],
+)
+def test_a_logs_url_carrying_credentials_is_never_served(
+    controls_client_as_operator, journal, monkeypatch, caplog, url
+):
+    """Credential-free is enforced, not just documented.
+
+    Every operator sees the link, so a URL with userinfo in it is treated as
+    unset, and the warning that says so does not repeat the URL.
+    """
+    import logging
+
+    from routers import logs
+
+    from robothor.settings import reset_settings
+
+    monkeypatch.setattr(logs, "_which", lambda _name: None)
+    monkeypatch.setenv("GENUS_LOGS_URL", url)
+    reset_settings()
+    with caplog.at_level(logging.WARNING, logger=logs.logger.name):
+        body = controls_client_as_operator.get(UNITS).json()
+    assert body["available"] is False
+    assert body["logs_url"] is None
+    assert any("GENUS_LOGS_URL" in record.getMessage() for record in caplog.records)
+    assert "hunter2" not in caplog.text
+    assert "example.com" not in caplog.text
+
+
+def test_a_journalctl_that_fails_gets_no_container_hint(
+    controls_client_as_operator, journal, monkeypatch
+):
+    """journalctl is installed but failed: a systemd host, not a container.
+
+    Telling that operator to use a cluster's log tool would point them at a
+    cluster that does not exist. The configured URL still travels.
+    """
+    from robothor.settings import reset_settings
+
+    journal.state["returncode"] = 1
+    monkeypatch.setenv("GENUS_LOGS_URL", "https://logs.example.invalid/search")
+    reset_settings()
+    body = controls_client_as_operator.get(UNITS).json()
+    assert body["available"] is False
+    assert "hint" not in body
+    assert body["logs_url"] == "https://logs.example.invalid/search"
+
+
+def test_available_units_carry_no_hint(controls_client_as_operator, journal, monkeypatch):
+    """The hint is for the unavailable case only; a journald box lists units."""
+    monkeypatch.setenv("GENUS_LOGS_URL", "https://logs.example.invalid/search")
+    body = controls_client_as_operator.get(UNITS).json()
+    assert body["available"] is True
+    assert "hint" not in body
+
+
 def test_a_non_zero_probe_is_available_false(controls_client_as_operator, journal):
     journal.state["returncode"] = 1
     body = controls_client_as_operator.get(UNITS).json()

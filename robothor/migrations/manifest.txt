@@ -181,5 +181,6 @@ crm/155_knowledge_base.sql
 crm/156_n8n_integration.sql
 crm/157_run_workflow_tool_denies.sql
 crm/158_operation_action_proposer.sql
-crm/159_audit_log_tenant.sql
-crm/160_tenant_plugin_grants.sql
+crm/161_session_rotation_grace.sql
+crm/162_audit_log_tenant.sql
+crm/163_tenant_plugin_grants.sql
