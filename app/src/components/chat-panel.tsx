@@ -1764,7 +1764,8 @@ export function ChatPanel({
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            onPaste={(e) => { if (e.clipboardData?.files?.length) { e.preventDefault(); void attachments.add(e.clipboardData.files); } }}
+            // Files only when the paste carries no text: Word, Excel and OneNote put a picture beside it.
+            onPaste={(e) => { const c = e.clipboardData; if (c?.files?.length && !Array.from(c.types ?? []).includes("text/plain")) { e.preventDefault(); void attachments.add(c.files); } }}
             placeholder={deepMode ? "Ask a deep reasoning question..." : planMode ? "Describe what you want planned..." : isStreaming ? "Add to the running task..." : "Ask me anything..."}
             className={`flex-1 resize-none rounded-lg border bg-background px-3 py-2 text-sm min-h-[44px] max-h-[120px] focus:outline-none focus:ring-1 ${deepMode ? "border-primary/30 focus:ring-primary/50" : planMode ? "border-warning/30 focus:ring-warning/50" : "border-border focus:ring-ring"}`}
             rows={1}
