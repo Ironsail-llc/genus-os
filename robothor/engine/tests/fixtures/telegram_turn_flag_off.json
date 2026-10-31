@@ -1,0 +1,51 @@
+{
+  "bot": [
+    [
+      "send_message",
+      {
+        "chat_id": 12345,
+        "parse_mode": null,
+        "text": "\u2728 Thinking..."
+      }
+    ],
+    [
+      "edit_message_text",
+      {
+        "chat_id": 12345,
+        "message_id": 42,
+        "parse_mode": null,
+        "text": "\ud83d\udd27 Searching the web..."
+      }
+    ],
+    [
+      "delete_message",
+      {
+        "chat_id": 12345,
+        "message_id": 42
+      }
+    ],
+    [
+      "send_message",
+      {
+        "chat_id": 12345,
+        "parse_mode": "HTML",
+        "text": "<b>Tides</b> rise twice a day."
+      }
+    ]
+  ],
+  "execute": {
+    "agent_id": "main",
+    "conversation_history": null,
+    "identity": null,
+    "live_inbox": "<LiveInbox>",
+    "message": "hello",
+    "model_override": null,
+    "on_status": "<callable>",
+    "on_tool": "<callable>",
+    "tenant_id": "test-tenant",
+    "trigger_detail": "chat:12345",
+    "trigger_type": "telegram",
+    "user_id": "telegram:12345",
+    "user_role": "user"
+  }
+}
