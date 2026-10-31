@@ -60,6 +60,17 @@ describe("FleetView payload", () => {
   });
 });
 
+describe("FleetView unreadable reply", () => {
+  it("says the bridge could not be read when a 200 body fails to parse", async () => {
+    vi.spyOn(global, "fetch").mockResolvedValue({
+      ok: true,
+      json: async () => { throw new SyntaxError("Unexpected token <"); },
+    } as unknown as Response);
+    render(<FleetView visible />);
+    expect(await screen.findByText("Could not reach the bridge.")).toBeTruthy();
+  });
+});
+
 describe("FleetView cache", () => {
   it("paints from cache without a request when shown again within a minute", async () => {
     const spy = vi.spyOn(global, "fetch").mockResolvedValue({

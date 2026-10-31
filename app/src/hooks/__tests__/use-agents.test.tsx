@@ -11,11 +11,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAgents } from "../use-agents";
 
 function Reader({ id }: { id: string }) {
-  const { summary, isLoading } = useAgents();
+  const { summary, isLoading, error } = useAgents();
   return (
-    <span data-testid={id}>
-      {isLoading ? "loading" : `${summary.healthy}/${summary.total}`}
-    </span>
+    <>
+      <span data-testid={id}>
+        {isLoading ? "loading" : `${summary.healthy}/${summary.total}`}
+      </span>
+      <span data-testid={`${id}-error`}>{error ? `${error.endpoint} ${error.status}` : ""}</span>
+    </>
   );
 }
 
@@ -109,5 +112,17 @@ describe("useAgents — shared data layer", () => {
     expect(signals[0].aborted).toBe(false);
     unmount();
     await waitFor(() => expect(signals[0].aborted).toBe(true));
+  });
+});
+
+describe("useAgents — a reply that cannot be read", () => {
+  it("reports a 200 whose body fails to parse as no answer, not as zero agents", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => { throw new SyntaxError("Unexpected token <"); },
+    }) as unknown as Response));
+    render(withClient(<Reader id="a" />));
+    await waitFor(() => expect(screen.getByTestId("a-error").textContent).toBe("/api/actions/execute 0"));
   });
 });
