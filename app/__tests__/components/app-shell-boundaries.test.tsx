@@ -168,26 +168,27 @@ describe("AppShell surface boundaries", () => {
     vi.restoreAllMocks();
   });
 
-  it("keeps the sidebar and views when the chat panel throws", () => {
+  it("keeps the sidebar and views when the chat panel throws", async () => {
     chatThrows = true;
     render(<AppShell />);
     expect(screen.getByTestId("sidebar")).toBeInTheDocument();
     const notice = screen.getByTestId("surface-error-chat");
     expect(notice).toHaveTextContent(/Chat/);
     fireEvent.click(screen.getByTestId("nav-tasks"));
-    expect(screen.getByTestId("task-board")).toBeInTheDocument();
+    // A view may load on first visit, so wait for it rather than expect it now.
+    expect(await screen.findByTestId("task-board")).toBeInTheDocument();
   });
 
-  it("keeps the chat panel and other views when one view throws", () => {
+  it("keeps the chat panel and other views when one view throws", async () => {
     tasksThrow = true;
     render(<AppShell />);
     expect(screen.getByTestId("chat-panel")).toBeInTheDocument();
     // The failed view is hidden while another view is active.
     expect(screen.queryByTestId("surface-error-tasks")).toBeNull();
     fireEvent.click(screen.getByTestId("nav-tasks"));
-    expect(screen.getByTestId("surface-error-tasks")).toHaveTextContent(/Tasks/);
+    expect(await screen.findByTestId("surface-error-tasks")).toHaveTextContent(/Tasks/);
     fireEvent.click(screen.getByTestId("nav-dashboard"));
-    expect(screen.getByTestId("dashboard-view").style.display).toBe("flex");
+    expect((await screen.findByTestId("dashboard-view")).style.display).toBe("flex");
     expect(screen.queryByTestId("surface-error-tasks")).toBeNull();
   });
 

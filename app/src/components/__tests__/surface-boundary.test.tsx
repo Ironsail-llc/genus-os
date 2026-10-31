@@ -6,7 +6,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { useEffect } from "react";
+import { Component, useEffect, type ReactNode } from "react";
 import { SurfaceBoundary } from "@/components/surface-boundary";
 
 let shouldThrow = true;
@@ -105,5 +105,56 @@ describe("SurfaceBoundary", () => {
       </SurfaceBoundary>,
     );
     expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("passes a chunk that failed to download up to the boundary above it", () => {
+    // A failed download is not a render failure: Retry cannot fetch a chunk
+    // the server no longer has, and the loader above owns the Reload panel.
+    function ChunkMissing(): ReactNode {
+      const err = new Error("Loading chunk 123 failed.");
+      err.name = "ChunkLoadError";
+      throw err;
+    }
+    class Outer extends Component<{ children: ReactNode }, { caught: string | null }> {
+      state = { caught: null as string | null };
+      static getDerivedStateFromError(error: Error) {
+        return { caught: error.name };
+      }
+      render() {
+        return this.state.caught ? <p>outer caught {this.state.caught}</p> : this.props.children;
+      }
+    }
+    render(
+      <Outer>
+        <SurfaceBoundary name="Goals">
+          <ChunkMissing />
+        </SurfaceBoundary>
+      </Outer>,
+    );
+    expect(screen.getByText("outer caught ChunkLoadError")).toBeInTheDocument();
+    expect(screen.queryByTestId("surface-error-goals")).toBeNull();
+  });
+
+  it("passes up a dynamic-import failure recognised by its message", () => {
+    function ImportFailed(): ReactNode {
+      throw new TypeError("Failed to fetch dynamically imported module: /_next/static/chunks/x.js");
+    }
+    class Outer extends Component<{ children: ReactNode }, { caught: boolean }> {
+      state = { caught: false };
+      static getDerivedStateFromError() {
+        return { caught: true };
+      }
+      render() {
+        return this.state.caught ? <p>outer caught</p> : this.props.children;
+      }
+    }
+    render(
+      <Outer>
+        <SurfaceBoundary name="Goals">
+          <ImportFailed />
+        </SurfaceBoundary>
+      </Outer>,
+    );
+    expect(screen.getByText("outer caught")).toBeInTheDocument();
   });
 });
