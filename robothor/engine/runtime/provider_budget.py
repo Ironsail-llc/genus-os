@@ -163,11 +163,15 @@ class TokenStream:
 
 
 async def assert_provider_authorized() -> None:
-    """A committed stop also prevents a later provider attempt or fallback."""
+    """A committed stop also prevents a later provider attempt or fallback.
+
+    Each attempt reads the stop afresh; the tool calls of the iteration it
+    opens reuse that read (``controls.stopped_for_iteration``).
+    """
     import asyncio
 
     from robothor.engine.runtime.activity import current
-    from robothor.engine.runtime.controls import stopped
+    from robothor.engine.runtime.controls import stopped_for_iteration
     from robothor.engine.runtime.current import active_context
     from robothor.engine.runtime.deadlines import require_time
 
@@ -181,11 +185,13 @@ async def assert_provider_authorized() -> None:
     context = active_context.get()
     if activity and activity.sessions:
         session = next(iter(activity.sessions.values()))
-        if await asyncio.to_thread(stopped, session.run.tenant_id, session.run_id):
+        if await asyncio.to_thread(
+            stopped_for_iteration, session.run.tenant_id, session.run_id, refresh=True
+        ):
             raise DurableStopError("Durable stop denies another provider request")
     elif context is not None:
         # `context and await ...` made the branch's type a union of the context
         # and the bool, which is not what the check means. It also leaned on a
         # frozen dataclass being truthy, which is always true.
-        if await asyncio.to_thread(stopped, context.tenant_id, ""):
+        if await asyncio.to_thread(stopped_for_iteration, context.tenant_id, "", refresh=True):
             raise DurableStopError("Durable stop denies another provider request")
