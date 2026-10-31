@@ -1245,6 +1245,35 @@ def test_one_read_per_request_answers_exactly_what_a_read_per_field_did(
     assert body["pending_restart"] == sorted(operator.units_for(operator.record(RESTART_STR)))
 
 
+def test_a_malformed_file_raises_a_fresh_error_on_every_read_in_the_scope(
+    clean_env, env_workspace
+):
+    """The scope's one read may be a ValueError. Re-raising that one object on
+    every read grows its traceback by a frame chain per read -- hundreds per
+    request -- so each read raises an equal error of its own."""
+    from robothor.settings import sources
+
+    _write_config(env_workspace, "settings: [unclosed\n")
+    raised: list[ValueError] = []
+    with sources.read_settings_once():
+        for _ in range(3):
+            try:
+                sources._read_settings_block()
+            except ValueError as exc:
+                raised.append(exc)
+    assert len(raised) == 3
+    assert len({id(exc) for exc in raised}) == 3, "one error object re-raised"
+    assert len({str(exc) for exc in raised}) == 1, "the same message every time"
+
+    def depth(exc):
+        n, tb = 0, exc.__traceback__
+        while tb is not None:
+            n, tb = n + 1, tb.tb_next
+        return n
+
+    assert depth(raised[0]) == depth(raised[-1])
+
+
 # ── the schema changes only on restart, so the browser may keep it ───────────
 
 
