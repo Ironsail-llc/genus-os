@@ -54,20 +54,49 @@ MAX_FILES = 3
 MAX_FILE_BYTES = 5 * 1024 * 1024
 
 #: What the composer offers: four picture formats and the plain documents the
-#: intake can read into the turn.
-ACCEPTED_MIMES = frozenset(
-    {
-        "image/png",
-        "image/jpeg",
-        "image/gif",
-        "image/webp",
-        "text/plain",
-        "text/markdown",
-        "text/csv",
-        "application/json",
-        "application/pdf",
-    }
-)
+#: intake can read into the turn, each with the family it belongs to.
+_MIME_FAMILY = {
+    "image/png": "image",
+    "image/jpeg": "image",
+    "image/gif": "image",
+    "image/webp": "image",
+    "text/plain": "text",
+    "text/markdown": "text",
+    "text/csv": "text",
+    "application/json": "text",
+    "application/pdf": "pdf",
+}
+ACCEPTED_MIMES = frozenset(_MIME_FAMILY)
+
+#: The extensions a file may carry, and the family each one names. A declared
+#: MIME type is the sender's claim; the extension is what the file will be
+#: opened as, so the two must name the same family (`tool.exe` sent as
+#: `text/plain`, or `evil.png` as text, is refused).
+ACCEPTED_EXTENSIONS = {
+    ".png": "image",
+    ".jpg": "image",
+    ".jpeg": "image",
+    ".gif": "image",
+    ".webp": "image",
+    ".txt": "text",
+    ".md": "text",
+    ".markdown": "text",
+    ".csv": "text",
+    ".json": "text",
+    ".pdf": "pdf",
+}
+
+
+def _bytes_fit(family: str, data: bytes) -> bool:
+    """For a name with no extension, the bytes have to vouch for the type."""
+    from robothor.engine.file_extract import looks_binary
+
+    if family == "image":
+        return attachments.looks_like_an_image(data)
+    if family == "pdf":
+        return data.startswith(b"%PDF")
+    return not looks_binary(data[:8192])
+
 
 CHANNEL = "webchat"
 
@@ -132,6 +161,10 @@ def parse_attachments(raw: Any) -> list[_Incoming]:
             raise AttachmentRefusal(422, "an attachment has no name")
         if not isinstance(mime, str) or mime.strip().lower() not in ACCEPTED_MIMES:
             raise AttachmentRefusal(422, f"{name} is not a supported type")
+        family = _MIME_FAMILY[mime.strip().lower()]
+        suffix = PurePath(name).suffix.lower()
+        if suffix and ACCEPTED_EXTENSIONS.get(suffix) != family:
+            raise AttachmentRefusal(422, f"{name} is not a supported type")
         if not isinstance(data, str):
             raise AttachmentRefusal(422, f"{name} has no data")
         # A cheap bound before decoding: base64 is 4 characters per 3 bytes.
@@ -147,6 +180,8 @@ def parse_attachments(raw: Any) -> list[_Incoming]:
         if declared is not None and declared != len(decoded):
             raise AttachmentRefusal(422, f"{name}'s size does not match its data")
         mime = mime.strip().lower()
+        if not suffix and not _bytes_fit(family, decoded):
+            raise AttachmentRefusal(422, f"{name} is not a supported type")
         if mime.startswith("image/") and not attachments.looks_like_an_image(decoded):
             raise AttachmentRefusal(422, f"{name} is not the picture it claims to be")
         out.append(_Incoming(name=name, mime=mime, data=decoded))

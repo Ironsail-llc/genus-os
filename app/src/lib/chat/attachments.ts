@@ -58,21 +58,51 @@ export interface AttachmentSummary {
   kind: string;
 }
 
-/**
- * The MIME type to send for a file, or null when the turn cannot carry it.
- * A browser often reports no type for `.md` (or a variant like
- * `text/x-markdown`), so the extension decides when the type is missing or
- * not on the list.
- */
-export function attachmentMime(name: string, type: string): string | null {
-  const lowered = (type || "").toLowerCase();
-  if (lowered in ACCEPTED_TYPES) return lowered;
-  const dot = name.lastIndexOf(".");
-  const ext = dot >= 0 ? name.slice(dot).toLowerCase() : "";
+/** "image", "pdf" or "text": what a type, or an extension, says the file is. */
+function familyOf(mime: string): string {
+  return mime.startsWith("image/") ? "image" : mime === "application/pdf" ? "pdf" : "text";
+}
+
+/** ".png" for "shot.PNG"; "" for no extension, as Python's `PurePath.suffix` says (".env" has none). */
+export function extensionOf(name: string): string {
+  const base = name.slice(Math.max(name.lastIndexOf("/"), name.lastIndexOf("\\")) + 1);
+  const dot = base.lastIndexOf(".");
+  return dot <= 0 || dot === base.length - 1 ? "" : base.slice(dot).toLowerCase();
+}
+
+/** The MIME type an accepted extension names, or null. */
+function mimeOfExtension(ext: string): string | null {
   for (const [mime, exts] of Object.entries(ACCEPTED_TYPES)) {
     if (exts.includes(ext)) return mime;
   }
   return null;
+}
+
+/**
+ * Do this name and this declared type describe the same kind of file? An
+ * extension, when there is one, must be on the list and name the same family
+ * as the type: `tool.exe` sent as text, or `evil.png` sent as text, is not.
+ * A name with no extension is the type's word alone here; the engine also
+ * checks the bytes for those.
+ */
+export function nameFitsType(name: string, mime: string): boolean {
+  const ext = extensionOf(name);
+  if (!ext) return true;
+  const named = mimeOfExtension(ext);
+  return named !== null && familyOf(named) === familyOf(mime);
+}
+
+/**
+ * The MIME type to send for a file, or null when the turn cannot carry it.
+ * A browser often reports no type for `.md` (or a variant like
+ * `text/x-markdown`), so the extension decides when the type is missing or
+ * not on the list; when both are present they must agree (`nameFitsType`).
+ */
+export function attachmentMime(name: string, type: string): string | null {
+  const lowered = (type || "").toLowerCase();
+  if (lowered in ACCEPTED_TYPES) return nameFitsType(name, lowered) ? lowered : null;
+  const ext = extensionOf(name);
+  return ext ? mimeOfExtension(ext) : null;
 }
 
 /** "5 B", "2.0 KB", "1.4 MB". */
@@ -93,7 +123,7 @@ export function checkAttachment(item: unknown): { status: number; error: string 
   }
   const { name, mime, size, data } = item as Record<string, unknown>;
   if (typeof name !== "string" || !name.trim()) return { status: 422, error: "an attachment has no name" };
-  if (typeof mime !== "string" || !(mime.toLowerCase() in ACCEPTED_TYPES)) {
+  if (typeof mime !== "string" || !(mime.toLowerCase() in ACCEPTED_TYPES) || !nameFitsType(name, mime.toLowerCase())) {
     return { status: 422, error: `${name} is not a supported type` };
   }
   if (typeof data !== "string" || !/^[A-Za-z0-9+/]*={0,2}$/.test(data) || data.length % 4 !== 0) {
