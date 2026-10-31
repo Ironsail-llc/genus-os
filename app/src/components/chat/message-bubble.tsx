@@ -3,6 +3,8 @@
 import { memo, type ComponentProps } from "react";
 import { ChatRecovery, type ChatRecoveryRequest } from "@/components/chat-recovery";
 import { ChatMarkdown, CHAT_PROSE } from "@/components/chat/chat-markdown";
+import { MessageAttachments } from "@/components/chat/chat-attachments";
+import type { AttachmentSummary } from "@/lib/chat/attachments";
 
 /** One message in the chat's scrollback. */
 export interface ChatBubbleMessage {
@@ -10,6 +12,8 @@ export interface ChatBubbleMessage {
   role: "user" | "assistant";
   content: string;
   recovery?: ChatRecoveryRequest;
+  /** Files sent with a user message. */
+  attachments?: AttachmentSummary[];
   /** Where a message sent while the agent was working went (live follow-ups). */
   note?: string;
 }
@@ -54,7 +58,10 @@ export const MessageBubble = memo(function MessageBubble({ msg, onRecovered }: M
             <ChatMarkdown content={msg.content} />
           )
         ) : (
-          <p>{msg.content}</p>
+          <>
+            {msg.content && <p>{msg.content}</p>}
+            <MessageAttachments attachments={msg.attachments} />
+          </>
         )}
         {msg.note && (
           <p className="mt-1 text-[11px] opacity-75" data-testid="message-note">{msg.note}</p>
