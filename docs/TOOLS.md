@@ -1394,11 +1394,15 @@ exec, `send_file` to another chat, and every GitHub tool without
 | `unlock` | what a person changes for the same call to succeed |
 
 Behavioural rule 22 ships with them: **A refusal names its gate; relay it,
-never claim an inability** — when a tool result has `refused: true`, tell the
-person which gate refused it (`gate`, `gate_name`) and what unlocks it
-(`unlock`), then offer the next step you can take now. Do not look for a way
-round a refusal, and never say you cannot do something no tool refused: if a
-tool you have can do it, do it.
+never claim an inability** — when a tool result has `refused: true` and a
+`gate`, tell the person which gate refused it (`gate`, `gate_name`) and what
+unlocks it (`unlock`), then offer the next step you can take now; do not look
+for a way round it. A `refused: true` without a `gate` is a redirection, not a
+block: change the call as its `reason` says. Never say you cannot do something
+no tool refused: if a tool you have can do it, do it.
+
+The repeat guard's `refused: true` (an identical call run too many times) has
+no `gate` on purpose: it asks for a different call, not a person.
 
 With the setting off, every payload is exactly what it was. A handler that
 refuses builds its payload with `robothor.engine.refusal.refusal()`.
@@ -1410,7 +1414,9 @@ a "What you can do here" block after its instruction and bootstrap files: the
 capabilities its granted tools give it (`exec`, `write_files`, `git_pr`,
 `coding_jobs`, `browser`, `spawn`, `vault_set`, `send_mail`, and `host_exec` for
 `main`), and for each one it lacks, the gate and the unlock (a manifest key, or
-a setting such as `ROBOTHOR_CODING_REPO_ROOTS` or `ROBOTHOR_HOST_EXEC_SOCKET`).
+a setting such as `ROBOTHOR_CODING_REPO_ROOTS` or `ROBOTHOR_HOST_EXEC_SOCKET`). It
+tells the agent to relay a refusal's gate and unlock only when
+`ROBOTHOR_REFUSAL_PAYLOAD_V2` is also on, since only then do refusals carry them.
 It reads only the manifest and the engine's settings, so it is the same on every
 turn of a conversation and the prompt prefix stays cacheable; a settings change
 that alters it rebuilds the prompt. `genus doctor --category capabilities

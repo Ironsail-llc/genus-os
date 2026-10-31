@@ -203,8 +203,12 @@ def facts_for(config: AgentConfig) -> Facts:
     )
 
 
-def render(capabilities: list[Capability], facts: Facts) -> str:
-    """The prompt block. Deterministic for the same input."""
+def render(capabilities: list[Capability], facts: Facts, *, relay_refusals: bool = False) -> str:
+    """The prompt block. Deterministic for the same input.
+
+    ``relay_refusals`` adds the sentence telling the model to relay a refusal's
+    gate and unlock; pass it only when ``ROBOTHOR_REFUSAL_PAYLOAD_V2`` is on.
+    """
     lines = [
         HEADER,
         "",
@@ -232,16 +236,22 @@ def render(capabilities: list[Capability], facts: Facts) -> str:
         "to, and an owner or admin may use everything available above. Scheduled, hook, "
         f"workflow and sub-agent runs act as service role '{facts.service_role}'.",
         "",
-        "Never say you cannot do something listed as available: do it. When a tool is "
-        "refused, its result names the gate and the unlock; tell the person both and "
-        "offer the next step, rather than saying you cannot or looking for a way round.",
+        "Never say you cannot do something listed as available: do it.",
     ]
+    if relay_refusals:
+        # Only when the payload carries them: told to relay a gate the result
+        # does not have, a model invents one (the reason rule 22 is gated too).
+        lines[-1] += (
+            " When a tool is refused, its result names the gate and the unlock; tell the "
+            "person both and offer the next step, rather than saying you cannot or "
+            "looking for a way round."
+        )
     return "\n".join(lines)
 
 
 def capability_block(config: AgentConfig) -> str:
     """The block for ``config``'s system prompt, or ``""`` with the flag off."""
-    from robothor.engine.feature_flags import capability_block_enabled
+    from robothor.engine.feature_flags import capability_block_enabled, refusal_payload_v2_enabled
 
     if not capability_block_enabled():
         return ""
@@ -249,4 +259,4 @@ def capability_block(config: AgentConfig) -> str:
 
     facts = facts_for(config)
     granted = get_registry().get_tool_names(config)
-    return render(assess(granted, facts), facts)
+    return render(assess(granted, facts), facts, relay_refusals=refusal_payload_v2_enabled())

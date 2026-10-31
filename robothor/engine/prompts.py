@@ -81,7 +81,7 @@ HONEST_CLAIMS_RULE = """
 # Ships with the payload it reads: told to relay `gate` and `unlock` while the
 # results do not carry them, a model would invent both.
 REFUSAL_RELAY_RULE = """
-22. **A refusal names its gate; relay it, never claim an inability** — when a tool result has `refused: true`, tell the person which gate refused it (`gate`, `gate_name`) and what unlocks it (`unlock`), then offer the next step you can take now. Do not look for a way round a refusal, and never say you cannot do something no tool refused: if a tool you have can do it, do it."""
+22. **A refusal names its gate; relay it, never claim an inability** — when a tool result has `refused: true` and a `gate`, tell the person which gate refused it (`gate`, `gate_name`) and what unlocks it (`unlock`), then offer the next step you can take now; do not look for a way round it. A `refused: true` without a `gate` is a redirection, not a block: change the call as its `reason` says. Never say you cannot do something no tool refused: if a tool you have can do it, do it."""
 
 
 def behavioral_rules() -> str:
