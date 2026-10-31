@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from psycopg2.extras import RealDictCursor
 
@@ -22,6 +22,9 @@ from robothor.constants import DEFAULT_TENANT
 from robothor.db.connection import get_connection
 from robothor.engine.sanitize import sanitize_log
 from robothor.memory.vector_tuning import apply_hnsw_session
+
+if TYPE_CHECKING:
+    from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -162,6 +165,7 @@ def save_exchange(
     tenant_id: str = DEFAULT_TENANT,
     user_extras: dict[str, Any] | None = None,
     assistant_extras: dict[str, Any] | None = None,
+    user_at: datetime | None = None,
 ) -> list[int]:
     """Upsert session + insert user and assistant messages in one transaction.
 
@@ -172,6 +176,10 @@ def save_exchange(
 
     Returns the inserted chat_messages ids (order: [user_id, assistant_id])
     so the async caller can schedule embedding without re-querying.
+
+    ``user_at`` is when the user's message arrived. Both rows are written when
+    the reply finishes, so without it the prompt is stored at the reply's
+    time; ``None`` keeps the database clock for both.
     """
     # Redacted at the door, not at each caller.
     #
@@ -214,20 +222,20 @@ def save_exchange(
 
         # Insert both messages
         inserted_ids: list[int] = []
-        for role, content, extras in [
-            ("user", user_content, user_extras),
-            ("assistant", assistant_content, assistant_extras),
+        for role, content, extras, at in [
+            ("user", user_content, user_extras, user_at),
+            ("assistant", assistant_content, assistant_extras, None),
         ]:
             payload: dict[str, Any] = {"role": role, "content": content}
             if extras:
                 payload.update(extras)
             cur.execute(
                 """
-                INSERT INTO chat_messages (session_id, message)
-                VALUES (%s, %s::jsonb)
+                INSERT INTO chat_messages (session_id, message, created_at)
+                VALUES (%s, %s::jsonb, COALESCE(%s::timestamptz, NOW()))
                 RETURNING id
                 """,
-                (session_id, json.dumps(payload)),
+                (session_id, json.dumps(payload), at),
             )
             inserted_ids.append(int(cur.fetchone()["id"]))
 
@@ -381,7 +389,7 @@ def load_session(
             SELECT message
             FROM chat_messages
             WHERE session_id = %s
-            ORDER BY created_at DESC
+            ORDER BY id DESC  -- write order; created_at can interleave overlapping turns
             LIMIT %s
             """,
             (session_row["id"], limit),
@@ -395,6 +403,59 @@ def load_session(
             "history": messages,
             "model_override": session_row["model_override"],
         }
+
+
+def load_history_page(
+    session_key: str,
+    *,
+    limit: int,
+    offset: int = 0,
+    before: int | None = None,
+    tenant_id: str = DEFAULT_TENANT,
+) -> dict[str, Any] | None:
+    """One page of a session's stored history, oldest first, with each row's time.
+
+    ``before`` is a ``chat_messages.id`` cursor: the page ends just before it,
+    which stays stable while new turns are appended. ``offset`` skips that many
+    rows back from the cursor (or from the newest row). One row beyond ``limit``
+    is fetched to answer ``hasMore`` without a COUNT.
+
+    Each message is the stored payload plus ``id`` and ``timestamp`` (ISO 8601,
+    the row's ``created_at``). ``None`` when the page has no rows at all.
+    """
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            """
+            SELECT m.id, m.message, m.created_at
+            FROM chat_messages m
+            JOIN chat_sessions s ON s.id = m.session_id
+            WHERE s.tenant_id = %s AND s.session_key = %s
+              AND (%s::bigint IS NULL OR m.id < %s)
+            ORDER BY m.id DESC
+            LIMIT %s OFFSET %s
+            """,
+            (tenant_id, session_key, before, before, limit + 1, offset),
+        )
+        rows = cur.fetchall()
+    if not rows:
+        return None
+    # Redacted on the way OUT as well: rows written before the store redacted
+    # on the way in still hold credentials, and a rule added since applies to
+    # old rows too. The in-memory path gets this from ChatHistory; this one
+    # reads the store directly, so it does it here.
+    from robothor.secrets.redaction import redact_message
+
+    page = rows[:limit]
+    messages = [
+        {
+            **redact_message(row["message"]),
+            "id": row["id"],
+            "timestamp": row["created_at"].isoformat(),
+        }
+        for row in reversed(page)
+    ]
+    return {"messages": messages, "hasMore": len(rows) > limit}
 
 
 def load_all_sessions(
@@ -434,7 +495,7 @@ def load_all_sessions(
                 SELECT message
                 FROM chat_messages
                 WHERE session_id = %s
-                ORDER BY created_at DESC
+                ORDER BY id DESC  -- write order; created_at can interleave overlapping turns
                 LIMIT %s
                 """,
                 (sess["id"], limit_per_session),
@@ -590,6 +651,7 @@ async def save_exchange_async(
     tenant_id: str = DEFAULT_TENANT,
     user_extras: dict[str, Any] | None = None,
     assistant_extras: dict[str, Any] | None = None,
+    user_at: datetime | None = None,
 ) -> list[int] | None:
     """Non-blocking wrapper around save_exchange. Logs warning on failure.
 
@@ -614,6 +676,7 @@ async def save_exchange_async(
                 tenant_id=tenant_id,
                 user_extras=user_extras,
                 assistant_extras=assistant_extras,
+                user_at=user_at,
             ),
         )
     except Exception as e:

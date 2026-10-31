@@ -1655,6 +1655,18 @@ class AuthSettings(SettingsGroup):
         "which would cover every workload in the namespace.",
         since="1.69.0",
     )
+    chat_agent_cache_ttl_ms: int = declare(
+        30_000,
+        "GENUS_CHAT_AGENT_CACHE_TTL_MS",
+        "How long (milliseconds) the DASHBOARD keeps a caller's agent listing "
+        "when checking that a chat message may be sent to the agent it names. "
+        "Kept per dashboard instance and per caller, and only for a listing the "
+        "bridge served; any manifest or agent change made through the dashboard "
+        "forgets it. An agent made unchattable some other way stays addressable "
+        "for at most this long. 0 asks the bridge on every message.",
+        restart_units=("robothor-app",),
+        since="1.123.0",
+    )
     cf_access_team_domain: str = declare(
         "",
         "CF_ACCESS_TEAM_DOMAIN",
@@ -1744,6 +1756,16 @@ class FlagSettings(SettingsGroup):
         "assistant organizes, so it can read them afterwards. Best-effort: "
         "needs the meetings.space.settings OAuth scope, and a failure is a "
         "note on the booking, never a failed booking.",
+    )
+    chat_history_pages: bool = declare(
+        False,
+        "ROBOTHOR_CHAT_HISTORY_PAGES",
+        "Serve chat history from the message store instead of the in-memory "
+        "tail: each message carries its stored time and id, and the endpoint "
+        "pages back past the last 50 (offset, or a before=<id> cursor) with a "
+        "hasMore flag. Off, history is the in-memory tail with no times, as "
+        "before. A first page the store cannot answer falls back to memory.",
+        since="1.123.0",
     )
     curator_apply: bool = declare(
         False,

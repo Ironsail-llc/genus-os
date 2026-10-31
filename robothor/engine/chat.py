@@ -377,6 +377,7 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
     identity = _resolve_webchat_identity(auth)
 
     body = await request.json()
+    received_at = datetime.now(UTC)  # the user row's stored time (chat_store.save_exchange)
     session_key: str = body.get("session_key", "")
     message: str = body.get("message", "")
 
@@ -471,6 +472,7 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
                         model_override=session.model_override,
                         tenant_id=auth.tenant_id,
                         user_extras=attached.extras,
+                        user_at=received_at,
                     )
                 )
 
@@ -572,22 +574,14 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
 
 @router.get("/history")
 async def chat_history(request: Request, session_key: str = "", limit: int = 50) -> JSONResponse:
-    """Return conversation history for a session."""
+    """Return conversation history for a session (a page of it: chat_history_page.py)."""
     auth = _auth_context(request)
     session_key = _effective_session_key(auth, session_key)
     session = _get_session(session_key)
-    messages = session.history[-limit:] if limit > 0 else session.history
+    from robothor.engine.chat_history_page import history_response
 
-    from robothor.engine.runtime.chat_control import recovery_scope
-
-    return JSONResponse(
-        {
-            "sessionKey": session_key,
-            "messages": messages,
-            "recoveryScope": recovery_scope(auth, session_key),
-        },
-        headers={"Cache-Control": "no-store"},
-    )
+    body = await history_response(session.history, session_key, limit, request.query_params, auth)
+    return JSONResponse(body, headers={"Cache-Control": "no-store"})
 
 
 @router.post("/inject")

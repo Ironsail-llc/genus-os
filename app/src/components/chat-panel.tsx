@@ -13,13 +13,22 @@ import {
 import { useVisualState } from "@/hooks/use-visual-state";
 import { useThrottle } from "@/hooks/use-throttle";
 import { MarkerInterceptor, stripMarkers } from "@/lib/engine/marker-interceptor";
-import { ChatRecovery, type ChatRecoveryRequest } from "@/components/chat-recovery";
-import { ChatMarkdown, CHAT_PROSE } from "@/components/chat/chat-markdown";
+import { type ChatRecoveryRequest } from "@/components/chat-recovery";
+import { ChatMarkdown } from "@/components/chat/chat-markdown";
+import { MessageBubble } from "@/components/chat/message-bubble";
+import { useMessageWindow } from "@/components/chat/use-message-window";
+import { useHistoryPager } from "@/components/chat/use-history-pager";
+import { useTurnActions } from "@/components/chat/use-turn-actions";
+import { usePrependAnchor } from "@/components/chat/use-prepend-anchor";
+import { historyToMessages } from "@/lib/chat/history-messages";
+import { usePinnedScroll } from "@/components/chat/use-pinned-scroll";
+import { useStableCallback } from "@/components/chat/use-stable-callback";
+import { readChatStream, type ChatStreamData } from "@/lib/chat/read-chat-stream";
 import { ChatAskCard, type ApprovalKind } from "@/components/chat-ask-card";
 import { ChatLanding } from "@/components/chat/chat-landing";
 import { ToolsPopover } from "@/components/chat/tools-popover";
-import { AttachButton, MessageAttachments, NOT_IN_PLAN_OR_DEEP, NOT_WHILE_RUNNING, PendingAttachments, useChatAttachments } from "@/components/chat/chat-attachments";
-import { attachmentKind, historyAttachments, stripAttachmentNote, type AttachmentSummary } from "@/lib/chat/attachments";
+import { AttachButton, NOT_IN_PLAN_OR_DEEP, NOT_WHILE_RUNNING, PendingAttachments, useChatAttachments } from "@/components/chat/chat-attachments";
+import { attachmentKind, type AttachmentSummary } from "@/lib/chat/attachments";
 import { repeatsQuickAction } from "@/components/business/quick-action-labels";
 import {
   isKeyableAgentId,
@@ -36,7 +45,10 @@ interface ChatMessage {
   id: string;
   role: "user" | "assistant";
   content: string;
-  timestamp: Date;
+  /** Absent for a history row whose time the engine did not send. */
+  timestamp?: Date;
+  /** The stored row id, for history pages. */
+  serverId?: number;
   recovery?: ChatRecoveryRequest;
   /** Where a message sent while the agent was working went (live follow-ups). */
   note?: string;
@@ -221,7 +233,6 @@ export function ChatPanel({
   const [deepElapsed, setDeepElapsed] = useState(0);
   const [, setDeepCost] = useState<{ time_s: number; cost: number } | null>(null);
   const throttledStreamingText = useThrottle(streamingText, 100);
-  const scrollEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   // Live follow-ups: messages typed while a turn runs. The engine takes them
@@ -270,10 +281,24 @@ export function ChatPanel({
 
   const currentAgentName = chattable.find((row) => row.id === agent)?.name ?? aiName;
 
-  // Scroll to bottom on new messages (throttled during streaming)
-  useEffect(() => {
-    scrollEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, throttledStreamingText, activePlan, isDeepReasoning]);
+  // Follow the bottom while the reader is there (throttled during streaming);
+  // sending a message brings them back to it. Keyed on the NEWEST user
+  // message, not a count: an older page from "Load earlier" adds user turns
+  // above the reader and must not throw them to the bottom.
+  const lastSentId = useMemo(() => messages.findLast((m) => m.role === "user")?.id ?? "", [messages]);
+  const { containerRef: scrollRef, onScroll: onPinnedScroll } = usePinnedScroll<HTMLDivElement>(
+    [messages, throttledStreamingText, activePlan, isDeepReasoning],
+    lastSentId,
+  );
+  const { visible: visibleMessages, hiddenCount, showEarlier } = useMessageWindow(messages);
+  const rememberScroll = usePrependAnchor(scrollRef, visibleMessages[0]?.id, visibleMessages.at(-1)?.id);
+  const onListScroll = useCallback(() => {
+    onPinnedScroll();
+    rememberScroll();
+  }, [onPinnedScroll, rememberScroll]);
+  const onBubbleRecovered = useStableCallback(recoverMessage);
+  const historyPager = useHistoryPager(agentQuery, messages, setMessages);
+  const settleHistoryPages = historyPager.settle;
 
   /** An `approval_required` event: the agent asked something and is waiting.
    *
@@ -448,34 +473,7 @@ export function ChatPanel({
         const scope = typeof data.recoveryScope === "string" ? data.recoveryScope : undefined;
         recoveryScopes.current[agent] = scope ?? "";
         {
-          const loaded: ChatMessage[] = (Array.isArray(data.messages) ? data.messages : [])
-            .filter(
-              (m: { role: string }) =>
-                m.role === "user" || m.role === "assistant"
-            )
-            .map(
-              (
-                m: { role: "user" | "assistant"; content: string | Array<{ type: string; text?: string }> },
-                i: number
-              ) => {
-                const files = m.role === "user" ? historyAttachments(m) : [];
-                const text = stripResidualMarkers(
-                  typeof m.content === "string"
-                    ? m.content
-                    : m.content
-                        .filter((b) => b.type === "text")
-                        .map((b) => b.text || "")
-                        .join("")
-                );
-                return {
-                  id: `hist-${i}`,
-                  role: m.role,
-                  content: files.length ? stripAttachmentNote(text) : text,
-                  timestamp: new Date(),
-                  ...(files.length ? { attachments: files } : {}),
-                };
-              }
-            );
+          const loaded: ChatMessage[] = historyToMessages(data.messages);
           const restored: ChatMessage[] = scope ? pendingRequests(scope)
             .filter((requestId) => requestId !== requestIdRef.current)
             .map((requestId) => ({
@@ -483,6 +481,7 @@ export function ChatPanel({
               timestamp: new Date(), recovery: { requestId, agent, scope },
             })) : [];
           setMessages([...loaded, ...restored]);
+          settleHistoryPages(data.hasMore === true);
           setHistorySettledFor(agentQuery);
         }
       })
@@ -494,7 +493,7 @@ export function ChatPanel({
     return () => {
       cancelled = true;
     };
-  }, [agentQuery, agent]);
+  }, [agentQuery, agent, settleHistoryPages]);
 
   // Recover pending plan on page refresh
   //
@@ -636,18 +635,12 @@ export function ChatPanel({
         return;
       }
 
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let sseBuffer = "";
-      let sseEventType = "";
-      let sseData = "";
       let fullResponse = "";
       let gotPlanEvent = false;
       let receivedTerminal = false;
 
-      const handleSSEEvent = (eventType: string, data: string) => {
+      const handleSSEEvent = (eventType: string, parsed: ChatStreamData) => {
         try {
-          const parsed = JSON.parse(data);
           if (handleSharedStreamEvent(eventType, parsed)) {
             return;
           }
@@ -674,31 +667,7 @@ export function ChatPanel({
         } catch { /* skip */ }
       };
 
-      const processLine = (line: string) => {
-        if (line === "") {
-          if (sseData) handleSSEEvent(sseEventType || "delta", sseData);
-          sseEventType = "";
-          sseData = "";
-        } else if (line.startsWith("event: ")) {
-          sseEventType = line.slice(7);
-        } else if (line.startsWith("data: ")) {
-          sseData += (sseData ? "\n" : "") + line.slice(6);
-        }
-      };
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        sseBuffer += decoder.decode(value, { stream: true });
-        const lines = sseBuffer.split("\n");
-        sseBuffer = lines.pop() || "";
-        for (const line of lines) processLine(line);
-      }
-      sseBuffer += decoder.decode();
-      if (sseBuffer) {
-        for (const line of sseBuffer.split("\n")) processLine(line);
-      }
-      if (sseData) handleSSEEvent(sseEventType || "delta", sseData);
+      for await (const { event, data } of readChatStream(res)) handleSSEEvent(event, data);
 
       setIsPlanning(false);
       setStreamingText("");
@@ -787,18 +756,20 @@ export function ChatPanel({
     noteMessages(ids, STOPPED_NOTE);
   }, [noteMessages]);
 
-  const sendMessage = useCallback(async (queued?: QueuedFollowup[] | unknown) => {
+  // `resend` is Regenerate's text: sent as a new turn, the composer left alone.
+  const sendMessage = useCallback(async (queued?: QueuedFollowup[] | unknown, resend?: string) => {
     const flushing = Array.isArray(queued) ? (queued as QueuedFollowup[]) : null;
     if (!flushing && (deepMode || planMode)) {
       // Deep mode routes through plan mode (deep always plans first).
       // Standalone plan mode also uses sendPlanMessage.
-      return sendPlanMessage();
+      return sendPlanMessage(resend);
     }
 
-    const text = flushing ? [...flushing].sort((a, b) => a.seq - b.seq).map((q) => q.text).join("\n\n") : input.trim();
-    if (!flushing && text && isStreaming) return sendFollowup(text);
-    // Files go with a fresh turn only, never with a flushed follow-up.
-    const files = flushing ? [] : attachments.files.map(({ name, mime, size, data }) => ({ name, mime, size, data }));
+    const text = flushing ? [...flushing].sort((a, b) => a.seq - b.seq).map((q) => q.text).join("\n\n") : (resend ?? input).trim();
+    if (!flushing && !resend && text && isStreaming) return sendFollowup(text);
+    // Files go with a fresh turn only: never with a flushed follow-up, and not
+    // with a Regenerate (the panel keeps only their summary, not their bytes).
+    const files = flushing || resend !== undefined ? [] : attachments.files.map(({ name, mime, size, data }) => ({ name, mime, size, data }));
     if ((!text && !files.length) || isStreaming) return;
 
     setActiveAsks([]);
@@ -815,8 +786,10 @@ export function ChatPanel({
       noteMessages(flushing.map((q) => q.id), undefined);
     } else {
       setMessages((prev) => [...prev, userMsg]);
-      setInput("");
-      attachments.clear();
+      if (resend === undefined) {
+        setInput("");
+        attachments.clear();
+      }
     }
     setIsStreaming(true);
     setStreamingText("");
@@ -862,20 +835,14 @@ export function ChatPanel({
         return;
       }
 
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let sseBuffer = "";
-      let sseEventType = "";
-      let sseData = "";
       let fullResponse = "";
       let receivedTerminal = false;
       const collectedAgentData: Record<string, unknown> = {};
 
       const interceptor = new MarkerInterceptor();
 
-      const handleSSEEvent = (eventType: string, data: string) => {
+      const handleSSEEvent = (eventType: string, parsed: ChatStreamData) => {
         try {
-          const parsed = JSON.parse(data);
           if (handleSharedStreamEvent(eventType, parsed)) {
             return;
           }
@@ -979,50 +946,7 @@ export function ChatPanel({
         }
       };
 
-      // Proper SSE parser: buffer event type + data until empty-line boundary.
-      // The old parser used lines[i-1] to detect event types, which broke when
-      // TCP chunks split between the "event:" and "data:" lines — the done event
-      // would be misidentified as a delta, doubling the message text.
-      const processLine = (line: string) => {
-        if (line === "") {
-          // Empty line = SSE event boundary — dispatch accumulated event
-          if (sseData) {
-            handleSSEEvent(sseEventType || "delta", sseData);
-          }
-          sseEventType = "";
-          sseData = "";
-        } else if (line.startsWith("event: ")) {
-          sseEventType = line.slice(7);
-        } else if (line.startsWith("data: ")) {
-          sseData += (sseData ? "\n" : "") + line.slice(6);
-        }
-      };
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        sseBuffer += decoder.decode(value, { stream: true });
-        const lines = sseBuffer.split("\n");
-        sseBuffer = lines.pop() || "";
-
-        for (const line of lines) {
-          processLine(line);
-        }
-      }
-
-      // Flush TextDecoder and process any remaining buffer data
-      sseBuffer += decoder.decode();
-      if (sseBuffer.length > 0) {
-        const remaining = sseBuffer.split("\n");
-        for (const line of remaining) {
-          processLine(line);
-        }
-      }
-      // Dispatch any accumulated event that wasn't terminated by an empty line
-      if (sseData) {
-        handleSSEEvent(sseEventType || "delta", sseData);
-      }
+      for await (const { event, data } of readChatStream(res)) handleSSEEvent(event, data);
 
       // Clear streaming state BEFORE adding the message to avoid duplicate display
       setIsStreaming(false);
@@ -1155,87 +1079,45 @@ export function ChatPanel({
         return;
       }
 
-      // Stream the execution response
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let sseBuffer = "";
-      let sseEventType = "";
-      let sseData = "";
+      // Stream the execution response. A bare event (no `event:` line) was never
+      // a delta on this stream.
       let fullResponse = "";
       let receivedTerminal = false;
       let costInfo: { time_s: number; cost: number } | null = null;
 
-      const processLine = (line: string) => {
-        if (line === "") {
-          if (sseData) {
-            try {
-              const parsed = JSON.parse(sseData);
-              if (handleSharedStreamEvent(sseEventType, parsed)) {
-                sseEventType = "";
-                sseData = "";
-                return;
-              }
-              if (sseEventType === "delta") {
-                fullResponse += parsed.text || "";
-                setStreamingText(fullResponse);
-              } else if (sseEventType === "deep_progress") {
-                setDeepElapsed(parsed.elapsed_s || 0);
-              } else if (sseEventType === "deep_result") {
-                fullResponse = parsed.response || fullResponse;
-                costInfo = {
-                  time_s: parsed.execution_time_s || 0,
-                  cost: parsed.cost_usd || 0,
-                };
-              } else if (sseEventType === "done") {
-                const terminal = terminalOutcome(parsed, fullResponse);
-                if (terminal !== undefined) {
-                  receivedTerminal = true;
-                  fullResponse = terminal;
-                }
-                if (parsed.cost_usd && !costInfo) {
-                  costInfo = {
-                    time_s: parsed.execution_time_s || 0,
-                    cost: parsed.cost_usd || 0,
-                  };
-                }
-              } else if (sseEventType === "error") {
-                fullResponse = `Error: ${parsed.error || "Unknown error"}`;
-              }
-            } catch { /* skip */ }
-          }
-          sseEventType = "";
-          sseData = "";
-        } else if (line.startsWith("event: ")) {
-          sseEventType = line.slice(7);
-        } else if (line.startsWith("data: ")) {
-          sseData += (sseData ? "\n" : "") + line.slice(6);
-        }
-      };
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        sseBuffer += decoder.decode(value, { stream: true });
-        const lines = sseBuffer.split("\n");
-        sseBuffer = lines.pop() || "";
-        for (const line of lines) processLine(line);
-      }
-      sseBuffer += decoder.decode();
-      if (sseBuffer) {
-        for (const line of sseBuffer.split("\n")) processLine(line);
-      }
-      if (sseData) {
+      const handleSSEEvent = (eventType: string, parsed: ChatStreamData) => {
         try {
-          const parsed = JSON.parse(sseData);
-          if (sseEventType === "done") {
+          if (handleSharedStreamEvent(eventType, parsed)) return;
+          if (eventType === "delta") {
+            fullResponse += parsed.text || "";
+            setStreamingText(fullResponse);
+          } else if (eventType === "deep_progress") {
+            setDeepElapsed(parsed.elapsed_s || 0);
+          } else if (eventType === "deep_result") {
+            fullResponse = parsed.response || fullResponse;
+            costInfo = {
+              time_s: parsed.execution_time_s || 0,
+              cost: parsed.cost_usd || 0,
+            };
+          } else if (eventType === "done") {
             const terminal = terminalOutcome(parsed, fullResponse);
             if (terminal !== undefined) {
               receivedTerminal = true;
               fullResponse = terminal;
             }
+            if (parsed.cost_usd && !costInfo) {
+              costInfo = {
+                time_s: parsed.execution_time_s || 0,
+                cost: parsed.cost_usd || 0,
+              };
+            }
+          } else if (eventType === "error") {
+            fullResponse = `Error: ${parsed.error || "Unknown error"}`;
           }
         } catch { /* skip */ }
-      }
+      };
+
+      for await (const { event, data } of readChatStream(res, { defaultEvent: "" })) handleSSEEvent(event, data);
 
       if (!receivedTerminal) fullResponse = OUTCOME_UNKNOWN;
       else if (fullResponse !== OUTCOME_UNKNOWN) {
@@ -1309,6 +1191,18 @@ export function ChatPanel({
     // Send feedback as the new message — history already has the previous plan
     sendPlanMessage(feedback);
   }, [activePlan, planFeedback, sendPlanMessage]);
+
+  const busy = isStreaming || isPlanExecuting || isPlanning || isDeepReasoning;
+  const { regenerate, edit: editMessage } = useTurnActions({
+    messages,
+    setMessages,
+    busy,
+    resend: (text) => void sendMessage(undefined, text),
+    compose: (text) => {
+      setInput(text);
+      setTimeout(() => inputRef.current?.focus(), 0);
+    },
+  });
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -1445,7 +1339,7 @@ export function ChatPanel({
       </div>
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto p-4">
+      <div ref={scrollRef} onScroll={onListScroll} className="flex-1 overflow-y-auto p-4">
         <div className="space-y-4" data-testid="message-list">
           {messages.length === 0 && !isStreaming && variant === "page" && historySettledFor === agentQuery && (
             <ChatLanding
@@ -1475,38 +1369,43 @@ export function ChatPanel({
             </div>
           )}
 
-          {messages.map((msg) => (
-            <div
-              key={msg.id}
-              className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
-              data-testid={`message-${msg.role}`}
-            >
-              <div
-                className={`max-w-[85%] rounded-lg px-3 py-2 text-sm ${
-                  msg.role === "user"
-                    ? "bg-primary text-primary-foreground"
-                    : "bg-muted border-l-2 border-l-primary"
-                }`}
+          {hiddenCount > 0 && (
+            <div className="flex justify-center">
+              <button
+                type="button"
+                onClick={showEarlier}
+                className="text-xs text-muted-foreground hover:text-foreground"
+                data-testid="show-earlier"
               >
-                {msg.role === "assistant" ? (
-                  msg.recovery ? (
-                    <div className={CHAT_PROSE}>
-                      <ChatRecovery request={msg.recovery} messageId={msg.id} onRecovered={recoverMessage} />
-                    </div>
-                  ) : (
-                    <ChatMarkdown content={msg.content} />
-                  )
-                ) : (
-                  <>
-                    {msg.content && <p>{msg.content}</p>}
-                    <MessageAttachments attachments={msg.attachments} />
-                  </>
-                )}
-                {msg.note && (
-                  <p className="mt-1 text-[11px] opacity-75" data-testid="message-note">{msg.note}</p>
-                )}
-              </div>
+                Show {hiddenCount} earlier {hiddenCount === 1 ? "message" : "messages"}
+              </button>
             </div>
+          )}
+          {hiddenCount === 0 && historyPager.hasMore && (
+            <div className="flex justify-center">
+              <button
+                type="button"
+                onClick={async () => {
+                  // Past the render window the page would land behind "Show earlier".
+                  if ((await historyPager.loadEarlier()) > 0) showEarlier();
+                }}
+                disabled={historyPager.loading}
+                className="text-xs text-muted-foreground hover:text-foreground disabled:opacity-50"
+                data-testid="load-earlier"
+              >
+                {historyPager.loading ? "Loading earlier messages…" : "Load earlier messages"}
+              </button>
+            </div>
+          )}
+          {visibleMessages.map((msg) => (
+            <MessageBubble
+              key={msg.id}
+              msg={msg}
+              onRecovered={onBubbleRecovered}
+              busy={busy}
+              onRegenerate={regenerate}
+              onEdit={editMessage}
+            />
           ))}
 
           {/* The agent's own question — `approval_required` over the run's stream */}
@@ -1641,7 +1540,6 @@ export function ChatPanel({
               </div>
             </div>
           )}
-          <div ref={scrollEndRef} />
         </div>
       </div>
 

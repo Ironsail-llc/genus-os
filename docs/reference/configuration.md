@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-488 settings in 18 groups.
+490 settings in 18 groups.
 
 ## autonomy
 
@@ -384,6 +384,7 @@ Who may reach the bridge and the dashboard, and how that is proven.
 | `GENUS_AUTH_ENFORCE` | bool | `false` | `robothor-bridge`, `robothor-app` | no | legacy | One-way compatibility switch that turns identity checks on. It never relaxes the existing role_permissions policy. |
 | `GENUS_AUTH_SIGNING_KEY` | str | _(unset)_ | `robothor-bridge`, `robothor-app` | yes | legacy | Key session tokens are signed with; at least 32 bytes. Required in production, where startup fails without it. |
 | `GENUS_BRIDGE_SSO_SECRET` | str | _(unset)_ | `robothor-bridge`, `robothor-app` | yes | legacy | Shared secret the dashboard and bridge exchange SSO assertions with. The two must match or every sign-in is refused. |
+| `GENUS_CHAT_AGENT_CACHE_TTL_MS` | int | `30000` | `robothor-app` | no | 1.123.0 | How long (milliseconds) the DASHBOARD keeps a caller's agent listing when checking that a chat message may be sent to the agent it names. Kept per dashboard instance and per caller, and only for a listing the bridge served; any manifest or agent change made through the dashboard forgets it. An agent made unchattable some other way stays addressable for at most this long. 0 asks the bridge on every message. |
 | `GENUS_DASHBOARD_TRUSTED_PROXIES` | str | _(empty)_ | `robothor-bridge`, `robothor-app` | no | 1.69.0 | Comma-separated addresses or CIDR ranges the DASHBOARD treats as its own edge when reading X-Forwarded-For. It walks that list from the right and forwards the first hop that is not one of these as X-Client-IP. Empty trusts no hop and sends no header at all, so the bridge falls back to its peer address; prefer a /32 over a pod CIDR, which would cover every workload in the namespace. |
 | `GENUS_ENVIRONMENT` | str | _(empty)_ | `robothor-bridge`, `robothor-app` | no | legacy | Deployment environment. 'production' makes the auth preconditions hard requirements instead of warnings. Also read from `ROBOTHOR_ENVIRONMENT`. |
 | `GENUS_INSECURE_DEV_MODE` | bool | `false` | `robothor-bridge`, `robothor-app` | no | legacy | Skip authentication for local development. Rejected outright in a production environment or on any non-loopback bind address. |
@@ -415,6 +416,7 @@ Guardrails and feature gates. Ones marked governed are inventoried in `infra/fla
 | `ROBOTHOR_BENCHMARK_SANDBOX_MODE` | str | `observe` | `robothor-engine` | no | legacy | **governed.** Benchmark-sandbox ladder position: observe seeds fixtures and records read-backs without grading them, enforce folds them into the score. |
 | `ROBOTHOR_CALENDAR_MEET_ARTIFACTS` | bool | `true` | `robothor-engine` | no | legacy | Turn Google Meet transcription and smart notes on for meetings the assistant organizes, so it can read them afterwards. Best-effort: needs the meetings.space.settings OAuth scope, and a failure is a note on the booking, never a failed booking. |
 | `ROBOTHOR_CALENDAR_SEND_UPDATES` | str | `all` | `robothor-engine` | no | legacy | **governed.** Who Google emails when an agent creates or deletes an event with attendees: all, externalOnly, or none. The default sends the invitation — an event nobody was told about is not a meeting, which is how an operator came to be an attendee of a trip he never saw. |
+| `ROBOTHOR_CHAT_HISTORY_PAGES` | bool | `false` | `robothor-engine` | no | 1.123.0 | Serve chat history from the message store instead of the in-memory tail: each message carries its stored time and id, and the endpoint pages back past the last 50 (offset, or a before=<id> cursor) with a hasMore flag. Off, history is the in-memory tail with no times, as before. A first page the store cannot answer falls back to memory. |
 | `ROBOTHOR_COMPLETION_CONTRACTS_ENABLED` | bool | `false` | `robothor-engine` | no | legacy | Switch for evidence-based completion contracts: a run claiming success must show the tool trace that produced it. |
 | `ROBOTHOR_COMPLETION_CONTRACTS_MODE` | str | `observe` | `robothor-engine` | no | legacy | **governed.** Completion-contract ladder position: observe records unevidenced claims, enforce fails the run that makes one. |
 | `ROBOTHOR_CONFIG_STRICT_MODE` | str | `observe` | `robothor-engine` | no | 1.66 | What an unknown key in the settings: block of config.yaml does. 'off' ignores it, 'observe' (default for existing installs) logs one warning naming the key and carries on, 'enforce' refuses to start. Inventoried in infra/flags.yaml but deliberately NOT governed: it is read while settings are being resolved, which happens before and without a database. |
