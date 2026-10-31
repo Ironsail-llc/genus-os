@@ -43,6 +43,12 @@ always re-bound. That memo assumes `connection.py` is the only code that sets
 which reverts at commit), and it assumes session-preserving connections, so
 leave the flag off behind a transaction-mode pooler.
 
+The flag also drops the default path's fixed 10-second cap per checkout. A
+checkout that has to open a connection is bounded by `ROBOTHOR_DB_CONNECT_TIMEOUT`
+instead, and while the database is unreachable those checkouts queue behind
+the pool lock, one `connect_timeout` each. Keep `ROBOTHOR_DB_CONNECT_TIMEOUT`
+above 0 when the flag is on.
+
 ## Turning it on
 
 ```bash

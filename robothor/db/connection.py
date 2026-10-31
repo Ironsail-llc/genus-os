@@ -465,11 +465,19 @@ def _fast_connection(
 ) -> Generator[psycopg2.extensions.connection, None, None]:
     """``get_connection`` under ``ROBOTHOR_DB_FAST_CHECKOUT``.
 
-    ``pool.getconn()`` runs in the caller's thread. It never waits for a
-    connection to come free -- psycopg2 raises ``PoolError`` at once when the
-    pool is exhausted -- and opening a new connection is bounded by libpq's
-    ``connect_timeout``, so the watchdog thread of the default path has
-    nothing left to bound and the late-connection race it needed cannot occur.
+    ``pool.getconn()`` runs in the caller's thread, so the late-connection
+    race the default path's watchdog thread needed cannot occur. It never
+    waits for a connection to come free -- psycopg2 raises ``PoolError`` at
+    once when the pool is exhausted.
+
+    What it does NOT keep is the default path's fixed 10 s cap per checkout.
+    ``getconn`` holds the pool lock while it opens a new connection, bounded
+    only by libpq's ``connect_timeout`` (``ROBOTHOR_DB_CONNECT_TIMEOUT``; 0
+    means wait forever), and every other checkout and return waits on that
+    lock. Against a database that silently drops packets, checkouts that must
+    open a connection therefore queue: the k-th waits up to about k times
+    ``connect_timeout``. Checkouts served from idle pooled connections are
+    unaffected once the lock is free.
     """
     try:
         conn = pool.getconn()
