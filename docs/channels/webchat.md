@@ -175,8 +175,16 @@ The composer states these limits and refuses a file that breaks one with a line
 under the chips, keeping everything else you added. The dashboard's send route
 and the engine check the same limits again: too many files or too large a file
 is refused with `413`, an unsupported type or a body that is not valid base64
-with `422`. A file that claims to be a picture but is not is also a `422`.
-Attaching is off in Plan and Deep mode and while a reply streams.
+with `422`. A file that claims to be a picture but is not is also a `422`. Every
+refusal answers `request_admitted: false`: no turn started, and nothing was kept.
+A file the engine cannot write (a full disk, say) is refused the same way, and
+whatever that turn had already written is removed.
+
+Files go with an ordinary, fresh message. In Plan or Deep mode, and while a reply
+streams, the paperclip is off and a paste or a drop is refused with a line saying
+why; switching Plan or Deep on removes the files waiting in the composer, and
+says which. Files cannot join a running task (`join_running` with attachments is
+a `422`); send them as the next message.
 
 Files land in the same inbox Telegram uses, one channel over:
 
@@ -185,14 +193,22 @@ Files land in the same inbox Telegram uses, one channel over:
 <workspace>/inbox/webchat/<session>/<YYYY-MM-DD>/secret/<sha256>-<safe-name>
 ```
 
-They are kept `0600`, deduplicated by the hash of their bytes, and pruned by the
-same retention sweep (see [the Telegram inbox](telegram.md#receiving-the-inbox)).
+They are kept `0600` and pruned by the same retention sweep (see [the Telegram inbox](telegram.md#receiving-the-inbox)).
 The agent's turn is your message first, then the same structured note Telegram
 writes: each file's path, kind and size, `call view_image on <path>` for a
 picture, and the extracted text of a text or PDF file. When the model the chat
 runs on is known to accept images, a picture is also sent to it directly; when
 it is not, or nobody has said, the note alone goes and the agent can look with
-`view_image`.
+`view_image`. A text file whose bytes are not text (a NUL in the first block) is
+named with its path but not quoted.
+
+A file is stored once per session, day and name: the same bytes sent again under
+the same name the same day reuse the earlier path, while the same bytes under
+another name are a second file. The stored name is sanitised to one safe path
+segment (`Résumé.txt` becomes `R-sum.txt`), so the row also keeps the name you
+sent as `original_name`, and that is what the chip shows. The rows use the same
+fields as Telegram's, `telegram_file_id` and `telegram_file_unique_id` included:
+for a webchat file those hold `<request id>:<n>` and the sha256 of the bytes.
 
 **A file named like a credentials file is quarantined.** `.env`,
 `credentials.json`, `id_rsa` and the like are saved under the day's `secret/`
