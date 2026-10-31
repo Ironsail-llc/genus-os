@@ -18,6 +18,11 @@ vi.mock("lucide-react", () => ({
   MessageSquareText: () => <span>MessageSquareText</span>,
   Brain: () => <span>Brain</span>,
   PanelRightClose: () => <span>PanelRightClose</span>,
+  // The composer's Tools dialog (components/chat/tools-popover.tsx).
+  Wrench: () => <span>Wrench</span>,
+  ChevronRight: () => <span>ChevronRight</span>,
+  Loader2: () => <span>Loader2</span>,
+  XIcon: () => <span>XIcon</span>,
   Paperclip: () => <span>Paperclip</span>,
   FileText: () => <span>FileText</span>,
   Image: () => <span>Image</span>,

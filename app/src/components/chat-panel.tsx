@@ -17,6 +17,7 @@ import { ChatRecovery, type ChatRecoveryRequest } from "@/components/chat-recove
 import { ChatMarkdown, CHAT_PROSE } from "@/components/chat/chat-markdown";
 import { ChatAskCard, type ApprovalKind } from "@/components/chat-ask-card";
 import { ChatLanding } from "@/components/chat/chat-landing";
+import { ToolsPopover } from "@/components/chat/tools-popover";
 import { AttachButton, MessageAttachments, NOT_IN_PLAN_OR_DEEP, NOT_WHILE_RUNNING, PendingAttachments, useChatAttachments } from "@/components/chat/chat-attachments";
 import { attachmentKind, historyAttachments, stripAttachmentNote, type AttachmentSummary } from "@/lib/chat/attachments";
 import { repeatsQuickAction } from "@/components/business/quick-action-labels";
@@ -191,6 +192,8 @@ export function ChatPanel({
   const [agent, setAgent] = useState("");
   const [chattable, setChattable] = useState<ChattableAgent[]>([]);
   const [defaultAgent, setDefaultAgent] = useState("");
+  // The listing answered 403: a member, on the default agent it may not name.
+  const [listingRefused, setListingRefused] = useState(false);
   const [isPlanExecuting, setIsPlanExecuting] = useState(false);
   const [planMode, setPlanMode] = useState(false);
   const [isPlanning, setIsPlanning] = useState(false);
@@ -348,7 +351,10 @@ export function ChatPanel({
   useEffect(() => {
     let cancelled = false;
     fetch("/api/bridge/api/agent-manifests")
-      .then((res) => (res.ok ? res.json() : null))
+      .then((res) => {
+        if (!cancelled && res.status === 403) setListingRefused(true);
+        return res.ok ? res.json() : null;
+      })
       .then((data) => {
         if (cancelled) return;
         const rows: ChattableAgent[] = Array.isArray(data?.agents)
@@ -1663,6 +1669,8 @@ export function ChatPanel({
                   ? "bg-warning/15 text-warning border border-warning/30"
                   : "bg-muted/50 text-muted-foreground border border-transparent"
               } disabled:opacity-50`}
+              aria-label="Plan mode"
+              aria-pressed={planMode && !deepMode}
               data-testid="plan-toggle"
             >
               <ClipboardList className="w-3.5 h-3.5" />
@@ -1689,11 +1697,14 @@ export function ChatPanel({
                   ? "bg-primary/15 text-primary border border-primary/30"
                   : "bg-muted/50 text-muted-foreground border border-transparent"
               } disabled:opacity-50`}
+              aria-label="Deep mode"
+              aria-pressed={deepMode}
               data-testid="deep-toggle"
             >
               <Brain className="w-3.5 h-3.5" />
               Deep
             </button>
+            <ToolsPopover agentId={agent || defaultAgent || null} listingRefused={listingRefused} mobile />
           </div>
         ) : null}
 
@@ -1714,6 +1725,8 @@ export function ChatPanel({
                     }}
                     className={planMode && !deepMode ? "text-warning bg-warning/10 hover:bg-warning/20" : planMode && deepMode ? "text-primary bg-primary/10 hover:bg-primary/20" : "text-muted-foreground hover:text-foreground"}
                     disabled={isStreaming || isPlanExecuting || isPlanning || isDeepReasoning}
+                    aria-label="Plan mode"
+                    aria-pressed={planMode && !deepMode}
                     data-testid="plan-toggle"
                   >
                     <ClipboardList className="w-4 h-4" />
@@ -1744,6 +1757,8 @@ export function ChatPanel({
                     }}
                     className={deepMode ? "text-primary bg-primary/10 hover:bg-primary/20" : "text-muted-foreground hover:text-foreground"}
                     disabled={isStreaming || isPlanExecuting || isPlanning || isDeepReasoning}
+                    aria-label="Deep mode"
+                    aria-pressed={deepMode}
                     data-testid="deep-toggle"
                   >
                     <Brain className="w-4 h-4" />
@@ -1754,6 +1769,9 @@ export function ChatPanel({
                 </TooltipContent>
               </Tooltip>
             </TooltipProvider>
+          )}
+          {!mobile && (
+            <ToolsPopover agentId={agent || defaultAgent || null} listingRefused={listingRefused} />
           )}
           <AttachButton
             onFiles={(files) => void attachments.add(files)}
