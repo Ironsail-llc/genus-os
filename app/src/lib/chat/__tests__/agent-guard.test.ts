@@ -54,6 +54,9 @@ async function resolve(agent: unknown) {
 describe("resolveChatAgent", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // A fresh module per case: the guard keeps a short per-caller cache of the
+    // listing, and these cases are each about one uncached decision.
+    vi.resetModules();
     listing(200);
   });
 

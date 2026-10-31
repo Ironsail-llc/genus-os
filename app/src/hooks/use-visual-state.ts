@@ -21,6 +21,11 @@ export interface RenderRequest {
   props: Record<string, any>;
 }
 
+export interface CanvasUpdateRequest {
+  messages: Array<{ role: string; content: string }>;
+  agentData?: Record<string, unknown> | null;
+}
+
 export type CanvasMode = "idle" | "loading" | "native" | "dashboard" | "error";
 
 /** An action request from a dashboard button/form. */
@@ -73,6 +78,22 @@ interface VisualStateContextType {
   pendingMessages: Array<{ role: string; content: string }> | null;
   pendingAgentData: Record<string, unknown> | null;
   notifyConversationUpdate: (messages: Array<{ role: string; content: string }>, agentData?: Record<string, unknown>) => void;
+  /** Which turn `pendingMessages` is: it counts up with every notify. */
+  pendingTurn: number;
+  /** True for the first canvas to claim `turn`, false for every later one. */
+  claimTurn: (turn: number) => boolean;
+  /** A claimer that left before finishing gives `turn` back for another canvas. */
+  releaseTurn: (turn: number) => void;
+  /** Counts releases, so the canvases still mounted look at the turn again. */
+  turnReleases: number;
+  /** The last canvas update's failure, shown on every canvas (any one may have asked). */
+  canvasError: string | null;
+  setCanvasError: (error: string | null) => void;
+  /** The last canvas update asked for, so any canvas can retry it. */
+  canvasRequests: {
+    last: () => CanvasUpdateRequest | null;
+    remember: (request: CanvasUpdateRequest) => void;
+  };
 
   // Canvas actions (Phase 4)
   pendingAction: ActionRequest | null;
@@ -106,6 +127,7 @@ export function VisualStateProvider({
   const [pendingAgentData, setPendingAgentData] = useState<
     Record<string, unknown> | null
   >(null);
+  const [pendingTurn, setPendingTurn] = useState(0);
 
   // Phase 4: Canvas actions
   const [pendingAction, setPendingAction] = useState<ActionRequest | null>(null);
@@ -197,9 +219,55 @@ export function VisualStateProvider({
     (messages: Array<{ role: string; content: string }>, agentData?: Record<string, unknown>) => {
       setPendingMessages(messages);
       setPendingAgentData(agentData && Object.keys(agentData).length > 0 ? agentData : null);
+      setPendingTurn((turn) => turn + 1);
     },
     []
   );
+
+  // Each mounted canvas (the chat's rail, the dashboard's AI canvas) runs its
+  // own dashboard agent, and their results land in this one shared slot. The
+  // first to claim a turn generates it; the rest would pay for a second
+  // triage+generate pipeline whose answer overwrites the first.
+  //
+  // A claimer that unmounts mid-request releases its turn, and the release
+  // re-renders, so a canvas still mounted (or the next to mount) generates it
+  // instead of the turn being lost. The failure and the request to retry live
+  // here, beside `dashboardCode`, because the claimer is often a canvas the
+  // operator cannot see (the dashboard view stays mounted while hidden).
+  const [turnReleases, setTurnReleases] = useState(0);
+  const [canvasError, setCanvasError] = useState<string | null>(null);
+  // Created once per provider; claiming a turn must not re-render anything.
+  const [turns] = useState(() => {
+    let claimed = 0;
+    return {
+      claim: (turn: number) => {
+        if (turn <= claimed) return false;
+        claimed = turn;
+        return true;
+      },
+      release: (turn: number) => {
+        if (claimed !== turn) return false;
+        claimed = turn - 1;
+        return true;
+      },
+    };
+  });
+  const claimTurn = turns.claim;
+  const releaseTurn = useCallback(
+    (turn: number) => {
+      if (turns.release(turn)) setTurnReleases((n) => n + 1);
+    },
+    [turns],
+  );
+  const [canvasRequests] = useState(() => {
+    let last: CanvasUpdateRequest | null = null;
+    return {
+      last: () => last,
+      remember: (request: CanvasUpdateRequest) => {
+        last = request;
+      },
+    };
+  });
 
   const currentView =
     viewStack.length > 0 ? viewStack[viewStack.length - 1] : null;
@@ -229,6 +297,13 @@ export function VisualStateProvider({
         pendingMessages,
         pendingAgentData,
         notifyConversationUpdate,
+        pendingTurn,
+        claimTurn,
+        releaseTurn,
+        turnReleases,
+        canvasError,
+        setCanvasError,
+        canvasRequests,
         pendingAction,
         lastActionResult,
         submitAction,
