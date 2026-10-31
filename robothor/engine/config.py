@@ -888,9 +888,11 @@ def reset_manifest_cache() -> None:
 def invalidate_config_caches() -> None:
     """Drop every config cache this process holds: defaults, manifests, adapters.
 
-    Called by whatever has just rewritten the files they came from — a plugin
-    sync writes agent manifests and changes which tool names an adapter may
-    claim.
+    In-process only. The engine's own plugin-sync route calls it; the
+    ``genus plugin sync`` CLI runs in another process and cannot, which is
+    fine: the manifests it rewrites change stat and miss on their own, and
+    the reload it tells the operator to run moves the plugin generation every
+    key carries.
     """
     from robothor.engine.adapters import reset_adapter_cache
 
@@ -935,6 +937,20 @@ def env_snapshot(text: str, pattern: re.Pattern[str] = _ENV_VAR_RE) -> EnvSnapsh
 def env_snapshot_holds(snapshot: EnvSnapshot) -> bool:
     """True while every variable in ``snapshot`` still has the value it had."""
     return all(os.environ.get(name) == value for name, value in snapshot)
+
+
+def _inside(directory: Path, path: Path) -> Path | None:
+    """``path`` resolved, when it resolves inside ``directory``; else None.
+
+    The cache reads the manifest a second time, so it re-proves what the
+    loader's agent-id check already guarantees: the path cannot leave the
+    manifest directory. A manifest symlinked elsewhere is simply not cached.
+    """
+    root = os.path.realpath(directory)
+    real = os.path.realpath(path)
+    if not real.startswith(root + os.sep):
+        return None
+    return Path(real)
 
 
 def _manifest_cache_key(
@@ -1419,7 +1435,8 @@ def load_agent_config(
     manifest_path = manifest_dir / f"{safe_id}.yaml"
     from robothor.engine.feature_flags import config_cache_enabled
 
-    identity = file_identity(manifest_path) if config_cache_enabled() else None
+    cache_path = _inside(manifest_dir, manifest_path) if config_cache_enabled() else None
+    identity = file_identity(cache_path) if cache_path is not None else None
     key = (
         _manifest_cache_key(
             agent_id, manifest_path, identity, manifest_dir, workspace, trigger_type
@@ -1439,9 +1456,13 @@ def load_agent_config(
         data = load_manifest(manifest_path)
         if data:
             config, issues = _build_config(data)
-            if key is not None:
-                snapshot = env_snapshot(manifest_path.read_text())
-                _manifest_cache[slot] = (key, copy.deepcopy(config), issues, snapshot)
+            if key is not None and cache_path is not None:
+                # A second read, for the ${VAR} names: a file gone since the
+                # parse is simply not cached, never an exception callers of
+                # this function have no answer for.
+                with contextlib.suppress(OSError):
+                    snapshot = env_snapshot(cache_path.read_text())
+                    _manifest_cache[slot] = (key, copy.deepcopy(config), issues, snapshot)
             return config
     # Fallback: scan all manifests for matching ID
     for m in load_all_manifests(manifest_dir):

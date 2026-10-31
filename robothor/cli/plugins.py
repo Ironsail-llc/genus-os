@@ -301,9 +301,6 @@ def cmd_plugin_sync(force: bool = False, strict: bool = False) -> int:
     for gone in result.removed:
         print(f"  {gone}  dropped — no longer installed")
     refused = _sync_workspace()
-    from robothor.engine.config import invalidate_config_caches
-
-    invalidate_config_caches()
     if result.added or result.updated or result.removed:
         print(f"\n{_RELOAD_HINT}")
     if strict and refused:

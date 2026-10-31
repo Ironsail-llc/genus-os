@@ -313,26 +313,6 @@ def _fake_sync_result() -> SimpleNamespace:
 
 
 class TestPluginSyncInvalidates:
-    def test_the_cli_sync_drops_both_caches(self, fleet, tmp_path, cache_on, parses, monkeypatch):
-        from robothor.cli import plugins as cli_plugins
-        from robothor.plugins import lockfile
-
-        adapter_dir = tmp_path / "adapters"
-        adapter_dir.mkdir()
-        (adapter_dir / "a.yaml").write_text("name: a\ntransport: http\nurl: http://x/_mcp\n")
-        load_agent_config("alice", fleet)
-        adapters.load_adapters(adapter_dir)
-        monkeypatch.setattr(lockfile, "sync", lambda force=False: _fake_sync_result())
-        monkeypatch.setattr(cli_plugins, "_sync_workspace", lambda: [])
-
-        assert cli_plugins.cmd_plugin_sync() == 0
-        parses.clear()
-        load_agent_config("alice", fleet)
-        assert len(parses) >= 1
-        parses.clear()
-        adapters.load_adapters(adapter_dir)
-        assert len(parses) >= 1
-
     def test_the_admin_sync_route_drops_the_manifest_cache(
         self, fleet, cache_on, parses, monkeypatch
     ):

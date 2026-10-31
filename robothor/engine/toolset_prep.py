@@ -320,17 +320,16 @@ async def _autonomy_active(tenant_id: str | None, actor_id: str | None, agent_id
 async def _load_adapters(registry: Any, agent_config: Any, agent_id: str) -> None:
     """Best-effort. A dead MCP server costs its own tools and nothing else."""
     try:
-        from robothor.engine.adapters import cached_adapters, get_adapters_for_agent
-        from robothor.engine.feature_flags import config_cache_enabled
+        from robothor.engine.adapters import get_adapters_for_agent
         from robothor.engine.mcp_client import configure_mcp_servers, register_adapter
 
         if agent_config.mcp_servers:
             configure_mcp_servers(agent_config.mcp_servers)
 
-        if config_cache_enabled():
-            adapters = get_adapters_for_agent(agent_id, cached_adapters())
-        else:
-            adapters = get_adapters_for_agent(agent_id)
+        # Through load_adapters on every run, never the watcher's list: with
+        # ROBOTHOR_CONFIG_CACHE on its per-file cache makes this a stat per
+        # file, and it still re-checks each file's identity and ${VAR} values.
+        adapters = get_adapters_for_agent(agent_id)
         for adapter in adapters:
             register_adapter(adapter)
         if adapters:

@@ -347,11 +347,6 @@ def get_adapters_for_agent(
 
 _loaded_adapters: list[AdapterConfig] = []
 
-#: The plugin generation ``_loaded_adapters`` was judged at, or None before
-#: anything has loaded it. Which tool names an adapter may claim depends on the
-#: installed plugins, so a plugin reload makes the list stale.
-_loaded_generation: int | None = None
-
 
 def get_loaded_adapters() -> list[AdapterConfig]:
     """Return the most recently loaded adapter configs (from cache)."""
@@ -363,25 +358,9 @@ def refresh_adapters(adapter_dir: Path | None = None) -> list[AdapterConfig]:
 
     A reload means "re-read the disk", so the per-file cache goes first.
     """
-    global _loaded_adapters, _loaded_generation
-    from robothor.plugins.loader import generation
-
+    global _loaded_adapters
     _adapter_file_cache.clear()
-    _loaded_generation = generation()
     _loaded_adapters = load_adapters(adapter_dir)
-    return _loaded_adapters
-
-
-def cached_adapters() -> list[AdapterConfig]:
-    """The module cache, loading it once if nothing has yet.
-
-    In the daemon the ExtensionWatcher keeps it current; anywhere else the
-    first run loads it.
-    """
-    from robothor.plugins.loader import generation
-
-    if _loaded_generation != generation():
-        return refresh_adapters()
     return _loaded_adapters
 
 
@@ -397,11 +376,9 @@ _digest_cache: dict[str, tuple[tuple[int, int, int, int], str]] = {}
 
 
 def reset_adapter_cache() -> None:
-    """Forget every parsed adapter file, binary digest and the module cache."""
-    global _loaded_generation
+    """Forget every parsed adapter file and binary digest."""
     _adapter_file_cache.clear()
     _digest_cache.clear()
-    _loaded_generation = None
 
 
 def _cache_identity(path: Path) -> tuple[int, int, int, int] | None:
