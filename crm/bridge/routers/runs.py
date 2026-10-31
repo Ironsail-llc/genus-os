@@ -4,6 +4,7 @@ sees the platform tenant's runs only."""
 
 from __future__ import annotations
 
+import uuid
 from decimal import Decimal
 
 import psycopg2.extras
@@ -71,15 +72,17 @@ def _sql_list(values: tuple[str, ...]) -> str:
 
 #: One run's delivery category, the same buckets the dashboard reads
 #: (``app/src/lib/automations/run-truth.ts``). Built from constants only.
+#: The status as both readers compare it: trimmed and lower-cased.
+_DS = "lower(btrim(delivery_status))"
 _DELIVERY_CATEGORY_SQL = (
     "CASE "
-    f"WHEN lower(delivery_status) IN ({_sql_list(_DELIVERED)}) THEN 'delivered' "
-    f"WHEN delivery_status IN ({_sql_list(_NO_DELIVERY_EXPECTED)}) "
-    "OR delivery_status LIKE 'blocked_by_hook:%%' THEN 'none_expected' "
-    "WHEN delivery_status LIKE 'failed%%' OR delivery_status LIKE 'partial:%%' "
-    "OR delivery_status LIKE 'unknown_mode:%%' THEN 'failed' "
-    "WHEN delivery_status IS NULL AND status IN ('pending', 'running', 'awaiting_approval') "
-    "THEN 'pending' "
+    f"WHEN {_DS} IN ({_sql_list(_DELIVERED)}) THEN 'delivered' "
+    f"WHEN {_DS} IN ({_sql_list(_NO_DELIVERY_EXPECTED)}) "
+    f"OR {_DS} LIKE 'blocked_by_hook:%%' THEN 'none_expected' "
+    f"WHEN {_DS} LIKE 'failed%%' OR {_DS} LIKE 'partial:%%' "
+    f"OR {_DS} LIKE 'unknown_mode:%%' THEN 'failed' "
+    "WHEN NULLIF(btrim(delivery_status), '') IS NULL "
+    "AND status IN ('pending', 'running', 'awaiting_approval') THEN 'pending' "
     "ELSE 'not_recorded' END"
 )
 _DELIVERY_CATEGORIES = ("delivered", "none_expected", "failed", "pending", "not_recorded")
@@ -261,6 +264,13 @@ def get_run(run_id: str, request: Request, response: Response) -> dict:
     require_operator(request)
     # Task text, tool input and output: never kept by a shared cache.
     response.headers["Cache-Control"] = "no-store"
+    try:
+        uuid.UUID(run_id)
+    except ValueError:
+        # Not an id the table can hold: an unknown run, not a database error.
+        raise HTTPException(
+            status_code=404, detail="unknown run", headers={"Cache-Control": "no-store"}
+        ) from None
     run = _get_run(run_id)
     if run is None:
         raise HTTPException(

@@ -228,8 +228,16 @@ export function deliveredReading(
   if (when) words.push(when);
   // An announcing automation whose run chose silence did not fail to deliver.
   const category = deliveryCategory(status, run.status);
+  // Same tones as `runDeliveredReading`: only a real failure is red, and a
+  // status nobody has taught this file is a warning.
   const tone: Tone =
-    category === "delivered" ? "good" : category === "none_expected" ? "unknown" : "bad";
+    category === "delivered"
+      ? "good"
+      : category === "none_expected"
+        ? "unknown"
+        : category === "failed"
+          ? "bad"
+          : "warn";
   return { text: words.join(" · "), tone };
 }
 
