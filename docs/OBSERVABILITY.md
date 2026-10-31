@@ -182,6 +182,11 @@ step's `tool_name`, `tool_input`, `tool_output` and `error_message`. The step
 payloads hold whatever the tools saw, so the route is for owners and admins
 only (other roles get 403) and is sent with `Cache-Control: no-store`.
 
+In the dashboard, Automations → Workflows reads the same two routes: a workflow
+that has run expands to list its runs, and opening one shows each step's tool,
+status, error, and input and output as collapsible JSON. A truncated payload is
+shown as its preview with the original size.
+
 ## Notes
 
 - Export is best-effort (a 5s-timeout POST per run); a collector outage never
