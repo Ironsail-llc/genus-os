@@ -844,6 +844,11 @@ what an entry renders and how to seed its workspace.
 - [ ] Set `ROBOTHOR_CAPABILITIES_MANIFEST` if the deployment keeps its
       `agent_capabilities.json` outside the workspace
 - [ ] Set up monitoring (health endpoints return JSON)
+- [ ] If a reverse proxy, ingress or tunnel sits in front of the dashboard, let it
+      admit request bodies of about 22 MB on `POST /api/chat/send`: a chat message
+      can carry three 5 MB files, base64-encoded (see
+      [Attaching files](channels/webchat.md#attaching-files)). A smaller limit
+      refuses those messages before they reach the dashboard
 - [ ] Back up PostgreSQL daily (`pg_dump robothor_memory`)
 
 ## Diagnostics (`genus doctor`)
@@ -1014,6 +1019,13 @@ embedding gets one attempt within 8 seconds, so an unreachable provider costs
 the save at most that long rather than outlasting the dashboard's 30-second
 request timeout.
 
+**An operator-confirmed fact is the operator's word, and no automatic path
+retires it.** When a later extraction contradicts or updates it, the new
+extraction is stored already superseded by the confirmed fact, so the
+pipeline's reading stays on record while the operator's stays active; the
+nightly quality prune, consolidation, dechurn and resolution capture all skip
+it. Only an operator's forget (or another edit) changes it.
+
 The bridge needs `ROBOTHOR_OLLAMA_URL` and `ROBOTHOR_EMBEDDING_MODEL` to reach
 the embedding provider; without them it tries `127.0.0.1:11434`. On the Helm
 chart the `ollama` egress class admits the bridge, but the chart sets neither
@@ -1032,7 +1044,7 @@ anything a spreadsheet would evaluate is prefixed with an apostrophe, so an
 audit detail cannot become a formula or carry a credential off the box. A
 failed export is a real `500` rather than an empty file.
 
-**Who sees which rows.** Since migration 162 every `audit_log` row records the
+**Who sees which rows.** Since migration 163 every `audit_log` row records the
 tenant it happened in — a bridge request's *acting* tenant, else the writing
 process's own. The platform tenant's operator or auditor, **at home**, still
 reads the appliance-wide trail: every tenant, independent root tenants such as

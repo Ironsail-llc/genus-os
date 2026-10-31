@@ -1,6 +1,6 @@
 """A child tenant's engine obeys the root tenant's plugin grants.
 
-``tenant_plugin_grants`` (migration 163) lets a root operator force one plugin
+``tenant_plugin_grants`` (migration 164) lets a root operator force one plugin
 ``on`` or ``off`` for one child. The engine reads its OWN tenant's rows, once
 per plugin-registry generation, and the loader applies them:
 

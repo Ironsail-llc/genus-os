@@ -1,4 +1,4 @@
--- Migration 163: tenant_plugin_grants, the root tenant's per-child plugin
+-- Migration 164: tenant_plugin_grants, the root tenant's per-child plugin
 -- decisions (robothor/plugins/grants.py).
 --
 -- A root operator forces one plugin 'on' or 'off' for one child tenant. The

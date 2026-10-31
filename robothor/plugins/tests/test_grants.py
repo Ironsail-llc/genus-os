@@ -23,7 +23,7 @@ import pytest
 
 MIGRATIONS_DIR = Path(__file__).resolve().parents[3] / "crm" / "migrations"
 MANIFEST = Path(__file__).resolve().parents[2] / "migrations" / "manifest.txt"
-MIGRATION = "163_tenant_plugin_grants"
+MIGRATION = "164_tenant_plugin_grants"
 
 
 # ─── unit: the contract, no database ─────────────────────────────────────

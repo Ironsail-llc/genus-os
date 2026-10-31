@@ -23,7 +23,13 @@ from robothor.constants import DEFAULT_TENANT
 from robothor.db.connection import get_connection
 from robothor.llm import ollama as llm_client
 from robothor.memory import generation
-from robothor.memory.bitemporal import record_conflict_decision, supersede_with_validity
+from robothor.memory.bitemporal import (
+    keep_overruled,
+    record_conflict_decision,
+    supersede_with_validity,
+)
+from robothor.memory.confirmed import is_operator_confirmed
+from robothor.memory.drift import compute_fact_hash
 from robothor.memory.facts import _write_dedup_enabled, store_fact
 from robothor.memory.vector_tuning import apply_hnsw_session
 
@@ -113,6 +119,7 @@ async def find_similar_facts(
                 confidence,
                 source_type,
                 is_active,
+                metadata,
                 1 - (embedding <=> %s::vector) as similarity
             FROM memory_facts
             WHERE embedding IS NOT NULL
@@ -226,6 +233,41 @@ def _supersede_fact(old_id: int, new_id: int, *, tenant_id: str = "") -> None:
     supersede_with_validity(old_id, new_id, tenant_id=tenant_id, classification="resolution")
 
 
+def _confirmed_now(fact_id: int, *, tenant_id: str = "") -> bool:
+    """Re-read one fact: is it (still there and) operator-confirmed?"""
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT metadata FROM memory_facts WHERE id = %s AND tenant_id = %s",
+            (fact_id, tenant_id or DEFAULT_TENANT),
+        )
+        row = cur.fetchone()
+    return row is not None and is_operator_confirmed({"metadata": row[0]})
+
+
+def _find_overruled(fact: dict[str, Any], kept_id: int, *, tenant_id: str = "") -> int:
+    """The id of an earlier inactive copy of ``fact`` overruled by ``kept_id``, or 0.
+
+    ``find_similar_facts`` and the insert's dedup index both see active rows
+    only, so without this every re-ingestion of a source that contradicts a
+    confirmed fact would store, embed and classify one more dead row.
+    """
+    tenant = tenant_id or DEFAULT_TENANT
+    content_hash = compute_fact_hash(
+        fact["fact_text"], tenant_id=tenant, category=fact.get("category") or ""
+    )
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id FROM memory_facts "
+            "WHERE tenant_id = %s AND content_hash = %s AND superseded_by = %s "
+            "AND is_active = FALSE ORDER BY id DESC LIMIT 1",
+            (tenant, content_hash, kept_id),
+        )
+        row = cur.fetchone()
+    return int(row[0]) if row else 0
+
+
 async def resolve_and_store(
     fact: dict[str, Any],
     source_content: str,
@@ -243,7 +285,9 @@ async def resolve_and_store(
         similarity_threshold: Minimum similarity to trigger classification.
 
     Returns:
-        Dict with 'action' (stored/skipped/superseded) and optionally 'new_id'.
+        Dict with 'action' (stored/skipped/superseded/reinforced/kept_confirmed)
+        and optionally 'new_id'. ``kept_confirmed`` means the best match is
+        operator-confirmed: the new fact was stored, inactive and superseded by it.
     """
     similar = await find_similar_facts(
         fact["fact_text"],
@@ -293,6 +337,31 @@ async def resolve_and_store(
             "similarity": round(float(best_match.get("similarity") or 0), 4),
         }
 
+    # The same extraction, already overruled by this confirmed fact on an
+    # earlier pass: record the decision against that row and stop, before the
+    # classification and the insert.
+    if is_operator_confirmed(best_match):
+        overruled_id = _find_overruled(fact, best_match["id"], tenant_id=tenant_id)
+        if overruled_id:
+            record_conflict_decision(
+                tenant_id=tenant_id or DEFAULT_TENANT,
+                classification="duplicate",
+                action="kept_confirmed",
+                new_fact_id=overruled_id,
+                existing_fact_id=best_match["id"],
+                reasoning="same extraction already overruled by this operator-confirmed fact",
+                similarity=float(best_match.get("similarity") or 0) or None,
+                new_fact_text=fact["fact_text"],
+                existing_fact_text=best_match["fact_text"],
+            )
+            return {
+                "action": "kept_confirmed",
+                "new_id": overruled_id,
+                "existing_id": best_match["id"],
+                "classification": "duplicate",
+                "reasoning": "already overruled",
+            }
+
     classification = await classify_relationship(
         fact["fact_text"],
         best_match["fact_text"],
@@ -326,12 +395,56 @@ async def resolve_and_store(
         # the two was always wrong and the bound is a guess about which. Acting
         # on that difference needs an error rate, and until this table existed
         # there was none: the classification deactivated rows and vanished.
-        supersede_with_validity(best_match["id"], new_id, tenant_id=tenant_id, classification=kind)
-        _record(action="superseded", new_fact_id=new_id)
+        #
+        # An operator-confirmed match is never superseded, whatever the new
+        # fact's confidence. supersede_with_validity also refuses one confirmed
+        # after the similarity search; both cases land in the branch below.
+        if not is_operator_confirmed(best_match) and supersede_with_validity(
+            best_match["id"], new_id, tenant_id=tenant_id, classification=kind
+        ):
+            _record(action="superseded", new_fact_id=new_id)
+            return {
+                "action": "superseded",
+                "new_id": new_id,
+                "old_id": best_match["id"],
+                "classification": kind,
+                "reasoning": classification["reasoning"],
+            }
+
+        # Refused for a reason other than confirmation (the target is gone):
+        # the new fact is the current statement, so it stays active.
+        if not is_operator_confirmed(best_match) and not _confirmed_now(
+            best_match["id"], tenant_id=tenant_id
+        ):
+            logger.info(
+                "resolve_and_store: fact %s not superseded (absent); new fact %s kept active",
+                best_match["id"],
+                new_id,
+            )
+            _record(action="supersede_skipped", new_fact_id=new_id)
+            return {
+                "action": "supersede_skipped",
+                "new_id": new_id,
+                "old_id": best_match["id"],
+                "classification": kind,
+                "reasoning": classification["reasoning"],
+            }
+
+        # Kept on record, overruled BY the confirmed fact, so the pipeline's
+        # view is not lost and the operator's stays the active answer.
+        if new_id:
+            keep_overruled(new_id, best_match["id"], tenant_id=tenant_id)
+        logger.info(
+            "resolve_and_store: fact %s is operator-confirmed; new fact %s kept overruled (%s)",
+            best_match["id"],
+            new_id,
+            kind,
+        )
+        _record(action="kept_confirmed", new_fact_id=new_id or None)
         return {
-            "action": "superseded",
+            "action": "kept_confirmed",
             "new_id": new_id,
-            "old_id": best_match["id"],
+            "existing_id": best_match["id"],
             "classification": kind,
             "reasoning": classification["reasoning"],
         }

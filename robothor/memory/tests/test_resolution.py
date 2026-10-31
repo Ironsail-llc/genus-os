@@ -62,6 +62,31 @@ class TestRecordResolution:
         assert any("importance_score" in c.args[0] for c in cur.execute.call_args_list)
 
     @pytest.mark.asyncio
+    async def test_an_operator_confirmed_match_is_not_retired(self, monkeypatch: Any) -> None:
+        monkeypatch.setenv("MEMORY_RESOLUTION_CAPTURE", "1")
+        ctx, _cur = _mock_conn()
+        supersede = MagicMock()
+        confirmed = {"operator_confirmed": {"at": "2026-01-01T00:00:00+00:00", "by": "op"}}
+        with (
+            patch.object(res, "store_fact", new=AsyncMock(return_value=500)),
+            patch.object(res, "get_connection", return_value=ctx),
+            patch.object(
+                res,
+                "find_similar_facts",
+                new=AsyncMock(
+                    return_value=[
+                        {"id": 10, "metadata": confirmed},
+                        {"id": 11, "metadata": None},
+                    ]
+                ),
+            ),
+            patch.object(res, "_supersede_fact", new=supersede),
+        ):
+            out = await record_resolution("the X alert", "confirmed safe")
+        assert out["superseded_ids"] == [11]
+        assert [c.args[0] for c in supersede.call_args_list] == [11]
+
+    @pytest.mark.asyncio
     async def test_stores_but_no_supersede_when_disabled(self, monkeypatch: Any) -> None:
         monkeypatch.delenv("MEMORY_RESOLUTION_CAPTURE", raising=False)
         ctx, _cur = _mock_conn()
