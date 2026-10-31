@@ -36,13 +36,14 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from robothor.constants import DEFAULT_TENANT
+from robothor.engine import live_control
 from robothor.engine.channels import access
 from robothor.engine.chat import get_shared_session
 from robothor.engine.chat_history import append_turn
 from robothor.engine.models import RunStatus, TriggerType
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from collections.abc import AsyncIterator, Callable
+    from collections.abc import AsyncIterator, Awaitable, Callable
 
     from robothor.identity import IdentityContext
 
@@ -194,6 +195,7 @@ async def handle_message(
     mode: str | None = None,
     record_turn: bool = True,
     history_limit: int | None = None,
+    on_progress: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
 ) -> InboundResult:
     """Gate one inbound message and, if it is allowed, run it.
 
@@ -225,6 +227,14 @@ async def handle_message(
             failed, timed-out or empty run records nothing.
         history_limit: hand the run only the last N turns (user + assistant
             pairs) of the session's history. ``None`` hands it all of it.
+        on_progress: optional. Called with the run's tool and status events
+            (``tool_start``, ``tool_end``, ``iteration_start`` and the rest), the
+            runner's ``on_tool`` and ``on_status``; feed them to
+            :class:`robothor.engine.live_control.ProgressMessage`. ``None``, the
+            run reports no progress, as before.
+
+    The run executes inside ``live_control.conversation_scope(session_key)``, so
+    ``/steer`` and ``/stop`` on the channel can reach it by its session key.
 
     Messages sharing a ``session_key`` run one after another; different
     conversations run concurrently, up to the fleet-wide
@@ -269,18 +279,23 @@ async def handle_message(
         if history_limit is not None:
             history = _last_turns(history, history_limit)
         try:
+            progress: dict[str, Any] = (
+                {"on_tool": on_progress, "on_status": on_progress} if on_progress else {}
+            )
             async with _fleet_slots():
-                run = await runner.execute(
-                    agent_id=agent_id,
-                    message=text,
-                    trigger_type=trigger_type,
-                    trigger_detail=detail,
-                    tenant_id=resolved_tenant,
-                    user_id=run_as(identity, channel, native_id),
-                    user_role=(identity.role if identity else "") or "user",
-                    identity=identity,
-                    conversation_history=history or None,
-                )
+                with live_control.conversation_scope(session_key):
+                    run = await runner.execute(
+                        agent_id=agent_id,
+                        message=text,
+                        trigger_type=trigger_type,
+                        trigger_detail=detail,
+                        tenant_id=resolved_tenant,
+                        user_id=run_as(identity, channel, native_id),
+                        user_role=(identity.role if identity else "") or "user",
+                        identity=identity,
+                        conversation_history=history or None,
+                        **progress,
+                    )
         except Exception:
             # Logged with a traceback here, where it reaches the journal; the
             # SENDER gets FAILED_REPLY, which names nothing.

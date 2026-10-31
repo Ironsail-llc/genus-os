@@ -149,8 +149,13 @@ class TestProgressLine:
 
     def test_tool_end_gives_the_duration_and_marks_a_failure(self):
         ok = live_control.format_progress_line(
-            {"event": "tool_end", "tool": "read_file", "duration_ms": 1500, "error": None,
-             "result_preview": "TOP SECRET CONTENTS"},
+            {
+                "event": "tool_end",
+                "tool": "read_file",
+                "duration_ms": 1500,
+                "error": None,
+                "result_preview": "TOP SECRET CONTENTS",
+            },
             elapsed_s=9,
         )
         failed = live_control.format_progress_line(
@@ -202,8 +207,8 @@ class TestProgressMessage:
         assert len(fake.posts) == 1
         assert len(fake.posts) + len(fake.edits) <= 2
         await progress.close()
-        assert fake.edits, "the final state is always written at close"
-        assert "tool 49" in fake.edits[-1][1]
+        written = fake.posts + [text for _, text in fake.edits]
+        assert "tool 49" in written[-1], "the latest state is what the channel shows"
 
     @pytest.mark.asyncio
     async def test_close_with_a_final_line_writes_it(self):

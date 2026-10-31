@@ -47,6 +47,7 @@ from fastapi.responses import JSONResponse
 from starlette.responses import StreamingResponse
 
 from robothor.constants import DEFAULT_TENANT
+from robothor.engine import live_control
 from robothor.engine.chat_delivery import deliver_interruption, deliver_plan_interruption
 from robothor.engine.chat_delivery import final_result as delivery_result
 from robothor.engine.chat_history import MAX_HISTORY as _MAX_HISTORY
@@ -422,22 +423,25 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
             if len(parts) >= 2:
                 agent_id = parts[1]
 
-            run = await _runner.execute(
-                agent_id=agent_id,
-                message=message,
-                trigger_type=TriggerType.WEBCHAT,
-                trigger_detail=f"webchat:{session_key}",
-                on_content=on_content,
-                on_tool=on_tool,
-                on_status=on_status,
-                model_override=session.model_override,
-                conversation_history=list(session.history),
-                tenant_id=auth.tenant_id,
-                user_id=auth.user_id,
-                user_role=auth.role,
-                identity=identity,
-                live_inbox=inbox,
-            )
+            # Inside the conversation's scope, so /chat/steer and /chat/interrupt
+            # can find this run by its session key (live_control.py).
+            with live_control.conversation_scope(session_key):
+                run = await _runner.execute(
+                    agent_id=agent_id,
+                    message=message,
+                    trigger_type=TriggerType.WEBCHAT,
+                    trigger_detail=f"webchat:{session_key}",
+                    on_content=on_content,
+                    on_tool=on_tool,
+                    on_status=on_status,
+                    model_override=session.model_override,
+                    conversation_history=list(session.history),
+                    tenant_id=auth.tenant_id,
+                    user_id=auth.user_id,
+                    user_role=auth.role,
+                    identity=identity,
+                    live_inbox=inbox,
+                )
             pending.extend(seal_live_inbox(session, inbox))
 
             delivered = await delivery_result(run, auth)
@@ -653,6 +657,62 @@ async def chat_abort(request: Request) -> JSONResponse:
     if result.get("aborted"):  # only a run that was actually cancelled
         drop_live_inbox(session, stopped_request)
     return JSONResponse(result)
+
+
+@router.get("/steer")
+async def chat_steer_mode() -> JSONResponse:
+    """Whether steer and interrupt are on (``ROBOTHOR_STEER_EVERYWHERE``)."""
+    return JSONResponse({"enabled": live_control.steer_everywhere_enabled()})
+
+
+@router.post("/steer")
+async def chat_steer(request: Request) -> JSONResponse:
+    """Steer the session's live run: the text joins it at the next iteration boundary.
+
+    The key is resolved exactly as ``/chat/send`` resolves it, and only a run of
+    the caller's tenant is reachable, so a caller can steer nothing but their
+    own conversation. ``found`` is false when nothing is running there.
+    """
+    if not live_control.steer_everywhere_enabled():
+        return JSONResponse({"error": "not found"}, status_code=404)
+    auth = _auth_context(request)
+    body = await request.json()
+    text = str(body.get("text") or "").strip()
+    if not text:
+        return JSONResponse({"error": "text required"}, status_code=400)
+    session_key = _effective_session_key(auth, body.get("session_key", ""))
+    # Off the loop: the steer is recorded as an operator signal in the database.
+    found = await asyncio.to_thread(
+        live_control.steer_conversation, session_key, text, tenant_id=auth.tenant_id
+    )
+    return JSONResponse({"ok": found, "found": found})
+
+
+@router.post("/interrupt")
+async def chat_interrupt(request: Request) -> JSONResponse:
+    """Halt the session's live run at its next iteration boundary, as CANCELLED.
+
+    Unlike ``/chat/abort``, which cancels the turn's task wherever it is, the
+    run stops at a step boundary and finishes like any other run.
+    """
+    if not live_control.steer_everywhere_enabled():
+        return JSONResponse({"error": "not found"}, status_code=404)
+    auth = _auth_context(request)
+    body = await request.json()
+    session_key = _effective_session_key(auth, body.get("session_key", ""))
+    message = body.get("message")
+    try:
+        # Off the loop: the durable stop is written to the database.
+        found = await asyncio.to_thread(
+            live_control.interrupt_conversation,
+            session_key,
+            str(message) if message else None,
+            tenant_id=auth.tenant_id,
+        )
+    except Exception:
+        logger.exception("Chat interrupt could not be recorded")
+        return JSONResponse({"error": "interrupt could not be recorded"}, status_code=502)
+    return JSONResponse({"ok": found, "found": found})
 
 
 @router.post("/clear")

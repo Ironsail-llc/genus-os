@@ -17,6 +17,7 @@ import { ChatRecovery, type ChatRecoveryRequest } from "@/components/chat-recove
 import { ChatMarkdown, CHAT_PROSE } from "@/components/chat/chat-markdown";
 import { ChatAskCard, type ApprovalKind } from "@/components/chat-ask-card";
 import { ChatLanding } from "@/components/chat/chat-landing";
+import { useSteerMode, steerRun, interruptRun, STEER_PLACEHOLDER, STEERED_NOTE } from "@/components/chat-steer";
 import { repeatsQuickAction } from "@/components/business/quick-action-labels";
 import {
   isKeyableAgentId,
@@ -196,6 +197,7 @@ export function ChatPanel({
   const [runtimeProgress, setRuntimeProgress] = useState<string | null>(null);
   const [stopNotice, setStopNotice] = useState<string | null>(null);
   const [isStopping, setIsStopping] = useState(false);
+  const steerMode = useSteerMode();
   const requestIdRef = useRef<string | null>(null);
   const [currentIteration, setCurrentIteration] = useState(0);
   const [maxIterations, setMaxIterations] = useState(0);
@@ -731,6 +733,11 @@ export function ChatPanel({
     setMessages((prev) => [...prev, { id: item.id, role: "user", content: text, timestamp: new Date(), note: "Sending…" }]);
     setInput("");
     inFlightFollowups.current = [...inFlightFollowups.current, item];
+    if (steerMode && (await steerRun(text, agent))) {
+      inFlightFollowups.current = inFlightFollowups.current.filter((f) => f.id !== item.id);
+      noteMessages([item.id], STEERED_NOTE);
+      return;
+    }
     let joined = false;
     try {
       const res = await fetch("/api/chat/send", {
@@ -751,7 +758,7 @@ export function ChatPanel({
     } else {
       queueFollowups([item]);
     }
-  }, [agent, isStopping, noteMessages, queueFollowups]);
+  }, [agent, isStopping, noteMessages, queueFollowups, steerMode]);
 
   /** Stop: what was waiting goes with the task, not out as a turn after it. */
   const discardFollowups = useCallback(() => {
@@ -1292,6 +1299,10 @@ export function ChatPanel({
   const handleAbort = async () => {
     if (isStopping) return;
     discardFollowups();
+    if (steerMode && isStreaming && (await interruptRun(agent))) {
+      setStopNotice("Stopping at the next step…");
+      return;
+    }
     const stoppedRequest = requestIdRef.current;
     const stoppedController = abortRef.current;
     setIsStopping(true);
@@ -1729,7 +1740,7 @@ export function ChatPanel({
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder={deepMode ? "Ask a deep reasoning question..." : planMode ? "Describe what you want planned..." : isStreaming ? "Add to the running task..." : "Ask me anything..."}
+            placeholder={deepMode ? "Ask a deep reasoning question..." : planMode ? "Describe what you want planned..." : isStreaming ? (steerMode ? STEER_PLACEHOLDER : "Add to the running task...") : "Ask me anything..."}
             className={`flex-1 resize-none rounded-lg border bg-background px-3 py-2 text-sm min-h-[44px] max-h-[120px] focus:outline-none focus:ring-1 ${deepMode ? "border-primary/30 focus:ring-primary/50" : planMode ? "border-warning/30 focus:ring-warning/50" : "border-border focus:ring-ring"}`}
             rows={1}
             // Open while an ordinary reply streams: what is typed joins it.

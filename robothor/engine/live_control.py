@@ -1,41 +1,172 @@
-"""Steer, stop and progress for a conversation's live run (interface only)."""
+"""Steer, stop and progress for a conversation's live run, on any channel.
+
+The engine can steer or halt a live run by ``run_id``
+(:mod:`robothor.engine.interrupt_api`). A chat surface knows the conversation,
+not the run, so this module adds the missing lookup and the pieces every
+channel needs around it:
+
+* :func:`conversation_scope` marks the run started inside it as the
+  conversation's run. The mark is claimed once, when the run registers as live
+  (``request_runtime.observe_request``), so a sub-agent the run spawns is never
+  mistaken for it.
+* :func:`find_live_run`, :func:`steer_conversation` and
+  :func:`interrupt_conversation` reach that run, only within the caller's
+  tenant, with ``interrupt_api``'s semantics: a steer joins at the next
+  iteration boundary as an operator steering update, an interrupt ends the run
+  there as CANCELLED.
+* :func:`format_progress_line` is one compact line per ``tool_start``,
+  ``tool_end`` and ``iteration_start`` event, with elapsed time, and never a
+  tool's arguments or results. :class:`ProgressMessage` posts that line once
+  and edits it in place, throttled, through two callables a channel supplies.
+
+Channels expose all of this only with ``ROBOTHOR_STEER_EVERYWHERE`` on
+(:func:`steer_everywhere_enabled`). Marking a run is unconditional and changes
+nothing a user can see.
+"""
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
+import logging
+import time
+from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any
+
+from robothor.engine import session_registry
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from collections.abc import Awaitable, Callable, Iterator
 
+logger = logging.getLogger(__name__)
+
+__all__ = [
+    "ProgressMessage",
+    "claim_conversation_key",
+    "conversation_scope",
+    "find_live_run",
+    "format_progress_line",
+    "interrupt_conversation",
+    "steer_conversation",
+    "steer_everywhere_enabled",
+]
+
+#: The longest progress line any channel is handed.
+MAX_LINE = 120
+
+_pending_key: ContextVar[str | None] = ContextVar("live_conversation_key", default=None)
+
 
 def steer_everywhere_enabled() -> bool:
-    raise NotImplementedError
+    """``ROBOTHOR_STEER_EVERYWHERE``, read through settings. False on any error."""
+    try:
+        from robothor.settings import get_settings
+
+        return bool(get_settings().channels.steer_everywhere)
+    except Exception:  # noqa: BLE001 - a settings error must not break a channel
+        logger.debug("steer_everywhere setting unreadable; treating as off", exc_info=True)
+        return False
+
+
+# ── which run is the conversation's ──────────────────────────────────────
 
 
 @contextlib.contextmanager
 def conversation_scope(key: str) -> Iterator[None]:
-    raise NotImplementedError
-    yield  # pragma: no cover
+    """The next run that goes live inside this block belongs to ``key``."""
+    token = _pending_key.set(key or None)
+    try:
+        yield
+    finally:
+        _pending_key.reset(token)
+
+
+def claim_conversation_key() -> str | None:
+    """Take the scope's key for the run going live now; later runs get none."""
+    key = _pending_key.get()
+    if key is not None:
+        _pending_key.set(None)
+    return key
 
 
 def find_live_run(key: str, *, tenant_id: str) -> str | None:
-    raise NotImplementedError
+    """The run id of ``key``'s live run in ``tenant_id``, or ``None``."""
+    if not key:
+        return None
+    for run_id in session_registry.active_run_ids():
+        session = session_registry.lookup(run_id)
+        if session is None or getattr(session, "conversation_key", None) != key:
+            continue
+        if getattr(session.run, "tenant_id", None) != tenant_id:
+            continue
+        return run_id
+    return None
 
 
 def steer_conversation(key: str, text: str, *, tenant_id: str) -> bool:
-    raise NotImplementedError
+    """Steer ``key``'s live run. False when nothing runs there or ``text`` is blank."""
+    from robothor.engine.interrupt_api import steer_session
+
+    text = (text or "").strip()
+    run_id = find_live_run(key, tenant_id=tenant_id) if text else None
+    return run_id is not None and steer_session(run_id, text)
 
 
 def interrupt_conversation(key: str, message: str | None = None, *, tenant_id: str) -> bool:
-    raise NotImplementedError
+    """Halt ``key``'s live run at its next iteration boundary. False when none runs."""
+    from robothor.engine.interrupt_api import interrupt_session
+
+    run_id = find_live_run(key, tenant_id=tenant_id)
+    return run_id is not None and interrupt_session(run_id, message)
+
+
+# ── progress ─────────────────────────────────────────────────────────────
+
+
+def _label(tool: Any) -> str:
+    return str(tool or "").replace("_", " ").strip() or "tool"
+
+
+def _seconds(value: float) -> str:
+    return f"{int(value)}s"
 
 
 def format_progress_line(event: dict[str, Any], *, elapsed_s: float) -> str | None:
-    raise NotImplementedError
+    """One compact line for a runner event, or ``None`` for an event with none.
+
+    ``elapsed_s`` is the time since the run started. Arguments and results are
+    never shown: a progress line goes to wherever the conversation is, which
+    may be a room.
+    """
+    kind = event.get("event")
+    elapsed = _seconds(elapsed_s)
+    if kind == "tool_start":
+        line = f"Running {_label(event.get('tool'))} · {elapsed}"
+    elif kind == "tool_end":
+        took = f"{float(event.get('duration_ms') or 0) / 1000:.1f}s"
+        verb = "failed" if event.get("error") else "done"
+        line = f"{_label(event.get('tool'))} {verb} in {took} · {elapsed}"
+    elif kind == "iteration_start":
+        line = f"Step {event.get('iteration', '?')} · {elapsed}"
+    else:
+        return None
+    line = " ".join(line.split())
+    if len(line) > MAX_LINE:
+        line = line[: MAX_LINE - 1] + "…"
+    return line
 
 
 class ProgressMessage:
+    """One progress message per run: posted on the first line, then edited.
+
+    ``post(text)`` returns a handle for the message (``None`` when it did not
+    land); ``edit(handle, text)`` replaces its text. Only the LATEST line is
+    kept, and a single worker writes it no more often than ``min_interval``, so
+    a burst of tool events costs one edit, not fifty. :meth:`close` writes the
+    final state (or ``final``) once. A channel failure is logged and dropped:
+    progress is never the reason a run fails.
+    """
+
     def __init__(
         self,
         post: Callable[[str], Awaitable[Any]],
@@ -43,10 +174,66 @@ class ProgressMessage:
         *,
         min_interval: float = 1.0,
     ) -> None:
-        raise NotImplementedError
+        self._post = post
+        self._edit = edit
+        self._min_interval = min_interval
+        self._started = time.monotonic()
+        self._latest: str | None = None
+        self._written: str | None = None
+        self._handle: Any = None
+        self._posted = False
+        self._next_allowed = 0.0
+        self._worker: asyncio.Task[None] | None = None
+        self._closed = False
 
     async def on_event(self, event: dict[str, Any]) -> None:
-        raise NotImplementedError
+        """A runner ``on_tool``/``on_status`` event. Never raises, never waits."""
+        if self._closed:
+            return
+        line = format_progress_line(event, elapsed_s=time.monotonic() - self._started)
+        if line is None:
+            return
+        self._latest = line
+        if self._worker is None or self._worker.done():
+            self._worker = asyncio.create_task(self._run(), name="channel-progress")
 
     async def close(self, final: str | None = None) -> None:
-        raise NotImplementedError
+        """Stop the worker and write the final state once. Idempotent."""
+        if self._closed:
+            return
+        self._closed = True
+        worker, self._worker = self._worker, None
+        if worker is not None and not worker.done():
+            worker.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await worker
+        if not self._posted and self._latest is None:
+            return  # nothing was ever shown; nothing to finish
+        text = final or self._latest
+        if text and text != self._written:
+            await self._write(text)
+
+    async def _run(self) -> None:
+        while not self._closed:
+            delay = self._next_allowed - time.monotonic()
+            if delay > 0:
+                await asyncio.sleep(delay)
+                continue
+            line = self._latest
+            if line is None or line == self._written:
+                return
+            await self._write(line)
+            self._next_allowed = time.monotonic() + self._min_interval
+
+    async def _write(self, text: str) -> None:
+        try:
+            if not self._posted:
+                self._posted = True
+                self._handle = await self._post(text)
+            elif self._handle is not None:
+                await self._edit(self._handle, text)
+            else:
+                return  # the first post never landed; never post a second message
+            self._written = text
+        except Exception as e:  # noqa: BLE001 - lost progress is not a lost answer
+            logger.debug("Channel progress update failed: %s", type(e).__name__)

@@ -1303,6 +1303,18 @@ class ChannelSettings(SettingsGroup):
         "@name of the Telegram bot, shown on the dashboard so an operator can "
         "find the right conversation.",
     )
+    steer_everywhere: bool = declare(
+        False,
+        "ROBOTHOR_STEER_EVERYWHERE",
+        "Steer and stop a live run from every chat surface, and show its "
+        "progress there: the dashboard chat's composer steers the running task "
+        "and Stop halts it at the next step (POST /chat/steer, /chat/interrupt); "
+        "Slack gains /steer and /stop and the Teams channel accepts them typed; "
+        "Slack and Teams post one progress line per run and edit it in place. "
+        "Off, every surface behaves as before.",
+        since="unreleased",
+        restart_required=False,
+    )
     telegram_rich_messages: bool = declare(
         True,
         "ROBOTHOR_TELEGRAM_RICH_MESSAGES",

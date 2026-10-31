@@ -17,6 +17,7 @@ from genus_teams import credentials as credentials_module
 from genus_teams import router as router_module
 from genus_teams import tokens as tokens_module
 from genus_teams.channel import TeamsChannel
+
 from robothor.engine import live_control
 from robothor.engine.channels import access, inbound
 from robothor.engine.channels.access import AccessDecision
@@ -200,7 +201,9 @@ async def test_the_progress_activity_is_posted_then_updated_in_place(http):
     assert activity_id == "activity-9"
     await channel.update_progress(CONVERSATION, activity_id, "Step 2")
 
-    calls = [r for r in http if (urlsplit(str(r.url)).hostname or "") != "login.microsoftonline.com"]
+    calls = [
+        r for r in http if (urlsplit(str(r.url)).hostname or "") != "login.microsoftonline.com"
+    ]
     assert [r.method for r in calls] == ["POST", "PUT"]
     conv = quote(CONVERSATION, safe="")
     assert str(calls[1].url).endswith(f"/v3/conversations/{conv}/activities/activity-9")

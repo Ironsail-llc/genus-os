@@ -12,6 +12,7 @@ if TYPE_CHECKING:
 
 from robothor.engine import session_registry
 from robothor.engine.context_control import ContextControl, control
+from robothor.engine.live_control import claim_conversation_key
 from robothor.engine.performance import ProgressReporter, periodic_progress, record_compactions
 
 logger = logging.getLogger(__name__)
@@ -20,6 +21,9 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def observe_request(session: Any, on_status: Any) -> AsyncIterator[Any]:
     reporter = ProgressReporter(on_status)
+    # The conversation this run answers, when a chat surface started it inside
+    # `live_control.conversation_scope`; how `/steer` and Stop find it.
+    session.conversation_key = claim_conversation_key()
     session_registry.register(session, on_status=reporter.status)
     state = ContextControl(active_request=getattr(session, "originating_message", ""))
     token = control.set(state)

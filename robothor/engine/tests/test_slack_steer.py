@@ -116,15 +116,21 @@ class _App:
 
 def test_flag_on_registers_steer_and_stop(flag):
     app = _App()
-    _bot()._register_commands(app)
-    assert {"/status", "/clear", "/steer", "/stop"} <= set(app.commands)
+    _bot()._register_run_commands(app)
+    assert app.commands == ["/steer", "/stop"]
 
 
-def test_flag_off_registers_only_what_it_always_did(flag):
+def test_flag_off_registers_neither(flag):
     flag["on"] = False
     app = _App()
-    _bot()._register_commands(app)
-    assert app.commands == ["/status", "/clear"]
+    _bot()._register_run_commands(app)
+    assert app.commands == []
+
+
+def test_start_registers_the_run_commands_beside_status_and_clear():
+    from robothor.engine.tests.astcheck import called_names, function_def
+
+    assert "_register_run_commands" in called_names(function_def("robothor.engine.slack", "start"))
 
 
 class _Client:
@@ -132,7 +138,7 @@ class _Client:
         self.posted: list[dict[str, Any]] = []
         self.updated: list[dict[str, Any]] = []
 
-    async def chat_postMessage(self, **kw: Any) -> dict[str, Any]:
+    async def chat_postMessage(self, **kw: Any) -> dict[str, Any]:  # noqa: N802 — Slack's name
         self.posted.append(kw)
         return {"ok": True, "ts": "1700000000.000100", "channel": kw["channel"]}
 
