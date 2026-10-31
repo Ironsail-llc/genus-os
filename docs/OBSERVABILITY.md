@@ -27,9 +27,21 @@ Per `llm_call` span (GenAI conventions):
 - `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`
 - `gen_ai.response.finish_reasons`
 
-Resource attributes: `service.name=robothor-engine`, `agent.id`. Span status uses
-OTLP codes (1 = ok, 2 = error). Run metrics are also published to the Redis
+Resource attributes: `service.name=robothor-engine`, `agent.id`, merged with the
+standard OpenTelemetry environment: `OTEL_RESOURCE_ATTRIBUTES` (comma-separated
+`key=value`, values percent-decoded, e.g.
+`deployment.environment=staging,service.namespace=example`) overrides those
+defaults, and `OTEL_SERVICE_NAME` overrides `service.name` from either. Span status
+uses OTLP codes (1 = ok, 2 = error). Run metrics are also published to the Redis
 stream `robothor:events:telemetry` for the dashboards.
+
+## Publishing never blocks a run
+
+Telemetry is published when a run finishes, off the engine's event loop: the
+Redis entry and the OTLP export run as background tasks on one shared async Redis
+client and one shared HTTP client (5 s timeout). Traces that finish while an export
+is in flight are sent together in the next request. A sink that is down logs one
+warning, then stays quiet at debug level; it never fails or delays the run.
 
 ## Failure-mode detectors
 
