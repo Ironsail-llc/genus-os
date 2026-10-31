@@ -198,16 +198,22 @@ async def test_a_failed_summary_is_not_drained_and_is_recorded_degraded():
 # ── AC3: anti-thrash backoff ──────────────────────────────────────────
 
 
-def _big_conversation(tag: int) -> list[dict]:
+#: Message size that puts the conversation just over the 64,000-token trigger
+#: the example chain sizes to (chars / 4), and one well past it.
+NEAR_THRESHOLD_CHARS = 4_400
+FAR_PAST_THRESHOLD_CHARS = 9_000
+
+
+def _big_conversation(tag: int, chars: int = NEAR_THRESHOLD_CHARS) -> list[dict]:
     msgs = _head()
     msgs.extend(
-        {"role": "user" if i % 2 == 0 else "assistant", "content": f"iter-{tag} " + "x" * 8_000}
+        {"role": "user" if i % 2 == 0 else "assistant", "content": f"iter-{tag} " + "x" * chars}
         for i in range(60)
     )
     return msgs
 
 
-async def _iterate(iterations: list[int]) -> list[int]:
+async def _iterate(iterations: list[int], sizes: dict[int, int] | None = None) -> list[int]:
     """Run the in-loop budget at each iteration over a context above threshold."""
     compacted_at: list[int] = []
     current = {"iteration": 0}
@@ -224,7 +230,9 @@ async def _iterate(iterations: list[int]) -> list[int]:
         with patch("robothor.engine.compaction.compact", new=fake_compact):
             for it in iterations:
                 current["iteration"] = it
-                session.messages = _big_conversation(it)
+                session.messages = _big_conversation(
+                    it, (sizes or {}).get(it, NEAR_THRESHOLD_CHARS)
+                )
                 await keep_context_within_budget(
                     session,
                     config,
@@ -241,6 +249,12 @@ async def _iterate(iterations: list[int]) -> list[int]:
 
 async def test_no_second_compaction_within_the_gap():
     assert await _iterate([1, 2, 3, 4]) == [1, 4]
+
+
+async def test_a_materially_larger_context_is_not_held_by_the_backoff():
+    """The gap damps small growth; a jump far past the trigger still summarises."""
+    sizes = {2: FAR_PAST_THRESHOLD_CHARS}
+    assert await _iterate([1, 2, 3], sizes) == [1, 2]
 
 
 async def test_without_v2_every_iteration_may_compact(monkeypatch):
@@ -352,3 +366,82 @@ async def test_the_previous_summary_is_updated_in_one_call():
     assert len(summaries) == 1
     assert "UPDATED-SUMMARY-BETA" in summaries[0]["content"]
     assert "PREVIOUS-SUMMARY-ALPHA" not in summaries[0]["content"]
+
+
+async def test_a_slice_over_the_cap_is_summarised_in_full():
+    """Every old message reaches a summary call and a fact-extraction call.
+
+    One call over the newest 32,000 characters would leave the oldest part of
+    the slice in neither the summary nor the facts, and then drop it.
+    """
+    messages = _head()
+    messages.extend(
+        {
+            "role": "user" if i % 2 == 0 else "assistant",
+            "content": f"turn-{i}-MARK " + "detail " * 80,
+        }
+        for i in range(200)
+    )
+    outputs: list[str] = []
+
+    class Chained(FakeCompletion):
+        async def __call__(self, model, **kwargs):
+            if not kwargs.get("response_format"):
+                self.summary = f"SUMMARY-ROUND-{len(outputs)}"
+                outputs.append(self.summary)
+            return await super().__call__(model, **kwargs)
+
+    fake = Chained()
+    with patch("robothor.engine.compaction.pooled_acompletion", new=fake):
+        result = await compact(messages, models=CHAIN, threshold=1, drain_to=1000)
+
+    def prompt(call):
+        return "\n".join(str(m.get("content")) for m in call["messages"])
+
+    summary_prompts = [prompt(c) for c in fake.summary_calls]
+    fact_prompts = [prompt(c) for c in fake.calls if c.get("response_format")]
+    assert len(summary_prompts) > 1
+    assert any("turn-0-MARK" in p for p in summary_prompts)
+    assert any("turn-0-MARK" in p for p in fact_prompts)
+    # The summary is carried forward from one round to the next.
+    for i, p in enumerate(summary_prompts[1:]):
+        assert outputs[i] in p
+    final = [
+        m["content"]
+        for m in result.messages
+        if isinstance(m.get("content"), str) and m["content"].startswith("[Conversation summary]")
+    ]
+    assert final == [f"[Conversation summary]\n{outputs[-1]}"]
+
+
+async def test_pre_flight_compaction_uses_the_run_compaction_model():
+    """The pre-flight path has no agent config; the run's state carries it."""
+    session = SimpleNamespace(
+        messages=[{"role": "user", "content": "hi"}],
+        run_id="run-1",
+        thin_previous_tool_results=lambda **_: 0,
+    )
+    config = SimpleNamespace(
+        id="example-agent", eager_tool_compression=False, model_compaction=CHAIN[1]
+    )
+    state = ContextControl()
+    token = control.set(state)
+    fake = FakeCompletion()
+    try:
+        # Iteration 0: the budget step records the model before the first call.
+        await keep_context_within_budget(
+            session,
+            config,
+            iteration=0,
+            models=CHAIN,
+            broken_models=set(),
+            hook_registry=None,
+            pre_iteration_msg_idx=0,
+        )
+        with patch("robothor.engine.compaction.pooled_acompletion", new=fake):
+            await maybe_compress(_prose_fixture(), CHAIN, threshold=1000)
+    finally:
+        control.reset(token)
+
+    assert fake.calls
+    assert fake.calls[0]["model"] == CHAIN[1]
