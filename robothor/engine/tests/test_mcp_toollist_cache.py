@@ -807,6 +807,54 @@ class TestRetireOnlyADesyncedPipe:
         assert procs[0].terminated is True
 
     @pytest.mark.asyncio
+    async def test_a_request_queued_behind_an_abandoned_one_does_not_hide_it(
+        self, monkeypatch: pytest.MonkeyPatch, pool: Any, cache_on: None
+    ) -> None:
+        """A caller already waiting on the lock must not read the abandoned answer.
+
+        It would take that answer as its own, mark the pipe in step, and leave
+        its own answer unread for the next request to misread.
+        """
+        procs = _install_pipe_stdio(monkeypatch, {"tools/call": 0.1})
+        mcp_client.register_adapter(_adapter("pipe"))
+        session = await pool.get_session("pipe")
+
+        first = asyncio.create_task(session.call_tool("pipe_tool", {}))
+        await asyncio.sleep(0.03)  # first holds the lock, its request written
+        queued = asyncio.create_task(session.call_tool("pipe_tool", {}))
+        await asyncio.sleep(0.01)  # queued now waits on the lock
+        first.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await first
+
+        with pytest.raises(RuntimeError, match="out of step"):
+            await queued
+        await asyncio.sleep(0.15)
+
+        tools = await pool.list_tools_cached("pipe")
+        assert [t["name"] for t in tools] == ["pipe_tool"]
+        assert len(procs) == 2
+        assert procs[0].terminated is True
+
+    @pytest.mark.asyncio
+    async def test_flag_off_a_queued_request_is_sent_as_before(
+        self, monkeypatch: pytest.MonkeyPatch, pool: Any, cache_off: None
+    ) -> None:
+        _install_pipe_stdio(monkeypatch, {"tools/call": 0.1})
+        mcp_client.register_adapter(_adapter("pipe"))
+        session = await pool.get_session("pipe")
+
+        first = asyncio.create_task(session.call_tool("pipe_tool", {}))
+        await asyncio.sleep(0.03)
+        queued = asyncio.create_task(session.call_tool("pipe_tool", {}))
+        await asyncio.sleep(0.01)
+        first.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await first
+
+        assert await queued == {"content": [{"type": "text", "text": '{"ok": true}'}]}
+
+    @pytest.mark.asyncio
     async def test_a_cancelled_list_still_retires_its_pipe(
         self, monkeypatch: pytest.MonkeyPatch, pool: Any, cache_on: None
     ) -> None:
