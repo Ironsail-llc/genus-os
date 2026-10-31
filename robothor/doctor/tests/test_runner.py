@@ -155,9 +155,12 @@ def _threads() -> int:
 
 
 def _open_fds() -> int:
+    """This process's open descriptors: ``/proc/self/fd`` on Linux, the
+    equivalent ``/dev/fd`` on macOS and the BSDs."""
     from pathlib import Path
 
-    return len(list(Path("/proc/self/fd").iterdir()))
+    proc = Path("/proc/self/fd")
+    return len(list((proc if proc.is_dir() else Path("/dev/fd")).iterdir()))
 
 
 def _blocking_check(check_id: str) -> Check:
