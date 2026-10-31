@@ -2212,6 +2212,20 @@ class ServiceSettings(SettingsGroup):
         since="unreleased",
         restart_units=("robothor-bridge",),
     )
+    dashboard_web_vitals: bool = declare(
+        True,
+        "GENUS_DASHBOARD_WEB_VITALS",
+        "Whether the dashboard reports its Core Web Vitals (LCP, INP, CLS, FCP, "
+        "TTFB). On: every page load beacons each metric to /api/vitals, which "
+        "logs one JSON line per metric (event web_vital: name, value, rating, "
+        "path without its query string, view) and appends it to the capped "
+        "Redis stream robothor:events:vitals. No tenant or user is recorded. "
+        "The route is public so the sign-in page reports too, and is limited "
+        "per client (GENUS_DASHBOARD_TRUSTED_PROXIES identifies the client). "
+        "False mounts no reporter and the route stores and logs nothing.",
+        since="unreleased",
+        restart_units=("robothor-app",),
+    )
 
 
 # ---------------------------------------------------------------------------

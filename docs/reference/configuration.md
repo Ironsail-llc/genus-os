@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-488 settings in 18 groups.
+489 settings in 18 groups.
 
 ## autonomy
 
@@ -467,6 +467,7 @@ Side services the instance runs: ports, endpoints and their knobs.
 
 | Variable | Type | Default | Restart | Secret | Since | Description |
 | --- | --- | --- | --- | --- | --- | --- |
+| `GENUS_DASHBOARD_WEB_VITALS` | bool | `true` | `robothor-app` | no | unreleased | Whether the dashboard reports its Core Web Vitals (LCP, INP, CLS, FCP, TTFB). On: every page load beacons each metric to /api/vitals, which logs one JSON line per metric (event web_vital: name, value, rating, path without its query string, view) and appends it to the capped Redis stream robothor:events:vitals. No tenant or user is recorded. The route is public so the sign-in page reports too, and is limited per client (GENUS_DASHBOARD_TRUSTED_PROXIES identifies the client). False mounts no reporter and the route stores and logs nothing. |
 | `GENUS_LOGS_URL` | str | _(empty)_ | `robothor-bridge` | no | unreleased | Where this deployment's logs are viewed when journald is not available (a container writes to standard output). The dashboard's Logs page links to it. A credential-free http(s) URL: it is shown to every operator, so it must never carry a token. Empty shows no link. |
 | `ROBOTHOR_API_PORT` | int | `9099` | `robothor-bridge`, `robothor-app` | no | legacy | RAG orchestrator / API server port. |
 | `ROBOTHOR_CAMERA_HEIGHT` | int | `480` | `robothor-bridge`, `robothor-app` | no | legacy | Capture height in pixels. |

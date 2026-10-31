@@ -27,6 +27,14 @@ describe("dashboard proxy authentication gate", () => {
     expect(authorizeDashboardRequest(request("/api/ready"), null).status).toBe(200);
   });
 
+  it("lets a signed-out page report its web vitals", () => {
+    // The sign-in page is where a signed-out visitor waits; its vitals are
+    // measured too. The route validates strictly and limits per client.
+    expect(authorizeDashboardRequest(request("/api/vitals"), null).status).toBe(200);
+    // Only that path: a neighbour is still private.
+    expect(authorizeDashboardRequest(request("/api/vitals/extra"), null).status).toBe(401);
+  });
+
   it("keeps the Cloudflare Access sign-in handler publicly reachable", () => {
     expect(
       authorizeDashboardRequest(request("/signin/cloudflare?callbackUrl=%2F"), null).status,
