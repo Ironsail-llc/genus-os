@@ -209,7 +209,10 @@ def _field_schema(record: dict[str, Any]) -> dict[str, Any]:
 
 #: The schema is the registry, which changes only when the process restarts.
 #: ``private``: it is an operator-only answer, so no shared cache may keep it.
-_SCHEMA_CACHE_CONTROL = "private, max-age=300"
+#: ``no-cache``: the browser asks every time, and the tag makes the answer a
+#: bodiless 304 -- so an upgrade's new fields show on the next load, and no
+#: copy is ever served without the gate being asked again.
+_SCHEMA_CACHE_CONTROL = "private, no-cache"
 
 
 def _etag_matches(if_none_match: str | None, etag: str) -> bool:
@@ -220,7 +223,7 @@ def _etag_matches(if_none_match: str | None, etag: str) -> bool:
         candidate = candidate.strip()
         if candidate == "*":
             return True
-        if candidate.removeprefix("W/") == etag:
+        if candidate.removeprefix("W/") == etag.removeprefix("W/"):
             return True
     return False
 
@@ -250,7 +253,9 @@ def settings_schema(request: Request) -> Response:
             ]
         }
     )
-    etag = '"' + hashlib.sha256(bytes(response.body)).hexdigest()[:32] + '"'
+    # Weak: the dashboard proxy re-serialises the JSON, so what the browser
+    # holds is equivalent to this body, not byte-identical to it.
+    etag = 'W/"' + hashlib.sha256(bytes(response.body)).hexdigest()[:32] + '"'
     headers = {"ETag": etag, "Cache-Control": _SCHEMA_CACHE_CONTROL}
     if _etag_matches(request.headers.get("if-none-match"), etag):
         return Response(status_code=304, headers=headers)
