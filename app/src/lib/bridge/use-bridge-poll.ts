@@ -117,7 +117,9 @@ export function useBridgePoll({
           setError(null);
           return;
         }
-        setError(await readBridgeReply(res));
+        const reply = await readBridgeReply(res);
+        if (controller.signal.aborted) return;
+        setError(reply);
         return;
       }
       setForbidden(false);

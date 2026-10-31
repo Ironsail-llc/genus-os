@@ -2,8 +2,8 @@
  * What one page load costs the bridge.
  *
  * The shell reads tasks and agents for the sidebar badges; the chat home's
- * landing and the (hidden, but mounted) Dashboard view show the same figures.
- * Three readers of one listing must cost one request, not three.
+ * landing and the Dashboard view show the same figures. Three readers of one
+ * listing must cost one request, not three.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";

@@ -95,15 +95,14 @@ export function GoalsView({ visible }: { visible: boolean }) {
     chosen && polled && polled.id === chosen.id && polled.version >= chosen.version ? polled : chosen;
   const error = actionError || snapshot.error?.message || "";
 
+  // After a write every goals snapshot is stale: the one on screen is read
+  // again now (cancelling a poll that left before the write), and one seeded
+  // by `open` is read as soon as the view switches to it.
   const refresh = useCallback(async () => {
-    await client.fetchQuery({
-      queryKey: [...GOALS_KEY, selectedId],
-      queryFn: () => readSnapshot(selectedId),
-      staleTime: 0,
-    });
-  }, [client, selectedId]);
+    await client.invalidateQueries({ queryKey: GOALS_KEY }, { cancelRefetch: true, throwOnError: true });
+  }, [client]);
 
-  /** Open a goal, and seed its snapshot with what was just read so it is not read again. */
+  /** Open a goal, seeding its snapshot so the detail paints without a second read. */
   const open = useCallback(
     (goal: Goal) => {
       const list = client.getQueryData<Snapshot>([...GOALS_KEY, selectedId])?.list;

@@ -23,7 +23,8 @@ function Reader({ id }: { id: string }) {
 }
 
 function withClient(children: ReactNode) {
-  const client = new QueryClient();
+  // As the shell's client: no silent retry, so a failure is reported at once.
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
 }
 

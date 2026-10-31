@@ -106,7 +106,9 @@ export function PersonalAutomationPanel() {
   // A first read that failed says why; a later poll that fails keeps the last answer quietly.
   const shownMessage = message || (snapshot.data ? "" : snapshot.error?.message ?? "");
   async function refresh() {
-    await client.fetchQuery({ queryKey: AUTONOMY_KEY, queryFn: () => loadSnapshot(), staleTime: 0 });
+    // A poll already on the wire may have left before the write; it is
+    // cancelled and read again rather than handed back.
+    await client.refetchQueries({ queryKey: AUTONOMY_KEY }, { cancelRefetch: true, throwOnError: true });
   }
   async function act(work: () => Promise<unknown>) {
     setBusy(true); setMessage("");

@@ -33,5 +33,12 @@ export async function executeTool(tool: string, params: Record<string, unknown>,
     throw new FetchRefused(endpoint, 0);
   }
   if (!res.ok) throw new FetchRefused(endpoint, res.status);
-  return res.json();
+  try {
+    return await res.json();
+  } catch (err) {
+    // A body cut off mid-read, or a non-JSON 200 from something in between,
+    // is no answer: reported as status 0, never shown as an empty list.
+    if (signal.aborted) throw err;
+    throw new FetchRefused(endpoint, 0);
+  }
 }

@@ -47,7 +47,13 @@ async function fetchFleet(signal: AbortSignal): Promise<Agent[]> {
   }
   // A 200 whose body is not a list (a proxy page, an older bridge) shows as an
   // empty fleet rather than taking the view down.
-  const body: unknown = await res.json();
+  let body: unknown;
+  try {
+    body = await res.json();
+  } catch (err) {
+    if (signal.aborted) throw err;
+    throw new FleetRefused("Could not reach the bridge.");
+  }
   return Array.isArray(body) ? (body as Agent[]) : [];
 }
 
