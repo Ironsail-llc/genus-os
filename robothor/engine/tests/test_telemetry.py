@@ -391,3 +391,20 @@ class TestOtlpResourceAttributes:
         assert res["spaced"] == "yes"
         assert "novalue" not in res
         assert "" not in res
+
+
+class TestPublishFromAWorkerThread:
+    async def test_worker_thread_hands_off_to_the_loop_publisher(self, async_redis):
+        """Finalizers that run in ``asyncio.to_thread`` reuse the loop's async client."""
+        aio, client = async_redis
+        _trace(1).publish_metrics(dict(_RUN_DATA))
+        await get_task_registry().drain(timeout=2.0)
+
+        with patch("redis.Redis") as sync_client:
+            await asyncio.to_thread(_trace(2).publish_metrics, dict(_RUN_DATA))
+            await asyncio.sleep(0.05)
+            await get_task_registry().drain(timeout=2.0)
+
+        sync_client.assert_not_called()
+        assert client.xadd.await_count == 2
+        assert aio.Redis.call_count == 1
