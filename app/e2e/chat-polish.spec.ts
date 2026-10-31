@@ -77,7 +77,7 @@ test.describe("Chat polish", () => {
     await setupMocks(page);
     await page.goto("/", { waitUntil: "networkidle" });
 
-    const reply = page.locator('[data-testid="message-assistant"]').last();
+    const reply = page.locator('[data-testid="message-row"]:has([data-testid="message-assistant"])').last();
     await expect(reply).toContainText("Four");
     await reply.hover();
     await reply.getByRole("button", { name: "Copy message" }).click();
@@ -91,7 +91,7 @@ test.describe("Chat polish", () => {
     const { sends } = await setupMocks(page);
     await page.goto("/", { waitUntil: "networkidle" });
 
-    const reply = page.locator('[data-testid="message-assistant"]').last();
+    const reply = page.locator('[data-testid="message-row"]:has([data-testid="message-assistant"])').last();
     await expect(reply).toContainText("Four");
     const regen = reply.getByRole("button", { name: "Regenerate response" });
     await regen.focus();
@@ -110,7 +110,7 @@ test.describe("Chat polish", () => {
     await expect(page.locator("[data-testid=message-list] time")).toHaveCount(2);
 
     await page.getByRole("button", { name: /load earlier/i }).click();
-    await expect(page.getByText("good morning")).toBeVisible();
+    await expect(page.getByTestId("message-list").getByText("good morning")).toBeVisible();
 
     expect(historyUrls.some((q) => q.includes("before=3"))).toBe(true);
     const texts = await page.locator("[data-testid=message-user], [data-testid=message-assistant]").allTextContents();

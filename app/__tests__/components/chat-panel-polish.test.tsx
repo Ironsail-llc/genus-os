@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, within } from "@testing-library/react";
 import React from "react";
 
 // Mock react-markdown
@@ -234,9 +234,10 @@ describe("ChatPanel polish", () => {
     const edits = screen.getAllByRole("button", { name: "Edit message" });
     fireEvent.click(edits[1]);
     expect(screen.getByTestId("chat-input")).toHaveValue("fix me");
-    expect(screen.queryByText("dropped reply")).toBeNull();
-    expect(screen.queryByText("fix me")).toBeNull();
-    expect(screen.getByText("kept reply")).toBeInTheDocument();
+    const list = within(screen.getByTestId("message-list"));
+    expect(list.queryByText("dropped reply")).toBeNull();
+    expect(list.queryByText("fix me")).toBeNull();
+    expect(list.getByText("kept reply")).toBeInTheDocument();
     expect(sends).toHaveLength(0);
   });
 });

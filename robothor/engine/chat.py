@@ -560,18 +560,18 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
 
 @router.get("/history")
 async def chat_history(request: Request, session_key: str = "", limit: int = 50) -> JSONResponse:
-    """Return conversation history for a session."""
+    """Return conversation history for a session (a page of it: chat_history_page.py)."""
     auth = _auth_context(request)
     session_key = _effective_session_key(auth, session_key)
     session = _get_session(session_key)
-    messages = session.history[-limit:] if limit > 0 else session.history
-
+    from robothor.engine.chat_history_page import history_page
     from robothor.engine.runtime.chat_control import recovery_scope
 
+    page = await history_page(session.history, session_key, limit, request.query_params, auth)
     return JSONResponse(
         {
             "sessionKey": session_key,
-            "messages": messages,
+            **page,
             "recoveryScope": recovery_scope(auth, session_key),
         },
         headers={"Cache-Control": "no-store"},

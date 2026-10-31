@@ -3,6 +3,7 @@
 import { memo } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { MarkdownPre } from "@/components/chat/code-block";
 
 /**
  * Typography for rendered markdown. `prose` comes from the typography plugin
@@ -22,6 +23,8 @@ const components: Components = {
     ) : (
       <a {...props} target="_blank" rel="noopener noreferrer" />
     ),
+  // Fenced code: language label, copy button, highlighting (code-block.tsx).
+  pre: ({ children }) => <MarkdownPre>{children}</MarkdownPre>,
 };
 
 const remarkPlugins = [remarkGfm];

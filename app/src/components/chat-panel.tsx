@@ -17,6 +17,8 @@ import { type ChatRecoveryRequest } from "@/components/chat-recovery";
 import { ChatMarkdown } from "@/components/chat/chat-markdown";
 import { MessageBubble } from "@/components/chat/message-bubble";
 import { useMessageWindow } from "@/components/chat/use-message-window";
+import { useHistoryPager } from "@/components/chat/use-history-pager";
+import { historyToMessages } from "@/lib/chat/history-messages";
 import { usePinnedScroll } from "@/components/chat/use-pinned-scroll";
 import { useStableCallback } from "@/components/chat/use-stable-callback";
 import { readChatStream, type ChatStreamData } from "@/lib/chat/read-chat-stream";
@@ -38,7 +40,10 @@ interface ChatMessage {
   id: string;
   role: "user" | "assistant";
   content: string;
-  timestamp: Date;
+  /** Absent for a history row whose time the engine did not send. */
+  timestamp?: Date;
+  /** The stored row id, for history pages. */
+  serverId?: number;
   recovery?: ChatRecoveryRequest;
   /** Where a message sent while the agent was working went (live follow-ups). */
   note?: string;
@@ -267,6 +272,8 @@ export function ChatPanel({
   );
   const { visible: visibleMessages, hiddenCount, showEarlier } = useMessageWindow(messages);
   const onBubbleRecovered = useStableCallback(recoverMessage);
+  const historyPager = useHistoryPager(agentQuery, messages, setMessages);
+  const settleHistoryPages = historyPager.settle;
 
   /** An `approval_required` event: the agent asked something and is waiting.
    *
@@ -438,29 +445,7 @@ export function ChatPanel({
         const scope = typeof data.recoveryScope === "string" ? data.recoveryScope : undefined;
         recoveryScopes.current[agent] = scope ?? "";
         {
-          const loaded: ChatMessage[] = (Array.isArray(data.messages) ? data.messages : [])
-            .filter(
-              (m: { role: string }) =>
-                m.role === "user" || m.role === "assistant"
-            )
-            .map(
-              (
-                m: { role: "user" | "assistant"; content: string | Array<{ type: string; text?: string }> },
-                i: number
-              ) => ({
-                id: `hist-${i}`,
-                role: m.role,
-                content: stripResidualMarkers(
-                  typeof m.content === "string"
-                    ? m.content
-                    : m.content
-                        .filter((b) => b.type === "text")
-                        .map((b) => b.text || "")
-                        .join("")
-                ),
-                timestamp: new Date(),
-              })
-            );
+          const loaded: ChatMessage[] = historyToMessages(data.messages);
           const restored: ChatMessage[] = scope ? pendingRequests(scope)
             .filter((requestId) => requestId !== requestIdRef.current)
             .map((requestId) => ({
@@ -468,6 +453,7 @@ export function ChatPanel({
               timestamp: new Date(), recovery: { requestId, agent, scope },
             })) : [];
           setMessages([...loaded, ...restored]);
+          settleHistoryPages(data.hasMore === true);
           setHistorySettledFor(agentQuery);
         }
       })
@@ -479,7 +465,7 @@ export function ChatPanel({
     return () => {
       cancelled = true;
     };
-  }, [agentQuery, agent]);
+  }, [agentQuery, agent, settleHistoryPages]);
 
   // Recover pending plan on page refresh
   //
@@ -742,16 +728,17 @@ export function ChatPanel({
     noteMessages(ids, STOPPED_NOTE);
   }, [noteMessages]);
 
-  const sendMessage = useCallback(async (queued?: QueuedFollowup[] | unknown) => {
+  // `resend` is Regenerate's text: sent as a new turn, the composer left alone.
+  const sendMessage = useCallback(async (queued?: QueuedFollowup[] | unknown, resend?: string) => {
     const flushing = Array.isArray(queued) ? (queued as QueuedFollowup[]) : null;
     if (!flushing && (deepMode || planMode)) {
       // Deep mode routes through plan mode (deep always plans first).
       // Standalone plan mode also uses sendPlanMessage.
-      return sendPlanMessage();
+      return sendPlanMessage(resend);
     }
 
-    const text = flushing ? [...flushing].sort((a, b) => a.seq - b.seq).map((q) => q.text).join("\n\n") : input.trim();
-    if (!flushing && text && isStreaming) return sendFollowup(text);
+    const text = flushing ? [...flushing].sort((a, b) => a.seq - b.seq).map((q) => q.text).join("\n\n") : (resend ?? input).trim();
+    if (!flushing && !resend && text && isStreaming) return sendFollowup(text);
     if (!text || isStreaming) return;
 
     setActiveAsks([]);
@@ -767,7 +754,7 @@ export function ChatPanel({
       noteMessages(flushing.map((q) => q.id), undefined);
     } else {
       setMessages((prev) => [...prev, userMsg]);
-      setInput("");
+      if (resend === undefined) setInput("");
     }
     setIsStreaming(true);
     setStreamingText("");
@@ -1170,6 +1157,26 @@ export function ChatPanel({
     sendPlanMessage(feedback);
   }, [activePlan, planFeedback, sendPlanMessage]);
 
+  const busy = isStreaming || isPlanExecuting || isPlanning || isDeepReasoning;
+  // Regenerate: the user turn before this reply goes out again as a new turn.
+  const regenerate = useStableCallback((id: string) => {
+    if (busy) return;
+    const at = messages.findIndex((m) => m.id === id);
+    const asked = messages.slice(0, at).reverse().find((m) => m.role === "user");
+    if (asked) void sendMessage(undefined, asked.content);
+  });
+  // Edit and resend: the text goes back in the composer, and it and everything
+  // after it leave the view. Local only: the engine keeps its history (it has no
+  // truncation), so the agent still sees the earlier exchange.
+  const editMessage = useStableCallback((id: string) => {
+    if (busy) return;
+    const at = messages.findIndex((m) => m.id === id);
+    if (at < 0) return;
+    setInput(messages[at].content);
+    setMessages((prev) => prev.slice(0, at));
+    setTimeout(() => inputRef.current?.focus(), 0);
+  });
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -1347,8 +1354,28 @@ export function ChatPanel({
               </button>
             </div>
           )}
+          {hiddenCount === 0 && historyPager.hasMore && (
+            <div className="flex justify-center">
+              <button
+                type="button"
+                onClick={() => void historyPager.loadEarlier()}
+                disabled={historyPager.loading}
+                className="text-xs text-muted-foreground hover:text-foreground disabled:opacity-50"
+                data-testid="load-earlier"
+              >
+                {historyPager.loading ? "Loading earlier messages…" : "Load earlier messages"}
+              </button>
+            </div>
+          )}
           {visibleMessages.map((msg) => (
-            <MessageBubble key={msg.id} msg={msg} onRecovered={onBubbleRecovered} />
+            <MessageBubble
+              key={msg.id}
+              msg={msg}
+              onRecovered={onBubbleRecovered}
+              busy={busy}
+              onRegenerate={regenerate}
+              onEdit={editMessage}
+            />
           ))}
 
           {/* The agent's own question — `approval_required` over the run's stream */}

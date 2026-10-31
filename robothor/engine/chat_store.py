@@ -397,6 +397,49 @@ def load_session(
         }
 
 
+def load_history_page(
+    session_key: str,
+    *,
+    limit: int,
+    offset: int = 0,
+    before: int | None = None,
+    tenant_id: str = DEFAULT_TENANT,
+) -> dict[str, Any] | None:
+    """One page of a session's stored history, oldest first, with each row's time.
+
+    ``before`` is a ``chat_messages.id`` cursor: the page ends just before it,
+    which stays stable while new turns are appended. ``offset`` skips that many
+    rows back from the cursor (or from the newest row). One row beyond ``limit``
+    is fetched to answer ``hasMore`` without a COUNT.
+
+    Each message is the stored payload plus ``id`` and ``timestamp`` (ISO 8601,
+    the row's ``created_at``). ``None`` when the page has no rows at all.
+    """
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            """
+            SELECT m.id, m.message, m.created_at
+            FROM chat_messages m
+            JOIN chat_sessions s ON s.id = m.session_id
+            WHERE s.tenant_id = %s AND s.session_key = %s
+              AND (%s::bigint IS NULL OR m.id < %s)
+            ORDER BY m.id DESC
+            LIMIT %s OFFSET %s
+            """,
+            (tenant_id, session_key, before, before, limit + 1, offset),
+        )
+        rows = cur.fetchall()
+    if not rows:
+        return None
+    page = rows[:limit]
+    messages = [
+        {**row["message"], "id": row["id"], "timestamp": row["created_at"].isoformat()}
+        for row in reversed(page)
+    ]
+    return {"messages": messages, "hasMore": len(rows) > limit}
+
+
 def load_all_sessions(
     limit_per_session: int = 20,
     ttl_days: int = 7,
