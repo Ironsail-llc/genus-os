@@ -1750,6 +1750,15 @@ async def main() -> int:
         task.cancel()
 
     await asyncio.gather(*pending, return_exceptions=True)
+
+    # Last: the pooled HTTP clients (backing services, Ollama) outlive every
+    # subsystem that might still be finishing a request.
+    try:
+        from robothor.http_clients import close_shared_clients
+
+        await close_shared_clients()
+    except Exception as e:  # noqa: BLE001 - shutdown must not raise
+        logger.debug("Closing shared HTTP clients failed: %s", e)
     logger.info("Engine stopped")
     return 1 if subsystem_crashed else 0
 

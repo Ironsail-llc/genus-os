@@ -29,10 +29,12 @@ import logging
 import math
 import os
 import random
-from contextlib import asynccontextmanager
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from typing import TYPE_CHECKING, Any
 
 import httpx
+
+from robothor.http_clients import shared_async_client
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, AsyncIterator
@@ -72,17 +74,48 @@ EMBED_BACKOFF_CAP_SECONDS = 45.0
 EMBED_BACKOFF_JITTER_FRACTION = 0.25
 
 
-def _probe_client(timeout: float) -> httpx.AsyncClient:
+class _TimedClient:
+    """The shared pooled client, with this call's timeout on every request.
+
+    The pool is shared by every Ollama call on the loop; the timeout is not, so
+    it travels with each request instead of living on the client.
+    """
+
+    def __init__(self, client: httpx.AsyncClient, timeout: float) -> None:
+        self._client = client
+        self._timeout = timeout
+
+    async def get(self, url: str, **kwargs: Any) -> httpx.Response:
+        kwargs.setdefault("timeout", self._timeout)
+        return await self._client.get(url, **kwargs)
+
+    async def post(self, url: str, **kwargs: Any) -> httpx.Response:
+        kwargs.setdefault("timeout", self._timeout)
+        return await self._client.post(url, **kwargs)
+
+    def stream(
+        self, method: str, url: str, **kwargs: Any
+    ) -> AbstractAsyncContextManager[httpx.Response]:
+        kwargs.setdefault("timeout", self._timeout)
+        return self._client.stream(method, url, **kwargs)
+
+
+def _shared(timeout: float) -> _TimedClient:
+    return _TimedClient(shared_async_client("ollama", transport=_transport), timeout)
+
+
+@asynccontextmanager
+async def _probe_client(timeout: float) -> AsyncIterator[_TimedClient]:
     """An UNGATED client, for cheap metadata calls only (``/api/tags``).
 
     Availability probes must never queue behind inference: a probe that waits for a
     busy GPU reports the model as missing, and callers degrade as though it were.
     """
-    return httpx.AsyncClient(timeout=timeout, transport=_transport)
+    yield _shared(timeout)
 
 
 @asynccontextmanager
-async def _client(timeout: float, lane: Lane | None = None) -> AsyncIterator[httpx.AsyncClient]:
+async def _client(timeout: float, lane: Lane | None = None) -> AsyncIterator[_TimedClient]:
     """One inference slot, then a client. Every request-bearing call goes through here.
 
     This is the single funnel for local inference in this module, so gating it covers
@@ -94,8 +127,7 @@ async def _client(timeout: float, lane: Lane | None = None) -> AsyncIterator[htt
     from robothor.llm.local_gate import gate
 
     async with gate().slot(lane=lane or _Lane.NORMAL):
-        async with httpx.AsyncClient(timeout=timeout, transport=_transport) as client:
-            yield client
+        yield _shared(timeout)
 
 
 # Transport-level failures worth retrying: timeouts, connect/read/write resets
