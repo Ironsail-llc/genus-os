@@ -301,33 +301,28 @@ def load_adapters(adapter_dir: Path | None = None) -> list[AdapterConfig]:
 
     import yaml
 
+    from robothor.engine.config import env_snapshot, env_snapshot_holds
+
     adapters: list[AdapterConfig] = []
     for path in sorted(d.glob("*.yaml")):
         key = _adapter_file_key(path)
         cached = _adapter_file_cache.get(str(path))
-        if key is not None and cached is not None and cached[0] == key:
-            from robothor.engine.config import env_snapshot_holds
-
-            if env_snapshot_holds(cached[1]):
-                if cached[2] is not None:
-                    adapters.append(cached[2])
+        if key is not None and cached is not None:
+            cached_key, snapshot, cached_adapter = cached
+            if cached_key == key and env_snapshot_holds(snapshot):
+                if cached_adapter is not None:
+                    adapters.append(cached_adapter)
                 continue
         try:
             with path.open() as f:
                 text = f.read()
             data = yaml.safe_load(text)
-            from robothor.engine.config import env_snapshot
-
-            snapshot = env_snapshot(text, _ENV_VAR_RE) if key is not None else ()
+            adapter = _parse_adapter(data) if isinstance(data, dict) else None
+            if key is not None:
+                _adapter_file_cache[str(path)] = (key, env_snapshot(text, _ENV_VAR_RE), adapter)
             if not isinstance(data, dict):
                 logger.warning("Adapter file %s is not a YAML mapping, skipping", path)
-                if key is not None:
-                    _adapter_file_cache[str(path)] = (key, snapshot, None)
-                continue
-            adapter = _parse_adapter(data)
-            if key is not None:
-                _adapter_file_cache[str(path)] = (key, snapshot, adapter)
-            if adapter:
+            elif adapter:
                 adapters.append(adapter)
                 logger.info(
                     "Loaded adapter '%s' (%s) from %s", adapter.name, adapter.transport, path
