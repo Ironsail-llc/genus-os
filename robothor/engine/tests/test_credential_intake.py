@@ -352,3 +352,37 @@ async def test_after_a_store_every_later_redaction_takes_the_value(intake, monke
     history.append({"role": "user", "content": line})
     leaked_history = SHAPELESS_KEY in repr(list(history))
     assert not leaked_history
+
+
+# ── the gate does not block the event loop ───────────────────────────────────
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tool", ["vault_get", "vault_set", "vault_test", "vault_list", "vault_delete"]
+)
+async def test_the_gate_runs_off_the_event_loop(intake, monkeypatch, tool):
+    """The gate reads the agent's manifest from disk and the governed flag from
+    the database (``robothor.flags.store``). Both are blocking I/O; on the loop
+    thread they stall every other run for as long as the read takes."""
+    import threading
+
+    from robothor.engine import feature_flags
+    from robothor.engine.tools.handlers import vault as vault_tools
+
+    seen: list[bool] = []
+
+    def tier(agent_id):
+        seen.append(threading.current_thread() is threading.main_thread())
+        return ""
+
+    def mode():
+        seen.append(threading.current_thread() is threading.main_thread())
+        return "off"
+
+    monkeypatch.setattr(vault_tools, "credential_tier", tier)
+    monkeypatch.setattr(feature_flags, "credential_intake_mode", mode)
+    session = intake["live"]()
+    await HANDLERS[tool](_store_args(), _ctx(session))
+    assert seen, "the gate never ran"
+    assert not any(seen), "the gate ran on the event-loop thread"
