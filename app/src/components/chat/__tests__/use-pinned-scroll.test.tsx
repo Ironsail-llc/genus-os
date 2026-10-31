@@ -5,7 +5,7 @@
  * restarted the animation ten times a second and dragged anyone reading back up
  * the conversation down to the bottom again.
  */
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, fireEvent } from "@testing-library/react";
 import { usePinnedScroll } from "../use-pinned-scroll";
 
@@ -74,5 +74,49 @@ describe("usePinnedScroll", () => {
     setGeometry(box, { scrollHeight: 1100, clientHeight: 400 });
     rerender(<Harness tick={0} repin={1} />);
     expect(box.scrollTop).toBe(1100);
+  });
+
+  describe("when content grows with nothing else changing", () => {
+    // Bubbles offscreen are laid out at a placeholder height until rendered,
+    // so the list can grow after the jump to the bottom with no new message.
+    let resize: (() => void) | null = null;
+    afterEach(() => {
+      vi.unstubAllGlobals();
+      resize = null;
+    });
+    function stubResizeObserver() {
+      vi.stubGlobal(
+        "ResizeObserver",
+        class {
+          constructor(cb: () => void) {
+            resize = cb;
+          }
+          observe() {}
+          unobserve() {}
+          disconnect() {}
+        },
+      );
+    }
+
+    it("stays at the bottom while pinned", () => {
+      stubResizeObserver();
+      const { getByTestId } = render(<Harness tick={0} repin={0} />);
+      const box = getByTestId("box");
+      setGeometry(box, { scrollHeight: 1600, clientHeight: 400 });
+      resize?.();
+      expect(box.scrollTop).toBe(1600);
+    });
+
+    it("leaves a reader who scrolled up where they are", () => {
+      stubResizeObserver();
+      const { getByTestId } = render(<Harness tick={0} repin={0} />);
+      const box = getByTestId("box");
+      setGeometry(box, { scrollHeight: 1000, clientHeight: 400 });
+      box.scrollTop = 100;
+      fireEvent.scroll(box);
+      setGeometry(box, { scrollHeight: 1600, clientHeight: 400 });
+      resize?.();
+      expect(box.scrollTop).toBe(100);
+    });
   });
 });

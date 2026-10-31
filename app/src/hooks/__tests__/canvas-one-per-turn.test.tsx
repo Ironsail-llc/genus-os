@@ -11,9 +11,19 @@ import { render, fireEvent, screen, waitFor } from "@testing-library/react";
 import { VisualStateProvider, useVisualState } from "@/hooks/use-visual-state";
 import { useDashboardAgent } from "@/hooks/use-dashboard-agent";
 
-function Canvas() {
-  useDashboardAgent();
-  return null;
+function Canvas({ name = "canvas" }: { name?: string }) {
+  const { error, retry } = useDashboardAgent();
+  return (
+    <>
+      <span data-testid={`${name}-error`}>{error ?? ""}</span>
+      <button data-testid={`${name}-retry`} onClick={retry} />
+    </>
+  );
+}
+
+function Spinner() {
+  const { isUpdating } = useVisualState();
+  return <span data-testid="updating">{isUpdating ? "yes" : "no"}</span>;
 }
 
 const turn = (reply: string) => [
@@ -84,5 +94,94 @@ describe("canvas generation per turn", () => {
     fireEvent.click(screen.getByTestId("first"));
     await new Promise((r) => setTimeout(r, 400));
     expect(generateCalls(fetcher)).toBe(0);
+  });
+
+  it("shows a failed generation on every mounted canvas, not only the one that asked", async () => {
+    const fetcher = vi.fn(async () => Response.json({ error: "generation failed" }));
+    vi.stubGlobal("fetch", fetcher);
+    render(
+      <VisualStateProvider>
+        <Chat />
+        <Canvas name="hidden" />
+        <Canvas name="visible" />
+      </VisualStateProvider>,
+    );
+    fireEvent.click(screen.getByTestId("first"));
+    await waitFor(() => expect(screen.getByTestId("visible-error").textContent).toBe("generation failed"));
+    expect(screen.getByTestId("hidden-error").textContent).toBe("generation failed");
+    expect(generateCalls(fetcher)).toBe(1);
+  });
+
+  it("retries from a canvas that did not make the failed request", async () => {
+    const fetcher = vi.fn(async () => Response.json({ error: "generation failed" }));
+    vi.stubGlobal("fetch", fetcher);
+    render(
+      <VisualStateProvider>
+        <Chat />
+        <Canvas name="hidden" />
+        <Canvas name="visible" />
+      </VisualStateProvider>,
+    );
+    fireEvent.click(screen.getByTestId("first"));
+    await waitFor(() => expect(screen.getByTestId("visible-error").textContent).toBe("generation failed"));
+    fireEvent.click(screen.getByTestId("visible-retry"));
+    await waitFor(() => expect(generateCalls(fetcher)).toBe(2));
+  });
+
+  it("hands the turn to the canvas that remains when the one generating it unmounts", async () => {
+    let answer!: (res: Response) => void;
+    const fetcher = vi.fn((_url: string | URL | Request, init?: RequestInit) => {
+      if (generateCalls(fetcher) === 1) {
+        // The first request never answers; it is aborted by its canvas leaving.
+        return new Promise<Response>((_resolve, reject) =>
+          init?.signal?.addEventListener("abort", () =>
+            reject(Object.assign(new Error("aborted"), { name: "AbortError" })),
+          ),
+        );
+      }
+      return new Promise<Response>((resolve) => { answer = resolve; });
+    });
+    vi.stubGlobal("fetch", fetcher);
+    const tree = (rail: boolean, dashboard: boolean) => (
+      <VisualStateProvider>
+        <Chat />
+        <Spinner />
+        {dashboard && <Canvas name="dashboard" />}
+        {rail && <Canvas name="rail" />}
+      </VisualStateProvider>
+    );
+    const { rerender } = render(tree(true, false));
+    fireEvent.click(screen.getByTestId("first"));
+    await waitFor(() => expect(generateCalls(fetcher)).toBe(1));
+    expect(screen.getByTestId("updating").textContent).toBe("yes");
+
+    // The operator closes the rail and opens the dashboard's AI canvas.
+    rerender(tree(false, true));
+    await waitFor(() => expect(generateCalls(fetcher)).toBe(2));
+    answer(new Response(null, { status: 204 }));
+    await waitFor(() => expect(screen.getByTestId("updating").textContent).toBe("no"));
+  });
+
+  it("puts the spinner down when the only canvas generating a turn unmounts", async () => {
+    const fetcher = vi.fn((_url: string | URL | Request, init?: RequestInit) =>
+      new Promise<Response>((_resolve, reject) =>
+        init?.signal?.addEventListener("abort", () =>
+          reject(Object.assign(new Error("aborted"), { name: "AbortError" })),
+        ),
+      ),
+    );
+    vi.stubGlobal("fetch", fetcher);
+    const tree = (rail: boolean) => (
+      <VisualStateProvider>
+        <Chat />
+        <Spinner />
+        {rail && <Canvas name="rail" />}
+      </VisualStateProvider>
+    );
+    const { rerender } = render(tree(true));
+    fireEvent.click(screen.getByTestId("first"));
+    await waitFor(() => expect(screen.getByTestId("updating").textContent).toBe("yes"));
+    rerender(tree(false));
+    await waitFor(() => expect(screen.getByTestId("updating").textContent).toBe("no"));
   });
 });
