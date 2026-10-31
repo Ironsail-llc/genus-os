@@ -432,9 +432,19 @@ def load_history_page(
         rows = cur.fetchall()
     if not rows:
         return None
+    # Redacted on the way OUT as well: rows written before the store redacted
+    # on the way in still hold credentials, and a rule added since applies to
+    # old rows too. The in-memory path gets this from ChatHistory; this one
+    # reads the store directly, so it does it here.
+    from robothor.secrets.redaction import redact_message
+
     page = rows[:limit]
     messages = [
-        {**row["message"], "id": row["id"], "timestamp": row["created_at"].isoformat()}
+        {
+            **redact_message(row["message"]),
+            "id": row["id"],
+            "timestamp": row["created_at"].isoformat(),
+        }
         for row in reversed(page)
     ]
     return {"messages": messages, "hasMore": len(rows) > limit}
