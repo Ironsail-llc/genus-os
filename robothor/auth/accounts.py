@@ -740,9 +740,8 @@ def issue_for_account(
     """
     from robothor.auth import tokens
 
-    if account.get("status") != "active":
-        raise AccountInactiveError("account is not active")
     raw_refresh, refresh_hash = tokens.new_refresh_token()
+    # ``token_pair`` refuses an inactive account, before any session is stored.
     pair = token_pair(account, refresh_token=raw_refresh)
     create_session(
         str(account["id"]),
