@@ -162,6 +162,9 @@ HOST_ROLES: frozenset[str] = frozenset({"owner", "admin"})
 #: set would leak back into the parent when it returned.
 _MAX_PLANS = 4096
 
+#: How a degraded or refused plan reads in its ``sandbox_playground`` row.
+_OUTCOME = {"host": "run on the host", "refuse": "be refused", "sandbox": "run in the sandbox"}
+
 #: Where the live run carries its plan (see ``exec_plan_for``).
 _RUN_ATTR = "_exec_plan"
 
@@ -320,7 +323,7 @@ async def establish_execution_plan(
             run_id,
             "sandbox_playground",
             "observed",
-            f"exec will {'run on the host' if plan.where == 'host' else 'be refused'}: {plan.reason}",
+            f"exec will {_OUTCOME[plan.where]}: {plan.reason}",
         )
     return plan
 
