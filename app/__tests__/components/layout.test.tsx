@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 
 // Mock next/image
 vi.mock("next/image", () => ({
@@ -83,21 +83,30 @@ vi.mock("@/lib/event-bus/use-event-stream", () => ({
 
 import { AppShell } from "@/components/layout/app-shell";
 
+// Views load on first visit; the first import of a real view module in a test
+// file includes its transform, which can outlast the default one second.
+const CHUNK_WAIT = { timeout: 5000 };
+
 describe("Layout (AppShell)", () => {
   it("renders the app shell container", () => {
     render(<AppShell />);
     expect(screen.getByTestId("app-shell")).toBeInTheDocument();
   });
 
-  it("contains sidebar, dashboard view, and chat panel", () => {
+  it("contains sidebar, dashboard view, and chat panel", async () => {
     render(<AppShell />);
     expect(screen.getByTestId("sidebar")).toBeInTheDocument();
-    expect(screen.getByTestId("dashboard-view")).toBeInTheDocument();
     expect(screen.getByTestId("chat-panel")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("nav-dashboard"));
+    expect(await screen.findByTestId("dashboard-view", {}, CHUNK_WAIT)).toBeInTheDocument();
   });
 
-  it("renders all three views (display:none pattern)", () => {
+  it("keeps opened views mounted together (display:none pattern)", async () => {
     render(<AppShell />);
+    for (const view of ["dashboard", "tasks", "agents"]) {
+      fireEvent.click(screen.getByTestId(`nav-${view}`));
+      await screen.findByTestId(`${view}-view`, {}, CHUNK_WAIT);
+    }
     expect(screen.getByTestId("dashboard-view")).toBeInTheDocument();
     expect(screen.getByTestId("tasks-view")).toBeInTheDocument();
     expect(screen.getByTestId("agents-view")).toBeInTheDocument();

@@ -172,7 +172,7 @@ function filterParams(filters: Filters): URLSearchParams {
 }
 
 export interface AuditViewProps {
-  /** The shell keeps every view mounted; this is the load gate. */
+  /** The shell keeps every opened view mounted; this is the load gate. */
   visible?: boolean;
   /** Session role. UX only — the bridge gates both routes itself. */
   role?: string | null;

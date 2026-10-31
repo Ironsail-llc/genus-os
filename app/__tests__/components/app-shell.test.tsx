@@ -123,6 +123,10 @@ vi.mock("@/hooks/use-mobile", () => ({
 
 import { AppShell } from "@/components/layout/app-shell";
 
+// Views load on first visit; the first import of a real view module in a test
+// file includes its transform, which can outlast the default one second.
+const CHUNK_WAIT = { timeout: 5000 };
+
 describe("AppShell", () => {
   beforeEach(() => {
     // The active view lives in the query string now — reset it between tests.
@@ -189,13 +193,14 @@ describe("AppShell", () => {
     expect(screen.getByTestId("chat-panel")).toBeInTheDocument();
   });
 
-  it("defaults to the chat view, with the old dashboard one click away", () => {
+  it("defaults to the chat view, with the old dashboard one click away", async () => {
     render(<AppShell />);
     expect(screen.getByTestId("header-title")).toHaveTextContent("Chat");
-    expect(screen.getByTestId("dashboard-view").style.display).toBe("none");
+    // A view is mounted on its first visit, not on page load.
+    expect(screen.queryByTestId("dashboard-view")).toBeNull();
     fireEvent.click(screen.getByTestId("nav-dashboard"));
-    expect(screen.getByTestId("dashboard-view").style.display).toBe("flex");
-    expect(screen.getByTestId("tasks-view").style.display).toBe("none");
+    expect((await screen.findByTestId("dashboard-view", {}, CHUNK_WAIT)).style.display).toBe("flex");
+    expect(screen.queryByTestId("tasks-view")).toBeNull();
   });
 
   it("centres the chat home stage at a readable width", () => {
@@ -241,14 +246,14 @@ describe("AppShell", () => {
     expect(screen.getByTestId("chat-panel")).toHaveAttribute("data-owner", "");
   });
 
-  it("on mobile, a landing quick action that opened a view takes the operator to it", () => {
+  it("on mobile, a landing quick action that opened a view takes the operator to it", async () => {
     mockScreenSize.mockReturnValue("mobile");
     render(<AppShell />);
     // The mobile chat home has no canvas, so the pushed view must be shown
     // where it renders: the Dashboard view.
     fireEvent.click(screen.getByTestId("panel-view-opened"));
     expect(new URL(window.location.href).searchParams.get("v")).toBe("dashboard");
-    expect(screen.getByTestId("dashboard-view").style.display).toBe("flex");
+    expect((await screen.findByTestId("dashboard-view", {}, CHUNK_WAIT)).style.display).toBe("flex");
   });
 
   it("on desktop, the canvas rail shows an opened view, so the chat home is not navigated away", () => {
@@ -256,17 +261,19 @@ describe("AppShell", () => {
     expect(screen.getByTestId("chat-panel")).toHaveAttribute("data-view-opened-handler", "no");
   });
 
-  it("switches to tasks view", () => {
+  it("switches to tasks view", async () => {
     render(<AppShell />);
+    fireEvent.click(screen.getByTestId("nav-dashboard"));
+    await screen.findByTestId("dashboard-view", {}, CHUNK_WAIT);
     fireEvent.click(screen.getByTestId("nav-tasks"));
-    expect(screen.getByTestId("tasks-view").style.display).toBe("flex");
+    expect((await screen.findByTestId("tasks-view", {}, CHUNK_WAIT)).style.display).toBe("flex");
     expect(screen.getByTestId("dashboard-view").style.display).toBe("none");
   });
 
-  it("switches to agents view", () => {
+  it("switches to agents view", async () => {
     render(<AppShell />);
     fireEvent.click(screen.getByTestId("nav-agents"));
-    expect(screen.getByTestId("agents-view").style.display).toBe("flex");
+    expect((await screen.findByTestId("agents-view", {}, CHUNK_WAIT)).style.display).toBe("flex");
   });
 
   it("toggles the docked chat panel beside another view", () => {
@@ -418,10 +425,14 @@ describe("AppShell", () => {
     expect(mockUseTasks).toHaveBeenCalledWith({ live: true });
   });
 
-  it("all three views are mounted simultaneously", () => {
+  it("keeps every opened view mounted at once, showing only the active one", async () => {
     render(<AppShell />);
-    expect(screen.getByTestId("dashboard-view")).toBeInTheDocument();
-    expect(screen.getByTestId("tasks-view")).toBeInTheDocument();
-    expect(screen.getByTestId("agents-view")).toBeInTheDocument();
+    for (const view of ["dashboard", "tasks", "agents"]) {
+      fireEvent.click(screen.getByTestId(`nav-${view}`));
+      await screen.findByTestId(`${view}-view`, {}, CHUNK_WAIT);
+    }
+    expect(screen.getByTestId("dashboard-view").style.display).toBe("none");
+    expect(screen.getByTestId("tasks-view").style.display).toBe("none");
+    expect(screen.getByTestId("agents-view").style.display).toBe("flex");
   });
 });
