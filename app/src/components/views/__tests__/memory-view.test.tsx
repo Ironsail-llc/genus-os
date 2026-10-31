@@ -765,6 +765,67 @@ describe("Observe › Memory › edit", () => {
     expect(screen.getByTestId("memory-forget-4711")).toBeTruthy();
   });
 
+  it("holds Save, with a note, while the entities break the bridge's limits", async () => {
+    listOnly();
+    const editor = await openEditor();
+    fireEvent.change(within(editor).getByTestId("memory-edit-reason-4711"), {
+      target: { value: "the extraction dropped a word" },
+    });
+    const save = within(editor).getByTestId("memory-edit-save-4711");
+    const entities = within(editor).getByTestId("memory-edit-entities-4711");
+    expect(save).not.toBeDisabled();
+
+    // Fifty-one names: one past the bridge's ceiling.
+    fireEvent.change(entities, {
+      target: { value: Array.from({ length: 51 }, (_, n) => `e${n}`).join(", ") },
+    });
+    expect(save).toBeDisabled();
+    expect(within(editor).getByTestId("memory-edit-entities-note-4711").textContent).toContain(
+      "50"
+    );
+
+    // One name over 200 characters.
+    fireEvent.change(entities, { target: { value: `Alice, ${"x".repeat(201)}` } });
+    expect(save).toBeDisabled();
+    expect(within(editor).getByTestId("memory-edit-entities-note-4711").textContent).toContain(
+      "200"
+    );
+
+    fireEvent.change(entities, { target: { value: "Alice, Tea" } });
+    expect(save).not.toBeDisabled();
+    expect(within(editor).queryByTestId("memory-edit-entities-note-4711")).toBeNull();
+  });
+
+  it("counts the text the way the bridge does — trimmed, at most 2000", async () => {
+    listOnly();
+    const editor = await openEditor();
+    fireEvent.change(within(editor).getByTestId("memory-edit-reason-4711"), {
+      target: { value: "the extraction dropped a word" },
+    });
+    const save = within(editor).getByTestId("memory-edit-save-4711");
+    const text = within(editor).getByTestId("memory-edit-text-4711");
+
+    // Exactly 2000 once trimmed: the bridge accepts it, so the page must too.
+    fireEvent.change(text, { target: { value: `  ${"x".repeat(2000)}  ` } });
+    expect(save).not.toBeDisabled();
+
+    fireEvent.change(text, { target: { value: "x".repeat(2001) } });
+    expect(save).toBeDisabled();
+    expect(within(editor).getByTestId("memory-edit-text-note-4711").textContent).toContain(
+      "at most 2000"
+    );
+  });
+
+  it("treats entities that differ only in case as one", async () => {
+    listOnly();
+    const editor = await openEditor();
+    fireEvent.change(within(editor).getByTestId("memory-edit-entities-4711"), {
+      target: { value: "Alice, alice, ALICE, Tea" },
+    });
+    expect(within(editor).getAllByTestId(/^memory-edit-chip-4711-/)).toHaveLength(2);
+    expect(within(editor).getByTestId("memory-edit-chip-4711-Alice")).toBeTruthy();
+  });
+
   it("badges a fact the listing says an operator confirmed", async () => {
     listOnly({
       facts: [fact({ id: 4711, operator_confirmed: CONFIRMED }), fact({ id: 4710 })],
