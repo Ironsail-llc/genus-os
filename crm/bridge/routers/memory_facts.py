@@ -45,6 +45,16 @@ Four rules the routes enforce:
    NULL embedding, so the vector is never nulled: if the embedding provider is
    unreachable the edit still saves, keeps the old vector and records
    ``metadata.embedding_stale = true`` until a later text edit refreshes it.
+   The embedding call has a budget of :data:`EDIT_EMBED_TIMEOUT_S` and ONE
+   attempt — the provider's own retries and back-off take about a minute to
+   give up, and the dashboard's proxy abandons the request at 30 s, so a
+   longer wait would tell the operator the save failed and then commit it.
+   It is only made for an edit that can use it: not for another tenant's id,
+   an inactive fact, or the same words saved again.
+
+   A corrected text under :data:`PRUNE_MIN_CHARS` characters is refused unless
+   the fact's category is one the nightly prune protects: otherwise it would
+   carry the Operator-confirmed badge today and be retired tonight.
 
 Handlers are plain ``def`` (not ``async def``) on purpose: psycopg2 is
 synchronous, so FastAPI must run them in its worker threadpool rather than on
@@ -99,6 +109,16 @@ MAX_FACT_TEXT = 2000
 #: extracted fact carries.
 MAX_ENTITIES = 50
 MAX_ENTITY_CHARS = 200
+
+#: The embedding call's whole budget, in seconds, for one attempt: well inside
+#: the dashboard proxy's 30 s abort (``app/src/app/api/bridge/[...path]/route.ts``).
+EDIT_EMBED_TIMEOUT_S = 8
+
+#: ``prune_low_quality_facts`` (``robothor/memory/lifecycle.py``) deactivates
+#: active facts shorter than this outside these categories. Duplicated, not
+#: imported, because the prune spells the rule in SQL; keep the two in step.
+PRUNE_MIN_CHARS = 15
+PRUNE_PROTECTED_CATEGORIES = frozenset({"decision", "preference", "resolution"})
 
 #: ``memory_facts_audit.reason`` for an operator's correction — the same column
 #: the drift writer fills with ``pre_update_drift_detected``.
@@ -568,6 +588,11 @@ def _edited_entities(raw: Any) -> list[str] | None:
     return names
 
 
+def _prunable(text: str, category: str | None) -> bool:
+    """Whether the nightly prune would retire an active fact with this text."""
+    return len(text) < PRUNE_MIN_CHARS and (category or "") not in PRUNE_PROTECTED_CATEGORIES
+
+
 def _embedding(text: str, fact_id: int) -> list[float] | None:
     """The vector for an edited text, or ``None`` when the provider fails.
 
@@ -579,8 +604,13 @@ def _embedding(text: str, fact_id: int) -> list[float] | None:
     import asyncio
 
     try:
-        return asyncio.run(llm_client.get_embedding_async(text))
-    except Exception as exc:  # noqa: BLE001 -- any provider failure degrades the same way
+        return asyncio.run(
+            asyncio.wait_for(
+                llm_client.get_embedding_async(text, max_retries=1),
+                timeout=EDIT_EMBED_TIMEOUT_S,
+            )
+        )
+    except Exception as exc:  # noqa: BLE001 -- a timeout or any provider failure degrades the same way
         logger.warning(
             "memory fact %d edited without a fresh embedding: %s", fact_id, type(exc).__name__
         )
@@ -612,9 +642,28 @@ def edit_fact(fact_id: str, request: Request, body: EditRequest | None = None) -
         raise HTTPException(status_code=422, detail="an edit needs fact_text, entities or both")
     reason = _reason(body, verb="edit")
 
-    # BEFORE the connection, for the reason ``_ranked_by_search`` gives: the
-    # embedding call must not run while this request holds a pool slot.
-    vector = _embedding(new_text, identifier) if new_text is not None else None
+    # BEFORE the locking connection, for the reason ``_ranked_by_search``
+    # gives: the embedding call must not run while this request holds a pool
+    # slot. An unlocked look first, released before the call, so an edit that
+    # will be refused below — or that keeps the same words — costs no
+    # embedding. The decision is re-made under the lock.
+    vector = None
+    if new_text is not None:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT fact_text, is_active, category FROM memory_facts "
+                "WHERE id = %s AND tenant_id = %s",
+                (identifier, tenant_id),
+            )
+            seen = cur.fetchone()
+        if (
+            seen is not None
+            and seen[1]
+            and new_text != (seen[0] or "").strip()
+            and not _prunable(new_text, seen[2])
+        ):
+            vector = _embedding(new_text, identifier)
 
     with get_connection() as conn:
         cur = conn.cursor()
@@ -628,8 +677,10 @@ def edit_fact(fact_id: str, request: Request, body: EditRequest | None = None) -
             raise HTTPException(status_code=404, detail="no fact with that id")
         old_text, old_entities, is_active, category, person_id, stored_hash = row
         if not is_active:
+            # 409, as Forget answers the same staleness: the page's copy of the
+            # row is what is wrong, not the request.
             raise HTTPException(
-                status_code=422,
+                status_code=409,
                 detail="that fact is inactive; only a fact still believed can be edited.",
             )
 
@@ -638,6 +689,14 @@ def edit_fact(fact_id: str, request: Request, body: EditRequest | None = None) -
         # a text edit, keeps the stored text byte for byte, and keeps its vector.
         text_changed = new_text is not None and new_text != (old_text or "").strip()
         text = new_text if text_changed and new_text is not None else (old_text or "")
+        if text_changed and _prunable(text, category):
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"text under {PRUNE_MIN_CHARS} characters would be retired by the "
+                    "nightly prune; say more or forget the fact"
+                ),
+            )
         refreshed = vector if text_changed else None
         entities = new_entities if new_entities is not None else old_entities
         person = str(person_id) if person_id else None

@@ -341,9 +341,10 @@ def test_editing_another_tenants_fact_is_404(controls_client_as_operator, script
     cursor = scripted_db(locked=None)
     resp = controls_client_as_operator.patch(EDIT, json=GOOD_EDIT)
     assert resp.status_code == 404
-    lock_sql, lock_params = cursor.statements[0]
-    assert "FOR UPDATE" in lock_sql
+    lock_sql = next(sql for sql, _ in cursor.statements if "FOR UPDATE" in sql)
     assert "tenant_id" in lock_sql
+    # Every read of the row, locked or not, is scoped to the caller's tenant.
+    assert all("tenant_id" in sql for sql, _ in cursor.statements if "FROM memory_facts" in sql)
     assert not any(sql.lstrip().upper().startswith("UPDATE") for sql, _ in cursor.statements)
     assert audit_calls == []
 
