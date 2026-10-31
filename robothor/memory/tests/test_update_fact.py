@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import os
-from unittest.mock import MagicMock, patch
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -23,6 +25,16 @@ def _mock_conn_yielding(rows: list) -> MagicMock:
     cm.__enter__.return_value = conn
     cm.__exit__.return_value = None
     return cm, cur
+
+
+@pytest.fixture(autouse=True)
+def _embedding() -> Any:
+    """No test here reaches a real embedding provider."""
+    with patch(
+        "robothor.memory.facts.llm_client.get_embedding_async",
+        new=AsyncMock(return_value=[0.1, 0.2]),
+    ) as embed:
+        yield embed
 
 
 class TestUpdateFactRip7Off:
@@ -179,3 +191,110 @@ class TestUpdateFactNullStoredHashIsFirstTouch:
 
         assert result == {"ok": True, "fact_id": 42}
         assert cur.execute.call_count == 2  # no audit, just SELECT + UPDATE
+
+
+def _update_call(cur: MagicMock) -> tuple[str, tuple]:
+    calls = [c for c in cur.execute.call_args_list if "UPDATE memory_facts" in c.args[0]]
+    assert len(calls) == 1
+    return calls[0].args[0], tuple(calls[0].args[1])
+
+
+def _json_params(params: tuple) -> list[dict]:
+    out = []
+    for p in params:
+        if isinstance(p, str):
+            try:
+                value = json.loads(p)
+            except ValueError:
+                continue
+            if isinstance(value, dict):
+                out.append(value)
+    return out
+
+
+class TestUpdateFactEmbedding:
+    """A text change re-embeds the fact the way store_fact embeds a new one."""
+
+    @patch("robothor.memory.facts.get_connection")
+    @pytest.mark.asyncio
+    async def test_a_text_change_writes_a_fresh_embedding(
+        self, mock_get_conn: MagicMock, _embedding: AsyncMock
+    ) -> None:
+        from robothor.memory.facts import update_fact
+
+        cm, cur = _mock_conn_yielding([("old text", "t", "preference", None, None), None])
+        mock_get_conn.return_value = cm
+        with patch.dict(os.environ, {}, clear=True):
+            result = await update_fact(42, fact_text="new text", tenant_id="t")
+
+        assert result == {"ok": True, "fact_id": 42}
+        _embedding.assert_awaited_once_with("new text")
+        sql, params = _update_call(cur)
+        assert "embedding" in sql
+        assert [0.1, 0.2] in params
+        # A fresh vector clears an earlier stale flag.
+        assert ["embedding_stale"] in params
+        assert not any(m.get("embedding_stale") for m in _json_params(params))
+
+    @patch("robothor.memory.facts.get_connection")
+    @pytest.mark.asyncio
+    async def test_the_same_text_leaves_the_embedding_alone(
+        self, mock_get_conn: MagicMock, _embedding: AsyncMock
+    ) -> None:
+        from robothor.memory.facts import update_fact
+
+        cm, cur = _mock_conn_yielding([("same text", "t", "preference", None, None), None])
+        mock_get_conn.return_value = cm
+        with patch.dict(os.environ, {}, clear=True):
+            result = await update_fact(
+                42, fact_text="same text", tenant_id="t", metadata={"note": "checked"}
+            )
+
+        assert result == {"ok": True, "fact_id": 42}
+        _embedding.assert_not_awaited()
+        _sql, params = _update_call(cur)
+        assert [0.1, 0.2] not in params
+        assert ["embedding_stale"] not in params
+
+    @patch("robothor.memory.facts.get_connection")
+    @pytest.mark.asyncio
+    async def test_an_embedding_failure_keeps_the_vector_and_marks_it_stale(
+        self, mock_get_conn: MagicMock, _embedding: AsyncMock
+    ) -> None:
+        from robothor.memory.facts import update_fact
+
+        _embedding.side_effect = RuntimeError("provider down")
+        cm, cur = _mock_conn_yielding([("old text", "t", "preference", None, None), None])
+        mock_get_conn.return_value = cm
+        with patch.dict(os.environ, {}, clear=True):
+            result = await update_fact(42, fact_text="new text", tenant_id="t")
+
+        assert result == {"ok": True, "fact_id": 42}
+        sql, params = _update_call(cur)
+        assert "COALESCE(%s::vector, embedding)" in sql  # NULL keeps the old vector
+        assert [0.1, 0.2] not in params
+        assert any(m.get("embedding_stale") is True for m in _json_params(params))
+
+
+class TestUpdateFactMetadataMerge:
+    @patch("robothor.memory.facts.get_connection")
+    @pytest.mark.asyncio
+    async def test_metadata_is_merged_so_operator_confirmed_survives(
+        self, mock_get_conn: MagicMock
+    ) -> None:
+        from robothor.memory.facts import update_fact
+
+        cm, cur = _mock_conn_yielding([("same text", "t", "preference", None, None), None])
+        mock_get_conn.return_value = cm
+        with patch.dict(os.environ, {}, clear=True):
+            await update_fact(42, fact_text="same text", tenant_id="t", metadata={"note": "x"})
+
+        sql, params = _update_call(cur)
+        # Merged onto the stored object, never a whole replacement that would
+        # drop keys the caller did not send (operator_confirmed among them).
+        assert "COALESCE(metadata, '{}'::jsonb)" in sql
+        assert "||" in sql
+        assert "COALESCE(%s::jsonb, metadata)" not in sql
+        merged = _json_params(params)
+        assert {"note": "x"} in merged
+        assert not any("operator_confirmed" in m for m in merged)

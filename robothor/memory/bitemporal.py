@@ -30,6 +30,7 @@ if TYPE_CHECKING:
 
 from robothor.constants import DEFAULT_TENANT
 from robothor.db.connection import get_connection
+from robothor.memory.confirmed import NOT_OPERATOR_CONFIRMED_SQL
 
 logger = logging.getLogger(__name__)
 
@@ -129,8 +130,13 @@ def supersede_with_validity(
     *,
     tenant_id: str = "",
     classification: str = "update",
-) -> None:
+    force: bool = False,
+) -> bool:
     """Supersede ``old_id`` by ``new_id``, bounding the old fact in world-time.
+
+    Returns whether ``old_id`` was superseded. An operator-confirmed fact is
+    refused (a no-op, logged) unless ``force=True``: callers already skip such
+    facts, and this is the defence in depth for one that does not.
 
     Deliberately keeps the existing ``is_active = FALSE`` behaviour so retrieval
     is unchanged and this cannot regress recall. The addition is ``valid_to``:
@@ -149,17 +155,27 @@ def supersede_with_validity(
         # One statement, so a crash cannot leave the old fact hidden but
         # unbounded — which would be invisible to both the normal and the
         # point-in-time read path.
+        guard = "" if force else f"AND {NOT_OPERATOR_CONFIRMED_SQL}"
         cur.execute(
-            """
+            f"""
             UPDATE memory_facts
             SET is_active = FALSE,
                 superseded_by = %s,
                 valid_to = COALESCE(valid_to, NOW()),
                 updated_at = NOW()
-            WHERE id = %s AND tenant_id = %s
+            WHERE id = %s AND tenant_id = %s {guard}
             """,
             (new_id, old_id, tenant),
         )
+        if not force and cur.rowcount == 0:
+            logger.info(
+                "supersede_with_validity: fact %s not superseded by %s "
+                "(operator-confirmed or absent) for %s",
+                old_id,
+                new_id,
+                tenant,
+            )
+            return False
         # The successor is true from now. COALESCE so a re-run cannot walk
         # valid_from forward and silently shorten the fact's history.
         cur.execute(
@@ -174,3 +190,41 @@ def supersede_with_validity(
     logger.debug(
         "supersede_with_validity: %s -> %s (%s) for %s", old_id, new_id, classification, tenant
     )
+    return True
+
+
+def keep_overruled(new_id: int, kept_id: int, *, tenant_id: str = "") -> bool:
+    """Record ``new_id`` as overruled by ``kept_id`` without touching ``kept_id``.
+
+    For a new extraction that conflicts with an operator-confirmed fact. One
+    statement on the new row only: inactive, ``superseded_by`` the kept fact,
+    and a zero-width validity interval (it was never the believed state). The
+    kept fact's own ``valid_from`` is left alone; writing it here would make the
+    operator's fact "true only from now", and a point-in-time read before that
+    moment would return the extraction it overruled.
+
+    Returns whether the row was written. It never deactivates ``kept_id`` or
+    any operator-confirmed row, even if the insert's dedup answered the kept
+    fact's own id as ``new_id``; that case is a no-op.
+    """
+    tenant = tenant_id or DEFAULT_TENANT
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            f"""
+            UPDATE memory_facts
+            SET is_active = FALSE,
+                superseded_by = %s,
+                valid_from = COALESCE(valid_from, NOW()),
+                valid_to = COALESCE(valid_to, NOW()),
+                updated_at = NOW()
+            WHERE id = %s AND tenant_id = %s AND id <> %s
+              AND {NOT_OPERATOR_CONFIRMED_SQL}
+            """,
+            (kept_id, new_id, tenant, kept_id),
+        )
+        written = bool(cur.rowcount > 0)
+        conn.commit()
+    if not written:
+        logger.info("keep_overruled: fact %s left alone (kept %s) for %s", new_id, kept_id, tenant)
+    return written

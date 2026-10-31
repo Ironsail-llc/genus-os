@@ -19,7 +19,7 @@ import pytest
 from robothor.audit import logger as audit
 from robothor.db.connection import tenant_scope
 
-MIGRATION = Path(__file__).resolve().parents[3] / "crm" / "migrations" / "162_audit_log_tenant.sql"
+MIGRATION = Path(__file__).resolve().parents[3] / "crm" / "migrations" / "163_audit_log_tenant.sql"
 
 
 @pytest.fixture(autouse=True)
