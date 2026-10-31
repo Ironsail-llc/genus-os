@@ -158,6 +158,26 @@ starts a run itself; without the flag the endpoint behaves as it always has. The
 running turn's own stream adds two events: `interim` (a superseded answer) and
 `pending_followups` (messages the turn never took, to send as the next turn).
 
+### Steering instead (`ROBOTHOR_STEER_EVERYWHERE`)
+
+With `ROBOTHOR_STEER_EVERYWHERE=true` the composer becomes a steer input while a
+reply streams: its placeholder reads *Steer the running task...*, and what you
+send is handed to the run as an operator steering update, read before its next
+model call. The note under it reads *Steering the run*. A steer is guidance for
+the run in flight, so it is not added to the conversation's history as a turn of
+its own; the answer it shapes is. When no run can take it (the task is between
+its last step and its answer) it falls back to the follow-up behaviour above.
+
+**Stop** then halts the run at its next step instead of cancelling the request:
+the run finishes as `cancelled` (not `failed`) and its record is written like
+any other run's. If no live run is found it falls back to the ordinary stop.
+
+For API clients: `POST /chat/steer` with `{"text": "..."}` and
+`POST /chat/interrupt` resolve the session key exactly like `/chat/send` and
+answer `{"ok": …, "found": …}`; `found` is false when nothing of yours is
+running. `GET /chat/steer` answers `{"enabled": …}`. With the setting off the
+two POST routes answer 404.
+
 ## The docked chat panel
 
 Chat is the Helm's home view. On any other view the chat stays docked as a

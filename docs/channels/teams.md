@@ -206,6 +206,23 @@ is worth fewer assumptions.
 See [Channel access](access.md) for the approval commands, which are identical
 for every channel.
 
+## Steer, stop and progress
+
+With `ROBOTHOR_STEER_EVERYWHERE=true`, two messages typed to the bot are
+commands rather than turns:
+
+| Message | What it does |
+|---------|--------------|
+| `/steer <text>` | Adds `<text>` to the conversation's running task, at its next step. No new turn starts |
+| `/stop` | Stops the conversation's running task at its next step; the run ends as `cancelled` |
+
+They pass the same access gate as any message, and answer "Nothing is running
+here." when nothing is. While a run works, the bot posts one progress activity
+and updates it in place (`PUT …/activities/{id}`, at most once a second): the
+step or tool in progress and the elapsed time, never arguments or results. It
+reads `Done.` once the answer is sent. With the setting off, `/steer` is an
+ordinary sentence the agent answers, as before.
+
 ## Targets
 
 `delivery.to` takes either:
