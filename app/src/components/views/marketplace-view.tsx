@@ -3,7 +3,9 @@
 import { useState, useEffect, useCallback } from "react";
 import { ExternalLink, Download, Trash2, RefreshCw, Package } from "lucide-react";
 
+import { TrustBadge } from "@/components/plugins/trust-badge";
 import { useRuntimeConfig } from "@/components/runtime-config";
+import { agentTrust, pluginTrust, type Trust } from "@/lib/plugins/trust";
 
 interface InstalledAgent {
   agent_id: string;
@@ -12,6 +14,10 @@ interface InstalledAgent {
   source: string;
   department: string;
   has_manifest: boolean;
+  /** The sha256 the bundle was pinned to, when the install recorded one. */
+  source_sha256?: string;
+  /** The distribution a plugin-shipped agent came in. */
+  plugin?: string;
 }
 
 interface MarketplaceViewProps {
@@ -25,13 +31,42 @@ const BRIDGE_URL = "/api/bridge";
 export function MarketplaceView({ visible }: MarketplaceViewProps) {
   const { marketplaceUrl } = useRuntimeConfig();
   const [agents, setAgents] = useState<InstalledAgent[]>([]);
+  /** Plugin trust by distribution name; empty when `/api/plugins` refused. */
+  const [pluginTrustByName, setPluginTrustByName] = useState<Record<string, Trust>>({});
   const [loading, setLoading] = useState(false);
   const [installSlug, setInstallSlug] = useState("");
   const [installing, setInstalling] = useState(false);
   const [message, setMessage] = useState<{ text: string; type: "success" | "error" } | null>(null);
 
+  /**
+   * Operator-only on the bridge. A refusal or an older bridge leaves the map
+   * empty, and a plugin-shipped agent then reads Unsigned rather than vanishing.
+   */
+  const fetchPluginTrust = useCallback(async () => {
+    try {
+      const res = await fetch(`${BRIDGE_URL}/api/plugins`);
+      if (!res.ok) {
+        setPluginTrustByName({});
+        return;
+      }
+      const data = await res.json();
+      const byName: Record<string, Trust> = {};
+      for (const row of Array.isArray(data?.plugins) ? data.plugins : []) {
+        if (row && typeof row.name === "string") byName[row.name] = pluginTrust(row);
+      }
+      setPluginTrustByName(byName);
+    } catch {
+      setPluginTrustByName({});
+    }
+  }, []);
+
+  /** A plugin-shipped agent takes its plugin's trust; any other is its own. */
+  const trustFor = (agent: InstalledAgent): Trust =>
+    (agent.plugin ? pluginTrustByName[agent.plugin] : undefined) ?? agentTrust(agent);
+
   const fetchAgents = useCallback(async () => {
     setLoading(true);
+    void fetchPluginTrust();
     try {
       const res = await fetch(`${BRIDGE_URL}/api/installed-agents`);
       if (res.ok) {
@@ -43,7 +78,7 @@ export function MarketplaceView({ visible }: MarketplaceViewProps) {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [fetchPluginTrust]);
 
   useEffect(() => {
     if (visible) fetchAgents();
@@ -195,6 +230,11 @@ export function MarketplaceView({ visible }: MarketplaceViewProps) {
                       </span>
                     )}
                     <span className="text-xs text-muted-foreground">v{agent.version}</span>
+                    <TrustBadge
+                      name={agent.agent_id}
+                      trust={trustFor(agent)}
+                      testId={`agent-trust-${agent.agent_id}`}
+                    />
                   </div>
                   <div className="text-xs text-muted-foreground mt-0.5">
                     {agent.has_manifest ? "Active" : "Missing manifest"}

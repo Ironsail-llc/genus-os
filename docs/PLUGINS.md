@@ -985,6 +985,7 @@ install, what gets recorded, and what `enable`/`disable` act on:
       "recorded_at": "2026-09-15T00:00:00+00:00",
       "dist_sha256": "…",
       "members_accounted": 14,
+      "scan_reasons": ["acme_tools/__init__.py:1: imports httpx"],
       "source": {
         "origin": "registry",
         "index_url": "https://ironsail-llc.github.io/genus-plugins/index.json",
@@ -1002,13 +1003,21 @@ a field reading `safe` because no scanner ran would be worse than no field at
 all. A plugin that arrived through `genus plugin install` carries the verdict
 its wheel actually got.
 
-`dist_sha256`, `members_accounted` and `source` appear only for plugins this
-platform installed. Their **absence** is information: a row without a `source`
+`dist_sha256`, `members_accounted`, `scan_reasons` and `source` appear only for
+plugins this platform installed (`scan_reasons` only when the scan gave some). Their **absence** is information: a row without a `source`
 is one an operator pip-installed by hand, and `genus plugin remove` refuses
 those without `--force`; `members_accounted` is how many wheel members the scan
 classified when the row was written, which is what makes the `verdict` beside it
-a measurement rather than a claim. All three are additive — a lockfile written
-before they existed parses unchanged.
+a measurement rather than a claim; `scan_reasons` is what the scan said, so the
+findings an operator accepted with `--accept-review` stay on record after the
+install has answered. These facts describe the bytes that were installed, so a
+`genus plugin sync` over a distribution whose version or manifest has since
+changed (a hand `pip install -U`, an edited package) drops them: `verdict`
+returns to `unscanned`, `dist_sha256`, `members_accounted`, `scan_reasons` and
+the source's `publisher_key_id` are cleared, and only `enabled` and the
+source's origin are kept, so the row reads Unsigned rather than Verified and
+`remove` still knows the platform installed it. All four are additive — a lockfile written before they
+existed parses unchanged.
 
 ### The verbs
 
@@ -1093,13 +1102,33 @@ acts with identifiers only.
 
 | route (bridge) | engine | what it does |
 |---|---|---|
-| `GET /api/plugins` | `GET /api/admin/plugins` | generation, lockfile state, one row per distribution, each with the `assets` it wrote into the workspace |
+| `GET /api/plugins` | `GET /api/admin/plugins` | generation, lockfile state, one row per distribution, each with the `assets` it wrote into the workspace and its `trust` (below) |
 | `POST /api/plugins/sync` | `POST /api/admin/plugins/sync` | record what is installed; **409** when the existing file's contents cannot be read (`--force` is CLI-only), **503** when the path itself cannot be written |
 | `POST /api/plugins/{name}/enable` | `POST /api/admin/plugins/{name}/enable` | flip the row; 404 if unrecorded; does **not** reload |
 | `POST /api/plugins/{name}/disable` | `POST /api/admin/plugins/{name}/disable` | as above |
 | `POST /api/plugins/reload` | `POST /api/admin/plugins/reload` | runs the SIGHUP body; returns `{generation, loaded, failures}` |
 | `POST /api/plugins/install` | `POST /api/admin/plugins/install` | `{name, version?, index?, accept_review?, dry_run?}` → the install plan and its verdict; **422** for a blocked or unreviewed wheel, an unverifiable index, or a `name` that is not a distribution name |
 | `POST /api/plugins/{name}/remove` | `POST /api/admin/plugins/{name}/remove` | `{force?}` → `{name, removed, row_dropped, reload_hint, note}` |
+
+Each row's **`trust`** is the lock row read back, never re-derived: nothing in a
+listing fetches, hashes or verifies anything.
+
+| field | meaning |
+|---|---|
+| `signature` | `{verified, key_id, index_url}`. `verified` only for a `registry` install with a publisher key id, which is recorded only after the index signature checked out against a pinned key. A wheel installed from disk is not signed |
+| `wheel` | `{sha256, pinned}`: the wheel hash recorded at install, which matched the index's pin (or `--sha256`) before pip ran |
+| `manifest` | `{sha256, matches}`: the recorded manifest digest and whether the installed manifest still hashes to it; `matches` is `null` with no row |
+| `scan` | `{verdict, reasons, members_accounted}` from the install scan; `unscanned` for a row `sync` recorded |
+| `lockfile` | `{recorded, drifted}` |
+| `contract_version` | what the plugin's manifest declares |
+
+The Helm's Plugins page shows one badge per row from these, worst first —
+Blocked, Drifted, Review, Unsigned, Not scanned, Verified — with the facts in a
+drawer behind it. The Marketplace view shows the same badge on each installed
+agent: a plugin-shipped agent takes its plugin's, and any other agent is
+Unsigned with the bundle sha256 it was pinned to (`source_sha256` and `plugin`
+on `GET /api/installed-agents`). An older engine that sends no `trust` still
+gets a badge, derived from `verdict`, `drifted` and `source`.
 
 The listing also answers **`indexes`** — the index URLs this instance reads, in
 order, **exactly as configured**, including one the install route would refuse.

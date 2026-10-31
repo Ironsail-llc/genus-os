@@ -43,7 +43,7 @@ import json
 import logging
 import os
 import tempfile
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -152,6 +152,11 @@ class LockRow:
     #: nothing" -- which is why it is omitted rather than written as 0. It is
     #: what makes the verdict beside it a measurement instead of a claim.
     members_accounted: int = 0
+    #: What the install scan said about the bytes it classified, one sentence
+    #: per finding. Empty means "nothing recorded reasons" -- a row ``sync``
+    #: wrote, or a scan that found nothing -- which is why it is omitted rather
+    #: than written as ``[]``: the verdict beside it says which of the two.
+    scan_reasons: tuple[str, ...] = ()
     #: Where this came from, or None for anything this platform did not
     #: install. Added after the lockfile shipped, so it is written only when
     #: set and read only when present -- an older lockfile parses unchanged,
@@ -176,6 +181,8 @@ class LockRow:
             row["dist_sha256"] = self.dist_sha256
         if self.members_accounted:
             row["members_accounted"] = self.members_accounted
+        if self.scan_reasons:
+            row["scan_reasons"] = list(self.scan_reasons)
         if self.source is not None:
             row["source"] = self.source.as_json()
         return row
@@ -385,6 +392,14 @@ def _source_from_json(data: Any) -> LockSource | None:
     )
 
 
+def _reasons(value: Any) -> tuple[str, ...]:
+    """The recorded scan reasons, or none. A hand-edited value that is not a
+    list of strings reads as nothing recorded, never as a partial list."""
+    if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+        return ()
+    return tuple(value)
+
+
 def _row_from_json(data: Any) -> LockRow | None:
     if not isinstance(data, dict):
         return None
@@ -408,6 +423,7 @@ def _row_from_json(data: Any) -> LockRow | None:
         members_accounted=(
             int(data["members_accounted"]) if isinstance(data.get("members_accounted"), int) else 0
         ),
+        scan_reasons=_reasons(data.get("scan_reasons")),
         source=_source_from_json(data.get("source")),
     )
 
@@ -689,22 +705,37 @@ def sync(path: Path | None = None, *, force: bool = False) -> SyncResult:
     updated: list[str] = []
     for name, dist in sorted(installed_distributions().items()):
         previous = existing.get(name)
+        version = str(getattr(dist, "version", "") or "")
+        digest = manifest_digest(dist)
+        # What the install established -- verdict, scan reasons, the wheel's
+        # hash, the key that signed its index -- is about the bytes it
+        # installed. A sync over a changed version or manifest is recording
+        # different bytes (a hand `pip install -U`, an edited package), and
+        # carrying those facts forward is how such a plugin came to read as
+        # signed, pinned and scanned. Only the operator's decision (`enabled`)
+        # and the ORIGIN survive: `remove` reads the origin to know this
+        # platform put the distribution there, and that is still true.
+        same = previous is not None and (
+            previous.version == version and previous.manifest_sha256 == digest
+        )
+        kept = previous if same else None
         row = LockRow(
             name=name,
-            version=str(getattr(dist, "version", "") or ""),
-            manifest_sha256=manifest_digest(dist),
-            verdict=previous.verdict if previous else UNSCANNED,
+            version=version,
+            manifest_sha256=digest,
+            verdict=kept.verdict if kept else UNSCANNED,
             enabled=previous.enabled if previous else True,
             kinds=tuple(sorted(groups.get(name, set()))),
             recorded_at=now,
-            dist_sha256=previous.dist_sha256 if previous else "",
-            members_accounted=previous.members_accounted if previous else 0,
-            # Carried like `enabled` and `verdict`, and for the same reason:
-            # a rebuild that forgot WHERE a plugin came from would make every
-            # `genus plugin remove` refuse the next time, or -- worse, if the
-            # refusal were dropped instead -- let it uninstall a distribution
-            # the operator installed themselves.
-            source=previous.source if previous else None,
+            dist_sha256=kept.dist_sha256 if kept else "",
+            members_accounted=kept.members_accounted if kept else 0,
+            scan_reasons=kept.scan_reasons if kept else (),
+            # Carried like `enabled`, and for the same reason: a rebuild that
+            # forgot WHERE a plugin came from would make every `genus plugin
+            # remove` refuse the next time, or -- worse, if the refusal were
+            # dropped instead -- let it uninstall a distribution the operator
+            # installed themselves.
+            source=_carried_source(previous, same=same),
         )
         rows[name] = row
         if previous is None:
@@ -739,6 +770,19 @@ def sync(path: Path | None = None, *, force: bool = False) -> SyncResult:
     )
 
 
+def _carried_source(previous: LockRow | None, *, same: bool) -> LockSource | None:
+    """The previous row's source, minus the signing key once the bytes changed.
+
+    The key id is evidence that an index signature checked out for the wheel
+    that was installed; it says nothing about bytes that replaced it.
+    """
+    if previous is None or previous.source is None:
+        return None
+    if same:
+        return previous.source
+    return replace(previous.source, publisher_key_id="")
+
+
 def record_install(
     name: str,
     *,
@@ -749,6 +793,7 @@ def record_install(
     dist_sha256: str,
     source: LockSource,
     members_accounted: int = 0,
+    scan_reasons: tuple[str, ...] = (),
     path: Path | None = None,
 ) -> LockRow | None:
     """Write the row for a distribution this platform just installed.
@@ -781,6 +826,7 @@ def record_install(
         recorded_at=datetime.now(UTC).isoformat(timespec="seconds"),
         dist_sha256=dist_sha256,
         members_accounted=members_accounted,
+        scan_reasons=tuple(scan_reasons),
         source=source,
     )
     rows = dict(lock.rows)
@@ -841,6 +887,7 @@ def set_enabled(name: str, enabled: bool, path: Path | None = None) -> LockRow |
         recorded_at=row.recorded_at,
         dist_sha256=row.dist_sha256,
         members_accounted=row.members_accounted,
+        scan_reasons=row.scan_reasons,
         source=row.source,
     )
     rows = dict(lock.rows)

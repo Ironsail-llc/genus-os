@@ -7,6 +7,7 @@ for the Helm UI's marketplace panel.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import tempfile
@@ -98,6 +99,33 @@ def _has_agent_manifest(agent_id: str) -> bool:
     return manifest.is_file()
 
 
+def _trust_fields(meta: dict[str, object]) -> dict[str, str]:
+    """What the install recorded that the Marketplace view's trust badge reads.
+
+    ``source_sha256``: the digest the bundle was pinned to. ``plugin``: the
+    distribution a ``plugin:<dist>`` agent came in, so the view can show that
+    plugin's signature, scan and drift instead of inventing one for the agent.
+
+    Each key is present only when its value passes the same validator the
+    install wrote it through. ``installed.yaml`` is mutable instance data; a
+    value that is not a digest is not a pin, and the badge must not draw it as
+    one. Absent, the row keeps exactly the shape it had before.
+    """
+    from robothor.templates.instance import validate_plugin_source
+    from robothor.templates.safety import validate_sha256
+
+    fields: dict[str, str] = {}
+    # Suppressed, not logged: an absent value is the common case (a local agent),
+    # and an invalid one costs one field on one row, never the listing.
+    with contextlib.suppress(TemplateSecurityError):
+        fields["source_sha256"] = validate_sha256(meta.get("source_sha256"))
+    source = meta.get("source")
+    if isinstance(source, str) and source.startswith("plugin:"):
+        with contextlib.suppress(TemplateSecurityError):
+            fields["plugin"] = validate_plugin_source(source.partition(":")[2])
+    return fields
+
+
 class InstallRequest(BaseModel):
     slug: str
     variables: dict[str, str] = {}
@@ -141,6 +169,7 @@ def list_installed_agents() -> dict[str, object]:
             "department": meta.get("department", ""),
         }
         agent_info["has_manifest"] = has_manifest
+        agent_info.update(_trust_fields(meta))
         agents.append(agent_info)
 
     return {"agents": agents, "count": len(agents)}
