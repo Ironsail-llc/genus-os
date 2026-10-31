@@ -686,3 +686,27 @@ def test_the_listing_carries_the_operator_confirmation(
     }
     assert facts[edited]["operator_confirmed"]["by"].startswith("operator:")
     assert facts[untouched]["operator_confirmed"] is None
+
+
+def test_the_listing_says_when_an_edit_could_not_be_embedded(
+    controls_client_as_operator, live_db, make_fact, tenants, monkeypatch
+):
+    platform, _ = tenants
+    marker = uuid.uuid4().hex[:8]
+
+    async def _unreachable(*_args, **_kwargs):
+        raise ConnectionError("embedding provider unreachable")
+
+    monkeypatch.setattr("robothor.llm.ollama.get_embedding_async", _unreachable)
+    stale = make_fact(f"Alice prefers tea {marker}", tenant=platform)
+    fresh = make_fact(f"Bob prefers coffee {marker}", tenant=platform)
+    controls_client_as_operator.patch(
+        f"{FACTS}/{stale}",
+        json={"fact_text": f"Alice prefers green tea {marker}", "reason": "a word was lost"},
+    )
+
+    facts = {
+        f["id"]: f for f in controls_client_as_operator.get(f"{FACTS}?limit=200").json()["facts"]
+    }
+    assert facts[stale]["embedding_stale"] is True
+    assert facts[fresh]["embedding_stale"] is False

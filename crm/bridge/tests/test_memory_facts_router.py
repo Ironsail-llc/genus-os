@@ -236,6 +236,9 @@ class _ScriptedCursor:
         self._last = ""
         self._text = locked[0] if locked else ""
         self._entities = list(locked[1]) if locked else []
+        #: What the re-read reports as ``embedding_stale``: whatever the UPDATE
+        #: wrote, so a test reads the flag back the way the page would.
+        self.stale = False
 
     def execute(self, sql, params=None):
         self.statements.append((sql, params))
@@ -244,6 +247,10 @@ class _ScriptedCursor:
             if self.update_raises is not None:
                 raise self.update_raises
             self._text, self._entities = params[0], params[1]
+            import json
+
+            patch = next(p for p in params if isinstance(p, str) and p.startswith("{"))
+            self.stale = json.loads(patch).get("embedding_stale") is True
 
     def fetchone(self):
         if "FOR UPDATE" in self._last:
@@ -266,6 +273,7 @@ class _ScriptedCursor:
                 None,
                 None,
                 {"at": "2026-10-30T12:00:00+00:00", "by": "operator:alice"},
+                self.stale,
             )
         return None
 
@@ -411,6 +419,17 @@ def test_an_edit_returns_the_fact_in_the_list_shape(
         "by": "operator:alice",
     }
     assert set(fact) >= {"entities", "is_active", "valid_from", "source", "superseded_by"}
+    assert fact["embedding_stale"] is False
+
+
+def test_an_edit_the_provider_could_not_embed_says_so_in_its_reply(
+    controls_client_as_operator, scripted_db, embeddings, audit_calls
+):
+    """The page has to be able to say the search index has not caught up."""
+    embeddings["fail"] = True
+    scripted_db()
+    fact = controls_client_as_operator.patch(EDIT, json=GOOD_EDIT).json()["fact"]
+    assert fact["embedding_stale"] is True
 
 
 def test_an_edit_snapshots_the_original_before_it_writes(
