@@ -530,6 +530,15 @@ bridge:
     enabled: true
     minAvailable: 1
 
+# ─── Logs ────────────────────────────────────────────────────────────────────
+# Pods write their logs to standard output; there is no journald in a
+# container, so the dashboard's Logs page cannot read them. Set url to where
+# this deployment's logs are viewed (your cluster's log tool) and the page
+# links to it. Rendered into the bridge as GENUS_LOGS_URL only when set.
+# Credential-free: every operator sees this link, so never put a token in it.
+logs:
+  url: ""
+
 # ─── Orchestrator (RAG/semantic-search HTTP API) ─────────────────────────────
 orchestrator:
   enabled: true
