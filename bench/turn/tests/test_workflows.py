@@ -36,3 +36,12 @@ def test_a_benchmark_piped_into_tee_keeps_its_exit_code(name: str) -> None:
         assert "set -o pipefail" in script or shell == "bash", (
             f"{label}: `| tee` without pipefail hides the benchmark's exit code"
         )
+
+
+@pytest.mark.parametrize("name", ["ci.yml", "install-gate.yml"])
+def test_ci_reads_the_ci_baseline_set_not_a_named_file(name: str) -> None:
+    """A named --baseline that is empty fails the step; the set skips it, as documented."""
+    for label, step in _bench_steps(name):
+        script = str(step["run"])
+        assert "--baseline-set ci" in script, f"{label}: compare with --baseline-set ci"
+        assert "--baseline " not in script, f"{label}: a named --baseline errors when empty"

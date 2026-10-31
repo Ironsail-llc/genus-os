@@ -65,13 +65,71 @@ def test_compare_only_exits_zero_within_threshold(tmp_path: Path) -> None:
     assert main(["--compare", current, "--baseline", baseline]) == 0
 
 
-def test_compare_against_the_empty_sentinel_is_a_no_op(
+def test_a_named_baseline_that_is_the_empty_sentinel_is_an_error(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    # Naming a file means comparing against it; an empty one compares nothing.
     baseline = _write(tmp_path / "b.json", EMPTY_BASELINE)
     current = _write(tmp_path / "c.json", _result(9999.0))
-    assert main(["--compare", current, "--baseline", baseline]) == 0
+    assert main(["--compare", current, "--baseline", baseline]) == 2
+    err = capsys.readouterr().err
+    assert "empty" in err
+    assert str(baseline) in err
+
+
+def test_a_named_baseline_that_does_not_exist_is_an_error(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    current = _write(tmp_path / "c.json", _result(9999.0))
+    missing = tmp_path / "typo.json"
+    assert main(["--compare", current, "--baseline", str(missing)]) == 2
+    err = capsys.readouterr().err
+    assert "not found" in err
+    assert str(missing) in err
+
+
+def _sentinels(folder: Path) -> None:
+    folder.mkdir()
+    for name in ("inprocess.json", "http.json", "ci-inprocess.json", "ci-http.json"):
+        _write(folder / name, EMPTY_BASELINE)
+
+
+def test_the_default_baseline_as_the_empty_sentinel_is_a_no_op(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import bench.turn.cli as cli
+
+    _sentinels(tmp_path / "baselines")
+    monkeypatch.setattr(cli, "BASELINES", tmp_path / "baselines")
+    current = _write(tmp_path / "c.json", _result(9999.0))
+    assert main(["--compare", current]) == 0
     assert "no baseline recorded" in capsys.readouterr().out
+
+
+def test_the_ci_baseline_set_reads_the_ci_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import bench.turn.cli as cli
+
+    _sentinels(tmp_path / "baselines")
+    _write(tmp_path / "baselines" / "ci-inprocess.json", _result(100.0))
+    monkeypatch.setattr(cli, "BASELINES", tmp_path / "baselines")
+    current = _write(tmp_path / "c.json", _result(200.0))
+    assert main(["--compare", current, "--baseline-set", "ci"]) == 1
+    assert "ci-inprocess.json" in capsys.readouterr().out
+    # The local set is still the empty sentinel: skipped, exit 0.
+    assert main(["--compare", current]) == 0
+
+
+def test_the_ci_baseline_set_skips_an_empty_ci_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import bench.turn.cli as cli
+
+    _sentinels(tmp_path / "baselines")
+    monkeypatch.setattr(cli, "BASELINES", tmp_path / "baselines")
+    current = _write(tmp_path / "c.json", _result(200.0))
+    assert main(["--compare", current, "--baseline-set", "ci"]) == 0
 
 
 def test_update_baseline_from_a_result_writes_it(tmp_path: Path) -> None:
