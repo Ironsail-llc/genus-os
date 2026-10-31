@@ -26,6 +26,8 @@ from robothor.engine.request_runtime import observe_request
 from robothor.engine.session import AgentSession
 
 KEY = "steer:main:e2e"
+RID_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+RID_B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
 
 
 @pytest.fixture(autouse=True)
@@ -86,6 +88,9 @@ class _FakeRun:
         self.session: AgentSession | None = None
         self.stopped: bool | None = None
 
+    async def __call__(self, **kwargs):
+        return await self.execute(**kwargs)
+
     async def execute(self, **kwargs):
         session = AgentSession("main", TriggerType.WEBCHAT, None, kwargs["tenant_id"])
         session.start("system", kwargs["message"], [])
@@ -114,11 +119,14 @@ def _steering_turns(session: AgentSession) -> list[str]:
     ]
 
 
-async def _start(client, mock_runner) -> tuple[_FakeRun, asyncio.Task]:
+async def _start(client, mock_runner, request_id: str = RID_A) -> tuple[_FakeRun, asyncio.Task]:
     fake = _FakeRun()
     mock_runner.execute = AsyncMock(side_effect=fake.execute)
     task = asyncio.create_task(
-        client.post("/chat/send", json={"session_key": KEY, "message": "draft the report"})
+        client.post(
+            "/chat/send",
+            json={"session_key": KEY, "message": "draft the report", "request_id": request_id},
+        )
     )
     await asyncio.wait_for(fake.live.wait(), timeout=5)
     return fake, task
@@ -130,7 +138,9 @@ async def test_a_steer_mid_run_lands_once_at_the_next_iteration_boundary(
 ):
     fake, task = await _start(client, mock_runner)
 
-    res = await client.post("/chat/steer", json={"session_key": KEY, "text": "use the EU region"})
+    res = await client.post(
+        "/chat/steer", json={"session_key": KEY, "text": "use the EU region", "request_id": RID_A}
+    )
     assert res.status_code == 200
     assert res.json()["ok"] is True and res.json()["found"] is True
     assert _steering_turns(fake.session) == [], "nothing lands before the boundary"
@@ -147,7 +157,7 @@ async def test_a_steer_mid_run_lands_once_at_the_next_iteration_boundary(
 async def test_an_interrupt_ends_the_run_cancelled_at_the_boundary(client, mock_runner, flag_on):
     fake, task = await _start(client, mock_runner)
 
-    res = await client.post("/chat/interrupt", json={"session_key": KEY})
+    res = await client.post("/chat/interrupt", json={"session_key": KEY, "request_id": RID_A})
     assert res.status_code == 200
     assert res.json()["ok"] is True and res.json()["found"] is True
 
@@ -160,14 +170,18 @@ async def test_an_interrupt_ends_the_run_cancelled_at_the_boundary(client, mock_
 
 @pytest.mark.asyncio
 async def test_with_nothing_running_the_steer_finds_nothing(client, flag_on):
-    res = await client.post("/chat/steer", json={"session_key": KEY, "text": "hello"})
+    res = await client.post(
+        "/chat/steer", json={"session_key": KEY, "text": "hello", "request_id": RID_A}
+    )
     assert res.status_code == 200
     assert res.json() == {"ok": False, "found": False}
 
 
 @pytest.mark.asyncio
 async def test_a_steer_needs_text(client, flag_on):
-    res = await client.post("/chat/steer", json={"session_key": KEY, "text": "  "})
+    res = await client.post(
+        "/chat/steer", json={"session_key": KEY, "text": "  ", "request_id": RID_A}
+    )
     assert res.status_code == 400
 
 
@@ -175,10 +189,17 @@ async def test_a_steer_needs_text(client, flag_on):
 async def test_another_tenants_run_on_the_same_key_is_out_of_reach(client, flag_on):
     session = AgentSession("main", TriggerType.WEBCHAT, None, "another-tenant")
     session.start("system", "x", [])
-    with live_control.conversation_scope(KEY):
+    from robothor.engine.chat import webchat_run_key
+
+    owner = SimpleNamespace(tenant_id="another-tenant", user_id="loopback-development-operator")
+    with live_control.conversation_scope(webchat_run_key(owner, KEY, RID_A)):
         async with observe_request(session, None):
-            steer = await client.post("/chat/steer", json={"session_key": KEY, "text": "x"})
-            stop = await client.post("/chat/interrupt", json={"session_key": KEY})
+            steer = await client.post(
+                "/chat/steer", json={"session_key": KEY, "text": "x", "request_id": RID_A}
+            )
+            stop = await client.post(
+                "/chat/interrupt", json={"session_key": KEY, "request_id": RID_A}
+            )
     assert steer.json()["found"] is False and stop.json()["found"] is False
     assert _steering_turns(session) == []
     assert session.consume_interrupt() is None
@@ -197,3 +218,48 @@ async def test_flag_off_the_routes_are_not_there(client, monkeypatch):
     assert (await client.post("/chat/interrupt", json={})).status_code == 404
     res = await client.get("/chat/steer")
     assert res.status_code == 200 and res.json() == {"enabled": False}
+
+
+@pytest.mark.asyncio
+async def test_a_steer_names_the_turn_it_is_for(client, flag_on):
+    """Without the turn's request id there is no telling which run is meant."""
+    steer = await client.post("/chat/steer", json={"session_key": KEY, "text": "x"})
+    stop = await client.post("/chat/interrupt", json={"session_key": KEY})
+    assert steer.status_code == 400 and stop.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_two_turns_on_one_key_each_reach_only_their_own_run(client, mock_runner, flag_on):
+    """Two tabs on one agent are two turns: a steer or Stop from one never lands in the other."""
+    first, second = _FakeRun(), _FakeRun()
+    runs = iter([first, second])
+
+    async def execute(**kwargs):
+        return await next(runs).execute(**kwargs)
+
+    mock_runner.execute = AsyncMock(side_effect=execute)
+    tab_a = asyncio.create_task(
+        client.post("/chat/send", json={"session_key": KEY, "message": "a", "request_id": RID_A})
+    )
+    await asyncio.wait_for(first.live.wait(), timeout=5)
+    tab_b = asyncio.create_task(
+        client.post("/chat/send", json={"session_key": KEY, "message": "b", "request_id": RID_B})
+    )
+    await asyncio.wait_for(second.live.wait(), timeout=5)
+
+    steer = await client.post(
+        "/chat/steer", json={"session_key": KEY, "text": "for B", "request_id": RID_B}
+    )
+    stop = await client.post("/chat/interrupt", json={"session_key": KEY, "request_id": RID_B})
+    assert steer.json()["found"] is True and stop.json()["found"] is True
+
+    first.release.set()
+    second.release.set()
+    sent_a, sent_b = await tab_a, await tab_b
+    assert _steering_turns(first.session) == []
+    assert _steering_turns(second.session) == ["[operator steering update]\nfor B"]
+    assert first.stopped is False and second.stopped is True
+    done_a = [d for e, d in _events(sent_a.text) if e == "done"][0]
+    done_b = [d for e, d in _events(sent_b.text) if e == "done"][0]
+    assert done_a["status"] == RunStatus.COMPLETED.value
+    assert done_b["status"] == RunStatus.CANCELLED.value

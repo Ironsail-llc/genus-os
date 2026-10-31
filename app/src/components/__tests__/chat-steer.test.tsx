@@ -89,7 +89,10 @@ describe("steering a running task from the Helm", () => {
     await type("Use the EU region.");
     await waitFor(() => expect(screen.getByText("Steering the run")).toBeTruthy());
     expect(posts(calls, "/api/chat/steer")).toHaveLength(1);
-    expect(posts(calls, "/api/chat/steer")[0].body).toMatchObject({ text: "Use the EU region." });
+    const turn = posts(calls, "/api/chat/send")[0].body.request_id;
+    expect(turn).toBeTruthy();
+    // It names the turn it is for: two tabs on one agent are two runs.
+    expect(posts(calls, "/api/chat/steer")[0].body).toMatchObject({ text: "Use the EU region.", request_id: turn });
     expect(posts(calls, "/api/chat/send").filter((c) => c.body.join_running)).toHaveLength(0);
 
     await act(async () => { running.release(); });
@@ -106,6 +109,7 @@ describe("steering a running task from the Helm", () => {
 
     await act(async () => { fireEvent.click(screen.getByTestId("abort-button")); });
     await waitFor(() => expect(posts(calls, "/api/chat/interrupt")).toHaveLength(1));
+    expect(posts(calls, "/api/chat/interrupt")[0].body.request_id).toBe(posts(calls, "/api/chat/send")[0].body.request_id);
     expect(posts(calls, "/api/chat/abort")).toHaveLength(0);
     await act(async () => { running.release(); });
   });

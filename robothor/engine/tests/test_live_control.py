@@ -82,6 +82,16 @@ class TestConversationLookup:
                     assert live_control.find_live_run(KEY, tenant_id=TENANT) == parent.run_id
 
     @pytest.mark.asyncio
+    async def test_a_verification_retry_keeps_the_runs_conversation(self):
+        """run_lifecycle enters observe_request a second time on the same session."""
+        session = _session()
+        with live_control.conversation_scope(KEY):
+            async with observe_request(session, None):
+                pass
+            async with observe_request(session, None):
+                assert live_control.find_live_run(KEY, tenant_id=TENANT) == session.run_id
+
+    @pytest.mark.asyncio
     async def test_another_tenants_run_is_never_found(self):
         session = _session(tenant="tenant-b")
         with live_control.conversation_scope(KEY):
@@ -218,6 +228,26 @@ class TestProgressMessage:
         await asyncio.sleep(0.05)
         await progress.close("Done")
         assert fake.edits[-1] == ("msg-1", "Done")
+
+    @pytest.mark.asyncio
+    async def test_a_close_during_the_first_post_still_finishes_the_message(self):
+        """The run ended while the first post was on its way: it must still read Done."""
+        fake = _FakeChannel()
+        landed = asyncio.Event()
+
+        async def slow_post(text: str) -> str:
+            await landed.wait()
+            return await fake.post(text)
+
+        progress = live_control.ProgressMessage(slow_post, fake.edit, min_interval=1.0)
+        await progress.on_event({"event": "tool_start", "tool": "web_search"})
+        await asyncio.sleep(0.01)
+        closing = asyncio.create_task(progress.close("Done"))
+        await asyncio.sleep(0.01)
+        landed.set()
+        await asyncio.wait_for(closing, timeout=5)
+        assert len(fake.posts) == 1
+        assert fake.edits == [("msg-1", "Done")]
 
     @pytest.mark.asyncio
     async def test_no_event_means_nothing_is_ever_posted(self):

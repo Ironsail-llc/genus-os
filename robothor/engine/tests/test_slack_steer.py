@@ -86,6 +86,18 @@ class TestCommands:
         assert await _bot()._stop_command("C123", user_id="U1") == "Nothing is running here."
 
     @pytest.mark.asyncio
+    async def test_a_control_that_fails_is_still_answered(self, flag, monkeypatch):
+        def _boom(*_a, **_kw):
+            raise ValueError("run not found in tenant")
+
+        monkeypatch.setattr(live_control, "steer_conversation", _boom)
+        monkeypatch.setattr(live_control, "interrupt_conversation", _boom)
+        assert await _bot()._stop_command("C123", user_id="U1") == "Stop could not be confirmed."
+        assert await _bot()._steer_command("C123", user_id="U1", text="x") == (
+            "Steer could not be delivered."
+        )
+
+    @pytest.mark.asyncio
     async def test_steer_without_text_says_how(self, flag, controls):
         reply = await _bot()._steer_command("C123", user_id="U1", text="  ")
         assert controls["steer"] == []

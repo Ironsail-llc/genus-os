@@ -130,6 +130,23 @@ async def test_stop_interrupts_the_conversations_run(flag, controls, runs):
 
 
 @pytest.mark.asyncio
+async def test_a_control_that_fails_is_still_answered(flag, runs, monkeypatch):
+    def _boom(*_a, **_kw):
+        raise ValueError("run not found in tenant")
+
+    monkeypatch.setattr(live_control, "steer_conversation", _boom)
+    monkeypatch.setattr(live_control, "interrupt_conversation", _boom)
+    channel = _Channel()
+    await _say(channel, "/stop")
+    await _say(channel, "/steer x")
+    assert channel.sent == [
+        (CONVERSATION, "Stop could not be confirmed."),
+        (CONVERSATION, "Steer could not be delivered."),
+    ]
+    assert runs == []
+
+
+@pytest.mark.asyncio
 async def test_a_refused_sender_steers_nothing(flag, controls, runs, gate):
     gate["decision"] = AccessDecision(allowed=False, refusal="")
     channel = _Channel()

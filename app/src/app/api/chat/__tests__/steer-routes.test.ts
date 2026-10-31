@@ -44,8 +44,8 @@ describe("steer and interrupt routes", () => {
 
   it("steers the named agent's run and ignores a browser session key", async () => {
     const { POST } = await import("../steer/route");
-    const res = await POST(post({ agent: "scheduler", text: "Use the EU region.", session_key: "someone-else" }));
-    expect(steer.chatSteer).toHaveBeenCalledWith(KEY, "Use the EU region.");
+    const res = await POST(post({ agent: "scheduler", text: "Use the EU region.", session_key: "someone-else", request_id: "request-1" }));
+    expect(steer.chatSteer).toHaveBeenCalledWith(KEY, "Use the EU region.", "request-1");
     expect(await res.json()).toEqual({ ok: true, found: true });
   });
 
@@ -77,8 +77,8 @@ describe("steer and interrupt routes", () => {
 
   it("interrupts the main conversation's run when no agent is named", async () => {
     const { POST } = await import("../interrupt/route");
-    const res = await POST(post({}));
-    expect(steer.chatInterrupt).toHaveBeenCalledWith("");
+    const res = await POST(post({ request_id: "request-1" }));
+    expect(steer.chatInterrupt).toHaveBeenCalledWith("", "request-1");
     expect(await res.json()).toEqual({ ok: true, found: true });
   });
 
