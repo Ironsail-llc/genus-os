@@ -156,6 +156,34 @@ describe("/api/chat/send with attachments", () => {
     expect(engine.chatSend).not.toHaveBeenCalled();
   });
 
+  it("answers 400 with request_admitted false for a body that is not JSON", async () => {
+    const { POST } = await import("../send/route");
+    const res = await POST(new Request("http://helm.test/api/chat/send", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{not json",
+    }));
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({ request_admitted: false });
+    expect(engine.chatSend).not.toHaveBeenCalled();
+  });
+
+  it("answers 413 with request_admitted false for a body that arrived shorter than it said", async () => {
+    // What a proxy that buffers only part of the body hands on: fewer bytes
+    // than the Content-Length the browser sent, and JSON cut off part way.
+    const { POST } = await import("../send/route");
+    const cut = '{"message": "x", "attachments": [{"name": "a.png", "data": "iVBOR';
+    const req = {
+      headers: new Headers({ "content-length": String(cut.length + 4_000_000) }),
+      text: async () => cut,
+      json: async () => JSON.parse(cut),
+    } as unknown as Request;
+    const res = await POST(req);
+    expect(res.status).toBe(413);
+    expect(await res.json()).toMatchObject({ request_admitted: false });
+    expect(engine.chatSend).not.toHaveBeenCalled();
+  });
+
   it("leaves a plain send's engine call exactly as it was", async () => {
     await send({ message: "hi", request_id: REQUEST });
     expect(engine.chatSend).toHaveBeenCalledWith("hi", "", REQUEST);
