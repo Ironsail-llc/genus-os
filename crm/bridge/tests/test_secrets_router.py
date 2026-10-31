@@ -290,3 +290,80 @@ def test_an_unreadable_vault_is_said_not_hidden(controls_client_as_operator, mon
 def test_a_readable_vault_says_so(controls_client_as_operator, fake_table):
     rows = _by_name(controls_client_as_operator.get(SECRETS).json())
     assert all(row["vault_readable"] is True for row in rows.values())
+
+
+# ── removing a vault row ─────────────────────────────────────────────────────
+#
+# ``DELETE /api/secrets/{name}`` takes the ENV name the list shows, never a
+# vault key: the list does not send vault keys, so the page has none to send
+# back. The route finds the row the accessor would serve and deletes that.
+
+
+@pytest.fixture
+def deletable(monkeypatch):
+    from routers import secrets
+
+    rows = {"EXAMPLE_API_TOKEN": "providers/example/api_key"}
+    deleted: list[str] = []
+    audits: list[tuple[str, dict]] = []
+    reloads: list[str] = []
+
+    def _status(name, **kwargs):
+        vault_key = rows.get(name)
+        return _row(
+            name,
+            configured=vault_key is not None,
+            in_vault=vault_key is not None,
+            source="vault" if vault_key else "missing",
+            vault_key=vault_key,
+        )
+
+    def _delete(key, **kwargs):
+        deleted.append(key)
+        for name, vk in list(rows.items()):
+            if vk == key:
+                rows.pop(name)
+        return True
+
+    monkeypatch.setattr(secrets, "status_for_name", _status)
+    monkeypatch.setattr(secrets, "_vault_delete", _delete)
+    monkeypatch.setattr(secrets, "audited", lambda request, event, **kw: audits.append((event, kw)))
+    monkeypatch.setattr(secrets, "_reload_engine", lambda: reloads.append("reload"))
+    return {"deleted": deleted, "audits": audits, "reloads": reloads}
+
+
+def test_an_operator_removes_a_vault_row(controls_client_as_operator, deletable):
+    res = controls_client_as_operator.delete(f"{SECRETS}/EXAMPLE_API_TOKEN")
+    assert res.status_code == 200, res.text
+    assert res.json()["deleted"] is True
+    assert deletable["deleted"] == ["providers/example/api_key"]
+    assert [event for event, _ in deletable["audits"]] == ["secret.delete"]
+    assert deletable["reloads"] == ["reload"]
+    assert res.headers.get("cache-control") == "no-store"
+    assert "providers/example" not in res.text, "the vault key must not leave"
+
+
+def test_an_admin_may_remove_one_too(controls_client_as_admin, deletable):
+    assert controls_client_as_admin.delete(f"{SECRETS}/EXAMPLE_API_TOKEN").status_code == 200
+
+
+def test_a_viewer_cannot_remove_a_secret(controls_client_as_viewer, deletable):
+    assert controls_client_as_viewer.delete(f"{SECRETS}/EXAMPLE_API_TOKEN").status_code == 403
+    assert deletable["deleted"] == []
+
+
+def test_a_service_token_cannot_remove_a_secret(controls_client_as_service, deletable):
+    assert controls_client_as_service.delete(f"{SECRETS}/EXAMPLE_API_TOKEN").status_code == 403
+    assert deletable["deleted"] == []
+
+
+def test_a_name_with_no_vault_row_is_not_found(controls_client_as_operator, deletable):
+    res = controls_client_as_operator.delete(f"{SECRETS}/NOT_IN_THE_VAULT")
+    assert res.status_code == 404
+    assert deletable["deleted"] == []
+
+
+def test_a_bootstrap_credential_is_refused(controls_client_as_operator, deletable):
+    res = controls_client_as_operator.delete(f"{SECRETS}/ROBOTHOR_DB_PASSWORD")
+    assert res.status_code == 409
+    assert deletable["deleted"] == []

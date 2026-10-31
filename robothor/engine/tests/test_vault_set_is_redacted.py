@@ -182,3 +182,63 @@ def test_an_audit_row_cannot_carry_a_credential():
 
     assert recorded, "the audit call recorded nothing"
     assert FAKE_TOKEN not in json.dumps(recorded, default=str)
+
+
+# ── the live tool stream ─────────────────────────────────────────────────────
+
+
+def _turn_request(events: list):
+    from types import SimpleNamespace
+
+    async def on_tool(event):
+        events.append(event)
+
+    run = SimpleNamespace(
+        id="r",
+        tenant_id="default",
+        user_id="u",
+        user_role="owner",
+        accessible_tenant_ids=(),
+        is_benchmark=False,
+    )
+    return SimpleNamespace(
+        on_tool=on_tool,
+        trace=None,
+        agent_config=SimpleNamespace(id="main", tool_timeout_seconds=120, task_author_override=""),
+        session=SimpleNamespace(run=run, identity=None),
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_tool_start_event_does_not_stream_the_credential():
+    """Every stored path redacted a ``vault_set`` argument; the live one did
+    not. ``tool_start`` carried the raw arguments onto the webchat SSE stream
+    and into the Telegram progress handler, so the credential reached the
+    browser in clear while every row about the call said ``<redacted>``."""
+    from types import SimpleNamespace
+
+    from robothor.engine.tool_turn import ToolTurnMixin
+
+    events: list = []
+
+    async def execute(name, args, **kwargs):
+        return {"success": True}
+
+    executor = ToolTurnMixin.__new__(ToolTurnMixin)
+    executor.registry = SimpleNamespace(execute=execute)  # type: ignore[attr-defined]
+    executor.config = SimpleNamespace(workspace="/tmp")  # type: ignore[attr-defined]
+    args = {"key": "providers/github/api_key", "value": FAKE_TOKEN}
+    call = SimpleNamespace(
+        tool_name="vault_set",
+        tool_args=args,
+        tc=SimpleNamespace(id="c1"),
+        result=None,
+        elapsed_ms=0,
+    )
+    await executor._execute_one(call, _turn_request(events))  # type: ignore[arg-type]
+
+    (start,) = [e for e in events if e.get("event") == "tool_start"]
+    leaked = FAKE_TOKEN in json.dumps(start, default=str)
+    assert not leaked, "tool_start streamed the credential"
+    assert start["args"]["key"] == "providers/github/api_key"
+    assert call.tool_args["value"] == FAKE_TOKEN, "the handler must still get the real value"

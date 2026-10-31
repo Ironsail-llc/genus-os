@@ -350,3 +350,55 @@ def test_kind_for_key_names_one_vendor_or_none(key, expected):
     from robothor.secrets.testers import kind_for_key
 
     assert kind_for_key(key) == expected
+
+
+# ── who stored it, and is it being used ──────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_vault_set_passes_audit_metadata_and_never_the_value(monkeypatch):
+    from robothor import vault
+
+    seen: list[dict] = []
+    monkeypatch.setattr(vault, "set", lambda key, value, **kw: seen.append(kw))
+    ctx = ToolContext(agent_id="main", run_id="run-1", tenant_id="default", user_id="user-bob")
+    await HANDLERS["vault_set"]({"key": "providers/github/api_key", "value": "ghp_FAKE3333"}, ctx)
+    (kw,) = seen
+    assert kw["metadata"]["stored_by"] == "user-bob"
+    assert kw["metadata"]["run_id"] == "run-1"
+    assert kw["metadata"]["agent_id"] == "main"
+    leaked = "ghp_FAKE3333" in repr(kw["metadata"])
+    assert not leaked
+
+
+@pytest.mark.asyncio
+async def test_vault_get_says_who_stored_it(stored, monkeypatch):
+    from robothor import vault
+
+    monkeypatch.setattr(
+        vault,
+        "get_metadata",
+        lambda key, **kw: {"stored_by": "user-bob", "via": "chat:webchat", "run_id": "r"},
+        raising=False,
+    )
+    result = await HANDLERS["vault_get"]({"key": "providers/github/api_key"}, _ctx())
+    assert result["stored_by"] == "user-bob"
+    assert result["via"] == "chat:webchat"
+
+
+@pytest.mark.asyncio
+async def test_vault_get_says_when_the_credential_was_last_used(stored, monkeypatch):
+    from robothor import secrets as secrets_module
+    from robothor import vault
+
+    monkeypatch.setattr(vault, "get_metadata", lambda key, **kw: {}, raising=False)
+    before = await HANDLERS["vault_get"]({"key": "providers/github/api_key"}, _ctx())
+    assert before["last_resolved_at"] is None
+
+    secrets_module.reset_secret_cache()
+    from robothor.secrets.status import resolve_for_key
+
+    resolved = resolve_for_key("providers/github/api_key", tenant_id="default")
+    assert resolved is not None
+    after = await HANDLERS["vault_get"]({"key": "providers/github/api_key"}, _ctx())
+    assert after["last_resolved_at"], "a vault resolve must stamp last_resolved_at"

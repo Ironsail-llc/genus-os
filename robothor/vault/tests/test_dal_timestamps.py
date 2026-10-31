@@ -34,6 +34,9 @@ class FakeCursor:
     def fetchall(self) -> list[tuple[Any, ...]]:
         return self._rows
 
+    def fetchone(self) -> tuple[Any, ...] | None:
+        return self._rows[0] if self._rows else None
+
     def __enter__(self) -> FakeCursor:
         return self
 
@@ -124,3 +127,32 @@ def test_it_never_selects_the_encrypted_value(fake_conn) -> None:
     get_secrets_updated_at(["providers/openrouter/api_key"])
     sql, _ = conn.cur.executed[0]
     assert "encrypted_value" not in sql
+
+
+def test_vault_set_forwards_metadata_to_the_dal(monkeypatch):
+    import robothor.vault as vault
+
+    seen: list[dict] = []
+    monkeypatch.setattr(vault, "get_master_key", lambda: b"k" * 32)
+    monkeypatch.setattr(vault, "set_secret", lambda key, value, mk, **kw: seen.append(kw))
+    vault.set("providers/example/api_key", "v" * 20, metadata={"stored_by": "user-alice"})
+    assert seen[0]["metadata"] == {"stored_by": "user-alice"}
+
+
+def test_get_secret_metadata_reads_the_audit_fields_without_decrypting(fake_conn) -> None:
+    from robothor.vault.dal import get_secret_metadata
+
+    conn = fake_conn([({"stored_by": "user-alice", "via": "chat:webchat"},)])
+    assert get_secret_metadata("providers/example/api_key") == {
+        "stored_by": "user-alice",
+        "via": "chat:webchat",
+    }
+    sql, _ = conn.cur.executed[0]
+    assert "encrypted_value" not in sql
+
+
+def test_get_secret_metadata_of_an_absent_row_is_none(fake_conn) -> None:
+    from robothor.vault.dal import get_secret_metadata
+
+    fake_conn([])
+    assert get_secret_metadata("providers/example/api_key") is None
