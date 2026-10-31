@@ -344,6 +344,37 @@ describe("Observe › Logs", () => {
       expect(screen.queryByTestId("logs-error")).toBeNull();
     });
 
+    it("never links to a URL that carries credentials", async () => {
+      for (const url of [
+        "https://alice:hunter2@logs.example.invalid/search",
+        "https://alice@logs.example.invalid/search",
+      ]) {
+        container({ ...CONTAINER, logs_url: url });
+        const { unmount } = render(<LogsView role="owner" />);
+        await screen.findByTestId("logs-unavailable");
+        expect(screen.queryByTestId("logs-external-link")).toBeNull();
+        unmount();
+      }
+    });
+
+    it("does not flash auto-refresh before the first units answer", async () => {
+      let release: () => void = () => {};
+      fetchMock.mockImplementation(async (url: string) => {
+        requests.push(url);
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        return { ok: true, status: 200, json: async () => CONTAINER } as Response;
+      });
+      render(<LogsView role="owner" />);
+
+      await waitFor(() => expect(requests.length).toBe(1));
+      expect(screen.queryByTestId("logs-auto")).toBeNull();
+      release();
+      await screen.findByTestId("logs-unavailable");
+      expect(screen.queryByTestId("logs-auto")).toBeNull();
+    });
+
     it("hides auto-refresh, which would have nothing to beat", async () => {
       container();
       render(<LogsView role="owner" />);

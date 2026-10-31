@@ -503,6 +503,40 @@ def test_unavailable_units_carry_the_configured_logs_url(
     assert body["hint"].strip()
 
 
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://alice:hunter2@logs.example.invalid/search",
+        "https://alice@logs.example.invalid/search",
+        "https://:hunter2@logs.example.invalid/search",
+    ],
+)
+def test_a_logs_url_carrying_credentials_is_never_served(
+    controls_client_as_operator, journal, monkeypatch, caplog, url
+):
+    """Credential-free is enforced, not just documented.
+
+    Every operator sees the link, so a URL with userinfo in it is treated as
+    unset, and the warning that says so does not repeat the URL.
+    """
+    import logging
+
+    from routers import logs
+
+    from robothor.settings import reset_settings
+
+    monkeypatch.setattr(logs, "_which", lambda _name: None)
+    monkeypatch.setenv("GENUS_LOGS_URL", url)
+    reset_settings()
+    with caplog.at_level(logging.WARNING, logger=logs.logger.name):
+        body = controls_client_as_operator.get(UNITS).json()
+    assert body["available"] is False
+    assert body["logs_url"] is None
+    assert any("GENUS_LOGS_URL" in record.getMessage() for record in caplog.records)
+    assert "hunter2" not in caplog.text
+    assert "logs.example.invalid" not in caplog.text
+
+
 def test_a_journalctl_that_fails_gets_no_container_hint(
     controls_client_as_operator, journal, monkeypatch
 ):
