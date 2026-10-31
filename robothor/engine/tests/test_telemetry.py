@@ -408,3 +408,82 @@ class TestPublishFromAWorkerThread:
         sync_client.assert_not_called()
         assert client.xadd.await_count == 2
         assert aio.Redis.call_count == 1
+
+
+# ── Redis address: the engine's Redis settings, REDIS_HOST as a fallback ──
+
+
+@pytest.fixture
+def fresh_config(monkeypatch):
+    from robothor.config import reset_config
+
+    for name in (
+        "ROBOTHOR_REDIS_HOST",
+        "ROBOTHOR_REDIS_PORT",
+        "ROBOTHOR_REDIS_DB",
+        "ROBOTHOR_REDIS_PASSWORD",
+        "REDIS_HOST",
+        "REDIS_PORT",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    reset_config()
+    yield monkeypatch
+    reset_config()
+
+
+def _client_kwargs(aio: MagicMock) -> dict[str, Any]:
+    assert aio.Redis.call_count == 1
+    return dict(aio.Redis.call_args.kwargs)
+
+
+class TestRedisAddress:
+    async def test_engine_redis_settings_are_used(self, fresh_config, async_redis):
+        aio, _ = async_redis
+        fresh_config.setenv("ROBOTHOR_REDIS_HOST", "redis-a.example")
+        fresh_config.setenv("ROBOTHOR_REDIS_PORT", "6390")
+        fresh_config.setenv("ROBOTHOR_REDIS_DB", "2")
+        fresh_config.setenv("ROBOTHOR_REDIS_PASSWORD", "example-pass")
+
+        _trace().publish_metrics(dict(_RUN_DATA))
+        await get_task_registry().drain(timeout=2.0)
+
+        kwargs = _client_kwargs(aio)
+        assert kwargs["host"] == "redis-a.example"
+        assert kwargs["port"] == 6390
+        assert kwargs["db"] == 2
+        assert kwargs["password"] == "example-pass"
+
+    async def test_engine_settings_win_over_legacy_redis_host(self, fresh_config, async_redis):
+        aio, _ = async_redis
+        fresh_config.setenv("ROBOTHOR_REDIS_HOST", "redis-a.example")
+        fresh_config.setenv("REDIS_HOST", "redis-legacy.example")
+        fresh_config.setenv("REDIS_PORT", "6400")
+
+        _trace().publish_metrics(dict(_RUN_DATA))
+        await get_task_registry().drain(timeout=2.0)
+
+        kwargs = _client_kwargs(aio)
+        assert kwargs["host"] == "redis-a.example"
+        assert kwargs["port"] == 6379
+
+    async def test_legacy_redis_host_still_works_alone(self, fresh_config, async_redis):
+        aio, _ = async_redis
+        fresh_config.setenv("REDIS_HOST", "redis-legacy.example")
+        fresh_config.setenv("REDIS_PORT", "6400")
+
+        _trace().publish_metrics(dict(_RUN_DATA))
+        await get_task_registry().drain(timeout=2.0)
+
+        kwargs = _client_kwargs(aio)
+        assert kwargs["host"] == "redis-legacy.example"
+        assert kwargs["port"] == 6400
+
+    def test_sync_path_uses_the_engine_settings_too(self, fresh_config):
+        fresh_config.setenv("ROBOTHOR_REDIS_HOST", "redis-a.example")
+        fresh_config.setenv("ROBOTHOR_REDIS_PORT", "6390")
+        with patch("redis.Redis") as sync_client:
+            _trace().publish_metrics(dict(_RUN_DATA))
+
+        kwargs = sync_client.call_args.kwargs
+        assert kwargs["host"] == "redis-a.example"
+        assert kwargs["port"] == 6390

@@ -119,3 +119,27 @@ def test_finishing_twice_publishes_once(runner):
 def test_no_trace_is_a_noop(runner):
     with patch.object(AgentRunner, "_persist_run_sync"), patch.object(AgentRunner, "_persist_run"):
         runner._finish_run(_run(RunStatus.FAILED, "boom"), trace=None)
+
+
+def test_a_run_publishes_once_even_from_two_traces(runner):
+    """Another call site publishing the same run must not double-count it."""
+    run = _run(RunStatus.COMPLETED, None)
+    first = TraceContext(run_id=run.id, agent_id="example-agent")
+    second = TraceContext(run_id=run.id, agent_id="example-agent")
+
+    published = _finish(runner, run, first)
+    with patch.object(second, "publish_metrics", side_effect=published.append):
+        AgentRunner._publish_run_telemetry(second, run)
+
+    assert len(published) == 1
+
+
+def test_different_runs_each_publish(runner):
+    a = _run(RunStatus.COMPLETED, None)
+    b = _run(RunStatus.COMPLETED, None)
+    b.id = "00000000-0000-0000-0000-00000000tel2"
+
+    published = _finish(runner, a, TraceContext(run_id=a.id, agent_id="example-agent"))
+    published += _finish(runner, b, TraceContext(run_id=b.id, agent_id="example-agent"))
+
+    assert len(published) == 2
