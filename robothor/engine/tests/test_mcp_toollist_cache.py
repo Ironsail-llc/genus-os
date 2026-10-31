@@ -541,6 +541,8 @@ class TestAFailedFetchIsNeverCached:
             if not first["done"]:
                 first["done"] = True
                 self._poisoned = True
+                # What the real session records once a request is on the pipe.
+                self._desynced = True
                 await asyncio.sleep(30)
             return await real_list(self)
 
@@ -670,3 +672,180 @@ class TestShutdownOrdering:
         pool_at = src.index("await _shutdown_mcp_pool()")
         for stopper in ("await scheduler.stop()", "await hooks.stop()", "await bot.stop("):
             assert src.index(stopper) < pool_at, stopper
+
+
+# ── round 2: retire only a pipe that really is out of step ───────────────
+
+
+class _PipeProcess:
+    """A stdio MCP server at the pipe: Content-Length frames in, frames out.
+
+    Each request is answered, with its own id, after ``delays[method]``
+    seconds, exactly as a real server would answer it whether or not the
+    client is still waiting.
+    """
+
+    def __init__(self, delays: dict[str, float]) -> None:
+        self.returncode: int | None = None
+        self.pid = 4343
+        self.terminated = False
+        self.stdout = asyncio.StreamReader()
+        self._delays = delays
+        self._buf = b""
+        self._tasks: set[asyncio.Task[None]] = set()
+        outer = self
+
+        class _Stdin:
+            def write(self, data: bytes) -> None:
+                outer._feed(data)
+
+            async def drain(self) -> None:
+                return None
+
+        self.stdin = _Stdin()
+
+    def _feed(self, data: bytes) -> None:
+        import json as _json
+
+        self._buf += data
+        while b"\r\n\r\n" in self._buf:
+            head, rest = self._buf.split(b"\r\n\r\n", 1)
+            length = int(head.split(b":")[1])
+            if len(rest) < length:
+                return
+            body, self._buf = rest[:length], rest[length:]
+            msg = _json.loads(body)
+            if "id" not in msg:
+                continue  # a notification
+            task = asyncio.get_running_loop().create_task(self._answer(msg))
+            self._tasks.add(task)
+            task.add_done_callback(self._tasks.discard)
+
+    async def _answer(self, msg: dict[str, Any]) -> None:
+        import json as _json
+
+        method = msg["method"]
+        await asyncio.sleep(self._delays.get(method, 0.0))
+        if method == "tools/list":
+            result: dict[str, Any] = {"tools": [{"name": "pipe_tool", "description": "d"}]}
+        elif method == "tools/call":
+            result = {"content": [{"type": "text", "text": '{"ok": true}'}]}
+        else:
+            result = {}
+        payload = _json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": result}).encode()
+        self.stdout.feed_data(b"Content-Length: %d\r\n\r\n" % len(payload) + payload)
+
+    def terminate(self) -> None:
+        self.terminated = True
+        self.returncode = -15
+
+    def kill(self) -> None:
+        self.terminate()
+
+    async def wait(self) -> int:
+        return self.returncode or 0
+
+
+def _install_pipe_stdio(
+    monkeypatch: pytest.MonkeyPatch, delays: dict[str, float]
+) -> list[_PipeProcess]:
+    procs: list[_PipeProcess] = []
+
+    async def _start(self: Any) -> None:
+        proc = _PipeProcess(delays)
+        procs.append(proc)
+        self._process = proc
+
+    monkeypatch.setattr(mcp_client.McpClientSession, "start", _start)
+    return procs
+
+
+class TestRetireOnlyADesyncedPipe:
+    @pytest.mark.asyncio
+    async def test_a_list_timing_out_behind_a_long_call_does_not_kill_it(
+        self, monkeypatch: pytest.MonkeyPatch, pool: Any, cache_on: None
+    ) -> None:
+        procs = _install_pipe_stdio(monkeypatch, {"tools/call": 0.5})
+        monkeypatch.setattr(mcp_client, "ADAPTER_CONNECT_TIMEOUT_S", 0.1)
+        adapter = _adapter("pipe")
+        mcp_client.register_adapter(adapter)
+        session = await pool.get_session("pipe")
+
+        call = asyncio.create_task(session.call_tool("pipe_tool", {}))
+        await asyncio.sleep(0.05)  # the call now holds the session's request lock
+        with pytest.raises(TimeoutError):
+            await mcp_client.fetch_adapter_tools(adapter, pool)
+
+        assert await call == {"content": [{"type": "text", "text": '{"ok": true}'}]}
+        assert procs[0].terminated is False
+        assert pool._sessions["pipe"] is session
+        # Nothing was written for the list, so nothing is out of step: the
+        # next miss lists on the same process.
+        tools = await pool.list_tools_cached("pipe")
+        assert [t["name"] for t in tools] == ["pipe_tool"]
+        assert len(procs) == 1
+
+    @pytest.mark.asyncio
+    async def test_a_cancelled_call_does_not_poison_the_next_list(
+        self, monkeypatch: pytest.MonkeyPatch, pool: Any, cache_on: None
+    ) -> None:
+        procs = _install_pipe_stdio(monkeypatch, {"tools/call": 0.1})
+        mcp_client.register_adapter(_adapter("pipe"))
+        session = await pool.get_session("pipe")
+
+        call = asyncio.create_task(session.call_tool("pipe_tool", {}))
+        await asyncio.sleep(0.03)
+        call.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await call
+        await asyncio.sleep(0.15)  # its answer lands, unread, on the pipe
+
+        tools = await pool.list_tools_cached("pipe")
+
+        assert [t["name"] for t in tools] == ["pipe_tool"]
+        assert len(procs) == 2
+        assert procs[0].terminated is True
+
+    @pytest.mark.asyncio
+    async def test_a_cancelled_list_still_retires_its_pipe(
+        self, monkeypatch: pytest.MonkeyPatch, pool: Any, cache_on: None
+    ) -> None:
+        procs = _install_pipe_stdio(monkeypatch, {"tools/list": 0.3})
+        monkeypatch.setattr(mcp_client, "ADAPTER_CONNECT_TIMEOUT_S", 0.1)
+        adapter = _adapter("pipe")
+        mcp_client.register_adapter(adapter)
+
+        with pytest.raises(TimeoutError):
+            await mcp_client.fetch_adapter_tools(adapter, pool)
+        await asyncio.sleep(0)
+
+        assert procs[0].terminated is True
+        assert "pipe" not in pool._sessions
+
+
+class TestAFailedHttpListKeepsItsClient:
+    @pytest.mark.asyncio
+    async def test_the_shared_client_survives_and_nothing_is_cached(
+        self, monkeypatch: pytest.MonkeyPatch, pool: Any, cache_on: None
+    ) -> None:
+        counters = _install_fake_httpx(monkeypatch)
+        real_post = httpx.AsyncClient.post
+        failures = {"left": 1}
+
+        async def _post(self: Any, url: str, headers: Any = None, json: Any = None) -> Any:
+            if json.get("method") == "tools/list" and failures["left"]:
+                failures["left"] -= 1
+                raise httpx.ReadTimeout("slow")
+            return await real_post(self, url, headers=headers, json=json)
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", _post)
+        pool.register(mcp_client.McpServerConfig(name="web", url="https://mcp.example.com/_mcp"))
+        session = await pool.get_session("web")
+
+        with pytest.raises(httpx.ReadTimeout):
+            await pool.list_tools_cached("web")
+        await pool.list_tools_cached("web")
+
+        assert pool._sessions["web"] is session
+        assert counters.constructed == 1
+        assert counters.closed == 0
