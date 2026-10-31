@@ -951,6 +951,19 @@ runs the chain above. `ROBOTHOR_WEB_SEARCH_BROWSER_FALLBACK=off` disables the *i
 browser fallback (it drives a headed browser on the operator's display); an
 explicit `provider="browser"` still runs.
 
+## Budgets and stops
+
+Spend budgets report rather than stop unless you set them. The fleet hourly
+cost cap (`ROBOTHOR_HOURLY_COST_CAP_USD`, 5.0) and the per-run runaway-token
+hard cap (`ROBOTHOR_RUNAWAY_HARD_CAP_TOKENS`, 5,000,000) observe by default. A
+run that crosses one carries a `budget_stop` step with mode `observe`, the
+existing alert is raised, and the run continues. Set the limit explicitly (in
+the environment or config.yaml), or set `ROBOTHOR_HOURLY_COST_CAP_MODE` or
+`ROBOTHOR_RUNAWAY_HARD_CAP_MODE` to `enforce`, and they stop runs as before.
+`observe` wins over an explicit limit. `genus doctor --only budget_stops.recent`
+counts the last day's stops. The full inventory of budgets, caps and stops is
+in `docs/BUDGETS_AND_STOPS.md` (repository only).
+
 ## Failure-mode detectors
 
 `ROBOTHOR_DETECTORS_ENABLED=0` disables every detector; what each one watches

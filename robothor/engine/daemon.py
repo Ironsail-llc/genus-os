@@ -2456,6 +2456,7 @@ def _init_fleet_capacity(config: EngineConfig) -> None:
         max_concurrent=config.max_concurrent_agents,
         hourly_cost_cap_usd=config.hourly_cost_cap_usd,
         reserved_slots=max(0, min(reserved, config.max_concurrent_agents - 1)),
+        cost_cap_mode=config.hourly_cost_cap_mode,
     )
     applied = CapacityGovernor(cloud_max_concurrent=config.max_concurrent_agents).apply_once()
     _size_spawn_fan_out(config)
