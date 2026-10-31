@@ -77,6 +77,8 @@ on-premises, in a private cloud, or in a deliberately configured air gap.
 - [Release notes](release-notes.md) — what changed, for operators, admins and
   agent authors.
 - [Architecture](architecture.md) — how the pieces fit together.
+- [Performance](PERFORMANCE.md) — how a turn is timed, the turn benchmark,
+  the trace spans, and the switches that make a turn faster.
 - [Platform vs Instance](PLATFORM_INSTANCE.md) — the boundary that keeps your
   data out of the platform.
 
