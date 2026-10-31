@@ -57,8 +57,9 @@ claiming there are none.
 or both, and give a reason. The original goes into the fact's history before
 the change, the audit record carries the fact id and your reason (never the
 text), and the fact shows **Operator-confirmed** afterwards. An edit that would
-duplicate another active fact is refused. The fact is not re-embedded, so
-vector search keeps ranking it by its old wording until it is.
+duplicate another active fact is refused. Changing the text re-embeds the
+fact, so search finds it by its new wording at once; only if the embedding
+provider is unreachable does it keep the old vector, marked stale.
 
 **Audit** has the audit log and the guardrail change log, and **Export CSV**
 carries the same filters the table is showing, up to five thousand rows. Two

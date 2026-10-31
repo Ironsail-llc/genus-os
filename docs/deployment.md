@@ -979,6 +979,7 @@ everything, and a warning that cries wolf is the one that gets ignored.
 and only the named row changes — supersession chains are not followed. A second
 forget is a `409`; a fact in another tenant is a `404`. The audit row carries
 the fact id and the reason, never the text.
+
 `PATCH /api/memory/facts/{id}` corrects one **active** fact: a body of
 `fact_text`, `entities` (a list of names) or both, and a `reason` under the
 same 3–500 rule. Before the row changes, its original text, entities and the
@@ -989,10 +990,12 @@ as `operator_confirmed`, and a recomputed `content_hash`. An edit whose text
 matches another active fact is a `409` ("an active fact with this text already
 exists"); an inactive fact is a `422`; another tenant's fact is a `404`. The
 `memory.edit` audit event carries the fact id and the reason, never the old or
-the new text. **The embedding is not recomputed.** Nothing backfills a missing
-embedding, so a text edit keeps the old vector and sets
-`metadata.embedding_stale = true`: keyword search finds the new text at once,
-while vector search ranks the fact by its old wording until it is re-embedded.
+the new text. **A text edit re-embeds the fact** in the same request, so
+vector search ranks it by its new wording at once; an entities-only edit, or
+one that saves the same words, leaves the vector alone. If the embedding
+provider is unreachable the edit still saves, keeps the old vector and sets
+`metadata.embedding_stale = true` until a later text edit refreshes it — the
+vector is never cleared, because nothing backfills a missing one.
 
 **Audit.** `GET /api/controls/audit` reads the guardrail change log
 (`feature_flag_audit`, written on every `PATCH /api/controls`), newest first.
@@ -1056,8 +1059,10 @@ chips), and a reason of 3–500 characters for the audit record. Saving keeps th
 original text in the fact's history first, then shows the row as the bridge
 stored it, with an **Operator-confirmed** badge. If another active fact already
 says the same thing, the save is refused with that message and the editor stays
-open. Inactive facts cannot be edited. An edit does not re-embed the fact, so
-vector search keeps ranking it by its old wording until it is re-embedded.
+open. Inactive facts cannot be edited. Changing the text re-embeds the fact,
+so search finds it by its new wording straight away (unless the embedding
+provider was unreachable, in which case the old vector is kept and marked
+stale).
 
 **Observe › Audit** has two tabs: the audit log itself, and the guardrail
 change log (every `PATCH /api/controls`, with the reason its operator typed).
