@@ -153,17 +153,12 @@ class ToolRpcServer:
         sock = writer.get_extra_info("socket")
         if sock is None:
             return "the peer could not be identified"
-        # Linux's option. A kernel without it cannot say who the peer is, which
-        # is the same answer as any other unidentifiable peer: refuse, and
-        # SAY so. Reaching for the missing attribute raised before the reply,
-        # left the connection open, and the snippet blocked in recv forever.
-        peercred = getattr(socket_module, "SO_PEERCRED", None)
-        if peercred is None:
-            return "the peer could not be identified (this kernel has no SO_PEERCRED)"
         try:
-            raw = sock.getsockopt(socket_module.SOL_SOCKET, peercred, struct.calcsize(_UCRED))
+            raw = sock.getsockopt(
+                socket_module.SOL_SOCKET, socket_module.SO_PEERCRED, struct.calcsize(_UCRED)
+            )
             peer_pid, peer_uid, _gid = struct.unpack(_UCRED, raw)
-        except (OSError, struct.error):
+        except (AttributeError, OSError, struct.error):  # no SO_PEERCRED off Linux: refuse
             return "the peer could not be identified"
         if peer_uid != os.getuid():
             return "the peer runs as another user"
