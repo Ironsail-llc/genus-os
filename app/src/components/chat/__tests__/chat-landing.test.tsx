@@ -202,6 +202,35 @@ describe("ChatLanding", () => {
     expect(healthCalls()).toBe(2);
   });
 
+  it("pauses the health poll while the browser tab is hidden", () => {
+    vi.useFakeTimers();
+    const fetchMock = routedFetch();
+    vi.stubGlobal("fetch", fetchMock);
+    const healthCalls = () =>
+      fetchMock.mock.calls.filter(([input]) => String(input).includes("/api/health")).length;
+    const setHidden = (hidden: boolean) => {
+      Object.defineProperty(document, "hidden", { value: hidden, configurable: true });
+      document.dispatchEvent(new Event("visibilitychange"));
+    };
+
+    const { unmount } = renderLanding();
+    expect(healthCalls()).toBe(1);
+    try {
+      act(() => setHidden(true));
+      act(() => {
+        vi.advanceTimersByTime(120000);
+      });
+      expect(healthCalls()).toBe(1);
+
+      // Back on screen: one read straight away for a figure of unknown age.
+      act(() => setHidden(false));
+      expect(healthCalls()).toBe(2);
+    } finally {
+      unmount();
+      Object.defineProperty(document, "hidden", { value: false, configurable: true });
+    }
+  });
+
   it("keeps the suggested prompts, and a chip hands its text to the composer", () => {
     const onPrompt = vi.fn();
     renderLanding({ onPrompt });

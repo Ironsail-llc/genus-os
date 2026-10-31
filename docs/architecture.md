@@ -120,3 +120,7 @@ Each agent declares its capabilities in `agent_capabilities.json`: which tools i
 | Non-Python services | Bridge HTTP API on :9100 | REST endpoints for CRM, contacts, search |
 | Dashboards | API server on :9099 | FastAPI with SSE for real-time events |
 | Agent frameworks | Any of the above | Agent Engine calls DAL directly; LangChain can import directly |
+
+## Dashboard Data Layer
+
+The Helm (`app/`) reads every listing through one TanStack Query client that `AppShell` mounts. Readers of the same key share one request and one poll, so the sidebar badges, the chat home and the Dashboard view together cost one `list_tasks` and one `agent_status` request. Each resource sets its own `staleTime` (tasks 30 s, agents and Fleet 60 s); polls stop while the browser tab is hidden, a returning tab re-reads only what is stale, and a request whose last reader unmounts is aborted. Goals and personal automation refresh every 30 s; when the event stream carries their events, those events should invalidate the keys instead. Task events already do: `useTasks({ live: true })` invalidates the tasks key on `task.*`.

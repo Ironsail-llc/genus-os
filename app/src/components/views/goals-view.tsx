@@ -1,6 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { useAppQueryClient } from "@/lib/query/query-client";
 
 type GoalStatus = "queued" | "running" | "waiting" | "blocked" | "paused" | "review" | "complete" | "canceled";
 interface Evidence { criterion: number; summary: string; reference: string; satisfied: boolean }
@@ -30,12 +32,25 @@ async function api(path = "", init?: RequestInit) {
   return body;
 }
 
+/**
+ * The list and the open goal are re-read every 30 seconds while the view is
+ * on screen and the tab is visible. There is no goal event on the stream yet;
+ * when there is, it should invalidate these keys and the beat can slow down.
+ */
+const POLL_MS = 30_000;
+const GOALS_KEY = ["bridge", "goals"] as const;
+type GoalList = { goals: Goal[]; enabled: boolean };
+type Snapshot = { list: GoalList; detail: Goal | null };
+async function readSnapshot(goalId: string | null, signal?: AbortSignal): Promise<Snapshot> {
+  const list: GoalList = await api("", { signal });
+  const detail = goalId ? ((await api(`/${goalId}`, { signal })).goal as Goal) : null;
+  return { list, detail };
+}
+
 export function GoalsView({ visible }: { visible: boolean }) {
-  const [goals, setGoals] = useState<Goal[]>([]);
-  const [selected, setSelected] = useState<Goal | null>(null);
-  const [enabled, setEnabled] = useState(false);
-  const [loaded, setLoaded] = useState(false);
-  const [error, setError] = useState("");
+  const client = useAppQueryClient();
+  const [chosen, setSelected] = useState<Goal | null>(null);
+  const [actionError, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [objective, setObjective] = useState("");
   const [criteria, setCriteria] = useState("");
@@ -53,29 +68,49 @@ export function GoalsView({ visible }: { visible: boolean }) {
   const [cadence, setCadence] = useState("24");
   const [steer, setSteer] = useState("");
 
-  const refresh = useCallback(async () => {
-    const data = await api();
-    setGoals(data.goals); setEnabled(data.enabled); setLoaded(true);
-  }, []);
+  // The list and the open goal are one read on one beat, as they always were:
+  // list first, then the open goal's detail.
+  const selectedId = chosen?.id ?? null;
+  const snapshotKey = [...GOALS_KEY, selectedId] as const;
+  const snapshot = useQuery(
+    {
+      queryKey: snapshotKey,
+      queryFn: ({ signal }) => readSnapshot(selectedId, signal),
+      enabled: visible,
+      staleTime: POLL_MS,
+      refetchInterval: POLL_MS,
+      // Opening another goal keeps the list on screen while its read is out.
+      placeholderData: keepPreviousData,
+    },
+    client
+  );
+  const goals = snapshot.data?.list.goals ?? [];
+  const enabled = snapshot.data?.list.enabled ?? false;
+  const loaded = snapshot.data !== undefined;
 
-  const selectedId = selected?.id;
-  useEffect(() => {
-    if (!visible) return;
-    let disposed = false;
-    const poll = async () => {
-      try {
-        const data = await api();
-        if (!disposed) { setGoals(data.goals); setEnabled(data.enabled); setLoaded(true); }
-        if (selectedId) {
-          const detail: Goal = (await api(`/${selectedId}`)).goal;
-          if (!disposed) setSelected(current => current?.id === detail.id && detail.version >= current.version ? detail : current);
-        }
-      } catch (e) { if (!disposed) setError((e as Error).message); }
-    };
-    void poll();
-    const timer = setInterval(() => void poll(), 5000);
-    return () => { disposed = true; clearInterval(timer); };
-  }, [visible, selectedId]);
+  // A polled copy replaces the open goal only when it is the same goal and no
+  // older than what an action just put there.
+  const polled = snapshot.data?.detail;
+  const selected =
+    chosen && polled && polled.id === chosen.id && polled.version >= chosen.version ? polled : chosen;
+  const error = actionError || snapshot.error?.message || "";
+
+  // After a write every goals snapshot is stale: the one on screen is read
+  // again now (cancelling a poll that left before the write), and one seeded
+  // by `open` is read as soon as the view switches to it.
+  const refresh = useCallback(async () => {
+    await client.invalidateQueries({ queryKey: GOALS_KEY }, { cancelRefetch: true, throwOnError: true });
+  }, [client]);
+
+  /** Open a goal, seeding its snapshot so the detail paints without a second read. */
+  const open = useCallback(
+    (goal: Goal) => {
+      const list = client.getQueryData<Snapshot>([...GOALS_KEY, selectedId])?.list;
+      if (list) client.setQueryData<Snapshot>([...GOALS_KEY, goal.id], { list, detail: goal });
+      setSelected(goal);
+    },
+    [client, selectedId]
+  );
 
   async function perform(fn: () => Promise<void>) {
     setBusy(true); setError("");
@@ -85,7 +120,7 @@ export function GoalsView({ visible }: { visible: boolean }) {
   }
 
   async function select(goalId: string) {
-    await perform(async () => setSelected((await api(`/${goalId}`)).goal));
+    await perform(async () => open((await api(`/${goalId}`)).goal));
   }
 
   async function change(action: string) {
@@ -99,7 +134,7 @@ export function GoalsView({ visible }: { visible: boolean }) {
         ...(action === "resume" && resumeAttempts ? { max_attempts: Number(resumeAttempts) } : {}),
         ...(action === "resume" && resumeDays ? { deadline_seconds: Math.round(Number(resumeDays) * 86400) } : {}),
       }) });
-      setSelected((await api(`/${data.goal.id}`)).goal); setSteer("");
+      open((await api(`/${data.goal.id}`)).goal); setSteer("");
     });
   }
 
@@ -126,7 +161,7 @@ export function GoalsView({ visible }: { visible: boolean }) {
             max_attempts: maxAttempts ? Number(maxAttempts) : null,
             deadline_seconds: deadlineDays ? Math.round(Number(deadlineDays) * 86400) : null,
           }) });
-          setSelected(data.goal); setObjective(""); setCriteria("");
+          open(data.goal); setObjective(""); setCriteria("");
         });
       }}>
         <label className="block">Objective<input required value={objective} onChange={e => setObjective(e.target.value)} className="block w-full border rounded p-2 bg-background" /></label>

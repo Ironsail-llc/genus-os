@@ -32,7 +32,8 @@ describe("WorkflowRunDrawer", () => {
     openDrawer();
     await screen.findByTestId("run-step-update_record");
     expect(spy).toHaveBeenCalledWith(
-      `/api/bridge/api/workflows/${WORKFLOW_ID}/runs/${FAILED_RUN_ID}`
+      `/api/bridge/api/workflows/${WORKFLOW_ID}/runs/${FAILED_RUN_ID}`,
+      expect.objectContaining({ signal: expect.any(AbortSignal) })
     );
   });
 

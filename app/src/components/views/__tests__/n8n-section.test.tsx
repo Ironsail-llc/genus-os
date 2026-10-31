@@ -63,7 +63,10 @@ describe("N8nSection", () => {
     const spy = vi.spyOn(global, "fetch").mockResolvedValue(reply(LISTING));
     render(<N8nSection visible />);
     await screen.findAllByTestId("n8n-row");
-    expect(spy).toHaveBeenCalledWith("/api/bridge/api/integrations/n8n/workflows");
+    expect(spy).toHaveBeenCalledWith(
+      "/api/bridge/api/integrations/n8n/workflows",
+      expect.objectContaining({ signal: expect.any(AbortSignal) })
+    );
   });
 
   it("renders a row per workflow with counts, active pill and a link out", async () => {

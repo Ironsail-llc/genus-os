@@ -97,10 +97,19 @@ export function useBridgePoll({
   const onDataRef = useRef(onData);
   onDataRef.current = onData;
 
+  // The request on the wire, if any. Aborted when the caller unmounts, hides
+  // or moves to another URL, so a pane that has gone does not leave a read
+  // running on the box, and a late answer never lands on the next pane.
+  const inFlightRef = useRef<AbortController | null>(null);
+
   const loadRef = useRef<() => Promise<void>>(async () => {});
   loadRef.current = async () => {
+    inFlightRef.current?.abort();
+    const controller = new AbortController();
+    inFlightRef.current = controller;
     try {
-      const res = await fetch(url);
+      const res = await fetch(url, { signal: controller.signal });
+      if (controller.signal.aborted) return;
       if (!res.ok) {
         setStatus(res.status);
         if (res.status === 403) {
@@ -108,18 +117,24 @@ export function useBridgePoll({
           setError(null);
           return;
         }
-        setError(await readBridgeReply(res));
+        const reply = await readBridgeReply(res);
+        if (controller.signal.aborted) return;
+        setError(reply);
         return;
       }
       setForbidden(false);
       setStatus(null);
-      onDataRef.current(await res.json());
+      const body: unknown = await res.json();
+      if (controller.signal.aborted) return;
+      onDataRef.current(body);
       setError(null);
     } catch {
+      if (controller.signal.aborted) return;
       setStatus(null);
       setError(BRIDGE_UNREACHABLE);
     } finally {
-      setLoading(false);
+      if (!controller.signal.aborted) setLoading(false);
+      if (inFlightRef.current === controller) inFlightRef.current = null;
     }
   };
 
@@ -137,7 +152,12 @@ export function useBridgePoll({
   useEffect(() => {
     if (!visible) return;
     void loadRef.current();
-    if (paused) return;
+    if (paused) {
+      return () => {
+        inFlightRef.current?.abort();
+        inFlightRef.current = null;
+      };
+    }
 
     /*
       `visible` answers "is this the view on screen in the Helm"; it says
@@ -166,6 +186,8 @@ export function useBridgePoll({
     }
     return () => {
       stop();
+      inFlightRef.current?.abort();
+      inFlightRef.current = null;
       if (typeof document !== "undefined") {
         document.removeEventListener("visibilitychange", sync);
       }
