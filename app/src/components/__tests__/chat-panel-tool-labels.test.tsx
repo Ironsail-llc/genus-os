@@ -57,12 +57,12 @@ describe("ChatPanel Tools button and the default agent", () => {
     vi.stubGlobal("fetch", fetchMock);
     render(<ChatPanel />);
 
-    const button = screen.getByRole("button", { name: "Tools and MCP servers" });
-    expect(button).toBeDisabled();
+    // Opened before the listing answers: no agent yet, so nothing is asked.
+    fireEvent.click(screen.getByRole("button", { name: "Tools and MCP servers" }));
+    expect(await screen.findByTestId("tools-no-agent")).toBeVisible();
 
+    // The listing names the default; the open dialog asks about THAT agent.
     releaseListing();
-    await waitFor(() => expect(button).toBeEnabled());
-    fireEvent.click(button);
     await waitFor(() =>
       expect(fetchMock.mock.calls.map(([url]) => String(url))).toContain(
         "/api/bridge/api/agents/example-main/tools"
@@ -71,5 +71,27 @@ describe("ChatPanel Tools button and the default agent", () => {
     expect(fetchMock.mock.calls.map(([url]) => String(url))).not.toContain(
       "/api/bridge/api/agents/main/tools"
     );
+  });
+});
+
+describe("ChatPanel Tools button for a member", () => {
+  it("opens and says the list is the operator's, without asking the bridge", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/bridge/api/agent-manifests") {
+        return { ok: false, status: 403, json: async () => ({ detail: "operator role required" }) };
+      }
+      return { ok: true, status: 200, json: async () => ({ messages: [], agents: [], active: false }) };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<ChatPanel />);
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.map(([url]) => String(url))).toContain("/api/bridge/api/agent-manifests")
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Tools and MCP servers" }));
+
+    expect(await screen.findByTestId("tools-no-agent")).toHaveTextContent(/only an operator/i);
+    expect(fetchMock.mock.calls.map(([url]) => String(url)).some((url) => url.includes("/tools"))).toBe(false);
   });
 });

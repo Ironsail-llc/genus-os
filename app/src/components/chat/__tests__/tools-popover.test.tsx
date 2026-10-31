@@ -185,13 +185,18 @@ describe("ToolsPopover — the dialog", () => {
     expect(error).toHaveTextContent(/sign in/i);
   });
 
-  it("is disabled until the chat knows which agent it is talking to", () => {
+  it("opens without an agent and asks nothing until the chat knows one", async () => {
+    // A member's agent listing is refused, and a listing may name no default:
+    // either way the chat has no agent id. The dialog still opens and says why.
     const fetchMock = installFetch();
     render(<ToolsPopover agentId={null} />);
 
     const button = screen.getByRole("button", { name: "Tools and MCP servers" });
-    expect(button).toBeDisabled();
+    expect(button).toBeEnabled();
     fireEvent.click(button);
+
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByTestId("tools-no-agent")).toHaveTextContent(/only an operator/i);
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
