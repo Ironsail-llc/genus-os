@@ -1,6 +1,8 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useCallback, useMemo } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { useAppQueryClient } from "@/lib/query/query-client";
 
 type HealthTier = "healthy" | "degraded" | "failed" | "sleeping" | "unknown";
 
@@ -49,89 +51,75 @@ export interface AgentSummary {
   total: number;
 }
 
-const POLL_INTERVAL_MS = 60_000; // 60s polling
-const STALE_THRESHOLD_MS = 60_000; // 60s tab-backgrounded -> refetch
+const POLL_INTERVAL_MS = 60_000; // 60s polling, one beat for every reader
+const STALE_MS = 60_000; // a reader mounting within a minute paints from cache
+
+/** One cache entry for the fleet's health rows, shared by every reader. */
+export const AGENTS_QUERY_KEY = ["agents", "status"] as const;
+
+const EMPTY_SUMMARY: AgentSummary = { healthy: 0, degraded: 0, failed: 0, sleeping: 0, total: 0 };
+
+/** A refusal or a request that never got an answer, reported, not shown as zero agents. */
+class FetchRefused extends Error {
+  constructor(readonly endpoint: string, readonly status: number) {
+    super(`${endpoint} answered ${status}`);
+  }
+}
+
+async function fetchAgentStatus(signal: AbortSignal): Promise<AgentInfo[]> {
+  let res: Response;
+  try {
+    res = await fetch("/api/actions/execute", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tool: "agent_status", params: {} }),
+      signal,
+    });
+  } catch (err) {
+    if (signal.aborted) throw err;
+    // Status 0 means "no response" (offline, connection refused).
+    throw new FetchRefused("/api/actions/execute", 0);
+  }
+  if (!res.ok) throw new FetchRefused("/api/actions/execute", res.status);
+  const json = await res.json();
+  return json.data?.agents || [];
+}
+
+function summarize(agentList: AgentInfo[]): AgentSummary {
+  const s = { ...EMPTY_SUMMARY, total: agentList.length };
+  for (const a of agentList) {
+    if (a.status === "healthy") s.healthy++;
+    else if (a.status === "degraded") s.degraded++;
+    else if (a.status === "failed") s.failed++;
+    else if (a.status === "sleeping") s.sleeping++;
+  }
+  return s;
+}
 
 export function useAgents() {
-  const [agents, setAgents] = useState<AgentInfo[]>([]);
-  const [summary, setSummary] = useState<AgentSummary>({ healthy: 0, degraded: 0, failed: 0, sleeping: 0, total: 0 });
-  const [isLoading, setIsLoading] = useState(true);
+  const client = useAppQueryClient();
+  const query = useQuery(
+    {
+      queryKey: AGENTS_QUERY_KEY,
+      queryFn: ({ signal }) => fetchAgentStatus(signal),
+      staleTime: STALE_MS,
+      refetchInterval: POLL_INTERVAL_MS,
+    },
+    client
+  );
+
+  const agents = useMemo(() => query.data ?? [], [query.data]);
+  const summary = useMemo(() => (query.data ? summarize(query.data) : EMPTY_SUMMARY), [query.data]);
   // A refused fetch must be reportable: "no agents" and "could not ask" are
-  // not the same answer.
-  const [error, setError] = useState<{ endpoint: string; status: number } | null>(null);
-  const lastVisibleRef = useRef(Date.now());
-  const fetchIdRef = useRef(0);
+  // not the same answer. Cleared by the next good answer.
+  const error =
+    query.error instanceof FetchRefused
+      ? { endpoint: query.error.endpoint, status: query.error.status }
+      : null;
+  const { refetch: refetchQuery } = query;
+  const refetch = useCallback(async () => {
+    await refetchQuery();
+  }, [refetchQuery]);
 
-  const fetchAgents = useCallback(async () => {
-    const id = ++fetchIdRef.current;
-    try {
-      setIsLoading(true);
-      const res = await fetch("/api/actions/execute", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ tool: "agent_status", params: {} }),
-      });
-      if (!res.ok) {
-        if (id === fetchIdRef.current) {
-          setError({ endpoint: "/api/actions/execute", status: res.status });
-        }
-        return;
-      }
-      const json = await res.json();
-      if (id !== fetchIdRef.current) return;
-
-      setError(null);
-      const agentList: AgentInfo[] = json.data?.agents || [];
-      setAgents(agentList);
-
-      // Compute summary
-      const s = { healthy: 0, degraded: 0, failed: 0, sleeping: 0, total: agentList.length };
-      for (const a of agentList) {
-        if (a.status === "healthy") s.healthy++;
-        else if (a.status === "degraded") s.degraded++;
-        else if (a.status === "failed") s.failed++;
-        else if (a.status === "sleeping") s.sleeping++;
-      }
-      setSummary(s);
-    } catch {
-      // The request never got an answer (offline, connection refused). Status
-      // 0 means "no response" — reported, not shown as zero healthy agents.
-      if (id === fetchIdRef.current) {
-        setError({ endpoint: "/api/actions/execute", status: 0 });
-      }
-    } finally {
-      if (id === fetchIdRef.current) {
-        setIsLoading(false);
-      }
-    }
-  }, []);
-
-  // Initial fetch
-  useEffect(() => {
-    fetchAgents();
-  }, [fetchAgents]);
-
-  // Polling
-  useEffect(() => {
-    const interval = setInterval(fetchAgents, POLL_INTERVAL_MS);
-    return () => clearInterval(interval);
-  }, [fetchAgents]);
-
-  // Page Visibility stale detection
-  useEffect(() => {
-    function onVisibilityChange() {
-      if (document.visibilityState === "visible") {
-        const elapsed = Date.now() - lastVisibleRef.current;
-        if (elapsed > STALE_THRESHOLD_MS) {
-          fetchAgents();
-        }
-      } else {
-        lastVisibleRef.current = Date.now();
-      }
-    }
-    document.addEventListener("visibilitychange", onVisibilityChange);
-    return () => document.removeEventListener("visibilitychange", onVisibilityChange);
-  }, [fetchAgents]);
-
-  return { agents, summary, isLoading, error, refetch: fetchAgents };
+  return { agents, summary, isLoading: query.isFetching || query.isPending, error, refetch };
 }

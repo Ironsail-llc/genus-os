@@ -33,6 +33,7 @@ import { useInbox } from "@/hooks/use-inbox";
 import { useScreenSize } from "@/hooks/use-mobile";
 import { useViewRoute } from "@/hooks/use-view-route";
 import { useVisualState } from "@/hooks/use-visual-state";
+import { QueryProvider } from "@/lib/query/query-client";
 import { PanelRight, PanelRightOpen, Zap } from "lucide-react";
 import { readChatDockOpen, subscribeChatDockOpen, writeChatDockOpen } from "@/lib/chat/dock-state";
 
@@ -64,7 +65,20 @@ function HeaderClock() {
   return <span className="text-xs text-muted-foreground tabular-nums">{time} ET</span>;
 }
 
+/**
+ * The shell owns the dashboard's one request cache: every view and badge under
+ * it reads tasks, agents and the other listings through the same client, so a
+ * listing three of them show costs one request.
+ */
 export function AppShell() {
+  return (
+    <QueryProvider>
+      <AppShellBody />
+    </QueryProvider>
+  );
+}
+
+function AppShellBody() {
   const screenSize = useScreenSize();
   const isMobile = screenSize === "mobile";
 

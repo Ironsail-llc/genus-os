@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle, Network } from "lucide-react";
 import { PageHeader } from "@/components/business/page-header";
 import { EmptyState } from "@/components/business/empty-state";
 import { StatusBadge, fromEngineStatus } from "@/components/business/status-badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useAppQueryClient } from "@/lib/query/query-client";
 
 const BRIDGE_URL = "/api/bridge";
 
@@ -27,37 +28,40 @@ type Agent = {
   findings?: Finding[];
 };
 
-export function FleetView({ visible = true }: { visible?: boolean }) {
-  const [agents, setAgents] = useState<Agent[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+/** Shown again within a minute, the view paints from cache without a request. */
+const FLEET_STALE_MS = 60_000;
+const FLEET_KEY = ["bridge", "fleet"] as const;
 
-  useEffect(() => {
-    if (!visible) return;
-    let active = true;
-    (async () => {
-      setLoading(true);
-      try {
-        const res = await fetch(`${BRIDGE_URL}/api/fleet`);
-        if (!active) return;
-        if (!res.ok) {
-          setError(res.status === 403 ? "Operator access required." : `Error ${res.status}`);
-          return;
-        }
-        const data = await res.json();
-        if (!active) return;
-        setAgents(data);
-        setError(null);
-      } catch {
-        if (active) setError("Could not reach the bridge.");
-      } finally {
-        if (active) setLoading(false);
-      }
-    })();
-    return () => {
-      active = false;
-    };
-  }, [visible]);
+class FleetRefused extends Error {}
+
+async function fetchFleet(signal: AbortSignal): Promise<Agent[]> {
+  let res: Response;
+  try {
+    res = await fetch(`${BRIDGE_URL}/api/fleet`, { signal });
+  } catch (err) {
+    if (signal.aborted) throw err;
+    throw new FleetRefused("Could not reach the bridge.");
+  }
+  if (!res.ok) {
+    throw new FleetRefused(res.status === 403 ? "Operator access required." : `Error ${res.status}`);
+  }
+  return res.json();
+}
+
+export function FleetView({ visible = true }: { visible?: boolean }) {
+  const client = useAppQueryClient();
+  const fleet = useQuery(
+    {
+      queryKey: FLEET_KEY,
+      queryFn: ({ signal }) => fetchFleet(signal),
+      enabled: visible,
+      staleTime: FLEET_STALE_MS,
+    },
+    client
+  );
+  const agents = fleet.data ?? [];
+  const loading = fleet.isFetching;
+  const error = fleet.error instanceof FleetRefused ? fleet.error.message : null;
 
   const flaggedCount = agents.filter((a) => (a.findings?.length ?? 0) > 0).length;
 

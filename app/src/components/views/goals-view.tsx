@@ -1,6 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { useAppQueryClient } from "@/lib/query/query-client";
 
 type GoalStatus = "queued" | "running" | "waiting" | "blocked" | "paused" | "review" | "complete" | "canceled";
 interface Evidence { criterion: number; summary: string; reference: string; satisfied: boolean }
@@ -30,12 +32,20 @@ async function api(path = "", init?: RequestInit) {
   return body;
 }
 
+/**
+ * The list and the open goal are re-read every 30 seconds while the view is
+ * on screen and the tab is visible. There is no goal event on the stream yet;
+ * when there is, it should invalidate these keys and the beat can slow down.
+ */
+const POLL_MS = 30_000;
+const GOALS_KEY = ["bridge", "goals"] as const;
+type GoalList = { goals: Goal[]; enabled: boolean };
+const listGoals = (signal?: AbortSignal): Promise<GoalList> => api("", { signal });
+
 export function GoalsView({ visible }: { visible: boolean }) {
-  const [goals, setGoals] = useState<Goal[]>([]);
-  const [selected, setSelected] = useState<Goal | null>(null);
-  const [enabled, setEnabled] = useState(false);
-  const [loaded, setLoaded] = useState(false);
-  const [error, setError] = useState("");
+  const client = useAppQueryClient();
+  const [chosen, setSelected] = useState<Goal | null>(null);
+  const [actionError, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [objective, setObjective] = useState("");
   const [criteria, setCriteria] = useState("");
@@ -53,29 +63,50 @@ export function GoalsView({ visible }: { visible: boolean }) {
   const [cadence, setCadence] = useState("24");
   const [steer, setSteer] = useState("");
 
-  const refresh = useCallback(async () => {
-    const data = await api();
-    setGoals(data.goals); setEnabled(data.enabled); setLoaded(true);
-  }, []);
+  const list = useQuery(
+    {
+      queryKey: GOALS_KEY,
+      queryFn: ({ signal }) => listGoals(signal),
+      enabled: visible,
+      staleTime: POLL_MS,
+      refetchInterval: POLL_MS,
+    },
+    client
+  );
+  const goals = list.data?.goals ?? [];
+  const enabled = list.data?.enabled ?? false;
+  const loaded = list.data !== undefined;
 
-  const selectedId = selected?.id;
-  useEffect(() => {
-    if (!visible) return;
-    let disposed = false;
-    const poll = async () => {
-      try {
-        const data = await api();
-        if (!disposed) { setGoals(data.goals); setEnabled(data.enabled); setLoaded(true); }
-        if (selectedId) {
-          const detail: Goal = (await api(`/${selectedId}`)).goal;
-          if (!disposed) setSelected(current => current?.id === detail.id && detail.version >= current.version ? detail : current);
-        }
-      } catch (e) { if (!disposed) setError((e as Error).message); }
-    };
-    void poll();
-    const timer = setInterval(() => void poll(), 5000);
-    return () => { disposed = true; clearInterval(timer); };
-  }, [visible, selectedId]);
+  const selectedId = chosen?.id;
+  const detail = useQuery(
+    {
+      queryKey: [...GOALS_KEY, selectedId],
+      queryFn: async ({ signal }) => (await api(`/${selectedId}`, { signal })).goal as Goal,
+      enabled: visible && !!selectedId,
+      staleTime: POLL_MS,
+      refetchInterval: POLL_MS,
+    },
+    client
+  );
+  // A polled copy replaces the open goal only when it is the same goal and no
+  // older than what an action just put there.
+  const polled = detail.data;
+  const selected =
+    chosen && polled && polled.id === chosen.id && polled.version >= chosen.version ? polled : chosen;
+  const error = actionError || (list.error ?? detail.error)?.message || "";
+
+  const refresh = useCallback(async () => {
+    await client.fetchQuery({ queryKey: GOALS_KEY, queryFn: () => listGoals(), staleTime: 0 });
+  }, [client]);
+
+  /** Open a goal, and seed the poll with what was just read so it does not read it again. */
+  const open = useCallback(
+    (goal: Goal) => {
+      client.setQueryData([...GOALS_KEY, goal.id], goal);
+      setSelected(goal);
+    },
+    [client]
+  );
 
   async function perform(fn: () => Promise<void>) {
     setBusy(true); setError("");
@@ -85,7 +116,7 @@ export function GoalsView({ visible }: { visible: boolean }) {
   }
 
   async function select(goalId: string) {
-    await perform(async () => setSelected((await api(`/${goalId}`)).goal));
+    await perform(async () => open((await api(`/${goalId}`)).goal));
   }
 
   async function change(action: string) {
@@ -99,7 +130,7 @@ export function GoalsView({ visible }: { visible: boolean }) {
         ...(action === "resume" && resumeAttempts ? { max_attempts: Number(resumeAttempts) } : {}),
         ...(action === "resume" && resumeDays ? { deadline_seconds: Math.round(Number(resumeDays) * 86400) } : {}),
       }) });
-      setSelected((await api(`/${data.goal.id}`)).goal); setSteer("");
+      open((await api(`/${data.goal.id}`)).goal); setSteer("");
     });
   }
 
@@ -126,7 +157,7 @@ export function GoalsView({ visible }: { visible: boolean }) {
             max_attempts: maxAttempts ? Number(maxAttempts) : null,
             deadline_seconds: deadlineDays ? Math.round(Number(deadlineDays) * 86400) : null,
           }) });
-          setSelected(data.goal); setObjective(""); setCriteria("");
+          open(data.goal); setObjective(""); setCriteria("");
         });
       }}>
         <label className="block">Objective<input required value={objective} onChange={e => setObjective(e.target.value)} className="block w-full border rounded p-2 bg-background" /></label>

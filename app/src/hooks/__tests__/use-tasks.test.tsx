@@ -3,7 +3,7 @@
  * home metrics' plain reader share one list_tasks request, an optimistic write
  * shows in every reader at once, and an abandoned request is aborted.
  */
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -14,12 +14,14 @@ vi.mock("@/lib/event-bus/use-event-stream", () => ({
 
 import { useTasks } from "../use-tasks";
 
-let approve: ((id: string, resolution: string) => Promise<void>) | null = null;
-
 function Reader({ id, live }: { id: string; live?: boolean }) {
   const { tasks, approveTask } = useTasks({ live });
-  if (live) approve = approveTask;
-  return <span data-testid={id}>{tasks.map((t) => `${t.id}:${t.status}`).join(",")}</span>;
+  return (
+    <>
+      <span data-testid={id}>{tasks.map((t) => `${t.id}:${t.status}`).join(",")}</span>
+      <button data-testid={`${id}-approve`} onClick={() => void approveTask("1", "looks good")} />
+    </>
+  );
 }
 
 function withClient(children: ReactNode) {
@@ -55,7 +57,6 @@ function listCalls(fetchMock: ReturnType<typeof mockTasks>) {
 
 afterEach(() => {
   signals.length = 0;
-  approve = null;
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -73,10 +74,9 @@ describe("useTasks — shared data layer", () => {
     mockTasks();
     render(withClient(<><Reader id="shell" live /><Reader id="home" /></>));
     await waitFor(() => expect(screen.getByTestId("home").textContent).toBe("1:REVIEW"));
-    await act(async () => {
-      await approve?.("1", "looks good");
-    });
-    expect(screen.getByTestId("shell").textContent).toBe("1:DONE");
+    fireEvent.click(screen.getByTestId("shell-approve"));
+    // The cache notifies its readers on the next tick, all in one batch.
+    await waitFor(() => expect(screen.getByTestId("shell").textContent).toBe("1:DONE"));
     expect(screen.getByTestId("home").textContent).toBe("1:DONE");
   });
 

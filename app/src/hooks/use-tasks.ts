@@ -1,6 +1,8 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { useAppQueryClient } from "@/lib/query/query-client";
 import { useEventStream } from "@/lib/event-bus/use-event-stream";
 
 export interface Task {
@@ -34,72 +36,94 @@ interface UseTasksOptions {
   live?: boolean;
 }
 
-const STALE_THRESHOLD_MS = 30_000; // 30s tab-backgrounded → refetch
+const STALE_MS = 30_000; // a reader mounting within 30s paints from cache
+
+/** The cache entry for one filtered board, shared by every reader of it. */
+export function tasksQueryKey(agentFilter?: string, priorityFilter?: string) {
+  return ["tasks", { agentFilter: agentFilter ?? null, priorityFilter: priorityFilter ?? null }] as const;
+}
+
+/** A refusal or a request that never got an answer, reported, not shown as an empty board. */
+class FetchRefused extends Error {
+  constructor(readonly endpoint: string, readonly status: number) {
+    super(`${endpoint} answered ${status}`);
+  }
+}
+
+async function fetchTaskList(
+  signal: AbortSignal,
+  agentFilter?: string,
+  priorityFilter?: string
+): Promise<Task[]> {
+  const params = new URLSearchParams();
+  if (agentFilter) params.set("assignedToAgent", agentFilter);
+  if (priorityFilter) params.set("priority", priorityFilter);
+  params.set("limit", "100");
+
+  let res: Response;
+  try {
+    res = await fetch("/api/actions/execute", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tool: "list_tasks", params: Object.fromEntries(params) }),
+      signal,
+    });
+  } catch (err) {
+    if (signal.aborted) throw err;
+    // Status 0 means "no response" (offline, connection refused).
+    throw new FetchRefused("/api/actions/execute", 0);
+  }
+  if (!res.ok) throw new FetchRefused("/api/actions/execute", res.status);
+  const json = await res.json();
+  return json.data?.tasks || [];
+}
+
+const TASK_EVENTS = ["task.created", "task.updated", "task.resolved", "task.answered"];
 
 /**
  * Hook for fetching tasks with optional SSE live updates.
  *
- * When `live=true`, subscribes to the agent event stream and refetches
- * on task.created / task.updated / task.resolved events.
- * Uses Page Visibility API to detect stale tabs and refetch on return.
+ * Every reader of the same filters shares one cache entry and one request
+ * (the shell's badges, the home metrics and the board). When `live=true`, the
+ * reader subscribes to the agent event stream and refreshes the shared entry
+ * on task.created / task.updated / task.resolved / task.answered. A tab that
+ * comes back after the entry went stale reads it again once.
  */
 export function useTasks(options: UseTasksOptions = {}) {
   const { agentFilter, priorityFilter, live = false } = options;
-  const [tasks, setTasks] = useState<Task[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const client = useAppQueryClient();
+  const queryKey = useMemo(() => tasksQueryKey(agentFilter, priorityFilter), [agentFilter, priorityFilter]);
+  const query = useQuery(
+    {
+      queryKey,
+      queryFn: ({ signal }) => fetchTaskList(signal, agentFilter, priorityFilter),
+      staleTime: STALE_MS,
+    },
+    client
+  );
+  const tasks = useMemo(() => query.data ?? [], [query.data]);
   // A refused fetch must be reportable: an empty board and an unreachable
   // board look identical to the operator otherwise.
-  const [error, setError] = useState<{ endpoint: string; status: number } | null>(null);
-  const lastVisibleRef = useRef(Date.now());
-  const fetchIdRef = useRef(0);
+  const error =
+    query.error instanceof FetchRefused
+      ? { endpoint: query.error.endpoint, status: query.error.status }
+      : null;
+  const isLoading = query.isFetching || query.isPending;
 
+  const { refetch: refetchQuery } = query;
   const fetchTasks = useCallback(async () => {
-    const id = ++fetchIdRef.current;
-    try {
-      setIsLoading(true);
-      const params = new URLSearchParams();
-      if (agentFilter) params.set("assignedToAgent", agentFilter);
-      if (priorityFilter) params.set("priority", priorityFilter);
-      params.set("limit", "100");
+    await refetchQuery();
+  }, [refetchQuery]);
 
-      const res = await fetch("/api/actions/execute", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          tool: "list_tasks",
-          params: Object.fromEntries(params),
-        }),
-      });
-
-      if (!res.ok) {
-        if (id === fetchIdRef.current) {
-          setError({ endpoint: "/api/actions/execute", status: res.status });
-        }
-        return;
-      }
-      const json = await res.json();
-      // Only apply if this is still the latest fetch
-      if (id === fetchIdRef.current) {
-        setError(null);
-        setTasks(json.data?.tasks || []);
-      }
-    } catch {
-      // The request never got an answer (offline, connection refused). Status
-      // 0 means "no response" — reported, not swallowed into an empty board.
-      if (id === fetchIdRef.current) {
-        setError({ endpoint: "/api/actions/execute", status: 0 });
-      }
-    } finally {
-      if (id === fetchIdRef.current) {
-        setIsLoading(false);
-      }
-    }
-  }, [agentFilter, priorityFilter]);
-
-  // Initial fetch
-  useEffect(() => {
-    fetchTasks();
-  }, [fetchTasks]);
+  /** Write the shared entry, so every reader moves at once. */
+  const setTasks = useCallback(
+    (next: Task[] | ((prev: Task[]) => Task[])) => {
+      client.setQueryData<Task[]>(queryKey, (prev) =>
+        typeof next === "function" ? next(prev ?? []) : next
+      );
+    },
+    [client, queryKey]
+  );
 
   // SSE live updates
   const { events } = useEventStream({
@@ -113,31 +137,11 @@ export function useTasks(options: UseTasksOptions = {}) {
   useEffect(() => {
     if (!live || events.length === 0) return;
     const latest = events[0];
-    if (
-      latest.id !== lastEventIdRef.current &&
-      ["task.created", "task.updated", "task.resolved", "task.answered"].includes(latest.type)
-    ) {
+    if (latest.id !== lastEventIdRef.current && TASK_EVENTS.includes(latest.type)) {
       lastEventIdRef.current = latest.id;
-      fetchTasks();
+      void client.invalidateQueries({ queryKey });
     }
-  }, [events, live, fetchTasks]);
-
-  // Page Visibility stale detection
-  useEffect(() => {
-    if (!live) return;
-    function onVisibilityChange() {
-      if (document.visibilityState === "visible") {
-        const elapsed = Date.now() - lastVisibleRef.current;
-        if (elapsed > STALE_THRESHOLD_MS) {
-          fetchTasks();
-        }
-      } else {
-        lastVisibleRef.current = Date.now();
-      }
-    }
-    document.addEventListener("visibilitychange", onVisibilityChange);
-    return () => document.removeEventListener("visibilitychange", onVisibilityChange);
-  }, [live, fetchTasks]);
+  }, [events, live, client, queryKey]);
 
   // Optimistic status update
   const updateTaskStatus = useCallback(
@@ -165,7 +169,7 @@ export function useTasks(options: UseTasksOptions = {}) {
         setTasks(previousTasks); // rollback
       }
     },
-    [tasks]
+    [tasks, setTasks]
   );
 
   // Approve a REVIEW task (moves to DONE)
@@ -193,7 +197,7 @@ export function useTasks(options: UseTasksOptions = {}) {
         setTasks(previousTasks);
       }
     },
-    [tasks]
+    [tasks, setTasks]
   );
 
   // Reject a REVIEW task (moves back to IN_PROGRESS)
@@ -221,7 +225,7 @@ export function useTasks(options: UseTasksOptions = {}) {
         setTasks(previousTasks);
       }
     },
-    [tasks]
+    [tasks, setTasks]
   );
 
   // Resolve any non-DONE task with a resolution note
@@ -249,7 +253,7 @@ export function useTasks(options: UseTasksOptions = {}) {
         setTasks(previousTasks);
       }
     },
-    [tasks]
+    [tasks, setTasks]
   );
 
   // Phase 4 — answer a planner-set question_for_operator. Clears the
@@ -292,7 +296,7 @@ export function useTasks(options: UseTasksOptions = {}) {
         return false;
       }
     },
-    [tasks]
+    [tasks, setTasks]
   );
 
   return {
