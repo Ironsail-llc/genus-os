@@ -44,6 +44,7 @@ interface Fact {
   created_at: string;
   superseded_by: number | null;
   operator_confirmed?: { at: string; by: string } | null;
+  embedding_stale?: boolean;
 }
 
 function fact(overrides: Partial<Fact> & { id: number }): Fact {
@@ -887,5 +888,44 @@ describe("Observe › Memory › edit", () => {
     const badge = await screen.findByTestId("memory-confirmed-4711");
     expect(badge.textContent).toMatch(/operator-confirmed/i);
     expect(screen.queryByTestId("memory-confirmed-4710")).toBeNull();
+  });
+
+  it("says when search still ranks a fact by its previous wording", async () => {
+    listOnly({
+      facts: [
+        fact({ id: 4711, operator_confirmed: CONFIRMED, embedding_stale: true }),
+        fact({ id: 4710, operator_confirmed: CONFIRMED, embedding_stale: false }),
+      ],
+      next_cursor: null,
+    });
+    render(<MemoryView role="owner" />);
+    const note = await screen.findByTestId("memory-index-pending-4711");
+    expect(note.textContent).toBe(
+      "search index pending: ranked by the previous wording until re-indexed"
+    );
+    expect(screen.queryByTestId("memory-index-pending-4710")).toBeNull();
+  });
+
+  it("shows the pending note from an edit's own reply", async () => {
+    withEdit(() => ({
+      body: {
+        fact: fact({
+          id: 4711,
+          fact_text: "Alice prefers green tea",
+          operator_confirmed: CONFIRMED,
+          embedding_stale: true,
+        }),
+      },
+    }));
+    const editor = await openEditor();
+    fireEvent.change(within(editor).getByTestId("memory-edit-text-4711"), {
+      target: { value: "Alice prefers green tea" },
+    });
+    fireEvent.change(within(editor).getByTestId("memory-edit-reason-4711"), {
+      target: { value: "the extraction dropped a word" },
+    });
+    fireEvent.click(within(editor).getByTestId("memory-edit-save-4711"));
+    expect(await screen.findByTestId("memory-index-pending-4711")).toBeTruthy();
+    expect(screen.getByTestId("memory-confirmed-4711")).toBeTruthy();
   });
 });
