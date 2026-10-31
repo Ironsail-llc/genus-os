@@ -46,7 +46,13 @@ def build_parser() -> argparse.ArgumentParser:
         "runner.execute turns in-process, p50/p95 per metric, compared with a baseline.",
     )
     p.add_argument("--half", choices=(*HALVES, "both"), default="both", help="which turns to drive")
-    p.add_argument("--runs", type=int, default=20, help="turns per half (default 20)")
+    p.add_argument("--runs", type=int, default=20, help="measured turns per half (default 20)")
+    p.add_argument(
+        "--warmup",
+        type=int,
+        default=1,
+        help="turns run first and left out of the summary (default 1: the cold first turn)",
+    )
     p.add_argument("--engine-url", default="http://127.0.0.1:18800", help="engine base URL")
     p.add_argument(
         "--db-url",
@@ -155,14 +161,22 @@ def _token(args: argparse.Namespace) -> str:
     )
 
 
+def split_warmup(
+    turns: list[dict[str, Any]], meta: list[dict[str, Any]], warmup: int
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    """Measured turns, their meta, and the warmup turns kept apart."""
+    return turns[warmup:], meta[warmup:], turns[:warmup]
+
+
 def _drive(args: argparse.Namespace, half: str, db_url: str) -> dict[str, Any]:
+    total = args.runs + args.warmup
     if half == "http":
         from bench.turn.http_half import run_http
 
         raw = run_http(
             engine_url=args.engine_url.rstrip("/"),
             token=_token(args),
-            runs=args.runs,
+            runs=total,
             agent=args.agent or "main",
             message=args.message,
             db_url=db_url,
@@ -173,14 +187,15 @@ def _drive(args: argparse.Namespace, half: str, db_url: str) -> dict[str, Any]:
         from bench.turn.inprocess_half import run_inprocess
 
         raw = run_inprocess(
-            runs=args.runs,
+            runs=total,
             agent=args.agent,
             message=args.message,
             model=args.model,
             db_url=db_url,
             settle_ms=args.settle_ms,
         )
-    summary = summarize(raw["turns"])
+    turns, meta, warm = split_warmup(raw["turns"], raw.get("meta") or [], args.warmup)
+    summary = summarize(turns)
     ready = raw.get("engine_ready_ms")
     if ready is not None:
         summary["engine_ready_ms"] = {"p50": ready, "p95": ready, "n": 1}
@@ -191,8 +206,9 @@ def _drive(args: argparse.Namespace, half: str, db_url: str) -> dict[str, Any]:
         "host": {"python": platform.python_version(), "machine": platform.machine()},
         "summary": summary,
         "notes": raw.get("notes") or {},
-        "turns": raw["turns"],
-        "meta": raw.get("meta") or [],
+        "warmup": warm,
+        "turns": turns,
+        "meta": meta,
     }
 
 

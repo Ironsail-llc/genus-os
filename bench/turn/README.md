@@ -48,7 +48,9 @@ the `postgres` service), then restart it.
 
 ## Output and baselines
 
-Every run prints p50 and p95 per metric (linear interpolation; turns that did
+Each half first runs `--warmup` turns (default 1, the cold first turn, which
+on CI takes ten times as long as the rest) and leaves them out of the summary;
+they are kept under `warmup` in the JSON. Every run then prints p50 and p95 per metric (linear interpolation; turns that did
 not record a metric are left out of it) and, with `--out FILE`, writes the
 JSON result: the summary, every turn's numbers, each turn's `run_id` and
 status, and `notes`. With `--half both`, `--out` and `--baseline` get `-http`
@@ -111,7 +113,7 @@ The `bench-turn` job in `.github/workflows/ci.yml` runs the unit tests in
 `robothor/engine/` (or a manual dispatch) it also runs the in-process half:
 20 turns against pgvector Postgres started with `pg_stat_statements` preloaded,
 Redis and the mock model (`tests/acceptance/mock_llm`), compared with
-`baselines/ci-inprocess.json`, and uploads the result as the `bench-turn`
+`baselines/ci-inprocess.json` with `--min-delta 5`, and uploads the result as the `bench-turn`
 artifact. A whole stack per pull request is too heavy, so the http half runs
 nightly in the install gate's compose job, report only, and uploads
 `bench-turn-http`.
