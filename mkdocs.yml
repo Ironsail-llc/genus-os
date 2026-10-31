@@ -95,6 +95,7 @@ exclude_docs: |
   !/channels/telegram.md
   !/CONNECTORS.md
   !/OBSERVABILITY.md
+  !/PERFORMANCE.md
   !/runbooks/SNAPSHOT_RESTORE.md
   !/compliance/SECURITY_CONTROLS.md
   !/compliance/SOC2_MAPPING.md
@@ -165,6 +166,7 @@ nav:
       - Microsoft 365 workspace: workspace/microsoft365.md
       - n8n monitoring: integrations/n8n.md
       - Observability: OBSERVABILITY.md
+      - Performance: PERFORMANCE.md
       - Snapshot and restore: runbooks/SNAPSHOT_RESTORE.md
       - Benchmark sandbox: runbooks/BENCHMARK_SANDBOX.md
       - Local fallback: runbooks/LOCAL_FALLBACK.md
