@@ -924,35 +924,10 @@ async def compact(
         old_messages = []
         recent_messages = non_retained
 
-    # Extract facts from old messages
+    # Extract facts from old messages, then merge those earlier compactions
+    # retained (deduplicated by text).
     new_facts = await extract_facts(old_messages, model=summary_model)
-    all_facts.extend(new_facts)
-
-    # Merge any facts from previously retained context messages
-    for rm in retained_msgs:
-        content = rm.get("content", "")
-        if isinstance(content, str):
-            for line in content.split("\n"):
-                line = line.strip()
-                if line.startswith("- [") and "] (p" in line:
-                    # Parse existing retained fact
-                    try:
-                        cat = line.split("[", 1)[1].split("]", 1)[0]
-                        pri = int(line.split("(p", 1)[1].split(")", 1)[0])
-                        txt = line.split(") ", 1)[1] if ") " in line else ""
-                        if txt:
-                            all_facts.append(CompactionFact(category=cat, text=txt, priority=pri))
-                    except (IndexError, ValueError):
-                        pass
-
-    # Deduplicate facts
-    seen: set[str] = set()
-    deduped_facts: list[CompactionFact] = []
-    for fact in all_facts:
-        if fact.text not in seen:
-            seen.add(fact.text)
-            deduped_facts.append(fact)
-    all_facts = deduped_facts
+    all_facts = _merge_retained_facts([*all_facts, *new_facts], retained_msgs)
 
     if not old_messages:
         # Nothing old to summarize — just inject facts and return
