@@ -16,6 +16,12 @@ import os
 import subprocess
 import sys
 
+import pytest
+
+# A subprocess here may take up to 60 s by its own bound; pytest.ini's 30 s
+# would stop the test first whenever the machine is busy (tests/test_suite_hygiene.py).
+pytestmark = pytest.mark.timeout(120)
+
 
 def test_importing_the_package_pins_litellm_offline() -> None:
     import robothor  # noqa: F401 - the import is the act under test

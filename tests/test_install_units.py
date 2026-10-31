@@ -33,6 +33,10 @@ from pathlib import Path
 
 import pytest
 
+# A subprocess here may take up to 60 s by its own bound; pytest.ini's 30 s
+# would stop the test first whenever the machine is busy (tests/test_suite_hygiene.py).
+pytestmark = pytest.mark.timeout(120)
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 RENDER = REPO_ROOT / "scripts" / "render-unit.sh"
 INSTALL = REPO_ROOT / "scripts" / "install-units.sh"

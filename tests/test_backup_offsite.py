@@ -26,7 +26,12 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "scripts" / "backup-offsite.sh"
 
-pytestmark = pytest.mark.skipif(shutil.which("rclone") is None, reason="rclone not installed")
+# A subprocess here may take up to 120 s by its own bound; pytest.ini's 30 s
+# would stop the test first whenever the machine is busy (tests/test_suite_hygiene.py).
+pytestmark = [
+    pytest.mark.skipif(shutil.which("rclone") is None, reason="rclone not installed"),
+    pytest.mark.timeout(180),
+]
 
 
 def _make_source(tmp_path: Path, *, days: int = 3) -> Path:

@@ -51,7 +51,19 @@ async def test_restored_deadline_bounds_execution_after_checkpoint_load(
 ):
     import time
 
-    deadline = datetime.now(UTC) + timedelta(seconds=-1 if expired else 0.08)
+    now = datetime.now(UTC)
+    deadline = now + timedelta(seconds=-1 if expired else 0.08)
+
+    class _Frozen(datetime):
+        """The deadline clock stopped at ``now``: how long the checkpoint read
+        took is the machine's business, and must not spend the 80 ms the run
+        is given once it starts. The window itself is still a real timer."""
+
+        @classmethod
+        def now(cls, tz=None):
+            return now
+
+    monkeypatch.setattr("robothor.engine.runtime.deadlines.datetime", _Frozen)
 
     def load_latest(*a, **k):
         time.sleep(load_seconds)  # runs on asyncio.to_thread, as the real read does

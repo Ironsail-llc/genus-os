@@ -14,6 +14,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ProvidersPage } from "../providers-page";
 
+// Legitimately slow first test: the first render
+// imports the settings page and its forms. Vitest's default 5 s is spent by that cold import alone on a
+// loaded runner, so the test timed out before asserting anything. The
+// assertions are unchanged.
+vi.setConfig({ testTimeout: 30_000 });
+
 const PROVIDERS = {
   providers: [
     {

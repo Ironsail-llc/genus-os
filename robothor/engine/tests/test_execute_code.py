@@ -30,6 +30,7 @@ import pytest
 from robothor.engine.code_exec_rpc import ToolRpcServer
 from robothor.engine.code_execution import MAX_STDERR_BYTES, truncate_with_marker
 from robothor.engine.tool_proxy import PROXY_DENIED_TOOLS, ToolProxy
+from tests.platform_capabilities import needs_peer_credentials
 
 CLIENT_SOURCE = Path(__file__).resolve().parents[1] / "sandbox_runtime" / "genus_tools.py"
 
@@ -145,13 +146,13 @@ def socket_dir():
 
 
 class TestTheTransport:
-    def test_the_socket_these_tests_bind_fits_every_kernel(self, tmp_path):
+    def test_the_socket_these_tests_bind_fits_every_kernel(self, socket_dir):
         """The transport tests bind a real AF_UNIX socket, and the kernel caps
         its path. pytest's own tmp_path is ~150 bytes on macOS, so every test
         below failed there with "AF_UNIX path too long" before it tested
         anything; a short directory is what production uses too
         (`code_exec._run_scratch_root`)."""
-        server = ToolRpcServer(directory=tmp_path, proxy=_FakeProxy(), max_calls=5)
+        server = ToolRpcServer(directory=socket_dir, proxy=_FakeProxy(), max_calls=5)
         assert len(os.fsencode(server.socket_path)) < _SUN_PATH_MAX, server.socket_path
 
     @pytest.mark.asyncio
@@ -182,10 +183,11 @@ class TestTheTransport:
         assert reply.get("ok") is False
         assert proxy.seen == []
 
+    @needs_peer_credentials
     @pytest.mark.asyncio
-    async def test_a_call_reaches_the_proxy_and_the_result_comes_back(self, tmp_path):
+    async def test_a_call_reaches_the_proxy_and_the_result_comes_back(self, socket_dir):
         proxy = _FakeProxy()
-        server = await _serve(proxy, tmp_path)
+        server = await _serve(proxy, socket_dir)
         try:
             token = server.token
             reply = await asyncio.to_thread(
@@ -199,10 +201,11 @@ class TestTheTransport:
         assert reply["result"]["tool"] == "read_file"
         assert proxy.seen == [("read_file", {"path": "a"})]
 
+    @needs_peer_credentials
     @pytest.mark.asyncio
-    async def test_a_wrong_token_never_reaches_the_proxy(self, tmp_path):
+    async def test_a_wrong_token_never_reaches_the_proxy(self, socket_dir):
         proxy = _FakeProxy()
-        server = await _serve(proxy, tmp_path)
+        server = await _serve(proxy, socket_dir)
         try:
             reply = await asyncio.to_thread(
                 _request,
@@ -216,9 +219,9 @@ class TestTheTransport:
         assert proxy.seen == []
 
     @pytest.mark.asyncio
-    async def test_the_socket_directory_is_private_to_this_user(self, tmp_path):
+    async def test_the_socket_directory_is_private_to_this_user(self, socket_dir):
         proxy = _FakeProxy()
-        server = await _serve(proxy, tmp_path)
+        server = await _serve(proxy, socket_dir)
         try:
             mode = server.directory.stat().st_mode & 0o777
             token_mode = server.token_path.stat().st_mode & 0o777
@@ -227,10 +230,11 @@ class TestTheTransport:
         assert mode == 0o700
         assert token_mode == 0o600
 
+    @needs_peer_credentials
     @pytest.mark.asyncio
-    async def test_the_call_cap_refuses_the_rest_of_the_snippet(self, tmp_path):
+    async def test_the_call_cap_refuses_the_rest_of_the_snippet(self, socket_dir):
         proxy = _FakeProxy(max_calls=2)
-        server = await _serve(proxy, tmp_path)
+        server = await _serve(proxy, socket_dir)
         try:
             call = {"token": server.token, "op": "call", "name": "read_file", "args": {}}
             replies = [await asyncio.to_thread(_request, server, call) for _ in range(4)]
@@ -240,12 +244,13 @@ class TestTheTransport:
         assert replies[2]["code"] == "call_cap"
         assert proxy.calls_made == 2, "the cap let a call through to the proxy"
 
+    @needs_peer_credentials
     @pytest.mark.asyncio
-    async def test_a_forged_tool_call_id_is_ignored(self, tmp_path):
+    async def test_a_forged_tool_call_id_is_ignored(self, socket_dir):
         """The wire has no id field. A snippet cannot name one, and the proxy
         mints its own — so there is nothing to forge."""
         proxy = _FakeProxy()
-        server = await _serve(proxy, tmp_path)
+        server = await _serve(proxy, socket_dir)
         try:
             reply = await asyncio.to_thread(
                 _request,
@@ -263,10 +268,11 @@ class TestTheTransport:
         assert reply["ok"] is True
         assert proxy.seen == [("read_file", {})]
 
+    @needs_peer_credentials
     @pytest.mark.asyncio
-    async def test_a_denied_tool_never_reaches_the_proxy(self, tmp_path):
+    async def test_a_denied_tool_never_reaches_the_proxy(self, socket_dir):
         proxy = _FakeProxy()
-        server = await _serve(proxy, tmp_path)
+        server = await _serve(proxy, socket_dir)
         try:
             reply = await asyncio.to_thread(
                 _request,
@@ -279,10 +285,11 @@ class TestTheTransport:
         assert reply["code"] == "denied"
         assert proxy.seen == []
 
+    @needs_peer_credentials
     @pytest.mark.asyncio
-    async def test_an_oversized_request_is_refused_rather_than_buffered(self, tmp_path):
+    async def test_an_oversized_request_is_refused_rather_than_buffered(self, socket_dir):
         proxy = _FakeProxy()
-        server = await _serve(proxy, tmp_path)
+        server = await _serve(proxy, socket_dir)
         try:
             huge = {
                 "token": server.token,
@@ -308,11 +315,11 @@ class TestOnlyThisSnippetMaySpeak:
     speaking."""
 
     @pytest.mark.asyncio
-    async def test_a_peer_in_another_session_is_refused_with_its_token(self, tmp_path):
+    async def test_a_peer_in_another_session_is_refused_with_its_token(self, socket_dir):
         proxy = _FakeProxy()
         # Bound to a session this process is NOT in. pid 1 is init: always
         # alive, always its own session, never ours.
-        server = await _serve(proxy, tmp_path, session=1)
+        server = await _serve(proxy, socket_dir, session=1)
         try:
             reply = await asyncio.to_thread(
                 _request,
@@ -332,11 +339,11 @@ class TestOnlyThisSnippetMaySpeak:
         assert proxy.seen == [], "another run's snippet reached this proxy"
 
     @pytest.mark.asyncio
-    async def test_an_unbound_socket_serves_nobody(self, tmp_path):
+    async def test_an_unbound_socket_serves_nobody(self, socket_dir):
         """Between `start()` and the spawn there is no legitimate caller, so
         there is no legitimate answer either."""
         proxy = _FakeProxy()
-        server = ToolRpcServer(directory=tmp_path, proxy=proxy, max_calls=5)
+        server = ToolRpcServer(directory=socket_dir, proxy=proxy, max_calls=5)
         await server.start()
         try:
             reply = await asyncio.to_thread(
@@ -352,12 +359,13 @@ class TestOnlyThisSnippetMaySpeak:
         assert reply["ok"] is False
         assert proxy.seen == []
 
+    @needs_peer_credentials
     @pytest.mark.asyncio
-    async def test_the_right_session_is_still_served(self, tmp_path):
+    async def test_the_right_session_is_still_served(self, socket_dir):
         """The check must not be so eager that it refuses the snippet — the
         failure mode that makes a control look like it works."""
         proxy = _FakeProxy()
-        server = await _serve(proxy, tmp_path)
+        server = await _serve(proxy, socket_dir)
         try:
             reply = await asyncio.to_thread(
                 _request,

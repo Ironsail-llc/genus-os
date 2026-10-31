@@ -149,13 +149,13 @@ verify_offsite() {
 
     local -a problems=()
     if [[ -s "$missing" ]]; then
-        problems+=("$(wc -l <"$missing" | tr -d ' ') MISSING offsite: $(paste -sd' ' <"$missing")")
+        problems+=("$(wc -l <"$missing" | tr -d ' ') MISSING offsite: $(paste -sd' ' - <"$missing")")
     fi
     if [[ -s "$differ" ]]; then
-        problems+=("$(wc -l <"$differ" | tr -d ' ') CORRUPT offsite (bytes differ from source): $(paste -sd' ' <"$differ")")
+        problems+=("$(wc -l <"$differ" | tr -d ' ') CORRUPT offsite (bytes differ from source): $(paste -sd' ' - <"$differ")")
     fi
     if [[ -s "$errors" ]]; then
-        problems+=("$(wc -l <"$errors" | tr -d ' ') UNREADABLE: $(paste -sd' ' <"$errors")")
+        problems+=("$(wc -l <"$errors" | tr -d ' ') UNREADABLE: $(paste -sd' ' - <"$errors")")
     fi
     if ((${#problems[@]} == 0)); then
         # rclone failed without naming a file — a transport or auth problem,
