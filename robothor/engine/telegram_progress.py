@@ -115,7 +115,7 @@ class TelegramProgress:
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await worker
 
-    async def finalise(self, text: str) -> Any:
+    async def finalise(self, text: str) -> SentMessages | None:
         """Turn the progress message into the formatted answer.
 
         Returns the delivered messages (a list holding this one message), or
