@@ -66,6 +66,9 @@ def signal_stopped(tenant: str, note: str) -> None:
         session = lookup(active_id)
         if session and session.run.tenant_id == tenant and stopped(tenant, active_id):
             session.interrupt(note or "Operator stopped execution")
+            from robothor.engine.budget_stops import record_durable_stop
+
+            record_durable_stop(session, note or "Operator stopped execution")
 
 
 def stopped(tenant: str, run_id: str) -> bool:

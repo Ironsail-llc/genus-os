@@ -238,6 +238,38 @@ def adopt_pending(session: Any) -> int:
     return len(held)
 
 
+DURABLE_STOP = "durable_stop"
+
+
+def record_durable_stop(session: Any, reason: str) -> Any:
+    """The operator's stop: a control, so always ``enforce``. Recorded once.
+
+    Called where the stop is issued to a live session (``runtime.activity.
+    stop_local``, ``controls.signal_stopped``) as well as where a later
+    provider request is refused. A stop that lands during a model call cancels
+    that call, so no later request ever reaches the refusal; recording at the
+    issue point is what puts the step on that run. Never raises.
+    """
+    try:
+        if any(
+            getattr(step, "tool_name", None) == DURABLE_STOP
+            and getattr(step, "step_type", None) == "budget_stop"
+            for step in list(session.run.steps)
+        ):
+            return None
+    except Exception:  # noqa: BLE001
+        return None
+    return record(
+        session,
+        stop=DURABLE_STOP,
+        reason=reason,
+        setting="agent_runtime_controls",
+        limit=None,
+        observed=None,
+        mode="enforce",
+    )
+
+
 def runaway_cap_hit(session: Any, cap: int, used: int, reason: str) -> Mode:
     """Record the runaway-token hard cap and say whether it stops the run.
 

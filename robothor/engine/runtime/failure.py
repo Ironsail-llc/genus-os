@@ -25,15 +25,7 @@ def failed_or_stopped(
         # Runs view shows WHY the run ended, beside every budget stop.
         from robothor.engine import budget_stops
 
-        budget_stops.record(
-            session,
-            stop="durable_stop",
-            reason=str(error),
-            setting="agent_runtime_controls",
-            limit=None,
-            observed=None,
-            mode="enforce",
-        )
+        budget_stops.record_durable_stop(session, str(error))
         return session.cancelled("Stopped as requested.")
     logger.error(
         "Agent %s failed: %s",
