@@ -41,8 +41,14 @@ import { BRIDGE_UNREACHABLE } from "@/lib/bridge/use-bridge-poll";
  * A warning that cries wolf is the one that gets ignored, so a short fact says
  * "too short to check" and warns about nothing.
  *
- * No optimistic updates anywhere: a row changes because the forget's own
- * response said so, or because a 409 said the row was already stale.
+ * `PATCH …/facts/{id}` **corrects** one active fact — its text, its entities
+ * or both — with a reason. The bridge keeps the original in the fact history
+ * first and marks the row `operator_confirmed`, which is the badge here. A
+ * correction that would duplicate another active fact is a 409, and the
+ * editor stays open with the draft so the operator can change it.
+ *
+ * No optimistic updates anywhere: a row changes because the forget's or the
+ * edit's own response said so, or because a 409 said the row was already stale.
  */
 
 const BRIDGE = "/api/bridge";
@@ -56,6 +62,8 @@ const WIDE_LIMIT = 200;
 
 const REASON_MIN = 3;
 const REASON_MAX = 500;
+/** The bridge's ceiling for an edited fact's text. */
+const FACT_TEXT_MAX = 2000;
 
 type ActiveFilter = "true" | "false" | "all";
 
@@ -76,6 +84,26 @@ export interface Fact {
   source: string | null;
   createdAt: string | null;
   supersededBy: number | null;
+  /** Set by an operator's edit: when, and by whom. */
+  operatorConfirmed: { at: string | null; by: string | null } | null;
+}
+
+/** What the operator is typing into one fact's editor. */
+interface EditDraft {
+  text: string;
+  /** Comma-separated, as typed; {@link entityList} is what is saved. */
+  entities: string;
+  reason: string;
+}
+
+/** The comma-separated entities field as the list it saves: trimmed, no blanks, no repeats. */
+export function entityList(raw: string): string[] {
+  const names: string[] = [];
+  for (const part of raw.split(",")) {
+    const name = part.trim();
+    if (name && !names.includes(name)) names.push(name);
+  }
+  return names;
 }
 
 interface References {
@@ -118,7 +146,14 @@ export function normalizeFact(entry: unknown): Fact | null {
     source: str(row.source),
     createdAt: str(row.created_at),
     supersededBy: typeof row.superseded_by === "number" ? row.superseded_by : null,
+    operatorConfirmed: confirmation(row.operator_confirmed),
   };
+}
+
+function confirmation(value: unknown): Fact["operatorConfirmed"] {
+  if (!value || typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  return { at: str(record.at), by: str(record.by) };
 }
 
 function normalizePreview(body: unknown): Preview {
@@ -221,6 +256,8 @@ export function MemoryView({ visible = true, role, roleLoading = false }: Memory
   const [previews, setPreviews] = useState<Record<number, Preview>>({});
   const [reasons, setReasons] = useState<Record<number, string>>({});
   const reasonRefs = useRef<Record<number, HTMLInputElement | null>>({});
+  const [drafts, setDrafts] = useState<Record<number, EditDraft>>({});
+  const editReasonRefs = useRef<Record<number, HTMLInputElement | null>>({});
 
   const { busyRow, rowErrors, act, clearRow } = useRowActions();
 
@@ -354,6 +391,71 @@ export function MemoryView({ visible = true, role, roleLoading = false }: Memory
       );
     },
     [act, reasons, replaceFact]
+  );
+
+  const openEditor = useCallback(
+    (fact: Fact) => {
+      clearRow(String(fact.id));
+      setDrafts((previous) => ({
+        ...previous,
+        [fact.id]: { text: fact.factText, entities: fact.entities.join(", "), reason: "" },
+      }));
+    },
+    [clearRow]
+  );
+
+  const closeEditor = useCallback(
+    (id: number) => {
+      setDrafts((previous) => {
+        const next = { ...previous };
+        delete next[id];
+        return next;
+      });
+      clearRow(String(id));
+    },
+    [clearRow]
+  );
+
+  const updateDraft = useCallback((id: number, change: Partial<EditDraft>) => {
+    setDrafts((previous) => {
+      const current = previous[id];
+      return current ? { ...previous, [id]: { ...current, ...change } } : previous;
+    });
+  }, []);
+
+  const saveEdit = useCallback(
+    (id: number) => {
+      const draft = drafts[id];
+      if (!draft) return;
+      void act(
+        String(id),
+        `${BRIDGE}/api/memory/facts/${id}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            fact_text: draft.text,
+            entities: entityList(draft.entities),
+            reason: draft.reason,
+          }),
+        },
+        (body) => {
+          const fact = normalizeFact((body as Record<string, unknown>)?.fact);
+          if (fact) replaceFact(fact);
+          setDrafts((previous) => {
+            const next = { ...previous };
+            delete next[id];
+            return next;
+          });
+        },
+        (res) => {
+          // A 409 (another active fact already says this) keeps the editor
+          // open with the draft: the text is what has to change. A 422 is
+          // about the request, and the reason is the field it is usually about.
+          if (res.status === 422) editReasonRefs.current[id]?.focus();
+        }
+      );
+    },
+    [act, drafts, replaceFact]
   );
 
   const searching = query.length > 0;
@@ -517,6 +619,7 @@ export function MemoryView({ visible = true, role, roleLoading = false }: Memory
           const reason = reasons[fact.id] ?? "";
           const trimmed = reason.trim().length;
           const reasonOk = trimmed >= REASON_MIN && reason.length <= REASON_MAX;
+          const draft = drafts[fact.id];
 
           return (
             <div
@@ -534,6 +637,20 @@ export function MemoryView({ visible = true, role, roleLoading = false }: Memory
                     className="shrink-0 rounded-full border border-warning/30 bg-warning/10 px-2 py-0.5 text-[10px] font-medium text-warning"
                   >
                     inactive
+                  </span>
+                ) : null}
+                {fact.operatorConfirmed ? (
+                  <span
+                    data-testid={`memory-confirmed-${fact.id}`}
+                    title={[
+                      fact.operatorConfirmed.by,
+                      fact.operatorConfirmed.at ? when(fact.operatorConfirmed.at) : null,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")}
+                    className="shrink-0 rounded-full border border-primary/30 bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary"
+                  >
+                    Operator-confirmed
                   </span>
                 ) : null}
               </div>
@@ -588,8 +705,17 @@ export function MemoryView({ visible = true, role, roleLoading = false }: Memory
                 </p>
               ) : null}
 
-              {fact.isActive && !preview ? (
+              {fact.isActive && !preview && !draft ? (
                 <div className="flex items-center gap-2 pt-0.5">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    data-testid={`memory-edit-${fact.id}`}
+                    disabled={busyRow === id}
+                    onClick={() => openEditor(fact)}
+                  >
+                    Edit
+                  </Button>
                   <Button
                     variant="outline"
                     size="sm"
@@ -600,6 +726,20 @@ export function MemoryView({ visible = true, role, roleLoading = false }: Memory
                     {busyRow === id ? "Checking…" : "Forget"}
                   </Button>
                 </div>
+              ) : null}
+
+              {draft ? (
+                <FactEditor
+                  id={fact.id}
+                  draft={draft}
+                  busy={busyRow === id}
+                  onChange={(change) => updateDraft(fact.id, change)}
+                  onSave={() => saveEdit(fact.id)}
+                  onCancel={() => closeEditor(fact.id)}
+                  reasonRef={(element) => {
+                    editReasonRefs.current[fact.id] = element;
+                  }}
+                />
               ) : null}
 
               {preview ? (
@@ -721,9 +861,121 @@ export function MemoryView({ visible = true, role, roleLoading = false }: Memory
 
       <p className="max-w-3xl pb-2 text-[11px] text-muted-foreground">
         Forgetting bounds a fact; it never deletes one. The row keeps its text and its provenance,
-        gains an end date, and stops being retrieved. The audit record carries the fact id and the
-        reason — never the text.
+        gains an end date, and stops being retrieved. Editing keeps the original text in the
+        fact&rsquo;s history and marks the fact operator-confirmed. Either way the audit record
+        carries the fact id and the reason — never the text.
       </p>
+    </div>
+  );
+}
+
+interface FactEditorProps {
+  id: number;
+  draft: EditDraft;
+  busy: boolean;
+  onChange: (change: Partial<EditDraft>) => void;
+  onSave: () => void;
+  onCancel: () => void;
+  reasonRef: (element: HTMLInputElement | null) => void;
+}
+
+/** One fact's inline editor. The draft lives in the view; this only renders it. */
+function FactEditor({ id, draft, busy, onChange, onSave, onCancel, reasonRef }: FactEditorProps) {
+  const chips = entityList(draft.entities);
+  const text = draft.text.trim();
+  const textOk = text.length > 0 && draft.text.length <= FACT_TEXT_MAX;
+  const reasonLength = draft.reason.trim().length;
+  const reasonOk = reasonLength >= REASON_MIN && draft.reason.length <= REASON_MAX;
+
+  return (
+    <div
+      data-testid={`memory-editor-${id}`}
+      className="flex min-w-0 flex-col gap-2 rounded-md border border-border bg-muted/40 p-3"
+    >
+      <p className="text-[11px] text-muted-foreground">
+        The current text is kept in the fact&rsquo;s history before it changes, and the fact is
+        marked operator-confirmed.
+      </p>
+      <textarea
+        data-testid={`memory-edit-text-${id}`}
+        aria-label="Fact text"
+        value={draft.text}
+        rows={3}
+        onChange={(event) => onChange({ text: event.target.value })}
+        className="w-full min-w-0 resize-y rounded-md border border-input bg-background px-2 py-1.5 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      />
+      {!textOk ? (
+        <span data-testid={`memory-edit-text-note-${id}`} className="text-[10px] text-destructive">
+          {text.length === 0
+            ? "A fact cannot be edited into nothing — forget it instead."
+            : `At most ${FACT_TEXT_MAX} characters.`}
+        </span>
+      ) : null}
+
+      <div className="flex min-w-0 flex-col gap-1">
+        <Input
+          data-testid={`memory-edit-entities-${id}`}
+          aria-label="Entities, separated by commas"
+          placeholder="Entities, separated by commas"
+          value={draft.entities}
+          onChange={(event) => onChange({ entities: event.target.value })}
+          className="h-8 w-full text-sm"
+        />
+        <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+          {chips.length === 0 ? (
+            <span className="text-[10px] text-muted-foreground">Filed under no entity</span>
+          ) : (
+            chips.map((name) => (
+              <span
+                key={name}
+                data-testid={`memory-edit-chip-${id}-${name}`}
+                className="rounded-full border border-border bg-muted px-2 py-0.5 text-[10px] text-muted-foreground"
+              >
+                {name}
+              </span>
+            ))
+          )}
+        </div>
+      </div>
+
+      <div className="flex min-w-0 flex-col gap-1">
+        <Input
+          data-testid={`memory-edit-reason-${id}`}
+          aria-label="Reason for the edit"
+          placeholder="Why is this being corrected? (recorded in the audit log)"
+          value={draft.reason}
+          ref={reasonRef}
+          onChange={(event) => onChange({ reason: event.target.value })}
+          className="h-8 w-full text-sm"
+        />
+        <span
+          data-testid={`memory-edit-reason-count-${id}`}
+          className={`text-[10px] ${
+            draft.reason.length > REASON_MAX ? "text-destructive" : "text-muted-foreground"
+          }`}
+        >
+          {draft.reason.length} / {REASON_MAX} — at least {REASON_MIN} characters
+        </span>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <Button
+          size="sm"
+          data-testid={`memory-edit-save-${id}`}
+          disabled={!textOk || !reasonOk || busy}
+          onClick={onSave}
+        >
+          {busy ? "Saving…" : "Save"}
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          data-testid={`memory-edit-cancel-${id}`}
+          onClick={onCancel}
+        >
+          Cancel
+        </Button>
+      </div>
     </div>
   );
 }
