@@ -134,6 +134,30 @@ describe("SecretsPage", () => {
     expect(row).not.toHaveTextContent(/nowhere/i);
   });
 
+  it("still names the environment for a credential it supplies while the vault is down", async () => {
+    mockSecrets(200, {
+      secrets: [
+        secret("EXAMPLE_ENV_TOKEN", {
+          configured: true,
+          source: "env",
+          updated_at: null,
+          vault_readable: false,
+        }),
+      ],
+    });
+    render(<SecretsPage visible role="owner" />);
+    const row = await screen.findByTestId("secrets-row-EXAMPLE_ENV_TOKEN");
+    expect(within(row).getByTestId("secrets-configured-EXAMPLE_ENV_TOKEN")).toHaveTextContent(
+      /^(Configured:)?configured$/i
+    );
+    expect(within(row).getByTestId("secrets-source-EXAMPLE_ENV_TOKEN")).toHaveTextContent(
+      /environment/i
+    );
+    expect(screen.getByTestId("secrets-vault-unreadable")).toHaveTextContent(
+      /no environment value show as unknown/i
+    );
+  });
+
   it("raises no vault alert when the vault was read", async () => {
     mockSecrets(200, { secrets: [secret("EXAMPLE_API_TOKEN")] });
     render(<SecretsPage visible role="owner" />);
