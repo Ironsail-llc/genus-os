@@ -221,6 +221,46 @@ the engine decides whether it is done.
 | `claude_code_followup` | A specific correction into the same Claude Code session: queued for a running job, or reopening a finished one with a fresh round allowance. |
 | `claude_code_cancel` | Kill the running round and remove the worktree. The branch and any commits stay. |
 
+**From a remote to a pull request.** Two more tools take a job from a
+repository that is not on the host yet to a draft pull request:
+
+| Tool | Purpose |
+|---|---|
+| `coding_repo_prepare` | Clone an allowlisted remote (`repo`: `owner/repo` on GitHub, or a clone URL) into `ROBOTHOR_CODING_WORKSPACE/<owner>/<repo>`, or fetch and fast-forward the clone that is already there. Returns the `repo_path` to give `claude_code_start`, the default branch and `head_sha`, and whether it `cloned`. |
+| `coding_publish` | Push a `done` job's `genus/cc-<id>` branch (verify passed, a commit made) to the clone's origin and open a **draft** pull request through the GitHub REST API: `job_id`, `title`, optional `body`, `ticket` (appended to the title) and `base` (default: the remote's default branch). Returns `pr_url`. Owner or admin only; never merges. |
+
+Use `coding_repo_prepare` when the code lives in a remote and
+`ROBOTHOR_CODING_WORKSPACE` is set; use a `repo_path` under
+`ROBOTHOR_CODING_REPO_ROOTS` for a checkout the operator already keeps on the
+host. Use `coding_publish` instead of the `git`/`gh` tools for a coding job's
+branch: it publishes only verified work, only to an allowlisted remote, and
+needs no `gh` binary.
+
+- **Off by default.** `ROBOTHOR_CODING_WORKSPACE` empty refuses every prepare;
+  `ROBOTHOR_CODING_REMOTES` empty refuses every remote, and a remote outside it
+  is refused before git runs; `ROBOTHOR_CODING_PR_ENABLED` (default false)
+  refuses every publish. Each refusal names the setting to change.
+- **The token.** `GITHUB_TOKEN` comes from the vault (a fine-grained token with
+  contents and pull-request write is enough; nothing here merges). It reaches
+  git only as an `http.https://<host>/.extraheader` passed through
+  `GIT_CONFIG_*` environment variables, so it is never in a git argv, never in
+  the clone's `.git/config`, and every error is redacted.
+- **Who.** The handler refuses `coding_publish` to anyone but the owner or an
+  admin and writes a `coding.publish` audit event for every refusal, push
+  failure and published pull request. Migration 165 also denies both tools to
+  `user` and `member`, and `coding_publish` to `service` (every unattended run).
+- **Where a job's private home goes.** With `ROBOTHOR_CODING_WORKSPACE` set,
+  a job's `HOME`/`CLAUDE_CONFIG_DIR` is `<workspace>/.home/<job>`, so it lands on
+  the writable coding volume even where the service user's home is read-only.
+- **Progress.** While a run waits on a job, every line the job reports
+  (`recent` in the status view) also reaches that run's live status as a
+  `coding_progress` event.
+- **Hosts without bubblewrap.** `ROBOTHOR_CODING_SANDBOX=off` sends no sandbox
+  settings, for containers that cannot create user namespaces. The job's Bash
+  then runs with the engine's own access inside the container; the Edit/Write
+  confinement and the secret-path read denies still apply. The default,
+  `required`, keeps the sandbox and fails a job that cannot start it.
+
 **How a job runs.** Each job gets its own git worktree
 (`ROBOTHOR_CODING_WORKTREE_ROOT`, default `<workspace>/.genus/worktrees/<job>`)
 on a new branch `genus/cc-<id>`, never on `main`/`master`. The engine runs
@@ -268,7 +308,8 @@ older than `ROBOTHOR_CODING_RETENTION_DAYS` (default 7) and marks the row
 
 **What it sees.** The child environment is built from nothing: `PATH`, locale,
 `TERM`, `TZ`, `TMPDIR`, a private `HOME`/`CLAUDE_CONFIG_DIR` under
-`$XDG_CONFIG_HOME/robothor/claude-code/<job>` (writable under the engine unit),
+`$XDG_CONFIG_HOME/robothor/claude-code/<job>` (writable under the engine unit;
+`<ROBOTHOR_CODING_WORKSPACE>/.home/<job>` when that is set),
 and `CLAUDE_CODE_OAUTH_TOKEN` resolved vault first. No fleet secret is
 inherited. `GH_TOKEN` travels only with `grant_github: true` **and** `GH_TOKEN`
 in the calling agent's own manifest `secrets:`. The engine's own git calls on a
@@ -280,7 +321,8 @@ as the engine's service user. The `main` template opts in to the tools on
 purpose — the operator wants Robothor to code — and the fence is what makes
 that acceptable:
 
-- **Where.** `ROBOTHOR_CODING_REPO_ROOTS` is required: with it empty every
+- **Where.** `ROBOTHOR_CODING_REPO_ROOTS` (or `ROBOTHOR_CODING_WORKSPACE`, which
+  is a root of its own) is required: with both empty every
   `claude_code_start` is refused. `repo_path` is resolved (symlinks included)
   and must sit under a root; the live workspace and the service user's home are
   refused even under a root, as is any directory containing them.

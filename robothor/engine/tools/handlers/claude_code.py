@@ -301,6 +301,19 @@ async def _prepare(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     }
 
 
+def _unpublishable(job: CodingJob) -> str:
+    """Why ``job`` may not be published; empty when it may."""
+    verify = job.result.get("verify") or {}
+    if str(job.status) != "done" or not verify.get("passed") or not job.result.get("commit_sha"):
+        return (
+            f"coding job {job.id!r} is {job.status}; only a done job whose verify passed "
+            "and that made a commit can be published"
+        )
+    if job.mode != "code" or not job.branch:
+        return f"a {job.mode} job has no branch to publish"
+    return ""
+
+
 async def _publish(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     if ctx.is_benchmark:
         return _benchmark_refusal("coding_publish")
@@ -329,15 +342,11 @@ async def _publish(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     job = await get_manager().get(job_id, ctx.tenant_id, agent_id=_scope(ctx))
     if job is None:
         return _not_found(job_id)
-    verify = job.result.get("verify") or {}
-    commit = str(job.result.get("commit_sha") or "")
-    if str(job.status) != "done" or not verify.get("passed") or not commit:
-        return {
-            "error": f"coding job {job_id!r} is {job.status}; only a done job whose verify "
-            "passed and that made a commit can be published"
-        }
-    if job.mode != "code" or not job.branch:
-        return {"error": f"a {job.mode} job has no branch to publish"}
+    refusal = _unpublishable(job)
+    if refusal:
+        return {"error": refusal}
+    branch = str(job.branch)  # _unpublishable refused a job without one
+    commit = str(job.result["commit_sha"])
     repo = Path(job.repo_path)
     try:
         remote = await repos.origin_remote(repo)
@@ -350,12 +359,12 @@ async def _publish(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             "pull-request write access in the vault"
         }
     base = str(args.get("base") or "").strip() or await repos.default_branch(repo)
-    details = {"job_id": job_id, "remote": remote.slug, "branch": job.branch, "base": base}
+    details = {"job_id": job_id, "remote": remote.slug, "branch": branch, "base": base}
     try:
-        await publish.push_branch(repo, job.branch, remote, token)
+        await publish.push_branch(repo, branch, remote, token)
         pr = await publish.open_draft_pr(
             remote,
-            head=job.branch,
+            head=branch,
             base=base,
             title=title,
             body=str(args.get("body") or ""),
@@ -369,7 +378,7 @@ async def _publish(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         "pr_url": pr.url,
         "pr_number": pr.number,
         "draft": pr.draft,
-        "branch": job.branch,
+        "branch": branch,
         "base": base,
         "commit_sha": commit,
         "remote": remote.slug,

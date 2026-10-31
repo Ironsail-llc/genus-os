@@ -31,6 +31,7 @@ import re
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlparse
 
 __all__ = [
@@ -96,7 +97,7 @@ class PreparedRepo:
     cloned: bool
 
 
-def _settings() -> object:
+def _settings() -> Any:
     from robothor.settings import get_settings
 
     return get_settings().coding
@@ -140,7 +141,7 @@ def parse_remote(raw: str) -> RemoteSpec:
 def allowed_remote(raw: str) -> RemoteSpec:
     """The allowlist's entry for ``raw``, or ``RepoError`` naming the setting."""
     spec = parse_remote(raw)
-    configured = str(getattr(_settings(), "remotes", "") or "")
+    configured = str(_settings().remotes or "")
     entries = [e.strip() for e in configured.split(",") if e.strip()]
     if not entries:
         raise RepoError(
@@ -157,7 +158,7 @@ def allowed_remote(raw: str) -> RemoteSpec:
 
 def workspace_dir() -> Path:
     """``ROBOTHOR_CODING_WORKSPACE``, or ``RepoError`` naming it when unset."""
-    configured = str(getattr(_settings(), "workspace", "") or "").strip()
+    configured = str(_settings().workspace or "").strip()
     if not configured:
         raise RepoError(
             "coding_repo_prepare is off until ROBOTHOR_CODING_WORKSPACE names the directory "
