@@ -400,3 +400,62 @@ describe("Observe › Audit — who may look", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * Filter by the acting agent's identity. `GET /api/audit/events` already takes
+ * `actor`, and an agent's tool calls are written with `actor = agent.id`, so the
+ * picker needs no new route: it lists the fleet's ids (from the operator-only
+ * `/api/agent-manifests`) and fills the same Actor filter the export reads.
+ * When the fleet cannot be read — an auditor, an older bridge — the picker is
+ * not drawn and the free-text Actor box is still there.
+ */
+describe("Observe › Audit — filter by agent", () => {
+  const MANIFESTS = {
+    agents: [{ id: "example-agent" }, { id: "bob" }],
+    broken: [],
+    count: 2,
+  };
+
+  function withFleet(fleet: () => { status?: number; body: unknown }) {
+    respond([
+      [/\/api\/agent-manifests/, fleet],
+      [/\/api\/controls\/audit/, () => ({ body: CHANGES })],
+      [/\/api\/audit\/events/, () => ({ body: EVENTS })],
+    ]);
+  }
+
+  it("offers the fleet's agent ids and filters the events and the export by one", async () => {
+    withFleet(() => ({ body: MANIFESTS }));
+    render(<AuditView role="owner" />);
+    await screen.findByTestId("audit-event-91");
+
+    const picker = await screen.findByTestId("audit-filter-agent");
+    const options = within(picker).getAllByRole("option").map((o) => o.getAttribute("value"));
+    expect(options).toEqual(["", "example-agent", "bob"]);
+
+    fireEvent.change(picker, { target: { value: "bob" } });
+    expect(screen.getByTestId("audit-filter-actor")).toHaveValue("bob");
+    fireEvent.click(screen.getByTestId("audit-apply"));
+
+    await waitFor(() => expect(lastRequest(/audit\/events\?/)).toContain("actor=bob"));
+    expect(screen.getByTestId("audit-export").getAttribute("href")).toContain("actor=bob");
+  });
+
+  it("draws no picker when the fleet cannot be read", async () => {
+    withFleet(() => ({ status: 403, body: { detail: "operator only" } }));
+    render(<AuditView role="owner" />);
+    await screen.findByTestId("audit-event-91");
+
+    expect(screen.queryByTestId("audit-filter-agent")).toBeNull();
+    expect(screen.getByTestId("audit-filter-actor")).toBeInTheDocument();
+  });
+
+  it("does not ask for the fleet as an auditor, who may not read it", async () => {
+    bothRoutes();
+    render(<AuditView role="auditor" />);
+    await screen.findByTestId("audit-event-91");
+
+    expect(requests.some((url) => url.includes("/api/agent-manifests"))).toBe(false);
+    expect(screen.queryByTestId("audit-filter-agent")).toBeNull();
+  });
+});

@@ -172,6 +172,61 @@ class TestEnableDisable:
         assert lockfile.read_lockfile().row("acme-tools").enabled is True
 
 
+class TestScanReasons:
+    """The install scan's reasons live on the row, so the Helm's trust drawer can
+    say WHAT an operator accepted under review long after the install answered.
+    Additive: written only when there are some, and carried by every rewrite."""
+
+    def _installed(self, lock_path):
+        dist = _Dist("acme-tools")
+        lockfile.record_install(
+            "acme-tools",
+            version="1.2.3",
+            manifest_sha256=lockfile.manifest_digest(dist),
+            kinds=("genus.tools",),
+            verdict="review",
+            dist_sha256="a" * 64,
+            source=lockfile.LockSource(origin="registry", publisher_key_id="k1"),
+            scan_reasons=("acme/__init__.py:1: imports httpx", "acme/net.py:3: opens a socket"),
+        )
+        return dist
+
+    def test_they_round_trip_through_the_file(self, lock_path):
+        self._installed(lock_path)
+        row = lockfile.read_lockfile().row("acme-tools")
+        assert row is not None
+        assert row.scan_reasons == (
+            "acme/__init__.py:1: imports httpx",
+            "acme/net.py:3: opens a socket",
+        )
+
+    def test_a_toggle_keeps_them(self, lock_path):
+        self._installed(lock_path)
+        lockfile.set_enabled("acme-tools", False)
+        row = lockfile.read_lockfile().row("acme-tools")
+        assert row is not None and len(row.scan_reasons) == 2
+
+    def test_a_sync_keeps_them(self, lock_path):
+        dist = self._installed(lock_path)
+        with patch.object(loader, "_discover", lambda: [_EP("probe", dist=dist)]):
+            lockfile.sync()
+        row = lockfile.read_lockfile().row("acme-tools")
+        assert row is not None and len(row.scan_reasons) == 2
+
+    def test_a_row_written_before_they_existed_reads_as_none(self, lock_path):
+        lock_path.write_text(
+            json.dumps(
+                {
+                    "lockfile_version": lockfile.LOCKFILE_VERSION,
+                    "plugins": [{"name": "acme-tools", "version": "1", "verdict": "safe"}],
+                }
+            ),
+            encoding="utf-8",
+        )
+        row = lockfile.read_lockfile().row("acme-tools")
+        assert row is not None and row.scan_reasons == ()
+
+
 class TestCorruption:
     def test_a_corrupt_file_reads_as_absent_and_says_so(self, lock_path, caplog):
         lock_path.write_text("{not json at all", encoding="utf-8")

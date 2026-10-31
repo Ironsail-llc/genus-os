@@ -296,6 +296,94 @@ class TestListing:
         reset_settings()
 
 
+class TestTrust:
+    """Each row's ``trust``: what install and sync already established, composed
+    for the Helm's badge and drawer. Nothing here is re-verified at read time --
+    the signature was checked when the index was parsed, the wheel's hash when
+    it was downloaded -- so this is the record, read back, and never a claim the
+    record does not make."""
+
+    def _record(self, **overrides):
+        fields = {
+            "version": "1.2.3",
+            "manifest_sha256": lockfile.manifest_digest(_Dist()),
+            "kinds": ("genus.tools",),
+            "verdict": "safe",
+            "dist_sha256": "b" * 64,
+            "source": lockfile.LockSource(
+                origin="registry",
+                index_url="https://index.example/index.json",
+                publisher_key_id="k1",
+                installed_at="2026-10-01T00:00:00+00:00",
+            ),
+            "members_accounted": 7,
+        }
+        fields.update(overrides)
+        lockfile.record_install("acme-tools", **fields)
+
+    def _trust(self, client):
+        return client.get("/api/admin/plugins").json()["plugins"][0]["trust"]
+
+    def test_a_signed_pinned_scanned_install_says_so(self, client, one_plugin):
+        self._record()
+        trust = self._trust(client)
+        assert trust["signature"] == {
+            "verified": True,
+            "key_id": "k1",
+            "index_url": "https://index.example/index.json",
+        }
+        assert trust["wheel"] == {"sha256": "b" * 64, "pinned": True}
+        assert trust["manifest"] == {
+            "sha256": lockfile.manifest_digest(_Dist()),
+            "matches": True,
+        }
+        assert trust["scan"] == {"verdict": "safe", "reasons": [], "members_accounted": 7}
+        assert trust["lockfile"] == {"recorded": True, "drifted": False}
+        assert trust["contract_version"] == 1
+
+    def test_the_reasons_the_scan_gave_are_carried(self, client, one_plugin):
+        self._record(verdict="review", scan_reasons=("acme/__init__.py:1: imports httpx",))
+        scan = self._trust(client)["scan"]
+        assert scan["verdict"] == "review"
+        assert scan["reasons"] == ["acme/__init__.py:1: imports httpx"]
+
+    def test_a_row_sync_recorded_is_neither_signed_nor_pinned(self, client, one_plugin):
+        lockfile.sync()
+        trust = self._trust(client)
+        assert trust["signature"] == {"verified": False, "key_id": None, "index_url": None}
+        assert trust["wheel"] == {"sha256": None, "pinned": False}
+        assert trust["manifest"]["matches"] is True
+        assert trust["scan"]["verdict"] == "unscanned"
+        assert trust["scan"]["members_accounted"] is None
+        assert trust["lockfile"] == {"recorded": True, "drifted": False}
+
+    def test_a_wheel_installed_from_disk_is_pinned_but_not_signed(self, client, one_plugin):
+        """``--sha256`` pins the bytes; no index vouched for who published them."""
+        self._record(source=lockfile.LockSource(origin="wheel", installed_at="2026-10-01"))
+        trust = self._trust(client)
+        assert trust["signature"]["verified"] is False
+        assert trust["wheel"]["pinned"] is True
+
+    def test_a_manifest_that_changed_does_not_match(self, client, one_plugin):
+        self._record(manifest_sha256="c" * 64)
+        trust = self._trust(client)
+        assert trust["manifest"] == {"sha256": "c" * 64, "matches": False}
+        assert trust["lockfile"]["drifted"] is True
+
+    def test_an_unrecorded_plugin_has_nothing_to_match(self, client, one_plugin):
+        trust = self._trust(client)
+        assert trust["lockfile"] == {"recorded": False, "drifted": False}
+        assert trust["manifest"] == {"sha256": None, "matches": None}
+        assert trust["scan"]["verdict"] is None
+
+    def test_trust_carries_no_filesystem_path(self, client, one_plugin):
+        self._record()
+        raw = json.dumps(self._trust(client))
+        assert "/home/" not in raw
+        assert str(Path.home()) not in raw
+        assert "plugins.lock" not in raw
+
+
 class TestAssets:
     """Each row carries what the plugin wrote into the workspace, from the ledger.
 

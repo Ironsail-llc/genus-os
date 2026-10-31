@@ -481,6 +481,31 @@ def test_a_review_wheel_needs_accept_review(registry_fixture) -> None:
     assert row is not None and row.verdict == "review"
 
 
+def test_the_scan_reasons_reach_the_lock_row(registry_fixture) -> None:
+    """The reasons the operator accepted are part of the record, not only of the
+    install's answer. Without them the Helm can say a plugin was installed under
+    review but not WHAT was reviewed, and that answer is gone once the install
+    response is."""
+    flagged = _wheel_bytes(code="import httpx\n" + _CODE)
+    registry_fixture.served["wheel"] = flagged
+    payload = _index_payload(flagged)
+    raw, sig = registry_fixture.resign(payload)
+    registry_fixture.served["index"], registry_fixture.served["sig"] = raw, sig
+
+    outcome = _install(registry_fixture, pip=_Pip(), accept_review=True)
+    assert outcome.plan.reasons, "the fixture must produce at least one reason"
+    row = lockfile.read_lockfile(registry_fixture.lock).row("acme-tools")
+    assert row is not None
+    assert row.scan_reasons == outcome.plan.reasons
+    assert row.as_json()["scan_reasons"] == list(outcome.plan.reasons)
+
+
+def test_a_lock_row_with_no_scan_reasons_does_not_serialise_them() -> None:
+    """Additive, like `members_accounted`: an empty list would read as "the scan
+    found nothing" on a row nothing scanned."""
+    assert "scan_reasons" not in lockfile.LockRow(name="acme-tools").as_json()
+
+
 def test_an_oversized_wheel_body_is_refused(registry_fixture, monkeypatch) -> None:
     monkeypatch.setattr(installer, "MAX_DOWNLOAD_BYTES", 16)
     pip = _Pip()
