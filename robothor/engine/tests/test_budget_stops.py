@@ -455,3 +455,117 @@ class TestTheObservedHourlyCapAlerts:
         assert len(alerts) == 1, alerts
         assert alerts[0][0] == "warning"
         assert "hourly_cost_cap" in alerts[0][1]
+
+
+# ── The modes are settings: config.yaml works as well as the environment ───
+
+
+@pytest.fixture
+def _config_yaml(tmp_path, monkeypatch, _no_cap_env):
+    """Write the instance's config.yaml settings block; settings re-resolve."""
+    from robothor.settings import reset_settings
+
+    monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(tmp_path))
+    reset_settings()
+
+    def _write(body: str) -> None:
+        (tmp_path / ".robothor").mkdir(parents=True, exist_ok=True)
+        (tmp_path / ".robothor" / "config.yaml").write_text(
+            "settings:\n  providers:\n" + body, encoding="utf-8"
+        )
+        reset_settings()
+
+    yield _write
+    reset_settings()
+
+
+class TestTheModesAreReadAsSettings:
+    def test_hourly_mode_set_in_config_yaml_enforces(self, _config_yaml):
+        """`genus config set ... enforce` writes config.yaml: it must take effect."""
+        from robothor.engine.config import EngineConfig
+
+        _config_yaml("    hourly_cost_cap_mode: enforce\n")
+        assert EngineConfig.from_env().hourly_cost_cap_mode == "enforce"
+
+    def test_an_hourly_cap_set_in_config_yaml_counts_as_explicit(self, _config_yaml):
+        from robothor.engine.config import EngineConfig
+
+        _config_yaml("    hourly_cost_cap_usd: 3.0\n")
+        cfg = EngineConfig.from_env()
+        assert cfg.hourly_cost_cap_usd == 3.0
+        assert cfg.hourly_cost_cap_mode == "enforce"
+
+    def test_runaway_mode_set_in_config_yaml_enforces(self, _config_yaml):
+        from robothor.engine import budget_stops
+
+        _config_yaml("    runaway_hard_cap_mode: enforce\n")
+        assert budget_stops.runaway_hard_cap_mode() == "enforce"
+
+    def test_nothing_set_anywhere_observes(self, _config_yaml):
+        from robothor.engine import budget_stops
+        from robothor.engine.config import EngineConfig
+
+        _config_yaml("    last_resort_model: ''\n")
+        assert EngineConfig.from_env().hourly_cost_cap_mode == "observe"
+        assert budget_stops.runaway_hard_cap_mode() == "observe"
+
+
+# ── The runaway pages say whether the run was stopped ───────────────────────
+
+
+class TestTheRunawayAlertSaysWhatHappened:
+    def test_the_hard_cap_page_says_the_run_continues_when_observing(
+        self, _no_cap_env, monkeypatch
+    ):
+        from robothor.engine import loop_guards
+
+        pages: list[tuple[str, str, str]] = []
+
+        async def _alert(level: str, title: str, body: str, **_kw: Any) -> bool:
+            pages.append((level, title, body))
+            return True
+
+        spawned: list[Any] = []
+        registry = MagicMock()
+        registry.spawn.side_effect = lambda coro, name=None: spawned.append(coro)
+        monkeypatch.setattr("robothor.engine.alerts.alert", _alert)
+        monkeypatch.setattr("robothor.engine.task_registry.get_task_registry", lambda: registry)
+        loop_guards._spawn_hard_cap_alert(_session_over(6_000_000), _cron_agent(), 6_000_000)
+        for coro in spawned:
+            asyncio.run(coro)
+
+        assert len(pages) == 1
+        text = (pages[0][1] + " " + pages[0][2]).lower()
+        assert "continu" in text
+        assert "robothor_runaway_hard_cap_mode=enforce" in text
+
+    @pytest.mark.parametrize("batched", [False, True])
+    def test_the_soft_page_does_not_claim_containment_when_observing(
+        self, _no_cap_env, monkeypatch, batched
+    ):
+        from robothor.engine import runner as runner_mod
+
+        pages: list[str] = []
+
+        async def _alert(level: str, title: str, body: str, **_kw: Any) -> bool:
+            pages.append(body)
+            return True
+
+        spawned: list[Any] = []
+        registry = MagicMock()
+        registry.spawn.side_effect = lambda coro, name=None: spawned.append(coro)
+        monkeypatch.setattr("robothor.engine.alerts.alert", _alert)
+        monkeypatch.setattr("robothor.engine.task_registry.get_task_registry", lambda: registry)
+        monkeypatch.setattr(runner_mod, "_soft_runaway_window_started_at", None)
+        monkeypatch.setattr(
+            runner_mod,
+            "_soft_runaway_pending",
+            [{"agent": "b", "run_id": "q", "tokens": 1}] if batched else [],
+        )
+        runner_mod._send_soft_runaway_alert("a", "r", 600_000, "m", 0.5)
+        for coro in spawned:
+            asyncio.run(coro)
+
+        assert len(pages) == 1
+        assert "contained by the budget guard" not in pages[0].lower()
+        assert "robothor_runaway_hard_cap_mode=enforce" in pages[0].lower()

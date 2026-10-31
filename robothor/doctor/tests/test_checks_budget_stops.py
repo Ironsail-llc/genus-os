@@ -38,6 +38,9 @@ def test_it_lists_the_last_24_hours_grouped_by_stop_and_mode():
     sql, _params = db.connection.cursors[0].executed[0]
     assert "budget_stop" in sql
     assert "24 hours" in sql
+    # The retention index is on created_at; started_at would scan every step.
+    assert "created_at >=" in sql
+    assert "started_at" not in sql
 
 
 def test_none_is_a_pass_that_says_zero():
