@@ -17,6 +17,7 @@ from collections import deque
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
+from urllib.parse import unquote
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -261,7 +262,22 @@ class TraceContext:
         }
 
     def _resource_attributes(self) -> dict[str, Any]:
-        return {"service.name": "robothor-engine", "agent.id": self.agent_id}
+        """Engine defaults, overridden by the standard OTel resource env vars.
+
+        ``OTEL_RESOURCE_ATTRIBUTES`` (comma-separated ``key=value``, values
+        percent-decoded) wins over the defaults, and ``OTEL_SERVICE_NAME``
+        wins over ``service.name`` from either, as the OTel spec orders them.
+        """
+        attrs: dict[str, Any] = {"service.name": "robothor-engine", "agent.id": self.agent_id}
+        for entry in os.environ.get("OTEL_RESOURCE_ATTRIBUTES", "").split(","):
+            key, sep, value = entry.partition("=")
+            key = key.strip()
+            if sep and key:
+                attrs[key] = unquote(value.strip())
+        service_name = os.environ.get("OTEL_SERVICE_NAME", "").strip()
+        if service_name:
+            attrs["service.name"] = service_name
+        return attrs
 
     def _span_to_otlp(self, s: Span) -> dict[str, Any]:
         return {
