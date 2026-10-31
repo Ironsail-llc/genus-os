@@ -293,7 +293,6 @@ class TestSyncOverChangedBytes:
         row = self._sync(_Dist("acme-tools", "2.0"))
         assert row.enabled is False
 
-
     def test_a_row_written_before_they_existed_reads_as_none(self, lock_path):
         lock_path.write_text(
             json.dumps(
