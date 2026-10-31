@@ -331,6 +331,11 @@ class TestGithubTokenRefusal:
         else:
             monkeypatch.delenv(FLAG, raising=False)
         monkeypatch.setattr(github_api, "_get_token", lambda: "")
+        # The unlock names vault_set only where vault_set would be admitted
+        # (TestQaRoundUnlocks covers the other cases); this agent holds the tier.
+        from robothor.engine.tools.handlers import vault
+
+        monkeypatch.setattr(vault, "credential_tier", lambda agent_id: "operator")
         out = await github_api._github_list_prs({"repo": "octo/example"}, _ctx())
         assert out["error"] == "GITHUB_TOKEN not configured"
         if on:
@@ -446,3 +451,46 @@ class TestRule22OnlyCoversGatedRefusals:
         source = Path(guard.__file__).read_text()
         assert '"refused": True' in source
         assert '"gate"' not in source
+
+
+class TestQaRoundUnlocks:
+    """Unlocks must name something the reader can actually do."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("role", ["admin", "owner"])
+    async def test_a_privileged_role_is_told_the_rule_not_to_ask_itself(
+        self, flag_on, role
+    ) -> None:
+        from robothor.engine.tools.dispatch import _refuse_before_handler
+
+        denial = f"Role '{role}' denied 'config_get' (pattern: config_*)"
+        with patch("robothor.engine.permissions.check_tool_permission", return_value=denial):
+            out = await _refuse_before_handler(
+                "config_get", agent_id="main", tenant_id="t-1", user_id="u-1", user_role=role
+            )
+        assert out is not None
+        assert "An owner or admin can do it" not in out["unlock"]
+        assert "config_*" in out["unlock"]
+        assert "role_permissions" in out["unlock"]
+
+    @pytest.mark.asyncio
+    async def test_github_unlock_names_vault_set_only_when_it_would_be_admitted(
+        self, flag_on, monkeypatch
+    ) -> None:
+        from robothor.engine.tools.handlers import github_api, vault
+
+        monkeypatch.setattr(github_api, "_get_token", lambda: "")
+        monkeypatch.delenv("ROBOTHOR_CREDENTIAL_INTAKE", raising=False)
+        monkeypatch.setattr(vault, "credential_tier", lambda agent_id: "")
+        out = await github_api._github_list_prs({"repo": "octo/example"}, _ctx(user_role="owner"))
+        assert "vault_set" not in out["unlock"]
+        assert "GITHUB_TOKEN" in out["unlock"]
+
+        monkeypatch.setenv("ROBOTHOR_CREDENTIAL_INTAKE", "enforce")
+        out = await github_api._github_list_prs({"repo": "octo/example"}, _ctx(user_role="owner"))
+        assert "vault_set" in out["unlock"]
+
+        monkeypatch.delenv("ROBOTHOR_CREDENTIAL_INTAKE")
+        monkeypatch.setattr(vault, "credential_tier", lambda agent_id: "operator")
+        out = await github_api._github_list_prs({"repo": "octo/example"}, _ctx(user_role="member"))
+        assert "vault_set" in out["unlock"]

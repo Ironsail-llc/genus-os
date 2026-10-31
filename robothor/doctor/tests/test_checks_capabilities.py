@@ -145,3 +145,29 @@ def test_the_cli_accepts_agent_and_hands_it_to_the_context() -> None:
         doctor_cmd.run_doctor(args)
     assert seen["ctx"].agent == "main"
     assert seen["category"] == "capabilities"
+
+
+@pytest.mark.asyncio
+async def test_vault_set_without_a_tier_is_gated(instance: Path, monkeypatch) -> None:
+    monkeypatch.delenv("ROBOTHOR_CREDENTIAL_INTAKE", raising=False)
+    _write_agent(instance, "main", {"tools_allowed": ["vault_set"]})
+    row = _by_sub(await _rows("main"))["main:vault_set"]
+    assert row.status == "fail"
+    assert "ROBOTHOR_CREDENTIAL_INTAKE" in row.detail
+
+
+@pytest.mark.asyncio
+async def test_vault_set_with_the_operator_tier_passes(instance: Path) -> None:
+    _write_agent(
+        instance, "main", {"tools_allowed": ["vault_set"], "v2": {"credentials": "operator"}}
+    )
+    assert _by_sub(await _rows("main"))["main:vault_set"].status == "pass"
+
+
+@pytest.mark.asyncio
+async def test_the_coding_workspace_satisfies_coding_jobs(instance: Path, monkeypatch) -> None:
+    monkeypatch.setenv("ROBOTHOR_CODING_WORKSPACE", str(instance / "coding"))
+    _write_agent(instance, "main", {"tools_opt_in": ["claude_code_start"]})
+    with patch("robothor.engine.coding.runner.resolve_claude_binary", return_value="claude"):
+        rows = _by_sub(await _check().run(DoctorContext(offline=True, agent="main")))
+    assert rows["main:coding_jobs"].status == "pass"

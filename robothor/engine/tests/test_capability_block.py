@@ -207,3 +207,92 @@ def test_flag_off_the_body_equals_one_built_without_the_block(tmp_path, monkeypa
     engine_config_module._prompt_cache.clear()
     monkeypatch.setattr(capabilities, "capability_block", lambda config: "")
     assert _static(config, tmp_path) == body
+
+
+# ── QA round: vault_set and coding jobs follow what actually admits them ──
+
+
+class TestVaultSetFollowsTheCredentialGate:
+    """``vault_set`` is refused unless the manifest declares the operator
+    credential tier, or credential intake is enforced for an owner's or
+    admin's chat with main. Granting the tool is not enough."""
+
+    def _vault(self, **facts):
+        from robothor.engine.capabilities import Facts, assess
+
+        rows = assess({"vault_set", "git_commit"}, Facts(**facts))
+        return {c.key: c for c in rows}
+
+    def test_no_tier_and_intake_off_is_gated_naming_both_unlocks(self) -> None:
+        rows = self._vault(agent_id="main")
+        vault = rows["vault_set"]
+        assert vault.available is False
+        assert vault.gate == "flag"
+        assert vault.gate_name == "ROBOTHOR_CREDENTIAL_INTAKE"
+        assert "ROBOTHOR_CREDENTIAL_INTAKE=enforce" in vault.unlock
+        assert "credentials: operator" in vault.unlock
+        assert "vault_set" not in rows["git_pr"].note
+
+    def test_observe_is_still_gated(self) -> None:
+        assert (
+            self._vault(agent_id="main", credential_intake="observe")["vault_set"].available
+            is False
+        )
+
+    def test_another_agent_without_a_tier_is_gated_on_the_tier(self) -> None:
+        vault = self._vault(agent_id="example-agent", credential_intake="enforce")["vault_set"]
+        assert vault.available is False
+        assert vault.gate_name == "credential_tier"
+        assert "credentials: operator" in vault.unlock
+
+    def test_the_operator_tier_makes_it_available(self) -> None:
+        rows = self._vault(agent_id="example-agent", credential_tier="operator")
+        assert rows["vault_set"].available is True
+        assert "vault_set" in rows["git_pr"].note
+
+    def test_intake_enforced_makes_it_available_in_an_owner_or_admin_chat(self) -> None:
+        vault = self._vault(agent_id="main", credential_intake="enforce")["vault_set"]
+        assert vault.available is True
+        assert "owner or admin" in vault.note
+
+    def test_the_prompt_reads_the_tier_and_the_intake_env(self, tmp_path, monkeypatch) -> None:
+        monkeypatch.setenv(FLAG, "1")
+        monkeypatch.delenv("ROBOTHOR_CREDENTIAL_INTAKE", raising=False)
+        config = _agent(tmp_path, id="main", tools_allowed=["vault_set", "read_file"])
+        body = _static(config, tmp_path)
+        assert "- vault_set:" in body[body.index("Gated") :]
+        engine_config_module._prompt_cache.clear()
+        monkeypatch.setenv("ROBOTHOR_CREDENTIAL_INTAKE", "enforce")
+        body = _static(config, tmp_path)
+        assert "- vault_set:" in body[body.index(HEADER) : body.index("Gated")]
+
+
+class TestCodingJobsAcceptTheCodingWorkspace:
+    """A coding workspace is an implicit repo root: with it set, a job starts."""
+
+    def test_the_workspace_alone_satisfies_the_roots(self) -> None:
+        from robothor.engine.capabilities import Facts, assess
+
+        rows = {
+            c.key: c
+            for c in assess(
+                {"claude_code_start"}, Facts(agent_id="main", coding_workspace="/srv/coding")
+            )
+        }
+        assert rows["coding_jobs"].available is True
+
+    def test_with_neither_set_both_are_named(self) -> None:
+        from robothor.engine.capabilities import Facts, assess
+
+        rows = {c.key: c for c in assess({"claude_code_start"}, Facts(agent_id="main"))}
+        coding = rows["coding_jobs"]
+        assert coding.available is False
+        assert "ROBOTHOR_CODING_REPO_ROOTS" in coding.unlock
+        assert "ROBOTHOR_CODING_WORKSPACE" in coding.unlock
+
+    def test_the_prompt_reads_the_workspace_env(self, tmp_path, monkeypatch) -> None:
+        monkeypatch.setenv(FLAG, "1")
+        monkeypatch.setenv("ROBOTHOR_CODING_WORKSPACE", str(tmp_path / "coding"))
+        config = _agent(tmp_path, tools_allowed=["claude_code_start", "read_file"])
+        body = _static(config, tmp_path)
+        assert "- coding_jobs:" in body[body.index(HEADER) : body.index("Gated")]
