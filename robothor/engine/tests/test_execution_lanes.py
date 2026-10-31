@@ -488,3 +488,20 @@ class TestWorkThatOutlivesItsRun:
                 lanes._HOLDING.reset(token)
         await task
         assert seen == [Lane.BACKGROUND, None]
+
+
+class TestImportsStayLight:
+    def test_lanes_and_workflow_import_without_a_database_driver(self):
+        """The CI manifest validator imports the workflow engine with no psycopg2;
+        lanes (imported by workflow.py) must not pull the database in."""
+        import subprocess
+        import sys
+
+        code = (
+            "import sys; sys.modules['psycopg2'] = None; "
+            "import robothor.engine.lanes, robothor.engine.workflow"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", code], capture_output=True, text=True, timeout=120
+        )
+        assert result.returncode == 0, result.stderr[-2000:]
