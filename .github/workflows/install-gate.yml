@@ -526,7 +526,7 @@ jobs:
           set -o pipefail
           python -m bench.turn --half http --runs 20 --engine-url "$ENGINE_URL" \
             --token "$TOKEN" --db-url "$DB_URL" --restart-cmd "$RESTART" \
-            --baseline bench/turn/baselines/ci-http.json \
+            --baseline-set ci \
             --out "$RUNNER_TEMP/bench-turn-http.json" 2>&1 | tee "$RUNNER_TEMP/bench-turn-http.txt"
 
       - name: Upload the webchat benchmark

@@ -474,7 +474,7 @@ jobs:
           # --min-delta 5 (also the default): a shared runner moves a ~40 ms
           # turn by a few ms from run to run, and 10% of 40 ms is inside that.
           python -m bench.turn --half inprocess --runs 20 --model "$BENCH_MODEL" \
-            --min-delta 5 --baseline bench/turn/baselines/ci-inprocess.json \
+            --min-delta 5 --baseline-set ci \
             --out "$RUNNER_TEMP/bench-turn-inprocess.json" 2>&1 \
             | tee "$RUNNER_TEMP/bench-turn.txt"
       - if: always() && steps.scope.outputs.run == 'true'

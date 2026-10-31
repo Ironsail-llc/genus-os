@@ -56,8 +56,10 @@ JSON result: the summary, every turn's numbers, each turn's `run_id` and
 status, and `notes`. With `--half both`, `--out` and `--baseline` get `-http`
 and `-inprocess` inserted before the extension.
 
-The result is compared with `bench/turn/baselines/<half>.json` (or
-`--baseline FILE`). A p50 or p95 more than `--threshold` (default `0.10`, 10%)
+The result is compared with the committed set: `bench/turn/baselines/<half>.json`
+by default, `bench/turn/baselines/ci-<half>.json` with `--baseline-set ci` (what
+CI uses), or one file named with `--baseline FILE`. A named file that is
+missing or is the empty sentinel exits 2, so a mistyped path cannot pass. A p50 or p95 more than `--threshold` (default `0.10`, 10%)
 over the baseline's, and more than `--min-delta` (default 5, in the metric's
 own unit) in absolute terms, is a regression. A smaller floor flags scheduler
 noise on the sub-10 ms metrics: a clean local re-run moved
@@ -67,7 +69,8 @@ not run or a turn did not complete (timings of a failed run measure the
 failure, so they are neither compared nor recorded).
 
 The committed baselines start as an empty sentinel (`"empty": true`). Against
-one, comparison is a no-op that prints `no baseline recorded`. Record a real
+one picked from the committed set (not named with `--baseline`), comparison is
+a no-op that prints `no baseline recorded`. Record a real
 baseline on the machine it will be compared on with `--update-baseline`, and
 commit the file:
 

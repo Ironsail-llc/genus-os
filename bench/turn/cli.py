@@ -15,7 +15,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from bench.turn.compare import compare
+from bench.turn.compare import compare, is_empty_baseline
 from bench.turn.stats import summarize
 
 BASELINES = Path(__file__).resolve().parent / "baselines"
@@ -89,7 +89,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--baseline",
         default="",
-        help="baseline JSON (default bench/turn/baselines/<half>.json)",
+        help="baseline JSON to compare with; missing or empty is an error (exit 2). "
+        "Default: the committed set, see --baseline-set",
+    )
+    p.add_argument(
+        "--baseline-set",
+        choices=("local", "ci"),
+        default="local",
+        help="committed baselines to use without --baseline: baselines/<half>.json (local) "
+        "or baselines/ci-<half>.json (ci); an empty one skips the comparison",
     )
     p.add_argument(
         "--threshold", type=float, default=0.10, help="regression threshold (default 0.10)"
@@ -115,7 +123,8 @@ def _per_half(path: str, half: str, both: bool) -> Path:
 def _baseline_path(args: argparse.Namespace, half: str) -> Path:
     if args.baseline:
         return _per_half(args.baseline, half, args.half == "both" and not args.compare)
-    return BASELINES / f"{half}.json"
+    prefix = "ci-" if args.baseline_set == "ci" else ""
+    return BASELINES / f"{prefix}{half}.json"
 
 
 def _load(path: Path) -> dict[str, Any] | None:
@@ -138,14 +147,28 @@ def _print_summary(result: dict[str, Any]) -> None:
 def _judge(args: argparse.Namespace, half: str, result: dict[str, Any]) -> int:
     path = _baseline_path(args, half)
     if args.update_baseline:
-        baseline = {
+        record = {
             k: result[k] for k in ("half", "runs", "recorded_at", "host", "summary") if k in result
         }
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(baseline, indent=2, sort_keys=True) + "\n")
+        path.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
         print(f"baseline written: {path}")
         return 0
-    outcome = compare(_load(path), result, threshold=args.threshold, min_delta=args.min_delta)
+    baseline = _load(path)
+    if args.baseline:
+        # A named file is a request to compare against it. Missing or empty,
+        # skipping would pass a mistyped path silently.
+        problem = (
+            "not found" if not path.exists() else "empty" if is_empty_baseline(baseline) else ""
+        )
+        if problem:
+            print(
+                f"--baseline {path}: {problem}; nothing to compare against "
+                "(record one with --update-baseline, or omit --baseline to use the committed set)",
+                file=sys.stderr,
+            )
+            return 2
+    outcome = compare(baseline, result, threshold=args.threshold, min_delta=args.min_delta)
     print(f"\nagainst {path}: {outcome.message}")
     return outcome.exit_code
 
