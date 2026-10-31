@@ -15,6 +15,7 @@ import {
 import { durationText } from "@/lib/automations/run-truth";
 import {
   OPERATOR_ONLY,
+  PLUGIN_JOB,
   prettyJson,
   runUrl,
   stepTally,
@@ -129,7 +130,11 @@ function RunDetail({ workflowId, runId }: { workflowId: string; runId: string })
         </p>
       )}
 
-      {detail && steps.length === 0 && (
+      {detail && steps.length === 0 && detail.trigger_type === PLUGIN_JOB && (
+        <JobResult detail={detail} />
+      )}
+
+      {detail && steps.length === 0 && detail.trigger_type !== PLUGIN_JOB && (
         <EmptyState
           testId="run-drawer-empty"
           icon={ListX}
@@ -140,12 +145,46 @@ function RunDetail({ workflowId, runId }: { workflowId: string; runId: string })
 
       {steps.length > 0 && (
         <ol className="flex flex-col gap-2">
-          {steps.map((step) => (
-            <StepCard key={step.step_id} step={step} />
+          {/* A retried step, or one a condition loops back to, records a row
+              per attempt under the same step id. */}
+          {steps.map((step, index) => (
+            <StepCard key={`${index}-${step.step_id}`} step={step} />
           ))}
         </ol>
       )}
     </div>
+  );
+}
+
+/** A scheduled plugin job records no steps; what it returned is its detail. */
+function JobResult({ detail }: { detail: WorkflowRunDetail }) {
+  if (detail.result === null || detail.result === undefined) {
+    return (
+      <EmptyState
+        testId="run-drawer-empty"
+        icon={ListX}
+        title="No result recorded"
+        description="This job run recorded no returned value."
+      />
+    );
+  }
+  const text =
+    detail.result_truncated && typeof detail.result === "string"
+      ? detail.result
+      : prettyJson(detail.result);
+  return (
+    <section
+      data-testid="run-drawer-job-result"
+      className="min-w-0 rounded-md border border-border bg-muted/40"
+    >
+      <h3 className="px-2 py-1 text-xs font-medium text-muted-foreground">Job result</h3>
+      {detail.result_truncated ? (
+        <p className="px-2 pb-1 text-xs text-warning">Truncated: showing the start.</p>
+      ) : null}
+      <pre className="max-h-80 overflow-y-auto whitespace-pre-wrap wrap-anywhere px-2 pb-2 font-mono text-[11px] leading-relaxed text-foreground">
+        {text}
+      </pre>
+    </section>
   );
 }
 

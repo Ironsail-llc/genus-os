@@ -49,7 +49,14 @@ export type WorkflowRunStep = {
 export type WorkflowRunDetail = WorkflowRun & {
   trigger_detail?: string | null;
   steps: WorkflowRunStep[];
+  /** A scheduled plugin job's returned value; it records no steps. */
+  result?: unknown;
+  /** True when the engine cut `result` to its cap; `result` is then the start of its JSON. */
+  result_truncated?: boolean;
 };
+
+/** `workflow_runs.trigger_type` of a scheduled plugin job's run. */
+export const PLUGIN_JOB = "plugin_job";
 
 export function runsUrl(workflowId: string): string {
   return `${BRIDGE}/api/workflows/${encodeURIComponent(workflowId)}/runs`;
