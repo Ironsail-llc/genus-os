@@ -1,15 +1,16 @@
-"""The Helm's Memory page — read what the instance believes, and forget one fact.
+"""The Helm's Memory page — read what the instance believes, correct one fact, forget one.
 
-Three routes, all operator-only:
+Four routes, all operator-only:
 
-``GET  /api/memory/facts``                    what is believed, newest first.
-``POST /api/memory/facts/{id}/forget/preview``  what a forget would do. Writes nothing.
-``POST /api/memory/facts/{id}/forget``          bound the fact, with a reason.
+``GET   /api/memory/facts``                    what is believed, newest first.
+``POST  /api/memory/facts/{id}/forget/preview``  what a forget would do. Writes nothing.
+``POST  /api/memory/facts/{id}/forget``          bound the fact, with a reason.
+``PATCH /api/memory/facts/{id}``                 correct the text or entities, with a reason.
 
 Separate from ``routers/memory.py`` because the two answer different questions.
 That module is the memory SUBSYSTEM's proxy — search, ingest, blocks, the
 pipeline — and every route on it is a thin pass-through to
-:mod:`robothor.memory`. These three are an operator surface over the
+:mod:`robothor.memory`. These four are an operator surface over the
 ``memory_facts`` TABLE, with their own gate, their own pagination and their own
 audit row, and folding them in would have meant one module where half the
 routes are agent-reachable under ``_memory_admin_scope`` and half are not.
@@ -29,7 +30,21 @@ Four rules the routes enforce:
    names a real fact, which is the whole of what an enumeration needs.
 4. **The audit row carries the id and the reason. Never the text.** The text is
    the content being forgotten, often the most sensitive line in the table, and
-   the audit log is exported to a SIEM (``robothor.audit.siem``).
+   the audit log is exported to a SIEM (``robothor.audit.siem``). An edit's
+   audit row carries neither the old text nor the new one.
+5. **An edit keeps the original on record.** Before the row changes, its text,
+   entities and the editing operator go into ``memory_facts_audit`` with
+   ``reason = 'operator_edit'`` (the drift table's append-only history, which
+   is retained indefinitely and is not exported). The row then carries
+   ``metadata.operator_confirmed = {"at", "by"}``, which the Helm shows as a
+   badge. The edit recomputes ``content_hash``, so editing a fact into the text
+   of another ACTIVE fact hits migration 078's unique index and is a 409.
+
+   The embedding is NOT recomputed. Nothing in ``robothor.memory`` backfills a
+   NULL embedding, so nulling it would drop the fact out of vector search for
+   good. A text edit therefore leaves the vector as it was and records
+   ``metadata.embedding_stale = true``: keyword search sees the new text at
+   once, vector search still ranks by the old one until the fact is re-embedded.
 
 Handlers are plain ``def`` (not ``async def``) on purpose: psycopg2 is
 synchronous, so FastAPI must run them in its worker threadpool rather than on
@@ -45,9 +60,12 @@ the older one is the one that is wrong.
 
 from __future__ import annotations
 
+import json
 import logging
+from datetime import UTC, datetime
 from typing import Any
 
+import psycopg2.errors
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
@@ -72,6 +90,18 @@ DEFAULT_LIMIT = 50
 #: API and ``feature_flag_audit.reason`` already use for the same kind of note.
 MIN_REASON = 3
 MAX_REASON = 500
+
+#: An edited fact is one claim, not a document. The ceiling keeps a pasted
+#: paragraph out of a table every agent's context is built from.
+MAX_FACT_TEXT = 2000
+#: Entities are tags. Fifty of them, each a name, is already more than any
+#: extracted fact carries.
+MAX_ENTITIES = 50
+MAX_ENTITY_CHARS = 200
+
+#: ``memory_facts_audit.reason`` for an operator's correction — the same column
+#: the drift writer fills with ``pre_update_drift_detected``.
+EDIT_SNAPSHOT_REASON = "operator_edit"
 
 #: Below this many characters, "which memory blocks quote this fact" stops
 #: being a question a substring test can answer. ``strpos(content, '')`` is 1
@@ -99,8 +129,13 @@ _COLUMNS = (
     "source_type",
     "created_at",
     "superseded_by",
+    "operator_confirmed",
 )
-_SELECT = ", ".join(_COLUMNS)
+#: Payload keys that are not plain columns. ``operator_confirmed`` is one key
+#: of ``metadata`` rather than the whole JSONB, which can be large and is not
+#: the page's business.
+_EXPRESSIONS = {"operator_confirmed": "metadata -> 'operator_confirmed'"}
+_SELECT = ", ".join(_EXPRESSIONS.get(column, column) for column in _COLUMNS)
 
 
 class ForgetRequest(BaseModel):
@@ -136,7 +171,19 @@ def _fact_id(value: str, *, field: str = "fact id") -> int:
     return positive_int(value, field=field, maximum=2147483647)
 
 
-def _reason(body: ForgetRequest | None) -> str:
+class EditRequest(BaseModel):
+    """What the operator is changing, and why.
+
+    Every field is ``Any`` for the reason :class:`ForgetRequest` gives: the
+    handler bounds them, so every refusal is the same flat 422.
+    """
+
+    fact_text: Any = None
+    entities: Any = None
+    reason: Any = None
+
+
+def _reason(body: ForgetRequest | EditRequest | None, *, verb: str = "forget") -> str:
     """The operator's sentence, or a flat 422.
 
     The type is checked HERE rather than by the annotation, because
@@ -154,7 +201,7 @@ def _reason(body: ForgetRequest | None) -> str:
     if len(text) < MIN_REASON:
         raise HTTPException(
             status_code=422,
-            detail=f"a reason of at least {MIN_REASON} characters is required to forget a fact",
+            detail=f"a reason of at least {MIN_REASON} characters is required to {verb} a fact",
         )
     if len(text) > MAX_REASON:
         raise HTTPException(
@@ -175,6 +222,7 @@ def _payload(row: tuple[Any, ...]) -> dict[str, Any]:
     pipeline, which has already renamed it once.
     """
     record = dict(zip(_COLUMNS, row, strict=True))
+    confirmed = record["operator_confirmed"]
     return {
         "id": int(record["id"]),
         "fact_text": record["fact_text"],
@@ -186,6 +234,7 @@ def _payload(row: tuple[Any, ...]) -> dict[str, Any]:
         "source": record["source_type"],
         "created_at": _iso(record["created_at"]),
         "superseded_by": record["superseded_by"],
+        "operator_confirmed": confirmed if isinstance(confirmed, dict) else None,
     }
 
 
@@ -466,3 +515,153 @@ def forget_fact(
         reason=reason,
     )
     return {"fact": fact, "forgotten": True}
+
+
+def _edited_text(raw: Any) -> str | None:
+    """The corrected text, ``None`` when it is not being changed, or a flat 422."""
+    if raw is None:
+        return None
+    if not isinstance(raw, str):
+        raise HTTPException(status_code=422, detail="fact_text must be text")
+    text = raw.strip()
+    if not text:
+        raise HTTPException(
+            status_code=422,
+            detail="a fact cannot be edited into nothing; forget it instead",
+        )
+    if len(text) > MAX_FACT_TEXT:
+        raise HTTPException(
+            status_code=422, detail=f"fact_text must be under {MAX_FACT_TEXT} characters"
+        )
+    return text
+
+
+def _edited_entities(raw: Any) -> list[str] | None:
+    """The corrected entity list, ``None`` when it is not being changed, or a flat 422.
+
+    Blank names are dropped and repeats collapsed, in the order given. An empty
+    list is a real edit: it files the fact under no entity.
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, list) or not all(isinstance(name, str) for name in raw):
+        raise HTTPException(status_code=422, detail="entities must be a list of names")
+    names: list[str] = []
+    for name in (entry.strip() for entry in raw):
+        if not name or name in names:
+            continue
+        if len(name) > MAX_ENTITY_CHARS:
+            raise HTTPException(
+                status_code=422,
+                detail=f"an entity name must be under {MAX_ENTITY_CHARS} characters",
+            )
+        names.append(name)
+    if len(names) > MAX_ENTITIES:
+        raise HTTPException(
+            status_code=422, detail=f"a fact may carry at most {MAX_ENTITIES} entities"
+        )
+    return names
+
+
+@router.patch("/facts/{fact_id}")
+def edit_fact(fact_id: str, request: Request, body: EditRequest | None = None) -> dict[str, Any]:
+    """Correct one fact's text or entities, keeping the original on record.
+
+    Rule 5 in the module header: the original goes into ``memory_facts_audit``
+    first, in the same transaction, so there is no committed edit without its
+    history row. The lock is the forget route's, for the same reason — two
+    concurrent saves must not both snapshot the same "original".
+
+    An inactive fact is a 422, not an edit: it is no longer believed, and
+    rewriting it would change the record of what WAS believed.
+    """
+    actor = require_operator(request)
+    from deps import get_tenant_id
+
+    from robothor.memory.drift import compute_fact_hash
+
+    tenant_id = get_tenant_id(request)
+    identifier = _fact_id(fact_id)
+    new_text = _edited_text(body.fact_text if body is not None else None)
+    new_entities = _edited_entities(body.entities if body is not None else None)
+    if new_text is None and new_entities is None:
+        raise HTTPException(status_code=422, detail="an edit needs fact_text, entities or both")
+    reason = _reason(body, verb="edit")
+
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT fact_text, entities, is_active, category, person_id, content_hash "
+            "FROM memory_facts WHERE id = %s AND tenant_id = %s FOR UPDATE",
+            (identifier, tenant_id),
+        )
+        row = cur.fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="no fact with that id")
+        old_text, old_entities, is_active, category, person_id, stored_hash = row
+        if not is_active:
+            raise HTTPException(
+                status_code=422,
+                detail="that fact is inactive; only a fact still believed can be edited.",
+            )
+
+        old_entities = list(old_entities or [])
+        text = new_text if new_text is not None else (old_text or "")
+        entities = new_entities if new_entities is not None else old_entities
+        person = str(person_id) if person_id else None
+        new_hash = compute_fact_hash(
+            text, tenant_id=tenant_id, category=category or "", person_id=person
+        )
+        metadata: dict[str, Any] = {
+            "operator_confirmed": {"at": datetime.now(UTC).isoformat(), "by": actor}
+        }
+        if text != old_text:
+            metadata["embedding_stale"] = True
+
+        # A savepoint, so a collision with another active fact undoes the
+        # history row too and leaves the transaction usable for the refusal.
+        cur.execute("SAVEPOINT memory_fact_edit")
+        try:
+            cur.execute(
+                "INSERT INTO memory_facts_audit (fact_id, tenant_id, fact_text, "
+                "content_hash_at_snapshot, content_hash_expected, reason, snapshot) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb) RETURNING snapshot_id",
+                (
+                    identifier,
+                    tenant_id,
+                    old_text,
+                    stored_hash,
+                    compute_fact_hash(
+                        old_text or "",
+                        tenant_id=tenant_id,
+                        category=category or "",
+                        person_id=person,
+                    ),
+                    EDIT_SNAPSHOT_REASON,
+                    json.dumps({"fact_text": old_text, "entities": old_entities, "actor": actor}),
+                ),
+            )
+            snapshot_id = int(cur.fetchone()[0])
+            cur.execute(
+                "UPDATE memory_facts SET fact_text = %s, entities = %s, content_hash = %s, "
+                "metadata = COALESCE(metadata, '{}'::jsonb) || %s::jsonb, updated_at = now() "
+                "WHERE id = %s AND tenant_id = %s",
+                (text, entities, new_hash, json.dumps(metadata), identifier, tenant_id),
+            )
+        except psycopg2.errors.UniqueViolation:
+            cur.execute("ROLLBACK TO SAVEPOINT memory_fact_edit")
+            raise HTTPException(
+                status_code=409, detail="an active fact with this text already exists"
+            ) from None
+        fact = _load(cur, identifier, tenant_id)
+
+    audited(
+        request,
+        "memory.edit",
+        action=str(identifier),
+        # Rule 4: identifiers and the operator's sentence — neither the text
+        # being replaced nor its replacement.
+        fact_id=identifier,
+        reason=reason,
+    )
+    return {"fact": fact, "snapshot_id": snapshot_id}
