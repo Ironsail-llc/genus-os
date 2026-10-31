@@ -982,6 +982,8 @@ the fact id and the reason, never the text.
 
 **Audit.** `GET /api/controls/audit` reads the guardrail change log
 (`feature_flag_audit`, written on every `PATCH /api/controls`), newest first.
+Each change is also a `control.set` event in the audit log (flag, value,
+reason, actor), and a change with a blank reason is refused with a 422.
 `GET /api/audit/events.csv` exports the audit log itself — same filters as
 `/api/audit/events`, up to 5,000 rows, as a `text/csv` attachment. Both admit
 the `auditor` role as well as an operator; nothing else on `/api/controls`
