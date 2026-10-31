@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import logging
 import re
+import sys
 from typing import Any
 
 import httpx
@@ -78,6 +79,20 @@ def engine_base_url() -> str:
     return _shared_base_url()
 
 
+def _shared_client() -> httpx.AsyncClient | None:
+    """The lifespan's client, when the bridge app is running.
+
+    Read from ``sys.modules`` rather than imported: importing ``bridge_service``
+    from a router would assemble the whole app as a side effect, and a script
+    or a test that uses this module without the app has no lifespan client to
+    share. ``bridge_service`` registers itself under that name even when run as
+    ``__main__``, so this finds the instance the lifespan populated.
+    """
+    service = sys.modules.get("bridge_service")
+    client: httpx.AsyncClient | None = getattr(service, "http_client", None)
+    return client
+
+
 def _engine_token() -> str:
     # ``require_existing_key=False``: the guard is for a CLI or a doctor on a
     # box whose vault may be unreadable, where minting would generate and
@@ -104,9 +119,17 @@ async def engine_request(
     """
     url = f"{engine_base_url()}{_checked_path(path)}"
     headers = {"Authorization": f"Bearer {_engine_token()}"}
+    shared = _shared_client()
     try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.request(method, url, json=json, headers=headers)
+        if shared is not None:
+            # One pool for every engine call: a new client per call was a new
+            # connection (and handshake) per proxied request.
+            response = await shared.request(
+                method, url, json=json, headers=headers, timeout=timeout
+            )
+        else:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                response = await client.request(method, url, json=json, headers=headers)
     except httpx.HTTPError as exc:
         # ``path`` is sanitized because it is no longer always a literal: the
         # agent-manifest routes build one from an id the caller supplied, and a

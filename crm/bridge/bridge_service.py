@@ -38,7 +38,7 @@ def _default_tenant() -> str:
     return DEFAULT_TENANT
 
 
-from middleware import AuthMiddleware, CorrelationMiddleware, RBACMiddleware, TenantMiddleware
+from middleware import BridgeMiddleware
 from routers.agent_manifests import router as agent_manifests_router
 from routers.agents import router as agents_router
 from routers.approvals import router as approvals_router
@@ -164,14 +164,12 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Middleware (applied in reverse order — correlation runs first, then auth,
-# then tenant, then RBAC). AuthMiddleware verifies a bridge-issued token and
-# sets request.state.auth. Authentication is fail-closed unless the bridge is
-# explicitly placed in loopback-only insecure development mode.
-app.add_middleware(RBACMiddleware)
-app.add_middleware(TenantMiddleware)
-app.add_middleware(AuthMiddleware)
-app.add_middleware(CorrelationMiddleware)
+# One pure-ASGI middleware, four steps in order: correlation id, then auth
+# (verifies a bridge-issued token into request.state.auth), then tenant, then
+# RBAC. Authentication is fail-closed unless the bridge is explicitly placed in
+# loopback-only insecure development mode. See BridgeMiddleware for what each
+# step answers.
+app.add_middleware(BridgeMiddleware)
 
 # Routers
 app.include_router(health_router)
