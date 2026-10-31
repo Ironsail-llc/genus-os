@@ -17,12 +17,7 @@ Renders:
 {{- if $cv.enabled -}}
 {{- $fullName := printf "%s-%s" (include "genus-os.fullname" $root) $component | trunc 63 | trimSuffix "-" -}}
 {{- $isHooks := eq $component "hooks" -}}
-{{- $port := 0 -}}
-{{- if $isHooks -}}
-{{- $port = $cv.port | int -}}
-{{- else -}}
-{{- $port = $cv.service.port | int -}}
-{{- end -}}
+{{- $port := include "genus-os.servicePort" (dict "root" $root "component" $component) | int -}}
 {{- /* hooks serves webhooks only: no workspace, no migrations to wait for. */ -}}
 {{- $waitForMigrations := and $root.Values.migrations.enabled (not $isHooks) -}}
 {{- $serviceEnv := dict -}}

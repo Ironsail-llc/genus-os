@@ -437,7 +437,10 @@ webhooks.yaml it holds (hooks.channels under `channels:`).
 {{- toYaml (dict "channels" (.Values.hooks.channels | default dict)) -}}
 {{- end -}}
 
-{{/* A component's Service port. Pass .root + .component. hooks keeps it at hooks.port. */}}
+{{/*
+A Python component's Service (and container) port. Pass .root + .component.
+hooks keeps it at hooks.port, the one key its server and Service share.
+*/}}
 {{- define "genus-os.servicePort" -}}
 {{- $cv := index .root.Values .component -}}
 {{- if eq .component "hooks" -}}
