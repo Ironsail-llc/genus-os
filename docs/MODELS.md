@@ -62,8 +62,8 @@ model with no entry still gets the right shape. OpenRouter's `openrouter/openai/
 routes and `codex/…` are unaffected.
 
 OpenAI accepts at most 128 tools on one request. An agent with broad tool access
-can exceed that; deferred tool loading (`ROBOTHOR_RIP_16_ENABLED`) keeps the
-advertised set small.
+can exceed that; deferred tool loading (`ROBOTHOR_RIP_16_ENABLED`, on by
+default) keeps the advertised set small.
 
 ## Where models are chosen
 

@@ -1302,7 +1302,12 @@ class AgentRunner(
 
                 # The deferred allow-set that gates tool_call, and the toolset
                 # tool_search reads. toolset_prep says why they are two things.
-                _toolset_tokens = publish_toolset(self.registry, agent_config, tool_names)
+                _toolset_tokens = publish_toolset(
+                    self.registry,
+                    agent_config,
+                    tool_names,
+                    {str(s.get("function", {}).get("name", "")) for s in tool_schemas or []},
+                )
 
                 from robothor.engine.request_runtime import observe_request
 

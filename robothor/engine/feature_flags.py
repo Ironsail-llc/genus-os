@@ -163,9 +163,24 @@ def deferred_tools_enabled() -> bool:
 
     When on, broad-access agents are advertised only a small CORE_TOOLS set plus
     the tool_search/tool_describe/tool_call meta-tools; the rest of their allowed
-    tools load on demand. Off by default; gated by ``ROBOTHOR_RIP_16_ENABLED``.
+    tools load on demand. ON by default (unlike the other rips): set
+    ``ROBOTHOR_RIP_16_ENABLED=0`` to advertise every allowed schema again, and
+    ``ROBOTHOR_DISABLE_ALL_RIPS=1`` still forces it off.
     """
-    return is_rip_enabled(16)
+    if _disabled_all():
+        return False
+    return _env_bool("ROBOTHOR_RIP_16_ENABLED", default=True)
+
+
+def deferred_tools_recent_runs() -> int:
+    """How many of an agent's latest runs seed its always-loaded core.
+
+    A deferred agent is advertised ``CORE_TOOLS`` plus the tools it called in
+    this many recent runs, so a tool it uses every day costs no tool_search
+    round-trip. ``0`` keeps the core static. Reads
+    ``ROBOTHOR_DEFERRED_TOOLS_RECENT_RUNS`` (default 10).
+    """
+    return _env_int("ROBOTHOR_DEFERRED_TOOLS_RECENT_RUNS", 10, minimum=0)
 
 
 def cron_warmup_recall_enabled() -> bool:
@@ -248,13 +263,18 @@ def deferred_tools_threshold() -> int:
     tool_search round-trip); only broad-access agents (e.g. main) defer.
     Reads ``ROBOTHOR_DEFERRED_TOOLS_THRESHOLD`` (default 40).
     """
-    raw = os.environ.get("ROBOTHOR_DEFERRED_TOOLS_THRESHOLD", "").strip()
+    return _env_int("ROBOTHOR_DEFERRED_TOOLS_THRESHOLD", 40, minimum=1)
+
+
+def _env_int(name: str, default: int, *, minimum: int) -> int:
+    """An integer tuning knob: unset or unparseable is ``default``, floored at ``minimum``."""
+    raw = os.environ.get(name, "").strip()
     if not raw:
-        return 40
+        return default
     try:
-        return max(1, int(raw))
+        return max(minimum, int(raw))
     except ValueError:
-        return 40
+        return default
 
 
 def symbolic_memory_mode() -> SymbolicMode:
