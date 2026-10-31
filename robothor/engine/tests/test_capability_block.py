@@ -173,3 +173,37 @@ class TestSharedAssessment:
         assert git.gate == "runtime"
         assert git.gate_name == "GITHUB_TOKEN"
         assert "vault_set" in git.unlock
+
+
+class TestTheBlockMatchesThePayload:
+    """The block may say a refusal names its gate and unlock only when the
+    refusal payload actually carries them."""
+
+    RELAY = "names the gate and the unlock"
+
+    @pytest.fixture(autouse=True)
+    def _on(self, monkeypatch):
+        monkeypatch.setenv(FLAG, "1")
+
+    def test_payload_off_the_block_does_not_promise_a_gate(self, tmp_path, monkeypatch) -> None:
+        monkeypatch.delenv("ROBOTHOR_REFUSAL_PAYLOAD_V2", raising=False)
+        block = _static(_agent(tmp_path), tmp_path)
+        block = block[block.index(HEADER) :]
+        assert self.RELAY not in block
+        assert "Never say you cannot" in block
+
+    def test_payload_on_the_block_says_to_relay_it(self, tmp_path, monkeypatch) -> None:
+        monkeypatch.setenv("ROBOTHOR_REFUSAL_PAYLOAD_V2", "1")
+        block = _static(_agent(tmp_path), tmp_path)
+        assert self.RELAY in block[block.index(HEADER) :]
+
+
+def test_flag_off_the_body_equals_one_built_without_the_block(tmp_path, monkeypatch) -> None:
+    """Equality, not containment: with the flag off nothing is appended."""
+    import robothor.engine.capabilities as capabilities
+
+    config = _agent(tmp_path)
+    body = _static(config, tmp_path)
+    engine_config_module._prompt_cache.clear()
+    monkeypatch.setattr(capabilities, "capability_block", lambda config: "")
+    assert _static(config, tmp_path) == body

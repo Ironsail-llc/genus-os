@@ -411,3 +411,38 @@ class TestRule22:
         from robothor.engine.prompts import BEHAVIORAL_RULES, behavioral_rules
 
         assert behavioral_rules() == BEHAVIORAL_RULES
+
+
+class TestRule22OnlyCoversGatedRefusals:
+    """The repeat guard already sends ``refused: true`` with no gate or unlock,
+    meaning "change the call". Rule 22 must not tell the model to relay a gate
+    that result does not have, nor forbid the change it asks for."""
+
+    @pytest.fixture(autouse=True)
+    def _no_verification(self, monkeypatch):
+        monkeypatch.setenv("ROBOTHOR_RUN_VERIFICATION_MODE", "off")
+
+    def _rule22(self) -> str:
+        from robothor.engine.prompts import behavioral_rules
+
+        rules = behavioral_rules()
+        return rules[rules.index("\n22. ") :]
+
+    def test_the_rule_applies_only_when_the_result_carries_a_gate(self, flag_on) -> None:
+        assert "`refused: true` and a `gate`" in self._rule22()
+
+    def test_a_refusal_without_a_gate_is_a_redirection(self, flag_on) -> None:
+        rule = self._rule22()
+        assert "without a `gate`" in rule
+        assert "change the call" in rule
+
+    def test_the_repeat_guard_payload_has_no_gate(self, flag_on) -> None:
+        """Pins the shape rule 22 distinguishes: if the repeat guard ever
+        gains a gate, the rule's carve-out needs revisiting."""
+        from pathlib import Path
+
+        import robothor.engine.repeat_guard as guard
+
+        source = Path(guard.__file__).read_text()
+        assert '"refused": True' in source
+        assert '"gate"' not in source
