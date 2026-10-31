@@ -244,11 +244,8 @@ class TraceContext:
         try:
             import redis
 
-            r = redis.Redis(
-                host=os.environ.get("REDIS_HOST", "localhost"),
-                port=int(os.environ.get("REDIS_PORT", "6379")),
-                decode_responses=True,
-            )
+            host, port = _redis_address()
+            r = redis.Redis(host=host, port=port, decode_responses=True)
             r.xadd(TELEMETRY_STREAM, fields, maxlen=TELEMETRY_STREAM_MAXLEN)
         except Exception as e:
             logger.debug("Failed to publish telemetry to Redis: %s", e)
@@ -317,6 +314,11 @@ class TraceContext:
             logger.debug("Failed to export OTLP trace: %s", e)
 
 
+def _redis_address() -> tuple[str, int]:
+    """Where run telemetry is written (``REDIS_HOST`` / ``REDIS_PORT``)."""
+    return os.environ.get("REDIS_HOST", "localhost"), int(os.environ.get("REDIS_PORT", "6379"))
+
+
 def _otlp_status(s: Span) -> dict[str, Any]:
     status: dict[str, Any] = {"code": 2 if s.status == "error" else 1}
     if s.status == "error" and s.status_message:
@@ -371,9 +373,10 @@ class _TelemetryPublisher:
         try:
             if self._redis is None:
                 aioredis = await _import_off_loop("redis.asyncio")
+                host, port = _redis_address()
                 self._redis = aioredis.Redis(
-                    host=os.environ.get("REDIS_HOST", "localhost"),
-                    port=int(os.environ.get("REDIS_PORT", "6379")),
+                    host=host,
+                    port=port,
                     decode_responses=True,
                     socket_connect_timeout=REDIS_TIMEOUT_S,
                     socket_timeout=REDIS_TIMEOUT_S,
