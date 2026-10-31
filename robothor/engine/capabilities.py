@@ -18,8 +18,8 @@ are checked when the tool is called; the doctor, which may do I/O, fills them.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from dataclasses import dataclass, replace
+from typing import TYPE_CHECKING
 
 from robothor.engine.tools.constants import MAIL_REPLY_TOOL, MAIL_SEND_TOOL
 
@@ -35,6 +35,7 @@ __all__ = [
     "capability_block",
     "facts_for",
     "manifest_unlock",
+    "render",
 ]
 
 HEADER = "## What you can do here"
@@ -76,7 +77,6 @@ class _Spec:
     label: str
     tools: tuple[str, ...]
     main_only: bool = False
-    extra: dict[str, Any] = field(default_factory=dict)
 
 
 #: Declared order is report order.
@@ -193,8 +193,6 @@ def _manifest_facts(config: AgentConfig) -> Facts:
 
 def facts_for(config: AgentConfig) -> Facts:
     """The session-stable facts: the manifest and the engine's settings only."""
-    from dataclasses import replace
-
     from robothor.settings import get_settings
 
     settings = get_settings()

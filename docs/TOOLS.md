@@ -572,8 +572,8 @@ With the monitor off they return `status: not_configured` and nothing else.
 **Choosing.** These are about the operator's **n8n** automations, not Genus
 workflows (`docs/workflows/*.yaml`) or agent runs. When a `workflow_failure`
 notification carries `source: n8n`, answer from `n8n_recent_failures` and give
-the operator the execution link: the agent cannot rerun or edit an n8n
-workflow, and neither tool calls n8n.
+the operator the execution link: neither tool reruns, edits or calls an n8n
+workflow, so fixing and rerunning one happens in n8n.
 
 ### Vision: `view_image` and `analyze_image`
 
@@ -1376,6 +1376,48 @@ storing an empty fact. `log_interaction` reaches the bridge at `BRIDGE_URL`;
 the bridge refuses it with `agent not authorized` until the calling agent is
 listed in `agent_capabilities.json`.
 
+### When a tool is refused
+
+A refusal is a control declining the call, not the tool failing. Every refusal
+keeps its `error` text. With `ROBOTHOR_REFUSAL_PAYLOAD_V2` on, the engine's
+refusals (plan mode, `tools_allowed`, the wrap-up window, a pre-tool-use hook,
+a guardrail, RBAC for a chat or a scheduled run, a forked task's whitelist,
+`config_get`/`config_set` for a non-owner, `config_set apply=true` without host
+exec, `send_file` to another chat, and every GitHub tool without
+`GITHUB_TOKEN`) also carry:
+
+| Key | Meaning |
+|---|---|
+| `refused` | `true` |
+| `gate` | `role`, `flag`, `allowlist`, `runtime` or `policy` |
+| `gate_name` | the control: `plan_mode`, `tools_allowed`, `rbac`, `owner_role`, `GITHUB_TOKEN`, a guardrail's name |
+| `unlock` | what a person changes for the same call to succeed |
+
+Behavioural rule 22 ships with them: **A refusal names its gate; relay it,
+never claim an inability** — when a tool result has `refused: true`, tell the
+person which gate refused it (`gate`, `gate_name`) and what unlocks it
+(`unlock`), then offer the next step you can take now. Do not look for a way
+round a refusal, and never say you cannot do something no tool refused: if a
+tool you have can do it, do it.
+
+With the setting off, every payload is exactly what it was. A handler that
+refuses builds its payload with `robothor.engine.refusal.refusal()`.
+
+### What an agent is told it can do
+
+With `ROBOTHOR_CAPABILITY_BLOCK_ENABLED` on, every agent's system prompt carries
+a "What you can do here" block after its instruction and bootstrap files: the
+capabilities its granted tools give it (`exec`, `write_files`, `git_pr`,
+`coding_jobs`, `browser`, `spawn`, `vault_set`, `send_mail`, and `host_exec` for
+`main`), and for each one it lacks, the gate and the unlock (a manifest key, or
+a setting such as `ROBOTHOR_CODING_REPO_ROOTS` or `ROBOTHOR_HOST_EXEC_SOCKET`).
+It reads only the manifest and the engine's settings, so it is the same on every
+turn of a conversation and the prompt prefix stays cacheable; a settings change
+that alters it rebuilds the prompt. `genus doctor --category capabilities
+--agent <id>` prints the same assessment, plus the two facts the prompt leaves
+to call time: whether `GITHUB_TOKEN` resolves and whether the Claude Code CLI is
+installed.
+
 ### `read_file` — documents, not just text
 
 `read_file` returns a text file as it is, and turns the common document formats
@@ -1425,6 +1467,7 @@ because they are not part of the function-schema contract.
 genus doctor --category agents
 genus doctor --category tools
 genus doctor --category calendar
+genus doctor --category capabilities --agent main
 ```
 
 **`agents.tools_named_but_not_granted`** — for each agent, the registered tool
@@ -1453,6 +1496,18 @@ an agent whose `tools_denied` names the native tool for the same action. The
 denial reads as a policy and is not one: the same account is reached through
 `exec`, past the do-not-contact check, the duplicate-reply guard, the threading
 and the benchmark gate.
+
+**`tools.inability_copy`** — instruction text that tells the agent it cannot
+do something ("I cannot …", "You can't …" at the start of a sentence or list
+item, outside code fences and HTML comments). The agent repeats such a line to
+the person whether or not it holds the tool, and it outlives the restriction it
+described. Say why and what unlocks it instead, or leave the gate to the
+engine, whose refusals name it.
+
+**`capabilities.agent`** (info) — one row per `<agent>:<capability>`: a pass
+for what the agent can do, a fail naming the gate and the unlock for what it
+cannot. Not a verdict on the instance; it is where to look when an agent says it
+cannot do something the person expected. `--agent <id>` reports one agent.
 
 ### Autonomy first
 
