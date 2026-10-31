@@ -34,6 +34,7 @@ import time
 from pathlib import Path
 
 import pytest
+from tests.platform_capabilities import needs_gnu_coreutils
 
 # A subprocess here may take up to 120 s by its own bound; pytest.ini's 30 s
 # would stop the test first whenever the machine is busy (tests/test_suite_hygiene.py).
@@ -363,6 +364,7 @@ class TestCronDedupSurvivesAnUnwritableStateDir:
         env["ROBOTHOR_ALERT_FALLBACK_STATE_DIR"] = str(tmp_path / "fallback-state")
         return env
 
+    @needs_gnu_coreutils
     def test_a_repeated_cron_failure_pages_once(self, tmp_path: Path):
         log = install_fake_curl(tmp_path)
         env = self.unwritable_state(tmp_path)
@@ -936,6 +938,7 @@ class TestSpoolDrain:
         assert "robothor-spooled.service" in log.read_text()
         assert spooled(tmp_path) == [], "a delivered spool file must be deleted"
 
+    @needs_gnu_coreutils
     def test_the_drained_page_says_it_is_delayed_and_when_it_was_queued(self, tmp_path: Path):
         log = install_fake_curl(tmp_path)
         epoch = SPOOLED_EPOCH_OLDER
@@ -1521,6 +1524,7 @@ class TestEveryNormalSendDrainsFirst:
         assert args.index("PAGE-SPOOLED") < args.index("robothor-sample.service FAILED")
         assert spooled(tmp_path) == []
 
+    @needs_gnu_coreutils
     def test_a_cooldown_suppressed_send_still_drains(self, tmp_path: Path):
         """The drain must sit ABOVE the cooldown check: a flapping unit inside
         its 1h cooldown is exactly when the spool would otherwise sit."""
@@ -1666,6 +1670,7 @@ class TestAStuckSpoolMarksItself:
             "DNS blip is one the operator learns to ignore"
         )
 
+    @needs_gnu_coreutils
     def test_half_the_attempt_budget_marks_the_spool_stuck(self, tmp_path: Path):
         """Two 401s against a 4-attempt budget: the token is wrong, and no
         amount of retrying will fix it."""

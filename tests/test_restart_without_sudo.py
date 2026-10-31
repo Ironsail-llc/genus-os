@@ -20,6 +20,7 @@ import re
 import subprocess
 import time
 from pathlib import Path
+from tests.platform_capabilities import needs_tools
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PATH_UNIT = REPO_ROOT / "infra/systemd/robothor-restart.path"
@@ -188,6 +189,7 @@ def restart_calls(log: Path) -> list[list[str]]:
     ]
 
 
+@needs_tools("flock")
 def test_several_requests_become_one_restart_transaction(tmp_path: Path):
     log = install_fake_systemctl(tmp_path)
     request(tmp_path, "robothor-engine")
@@ -206,6 +208,7 @@ def test_several_requests_become_one_restart_transaction(tmp_path: Path):
     assert not (tmp_path / "restart-request").exists()
 
 
+@needs_tools("flock")
 def test_a_unit_with_a_queued_job_is_left_alone(tmp_path: Path):
     """The job already queued for it will start it with the new code; a
     second restart on top would kill that job's ExecStartPre and page."""
@@ -224,6 +227,7 @@ def test_a_unit_with_a_queued_job_is_left_alone(tmp_path: Path):
     assert not list((tmp_path / "requests").iterdir()), "requests are consumed either way"
 
 
+@needs_tools("flock")
 def test_nothing_to_restart_calls_nothing(tmp_path: Path):
     log = install_fake_systemctl(tmp_path)
     (tmp_path / "jobs").write_text("robothor-engine.service 7\n")
@@ -235,6 +239,7 @@ def test_nothing_to_restart_calls_nothing(tmp_path: Path):
     assert restart_calls(log) == []
 
 
+@needs_tools("flock")
 def test_a_refused_name_is_consumed_and_never_restarted(tmp_path: Path):
     log = install_fake_systemctl(tmp_path)
     request(tmp_path, "sshd")
@@ -248,6 +253,7 @@ def test_a_refused_name_is_consumed_and_never_restarted(tmp_path: Path):
     assert not list((tmp_path / "requests").iterdir())
 
 
+@needs_tools("flock")
 def test_two_handlers_serialise_on_the_lock(tmp_path: Path):
     """While one handler holds the lock the next one waits — it neither
     consumes the requests nor calls systemctl until the first is done."""

@@ -52,6 +52,7 @@ import time
 from pathlib import Path
 
 import pytest
+from tests.platform_capabilities import needs_gnu_coreutils
 
 # A subprocess here may take up to 60 s by its own bound; pytest.ini's 30 s
 # would stop the test first whenever the machine is busy (tests/test_suite_hygiene.py).
@@ -253,6 +254,7 @@ class TestConsecutiveFailureThreshold:
         run_probe(env)
         assert send_attempts(log) == 1
 
+    @needs_gnu_coreutils
     def test_a_longer_outage_keeps_paging_through_the_sender_dedup(self, tmp_path: Path):
         """Past the threshold the probe keeps calling the sender every cycle;
         the sender's own per-unit cooldown is the single source of dedup
@@ -699,6 +701,7 @@ class TestAStuckSpoolPagesOnItsOwnKey:
     because the sender may itself be what is broken.
     """
 
+    @needs_gnu_coreutils
     def test_a_stale_marker_pages_on_its_own_key(self, tmp_path: Path):
         alert_log = install_recording_alert(tmp_path)
         install_fake_curl(tmp_path)
@@ -722,6 +725,7 @@ class TestAStuckSpoolPagesOnItsOwnKey:
             "to fail about"
         )
 
+    @needs_gnu_coreutils
     def test_the_stuck_page_is_short_and_says_why(self, tmp_path: Path):
         """The delivery path is the thing that is broken. A page composed of a
         journal tail and a consequence map is the least likely to fit through
@@ -779,6 +783,7 @@ class TestAStuckSpoolPagesOnItsOwnKey:
         assert result.returncode == 0, result.stdout + result.stderr
         assert "alert-spool-stuck" not in alert_log.read_text()
 
+    @needs_gnu_coreutils
     def test_a_stuck_page_the_sender_cannot_deliver_fails_the_unit(self, tmp_path: Path):
         """The last fallback. If the sender cannot deliver the news that the
         sender is broken, the unit has to go `failed` so systemd's own
@@ -799,6 +804,7 @@ class TestAStuckSpoolPagesOnItsOwnKey:
             "nothing is left to notice"
         )
 
+    @needs_gnu_coreutils
     def test_the_stuck_key_counts_separately_from_the_engine(self, tmp_path: Path):
         """Sharing the engine's counter would let one mute the other: a
         recovering engine would reset the spool's count on every tick, and the

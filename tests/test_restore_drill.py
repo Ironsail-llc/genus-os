@@ -43,6 +43,7 @@ import time
 from pathlib import Path
 
 import pytest
+from tests.platform_capabilities import needs_tools
 
 # A subprocess here may take up to 600 s by its own bound; pytest.ini's 30 s
 # would stop the test first whenever the machine is busy (tests/test_suite_hygiene.py).
@@ -210,6 +211,7 @@ class TestAMissingDumpAborts:
         assert DRILL.exists(), "scripts/restore-drill.sh missing"
         assert DRILL.stat().st_mode & 0o111, f"{DRILL} is not executable"
 
+    @needs_tools("timeout")
     def test_no_dump_anywhere_is_a_non_zero_abort(self, tmp_path: Path):
         """2026-08-24: the glob matched nothing and the drill "succeeded" in
         0.09s against an empty database. A drill that passes without a dump
@@ -341,6 +343,7 @@ class TestADropdbThatHangsIsNotAHungUnit:
         dropdb.chmod(dropdb.stat().st_mode | stat.S_IEXEC)
         return dropdb
 
+    @needs_tools("timeout")
     def test_a_dropdb_that_never_returns_aborts_non_zero_and_says_so(self, tmp_path: Path):
         write_fixture_dump(tmp_path / "dumps" / "robothor_memory-fixture.sql.gz")
         notify_log = install_recording_notify(tmp_path)
@@ -490,6 +493,7 @@ def install_fake_pg(tmp_path: Path) -> dict[str, str]:
 
 
 class TestOffsiteIsThePreferredSource:
+    @needs_tools("timeout")
     def test_the_remote_is_tried_before_the_local_copy(self, tmp_path: Path):
         """A box-loss restores from offsite, so that is the path worth
         exercising — the 2026-08-24 drill did exactly that, hours after the
@@ -537,6 +541,7 @@ class TestTheDrillLeavesNoTemporaryFilesBehind:
     year, and the fetched dump inside it is a full copy of production. The
     error log is the same story with a smaller file."""
 
+    @needs_tools("timeout")
     def test_the_work_dir_and_error_log_are_removed_on_success(self, tmp_path: Path):
         scratch = tmp_path / "tmp"
         scratch.mkdir()
@@ -571,6 +576,7 @@ class TestTheDrillLeavesNoTemporaryFilesBehind:
             f"an aborted drill left temporary files behind: {[p.name for p in scratch.iterdir()]}"
         )
 
+    @needs_tools("timeout")
     def test_a_configured_work_dir_is_not_deleted(self, tmp_path: Path):
         """Only a directory this run created may be removed — a work dir the
         operator configured may be a real directory with other things in it."""

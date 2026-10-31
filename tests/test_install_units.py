@@ -32,6 +32,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from tests.platform_capabilities import needs_tools
 
 # A subprocess here may take up to 60 s by its own bound; pytest.ini's 30 s
 # would stop the test first whenever the machine is busy (tests/test_suite_hygiene.py).
@@ -261,6 +262,7 @@ def test_percent_i_instance_specifier_is_preserved(tmp_path: Path):
     assert "%i" in result.stdout
 
 
+@needs_tools("getent")
 def test_home_is_derived_from_passwd_when_unset(tmp_path: Path):
     import pwd
 
@@ -1198,6 +1200,7 @@ def test_installer_prints_exactly_one_restart_command(tmp_path: Path):
     )
 
 
+@needs_tools("flock")
 def test_installer_with_restart_flag_issues_one_transaction(tmp_path: Path):
     """--restart: daemon-reload, then a SINGLE `systemctl restart` naming the
     secrets unit and all its dependents, each exactly once."""
@@ -1232,6 +1235,7 @@ def test_installer_without_restart_flag_never_calls_systemctl(tmp_path: Path):
     assert not log.exists(), f"systemctl was called without --restart:\n{log.read_text()}"
 
 
+@needs_tools("flock")
 def test_restart_leaves_a_unit_with_a_queued_job_to_that_job(tmp_path: Path):
     """The restart broker may have a restart of the engine in flight (the
     engine writes the legacy trigger itself). A deploy restart on top of it
@@ -1252,6 +1256,7 @@ def test_restart_leaves_a_unit_with_a_queued_job_to_that_job(tmp_path: Path):
     )
 
 
+@needs_tools("flock")
 def test_restart_with_every_unit_queued_restarts_nothing(tmp_path: Path):
     log = install_fake_systemctl(tmp_path)
     units = ["robothor-secrets.service", *secrets_dependents()]
@@ -1262,6 +1267,7 @@ def test_restart_with_every_unit_queued_restarts_nothing(tmp_path: Path):
     assert restart_calls(log) == []
 
 
+@needs_tools("flock")
 def test_restart_holds_the_brokers_lock(tmp_path: Path):
     """The deploy and the broker take the SAME lock, so neither can enqueue
     a restart while the other's transaction is being decided."""
@@ -1295,6 +1301,7 @@ def test_restart_holds_the_brokers_lock(tmp_path: Path):
     assert len(restart_calls(log)) == 1
 
 
+@needs_tools("flock")
 def test_a_failed_restart_is_reported_per_unit_and_exits_nonzero(tmp_path: Path):
     """`set -e` must not abort the report mid-way: after the transaction is
     enqueued every unit's state is printed, and the exit code says failure."""
@@ -1345,6 +1352,7 @@ def _unwritable_lock(env: dict[str, str]) -> Path:
     return lock
 
 
+@needs_tools("flock")
 @pytest.mark.skipif(os.geteuid() == 0, reason="root can write a read-only file")
 def test_an_existing_lock_another_user_owns_does_not_abort_the_restart(tmp_path: Path):
     """Observed 2026-10-05: `exec 9>"$LOCK_FILE"` failed with "Permission
@@ -1357,6 +1365,7 @@ def test_an_existing_lock_another_user_owns_does_not_abort_the_restart(tmp_path:
     assert len(restart_calls(log)) == 1
 
 
+@needs_tools("flock")
 @pytest.mark.skipif(os.geteuid() == 0, reason="root can write a read-only file")
 def test_the_broker_takes_an_existing_lock_it_cannot_write(tmp_path: Path):
     handler = REPO_ROOT / "infra" / "bin" / "robothor-restart-handler.sh"
@@ -1372,6 +1381,7 @@ def test_the_broker_takes_an_existing_lock_it_cannot_write(tmp_path: Path):
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+@needs_tools("flock")
 def test_a_missing_lock_is_created(tmp_path: Path):
     install_fake_systemctl(tmp_path)
     env = restart_env(tmp_path)

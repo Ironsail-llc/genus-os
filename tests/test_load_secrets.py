@@ -34,10 +34,15 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from tests.platform_capabilities import needs_gnu_coreutils
 
 # A subprocess here may take up to 60 s by its own bound; pytest.ini's 30 s
 # would stop the test first whenever the machine is busy (tests/test_suite_hygiene.py).
-pytestmark = pytest.mark.timeout(120)
+# The script under test needs Linux tools on every run (tests/platform_capabilities.py).
+pytestmark = [
+    pytest.mark.timeout(120),
+    needs_gnu_coreutils,
+]
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = REPO_ROOT / "scripts"

@@ -15,6 +15,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from tests.platform_capabilities import needs_gnu_coreutils
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SEND = REPO_ROOT / "scripts" / "send_failure_alert.sh"
@@ -462,6 +463,7 @@ class TestCooldownDedup:
         assert result.returncode == 0, result.stdout + result.stderr
         assert curl_call_count(log) == 1
 
+    @needs_gnu_coreutils
     def test_second_call_within_cooldown_is_suppressed_without_curling(self, tmp_path: Path):
         log = fake_curl(tmp_path)
         env = dict(self.ENV)
@@ -486,6 +488,7 @@ class TestCooldownDedup:
         assert second.returncode == 0, second.stdout + second.stderr
         assert curl_call_count(log) == 2
 
+    @needs_gnu_coreutils
     def test_call_after_cooldown_expiry_pages_again(self, tmp_path: Path):
         log = fake_curl(tmp_path)
         env = dict(self.ENV)
@@ -714,6 +717,7 @@ class TestBodyOverride:
         assert "Restore drill FAILED: pg_restore exited 1 on the newest dump" in text
         assert "Last journal lines:" not in text
 
+    @needs_gnu_coreutils
     def test_the_first_argument_is_still_the_dedup_key(self, tmp_path: Path):
         """Two different bodies under one key are one incident, and must
         page once — otherwise a per-tick body defeats the cooldown."""
@@ -768,6 +772,7 @@ class TestBodyOverride:
             "the operator instead"
         )
 
+    @needs_gnu_coreutils
     def test_the_body_page_is_stamped_with_the_time_and_host(self, tmp_path: Path):
         """Losing the headline must not lose WHEN and WHERE."""
         log = fake_curl(tmp_path)

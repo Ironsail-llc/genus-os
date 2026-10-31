@@ -24,6 +24,7 @@ from pathlib import Path
 from urllib.parse import SplitResult, urlsplit
 
 import pytest
+from tests.platform_capabilities import needs_gnu_coreutils
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "scripts" / "install.sh"
@@ -504,6 +505,7 @@ def test_a_releases_api_that_fails_with_no_stamp_is_an_error_not_a_hang(
     assert "--version" in result.stderr
 
 
+@needs_gnu_coreutils
 def test_a_releases_api_that_hangs_is_bounded_by_the_script_not_by_curl(
     installer, tmp_path
 ) -> None:

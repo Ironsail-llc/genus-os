@@ -33,6 +33,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from tests.platform_capabilities import needs_bash44
 
 # A subprocess here may take up to 180 s by its own bound; pytest.ini's 30 s
 # would stop the test first whenever the machine is busy (tests/test_suite_hygiene.py).
@@ -347,6 +348,7 @@ def test_an_unreadable_allow_file_is_reported(installed_root: Path, tmp_path: Pa
     assert "robothor-orphan.service" in result.stdout, result.stdout
 
 
+@needs_bash44
 def test_an_allow_entry_that_matched_nothing_is_reported(
     installed_root: Path, tmp_path: Path
 ):
@@ -362,6 +364,7 @@ def test_an_allow_entry_that_matched_nothing_is_reported(
     assert "robothor-long-gone.service" in result.stderr, result.stderr
 
 
+@needs_bash44
 def test_the_allow_file_cannot_suppress_drift_inert_files_or_symlinks(
     installed_root: Path, tmp_path: Path
 ):

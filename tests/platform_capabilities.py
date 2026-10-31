@@ -3,7 +3,7 @@
 Production is Linux: the engine runs in a Linux container, and the host
 scripts under ``scripts/`` run as systemd units on a Linux box. Some tests
 exercise exactly that platform -- a kernel option, ``/proc``, a util-linux or
-coreutils binary, GNU ``date -d`` -- and on a developer Mac they fail before
+coreutils binary, GNU option spellings, bash 4.4 -- and on a developer Mac they fail before
 they test anything. Each marker here asks for the CAPABILITY, not the OS name,
 so a Mac with GNU coreutils on PATH still runs what it can, and each reason
 names what is missing so a skip is never mistaken for a pass.
@@ -34,40 +34,48 @@ def needs_tools(*names: str) -> pytest.MarkDecorator:
     )
 
 
-@cache
-def _gnu_date() -> bool:
+def _succeeds(argv: list[str], expect: str) -> bool:
     try:
-        result = subprocess.run(
-            ["date", "-d", "@0", "+%s"], capture_output=True, text=True, timeout=10, check=False
-        )
+        result = subprocess.run(argv, capture_output=True, text=True, timeout=10, check=False)
     except (OSError, subprocess.SubprocessError):
         return False
-    return result.returncode == 0 and result.stdout.strip() == "0"
+    return result.returncode == 0 and result.stdout.strip() == expect
 
 
 @cache
-def _bash4() -> bool:
-    try:
-        result = subprocess.run(
-            ["bash", "-c", "declare -A probe=([k]=v); echo ${probe[k]}"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return False
-    return result.returncode == 0 and result.stdout.strip() == "v"
+def _gnu_coreutils() -> bool:
+    """GNU spellings the host scripts use: ``date -d``, ``stat -c``, ``touch -d``."""
+    return _succeeds(["date", "-d", "@0", "+%s"], "0") and _succeeds(
+        ["stat", "-c", "%n", "/"], "/"
+    )
 
 
-#: GNU ``date -d <string>``; BSD date spells it ``-j -f`` and rejects ``-d``.
-needs_gnu_date = pytest.mark.skipif(
-    not _gnu_date(), reason="needs GNU date (date -d); this date is BSD"
+@cache
+def _bash44() -> bool:
+    """Associative arrays, and an empty array expanding cleanly under ``set -u``
+    (bash 4.4; before it, ``"${empty[@]}"`` is an unbound-variable error)."""
+    return _succeeds(
+        ["bash", "-c", 'set -u; declare -A probe=([k]=v); empty=(); echo "${probe[k]}${empty[@]}"'],
+        "v",
+    )
+
+
+#: GNU coreutils (``date -d``, ``stat -c``, ``touch -d``, ``mv -T``); BSD and
+#: macOS spell these differently or not at all.
+needs_gnu_coreutils = pytest.mark.skipif(
+    not _gnu_coreutils(),
+    reason="needs GNU coreutils (date -d, stat -c, touch -d, mv -T); these are BSD",
 )
 
-#: bash 4+ (associative arrays, ``mapfile``); macOS ships bash 3.2.
-needs_bash4 = pytest.mark.skipif(
-    not _bash4(), reason="needs bash 4 or later; this bash is older (macOS ships 3.2)"
+#: bash 4.4+ (associative arrays, ``mapfile``, empty arrays under ``set -u``);
+#: macOS ships 3.2.
+needs_bash44 = pytest.mark.skipif(
+    not _bash44(), reason="needs bash 4.4 or later; this bash is older (macOS ships 3.2)"
+)
+
+#: Linux file-system semantics (setgid directories, group inheritance).
+needs_linux = pytest.mark.skipif(
+    sys.platform != "linux", reason="needs Linux file-system semantics (setgid directories)"
 )
 
 #: ``/proc`` -- per-process environ, task lists.

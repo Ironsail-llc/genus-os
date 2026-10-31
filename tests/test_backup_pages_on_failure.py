@@ -34,6 +34,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from tests.platform_capabilities import needs_tools
 
 # A subprocess here may take up to 120 s by its own bound; pytest.ini's 30 s
 # would stop the test first whenever the machine is busy (tests/test_suite_hygiene.py).
@@ -160,6 +161,7 @@ class TestWalOffsiteSurvivesAnOffsiteFailure:
         path.write_text(f"#!/usr/bin/env bash\n{body}\n")
         path.chmod(path.stat().st_mode | stat.S_IEXEC)
 
+    @needs_tools("timeout", "findmnt")
     def test_prune_runs_and_exit_is_nonzero_even_when_rclone_fails(
         self, tmp_path: Path
     ) -> None:
@@ -314,6 +316,7 @@ class TestWalOffsiteDegradesWhenTheBackupVolumeIsWedged:
             basebackup_dir.chmod(0o755)
         return result, rclone_log, prune_log, archive_dir
 
+    @needs_tools("timeout", "findmnt")
     def test_it_exits_zero_so_the_unit_stops_paging_every_15_minutes(
         self, tmp_path: Path
     ) -> None:
@@ -358,6 +361,7 @@ class TestWalOffsiteDegradesWhenTheBackupVolumeIsWedged:
             f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         )
 
+    @needs_tools("timeout", "findmnt")
     def test_a_degraded_run_still_records_that_the_wal_went_offsite(
         self, tmp_path: Path
     ) -> None:
@@ -418,6 +422,7 @@ class TestTheBaseBackupRecordsWhenItLastWorked:
             env=env,
         )
 
+    @needs_tools("timeout", "findmnt")
     def test_a_successful_base_backup_records_last_basebackup(
         self, tmp_path: Path
     ) -> None:
@@ -527,6 +532,7 @@ class TestTheWalMarkerOnlyMeansTheWalWentOffsite:
                 basebackup_dir.chmod(0o755)
         return result
 
+    @needs_tools("timeout", "findmnt")
     def test_no_offsite_remote_configured_records_nothing(self, tmp_path: Path):
         result = self._run(tmp_path)  # ROBOTHOR_OFFSITE_REMOTE deliberately unset
         assert result.returncode == 0, result.stdout + result.stderr
@@ -537,6 +543,7 @@ class TestTheWalMarkerOnlyMeansTheWalWentOffsite:
             "infinity healthy\n" + result.stdout + result.stderr
         )
 
+    @needs_tools("timeout", "findmnt")
     def test_a_degraded_run_with_a_working_remote_still_records(
         self, tmp_path: Path
     ):
@@ -665,6 +672,7 @@ class TestWalOffsiteRefusesToGuessWhenTheProbeIsBroken:
         self._run(tmp_path, 255)
         assert not (tmp_path / "state" / "last-wal-offsite-ok").exists()
 
+    @needs_tools("timeout", "findmnt")
     def test_an_unhealthy_volume_still_only_degrades(self, tmp_path: Path):
         result = self._run(tmp_path, 1)
         assert result.returncode == 0, (
