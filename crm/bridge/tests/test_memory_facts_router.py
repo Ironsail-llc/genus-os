@@ -248,6 +248,9 @@ class _ScriptedCursor:
     def fetchone(self):
         if "FOR UPDATE" in self._last:
             return self.locked
+        if self._last.lstrip().startswith("SELECT fact_text, is_active, category"):
+            # The unlocked look the handler may take before deciding to embed.
+            return (self.locked[0], self.locked[2], self.locked[3]) if self.locked else None
         if "INSERT INTO memory_facts_audit" in self._last:
             return (77,)
         if "FROM memory_facts" in self._last:
@@ -278,8 +281,13 @@ def embeddings(monkeypatch):
     """
     state: dict = {"calls": [], "fail": False}
 
-    async def _embed(text, *_args, **_kwargs):
+    async def _embed(text, *_args, **kwargs):
         state["calls"].append(text)
+        state.setdefault("kwargs", []).append(kwargs)
+        if state.get("sleep"):
+            import asyncio
+
+            await asyncio.sleep(state["sleep"])
         if state["fail"]:
             raise ConnectionError("embedding provider unreachable")
         return VECTOR
@@ -340,10 +348,11 @@ def test_editing_another_tenants_fact_is_404(controls_client_as_operator, script
     assert audit_calls == []
 
 
-def test_editing_an_inactive_fact_is_422(controls_client_as_operator, scripted_db, audit_calls):
+def test_editing_an_inactive_fact_is_409(controls_client_as_operator, scripted_db, audit_calls):
+    """The row is stale, as in Forget's 409: the page's copy is what is wrong."""
     cursor = scripted_db(locked=("Alice moved on", ["Alice"], False, "fact", None, None))
     resp = controls_client_as_operator.patch(EDIT, json=GOOD_EDIT)
-    assert resp.status_code == 422
+    assert resp.status_code == 409
     assert isinstance(resp.json()["detail"], str)
     assert "inactive" in resp.json()["detail"]
     assert not any("memory_facts_audit" in sql for sql, _ in cursor.statements)
@@ -515,3 +524,94 @@ def test_the_edit_limits_say_what_they_allow(controls_client_as_operator, no_db)
     assert "at most 2000" in text["detail"]
     name = client.patch(EDIT, json={"entities": ["x" * 201], "reason": "too long"}).json()
     assert "at most 200" in name["detail"]
+
+
+# ── edit: the embedding call is bounded, and only made when it can be used ───
+
+
+def test_a_slow_embedding_provider_falls_back_well_inside_the_proxy_budget(
+    controls_client_as_operator, scripted_db, embeddings, audit_calls, monkeypatch
+):
+    """The dashboard's proxy gives up at 30 s; the fallback must answer first.
+
+    With the provider's own five retries and back-off, an unreachable provider
+    took about a minute to fail — the operator was told the save failed, and it
+    committed afterwards. The call is bounded and tried once.
+    """
+    import time
+
+    from routers import memory_facts
+
+    monkeypatch.setattr(memory_facts, "EDIT_EMBED_TIMEOUT_S", 0.1, raising=False)
+    embeddings["sleep"] = 2
+    cursor = scripted_db()
+
+    started = time.monotonic()
+    resp = controls_client_as_operator.patch(EDIT, json=GOOD_EDIT)
+    elapsed = time.monotonic() - started
+
+    assert resp.status_code == 200, resp.text
+    assert elapsed < 1.5, f"the edit waited {elapsed:.1f}s on the embedding provider"
+    assert embeddings["kwargs"][-1].get("max_retries") == 1
+    _, params = _update(cursor)
+    assert _metadata_patch(params)["embedding_stale"] is True
+
+
+def test_the_bound_is_well_under_the_dashboard_proxy_timeout():
+    from routers import memory_facts
+
+    assert memory_facts.EDIT_EMBED_TIMEOUT_S == 8
+
+
+@pytest.mark.parametrize(
+    "locked",
+    [
+        None,  # another tenant's id, or no such fact
+        ("Alice moved on for good", ["Alice"], False, "fact", None, None),  # inactive
+        ("Alice prefers green tea", ["Alice"], True, "fact", None, None),  # same words
+    ],
+)
+def test_no_embedding_is_fetched_for_an_edit_that_cannot_use_one(
+    controls_client_as_operator, scripted_db, embeddings, audit_calls, locked
+):
+    scripted_db(locked=locked)
+    controls_client_as_operator.patch(EDIT, json=GOOD_EDIT)
+    assert embeddings["calls"] == []
+
+
+# ── edit: no correction the nightly prune would retire ───────────────────────
+
+
+def test_a_short_text_the_nightly_prune_would_retire_is_refused(
+    controls_client_as_operator, scripted_db, embeddings, audit_calls
+):
+    """``prune_low_quality_facts`` deactivates active facts under 15 characters.
+
+    Outside its protected categories, a correction that short would carry the
+    Operator-confirmed badge today and be inactive after the next run, with no
+    audit event saying why. Refused up front, with the reason.
+    """
+    cursor = scripted_db()
+    resp = controls_client_as_operator.patch(
+        EDIT, json={"fact_text": "Alice is CTO", "reason": "promoted"}
+    )
+    assert resp.status_code == 422
+    detail = resp.json()["detail"]
+    assert isinstance(detail, str)
+    assert detail == (
+        "text under 15 characters would be retired by the nightly prune; "
+        "say more or forget the fact"
+    )
+    assert not any("memory_facts_audit" in sql for sql, _ in cursor.statements)
+    assert embeddings["calls"] == []
+    assert audit_calls == []
+
+
+def test_a_short_text_in_a_category_the_prune_protects_is_allowed(
+    controls_client_as_operator, scripted_db, embeddings, audit_calls
+):
+    scripted_db(locked=("Alice likes coffee", ["Alice"], True, "preference", None, None))
+    resp = controls_client_as_operator.patch(
+        EDIT, json={"fact_text": "tea at 4pm", "reason": "she changed her mind"}
+    )
+    assert resp.status_code == 200, resp.text

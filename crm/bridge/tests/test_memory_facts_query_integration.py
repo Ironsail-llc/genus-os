@@ -643,7 +643,7 @@ def test_an_edit_onto_another_active_facts_text_is_refused_and_changes_nothing(
     assert _edited(db_conn, first)["fact_text"] == taken
 
 
-def test_editing_an_inactive_fact_is_422_and_writes_nothing(
+def test_editing_an_inactive_fact_is_409_and_writes_nothing(
     controls_client_as_operator, live_db, make_fact, tenants, db_conn, embeddings
 ):
     platform, _ = tenants
@@ -651,7 +651,7 @@ def test_editing_an_inactive_fact_is_422_and_writes_nothing(
     resp = controls_client_as_operator.patch(
         f"{FACTS}/{fact_id}", json={"fact_text": "Alice moved teams", "reason": "typo"}
     )
-    assert resp.status_code == 422
+    assert resp.status_code == 409
     assert _edited(db_conn, fact_id)["fact_text"] == "Alice moved on"
     assert _history(db_conn, fact_id) == []
 
