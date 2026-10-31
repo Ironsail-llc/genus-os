@@ -156,8 +156,15 @@ def _readonly_rows(ctx: DoctorContext) -> list[dict[str, Any]]:
             }
         )
     rows.extend(
-        {"migration_id": migration_id, "status": "MISSING"}
-        for migration_id in applied
+        {
+            "migration_id": migration_id,
+            "status": (
+                migrate.AHEAD_STATUS
+                if migrate.newer_than_manifest(migrations, str(record[1]))
+                else "MISSING"
+            ),
+        }
+        for migration_id, record in applied.items()
         if migration_id not in discovered
     )
     return rows
@@ -186,6 +193,10 @@ async def _migrations(ctx: DoctorContext) -> Result:
     changed since it ran, and ``MISSING`` that the ledger records one this
     install does not ship: neither can be repaired by applying anything, and
     both need a human. Only pending is fixable, and only with ``--fix``.
+    ``AHEAD`` is a ledger row strictly newer than this install's whole manifest:
+    a later release's migration, left by a rollback. The migrator lets the
+    release start on it (robothor/db/migrate.py), and this check still reports
+    it, because the code is older than the schema until it is rolled forward.
 
     A least-privilege role gets the same verdict by a different route rather
     than a shrug. ``migrate.status()`` needs CREATE on the schema (it creates
@@ -223,6 +234,15 @@ async def _migrations(ctx: DoctorContext) -> Result:
             f"{len(broken)} migration(s) the ledger and this checkout disagree about: "
             + ", ".join(broken[:5])
             + " — this cannot be repaired by applying migrations; see 'genus migrate --status'"
+        )
+    ahead = [row["migration_id"] for row in rows if row["status"] == "AHEAD"]
+    if ahead:
+        return fail(
+            f"{len(ahead)} applied migration(s) newer than this release: "
+            + ", ".join(ahead[:5])
+            + " — the schema is ahead of the code, the state a rollback leaves. The release "
+            "runs (the migrator accepts migrations strictly newer than its manifest); roll "
+            "forward to clear this"
         )
     if pending:
         return fail(

@@ -10,6 +10,31 @@ Migration identity is the complete filename stem (for example,
 immutable and globally unique across the canonical manifest; the SHA-256
 checksum makes an edited, already-applied migration a hard failure.
 
+Rolling back to an older release
+--------------------------------
+
+A ledger row this release does not ship is refused -- with one exception,
+which is what makes a rollback possible. Releasing N+1 applies its new
+migrations; resetting to release N then finds rows N's manifest has never
+heard of, and refusing them failed the migration Job and with it every pod's
+``wait-for-migrations`` init container. The rule:
+
+* An unknown applied migration whose number is **strictly greater** than the
+  highest number in this release's manifest is ``AHEAD``: a later release's
+  forward migration. The release starts, logging a warning that names them.
+  Migrations are additive by this repo's own rules, so code written before a
+  migration runs beside it.
+* That holds only while the ledger carries this release's **whole** chain,
+  undrifted. A pending known migration next to an ``AHEAD`` row is refused:
+  applying an old migration over a schema a newer one already changed is not
+  a rollback. A drifted known migration is refused as always.
+* Every other unknown row is still ``MISSING`` and refused: one numbered
+  inside the known range (a gap -- another chain wrote it), or one sharing the
+  last known number (a rename keeps its number).
+
+The rule lives in the release being rolled back TO, so it helps only rollbacks
+to releases that contain it; an older release still refuses.
+
 Usage::
 
     python -m robothor.db.migrate status
@@ -66,6 +91,10 @@ _HISTORY_TABLE = "schema_migrations_v2"
 # operator adopts the history explicitly.
 BASELINE_EVIDENCE_TABLE = "memory_facts"
 
+#: ``status()`` row status for an applied migration this release does not ship
+#: but that is strictly newer than its whole manifest. See the module docstring.
+AHEAD_STATUS = "AHEAD"
+
 BASELINE_UNADOPTED_STATUS = "baseline-unadopted"
 BASELINE_UNADOPTED_MESSAGE = (
     "ledger empty but schema present — run `robothor migrate --adopt-baseline`. "
@@ -87,6 +116,7 @@ _LOCK_KEY = int.from_bytes(
 # Pattern: 001_name.sql, 015b_name.sql, etc.  The prefix remains useful for
 # display and ordering but is deliberately not an identity key.
 _MIGRATION_RE = re.compile(r"^(\d+)([a-z]?)_(.+)\.sql$")
+_VERSION_RE = re.compile(r"^(\d+)([a-z]?)$")
 
 
 class MigrationError(RuntimeError):
@@ -235,6 +265,27 @@ def _discover(migrations_dir: Path | None = None) -> list[Migration]:
     if not migrations:
         raise MigrationDiscoveryError("No migration files found")
     return migrations
+
+
+def _version_key(version: str) -> tuple[int, int] | None:
+    """``"015b"`` -> ``(15, 2)``; None for a version that does not parse."""
+    match = _VERSION_RE.fullmatch(str(version or ""))
+    if match is None:
+        return None
+    number, suffix = match.groups()
+    return int(number), (ord(suffix) - ord("a") + 1) if suffix else 0
+
+
+def newer_than_manifest(migrations: list[Migration], version: str) -> bool:
+    """Is ``version`` strictly beyond every migration in ``migrations``?
+
+    True only for a parseable version above the manifest's highest one. Equal
+    is not newer (a renamed file keeps its number), and an unparseable version
+    is never newer: unknown is refused, not excused.
+    """
+    key = _version_key(version)
+    known = [k for k in (_version_key(m.version) for m in migrations) if k is not None]
+    return key is not None and bool(known) and key > max(known)
 
 
 def manifest_count() -> int:
@@ -630,9 +681,13 @@ def _applied(conn: Any) -> dict[str, AppliedMigration]:
 
 def _validate_history(migrations: list[Migration], applied: dict[str, AppliedMigration]) -> None:
     discovered = {migration.migration_id: migration for migration in migrations}
+    ahead: list[str] = []
     for migration_id, record in applied.items():
         migration = discovered.get(migration_id)
         if migration is None:
+            if newer_than_manifest(migrations, record.version):
+                ahead.append(migration_id)
+                continue
             raise MigrationHistoryError(
                 f"Applied migration {migration_id!r} is missing from the canonical manifest"
             )
@@ -649,6 +704,21 @@ def _validate_history(migrations: list[Migration], applied: dict[str, AppliedMig
             raise MigrationDriftError(
                 f"Applied migration {migration_id!r} has drifted: " + "; ".join(mismatches)
             )
+    if not ahead:
+        return
+    pending = [m.migration_id for m in migrations if m.migration_id not in applied]
+    if pending:
+        raise MigrationHistoryError(
+            f"Applied migration(s) {', '.join(ahead)} are newer than this release, but its "
+            f"own {pending[0]} is pending: the ledger is not this release's chain plus a "
+            "later release's, so it is not a rollback this runner can start on"
+        )
+    logger.warning(
+        "Schema is ahead of this release: %s applied but not shipped here. Starting "
+        "anyway (strictly newer than the manifest, so a later release's forward "
+        "migrations); roll forward to clear this.",
+        ", ".join(ahead),
+    )
 
 
 def _select_migrations(migrations: list[Migration], selector: str | None) -> list[Migration]:
@@ -730,7 +800,11 @@ def status(
                     "version": record.version,
                     "filename": record.filename,
                     "source": record.source,
-                    "status": "MISSING",
+                    "status": (
+                        AHEAD_STATUS
+                        if newer_than_manifest(migrations, record.version)
+                        else "MISSING"
+                    ),
                     "applied_at": record.applied_at,
                 }
             )

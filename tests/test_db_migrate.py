@@ -877,9 +877,7 @@ def _known_chain(directory: Path, *names: str) -> dict[str, tuple[Any, ...]]:
     for name in names:
         path = _write_migration(directory, f"{name}.sql", f"SELECT '{name}';\n")
         version = name.split("_", 1)[0]
-        history[name] = _ledger_row(
-            name, version, path.name, directory.name, migrate._sha256(path)
-        )
+        history[name] = _ledger_row(name, version, path.name, directory.name, migrate._sha256(path))
     return history
 
 
