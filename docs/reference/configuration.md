@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-488 settings in 18 groups.
+489 settings in 18 groups.
 
 ## autonomy
 
@@ -180,6 +180,7 @@ PostgreSQL connection, tenancy and row-level security.
 | --- | --- | --- | --- | --- | --- | --- |
 | `ROBOTHOR_BENCHMARK_TENANT` | str | _(empty)_ | `robothor-engine`, `robothor-bridge` | no | legacy | Tenant benchmark runs are confined to, so a harness can never touch production CRM rows. Empty means the built-in sandbox tenant. |
 | `ROBOTHOR_DB_CONNECT_TIMEOUT` | int | `5` | `robothor-engine`, `robothor-bridge` | no | legacy | Seconds to wait for a connection before failing, so a wedged database stalls one call rather than the process. |
+| `ROBOTHOR_DB_FAST_CHECKOUT` | bool | `false` | `robothor-engine`, `robothor-bridge` | no | legacy | Check connections out without a thread per call, re-send the tenant binding and vector-scan setting only when they change, and run read-only helpers without a transaction. Needs session-preserving connections: not behind a transaction-mode pooler. |
 | `ROBOTHOR_DB_HOST` | str | _(empty)_ | `robothor-engine`, `robothor-bridge` | no | legacy | PostgreSQL host. An empty value means a Unix socket with peer authentication, which is the default on a single-box install. |
 | `ROBOTHOR_DB_NAME` | str | `robothor_memory` | `robothor-engine`, `robothor-bridge` | no | legacy | Database holding CRM, memory and engine tables. |
 | `ROBOTHOR_DB_PASSWORD` | str | _(unset)_ | `robothor-engine`, `robothor-bridge` | yes | legacy | PostgreSQL password. Unset with a Unix-socket host (peer auth). |

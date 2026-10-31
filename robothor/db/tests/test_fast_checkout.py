@@ -234,8 +234,7 @@ def test_a_tenant_change_reapplies_set_config_every_time(fast: _Pool) -> None:
         with connection.tenant_scope(tenant), connection.get_connection(read_only=True) as conn:
             seen.append(_bound_tenant(conn))
         assert len(_set_configs(fast.log)) == 1, (
-            f"switching the pooled connection to {tenant} must re-run set_config, "
-            f"got {fast.log}"
+            f"switching the pooled connection to {tenant} must re-run set_config, got {fast.log}"
         )
     assert len(fast.created) == 1
     assert seen == ["tenant-a", "tenant-b", "tenant-a", "tenant-b"]
@@ -268,9 +267,7 @@ def test_a_discarded_connection_is_not_remembered(fast: _Pool) -> None:
     assert any(s.startswith("SET hnsw.iterative_scan") for s in fast.log)
 
 
-def test_no_thread_is_started_per_checkout(
-    fast: _Pool, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_no_thread_is_started_per_checkout(fast: _Pool, monkeypatch: pytest.MonkeyPatch) -> None:
     started: list[object] = []
 
     class _NoThread(threading.Thread):
@@ -285,9 +282,7 @@ def test_no_thread_is_started_per_checkout(
     assert started == [], f"{len(started)} threads started for 50 checkouts"
 
 
-def test_an_acquisition_error_keeps_its_cause(
-    fast: _Pool, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_an_acquisition_error_keeps_its_cause(fast: _Pool, monkeypatch: pytest.MonkeyPatch) -> None:
     cause = RuntimeError("connection pool exhausted")
 
     def _boom() -> _Conn:
@@ -313,7 +308,9 @@ def test_a_read_only_checkout_leaves_the_connection_transactional_for_the_next(
 # Nothing outside the factory may move a pooled connection's session tenant.
 # ---------------------------------------------------------------------------
 
-_SESSION_TENANT = re.compile(r"set_config\(\s*'app\.tenant_id'\s*,[^)]*,\s*false\s*\)", re.I)
+_SESSION_TENANT = re.compile(
+    r"set_config\(\s*'app\.tenant_id'\s*,[^)]*,\s*false\s*\)", re.IGNORECASE
+)
 
 
 def test_no_module_outside_the_factory_sets_a_session_level_tenant() -> None:
