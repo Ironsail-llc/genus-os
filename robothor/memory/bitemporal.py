@@ -223,7 +223,7 @@ def keep_overruled(new_id: int, kept_id: int, *, tenant_id: str = "") -> bool:
             """,
             (kept_id, new_id, tenant, kept_id),
         )
-        written = cur.rowcount > 0
+        written = bool(cur.rowcount > 0)
         conn.commit()
     if not written:
         logger.info("keep_overruled: fact %s left alone (kept %s) for %s", new_id, kept_id, tenant)
