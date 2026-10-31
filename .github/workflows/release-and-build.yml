@@ -32,7 +32,7 @@ jobs:
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'pull_request'
         && github.event.action != 'closed')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       # `Require CI to have passed this commit` reads the Actions API via
@@ -210,7 +210,7 @@ jobs:
     name: Semantic Release
     needs: [verify]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write       # tag + CHANGELOG.md commit
       issues: write         # GitHub Releases issue/PR comment integration
@@ -282,7 +282,7 @@ jobs:
       github.event_name == 'push'
       && github.ref == 'refs/heads/main'
       && needs.release.outputs.new_release_published == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write   # gh release upload
     steps:
@@ -343,7 +343,7 @@ jobs:
     if: |
       needs.release.outputs.new_release_published == 'true'
       && vars.PYPI_PUBLISH_ENABLED == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment: pypi
     permissions:
       id-token: write   # PyPI Trusted Publishing (OIDC) — no API token
@@ -371,7 +371,7 @@ jobs:
           && github.event.action != 'unlabeled'
           && contains(github.event.pull_request.labels.*.name, 'deploy-staging'))
       )
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       packages: write       # GHCR push
@@ -511,7 +511,7 @@ jobs:
       && needs.release.outputs.new_release_published == 'true'
       && github.event_name == 'push'
       && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
       packages: read
@@ -568,7 +568,7 @@ jobs:
       && needs.release.outputs.new_release_published == 'true'
       && github.event_name == 'push'
       && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       packages: write
@@ -660,7 +660,7 @@ jobs:
       && needs.build.result == 'success'
       && github.event_name == 'pull_request'
       && contains(github.event.pull_request.labels.*.name, 'deploy-staging')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       pull-requests: write
@@ -712,7 +712,7 @@ jobs:
       && needs.release.outputs.new_release_published == 'true'
       && github.event_name == 'push'
       && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
@@ -814,7 +814,7 @@ jobs:
       && github.event.action != 'closed'
       && github.event.action != 'unlabeled'
       && contains(github.event.pull_request.labels.*.name, 'deploy-staging')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     concurrency:
       group: staging-deploy
       cancel-in-progress: false
@@ -932,7 +932,7 @@ jobs:
       github.event_name == 'pull_request'
       && ( github.event.action == 'closed'
            || (github.event.action == 'unlabeled' && github.event.label.name == 'deploy-staging') )
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     concurrency:
       group: staging-deploy
       cancel-in-progress: false
