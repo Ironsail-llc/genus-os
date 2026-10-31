@@ -2,7 +2,7 @@
 
 Every metric the benchmark records is lower-is-better, so a regression is a
 p50 or p95 more than ``threshold`` above the baseline's and more than
-``min_delta`` above it in absolute terms (a 0 -> 0.5 ms move is an infinite
+``min_delta`` (default 5, as the CLI) above it in absolute terms (a 0 -> 0.5 ms move is an infinite
 ratio and still noise).
 """
 
@@ -66,7 +66,7 @@ def compare(
     current: dict[str, Any],
     *,
     threshold: float = 0.10,
-    min_delta: float = 1.0,
+    min_delta: float = 5.0,
 ) -> Comparison:
     outcome = Comparison(threshold=threshold)
     if is_empty_baseline(baseline):
