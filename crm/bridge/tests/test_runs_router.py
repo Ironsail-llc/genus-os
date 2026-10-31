@@ -3,6 +3,9 @@
 import pytest
 from routers import runs
 
+#: Run ids are UUIDs; the detail route refuses anything else with a 404.
+RUN_ID = "11111111-1111-4111-8111-111111111111"
+
 
 @pytest.fixture
 def fake_runs(monkeypatch):
@@ -17,7 +20,7 @@ def fake_runs(monkeypatch):
         runs,
         "_get_run",
         lambda run_id: (
-            {"id": "r1", "agent_id": "main", "status": "completed"} if run_id == "r1" else None
+            {"id": RUN_ID, "agent_id": "main", "status": "completed"} if run_id == RUN_ID else None
         ),
     )
     monkeypatch.setattr(
@@ -60,8 +63,8 @@ def test_list_clamps_limit(controls_client_as_operator, monkeypatch):
 
 
 def test_detail_bundles_steps_and_events(controls_client_as_operator, fake_runs):
-    body = controls_client_as_operator.get("/api/runs/r1").json()
-    assert body["run"]["id"] == "r1"
+    body = controls_client_as_operator.get(f"/api/runs/{RUN_ID}").json()
+    assert body["run"]["id"] == RUN_ID
     assert body["steps"][0]["tool_name"] == "exec"
     assert body["guardrail_events"][0]["action"] == "blocked"
 
@@ -237,12 +240,12 @@ def test_detail_selects_the_columns_that_explain_the_run(captured_sql, monkeypat
 
 
 def test_detail_is_not_cached(controls_client_as_operator, fake_runs):
-    r = controls_client_as_operator.get("/api/runs/r1")
+    r = controls_client_as_operator.get(f"/api/runs/{RUN_ID}")
     assert r.headers.get("cache-control") == "no-store"
 
 
 def test_detail_requires_operator(controls_client_as_viewer, fake_runs):
-    assert controls_client_as_viewer.get("/api/runs/r1").status_code == 403
+    assert controls_client_as_viewer.get(f"/api/runs/{RUN_ID}").status_code == 403
 
 
 def test_list_order_has_a_tie_break(controls_client_as_operator, captured_sql):
@@ -254,3 +257,21 @@ def test_list_order_has_a_tie_break(controls_client_as_operator, captured_sql):
 def test_a_run_awaiting_approval_is_pending_delivery():
     """`awaiting_approval` has not finished, so no delivery yet is pending."""
     assert "status IN ('pending', 'running', 'awaiting_approval')" in runs._DELIVERY_CATEGORY_SQL
+
+
+def test_detail_404_for_an_id_that_is_not_a_uuid(controls_client_as_operator, monkeypatch):
+    """A malformed id is an unknown run, not a database error."""
+    called = []
+    monkeypatch.setattr(runs, "_get_run", lambda run_id: called.append(run_id))
+    r = controls_client_as_operator.get("/api/runs/not-a-uuid")
+    assert r.status_code == 404
+    assert called == []
+
+
+def test_delivery_buckets_normalise_case_whitespace_and_empty():
+    """SQL and run-truth.ts read every input the same way: trimmed, lower-cased,
+    and an empty status is no status."""
+    sql = runs._DELIVERY_CATEGORY_SQL
+    assert "lower(btrim(delivery_status))" in sql
+    assert "delivery_status IN" not in sql
+    assert "NULLIF(btrim(delivery_status), '') IS NULL" in sql

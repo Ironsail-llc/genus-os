@@ -279,3 +279,16 @@ describe("in flight", () => {
     ).toBe("delivery pending");
   });
 });
+
+describe("one reading of an unknown delivery status", () => {
+  it("an automation's last run with a status nobody taught us is a warning, as on Runs", () => {
+    const odd = automation({ last_run: run({ delivery_status: "queued_somewhere" }) });
+    expect(deliveredReading(odd, NOW).tone).toBe("warn");
+  });
+
+  it("buckets a padded or upper-case status, and an empty one, like the bridge", () => {
+    expect(deliveryCategory("  SILENT ", "completed")).toBe("none_expected");
+    expect(deliveryCategory("  ", "running")).toBe("pending");
+    expect(deliveryCategory("", "completed")).toBe("not_recorded");
+  });
+});
