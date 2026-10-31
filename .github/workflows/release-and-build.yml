@@ -296,6 +296,9 @@ jobs:
           GIT_COMMITTER_NAME: github-actions[bot]
           GIT_COMMITTER_EMAIL: github-actions[bot]@users.noreply.github.com
           # Plain text, so ANSI codes cannot break the skip-line match below.
+          # semantic-release's logger (chalk 2 / supports-color 5) ignores
+          # NO_COLOR; FORCE_COLOR=0 is what forces its colour level to 0.
+          FORCE_COLOR: "0"
           NO_COLOR: "1"
         # Published means a v* tag on HEAD that did not exist before this
         # run (the tip can already be a tagged release commit: a re-run, or
