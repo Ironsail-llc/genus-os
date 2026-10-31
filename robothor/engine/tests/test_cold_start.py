@@ -31,6 +31,9 @@ if TYPE_CHECKING:
 
 SLOW = 0.3  # seconds; each slow fake step
 
+ALICE_KEY = "agent:main:alice"
+ALICE_HISTORY = [{"role": "user", "content": "hi"}]
+
 
 class _ReachedReady(Exception):  # noqa: N818 - a control-flow sentinel, not an error
     """Raised by the fake ``_sd_notify`` so ``main`` stops at READY=1."""
@@ -80,6 +83,9 @@ class _Harness:
         self.scheduler_start_kwargs: dict[str, Any] = {}
         self.hooks_start_kwargs: dict[str, Any] = {}
         self.scan_results: list[Any] = []
+        self.history_when_channels_start: list[Any] | None = None
+        self.serve_health_kwargs: dict[str, Any] = {}
+        self.session_load_seconds = 0.0
 
     @property
     def elapsed(self) -> float:
@@ -152,6 +158,15 @@ def harness(monkeypatch: pytest.MonkeyPatch, fleet: Path) -> _Harness:
 
     config_mod._prompt_cache.clear()
 
+    from robothor.engine import chat
+
+    def fake_load_sessions(**_kwargs: Any) -> dict[str, Any]:
+        time.sleep(h.session_load_seconds)  # blocking, like the real query
+        return {ALICE_KEY: {"history": list(ALICE_HISTORY)}}
+
+    monkeypatch.setattr(chat, "load_all_sessions", fake_load_sessions)
+    chat._cache.sessions.pop(ALICE_KEY, None)
+
     def fake_notify(state: str) -> None:
         if state == "READY=1":
             h.ready_at = time.perf_counter()
@@ -219,7 +234,12 @@ def harness(monkeypatch: pytest.MonkeyPatch, fleet: Path) -> _Harness:
     m(daemon, "EventHooks", FakeEventHooks)
     m(daemon, "_start_federation", _noop)
     m(daemon, "_background_workers", lambda _t: [])
-    m(daemon, "serve_health", _forever)
+
+    def fake_serve_health(*_args: Any, **kwargs: Any) -> Any:
+        h.serve_health_kwargs = kwargs
+        return _forever()
+
+    m(daemon, "serve_health", fake_serve_health)
     for loop_name in (
         "_watchdog",
         "_autodream_loop",
@@ -232,7 +252,9 @@ def harness(monkeypatch: pytest.MonkeyPatch, fleet: Path) -> _Harness:
         m(daemon, loop_name, _forever)
 
     async def fake_channels(*_args: Any) -> None:
-        return None
+        # Telegram, Slack and inbound channels share the chat session cache;
+        # what they see when they start is what their first turn runs with.
+        h.history_when_channels_start = chat.get_shared_session(ALICE_KEY).history
 
     m(daemon, "_start_channels", fake_channels)
     m(daemon, "_sd_notify", fake_notify)
@@ -370,42 +392,29 @@ def _health_body() -> dict[str, Any]:
 
 
 class TestSessionRestoreIsOffTheLoop:
-    """``_restore_sessions`` reads every webchat session from Postgres. It ran
-    inside ``create_health_app``, on the event loop, before the server bound."""
+    """Webchat sessions are read from Postgres at startup.
+
+    The read ran inside ``create_health_app``, on the event loop. It must
+    leave the loop free, yet finish before any channel (Telegram, Slack,
+    inbound) can take a turn on the shared session cache, so a message right
+    after a restart never runs with an empty history.
+    """
 
     @pytest.mark.asyncio
-    async def test_serve_health_does_not_stall_the_loop_and_restores_first(self, monkeypatch):
-        from robothor.engine import chat, health
+    async def test_channels_start_with_the_restored_history(self, harness):
+        await _run_to_ready(harness)
 
-        # Long enough to tell apart from building the app itself (~150 ms of
-        # route registration that still runs on the loop, out of scope here).
-        restore_seconds = 0.8
+        assert harness.history_when_channels_start == ALICE_HISTORY
 
-        def slow_load(**_kwargs: Any) -> dict[str, Any]:
-            time.sleep(restore_seconds)
-            return {"agent:main:alice": {"history": [{"role": "user", "content": "hi"}]}}
+    @pytest.mark.asyncio
+    async def test_the_health_server_does_not_restore_a_second_time(self, harness):
+        await _run_to_ready(harness)
 
-        monkeypatch.setattr(chat, "load_all_sessions", slow_load)
-        chat._cache.sessions.pop("agent:main:alice", None)
-        monkeypatch.setattr(health, "validate_engine_auth_configuration", lambda: None)
-        monkeypatch.setattr("robothor.engine.ide.init_ide", lambda *_a: None)
+        assert harness.serve_health_kwargs.get("restore_sessions") is False
 
-        restored_when_serving: list[bool] = []
-
-        class FakeServer:
-            def __init__(self, _config: Any) -> None:
-                pass
-
-            async def serve(self) -> None:
-                restored_when_serving.append("agent:main:alice" in chat._cache.sessions)
-
-        monkeypatch.setattr(health, "_health_server_class", lambda: FakeServer)
-
-        config = MagicMock()
-        config.tenant_id = "test-tenant"
-        config.bot_token = ""
-        config.port = 18800
-
+    @pytest.mark.asyncio
+    async def test_the_session_read_does_not_stall_the_loop(self, harness):
+        harness.session_load_seconds = 0.8
         gaps: list[float] = []
         done = asyncio.Event()
 
@@ -417,33 +426,44 @@ class TestSessionRestoreIsOffTheLoop:
                 gaps.append(now - last)
                 last = now
 
-        async def serve() -> None:
-            try:
-                with (
-                    patch(
-                        "robothor.engine.dashboards.get_dashboard_router",
-                        return_value=APIRouter(),
-                    ),
-                    patch("robothor.engine.dashboards.get_public_router", return_value=APIRouter()),
-                    patch("robothor.engine.webhooks.get_webhook_router", return_value=APIRouter()),
-                ):
-                    await health.serve_health(config, runner=MagicMock(name="runner"))
-            finally:
-                done.set()
-
-        # Build the app once first, so first-import cost (the chat stack, the
-        # IDE websocket, the webhook ingress) is not mistaken for the restore.
-        _health_body()
-        import robothor.engine.ide  # noqa: F401
-
         tick = asyncio.create_task(ticker())
-        await asyncio.sleep(0.02)  # let the ticker take its first reading
-        await serve()
-        await tick
+        await asyncio.sleep(0.02)
+        harness.started = time.perf_counter()
+        try:
+            with pytest.raises(_ReachedReady):
+                await daemon.main()
+        finally:
+            done.set()
+            await tick
+            await _cancel_leftovers()
 
-        chat._cache.sessions.pop("agent:main:alice", None)
-        assert restored_when_serving == [True], "sessions must be restored before serving"
-        assert max(gaps) < restore_seconds / 2, f"event loop stalled {max(gaps) * 1000:.0f} ms"
+        assert harness.history_when_channels_start == ALICE_HISTORY
+        assert max(gaps) < 0.4, f"event loop stalled {max(gaps) * 1000:.0f} ms"
+
+    def test_create_health_app_alone_still_restores(self, monkeypatch):
+        """Callers outside the daemon keep the synchronous restore."""
+        from robothor.engine import chat
+
+        monkeypatch.setattr(
+            chat, "load_all_sessions", lambda **_k: {ALICE_KEY: {"history": list(ALICE_HISTORY)}}
+        )
+        monkeypatch.setattr("robothor.engine.ide.init_ide", lambda *_a: None)
+        chat._cache.sessions.pop(ALICE_KEY, None)
+        config = MagicMock()
+        config.tenant_id = "test-tenant"
+        config.bot_token = ""
+
+        from robothor.engine.health import create_health_app
+
+        with (
+            patch("robothor.engine.dashboards.get_dashboard_router", return_value=APIRouter()),
+            patch("robothor.engine.dashboards.get_public_router", return_value=APIRouter()),
+            patch("robothor.engine.webhooks.get_webhook_router", return_value=APIRouter()),
+        ):
+            create_health_app(config, runner=MagicMock(name="runner"))
+
+        assert chat._cache.sessions[ALICE_KEY].history == ALICE_HISTORY
+        chat._cache.sessions.pop(ALICE_KEY, None)
 
 
 class TestConsumersUseTheSharedScan:
