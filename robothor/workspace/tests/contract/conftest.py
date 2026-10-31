@@ -387,7 +387,9 @@ def _common(monkeypatch: pytest.MonkeyPatch, tmp_path: Any, env: WorkspaceEnv) -
         lambda emails: {e: "no_auto" for e in emails if e in env.no_auto},
     )
     monkeypatch.setattr("robothor.engine.feature_flags.calendar_send_updates", lambda: "all")
-    monkeypatch.setattr("robothor.db.connection.get_connection", lambda: _Connection(env.crm_sql))
+    monkeypatch.setattr(
+        "robothor.db.connection.get_connection", lambda **_kw: _Connection(env.crm_sql)
+    )
     monkeypatch.setattr(gws, "_resolve_person_by_email", lambda _email: None)
     monkeypatch.setattr("robothor.engine.tools.verification.tool_verify_mode", lambda: "enforce")
     from robothor.engine.tools.verification import reset_verification_budget

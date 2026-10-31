@@ -70,7 +70,7 @@ def check_tool_permission(
     try:
         from robothor.db.connection import get_connection
 
-        with get_connection() as conn:
+        with get_connection(read_only=True) as conn:
             cur = conn.cursor()
 
             if user_id:
