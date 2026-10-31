@@ -238,6 +238,7 @@ missing Secrets fail closed with CreateContainerConfigError.
       "engine" (list "database" "cache" "auth-signing" "engine-providers")
       "bridge" (list "database" "cache" "auth-signing" "bridge-sso" "bridge-oidc" "bridge-integrations")
       "orchestrator" (list "database" "cache" "auth-signing" "orchestrator-providers")
+      "hooks" (list "cache" "engine-providers")
       "dashboard" (list "dashboard-auth" "bridge-sso")
       "migrations" (list "database") -}}
 {{- $allowedRefs := index $allowedByComponent $component -}}
@@ -424,4 +425,24 @@ Engine only; each renders nothing when engine.googleWorkspace.enabled is false.
       - key: {{ $key }}
         path: {{ $key }}
 {{- end }}
+{{- end -}}
+
+{{/*
+The hooks component: where its channels ConfigMap is mounted, and the
+webhooks.yaml it holds (hooks.channels under `channels:`).
+*/}}
+{{- define "genus-os.hooksWebhooksDir" -}}/etc/robothor/webhooks{{- end -}}
+
+{{- define "genus-os.hooksWebhooksYaml" -}}
+{{- toYaml (dict "channels" (.Values.hooks.channels | default dict)) -}}
+{{- end -}}
+
+{{/* A component's Service port. Pass .root + .component. hooks keeps it at hooks.port. */}}
+{{- define "genus-os.servicePort" -}}
+{{- $cv := index .root.Values .component -}}
+{{- if eq .component "hooks" -}}
+{{- $cv.port -}}
+{{- else -}}
+{{- $cv.service.port -}}
+{{- end -}}
 {{- end -}}
