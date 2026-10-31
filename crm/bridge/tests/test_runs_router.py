@@ -140,12 +140,21 @@ def test_summary_counts_by_status_delivery_and_agent(controls_client_as_operator
     def _fake_rows(sql, params):
         seen["sql"], seen["params"] = sql, params
         return [
-            {"agent_id": "main", "status": "completed", "delivery": "delivered", "runs": 3,
-             "cost": 0.3},
-            {"agent_id": "main", "status": "failed", "delivery": "failed", "runs": 1,
-             "cost": 0.05},
-            {"agent_id": "worker", "status": "completed", "delivery": "none_expected",
-             "runs": 2, "cost": 0.0},
+            {
+                "agent_id": "main",
+                "status": "completed",
+                "delivery": "delivered",
+                "runs": 3,
+                "cost": 0.3,
+            },
+            {"agent_id": "main", "status": "failed", "delivery": "failed", "runs": 1, "cost": 0.05},
+            {
+                "agent_id": "worker",
+                "status": "completed",
+                "delivery": "none_expected",
+                "runs": 2,
+                "cost": 0.0,
+            },
         ]
 
     monkeypatch.setattr(runs, "_rows", _fake_rows)
