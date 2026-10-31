@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
 from bench.turn.cli import build_parser, main
 from bench.turn.compare import EMPTY_BASELINE
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def test_help_lists_the_documented_flags(capsys: pytest.CaptureFixture[str]) -> None:
@@ -77,3 +80,36 @@ def test_update_baseline_from_a_result_writes_it(tmp_path: Path) -> None:
     written = json.loads(baseline.read_text())
     assert written["summary"]["done_ms"]["p50"] == 42.0
     assert main(["--compare", current, "--baseline", str(baseline)]) == 0
+
+
+def _driven(status: str) -> dict:
+    return {
+        **_result(10.0),
+        "runs": 2,
+        "turns": [{"done_ms": 10.0}, {"done_ms": 10.0}],
+        "meta": [{"turn": 0, "status": "completed"}, {"turn": 1, "status": status}],
+        "notes": {},
+    }
+
+
+def test_a_failed_turn_fails_the_benchmark_and_writes_no_baseline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import bench.turn.cli as cli
+
+    monkeypatch.setattr(cli, "_drive", lambda args, half, db_url: _driven("failed"))
+    baseline = tmp_path / "b.json"
+    _write(baseline, EMPTY_BASELINE)
+    code = main(["--half", "inprocess", "--baseline", str(baseline), "--update-baseline"])
+    assert code == 2
+    assert json.loads(baseline.read_text()) == EMPTY_BASELINE
+
+
+def test_completed_turns_record_a_baseline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import bench.turn.cli as cli
+
+    monkeypatch.setattr(cli, "_drive", lambda args, half, db_url: _driven("completed"))
+    baseline = tmp_path / "b.json"
+    code = main(["--half", "inprocess", "--baseline", str(baseline), "--update-baseline"])
+    assert code == 0
+    assert json.loads(baseline.read_text())["summary"]["done_ms"]["p50"] == 10.0

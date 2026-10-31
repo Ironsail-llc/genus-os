@@ -5,8 +5,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
-
 from bench.turn.compare import EMPTY_BASELINE, compare, is_empty_baseline
 
 

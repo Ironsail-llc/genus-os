@@ -49,7 +49,7 @@ class _Conn:
 
 
 def test_delta_between_two_snapshots() -> None:
-    conn = _Conn(calls=[100, 142])
+    conn = _Conn(calls=[0, 100, 142])  # open() probes the view once
     counter = StatementCounter(connect=lambda: conn)
     assert counter.open()
     before = counter.snapshot()

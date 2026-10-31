@@ -32,7 +32,12 @@ def _steps() -> list[dict]:
             "completed_at": _at(180),
         },
         {"step_type": "llm_call", "duration_ms": 100, "completed_at": _at(300)},
-        {"step_type": "tool_call", "tool_name": "noop", "duration_ms": 15, "completed_at": _at(330)},
+        {
+            "step_type": "tool_call",
+            "tool_name": "noop",
+            "duration_ms": 15,
+            "completed_at": _at(330),
+        },
         {"step_type": "tool_call", "tool_name": "noop", "duration_ms": 5, "completed_at": _at(340)},
         # Next LLM call started at 450 - 60 = 390: a 90 ms gap after the
         # first call, 20 ms of which the tools spent.

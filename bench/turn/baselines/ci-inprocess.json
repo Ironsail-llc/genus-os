@@ -1,0 +1,6 @@
+{
+  "empty": true,
+  "half": "inprocess",
+  "note": "No baseline recorded yet. Record one on the reference machine with `python -m bench.turn ... --update-baseline` and commit this file.",
+  "summary": {}
+}
