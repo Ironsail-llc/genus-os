@@ -181,6 +181,7 @@ jobs:
       # 192 untyped-def errors of pure noise, and a gate that reports noise
       # gets disabled within a week.
       - run: mypy bench/wildclaw --ignore-missing-imports --exclude 'tests/'
+      - run: mypy bench/turn --ignore-missing-imports --exclude 'tests/'
 
   validate-agents:
     runs-on: ubuntu-latest
@@ -368,6 +369,123 @@ jobs:
       # nightly eval/benchmark timers instead.
       - run: pytest tests/ robothor/ -m "integration and not llm" -v
       - run: pytest crm/ -m "integration and not llm" -v
+
+  bench-turn:
+    # Per-turn latency (bench/turn/README.md). Its unit tests run on every
+    # push. The benchmark itself runs on pull requests that touch
+    # robothor/engine/ (and on a manual dispatch): the Telegram-shaped
+    # in-process half, 20 runner.execute turns against real Postgres (with
+    # pg_stat_statements preloaded, for statements per turn), Redis and the
+    # mock model. A whole compose stack per pull request is too heavy, so the
+    # webchat HTTP half runs nightly in install-gate.yml's compose job instead.
+    # The comparison is against bench/turn/baselines/ci-inprocess.json, which
+    # must be recorded on this runner class, not on a laptop.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      ROBOTHOR_DB_HOST: 127.0.0.1
+      ROBOTHOR_DB_PORT: "5432"
+      ROBOTHOR_DB_NAME: robothor_test
+      ROBOTHOR_DB_USER: robothor
+      ROBOTHOR_DB_PASSWORD: robothor
+      ROBOTHOR_REDIS_HOST: 127.0.0.1
+      ROBOTHOR_REDIS_PORT: "6379"
+      ROBOTHOR_OLLAMA_URL: http://127.0.0.1:11434
+      OLLAMA_API_BASE: http://127.0.0.1:11434
+      OPENROUTER_API_BASE: http://127.0.0.1:11434/v1
+      OPENROUTER_API_KEY: mock-llm-not-a-key
+      BENCH_MODEL: openrouter/deepseek/deepseek-v4-pro
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+          cache: "pip"
+      - run: pip install -e ".[dev,api]"
+      - name: Unit-test the benchmark's parsers and comparison
+        run: pytest bench/turn/tests -q
+      - name: Decide whether this change touches the engine
+        id: scope
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          elif [ "$EVENT" = "pull_request" ] \
+              && git diff --name-only "origin/${BASE_REF}...HEAD" | grep -qE '^(robothor/engine/|robothor/templates/|agents/|templates/)'; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "no change to the engine or the prompt's sources: the benchmark is skipped"
+          fi
+      # Not a `services:` container: those cannot take a command, and
+      # pg_stat_statements only works when the server preloads it.
+      - name: Start Postgres with pg_stat_statements preloaded
+        if: steps.scope.outputs.run == 'true'
+        run: |
+          docker run -d --name bench-postgres -p 5432:5432 \
+            -e POSTGRES_USER=robothor -e POSTGRES_PASSWORD=robothor -e POSTGRES_DB=robothor_test \
+            pgvector/pgvector:pg16 postgres -c shared_preload_libraries=pg_stat_statements
+          for _ in $(seq 1 60); do
+            docker exec bench-postgres pg_isready -U robothor -d robothor_test >/dev/null 2>&1 && break
+            sleep 1
+          done
+          docker exec bench-postgres pg_isready -U robothor -d robothor_test
+      - name: Start the mock model server
+        if: steps.scope.outputs.run == 'true'
+        run: |
+          python -m tests.acceptance.mock_llm --host 127.0.0.1 --port 11434 \
+            > "$RUNNER_TEMP/mock.log" 2>&1 &
+          for _ in $(seq 1 60); do
+            curl -fsS http://127.0.0.1:11434/api/tags >/dev/null 2>&1 && break
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:11434/api/tags >/dev/null
+      - name: Schema and a minimal instance
+        if: steps.scope.outputs.run == 'true'
+        run: |
+          python -m robothor.cli migrate
+          echo "ROBOTHOR_WORKSPACE=$RUNNER_TEMP/workspace" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/workspace/.robothor"
+          cp templates/owner.yaml.example "$RUNNER_TEMP/workspace/.robothor/owner.yaml"
+          echo "ROBOTHOR_OWNER_CONFIG=$RUNNER_TEMP/workspace/.robothor/owner.yaml" >> "$GITHUB_ENV"
+          ROBOTHOR_WORKSPACE="$RUNNER_TEMP/workspace" \
+            python -m robothor.cli agent install --preset minimal --yes
+      - name: Benchmark Telegram-shaped turns and compare with the baseline
+        if: steps.scope.outputs.run == 'true'
+        run: |
+          # pipefail: without it the step takes tee's 0, and neither a
+          # regression (exit 1) nor a failed turn (exit 2) fails the job.
+          set -o pipefail
+          # --baseline-set ci: timings regress past 30% and 5 ms (shared
+          # runners spread ~20% run to run), db_statements past 10%, and
+          # prompt_tokens and tool_schemas on any increase.
+          python -m bench.turn --half inprocess --runs 20 --model "$BENCH_MODEL" \
+            --min-delta 5 --baseline-set ci \
+            --out "$RUNNER_TEMP/bench-turn-inprocess.json" 2>&1 \
+            | tee "$RUNNER_TEMP/bench-turn.txt"
+      - if: always() && steps.scope.outputs.run == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: bench-turn
+          path: |
+            ${{ runner.temp }}/bench-turn*
+            ${{ runner.temp }}/mock.log
+          if-no-files-found: ignore
 
   wheel-smoke:
     # Builds the Python distribution and installs it into a throwaway venv,
