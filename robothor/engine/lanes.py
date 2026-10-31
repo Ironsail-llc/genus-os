@@ -207,19 +207,26 @@ class ExecutionLanes:
     def release(self, lane: Lane) -> None:
         st = self._states[lane]
         with self._lock:
-            while st.waiters:
-                fut = st.waiters.popleft()
-                if fut.done():
-                    continue  # cancelled while queued; its task holds no slot
-                # Hand the slot over; active stays the same.
-                st.handed.add(fut)
-                fut.get_loop().call_soon_threadsafe(_resolve, fut)
-                break
-            else:
+            if not self._hand_over_locked(st):
                 st.active = max(0, st.active - 1)
             if lane is Lane.INTERACTIVE:
                 self._notify_interactive_clear_locked()
             self._publish_locked(lane)
+
+    @staticmethod
+    def _hand_over_locked(st: _LaneState) -> bool:
+        """Give a freed slot to the first live waiter; ``active`` stays the same.
+
+        A waiter already done was cancelled while queued and holds no slot.
+        """
+        while st.waiters:
+            fut = st.waiters.popleft()
+            if fut.done():
+                continue
+            st.handed.add(fut)
+            fut.get_loop().call_soon_threadsafe(_resolve, fut)
+            return True
+        return False
 
     @asynccontextmanager
     async def slot(self, lane: Lane) -> AsyncIterator[None]:
