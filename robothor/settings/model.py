@@ -2066,6 +2066,15 @@ class FlagSettings(SettingsGroup):
         "write the agent_reviews rows the achievement score is built on.",
         governed=True,
     )
+    cache_layout_v2: bool = declare(
+        False,
+        "ROBOTHOR_CACHE_LAYOUT_V2",
+        "Prompt-cache layout v2: move the per-run time line out of the system "
+        "prompt into an engine turn before the latest user message, so the "
+        "system prompt, tools and earlier conversation stay a byte-stable "
+        "prefix that providers cache; adds tool and conversation breakpoints "
+        "on Anthropic direct and sends no cache markers to OpenAI or Gemini.",
+    )
     disable_all_rips: bool = declare(
         False,
         "ROBOTHOR_DISABLE_ALL_RIPS",

@@ -139,7 +139,7 @@ def test_system_message_differs_a_minute_apart_with_flag_off(flag_off, model):
 @pytest.mark.parametrize("model", ALL_MODELS)
 def test_guardrail_summary_stays_in_the_system_prefix(flag_on, model):
     kwargs = _build(model, _messages(_system_at(9, 41), _history(2), "hello"))
-    assert GUARDRAIL in _dump(kwargs["messages"][0])
+    assert json.dumps(GUARDRAIL)[1:-1] in _dump(kwargs["messages"][0])  # JSON-escaped
     assert "Current time:" not in _dump(kwargs["messages"][0])
 
 

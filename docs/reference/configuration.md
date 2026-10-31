@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-488 settings in 18 groups.
+489 settings in 18 groups.
 
 ## autonomy
 
@@ -413,6 +413,7 @@ Guardrails and feature gates. Ones marked governed are inventoried in `infra/fla
 | `ROBOTHOR_BENCHMARK_DECONTAMINATION_MODE` | str | `observe` | `robothor-engine` | no | legacy | **governed.** Decontamination ladder position: observe reports benchmark runs and cost separately, enforce excludes them from production surfaces. |
 | `ROBOTHOR_BENCHMARK_SANDBOX_ENABLED` | bool | `false` | `robothor-engine` | no | legacy | Switch for seeded benchmark fixtures and sandboxed CRM writes, so a graded task can act instead of only reading. |
 | `ROBOTHOR_BENCHMARK_SANDBOX_MODE` | str | `observe` | `robothor-engine` | no | legacy | **governed.** Benchmark-sandbox ladder position: observe seeds fixtures and records read-backs without grading them, enforce folds them into the score. |
+| `ROBOTHOR_CACHE_LAYOUT_V2` | bool | `false` | `robothor-engine` | no | legacy | Prompt-cache layout v2: move the per-run time line out of the system prompt into an engine turn before the latest user message, so the system prompt, tools and earlier conversation stay a byte-stable prefix that providers cache; adds tool and conversation breakpoints on Anthropic direct and sends no cache markers to OpenAI or Gemini. |
 | `ROBOTHOR_CALENDAR_MEET_ARTIFACTS` | bool | `true` | `robothor-engine` | no | legacy | Turn Google Meet transcription and smart notes on for meetings the assistant organizes, so it can read them afterwards. Best-effort: needs the meetings.space.settings OAuth scope, and a failure is a note on the booking, never a failed booking. |
 | `ROBOTHOR_CALENDAR_SEND_UPDATES` | str | `all` | `robothor-engine` | no | legacy | **governed.** Who Google emails when an agent creates or deletes an event with attendees: all, externalOnly, or none. The default sends the invitation — an event nobody was told about is not a meeting, which is how an operator came to be an attendee of a trip he never saw. |
 | `ROBOTHOR_COMPLETION_CONTRACTS_ENABLED` | bool | `false` | `robothor-engine` | no | legacy | Switch for evidence-based completion contracts: a run claiming success must show the tool trace that produced it. |
