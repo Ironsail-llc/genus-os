@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from contextlib import AbstractContextManager, nullcontext
 from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
 from robothor.engine.feature_flags import early_done_enabled
@@ -63,11 +64,26 @@ async def release_then_finalize(
     try:
         await on_complete(completed)
     finally:  # a failed release must not leave the run unfinalized
-        get_task_registry().spawn(
-            _finalize(runner, completed, session=session, **finish_kwargs),
-            name=f"finalize-run:{completed.id}",
-        )
+        with _background_lane():
+            get_task_registry().spawn(
+                _finalize(runner, completed, session=session, **finish_kwargs),
+                name=f"finalize-run:{completed.id}",
+            )
     return completed
+
+
+def _background_lane() -> AbstractContextManager[None]:
+    """The background execution lane, when the engine has lanes; else a no-op.
+
+    A spawned task copies its creator's context, so without this the
+    finalization would inherit the interactive run's lane and its workers.
+    """
+    try:
+        from robothor.engine.lanes import Lane, in_lane
+    except ImportError:
+        return nullcontext()
+    lane: AbstractContextManager[None] = in_lane(Lane.BACKGROUND)
+    return lane
 
 
 async def _finalize(runner: Any, run: AgentRun, **finish_kwargs: Any) -> None:
