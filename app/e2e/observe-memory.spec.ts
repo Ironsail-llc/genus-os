@@ -38,13 +38,21 @@ const OTHER_FACT = {
   entities: ["Bob", "Example Corp"],
 };
 
+const EDITED_FACT = {
+  ...ACTIVE_FACT,
+  fact_text: "Alice prefers green tea",
+  entities: ["Alice", "Tea"],
+  operator_confirmed: { at: "2099-01-01T11:00:00+00:00", by: "operator:alice" },
+};
+
 interface Recorded {
   previews: string[];
   forgets: Array<{ url: string; body: Record<string, unknown> }>;
+  edits: Array<{ url: string; method: string; body: Record<string, unknown> }>;
 }
 
 async function setupMocks(page: Page): Promise<Recorded> {
-  const recorded: Recorded = { previews: [], forgets: [] };
+  const recorded: Recorded = { previews: [], forgets: [], edits: [] };
 
   await page.route("**/api/auth/session", (route) =>
     json(route, {
@@ -97,6 +105,15 @@ async function setupMocks(page: Page): Promise<Recorded> {
       fact: { ...ACTIVE_FACT, is_active: false, valid_to: "2099-01-01T10:00:00+00:00" },
       forgotten: true,
     });
+  });
+
+  await page.route(/\/api\/bridge\/api\/memory\/facts\/\d+$/, (route) => {
+    recorded.edits.push({
+      url: route.request().url(),
+      method: route.request().method(),
+      body: (route.request().postDataJSON() ?? {}) as Record<string, unknown>,
+    });
+    return json(route, { fact: EDITED_FACT, snapshot_id: 9 });
   });
 
   await page.route(/\/api\/bridge\/api\/memory\/facts\?/, (route) =>
@@ -161,6 +178,65 @@ test.describe("Observe › Memory", () => {
     await page.locator('[data-testid="memory-forget-4711"]').click();
     await expect(page.locator('[data-testid="memory-reason-4711"]')).toBeVisible();
     await expect(page.locator('[data-testid="memory-confirm-go-4711"]')).toBeVisible();
+
+    const worst = await page.evaluate(() => {
+      let overflow = 0;
+      let el: Element | null = document.querySelector('[data-testid="memory-view"]');
+      while (el) {
+        overflow = Math.max(overflow, el.scrollWidth - el.clientWidth);
+        el = el.parentElement;
+      }
+      return overflow;
+    });
+    expect(worst).toBeLessThanOrEqual(1);
+  });
+
+  test("edits a fact with a reason and shows it operator-confirmed", async ({ page }) => {
+    const recorded = await setupMocks(page);
+    await page.goto(MEMORY_URL, { waitUntil: "networkidle" });
+
+    await expect(page.locator('[data-testid="memory-fact-4711"]')).toBeVisible({
+      timeout: 15000,
+    });
+    await page.locator('[data-testid="memory-edit-4711"]').click();
+
+    const editor = page.locator('[data-testid="memory-editor-4711"]');
+    await expect(editor).toBeVisible();
+    await expect(page.locator('[data-testid="memory-edit-text-4711"]')).toHaveValue(
+      "Alice prefers tea"
+    );
+    await page.locator('[data-testid="memory-edit-text-4711"]').fill("Alice prefers green tea");
+    await page.locator('[data-testid="memory-edit-entities-4711"]').fill("Alice, Tea");
+    await expect(page.locator('[data-testid="memory-edit-chip-4711-Tea"]')).toBeVisible();
+    // No reason, no save.
+    await expect(page.locator('[data-testid="memory-edit-save-4711"]')).toBeDisabled();
+    await page.locator('[data-testid="memory-edit-reason-4711"]').fill("the extraction dropped a word");
+    await page.locator('[data-testid="memory-edit-save-4711"]').click();
+
+    await expect(page.locator('[data-testid="memory-confirmed-4711"]')).toBeVisible();
+    await expect(editor).toHaveCount(0);
+    await expect(page.locator('[data-testid="memory-fact-4711"]')).toContainText(
+      "Alice prefers green tea"
+    );
+
+    expect(recorded.edits).toHaveLength(1);
+    expect(recorded.edits[0].method).toBe("PATCH");
+    expect(recorded.edits[0].body).toEqual({
+      fact_text: "Alice prefers green tea",
+      entities: ["Alice", "Tea"],
+      reason: "the extraction dropped a word",
+    });
+  });
+
+  test("keeps the editor usable on a 390 px screen", async ({ page }) => {
+    await setupMocks(page);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto(MEMORY_URL, { waitUntil: "networkidle" });
+
+    await expect(page.locator('[data-testid="memory-view"]')).toBeVisible({ timeout: 15000 });
+    await page.locator('[data-testid="memory-edit-4711"]').click();
+    await expect(page.locator('[data-testid="memory-edit-reason-4711"]')).toBeVisible();
+    await expect(page.locator('[data-testid="memory-edit-save-4711"]')).toBeVisible();
 
     const worst = await page.evaluate(() => {
       let overflow = 0;

@@ -23,6 +23,9 @@
  *   check", never warn.
  * * **nothing is optimistic.** The row changes from the forget's own response,
  *   or — on a 409 — because the server said it is already inactive.
+ * * **an edit is replaced from the server's reply.** `PATCH …/facts/{id}`
+ *   answers with the row as stored, `operator_confirmed` included, and that is
+ *   what the page renders — never what the operator typed.
  */
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -40,6 +43,7 @@ interface Fact {
   source: string | null;
   created_at: string;
   superseded_by: number | null;
+  operator_confirmed?: { at: string; by: string } | null;
 }
 
 function fact(overrides: Partial<Fact> & { id: number }): Fact {
@@ -53,6 +57,7 @@ function fact(overrides: Partial<Fact> & { id: number }): Fact {
     source: "chat",
     created_at: "2026-09-15T12:00:00+00:00",
     superseded_by: null,
+    operator_confirmed: null,
     ...overrides,
   };
 }
@@ -553,5 +558,221 @@ describe("Observe › Memory", () => {
     listOnly();
     render(<MemoryView role="owner" visible={false} />);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("Observe › Memory › edit", () => {
+  const CONFIRMED = { at: "2031-05-06T07:08:00+00:00", by: "operator:alice" };
+
+  /** The list, plus a PATCH whose reply the spec chooses; records what was sent. */
+  function withEdit(reply: () => { status?: number; body: unknown }) {
+    const sent: Array<{ url: string; method?: string; body: Record<string, unknown> }> = [];
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      requests.push(url);
+      if (init?.method === "PATCH") {
+        sent.push({ url, method: init.method, body: JSON.parse(String(init.body ?? "{}")) });
+        const { status = 200, body } = reply();
+        return { ok: status >= 200 && status < 300, status, json: async () => body } as Response;
+      }
+      return { ok: true, status: 200, json: async () => PAGE_ONE } as Response;
+    });
+    return sent;
+  }
+
+  async function openEditor(id = 4711) {
+    render(<MemoryView role="owner" />);
+    await screen.findByTestId(`memory-fact-${id}`);
+    fireEvent.click(screen.getByTestId(`memory-edit-${id}`));
+    return screen.findByTestId(`memory-editor-${id}`);
+  }
+
+  it("offers Edit beside Forget on an active fact, and not on an inactive one", async () => {
+    listOnly();
+    render(<MemoryView role="owner" />);
+    const row = await screen.findByTestId("memory-fact-4711");
+    expect(within(row).getByTestId("memory-edit-4711")).toBeTruthy();
+    expect(within(row).getByTestId("memory-forget-4711")).toBeTruthy();
+    expect(screen.queryByTestId("memory-edit-4709")).toBeNull();
+  });
+
+  it("opens an editor prefilled with the text and the entities", async () => {
+    listOnly();
+    const editor = await openEditor(4710);
+    expect((within(editor).getByTestId("memory-edit-text-4710") as HTMLTextAreaElement).value).toBe(
+      "Bob works at Example Corp"
+    );
+    expect(
+      (within(editor).getByTestId("memory-edit-entities-4710") as HTMLInputElement).value
+    ).toBe("Bob, Example Corp");
+    // The comma-separated field is rendered back as the chips it will save.
+    expect(within(editor).getByTestId("memory-edit-chip-4710-Bob")).toBeTruthy();
+    expect(within(editor).getByTestId("memory-edit-chip-4710-Example Corp")).toBeTruthy();
+    // Editing and forgetting are not offered at once.
+    expect(screen.queryByTestId("memory-forget-4710")).toBeNull();
+  });
+
+  it("renders the entities field back as chips while it is typed", async () => {
+    listOnly();
+    const editor = await openEditor();
+    fireEvent.change(within(editor).getByTestId("memory-edit-entities-4711"), {
+      target: { value: "Alice,  Tea , ,Alice" },
+    });
+    expect(within(editor).getByTestId("memory-edit-chip-4711-Tea")).toBeTruthy();
+    // Blank entries are dropped and a repeat is one chip.
+    expect(within(editor).getAllByTestId("memory-edit-chip-4711-Alice")).toHaveLength(1);
+  });
+
+  it("requires a reason of 3 to 500 characters and a text that is not empty", async () => {
+    listOnly();
+    const editor = await openEditor();
+    const save = within(editor).getByTestId("memory-edit-save-4711");
+    expect(save).toBeDisabled();
+
+    const reason = within(editor).getByTestId("memory-edit-reason-4711");
+    fireEvent.change(reason, { target: { value: "no" } });
+    expect(save).toBeDisabled();
+    expect(within(editor).getByTestId("memory-edit-reason-count-4711").textContent).toContain("2");
+
+    fireEvent.change(reason, { target: { value: "x".repeat(501) } });
+    expect(save).toBeDisabled();
+
+    fireEvent.change(reason, { target: { value: "the extraction dropped a word" } });
+    expect(save).not.toBeDisabled();
+
+    // A fact cannot be edited into nothing; forget is the way to stop believing one.
+    fireEvent.change(within(editor).getByTestId("memory-edit-text-4711"), {
+      target: { value: "   " },
+    });
+    expect(save).toBeDisabled();
+  });
+
+  it("saves with PATCH and replaces the row from the server's reply", async () => {
+    const stored = fact({
+      id: 4711,
+      fact_text: "Alice prefers green tea",
+      entities: ["Alice", "Tea"],
+      operator_confirmed: CONFIRMED,
+    });
+    const sent = withEdit(() => ({ body: { fact: stored, snapshot_id: 9 } }));
+    const editor = await openEditor();
+
+    fireEvent.change(within(editor).getByTestId("memory-edit-text-4711"), {
+      target: { value: "Alice prefers green tea" },
+    });
+    fireEvent.change(within(editor).getByTestId("memory-edit-entities-4711"), {
+      target: { value: "Alice, Tea" },
+    });
+    fireEvent.change(within(editor).getByTestId("memory-edit-reason-4711"), {
+      target: { value: "the extraction dropped a word" },
+    });
+    fireEvent.click(within(editor).getByTestId("memory-edit-save-4711"));
+
+    const badge = await screen.findByTestId("memory-confirmed-4711");
+    expect(badge.textContent).toMatch(/operator-confirmed/i);
+    expect(sent).toEqual([
+      {
+        url: "/api/bridge/api/memory/facts/4711",
+        method: "PATCH",
+        body: {
+          fact_text: "Alice prefers green tea",
+          entities: ["Alice", "Tea"],
+          reason: "the extraction dropped a word",
+        },
+      },
+    ]);
+    expect(screen.queryByTestId("memory-editor-4711")).toBeNull();
+    const row = screen.getByTestId("memory-fact-4711");
+    expect(row.textContent).toContain("Alice prefers green tea");
+    expect(within(row).getByTestId("memory-chip-4711-Tea")).toBeTruthy();
+    // One edit changes one row.
+    expect(screen.queryByTestId("memory-confirmed-4710")).toBeNull();
+  });
+
+  /**
+   * The reply wins over the draft. A page that rendered what was typed would
+   * show "typed text" here; the server stored something else (it trims, and
+   * may refuse), and only the reply knows what.
+   */
+  it("renders what the server stored, not what was typed", async () => {
+    withEdit(() => ({
+      body: {
+        fact: fact({ id: 4711, fact_text: "as the server stored it", operator_confirmed: CONFIRMED }),
+      },
+    }));
+    const editor = await openEditor();
+    fireEvent.change(within(editor).getByTestId("memory-edit-text-4711"), {
+      target: { value: "typed text" },
+    });
+    fireEvent.change(within(editor).getByTestId("memory-edit-reason-4711"), {
+      target: { value: "the extraction dropped a word" },
+    });
+    fireEvent.click(within(editor).getByTestId("memory-edit-save-4711"));
+
+    await screen.findByTestId("memory-confirmed-4711");
+    const row = screen.getByTestId("memory-fact-4711");
+    expect(row.textContent).toContain("as the server stored it");
+    expect(row.textContent).not.toContain("typed text");
+  });
+
+  it("shows a 409 in the server's words and leaves the row and the editor as they were", async () => {
+    const sentence = "an active fact with this text already exists";
+    withEdit(() => ({ status: 409, body: { detail: sentence } }));
+    const editor = await openEditor();
+    fireEvent.change(within(editor).getByTestId("memory-edit-text-4711"), {
+      target: { value: "Bob prefers coffee" },
+    });
+    fireEvent.change(within(editor).getByTestId("memory-edit-reason-4711"), {
+      target: { value: "make them agree" },
+    });
+    fireEvent.click(within(editor).getByTestId("memory-edit-save-4711"));
+
+    await waitFor(() => expect(screen.getByTestId("memory-error-4711").textContent).toBe(sentence));
+    // Still open, with the draft, so the operator can change the text.
+    const still = screen.getByTestId("memory-editor-4711");
+    expect((within(still).getByTestId("memory-edit-text-4711") as HTMLTextAreaElement).value).toBe(
+      "Bob prefers coffee"
+    );
+    expect(screen.queryByTestId("memory-confirmed-4711")).toBeNull();
+  });
+
+  it("lands a 422 on the reason field", async () => {
+    withEdit(() => ({
+      status: 422,
+      body: { detail: "a reason of at least 3 characters is required to edit a fact" },
+    }));
+    const editor = await openEditor();
+    const reason = within(editor).getByTestId("memory-edit-reason-4711");
+    fireEvent.change(reason, { target: { value: "n/a" } });
+    fireEvent.click(within(editor).getByTestId("memory-edit-save-4711"));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("memory-error-4711").textContent).toContain("to edit a fact")
+    );
+    expect(document.activeElement).toBe(reason);
+  });
+
+  it("cancels without asking the bridge anything", async () => {
+    const sent = withEdit(() => ({ body: {} }));
+    const editor = await openEditor();
+    fireEvent.change(within(editor).getByTestId("memory-edit-text-4711"), {
+      target: { value: "never saved" },
+    });
+    fireEvent.click(within(editor).getByTestId("memory-edit-cancel-4711"));
+
+    expect(screen.queryByTestId("memory-editor-4711")).toBeNull();
+    expect(sent).toHaveLength(0);
+    expect(screen.getByTestId("memory-fact-4711").textContent).toContain("Alice prefers tea");
+    expect(screen.getByTestId("memory-forget-4711")).toBeTruthy();
+  });
+
+  it("badges a fact the listing says an operator confirmed", async () => {
+    listOnly({
+      facts: [fact({ id: 4711, operator_confirmed: CONFIRMED }), fact({ id: 4710 })],
+      next_cursor: null,
+    });
+    render(<MemoryView role="owner" />);
+    const badge = await screen.findByTestId("memory-confirmed-4711");
+    expect(badge.textContent).toMatch(/operator-confirmed/i);
+    expect(screen.queryByTestId("memory-confirmed-4710")).toBeNull();
   });
 });
