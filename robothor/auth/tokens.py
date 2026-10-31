@@ -45,6 +45,13 @@ REFRESH_TTL_SECONDS = 30 * 24 * 60 * 60  # 30 days
 #: revoked, the token is refused exactly as before. Short on purpose: it is
 #: the time a stolen, already-used token stays useful. Operators: see
 #: docs/enterprise/02-identity.md, "Sessions and refresh".
+#:
+#: Coupling to keep in mind before raising it: the dashboard schedules its
+#: next refresh at now + 14 minutes on ITS clock (``ACCESS_SKEW_MS`` in
+#: ``app/src/lib/auth.ts``), while a replayed pair's access token expires at
+#: ``rotated_at`` + 15 minutes on the DATABASE clock. A replay late in the
+#: window hands out an access token with up to that much less life left, so
+#: the grace must stay well under the 60 s margin between the two.
 REFRESH_REUSE_GRACE_SECONDS = 30
 
 #: How far a rotated access token's ``iat`` is set BEFORE the rotation time.
