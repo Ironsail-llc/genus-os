@@ -73,6 +73,10 @@ CHECK_MODULES = (
     # manifest about its tools" is the next question, and the answer explains
     # refusals an operator is otherwise reading one journald line at a time.
     "tools",
+    # What each agent can do here, and the gate and unlock for what it cannot:
+    # the same assessment its own system prompt carries, so the operator and
+    # the agent read one answer.
+    "capabilities",
     # Beside the tools, because a skill IS instruction the tools carry out --
     # and because the one thing neither a checkout nor a manifest can tell an
     # operator is which of two same-named procedures their agents are reading.

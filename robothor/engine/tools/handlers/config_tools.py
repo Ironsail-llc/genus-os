@@ -64,13 +64,21 @@ def _owner_denial(ctx: ToolContext, tool: str) -> dict[str, Any] | None:
 
     if is_verified_owner(ctx):
         return None
-    return {
-        "error": (
+    from robothor.engine.refusal import refusal
+
+    return refusal(
+        (
             f"{tool} is restricted to the instance owner (a verified owner identity "
             "on this run). Ask the operator's own assistant to read or change settings."
         ),
-        "denied_by": "owner_role",
-    }
+        gate="role",
+        name="owner_role",
+        unlock=(
+            f"the owner runs {tool} from their own verified chat with this assistant, "
+            "or uses `genus config` on the instance"
+        ),
+        denied_by="owner_role",
+    )
 
 
 def _jsonable(value: Any) -> Any:
@@ -216,16 +224,25 @@ async def _set_apply(row: dict[str, Any], value: str, ctx: ToolContext) -> dict[
     except operator.SettingError as exc:
         return {"error": exc.message}
     if not host_execution.socket_path() or not host_execution.eligible(ctx):
-        return {
-            "error": (
+        from robothor.engine.refusal import refusal
+
+        return refusal(
+            (
                 "apply=true needs host exec: it writes systemd drop-ins under /etc and "
                 "restarts services, which the engine process cannot do. Host exec is "
                 "available only to the verified owner on a top-level main run with the "
                 "host-exec service configured. Without it, call config_set with "
                 "apply=false (writes config.yaml) and ask the operator to restart."
             ),
-            "error_type": "host_exec_required",
-        }
+            gate="runtime",
+            name="host_exec",
+            unlock=(
+                "call config_set again with apply=false now; for apply=true an operator "
+                "installs the host-exec service and sets ROBOTHOR_HOST_EXEC_SOCKET, and the "
+                "verified owner asks from main's own top-level chat"
+            ),
+            error_type="host_exec_required",
+        )
     # ``--`` ends the options: a value such as ``--fast`` or ``-x`` must reach
     # argparse as the positional value, not as an unknown flag.
     command = shlex.join(["genus", "config", "set", "--apply", "--json", "--", row["env"], value])

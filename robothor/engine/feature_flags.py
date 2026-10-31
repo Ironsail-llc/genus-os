@@ -230,6 +230,29 @@ def goal_judge_enabled() -> bool:
     return _env_bool("ROBOTHOR_JUDGE_ENABLED")
 
 
+def capability_block_enabled() -> bool:
+    """Add the "What you can do here" block to every agent's system prompt.
+
+    Built by ``robothor.engine.capabilities`` from the agent's granted tools and
+    the engine's settings, after the bootstrap files. Session-stable (no clock,
+    no vault) and part of the prompt cache stamp. Default OFF; gated by
+    ``ROBOTHOR_CAPABILITY_BLOCK_ENABLED``.
+    """
+    return _env_bool("ROBOTHOR_CAPABILITY_BLOCK_ENABLED")
+
+
+def refusal_payload_v2_enabled() -> bool:
+    """Refusals carry ``refused``, ``gate``, ``gate_name`` and ``unlock``.
+
+    Read by ``robothor.engine.refusal`` for every refusal the engine hands a
+    model, and by ``prompts.behavioral_rules`` for rule 22, which tells the
+    model to relay the gate and unlock. Off, every payload is exactly what it
+    was. Default OFF; gated by ``ROBOTHOR_REFUSAL_PAYLOAD_V2``. Read from the
+    environment only: it is checked on the event loop.
+    """
+    return _env_bool("ROBOTHOR_REFUSAL_PAYLOAD_V2")
+
+
 def curator_enabled() -> bool:
     """True iff the destructive LLM skill-consolidation curator (Rip 5) is active.
 

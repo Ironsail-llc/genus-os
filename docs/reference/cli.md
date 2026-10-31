@@ -421,7 +421,7 @@ Usage: `genus channel access {list,approve,deny,revoke}`
 
 Diagnose this instance and optionally repair what can be repaired.
 
-Usage: `genus doctor [--fix] [--dry-run] [--json] [--only ID] [--category C] [--offline] [--timeout S]`
+Usage: `genus doctor [--fix] [--dry-run] [--json] [--only ID] [--category C] [--agent ID] [--offline] [--timeout S]`
 
 | Flag | Takes | Default | Description |
 | --- | --- | --- | --- |
@@ -430,6 +430,7 @@ Usage: `genus doctor [--fix] [--dry-run] [--json] [--only ID] [--category C] [--
 | `--json` | — | off | Machine-readable output |
 | `--only` | `ID` | — | Run one check by id |
 | `--category` | `C` | — | Run one category, e.g. database |
+| `--agent` | `ID` | — | Per-agent checks (e.g. --category capabilities) report only this agent |
 | `--offline` | — | off | Make no upstream call; the provider completion check is skipped |
 | `--timeout` | `S` | `5.0` | Per-check budget in seconds |
 

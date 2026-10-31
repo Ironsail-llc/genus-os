@@ -42,6 +42,21 @@ def _get_token() -> str:
     return get_secret("GITHUB_TOKEN") or ""
 
 
+def _no_token() -> dict[str, Any]:
+    """The refusal every GitHub tool returns when no token resolves."""
+    from robothor.engine.refusal import refusal
+
+    return refusal(
+        "GITHUB_TOKEN not configured",
+        gate="runtime",
+        name="GITHUB_TOKEN",
+        unlock=(
+            "store a GitHub token as GITHUB_TOKEN with vault_set (the person can paste it "
+            "in chat) and retry; no restart is needed"
+        ),
+    )
+
+
 def _headers(token: str) -> dict[str, str]:
     return {
         "Authorization": f"Bearer {token}",
@@ -108,7 +123,7 @@ async def _github_list_prs(args: dict[str, Any], ctx: ToolContext) -> dict[str, 
     """List pull requests for a repository."""
     token = _get_token()
     if not token:
-        return {"error": "GITHUB_TOKEN not configured"}
+        return _no_token()
 
     repo = args.get("repo", "")
     if not repo:
@@ -149,7 +164,7 @@ async def _github_get_pr(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
     """Get a single PR with review timeline and details."""
     token = _get_token()
     if not token:
-        return {"error": "GITHUB_TOKEN not configured"}
+        return _no_token()
 
     repo = args.get("repo", "")
     pr_number = args.get("pr_number")
@@ -298,7 +313,7 @@ async def _github_pr_stats(args: dict[str, Any], ctx: ToolContext) -> dict[str, 
     """
     token = _get_token()
     if not token:
-        return {"error": "GITHUB_TOKEN not configured"}
+        return _no_token()
 
     repo = args.get("repo", "")
     if not repo:
@@ -414,7 +429,7 @@ async def _github_commit_activity(args: dict[str, Any], ctx: ToolContext) -> dic
     """Get commit frequency by contributor."""
     token = _get_token()
     if not token:
-        return {"error": "GITHUB_TOKEN not configured"}
+        return _no_token()
 
     repo = args.get("repo", "")
     if not repo:
@@ -483,7 +498,7 @@ async def _github_review_stats(args: dict[str, Any], ctx: ToolContext) -> dict[s
     """Get code review participation stats."""
     token = _get_token()
     if not token:
-        return {"error": "GITHUB_TOKEN not configured"}
+        return _no_token()
 
     repo = args.get("repo", "")
     if not repo:
@@ -743,7 +758,7 @@ async def _github_pr_diff(args: dict[str, Any], ctx: ToolContext) -> dict[str, A
     repo, number = parsed
     token = _get_token()
     if not token:
-        return {"error": "GITHUB_TOKEN not configured"}
+        return _no_token()
 
     headers = {**_headers(token), "Accept": "application/vnd.github.diff"}
     try:
@@ -779,7 +794,7 @@ async def _github_pr_files(args: dict[str, Any], ctx: ToolContext) -> dict[str, 
     repo, number = parsed
     token = _get_token()
     if not token:
-        return {"error": "GITHUB_TOKEN not configured"}
+        return _no_token()
 
     try:
         async with _client() as client:
@@ -814,7 +829,7 @@ async def _github_compare(args: dict[str, Any], ctx: ToolContext) -> dict[str, A
         return {"error": f"repo must be in owner/repo format, got {repo!r}"}
     token = _get_token()
     if not token:
-        return {"error": "GITHUB_TOKEN not configured"}
+        return _no_token()
 
     url = f"{_GITHUB_API}/repos/{repo}/compare/{quote(base, safe='')}...{quote(head, safe='')}"
     try:
@@ -1035,7 +1050,7 @@ async def _github_create_review(args: dict[str, Any], ctx: ToolContext) -> dict[
         return {"error": "commit_id is required (the head SHA the review was written against)"}
     token = _get_token()
     if not token:
-        return {"error": "GITHUB_TOKEN not configured"}
+        return _no_token()
 
     headers = _headers(token)
     pr_url = f"{_GITHUB_API}/repos/{repo}/pulls/{number}"
@@ -1213,7 +1228,7 @@ async def _github_reply_review_comment(args: dict[str, Any], ctx: ToolContext) -
         return {"error": "comment_id must be an integer"}
     token = _get_token()
     if not token:
-        return {"error": "GITHUB_TOKEN not configured"}
+        return _no_token()
 
     try:
         async with _client() as client:
@@ -1309,7 +1324,7 @@ async def _github_resolve_threads(args: dict[str, Any], ctx: ToolContext) -> dic
         return {"error": "review_ids is required — only threads from these reviews are resolved"}
     token = _get_token()
     if not token:
-        return {"error": "GITHUB_TOKEN not configured"}
+        return _no_token()
 
     owner, name = repo.split("/", 1)
     headers = _headers(token)

@@ -1711,3 +1711,23 @@ class TestInabilityCopy:
     async def test_the_shipped_templates_pass(self, stock_instance: Path) -> None:
         result = await _run("tools.inability_copy")
         assert result.status == "pass", result.detail
+
+    def test_no_shipped_instruction_template_claims_an_inability(self) -> None:
+        """The stock instance copies manifests only, so read the shipped
+        instruction text directly."""
+        from pathlib import Path as _Path
+
+        from robothor.doctor.checks.tools import inability_claims
+
+        repo = _Path(__file__).resolve().parents[3]
+        found = {
+            str(path.relative_to(repo)): inability_claims(path.read_text())
+            for path in sorted(repo.glob("templates/**/*.md"))
+        }
+        assert {k: v for k, v in found.items() if v} == {}
+
+    def test_conditions_are_not_claims(self) -> None:
+        from robothor.doctor.checks.tools import inability_claims
+
+        assert inability_claims("If you cannot find it, ask.") == []
+        assert inability_claims("- You can't rerun a workflow.") == ["You can't rerun a workflow."]

@@ -187,12 +187,20 @@ async def send_file(args: dict[str, Any], ctx: ToolContext | Any = None) -> dict
     if requested_target and requested_target != target:
         role = str(getattr(ctx, "user_role", "") or "").lower()
         if role not in _REDIRECT_ROLES:
-            return {
-                "error": (
+            from robothor.engine.refusal import refusal as gated
+
+            return gated(
+                (
                     "refused: only an operator-tier agent may send a file to a chat other "
                     "than the one this run came from. Leave `target` out to reply here."
-                )
-            }
+                ),
+                gate="role",
+                name="send_file_redirect",
+                unlock=(
+                    "leave `target` out to send it to this chat; sending elsewhere needs "
+                    "an owner, admin or operator to ask"
+                ),
+            )
         target = requested_target
 
     if not channel_name or not target:

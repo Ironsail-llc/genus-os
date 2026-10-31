@@ -62,6 +62,7 @@ def run_doctor(args: argparse.Namespace) -> DoctorReport:
         dry_run=bool(getattr(args, "dry_run", False)),
         offline=bool(getattr(args, "offline", False)),
         fix=bool(getattr(args, "fix", False)),
+        agent=str(getattr(args, "agent", "") or ""),
     )
     return run_sync(
         ctx,

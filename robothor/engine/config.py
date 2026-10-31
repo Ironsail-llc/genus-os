@@ -1389,8 +1389,10 @@ SECURITY_PREAMBLE = (
 )
 
 
-# Cache: agent_id → (max_mtime_of_files, prompt_without_time)
-_prompt_cache: dict[str, tuple[float, str]] = {}
+#: agent id -> (newest source mtime, capability block, assembled body). The
+#: capability block is part of the stamp: it comes from settings rather than a
+#: file, so a settings change must rebuild the body although no mtime moved.
+_prompt_cache: dict[str, tuple[float, str, str]] = {}
 
 
 @dataclass(frozen=True)
@@ -1443,9 +1445,12 @@ def build_system_prompt(config: AgentConfig, workspace: Path) -> SystemPromptPar
         with contextlib.suppress(OSError):
             max_mtime = max(max_mtime, fp.stat().st_mtime)
 
+    from robothor.engine.capabilities import capability_block
+
+    capabilities = capability_block(config)
     cached = _prompt_cache.get(cache_key)
-    if cached and cached[0] == max_mtime:
-        body = cached[1]
+    if cached and cached[0] == max_mtime and cached[1] == capabilities:
+        body = cached[2]
     else:
         # Build from files
         parts: list[str] = []
@@ -1497,6 +1502,12 @@ def build_system_prompt(config: AgentConfig, workspace: Path) -> SystemPromptPar
                 f"files instead of silently truncating."
             )
 
+        # What this agent can do here, and what gates the rest. After the
+        # instructions so it reads as this instance's facts about them; outside
+        # the bootstrap limit because it is the platform's text, not the agent's.
+        if capabilities:
+            parts.append(capabilities)
+
         # Skill catalog (if skills exist)
         try:
             from robothor.engine.skills import build_skill_catalog
@@ -1509,7 +1520,7 @@ def build_system_prompt(config: AgentConfig, workspace: Path) -> SystemPromptPar
             logger.debug("Skill catalog failed: %s", e)
 
         body = "\n\n---\n\n".join(parts)
-        _prompt_cache[cache_key] = (max_mtime, body)
+        _prompt_cache[cache_key] = (max_mtime, capabilities, body)
 
     return _prompt_with_time(body, config.timezone)
 
@@ -1529,6 +1540,11 @@ def _snapshot_prompt_body(config: AgentConfig) -> str:
     parts.extend(files[path] for path in references if path)
     if sum(map(len, parts)) > BOOTSTRAP_TOTAL_MAX_CHARS:
         raise ValueError("Fleet snapshot system prompt exceeds the bootstrap character limit")
+    from robothor.engine.capabilities import capability_block
+
+    capabilities = capability_block(config)
+    if capabilities:
+        parts.append(capabilities)
     try:
         catalog = build_skill_catalog()
         if catalog:
