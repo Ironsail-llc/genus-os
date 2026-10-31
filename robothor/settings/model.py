@@ -2202,6 +2202,16 @@ class ServiceSettings(SettingsGroup):
     siem_syslog_port: int = declare(
         514, "ROBOTHOR_SIEM_SYSLOG_PORT", "UDP port for syslog audit forwarding."
     )
+    logs_url: str = declare(
+        "",
+        "GENUS_LOGS_URL",
+        "Where this deployment's logs are viewed when journald is not available "
+        "(a container writes to standard output). The dashboard's Logs page "
+        "links to it. A credential-free http(s) URL: it is shown to every "
+        "operator, so it must never carry a token. Empty shows no link.",
+        since="unreleased",
+        restart_units=("robothor-bridge",),
+    )
 
 
 # ---------------------------------------------------------------------------

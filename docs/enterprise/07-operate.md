@@ -64,7 +64,11 @@ audit detail cannot become a formula or carry a credential off the box.
 **Logs need journald**, and a container does not have it. Both routes answer
 "not available on this deployment" with a 200 and a reason, and the page says
 that in the Bridge's own words rather than showing an error — nothing is
-broken; use the container runtime's log stream instead. Where journald is
+broken. The page says the deployment writes its logs to standard output, to be
+read with your cluster's log tool, and when `GENUS_LOGS_URL` (Helm value
+`logs.url`) is set it offers **Open logs**, a link to where this deployment's
+logs are viewed. Auto-refresh is hidden while journald is unavailable, and
+Refresh asks again whether it is. Where journald is
 present, the unit list is derived from the units the installer wrote, so a new
 unit appears without a code change. Auto-refresh is off by default and beats
 every ten seconds when on, because each read is one process on the box. The
