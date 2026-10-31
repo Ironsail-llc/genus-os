@@ -20,4 +20,17 @@ describe("request admission evidence", () => {
     expect(await requestFailure(new Response("unreadable", { status: 502 })))
       .toEqual({ text: OUTCOME_UNKNOWN, rejected: false });
   });
+  it.each([
+    ["an HTML page", new Response("<html><body>413 Request Entity Too Large</body></html>", { status: 413, headers: { "content-type": "text/html" } })],
+    ["no body at all", new Response(null, { status: 413 })],
+  ])("treats a 413 with %s as refused before it reached the dashboard, naming the limit", async (_label, response) => {
+    const failure = await requestFailure(response);
+    expect(failure.rejected).toBe(true);
+    expect(failure.text).toMatch(/too large/);
+    expect(failure.text).toContain("5 MB");
+    expect(failure.text).not.toBe(OUTCOME_UNKNOWN);
+  });
+  it("keeps a JSON 413 without the admission flag unresolved", async () => {
+    expect((await requestFailure(Response.json({ error: "big" }, { status: 413 }))).rejected).toBe(false);
+  });
 });

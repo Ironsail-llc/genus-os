@@ -158,6 +158,95 @@ starts a run itself; without the flag the endpoint behaves as it always has. The
 running turn's own stream adds two events: `interim` (a superseded answer) and
 `pending_followups` (messages the turn never took, to send as the next turn).
 
+## Attaching files
+
+The paperclip at the left of the composer adds files to the message you are
+about to send. You can also paste a screenshot into the box or drop files onto
+the composer. Each file shows as a chip with its name and size, and the × on a
+chip takes it off again. A message can be only files, with no text.
+
+| | |
+|---|---|
+| Types | Images (PNG, JPG, GIF, WebP); text, Markdown, CSV, JSON and PDF — by type **and** extension |
+| Largest file | **5 MB** |
+| Files per message | **3** |
+
+The composer states these limits and refuses a file that breaks one with a line
+under the chips, keeping everything else you added. The dashboard's send route
+and the engine check the same limits again: too many files or too large a file
+is refused with `413`, an unsupported type or a body that is not valid base64
+with `422`. A file that claims to be a picture but is not is also a `422`.
+
+The file's extension is part of its type. It must be one of `.png`, `.jpg`,
+`.jpeg`, `.gif`, `.webp`, `.txt`, `.md`, `.markdown`, `.csv`, `.json` or `.pdf`,
+and name the same kind of file as the declared type: `tool.exe` sent as
+`text/plain`, or `evil.png` sent as text, is refused as "not a supported type"
+(`422`). A name with no extension (`README`, `.env`) is taken on its declared
+type only if the bytes agree: an image's magic number, a PDF's `%PDF` header,
+or no NUL byte for text. The route checks the name; the engine checks both. Every
+refusal answers `request_admitted: false`: no turn started, and nothing was kept.
+
+The whole request, three files base64-encoded plus the message, can reach about
+21 MB. The send route runs behind the dashboard's proxy, and Next buffers a
+proxied body only up to `experimental.proxyClientMaxBodySize` (10 MB unless set),
+so `app/next.config.ts` sets it from the same constant the route reads
+(`MAX_SEND_BODY_BYTES`). A body larger than that is refused before it is read
+(`413`), as is one that grows past it while it streams or arrives shorter than
+its `Content-Length`, and one that is not JSON is a `400`.
+
+**Anything in front of the dashboard must admit the same.** A reverse proxy,
+ingress or tunnel with a smaller body limit answers its own `413` before the
+request reaches the dashboard; the Helm then says the message was too large to
+send and names the limits, and no turn starts. Let it admit about 22 MB on
+`POST /api/chat/send` (see the [production checklist](../deployment.md#production-checklist)).
+A file the engine cannot write (a full disk, say) is refused the same way, and
+whatever that turn had already written is removed.
+
+Files go with an ordinary, fresh message. In Plan or Deep mode, and while a reply
+streams, the paperclip is off and a paste or a drop is refused with a line saying
+why; switching Plan or Deep on removes the files waiting in the composer, and
+says which. Files cannot join a running task (`join_running` with attachments is
+a `422`); send them as the next message.
+
+Files land in the same inbox Telegram uses, one channel over:
+
+```
+<workspace>/inbox/webchat/<session>/<YYYY-MM-DD>/<sha256>-<safe-name>
+<workspace>/inbox/webchat/<session>/<YYYY-MM-DD>/secret/<sha256>-<safe-name>
+```
+
+They are kept `0600` and pruned by the same retention sweep (see [the Telegram inbox](telegram.md#receiving-the-inbox)).
+The agent's turn is your message first, then the same structured note Telegram
+writes: each file's path, kind and size, `call view_image on <path>` for a
+picture, and the extracted text of a text or PDF file. When the model the chat
+runs on is known to accept images, a picture is also sent to it directly; when
+it is not, or nobody has said, the note alone goes and the agent can look with
+`view_image`. A text file whose bytes are not text (a NUL in the first block) is
+named with its path but not quoted.
+
+A file is stored once per session, day and name: the same bytes sent again under
+the same name the same day reuse the earlier path, while the same bytes under
+another name are a second file. The stored name is sanitised to one safe path
+segment (`Résumé.txt` becomes `R-sum.txt`), so the row also keeps the name you
+sent as `original_name`, and that is what the chip shows. The rows use the same
+fields as Telegram's, `telegram_file_id` and `telegram_file_unique_id` included:
+for a webchat file those hold `<request id>:<n>` and the sha256 of the bytes.
+
+**A file named like a credentials file is quarantined.** The test is the
+engine's secrets-path rule (`robothor/engine/secret_paths.py`): `.env`,
+`credentials.json`, `id_rsa` and the other names it recognises are saved under
+the day's `secret/` directory, and the note says the file was kept but not read.
+A name ending in a documentation suffix (`.txt`, `.md`) is treated as notes
+*about* a secret, not the secret, so `aws_credentials.txt` is kept and quoted
+like any other text file. A quarantined file's contents never reach the
+prompt, and `read_file` and `send_file` refuse it. This is the
+Telegram rule, described in full in
+[the Telegram channel](telegram.md#the-attachment-row).
+
+The names stay with the conversation. The stored user turn records the files
+beside the text (`extras.attachments` on `GET /chat/history`, `attachments` on
+the persisted row), so a reload shows the same chips under your message.
+
 ## When `done` arrives
 
 A reply's `done` event carries the final text, `run_id`, `status`, token counts
@@ -184,6 +273,32 @@ slim tab at the right edge; click it to bring the chat back.
 The Helm remembers the choice in this browser, so a reload keeps the panel the
 way you left it. The panel opens by default, and on a phone the chat is always
 a view of its own.
+
+## What the agent can reach
+
+The wrench button beside **Plan** and **Deep** in the composer (the **Tools**
+chip on a phone) opens a read-only list of what the agent in this chat can use:
+
+- **MCP servers**, each with its health (**Ready** when the session is up and
+  initialized, **Starting** while it is still handshaking, **Stopped** when it
+  is not running) and how many tools it contributed. How the engine reaches a
+  server (its command or URL) is never shown.
+- **Tools**, counted by where they come from: core, each plugin, each MCP
+  server, and the opt-in families. Open a group to see the names.
+- **The manifest's lists**: how many tools it allows by name (or that it has no
+  allow list, which means every tool that is not opt-in), and its deny list.
+
+Nothing here turns a tool on or off. An agent's tools are set by its manifest,
+so **Manage in agent settings** opens the agent editor for that agent
+(`?v=agents&agent=<id>`), where `tools_allowed` is edited. `tools_denied` is
+set in the manifest file itself. After a save the engine reconciles, and the
+dialog shows the new list the next time it opens.
+
+The list is operator information, so a member sees a sentence saying so. A
+chat whose fleet listing names no default agent says it has no agent to list. The
+data comes from two engine routes, `GET /api/admin/agents/{id}/tools` and
+`GET /api/admin/mcp/servers`, which the bridge proxies as
+`GET /api/agents/{id}/tools` and `GET /api/mcp/servers` for operators.
 
 ## `genus channel verify webchat` exits 2
 

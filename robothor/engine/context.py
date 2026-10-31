@@ -162,6 +162,19 @@ def _clear_old_tool_results(
     return messages
 
 
+def _text_of(content: Any) -> str:
+    """A turn's text: the string, or the text blocks of a multimodal list."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(
+            str(b.get("text", ""))
+            for b in content
+            if isinstance(b, dict) and b.get("type") == "text"
+        )
+    return ""
+
+
 def _pin_active_request(messages: list[dict[str, Any]], request: str) -> list[dict[str, Any]]:
     """Mark the user turn that carries this run's request so compaction keeps it.
 
@@ -184,7 +197,7 @@ def _pin_active_request(messages: list[dict[str, Any]], request: str) -> list[di
         for i in range(len(messages) - 1, -1, -1):
             msg = messages[i]
             content = msg.get("content")
-            if msg.get("role") == "user" and isinstance(content, str) and wanted in content:
+            if msg.get("role") == "user" and wanted in _text_of(content):
                 return [*messages[:i], {**msg, PIN_KEY: ACTIVE_REQUEST_PIN}, *messages[i + 1 :]]
     # No surviving user turn to mark (a resumed or already-compacted history):
     # one pinned developer turn, which the idempotence check above then keeps
