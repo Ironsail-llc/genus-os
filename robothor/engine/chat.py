@@ -375,6 +375,7 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
     identity = _resolve_webchat_identity(auth)
 
     body = await request.json()
+    received_at = datetime.now(UTC)  # the user row's stored time (chat_store.save_exchange)
     session_key: str = body.get("session_key", "")
     message: str = body.get("message", "")
 
@@ -459,6 +460,7 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
                         channel="webchat",
                         model_override=session.model_override,
                         tenant_id=auth.tenant_id,
+                        user_at=received_at,
                     )
                 )
 

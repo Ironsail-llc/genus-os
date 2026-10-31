@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from psycopg2.extras import RealDictCursor
 
@@ -22,6 +22,9 @@ from robothor.constants import DEFAULT_TENANT
 from robothor.db.connection import get_connection
 from robothor.engine.sanitize import sanitize_log
 from robothor.memory.vector_tuning import apply_hnsw_session
+
+if TYPE_CHECKING:
+    from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -162,6 +165,7 @@ def save_exchange(
     tenant_id: str = DEFAULT_TENANT,
     user_extras: dict[str, Any] | None = None,
     assistant_extras: dict[str, Any] | None = None,
+    user_at: datetime | None = None,
 ) -> list[int]:
     """Upsert session + insert user and assistant messages in one transaction.
 
@@ -172,6 +176,10 @@ def save_exchange(
 
     Returns the inserted chat_messages ids (order: [user_id, assistant_id])
     so the async caller can schedule embedding without re-querying.
+
+    ``user_at`` is when the user's message arrived. Both rows are written when
+    the reply finishes, so without it the prompt is stored at the reply's
+    time; ``None`` keeps the database clock for both.
     """
     # Redacted at the door, not at each caller.
     #
@@ -214,20 +222,20 @@ def save_exchange(
 
         # Insert both messages
         inserted_ids: list[int] = []
-        for role, content, extras in [
-            ("user", user_content, user_extras),
-            ("assistant", assistant_content, assistant_extras),
+        for role, content, extras, at in [
+            ("user", user_content, user_extras, user_at),
+            ("assistant", assistant_content, assistant_extras, None),
         ]:
             payload: dict[str, Any] = {"role": role, "content": content}
             if extras:
                 payload.update(extras)
             cur.execute(
                 """
-                INSERT INTO chat_messages (session_id, message)
-                VALUES (%s, %s::jsonb)
+                INSERT INTO chat_messages (session_id, message, created_at)
+                VALUES (%s, %s::jsonb, COALESCE(%s::timestamptz, NOW()))
                 RETURNING id
                 """,
-                (session_id, json.dumps(payload)),
+                (session_id, json.dumps(payload), at),
             )
             inserted_ids.append(int(cur.fetchone()["id"]))
 
@@ -643,6 +651,7 @@ async def save_exchange_async(
     tenant_id: str = DEFAULT_TENANT,
     user_extras: dict[str, Any] | None = None,
     assistant_extras: dict[str, Any] | None = None,
+    user_at: datetime | None = None,
 ) -> list[int] | None:
     """Non-blocking wrapper around save_exchange. Logs warning on failure.
 
@@ -667,6 +676,7 @@ async def save_exchange_async(
                 tenant_id=tenant_id,
                 user_extras=user_extras,
                 assistant_extras=assistant_extras,
+                user_at=user_at,
             ),
         )
     except Exception as e:
