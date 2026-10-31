@@ -24,7 +24,7 @@ ambient:
 
 | Key | Meaning |
 |-----|---------|
-| `watch` | `inbox` is the CRM conversation inbox (open conversations, incoming vs outgoing messages; private notes are ignored). `stream:<name>` is a Redis stream the agent already lists in `streams.read`; its events count when the payload carries `thread_id` and `direction` (`inbound` or `outbound`), with an optional `person`. Any other source, or a stream the agent does not read, is a manifest error. |
+| `watch` | `inbox` is the CRM conversation inbox: every open conversation, read page by page (up to 10,000), with incoming vs outgoing messages; private notes are ignored. `stream:<name>` is a Redis stream the agent already lists in `streams.read`; its events count when the payload carries `thread_id` and `direction` (`inbound` or `outbound`), with an optional `person`. Any other source, or a stream the agent does not read, is a manifest error. |
 | `stalled_after` | A duration: `90s`, `30m`, `4h`, `1d`, `1h30m`. Required. |
 | `digest_at` | A 5-field cron, or comma-separated `HH:MM` times, in the agent's schedule timezone. Required. One scheduler job per agent, `<agent>:ambient`. |
 | `tiers` | One entry per action kind. Unknown kinds and values other than the three tiers are manifest errors. |
@@ -35,7 +35,7 @@ The action kinds:
 |------|---------------------------|
 | `nudge_thread` | A short note to the agent's delivery target (`delivery.channel` / `delivery.to`) that one thread is waiting. One per stalled thread. |
 | `send_digest` | One message to the delivery target covering every stalled thread. |
-| `reply_on_behalf` | A reply posted in the thread itself, as an outgoing message. Inbox threads only. |
+| `reply_on_behalf` | A reply to the person who is waiting, in the thread itself. **Proposed and recorded, never sent yet:** the CRM inbox is a log of conversations held on other channels, so a row written there would reach nobody. Under `enforce` its outcome is `unsupported` until a reply can go out on the channel the conversation lives on. |
 
 A thread is stalled when the first message from a person after our last reply
 is at least `stalled_after` old. A second "any news?" does not restart the
@@ -47,11 +47,13 @@ clock; a reply from us stops it.
    Nothing stalled means no run.
 2. Composes with the agent's own run: its model and instructions, a `cron`
    trigger whose detail is `ambient:observe` or `ambient:enforce`, delivery
-   off, and only the read-only tools it already had. The composing run cannot
+   off, and only the read-only tools it already had (the goal-writing tools the
+   registry adds to every explicit list are denied). The composing run cannot
    send anything; the worker decides what goes out.
 3. Asks only for the kinds whose tier is not `never`. A `never` kind the model
-   writes anyway, a thread that is not stalled, and an empty section are
-   dropped.
+   writes anyway, a thread that is not stalled, an empty section, and output
+   with no section headers at all are dropped. A composing run that did not
+   complete proposes nothing.
 4. Holds each proposal to its tier (below), then records it.
 
 ## `ROBOTHOR_AMBIENT`
@@ -60,7 +62,7 @@ clock; a reply from us stops it.
 |------|-----------|
 | `off` (default) | No ambient job is registered and nothing runs. Any unrecognised value is `off`. |
 | `observe` | Every proposal is recorded, with outcome `observed`, and **nothing is sent**: no channel message, no approval card, no reply in a thread. |
-| `enforce` | `auto` sends. `approve` asks the approval gate first — the same prompt a guarded tool call raises: the Telegram inline keyboard, or the webchat approval card — and sends only on Approve. A denial, a timeout (`v2.human_approval_timeout`) or no reachable approver sends nothing. |
+| `enforce` | `auto` sends. `approve` asks the approval gate first — the same prompt a guarded tool call raises: the Telegram inline keyboard, or the webchat approval card — and sends only on Approve. A pass asks all its approvals at once. A denial, a timeout (`v2.human_approval_timeout`) or no reachable approver sends nothing. |
 
 It is a governed flag, so it moves from the dashboard's Controls page as well
 as the environment, and `ROBOTHOR_DISABLE_ALL_RIPS=1` forces it off.
@@ -71,14 +73,17 @@ as the environment, and `ROBOTHOR_DISABLE_ALL_RIPS=1` forces it off.
   `ambient_proposal` on the run that composed it. Its input says `kind`,
   `tier`, `target`, `mode` and how long the thread waited; its output carries
   the `text` and the `outcome` (`observed`, `sent`, `denied`, `no_approver`,
-  `no_target`, `send_failed`). The run detail renders these like any other
+  `no_target`, `send_failed`, `unsupported`). The run detail renders these like any other
   step; the same rows come back from the run steps API.
 - **A digest file** per agent per day, appended on every pass:
   `$ROBOTHOR_WORKSPACE/.robothor/ambient/<agent>/<YYYY-MM-DD>.md`.
 - **The engine log**, one line per proposal: `ambient <agent> (<mode>): <kind> -> <target> [<tier>, <outcome>]`.
 - **Approval cards** for `approve`-tier proposals under `enforce`. "Approve
-  All" grants the rest of that agent's ambient proposals for the session, as it
-  does for tool calls.
+  All" covers the rest of that kind in the same pass only; the next pass asks
+  again, so one tap never turns an `approve` tier into `auto`.
+- **The Automations page**, as its own `<agent>:ambient` card while the flag is
+  on, with the job's last run and error count. The pass goes through the same
+  circuit breaker and fleet admission as every scheduled run.
 
 ## Rolling it out
 
