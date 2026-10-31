@@ -867,24 +867,14 @@ class AgentRunner(
             # only — no other warmup DB work (memory blocks, entity context,
             # etc. are already in the transcript).
             try:
-                from robothor.engine.feature_flags import warmup_parallel_enabled
+                from robothor.engine.warmup import enrichment_call_for_turn
 
                 # Enrichment does blocking DB work on a cache miss — offload to
                 # the executor so it never blocks the event loop, mirroring the
                 # first-turn warmup path just above. With
                 # ROBOTHOR_WARMUP_PARALLEL on it is held for the chat session.
-                if warmup_parallel_enabled():
-                    from robothor.identity.enrichment import enrich_identity_for_session
-
-                    _enriched = await loop.run_in_executor(
-                        None, enrich_identity_for_session, agent_id, effective_identity
-                    )
-                else:
-                    from robothor.identity import enrich_identity
-
-                    _enriched = await loop.run_in_executor(
-                        None, enrich_identity, effective_identity
-                    )
+                _enrich_fn, _enrich_args = enrichment_call_for_turn(agent_id, effective_identity)
+                _enriched = await loop.run_in_executor(None, _enrich_fn, *_enrich_args)
             except Exception as e:
                 logger.debug(
                     "Per-turn identity enrichment failed for %s: %s",

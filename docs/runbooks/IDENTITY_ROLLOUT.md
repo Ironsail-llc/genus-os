@@ -272,12 +272,12 @@ revoke looks like it did not take, check the engine log for a refused reload
 before assuming the row is wrong.
 
 With `ROBOTHOR_WARMUP_PARALLEL` on, the CRM and memory-graph enrichment behind
-the `CURRENT USER` block (`identity.enrichment`) is also held for the lifetime
-of a chat session (one agent and one caller) rather than 60 s. A decision that
+the `CURRENT USER` block (`identity.enrichment`) is held per chat session (one
+agent and one caller) for up to 15 minutes rather than 60 s. A decision that
 changes who the caller resolves to — a different person, role or verification
 state — produces a different identity and recomputes it on the next turn; a
-change to the person's CRM record alone shows once the engine restarts or the
-session's entry is evicted.
+change to the person's CRM record, and the block's `History:` line, can lag by
+up to those 15 minutes.
 
 **Roles.** `viewer` is the default, and deliberately so: the seeded `member`
 policy is `("member", "*", "allow")` and migration 088 narrows it only for the

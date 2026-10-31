@@ -35,9 +35,13 @@ _cache: dict[tuple[str, str], tuple[EnrichedIdentity | None, float]] = {}
 #: ``enrich_identity_for_session``). Bounded so an instance with many distinct
 #: callers cannot grow it without limit; the oldest session is evicted first.
 _SESSION_CACHE_MAX = 512
-_session_cache: OrderedDict[tuple[str, str, str, str], tuple[IdentityContext, EnrichedIdentity]] = (
-    OrderedDict()
-)
+#: How long a held session entry lives. The enrichment carries the caller's
+#: interaction history (``History: N prior interactions, last <ts>``), so an
+#: entry with no lifetime froze that line until the engine restarted.
+_SESSION_TTL_SECONDS = 900
+_session_cache: OrderedDict[
+    tuple[str, str, str, str], tuple[IdentityContext, EnrichedIdentity, float]
+] = OrderedDict()
 _session_lock = threading.Lock()
 
 
@@ -73,19 +77,21 @@ def enrich_identity(ctx: IdentityContext) -> EnrichedIdentity | None:
 
 
 def enrich_identity_for_session(agent_id: str, ctx: IdentityContext) -> EnrichedIdentity | None:
-    """``enrich_identity``, held for the lifetime of one chat session.
+    """``enrich_identity``, held across one chat session's turns.
 
     A session is one agent talking to one caller: (agent, tenant, channel,
     identifier). The first turn pays the CRM and memory-graph lookups; later
-    turns reuse the result however long the conversation pauses, until the
+    turns reuse the result for up to ``_SESSION_TTL_SECONDS`` (15 minutes,
+    against the 60 s of ``enrich_identity``), and sooner when the
     ``IdentityContext`` for that caller changes (a different person, role or
-    verification state), which recomputes it. A failed or empty enrichment is
-    not held, so the next turn tries again.
+    verification state). The lifetime is what keeps the interaction-history
+    line moving. A failed or empty enrichment is not held, so the next turn
+    tries again.
     """
     key = (agent_id, ctx.tenant_id, ctx.channel, ctx.identifier)
     with _session_lock:
         held = _session_cache.get(key)
-        if held is not None and held[0] == ctx:
+        if held is not None and held[0] == ctx and time.monotonic() < held[2]:
             _session_cache.move_to_end(key)
             return held[1]
 
@@ -94,7 +100,7 @@ def enrich_identity_for_session(agent_id: str, ctx: IdentityContext) -> Enriched
         if result is None:
             _session_cache.pop(key, None)
         else:
-            _session_cache[key] = (ctx, result)
+            _session_cache[key] = (ctx, result, time.monotonic() + _SESSION_TTL_SECONDS)
             _session_cache.move_to_end(key)
             while len(_session_cache) > _SESSION_CACHE_MAX:
                 _session_cache.popitem(last=False)

@@ -929,22 +929,31 @@ def _run_interactive_sections(
     return sections
 
 
-def enrich_identity_for_turn(agent_id: str, identity: IdentityContext) -> EnrichedIdentity | None:
-    """Identity enrichment for one interactive turn of ``agent_id``.
+def enrichment_call_for_turn(
+    agent_id: str, identity: IdentityContext
+) -> tuple[Callable[..., EnrichedIdentity | None], tuple[Any, ...]]:
+    """The enrichment function and arguments for one interactive turn.
 
-    With ``ROBOTHOR_WARMUP_PARALLEL`` on, the result is held for the chat
-    session (``enrich_identity_for_session``); off, it is the 60-second cache
-    every turn has always used.
+    Returned rather than called so the runner can hand both to
+    ``run_in_executor``. With ``ROBOTHOR_WARMUP_PARALLEL`` on it is the
+    session-held cache (``enrich_identity_for_session``); off, the 60-second
+    ``enrich_identity`` every turn has always used.
     """
     from robothor.engine.feature_flags import warmup_parallel_enabled
 
     if warmup_parallel_enabled():
-        from robothor.identity.enrichment import enrich_identity_for_session
+        from robothor.identity import enrichment
 
-        return enrich_identity_for_session(agent_id, identity)
-    from robothor.identity import enrich_identity as _enrich
+        return enrichment.enrich_identity_for_session, (agent_id, identity)
+    import robothor.identity as _identity
 
-    return _enrich(identity)
+    return _identity.enrich_identity, (identity,)
+
+
+def enrich_identity_for_turn(agent_id: str, identity: IdentityContext) -> EnrichedIdentity | None:
+    """Identity enrichment for one interactive turn of ``agent_id``."""
+    fn, args = enrichment_call_for_turn(agent_id, identity)
+    return fn(*args)
 
 
 def build_interactive_preamble(

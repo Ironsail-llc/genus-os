@@ -1202,7 +1202,7 @@ order, so the text is identical and the first turn waits for the slowest
 section, not the sum. Memory blocks are read in one `SELECT`
 (`memory.blocks.read_blocks`) with the read count bumped afterwards in one
 batched `UPDATE` (`touch_blocks`); entity candidates are fetched in one
-`LATERAL` query; identity enrichment is held for the chat session
+`LATERAL` query; identity enrichment is held per chat session for up to 15 minutes
 (`identity.enrichment.enrich_identity_for_session`). Each section is recorded
 as a `warmup_section:<name>` step, as the cron preamble's already are.
 
