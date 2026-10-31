@@ -47,14 +47,16 @@ must run them in its worker threadpool rather than on the event loop (see
 
 from __future__ import annotations
 
+import hashlib
 from typing import Any
 
 from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 
 from robothor.settings import operator, provenance
 from robothor.settings.registry import field_index, groups
+from robothor.settings.sources import read_settings_once
 from routers._audit import audited
 from routers._operator import require_operator
 
@@ -205,24 +207,55 @@ def _field_schema(record: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+#: The schema is the registry, which changes only when the process restarts.
+#: ``private``: it is an operator-only answer, so no shared cache may keep it.
+_SCHEMA_CACHE_CONTROL = "private, max-age=300"
+
+
+def _etag_matches(if_none_match: str | None, etag: str) -> bool:
+    """Whether an ``If-None-Match`` header names this tag (weak comparison)."""
+    if not if_none_match:
+        return False
+    for candidate in if_none_match.split(","):
+        candidate = candidate.strip()
+        if candidate == "*":
+            return True
+        if candidate.removeprefix("W/") == etag:
+            return True
+    return False
+
+
 @router.get("/schema")
-def settings_schema(request: Request) -> dict[str, Any]:
+def settings_schema(request: Request) -> Response:
     """What can be configured, as a form description.
 
     Deterministic: groups in the model's declaration order, fields in theirs.
     A page whose field order changed between two loads is a page an operator
     cannot learn.
+
+    Tagged with a hash of its own body, and a matching ``If-None-Match`` is
+    answered 304 with no body: the schema is a few hundred kilobytes and is
+    the same on every load until a restart. The gate runs first -- a 304 is
+    an answer too.
     """
     require_operator(request)
     by_group: dict[str, list[dict[str, Any]]] = {name: [] for name in groups()}
     for record in _declared():
         by_group.setdefault(record["group"], []).append(_field_schema(record))
-    return {
-        "groups": [
-            {"id": name, "label": _label(name), "fields": fields}
-            for name, fields in by_group.items()
-        ]
-    }
+    response = JSONResponse(
+        {
+            "groups": [
+                {"id": name, "label": _label(name), "fields": fields}
+                for name, fields in by_group.items()
+            ]
+        }
+    )
+    etag = '"' + hashlib.sha256(bytes(response.body)).hexdigest()[:32] + '"'
+    headers = {"ETag": etag, "Cache-Control": _SCHEMA_CACHE_CONTROL}
+    if _etag_matches(request.headers.get("if-none-match"), etag):
+        return Response(status_code=304, headers=headers)
+    response.headers.update(headers)
+    return response
 
 
 def _refusal(record: dict[str, Any]) -> str | None:
@@ -293,17 +326,20 @@ def settings_values(request: Request) -> dict[str, Any]:
     # the operator flipped an hour ago as unset.
     operator.reset_db_rows()
 
-    values: dict[str, Any] = {}
-    for record in _declared():
-        value, source, _detail = operator.resolve(record)
-        reason = _refusal(record)
-        values[record["env"]] = {
-            "value": operator.secret_status(record) if record["secret"] else value,
-            "source": _API_SOURCE.get(source, source),
-            "editable": reason is None,
-            "reason": reason,
-        }
-    return {"values": values, "pending_restart": _pending_restart()}
+    # One read of config.yaml for the whole answer: every field below asks
+    # whether the file holds it, and the pending-restart walk asks again.
+    with read_settings_once():
+        values: dict[str, Any] = {}
+        for record in _declared():
+            value, source, _detail = operator.resolve(record)
+            reason = _refusal(record)
+            values[record["env"]] = {
+                "value": operator.secret_status(record) if record["secret"] else value,
+                "source": _API_SOURCE.get(source, source),
+                "editable": reason is None,
+                "reason": reason,
+            }
+        return {"values": values, "pending_restart": _pending_restart()}
 
 
 def _env_refusal(record: dict[str, Any], env_name: str) -> str:

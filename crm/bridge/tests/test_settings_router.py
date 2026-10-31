@@ -1185,9 +1185,7 @@ def test_the_values_route_reads_config_yaml_once_per_request(
     assert len(reads) == 2, "each request reads the file afresh: the snapshot is per request"
 
 
-def test_a_write_is_seen_by_the_next_read(
-    controls_client_as_operator, clean_env, env_workspace
-):
+def test_a_write_is_seen_by_the_next_read(controls_client_as_operator, clean_env, env_workspace):
     """Reading once per request must not become reading once per process."""
     _write_config(env_workspace, "settings:\n")
     before = controls_client_as_operator.get(SETTINGS).json()["values"][HOT_INT]
@@ -1233,17 +1231,18 @@ def test_one_read_per_request_answers_exactly_what_a_read_per_field_did(
         value, source, _detail = operator.resolve(record)
         entry = body["values"][record["env"]]
         assert entry["value"] == value, record["env"]
-        assert entry["source"] == {
-            "default": "default",
-            "config.yaml": "config",
-            "env": "env",
-            "runtime": "db",
-        }[source], record["env"]
+        assert (
+            entry["source"]
+            == {
+                "default": "default",
+                "config.yaml": "config",
+                "env": "env",
+                "runtime": "db",
+            }[source]
+        ), record["env"]
     assert body["values"][HOT_INT]["source"] == "config"
     assert body["values"][RESTART_STR]["source"] == "env"
-    assert body["pending_restart"] == sorted(
-        operator.units_for(operator.record(RESTART_STR))
-    )
+    assert body["pending_restart"] == sorted(operator.units_for(operator.record(RESTART_STR)))
 
 
 # ── the schema changes only on restart, so the browser may keep it ───────────
