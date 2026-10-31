@@ -185,6 +185,14 @@ and name the same kind of file as the declared type: `tool.exe` sent as
 type only if the bytes agree: an image's magic number, a PDF's `%PDF` header,
 or no NUL byte for text. The route checks the name; the engine checks both. Every
 refusal answers `request_admitted: false`: no turn started, and nothing was kept.
+
+The whole request, three files base64-encoded plus the message, can reach about
+21 MB. The send route runs behind the dashboard's proxy, and Next buffers a
+proxied body only up to `experimental.proxyClientMaxBodySize` (10 MB unless set),
+so `app/next.config.ts` sets it from the same constant the route reads
+(`MAX_SEND_BODY_BYTES`). A body larger than that is refused before it is read
+(`413`), one that arrives shorter than its `Content-Length` is a `413`, and one
+that is not JSON is a `400`.
 A file the engine cannot write (a full disk, say) is refused the same way, and
 whatever that turn had already written is removed.
 
