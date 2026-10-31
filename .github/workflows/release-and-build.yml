@@ -295,14 +295,20 @@ jobs:
           GIT_AUTHOR_EMAIL: github-actions[bot]@users.noreply.github.com
           GIT_COMMITTER_NAME: github-actions[bot]
           GIT_COMMITTER_EMAIL: github-actions[bot]@users.noreply.github.com
+          # Plain text, so ANSI codes cannot break the skip-line match below.
+          NO_COLOR: "1"
         # Published means a v* tag on HEAD that did not exist before this
-        # run: the tip can already be a tagged release commit (a re-run, or
-        # a push whose tip is the last release), and that is not a release.
-        # Once a tag is cut the step never fails, so the release always
-        # ships. Only when nothing was published is the captured output
-        # checked for semantic-release's own skip line (anchored to its
-        # logger, so commit messages it echoes cannot match): main moved
-        # under it, it exited 0, and that must not pass green.
+        # run (the tip can already be a tagged release commit: a re-run, or
+        # a push whose tip is the last release) AND that is on the remote: a
+        # tag whose push failed exists only here, nothing downstream could
+        # check it out, so that fails now. Once the tag is on the remote the
+        # step never fails, so the release always ships. Only when nothing
+        # was published is the captured output checked for
+        # semantic-release's own skip line (anchored to its logger, so the
+        # commit subjects it echoes cannot match): main moved under it, it
+        # exited 0, and that must not pass green. Accepted: a commit-body
+        # line quoting that exact sentence, prefix included, could match on
+        # a run that publishes nothing and turn it red.
         run: |
           log="$(mktemp)"
           tags_before="$(mktemp)"
@@ -313,6 +319,12 @@ jobs:
           set -e
 
           version="$(git tag --points-at HEAD --list 'v*' | sort | comm -13 "$tags_before" - | head -n1)"
+          if [ -n "$version" ] && ! git ls-remote --exit-code --tags origin "refs/tags/$version" >/dev/null; then
+            echo "new_release_published=false" >> "$GITHUB_OUTPUT"
+            echo "new_release_version=" >> "$GITHUB_OUTPUT"
+            echo "::error::semantic-release cut $version but the tag is not on the remote (its push failed). Nothing downstream can build it; fix the push and re-run this workflow."
+            exit 1
+          fi
           if [ -n "$version" ]; then
             echo "new_release_published=true" >> "$GITHUB_OUTPUT"
             echo "new_release_version=${version#v}" >> "$GITHUB_OUTPUT"
