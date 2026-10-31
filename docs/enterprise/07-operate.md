@@ -58,9 +58,10 @@ or both, and give a reason. The original goes into the fact's history before
 the change, the audit record carries the fact id and your reason (never the
 text), and the fact shows **Operator-confirmed** afterwards. An edit that would
 duplicate another active fact is refused, and so is a text under 15
-characters for most facts, because the nightly quality prune would retire it. Changing the text re-embeds the
-fact, so search finds it by its new wording at once; only if the embedding
-provider is unreachable does it keep the old vector, marked stale.
+characters for most facts, because the nightly quality prune would retire it.
+Changing the text refreshes the fact's search vector when the bridge can reach
+the embedding provider; when it cannot, the card says **search index pending**
+and search ranks the fact by its previous wording until it is re-indexed.
 
 **Audit** has the audit log and the guardrail change log, and **Export CSV**
 carries the same filters the table is showing, up to five thousand rows. Two
