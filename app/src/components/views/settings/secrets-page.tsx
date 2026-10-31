@@ -47,6 +47,8 @@ interface SecretRow {
   shadowed: boolean;
   shadowedBy: string | null;
   envName: string;
+  /** False when the vault could not be read: absent from it is then unknown, not "no". */
+  vaultReadable: boolean;
 }
 
 const SOURCE_LABEL: Record<SecretSource, string> = {
@@ -77,12 +79,19 @@ function normalize(body: unknown): SecretRow[] {
       shadowed: row.shadowed === true,
       shadowedBy: typeof row.shadowed_by === "string" ? row.shadowed_by : null,
       envName: typeof row.env_name === "string" && row.env_name ? row.env_name : row.name,
+      vaultReadable: row.vault_readable !== false,
     });
   }
   return rows;
 }
 
-/** Whole days since `iso`, or null when there is no usable timestamp. */
+/**
+ * Whole days since `iso`, or null when there is no usable timestamp.
+ *
+ * `updated_at` is a Postgres `timestamptz` serialized with `isoformat()`, so it
+ * always carries its offset and `Date` parses it as an instant, not as the
+ * browser's local time.
+ */
 function ageInDays(iso: string | null, now: number): number | null {
   if (!iso) return null;
   const at = new Date(iso).getTime();
@@ -213,7 +222,19 @@ export function SecretsPage({ visible = true, role }: SecretsPageProps) {
           </p>
         </div>
       ) : (
-        <SecretsTable rows={load.rows} now={load.readAt} />
+        <>
+          {load.rows.some((row) => !row.vaultReadable) && (
+            <div
+              role="alert"
+              className="max-w-2xl rounded-lg border border-warning/30 bg-warning/10 p-3 text-xs text-warning"
+              data-testid="secrets-vault-unreadable"
+            >
+              The vault could not be read, so vault-held credentials show as unknown. Check the
+              vault with <code className="font-mono">genus doctor</code>, then refresh.
+            </div>
+          )}
+          <SecretsTable rows={load.rows} now={load.readAt} />
+        </>
       )}
     </div>
   );
@@ -274,13 +295,15 @@ function SecretRowView({ row, now }: { row: SecretRow; now: number }) {
         <CellLabel>Configured</CellLabel>
         {row.configured ? (
           <span className="text-success">configured</span>
+        ) : !row.vaultReadable ? (
+          <span className="text-muted-foreground">unknown</span>
         ) : (
           <span className="text-warning">not configured</span>
         )}
       </td>
       <td className={cell}>
         <CellLabel>Source</CellLabel>
-        {SOURCE_LABEL[row.source]}
+        {row.vaultReadable ? SOURCE_LABEL[row.source] : "unknown"}
         {row.shadowed && (
           <span className="mt-0.5 block text-[11px] text-warning">
             The two copies differ; {row.shadowedBy ?? "one store"} is not being served.

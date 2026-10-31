@@ -28,7 +28,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from robothor.secrets.status import SecretStatus, status_table
@@ -62,12 +62,23 @@ def _public(row: SecretStatus, index: dict[str, dict[str, Any]]) -> dict[str, An
         "shadowed": row.shadowed,
         "shadowed_by": row.shadowed_by,
         "env_name": declared["env"] if declared else row.name,
+        # False when the vault could not be read at all. Without it a
+        # vault-only credential reads as "not configured" during an outage.
+        "vault_readable": row.vault_readable,
     }
 
 
 @router.get("")
 def list_secrets(request: Request) -> JSONResponse:
-    require_operator(request)
+    try:
+        require_operator(request)
+    except HTTPException as refused:
+        # The refusal is no-store too, like the list (``runs.py`` does the same).
+        raise HTTPException(
+            status_code=refused.status_code,
+            detail=refused.detail,
+            headers={"Cache-Control": "no-store"},
+        ) from None
     index = field_index()
     rows = [_public(row, index) for row in status_table(tenant_id=PLATFORM_TENANT)]
     return JSONResponse({"secrets": rows}, headers={"Cache-Control": "no-store"})
