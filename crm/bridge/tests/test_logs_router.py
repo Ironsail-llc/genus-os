@@ -506,9 +506,9 @@ def test_unavailable_units_carry_the_configured_logs_url(
 @pytest.mark.parametrize(
     "url",
     [
-        "https://alice:hunter2@logs.example.invalid/search",
-        "https://alice@logs.example.invalid/search",
-        "https://:hunter2@logs.example.invalid/search",
+        "https://alice:hunter2@example.com/search",
+        "https://alice@example.com/search",
+        "https://:hunter2@example.com/search",
     ],
 )
 def test_a_logs_url_carrying_credentials_is_never_served(
@@ -534,7 +534,7 @@ def test_a_logs_url_carrying_credentials_is_never_served(
     assert body["logs_url"] is None
     assert any("GENUS_LOGS_URL" in record.getMessage() for record in caplog.records)
     assert "hunter2" not in caplog.text
-    assert "logs.example.invalid" not in caplog.text
+    assert "example.com" not in caplog.text
 
 
 def test_a_journalctl_that_fails_gets_no_container_hint(

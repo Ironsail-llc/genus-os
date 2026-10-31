@@ -346,8 +346,8 @@ describe("Observe › Logs", () => {
 
     it("never links to a URL that carries credentials", async () => {
       for (const url of [
-        "https://alice:hunter2@logs.example.invalid/search",
-        "https://alice@logs.example.invalid/search",
+        "https://alice:hunter2@example.com/search",
+        "https://alice@example.com/search",
       ]) {
         container({ ...CONTAINER, logs_url: url });
         const { unmount } = render(<LogsView role="owner" />);
