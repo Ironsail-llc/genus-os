@@ -274,3 +274,43 @@ def test_the_flag_is_off_by_default():
     from robothor.settings.model import GenusSettings
 
     assert GenusSettings().channels.steer_everywhere is False
+
+
+class TestASteerDuringTheFinalAnswer:
+    """The model answered without tools while the steer was on its way."""
+
+    @pytest.mark.asyncio
+    async def test_the_run_takes_another_turn_with_the_steer(self):
+        from robothor.engine.live_inbox import keep_going_after_answer
+
+        session = _session()  # a Slack-style run: no live inbox
+        session.messages.append({"role": "assistant", "content": "Here is the report."})
+        session.steer("use the EU region")
+        assert await keep_going_after_answer(session, None, "Here is the report.") is True
+        assert _steering_turns(session) == ["[operator steering update]\nuse the EU region"]
+
+    @pytest.mark.asyncio
+    async def test_a_webchat_run_shows_the_superseded_answer_as_interim(self):
+        from robothor.engine.live_inbox import LiveInbox, keep_going_after_answer
+
+        session = _session()
+        inbox = LiveInbox()
+        shown: list[str] = []
+
+        async def on_interim(text: str) -> None:
+            shown.append(text)
+
+        inbox.on_interim = on_interim
+        session.live_inbox = inbox
+        session.messages.append({"role": "assistant", "content": "Here is the report."})
+        session.steer("use the EU region")
+        assert await keep_going_after_answer(session, None, "Here is the report.") is True
+        assert shown == ["Here is the report."]
+
+    @pytest.mark.asyncio
+    async def test_no_steer_means_the_answer_stands(self):
+        from robothor.engine.live_inbox import keep_going_after_answer
+
+        session = _session()
+        session.messages.append({"role": "assistant", "content": "Here is the report."})
+        assert await keep_going_after_answer(session, None, "Here is the report.") is False
