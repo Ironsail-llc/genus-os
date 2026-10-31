@@ -532,7 +532,7 @@ def _edited_text(raw: Any) -> str | None:
         )
     if len(text) > MAX_FACT_TEXT:
         raise HTTPException(
-            status_code=422, detail=f"fact_text must be under {MAX_FACT_TEXT} characters"
+            status_code=422, detail=f"fact_text may be at most {MAX_FACT_TEXT} characters"
         )
     return text
 
@@ -557,7 +557,7 @@ def _edited_entities(raw: Any) -> list[str] | None:
         if len(name) > MAX_ENTITY_CHARS:
             raise HTTPException(
                 status_code=422,
-                detail=f"an entity name must be under {MAX_ENTITY_CHARS} characters",
+                detail=f"an entity name may be at most {MAX_ENTITY_CHARS} characters",
             )
         names.append(name)
         seen.add(name.casefold())
