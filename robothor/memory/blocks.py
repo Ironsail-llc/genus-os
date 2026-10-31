@@ -77,6 +77,58 @@ def read_block(block_name: str, tenant_id: str = DEFAULT_TENANT) -> dict[str, An
             }
 
 
+def read_blocks(
+    block_names: list[str], tenant_id: str = DEFAULT_TENANT
+) -> dict[str, dict[str, Any]]:
+    """Read several named blocks in one SELECT, without touching their read count.
+
+    ``read_block`` is an ``UPDATE ... RETURNING`` per block, so loading four
+    blocks costs four write transactions. This is the read alone; call
+    ``touch_blocks`` with the same names to keep ``read_count`` and
+    ``last_read_at`` honest, as one batched write, whenever suits the caller.
+
+    Returns ``{name: {block_name, content, last_written_at}}`` for every name
+    found (the same shape ``read_block`` returns); missing or pruned names are
+    absent.
+    """
+    names = [n for n in dict.fromkeys(block_names) if n]
+    if not names:
+        return {}
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT block_name, content, last_written_at FROM agent_memory_blocks "
+                "WHERE tenant_id = %s AND block_name = ANY(%s) AND pruned_at IS NULL",
+                (tenant_id, names),
+            )
+            rows = cur.fetchall()
+    return {
+        row[0]: {
+            "block_name": row[0],
+            "content": row[1] or "",
+            "last_written_at": row[2].isoformat() if row[2] else None,
+        }
+        for row in rows
+    }
+
+
+def touch_blocks(block_names: list[str], tenant_id: str = DEFAULT_TENANT) -> None:
+    """Record a read of each named block (``read_count``, ``last_read_at``) in one UPDATE."""
+    names = [n for n in dict.fromkeys(block_names) if n]
+    if not names:
+        return
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE agent_memory_blocks "
+                "SET read_count = read_count + 1, last_read_at = NOW() "
+                "WHERE tenant_id = %s AND block_name = ANY(%s) AND pruned_at IS NULL",
+                (tenant_id, names),
+            )
+
+
 def write_block(block_name: str, content: str, tenant_id: str = DEFAULT_TENANT) -> dict[str, Any]:
     """Write or update a named memory block.
 

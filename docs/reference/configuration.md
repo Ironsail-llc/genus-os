@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-488 settings in 18 groups.
+489 settings in 18 groups.
 
 ## autonomy
 
@@ -459,6 +459,7 @@ Guardrails and feature gates. Ones marked governed are inventoried in `infra/fla
 | `ROBOTHOR_TOOL_VERIFY_MODE` | str | `observe` | `robothor-engine` | no | legacy | **governed.** Tool-verification ladder position: observe records a failed post-condition, enforce reports the tool call as failed. |
 | `ROBOTHOR_TRUNCATION_LEDGER_MODE` | str | `observe` | `robothor-engine` | no | legacy | **governed.** Ledger of tool results the run saw only part of: 'off' keeps none, 'observe' (default) keeps it, logs the unresolved entries at WARNING and writes a guardrail row at the end, 'enforce' also quotes each unresolved entry to the model once and holds a finishing run for one more ask before it completes saying what it never read. |
 | `ROBOTHOR_VERDICT_COMMITMENT_MODE` | str | `observe` | `robothor-engine` | no | legacy | **governed.** One verdict per item where the task asked the agent to classify, triage, route or prioritise: 'observe' (default) logs an item filed under two verdicts or handed back to the reader, 'enforce' re-asks once, 'off' checks nothing. The only ladder here that touches model judgement, so it stays on observe until it has been probed. |
+| `ROBOTHOR_WARMUP_PARALLEL` | bool | `false` | `robothor-engine` | no | unreleased | Build the interactive warmup preamble's sections concurrently instead of one after another, read its memory blocks in one statement, batch its entity lookups into one query and cache identity enrichment for the chat session. The text is the same; the first turn waits for the slowest section rather than the sum of them. |
 | `ROBOTHOR_WEB_SEARCH_BROWSER_FALLBACK` | str | _(empty)_ | `robothor-engine` | no | legacy | 'on' lets web_search fall back to a real browser when the scraped engines block the host IP — the failure mode behind a whole day of 'can't even web search'. |
 
 ## services

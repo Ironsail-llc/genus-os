@@ -2066,6 +2066,16 @@ class FlagSettings(SettingsGroup):
         "write the agent_reviews rows the achievement score is built on.",
         governed=True,
     )
+    warmup_parallel: bool = declare(
+        False,
+        "ROBOTHOR_WARMUP_PARALLEL",
+        "Build the interactive warmup preamble's sections concurrently instead "
+        "of one after another, read its memory blocks in one statement, batch "
+        "its entity lookups into one query and cache identity enrichment for "
+        "the chat session. The text is the same; the first turn waits for the "
+        "slowest section rather than the sum of them.",
+        since="unreleased",
+    )
     disable_all_rips: bool = declare(
         False,
         "ROBOTHOR_DISABLE_ALL_RIPS",

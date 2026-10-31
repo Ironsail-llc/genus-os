@@ -206,9 +206,7 @@ def db():
             patch("robothor.engine.host_state.host_state_section", side_effect=_host_state),
             patch("robothor.crm.dal.list_tasks", side_effect=_list_tasks),
             patch("robothor.engine.warmup._recent_fleet_surfaces", side_effect=_fleet),
-            patch(
-                "robothor.engine.session_goal.build_agent_goal_context", side_effect=_goal
-            ),
+            patch("robothor.engine.session_goal.build_agent_goal_context", side_effect=_goal),
         ):
             yield fake
     finally:
@@ -340,6 +338,8 @@ class TestFewerStatements:
 
 class TestWallTime:
     def test_parallel_is_near_the_slowest_section_not_the_sum(self, db: FakeDB) -> None:
+        _build(parallel=False)  # first-call imports are not what is measured
+        db.statements.clear()
         _, sequential_s = _build(parallel=False)
         sequential_statements = len(db.statements)
         timings: dict[str, float] = {}

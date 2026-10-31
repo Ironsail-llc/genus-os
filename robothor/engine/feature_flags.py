@@ -180,6 +180,19 @@ def cron_warmup_recall_enabled() -> bool:
     return _env_bool("MEMORY_CRON_WARMUP_RECALL")
 
 
+def warmup_parallel_enabled() -> bool:
+    """Build the interactive warmup preamble's sections concurrently.
+
+    Off, ``build_interactive_preamble`` runs every section one after another,
+    so the first turn waits for the sum of them. On, the sections run on a
+    small thread pool and are joined in their original order (same text),
+    memory blocks are read in one statement, entity candidates in one query,
+    and identity enrichment is cached for the chat session. Default OFF; gated
+    by ``ROBOTHOR_WARMUP_PARALLEL``.
+    """
+    return _env_bool("ROBOTHOR_WARMUP_PARALLEL")
+
+
 def narrow_memory_search_enabled() -> bool:
     """Make the default search_memory tool path fact-only (no auto fan-out).
 
