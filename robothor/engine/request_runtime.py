@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 
 from robothor.engine import session_registry
 from robothor.engine.context_control import ContextControl, control
-from robothor.engine.live_control import claim_conversation_key
+from robothor.engine.live_control import claim_conversation
 from robothor.engine.performance import ProgressReporter, periodic_progress, record_compactions
 
 logger = logging.getLogger(__name__)
@@ -25,9 +25,7 @@ async def observe_request(session: Any, on_status: Any) -> AsyncIterator[Any]:
     # `live_control.conversation_scope`; how `/steer` and Stop find it.
     # A verification retry enters here again on the same session; the key was
     # claimed the first time and must survive it.
-    key = claim_conversation_key()
-    if key is not None:
-        session.conversation_key = key
+    claim_conversation(session)
     session_registry.register(session, on_status=reporter.status)
     state = ContextControl(active_request=getattr(session, "originating_message", ""))
     token = control.set(state)

@@ -400,6 +400,7 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
         return single_event_response(join_running_turn(session, auth, session_key, body))
     inbox = LiveInbox()
     pending: list[str] = []
+    steered: list[str] = []  # the operator steers the run took (live_control.py)
     # Only a turn that names its request id can be steered or stopped by it.
     live_key = (
         webchat_run_key(auth, session_key, body["request_id"]) if body.get("request_id") else ""
@@ -440,7 +441,7 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
 
             # Inside this turn's scope, so /chat/steer and /chat/interrupt can
             # find this run by the turn's key (live_control.py).
-            with live_control.conversation_scope(live_key):
+            with live_control.conversation_scope(live_key, steered):
                 run = await _runner.execute(
                     agent_id=agent_id,
                     message=message,
@@ -464,7 +465,7 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
             # Always record user message (plus what joined mid-run) in session history
             append_turn(
                 session,
-                user_message=history_text(message, inbox.taken),
+                user_message=history_text(message, inbox.taken, steered),
                 assistant_text=final_text or None,
             )
 
@@ -473,7 +474,7 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
                 asyncio.create_task(
                     save_exchange_async(
                         session_key,
-                        history_text(message, inbox.taken),
+                        history_text(message, inbox.taken, steered),
                         final_text,
                         channel="webchat",
                         model_override=session.model_override,
@@ -517,12 +518,12 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
                 }
             )
         except asyncio.CancelledError:
-            turn = history_text(message, inbox.taken)
+            turn = history_text(message, inbox.taken, steered)
             if await deliver_interruption(queue, session, auth, session_key, turn, aborted=True):
                 return
             await queue.put({"event": "done", "data": {"text": "", "aborted": True}})
         except Exception as e:
-            turn = history_text(message, inbox.taken)
+            turn = history_text(message, inbox.taken, steered)
             if await deliver_interruption(queue, session, auth, session_key, turn):
                 return
             logger.error("Chat agent error: %s", e, exc_info=True)

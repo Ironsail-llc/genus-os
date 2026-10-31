@@ -164,8 +164,9 @@ With `ROBOTHOR_STEER_EVERYWHERE=true` the composer becomes a steer input while a
 reply streams: its placeholder reads *Steer the running task...*, and what you
 send is handed to the run as an operator steering update, read before its next
 model call. The note under it reads *Steering the run*. A steer is guidance for
-the run in flight, so it is not added to the conversation's history as a turn of
-its own; the answer it shapes is. A steer that arrives while the agent writes
+the run in flight: it is not a turn of its own, but once the run has read it,
+it is kept with the turn in the conversation's history (as
+`[steered while working] …`), so a reload and the next turn still know it. A steer that arrives while the agent writes
 its final answer is not lost: the run takes another turn with it, and the
 answer already written stays on screen as its own message, exactly as for a
 follow-up. When no live run can take it, it falls back to the follow-up

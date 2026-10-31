@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "ProgressMessage",
-    "claim_conversation_key",
+    "claim_conversation",
     "conversation_scope",
     "find_live_run",
     "format_progress_line",
@@ -68,7 +68,9 @@ STEER_FAILED = "Steer could not be delivered."
 #: What a run's progress message reads once the run has ended.
 PROGRESS_DONE = "Done."
 
-_pending_key: ContextVar[str | None] = ContextVar("live_conversation_key", default=None)
+_pending_key: ContextVar[tuple[str, list[str]] | None] = ContextVar(
+    "live_conversation_key", default=None
+)
 
 
 def steer_everywhere_enabled() -> bool:
@@ -86,21 +88,34 @@ def steer_everywhere_enabled() -> bool:
 
 
 @contextlib.contextmanager
-def conversation_scope(key: str) -> Iterator[None]:
-    """The next run that goes live inside this block belongs to ``key``."""
-    token = _pending_key.set(key or None)
+def conversation_scope(key: str, taken: list[str] | None = None) -> Iterator[list[str]]:
+    """The next run that goes live inside this block belongs to ``key``.
+
+    Yields the steers that run actually took, in order, filled as the loop
+    absorbs them (``live_inbox.absorb_operator_steer``), so the channel can
+    record them with the turn. A steer accepted but never read is not in it.
+    Pass ``taken`` to have them collected into a list the caller already holds.
+    """
+    if taken is None:
+        taken = []
+    token = _pending_key.set((key, taken) if key else None)
     try:
-        yield
+        yield taken
     finally:
         _pending_key.reset(token)
 
 
-def claim_conversation_key() -> str | None:
-    """Take the scope's key for the run going live now; later runs get none."""
-    key = _pending_key.get()
-    if key is not None:
-        _pending_key.set(None)
-    return key
+def claim_conversation(session: Any) -> None:
+    """Give the run going live now the scope's key and steer log; later runs get none.
+
+    A session that already holds a key (a verification retry entering again)
+    keeps it.
+    """
+    pending = _pending_key.get()
+    if pending is None:
+        return
+    _pending_key.set(None)
+    session.conversation_key, session.steers_taken = pending
 
 
 def find_live_run(key: str, *, tenant_id: str) -> str | None:

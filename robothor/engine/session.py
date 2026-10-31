@@ -283,6 +283,8 @@ class AgentSession:
         self.live_inbox: Any = None
         # The chat conversation this run answers (live_control.py); None otherwise.
         self.conversation_key: str | None = None
+        # Where the steers this run absorbs are recorded for its channel.
+        self.steers_taken: list[str] | None = None
         self.late_extensions: int = 0
 
     @property

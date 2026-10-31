@@ -114,6 +114,9 @@ def absorb_operator_steer(session: Any) -> None:
     text = session.consume_pending_steer()
     if text:
         session.messages.append({"role": "user", "content": f"[operator steering update]\n{text}"})
+        taken = getattr(session, "steers_taken", None)
+        if isinstance(taken, list):
+            taken.append(text)
         _count_user_turn(session)
         logger.info("Live steer injected into run %s", session.run_id)
 
@@ -231,12 +234,17 @@ async def keep_going_after_answer(
     return await extend_for_late_followups(session, answer)
 
 
-def history_text(original: str, absorbed: list[FollowUp]) -> str:
-    """The user row a channel stores: the request plus what was added mid-run."""
-    if not absorbed:
+def history_text(original: str, absorbed: list[FollowUp], steered: list[str] | None = None) -> str:
+    """The user row a channel stores: the request plus what was added mid-run.
+
+    ``steered`` is what the run took as operator steers
+    (``live_control.conversation_scope``), so the next turn still knows them.
+    """
+    lines = [f"[added while working] {item.text}" for item in absorbed]
+    lines += [f"[steered while working] {text}" for text in steered or []]
+    if not lines:
         return original
-    added = "\n\n".join(f"[added while working] {item.text}" for item in absorbed)
-    return f"{original}\n\n{added}"
+    return original + "\n\n" + "\n\n".join(lines)
 
 
 def followup_text(session: Any) -> str:
