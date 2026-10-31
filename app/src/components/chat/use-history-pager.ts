@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef, useState, type Dispatch, type SetStateAction } from "react";
+import { useCallback, useLayoutEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { historyToMessages, oldestServerId, type HistoryMessage } from "@/lib/chat/history-messages";
 
 /** Rows per "Load earlier": the same page size the first load asks for. */
@@ -33,8 +33,13 @@ export function useHistoryPager<M extends { id: string; serverId?: number }>(
   const [more, setMore] = useState({ agentQuery, value: false });
   const hasMore = more.agentQuery === agentQuery && more.value;
   const [loading, setLoading] = useState(false);
+  // What the callbacks read when they run, refreshed after each commit (refs
+  // are not written during render). A click or a fetch's answer always comes
+  // after the commit that rendered it.
   const latest = useRef({ agentQuery, messages });
-  latest.current = { agentQuery, messages };
+  useLayoutEffect(() => {
+    latest.current = { agentQuery, messages };
+  });
 
   const setHasMore = useCallback((value: boolean) => setMore({ agentQuery: latest.current.agentQuery, value }), []);
   const settle = setHasMore;
