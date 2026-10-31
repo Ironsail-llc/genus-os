@@ -298,7 +298,7 @@ The agent execution layer: bind address, concurrency, pacing, sandbox.
 | `ROBOTHOR_MANIFEST_ALERT_DEDUP` | int | `3600` | `robothor-engine` | no | legacy | Seconds between repeat alerts about the same broken manifest. |
 | `ROBOTHOR_MAX_CONCURRENT_AGENTS` | int | `3` | no | no | legacy | How many agent runs may execute at once. |
 | `ROBOTHOR_MAX_CONCURRENT_BACKGROUND` | int | `2` | `robothor-engine` | no | unreleased | With ROBOTHOR_EXECUTION_LANES on: how many background runs (cron, hooks, workflows, everything without a person waiting) may execute at once. Read at the first run. |
-| `ROBOTHOR_MAX_CONCURRENT_INTERACTIVE` | int | `3` | `robothor-engine` | no | unreleased | With ROBOTHOR_EXECUTION_LANES on: how many interactive runs (Telegram, webchat, Slack, plugin channels, IDE, CLI) may execute at once. Read at the first run. |
+| `ROBOTHOR_MAX_CONCURRENT_INTERACTIVE` | int | `0` | `robothor-engine` | no | unreleased | With ROBOTHOR_EXECUTION_LANES on: how many interactive runs (Telegram, webchat, Slack, plugin channels, IDE, CLI) may execute at once. 0, the default, is uncapped: interactive turns are never queued, as without lanes. A cap queues a turn with no deadline while others hold the slots, including runs waiting on ask_user. Read at the first run. |
 | `ROBOTHOR_MAX_CONCURRENT_SPAWNS` | int | `10` | no | no | legacy | How many sub-agent spawns may be in flight at once. |
 | `ROBOTHOR_MAX_ITERATIONS` | int | `20` | no | no | legacy | Default ceiling on tool-call iterations within one agent run. |
 | `ROBOTHOR_MAX_SPAWN_BATCH` | int | `10` | no | no | legacy | Largest number of sub-agents one parent may spawn in a single batch. |

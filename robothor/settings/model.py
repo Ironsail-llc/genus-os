@@ -822,11 +822,13 @@ class EngineSettings(SettingsGroup):
         restart_required=False,
     )
     max_concurrent_interactive: int = declare(
-        3,
+        0,
         "ROBOTHOR_MAX_CONCURRENT_INTERACTIVE",
         "With ROBOTHOR_EXECUTION_LANES on: how many interactive runs (Telegram, "
-        "webchat, Slack, plugin channels, IDE, CLI) may execute at once. Read at "
-        "the first run.",
+        "webchat, Slack, plugin channels, IDE, CLI) may execute at once. 0, the "
+        "default, is uncapped: interactive turns are never queued, as without "
+        "lanes. A cap queues a turn with no deadline while others hold the slots, "
+        "including runs waiting on ask_user. Read at the first run.",
         since="unreleased",
     )
     max_concurrent_background: int = declare(

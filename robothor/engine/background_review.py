@@ -463,4 +463,9 @@ def fire_and_forget(session: AgentSession, **kwargs: object) -> asyncio.Task[obj
         loop = asyncio.get_running_loop()
     except RuntimeError:
         return None
-    return loop.create_task(spawn_background_review(session, **kwargs))  # type: ignore[arg-type]
+    # Detached: the fork outlives the turn, so it runs in the background lane
+    # and takes its own slot rather than riding on the turn's (execution lanes).
+    from robothor.engine.lanes import detached
+
+    with detached():
+        return loop.create_task(spawn_background_review(session, **kwargs))  # type: ignore[arg-type]
