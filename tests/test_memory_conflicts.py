@@ -96,6 +96,7 @@ async def _resolve(
     classify = AsyncMock(return_value={"classification": kind, "reasoning": "r"})
     record = MagicMock()
     cur = MagicMock()
+    cur.rowcount = 1
     conn = MagicMock()
     conn.cursor.return_value = cur
     ctx = MagicMock()

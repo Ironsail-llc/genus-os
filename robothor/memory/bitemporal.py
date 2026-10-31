@@ -193,7 +193,7 @@ def supersede_with_validity(
     return True
 
 
-def keep_overruled(new_id: int, kept_id: int, *, tenant_id: str = "") -> None:
+def keep_overruled(new_id: int, kept_id: int, *, tenant_id: str = "") -> bool:
     """Record ``new_id`` as overruled by ``kept_id`` without touching ``kept_id``.
 
     For a new extraction that conflicts with an operator-confirmed fact. One
@@ -202,20 +202,29 @@ def keep_overruled(new_id: int, kept_id: int, *, tenant_id: str = "") -> None:
     kept fact's own ``valid_from`` is left alone; writing it here would make the
     operator's fact "true only from now", and a point-in-time read before that
     moment would return the extraction it overruled.
+
+    Returns whether the row was written. It never deactivates ``kept_id`` or
+    any operator-confirmed row, even if the insert's dedup answered the kept
+    fact's own id as ``new_id``; that case is a no-op.
     """
     tenant = tenant_id or DEFAULT_TENANT
     with get_connection() as conn:
         cur = conn.cursor()
         cur.execute(
-            """
+            f"""
             UPDATE memory_facts
             SET is_active = FALSE,
                 superseded_by = %s,
                 valid_from = COALESCE(valid_from, NOW()),
                 valid_to = COALESCE(valid_to, NOW()),
                 updated_at = NOW()
-            WHERE id = %s AND tenant_id = %s
+            WHERE id = %s AND tenant_id = %s AND id <> %s
+              AND {NOT_OPERATOR_CONFIRMED_SQL}
             """,
-            (kept_id, new_id, tenant),
+            (kept_id, new_id, tenant, kept_id),
         )
+        written = cur.rowcount > 0
         conn.commit()
+    if not written:
+        logger.info("keep_overruled: fact %s left alone (kept %s) for %s", new_id, kept_id, tenant)
+    return written

@@ -233,6 +233,18 @@ def _supersede_fact(old_id: int, new_id: int, *, tenant_id: str = "") -> None:
     supersede_with_validity(old_id, new_id, tenant_id=tenant_id, classification="resolution")
 
 
+def _confirmed_now(fact_id: int, *, tenant_id: str = "") -> bool:
+    """Re-read one fact: is it (still there and) operator-confirmed?"""
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT metadata FROM memory_facts WHERE id = %s AND tenant_id = %s",
+            (fact_id, tenant_id or DEFAULT_TENANT),
+        )
+        row = cur.fetchone()
+    return row is not None and is_operator_confirmed({"metadata": row[0]})
+
+
 def _find_overruled(fact: dict[str, Any], kept_id: int, *, tenant_id: str = "") -> int:
     """The id of an earlier inactive copy of ``fact`` overruled by ``kept_id``, or 0.
 
@@ -393,6 +405,25 @@ async def resolve_and_store(
             _record(action="superseded", new_fact_id=new_id)
             return {
                 "action": "superseded",
+                "new_id": new_id,
+                "old_id": best_match["id"],
+                "classification": kind,
+                "reasoning": classification["reasoning"],
+            }
+
+        # Refused for a reason other than confirmation (the target is gone):
+        # the new fact is the current statement, so it stays active.
+        if not is_operator_confirmed(best_match) and not _confirmed_now(
+            best_match["id"], tenant_id=tenant_id
+        ):
+            logger.info(
+                "resolve_and_store: fact %s not superseded (absent); new fact %s kept active",
+                best_match["id"],
+                new_id,
+            )
+            _record(action="supersede_skipped", new_fact_id=new_id)
+            return {
+                "action": "supersede_skipped",
                 "new_id": new_id,
                 "old_id": best_match["id"],
                 "classification": kind,
