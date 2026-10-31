@@ -379,8 +379,8 @@ With `vault.enabled: false` (local values), create the
 | Key | Default | Notes |
 |-----|---------|-------|
 | `id` | required | Lowercase DNS label, unique, and not `global.rootTenant`. |
-| `replicaCount`, `resources`, `secretRefs`, `podLabels`, `podAnnotations`, `nodeSelector`, `tolerations`, `affinity` | the `engine.*` value | Replaced, not merged. `secretRefs` keeps the engine's allow-list. |
-| `env` | `engine.env` | Merged over it, key by key. |
+| `replicaCount`, `resources`, `secretRefs`, `podLabels`, `podAnnotations`, `nodeSelector`, `tolerations`, `affinity` | the `engine.*` value | Replaced, not merged. `secretRefs` keeps the engine's allow-list, plus the cell's own `engine-providers-<id>` (see below). |
+| `env` | `engine.env` | Merged over it, key by key. On a persistent, writable workspace the chart sets `ROBOTHOR_PLUGIN_DIR` and `PYTHONPATH` (see below); the entry's `env` overrides either. |
 | `workspace.allowEmptyFleet`, `minAgentCount`, `requiredAgentIds`, `readOnly` | the top-level `workspace.*` value | |
 | `workspace.persistence` | `workspace.persistence` without `existingClaim` | Merged key by key. A cell never mounts the root engine's claim. |
 | `workspace.configMap` | none | Never inherited: a bundle holds one tenant's fleet. |
@@ -397,6 +397,74 @@ With `vault.enabled: false` (local values), create the
 - `workspace.persistence.existingClaim`: a volume you have already populated;
 - `workspace.configMap`: an immutable bundle, with
   `workspace.persistence.enabled: false` on that cell.
+
+**Plugins in a cell.** Plugins load from `ROBOTHOR_PLUGIN_DIR`, which must
+also be on `PYTHONPATH` (see `docs/PLUGINS.md`). The container's root
+filesystem is read-only, so a cell keeps its plugins on its own workspace.
+When the cell's workspace is persistent (a chart-created PVC or
+`existingClaim`) and writable, the chart sets both variables to
+`<workspace.mountPath>/.plugins`, so a plugin installed into a cell survives
+its restarts and is never visible to another cell. That default wins over
+`engine.env`, whose values describe the root engine's workspace; the entry's
+own `env` overrides either variable, for example to add a second directory to
+`PYTHONPATH`. A cell on an `emptyDir`, a ConfigMap bundle or a `readOnly`
+workspace gets neither variable: an install there would be lost on restart, or
+could not be written at all. The root engine renders exactly as before, so a
+deployment that sets these variables in `engine.env` keeps doing so.
+
+The plugin directory is on the workspace, which the cell's agents can write
+to, and `PYTHONPATH` comes before site-packages. A file an agent writes there
+(a `sitecustomize.py`, or a package shadowing a real dependency) runs inside
+the engine process on its next restart, with every secret the cell reads.
+Give the cell's agents a `write_path_allowlist` in their manifests that leaves
+out `.plugins/`, with `write_path_restrict` in their `guardrails` list, which
+the allowlist needs before it is enforced. To turn
+the plugin directory off for a cell, set both variables to empty in its
+`env`, which installs into the image's own environment as on a default root
+engine:
+
+```yaml
+tenants:
+  - id: child-a
+    env: {ROBOTHOR_PLUGIN_DIR: "", PYTHONPATH: ""}
+```
+
+State a plugin keeps outside the workspace goes on a volume the entry declares
+itself in `extraVolumes` and `extraVolumeMounts`: a cell never inherits the
+root engine's, so give each cell its own claim.
+
+```yaml
+tenants:
+  - id: child-a
+    workspace:
+      persistence: {enabled: true}
+    extraVolumes:
+      - name: plugin-state
+        persistentVolumeClaim: {claimName: child-a-plugin-state}
+    extraVolumeMounts:
+      - {name: plugin-state, mountPath: /var/lib/plugin-state}
+```
+
+**Provider credentials per cell.** A cell reads the root engine's provider
+class `engine-providers` by default. To give it credentials of its own, add a
+class named `engine-providers-<id>` to `vault.secrets` and to that cell's
+`secretRefs`, which replace the engine's list wholesale:
+
+```yaml
+vault:
+  secrets:
+    engine-providers-child-a: {path: genus-os/production/engine-providers-child-a}
+tenants:
+  - id: child-a
+    secretRefs: [database, cache, auth-signing, engine-providers-child-a]
+```
+
+Only the cell whose `id` the class names may read it. A cell naming another
+cell's `engine-providers-<other id>` fails at template time, and so does the
+root engine naming any of them in `engine.secretRefs`. The class must exist
+in `vault.secrets`, like every other one. Rotating it through VSO restarts
+that cell alone. A cell also restarts when any class it names in its own
+`secretRefs` rotates, as well as with every class the root engine reads.
 
 **Removing a cell.** Removing an entry from `tenants:` deletes that cell's
 Deployment and Service and never deletes its workspace claim. The

@@ -499,6 +499,290 @@ tests:
             name: root-plugin-state
             persistentVolumeClaim: {claimName: root-plugin-state}
 
+  # ─── Plugins ───────────────────────────────────────────────────────────────
+  # Plugins load from ROBOTHOR_PLUGIN_DIR, which must also be on PYTHONPATH.
+  # The root filesystem is read-only, so a cell's plugins live on its own
+  # workspace volume, and only a persistent, writable one keeps an install.
+  - it: a cell with a persistent workspace loads plugins from its workspace
+    template: engine/tenants.yaml
+    set:
+      tenants:
+        - id: acme-child-a
+          workspace:
+            persistence: {enabled: true}
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: ROBOTHOR_PLUGIN_DIR, value: /workspace/.plugins}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: PYTHONPATH, value: /workspace/.plugins}
+
+  - it: a cell's plugin dir follows the workspace mount path
+    template: engine/tenants.yaml
+    set:
+      workspace.mountPath: /data/ws
+      workspace.persistence.enabled: true
+      tenants:
+        - id: acme-child-a
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: ROBOTHOR_PLUGIN_DIR, value: /data/ws/.plugins}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: PYTHONPATH, value: /data/ws/.plugins}
+
+  - it: a cell on an existing workspace claim loads plugins from it
+    template: engine/tenants.yaml
+    set:
+      tenants:
+        - id: acme-child-a
+          workspace:
+            persistence: {enabled: true, existingClaim: child-a-workspace}
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: ROBOTHOR_PLUGIN_DIR, value: /workspace/.plugins}
+
+  # engine.env describes the root engine; its values do not carry into a
+  # cell's plugin wiring, but the cell's own env always wins.
+  - it: a cell's own env overrides its plugin dir and PYTHONPATH
+    template: engine/tenants.yaml
+    set:
+      engine.env.PYTHONPATH: /from-engine
+      tenants:
+        - id: acme-child-a
+          workspace:
+            persistence: {enabled: true}
+          env:
+            ROBOTHOR_PLUGIN_DIR: /workspace/custom-plugins
+            PYTHONPATH: /workspace/custom-plugins:/workspace/lib
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: ROBOTHOR_PLUGIN_DIR, value: /workspace/custom-plugins}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: PYTHONPATH, value: /workspace/custom-plugins:/workspace/lib}
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content: {name: ROBOTHOR_PLUGIN_DIR, value: /workspace/.plugins}
+
+  - it: engine.env plugin settings do not override a cell's plugin dir
+    template: engine/tenants.yaml
+    set:
+      engine.env.ROBOTHOR_PLUGIN_DIR: /from-engine
+      engine.env.PYTHONPATH: /from-engine
+      tenants:
+        - id: acme-child-a
+          workspace:
+            persistence: {enabled: true}
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: ROBOTHOR_PLUGIN_DIR, value: /workspace/.plugins}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: PYTHONPATH, value: /workspace/.plugins}
+
+  - it: a cell with an emptyDir workspace gets no plugin dir
+    template: engine/tenants.yaml
+    set:
+      tenants:
+        - id: acme-child-a
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content: {name: ROBOTHOR_PLUGIN_DIR}
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content: {name: PYTHONPATH}
+          any: true
+
+  - it: a cell with a ConfigMap workspace gets no plugin dir
+    template: engine/tenants.yaml
+    set:
+      workspace.persistence.enabled: true
+      tenants:
+        - id: acme-child-a
+          workspace:
+            persistence: {enabled: false}
+            configMap: {name: acme-child-a-bundle}
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content: {name: ROBOTHOR_PLUGIN_DIR}
+          any: true
+
+  - it: a cell with a read-only workspace gets no plugin dir
+    template: engine/tenants.yaml
+    set:
+      tenants:
+        - id: acme-child-a
+          workspace:
+            readOnly: true
+            persistence: {enabled: true}
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content: {name: ROBOTHOR_PLUGIN_DIR}
+          any: true
+
+  - it: the root engine gets no plugin dir from cells
+    template: engine/workload.yaml
+    documentIndex: 0
+    set:
+      workspace.persistence.enabled: true
+      tenants:
+        - id: acme-child-a
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content: {name: ROBOTHOR_PLUGIN_DIR}
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content: {name: PYTHONPATH}
+          any: true
+
+  - it: the root engine keeps a plugin dir it sets itself
+    template: engine/workload.yaml
+    documentIndex: 0
+    set:
+      workspace.persistence.enabled: true
+      engine.env.ROBOTHOR_PLUGIN_DIR: /workspace/.plugins
+      engine.env.PYTHONPATH: /workspace/.plugins
+      tenants:
+        - id: acme-child-a
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: ROBOTHOR_PLUGIN_DIR, value: /workspace/.plugins}
+
+  # ─── Per-cell provider credentials ─────────────────────────────────────────
+  - it: a cell may read its own provider secret class
+    template: engine/tenants.yaml
+    set:
+      vault.secrets.engine-providers-acme-child-a.path: genus-os/test/engine-providers-acme-child-a
+      tenants:
+        - id: acme-child-a
+          secretRefs: [database, cache, auth-signing, engine-providers-acme-child-a]
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].envFrom
+          value:
+            - secretRef: {name: gos-genus-os-database}
+            - secretRef: {name: gos-genus-os-cache}
+            - secretRef: {name: gos-genus-os-auth-signing}
+            - secretRef: {name: gos-genus-os-engine-providers-acme-child-a}
+
+  - it: a cell may not read another cell's provider secret class
+    template: engine/tenants.yaml
+    set:
+      vault.secrets.engine-providers-acme-child-b.path: genus-os/test/engine-providers-acme-child-b
+      tenants:
+        - id: acme-child-a
+          secretRefs: [database, engine-providers-acme-child-b]
+        - id: acme-child-b
+          secretRefs: [database, engine-providers-acme-child-b]
+    asserts:
+      - failedTemplate:
+          errorPattern: "tenants\\[0\\]\\.secretRefs names \"engine-providers-acme-child-b\".*only its own \"engine-providers-acme-child-a\""
+
+  - it: a cell's provider secret class must exist in vault.secrets
+    template: engine/tenants.yaml
+    set:
+      tenants:
+        - id: acme-child-a
+          secretRefs: [database, engine-providers-acme-child-a]
+    asserts:
+      - failedTemplate:
+          errorPattern: "unknown vault.secrets entry \"engine-providers-acme-child-a\""
+
+  - it: the root engine may not read a cell's provider secret class
+    template: engine/workload.yaml
+    set:
+      vault.secrets.engine-providers-acme-child-a.path: genus-os/test/engine-providers-acme-child-a
+      engine.secretRefs: [database, engine-providers-acme-child-a]
+      tenants:
+        - id: acme-child-a
+    asserts:
+      - failedTemplate:
+          errorPattern: "engine.secretRefs forbids secret class \"engine-providers-acme-child-a\""
+
+  - it: a cell's provider secret rotation restarts that cell only
+    template: vaultstaticsecret.yaml
+    set:
+      vault.secrets.engine-providers-acme-child-a.path: genus-os/test/engine-providers-acme-child-a
+      tenants:
+        - id: acme-child-a
+          secretRefs: [database, engine-providers-acme-child-a]
+        - id: acme-child-b
+    documentSelector:
+      path: metadata.name
+      value: gos-genus-os-engine-providers-acme-child-a
+    asserts:
+      - equal:
+          path: spec.path
+          value: genus-os/test/engine-providers-acme-child-a
+      - equal:
+          path: spec.rolloutRestartTargets
+          value:
+            - kind: Deployment
+              name: gos-genus-os-engine-acme-child-a
+
+  - it: a cell restarts with a class only it reads, without duplicates
+    template: vaultstaticsecret.yaml
+    set:
+      vault.secrets.engine-providers-acme-child-a.path: genus-os/test/engine-providers-acme-child-a
+      tenants:
+        - id: acme-child-a
+          secretRefs: [database, engine-providers-acme-child-a]
+    documentSelector:
+      path: metadata.name
+      value: gos-genus-os-database
+    asserts:
+      - equal:
+          path: spec.rolloutRestartTargets
+          value:
+            - kind: Deployment
+              name: gos-genus-os-engine
+            - kind: Deployment
+              name: gos-genus-os-bridge
+            - kind: Deployment
+              name: gos-genus-os-orchestrator
+            - kind: Deployment
+              name: gos-genus-os-engine-acme-child-a
+
   - it: a tenant cell never renders an Ingress
     template: engine/tenants.yaml
     set:

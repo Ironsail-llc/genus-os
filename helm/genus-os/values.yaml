@@ -531,9 +531,14 @@ tenancy:
 tenants: []
 #  - id: child-a                 # a crm_tenants id: lowercase DNS label
 #    replicaCount: 1             # default engine.replicaCount
-#    env: {}                     # merged over engine.env
+#    env: {}                     # merged over engine.env. A persistent, writable
+#                                # workspace also gets ROBOTHOR_PLUGIN_DIR and
+#                                # PYTHONPATH=<workspace.mountPath>/.plugins;
+#                                # set either here to override it
 #    resources: {}               # default engine.resources (replaced, not merged)
-#    secretRefs: []              # default engine.secretRefs; same allow-list
+#    secretRefs: []              # default engine.secretRefs; same allow-list, plus
+#                                # this cell's own engine-providers-<id> (which
+#                                # must also be in vault.secrets)
 #    podLabels: {}               # also podAnnotations, nodeSelector, tolerations, affinity
 #    workspace:                  # unset keys come from the top-level workspace:
 #      allowEmptyFleet: true
@@ -546,7 +551,8 @@ tenants: []
 #      configMap:                # never inherited from workspace.configMap
 #        name: ""
 #        items: []
-#    extraVolumes: []            # never inherited from engine.extraVolumes
+#    extraVolumes: []            # never inherited from engine.extraVolumes;
+#                                # plugin data volumes go here
 #    extraVolumeMounts: []       # never inherited from engine.extraVolumeMounts
 #    googleWorkspace:            # never inherited from engine.googleWorkspace
 #      enabled: false
