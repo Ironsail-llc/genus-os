@@ -508,5 +508,7 @@ jobs:
       - run: pnpm exec tsc --noEmit
       - run: pnpm test
       - run: pnpm build
+      # First-load JS per page route against app/bundle-budget.json.
+      - run: pnpm bundle:check
       - run: pnpm exec playwright install --with-deps chromium
       - run: pnpm exec playwright test

@@ -109,4 +109,9 @@ describe("POST /api/vitals", () => {
     expect(res.status).toBe(204);
     expect(webVitalLines(logSpy)).toHaveLength(1);
   });
+  it("drops a well-formed view the dashboard does not have", async () => {
+    await POST(post({ ...LCP, view: "made-up-view" }));
+
+    expect(mockWriteVital.mock.calls[0][0]).not.toHaveProperty("view");
+  });
 });
