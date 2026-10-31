@@ -34,7 +34,7 @@ function engine(history: unknown[] = []) {
   return sends;
 }
 
-const file = (name: string, type: string, body: string | Uint8Array = "hello") =>
+const file = (name: string, type: string, body: BlobPart = "hello") =>
   new File([body], name, { type });
 
 function attach(...files: File[]) {

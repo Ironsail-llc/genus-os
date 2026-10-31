@@ -12,7 +12,6 @@ model can take one.
 from __future__ import annotations
 
 import base64
-import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -85,7 +84,7 @@ class TestKeptInTheInbox:
         assert len(files) == 1
         assert files[0].read_bytes() == b"# hi"
         assert files[0].name.endswith("-notes.md")
-        assert oct(os.stat(files[0]).st_mode & 0o777) == "0o600"
+        assert oct(files[0].stat().st_mode & 0o777) == "0o600"
 
     @pytest.mark.asyncio
     async def test_the_turn_is_the_message_then_the_telegram_note(
@@ -222,7 +221,9 @@ class TestHistory:
         users = [m for m in res.json()["messages"] if m["role"] == "user"]
         assert users, "the turn was recorded"
         rows = users[-1]["extras"]["attachments"]
-        assert [(r["name"], r["kind"], r["size"]) for r in rows] == [("shot.png", "image", len(PNG))]
+        assert [(r["name"], r["kind"], r["size"]) for r in rows] == [
+            ("shot.png", "image", len(PNG))
+        ]
 
     @pytest.mark.asyncio
     async def test_the_persisted_turn_carries_the_rows(self, engine_config, mock_runner) -> None:

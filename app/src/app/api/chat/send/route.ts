@@ -1,14 +1,28 @@
 import { getEngineClient } from "@/lib/engine/server-client";
 import { ensureCanvasPromptInjected } from "@/lib/engine/session-state";
 import { resolveChatAgent } from "@/lib/chat/agent-guard";
+import { checkAttachments, type AttachmentPayload } from "@/lib/chat/attachments";
 
 export async function POST(req: Request) {
   const body = await req.json();
   const message = body.message;
+  const attachments: AttachmentPayload[] | undefined = body.attachments;
+  const hasFiles = Array.isArray(attachments) && attachments.length > 0;
 
-  if (!message || typeof message !== "string") {
+  if (typeof message !== "string" || (!message && !hasFiles)) {
     return new Response(JSON.stringify({ error: "message required", request_admitted: false }), {
       status: 400,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
+  // Files ride with the turn. Checked here against the composer's own limits
+  // (413 too many or too large, 422 a type off the list or bytes that are not
+  // base64) and again by the engine, which keeps them.
+  const refused = checkAttachments(attachments);
+  if (refused) {
+    return new Response(JSON.stringify({ error: refused.error, request_admitted: false }), {
+      status: refused.status,
       headers: { "Content-Type": "application/json" },
     });
   }
@@ -44,7 +58,9 @@ export async function POST(req: Request) {
     // the running turn; never start one), so nothing merely truthy may turn it on.
     const engineRes = await (body.join_running === true
       ? client.chatSend(message, sessionKey, body.request_id, true)
-      : body.request_id === undefined
+      : hasFiles
+        ? client.chatSend(message, sessionKey, body.request_id, false, attachments)
+        : body.request_id === undefined
         ? client.chatSend(message, sessionKey)
         : client.chatSend(message, sessionKey, body.request_id));
 

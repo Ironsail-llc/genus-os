@@ -17,6 +17,8 @@ import { ChatRecovery, type ChatRecoveryRequest } from "@/components/chat-recove
 import { ChatMarkdown, CHAT_PROSE } from "@/components/chat/chat-markdown";
 import { ChatAskCard, type ApprovalKind } from "@/components/chat-ask-card";
 import { ChatLanding } from "@/components/chat/chat-landing";
+import { AttachButton, MessageAttachments, PendingAttachments, useChatAttachments } from "@/components/chat/chat-attachments";
+import { attachmentKind, historyAttachments, stripAttachmentNote, type AttachmentSummary } from "@/lib/chat/attachments";
 import { repeatsQuickAction } from "@/components/business/quick-action-labels";
 import {
   isKeyableAgentId,
@@ -37,6 +39,8 @@ interface ChatMessage {
   recovery?: ChatRecoveryRequest;
   /** Where a message sent while the agent was working went (live follow-ups). */
   note?: string;
+  /** Files that went with a user turn. */
+  attachments?: AttachmentSummary[];
 }
 
 /** A message typed while a turn ran. `seq` is typing order: queued ones go out in it. */
@@ -161,6 +165,7 @@ export function ChatPanel({
     }
   }, [notifyCanvas, renderOnCanvas]);
   const [input, setInput] = useState("");
+  const attachments = useChatAttachments();
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamingText, setStreamingText] = useState("");
   const [activePlan, setActivePlan] = useState<ActivePlan | null>(null);
@@ -438,19 +443,24 @@ export function ChatPanel({
               (
                 m: { role: "user" | "assistant"; content: string | Array<{ type: string; text?: string }> },
                 i: number
-              ) => ({
-                id: `hist-${i}`,
-                role: m.role,
-                content: stripResidualMarkers(
+              ) => {
+                const files = m.role === "user" ? historyAttachments(m) : [];
+                const text = stripResidualMarkers(
                   typeof m.content === "string"
                     ? m.content
                     : m.content
                         .filter((b) => b.type === "text")
                         .map((b) => b.text || "")
                         .join("")
-                ),
-                timestamp: new Date(),
-              })
+                );
+                return {
+                  id: `hist-${i}`,
+                  role: m.role,
+                  content: files.length ? stripAttachmentNote(text) : text,
+                  timestamp: new Date(),
+                  ...(files.length ? { attachments: files } : {}),
+                };
+              }
             );
           const restored: ChatMessage[] = scope ? pendingRequests(scope)
             .filter((requestId) => requestId !== requestIdRef.current)
@@ -773,7 +783,9 @@ export function ChatPanel({
 
     const text = flushing ? [...flushing].sort((a, b) => a.seq - b.seq).map((q) => q.text).join("\n\n") : input.trim();
     if (!flushing && text && isStreaming) return sendFollowup(text);
-    if (!text || isStreaming) return;
+    // Files go with a fresh turn only, never with a flushed follow-up.
+    const files = flushing ? [] : attachments.files.map(({ name, mime, size, data }) => ({ name, mime, size, data }));
+    if ((!text && !files.length) || isStreaming) return;
 
     setActiveAsks([]);
 
@@ -782,6 +794,7 @@ export function ChatPanel({
       role: "user",
       content: text,
       timestamp: new Date(),
+      ...(files.length ? { attachments: files.map((f) => ({ name: f.name, size: f.size, kind: attachmentKind(f.mime) })) } : {}),
     };
     if (flushing) {
       // Their bubbles are already on screen, where they were typed.
@@ -789,6 +802,7 @@ export function ChatPanel({
     } else {
       setMessages((prev) => [...prev, userMsg]);
       setInput("");
+      attachments.clear();
     }
     setIsStreaming(true);
     setStreamingText("");
@@ -812,7 +826,7 @@ export function ChatPanel({
       const res = await fetch("/api/chat/send", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: text, request_id: requestIdRef.current, ...(agent ? { agent } : {}) }),
+        body: JSON.stringify({ message: text, request_id: requestIdRef.current, ...(agent ? { agent } : {}), ...(files.length ? { attachments: files } : {}) }),
         signal: controller.signal,
       });
 
@@ -1056,7 +1070,7 @@ export function ChatPanel({
       if (!streamSettled) noteMessages(joinedFollowups.current.map((f) => f.id), DROPPED_NOTE);
       joinedFollowups.current = [];
     }
-  }, [input, isStreaming, planMode, deepMode, sendPlanMessage, sendFollowup, noteMessages, queueFollowups, notifyConversationUpdate, setRender, handleSharedStreamEvent, agent]);
+  }, [input, attachments, isStreaming, planMode, deepMode, sendPlanMessage, sendFollowup, noteMessages, queueFollowups, notifyConversationUpdate, setRender, handleSharedStreamEvent, agent]);
 
   // Another agent is another conversation: what waited for this one is not sent there.
   useEffect(() => {
@@ -1469,7 +1483,10 @@ export function ChatPanel({
                     <ChatMarkdown content={msg.content} />
                   )
                 ) : (
-                  <p>{msg.content}</p>
+                  <>
+                    {msg.content && <p>{msg.content}</p>}
+                    <MessageAttachments attachments={msg.attachments} />
+                  </>
                 )}
                 {msg.note && (
                   <p className="mt-1 text-[11px] opacity-75" data-testid="message-note">{msg.note}</p>
@@ -1614,8 +1631,14 @@ export function ChatPanel({
         </div>
       </div>
 
-      {/* Input area */}
-      <div className="p-3 border-t border-border space-y-2">
+      {/* Input area — files can be dropped anywhere on it */}
+      <div
+        className="p-3 border-t border-border space-y-2"
+        onDragOver={(e) => { if (e.dataTransfer?.types?.includes?.("Files")) e.preventDefault(); }}
+        onDrop={(e) => { if (e.dataTransfer?.files?.length) { e.preventDefault(); void attachments.add(e.dataTransfer.files); } }}
+        data-testid="chat-composer"
+      >
+        <PendingAttachments files={attachments.files} refusal={attachments.refusal} onRemove={attachments.remove} />
         {/* Mode toggles — labeled chips on mobile, icon buttons on desktop */}
         {mobile ? (
           <div className="flex gap-2" data-testid="mobile-mode-toggles">
@@ -1724,11 +1747,16 @@ export function ChatPanel({
               </Tooltip>
             </TooltipProvider>
           )}
+          <AttachButton
+            onFiles={(files) => void attachments.add(files)}
+            disabled={planMode || deepMode || isStreaming || isPlanExecuting || isPlanning || isDeepReasoning}
+          />
           <textarea
             ref={inputRef}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
+            onPaste={(e) => { if (e.clipboardData?.files?.length) { e.preventDefault(); void attachments.add(e.clipboardData.files); } }}
             placeholder={deepMode ? "Ask a deep reasoning question..." : planMode ? "Describe what you want planned..." : isStreaming ? "Add to the running task..." : "Ask me anything..."}
             className={`flex-1 resize-none rounded-lg border bg-background px-3 py-2 text-sm min-h-[44px] max-h-[120px] focus:outline-none focus:ring-1 ${deepMode ? "border-primary/30 focus:ring-primary/50" : planMode ? "border-warning/30 focus:ring-warning/50" : "border-border focus:ring-ring"}`}
             rows={1}
@@ -1764,7 +1792,7 @@ export function ChatPanel({
             <Button
               size="icon"
               onClick={sendMessage}
-              disabled={!input.trim() || isPlanExecuting}
+              disabled={(!input.trim() && !attachments.files.length) || isPlanExecuting}
               className="shrink-0"
               data-testid="send-button"
             >
