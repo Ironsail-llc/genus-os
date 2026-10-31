@@ -281,8 +281,7 @@ class TraceContext:
         try:
             import redis
 
-            host, port = _redis_address()
-            r = redis.Redis(host=host, port=port, decode_responses=True)
+            r = redis.Redis(**_redis_kwargs(), decode_responses=True)
             r.xadd(TELEMETRY_STREAM, fields, maxlen=TELEMETRY_STREAM_MAXLEN)
         except Exception as e:
             logger.debug("Failed to publish telemetry to Redis: %s", e)
@@ -352,9 +351,20 @@ class TraceContext:
             logger.debug("Failed to export OTLP trace: %s", e)
 
 
-def _redis_address() -> tuple[str, int]:
-    """Where run telemetry is written (``REDIS_HOST`` / ``REDIS_PORT``)."""
-    return os.environ.get("REDIS_HOST", "localhost"), int(os.environ.get("REDIS_PORT", "6379"))
+def _redis_kwargs() -> dict[str, Any]:
+    """Where run telemetry is written: the engine's Redis settings.
+
+    ``ROBOTHOR_REDIS_*`` (via ``robothor.config``), like the rest of the engine.
+    ``REDIS_HOST`` / ``REDIS_PORT``, which telemetry used to read, still apply
+    when the engine's host is left at its default.
+    """
+    from robothor.config import RedisConfig, get_config
+
+    cfg = get_config().redis
+    legacy_host = os.environ.get("REDIS_HOST")
+    if legacy_host and cfg.host == RedisConfig.host:
+        return {"host": legacy_host, "port": int(os.environ.get("REDIS_PORT", "6379"))}
+    return {"host": cfg.host, "port": cfg.port, "db": cfg.db, "password": cfg.password or None}
 
 
 def _otlp_status(s: Span) -> dict[str, Any]:
@@ -411,10 +421,8 @@ class _TelemetryPublisher:
         try:
             if self._redis is None:
                 aioredis = await _import_off_loop("redis.asyncio")
-                host, port = _redis_address()
                 self._redis = aioredis.Redis(
-                    host=host,
-                    port=port,
+                    **_redis_kwargs(),
                     decode_responses=True,
                     socket_connect_timeout=REDIS_TIMEOUT_S,
                     socket_timeout=REDIS_TIMEOUT_S,

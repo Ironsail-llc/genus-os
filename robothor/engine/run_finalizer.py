@@ -33,6 +33,8 @@ import contextlib
 import functools
 import logging
 import os
+import threading
+from collections import OrderedDict
 from typing import Any
 
 from robothor.engine.interactive_recency import (  # noqa: F401
@@ -84,6 +86,25 @@ logger = logging.getLogger(__name__)
 # Run exits that export an error span (status code 2) carrying the reason.
 _ERROR_STATUSES = frozenset({RunStatus.FAILED, RunStatus.TIMEOUT, RunStatus.CANCELLED})
 _REASON_MAX = 500
+
+# Run ids whose telemetry has been published: one publish per run, whichever
+# call site gets there first. Bounded; oldest ids are forgotten first.
+_PUBLISHED_RUN_IDS: OrderedDict[str, None] = OrderedDict()
+_PUBLISHED_RUN_IDS_MAX = 10_000
+_PUBLISHED_RUN_IDS_LOCK = threading.Lock()
+
+
+def _first_publish(run_id: str | None) -> bool:
+    """True the first time ``run_id`` is seen (always True without an id)."""
+    if not run_id:
+        return True
+    with _PUBLISHED_RUN_IDS_LOCK:  # finalizers also run in worker threads
+        if run_id in _PUBLISHED_RUN_IDS:
+            return False
+        _PUBLISHED_RUN_IDS[run_id] = None
+        while len(_PUBLISHED_RUN_IDS) > _PUBLISHED_RUN_IDS_MAX:
+            _PUBLISHED_RUN_IDS.popitem(last=False)
+    return True
 
 
 def _escalate_unfinished_todos(
@@ -368,6 +389,8 @@ class RunFinalizationMixin:
         Best-effort: telemetry must never break a completed run.
         """
         if not trace or getattr(trace, "published", False) is True:
+            return
+        if not _first_publish(getattr(run, "id", None)):
             return
         with contextlib.suppress(Exception):
             from robothor.engine.telemetry import cache_hit_ratio, gen_ai_attributes
