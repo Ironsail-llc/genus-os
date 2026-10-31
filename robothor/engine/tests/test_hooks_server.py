@@ -287,3 +287,24 @@ def test_main_binds_robothor_hooks_host(monkeypatch):
     ):
         hooks_server.main()
     assert run.call_args.kwargs["host"] == "127.0.0.1"
+
+
+def test_a_hostile_channel_path_never_reaches_the_log_raw(caplog):
+    """CR/LF and ANSI escapes in the path cannot forge or colour a log line."""
+    caplog.set_level(logging.INFO, logger="robothor.engine.hooks_server")
+    hostile = "evil%0Awebhook%20delivery%20channel=orders%20outcome=accepted%1B[31m" + "x" * 500
+    with patch(
+        "robothor.engine.webhooks._get_async_redis", new_callable=AsyncMock, return_value=None
+    ):
+        resp = _client().post(f"/api/webhooks/{hostile}", content=b"{}")
+    assert resp.status_code == 404
+
+    lines = [r.getMessage() for r in caplog.records if r.name == "robothor.engine.hooks_server"]
+    assert len(lines) == 1
+    line = lines[0]
+    assert "channel=unknown " in line
+    assert "\n" not in line
+    assert "\r" not in line
+    assert "\x1b" not in line
+    assert "evil" not in line.split("reason=")[0]
+    assert len(line) < 400
