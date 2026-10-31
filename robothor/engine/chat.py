@@ -114,11 +114,7 @@ def _require_chat_auth(request: Request) -> None:
     if _config is None:
         raise HTTPException(status_code=503, detail="Chat not initialized")
     context = engine_auth.authenticate_http_request(request, tenant_id=_config.tenant_id)
-    if context is None:
-        raise HTTPException(status_code=401, detail="authentication required")
-    if not engine_auth.session_stands(context):  # sync dependency: runs in the threadpool
-        raise HTTPException(status_code=401, detail=engine_auth.SESSION_NO_LONGER_VALID)
-    request.state.auth = context
+    request.state.auth = engine_auth.require_standing(context)  # sync: runs in the threadpool
 
 
 def _auth_context(request: Request) -> Any:
