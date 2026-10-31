@@ -144,7 +144,7 @@ All camera/vision ports (`8554`, `8889`, `8890`, `8600`) are bound to `127.0.0.1
 | GET | `/costs?hours=24` | Per-agent cost breakdown |
 | GET | `/costs/deep?hours=24` | RLM deep reasoning cost tracking |
 | POST | `/chat/send` | SSE — chat with agent (delta, tool_start/end, done) |
-| GET | `/chat/history` | Session message history |
+| GET | `/chat/history` | Session message history (`limit`; with `ROBOTHOR_CHAT_HISTORY_PAGES`, also `before`/`offset`, per-message `id`/`timestamp`, `hasMore`) |
 | POST | `/chat/abort` | Cancel running response |
 | POST | `/chat/clear` | Reset session history |
 | POST | `/chat/plan/start` | SSE — plan mode exploration |

@@ -92,8 +92,9 @@ escape hatch), so:
   conversation they already have rather than a second one beside it.
 
 The turn is appended to the in-memory session as well as the database, because
-`GET /chat/history` reads RAM and the database only at boot — without that, a
-delivery would be invisible in the Helm until the next engine restart.
+`GET /chat/history` reads RAM (and the database only at boot) unless
+`ROBOTHOR_CHAT_HISTORY_PAGES` is on — without that, a delivery would be
+invisible in the Helm until the next engine restart.
 
 ## Asking a question
 
@@ -169,6 +170,36 @@ slim tab at the right edge; click it to bring the chat back.
 The Helm remembers the choice in this browser, so a reload keeps the panel the
 way you left it. The panel opens by default, and on a phone the chat is always
 a view of its own.
+
+## Working with messages
+
+Hover over a message, or Tab into it, for its actions. Every message has
+**Copy** (the markdown as written) and **Copy as plain text**. A reply has
+**Regenerate**, which sends the question before it again as a new turn. Your
+own messages have **Edit**, which puts the text back in the composer and takes
+that message and everything after it off the screen. Both wait while a turn is
+running. Edit changes only what the Helm shows: the engine keeps its history,
+so the agent still has the earlier exchange in context when you send.
+
+Code in a reply shows its language, a **Copy** button that copies the code
+alone, and light highlighting of keywords, strings, comments and numbers.
+
+Press **?** anywhere outside a text field for the keyboard shortcuts. In the
+command palette (Ctrl/⌘+K) the arrow keys move through the list and Enter
+runs the highlighted command.
+
+### Times and older messages
+
+`ROBOTHOR_CHAT_HISTORY_PAGES` (off by default) serves `GET /chat/history` from
+`chat_messages` instead of the in-memory tail, which keeps only the last 40
+rows and no times. Each message then carries `id` and `timestamp` (when the
+row was stored; a user turn is stored with its reply, so both show the time the
+reply finished), the response carries `hasMore`, and the Helm shows each
+message's time and a **Load earlier messages** button. Pages go back by
+`before=<id>`, or by `offset`; `limit` is the page size (50 from the Helm).
+A first page the database cannot answer falls back to the in-memory tail.
+With the setting off the endpoint answers exactly as before, and the Helm
+shows no times on history and no button.
 
 ## `genus channel verify webchat` exits 2
 
