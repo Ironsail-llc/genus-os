@@ -191,8 +191,14 @@ The whole request, three files base64-encoded plus the message, can reach about
 proxied body only up to `experimental.proxyClientMaxBodySize` (10 MB unless set),
 so `app/next.config.ts` sets it from the same constant the route reads
 (`MAX_SEND_BODY_BYTES`). A body larger than that is refused before it is read
-(`413`), one that arrives shorter than its `Content-Length` is a `413`, and one
-that is not JSON is a `400`.
+(`413`), as is one that grows past it while it streams or arrives shorter than
+its `Content-Length`, and one that is not JSON is a `400`.
+
+**Anything in front of the dashboard must admit the same.** A reverse proxy,
+ingress or tunnel with a smaller body limit answers its own `413` before the
+request reaches the dashboard; the Helm then says the message was too large to
+send and names the limits, and no turn starts. Let it admit about 22 MB on
+`POST /api/chat/send` (see the [production checklist](../deployment.md#production-checklist)).
 A file the engine cannot write (a full disk, say) is refused the same way, and
 whatever that turn had already written is removed.
 

@@ -835,6 +835,11 @@ per-pod volume such as `emptyDir`.
 - [ ] Set `ROBOTHOR_CAPABILITIES_MANIFEST` if the deployment keeps its
       `agent_capabilities.json` outside the workspace
 - [ ] Set up monitoring (health endpoints return JSON)
+- [ ] If a reverse proxy, ingress or tunnel sits in front of the dashboard, let it
+      admit request bodies of about 22 MB on `POST /api/chat/send`: a chat message
+      can carry three 5 MB files, base64-encoded (see
+      [Attaching files](channels/webchat.md#attaching-files)). A smaller limit
+      refuses those messages before they reach the dashboard
 - [ ] Back up PostgreSQL daily (`pg_dump robothor_memory`)
 
 ## Diagnostics (`genus doctor`)
