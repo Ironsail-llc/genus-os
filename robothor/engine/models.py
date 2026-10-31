@@ -278,6 +278,23 @@ class ChannelBusConfig:
 
 
 @dataclass
+class AmbientConfig:
+    """The manifest's ``ambient:`` block — ambient follow-ups, opt-in per agent.
+
+    Parsed by :func:`robothor.engine.ambient.parse_ambient`; ``None`` on the
+    agent means not opted in. ``tiers`` maps each action kind
+    (``nudge_thread``, ``send_digest``, ``reply_on_behalf``) to ``auto``,
+    ``approve`` or ``never``. See ``docs/AMBIENT.md``.
+    """
+
+    watch: list[str] = field(default_factory=list)
+    stalled_after: str = ""
+    stalled_after_seconds: int = 0
+    digest_at: str = ""
+    tiers: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
 class AgentConfig:
     """Configuration for a single agent, loaded from YAML manifest."""
 
@@ -424,6 +441,9 @@ class AgentConfig:
 
     # Channel bus — wake-on-surface (main only)
     channel_bus: ChannelBusConfig | None = None
+
+    # Ambient follow-ups — stalled threads and digests (opt-in, ROBOTHOR_AMBIENT)
+    ambient: AmbientConfig | None = None
 
     # ── v2 enhancements (all default off for backward compat) ──
     # Sub-agent spawning

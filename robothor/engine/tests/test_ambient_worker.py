@@ -11,8 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -25,6 +24,9 @@ from robothor.engine.ambient import (
 )
 from robothor.engine.channels.base import SendReceipt
 from robothor.engine.models import AgentConfig, AgentRun, RunStatus, StepType, TriggerType
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 NOW = datetime(2026, 10, 31, 12, 0, tzinfo=UTC)
 
@@ -208,9 +210,7 @@ class TestObserveRecordsAndSendsNothing:
         assert "Alice asked about her invoice" in text
         assert "observe" in text
 
-    async def test_the_composing_run_is_the_agents_own_run_and_cannot_send(
-        self, tmp_path, observe
-    ):
+    async def test_the_composing_run_is_the_agents_own_run_and_cannot_send(self, tmp_path, observe):
         h = _harness(tmp_path)
         await h.worker.run_pass(_agent())
         [call] = h.runner.calls

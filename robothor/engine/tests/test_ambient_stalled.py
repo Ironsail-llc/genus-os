@@ -44,7 +44,9 @@ def test_only_the_old_unanswered_inbound_is_stalled():
 def test_a_new_inbound_after_our_reply_restarts_the_clock():
     threads = [
         _thread("follow-up", ("inbound", _at(5)), ("outbound", _at(6)), ("inbound", _at(7))),
-        _thread("follow-up-recent", ("inbound", _at(5)), ("outbound", _at(6)), ("inbound", _at(11))),
+        _thread(
+            "follow-up-recent", ("inbound", _at(5)), ("outbound", _at(6)), ("inbound", _at(11))
+        ),
     ]
     stalled = find_stalled(threads, FOUR_HOURS, NOW)
     assert [s.thread_id for s in stalled] == ["follow-up"]

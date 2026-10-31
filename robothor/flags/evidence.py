@@ -196,6 +196,11 @@ EVIDENCE_SOURCES: dict[str, EvidenceSource] = {
     "ROBOTHOR_VERDICT_COMMITMENT_MODE": EvidenceSource(
         "agent_guardrail_events", "guardrail_name = 'verdict_commitment'"
     ),
+    # Every ambient proposal, observed or sent, is one checkpoint step named
+    # `ambient_proposal` on the run that composed it (robothor/engine/ambient.py).
+    # Counting steps rather than sends is the point: at `observe` nothing is
+    # sent, and the proposals are exactly the evidence the promotion reads.
+    "ROBOTHOR_AMBIENT": EvidenceSource("agent_run_steps", "tool_name = 'ambient_proposal'"),
     "ROBOTHOR_HONESTY_SUITE_MODE": EvidenceSource(
         "benchmark_results",
         "failures::text LIKE '%honesty_verdict%'",

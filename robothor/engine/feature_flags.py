@@ -1045,3 +1045,26 @@ def log_security_posture() -> None:
         )
     else:
         logger.info("Security posture: %s", rendered)
+
+
+AmbientMode = Literal["off", "observe", "enforce"]
+_VALID_AMBIENT_MODES = frozenset(("off", "observe", "enforce"))
+
+
+def ambient_mode() -> AmbientMode:
+    """Rollout mode for ambient follow-ups (``robothor.engine.ambient``).
+
+    One variable, ``ROBOTHOR_AMBIENT``, default ``off``: an agent's ``ambient:``
+    block does nothing until the operator moves this. ``observe`` records what
+    would have been sent and sends nothing; ``enforce`` sends per tier.
+
+    An unrecognised value is ``off``, not ``observe``. This flag decides
+    whether the engine starts LLM runs on a schedule and, one rung up, whether
+    it speaks for the operator; a typo should do neither.
+    """
+    if _disabled_all():
+        return "off"
+    raw = _resolve_raw("ROBOTHOR_AMBIENT", "off").strip().lower()
+    if raw in _VALID_AMBIENT_MODES:
+        return raw  # type: ignore[return-value]
+    return "off"

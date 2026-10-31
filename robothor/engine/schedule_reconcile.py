@@ -26,10 +26,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from robothor.engine.ambient import KIND_AMBIENT, ambient_job_spec, ambient_schedule
 from robothor.engine.crontab import cron_trigger
 
 if TYPE_CHECKING:
-    from apscheduler.triggers.cron import CronTrigger
+    from apscheduler.triggers.base import BaseTrigger
 
     from robothor.engine.config import ManifestScan
     from robothor.engine.models import AgentConfig
@@ -47,6 +48,7 @@ CRON_ERROR_TEMPLATES = {
     KIND_AGENT: "Invalid cron expression for %s: %s — %s",
     KIND_HEARTBEAT: "Invalid heartbeat cron for %s: %s — %s",
     KIND_WORKER: "Invalid worker cron for %s: %s — %s",
+    KIND_AMBIENT: "Invalid ambient digest_at for %s: %s — %s",
 }
 
 
@@ -64,7 +66,7 @@ class JobSpec:
     kind: str
     agent_id: str
     name: str
-    trigger: CronTrigger
+    trigger: BaseTrigger
     cron_expr: str
     misfire_grace_time: int | None
     #: ``schedule.enabled``. A spec is built either way: a disabled schedule
@@ -301,6 +303,7 @@ def agent_job_specs(
         (KIND_HEARTBEAT, agent.heartbeat and agent.heartbeat.cron_expr, _heartbeat_spec),
         (KIND_WORKER, agent.worker and agent.worker.cron_expr, _worker_spec),
         (KIND_AGENT, agent.cron_expr, _agent_spec),
+        (KIND_AMBIENT, ambient_schedule(agent), ambient_job_spec),
     )
     for kind, cron_expr, build in builders:
         if not cron_expr:

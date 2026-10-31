@@ -19,6 +19,7 @@ from croniter import croniter  # type: ignore[import-untyped,unused-ignore]
 
 from robothor.constants import DEFAULT_TENANT
 from robothor.engine.admission import admit, complete, register
+from robothor.engine.ambient import KIND_AMBIENT
 from robothor.engine.config import (
     ManifestScan,
     load_agent_config_or_broken,
@@ -431,6 +432,7 @@ class CronScheduler:
             KIND_AGENT: self._run_agent,
             KIND_HEARTBEAT: self._run_heartbeat,
             KIND_WORKER: self._run_worker,
+            KIND_AMBIENT: self._run_ambient,
         }[kind]
 
     def _add_job(self, spec: JobSpec) -> bool:
@@ -904,6 +906,33 @@ class CronScheduler:
             override_config,
             f"heartbeat:{agent_config.heartbeat.cron_expr}",
         )
+
+    async def _run_ambient(self, agent_id: str) -> None:
+        """One ambient follow-up pass for an agent (``robothor.engine.ambient``).
+
+        Leader-only and deduplicated like every scheduled run. The pass itself
+        decides whether ``ROBOTHOR_AMBIENT`` lets it compose or send anything.
+        """
+        from robothor.engine.ambient import AmbientWorker
+        from robothor.engine.leader import is_leader
+
+        if not is_leader():
+            return
+        agent_config = load_agent_config_or_broken(agent_id, self.config.manifest_dir, "ambient")
+        if not agent_config or not agent_config.ambient:
+            logger.error("Agent config or ambient block not found for: %s", agent_id)
+            return
+        dedup_key = f"{agent_id}:ambient"
+        if not await try_acquire(dedup_key):
+            logger.warning("Ambient pass skipped: %s already running", dedup_key)
+            return
+        try:
+            worker = AmbientWorker(self.runner, tenant_id=self.config.tenant_id)
+            await worker.run_pass(agent_config)
+        except Exception:  # one agent's pass, never the scheduler
+            logger.exception("Ambient pass failed for %s", agent_id)
+        finally:
+            await release(dedup_key)
 
     async def _run_worker(self, agent_id: str) -> None:
         """Execute a drain/worker run for an agent.

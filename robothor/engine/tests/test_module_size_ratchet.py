@@ -784,7 +784,10 @@ CAPS = {
     # decides whether the JOB does. Conflating the two left a model-only edit
     # reconciling to a no-op with a stale row; separating them is what kept the
     # scheduler a call site rather than growing this logic there.
-    "robothor/engine/schedule_reconcile.py": 340,
+    # 340 -> 343: the ambient job kind — one import, one error template, one
+    # builder row. The spec itself and its schedule rule live in ambient.py,
+    # so the derivation stays one loop over every kind.
+    "robothor/engine/schedule_reconcile.py": 343,
     # The bridge's agent builder. Not under robothor/, and that is the point:
     # CAPS was a robothor/-only list, so the largest new file in the manifest-API
     # change was unbounded while every engine file it touched was pinned to
