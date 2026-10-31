@@ -479,8 +479,10 @@ row whose two copies differ says which store is not being served.
 It never shows a value, a fingerprint or the vault key a row sits under. The
 bridge route behind it (`GET /api/secrets`) does not send them, is
 operator-only (owner or admin of the platform tenant), and is marked
-`no-store`. Use `genus secrets status` on the box when you need fingerprints
-to compare two copies.
+`no-store`. On the box, `genus secrets status` shows the served value's
+fingerprint, and `genus doctor` reports when an environment value shadows the
+vault. If the vault cannot be read, the page says so and shows vault-held
+credentials as unknown rather than missing.
 
 A credential whose last change is more than **90 days** old carries a
 *rotation overdue* chip, and one with no recorded change (an environment-only
