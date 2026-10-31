@@ -13,7 +13,7 @@
  * is no popover primitive in this app, and one dialog is not worth a new
  * dependency.
  */
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ChevronRight, Loader2, Wrench } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -67,7 +67,6 @@ export interface McpServer {
 
 type Load =
   | { state: "idle" }
-  | { state: "loading" }
   | { state: "refused" }
   | { state: "error"; message: string }
   | { state: "signed-out" }
@@ -149,7 +148,17 @@ function ToolGroup({ id, title, names }: { id: string; title: string; names: str
 }
 
 function ToolsBody({ agentId, load }: { agentId: string | null; load: Load }) {
-  if (load.state === "idle" || load.state === "loading") {
+  if (!agentId) {
+    // A member's agent listing is refused, and a listing may name no default:
+    // either way this chat has no agent id to ask about.
+    return (
+      <p className="text-sm text-muted-foreground" data-testid="tools-no-agent">
+        Only an operator can see which tools and servers an agent can reach. This chat has not
+        been told which agent it is talking to, so there is nothing to list.
+      </p>
+    );
+  }
+  if (load.state === "idle") {
     return (
       <p className="flex items-center gap-2 text-sm text-muted-foreground" data-testid="tools-loading">
         <Loader2 className="h-4 w-4 animate-spin" /> Asking the engine…
@@ -301,7 +310,6 @@ export function ToolsPopover({ agentId, mobile = false, disabled = false }: Tool
     const settle = (next: Load) => {
       if (ticket === latest.current) setLoad(next);
     };
-    setLoad({ state: "loading" });
     try {
       const [tools, servers] = await Promise.all([
         readJson(`${BRIDGE}/api/agents/${encodeURIComponent(agentId)}/tools`),
@@ -341,13 +349,18 @@ export function ToolsPopover({ agentId, mobile = false, disabled = false }: Tool
     }
   }, [agentId]);
 
-  const onOpenChange = useCallback(
-    (next: boolean) => {
-      setOpen(next);
-      if (next) void fetchAll();
-    },
-    [fetchAll]
-  );
+  // Asked when the dialog opens, and again if the chat learns (or changes) its
+  // agent while it is open: the agent listing can answer after the click.
+  useEffect(() => {
+    if (open && agentId) void fetchAll();
+  }, [open, agentId, fetchAll]);
+
+  // Opening starts from the "asking" state, so a previous answer is never
+  // shown as if it were this one.
+  const onOpenChange = useCallback((next: boolean) => {
+    if (next) setLoad({ state: "idle" });
+    setOpen(next);
+  }, []);
 
   if (mobile) {
     return (
@@ -355,7 +368,7 @@ export function ToolsPopover({ agentId, mobile = false, disabled = false }: Tool
         <button
           type="button"
           onClick={() => onOpenChange(true)}
-          disabled={disabled || !agentId}
+          disabled={disabled}
           aria-label={TOOLS_LABEL}
           className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-colors bg-muted/50 text-muted-foreground border border-transparent disabled:opacity-50"
           data-testid="tools-toggle"
@@ -385,7 +398,7 @@ export function ToolsPopover({ agentId, mobile = false, disabled = false }: Tool
               size="icon"
               variant="ghost"
               onClick={() => onOpenChange(true)}
-              disabled={disabled || !agentId}
+              disabled={disabled}
               aria-label={TOOLS_LABEL}
               className="text-muted-foreground hover:text-foreground"
               data-testid="tools-toggle"

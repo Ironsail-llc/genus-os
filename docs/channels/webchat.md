@@ -237,7 +237,8 @@ so **Manage in agent settings** opens the agent editor for that agent
 set in the manifest file itself. After a save the engine reconciles, and the
 dialog shows the new list the next time it opens.
 
-The list is operator information, so a member sees a sentence saying so. The
+The list is operator information, so a member sees a sentence saying so, as
+does a chat whose fleet listing names no default agent. The
 data comes from two engine routes, `GET /api/admin/agents/{id}/tools` and
 `GET /api/admin/mcp/servers`, which the bridge proxies as
 `GET /api/agents/{id}/tools` and `GET /api/mcp/servers` for operators.
