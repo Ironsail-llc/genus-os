@@ -1665,6 +1665,7 @@ export function ChatPanel({
                   : "bg-muted/50 text-muted-foreground border border-transparent"
               } disabled:opacity-50`}
               aria-label="Plan mode"
+              aria-pressed={planMode && !deepMode}
               data-testid="plan-toggle"
             >
               <ClipboardList className="w-3.5 h-3.5" />
@@ -1692,6 +1693,7 @@ export function ChatPanel({
                   : "bg-muted/50 text-muted-foreground border border-transparent"
               } disabled:opacity-50`}
               aria-label="Deep mode"
+              aria-pressed={deepMode}
               data-testid="deep-toggle"
             >
               <Brain className="w-3.5 h-3.5" />
@@ -1719,6 +1721,7 @@ export function ChatPanel({
                     className={planMode && !deepMode ? "text-warning bg-warning/10 hover:bg-warning/20" : planMode && deepMode ? "text-primary bg-primary/10 hover:bg-primary/20" : "text-muted-foreground hover:text-foreground"}
                     disabled={isStreaming || isPlanExecuting || isPlanning || isDeepReasoning}
                     aria-label="Plan mode"
+                    aria-pressed={planMode && !deepMode}
                     data-testid="plan-toggle"
                   >
                     <ClipboardList className="w-4 h-4" />
@@ -1750,6 +1753,7 @@ export function ChatPanel({
                     className={deepMode ? "text-primary bg-primary/10 hover:bg-primary/20" : "text-muted-foreground hover:text-foreground"}
                     disabled={isStreaming || isPlanExecuting || isPlanning || isDeepReasoning}
                     aria-label="Deep mode"
+                    aria-pressed={deepMode}
                     data-testid="deep-toggle"
                   >
                     <Brain className="w-4 h-4" />
