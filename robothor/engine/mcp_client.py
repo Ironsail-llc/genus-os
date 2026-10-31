@@ -154,6 +154,12 @@ class McpClientSession:
             raise RuntimeError(f"MCP server '{self.config.name}' not running")
 
         async with self._lock:
+            # A request abandoned before this one got the lock left its answer
+            # unread; sending now would read that answer as ours and hide the
+            # fault. Refuse, leaving the flag set so the pool restarts the
+            # session (McpClientPool._get_session_locked).
+            if self._desynced and _config_cache_enabled():
+                raise RuntimeError(f"MCP server '{self.config.name}': pipe out of step")
             self._request_id += 1
             request = {
                 "jsonrpc": "2.0",

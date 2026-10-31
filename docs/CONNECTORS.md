@@ -189,7 +189,8 @@ sooner. An HTTP session never drops, so for a remote server the ten-minute age
 limit is what picks up tools it added or removed. A `tools/list` that fails or
 times out is never cached. A stdio server whose request was abandoned after it
 was written (a timed-out list or call) is restarted before its next request,
-because its unread answer would be misread; one that only waited behind
+because its unread answer would be misread; a request already queued on that
+server fails with "pipe out of step" instead of reading it. One that only waited behind
 another run's call is left alone, and so is an HTTP server.
 Adapters also connect concurrently (four at a time, each under its own
 five-second timeout), an HTTP server keeps one client for all its requests, and
