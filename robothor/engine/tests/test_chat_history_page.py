@@ -9,6 +9,7 @@ endpoint reads its page from there; off, it answers exactly as before.
 
 from __future__ import annotations
 
+import json
 import threading
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -91,6 +92,25 @@ class TestLoadHistoryPage:
         assert 71 in params
         assert 51 in params  # limit + 1
         assert 7 in params
+
+    def test_a_stored_page_cannot_serve_a_credential(self, chat_db):
+        """Rows written before the store redacted on the way in still hold
+        tokens; the in-memory path re-redacts them, and so must a page."""
+        token = "ghp_FAKE0000_stored_before_redaction_0000"
+        chat_db.fetchall.return_value = [
+            {
+                "id": 5,
+                "message": {"role": "user", "content": f"here it is: {token}"},
+                "created_at": T0,
+            }
+        ]
+
+        page = chat_store.load_history_page("s:key", limit=50, tenant_id="t1")
+
+        assert page is not None
+        assert token not in json.dumps(page, default=str)
+        assert "here it is" in page["messages"][0]["content"]
+        assert page["messages"][0]["id"] == 5
 
     def test_nothing_stored_is_none(self, chat_db):
         chat_db.fetchall.return_value = []
