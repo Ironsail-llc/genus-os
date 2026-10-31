@@ -851,7 +851,13 @@ def set_enabled(name: str, enabled: bool, path: Path | None = None) -> LockRow |
     return updated
 
 
-def refusal_for(dist: Any, lock: Lockfile, digests: dict[str, str] | None = None) -> str | None:
+def refusal_for(
+    dist: Any,
+    lock: Lockfile,
+    digests: dict[str, str] | None = None,
+    *,
+    ignore_disabled: bool = False,
+) -> str | None:
     """Why this distribution must not be imported, or None.
 
     The loader's gate, kept here so that the rule and the record it reads have
@@ -865,6 +871,11 @@ def refusal_for(dist: Any, lock: Lockfile, digests: dict[str, str] | None = None
     ``Distribution`` object for every group query, so the object identity never
     repeats and that memo had a 0% hit rate while looking like an optimisation.
     A recycled id would also have handed back another distribution's digest.
+
+    ``ignore_disabled`` is the root tenant forcing the plugin on
+    (``robothor.plugins.grants``): the row's ``enabled: false`` no longer
+    refuses it, and the drift check still does. A grant overrides a child's
+    decision, never the record of what was reviewed.
     """
     if not lock.usable:
         return None
@@ -872,7 +883,7 @@ def refusal_for(dist: Any, lock: Lockfile, digests: dict[str, str] | None = None
     row = lock.rows.get(name) if name else None
     if row is None:
         return None
-    if not row.enabled:
+    if not row.enabled and not ignore_disabled:
         return DISABLED_REASON
     if digests is None:
         digest = manifest_digest(dist)

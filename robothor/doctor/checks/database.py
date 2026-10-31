@@ -15,6 +15,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from robothor.db import rls_exemptions
 from robothor.doctor.model import Check, FixResult, Result, fail, ok
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -30,10 +31,15 @@ __all__ = ["CHECKS", "SERVICE_ROLE_MIGRATION"]
 SERVICE_ROLE_MIGRATION = "107_seed_service_role.sql"
 RLS_BACKSTOP_MIGRATION = "120_tenant_rls_cover_new_tables.sql"
 
-_BARE_TENANT_TABLES_SQL = """
+#: Deliberately exempt tenant tables (``robothor.db.rls_exemptions``): they carry
+#: ``tenant_id`` and no ``tenant_isolation``, and are neither reported nor fixed.
+_EXEMPT = rls_exemptions.sql_literal_list()
+
+_BARE_TENANT_TABLES_SQL = f"""
 SELECT pt.tablename
 FROM pg_tables pt
 WHERE pt.schemaname = 'public'
+  AND pt.tablename NOT IN {_EXEMPT}
   AND EXISTS (
       SELECT 1 FROM information_schema.columns c
       WHERE c.table_schema = 'public'
@@ -150,8 +156,15 @@ def _readonly_rows(ctx: DoctorContext) -> list[dict[str, Any]]:
             }
         )
     rows.extend(
-        {"migration_id": migration_id, "status": "MISSING"}
-        for migration_id in applied
+        {
+            "migration_id": migration_id,
+            "status": (
+                migrate.AHEAD_STATUS
+                if migrate.newer_than_manifest(migrations, str(record[1]))
+                else "MISSING"
+            ),
+        }
+        for migration_id, record in applied.items()
         if migration_id not in discovered
     )
     return rows
@@ -180,6 +193,10 @@ async def _migrations(ctx: DoctorContext) -> Result:
     changed since it ran, and ``MISSING`` that the ledger records one this
     install does not ship: neither can be repaired by applying anything, and
     both need a human. Only pending is fixable, and only with ``--fix``.
+    ``AHEAD`` is a ledger row strictly newer than this install's whole manifest:
+    a later release's migration, left by a rollback. The migrator lets the
+    release start on it (robothor/db/migrate.py), and this check still reports
+    it, because the code is older than the schema until it is rolled forward.
 
     A least-privilege role gets the same verdict by a different route rather
     than a shrug. ``migrate.status()`` needs CREATE on the schema (it creates
@@ -217,6 +234,27 @@ async def _migrations(ctx: DoctorContext) -> Result:
             f"{len(broken)} migration(s) the ledger and this checkout disagree about: "
             + ", ".join(broken[:5])
             + " — this cannot be repaired by applying migrations; see 'genus migrate --status'"
+        )
+    from robothor.db.migrate import AHEAD_STATUS
+
+    ahead = [row["migration_id"] for row in rows if row["status"] == AHEAD_STATUS]
+    if ahead and pending:
+        # The migrator refuses this ledger (robothor/db/migrate.py), so neither
+        # "the release runs" nor a --fix that applies the pending one is true.
+        return fail(
+            f"{len(ahead)} applied migration(s) newer than this release ("
+            + ", ".join(ahead[:5])
+            + f") sit beside {len(pending)} of its own still pending, first {pending[0]} — "
+            "the migrator refuses this ledger and the release will not start; roll forward, "
+            "or restore the database from before the newer release migrated it"
+        )
+    if ahead:
+        return fail(
+            f"{len(ahead)} applied migration(s) newer than this release: "
+            + ", ".join(ahead[:5])
+            + " — the schema is ahead of the code, the state a rollback leaves. The release "
+            "runs (the migrator accepts migrations strictly newer than its manifest); roll "
+            "forward to clear this"
         )
     if pending:
         return fail(
@@ -323,11 +361,34 @@ async def _rls_coverage(ctx: DoctorContext) -> Result:
     return ok("every tenant_id table carries the tenant_isolation policy")
 
 
+#: Where the exemption goes in migration 120's loop: right after the one
+#: ``schemaname`` predicate of its ``FOR t IN SELECT ... FROM pg_tables pt``.
+_BACKSTOP_ANCHOR = "WHERE schemaname = 'public'"
+
+
+def _exemption_clause() -> str:
+    return f"\n          AND pt.tablename NOT IN {_EXEMPT}"
+
+
+def _backstop_sql() -> str:
+    """Migration 120's own loop, with the exempt tables taken out of it.
+
+    Executed rather than re-typed, for the reason ``SERVICE_ROLE_MIGRATION``
+    is; the ONE change is the exemption, inserted at a fixed anchor. A
+    migration 120 whose text no longer has exactly one anchor raises rather
+    than running a loop that would put RLS on ``audit_log``.
+    """
+    sql = _migration_sql(RLS_BACKSTOP_MIGRATION)
+    if sql.count(_BACKSTOP_ANCHOR) != 1:
+        raise RuntimeError(f"{RLS_BACKSTOP_MIGRATION} no longer has one '{_BACKSTOP_ANCHOR}'")
+    return sql.replace(_BACKSTOP_ANCHOR, _BACKSTOP_ANCHOR + _exemption_clause())
+
+
 async def _apply_rls_backstop(ctx: DoctorContext) -> FixResult:
-    """Run migration 120's own SQL. Idempotent -- it only touches bare tables."""
+    """Run migration 120's own loop, minus the exempt tables. Idempotent."""
 
     def _apply() -> None:
-        sql = _migration_sql(RLS_BACKSTOP_MIGRATION)
+        sql = _backstop_sql()
         with ctx.db() as conn:
             cursor = conn.cursor()
             cursor.execute(sql)

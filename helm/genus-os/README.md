@@ -212,6 +212,278 @@ ready.
 configuration. Legacy `/health` and `/liveness` endpoints remain available for
 older integrations.
 
+## Tenant cells
+
+One release can run an engine per tenant. The root engine is the `engine:`
+block and operates as `global.rootTenant` (default `default`, which is also
+what the code assumes when nothing is set). Each entry in `tenants:` adds a
+**cell**: one more engine for one child tenant, sharing the release's bridge,
+dashboard, orchestrator, database and cache. The default `tenants: []` renders
+nothing extra.
+
+The list names real tenants, so it is deployment data: put it in your
+environment's values, never in this chart.
+
+```yaml
+tenants:
+  - id: child-a                  # a crm_tenants id: lowercase DNS label
+  - id: child-b
+    replicaCount: 1
+    env: {SOME_FLAG: "1"}        # merged over engine.env
+    workspace:
+      requiredAgentIds: [main]
+      persistence: {size: 5Gi}
+    googleWorkspace: {enabled: true}
+```
+
+**What one entry renders.** A Deployment and a Service named
+`<fullname>-engine-<id>`, and a workspace PVC `<fullname>-workspace-<id>`
+unless the cell mounts a ConfigMap or an existing claim. A cell never renders
+an Ingress. Its pods carry `app.kubernetes.io/component: engine`, like the
+root engine's, so every NetworkPolicy written for the engine (ingress from the
+bridge and dashboard, egress to the database, cache, NATS and external
+destinations) covers them with no change. They are told apart by
+`genus-os/tenant: <id>`, which is in each cell's selectors.
+
+**The root engine.** Its Deployment selector is immutable and does not change.
+Its pods gain the `genus-os/tenant: <rootTenant>` label, and once `tenants` is
+non-empty its Service and PodDisruptionBudget select on it, so traffic for the
+root engine never reaches a cell. If you add the first cell in the same
+upgrade that first adds the label, the root Service has no endpoints until
+the new root pod is ready. To avoid that gap, upgrade the chart first and add
+cells afterwards.
+
+**Tenant identity.** Every engine pod gets `ROBOTHOR_TENANT_ID` and
+`ROBOTHOR_DEFAULT_TENANT` set to the same value: the cell's `id`, or
+`global.rootTenant` on the root engine. The two must agree in one process
+(`tenant_env_conflict` in `robothor/constants.py`), so a cell's `env` cannot
+override them, and `engine.env` naming either one with a value other than
+`global.rootTenant` fails at template time. A cell also gets
+`GENUS_EVENT_CONSUMER_GROUP=engine-<id>`, so each engine reads the event
+stream as its own consumer group.
+
+**Reaching a cell.** The bridge and the dashboard both get
+`ROBOTHOR_ENGINE_URL` (the root engine) and
+`GENUS_TENANT_ENGINE_URL_TEMPLATE=http://<fullname>-engine-{tenant}:<engine.service.port>`.
+`{tenant}` is literal text that the application replaces with a tenant id.
+The chart refuses an id that would make `<fullname>-engine-<id>` longer than 63
+characters, because the template could then name a Service that does not
+exist. Both also get `ROBOTHOR_DEFAULT_TENANT=<global.rootTenant>`, so the
+bridge, the dashboard and the root engine agree on which tenant is root and a
+root user's requests go to the root engine rather than to a cell that does not
+exist. If you set `ROBOTHOR_PLATFORM_TENANT`, set it on the bridge and the
+dashboard alike: both read it before `ROBOTHOR_DEFAULT_TENANT`.
+
+**Tenant switching.** Whether a root-tenant owner or admin may act in a
+descendant tenant is one setting, read by the bridge (which issues the acting
+token) and by every engine (which enforces it). Set it once and the chart
+renders it on the bridge, the root engine and every cell. A component's own
+`env`, or a cell's `env`, still wins.
+
+| Value | Renders | Default |
+|-------|---------|---------|
+| `tenancy.switchMode` | `GENUS_TENANT_SWITCH_MODE`: `off`, `observe` or `enforce` | `""`, which renders nothing; the code's default is `off` |
+| `tenancy.allowInertRls` | `GENUS_TENANT_SWITCH_ALLOW_INERT_RLS` | unset, which renders nothing; the code's default is `false` |
+
+Both render nothing until set, so a release that sets neither renders exactly
+as before. Any other switch mode fails at template time, because the code
+would read it as `off` and silently disable switching. `allowInertRls` lets
+switching work while row-level security is inert, which leaves each query's
+own `WHERE` clause as the only tenant boundary. Turn it on deliberately, if at
+all.
+
+**Shared vault key.** Credentials in the vault are encrypted with one master
+key, and a credential the bridge stores while acting in a child tenant is read
+back by that child's engine. So the bridge, the root engine and every cell
+must hold the same key. Without one, each process looks for
+`<workspace>/.vault-key`. The bridge has no workspace at all, and each cell has
+its own, so nothing would match. The chart therefore refuses to render
+`tenants` unless `vaultKey.enabled` is true.
+
+```yaml
+vault:
+  secrets:
+    vault-key: {path: genus-os/production/vault-key}
+vaultKey:
+  enabled: true
+```
+
+The Vault path holds two fields, `key` and `fingerprint-salt`, each 32 bytes
+stored base64-encoded because Vault KV holds strings. Where those bytes come
+from depends on whether the release already has a vault key, and **the chart
+cannot tell the two cases apart**. Check before you write anything:
+
+```sh
+kubectl exec deploy/<fullname>-engine --namespace <namespace> -- \
+  genus vault list
+```
+
+Run it as the root tenant. If it lists any rows, or
+`/workspace/.vault-key` exists in the engine pod, you are in case (b).
+
+**(a) No key yet: an empty vault and no `/workspace/.vault-key`.** Generate
+both values:
+
+```sh
+vault kv put <mount>/<path>/vault-key \
+  key="$(openssl rand -base64 32)" \
+  fingerprint-salt="$(openssl rand -base64 32)"
+```
+
+**(b) An existing key: stored secrets, or a `.vault-key` in the workspace.**
+Migrate the key the release already uses. **Do not generate a new one.**
+Every secret already stored is encrypted under the existing key, and a new
+key would make all of them permanently unreadable. Copy the existing files
+into Vault instead. A missing salt only changes how fingerprints print, so
+generate one if the workspace has none:
+
+```sh
+key="$(kubectl exec deploy/<fullname>-engine --namespace <namespace> -- \
+  base64 -w0 /workspace/.vault-key)"
+salt="$(kubectl exec deploy/<fullname>-engine --namespace <namespace> -- \
+  base64 -w0 /workspace/.fingerprint-salt 2>/dev/null || openssl rand -base64 32)"
+vault kv put <mount>/<path>/vault-key key="$key" fingerprint-salt="$salt"
+unset key salt
+```
+
+Then enable `vaultKey`. The engine reads the same key from
+`/etc/genus/vault/.vault-key` from then on, and the workspace copy is no
+longer used.
+
+VSO decodes them into raw files in the `<fullname>-vault-key` Secret. The
+chart mounts them read-only on the bridge, the root engine and every cell as
+`/etc/genus/vault/.vault-key` and `/etc/genus/vault/.fingerprint-salt`, and
+sets `GENUS_VAULT_KEY_FILE` and `GENUS_FINGERPRINT_SALT_FILE` to those paths.
+The basenames are deliberate: the agent secret-file denylist refuses
+`.vault-key` and `.fingerprint-salt` wherever they live, so an agent's shell
+or file tools cannot read the master key. The mount
+is not optional: under those variables a missing file is a hard error, and the
+pod waits for the Secret rather than starting without a key. Rotating either
+field through VSO restarts the bridge and every engine. Rotating `key`
+re-keys nothing, though: secrets already stored stay encrypted under the old
+key and become unreadable, so treat `key` as write-once.
+
+The fingerprint salt is separate from the key. A fingerprint (`b2:…`) is
+keyed by the salt file, not by the vault key, so two processes with the same
+key but different salts print different fingerprints for the same
+credential. Sharing the salt as well keeps fingerprints comparable across the
+bridge and every engine. It has no effect on whether a secret can be
+decrypted.
+
+With `vault.enabled: false` (local values), create the
+`<fullname>-vault-key` Secret yourself with the raw bytes under `key` and
+`fingerprint-salt`.
+
+**Defaults and inheritance.**
+
+| Key | Default | Notes |
+|-----|---------|-------|
+| `id` | required | Lowercase DNS label, unique, and not `global.rootTenant`. |
+| `replicaCount`, `resources`, `secretRefs`, `podLabels`, `podAnnotations`, `nodeSelector`, `tolerations`, `affinity` | the `engine.*` value | Replaced, not merged. `secretRefs` keeps the engine's allow-list, plus the cell's own `engine-providers-<id>` (see below). |
+| `env` | `engine.env` | Merged over it, key by key. On a persistent, writable workspace the chart sets `ROBOTHOR_PLUGIN_DIR` and `PYTHONPATH` (see below); the entry's `env` overrides either. |
+| `workspace.allowEmptyFleet`, `minAgentCount`, `requiredAgentIds`, `readOnly` | the top-level `workspace.*` value | |
+| `workspace.persistence` | `workspace.persistence` without `existingClaim` | Merged key by key. A cell never mounts the root engine's claim. |
+| `workspace.configMap` | none | Never inherited: a bundle holds one tenant's fleet. |
+| `extraVolumes`, `extraVolumeMounts` | none | Never inherited: the root engine's extra volumes name its own resources, and a `ReadWriteOnce` claim mounted by a second pod would leave the cell unschedulable. Same shape as `engine.extraVolumes` (see [Extra volumes](#extra-volumes)). |
+| `googleWorkspace.enabled` | `false` | Never inherited: credentials belong to one mailbox. |
+| `googleWorkspace.secretName` | `<fullname>-engine-<id>-google` | A Secret with a `credentials.json` key, supplied by the deployment. VSO only materializes the root engine's `engine-google`. The mount is optional, as on the root engine. |
+
+**Seeding a cell's workspace.** Same options as the root engine (see
+[Workspace and readiness](#workspace-and-readiness)):
+
+- a chart-created PVC (the default when `workspace.persistence.enabled`),
+  seeded by an operator or a provisioning job, with the cell unready until a
+  valid fleet is present unless `allowEmptyFleet` is true;
+- `workspace.persistence.existingClaim`: a volume you have already populated;
+- `workspace.configMap`: an immutable bundle, with
+  `workspace.persistence.enabled: false` on that cell.
+
+**Plugins in a cell.** Plugins load from `ROBOTHOR_PLUGIN_DIR`, which must
+also be on `PYTHONPATH` (see `docs/PLUGINS.md`). The container's root
+filesystem is read-only, so a cell keeps its plugins on its own workspace.
+When the cell's workspace is persistent (a chart-created PVC or
+`existingClaim`) and writable, the chart sets both variables to
+`<workspace.mountPath>/.plugins`, so a plugin installed into a cell survives
+its restarts and is never visible to another cell. That default wins over
+`engine.env`, whose values describe the root engine's workspace; the entry's
+own `env` overrides either variable, for example to add a second directory to
+`PYTHONPATH`. A cell on an `emptyDir`, a ConfigMap bundle or a `readOnly`
+workspace gets neither variable: an install there would be lost on restart, or
+could not be written at all. The root engine renders exactly as before, so a
+deployment that sets these variables in `engine.env` keeps doing so.
+
+The plugin directory is on the workspace, which the cell's agents can write
+to, and `PYTHONPATH` comes before site-packages. A file an agent writes there
+(a `sitecustomize.py`, or a package shadowing a real dependency) runs inside
+the engine process on its next restart, with every secret the cell reads.
+Give the cell's agents a `write_path_allowlist` in their manifests that leaves
+out `.plugins/`, with `write_path_restrict` in their `guardrails` list, which
+the allowlist needs before it is enforced. To turn
+the plugin directory off for a cell, set both variables to empty in its
+`env`, which installs into the image's own environment as on a default root
+engine:
+
+```yaml
+tenants:
+  - id: child-a
+    env: {ROBOTHOR_PLUGIN_DIR: "", PYTHONPATH: ""}
+```
+
+State a plugin keeps outside the workspace goes on a volume the entry declares
+itself in `extraVolumes` and `extraVolumeMounts`: a cell never inherits the
+root engine's, so give each cell its own claim.
+
+```yaml
+tenants:
+  - id: child-a
+    workspace:
+      persistence: {enabled: true}
+    extraVolumes:
+      - name: plugin-state
+        persistentVolumeClaim: {claimName: child-a-plugin-state}
+    extraVolumeMounts:
+      - {name: plugin-state, mountPath: /var/lib/plugin-state}
+```
+
+**Provider credentials per cell.** A cell reads the root engine's provider
+class `engine-providers` by default. To give it credentials of its own, add a
+class named `engine-providers-<id>` to `vault.secrets` and to that cell's
+`secretRefs`, which replace the engine's list wholesale:
+
+```yaml
+vault:
+  secrets:
+    engine-providers-child-a: {path: genus-os/production/engine-providers-child-a}
+tenants:
+  - id: child-a
+    secretRefs: [database, cache, auth-signing, engine-providers-child-a]
+```
+
+Only the cell whose `id` the class names may read it. A cell naming another
+cell's `engine-providers-<other id>` fails at template time, and so does the
+root engine naming any of them in `engine.secretRefs`. The class must exist
+in `vault.secrets`, like every other one. Rotating it through VSO restarts
+that cell alone. A cell also restarts when any class it names in its own
+`secretRefs` rotates, as well as with every class the root engine reads.
+
+**Removing a cell.** Removing an entry from `tenants:` deletes that cell's
+Deployment and Service and never deletes its workspace claim. The
+chart-created PVC carries two sets of opt-outs:
+
+- `helm.sh/resource-policy: keep`, so `helm upgrade` and `helm uninstall`
+  leave it in place;
+- `argocd.argoproj.io/sync-options: Prune=false,Delete=false`, because Argo CD
+  ignores Helm's policy. `Prune=false` stops `argocd app sync --prune` from
+  removing it, and `Delete=false` stops a cascading delete of the Argo CD
+  Application from removing it.
+
+Other sync options set in `workspace.persistence.annotations` are kept, and a
+`Prune=` or `Delete=` set there is replaced. Under Argo CD the orphaned claim
+then shows as requiring pruning, and the Application stays OutOfSync until the
+claim is gone. Adding the same `id` back mounts the same workspace again.
+Otherwise, delete the claim by hand once you no longer need its contents:
+`kubectl delete pvc <fullname>-workspace-<id> --namespace <namespace>`.
+
 ## Google Workspace credentials
 
 The engine's mail, calendar and chat tools (`gws_*`) run the `gws` CLI, which

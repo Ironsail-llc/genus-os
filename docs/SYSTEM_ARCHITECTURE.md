@@ -72,12 +72,20 @@ The Helm deployment has a different boundary from the systemd appliance:
   (`app/src/app/api/bridge/[...path]`) will not forward the path at all. Humans
   set and rotate secrets with `robothor vault` on the appliance.
   `/api/vault/list` stays open to operators because it returns key names only.
-- Bridge mutations under `/api/` either call `require_operator(request)` or are
-  scope-gated by the middleware (the Inbox answers additionally carry the
-  tenant-local `require_tenant_operator`, pinned by the same test); `crm/bridge/tests/test_mutations_are_gated.py`
+- Bridge mutations under `/api/` either call an operator gate (the root gate
+  `require_root_operator`, the per-tenant `require_tenant_admin`, or the Inbox's
+  tenant-local `require_tenant_operator`) or are scope-gated by the middleware;
+  `crm/bridge/tests/test_mutations_are_gated.py`
   enumerates the assembled app and fails on any route that is neither, so a new
-  ungated mutation cannot ship unnoticed. Appliance-global acts (marketplace
-  agent install/update/remove) are operator-gated and write an audit row.
+  ungated mutation cannot ship unnoticed. There are two gates
+  (`crm/bridge/routers/_operator.py`): `require_tenant_admin` for the *acting*
+  tenant's own administration (its fleet, runs, approvals, accounts, provider
+  keys), and `require_root_operator` — a root owner/admin at home, not acting in
+  a child — for appliance-wide state (flags, settings, logs, plugins, the
+  doctor, marketplace installs). `crm/bridge/tests/test_tenant_admin_gates.py`
+  classifies every admin route and fails on one that is not. Calls to the
+  engine go to the acting tenant's engine (`robothor.engine_control.
+  engine_base_url(tenant)`), with a token minted for that tenant.
 - Engine non-probe HTTP routes and the IDE WebSocket independently verify
   signed, tenant-bound Engine scopes. Channel webhooks use their own
   route-specific HMAC. Empty roles do not imply privileged execution.
@@ -388,6 +396,7 @@ Two databases on the same instance:
 | `pr_review_messages` | Each Google Chat message the pr-review intake handled, once, with what it did or the error it raised — a failing message is recorded and skipped, never retried. Tenant RLS |
 | `pr_review_cursors` | Where each Chat source's last intake poll stopped. Tenant RLS |
 | `plugin_state` | Plugin data (migration 154): one JSON object per (tenant, plugin, kind, key), with an optional `expires_at`. A plugin wheel cannot ship a migration, so each "table" a plugin needs is a row kind here, read and written through `robothor.plugins.state.PluginState`. Expired rows are hidden from reads at once; the daemon's watchdog purges them hourly for the instance's tenant, and rows for other tenants need `PluginState.purge_expired()`. Tenant RLS |
+| `tenant_plugin_grants` | The root tenant's per-child plugin decisions (migration 163): one row per (tenant, plugin) with `state` `on` or `off`, `set_by` and `set_at`. The child's engine reads its own rows once per plugin generation through `robothor.plugins.grants`; `off` is refused before import and `on` loads despite the child's lockfile. Written only by the root-only bridge route `PUT /api/plugins/{name}/tenants/{tenant_id}`. Tenant RLS for reads; writes only from a connection scoped to the row's root tenant (`tenant_plugin_grants_root`) or unbound |
 | `kb_documents` | One curated reference document per (tenant, collection, doc\_id) for the knowledge base (migration 155): title, source URI, metadata, version and the SHA-256 that lets an unchanged upsert skip. Collections are named `<plugin>/<topic>`. Tenant RLS |
 | `kb_chunks` | A knowledge-base document split into overlapping chunks, each with a 1024-dim embedding (HNSW cosine) and a generated `tsvector` (GIN) for hybrid search; deleted with their document. Tenant RLS |
 | `n8n_workflows` | The external n8n instance's workflows as of the n8n monitor's latest listing (migration 156): name, active, tag names, n8n's own update time. A workflow deleted in n8n leaves on the next listing. Tenant RLS |
@@ -1009,7 +1018,7 @@ Single daemon handling agent orchestration, Telegram delivery, and cron scheduli
 |-----------|------|---------|
 | Engine | 18800 | Agent execution, Telegram bot, health API |
 | Scheduler | — | APScheduler cron jobs from YAML manifests |
-| Event Hooks | — | Redis Stream consumers (email, calendar triggers) |
+| Event Hooks | — | Redis Stream consumers (email, calendar triggers). One consumer group per engine; events are tenant-tagged and each engine acts only on its own tenant's ([Event Bus](event-bus.md#one-engine-per-tenant)) |
 | Tool Registry | — | 54 tools, direct DAL calls (no HTTP roundtrip) |
 
 #### Schedule reconciliation

@@ -488,6 +488,40 @@ last id you are *certain* of and let the remaining migrations apply, since
 re-applying a migration whose objects already exist is the case those files are
 written to tolerate.
 
+#### Rolling back to an older release
+
+Migrations only move forward; rolling back a release does not undo the schema.
+The older release's migrator finds ledger rows its manifest does not list, and
+it decides what they are by number:
+
+| What the older release finds | Verdict | Effect |
+|---|---|---|
+| Every migration it ships, applied and undrifted, plus rows numbered **strictly above** its highest migration | `AHEAD` | Starts. A warning names the newer migrations; `genus doctor` reports `db.migrations` as failing (not fixable) until you roll forward. |
+| An unknown row numbered at or below its highest migration | `MISSING` | Refuses. Usually the newer release's own migration, numbered at or below the older release's highest; sometimes a renamed file or another chain's migration. |
+| A newer row while one of its own migrations is still pending | refused | Refuses. Applying an old migration over a schema a newer one has already changed is not a rollback. |
+| Drift in any migration it ships | `DRIFT` | Refuses, as always. |
+
+**Most rollbacks across a parallel-branch merge are refused.** Nothing makes
+a later release number its migrations above an earlier one's: branches that
+merge in a different order routinely land the same or a lower number (the
+manifest has several migrations sharing one number). If any migration the
+newer release added is numbered at or below the older release's highest, the
+older release reports it as `MISSING` and its migration Job fails. Before you
+roll back, compare the numbers: `genus migrate --status` on the newer release
+lists what it applied, and the older release's `robothor/migrations/manifest.txt`
+shows its highest. When the check fails, restore instead of rolling back.
+
+Code written before a migration is expected to run beside it, because
+migrations here are additive. If the release you are rolling forward from
+shipped a migration that is not (one that drops or renames something the older
+code reads), restore the database from before it instead (see
+[PITR](runbooks/PITR.md)).
+
+The rule lives in the release you roll back **to**. Rolling back to a release
+older than it still refuses a newer ledger, and the migration Job fails; roll
+forward again, or restore the database to a point before the newer release
+migrated it.
+
 ### Redis
 
 ```bash
@@ -814,6 +848,15 @@ claim. The engine runs one replica with the `Recreate` strategy, so a
 replicas with rolling updates, so give them a `ReadWriteMany` claim or a
 per-pod volume such as `emptyDir`.
 
+### Running child tenants in one release
+
+Each entry in the chart's `tenants:` list runs one more engine, its own
+workspace and its own tenant identity, beside the root engine, in the same
+release. An empty list (the default) renders nothing extra. The list names
+real tenants, so it belongs in your deployment's values, not in the chart. See
+[Tenant cells](https://github.com/Ironsail-llc/genus-os/blob/main/helm/genus-os/README.md#tenant-cells) in the chart README for
+what an entry renders and how to seed its workspace.
+
 ## Production Checklist
 
 - [ ] Set a strong `ROBOTHOR_DB_PASSWORD`
@@ -907,7 +950,10 @@ what the re-run found rather than what the repair claimed:
 
 - `db.migrations` — applies pending migrations (the same work as
   `genus migrate`). Drift and a ledger row this checkout does not ship are
-  **not** repairable; they need a human.
+  **not** repairable; they need a human. A row newer than everything this
+  release ships is what rolling back a release leaves behind: it is reported,
+  the release runs, and rolling forward clears it (see
+  [Rolling back to an older release](#rolling-back-to-an-older-release)).
 - `db.rbac_service_role` — executes migration `107_seed_service_role.sql`.
 - `db.rls_coverage` — executes migration `120_tenant_rls_cover_new_tables.sql`, which
   policies every `tenant_id` table that has no `tenant_isolation` policy yet.
@@ -1023,9 +1069,17 @@ anything a spreadsheet would evaluate is prefixed with an apostrophe, so an
 audit detail cannot become a formula or carry a credential off the box. A
 failed export is a real `500` rather than an empty file.
 
-`audit_log` has no tenant column, so **the export is appliance-wide**, not
-caller-tenant-wide — the same rows `GET /api/audit/events` has always returned.
-The `<tenant>` in the filename names who exported it, not what is inside.
+**Who sees which rows.** Since migration 162 every `audit_log` row records the
+tenant it happened in — a bridge request's *acting* tenant, else the writing
+process's own. The platform tenant's operator or auditor, **at home**, still
+reads the appliance-wide trail: every tenant, independent root tenants such as
+the benchmark sandbox, and the rows written before the migration (which carry
+no tenant). Everyone else — a child tenant's admin, and a root admin acting in
+a child — reads `/api/audit/events`, its CSV and `/api/audit/stats` for the
+acting tenant and, for an owner or admin, its descendants, and never the
+untenanted rows. The `<tenant>` in the filename is the acting tenant. The
+guardrail change log and `/api/audit/guardrails` have no tenant at all and
+stay with the platform's operator or auditor at home.
 
 **Logs.** `GET /api/logs/units` lists the units that may be followed — derived
 from the unit files `scripts/install-units.sh` installs, so a unit added to
@@ -1101,9 +1155,9 @@ search ranks the fact by its previous wording until it is re-indexed.
 **Observe › Audit** has two tabs: the audit log itself, and the guardrail
 change log (every `PATCH /api/controls`, with the reason its operator typed).
 **Export CSV** is a plain download link carrying the same filters the table is
-showing, up to 5,000 rows. It is **appliance-wide** — `audit_log` has no tenant
-column, so it holds every tenant's rows, and the tenant in the filename names
-who exported it, not what is inside. The events tab has no cursor: "Load more"
+showing, up to 5,000 rows. For the platform's operator or auditor at home it is
+the whole appliance; for anyone else it is the acting tenant and, for an owner
+or admin, its descendants. The events tab has no cursor: "Load more"
 re-reads a larger window up to the route's 500-row ceiling, and anything bigger
 is an export.
 
@@ -1131,6 +1185,33 @@ turns a plugin off, and reloads the engine once afterwards. A damaged lockfile
 is reported as what it is: the engine ignores such a file entirely, so every
 plugin that was turned off is loading again. See
 [Disabling and the lockfile](PLUGINS.md#disabling-and-the-lockfile).
+
+### Acting in another tenant from the Helm
+
+A root-tenant owner or admin whose `GET /api/tenants/accessible` lists more
+than one tenant gets a **tenant picker** in the Helm's top bar; anyone with a
+single tenant never sees it. Picking a tenant calls the dashboard's
+`POST /api/session/switch-tenant`, which asks the bridge to switch and keeps
+the acting token inside the existing session cookie (the browser never holds
+it), then reloads the page; an **"Acting as … — Switch back"** banner stays
+under the header until you return home. The bridge refuses unless
+`GENUS_TENANT_SWITCH_MODE=enforce` (see
+[Tenant switching over the API](configuration.md#tenant-switching-over-the-api)),
+and the picker shows that refusal rather than switching. Because a refresh
+always hands back a home token, the dashboard re-enters the acting tenant after
+each refresh and, if that is refused, drops to home and says so.
+
+Every engine call the dashboard makes goes to the engine of the tenant in the
+session's token — a root admin acting in a child tenant, and equally a user
+whose home is a child tenant, on every request. The URL is chosen in three
+steps: `GENUS_TENANT_ENGINE_URLS` (a JSON object `{"<tenant>": "<url>"}`), then
+`GENUS_TENANT_ENGINE_URL_TEMPLATE` (a URL containing the literal `{tenant}`),
+then `ROBOTHOR_ENGINE_URL`. Each of the first two also answers to its older
+alias, `ROBOTHOR_TENANT_ENGINE_URLS` and `ROBOTHOR_TENANT_ENGINE_URL_TEMPLATE`;
+the `GENUS_` name wins when both are set. The root tenant
+(`ROBOTHOR_DEFAULT_TENANT`, default `default`) always uses
+`ROBOTHOR_ENGINE_URL`, and a malformed override or template fails the request
+instead of falling back to the root engine.
 
 ## Health Endpoints
 

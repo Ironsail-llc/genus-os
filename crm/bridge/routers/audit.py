@@ -41,7 +41,11 @@ from fastapi.responses import JSONResponse, Response
 from robothor.audit.logger import query_log
 from robothor.sanitize import sanitize_log
 from robothor.secrets.redaction import redact
-from routers._operator import require_audit_reader
+from routers._operator import (
+    audit_scope,
+    require_root_audit_reader,
+    require_tenant_audit_reader,
+)
 from routers._params import iso_timestamp, positive_int
 
 logger = logging.getLogger(__name__)
@@ -83,6 +87,7 @@ _UNSAFE_IN_FILENAME = re.compile(r"[^A-Za-z0-9._-]+")
 
 @router.get("/events")
 def get_audit_events(
+    request: Request,
     since: str | None = Query(None, description="ISO timestamp lower bound"),
     until: str | None = Query(None, description="ISO timestamp upper bound"),
     event_type: str | None = Query(None, description="Filter by event_type"),
@@ -90,7 +95,9 @@ def get_audit_events(
     user_id: str | None = Query(None, description="Filter by user_id"),
     limit: int = Query(50, ge=1, le=500),
 ) -> dict[str, Any]:
-    """Query audit log events with filters."""
+    """Query audit log events with filters, over the tenants the caller may see."""
+    require_tenant_audit_reader(request)
+    tenants = audit_scope(request.state.auth)
     try:
         events = query_log(
             limit=limit,
@@ -98,6 +105,7 @@ def get_audit_events(
             actor=actor,
             since=since,
             user_id=user_id,
+            tenants=tenants,
         )
 
         # Apply 'until' filter in Python (query_log doesn't support it natively)
@@ -183,16 +191,16 @@ def export_audit_events_csv(
     fault, in the route whose whole argument for a real 500 is that a 500 means
     *we* broke.
 
-    **The export is appliance-wide, not caller-tenant-wide.** ``audit_log`` has
-    no ``tenant_id`` column (the tenant is a key inside ``details``, written by
-    ``routers/_audit.py``) and ``query_log`` applies no tenant predicate, so
-    this returns every tenant's rows — exactly as ``GET /api/audit/events``,
-    which already admits an auditor, has always done. The filename names the
-    CALLER's tenant, which is a fact about who exported it, not about what is
-    inside.
+    **The export is the caller's tenants, not the appliance.** ``audit_log``
+    records the tenant each event happened in (migration 162), and this reads
+    the caller's ``audit_scope``: the whole appliance for the platform root
+    operator or auditor at home, else the ACTING tenant and — for an
+    owner/admin — its descendants. The filename names the acting tenant.
     """
-    require_audit_reader(request)
+    require_tenant_audit_reader(request)
     from deps import get_tenant_id
+
+    tenants = audit_scope(request.state.auth)
 
     rows = positive_int(limit, field="limit", maximum=MAX_CSV_ROWS)
     if since is not None:
@@ -207,6 +215,7 @@ def export_audit_events_csv(
             actor=actor,
             since=since,
             user_id=user_id,
+            tenants=tenants,
         )
         if until:
             events = [e for e in events if e.get("timestamp", "") <= until]
@@ -234,13 +243,20 @@ def export_audit_events_csv(
 
 @router.get("/guardrails")
 def get_guardrail_events(
+    request: Request,
     since: str | None = Query(None, description="ISO timestamp lower bound"),
     until: str | None = Query(None, description="ISO timestamp upper bound"),
     policy: str | None = Query(None, description="Filter by guardrail_name"),
     action: str | None = Query(None, description="Filter by action (blocked/warned/allowed)"),
     limit: int = Query(50, ge=1, le=500),
 ) -> dict[str, Any]:
-    """Query guardrail events."""
+    """Query guardrail events.
+
+    Root operator or root auditor, at home: ``agent_guardrail_events`` carries
+    no tenant, so there is no per-tenant slice of it to hand a child tenant's
+    admin — but it is an audit read, and the platform's auditor keeps it.
+    """
+    require_root_audit_reader(request)
     try:
         from robothor.db.connection import get_connection
 
@@ -295,16 +311,23 @@ def get_guardrail_events(
 
 @router.get("/stats")
 def get_audit_stats(
+    request: Request,
     hours: int = Query(24, ge=1, le=720, description="Rolling window in hours"),
 ) -> dict[str, Any]:
-    """Aggregated audit statistics for the given time window."""
+    """Aggregated audit statistics for the given time window.
+
+    The audit half is the caller's ``audit_scope``. The guardrail half has no
+    tenant column, so only an unrestricted (root, at home) reader is shown it.
+    """
+    require_tenant_audit_reader(request)
+    tenants = audit_scope(request.state.auth)
     try:
         from robothor.audit.logger import stats as audit_stats
 
-        base_stats = audit_stats()
+        base_stats = audit_stats(tenants=tenants)
 
         # Add guardrail-specific stats
-        guardrail_stats = _get_guardrail_stats(hours)
+        guardrail_stats = _get_guardrail_stats(hours) if tenants is None else {}
 
         return {
             "audit_log": base_stats,

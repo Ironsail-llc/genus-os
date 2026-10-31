@@ -84,16 +84,41 @@ class IdeSession:
 
 @router.websocket("/ide/ws")
 async def ide_websocket(ws: WebSocket) -> None:
-    """WebSocket endpoint for IDE extensions."""
+    """WebSocket endpoint for IDE extensions.
+
+    The two refusals close differently, on purpose. A token that is missing,
+    invalid, for another tenant, short of scope, or whose account no longer
+    stands is closed BEFORE ``accept`` (4401): an unauthenticated peer never
+    gets a live channel, and a real server turns that into a bare HTTP 403
+    handshake rejection, which says nothing about why. A VALID acting token
+    refused because tenant switching is not enforced is accepted and then
+    closed with 4403 "tenant switching disabled": the caller is who it says,
+    and the reason is something its operator can act on — a close sent before
+    ``accept`` would never reach the client as a code at all.
+    """
     if _config is None:
         await ws.close(code=1013, reason="Engine not initialized")
         return
 
     from robothor.auth.tokens import TokenError
-    from robothor.engine.auth import authenticate_websocket
+    from robothor.engine.auth import (
+        SWITCHING_DISABLED,
+        SwitchingDisabledError,
+        authenticate_websocket,
+        session_stands,
+    )
 
     try:
         auth = authenticate_websocket(ws, tenant_id=_config.tenant_id)
+        # A disabled or moved account is refused like a bad token (off the loop).
+        if not await asyncio.to_thread(session_stands, auth):
+            raise TokenError("session no longer valid")
+    except SwitchingDisabledError:
+        # Authenticated, and refused for a reason the caller can act on —
+        # accepted first so the close code and reason reach the client.
+        await ws.accept()
+        await ws.close(code=4403, reason=SWITCHING_DISABLED)
+        return
     except TokenError:
         # Authenticate before accepting so an unauthenticated peer never gets a
         # live JSON-RPC channel.  Keep the close reason generic to avoid making

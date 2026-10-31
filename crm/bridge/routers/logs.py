@@ -59,7 +59,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 
 from robothor.sanitize import sanitize_log
 from robothor.secrets.redaction import redact
-from routers._operator import require_operator
+from routers._operator import require_root_operator
 from routers._params import ISO_TIMESTAMP_PATTERN, positive_int
 
 logger = logging.getLogger(__name__)
@@ -384,7 +384,7 @@ def list_units(request: Request) -> dict[str, Any]:
     end, and, when there is no ``journalctl`` binary at all (a container), a
     ``hint`` saying where the logs are.
     """
-    require_operator(request)
+    require_root_operator(request)
     catalog = unit_catalog()
     _, reason, missing = _journalctl()
     if reason is not None:
@@ -411,7 +411,7 @@ def read_logs(
     grep: str | None = Query(None, description="Case-insensitive substring, applied in Python"),
 ) -> dict[str, Any]:
     """The last N lines of one unit's journal."""
-    require_operator(request)
+    require_root_operator(request)
     catalog = unit_catalog()
     # The catalog's OWN string from here on — see _allowlisted_unit.
     known_unit = _allowlisted_unit(unit, catalog)

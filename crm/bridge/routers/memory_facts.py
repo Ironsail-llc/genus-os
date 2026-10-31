@@ -83,7 +83,7 @@ from robothor.db.connection import get_connection
 from robothor.llm import ollama as llm_client
 from robothor.sanitize import sanitize_log
 from routers._audit import audited
-from routers._operator import require_operator
+from routers._operator import require_tenant_admin
 from routers._params import positive_int
 
 logger = logging.getLogger(__name__)
@@ -368,7 +368,7 @@ def list_facts(
     for page two, forever. ``entity`` still applies — a filter the UI is
     rendering is never one this route silently drops.
     """
-    require_operator(request)
+    require_tenant_admin(request)
     from deps import get_tenant_id
 
     tenant_id = get_tenant_id(request)
@@ -447,7 +447,7 @@ def preview_forget(fact_id: str, request: Request) -> dict[str, Any]:
     those two words. A warning that cries wolf is the one that gets ignored, so
     the short case returns an empty list and says it did not look.
     """
-    require_operator(request)
+    require_tenant_admin(request)
     from deps import get_tenant_id
 
     tenant_id = get_tenant_id(request)
@@ -502,7 +502,7 @@ def forget_fact(
     one saying the operator forgot an already-forgotten fact is a trail that
     disagrees with the table. The conflict says which it is.
     """
-    require_operator(request)
+    require_tenant_admin(request)
     from deps import get_tenant_id
 
     tenant_id = get_tenant_id(request)
@@ -636,7 +636,7 @@ def edit_fact(fact_id: str, request: Request, body: EditRequest | None = None) -
     An inactive fact is a 422, not an edit: it is no longer believed, and
     rewriting it would change the record of what WAS believed.
     """
-    actor = require_operator(request)
+    actor = require_tenant_admin(request)
     from deps import get_tenant_id
 
     from robothor.memory.drift import compute_fact_hash

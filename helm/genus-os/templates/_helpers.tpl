@@ -3,6 +3,9 @@ Common helpers for the genus-os chart.
 
 Component templates pass their key as $.component (string), e.g. "engine".
 Most helpers resolve everything from that key + $.Values.<key>.* + $.Values.global.*.
+A caller that has already built the component's values map (a tenant engine
+cell, whose map is engine.* overlaid with its tenants[] entry) passes it as
+$.values, which then wins over $.Values.<key>.
 */}}
 
 {{/* Chart name, sanitized to <=63 chars. */}}
@@ -34,7 +37,10 @@ Most helpers resolve everything from that key + $.Values.<key>.* + $.Values.glob
 {{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
-{{/* Common labels. Pass .root (the top dot) + .component (string). */}}
+{{/*
+Common labels. Pass .root (the top dot) + .component (string), and .tenant
+for an object that belongs to one tenant engine cell (adds genus-os/tenant).
+*/}}
 {{- define "genus-os.labels" -}}
 helm.sh/chart: {{ include "genus-os.chart" .root }}
 app.kubernetes.io/name: {{ include "genus-os.name" .root }}
@@ -43,13 +49,23 @@ app.kubernetes.io/version: {{ .root.Chart.AppVersion | quote }}
 app.kubernetes.io/managed-by: {{ .root.Release.Service }}
 app.kubernetes.io/component: {{ .component }}
 app.kubernetes.io/part-of: genus-os
+{{- with .tenant }}
+genus-os/tenant: {{ . }}
+{{- end }}
 {{- end -}}
 
-{{/* Selector labels (subset of common labels — must be immutable). */}}
+{{/*
+Selector labels (subset of common labels — must be immutable). .tenant is
+optional, as for genus-os.labels. A Deployment's selector cannot change after
+creation, so no existing selector may ever gain it.
+*/}}
 {{- define "genus-os.selectorLabels" -}}
 app.kubernetes.io/name: {{ include "genus-os.name" .root }}
 app.kubernetes.io/instance: {{ .root.Release.Name }}
 app.kubernetes.io/component: {{ .component }}
+{{- with .tenant }}
+genus-os/tenant: {{ . }}
+{{- end }}
 {{- end -}}
 
 {{/* Per-component ServiceAccount name. Pass .root + .component. */}}
@@ -73,7 +89,7 @@ to .component). Image repo is .Values.global.registry + "/" + repository.
 */}}
 {{- define "genus-os.image" -}}
 {{- $component := .component -}}
-{{- $cv := index .root.Values $component -}}
+{{- $cv := .values | default (index .root.Values $component) -}}
 {{- $repo := default $component $cv.image.repository -}}
 {{- $registry := .root.Values.global.registry -}}
 {{- $tag := default .root.Values.global.imageTag $cv.image.tag -}}
@@ -83,7 +99,7 @@ to .component). Image repo is .Values.global.registry + "/" + repository.
 {{/* Image pull policy with fallback to global. */}}
 {{- define "genus-os.imagePullPolicy" -}}
 {{- $component := .component -}}
-{{- $cv := index .root.Values $component -}}
+{{- $cv := .values | default (index .root.Values $component) -}}
 {{- default .root.Values.global.imagePullPolicy $cv.image.pullPolicy -}}
 {{- end -}}
 
@@ -104,6 +120,26 @@ on the next sync.
 */}}
 {{- define "genus-os.migrationJobName" -}}
 {{- printf "%s-migrate-%s" (include "genus-os.fullname" .) (include "genus-os.migrationsPodTemplate" . | sha256sum | trunc 8) -}}
+{{- end -}}
+
+{{/* The tenant the root engine operates as (global.rootTenant). */}}
+{{- define "genus-os.rootTenant" -}}
+{{- toString (.Values.global.rootTenant | default "default") -}}
+{{- end -}}
+
+{{/* The root engine's in-cluster URL. */}}
+{{- define "genus-os.engineUrl" -}}
+{{- printf "http://%s-engine:%v" (include "genus-os.fullname" .) .Values.engine.service.port -}}
+{{- end -}}
+
+{{/*
+URL of any tenant engine cell, with `{tenant}` left as literal text for the
+application to substitute with a tenants[].id. It matches the Service name
+engine/tenants.yaml renders, which is why that template refuses an id whose
+name would be truncated.
+*/}}
+{{- define "genus-os.tenantEngineUrlTemplate" -}}
+{{- printf "http://%s-engine-{tenant}:%v" (include "genus-os.fullname" .) .Values.engine.service.port -}}
 {{- end -}}
 
 {{/* Workspace PVC name (created by this chart or supplied by the operator). */}}
@@ -224,16 +260,23 @@ environment's vault.secrets.cache.path is authoritative.
   value: {{ .Values.global.imageTag | quote }}
 {{- end -}}
 
+{{/* A tenant engine cell's own provider class. Pass the cell id. */}}
+{{- define "genus-os.cellProviderClass" -}}
+{{- printf "engine-providers-%s" . -}}
+{{- end -}}
+
 {{/*
 Render only the named Secret classes declared by one component's secretRefs.
-Pass .root + .component. Unknown references are a hard template error. The
-Secret may be materialized by VSO or supplied out-of-band when Vault is off;
-missing Secrets fail closed with CreateContainerConfigError.
+Pass .root + .component, and optionally .values and .tenant (a tenant engine
+cell, which may also read its own engine-providers-<tenant>). Unknown
+references are a hard template error. The Secret may be materialized by VSO
+or supplied out-of-band when Vault is off; missing Secrets fail closed with
+CreateContainerConfigError.
 */}}
 {{- define "genus-os.envFromSecret" -}}
 {{- $root := .root -}}
 {{- $component := .component -}}
-{{- $cv := index $root.Values $component -}}
+{{- $cv := .values | default (index $root.Values $component) -}}
 {{- $allowedByComponent := dict
       "engine" (list "database" "cache" "auth-signing" "engine-providers")
       "bridge" (list "database" "cache" "auth-signing" "bridge-sso" "bridge-oidc" "bridge-integrations")
@@ -241,6 +284,10 @@ missing Secrets fail closed with CreateContainerConfigError.
       "dashboard" (list "dashboard-auth" "bridge-sso")
       "migrations" (list "database") -}}
 {{- $allowedRefs := index $allowedByComponent $component -}}
+{{- /* A tenant engine cell also reads its own provider class. */ -}}
+{{- if and (eq $component "engine") .tenant -}}
+{{- $allowedRefs = append $allowedRefs (include "genus-os.cellProviderClass" .tenant) -}}
+{{- end -}}
 {{- range $secretName := ($cv.secretRefs | default list) -}}
 {{- if not (hasKey $root.Values.vault.secrets $secretName) -}}
 {{- fail (printf "%s.secretRefs contains unknown vault.secrets entry %q" $component $secretName) -}}
@@ -287,7 +334,7 @@ password only while the server enforces auth.
 {{/* Merge globals + per-component nodeSelector. */}}
 {{- define "genus-os.nodeSelector" -}}
 {{- $component := .component -}}
-{{- $cv := index .root.Values $component -}}
+{{- $cv := .values | default (index .root.Values $component) -}}
 {{- $merged := merge (deepCopy ($cv.nodeSelector | default dict)) (.root.Values.global.nodeSelector | default dict) -}}
 {{- toYaml $merged -}}
 {{- end -}}
@@ -295,7 +342,7 @@ password only while the server enforces auth.
 {{/* Merge globals + per-component tolerations. */}}
 {{- define "genus-os.tolerations" -}}
 {{- $component := .component -}}
-{{- $cv := index .root.Values $component -}}
+{{- $cv := .values | default (index .root.Values $component) -}}
 {{- $cvTol := $cv.tolerations | default list -}}
 {{- $gTol := .root.Values.global.tolerations | default list -}}
 {{- $merged := concat $cvTol $gTol -}}
@@ -305,7 +352,7 @@ password only while the server enforces auth.
 {{/* Affinity with fallback to globals. */}}
 {{- define "genus-os.affinity" -}}
 {{- $component := .component -}}
-{{- $cv := index .root.Values $component -}}
+{{- $cv := .values | default (index .root.Values $component) -}}
 {{- $aff := $cv.affinity | default dict -}}
 {{- if not $aff -}}{{- $aff = .root.Values.global.affinity | default dict -}}{{- end -}}
 {{- if $aff -}}
@@ -318,7 +365,7 @@ podAntiAffinity:
         topologyKey: kubernetes.io/hostname
         labelSelector:
           matchLabels:
-            {{- include "genus-os.selectorLabels" (dict "root" .root "component" $component) | nindent 12 }}
+            {{- include "genus-os.selectorLabels" (dict "root" .root "component" $component "tenant" .tenant) | nindent 12 }}
 {{- else -}}
 {}
 {{- end -}}
@@ -328,7 +375,7 @@ podAntiAffinity:
 {{- define "genus-os.httpProbe" -}}
 {{- $component := .component -}}
 {{- $probeName := .probe -}}
-{{- $cv := index .root.Values $component -}}
+{{- $cv := .values | default (index .root.Values $component) -}}
 {{- $cfg := index $cv.probes $probeName -}}
 {{- if $cfg.enabled }}
 httpGet:
@@ -376,13 +423,16 @@ The CLI rewrites a token cache next to its config; the root filesystem is
 read-only, so the config dir sits on the writable runtime-cache emptyDir.
 The mount is optional: a Secret that has not synced yet leaves the gws tools
 reporting an auth error instead of holding the engine in ContainerCreating.
-Engine only; each renders nothing when engine.googleWorkspace.enabled is false.
+Engine only. Pass .root, .gw (the engine's or a tenant cell's googleWorkspace
+map), .secretName and .checkVault; each renders nothing when .gw.enabled is
+false. Only the root engine's Secret is materialized by VSO (checkVault); a
+tenant cell's Secret is supplied by the deployment.
 */}}
 {{- define "genus-os.googleWorkspaceDir" -}}/etc/genus/gws{{- end -}}
 
 {{- define "genus-os.googleWorkspaceEnv" -}}
-{{- if (.Values.engine.googleWorkspace | default dict).enabled }}
-{{- if and .Values.vault.enabled (not (hasKey .Values.vault.secrets "engine-google")) -}}
+{{- if (.gw | default dict).enabled }}
+{{- if and .checkVault .root.Values.vault.enabled (not (hasKey .root.Values.vault.secrets "engine-google")) -}}
 {{- fail "engine.googleWorkspace.enabled requires vault.secrets.engine-google (a Vault path holding credentials.json)" -}}
 {{- end }}
 - name: GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE
@@ -393,7 +443,7 @@ Engine only; each renders nothing when engine.googleWorkspace.enabled is false.
 {{- end -}}
 
 {{- define "genus-os.googleWorkspaceVolumeMount" -}}
-{{- if (.Values.engine.googleWorkspace | default dict).enabled }}
+{{- if (.gw | default dict).enabled }}
 - name: google-workspace
   mountPath: {{ include "genus-os.googleWorkspaceDir" . }}
   readOnly: true
@@ -401,15 +451,64 @@ Engine only; each renders nothing when engine.googleWorkspace.enabled is false.
 {{- end -}}
 
 {{- define "genus-os.googleWorkspaceVolume" -}}
-{{- if (.Values.engine.googleWorkspace | default dict).enabled }}
+{{- if (.gw | default dict).enabled }}
 - name: google-workspace
   secret:
-    secretName: {{ include "genus-os.fullname" . }}-engine-google
+    secretName: {{ .secretName }}
     defaultMode: 0400
     optional: true
     items:
       - key: credentials.json
         path: credentials.json
+{{- end }}
+{{- end -}}
+
+{{/*
+Shared vault key (vaultKey.enabled). One master key and one fingerprint salt
+for every process that reads the vault: the bridge, the root engine and every
+tenant cell. The `vault-key` class is materialized by VSO, which decodes the
+base64 fields stored in Vault into the raw files the code reads. NOT optional:
+under GENUS_VAULT_KEY_FILE a missing key is a hard error, and a pod that can
+start without it would only fail later, on the first secret it touches.
+The files keep the basenames the agent secret-file denylist guards
+(.vault-key, .fingerprint-salt in robothor/engine/secret_paths.py), so a
+missed path check still cannot hand the master key to an agent's exec or
+read_file. Pass the top-level dot; each renders nothing when
+vaultKey.enabled is false.
+*/}}
+{{- define "genus-os.vaultKeyDir" -}}/etc/genus/vault{{- end -}}
+
+{{- define "genus-os.vaultKeyEnv" -}}
+{{- if (.Values.vaultKey | default dict).enabled }}
+{{- if and .Values.vault.enabled (not (hasKey .Values.vault.secrets "vault-key")) -}}
+{{- fail "vaultKey.enabled requires vault.secrets.vault-key (a Vault path holding base64 `key` and `fingerprint-salt`)" -}}
+{{- end }}
+- name: GENUS_VAULT_KEY_FILE
+  value: {{ printf "%s/.vault-key" (include "genus-os.vaultKeyDir" .) | quote }}
+- name: GENUS_FINGERPRINT_SALT_FILE
+  value: {{ printf "%s/.fingerprint-salt" (include "genus-os.vaultKeyDir" .) | quote }}
+{{- end }}
+{{- end -}}
+
+{{- define "genus-os.vaultKeyVolumeMount" -}}
+{{- if (.Values.vaultKey | default dict).enabled }}
+- name: vault-key
+  mountPath: {{ include "genus-os.vaultKeyDir" . }}
+  readOnly: true
+{{- end }}
+{{- end -}}
+
+{{- define "genus-os.vaultKeyVolume" -}}
+{{- if (.Values.vaultKey | default dict).enabled }}
+- name: vault-key
+  secret:
+    secretName: {{ include "genus-os.fullname" . }}-vault-key
+    defaultMode: 0400
+    items:
+      - key: key
+        path: .vault-key
+      - key: fingerprint-salt
+        path: .fingerprint-salt
 {{- end }}
 {{- end -}}
 
