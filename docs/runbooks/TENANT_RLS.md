@@ -169,7 +169,7 @@ fingerprints unsalted until the file appears. Unset, both behave as before.
 **Sign-in is the exception.** A login has no token yet, and the account may
 live in any tenant — `(idp_issuer, idp_subject)` is unique platform-wide. The
 `/api/auth` sso, login, refresh, logout and switch-tenant routes and
-`accounts.get_account_by_idp` / `jit_provision` / `consume_active_session`
+`accounts.get_account_by_idp` / `jit_provision` / `rotate_session`
 therefore run inside `unbound_scope()`, which binds `app.tenant_id = ''` (the
 permissive branch of the policy). Without it, an SSO sign-in for an account
 outside the default tenant misses the existing row, inserts a duplicate and
@@ -255,7 +255,7 @@ engine refuses a token minted for another tenant. A child tenant's agent
 manifests live on its engine's volume and are read and written through that
 engine's `/api/admin/manifests*` routes.
 
-Audit rows record the tenant they happened in (migration 159). The platform's
+Audit rows record the tenant they happened in (migration 162). The platform's
 operator or auditor at home reads the whole appliance trail, untenanted rows
 and independent roots included (`_operator.audit_scope`); anyone else reads the
 acting tenant and, for an owner/admin, its descendants.

@@ -269,6 +269,68 @@ describe("Settings › Config", () => {
     }
   });
 
+  it("lists the groups as soon as the schema arrives, before the values do", async () => {
+    // The values walk every declared field on the bridge and is the slow half
+    // of the page; the schema is the shape. A page that waited for both showed
+    // a spinner for as long as the slower one took.
+    let releaseValues: () => void = () => {};
+    const valuesGate = new Promise<void>((resolve) => {
+      releaseValues = resolve;
+    });
+    vi.spyOn(global, "fetch").mockImplementation((async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/schema")) {
+        return { ok: true, status: 200, json: async () => SCHEMA } as Response;
+      }
+      await valuesGate;
+      return { ok: true, status: 200, json: async () => VALUES } as Response;
+    }) as typeof fetch);
+
+    render(<ConfigPage visible />);
+    for (const id of ["engine", "channels", "flags"]) {
+      expect(await screen.findByTestId(`config-group-${id}`)).toBeInTheDocument();
+    }
+    expect(screen.getByTestId("config-group-toggle-engine")).toHaveTextContent("4 settings");
+    expect(screen.queryByTestId("config-loading")).not.toBeInTheDocument();
+
+    // Opened early, a section shows a placeholder per setting rather than
+    // controls with no value behind them: an input seeded from nothing would
+    // let the operator "edit" a value they have not seen.
+    fireEvent.click(screen.getByTestId("config-group-toggle-engine"));
+    const pending = screen.getByTestId("config-values-loading-engine");
+    expect(within(pending).getAllByTestId("config-field-skeleton")).toHaveLength(4);
+    expect(screen.queryByTestId("config-field-ROBOTHOR_LOG_DIR")).not.toBeInTheDocument();
+
+    releaseValues();
+    expect(await screen.findByTestId("config-field-ROBOTHOR_LOG_DIR")).toBeInTheDocument();
+    expect(screen.queryByTestId("config-values-loading-engine")).not.toBeInTheDocument();
+    expect(screen.getByTestId("config-input-ROBOTHOR_MAX_CONCURRENT_AGENTS")).toHaveValue(3);
+  });
+
+  it("keeps the groups on screen when only the values fail to load", async () => {
+    vi.spyOn(global, "fetch").mockImplementation((async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/schema")) {
+        return { ok: true, status: 200, json: async () => SCHEMA } as Response;
+      }
+      return {
+        ok: false,
+        status: 503,
+        json: async () => ({ detail: "values unavailable" }),
+        text: async () => JSON.stringify({ detail: "values unavailable" }),
+        headers: new Headers({ "content-type": "application/json" }),
+      } as unknown as Response;
+    }) as typeof fetch);
+
+    render(<ConfigPage visible />);
+    expect(await screen.findByTestId("config-error")).toBeInTheDocument();
+    expect(screen.getByTestId("config-group-engine")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("config-group-toggle-engine"));
+    // Not a placeholder: nothing is loading any more, and saying so would be a lie.
+    expect(screen.queryByTestId("config-field-skeleton")).not.toBeInTheDocument();
+    expect(screen.getByTestId("config-values-unavailable-engine")).toBeInTheDocument();
+  });
+
   it("renders a section per schema group, collapsed until asked", async () => {
     mockBridge();
     render(<ConfigPage visible />);

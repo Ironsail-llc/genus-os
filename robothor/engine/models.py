@@ -944,6 +944,8 @@ class WorkflowStepResult:
     status: WorkflowStepStatus = WorkflowStepStatus.PENDING
     output_text: str | None = None
     agent_run_id: str | None = None
+    tool_name: str | None = None
+    tool_input: dict[str, Any] | None = None
     tool_output: dict[str, Any] | None = None
     condition_branch: str | None = None
     error_message: str | None = None

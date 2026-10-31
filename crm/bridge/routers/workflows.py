@@ -1,5 +1,9 @@
 """Tenant-scoped, read-only workflow accounting, from workflow_runs.
 
+A run's detail (``/{workflow_id}/runs/{run_id}``) adds each step's tool name,
+input, output and error from workflow_run_steps. Those payloads carry whatever
+the tools saw, so the response is marked ``Cache-Control: no-store``.
+
 Deliberately bridge-side: the engine's /api/workflows* is not operator-scoped and
 the dashboard proxy targets the bridge. Lists every workflow that has RUN
 (distinct workflow_id in workflow_runs) and, for the root tenant, every workflow
@@ -17,10 +21,12 @@ live on that tenant's engine and are not reachable from here.
 from __future__ import annotations
 
 import logging
+import uuid
 
 import psycopg2.extras
 from deps import get_tenant_id
 from fastapi import APIRouter, Request
+from fastapi.responses import JSONResponse
 
 from robothor.constants import PLATFORM_TENANT
 from robothor.db.connection import get_connection
@@ -31,6 +37,15 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/workflows", tags=["workflows"])
 
 _MAX_LIMIT = 100
+_NO_STORE = {"Cache-Control": "no-store"}
+
+
+def _is_uuid(value: str) -> bool:
+    try:
+        uuid.UUID(value)
+    except ValueError:
+        return False
+    return True
 
 
 def _rows(sql: str, params: tuple) -> list[dict]:
@@ -154,6 +169,52 @@ def _workflow_runs(workflow_id: str, limit: int, tenant_id: str) -> list[dict]:
     return [_iso(r) for r in rows]
 
 
+#: ``workflow_runs.trigger_type`` of a scheduled plugin job's run.
+_PLUGIN_JOB = "plugin_job"
+
+
+def _workflow_run(workflow_id: str, run_id: str, tenant_id: str) -> dict | None:
+    """One run of one workflow, with each step's tool name, input, output and error.
+
+    The run must belong to ``tenant_id``; its steps are read only once it does
+    (``workflow_run_steps`` carries no tenant of its own).
+
+    A scheduled plugin job records no steps; its detail carries what the job
+    returned (``result``, and ``result_truncated`` when the engine capped it).
+    A workflow's own run context is never served: it holds every step's raw
+    output.
+    """
+    runs = _rows(
+        "SELECT id, workflow_id, status, trigger_type, trigger_detail, steps_total, "
+        "steps_completed, steps_failed, steps_skipped, duration_ms, started_at, "
+        "completed_at, error_message, "
+        "CASE WHEN trigger_type = 'plugin_job' THEN context END AS context "
+        "FROM workflow_runs WHERE id = %s AND workflow_id = %s AND tenant_id = %s",
+        (run_id, workflow_id, tenant_id),
+    )
+    if not runs:
+        return None
+    steps = _rows(
+        "SELECT step_id, step_type, status, agent_id, agent_run_id, tool_name, "
+        "tool_input, tool_output, condition_branch, output_text, error_message, "
+        "duration_ms, started_at, completed_at "
+        "FROM workflow_run_steps WHERE run_id = %s ORDER BY created_at",
+        (run_id,),
+    )
+    detail = _iso(runs[0])
+    detail["id"] = str(detail["id"])
+    context = detail.pop("context", None)
+    if detail.get("trigger_type") == _PLUGIN_JOB and isinstance(context, dict):
+        for key in ("result", "result_truncated"):
+            if key in context:
+                detail[key] = context[key]
+    detail["steps"] = [
+        {k: (str(v) if k == "agent_run_id" and v is not None else v) for k, v in _iso(s).items()}
+        for s in steps
+    ]
+    return detail
+
+
 @router.get("")
 def list_workflows(request: Request) -> list[dict]:
     require_tenant_admin(request)
@@ -165,3 +226,16 @@ def workflow_runs(workflow_id: str, request: Request, limit: int = 20) -> list[d
     require_tenant_admin(request)
     limit = max(1, min(limit, _MAX_LIMIT))
     return _workflow_runs(workflow_id, limit, get_tenant_id(request))
+
+
+@router.get("/{workflow_id}/runs/{run_id}")
+def workflow_run(workflow_id: str, run_id: str, request: Request) -> JSONResponse:
+    """A run's step detail, for a run the ACTING tenant owns. Tenant-admin only
+    and never cached: the step inputs and outputs carry whatever the tools saw."""
+    require_tenant_admin(request)
+    detail = (
+        _workflow_run(workflow_id, run_id, get_tenant_id(request)) if _is_uuid(run_id) else None
+    )
+    if detail is None:
+        return JSONResponse({"detail": "run not found"}, status_code=404, headers=_NO_STORE)
+    return JSONResponse(detail, headers=_NO_STORE)

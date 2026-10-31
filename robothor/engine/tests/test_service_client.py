@@ -109,6 +109,25 @@ async def test_auth_rejection_maps_to_credentials_message_without_url(code: int)
     assert "127.0.0.1" not in str(result)
 
 
+@pytest.mark.parametrize(
+    "body", [{"error": "agent not authorized"}, {"detail": "agent not authorized"}]
+)
+async def test_auth_rejection_carries_the_services_reason(body: dict[str, Any]):
+    """A refusal says why, so the operator can act on it.
+
+    The bridge answers 403 "agent not authorized" when the calling agent is not
+    in its capabilities manifest; without that reason every refusal reads as a
+    credentials problem.
+    """
+    with _patched(_client_responding(403, body)):
+        result = await call_service("bridge", "POST", URL)
+    assert result["error"] == (
+        "bridge rejected engine credentials — check service auth config "
+        "(HTTP 403: agent not authorized)"
+    )
+    assert result["retryable"] is False
+
+
 async def test_error_payloads_never_echo_url():
     for client in (
         _client_raising(httpx.ConnectError(f"failed to connect to {URL}")),

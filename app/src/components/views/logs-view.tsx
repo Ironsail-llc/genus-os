@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useMemo, useState } from "react";
-import { FileText, Loader2, RefreshCw } from "lucide-react";
+import { ExternalLink, FileText, Loader2, RefreshCw } from "lucide-react";
 
 import { EmptyState } from "@/components/business/empty-state";
 import { PageHeader } from "@/components/business/page-header";
@@ -21,6 +21,16 @@ import { isLogSince } from "@/lib/observe/since";
  * state and only that state, which makes it the most-seen screen in this file
  * and the easiest one to get wrong — an appliance fault reported where there is
  * none sends an operator looking for a problem that does not exist.
+ *
+ * **A container is told where its logs are.** The unavailable answer carries
+ * the deployment's own `logs_url` when one is configured and, only when there
+ * is no journalctl binary at all, a `hint` (pods write to standard output; read
+ * them with the cluster's log tool). A journalctl that failed is a systemd
+ * host and gets no cluster wording, so the page links
+ * out instead of ending the conversation. While journald is unavailable there
+ * is nothing to read and nothing to beat: Auto-refresh is hidden, no lines
+ * request is ever sent (an empty `unit=` would earn a 422 and a red banner),
+ * and Refresh re-asks the units route whether that is still true.
  *
  * **The unit picker is the route's allowlist**, read from `GET /api/logs/units`
  * and never a list typed here. That list is derived on the bridge from the unit
@@ -50,6 +60,23 @@ const BRIDGE = "/api/bridge";
 const LOGS_POLL_MS = 10_000;
 
 const LINE_CHOICES = [50, 200, 1000];
+
+/**
+ * Only an http(s) URL with no username or password becomes a link. The value
+ * is the operator's own setting, but a `javascript:` href is a script on click,
+ * whoever typed it, and a URL with credentials in it is shown to everyone.
+ */
+export function safeLogsUrl(value: unknown): string | null {
+  if (typeof value !== "string" || !value.trim()) return null;
+  try {
+    const parsed = new URL(value.trim());
+    // Credential-free, enforced: every operator sees this link.
+    if (parsed.username || parsed.password) return null;
+    return parsed.protocol === "https:" || parsed.protocol === "http:" ? parsed.toString() : null;
+  } catch {
+    return null;
+  }
+}
 
 const SINCE_PRESETS: Array<{ id: string; value: string; label: string }> = [
   { id: "15m", value: "15m", label: "15m" },
@@ -113,6 +140,16 @@ export function isSinceRefusal(message: string): boolean {
  */
 const NO_TIME = "--:--:--";
 
+/**
+ * The bridge writes its hint as a clause. The page shows it as a sentence, but
+ * capitalises it in CSS (`first-letter:uppercase`) so the text stays the
+ * server's own words.
+ */
+function sentence(text: string): string {
+  const trimmed = text.trim();
+  return !trimmed || /[.!?]$/.test(trimmed) ? trimmed : `${trimmed}.`;
+}
+
 function timeOf(value: string | null): string {
   if (!value) return NO_TIME;
   const parsed = new Date(value);
@@ -133,6 +170,8 @@ export function LogsView({ visible = true, role, roleLoading = false }: LogsView
   const [units, setUnits] = useState<Unit[]>([]);
   const [unitsAvailable, setUnitsAvailable] = useState(true);
   const [unitsReason, setUnitsReason] = useState<string | null>(null);
+  const [unitsHint, setUnitsHint] = useState<string | null>(null);
+  const [logsUrl, setLogsUrl] = useState<string | null>(null);
 
   const [unit, setUnit] = useState("");
   const [lines, setLines] = useState(200);
@@ -171,6 +210,8 @@ export function LogsView({ visible = true, role, roleLoading = false }: LogsView
     setUnits(list);
     setUnitsAvailable(root.available !== false);
     setUnitsReason(typeof root.reason === "string" ? root.reason : null);
+    setUnitsHint(typeof root.hint === "string" && root.hint.trim() ? root.hint : null);
+    setLogsUrl(safeLogsUrl(root.logs_url));
     setUnit((current) => (current && list.some((u) => u.name === current) ? current : (list[0]?.name ?? "")));
   }, []);
 
@@ -258,6 +299,13 @@ export function LogsView({ visible = true, role, roleLoading = false }: LogsView
   }, []);
 
   const refresh = useCallback(() => {
+    // Nothing to read (no journald, an empty catalog, a catalog that failed):
+    // the question worth asking again is the units route's. The lines poll is
+    // not visible in that state, so asking it would be a no-op at best.
+    if (!canRead) {
+      unitsPoll.reload();
+      return;
+    }
     const nextSince = sinceDraft.trim();
     if (nextSince && !isLogSince(nextSince)) {
       setSinceError(
@@ -273,7 +321,7 @@ export function LogsView({ visible = true, role, roleLoading = false }: LogsView
     // A changed value moves the URL and the poll re-reads on its own; an
     // unchanged one has to be asked for, which is what Refresh is for.
     if (unchanged) linesPoll.reload();
-  }, [sinceDraft, grepDraft, since, grep, linesPoll]);
+  }, [canRead, unitsPoll, sinceDraft, grepDraft, since, grep, linesPoll]);
 
   if (!visible) return null;
 
@@ -319,21 +367,27 @@ export function LogsView({ visible = true, role, roleLoading = false }: LogsView
   return (
     <div className="flex h-full min-w-0 flex-col gap-3 overflow-hidden p-4" data-testid="logs-view">
       <PageHeader title="Logs" description="The journal of the units this instance runs.">
-        <button
-          type="button"
-          aria-pressed={autoRefresh}
-          data-testid="logs-auto"
-          onClick={() => setAutoRefresh((current) => !current)}
-          className={`rounded-md border px-2 py-1 text-xs transition-colors ${
-            autoRefresh
-              ? "border-primary/25 bg-primary/10 text-foreground"
-              : "border-border text-muted-foreground hover:text-foreground"
-          }`}
-        >
-          Auto-refresh {autoRefresh ? "on" : "off"}
-        </button>
+        {/* Not before the first units answer either: on a container it would flash. */}
+        {unitsAvailable && !unitsPoll.loading ? (
+          <button
+            type="button"
+            aria-pressed={autoRefresh}
+            data-testid="logs-auto"
+            onClick={() => setAutoRefresh((current) => !current)}
+            className={`rounded-md border px-2 py-1 text-xs transition-colors ${
+              autoRefresh
+                ? "border-primary/25 bg-primary/10 text-foreground"
+                : "border-border text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            Auto-refresh {autoRefresh ? "on" : "off"}
+          </button>
+        ) : null}
         <Button variant="outline" size="sm" data-testid="logs-refresh" onClick={refresh}>
-          <RefreshCw aria-hidden className={linesPoll.loading ? "animate-spin" : undefined} />
+          <RefreshCw
+            aria-hidden
+            className={(canRead ? linesPoll.loading : unitsPoll.loading) ? "animate-spin" : undefined}
+          />
           Refresh
         </Button>
       </PageHeader>
@@ -359,6 +413,55 @@ export function LogsView({ visible = true, role, roleLoading = false }: LogsView
         >
           {bannerError}
         </p>
+      ) : !unitsAvailable ? (
+        <div
+          data-testid="logs-unavailable"
+          className="flex flex-col items-center justify-center px-4 py-10 text-center"
+        >
+          <FileText aria-hidden className="mb-3 size-6 text-muted-foreground/60" strokeWidth={1.5} />
+          <p className="text-sm font-medium text-foreground">
+            {unitsHint
+              ? "Logs are read outside the dashboard on this deployment"
+              : "Logs are not available on this deployment"}
+          </p>
+          {unitsHint ? (
+            <>
+              <p
+                data-testid="logs-unavailable-hint"
+                className="mt-1 max-w-xl text-xs text-foreground/80 first-letter:uppercase"
+              >
+                {sentence(unitsHint)}
+              </p>
+              <p className="mt-1 max-w-xl text-xs text-muted-foreground">
+                Nothing is broken. Read the pods&rsquo; output with your cluster&rsquo;s log tool,
+                or the log service this deployment ships to.
+              </p>
+            </>
+          ) : (
+            <p className="mt-1 max-w-xl text-xs text-muted-foreground">
+              The bridge could not use journald here; its reason is below. On a systemd install,
+              the bridge&rsquo;s service user has to be able to read the journals it is asked for.
+            </p>
+          )}
+          {logsUrl ? (
+            <a
+              data-testid="logs-external-link"
+              href={logsUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="mt-4 inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs text-foreground transition-colors hover:bg-accent/60"
+            >
+              <ExternalLink aria-hidden className="size-3.5" />
+              Open logs
+            </a>
+          ) : null}
+          <p
+            data-testid="logs-unavailable-reason"
+            className="mt-4 max-w-xl text-[11px] text-muted-foreground/80"
+          >
+            {unavailableReason}
+          </p>
+        </div>
       ) : unavailableReason ? (
         <EmptyState
           testId="logs-unavailable"

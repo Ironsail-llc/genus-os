@@ -540,6 +540,16 @@ once and shows up as `auth` (a 403) or `unclassified`. A `Mail service not enabl
 instead means the mailbox has no Gmail license in the Workspace admin console;
 the credentials are fine and start working once Gmail is on.
 
+## Logs
+
+Pods write their logs to standard output; there is no journald in a container,
+so the dashboard's Logs page cannot read them itself. Set `logs.url` to where
+this deployment's logs are viewed and the page links to it.
+
+| Value | Default | Meaning |
+|-------|---------|---------|
+| `logs.url` | `""` | Rendered into the bridge as `GENUS_LOGS_URL` only when set. Credential-free: every operator sees the link, so it must never carry a token. |
+
 ## Extra volumes
 
 Each Python workload can mount additional volumes, rendered verbatim with

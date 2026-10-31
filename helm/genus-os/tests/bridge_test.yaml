@@ -42,3 +42,34 @@ tests:
           content:
             name: ROBOTHOR_ENGINE_URL
             value: http://gos-genus-os-engine:18800
+
+  - it: bridge gets the logs URL when logs.url is set
+    set:
+      logs.url: https://logs.example.invalid/search
+    documentIndex: 0
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: GENUS_LOGS_URL
+            value: https://logs.example.invalid/search
+
+  - it: bridge gets no logs URL when logs.url is unset
+    documentIndex: 0
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: GENUS_LOGS_URL
+          any: true
+
+  - it: bridge gets no logs URL when logs.url is empty
+    set:
+      logs.url: ""
+    documentIndex: 0
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: GENUS_LOGS_URL
+          any: true

@@ -1707,7 +1707,7 @@ class AuthSettings(SettingsGroup):
         "security is genuinely enforcing. Any other value reads as 'off'.",
         aliases=("ROBOTHOR_TENANT_SWITCH_MODE",),
         restart_units=("robothor-bridge",),
-        since="1.118.0",
+        since="1.123.0",
     )
     tenant_switch_allow_inert_rls: bool = declare(
         False,
@@ -1718,7 +1718,7 @@ class AuthSettings(SettingsGroup):
         "query's own WHERE clause.",
         aliases=("ROBOTHOR_TENANT_SWITCH_ALLOW_INERT_RLS",),
         restart_units=("robothor-bridge",),
-        since="1.118.0",
+        since="1.123.0",
     )
     tenant_engine_urls: str = declare(
         "",
@@ -1728,7 +1728,7 @@ class AuthSettings(SettingsGroup):
         "An explicit entry wins over GENUS_TENANT_ENGINE_URL_TEMPLATE; meant "
         "for local development and one-off overrides. Empty means none.",
         aliases=("ROBOTHOR_TENANT_ENGINE_URLS",),
-        since="1.118.0",
+        since="1.123.0",
     )
     tenant_engine_url_template: str = declare(
         "",
@@ -1738,7 +1738,7 @@ class AuthSettings(SettingsGroup):
         "e.g. http://engine-{tenant}:18800. Empty means every tenant is "
         "served by the instance's own engine.",
         aliases=("ROBOTHOR_TENANT_ENGINE_URL_TEMPLATE",),
-        since="1.118.0",
+        since="1.123.0",
     )
 
 
@@ -2260,6 +2260,16 @@ class ServiceSettings(SettingsGroup):
     siem_syslog_port: int = declare(
         514, "ROBOTHOR_SIEM_SYSLOG_PORT", "UDP port for syslog audit forwarding."
     )
+    logs_url: str = declare(
+        "",
+        "GENUS_LOGS_URL",
+        "Where this deployment's logs are viewed when journald is not available "
+        "(a container writes to standard output). The dashboard's Logs page "
+        "links to it. A credential-free http(s) URL: it is shown to every "
+        "operator, so it must never carry a token. Empty shows no link.",
+        since="unreleased",
+        restart_units=("robothor-bridge",),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -2295,7 +2305,7 @@ class SecretSettings(SettingsGroup):
         # come from the environment (and never reaches an agent's shell).
         secret=True,
         bootstrap=True,
-        since="1.118.0",
+        since="1.123.0",
     )
     fingerprint_salt_file: str = declare(
         "",
@@ -2310,7 +2320,7 @@ class SecretSettings(SettingsGroup):
         # before the vault, from the environment only, never by an agent.
         secret=True,
         bootstrap=True,
-        since="1.118.0",
+        since="1.123.0",
     )
     env_file: str = declare(
         "/etc/robothor/robothor.env",

@@ -19,6 +19,11 @@ the audit log is read by auditors, exported to a SIEM
 this PR just stopped serving over HTTP.  ``audited`` takes ``**details``
 explicitly rather than a dict so that a caller has to *name* each field it
 records, which is what makes that convention reviewable in a diff.
+
+One deliberate exception: ``control.set`` (``routers/controls.py``) carries the
+operator's reason, capped at 500 chars. A guardrail change is only auditable
+with the sentence its operator typed, and the cap and the non-blank rule are
+enforced by the route before anything is written.
 """
 
 from __future__ import annotations

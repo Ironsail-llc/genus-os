@@ -172,6 +172,12 @@ governed flag, its rungs, and the verdict — what the control has done, and whe
 it last did it. A change there is live within seconds and needs no restart, and
 it records the reason you type alongside it.
 
+Config lists its sections as soon as it knows which settings exist, and each
+section's values fill in once the instance has read them; config.yaml is read
+once for the whole page, so a slow volume costs one read, not one per setting.
+The list of settings changes only when the bridge restarts, so on every load
+the browser asks whether it changed and downloads it again only when it has.
+
 After a save that is *not* hot, Config shows a banner naming the units to
 restart — `robothor-engine`, `robothor-bridge`, whatever the settings you
 changed declare. Until you restart them the running services keep the values
@@ -604,6 +610,10 @@ to "everything" from a page that is meant to be read-only — add the unit to
 `infra/systemd/` and install it, and the route follows it. `GET /api/logs/units`
 is the live answer for any given box. See
 [Deployment](deployment.md#the-helms-observe-pages).
+
+Where there is no journald (a container), `GENUS_LOGS_URL` is the one logs
+setting: a credential-free link to where this deployment's logs are viewed,
+which the Logs page offers as **Open logs**. Helm sets it from `logs.url`.
 
 ## Channels
 

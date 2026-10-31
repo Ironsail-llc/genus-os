@@ -120,14 +120,17 @@ ROUTE_CLASSES: dict[tuple[str, str], str] = {
     ("GET", "/api/automations"): T,
     ("POST", "/api/automations/{agent_id}/reset-breaker"): T,
     ("GET", "/api/runs"): T,
+    ("GET", "/api/runs/summary"): T,
     ("GET", "/api/runs/{run_id}"): T,
     ("GET", "/api/workflows"): T,
     ("GET", "/api/workflows/{workflow_id}/runs"): T,
+    ("GET", "/api/workflows/{workflow_id}/runs/{run_id}"): T,
     ("GET", "/api/fleet"): T,
     ("GET", "/api/fleet/{agent_id}"): T,
     ("GET", "/api/memory/facts"): T,
     ("POST", "/api/memory/facts/{fact_id}/forget/preview"): T,
     ("POST", "/api/memory/facts/{fact_id}/forget"): T,
+    ("PATCH", "/api/memory/facts/{fact_id}"): T,
     # ── accounts ──
     ("GET", "/api/auth/roles"): T,
     ("GET", "/api/users"): T,
@@ -396,7 +399,7 @@ def test_no_classification_is_stale() -> None:
 
 
 def test_the_enumeration_did_not_collapse() -> None:
-    assert len(_admin_routes()) >= 75
+    assert len(_admin_routes()) >= 78
 
 
 # ─── The gate matrix, over HTTP ───────────────────────────────────────
@@ -604,6 +607,35 @@ class TestActingTenantIsTheScope:
         sql, params = rows.call_args.args
         assert "tenant_id = %s" in sql
         assert CHILD_A in params
+
+    def test_the_runs_summary_is_filtered_by_the_acting_tenant(self, root_is_parent):
+        with patch("routers.runs._rows", return_value=[]) as rows:
+            response = _client(CHILD_A).get("/api/runs/summary")
+        assert response.status_code == 200, response.text
+        sql, params = rows.call_args.args
+        assert "tenant_id = %s" in sql
+        assert CHILD_A in params
+
+    def test_a_run_detail_is_read_in_the_acting_tenant(self, root_is_parent):
+        run_id = "00000000-0000-4000-8000-000000000001"
+        with patch("routers.runs._rows", return_value=[]) as rows:
+            response = _client(CHILD_A).get(f"/api/runs/{run_id}")
+        assert response.status_code == 404, response.text
+        sql, params = rows.call_args_list[0].args
+        assert "tenant_id = %s" in sql
+        assert params == (run_id, CHILD_A)
+
+    def test_a_workflow_run_detail_is_read_in_the_acting_tenant(self, root_is_parent):
+        run_id = "00000000-0000-4000-8000-000000000001"
+        with patch("routers.workflows._rows", return_value=[]) as rows:
+            response = _client(CHILD_A).get(f"/api/workflows/wf/runs/{run_id}")
+        assert response.status_code == 404, response.text
+        # The run is looked up in the acting tenant, and with no run found the
+        # steps are never read.
+        assert len(rows.call_args_list) == 1
+        sql, params = rows.call_args_list[0].args
+        assert "tenant_id = %s" in sql
+        assert params == (run_id, "wf", CHILD_A)
 
     def test_workflows_are_filtered_by_the_acting_tenant(self, root_is_parent):
         with patch("routers.workflows._rows", return_value=[]) as rows:

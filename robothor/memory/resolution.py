@@ -71,6 +71,10 @@ async def record_resolution(
         source_type="resolution",
         tenant_id=tenant,
     )
+    if not new_id:
+        # store_fact keeps nothing and answers 0 when the quality gate refuses
+        # the fact; reporting that as a resolution would hide it.
+        return {"error": "resolution not stored: the memory quality gate refused it"}
 
     # store_fact stores the default importance (0.5); a confirmed resolution is
     # high-signal — lift it so recency+importance float it above the open noise.

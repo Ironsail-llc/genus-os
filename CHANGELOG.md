@@ -1,3 +1,16 @@
+## [1.122.0](https://github.com/Ironsail-llc/genus-os/compare/v1.121.0...v1.122.0) (2026-10-31)
+
+### Features
+
+* **dashboard:** runs, memory edit, refresh grace, config, logs pages (GEN-126) ([553c671](https://github.com/Ironsail-llc/genus-os/commit/553c67116add1b1a67ec35e2e1d2f4a68de37378)), closes [#795](https://github.com/Ironsail-llc/genus-os/issues/795) [#797](https://github.com/Ironsail-llc/genus-os/issues/797) [#792](https://github.com/Ironsail-llc/genus-os/issues/792) [#794](https://github.com/Ironsail-llc/genus-os/issues/794) [#793](https://github.com/Ironsail-llc/genus-os/issues/793) [#796](https://github.com/Ironsail-llc/genus-os/issues/796)
+
+## [1.121.0](https://github.com/Ironsail-llc/genus-os/compare/v1.120.0...v1.121.0) (2026-10-31)
+
+### Features
+
+* **engine:** step io, run detail, tool failures, job runs (GEN-168) ([26926f5](https://github.com/Ironsail-llc/genus-os/commit/26926f5667a2f0177169879923adbd2744c17e64)), closes [#788](https://github.com/Ironsail-llc/genus-os/issues/788) [#789](https://github.com/Ironsail-llc/genus-os/issues/789) [#790](https://github.com/Ironsail-llc/genus-os/issues/790) [#791](https://github.com/Ironsail-llc/genus-os/issues/791)
+* **platform:** hierarchical tenancy in one deployment (GEN-61) ([#771](https://github.com/Ironsail-llc/genus-os/issues/771)) ([986d2a1](https://github.com/Ironsail-llc/genus-os/commit/986d2a1070ae027e8d08298fb5df59628b81ed2a)), closes [#746](https://github.com/Ironsail-llc/genus-os/issues/746) [#747](https://github.com/Ironsail-llc/genus-os/issues/747) [#744](https://github.com/Ironsail-llc/genus-os/issues/744) [#745](https://github.com/Ironsail-llc/genus-os/issues/745) [#749](https://github.com/Ironsail-llc/genus-os/issues/749) [#748](https://github.com/Ironsail-llc/genus-os/issues/748)
+
 ## [1.120.0](https://github.com/Ironsail-llc/genus-os/compare/v1.119.0...v1.120.0) (2026-10-30)
 
 ### Features

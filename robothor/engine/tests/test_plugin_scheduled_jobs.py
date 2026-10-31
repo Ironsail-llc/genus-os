@@ -149,12 +149,15 @@ class TestTheSchedulerActuallyRegistersThem:
     """A spec list nothing schedules is a function, not a feature."""
 
     def _scheduler(self):
+        from types import SimpleNamespace
+
         from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
         from robothor.engine.scheduler import CronScheduler
 
         s = CronScheduler.__new__(CronScheduler)
         s.scheduler = AsyncIOScheduler()
+        s.config = SimpleNamespace(tenant_id="test-tenant")
         return s
 
     def test_plugin_jobs_reach_apscheduler(self, install):

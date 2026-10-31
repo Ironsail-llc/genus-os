@@ -1128,6 +1128,24 @@ fifteen minutes". Rows still `running` when the run ends are closed out as
 were in flight. `WorkflowStepStatus` is held against that CHECK constraint by
 `test_schema_drift.py`, the same guard its three sibling enums already had.
 
+A tool step's row also says what the step was asked to do and what it got
+back: `tool_name` and `tool_input` (its arguments, templates rendered) are
+written with the `running` row, so they are there even if the step never
+returns, and `tool_output` when it ends. The stored input is redacted first,
+as `agent_run_steps.tool_input` is (`redact_tool_arguments`: a credential-named
+argument or a `vault_set` value becomes `<redacted>`); the tool still gets the
+real arguments. Each is capped at 64 KB of JSON
+(`STEP_IO_MAX_BYTES` in `robothor/engine/workflow.py`); a larger payload is
+stored as `{"_truncated": true, "original_bytes": N, "preview": "..."}` and the
+run carries on. Because these payloads hold whatever the tools saw, they are
+read only through routes for owners and admins, and never cached:
+
+| Route | Service | Returns |
+|-------|---------|---------|
+| `GET /api/workflows/runs/{run_id}` | engine (`engine:control`, the engine's tenant) | the run, and each step's tool name, input, output and error |
+| `GET /api/workflows/{workflow_id}/runs` | bridge (operator) | the workflow's recent runs, with `steps_completed`, `steps_failed`, `steps_skipped` |
+| `GET /api/workflows/{workflow_id}/runs/{run_id}` | bridge (operator) | the same step detail as the engine route; 404 for a run of another workflow |
+
 #### Engine admin routes
 
 Everything under `/api/admin` requires the `engine:control` scope

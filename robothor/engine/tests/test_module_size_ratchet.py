@@ -340,7 +340,10 @@ CAPS = {
     # and threw away the three follow-up messages that rode back in those same
     # responses. Eight lines, and the evidence extraction itself is in
     # act_observe.py rather than here.
-    "robothor/engine/tool_proxy.py": 322,
+    # +1: the proxied call reads its error through tool_outcome.error_text, the
+    # same reading as a turn's call, so an object error is counted as a failure
+    # on both paths. The reading itself lives in tool_outcome.py.
+    "robothor/engine/tool_proxy.py": 323,
     # 209 -> 283: the peer-session check. Not a feature, a control: the token
     # alone could not tell one run's snippet from another's, and a probe drove
     # a second run's proxy with a stolen token. Correcting a cap set hours

@@ -731,7 +731,7 @@ def _consume_binding_grant(
     cur: Any, tenant_id: str, email: str, presenting_issuer: str
 ) -> dict[str, Any] | None:
     """Atomically spend one live grant (single UPDATE ... RETURNING, mirroring
-    ``consume_active_session``): two concurrent sign-ins must not both bind.
+    ``rotate_session``): two concurrent sign-ins must not both bind.
     Issuer-pinned grants are only spendable by that IdP."""
     cur.execute(
         """UPDATE sso_binding_grants
@@ -803,28 +803,143 @@ def get_active_session(refresh_token_hash: str) -> dict[str, Any] | None:
         return dict(row) if row else None
 
 
-def consume_active_session(refresh_token_hash: str) -> dict[str, Any] | None:
-    """Atomically revoke and return one valid refresh session.
+def rotate_session(
+    refresh_token_hash: str,
+    successor_hash: str,
+    *,
+    ttl_seconds: int,
+    grace_seconds: int,
+    user_agent: str | None = None,
+    ip: str | None = None,
+) -> dict[str, Any] | None:
+    """Rotate one refresh session to ``successor_hash``, tolerating a replay.
 
-    Rotation must be a single database operation: a separate read followed by
-    a revoke allows two concurrent requests to reuse the same refresh token.
+    Returns ``{"user_id", "rotated_at", "replayed"}`` or ``None`` (refuse).
+
+    The first caller spends the token and, in the SAME transaction, inserts
+    the successor session (only for an active account) and links the two
+    (``rotated_to``). A second caller holding the same token blocks on the row
+    lock until that commits, finds it spent, and is answered with the same
+    rotation — ``replayed: True`` — when all of these hold:
+
+    * the token was ROTATED (``rotated_at`` set), not signed out or revoked;
+    * less than ``grace_seconds`` ago, by the database clock, so every bridge
+      and dashboard pod agrees on the window;
+    * the successor it links to is the one derived from this token
+      (``successor_hash``), belongs to the same user and is still live.
+
+    A token of an account that is no longer active is spent and refused
+    (``None``); no successor is stored for it.
+
+    Anything else is ``None``, as an unknown token always was. No second
+    session is minted for a replay: the caller rebuilds the same pair from the
+    token itself (``tokens.successor_refresh_token``).
 
     Unbound: a refresh carries no access token, so nothing says which tenant
-    the session's account lives in until this has answered.
+    the session's account lives in until this has answered. The successor
+    INSERT reads ``user_accounts`` under the same scope, so a child tenant's
+    account rotates as the platform tenant's does.
     """
     with unbound_scope(), get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
         cur.execute(
             """UPDATE user_sessions
-               SET revoked_at = NOW()
+               SET revoked_at = NOW(), rotated_at = NOW()
                WHERE refresh_token_hash = %s
                  AND revoked_at IS NULL AND expires_at > NOW()
-               RETURNING *""",
+               RETURNING id, user_id, rotated_at""",
             (refresh_token_hash,),
         )
-        row = cur.fetchone()
+        spent = cur.fetchone()
+        if spent:
+            cur.execute(
+                """INSERT INTO user_sessions
+                       (user_id, refresh_token_hash, expires_at, user_agent, ip)
+                   SELECT a.id, %s, NOW() + make_interval(secs => %s), %s, %s
+                   FROM user_accounts a
+                   WHERE a.id = %s AND a.status = 'active'
+                   RETURNING id""",
+                (successor_hash, ttl_seconds, user_agent, ip, spent["user_id"]),
+            )
+            successor = cur.fetchone()
+            if not successor:
+                # Inactive account: the token is spent, and nothing replaces it.
+                # Refused here, so no caller can hand out a successor that was
+                # never stored.
+                conn.commit()
+                return None
+            cur.execute(
+                "UPDATE user_sessions SET rotated_to = %s WHERE id = %s",
+                (successor["id"], spent["id"]),
+            )
+            conn.commit()
+            return {
+                "user_id": spent["user_id"],
+                "rotated_at": spent["rotated_at"],
+                "replayed": False,
+            }
+        cur.execute(
+            """SELECT old.user_id, old.rotated_at
+               FROM user_sessions old
+               JOIN user_sessions new ON new.id = old.rotated_to
+               WHERE old.refresh_token_hash = %s
+                 AND old.rotated_at > NOW() - make_interval(secs => %s)
+                 AND new.refresh_token_hash = %s
+                 AND new.user_id = old.user_id
+                 AND new.revoked_at IS NULL AND new.expires_at > NOW()""",
+            (refresh_token_hash, grace_seconds, successor_hash),
+        )
+        replay = cur.fetchone()
         conn.commit()
-        return dict(row) if row else None
+        if not replay:
+            return None
+        return {"user_id": replay["user_id"], "rotated_at": replay["rotated_at"], "replayed": True}
+
+
+def token_pair(
+    account: dict[str, Any],
+    *,
+    refresh_token: str,
+    rotated_at: int | None = None,
+    jti: str | None = None,
+) -> dict[str, Any]:
+    """The response every sign-in path returns, for a refresh token already stored.
+
+    ``rotated_at`` (whole seconds, the database clock) pins the access token's
+    times so a replay of the rotation mints it identically: ``iat`` is
+    ``rotated_at - ROTATION_CLOCK_SKEW_SECONDS``, so a database clock slightly
+    ahead of the verifier never yields a token that is not yet valid, and
+    ``exp`` is ``rotated_at + ACCESS_TTL_SECONDS``, so the lifetime is not
+    extended. Without it, both come from the local clock.
+    """
+    from robothor.auth import tokens
+
+    if account.get("status") != "active":
+        raise AccountInactiveError("account is not active")
+    if rotated_at is None:
+        issued_at, ttl = None, tokens.ACCESS_TTL_SECONDS
+    else:
+        issued_at = rotated_at - tokens.ROTATION_CLOCK_SKEW_SECONDS
+        ttl = tokens.ACCESS_TTL_SECONDS + tokens.ROTATION_CLOCK_SKEW_SECONDS
+    access = tokens.issue_access_token(
+        str(account["id"]),
+        account["tenant_id"],
+        account["role"],
+        ttl_seconds=ttl,
+        issued_at=issued_at,
+        jti=jti,
+    )
+    return {
+        "access_token": access,
+        "refresh_token": refresh_token,
+        "user": {
+            "id": str(account["id"]),
+            "email": str(account["email"]),
+            "display_name": account["display_name"],
+            "role": account["role"],
+            "tenant_id": account["tenant_id"],
+        },
+    }
 
 
 def issue_for_account(
@@ -843,10 +958,9 @@ def issue_for_account(
     """
     from robothor.auth import tokens
 
-    if account.get("status") != "active":
-        raise AccountInactiveError("account is not active")
-    access = tokens.issue_access_token(str(account["id"]), account["tenant_id"], account["role"])
     raw_refresh, refresh_hash = tokens.new_refresh_token()
+    # ``token_pair`` refuses an inactive account, before any session is stored.
+    pair = token_pair(account, refresh_token=raw_refresh)
     create_session(
         str(account["id"]),
         refresh_hash,
@@ -854,17 +968,7 @@ def issue_for_account(
         user_agent=user_agent,
         ip=ip,
     )
-    return {
-        "access_token": access,
-        "refresh_token": raw_refresh,
-        "user": {
-            "id": str(account["id"]),
-            "email": str(account["email"]),
-            "display_name": account["display_name"],
-            "role": account["role"],
-            "tenant_id": account["tenant_id"],
-        },
-    }
+    return pair
 
 
 def revoke_user_sessions(user_id: str, *, except_refresh_hash: str | None = None) -> int:
@@ -1296,7 +1400,7 @@ def move_account(
             }
             # Filed under the TARGET tenant, so the trail of the tenant the
             # account now belongs to shows how it arrived; both ids are in
-            # ``details``. The column is migration 159's; on a database that
+            # ``details``. The column is migration 162's; on a database that
             # has not applied it yet the row is written without it.
             cur.execute(
                 "SELECT 1 AS present FROM pg_attribute "

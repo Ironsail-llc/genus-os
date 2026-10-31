@@ -1365,6 +1365,17 @@ agent's own allow-set is the authoritative answer. The families:
 | Desktop | `desktop_*` (a real screen) |
 | n8n automations | `n8n_list_workflows`, `n8n_recent_failures` (the n8n monitor's snapshot — see above) |
 
+### When a tool call fails
+
+A tool fails by returning a result with an `error` key. The engine records that
+call's step as failed, with the error as text in `error_message` (an error
+object is recorded by its `message`), so the agent's tool success rate counts
+it. `store_memory` and `record_resolution` refuse a call that lacks their
+required arguments, naming what was missing and what was sent, rather than
+storing an empty fact. `log_interaction` reaches the bridge at `BRIDGE_URL`;
+the bridge refuses it with `agent not authorized` until the calling agent is
+listed in `agent_capabilities.json`.
+
 ### `read_file` — documents, not just text
 
 `read_file` returns a text file as it is, and turns the common document formats

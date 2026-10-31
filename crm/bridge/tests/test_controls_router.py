@@ -213,3 +213,96 @@ def test_patch_rejects_off_on_the_dnc_flag(controls_client_as_operator):
     assert r.status_code == 422, (
         "a compliance opt-out has no 'off' rung — the engine maps it to enforce"
     )
+
+
+# ── The change is in the platform audit log, and it carries a reason ──
+
+
+def test_a_flag_change_is_written_to_the_audit_log_with_actor_and_reason(
+    controls_client_as_operator, fake_store
+):
+    from unittest.mock import patch
+
+    with patch("routers._audit.log_event") as log_event:
+        r = controls_client_as_operator.patch(
+            "/api/controls/ROBOTHOR_RBAC_MODE",
+            json={"value": "enforce", "reason": "soak window clean"},
+        )
+    assert r.status_code == 200
+    log_event.assert_called_once()
+    args, kwargs = log_event.call_args
+    assert args[0] == "control.set"
+    assert kwargs["action"] == "ROBOTHOR_RBAC_MODE"
+    assert kwargs["actor"] == "operator-1"
+    assert kwargs["status"] == "ok"
+    details = kwargs["details"]
+    assert details["value"] == "enforce"
+    assert details["reason"] == "soak window clean"
+
+
+def test_a_refused_flag_change_writes_no_audit_event(controls_client_as_operator, fake_store):
+    from unittest.mock import patch
+
+    with patch("routers._audit.log_event") as log_event:
+        r = controls_client_as_operator.patch(
+            "/api/controls/ROBOTHOR_RBAC_MODE", json={"value": "maybe", "reason": "x"}
+        )
+    assert r.status_code == 422
+    log_event.assert_not_called()
+
+
+def test_a_blank_reason_is_refused_with_a_flat_422(controls_client_as_operator, fake_store):
+    for reason in ("", "   ", "\t\n"):
+        r = controls_client_as_operator.patch(
+            "/api/controls/ROBOTHOR_RBAC_MODE", json={"value": "enforce", "reason": reason}
+        )
+        assert r.status_code == 422, reason
+        assert isinstance(r.json()["detail"], str), r.json()
+        assert "reason" in r.json()["detail"]
+    assert fake_store.last_write is None
+
+
+def test_the_stored_reason_is_trimmed(controls_client_as_operator, fake_store):
+    r = controls_client_as_operator.patch(
+        "/api/controls/ROBOTHOR_RBAC_MODE", json={"value": "enforce", "reason": "  promote  "}
+    )
+    assert r.status_code == 200
+    assert fake_store.last_reason == "promote"
+
+
+def test_a_reason_over_500_characters_is_refused_with_a_flat_422(
+    controls_client_as_operator, fake_store
+):
+    from unittest.mock import patch
+
+    with patch("routers._audit.log_event") as log_event:
+        r = controls_client_as_operator.patch(
+            "/api/controls/ROBOTHOR_RBAC_MODE", json={"value": "enforce", "reason": "x" * 501}
+        )
+    assert r.status_code == 422
+    assert isinstance(r.json()["detail"], str), r.json()
+    assert "500" in r.json()["detail"]
+    assert fake_store.last_write is None
+    log_event.assert_not_called()
+
+
+def test_a_reason_of_exactly_500_characters_is_stored_and_audited(
+    controls_client_as_operator, fake_store
+):
+    from unittest.mock import patch
+
+    reason = "y" * 500
+    with patch("routers._audit.log_event") as log_event:
+        r = controls_client_as_operator.patch(
+            "/api/controls/ROBOTHOR_RBAC_MODE", json={"value": "enforce", "reason": reason}
+        )
+    assert r.status_code == 200
+    assert fake_store.last_reason == reason
+    assert log_event.call_args.kwargs["details"]["reason"] == reason
+
+
+def test_the_audit_module_documents_the_reason_exception():
+    from routers import _audit
+
+    assert "control.set" in (_audit.__doc__ or "")
+    assert "500" in (_audit.__doc__ or "")
