@@ -171,11 +171,23 @@ describe("RunDetailDrawer", () => {
     expect(event.className).toMatch(/warning/);
   });
 
-  it("says steps were pruned when a finished run has none", async () => {
-    mockDetail({ run: RUN, steps: [], guardrail_events: [] });
+  it("says steps were pruned when a finished run older than retention has none", async () => {
+    // Older than the 30-day step retention: only then is "pruned" the explanation.
+    const old = { ...RUN, started_at: new Date(Date.now() - 45 * 864e5).toISOString() };
+    mockDetail({ run: old, steps: [], guardrail_events: [] });
     render(<RunDetailDrawer runId="r1" onClose={() => {}} />);
     const note = await screen.findByTestId("run-steps-pruned");
     expect(note.textContent).toMatch(/30 days/);
+    expect(screen.queryByTestId("run-steps-none")).toBeNull();
+  });
+
+  it("a recent finished run with no steps says none were recorded, not pruned", async () => {
+    const recent = { ...RUN, started_at: new Date(Date.now() - 2 * 864e5).toISOString() };
+    mockDetail({ run: recent, steps: [], guardrail_events: [] });
+    render(<RunDetailDrawer runId="r1" onClose={() => {}} />);
+    const note = await screen.findByTestId("run-steps-none");
+    expect(note.textContent).toMatch(/No steps were recorded for this run/);
+    expect(screen.queryByTestId("run-steps-pruned")).toBeNull();
   });
 
   it("does not say pruned for a run still going", async () => {
