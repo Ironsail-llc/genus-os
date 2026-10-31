@@ -174,13 +174,13 @@ class TestTipGuard:
 # ── semantic-release: a skip is never green ───────────────────────────────
 
 
-def _stub_npx(bin_dir: Path, output: str, code: int, tag: str | None = None) -> None:
+def _stub_npx(bin_dir: Path, output: str | list[str], code: int, tag: str | None = None) -> None:
     bin_dir.mkdir(exist_ok=True)
+    lines = [output] if isinstance(output, str) else output
+    printed = "".join(f"printf '%s\\n' {line!r}\n" for line in lines)
     tag_line = f"git tag {tag}\n" if tag else ""
     stub = bin_dir / "npx"
-    stub.write_text(
-        f"#!/usr/bin/env bash\nprintf '%s\\n' {output!r}\n{tag_line}exit {code}\n", encoding="utf-8"
-    )
+    stub.write_text(f"#!/usr/bin/env bash\n{printed}{tag_line}exit {code}\n", encoding="utf-8")
     stub.chmod(0o755)
 
 
@@ -205,10 +205,19 @@ def _run_semantic(
 BEHIND = "[semantic-release] The local branch main is behind the remote one, therefore a new version won't be published."
 
 
+# The same line as semantic-release prints it on a runner.
+BEHIND_TIMESTAMPED = "[1:02:03 PM] [semantic-release] \u203a \u2139  " + BEHIND.removeprefix(
+    "[semantic-release] "
+)
+
+
 class TestSemanticReleaseStep:
-    def test_behind_the_remote_fails(self, jobs: dict, repo: Path, tmp_path: Path) -> None:
+    @pytest.mark.parametrize("line", [BEHIND, BEHIND_TIMESTAMPED])
+    def test_behind_the_remote_fails(
+        self, jobs: dict, repo: Path, tmp_path: Path, line: str
+    ) -> None:
         _commit(repo, "feat: a change")
-        _stub_npx(tmp_path / "bin", BEHIND, 0)
+        _stub_npx(tmp_path / "bin", line, 0)
         result, _ = _run_semantic(jobs, repo, tmp_path)
         assert result.returncode != 0
         assert "::error::" in result.stdout
@@ -242,6 +251,96 @@ class TestSemanticReleaseStep:
         assert "new_release_published=false" in outputs
 
 
+class TestSemanticReleaseOrdering:
+    def test_quoted_skip_phrase_in_a_published_release_stays_green(
+        self, jobs: dict, repo: Path, tmp_path: Path
+    ) -> None:
+        # commit-analyzer logs each raw commit message; a squash-merged body
+        # can quote the skip line. A release that was cut must stay green.
+        _commit(repo, "fix: a change")
+        _stub_npx(
+            tmp_path / "bin",
+            [
+                "[semantic-release] [@semantic-release/commit-analyzer] Analyzing commit: fix: a change",
+                "semantic-release logs that the local branch is behind the remote one, "
+                "therefore a new version won't be published",
+                "[semantic-release] Published release 1.2.3 on default channel",
+            ],
+            0,
+            tag="v1.2.3",
+        )
+        result, outputs = _run_semantic(jobs, repo, tmp_path)
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "new_release_published=true" in outputs
+        assert "new_release_version=1.2.3" in outputs
+
+    def test_quoted_skip_phrase_without_a_release_stays_green(
+        self, jobs: dict, repo: Path, tmp_path: Path
+    ) -> None:
+        _commit(repo, "docs: mention behind the remote one")
+        _stub_npx(
+            tmp_path / "bin",
+            "[semantic-release] [@semantic-release/commit-analyzer] Analyzing commit: docs: the local branch main "
+            "is behind the remote one, therefore a new version won't be published",
+            0,
+        )
+        result, outputs = _run_semantic(jobs, repo, tmp_path)
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "new_release_published=false" in outputs
+
+    def test_failure_after_the_tag_was_cut_stays_green_and_published(
+        self, jobs: dict, repo: Path, tmp_path: Path
+    ) -> None:
+        _commit(repo, "fix: a change")
+        _stub_npx(tmp_path / "bin", "a later plugin failed", 1, tag="v1.2.3")
+        result, outputs = _run_semantic(jobs, repo, tmp_path)
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "new_release_published=true" in outputs
+        assert "new_release_version=1.2.3" in outputs
+
+    def test_already_tagged_tip_is_not_a_new_release(
+        self, jobs: dict, repo: Path, tmp_path: Path
+    ) -> None:
+        # A re-run of the last release run, or a tip that is the previous
+        # release commit: the tag on HEAD is old, nothing was published.
+        _commit(repo, "chore(release): 1.0.0 [skip ci]", author=(BOT, BOT_EMAIL))
+        _git(repo, "tag", "v1.0.0")
+        _stub_npx(
+            tmp_path / "bin", "There are no relevant changes, so no new version is released.", 0
+        )
+        result, outputs = _run_semantic(jobs, repo, tmp_path)
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "new_release_published=false" in outputs
+        assert "new_release_version=1.0.0" not in outputs
+
+
+class TestTipGuardAllowlist:
+    def test_passes_over_every_bot_commit_shape(self, jobs: dict, repo: Path) -> None:
+        gated = _commit(repo, "feat: a change")
+        for subject in (
+            "chore(release): 1.0.0 [skip ci]",
+            "chore(staging): deploy PR #1 (sha-abc1234) [skip ci]",
+            "chore(staging): reset to v1.0.0 [skip ci]",
+            "chore(deploy): promote v1.0.0 [skip ci]",
+            "revert(deploy): roll back v1.0.0 [skip ci]",
+        ):
+            _commit(repo, subject, author=(BOT, BOT_EMAIL))
+        result = _run(_step(jobs["release"], GUARD)["run"], repo, {"GATED_SHA": gated})
+        assert result.returncode == 0, result.stdout + result.stderr
+
+    def test_fails_on_bot_name_with_another_email(self, jobs: dict, repo: Path) -> None:
+        gated = _commit(repo, "feat: a change")
+        _commit(repo, "chore(deploy): promote v1.0.0 [skip ci]", author=(BOT, "alice@example.com"))
+        result = _run(_step(jobs["release"], GUARD)["run"], repo, {"GATED_SHA": gated})
+        assert result.returncode != 0
+
+    def test_fails_on_a_bot_skip_ci_commit_of_unknown_shape(self, jobs: dict, repo: Path) -> None:
+        gated = _commit(repo, "feat: a change")
+        _commit(repo, "feat: something new [skip ci]", author=(BOT, BOT_EMAIL))
+        result = _run(_step(jobs["release"], GUARD)["run"], repo, {"GATED_SHA": gated})
+        assert result.returncode != 0
+
+
 # ── downstream jobs work from the released version ────────────────────────
 
 
@@ -260,6 +359,15 @@ class TestDownstreamUsesTheRelease:
     @pytest.mark.parametrize("job", ["build-dist", "publish-chart", "promote-production"])
     def test_release_path_never_uses_the_push_sha(self, jobs: dict, job: str) -> None:
         assert "github.sha" not in yaml.safe_dump(jobs[job])
+
+    def test_image_build_release_checkout_never_uses_the_push_sha(self, jobs: dict) -> None:
+        # The push-release branch of build's checkout ref, before the PR and
+        # dispatch fallbacks. The `sha-` image tag (metadata-action) names
+        # the gated commit on purpose and is not a checkout.
+        ref = _checkout(jobs["build"]).get("ref", "")
+        release_branch = ref.split("||", 1)[0]
+        assert "github.sha" not in release_branch
+        assert RELEASE_VERSION in release_branch
 
     def test_promotion_promotes_the_released_version(self, jobs: dict) -> None:
         # It commits a GitOps bump, so it checks out main to push onto; what
