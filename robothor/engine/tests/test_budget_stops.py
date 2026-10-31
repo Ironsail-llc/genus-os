@@ -569,3 +569,83 @@ class TestTheRunawayAlertSaysWhatHappened:
         assert len(pages) == 1
         assert "contained by the budget guard" not in pages[0].lower()
         assert "robothor_runaway_hard_cap_mode=enforce" in pages[0].lower()
+
+
+# ── An operator stop that lands mid-call is recorded when it is issued ──────
+
+
+def _durable_steps(session: AgentSession) -> list[Any]:
+    return [s for s in _budget_steps(session.run.steps) if s.tool_name == "durable_stop"]
+
+
+class TestAStopDuringAModelCallIsRecorded:
+    @pytest.mark.asyncio
+    async def test_stop_local_records_the_step_and_cancels_the_call(self, published):
+        """The in-flight call is cancelled, so no later provider request ever
+        reaches the durable-stop check: the record has to be made here."""
+        from robothor.engine.runtime import activity
+
+        session = AgentSession("stopped-agent")
+        session.run.tenant_id = "test-tenant"
+        in_call = asyncio.Event()
+
+        async def _model_call() -> None:
+            in_call.set()
+            await asyncio.sleep(30)
+
+        task = asyncio.get_running_loop().create_task(_model_call())
+        await in_call.wait()
+        act = activity.Activity(task=task, loop=asyncio.get_running_loop())
+        act.sessions[session.run_id] = session
+        with activity._lock:
+            activity._active[(session.run.tenant_id, session.run_id)] = act
+        try:
+            await asyncio.to_thread(
+                activity.stop_local, session.run.tenant_id, session.run_id, "Operator stopped"
+            )
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        finally:
+            activity.remove(act)
+
+        steps = _durable_steps(session)
+        assert len(steps) == 1
+        assert steps[0].tool_input["mode"] == "enforce"
+        assert steps[0].tool_input["stop"] == "durable_stop"
+        assert "Operator stopped" in steps[0].tool_input["reason"]
+
+    def test_signal_stopped_records_the_step_on_a_registered_session(self, published, monkeypatch):
+        from robothor.engine import session_registry
+        from robothor.engine.runtime import controls
+
+        session = AgentSession("stopped-agent")
+        session.run.tenant_id = "test-tenant"
+        monkeypatch.setattr(controls, "stopped", lambda tenant, run_id: True)
+        session_registry.register(session)
+        try:
+            controls.signal_stopped("test-tenant", "Operator stopped execution")
+        finally:
+            session_registry.unregister(session.run_id)
+
+        assert len(_durable_steps(session)) == 1
+        assert session._interrupt_requested is True
+
+    def test_a_later_provider_refusal_does_not_record_it_twice(self, published, monkeypatch):
+        from robothor.engine import session_registry
+        from robothor.engine.runtime import controls
+        from robothor.engine.runtime.failure import failed_or_stopped
+        from robothor.engine.runtime.provider_budget import DurableStopError
+
+        session = AgentSession("stopped-agent")
+        session.run.tenant_id = "test-tenant"
+        monkeypatch.setattr(controls, "stopped", lambda tenant, run_id: True)
+        session_registry.register(session)
+        try:
+            controls.signal_stopped("test-tenant", "Operator stopped execution")
+        finally:
+            session_registry.unregister(session.run_id)
+        failed_or_stopped(
+            session, DurableStopError("Durable stop denies another provider request"), None
+        )
+
+        assert len(_durable_steps(session)) == 1
