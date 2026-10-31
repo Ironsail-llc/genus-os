@@ -40,11 +40,11 @@ Four rules the routes enforce:
    badge. The edit recomputes ``content_hash``, so editing a fact into the text
    of another ACTIVE fact hits migration 078's unique index and is a 409.
 
-   The embedding is NOT recomputed. Nothing in ``robothor.memory`` backfills a
-   NULL embedding, so nulling it would drop the fact out of vector search for
-   good. A text edit therefore leaves the vector as it was and records
-   ``metadata.embedding_stale = true``: keyword search sees the new text at
-   once, vector search still ranks by the old one until the fact is re-embedded.
+   A text edit re-embeds the fact in the same request, so vector search ranks
+   it by its new wording at once. Nothing in ``robothor.memory`` backfills a
+   NULL embedding, so the vector is never nulled: if the embedding provider is
+   unreachable the edit still saves, keeps the old vector and records
+   ``metadata.embedding_stale = true`` until a later text edit refreshes it.
 
 Handlers are plain ``def`` (not ``async def``) on purpose: psycopg2 is
 synchronous, so FastAPI must run them in its worker threadpool rather than on
@@ -70,6 +70,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from robothor.db.connection import get_connection
+from robothor.llm import ollama as llm_client
 from robothor.sanitize import sanitize_log
 from routers._audit import audited
 from routers._operator import require_operator
@@ -547,8 +548,11 @@ def _edited_entities(raw: Any) -> list[str] | None:
     if not isinstance(raw, list) or not all(isinstance(name, str) for name in raw):
         raise HTTPException(status_code=422, detail="entities must be a list of names")
     names: list[str] = []
+    seen: set[str] = set()
     for name in (entry.strip() for entry in raw):
-        if not name or name in names:
+        # Case-insensitively, like the entity filter (``lower_entities``): "Alice"
+        # and "alice" are one tag, and the first spelling given is the one kept.
+        if not name or name.casefold() in seen:
             continue
         if len(name) > MAX_ENTITY_CHARS:
             raise HTTPException(
@@ -556,11 +560,31 @@ def _edited_entities(raw: Any) -> list[str] | None:
                 detail=f"an entity name must be under {MAX_ENTITY_CHARS} characters",
             )
         names.append(name)
+        seen.add(name.casefold())
     if len(names) > MAX_ENTITIES:
         raise HTTPException(
             status_code=422, detail=f"a fact may carry at most {MAX_ENTITIES} entities"
         )
     return names
+
+
+def _embedding(text: str, fact_id: int) -> list[float] | None:
+    """The vector for an edited text, or ``None`` when the provider fails.
+
+    ``asyncio.run`` is safe here for the reason ``_ranked_by_search`` gives: a
+    plain ``def`` handler runs in a worker thread with no event loop. A failure
+    is not a refused edit — the operator's correction is saved and the row says
+    its vector is stale — and the warning names the fact, never its text.
+    """
+    import asyncio
+
+    try:
+        return asyncio.run(llm_client.get_embedding_async(text))
+    except Exception as exc:  # noqa: BLE001 -- any provider failure degrades the same way
+        logger.warning(
+            "memory fact %d edited without a fresh embedding: %s", fact_id, type(exc).__name__
+        )
+        return None
 
 
 @router.patch("/facts/{fact_id}")
@@ -588,6 +612,10 @@ def edit_fact(fact_id: str, request: Request, body: EditRequest | None = None) -
         raise HTTPException(status_code=422, detail="an edit needs fact_text, entities or both")
     reason = _reason(body, verb="edit")
 
+    # BEFORE the connection, for the reason ``_ranked_by_search`` gives: the
+    # embedding call must not run while this request holds a pool slot.
+    vector = _embedding(new_text, identifier) if new_text is not None else None
+
     with get_connection() as conn:
         cur = conn.cursor()
         cur.execute(
@@ -606,7 +634,11 @@ def edit_fact(fact_id: str, request: Request, body: EditRequest | None = None) -
             )
 
         old_entities = list(old_entities or [])
-        text = new_text if new_text is not None else (old_text or "")
+        # Compared trimmed, as the new text was: saving the same words is not
+        # a text edit, keeps the stored text byte for byte, and keeps its vector.
+        text_changed = new_text is not None and new_text != (old_text or "").strip()
+        text = new_text if text_changed and new_text is not None else (old_text or "")
+        refreshed = vector if text_changed else None
         entities = new_entities if new_entities is not None else old_entities
         person = str(person_id) if person_id else None
         new_hash = compute_fact_hash(
@@ -615,8 +647,10 @@ def edit_fact(fact_id: str, request: Request, body: EditRequest | None = None) -
         metadata: dict[str, Any] = {
             "operator_confirmed": {"at": datetime.now(UTC).isoformat(), "by": actor}
         }
-        if text != old_text:
+        if text_changed and refreshed is None:
             metadata["embedding_stale"] = True
+        # A fresh vector clears an earlier flag; anything else leaves it alone.
+        cleared = ["embedding_stale"] if refreshed is not None else []
 
         # A savepoint, so a collision with another active fact undoes the
         # history row too and leaves the transaction usable for the refusal.
@@ -644,9 +678,19 @@ def edit_fact(fact_id: str, request: Request, body: EditRequest | None = None) -
             snapshot_id = int(cur.fetchone()[0])
             cur.execute(
                 "UPDATE memory_facts SET fact_text = %s, entities = %s, content_hash = %s, "
-                "metadata = COALESCE(metadata, '{}'::jsonb) || %s::jsonb, updated_at = now() "
-                "WHERE id = %s AND tenant_id = %s",
-                (text, entities, new_hash, json.dumps(metadata), identifier, tenant_id),
+                "embedding = COALESCE(%s::vector, embedding), "
+                "metadata = (COALESCE(metadata, '{}'::jsonb) - %s::text[]) || %s::jsonb, "
+                "updated_at = now() WHERE id = %s AND tenant_id = %s",
+                (
+                    text,
+                    entities,
+                    new_hash,
+                    refreshed,
+                    cleared,
+                    json.dumps(metadata),
+                    identifier,
+                    tenant_id,
+                ),
             )
         except psycopg2.errors.UniqueViolation:
             cur.execute("ROLLBACK TO SAVEPOINT memory_fact_edit")
