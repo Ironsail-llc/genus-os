@@ -1010,7 +1010,13 @@ those without `--force`; `members_accounted` is how many wheel members the scan
 classified when the row was written, which is what makes the `verdict` beside it
 a measurement rather than a claim; `scan_reasons` is what the scan said, so the
 findings an operator accepted with `--accept-review` stay on record after the
-install has answered. All four are additive — a lockfile written before they
+install has answered. These facts describe the bytes that were installed, so a
+`genus plugin sync` over a distribution whose version or manifest has since
+changed (a hand `pip install -U`, an edited package) drops them: `verdict`
+returns to `unscanned`, `dist_sha256`, `members_accounted`, `scan_reasons` and
+the source's `publisher_key_id` are cleared, and only `enabled` and the
+source's origin are kept, so the row reads Unsigned rather than Verified and
+`remove` still knows the platform installed it. All four are additive — a lockfile written before they
 existed parses unchanged.
 
 ### The verbs
