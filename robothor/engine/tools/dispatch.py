@@ -454,6 +454,25 @@ def _audit_tool_call(
         pass
 
 
+def _rbac_unlock(user_role: str, name: str, denied: str) -> str:
+    """What unlocks a per-user RBAC denial, from where the caller stands.
+
+    Telling an owner or admin that "an owner or admin can do it" sends them to
+    themselves; what gates them is the rule itself.
+    """
+    role = user_role or "none"
+    if role in ("owner", "admin"):
+        return (
+            f"Your role '{role}' is refused '{name}' by a specific RBAC rule ({denied}), "
+            "not by its rank. An owner changes that rule: an allow row for role "
+            f"'{role}' and '{name}' in role_permissions"
+        )
+    return (
+        f"Your role here is '{role}', which may not use '{name}'. An owner or admin can "
+        "do it, or grant that role the tool (a role_permissions allow row)"
+    )
+
+
 async def _refuse_before_handler(
     name: str,
     *,
@@ -487,11 +506,7 @@ async def _refuse_before_handler(
             denied,
             gate="role",
             name="rbac",
-            unlock=(
-                f"Your role here is '{user_role or 'none'}', which may not use '{name}'. "
-                "An owner or admin can do it, or grant that role the tool (a "
-                "role_permissions allow row)"
-            ),
+            unlock=_rbac_unlock(user_role, name, denied),
         )
 
     # ── Per-task tool whitelist (Rip 1) ──

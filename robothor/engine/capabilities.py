@@ -33,9 +33,12 @@ __all__ = [
     "Facts",
     "assess",
     "capability_block",
+    "env_facts",
     "facts_for",
+    "github_token_unlock",
     "manifest_unlock",
     "render",
+    "vault_set_admitted",
 ]
 
 HEADER = "## What you can do here"
@@ -54,6 +57,14 @@ class Facts:
     can_spawn_agents: bool = False
     host_exec_socket: str = ""
     coding_repo_roots: str = ""
+    #: ``ROBOTHOR_CODING_WORKSPACE``: an implicit repo root, so it alone admits
+    #: a coding job.
+    coding_workspace: str = ""
+    #: ``v2.credentials`` in the manifest (``operator`` admits vault_set).
+    credential_tier: str = ""
+    #: ``ROBOTHOR_CREDENTIAL_INTAKE`` (off | observe | enforce): at ``enforce``,
+    #: vault_set is admitted in an owner's or admin's own chat with main.
+    credential_intake: str = "off"
     #: ``None``: not checked here; the tool reports it when called.
     github_token: bool | None = None
     claude_cli: bool | None = None
@@ -124,29 +135,56 @@ def manifest_unlock(agent_config: AgentConfig | None, tool_name: str) -> str:
     return _grant_unlock(_manifest_facts(agent_config), tool_name)[1]
 
 
-def _runtime_gate(spec: _Spec, facts: Facts) -> tuple[str, str] | None:
-    """``(gate_name, unlock)`` when the instance lacks what a granted capability needs."""
+def vault_set_admitted(facts: Facts) -> bool:
+    """Whether ``vault_set`` gets past the credential gate for this agent.
+
+    Mirrors the vault handler: the manifest's operator tier always admits it;
+    otherwise credential intake at ``enforce`` admits it in an owner's or
+    admin's own chat with main (the per-person half is checked when called).
+    """
+    if facts.credential_tier == "operator":
+        return True
+    return facts.credential_intake == "enforce" and facts.agent_id == "main"
+
+
+def _credential_gate(facts: Facts) -> tuple[str, str, str]:
+    path = f"docs/agents/{facts.agent_id}.yaml"
+    tier = f"adds `credentials: operator` under `v2:` in {path}"
+    if facts.agent_id == "main":
+        return (
+            "flag",
+            "ROBOTHOR_CREDENTIAL_INTAKE",
+            f"an operator sets ROBOTHOR_CREDENTIAL_INTAKE=enforce (then an owner or admin "
+            f"can hand a credential over in chat), or {tier}",
+        )
+    return "allowlist", "credential_tier", f"an operator {tier}"
+
+
+def _runtime_gate(spec: _Spec, facts: Facts) -> tuple[str, str, str] | None:
+    """``(gate, gate_name, unlock)`` when something besides the grant refuses it."""
+    if spec.key == "vault_set" and not vault_set_admitted(facts):
+        return _credential_gate(facts)
     if spec.key == "host_exec" and not facts.host_exec_socket:
         return (
+            "runtime",
             "ROBOTHOR_HOST_EXEC_SOCKET",
             "an operator installs the host-exec service and sets ROBOTHOR_HOST_EXEC_SOCKET; "
             "it then serves the verified owner's own top-level chat (plain exec still works)",
         )
     if spec.key == "git_pr" and facts.github_token is False:
-        return (
-            "GITHUB_TOKEN",
-            "store a GitHub token as GITHUB_TOKEN with vault_set (the person can paste it "
-            "in chat) and retry",
-        )
+        return ("runtime", "GITHUB_TOKEN", github_token_unlock(vault_set_admitted(facts)))
     if spec.key == "coding_jobs":
-        if not facts.coding_repo_roots:
+        if not facts.coding_repo_roots and not facts.coding_workspace:
             return (
+                "runtime",
                 "ROBOTHOR_CODING_REPO_ROOTS",
-                "an operator sets ROBOTHOR_CODING_REPO_ROOTS to the directories coding jobs "
-                "may work under (config_set can write it)",
+                "an operator sets ROBOTHOR_CODING_WORKSPACE (where coding jobs clone "
+                "repositories) or ROBOTHOR_CODING_REPO_ROOTS (the directories they may work "
+                "under)",
             )
         if facts.claude_cli is False:
             return (
+                "runtime",
                 "claude CLI",
                 "an operator installs the Claude Code CLI for the engine's user, or sets "
                 "ROBOTHOR_CLAUDE_BIN, then runs `robothor claude-code login`",
@@ -170,13 +208,15 @@ def assess(granted: Iterable[str], facts: Facts) -> list[Capability]:
             continue
         blocked = _runtime_gate(spec, facts)
         if blocked:
-            out.append(
-                Capability(spec.key, spec.label, False, have, "runtime", blocked[0], blocked[1])
-            )
+            out.append(Capability(spec.key, spec.label, False, have, *blocked))
             continue
         note = ""
         if spec.key == "git_pr" and facts.github_token is None:
-            note = "needs GITHUB_TOKEN when called; vault_set stores it"
+            note = "needs GITHUB_TOKEN when called; " + (
+                "vault_set stores it" if vault_set_admitted(facts) else "an operator stores it"
+            )
+        if spec.key == "vault_set" and facts.credential_tier != "operator":
+            note = "only in an owner or admin's own chat with you"
         out.append(Capability(spec.key, spec.label, True, have, note=note))
     return out
 
@@ -188,6 +228,20 @@ def _manifest_facts(config: AgentConfig) -> Facts:
         declares_tools_allowed=bool(config.tools_allowed),
         tools_denied=tuple(config.tools_denied or ()),
         can_spawn_agents=bool(config.can_spawn_agents),
+        credential_tier=str(getattr(config, "credential_tier", "") or "").strip().lower(),
+    )
+
+
+def github_token_unlock(vault_set_ok: bool) -> str:
+    """The unlock for a missing ``GITHUB_TOKEN``: vault_set only where it is admitted."""
+    if vault_set_ok:
+        return (
+            "store a GitHub token as GITHUB_TOKEN with vault_set (the person can paste it "
+            "in chat) and retry; no restart is needed"
+        )
+    return (
+        "an operator stores a GitHub token as GITHUB_TOKEN in the instance's vault and the "
+        "call is retried; no restart is needed"
     )
 
 
@@ -196,11 +250,30 @@ def facts_for(config: AgentConfig) -> Facts:
     from robothor.settings import get_settings
 
     settings = get_settings()
+    workspace, intake = env_facts()
     return replace(
         _manifest_facts(config),
         host_exec_socket=settings.engine.host_exec_socket or "",
         coding_repo_roots=settings.coding.repo_roots or "",
+        coding_workspace=workspace,
+        credential_intake=intake,
     )
+
+
+def env_facts() -> tuple[str, str]:
+    """Facts read from the environment BY NAME.
+
+    ``ROBOTHOR_CREDENTIAL_INTAKE`` and ``ROBOTHOR_CODING_WORKSPACE`` are declared
+    by separate pull requests (credential intake, the coding workspace) that may
+    land before or after this one, so neither is a typed setting here yet.
+    Once both are, read them from ``get_settings()`` instead. Returns
+    ``(coding workspace, credential intake mode)``.
+    """
+    import os
+
+    workspace = os.environ.get("ROBOTHOR_CODING_WORKSPACE", "").strip()
+    intake = os.environ.get("ROBOTHOR_CREDENTIAL_INTAKE", "").strip().lower() or "off"
+    return workspace, intake
 
 
 def render(capabilities: list[Capability], facts: Facts, *, relay_refusals: bool = False) -> str:

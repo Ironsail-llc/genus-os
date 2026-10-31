@@ -166,7 +166,10 @@ class TestSharedAssessment:
 
         rows = assess(
             {"git_commit", "create_pull_request"},
-            Facts(agent_id="a", service_role="service", github_token=False),
+            # The tier is what makes vault_set the unlock (QA round, D1).
+            Facts(
+                agent_id="a", service_role="service", github_token=False, credential_tier="operator"
+            ),
         )
         git = next(c for c in rows if c.key == "git_pr")
         assert git.available is False

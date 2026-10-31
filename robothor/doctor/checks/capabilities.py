@@ -42,10 +42,13 @@ def _io_facts() -> tuple[bool, bool]:
 
 
 def _facts(manifest: dict[str, Any], token: bool, cli: bool) -> Facts:
-    from robothor.engine.capabilities import Facts
+    from robothor.engine.capabilities import Facts, env_facts
     from robothor.settings import get_settings
 
     settings = get_settings()
+    v2 = manifest.get("v2")
+    v2 = v2 if isinstance(v2, dict) else {}
+    workspace, intake = env_facts()
     return Facts(
         agent_id=str(manifest.get("id")),
         service_role=str(manifest.get("service_role") or "service"),
@@ -56,6 +59,9 @@ def _facts(manifest: dict[str, Any], token: bool, cli: bool) -> Facts:
         coding_repo_roots=settings.coding.repo_roots or "",
         github_token=token,
         claude_cli=cli,
+        credential_tier=str(v2.get("credentials", "") or "").strip().lower(),
+        coding_workspace=workspace,
+        credential_intake=intake,
     )
 
 

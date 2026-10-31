@@ -1414,7 +1414,11 @@ a "What you can do here" block after its instruction and bootstrap files: the
 capabilities its granted tools give it (`exec`, `write_files`, `git_pr`,
 `coding_jobs`, `browser`, `spawn`, `vault_set`, `send_mail`, and `host_exec` for
 `main`), and for each one it lacks, the gate and the unlock (a manifest key, or
-a setting such as `ROBOTHOR_CODING_REPO_ROOTS` or `ROBOTHOR_HOST_EXEC_SOCKET`). It
+a setting such as `ROBOTHOR_CODING_REPO_ROOTS` or `ROBOTHOR_HOST_EXEC_SOCKET`). `vault_set` is listed as available only when the
+manifest declares `credentials: operator` under `v2:`, or, for `main`, when
+`ROBOTHOR_CREDENTIAL_INTAKE=enforce` (then in an owner's or admin's own chat);
+coding jobs are available when either `ROBOTHOR_CODING_WORKSPACE` or
+`ROBOTHOR_CODING_REPO_ROOTS` is set. It
 tells the agent to relay a refusal's gate and unlock only when
 `ROBOTHOR_REFUSAL_PAYLOAD_V2` is also on, since only then do refusals carry them.
 It reads only the manifest and the engine's settings, so it is the same on every
