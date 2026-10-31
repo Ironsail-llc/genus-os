@@ -104,6 +104,10 @@ set on each:
 
 Every process also needs the shared vault key below.
 
+`genus doctor` in a child's engine reports `identity.owner_account` as passing
+and not applicable: a child has no owner by design, and an engine bound to the
+child cannot see the root's owner. A root tenant with no owner still fails.
+
 ### Vault key
 
 Every tenant shares one vault master key. A credential the bridge stores while acting in a child tenant is encrypted with that key and decrypted later by the child's own engine, so the bridge, the root engine and every child engine must hold the same key. A key per workspace makes the child's credentials unreadable by its engine. On Kubernetes the chart provides the key: set `vaultKey.enabled: true` and point `vault.secrets.vault-key.path` at a Vault path holding two base64 fields, `key` and `fingerprint-salt`, each made with `openssl rand -base64 32`. The chart mounts both read-only on the bridge and every engine, at `/etc/genus/vault/.vault-key` and `/etc/genus/vault/.fingerprint-salt`, and sets `GENUS_VAULT_KEY_FILE` and `GENUS_FINGERPRINT_SALT_FILE` to them. The files keep the `.vault-key` / `.fingerprint-salt` names because the engine refuses agent reads of those names; the override paths are refused as well. It refuses to render tenant cells without this. On a single host, point both variables at the same files for every process. Treat `key` as write-once: secrets already stored cannot be read under a new key. The fingerprint salt only affects how credentials are displayed (`b2:…`), not decryption, but sharing it keeps one credential's fingerprint identical everywhere.
@@ -361,6 +365,12 @@ SELECT DISTINCT tenant_id FROM crm_tasks;
 
 ## Rolling back
 
+- The release itself: reset the deployment to the previous release. Its
+  migrations stay applied, and the older release starts beside them only if it
+  carries the rule for newer migrations; one that does not refuses them and
+  its migration Job fails. See
+  [Rolling back to an older release](../deployment.md#rolling-back-to-an-older-release)
+  for what the migrator accepts and what it still refuses.
 - A claimed domain: `genus tenant set-domains <id>` with no domains.
 - A move: move the account back (`--to` the old tenant, `--role` the old role
   unless it was `owner`; restore an owner with `genus auth bootstrap` or the
