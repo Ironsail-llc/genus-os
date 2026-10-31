@@ -1674,3 +1674,40 @@ class TestTheGateIsOfferedNeverRecommended:
         assert result.status == "pass", result.detail
         assert "not a gap" in result.detail, result.detail
         assert "opt-in" in result.detail, result.detail
+
+
+# ── tools.inability_copy ──────────────────────────────────────────────
+
+
+class TestInabilityCopy:
+    """Instruction text that tells the agent it cannot do something is how an
+    agent with the tool learns to refuse. A reason belongs there instead."""
+
+    @pytest.mark.asyncio
+    async def test_a_bare_inability_outside_a_fence_is_reported(self, instance: Path) -> None:
+        _write_agent(
+            instance,
+            "example-agent",
+            {},
+            instructions="Be helpful.\nI cannot send email.\nYou can't edit code here.\n",
+        )
+        result = await _run("tools.inability_copy")
+        assert result.status == "fail"
+        assert "example-agent" in result.detail
+        assert "I cannot send email." in result.detail
+
+    @pytest.mark.asyncio
+    async def test_a_fenced_example_is_not_reported(self, instance: Path) -> None:
+        _write_agent(
+            instance,
+            "example-agent",
+            {},
+            instructions="Quote it like this:\n```\nI cannot help with that.\n```\n",
+        )
+        result = await _run("tools.inability_copy")
+        assert result.status == "pass"
+
+    @pytest.mark.asyncio
+    async def test_the_shipped_templates_pass(self, stock_instance: Path) -> None:
+        result = await _run("tools.inability_copy")
+        assert result.status == "pass", result.detail
