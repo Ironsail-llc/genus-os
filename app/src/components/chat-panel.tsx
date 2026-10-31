@@ -1666,7 +1666,7 @@ export function ChatPanel({
               <Brain className="w-3.5 h-3.5" />
               Deep
             </button>
-            <ToolsPopover agentId={agent || defaultAgent || "main"} mobile />
+            <ToolsPopover agentId={agent || defaultAgent || null} mobile />
           </div>
         ) : null}
 
@@ -1731,7 +1731,7 @@ export function ChatPanel({
             </TooltipProvider>
           )}
           {!mobile && (
-            <ToolsPopover agentId={agent || defaultAgent || "main"} />
+            <ToolsPopover agentId={agent || defaultAgent || null} />
           )}
           <textarea
             ref={inputRef}

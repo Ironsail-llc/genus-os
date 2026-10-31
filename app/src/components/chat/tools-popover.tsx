@@ -13,7 +13,7 @@
  * is no popover primitive in this app, and one dialog is not worth a new
  * dependency.
  */
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { ChevronRight, Loader2, Wrench } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -70,6 +70,7 @@ type Load =
   | { state: "loading" }
   | { state: "refused" }
   | { state: "error"; message: string }
+  | { state: "signed-out" }
   | { state: "ready"; tools: AgentToolsReply; servers: McpServer[] };
 
 /** Where the agent editor opens for one agent (`agent-manifests.tsx`). */
@@ -87,8 +88,13 @@ function health(server: McpServer): { label: string; tone: string } {
   return { label: "Stopped", tone: "text-muted-foreground" };
 }
 
+/**
+ * One retry on 401, as the Flags page does: the first 401 is often the request
+ * that lost a session-refresh race, and the retry carries the rotated cookie.
+ */
 async function readJson(url: string): Promise<{ status: number; body: unknown }> {
-  const res = await fetch(url);
+  let res = await fetch(url);
+  if (res.status === 401) res = await fetch(url);
   let body: unknown = null;
   try {
     body = await res.json();
@@ -96,6 +102,23 @@ async function readJson(url: string): Promise<{ status: number; body: unknown }>
     body = null;
   }
   return { status: res.status, body };
+}
+
+function signInHref(): string {
+  if (typeof window === "undefined") return "/signin";
+  const back = `${window.location.pathname}${window.location.search}`;
+  return `/signin?callbackUrl=${encodeURIComponent(back)}`;
+}
+
+/** The engine's own sentence from an error body, when it sent one. */
+function errorText(body: unknown): string | null {
+  if (body && typeof body === "object") {
+    const record = body as Record<string, unknown>;
+    for (const key of ["error", "detail", "message"]) {
+      if (typeof record[key] === "string" && record[key]) return record[key] as string;
+    }
+  }
+  return null;
 }
 
 function ToolGroup({ id, title, names }: { id: string; title: string; names: string[] }) {
@@ -125,7 +148,7 @@ function ToolGroup({ id, title, names }: { id: string; title: string; names: str
   );
 }
 
-function ToolsBody({ agentId, load }: { agentId: string; load: Load }) {
+function ToolsBody({ agentId, load }: { agentId: string | null; load: Load }) {
   if (load.state === "idle" || load.state === "loading") {
     return (
       <p className="flex items-center gap-2 text-sm text-muted-foreground" data-testid="tools-loading">
@@ -137,6 +160,17 @@ function ToolsBody({ agentId, load }: { agentId: string; load: Load }) {
     return (
       <p className="text-sm text-muted-foreground" data-testid="tools-refused">
         Only an operator can see which tools and servers this agent can reach.
+      </p>
+    );
+  }
+  if (load.state === "signed-out") {
+    return (
+      <p className="text-sm text-muted-foreground" data-testid="tools-error">
+        Your session has ended.{" "}
+        <a href={signInHref()} className="font-medium text-primary underline-offset-4 hover:underline">
+          Sign in again
+        </a>{" "}
+        to see this agent&apos;s tools.
       </p>
     );
   }
@@ -235,7 +269,7 @@ function ToolsBody({ agentId, load }: { agentId: string; load: Load }) {
       </section>
 
       <a
-        href={agentEditorHref(agentId)}
+        href={agentEditorHref(agentId ?? tools.agent)}
         className="text-sm font-medium text-primary underline-offset-4 hover:underline"
       >
         Manage in agent settings
@@ -245,8 +279,8 @@ function ToolsBody({ agentId, load }: { agentId: string; load: Load }) {
 }
 
 export interface ToolsPopoverProps {
-  /** The agent the chat is talking to. */
-  agentId: string;
+  /** The agent the chat is talking to, or null until the chat knows. */
+  agentId: string | null;
   /** Labelled chip and bottom sheet instead of icon button and dialog. */
   mobile?: boolean;
   disabled?: boolean;
@@ -256,33 +290,54 @@ export function ToolsPopover({ agentId, mobile = false, disabled = false }: Tool
   const [open, setOpen] = useState(false);
   const [load, setLoad] = useState<Load>({ state: "idle" });
 
+  // Each fetch takes a number; only the latest may write. Switching agent and
+  // reopening while the first agent's reply is still in flight must not end
+  // with that reply on screen under the second agent's name.
+  const latest = useRef(0);
+
   const fetchAll = useCallback(async () => {
+    if (!agentId) return;
+    const ticket = ++latest.current;
+    const settle = (next: Load) => {
+      if (ticket === latest.current) setLoad(next);
+    };
     setLoad({ state: "loading" });
     try {
       const [tools, servers] = await Promise.all([
         readJson(`${BRIDGE}/api/agents/${encodeURIComponent(agentId)}/tools`),
         readJson(`${BRIDGE}/api/mcp/servers`),
       ]);
+      if (tools.status === 401 || servers.status === 401) {
+        settle({ state: "signed-out" });
+        return;
+      }
       if (tools.status === 403 || servers.status === 403) {
-        setLoad({ state: "refused" });
+        settle({ state: "refused" });
         return;
       }
       if (tools.status === 404) {
-        setLoad({ state: "error", message: `The engine has no agent called ${agentId}.` });
+        settle({ state: "error", message: `The engine has no agent called ${agentId}.` });
+        return;
+      }
+      if (tools.status === 422) {
+        settle({
+          state: "error",
+          message: errorText(tools.body) ?? "The engine refused this agent's manifest.",
+        });
         return;
       }
       if (tools.status >= 400 || servers.status >= 400) {
-        setLoad({ state: "error", message: "The engine did not answer. Check that it is running." });
+        settle({ state: "error", message: "The engine did not answer. Check that it is running." });
         return;
       }
       const serverBody = servers.body as { servers?: McpServer[] } | null;
-      setLoad({
+      settle({
         state: "ready",
         tools: tools.body as AgentToolsReply,
         servers: serverBody?.servers ?? [],
       });
     } catch {
-      setLoad({ state: "error", message: "The dashboard could not reach the bridge." });
+      settle({ state: "error", message: "The dashboard could not reach the bridge." });
     }
   }, [agentId]);
 
@@ -300,7 +355,7 @@ export function ToolsPopover({ agentId, mobile = false, disabled = false }: Tool
         <button
           type="button"
           onClick={() => onOpenChange(true)}
-          disabled={disabled}
+          disabled={disabled || !agentId}
           aria-label={TOOLS_LABEL}
           className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-colors bg-muted/50 text-muted-foreground border border-transparent disabled:opacity-50"
           data-testid="tools-toggle"
@@ -330,7 +385,7 @@ export function ToolsPopover({ agentId, mobile = false, disabled = false }: Tool
               size="icon"
               variant="ghost"
               onClick={() => onOpenChange(true)}
-              disabled={disabled}
+              disabled={disabled || !agentId}
               aria-label={TOOLS_LABEL}
               className="text-muted-foreground hover:text-foreground"
               data-testid="tools-toggle"

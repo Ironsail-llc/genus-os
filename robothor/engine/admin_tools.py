@@ -19,8 +19,8 @@ is in ``OPT_IN_TOOLS``); a plugin tool is attributed to the loaded distribution
 whose manifest declares it. A plugin tool no loaded manifest declares is
 reported under ``unattributed`` rather than guessed at.
 
-``command`` and ``url`` are how this process reaches a server. They are
-deployment detail, and they never leave this module.
+``command`` and ``url`` (and anything else the pool knows about reaching a
+server) are deployment detail: only the fields in ``_SHOWN`` leave this module.
 """
 
 from __future__ import annotations
@@ -43,8 +43,10 @@ UNATTRIBUTED = "unattributed"
 #: ``genus.schemas`` schemas (see ``robothor.plugins.loader._GROUPS``).
 _TOOL_KINDS = ("handlers", "schemas")
 
-#: Fields of ``McpClientPool.list_servers()`` that never reach a caller.
-_REDACTED = frozenset({"command", "url"})
+#: The fields of ``McpClientPool.list_servers()`` a caller may see. An
+#: allow-list, so a field the pool grows later (an env block, headers) stays
+#: in this process until someone decides it is safe to show.
+_SHOWN = ("name", "transport", "running", "initialized", "protocol")
 
 
 def _manifest_dir() -> Path:
@@ -73,13 +75,15 @@ def _plugin_owners() -> dict[str, str]:
     return owners
 
 
-def group_tools(names: list[str], registry: Any) -> dict[str, Any]:
-    """Sort *names* into core, plugins, mcp and opt_in, each list sorted."""
+def group_tools(names: list[str], registry: Any, owners: dict[str, str]) -> dict[str, Any]:
+    """Sort *names* into core, plugins, mcp and opt_in, each list sorted.
+
+    *owners* is :func:`_plugin_owners`, read off the loop by the caller.
+    """
     from robothor.engine.tools.constants import OPT_IN_TOOLS
     from robothor.engine.tools.registry import builtin_schema_names
 
     builtins = builtin_schema_names()
-    owners = _plugin_owners()
     core: list[str] = []
     opt_in: list[str] = []
     plugins: dict[str, list[str]] = {}
@@ -100,20 +104,37 @@ def group_tools(names: list[str], registry: Any) -> dict[str, Any]:
     }
 
 
-def agent_tools(agent_id: str) -> tuple[int, dict[str, Any]]:
-    """``(status, body)`` for one agent. Blocking: run it off the loop."""
+def _load(agent_id: str) -> tuple[Any, str, dict[str, str]]:
+    """The blocking half: the manifest and the plugin manifests. Off the loop."""
     from robothor.engine.config import load_agent_config_or_reason
-    from robothor.engine.tools import registry as tool_registry
 
     config, reason = load_agent_config_or_reason(agent_id, _manifest_dir(), "admin_tools")
+    return config, reason, (_plugin_owners() if config is not None else {})
+
+
+async def agent_tools(agent_id: str) -> tuple[int, dict[str, Any]]:
+    """``(status, body)`` for one agent.
+
+    The registry is read ON the loop, as every run reads it. Off it,
+    ``_get_filtered_names`` would spend its warn-once flag for an agent with an
+    unresolved tool while the escalation it pairs with, which needs a running
+    loop, did nothing -- so the operator would never be told. It would also
+    iterate ``_schemas`` while the loop may be changing it.
+    """
+    from robothor.engine.tools import registry as tool_registry
+
+    config, reason, owners = await asyncio.to_thread(_load, agent_id)
     if config is None:
         status = 404 if reason.startswith("Agent config not found") else 422
         return status, {"error": reason}
     registry = tool_registry.get_registry()
+    # The run path refreshes before it builds; so does this, so the dialog
+    # right after a plugin install shows what the next run will get.
+    registry._refresh_plugin_schemas_if_stale()
     names = list(registry.get_tool_names(config))
     return 200, {
         "agent": config.id,
-        "groups": group_tools(names, registry),
+        "groups": group_tools(names, registry, owners),
         "allowed": list(config.tools_allowed or []),
         "denied": list(config.tools_denied or []),
         "count": len(names),
@@ -133,7 +154,7 @@ def mcp_servers() -> list[dict[str, Any]]:
             counts[route] = counts.get(route, 0) + 1
     servers: list[dict[str, Any]] = []
     for server in get_mcp_client_pool().list_servers():
-        row = {k: v for k, v in server.items() if k not in _REDACTED}
+        row = {k: server[k] for k in _SHOWN if k in server}
         row["tool_count"] = counts.get(str(server.get("name")), 0)
         servers.append(row)
     return servers
@@ -149,7 +170,7 @@ def register(app: FastAPI) -> None:
     @router.get("/agents/{agent_id}/tools")
     async def get_agent_tools(agent_id: str) -> Any:
         """The agent's tools by source, and its manifest's allow and deny lists."""
-        status, body = await asyncio.to_thread(agent_tools, agent_id)
+        status, body = await agent_tools(agent_id)
         if status != 200:
             return JSONResponse(body, status_code=status)
         return body

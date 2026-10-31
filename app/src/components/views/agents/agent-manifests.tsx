@@ -183,6 +183,15 @@ export function AgentManifests({
     if (!linkedAgent || !agents) return;
     if (agents.some((row) => row.id === linkedAgent)) setPanel({ agentId: linkedAgent });
     setLinkedAgent(null);
+    // Consumed: a reload or a Back must not open the editor a second time.
+    const params = new URLSearchParams(window.location.search);
+    params.delete("agent");
+    const search = params.toString();
+    window.history.replaceState(
+      window.history.state,
+      "",
+      `${window.location.pathname}${search ? `?${search}` : ""}${window.location.hash}`
+    );
   }, [linkedAgent, agents]);
 
   /**

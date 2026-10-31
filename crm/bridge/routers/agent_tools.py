@@ -31,7 +31,7 @@ router = APIRouter(prefix="/api", tags=["agents"])
 
 #: The engine's own rule for an agent id (``config.load_agent_config``). The id
 #: reaches a proxied path, so anything else is refused here.
-_AGENT_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+_AGENT_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
 
 
 def _proxied(path: str) -> JSONResponse:
@@ -43,7 +43,7 @@ def _proxied(path: str) -> JSONResponse:
 def agent_tools(agent_id: str, request: Request) -> Any:
     """The agent's tools by source, and its manifest's allow and deny lists."""
     require_operator(request)
-    if not _AGENT_ID.match(agent_id):
+    if not _AGENT_ID.fullmatch(agent_id):
         raise HTTPException(status_code=422, detail="not an agent id")
     return _proxied(f"/api/admin/agents/{agent_id}/tools")
 

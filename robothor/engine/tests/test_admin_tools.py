@@ -60,6 +60,9 @@ class FakeRegistry:
         self.configs: list[Any] = []
         self.routes = {MCP_TOOL: MCP_SERVER, "example_fetch": MCP_SERVER}
 
+    def _refresh_plugin_schemas_if_stale(self) -> None:
+        """The registry's own refresh; a no-op for a fixed fake."""
+
     def get_tool_names(self, config: Any) -> list[str]:
         self.configs.append(config)
         return [CORE_TOOL, OPT_IN_TOOL, PLUGIN_TOOL, STRAY_PLUGIN_TOOL, MCP_TOOL]
