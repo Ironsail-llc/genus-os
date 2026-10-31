@@ -82,22 +82,6 @@ def no_retry_pause(monkeypatch):
 
 
 @pytest.fixture
-def flag(monkeypatch):
-    from robothor.settings import reset_settings
-
-    def _set(on: bool) -> None:
-        if on:
-            monkeypatch.setenv("ROBOTHOR_CHANNEL_STREAMING", "true")
-        else:
-            monkeypatch.delenv("ROBOTHOR_CHANNEL_STREAMING", raising=False)
-        reset_settings()
-
-    yield _set
-    monkeypatch.delenv("ROBOTHOR_CHANNEL_STREAMING", raising=False)
-    reset_settings()
-
-
-@pytest.fixture
 def status_events():
     events: list[dict[str, Any]] = []
 
@@ -149,10 +133,10 @@ TRANSIENT = [
 @pytest.mark.asyncio
 @pytest.mark.parametrize("error", TRANSIENT)
 async def test_a_transient_failure_retries_once_on_the_same_model(
-    breaker, no_retry_pause, flag, status_events, error
+    breaker, no_retry_pause, channel_streaming, status_events, error
 ):
     """AC4: completes on the SAME model; one stream_retry status; partial discarded."""
-    flag(True)
+    channel_streaming(True)
     seen: list[str] = []
 
     async def on_content(text: str) -> None:
@@ -179,9 +163,11 @@ async def test_a_transient_failure_retries_once_on_the_same_model(
 
 
 @pytest.mark.asyncio
-async def test_a_second_failure_falls_back(breaker, no_retry_pause, flag, status_events):
+async def test_a_second_failure_falls_back(
+    breaker, no_retry_pause, channel_streaming, status_events
+):
     """AC5: one in-place retry, not two."""
-    flag(True)
+    channel_streaming(True)
     acompletion = AsyncMock(
         side_effect=[
             _Stream([_chunk("p")], fail_with=_ProviderError(502)),
@@ -197,9 +183,9 @@ async def test_a_second_failure_falls_back(breaker, no_retry_pause, flag, status
 
 
 @pytest.mark.asyncio
-async def test_a_stall_still_falls_back(breaker, no_retry_pause, flag, status_events):
+async def test_a_stall_still_falls_back(breaker, no_retry_pause, channel_streaming, status_events):
     """AC6: a stalled stream is not retried in place."""
-    flag(True)
+    channel_streaming(True)
     acompletion = AsyncMock(
         side_effect=[
             _Stream([_chunk("p")], fail_with=TimeoutError("stalled")),
@@ -216,10 +202,10 @@ async def test_a_stall_still_falls_back(breaker, no_retry_pause, flag, status_ev
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("on", "scoped"), [(False, True), (True, False)])
 async def test_no_retry_without_both_flag_and_scope(
-    breaker, no_retry_pause, flag, status_events, on, scoped
+    breaker, no_retry_pause, channel_streaming, status_events, on, scoped
 ):
     """Today's behaviour: flag off, or a caller (webchat) outside the scope."""
-    flag(on)
+    channel_streaming(on)
     acompletion = AsyncMock(
         side_effect=[
             _Stream([_chunk("p")], fail_with=_ProviderError(503)),
@@ -241,9 +227,9 @@ def _tool_turn_stream() -> _Stream:
 
 
 @pytest.mark.asyncio
-async def test_tool_turn_text_reaches_a_streaming_channel(breaker, flag):
+async def test_tool_turn_text_reaches_a_streaming_channel(breaker, channel_streaming):
     """AC7: inside the scope, text after a tool-call delta is not suppressed."""
-    flag(True)
+    channel_streaming(True)
     seen: list[str] = []
 
     async def on_content(text: str) -> None:
@@ -257,8 +243,8 @@ async def test_tool_turn_text_reaches_a_streaming_channel(breaker, flag):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("on", "scoped"), [(False, True), (True, False)])
-async def test_tool_turn_text_suppressed_as_today_otherwise(breaker, flag, on, scoped):
-    flag(on)
+async def test_tool_turn_text_suppressed_as_today_otherwise(breaker, channel_streaming, on, scoped):
+    channel_streaming(on)
     seen: list[str] = []
 
     async def on_content(text: str) -> None:

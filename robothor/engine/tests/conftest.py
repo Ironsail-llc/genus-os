@@ -383,3 +383,24 @@ def isolated_plan_claims(monkeypatch):
     # PostgreSQL) get a successful fake write; tests that care about the
     # persisted payload or a failed write patch this name themselves.
     monkeypatch.setattr("robothor.engine.chat.save_plan_state_async", AsyncMock(return_value=None))
+
+
+@pytest.fixture
+def channel_streaming(monkeypatch):
+    """Call with True/False to set ROBOTHOR_CHANNEL_STREAMING for the test.
+
+    Through the environment and a settings reset, so the reader under test
+    (``channel_streaming.channel_streaming_enabled``) resolves it for real.
+    """
+    from robothor.settings import reset_settings
+
+    def _set(on: bool) -> None:
+        if on:
+            monkeypatch.setenv("ROBOTHOR_CHANNEL_STREAMING", "true")
+        else:
+            monkeypatch.delenv("ROBOTHOR_CHANNEL_STREAMING", raising=False)
+        reset_settings()
+
+    yield _set
+    monkeypatch.delenv("ROBOTHOR_CHANNEL_STREAMING", raising=False)
+    reset_settings()

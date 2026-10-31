@@ -26,22 +26,6 @@ from robothor.engine.tests.test_channel_inbound_pipeline import (  # noqa: F401 
 )
 
 
-@pytest.fixture
-def flag(monkeypatch):
-    from robothor.settings import reset_settings
-
-    def _set(on: bool) -> None:
-        if on:
-            monkeypatch.setenv("ROBOTHOR_CHANNEL_STREAMING", "true")
-        else:
-            monkeypatch.delenv("ROBOTHOR_CHANNEL_STREAMING", raising=False)
-        reset_settings()
-
-    yield _set
-    monkeypatch.delenv("ROBOTHOR_CHANNEL_STREAMING", raising=False)
-    reset_settings()
-
-
 class _ScopeRecordingRunner(_Runner):
     def __init__(self) -> None:
         super().__init__(_Run())
@@ -57,9 +41,9 @@ async def _stream(_text: str) -> None:
 
 
 @pytest.mark.asyncio
-async def test_flag_on_passes_the_stream_as_on_content(monkeypatch, flag):
+async def test_flag_on_passes_the_stream_as_on_content(monkeypatch, channel_streaming):
     """AC9."""
-    flag(True)
+    channel_streaming(True)
     runner = _ScopeRecordingRunner()
 
     result = await _handle(monkeypatch, _allow(), runner, stream=_stream)
@@ -70,9 +54,9 @@ async def test_flag_on_passes_the_stream_as_on_content(monkeypatch, flag):
 
 
 @pytest.mark.asyncio
-async def test_flag_off_ignores_the_stream(monkeypatch, flag):
+async def test_flag_off_ignores_the_stream(monkeypatch, channel_streaming):
     """AC8: byte-identical kwargs with the flag off, even when a stream is passed."""
-    flag(False)
+    channel_streaming(False)
     plain, streamed = _ScopeRecordingRunner(), _ScopeRecordingRunner()
 
     # record_turn=False: the harness's fake session is shared, and the first
@@ -86,8 +70,8 @@ async def test_flag_off_ignores_the_stream(monkeypatch, flag):
 
 
 @pytest.mark.asyncio
-async def test_no_stream_keeps_the_call_unchanged_with_the_flag_on(monkeypatch, flag):
-    flag(True)
+async def test_no_stream_keeps_the_call_unchanged_with_the_flag_on(monkeypatch, channel_streaming):
+    channel_streaming(True)
     runner = _ScopeRecordingRunner()
 
     await _handle(monkeypatch, _allow(), runner)

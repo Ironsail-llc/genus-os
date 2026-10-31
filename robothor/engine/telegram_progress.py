@@ -180,12 +180,7 @@ class TelegramProgress:
                     await asyncio.sleep(wait)
                     continue
             try:
-                await self.bot.edit_message_text(
-                    chat_id=int(self.chat_id),
-                    message_id=self.message_id,
-                    text=rendered,
-                    parse_mode=None,
-                )
+                await self._edit(rendered, None)
             except TelegramRetryAfter as e:
                 self._next_allowed = time.monotonic() + float(e.retry_after)
                 continue
@@ -196,18 +191,21 @@ class TelegramProgress:
             self._last_edit = time.monotonic()
             self._next_allowed = self._last_edit + self._min_interval
 
+    async def _edit(self, text: str, mode: Any) -> Any:
+        return await self.bot.edit_message_text(
+            chat_id=int(self.chat_id),
+            message_id=self.message_id,
+            text=text,
+            parse_mode=mode,
+        )
+
     async def _final_edit(self, text: str, mode: Any) -> Any:
         for _ in range(_FINAL_RETRIES):
             delay = self._next_allowed - time.monotonic()
             if delay > 0:
                 await asyncio.sleep(delay)
             try:
-                result = await self.bot.edit_message_text(
-                    chat_id=int(self.chat_id),
-                    message_id=self.message_id,
-                    text=text,
-                    parse_mode=mode,
-                )
+                result = await self._edit(text, mode)
             except TelegramRetryAfter as e:
                 self._next_allowed = time.monotonic() + float(e.retry_after)
                 continue

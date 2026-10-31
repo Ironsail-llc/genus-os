@@ -79,22 +79,6 @@ def _plain(value: Any) -> Any:
 
 
 @pytest.fixture
-def flag(monkeypatch):
-    from robothor.settings import reset_settings
-
-    def _set(on: bool) -> None:
-        if on:
-            monkeypatch.setenv("ROBOTHOR_CHANNEL_STREAMING", "true")
-        else:
-            monkeypatch.delenv("ROBOTHOR_CHANNEL_STREAMING", raising=False)
-        reset_settings()
-
-    yield _set
-    monkeypatch.delenv("ROBOTHOR_CHANNEL_STREAMING", raising=False)
-    reset_settings()
-
-
-@pytest.fixture
 def bot(engine_config):
     _sessions.clear()
     with (
@@ -134,9 +118,9 @@ def _execute_kwargs(execute: AsyncMock) -> dict[str, Any]:
 
 
 @pytest.mark.asyncio
-async def test_flag_off_turn_matches_the_fixture(bot, flag):
+async def test_flag_off_turn_matches_the_fixture(bot, channel_streaming):
     """AC8: kwargs and bot calls identical to the recording made before the change."""
-    flag(False)
+    channel_streaming(False)
     run = _run()
 
     async def on_tool_events(**kwargs: Any) -> AgentRun:
@@ -156,9 +140,9 @@ async def test_flag_off_turn_matches_the_fixture(bot, flag):
 
 
 @pytest.mark.asyncio
-async def test_flag_on_streams_into_the_thinking_message(bot, flag):
+async def test_flag_on_streams_into_the_thinking_message(bot, channel_streaming):
     """AC1 end to end: one message id edited N times, then finalised in place."""
-    flag(True)
+    channel_streaming(True)
     bot._progress_edit_interval = 0.1
     run = _run()
     scoped: list[bool] = []
