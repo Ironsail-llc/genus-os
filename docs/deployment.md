@@ -814,6 +814,31 @@ claim. The engine runs one replica with the `Recreate` strategy, so a
 replicas with rolling updates, so give them a `ReadWriteMany` claim or a
 per-pod volume such as `emptyDir`.
 
+### Webhook receiver (hooks)
+
+The engine runs as one `Recreate` replica, so webhook deliveries to
+`POST /api/webhooks/{channel}` fail while it restarts. The chart's optional
+`hooks` component serves that path from its own pods (two replicas, a
+surge-only rolling update, a disruption budget): each delivery is verified and
+published to the event stream, and the engine consumes it from there.
+
+```yaml
+hooks:
+  enabled: true
+  channels:
+    example:
+      stream: example
+      secret_env: EXAMPLE_WEBHOOK_SECRET
+      signature_scheme: hmac_hex
+```
+
+`hooks.channels` takes the same keys as `docs/webhooks.yaml` (see
+[Webhook ingress](event-bus.md#webhook-ingress)) and is mounted into the pods
+as their `webhooks.yaml`. Each `secret_env` is read from the `engine-providers`
+Secret. Route the public webhook path to the `<release>-hooks` Service once its
+pods are ready; the engine keeps serving the same path until then. The chart's
+README ("Hooks") lists every value and the network-policy wiring.
+
 ## Production Checklist
 
 - [ ] Set a strong `ROBOTHOR_DB_PASSWORD`
