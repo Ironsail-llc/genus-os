@@ -648,6 +648,16 @@ class ProviderSettings(SettingsGroup):
         restart_required=False,
         since="unreleased",
     )
+    compaction_min_gap_iterations: int = declare(
+        3,
+        "ROBOTHOR_COMPACTION_MIN_GAP_ITERATIONS",
+        "With ROBOTHOR_COMPACTION_V2 on, the fewest agent-loop iterations "
+        "between two compactions of one run. A context that grows by one tool "
+        "result must not be summarised again on the next iteration; the hard "
+        "context ceiling is still enforced every iteration.",
+        restart_required=False,
+        since="unreleased",
+    )
     compaction_trigger_tokens: int = declare(
         80000,
         "ROBOTHOR_COMPACTION_TRIGGER_TOKENS",
@@ -1744,6 +1754,19 @@ class FlagSettings(SettingsGroup):
         "assistant organizes, so it can read them afterwards. Best-effort: "
         "needs the meetings.space.settings OAuth scope, and a failure is a "
         "note on the booking, never a failed booking.",
+    )
+    compaction_v2: bool = declare(
+        False,
+        "ROBOTHOR_COMPACTION_V2",
+        "Hardened context compaction: summarise with the agent's own model "
+        "chain (manifest `model.compaction` first, the fleet chain when a "
+        "caller has none), reclaim tool arguments, old tool results and media "
+        "without a model call first, update the previous summary instead of "
+        "rebuilding it, wait ROBOTHOR_COMPACTION_MIN_GAP_ITERATIONS between "
+        "compactions, and keep the messages (the run's compaction step marked "
+        "degraded) when every model fails to summarise.",
+        restart_required=False,
+        since="unreleased",
     )
     curator_apply: bool = declare(
         False,

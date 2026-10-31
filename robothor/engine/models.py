@@ -288,6 +288,10 @@ class AgentConfig:
     # Models
     model_primary: str = ""
     model_fallbacks: list[str] = field(default_factory=list)
+    # The chain member compaction should summarise with first (manifest
+    # ``model.compaction``), typically its small/fast model. Honoured only under
+    # ROBOTHOR_COMPACTION_V2 and only when it names a member of the chain.
+    model_compaction: str = ""
     response_format: str = "text"  # text | json_object; final content, not tool arguments
     provider_order: dict[str, list[str]] = field(default_factory=dict)
 

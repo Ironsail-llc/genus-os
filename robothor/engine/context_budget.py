@@ -51,6 +51,14 @@ async def keep_context_within_budget(
     The first iteration has nothing behind it to thin and nothing accumulated
     to compact, so both steps are skipped.
     """
+    from robothor.engine.context_control import control
+
+    # Recorded before the iteration-0 return: the pre-flight compaction of the
+    # first call reads the compaction model from here.
+    state = control.get()
+    if state is not None:
+        state.iteration = iteration
+        state.compaction_model = str(getattr(agent_config, "model_compaction", "") or "")
     if iteration <= 0:
         return
     _thin(session, agent_config, pre_iteration_msg_idx)
@@ -135,7 +143,11 @@ async def _compact_and_enforce(
         )
 
         session.messages[:] = await maybe_compress(
-            session.messages, models, threshold=threshold, broken_models=broken_models
+            session.messages,
+            models,
+            threshold=threshold,
+            broken_models=broken_models,
+            preferred_model=str(getattr(agent_config, "model_compaction", "") or "") or None,
         )
         logger.info(
             "Proactive compaction at iter %d: %d→%d messages (est %d tokens, threshold %d)",

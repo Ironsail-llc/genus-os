@@ -28,6 +28,10 @@ DRAIN_THRESHOLD = 60_000
 # Number of recent messages to always keep verbatim
 KEEP_RECENT = 20
 
+# Compaction v2 backoff yields once the context is this far past the trigger
+# (the same 1.2x ContextControl.skip uses for "materially larger").
+BACKOFF_YIELD_RATIO = 1.2
+
 # ── Compression hooks ──────────────────────────────────────────────
 
 _pre_compress_hooks: list[Callable[..., Any]] = []
@@ -143,6 +147,16 @@ def estimate_tokens(messages: list[dict[str, Any]], model: str | None = None) ->
     return (total_chars // 4) + (tool_call_count * 400)
 
 
+def _min_gap_iterations() -> int:
+    """``ROBOTHOR_COMPACTION_MIN_GAP_ITERATIONS``; never fails on config."""
+    from robothor.settings import get_settings
+
+    try:
+        return max(0, int(get_settings().providers.compaction_min_gap_iterations))
+    except Exception:  # noqa: BLE001 — compaction must never fail on config
+        return 3
+
+
 def _clear_old_tool_results(
     messages: list[dict[str, Any]], keep_last: int = 10
 ) -> list[dict[str, Any]]:
@@ -205,6 +219,7 @@ async def maybe_compress(
     models: list[str] | None = None,
     threshold: int | None = None,
     broken_models: set[str] | None = None,
+    preferred_model: str | None = None,
 ) -> list[dict[str, Any]]:
     """Compress conversation if above threshold.
 
@@ -239,6 +254,23 @@ async def maybe_compress(
     state = control.get()
     if state is not None and state.skip(messages, model, compress_at, est):
         return messages
+    from robothor.engine.feature_flags import compaction_v2_enabled
+
+    v2 = compaction_v2_enabled()
+    # The gap damps small growth only: a context far past the trigger is
+    # summarised anyway, or the ceiling would drop what a summary could keep.
+    if (
+        v2
+        and state is not None
+        and est < compress_at * BACKOFF_YIELD_RATIO
+        and state.backing_off(_min_gap_iterations())
+    ):
+        logger.info(
+            "Compaction v2: backing off at iteration %d (last compaction at %s)",
+            state.iteration,
+            state.last_compaction_iteration,
+        )
+        return messages
     started = time.monotonic()
     if state is not None and state.active_request:
         messages = _pin_active_request(messages, state.active_request)
@@ -269,6 +301,7 @@ async def maybe_compress(
         threshold=compress_at,
         drain_to=min(DRAIN_THRESHOLD, max(1, int(compress_at * 0.75))),
         broken_models=broken_models,
+        preferred_model=preferred_model or (state.compaction_model if state else None) or None,
     )
 
     compressed = _restore_output_contract(messages, result.messages)
@@ -280,7 +313,11 @@ async def maybe_compress(
     # Off the loop for the same reason as the two estimates above, and more so:
     # this one prices every drop candidate. Measured at 2024ms on a real
     # 121-message history, which is 2s of stalled Telegram, /health and cron.
-    compressed = await asyncio.to_thread(drain_history, compressed, model, target)
+    # Freeze on failure (v2): a summary that could not be written must not be
+    # followed by a drain that drops the middle it was meant to replace. The
+    # provider ceiling is still enforced by the caller.
+    if not result.degraded:
+        compressed = await asyncio.to_thread(drain_history, compressed, model, target)
     after = await asyncio.to_thread(estimate_tokens, compressed, model or None)
     if state is not None:
         state.fingerprint = fingerprint(compressed)
@@ -294,8 +331,12 @@ async def maybe_compress(
                 "tokens_after": after,
                 "target_tokens": target,
                 "target_reached": after <= target,
+                **({"degraded": result.degraded} if v2 else {}),
             }
         )
+        if v2:
+            state.last_compaction_iteration = state.iteration
+            state.degraded = state.degraded or result.degraded
     logger.info(
         "Compaction complete: %d → %d messages, ~%d → ~%d tokens, "
         "%d facts extracted, %d passes used",

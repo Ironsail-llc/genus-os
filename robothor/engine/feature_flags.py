@@ -203,6 +203,17 @@ def compaction_hardening_enabled() -> bool:
     return is_rip_enabled(18)
 
 
+def compaction_v2_enabled() -> bool:
+    """Return True iff the hardened compaction path is active.
+
+    Agent-chain summariser, LLM-free pre-pass, iterative summary, anti-thrash
+    backoff and freeze-on-failure (``compaction._compact_v2``). Off by default;
+    gated by ``ROBOTHOR_COMPACTION_V2`` and dark under
+    ``ROBOTHOR_DISABLE_ALL_RIPS``.
+    """
+    return not _disabled_all() and _env_bool("ROBOTHOR_COMPACTION_V2")
+
+
 def catalog_backed_models_enabled() -> bool:
     """Return True iff the catalog-backed model registry (Rip 17 / G6) is active.
 

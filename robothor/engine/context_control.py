@@ -17,6 +17,15 @@ class ContextControl:
     threshold: int = 0
     stalled_tokens: int = 0
     measurements: list[dict[str, Any]] = field(default_factory=list)
+    # Agent-loop iteration the budget last ran at, and the one the last
+    # compaction ran at (ROBOTHOR_COMPACTION_V2 anti-thrash backoff).
+    iteration: int = 0
+    last_compaction_iteration: int | None = None
+    #: The agent's manifest ``model.compaction``, for paths that have no agent
+    #: config of their own (the LLM client's pre-flight compaction).
+    compaction_model: str = ""
+    #: A compaction found the context over budget and could not summarise it.
+    degraded: bool = False
 
     def skip(self, messages: list[dict[str, Any]], model: str, threshold: int, tokens: int) -> bool:
         if model != self.model or threshold != self.threshold:
@@ -26,6 +35,11 @@ class ContextControl:
         # A protected prefix that cannot fit must not cause another summary
         # on every tool result. A materially larger context gets another try.
         return bool(self.stalled_tokens and tokens < self.stalled_tokens * 1.2)
+
+    def backing_off(self, min_gap: int) -> bool:
+        """Did this run compact fewer than ``min_gap`` iterations ago?"""
+        last = self.last_compaction_iteration
+        return last is not None and self.iteration - last < min_gap
 
 
 def fingerprint(messages: list[dict[str, Any]]) -> str:
