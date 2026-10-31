@@ -263,3 +263,35 @@ async def test_two_turns_on_one_key_each_reach_only_their_own_run(client, mock_r
     done_b = [d for e, d in _events(sent_b.text) if e == "done"][0]
     assert done_a["status"] == RunStatus.COMPLETED.value
     assert done_b["status"] == RunStatus.CANCELLED.value
+
+
+@pytest.mark.asyncio
+async def test_a_steer_that_landed_is_kept_in_the_conversations_history(
+    client, mock_runner, flag_on
+):
+    """The next turn, and a reload, must still know the correction the run applied."""
+    from robothor.engine.chat import get_shared_session
+
+    fake, task = await _start(client, mock_runner)
+    await client.post(
+        "/chat/steer", json={"session_key": KEY, "text": "use the EU region", "request_id": RID_A}
+    )
+    fake.release.set()
+    await task
+
+    users = [m["content"] for m in get_shared_session(KEY).history if m["role"] == "user"]
+    assert len(users) == 1
+    assert "draft the report" in users[0] and "use the EU region" in users[0]
+
+
+@pytest.mark.asyncio
+async def test_a_steer_that_never_landed_is_not_claimed_as_heard(client, mock_runner, flag_on):
+    from robothor.engine.chat import get_shared_session
+
+    fake, task = await _start(client, mock_runner)
+    fake.session.steer("never consumed")  # pending, but the run ends before a boundary reads it
+    fake.session.consume_pending_steer = lambda: None  # the boundary reads nothing
+    fake.release.set()
+    await task
+    users = [m["content"] for m in get_shared_session(KEY).history if m["role"] == "user"]
+    assert users == ["draft the report"]
