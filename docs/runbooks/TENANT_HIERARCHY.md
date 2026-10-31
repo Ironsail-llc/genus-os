@@ -367,8 +367,9 @@ SELECT DISTINCT tenant_id FROM crm_tasks;
 
 - The release itself: reset the deployment to the previous release. Its
   migrations stay applied, and the older release starts beside them only if it
-  carries the rule for newer migrations; one that does not refuses them and
-  its migration Job fails. See
+  carries the rule for newer migrations, and only if every migration the newer
+  release added is numbered above the older release's highest. Otherwise the
+  older release refuses them and its migration Job fails. See
   [Rolling back to an older release](../deployment.md#rolling-back-to-an-older-release)
   for what the migrator accepts and what it still refuses.
 - A claimed domain: `genus tenant set-domains <id>` with no domains.

@@ -28,9 +28,15 @@ heard of, and refusing them failed the migration Job and with it every pod's
   undrifted. A pending known migration next to an ``AHEAD`` row is refused:
   applying an old migration over a schema a newer one already changed is not
   a rollback. A drifted known migration is refused as always.
-* Every other unknown row is still ``MISSING`` and refused: one numbered
-  inside the known range (a gap -- another chain wrote it), or one sharing the
-  last known number (a rename keeps its number).
+* Every other unknown row is still ``MISSING`` and refused: any row numbered
+  at or below this release's highest migration. That is a renamed file (a
+  rename keeps its number), another chain's migration -- and, most often, a
+  newer release's own migration that was numbered at or below the older
+  release's highest. Nothing makes later releases number above earlier ones:
+  parallel branches routinely land the same or a lower number (this manifest
+  has several migrations sharing one number), so such a release cannot be
+  rolled back this way. Refusing is the safe direction; the remedy is a
+  restore from before the newer release migrated.
 
 The rule lives in the release being rolled back TO, so it helps only rollbacks
 to releases that contain it; an older release still refuses.

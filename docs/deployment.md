@@ -497,9 +497,19 @@ it decides what they are by number:
 | What the older release finds | Verdict | Effect |
 |---|---|---|
 | Every migration it ships, applied and undrifted, plus rows numbered **strictly above** its highest migration | `AHEAD` | Starts. A warning names the newer migrations; `genus doctor` reports `db.migrations` as failing (not fixable) until you roll forward. |
-| An unknown row numbered at or below its highest migration (a gap, or a renamed file) | `MISSING` | Refuses. Another chain wrote that row. |
+| An unknown row numbered at or below its highest migration | `MISSING` | Refuses. Usually the newer release's own migration, numbered at or below the older release's highest; sometimes a renamed file or another chain's migration. |
 | A newer row while one of its own migrations is still pending | refused | Refuses. Applying an old migration over a schema a newer one has already changed is not a rollback. |
 | Drift in any migration it ships | `DRIFT` | Refuses, as always. |
+
+**Most rollbacks across a parallel-branch merge are refused.** Nothing makes
+a later release number its migrations above an earlier one's: branches that
+merge in a different order routinely land the same or a lower number (the
+manifest has several migrations sharing one number). If any migration the
+newer release added is numbered at or below the older release's highest, the
+older release reports it as `MISSING` and its migration Job fails. Before you
+roll back, compare the numbers: `genus migrate --status` on the newer release
+lists what it applied, and the older release's `robothor/migrations/manifest.txt`
+shows its highest. When the check fails, restore instead of rolling back.
 
 Code written before a migration is expected to run beside it, because
 migrations here are additive. If the release you are rolling forward from
