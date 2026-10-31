@@ -102,6 +102,9 @@ const VIEW_MODULES: Array<[path: string, exportName: string, name: string]> = [
   ["@/components/views/settings-view", "SettingsView", "settings"],
 ];
 
+// A slow machine can take longer than the default second to import a view.
+const CHUNK_WAIT = { timeout: 5000 };
+
 async function renderShellAt(search: string) {
   window.history.replaceState(null, "", `/${search}`);
   const { AppShell } = await import("../app-shell");
@@ -137,24 +140,24 @@ describe("AppShell — views load on first visit", () => {
 
   it("imports only the active view's module on a deep link", async () => {
     await renderShellAt("?v=tasks");
-    expect(await screen.findByTestId("stub-tasks")).toBeVisible();
+    expect(await screen.findByTestId("stub-tasks", {}, CHUNK_WAIT)).toBeVisible();
     expect(lazy.loaded).toEqual(["tasks"]);
   });
 
   it("shows a skeleton while the view's chunk is loading", async () => {
     await renderShellAt("?v=fleet");
     expect(screen.getByTestId("view-loading")).toBeInTheDocument();
-    expect(await screen.findByTestId("stub-fleet")).toBeVisible();
+    expect(await screen.findByTestId("stub-fleet", {}, CHUNK_WAIT)).toBeVisible();
     expect(screen.queryByTestId("view-loading")).toBeNull();
   });
 
   it("keeps a visited view mounted, with its state, after switching away", async () => {
     await renderShellAt("?v=goals");
-    fireEvent.click(await screen.findByTestId("stub-goals-click"));
+    fireEvent.click(await screen.findByTestId("stub-goals-click", {}, CHUNK_WAIT));
     expect(screen.getByTestId("stub-goals")).toHaveAttribute("data-clicks", "1");
 
     fireEvent.click(screen.getByTestId("nav-tasks"));
-    expect(await screen.findByTestId("stub-tasks")).toBeVisible();
+    expect(await screen.findByTestId("stub-tasks", {}, CHUNK_WAIT)).toBeVisible();
     // Still in the document, only hidden, and never remounted.
     expect(screen.getByTestId("stub-goals")).not.toBeVisible();
 
@@ -167,7 +170,7 @@ describe("AppShell — views load on first visit", () => {
 
   it("does not mount a view that was never opened", async () => {
     await renderShellAt("?v=runs");
-    await screen.findByTestId("stub-runs");
+    await screen.findByTestId("stub-runs", {}, CHUNK_WAIT);
     expect(screen.queryByTestId("stub-settings")).toBeNull();
     expect(screen.queryByTestId("stub-memory")).toBeNull();
     expect(Object.keys(lazy.mounts)).toEqual(["runs"]);
@@ -194,7 +197,7 @@ describe("AppShell — views load on first visit", () => {
     });
     await renderShellAt("?v=goals");
 
-    const panel = await screen.findByTestId("view-load-failed");
+    const panel = await screen.findByTestId("view-load-failed", {}, CHUNK_WAIT);
     expect(panel.textContent).toMatch(/updated/i);
     expect(screen.getByTestId("sidebar")).toBeInTheDocument();
     expect(screen.getByTestId("chat-panel")).toBeInTheDocument();
@@ -204,7 +207,7 @@ describe("AppShell — views load on first visit", () => {
 
     // Another screen still works, and the failed one's panel leaves with it.
     fireEvent.click(screen.getByTestId("nav-tasks"));
-    expect(await screen.findByTestId("stub-tasks")).toBeVisible();
+    expect(await screen.findByTestId("stub-tasks", {}, CHUNK_WAIT)).toBeVisible();
     expect(screen.queryByTestId("view-load-failed")).toBeNull();
   });
 });
