@@ -243,8 +243,15 @@ needs no `gh` binary.
 - **The token.** `GITHUB_TOKEN` comes from the vault (a fine-grained token with
   contents and pull-request write is enough; nothing here merges). It reaches
   git only as an `http.https://<host>/.extraheader` passed through
-  `GIT_CONFIG_*` environment variables, so it is never in a git argv, never in
-  the clone's `.git/config`, and every error is redacted.
+  `GIT_CONFIG_*` environment variables, and only for `https://github.com`
+  remotes (another host on the allowlist is cloned without it). It is never in
+  a git argv, never in the clone's `.git/config`, and every error is redacted.
+  These git calls run with `core.hooksPath=/dev/null` and `core.fsmonitor=false`,
+  like every other engine-side git call, so no repository hook runs with the
+  token. `coding_publish` opens pull requests on GitHub only.
+- **The clone path.** A directory already at `<workspace>/<owner>/<repo>` that
+  is not a clone is refused and left alone; a failed clone removes only the
+  directory it created.
 - **Who.** The handler refuses `coding_publish` to anyone but the owner or an
   admin and writes a `coding.publish` audit event for every refusal, push
   failure and published pull request. Migration 165 also denies both tools to

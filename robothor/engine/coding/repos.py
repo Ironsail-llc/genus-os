@@ -35,6 +35,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 __all__ = [
+    "GITHUB_HOST",
     "PreparedRepo",
     "RemoteSpec",
     "RepoError",
@@ -61,6 +62,9 @@ _SCHEMES = frozenset({"https", "ssh", "file"})
 #: given to a shell, and these would only ever mean an attempt to reach one.
 _FORBIDDEN = re.compile(r"[\s;|&$`<>'\"\\]")
 _LOCKS: dict[str, asyncio.Lock] = {}
+#: As in :mod:`robothor.engine.coding.worktree`: a repository's hooks and
+#: fsmonitor are code, and these calls carry the token in their environment.
+_GIT_HARDENING = ("-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false")
 
 
 class RepoError(ValueError):
@@ -187,9 +191,10 @@ def git_env(url: str, token: str) -> dict[str, str]:
     }
     env["GIT_TERMINAL_PROMPT"] = "0"
     parsed = urlparse(url)
-    if token and parsed.scheme == "https" and parsed.hostname:
+    # A GitHub credential goes to GitHub and nowhere else, whatever the allowlist names.
+    if token and parsed.scheme == "https" and (parsed.hostname or "").lower() == GITHUB_HOST:
         env["GIT_CONFIG_COUNT"] = "1"
-        env["GIT_CONFIG_KEY_0"] = f"http.https://{parsed.hostname}/.extraheader"
+        env["GIT_CONFIG_KEY_0"] = f"http.https://{GITHUB_HOST}/.extraheader"
         env["GIT_CONFIG_VALUE_0"] = f"AUTHORIZATION: basic {_basic(token)}"
     return env
 
@@ -216,6 +221,7 @@ async def git(
     """Run git (never a shell) with :func:`git_env`; ``RepoError`` on failure when ``check``."""
     proc = await asyncio.create_subprocess_exec(
         "git",
+        *_GIT_HARDENING,
         *args,
         cwd=str(cwd),
         env=git_env(url, token),
@@ -268,6 +274,15 @@ async def ensure_repo(raw: str, *, token: str) -> PreparedRepo:
         cloned = not (dest / ".git").exists()
         if cloned:
             dest.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                # Atomic: only an empty directory this call created is ever cloned
+                # into, and only that one is removed if the clone fails.
+                dest.mkdir()
+            except FileExistsError:
+                raise RepoError(
+                    f"{dest} already exists and is not a clone; move it aside or choose "
+                    "another ROBOTHOR_CODING_WORKSPACE"
+                ) from None
             try:
                 await git(
                     dest.parent, "clone", "--quiet", "--", spec.url, str(dest),

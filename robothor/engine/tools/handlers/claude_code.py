@@ -352,6 +352,11 @@ async def _publish(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         remote = await repos.origin_remote(repo)
     except repos.RepoError as exc:
         return {"error": str(exc)}
+    if remote.host and remote.host != repos.GITHUB_HOST:
+        return {
+            "error": f"coding_publish opens pull requests on GitHub only; {remote.slug}'s "
+            f"origin is on {remote.host}"
+        }
     token = await _github_token(ctx.tenant_id)
     if not token:
         return {
