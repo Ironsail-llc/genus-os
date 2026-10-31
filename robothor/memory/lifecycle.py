@@ -144,11 +144,13 @@ def _apply_consolidation_supersession(new_id: int, source_ids: list[int]) -> Non
             if guard and _chain_depth(cur, source_id) >= _MAX_CHAIN_DEPTH:
                 logger.debug("consolidation: skip supersede of deep-chain fact %s", source_id)
                 continue
+            # Re-checked here: selection and this write are separated by the
+            # LLM call, and a fact confirmed in that window must survive.
             cur.execute(
-                """
+                f"""
                 UPDATE memory_facts
                 SET is_active = FALSE, superseded_by = %s, updated_at = NOW()
-                WHERE id = %s AND is_active = TRUE
+                WHERE id = %s AND is_active = TRUE AND {NOT_OPERATOR_CONFIRMED_SQL}
                 """,
                 (new_id, source_id),
             )

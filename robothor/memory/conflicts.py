@@ -29,6 +29,7 @@ from robothor.memory.bitemporal import (
     supersede_with_validity,
 )
 from robothor.memory.confirmed import is_operator_confirmed
+from robothor.memory.drift import compute_fact_hash
 from robothor.memory.facts import _write_dedup_enabled, store_fact
 from robothor.memory.vector_tuning import apply_hnsw_session
 
@@ -232,6 +233,29 @@ def _supersede_fact(old_id: int, new_id: int, *, tenant_id: str = "") -> None:
     supersede_with_validity(old_id, new_id, tenant_id=tenant_id, classification="resolution")
 
 
+def _find_overruled(fact: dict[str, Any], kept_id: int, *, tenant_id: str = "") -> int:
+    """The id of an earlier inactive copy of ``fact`` overruled by ``kept_id``, or 0.
+
+    ``find_similar_facts`` and the insert's dedup index both see active rows
+    only, so without this every re-ingestion of a source that contradicts a
+    confirmed fact would store, embed and classify one more dead row.
+    """
+    tenant = tenant_id or DEFAULT_TENANT
+    content_hash = compute_fact_hash(
+        fact["fact_text"], tenant_id=tenant, category=fact.get("category") or ""
+    )
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id FROM memory_facts "
+            "WHERE tenant_id = %s AND content_hash = %s AND superseded_by = %s "
+            "AND is_active = FALSE ORDER BY id DESC LIMIT 1",
+            (tenant, content_hash, kept_id),
+        )
+        row = cur.fetchone()
+    return int(row[0]) if row else 0
+
+
 async def resolve_and_store(
     fact: dict[str, Any],
     source_content: str,
@@ -300,6 +324,31 @@ async def resolve_and_store(
             "existing_id": best_match["id"],
             "similarity": round(float(best_match.get("similarity") or 0), 4),
         }
+
+    # The same extraction, already overruled by this confirmed fact on an
+    # earlier pass: record the decision against that row and stop, before the
+    # classification and the insert.
+    if is_operator_confirmed(best_match):
+        overruled_id = _find_overruled(fact, best_match["id"], tenant_id=tenant_id)
+        if overruled_id:
+            record_conflict_decision(
+                tenant_id=tenant_id or DEFAULT_TENANT,
+                classification="duplicate",
+                action="kept_confirmed",
+                new_fact_id=overruled_id,
+                existing_fact_id=best_match["id"],
+                reasoning="same extraction already overruled by this operator-confirmed fact",
+                similarity=float(best_match.get("similarity") or 0) or None,
+                new_fact_text=fact["fact_text"],
+                existing_fact_text=best_match["fact_text"],
+            )
+            return {
+                "action": "kept_confirmed",
+                "new_id": overruled_id,
+                "existing_id": best_match["id"],
+                "classification": "duplicate",
+                "reasoning": "already overruled",
+            }
 
     classification = await classify_relationship(
         fact["fact_text"],
