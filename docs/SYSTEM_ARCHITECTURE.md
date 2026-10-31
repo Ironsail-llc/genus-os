@@ -223,6 +223,36 @@ knowing when reading `agent_run_steps` or the journal:
   per-model allowance, never raise it, and a reasoning-only re-ask is a real
   provider call that has to clear both.
 
+### Context Compaction (`robothor/engine/compaction.py`)
+
+When a run's context passes the proactive threshold, `context_budget` calls
+`context.maybe_compress`, which delegates to `compaction.compact`. Off by
+default, `ROBOTHOR_COMPACTION_V2` switches it to a hardened path:
+
+- **The summariser is the agent's own chain** (primary, then fallbacks, minus
+  models the run has proven dead), dialled through the same pooled completion
+  path as the agent's turns. A manifest may name a chain member as
+  `model.compaction` to be tried first, typically its small/fast model. A
+  caller with no chain (idle chat compression) gets the fleet chain from
+  `_defaults.yaml`, never a model the platform picked.
+- **An LLM-free pre-pass runs first**, outside the protected head and the
+  recent tail: identical tool results are deduplicated, historical media is
+  replaced by a placeholder, old tool results over 2,000 characters become a
+  one-line summary with their `tool_call_id` and size, and tool-call argument
+  JSON over 1,000 characters is truncated (still valid JSON). When that brings
+  the context under the drain target, no model is called.
+- **The summary is updated, not rebuilt**: the previous `[Conversation
+  summary]` and only the new slice go to one call.
+- **Anti-thrash**: a run does not compact again within
+  `ROBOTHOR_COMPACTION_MIN_GAP_ITERATIONS` iterations of its last compaction.
+- **Freeze on failure**: when every model fails to summarise, the messages are
+  kept (no placeholder, no drain of the middle) and the run's `compaction` step
+  records `degraded: true`.
+
+The hard context ceiling (`context_fit.enforce_ceiling`) is enforced after
+every compaction attempt either way, so neither the backoff nor a freeze can
+send a provider more than its window.
+
 ---
 
 ## Architecture Overview
