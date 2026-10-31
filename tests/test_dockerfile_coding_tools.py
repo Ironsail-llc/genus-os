@@ -15,7 +15,9 @@ DOCKERFILE = (Path(__file__).resolve().parents[1] / "Dockerfile.python").read_te
 
 
 def _stage(name: str) -> str:
-    match = re.search(rf"^FROM \S+ AS {name}\n(.*?)(?=^FROM |\Z)", DOCKERFILE, re.M | re.S)
+    match = re.search(
+        rf"^FROM \S+ AS {name}\n(.*?)(?=^FROM |\Z)", DOCKERFILE, re.MULTILINE | re.DOTALL
+    )
     assert match, f"no stage {name}"
     return match.group(1)
 
@@ -29,14 +31,14 @@ def test_the_production_image_has_git_and_ssh():
 def test_the_claude_stage_pins_a_version_and_both_checksums():
     stage = _stage("claude-cli")
     for arg in ("CLAUDE_CODE_VERSION", "CLAUDE_CODE_SHA256_AMD64", "CLAUDE_CODE_SHA256_ARM64"):
-        assert re.search(rf"^ARG {arg}=", stage, re.M), arg
+        assert re.search(rf"^ARG {arg}=", stage, re.MULTILINE), arg
     assert "sha256sum -c" in stage
     assert "--version" in stage
 
 
 def test_the_claude_cli_is_opt_in_by_default():
     stage = _stage("claude-cli")
-    assert re.search(r"^ARG CLAUDE_CODE_VERSION=$", stage, re.M)
+    assert re.search(r"^ARG CLAUDE_CODE_VERSION=$", stage, re.MULTILINE)
 
 
 def test_production_and_dev_copy_the_claude_stage():

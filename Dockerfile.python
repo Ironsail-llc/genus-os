@@ -68,6 +68,39 @@ RUN set -eu; \
     install -m 0755 "$(find /tmp/gws -type f -name gws | head -n1)" /usr/local/bin/gws; \
     /usr/local/bin/gws --version
 
+# ─── claude-cli — Claude Code CLI behind the claude_code_* tools (opt-in) ─────
+# The native release binary, pinned like gws: a version and a sha256 per
+# architecture, checked here; the upstream manifest is not trusted at build
+# time. OPT-IN: with CLAUDE_CODE_VERSION empty (the default) nothing is
+# downloaded and /opt/claude/bin stays empty, so a build that has not recorded
+# the checksums never installs an unverified binary. Pass all three build args
+# (and CLAUDE_CODE_DIST if the release location moves) to bake it in.
+FROM base AS claude-cli
+
+ARG CLAUDE_CODE_VERSION=
+ARG CLAUDE_CODE_SHA256_AMD64=
+ARG CLAUDE_CODE_SHA256_ARM64=
+ARG CLAUDE_CODE_DIST=https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases
+ARG TARGETARCH
+
+RUN set -eu; \
+    mkdir -p /opt/claude/bin; \
+    if [ -z "$CLAUDE_CODE_VERSION" ]; then \
+        echo "claude-cli: CLAUDE_CODE_VERSION unset; the image carries no Claude Code CLI"; \
+        exit 0; \
+    fi; \
+    case "$TARGETARCH" in \
+        amd64) platform=linux-x64;   sum="$CLAUDE_CODE_SHA256_AMD64" ;; \
+        arm64) platform=linux-arm64; sum="$CLAUDE_CODE_SHA256_ARM64" ;; \
+        *) echo "claude-cli: unsupported arch $TARGETARCH" >&2; exit 1 ;; \
+    esac; \
+    if [ -z "$sum" ]; then echo "claude-cli: no sha256 pinned for $TARGETARCH" >&2; exit 1; fi; \
+    curl -fsSL -o /tmp/claude "$CLAUDE_CODE_DIST/$CLAUDE_CODE_VERSION/$platform/claude"; \
+    echo "$sum  /tmp/claude" | sha256sum -c -; \
+    install -m 0755 /tmp/claude /opt/claude/bin/claude; \
+    rm -f /tmp/claude; \
+    /opt/claude/bin/claude --version
+
 # ─── build-deps — compile toolchain + resolved venv ──────────────────────────
 FROM base AS build-deps
 
@@ -117,11 +150,16 @@ COPY infra/migrations /app/infra/migrations
 COPY templates /app/templates
 COPY conftest.py hatch_build.py /app/
 COPY --from=gws /usr/local/bin/gws /usr/local/bin/gws
+COPY --from=claude-cli /opt/claude /opt/claude
+
+RUN apt-get update && apt-get install -y --no-install-recommends git openssh-client \
+    && rm -rf /var/lib/apt/lists/*
 
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install --no-deps -e .
 
-ENV ROBOTHOR_DEV=1
+ENV ROBOTHOR_DEV=1 \
+    PATH="/opt/claude/bin:$PATH"
 
 # Each compose service overrides this with its own `command:`.
 CMD ["python", "-m", "robothor.engine.daemon"]
@@ -141,11 +179,19 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # ─── production — slim runtime, non-root (default target) ────────────────────
 FROM base AS production
 
+# git for coding jobs (clone, worktrees, push); the clone a job branches from
+# lives on a writable volume (ROBOTHOR_CODING_WORKSPACE), never under /app.
+RUN apt-get update && apt-get install -y --no-install-recommends git openssh-client \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN groupadd -r app && useradd -r -g app -u 1000 -d /app -s /usr/sbin/nologin app
 
 COPY --from=prod-builder --chown=app:app /opt/venv /opt/venv
 COPY --from=prod-builder --chown=app:app /app /app
 COPY --from=gws /usr/local/bin/gws /usr/local/bin/gws
+COPY --from=claude-cli /opt/claude /opt/claude
+
+ENV PATH="/opt/claude/bin:$PATH"
 
 USER app
 

@@ -451,10 +451,15 @@ def check_repo_path(raw: str) -> Path:
     roots = [
         Path(r.strip()).expanduser().resolve() for r in configured.split(os.pathsep) if r.strip()
     ]
+    clones = str(_settings().workspace or "").strip()
+    if clones:
+        # Where coding_repo_prepare clones: always a root of its own.
+        roots.append(Path(clones).expanduser().resolve())
     if not roots:
         raise ValueError(
             "coding jobs are disabled until ROBOTHOR_CODING_REPO_ROOTS names the directories "
-            "repositories may live under (path-separated, for example ~/src)"
+            "repositories may live under (path-separated, for example ~/src), or "
+            "ROBOTHOR_CODING_WORKSPACE names where coding_repo_prepare clones them"
         )
     resolved = path.resolve()
     if not any(resolved.is_relative_to(root) for root in roots):
@@ -906,11 +911,27 @@ class CodingJobManager:
         save.add_done_callback(self._saves.discard)
 
     def _on_event(self, job: CodingJob, event: ProgressEvent) -> None:
-        job.events_tail = [*job.events_tail, event.line()][-_EVENTS_TAIL:]
+        line = event.line()
+        job.events_tail = [*job.events_tail, line][-_EVENTS_TAIL:]
+        if job.run_id:
+            self._report_progress(job, line)
         if event.session_id and event.session_id != job.session_id:
             # Persisted NOW: a crash before the round ends must still resume.
             job.session_id = event.session_id
             self._save_soon(job)
+
+    def _report_progress(self, job: CodingJob, line: str) -> None:
+        """Hand the line to the run that started the job, if it is still listening."""
+        from robothor.engine.run_status import emit_status
+
+        async def emit(event: dict[str, Any]) -> None:
+            await emit_status(job.run_id, event)
+
+        task = asyncio.create_task(
+            emit({"event": "coding_progress", "job_id": job.id, "line": line})
+        )
+        self._saves.add(task)
+        task.add_done_callback(self._saves.discard)
 
     async def _ensure_worktree(self, job: CodingJob) -> None:
         path = Path(job.worktree_path) if job.worktree_path else wt.worktree_path_for(job.id)
@@ -1153,8 +1174,12 @@ class CodingJobManager:
         )
         paths = await self._job_paths(job)
         allowed_tools, disallowed_tools = sandbox.build_permissions(job.mode, paths)
-        settings = sandbox.build_sandbox_settings(
-            job.mode, paths, allowed_domains=sandbox.allowed_domains()
+        settings = (
+            sandbox.build_sandbox_settings(
+                job.mode, paths, allowed_domains=sandbox.allowed_domains()
+            )
+            if sandbox.required()
+            else None
         )
         round_timeout = float(job.round_timeout_s or _settings().round_timeout_s)
         max_turns = int(job.max_turns or _settings().max_turns)

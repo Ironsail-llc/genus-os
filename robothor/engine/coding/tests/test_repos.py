@@ -7,12 +7,15 @@ URL, so nothing touches the network.
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
 from robothor.engine.coding import repos
 from robothor.engine.coding.tests.conftest import git
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 TOKEN = "ghs_exampletoken0123456789"
 

@@ -302,7 +302,9 @@ async def test_publish_is_refused_while_prs_are_disabled(manager, remote, github
 @pytest.mark.parametrize("role", ["member", "user", "service", ""])
 async def test_publish_is_refused_below_owner_and_audited(manager, remote, github, audit, role):
     job = await _done_job(remote)
-    out = await _call("coding_publish", {"job_id": job["job_id"], "title": "t"}, _ctx(user_role=role))
+    out = await _call(
+        "coding_publish", {"job_id": job["job_id"], "title": "t"}, _ctx(user_role=role)
+    )
     assert "error" in out
     assert (role or "no role") in out["error"]
     assert github.requests == []
@@ -314,7 +316,9 @@ async def test_publish_is_refused_below_owner_and_audited(manager, remote, githu
 @pytest.mark.parametrize("role", ["owner", "admin"])
 async def test_owner_and_admin_may_publish(manager, remote, github, audit, role):
     job = await _done_job(remote)
-    out = await _call("coding_publish", {"job_id": job["job_id"], "title": "t"}, _ctx(user_role=role))
+    out = await _call(
+        "coding_publish", {"job_id": job["job_id"], "title": "t"}, _ctx(user_role=role)
+    )
     assert out.get("pr_url") == PR_URL, out
 
 

@@ -28,6 +28,10 @@ tools_opt_in:
   - claude_code_wait
   - claude_code_followup
   - claude_code_cancel
+  # Clone an allowlisted remote (ROBOTHOR_CODING_REMOTES) and, for the owner,
+  # push a verified job and open a draft PR (ROBOTHOR_CODING_PR_ENABLED).
+  - coding_repo_prepare
+  - coding_publish
   - pr_review_intake
   - pr_review_status
   # Starts declared workflows when the operator asks; RBAC denies it to user/member.

@@ -46,6 +46,7 @@ __all__ = [
     "build_sandbox_settings",
     "engine_unit_proc_problems",
     "live_workspace",
+    "required",
     "sandbox_problems",
     "secret_paths",
     "unwritable_login_paths",
@@ -137,6 +138,13 @@ def live_workspace() -> Path | None:
         return Path.home() / "robothor"
     except RuntimeError:
         return None
+
+
+def required() -> bool:
+    """False only when ``ROBOTHOR_CODING_SANDBOX`` is ``off``; anything else fails closed."""
+    from robothor.settings import get_settings
+
+    return str(get_settings().coding.sandbox or "").strip().lower() != "off"
 
 
 def secret_paths(home: Path, workspace: Path | None) -> list[str]:
