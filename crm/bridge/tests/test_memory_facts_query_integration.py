@@ -12,7 +12,9 @@ The claims that need a real table under them:
 * preview changes no row and no ``is_active``;
 * forget bounds the fact (``is_active=false``, ``valid_to`` set) and nothing else;
 * the second forget is a 409;
-* the audit row carries the id and the reason, and never the text.
+* the audit row carries the id and the reason, and never the text;
+* an edit keeps the original in ``memory_facts_audit``, marks the row
+  operator-confirmed, and refuses to collide with another active fact.
 """
 
 from __future__ import annotations
@@ -71,6 +73,9 @@ def make_fact(db_conn, tenants):
 
     with db_conn.cursor() as cur:
         cur.execute("DELETE FROM memory_episodes WHERE fact_ids && %s", (created,))
+        # An edit's history row: the commit below would otherwise keep it
+        # after the fact it describes is gone.
+        cur.execute("DELETE FROM memory_facts_audit WHERE fact_id = ANY(%s)", (created,))
         cur.execute("DELETE FROM memory_facts WHERE id = ANY(%s)", (created,))
     db_conn.commit()
 
@@ -480,3 +485,183 @@ def test_the_forget_is_committed_and_visible_to_another_connection(
     finally:
         elsewhere.rollback()
         elsewhere.close()
+
+
+# ── edit ─────────────────────────────────────────────────────────────────────
+
+
+def _history(db_conn, fact_id: int) -> list[dict]:
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "SELECT fact_text, reason, snapshot, content_hash_at_snapshot "
+            "FROM memory_facts_audit WHERE fact_id = %s ORDER BY snapshot_id",
+            (fact_id,),
+        )
+        return [
+            {"fact_text": t, "reason": r, "snapshot": s, "hash_at_snapshot": h}
+            for t, r, s, h in cur.fetchall()
+        ]
+
+
+def _edited(db_conn, fact_id: int) -> dict:
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "SELECT fact_text, entities, content_hash, metadata, updated_at, is_active, tenant_id "
+            "FROM memory_facts WHERE id = %s",
+            (fact_id,),
+        )
+        text, entities, content_hash, metadata, updated_at, is_active, tenant = cur.fetchone()
+    return {
+        "fact_text": text,
+        "entities": list(entities or []),
+        "content_hash": content_hash,
+        "metadata": metadata or {},
+        "updated_at": updated_at,
+        "is_active": is_active,
+        "tenant_id": tenant,
+    }
+
+
+def test_an_edit_keeps_the_original_and_marks_the_row_operator_confirmed(
+    controls_client_as_operator, live_db, make_fact, tenants, db_conn, audit_rows
+):
+    from robothor.memory.drift import compute_fact_hash
+
+    platform, _ = tenants
+    marker = uuid.uuid4().hex[:8]
+    original = f"Alice prefers tea {marker}"
+    corrected = f"Alice prefers green tea {marker}"
+    fact_id = make_fact(original, tenant=platform, entities=["Alice"])
+
+    resp = controls_client_as_operator.patch(
+        f"{FACTS}/{fact_id}",
+        json={
+            "fact_text": corrected,
+            "entities": ["Alice", "Tea"],
+            "reason": "the extraction dropped a word",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+
+    row = _edited(db_conn, fact_id)
+    assert row["fact_text"] == corrected
+    assert row["entities"] == ["Alice", "Tea"]
+    assert row["is_active"] is True, "an edit corrects a fact; it does not bound it"
+    assert row["updated_at"] is not None
+    assert row["content_hash"] == compute_fact_hash(corrected, tenant_id=platform, category="fact")
+    confirmed = row["metadata"]["operator_confirmed"]
+    assert confirmed["by"].startswith("operator:")
+    assert confirmed["at"]
+    # There is no null-embedding backfill to lean on, so the row says its
+    # vector was computed over the old text rather than pretending otherwise.
+    assert row["metadata"]["embedding_stale"] is True
+
+    [history] = _history(db_conn, fact_id)
+    assert history["fact_text"] == original
+    assert history["reason"] == "operator_edit"
+    assert history["snapshot"]["fact_text"] == original
+    assert history["snapshot"]["entities"] == ["Alice"]
+    assert history["snapshot"]["actor"] == confirmed["by"]
+
+    fact = resp.json()["fact"]
+    assert fact["fact_text"] == corrected
+    assert fact["entities"] == ["Alice", "Tea"]
+    assert fact["operator_confirmed"] == confirmed
+
+    assert [r["event_type"] for r in audit_rows] == ["memory.edit"]
+    details = audit_rows[0]["details"]
+    assert details["fact_id"] == fact_id
+    assert details["reason"] == "the extraction dropped a word"
+    assert marker not in str(audit_rows[0]), "neither the old text nor the new one"
+
+
+def test_an_entities_only_edit_leaves_the_text_and_its_embedding_alone(
+    controls_client_as_operator, live_db, make_fact, tenants, db_conn
+):
+    platform, _ = tenants
+    text = f"Bob prefers coffee {uuid.uuid4().hex[:8]}"
+    fact_id = make_fact(text, tenant=platform, entities=["Bobby"])
+
+    resp = controls_client_as_operator.patch(
+        f"{FACTS}/{fact_id}", json={"entities": ["Bob"], "reason": "wrong entity name"}
+    )
+    assert resp.status_code == 200, resp.text
+    row = _edited(db_conn, fact_id)
+    assert row["fact_text"] == text
+    assert row["entities"] == ["Bob"]
+    assert "embedding_stale" not in row["metadata"]
+    assert "operator_confirmed" in row["metadata"]
+    assert _history(db_conn, fact_id)[0]["snapshot"]["entities"] == ["Bobby"]
+
+
+def test_an_edit_onto_another_active_facts_text_is_refused_and_changes_nothing(
+    controls_client_as_operator, live_db, make_fact, tenants, db_conn
+):
+    platform, _ = tenants
+    marker = uuid.uuid4().hex[:8]
+    taken = f"Alice prefers tea {marker}"
+    first = make_fact(taken, tenant=platform)
+    second = make_fact(f"Alice prefers coffee {marker}", tenant=platform)
+    # The first edit gives ``first`` its content hash, so the index has
+    # something to collide with.
+    assert (
+        controls_client_as_operator.patch(
+            f"{FACTS}/{first}", json={"entities": ["Alice"], "reason": "tag it"}
+        ).status_code
+        == 200
+    )
+
+    resp = controls_client_as_operator.patch(
+        f"{FACTS}/{second}", json={"fact_text": taken, "reason": "make them agree"}
+    )
+    assert resp.status_code == 409
+    assert resp.json()["detail"] == "an active fact with this text already exists"
+    assert _edited(db_conn, second)["fact_text"] == f"Alice prefers coffee {marker}"
+    assert _history(db_conn, second) == [], "a refused edit leaves no history row"
+    # And the transaction is still usable: the refusal did not poison it.
+    assert _edited(db_conn, first)["fact_text"] == taken
+
+
+def test_editing_an_inactive_fact_is_422_and_writes_nothing(
+    controls_client_as_operator, live_db, make_fact, tenants, db_conn
+):
+    platform, _ = tenants
+    fact_id = make_fact("Alice moved on", tenant=platform, active=False)
+    resp = controls_client_as_operator.patch(
+        f"{FACTS}/{fact_id}", json={"fact_text": "Alice moved teams", "reason": "typo"}
+    )
+    assert resp.status_code == 422
+    assert _edited(db_conn, fact_id)["fact_text"] == "Alice moved on"
+    assert _history(db_conn, fact_id) == []
+
+
+def test_editing_another_tenants_fact_is_404_and_changes_nothing(
+    controls_client_as_operator, live_db, make_fact, tenants, db_conn
+):
+    _, other = tenants
+    fact_id = make_fact("Bob's private note", tenant=other)
+    resp = controls_client_as_operator.patch(
+        f"{FACTS}/{fact_id}", json={"fact_text": "rewritten", "reason": "nosy"}
+    )
+    assert resp.status_code == 404
+    assert "Bob" not in resp.text
+    assert _edited(db_conn, fact_id)["fact_text"] == "Bob's private note"
+    assert _history(db_conn, fact_id) == []
+
+
+def test_the_listing_carries_the_operator_confirmation(
+    controls_client_as_operator, live_db, make_fact, tenants
+):
+    platform, _ = tenants
+    marker = uuid.uuid4().hex[:8]
+    edited = make_fact(f"Alice prefers tea {marker}", tenant=platform)
+    untouched = make_fact(f"Bob prefers coffee {marker}", tenant=platform)
+    controls_client_as_operator.patch(
+        f"{FACTS}/{edited}", json={"entities": ["Alice"], "reason": "tag it"}
+    )
+
+    facts = {
+        f["id"]: f for f in controls_client_as_operator.get(f"{FACTS}?limit=200").json()["facts"]
+    }
+    assert facts[edited]["operator_confirmed"]["by"].startswith("operator:")
+    assert facts[untouched]["operator_confirmed"] is None

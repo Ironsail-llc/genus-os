@@ -147,3 +147,257 @@ def test_a_forget_without_a_real_reason_is_422(controls_client_as_operator, no_d
 
 def test_a_reason_longer_than_the_audit_column_is_422(controls_client_as_operator, no_db):
     assert controls_client_as_operator.post(FORGET, json={"reason": "x" * 501}).status_code == 422
+
+
+# ── edit ─────────────────────────────────────────────────────────────────────
+#
+# ``PATCH /api/memory/facts/{id}`` corrects one fact and keeps the original on
+# record. The gate and every validation refusal come before any query, which is
+# what ``no_db`` proves; the two outcomes that need a row under them (the 409
+# mapping and the audit call) run against a scripted connection below, and the
+# real table is exercised in ``test_memory_facts_query_integration.py``.
+
+EDIT = "/api/memory/facts/1"
+GOOD_EDIT = {"fact_text": "Alice prefers green tea", "reason": "the extraction got it wrong"}
+
+
+def test_edit_rejects_a_service_token(controls_client_as_service, no_db):
+    assert controls_client_as_service.patch(EDIT, json=GOOD_EDIT).status_code == 403
+
+
+def test_edit_rejects_a_viewer(controls_client_as_viewer, no_db):
+    assert controls_client_as_viewer.patch(EDIT, json=GOOD_EDIT).status_code == 403
+
+
+def test_edit_rejects_an_auditor(controls_client_as_auditor, no_db):
+    assert controls_client_as_auditor.patch(EDIT, json=GOOD_EDIT).status_code == 403
+
+
+def test_edit_rejects_another_tenants_owner(controls_client_as_other_tenant_owner, no_db):
+    assert controls_client_as_other_tenant_owner.patch(EDIT, json=GOOD_EDIT).status_code == 403
+
+
+@pytest.mark.parametrize("fact_id", ["abc", "1.5", "-3", "0", "1_0", "+7", "007"])
+def test_an_edit_of_something_that_is_not_an_id_is_422(controls_client_as_operator, no_db, fact_id):
+    resp = controls_client_as_operator.patch(f"/api/memory/facts/{fact_id}", json=GOOD_EDIT)
+    assert resp.status_code == 422
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        # Nothing to change: a reason alone is not an edit.
+        {"reason": "the extraction got it wrong"},
+        {"fact_text": None, "entities": None, "reason": "the extraction got it wrong"},
+        # A fact cannot be edited into nothing — forget is the way to stop
+        # believing one.
+        {"fact_text": "", "reason": "the extraction got it wrong"},
+        {"fact_text": "   ", "reason": "the extraction got it wrong"},
+        {"fact_text": 12345, "reason": "the extraction got it wrong"},
+        {"fact_text": "x" * 2001, "reason": "the extraction got it wrong"},
+        {"entities": "Alice", "reason": "the extraction got it wrong"},
+        {"entities": ["Alice", 7], "reason": "the extraction got it wrong"},
+        {"entities": ["x" * 201], "reason": "the extraction got it wrong"},
+        {"entities": [f"e{n}" for n in range(51)], "reason": "the extraction got it wrong"},
+        # The reason rule is forget's, word for word.
+        {"fact_text": "Alice prefers green tea"},
+        {"fact_text": "Alice prefers green tea", "reason": ""},
+        {"fact_text": "Alice prefers green tea", "reason": "ab"},
+        {"fact_text": "Alice prefers green tea", "reason": 12345},
+        {"fact_text": "Alice prefers green tea", "reason": "x" * 501},
+    ],
+)
+def test_an_edit_that_is_not_a_real_edit_is_a_flat_422(controls_client_as_operator, no_db, body):
+    resp = controls_client_as_operator.patch(EDIT, json=body)
+    assert resp.status_code == 422, body
+    assert isinstance(resp.json()["detail"], str), "the Helm was promised a flat 422"
+
+
+def test_an_edit_without_a_reason_says_edit_not_forget(controls_client_as_operator, no_db):
+    detail = controls_client_as_operator.patch(
+        EDIT, json={"fact_text": "Alice prefers green tea", "reason": "ab"}
+    ).json()["detail"]
+    assert "edit" in detail
+    assert "forget" not in detail
+
+
+# A scripted connection for the two outcomes that need a row. It answers by
+# statement, not by call order, so the test says what the table holds rather
+# than how many queries the handler happens to make.
+
+_LOCKED = ("Alice prefers tea", ["Alice"], True, "fact", None, None)
+
+
+class _ScriptedCursor:
+    def __init__(self, locked, *, update_raises=None):
+        self.locked = locked
+        self.update_raises = update_raises
+        self.statements: list[tuple[str, object]] = []
+        self._last = ""
+        self._text = locked[0] if locked else ""
+        self._entities = list(locked[1]) if locked else []
+
+    def execute(self, sql, params=None):
+        self.statements.append((sql, params))
+        self._last = sql
+        if sql.lstrip().upper().startswith("UPDATE MEMORY_FACTS"):
+            if self.update_raises is not None:
+                raise self.update_raises
+            self._text, self._entities = params[0], params[1]
+
+    def fetchone(self):
+        if "FOR UPDATE" in self._last:
+            return self.locked
+        if "INSERT INTO memory_facts_audit" in self._last:
+            return (77,)
+        if "FROM memory_facts" in self._last:
+            return (
+                1,
+                self._text,
+                self._entities,
+                True,
+                None,
+                None,
+                0.9,
+                "chat",
+                None,
+                None,
+                {"at": "2026-10-30T12:00:00+00:00", "by": "operator:alice"},
+            )
+        return None
+
+
+@pytest.fixture
+def scripted_db(monkeypatch):
+    """Bind the router to a ``_ScriptedCursor``; return a setter for its script."""
+    from contextlib import contextmanager
+
+    from routers import memory_facts
+
+    holder: dict[str, _ScriptedCursor] = {}
+
+    def _bind(locked=_LOCKED, *, update_raises=None) -> _ScriptedCursor:
+        cursor = _ScriptedCursor(locked, update_raises=update_raises)
+        holder["cursor"] = cursor
+
+        class _Conn:
+            def cursor(self):
+                return cursor
+
+        @contextmanager
+        def _conn():
+            yield _Conn()
+
+        monkeypatch.setattr(memory_facts, "get_connection", _conn)
+        return cursor
+
+    return _bind
+
+
+@pytest.fixture
+def audit_calls(monkeypatch):
+    from routers import memory_facts
+
+    calls: list[dict] = []
+
+    def _audited(request, event_type, **kwargs):
+        calls.append({"event_type": event_type, **kwargs})
+
+    monkeypatch.setattr(memory_facts, "audited", _audited)
+    return calls
+
+
+def test_editing_another_tenants_fact_is_404(controls_client_as_operator, scripted_db, audit_calls):
+    """The tenant predicate is on the locking read: no row there is a 404, never a 403."""
+    cursor = scripted_db(locked=None)
+    resp = controls_client_as_operator.patch(EDIT, json=GOOD_EDIT)
+    assert resp.status_code == 404
+    lock_sql, lock_params = cursor.statements[0]
+    assert "FOR UPDATE" in lock_sql
+    assert "tenant_id" in lock_sql
+    assert not any(sql.lstrip().upper().startswith("UPDATE") for sql, _ in cursor.statements)
+    assert audit_calls == []
+
+
+def test_editing_an_inactive_fact_is_422(controls_client_as_operator, scripted_db, audit_calls):
+    cursor = scripted_db(locked=("Alice moved on", ["Alice"], False, "fact", None, None))
+    resp = controls_client_as_operator.patch(EDIT, json=GOOD_EDIT)
+    assert resp.status_code == 422
+    assert isinstance(resp.json()["detail"], str)
+    assert "inactive" in resp.json()["detail"]
+    assert not any("memory_facts_audit" in sql for sql, _ in cursor.statements)
+    assert audit_calls == []
+
+
+def test_an_edit_onto_another_active_facts_text_is_a_409(
+    controls_client_as_operator, scripted_db, audit_calls
+):
+    """Migration 078's unique index, in the operator's words — not a 500."""
+    import psycopg2.errors
+
+    scripted_db(update_raises=psycopg2.errors.UniqueViolation("duplicate key"))
+    resp = controls_client_as_operator.patch(EDIT, json=GOOD_EDIT)
+    assert resp.status_code == 409
+    assert resp.json()["detail"] == "an active fact with this text already exists"
+    assert audit_calls == []
+
+
+def test_an_edit_audits_the_id_and_the_reason_never_the_text(
+    controls_client_as_operator, scripted_db, audit_calls
+):
+    scripted_db()
+    resp = controls_client_as_operator.patch(
+        EDIT,
+        json={
+            "fact_text": "Alice prefers green tea",
+            "entities": ["Alice"],
+            "reason": "the extraction got it wrong",
+        },
+    )
+    assert resp.status_code == 200
+    assert audit_calls == [
+        {
+            "event_type": "memory.edit",
+            "action": "1",
+            "fact_id": 1,
+            "reason": "the extraction got it wrong",
+        }
+    ]
+    # Neither the text being replaced nor its replacement.
+    assert "tea" not in str(audit_calls)
+
+
+def test_an_edit_returns_the_fact_in_the_list_shape(
+    controls_client_as_operator, scripted_db, audit_calls
+):
+    scripted_db()
+    body = controls_client_as_operator.patch(EDIT, json=GOOD_EDIT).json()
+    fact = body["fact"]
+    assert fact["id"] == 1
+    assert fact["fact_text"] == "Alice prefers green tea"
+    assert fact["operator_confirmed"] == {
+        "at": "2026-10-30T12:00:00+00:00",
+        "by": "operator:alice",
+    }
+    assert set(fact) >= {"entities", "is_active", "valid_from", "source", "superseded_by"}
+
+
+def test_an_edit_snapshots_the_original_before_it_writes(
+    controls_client_as_operator, scripted_db, audit_calls
+):
+    cursor = scripted_db()
+    controls_client_as_operator.patch(EDIT, json=GOOD_EDIT)
+    kinds = [sql.lstrip().split()[0].upper() for sql, _ in cursor.statements]
+    snapshot_at = next(
+        i for i, (sql, _) in enumerate(cursor.statements) if "memory_facts_audit" in sql
+    )
+    update_at = next(
+        i
+        for i, (sql, _) in enumerate(cursor.statements)
+        if sql.lstrip().upper().startswith("UPDATE MEMORY_FACTS")
+    )
+    assert snapshot_at < update_at, kinds
+    assert "DELETE" not in kinds
+    snapshot_params = cursor.statements[snapshot_at][1]
+    assert "Alice prefers tea" in snapshot_params
+    assert "operator_edit" in snapshot_params
