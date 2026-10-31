@@ -60,6 +60,10 @@ export function MarketplaceView({ visible }: MarketplaceViewProps) {
     }
   }, []);
 
+  /** A plugin-shipped agent takes its plugin's trust; any other is its own. */
+  const trustFor = (agent: InstalledAgent): Trust =>
+    (agent.plugin ? pluginTrustByName[agent.plugin] : undefined) ?? agentTrust(agent);
+
   const fetchAgents = useCallback(async () => {
     setLoading(true);
     void fetchPluginTrust();
@@ -228,9 +232,7 @@ export function MarketplaceView({ visible }: MarketplaceViewProps) {
                     <span className="text-xs text-muted-foreground">v{agent.version}</span>
                     <TrustBadge
                       name={agent.agent_id}
-                      trust={
-                        (agent.plugin && pluginTrustByName[agent.plugin]) || agentTrust(agent)
-                      }
+                      trust={trustFor(agent)}
                       testId={`agent-trust-${agent.agent_id}`}
                     />
                   </div>
