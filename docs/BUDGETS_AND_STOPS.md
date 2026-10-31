@@ -34,6 +34,13 @@ mode:
 genus doctor --only budget_stops.recent
 ```
 
+The check id is `budget_stops.recent`. Doctor check ids are dotted
+`<area>.<name>` (`db.migrations`, `provider.keys`). This check's area is the same
+as its category, `budget_stops`, which is also its module name
+(`robothor/doctor/checks/budget_stops.py`), so `genus doctor --category
+budget_stops` selects it too. It is an `info` check: it reports a count and is
+never a verdict on the instance.
+
 An observed hourly cap crossing also raises a `warning` alert through the
 existing alert path, which writes a digest row rather than paging. The
 runaway-token cap keeps its `critical` alert in both modes.

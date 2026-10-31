@@ -870,7 +870,12 @@ genus doctor --fix --dry-run        # say what --fix would repair
 | `manifests` | every agent manifest satisfies the schema; none is present-but-unreadable |
 | `identity` | an operator is configured in `owner.yaml`; an owner account exists so somebody can sign in |
 | `secrets` | the secrets backend is usable; the JWT signing key resolves; the bridge SSO secret is set where auth is enforced |
+| `budget_stops` | `budget_stops.recent` (info): how many `budget_stop` steps the last 24 hours recorded, by stop and mode. See `docs/BUDGETS_AND_STOPS.md` (repository only) |
 | `host` | the installed systemd units match the repo (wraps `scripts/instance_doctor.sh`) |
+
+Check ids are dotted `<area>.<name>`, for example `db.migrations` (category
+`database`) or `budget_stops.recent` (category `budget_stops`). `--only` takes
+the full id; `--category` takes the category from the table above.
 
 Installed plugins may add their own checks through the `genus.doctor`
 entry-point group. A plugin's check ids must be prefixed with its distribution
