@@ -175,6 +175,8 @@ read-only. It has four parts:
   by status, by delivery category and by agent. Benchmark runs are left out
   when decontamination is enforced, with the same predicate the analytics module uses
   (`robothor/engine/analytics.py`, `exclude_benchmark_filter`).
+  The summary leaves benchmark runs out only when decontamination is enforced,
+  and the table always shows them, so the two can differ by exactly those rows.
 - **Filters** for status, agent, trigger and period (24 hours, 7 days — the
   default — 30 days, or all time). They change both the table and the summary.
 - **A full-width table** with agent, trigger, status, started, duration, model,
@@ -199,7 +201,7 @@ read-only. It has four parts:
 | delivered | `delivered`, `sent`, `ok`, `success` | the channel and when it landed |
 | none expected | `silent`, `suppressed_sub_agent`, `suppressed_trivial`, `suppressed_filtered`, `no_output`, `published`, `blocked_by_hook:*` | "no delivery expected", in a neutral tone |
 | failed | `failed*`, `partial:<sent>/<expected>`, `unknown_mode:*` | red — the only red delivery |
-| pending | none yet, run still pending or running | "delivery pending" |
+| pending | none yet, run still pending, running or `awaiting_approval` | "delivery pending" |
 | not recorded | none on a finished run, or a status the Helm does not know | neutral, or a warning for an unknown status |
 
 **Steps are pruned after 30 days** (`robothor/engine/retention.py`). A run older
