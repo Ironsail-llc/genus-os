@@ -169,3 +169,47 @@ async def test_flush_on_an_idle_writer_returns(count):
     for _ in range(count):
         await writer.flush()
     await writer.shutdown()
+
+
+async def test_flush_does_not_spin_while_a_thread_writes_the_last_row_inline():
+    """A submit from a worker thread (no loop) drains the queue inline. While it
+    holds the last row, flush must wait, not bounce the loop at full CPU."""
+    writer = _writer()
+    started = threading.Event()
+    written: list[str] = []
+
+    def slow_row() -> None:
+        started.set()
+        time.sleep(0.4)
+        written.append("queued")
+
+    writer.submit(slow_row)  # queued from the loop; the task has not run yet
+    inline = threading.Thread(target=writer.submit, args=(written.append, "inline"))
+    inline.start()
+    assert started.wait(2), "the inline writer never picked up the queued row"
+
+    cpu = time.process_time()
+    await writer.flush()
+    spent = time.process_time() - cpu
+    inline.join()
+
+    assert written[0] == "queued"
+    assert spent < 0.05, f"flush burned {spent * 1000:.0f} ms of CPU waiting 400 ms"
+    await writer.shutdown()
+
+
+async def test_shutdown_is_bounded_and_reports_what_it_could_not_write(caplog):
+    writer = _writer()
+    written: list[int] = []
+    writer.submit(lambda: time.sleep(1.0))
+    for i in range(3):
+        writer.submit(written.append, i)
+
+    started = time.monotonic()
+    await writer.shutdown(timeout=0.1)
+    took = time.monotonic() - started
+
+    assert took < 0.5, f"shutdown(timeout=0.1) took {took * 1000:.0f} ms"
+    assert any("3" in r.getMessage() and r.levelname == "ERROR" for r in caplog.records), (
+        "the rows left unwritten must be reported"
+    )
