@@ -52,7 +52,11 @@ async def _policy(ctx: DoctorContext) -> Result:
     from robothor.doctor.checks.tools import _scan_manifests
     from robothor.engine import sandbox
     from robothor.engine.feature_flags import sandbox_default_mode, sandbox_playground_enabled
-    from robothor.engine.sandbox_policy import agent_holds_exec, resolve_execution_plan
+    from robothor.engine.sandbox_policy import (
+        agent_holds_exec,
+        manifest_sandbox,
+        resolve_execution_plan,
+    )
 
     status = await ctx.run_blocking(sandbox.runtime_status)
     manifests = await ctx.run_blocking(_scan_manifests, _manifest_dir(ctx))
@@ -63,7 +67,7 @@ async def _policy(ctx: DoctorContext) -> Result:
     for manifest in manifests:
         cfg = SimpleNamespace(
             id=str(manifest.get("id", "")),
-            sandbox=str(manifest.get("sandbox", "") or ""),
+            sandbox=manifest_sandbox(manifest),
             tools_allowed=list(manifest.get("tools_allowed") or []),
             tools_denied=list(manifest.get("tools_denied") or []),
         )

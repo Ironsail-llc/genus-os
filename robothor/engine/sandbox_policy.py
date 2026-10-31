@@ -168,10 +168,28 @@ _OUTCOME = {"host": "run on the host", "refuse": "be refused", "sandbox": "run i
 #: Where the live run carries its plan (see ``exec_plan_for``).
 _RUN_ATTR = "_exec_plan"
 
-_UNLOCK = (
-    "An owner or admin can run it, or the operator can install a sandbox runtime "
-    "(rootless podman) on the engine or select one with ROBOTHOR_SANDBOX_BACKEND."
+_INSTALL = (
+    "the operator can install a sandbox runtime (rootless podman) on the engine "
+    "or select one with ROBOTHOR_SANDBOX_BACKEND."
 )
+_UNLOCK = f"An owner or admin can run it, or {_INSTALL}"
+#: A sub-agent's requester may already be the owner, so the role is not the
+#: unlock: the host fallback belongs to the run nothing spawned.
+_SUB_AGENT_UNLOCK = (
+    "Host fallback is only for the top-level run: have the parent agent run the "
+    f"command itself, or {_INSTALL}"
+)
+
+
+def manifest_sandbox(manifest: dict[str, Any]) -> str:
+    """A raw manifest's sandbox setting, read where the engine reads it.
+
+    ``engine/config.py`` builds ``AgentConfig.sandbox`` from ``v2.sandbox``
+    (default ``local``); a top-level ``sandbox:`` key is ignored there, so any
+    reader of a raw manifest that wants the engine's answer must ignore it too.
+    """
+    v2 = manifest.get("v2") or {}
+    return str(v2.get("sandbox", "local") if isinstance(v2, dict) else "local")
 
 
 @dataclass(frozen=True)
@@ -227,7 +245,7 @@ def resolve_execution_plan(
             f"there is no sandbox runtime on this engine ({missing}), and a "
             "sub-agent never falls back to the host"
         )
-        return ExecPlan(where="refuse", reason=why, unlock=_UNLOCK, user_role=role)
+        return ExecPlan(where="refuse", reason=why, unlock=_SUB_AGENT_UNLOCK, user_role=role)
     if is_benchmark:
         why = (
             f"there is no sandbox runtime on this engine ({missing}), and a "
