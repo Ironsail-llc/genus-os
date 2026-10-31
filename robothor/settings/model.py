@@ -836,7 +836,9 @@ class EngineSettings(SettingsGroup):
         "ROBOTHOR_MAX_CONCURRENT_BACKGROUND",
         "With ROBOTHOR_EXECUTION_LANES on: how many background runs (cron, hooks, "
         "workflows, everything without a person waiting) may execute at once. "
-        "Read at the first run.",
+        "Never below 1: 0 is read as 1, not as uncapped. A cron run or workflow "
+        "takes its slot before its own timeout starts, so time queued is not "
+        "counted against it. Read at the first run.",
         since="unreleased",
     )
     lane_background_yield_ms: int = declare(

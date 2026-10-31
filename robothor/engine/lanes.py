@@ -142,8 +142,10 @@ def _publish(lane: Lane, active: int, waiting: int) -> None:
 
 
 class _LaneState:
-    def __init__(self, limit: int) -> None:
-        self.limit = max(0, int(limit))  # 0 = uncapped
+    def __init__(self, limit: int, *, uncapped_at_zero: bool = False) -> None:
+        # 0 = uncapped, for the interactive lane only. Background keeps a floor
+        # of one: an operator setting 0 there means "as few as possible".
+        self.limit = max(0 if uncapped_at_zero else 1, int(limit))
         self.active = 0
         self.waiters: deque[asyncio.Future[None]] = deque()
         # Waiters a freed slot was handed to, until they resume or are cancelled.
@@ -171,7 +173,7 @@ class ExecutionLanes:
     ) -> None:
         self._lock = threading.Lock()
         self._states = {
-            Lane.INTERACTIVE: _LaneState(interactive_limit),
+            Lane.INTERACTIVE: _LaneState(interactive_limit, uncapped_at_zero=True),
             Lane.BACKGROUND: _LaneState(background_limit),
         }
         self._yield_s = max(0, int(yield_ms)) / 1000.0
@@ -322,6 +324,35 @@ def get_lanes() -> ExecutionLanes:
         return _LANES
 
 
+def _holds_a_slot() -> bool:
+    holder = _HOLDING.get()
+    return holder is not None and not holder.released
+
+
+@asynccontextmanager
+async def run_slot(lane: Lane) -> AsyncIterator[None]:
+    """Hold a slot in ``lane`` for the enclosed run.
+
+    A caller that wraps a run in its own clock (the scheduler's safety timeout,
+    a workflow's timeout) takes the slot here, before starting that clock, so
+    time spent queued is never counted against it. A ``runner.execute`` inside
+    then finds the slot held and takes no second one. A no-op with the flag
+    off, or when the current run already holds a slot.
+    """
+    if _holds_a_slot() or not lanes_enabled():
+        yield
+        return
+    async with get_lanes().slot(lane):
+        mine = _Holder(lane)
+        held, current = _HOLDING.set(mine), _LANE.set(lane)
+        try:
+            yield
+        finally:
+            mine.released = True
+            _LANE.reset(current)
+            _HOLDING.reset(held)
+
+
 _P = ParamSpec("_P")
 _R = TypeVar("_R")
 
@@ -340,23 +371,14 @@ def lane_gated(
 
     @functools.wraps(fn)
     async def gated(*args: _P.args, **kwargs: _P.kwargs) -> _R:
-        holder = _HOLDING.get()
-        if (holder is not None and not holder.released) or not lanes_enabled():
+        if _holds_a_slot() or not lanes_enabled():
             return await fn(*args, **kwargs)
         try:
             bound = parameters.bind_partial(*args, **kwargs).arguments
         except TypeError:
             return await fn(*args, **kwargs)
-        lane = lane_for_trigger(bound.get("trigger_type", default))
-        async with get_lanes().slot(lane):
-            mine = _Holder(lane)
-            held, current = _HOLDING.set(mine), _LANE.set(lane)
-            try:
-                return await fn(*args, **kwargs)
-            finally:
-                mine.released = True
-                _LANE.reset(current)
-                _HOLDING.reset(held)
+        async with run_slot(lane_for_trigger(bound.get("trigger_type", default))):
+            return await fn(*args, **kwargs)
 
     gated.__lane_gated__ = True  # type: ignore[attr-defined]
     return gated
