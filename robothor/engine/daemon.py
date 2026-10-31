@@ -244,7 +244,7 @@ async def _execute_resume(runner: Any, candidate: Any, claim: Any = None) -> Non
             resume_from_run_id=candidate.run_id,
             tenant_id=candidate.tenant_id,
         )
-    except Exception:
+    except Exception:  # noqa: BLE001 - one failed resume must not stop the others
         logger.exception("Resume of run %s failed", candidate.run_id)
     finally:
         current.reset(claim_token)
@@ -308,7 +308,7 @@ def _resume_scan(tenant_id: str) -> list[ResumeCandidate]:
         # Durable operator controls override restart eligibility before any
         # attempt is charged or a resume task is announced/scheduled.
         rows = [r for r in rows if not stopped(str(r[4]), str(r[0]))]
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - a failed scan resumes nothing; the reaper still runs
         logger.warning("Resume scan failed: %s", _sanitize(e))
         return []
 
@@ -384,7 +384,7 @@ async def resume_interrupted_runs(runner: Any = None) -> int:
         work = _execute_resume(runner, candidate, claim)
         try:
             task = asyncio.create_task(work)
-        except BaseException:
+        except BaseException:  # noqa: BLE001 - release the claim, then re-raise
             work.close()
             claim.close()
             raise
@@ -430,7 +430,7 @@ def classify_reap_reason(
         from robothor.engine.tracking import list_steps
 
         steps = list_steps(run_id)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - no steps reads as no evidence, not as a crash
         logger.debug("classify_reap_reason: list_steps failed for %s: %s", run_id, e)
         steps = []
 
@@ -506,7 +506,7 @@ def _cleanup_stale_workflow_runs(tenant_id: str | None = None) -> int:
             if reaped:
                 logger.warning("Cleaned up %d stale workflow runs", reaped)
             return reaped
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - housekeeping; the next pass retries
         logger.warning("Stale workflow run cleanup failed: %s", e)
         return 0
 
@@ -613,7 +613,7 @@ def _cleanup_stale_runs(tenant_id: str | None = None) -> int:
                 release_sync(agent_id)
 
             return len(reaped_agents) + wf_reaped
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - housekeeping; the next pass retries
         logger.warning("Stale run cleanup failed: %s", e)
         return wf_reaped
     finally:
@@ -801,7 +801,7 @@ async def _start_federation(config: EngineConfig, runner: Any = None) -> Any:
             return None
 
         return nats_mgr
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - federation is optional; the failure is alerted below
         # A crash here used to be a warning line. If connections are configured,
         # the operator needs to know federation is down, not find out months later.
         logger.exception("Federation startup failed (non-fatal)")
@@ -889,7 +889,7 @@ async def _maybe_run_alert_selftest() -> None:
             "confirms alert() runs and reaches the notification inbox. Unset "
             "ROBOTHOR_ALERT_SELFTEST to stop it.",
         )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - the self-test reports, it never blocks boot
         logger.error("Alert delivery self-test RAISED: %s — the alert path is broken", e)
         return
     if recorded:
@@ -1188,7 +1188,7 @@ async def _announce_shutdown(config: Any) -> None:
                 ),
                 timeout=ANNOUNCE_TIMEOUT_SECONDS,
             )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - shutdown continues regardless
         logger.debug("Shutdown announcement failed: %s", e)
 
 
@@ -1670,7 +1670,7 @@ async def main() -> int:
                 f"{scheduled} scheduled agents loaded.\n"
                 f"Port {config.port} | Tenant {config.tenant_id}",
             )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - a startup announcement is cosmetic
         logger.debug("Startup announcement failed: %s", e)
 
     # Alert delivery self-test (env-gated, best-effort) — see docstring.
@@ -1717,7 +1717,7 @@ async def main() -> int:
         try:
             await nats_mgr.disconnect()
             logger.info("Federation: NATS disconnected")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - shutdown continues regardless
             logger.debug("Federation NATS disconnect failed: %s", e)
 
     # Drain tracked background tasks before stopping subsystems
@@ -1734,7 +1734,7 @@ async def main() -> int:
     if slack_bot is not None:
         try:
             await slack_bot.stop()
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - shutdown continues regardless
             logger.debug("Slack bot stop failed: %s", e)
 
     # Release the leadership lease explicitly before cancelling its task —
@@ -1742,7 +1742,7 @@ async def main() -> int:
     # leaderless (no cron/heartbeat) for up to that window.
     try:
         await _elector.stop()
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - shutdown continues regardless
         logger.debug("Leader elector stop failed: %s", e)
 
     # Cancel remaining tasks
@@ -1830,7 +1830,7 @@ def _record_watchdog_event(event_type: str, detail: str) -> None:
         lines.append(entry)
         lines = lines[-50:]
         write_block("watchdog_log", "\n".join(lines))
-    except Exception:
+    except Exception:  # noqa: BLE001 - bookkeeping must not stop the watchdog
         logger.debug("Watchdog event recording failed", exc_info=True)
 
 
@@ -1863,7 +1863,7 @@ def _read_last_watchdog_event_ts(*event_types: str) -> float | None:
 
         existing = read_block("watchdog_log")
         content = existing.get("content", "") if "error" not in existing else ""
-    except Exception:
+    except Exception:  # noqa: BLE001 - no timestamp means the job is due
         logger.debug("Reading watchdog_log block failed", exc_info=True)
         return None
 
@@ -2039,7 +2039,7 @@ async def _run_tick_detectors(tick_count: int, tenant_id: str) -> None:
             fired = await runaway_burn_detector()
             if fired:
                 logger.info("Detectors: %d runaway-burn alerts fired", fired)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - the alarm's own failure is a WARNING; next tick retries
             logger.warning("Detectors: runaway_burn check failed: %s", e)
 
     # Repeat errors + tool degradation: every 10 ticks = 5 minutes
@@ -2056,7 +2056,7 @@ async def _run_tick_detectors(tick_count: int, tenant_id: str) -> None:
             fired = await tool_degradation_detector()
             if fired:
                 logger.info("Detectors: %d tool-degradation alerts fired", fired)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - the alarm's own failure is a WARNING; next tick retries
             logger.warning("Detectors: pattern checks failed: %s", e)
 
     # Zombie runner: every 20 ticks = 10 minutes
@@ -2067,7 +2067,7 @@ async def _run_tick_detectors(tick_count: int, tenant_id: str) -> None:
             fired = await zombie_runner_detector()
             if fired:
                 logger.info("Detectors: %d zombie-runner alerts fired", fired)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - the alarm's own failure is a WARNING; next tick retries
             logger.warning("Detectors: zombie_runner check failed: %s", e)
 
     # Workflow health (stuck runs + failure streaks): every 20 ticks = 10 min
@@ -2084,7 +2084,7 @@ async def _run_tick_detectors(tick_count: int, tenant_id: str) -> None:
             fired = await workflow_failure_streak_detector()
             if fired:
                 logger.info("Detectors: %d workflow-failure-streak alerts fired", fired)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - the alarm's own failure is a WARNING; next tick retries
             logger.warning("Detectors: workflow health checks failed: %s", e)
 
 
@@ -2125,7 +2125,7 @@ async def _check_autodream_staleness(config: EngineConfig) -> None:
                 # Latch only after a delivered page so a transient
                 # sender outage doesn't suppress the alert.
                 _autodream_stale_alerted = True
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - logged at WARNING; the next check retries
         logger.warning("Watchdog: autoDream staleness check failed: %s", e)
 
 
@@ -2171,7 +2171,7 @@ async def _watchdog(
 
             await asyncio.wait_for(loop.run_in_executor(None, _pg_ping), timeout=10.0)
             pg_failures = 0
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - counted; three in a row pages below
             pg_failures += 1
             logger.warning("Watchdog: PostgreSQL ping failed (%d): %s", pg_failures, e)
             if pg_failures in (1, 3, 10) or (pg_failures > 10 and pg_failures % 100 == 0):
@@ -2198,7 +2198,7 @@ async def _watchdog(
 
             await asyncio.wait_for(loop.run_in_executor(None, _redis_ping), timeout=10.0)
             redis_failures = 0
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - counted; three in a row pages below
             redis_failures += 1
             logger.warning("Watchdog: Redis ping failed (%d): %s", redis_failures, e)
             if redis_failures in (1, 3, 10) or (redis_failures > 10 and redis_failures % 100 == 0):
@@ -2210,7 +2210,7 @@ async def _watchdog(
                 # reconcile() pages when a manifest cannot be read, and changes
                 # nothing at all from an incomplete scan.
                 _log_reconcile(await scheduler.reconcile())
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - one tick's job; the next tick retries
                 logger.warning("Watchdog: schedule reconciliation failed: %s", e)
 
         # Approval driver (every 2 ticks = 1 minute). A decided approval that
@@ -2231,7 +2231,7 @@ async def _watchdog(
                 reaped = await loop.run_in_executor(None, _cleanup_stale_runs, config.tenant_id)
                 if reaped:
                     logger.warning("Watchdog: reaped %d zombie agent runs", reaped)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - one tick's job; the next tick retries
                 logger.warning("Watchdog: zombie reaper failed: %s", e)
 
         # Failure-mode detectors — read-only, alerts only, never kills runs.
@@ -2269,7 +2269,7 @@ async def _watchdog(
                 deleted = await loop.run_in_executor(None, cleanup_stale_sessions)
                 if deleted:
                     logger.info("Watchdog: cleaned up %d stale chat sessions", deleted)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - daily job; logged, the next day retries
                 logger.warning("Watchdog: chat session cleanup failed: %s", e)
 
             try:
@@ -2287,7 +2287,7 @@ async def _watchdog(
             except TimeoutError:
                 logger.warning("Watchdog: retention cleanup timed out after 300s")
                 _record_watchdog_event("retention_timeout", "cleanup exceeded 300s")
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - daily job; logged, the next day retries
                 logger.warning("Watchdog: retention cleanup failed: %s", e)
 
         # Chat-message embedding backfill (every 60 ticks = 30 min).
@@ -2300,7 +2300,7 @@ async def _watchdog(
                 embedded = await backfill_chat_embeddings()
                 if embedded:
                     logger.info("Watchdog: backfilled embeddings for %d chat messages", embedded)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - daily job; logged, the next day retries
                 logger.warning("Watchdog: chat embedding backfill failed: %s", e)
 
         # autoDream staleness check (every 20 ticks = 10 min)
@@ -2318,7 +2318,7 @@ async def _watchdog(
                         config.default_chat_id,
                         "*Watchdog Alert*\n\nPostgreSQL unreachable for 3 consecutive checks.",
                     )
-            except Exception:
+            except Exception:  # noqa: BLE001 - logged at ERROR: the page itself failed
                 # A page that fails silently is worse than no page: the database
                 # outage and the failed alert then look identical from outside —
                 # nothing. The journal is monitored, so ERROR here is the last
@@ -2382,7 +2382,7 @@ async def _curiosity_density_loop(scheduler: Any) -> None:
             await scheduler._run_agent("curiosity-engine")  # noqa: SLF001
         except asyncio.CancelledError:
             return
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - the loop must outlive one bad pass
             logger.warning("curiosity-density loop error: %s", e)
 
 
@@ -2525,7 +2525,7 @@ async def _extension_watcher_loop() -> None:
         from robothor.engine.extensions import ExtensionWatcher
 
         await ExtensionWatcher().watch()
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - a dead watcher only stops hot reload
         logger.debug("Extension watcher exited: %s", e)
 
 
@@ -2564,7 +2564,7 @@ def _resolve_last_run() -> tuple[float | None, str]:
             from datetime import datetime as _dt
 
             return _dt.fromisoformat(_DAEMON_START_TS).timestamp(), "daemon boot"
-        except Exception:
+        except Exception:  # noqa: BLE001 - an unparseable boot stamp means no clock
             return None, "unknown"
     return None, "unknown"
 
@@ -2683,7 +2683,7 @@ async def _autodream_loop() -> None:
             consecutive_errors = 0
         except asyncio.CancelledError:
             return
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - counted and backed off below
             consecutive_errors += 1
             logger.warning(
                 "autoDream loop error (%d consecutive, next retry in %ds): %s",
@@ -2703,7 +2703,7 @@ def run() -> None:
         # stop and a second one past the echo window is _force_exit(130).
         # Either way: quiet, and zero.
         return
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - top level: log, then exit 1 for systemd
         logger.error("Engine crashed: %s", e, exc_info=True)
         sys.exit(1)
     if exit_code != 0:
