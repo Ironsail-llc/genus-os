@@ -34,6 +34,7 @@ from robothor.engine.models import (
     AgentConfig,
     SpawnContext,
     StepType,
+    TriggerType,
 )
 
 # ── Log-injection sanitizer ──
@@ -114,6 +115,12 @@ INIT_TIMEOUT_SECONDS = 60
 # keeps a stale binding alive).
 
 logger = logging.getLogger(__name__)
+
+# Interactive surfaces where router v2 stops message length forcing a planner
+# call: a person is waiting on each turn. A plugin channel is ``channel``.
+_ROUTER_V2_TRIGGERS = frozenset(
+    {TriggerType.TELEGRAM.value, TriggerType.WEBCHAT.value, TriggerType.CHANNEL.value}
+)
 
 
 def spawn_post_stall_autodream(agent_id: str) -> None:
@@ -386,12 +393,33 @@ class RunLifecycleMixin:
             logger.warning("Plan context formatting failed (non-fatal): %s", _sanitize(exc))
             return ""
 
-    def _apply_routing(self, agent_config: AgentConfig, message: str, tool_count: int) -> Any:
+    def _apply_routing(
+        self,
+        agent_config: AgentConfig,
+        message: str,
+        tool_count: int,
+        *,
+        trigger_type: Any = None,
+        readonly_mode: bool = False,
+        trigger_detail: str = "",
+        resumed: bool = False,
+    ) -> Any:
         """Apply difficulty-aware routing. Returns RouteConfig or None."""
         try:
+            from robothor.engine.feature_flags import router_v2_enabled
             from robothor.engine.router import get_route_config
             from robothor.engine.runtime.automatic_planning import context_for
 
+            # Router v2: an ordinary chat turn's length no longer buys a
+            # planner call. Plan mode, approved-plan execution and resumed
+            # runs keep today's policy.
+            length_forces_planning = not (
+                router_v2_enabled()
+                and str(trigger_type or "") in _ROUTER_V2_TRIGGERS
+                and not readonly_mode
+                and not str(trigger_detail or "").startswith("plan")
+                and not resumed
+            )
             return get_route_config(
                 message,
                 tool_count,
@@ -400,6 +428,7 @@ class RunLifecycleMixin:
                 # request needs an auxiliary planning call. Keep configured
                 # planning and long/delegated/resumed work on their old policy.
                 catalogue_implies_complexity=context_for(agent_config) is None,
+                length_forces_planning=length_forces_planning,
             )
         except Exception as e:
             logger.debug("Routing failed: %s", _sanitize(e))

@@ -1139,7 +1139,18 @@ class AgentRunner(
                     models = ["openrouter/deepseek/deepseek-v4-pro"]
 
                 # ── [ROUTER] Classify difficulty → adjust config ──
-                route = self._apply_routing(agent_config, message, len(tool_names))
+                from robothor.engine.feature_flags import router_v2_enabled
+
+                router_v2 = router_v2_enabled()
+                route = self._apply_routing(
+                    agent_config,
+                    message,
+                    len(tool_names),
+                    trigger_type=trigger_type,
+                    readonly_mode=readonly_mode,
+                    trigger_detail=trigger_detail or "",
+                    resumed=bool(resume_from_run_id),
+                )
 
                 # ── [PLANNER] Generate plan if enabled ──
                 from robothor.engine.runtime.classified_deadline import (
@@ -1151,9 +1162,12 @@ class AgentRunner(
                     plan_result = await self._run_planner(
                         agent_config, message, planner_tool_names(_prepared), models
                     )
-                    await apply_classified_deadline(
-                        session, native_window, agent_config, route, plan_result
-                    )
+                    if not router_v2:
+                        # Router v2 applies (and persists) the deadline once,
+                        # after this block; today's path applies it twice.
+                        await apply_classified_deadline(
+                            session, native_window, agent_config, route, plan_result
+                        )
                     if plan_result and plan_result.success:
                         self._attach_plan_context(session, plan_result)
 

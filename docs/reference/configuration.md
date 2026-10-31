@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-488 settings in 18 groups.
+489 settings in 18 groups.
 
 ## autonomy
 
@@ -449,6 +449,7 @@ Guardrails and feature gates. Ones marked governed are inventoried in `infra/fla
 | `ROBOTHOR_RIP_5_ENABLED` | bool | `false` | `robothor-engine` | no | legacy | **governed.** Rip 5: the destructive LLM skill-consolidation curator pass. The non-destructive lifecycle runs either way. |
 | `ROBOTHOR_RIP_7_ENABLED` | bool | `false` | `robothor-engine` | no | legacy | Rip 7: the drift detector over memory_facts. |
 | `ROBOTHOR_RIP_7_MODE` | str | `observe` | `robothor-engine` | no | legacy | **governed.** Rip 7 ladder position: observe logs a drifting write, alert also notifies, enforce snapshots and refuses it. |
+| `ROBOTHOR_ROUTER_V2` | bool | `false` | `robothor-engine` | no | legacy | Stop message length alone buying a separate planner LLM call on a Telegram, webchat or plugin-channel turn: a long message plans only in plan mode, when the manifest asks, or when it lists three or more steps. |
 | `ROBOTHOR_RUN_VERIFICATION_ENABLED` | bool | `false` | `robothor-engine` | no | legacy | Switch for verifying a finished run's claims against its tool trace. |
 | `ROBOTHOR_RUN_VERIFICATION_MODE` | str | `observe` | `robothor-engine` | no | legacy | **governed.** Run-verification ladder position: observe records the verdict, enforce marks the run failed when its claims are unsupported. |
 | `ROBOTHOR_SANDBOX_ENFORCE_OVERRIDES_MANIFEST` | bool | `false` | `robothor-engine` | no | legacy | Make sandbox 'enforce' outrank a manifest's per-agent opt-out. Without it an agent can decline the sandbox it is enforced under. |
