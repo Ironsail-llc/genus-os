@@ -559,6 +559,11 @@ async def _get_async_redis() -> Any:
             return None
 
 
+async def redis_available() -> bool:
+    """Whether the ingress can reach Redis (the connection answers a ping)."""
+    return await _get_async_redis() is not None
+
+
 async def _check_rate_limit(channel: WebhookChannel) -> bool:
     """Check rate limit using Redis INCR + EXPIRE pattern.
 

@@ -56,7 +56,7 @@ def create_app(config: WebhookConfig | None = None) -> FastAPI:
 
     @app.get("/ready")
     async def ready() -> JSONResponse:
-        if await webhooks._get_async_redis() is None:
+        if not await webhooks.redis_available():
             return JSONResponse({"status": "unavailable", "redis": False}, status_code=503)
         return JSONResponse({"status": "ok", "redis": True})
 
