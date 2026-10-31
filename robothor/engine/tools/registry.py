@@ -725,8 +725,12 @@ class ToolRegistry:
 
             now = time.monotonic()
             try:
-                session = await asyncio.wait_for(pool.get_session(adapter.name), timeout=5.0)
-                mcp_tools = await asyncio.wait_for(session.list_tools(), timeout=5.0)
+                session = await asyncio.wait_for(
+                    pool.get_session(adapter.name), timeout=mcp_client.ADAPTER_CONNECT_TIMEOUT_S
+                )
+                mcp_tools = await asyncio.wait_for(
+                    session.list_tools(), timeout=mcp_client.ADAPTER_CONNECT_TIMEOUT_S
+                )
                 self._apply_adapter_tools(adapter, mcp_tools)
             except Exception as e:
                 self._record_adapter_failure(adapter.name, now, e)

@@ -179,6 +179,15 @@ Then add the `example_*` tool names to the agent's `tools_allowed` in
 can see them; the allowlist controls *whether* they're exposed). Tools are
 discovered from the bridge's `tools/list` at registration — no per-tool code.
 
+With `ROBOTHOR_CONFIG_CACHE` on (default off, see the
+[configuration reference](reference/configuration.md)), the engine keeps each
+adapter's `tools/list` for as long as its session lives instead of asking on
+every run. A dropped session, a changed adapter file, a plugin reload
+(`genus plugin sync`) or `mcp_list_tools` with `refresh: true` fetches it again.
+Adapters also connect concurrently (four at a time, each under its own
+five-second timeout), an HTTP server keeps one client for all its requests, and
+the engine opens every adapter's session in the background when it starts.
+
 ## Verify
 
 ```bash
