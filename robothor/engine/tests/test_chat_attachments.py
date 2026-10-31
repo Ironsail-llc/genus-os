@@ -269,3 +269,159 @@ class TestSessionStart:
         session = AgentSession("test-agent")
         session.start("sys", "hello", [])
         assert session.messages[-1] == {"role": "user", "content": "hello"}
+
+
+class TestFailures:
+    """A file that cannot be kept is an answer, not a 500 (the Telegram rule)."""
+
+    @pytest.mark.asyncio
+    async def test_a_failed_save_answers_json_and_runs_nothing(
+        self, client, engine_config, mock_runner
+    ) -> None:
+        with patch("robothor.engine.attachments.save_attachment", side_effect=OSError("disk full")):
+            res = await _send(client, "here", [_file("a.txt", "text/plain", b"hi")])
+        assert res.status_code == 500
+        assert res.json()["request_admitted"] is False
+        assert "a.txt" in res.json()["error"]
+        mock_runner.execute.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_files_already_kept_for_a_failed_turn_are_removed(
+        self, client, engine_config, mock_runner
+    ) -> None:
+        real = attachments.save_attachment
+        calls = {"n": 0}
+
+        def second_fails(**kwargs):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                raise ValueError("attachment path escaped the inbox root")
+            return real(**kwargs)
+
+        with patch("robothor.engine.attachments.save_attachment", side_effect=second_fails):
+            res = await _send(
+                client,
+                "here",
+                [_file("a.txt", "text/plain", b"one"), _file("b.txt", "text/plain", b"two")],
+            )
+        assert res.status_code == 500
+        assert _inbox(engine_config) == []
+        mock_runner.execute.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_a_failed_extraction_still_sends_the_file(
+        self, client, engine_config, mock_runner
+    ) -> None:
+        with patch(
+            "robothor.engine.file_extract.describe_bytes", side_effect=ImportError("no pdf lib")
+        ):
+            res = await _send(client, "read", [_file("a.pdf", "application/pdf", b"%PDF-1.4")])
+        assert res.status_code == 200
+        sent = mock_runner.execute.call_args.kwargs["message"]
+        assert f"path: {_inbox(engine_config)[0]}" in sent
+        assert "note: " in sent
+
+
+class TestJoinRunning:
+    @pytest.mark.asyncio
+    async def test_files_cannot_join_a_running_turn(self, client, engine_config, mock_runner):
+        res = await client.post(
+            "/chat/send",
+            json={
+                "message": "also this",
+                "join_running": True,
+                "attachments": [_file("a.txt", "text/plain", b"hi")],
+            },
+        )
+        assert res.status_code == 422
+        assert res.json()["request_admitted"] is False
+        mock_runner.execute.assert_not_called()
+        assert _inbox(engine_config) == []
+
+
+class TestTextQuoting:
+    @pytest.mark.asyncio
+    async def test_binary_bytes_in_a_text_file_are_not_quoted(self, client, mock_runner) -> None:
+        await _send(client, "read", [_file("a.txt", "text/plain", b"ab\x00\xff\xfe\x00cd")])
+        sent = mock_runner.execute.call_args.kwargs["message"]
+        assert "--- begin a.txt ---" not in sent
+        assert "�" not in sent
+
+
+class TestNames:
+    @pytest.mark.asyncio
+    async def test_the_original_name_is_kept_for_the_chip(self, client) -> None:
+        await _send(client, "see", [_file("Résumé 2026.txt", "text/plain", b"hi")])
+        res = await client.get("/chat/history")
+        row = res.json()["messages"][0]["extras"]["attachments"][0]
+        assert row["original_name"] == "Résumé 2026.txt"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("name", "mime", "data"),
+        [
+            ("../../x.png", "image/png", PNG),
+            ("a\x00b.txt", "text/plain", b"hi"),
+            ("/etc/passwd.txt", "text/plain", b"hi"),
+            ("n" * 300 + ".txt", "text/plain", b"hi"),
+        ],
+    )
+    async def test_a_hostile_name_stays_inside_the_inbox(
+        self, client, engine_config, name, mime, data
+    ) -> None:
+        res = await _send(client, "here", [_file(name, mime, data)])
+        assert res.status_code == 200
+        root = (engine_config.workspace / "inbox" / "webchat").resolve()
+        files = _inbox(engine_config)
+        assert len(files) == 1
+        assert root in files[0].resolve().parents
+        assert "\x00" not in files[0].name
+        assert len(files[0].name) <= attachments.MAX_NAME_CHARS + 65
+
+
+class TestLimitsAgree:
+    def test_the_dashboard_states_the_same_limits(self) -> None:
+        """The composer's numbers and the engine's are one set, checked here."""
+        import re
+        from pathlib import Path
+
+        from robothor.engine import chat_attachments
+
+        ts = (
+            Path(__file__).resolve().parents[3] / "app" / "src" / "lib" / "chat" / "attachments.ts"
+        ).read_text()
+
+        def number(name: str) -> int:
+            expr = re.search(rf"export const {name} = ([0-9 *]+);", ts)
+            assert expr, name
+            value = 1
+            for part in expr.group(1).split("*"):
+                value *= int(part.strip())
+            return value
+
+        assert number("MAX_ATTACHMENTS") == chat_attachments.MAX_FILES
+        assert number("MAX_ATTACHMENT_BYTES") == chat_attachments.MAX_FILE_BYTES
+        block = ts.split("export const ACCEPTED_TYPES", 1)[1].split("};", 1)[0]
+        assert set(re.findall(r'"([a-z]+/[a-z0-9.+-]+)"', block)) == set(
+            chat_attachments.ACCEPTED_MIMES
+        )
+
+
+class TestActiveRequestPin:
+    def test_a_turn_with_image_blocks_is_pinned_itself(self) -> None:
+        from robothor.engine.compaction import ACTIVE_REQUEST_PIN, PIN_KEY
+        from robothor.engine.context import _pin_active_request
+
+        turn = {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "what is in this screenshot?"},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+            ],
+        }
+        out = _pin_active_request(
+            [{"role": "system", "content": "sys"}, turn], "what is in this screenshot?"
+        )
+        assert len(out) == 2
+        assert out[1][PIN_KEY] == ACTIVE_REQUEST_PIN
+        assert out[1]["content"] == turn["content"]
