@@ -284,8 +284,7 @@ class RunFinalizationMixin:
         # Deliverable contracts: did the run produce the artifact the task
         # named, in the shape it named? The ladder and every side effect live
         # in `deliverable_verdict`, extracted here by this file's own rule.
-        # Output-altering: under ROBOTHOR_EARLY_DONE it already ran before the
-        # answer was released, and this second call is a no-op (early_done.py).
+        # Output-altering; a no-op if early_done already ran it before the answer.
         apply_output_policies(run, session, self.config.workspace)
 
         # And what the run never finished reading — a separate question from
