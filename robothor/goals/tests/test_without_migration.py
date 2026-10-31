@@ -98,7 +98,7 @@ def database_at_tail_125(tmp_path_factory):
 @pytest.fixture
 def pre_126(database_at_tail_125, monkeypatch):
     @contextmanager
-    def connection():
+    def connection(**_kw):
         conn = psycopg2.connect(database_at_tail_125)
         try:
             yield conn
