@@ -219,6 +219,11 @@ read-only. It has four parts:
   its output, which the engine caps at 4,000 characters when it records it — the
   drawer says so when an output was cut. Warm-up steps are grouped under
   **Warm-up**, and guardrail events are listed with their reason.
+  A budget, cap or stop that refused, ended or (in observe mode) would have
+  ended the run is a `budget_stop` step, whose tool is the stop's name and whose
+  input carries the reason, setting, limit, observed value and mode. The same
+  record is published as `agent.budget_stop` on `robothor:events:telemetry`
+  ([Budgets and Stops](BUDGETS_AND_STOPS.md)).
 
 **Delivery categories.** Delivery is read the same way by the summary
 (`crm/bridge/routers/runs.py`) and the table (`app/src/lib/automations/run-truth.ts`):
