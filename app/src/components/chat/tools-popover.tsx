@@ -109,6 +109,25 @@ function signInHref(): string {
   return `/signin?callbackUrl=${encodeURIComponent(back)}`;
 }
 
+/** True when *body* has the shape the dialog renders; anything else is an error. */
+function isToolsReply(body: unknown): body is AgentToolsReply {
+  if (!body || typeof body !== "object") return false;
+  const reply = body as Partial<AgentToolsReply>;
+  const groups = reply.groups;
+  return (
+    !!groups &&
+    Array.isArray(groups.core) &&
+    Array.isArray(groups.opt_in) &&
+    !!groups.plugins &&
+    typeof groups.plugins === "object" &&
+    !!groups.mcp &&
+    typeof groups.mcp === "object" &&
+    Array.isArray(reply.allowed) &&
+    Array.isArray(reply.denied) &&
+    typeof reply.count === "number"
+  );
+}
+
 /** The engine's own sentence from an error body, when it sent one. */
 function errorText(body: unknown): string | null {
   if (body && typeof body === "object") {
@@ -147,14 +166,24 @@ function ToolGroup({ id, title, names }: { id: string; title: string; names: str
   );
 }
 
-function ToolsBody({ agentId, load }: { agentId: string | null; load: Load }) {
+function ToolsBody({
+  agentId,
+  load,
+  listingRefused,
+}: {
+  agentId: string | null;
+  load: Load;
+  listingRefused: boolean;
+}) {
   if (!agentId) {
-    // A member's agent listing is refused, and a listing may name no default:
-    // either way this chat has no agent id to ask about.
+    // Two different reasons for no agent id. A member's chat IS on the default
+    // agent; the listing that would name it was refused for their role. A
+    // listing that answered and named no default really leaves it unknown.
     return (
       <p className="text-sm text-muted-foreground" data-testid="tools-no-agent">
-        Only an operator can see which tools and servers an agent can reach. This chat has not
-        been told which agent it is talking to, so there is nothing to list.
+        {listingRefused
+          ? "Only an operator can see which tools and servers an agent can reach."
+          : "This chat has not been told which agent it is talking to, so there is nothing to list."}
       </p>
     );
   }
@@ -290,12 +319,19 @@ function ToolsBody({ agentId, load }: { agentId: string | null; load: Load }) {
 export interface ToolsPopoverProps {
   /** The agent the chat is talking to, or null until the chat knows. */
   agentId: string | null;
+  /** The fleet listing was refused for this session's role (a member). */
+  listingRefused?: boolean;
   /** Labelled chip and bottom sheet instead of icon button and dialog. */
   mobile?: boolean;
   disabled?: boolean;
 }
 
-export function ToolsPopover({ agentId, mobile = false, disabled = false }: ToolsPopoverProps) {
+export function ToolsPopover({
+  agentId,
+  listingRefused = false,
+  mobile = false,
+  disabled = false,
+}: ToolsPopoverProps) {
   const [open, setOpen] = useState(false);
   const [load, setLoad] = useState<Load>({ state: "idle" });
 
@@ -338,10 +374,14 @@ export function ToolsPopover({ agentId, mobile = false, disabled = false }: Tool
         settle({ state: "error", message: "The engine did not answer. Check that it is running." });
         return;
       }
+      if (!isToolsReply(tools.body)) {
+        settle({ state: "error", message: "The engine sent an unexpected answer about this agent's tools." });
+        return;
+      }
       const serverBody = servers.body as { servers?: McpServer[] } | null;
       settle({
         state: "ready",
-        tools: tools.body as AgentToolsReply,
+        tools: tools.body,
         servers: serverBody?.servers ?? [],
       });
     } catch {
@@ -382,7 +422,7 @@ export function ToolsPopover({ agentId, mobile = false, disabled = false }: Tool
               <SheetTitle>{TITLE}</SheetTitle>
               <SheetDescription>{DESCRIPTION}</SheetDescription>
             </SheetHeader>
-            <ToolsBody agentId={agentId} load={load} />
+            <ToolsBody agentId={agentId} load={load} listingRefused={listingRefused} />
           </SheetContent>
         </Sheet>
       </>
@@ -417,7 +457,7 @@ export function ToolsPopover({ agentId, mobile = false, disabled = false }: Tool
             <DialogTitle>{TITLE}</DialogTitle>
             <DialogDescription>{DESCRIPTION}</DialogDescription>
           </DialogHeader>
-          <ToolsBody agentId={agentId} load={load} />
+          <ToolsBody agentId={agentId} load={load} listingRefused={listingRefused} />
         </DialogContent>
       </Dialog>
     </>

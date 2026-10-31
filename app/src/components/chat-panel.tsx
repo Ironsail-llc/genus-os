@@ -192,6 +192,8 @@ export function ChatPanel({
   const [agent, setAgent] = useState("");
   const [chattable, setChattable] = useState<ChattableAgent[]>([]);
   const [defaultAgent, setDefaultAgent] = useState("");
+  // The listing answered 403: a member, on the default agent it may not name.
+  const [listingRefused, setListingRefused] = useState(false);
   const [isPlanExecuting, setIsPlanExecuting] = useState(false);
   const [planMode, setPlanMode] = useState(false);
   const [isPlanning, setIsPlanning] = useState(false);
@@ -349,7 +351,10 @@ export function ChatPanel({
   useEffect(() => {
     let cancelled = false;
     fetch("/api/bridge/api/agent-manifests")
-      .then((res) => (res.ok ? res.json() : null))
+      .then((res) => {
+        if (!cancelled && res.status === 403) setListingRefused(true);
+        return res.ok ? res.json() : null;
+      })
       .then((data) => {
         if (cancelled) return;
         const rows: ChattableAgent[] = Array.isArray(data?.agents)
@@ -1699,7 +1704,7 @@ export function ChatPanel({
               <Brain className="w-3.5 h-3.5" />
               Deep
             </button>
-            <ToolsPopover agentId={agent || defaultAgent || null} mobile />
+            <ToolsPopover agentId={agent || defaultAgent || null} listingRefused={listingRefused} mobile />
           </div>
         ) : null}
 
@@ -1766,7 +1771,7 @@ export function ChatPanel({
             </TooltipProvider>
           )}
           {!mobile && (
-            <ToolsPopover agentId={agent || defaultAgent || null} />
+            <ToolsPopover agentId={agent || defaultAgent || null} listingRefused={listingRefused} />
           )}
           <AttachButton
             onFiles={(files) => void attachments.add(files)}
