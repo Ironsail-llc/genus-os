@@ -241,6 +241,19 @@ def curator_enabled() -> bool:
     return is_rip_enabled(5)
 
 
+def execution_lanes_enabled() -> bool:
+    """True iff interactive turns and background work run in separate lanes.
+
+    Each lane gets its own concurrency limit and thread executor, and the local
+    inference gate keeps a slot for interactive requests (``engine/lanes.py``).
+    Off by default; gated by ``ROBOTHOR_EXECUTION_LANES``. Forced off by
+    ``ROBOTHOR_DISABLE_ALL_RIPS=1``.
+    """
+    if _disabled_all():
+        return False
+    return _env_bool("ROBOTHOR_EXECUTION_LANES")
+
+
 def deferred_tools_threshold() -> int:
     """Min advertised-tool count above which an agent's set is deferred.
 

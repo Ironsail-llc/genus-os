@@ -28,6 +28,7 @@ from robothor.engine.config import (
 from robothor.engine.crontab import cron_trigger
 from robothor.engine.dedup import release, try_acquire
 from robothor.engine.delivery import _beat_incomplete, _looks_like_mid_thought, deliver
+from robothor.engine.lanes import Lane, run_slot
 from robothor.engine.manifest_guard import alert_manifest_scan
 from robothor.engine.models import AgentConfig, AgentRun, RunStatus, TriggerType
 from robothor.engine.schedule_overrides import (
@@ -608,9 +609,20 @@ class CronScheduler:
             # opts in.
             try:
                 register(dedup_key, agent_id)  # released in the finally below
-                if agent_config.timeout_seconds > 0:
-                    safety_timeout = agent_config.timeout_seconds + 120
-                    async with asyncio.timeout(safety_timeout):
+                # The lane slot first: queue time must not count against the
+                # safety clock, whose expiry feeds the circuit breaker.
+                async with run_slot(Lane.BACKGROUND):
+                    if agent_config.timeout_seconds > 0:
+                        safety_timeout = agent_config.timeout_seconds + 120
+                        async with asyncio.timeout(safety_timeout):
+                            await self._execute_and_deliver(
+                                agent_id,
+                                dedup_key,
+                                agent_config,
+                                trigger_detail,
+                                downstream_agents=downstream_agents,
+                            )
+                    else:
                         await self._execute_and_deliver(
                             agent_id,
                             dedup_key,
@@ -618,14 +630,6 @@ class CronScheduler:
                             trigger_detail,
                             downstream_agents=downstream_agents,
                         )
-                else:
-                    await self._execute_and_deliver(
-                        agent_id,
-                        dedup_key,
-                        agent_config,
-                        trigger_detail,
-                        downstream_agents=downstream_agents,
-                    )
             except TimeoutError:
                 logger.error(
                     "Scheduler safety timeout hit for %s (agent timeout=%ds)",

@@ -947,3 +947,18 @@ flags:
       that fires it and (b) twenty real task specs read read-only from the
       benchmark checkout that produce nothing. Only after both does a promotion
       date belong here at all.
+
+  - name: ROBOTHOR_EXECUTION_LANES
+    owner: ops
+    mode: "off"
+    promotion: n/a-until-staging-soak
+    soak: >
+      NEW. Interactive turns and background work run in separate lanes, each
+      with its own concurrency limit (ROBOTHOR_MAX_CONCURRENT_INTERACTIVE,
+      ROBOTHOR_MAX_CONCURRENT_BACKGROUND) and thread executor; the local
+      inference gate keeps a slot for interactive requests. Off keeps the
+      single shared executor and first-come gate. Promotion rests on a staging
+      soak: /health execution_lanes and the robothor_lane_active /
+      robothor_lane_waiting gauges show background waiting during a burst of
+      scheduled runs while interactive time to first delta stays flat, and no
+      background run is starved (waiting returns to 0 after the burst).

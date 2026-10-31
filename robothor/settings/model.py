@@ -821,6 +821,34 @@ class EngineSettings(SettingsGroup):
         "How many agent runs may execute at once.",
         restart_required=False,
     )
+    max_concurrent_interactive: int = declare(
+        0,
+        "ROBOTHOR_MAX_CONCURRENT_INTERACTIVE",
+        "With ROBOTHOR_EXECUTION_LANES on: how many interactive runs (Telegram, "
+        "webchat, Slack, plugin channels, IDE, CLI) may execute at once. 0, the "
+        "default, is uncapped: interactive turns are never queued, as without "
+        "lanes. A cap queues a turn with no deadline while others hold the slots, "
+        "including runs waiting on ask_user. Read at the first run.",
+        since="unreleased",
+    )
+    max_concurrent_background: int = declare(
+        2,
+        "ROBOTHOR_MAX_CONCURRENT_BACKGROUND",
+        "With ROBOTHOR_EXECUTION_LANES on: how many background runs (cron, hooks, "
+        "workflows, everything without a person waiting) may execute at once. "
+        "Never below 1: 0 is read as 1, not as uncapped. A cron run or workflow "
+        "takes its slot before its own timeout starts, so time queued is not "
+        "counted against it. Read at the first run.",
+        since="unreleased",
+    )
+    lane_background_yield_ms: int = declare(
+        200,
+        "ROBOTHOR_LANE_BACKGROUND_YIELD_MS",
+        "With ROBOTHOR_EXECUTION_LANES on: how long a background run asking for a "
+        "slot holds back while an interactive run is waiting for one. 0 disables "
+        "the yield.",
+        since="unreleased",
+    )
     max_iterations: int = declare(
         20,
         "ROBOTHOR_MAX_ITERATIONS",
@@ -2065,6 +2093,17 @@ class FlagSettings(SettingsGroup):
         "Let the goal-judge grade recent runs against real outcome signals and "
         "write the agent_reviews rows the achievement score is built on.",
         governed=True,
+    )
+    execution_lanes: bool = declare(
+        False,
+        "ROBOTHOR_EXECUTION_LANES",
+        "Run interactive turns and background work in separate lanes, each with "
+        "its own concurrency limit and thread executor, and keep a local "
+        "inference slot for interactive requests, so a burst of scheduled runs "
+        "cannot delay a reply. Lane occupancy is on /health and /metrics. The "
+        "thread executor split is installed at engine start, so a change needs a "
+        "restart to take full effect.",
+        since="unreleased",
     )
     disable_all_rips: bool = declare(
         False,
