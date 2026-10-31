@@ -44,9 +44,11 @@ from enum import StrEnum
 from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar
 
 # Imported here, not on first use: a first use is on the event loop, inside a
-# run, and these imports are not free.
+# run, and these imports are not free. ``feature_flags`` is the exception: it
+# reaches the database driver, and workflow.py (imported by tools that run with
+# no driver installed) imports this module. The daemon reads the flag once at
+# start (``install_lane_executor``), so the loop never pays for that import.
 from robothor.engine.agent_priority import _INTERACTIVE_TRIGGERS
-from robothor.engine.feature_flags import execution_lanes_enabled
 from robothor.engine.metrics import set_lane_occupancy
 
 if TYPE_CHECKING:
@@ -90,6 +92,8 @@ _HOLDING: contextvars.ContextVar[_Holder | None] = contextvars.ContextVar(
 def lanes_enabled() -> bool:
     """The rollout flag. An unreadable flag means off: today's behaviour."""
     try:
+        from robothor.engine.feature_flags import execution_lanes_enabled
+
         return execution_lanes_enabled()
     except Exception:  # noqa: BLE001 - a flag read must not break a run
         return False
@@ -151,6 +155,10 @@ class _LaneState:
         # Waiters a freed slot was handed to, until they resume or are cancelled.
         self.handed: set[asyncio.Future[None]] = set()
         self.yielding = 0
+
+    def has_room(self) -> bool:
+        uncapped = self.limit == 0
+        return uncapped or self.active < self.limit
 
     @property
     def waiting(self) -> int:
@@ -222,7 +230,7 @@ class ExecutionLanes:
             await self._yield_to_interactive()
         st = self._states[lane]
         with self._lock:
-            if (st.limit == 0 or st.active < st.limit) and not st.waiters:
+            if st.has_room() and not st.waiters:
                 st.active += 1
                 self._publish_locked(lane)
                 return
