@@ -39,25 +39,34 @@ export function useHistoryPager<M extends { id: string; serverId?: number }>(
   const setHasMore = useCallback((value: boolean) => setMore({ agentQuery: latest.current.agentQuery, value }), []);
   const settle = setHasMore;
 
-  const loadEarlier = useCallback(async () => {
+  /** Resolves to how many messages it added above the ones on screen. */
+  const loadEarlier = useCallback(async (): Promise<number> => {
     const asked = latest.current.agentQuery;
     const before = oldestServerId(latest.current.messages);
-    if (before === undefined) return;
+    if (before === undefined) return 0;
     setLoading(true);
     try {
       const sep = asked ? `${asked}&` : "?";
       const res = await fetch(`/api/chat/history${sep}before=${before}&limit=${HISTORY_PAGE}`, { cache: "no-store" });
-      if (!res.ok) return;
+      if (!res.ok) return 0;
       const data = await res.json();
-      if (latest.current.agentQuery !== asked) return;
-      const older: HistoryMessage[] = historyToMessages(data.messages);
+      if (latest.current.agentQuery !== asked) return 0;
+      // Only stored rows belong before a cursor. An engine with pages switched
+      // off since this tab loaded answers with its in-memory tail (the NEWEST
+      // rows, no ids); prepending that would show the tail twice.
+      const onScreen = new Set(latest.current.messages.map((m) => m.id));
+      const older: HistoryMessage[] = historyToMessages(data.messages).filter(
+        (m) => m.serverId !== undefined && !onScreen.has(m.id),
+      );
       setMessages((prev) => {
-        const onScreen = new Set(prev.map((m) => m.id));
-        return [...(older.filter((m) => !onScreen.has(m.id)) as unknown as M[]), ...prev];
+        const shown = new Set(prev.map((m) => m.id));
+        return [...(older.filter((m) => !shown.has(m.id)) as unknown as M[]), ...prev];
       });
-      setHasMore(data.hasMore === true);
+      setHasMore(data.hasMore === true && older.length > 0);
+      return older.length;
     } catch {
       // Keep the button: the reader can try again.
+      return 0;
     } finally {
       setLoading(false);
     }

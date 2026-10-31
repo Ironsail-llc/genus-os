@@ -19,6 +19,7 @@ import { MessageBubble } from "@/components/chat/message-bubble";
 import { useMessageWindow } from "@/components/chat/use-message-window";
 import { useHistoryPager } from "@/components/chat/use-history-pager";
 import { useTurnActions } from "@/components/chat/use-turn-actions";
+import { usePrependAnchor } from "@/components/chat/use-prepend-anchor";
 import { historyToMessages } from "@/lib/chat/history-messages";
 import { usePinnedScroll } from "@/components/chat/use-pinned-scroll";
 import { useStableCallback } from "@/components/chat/use-stable-callback";
@@ -265,13 +266,20 @@ export function ChatPanel({
   const currentAgentName = chattable.find((row) => row.id === agent)?.name ?? aiName;
 
   // Follow the bottom while the reader is there (throttled during streaming);
-  // sending a message brings them back to it.
-  const sentCount = useMemo(() => messages.filter((m) => m.role === "user").length, [messages]);
-  const { containerRef: scrollRef, onScroll: onListScroll } = usePinnedScroll<HTMLDivElement>(
+  // sending a message brings them back to it. Keyed on the NEWEST user
+  // message, not a count: an older page from "Load earlier" adds user turns
+  // above the reader and must not throw them to the bottom.
+  const lastSentId = useMemo(() => messages.findLast((m) => m.role === "user")?.id ?? "", [messages]);
+  const { containerRef: scrollRef, onScroll: onPinnedScroll } = usePinnedScroll<HTMLDivElement>(
     [messages, throttledStreamingText, activePlan, isDeepReasoning],
-    sentCount,
+    lastSentId,
   );
   const { visible: visibleMessages, hiddenCount, showEarlier } = useMessageWindow(messages);
+  const rememberScroll = usePrependAnchor(scrollRef, visibleMessages[0]?.id, visibleMessages.at(-1)?.id);
+  const onListScroll = useCallback(() => {
+    onPinnedScroll();
+    rememberScroll();
+  }, [onPinnedScroll, rememberScroll]);
   const onBubbleRecovered = useStableCallback(recoverMessage);
   const historyPager = useHistoryPager(agentQuery, messages, setMessages);
   const settleHistoryPages = historyPager.settle;
@@ -1351,7 +1359,10 @@ export function ChatPanel({
             <div className="flex justify-center">
               <button
                 type="button"
-                onClick={() => void historyPager.loadEarlier()}
+                onClick={async () => {
+                  // Past the render window the page would land behind "Show earlier".
+                  if ((await historyPager.loadEarlier()) > 0) showEarlier();
+                }}
                 disabled={historyPager.loading}
                 className="text-xs text-muted-foreground hover:text-foreground disabled:opacity-50"
                 data-testid="load-earlier"

@@ -79,7 +79,7 @@ describe("useHistoryPager", () => {
     mockFetch.mockReturnValueOnce(new Promise((r) => (resolve = r)));
     const { result, rerender } = setup("");
     act(() => result.current.pager.settle(true));
-    let pending!: Promise<void>;
+    let pending!: Promise<unknown>;
     act(() => {
       pending = result.current.pager.loadEarlier();
     });
