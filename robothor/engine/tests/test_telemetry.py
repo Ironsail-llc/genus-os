@@ -123,11 +123,13 @@ def _closed_port() -> int:
 
 @pytest.fixture(autouse=True)
 def _isolated_publisher(monkeypatch: pytest.MonkeyPatch):
-    """Fresh publisher state, no real Redis, no collector unless a test sets one."""
+    """Fresh publisher state, no real Redis, no collector or OTel env unless a test sets one."""
     monkeypatch.setattr(telemetry, "_publisher", None, raising=False)
     monkeypatch.setenv("REDIS_HOST", "127.0.0.1")
     monkeypatch.setenv("REDIS_PORT", str(_closed_port()))
     monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
+    monkeypatch.delenv("OTEL_RESOURCE_ATTRIBUTES", raising=False)
+    monkeypatch.delenv("OTEL_SERVICE_NAME", raising=False)
     reset_task_registry()
     yield
     reset_task_registry()
@@ -357,16 +359,13 @@ def _resource(trace: TraceContext) -> dict[str, Any]:
 
 
 class TestOtlpResourceAttributes:
-    def test_defaults_without_env(self, monkeypatch):
-        monkeypatch.delenv("OTEL_RESOURCE_ATTRIBUTES", raising=False)
-        monkeypatch.delenv("OTEL_SERVICE_NAME", raising=False)
+    def test_defaults_without_env(self):
         assert _resource(_trace()) == {
             "service.name": "robothor-engine",
             "agent.id": "example-agent",
         }
 
     def test_resource_attributes_env_is_merged(self, monkeypatch):
-        monkeypatch.delenv("OTEL_SERVICE_NAME", raising=False)
         monkeypatch.setenv(
             "OTEL_RESOURCE_ATTRIBUTES",
             "deployment.environment=staging, service.namespace=example",
@@ -386,7 +385,6 @@ class TestOtlpResourceAttributes:
         assert _resource(_trace())["service.name"] == "example-service"
 
     def test_malformed_entries_are_skipped(self, monkeypatch):
-        monkeypatch.delenv("OTEL_SERVICE_NAME", raising=False)
         monkeypatch.setenv("OTEL_RESOURCE_ATTRIBUTES", "novalue,=empty,,ok=1, spaced = yes ")
         res = _resource(_trace())
         assert res["ok"] == "1"
