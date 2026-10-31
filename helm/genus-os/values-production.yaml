@@ -65,6 +65,17 @@ vault:
     # Mounted as a file by engine.googleWorkspace, never through secretRefs.
     engine-google:
       path: ironsail-production/genus-os/engine-google
+    # The shared vault master key (fields: key, fingerprint-salt), mounted as
+    # files on the bridge, the root engine and every tenant cell by vaultKey.
+    # Written once; a new key would orphan every stored connector secret.
+    vault-key:
+      path: ironsail-production/genus-os/vault-key
+# One vault key for every process that reads or writes stored connector
+# secrets, so a credential saved while acting in a child tenant is readable by
+# that child's engine. Required before any entry in the deployment's tenants
+# list renders.
+vaultKey:
+  enabled: true
 dashboard:
   enabled: true
   replicaCount: 2
