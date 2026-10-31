@@ -22,7 +22,9 @@ export function ThemeToggle({ className }: { className?: string }) {
   // Theme is only known client-side; render a stable icon until hydrated.
   const mounted = useIsClient();
 
-  const dark = resolvedTheme !== "light";
+  // Until hydration the theme is unknown, so the server and the first client
+  // render agree on "not dark"; the real answer follows on mount.
+  const dark = mounted && resolvedTheme !== "light";
   const label = dark ? "Switch to light theme" : "Switch to dark theme";
 
   return (
@@ -38,7 +40,7 @@ export function ThemeToggle({ className }: { className?: string }) {
         className
       )}
     >
-      {mounted && dark ? <Sun className="size-4" /> : <Moon className="size-4" />}
+      {dark ? <Sun className="size-4" /> : <Moon className="size-4" />}
     </button>
   );
 }

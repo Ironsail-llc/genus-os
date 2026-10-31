@@ -8,22 +8,23 @@ import { Sidebar } from "./sidebar";
 import { MobileTabBar } from "./mobile-tab-bar";
 import { isComingSoonView, viewGroupLabel, viewTitles } from "./nav-config";
 import { ChatPanel } from "@/components/chat-panel";
-import { DashboardView } from "@/components/views/dashboard-view";
-import { InboxView } from "@/components/views/inbox-view";
-import { GoalsView } from "@/components/views/goals-view";
-import { TasksView } from "@/components/views/tasks-view";
-import { SalesView } from "@/components/views/sales-view";
-import { AgentsView } from "@/components/views/agents-view";
-import { MarketplaceView } from "@/components/views/marketplace-view";
-import { FleetView } from "@/components/views/fleet-view";
-import { RunsView } from "@/components/views/runs-view";
-import { AutomationsView } from "@/components/views/automations-view";
-import { HealthView } from "@/components/views/health-view";
-import { MemoryView } from "@/components/views/memory-view";
-import { AuditView } from "@/components/views/audit-view";
-import { LogsView } from "@/components/views/logs-view";
+import { SurfaceBoundary, withSurfaceBoundary } from "@/components/surface-boundary";
+import { DashboardView as DashboardViewBody } from "@/components/views/dashboard-view";
+import { InboxView as InboxViewBody } from "@/components/views/inbox-view";
+import { GoalsView as GoalsViewBody } from "@/components/views/goals-view";
+import { TasksView as TasksViewBody } from "@/components/views/tasks-view";
+import { SalesView as SalesViewBody } from "@/components/views/sales-view";
+import { AgentsView as AgentsViewBody } from "@/components/views/agents-view";
+import { MarketplaceView as MarketplaceViewBody } from "@/components/views/marketplace-view";
+import { FleetView as FleetViewBody } from "@/components/views/fleet-view";
+import { RunsView as RunsViewBody } from "@/components/views/runs-view";
+import { AutomationsView as AutomationsViewBody } from "@/components/views/automations-view";
+import { HealthView as HealthViewBody } from "@/components/views/health-view";
+import { MemoryView as MemoryViewBody } from "@/components/views/memory-view";
+import { AuditView as AuditViewBody } from "@/components/views/audit-view";
+import { LogsView as LogsViewBody } from "@/components/views/logs-view";
 import { ComingSoonView } from "@/components/views/coming-soon-view";
-import { SettingsView } from "@/components/views/settings-view";
+import { SettingsView as SettingsViewBody } from "@/components/views/settings-view";
 import { MfaSetupBanner } from "@/components/mfa-setup-banner";
 import { ThemeToggle } from "@/components/business/theme-toggle";
 import { CommandPalette } from "@/components/business/command-palette";
@@ -35,6 +36,24 @@ import { useViewRoute } from "@/hooks/use-view-route";
 import { useVisualState } from "@/hooks/use-visual-state";
 import { PanelRight, PanelRightOpen, Zap } from "lucide-react";
 import { readChatDockOpen, subscribeChatDockOpen, writeChatDockOpen } from "@/lib/chat/dock-state";
+
+// Each view behind its own boundary: one view that throws while drawing shows
+// a notice in its place, and the shell, the chat and the other views carry on.
+const DashboardView = withSurfaceBoundary("Dashboard", DashboardViewBody);
+const InboxView = withSurfaceBoundary("Inbox", InboxViewBody);
+const GoalsView = withSurfaceBoundary("Goals", GoalsViewBody);
+const TasksView = withSurfaceBoundary("Tasks", TasksViewBody);
+const SalesView = withSurfaceBoundary("Sales", SalesViewBody);
+const AgentsView = withSurfaceBoundary("Agents", AgentsViewBody);
+const MarketplaceView = withSurfaceBoundary("Marketplace", MarketplaceViewBody);
+const FleetView = withSurfaceBoundary("Fleet", FleetViewBody);
+const RunsView = withSurfaceBoundary("Runs", RunsViewBody);
+const AutomationsView = withSurfaceBoundary("Automations", AutomationsViewBody);
+const HealthView = withSurfaceBoundary("Health", HealthViewBody);
+const MemoryView = withSurfaceBoundary("Memory", MemoryViewBody);
+const AuditView = withSurfaceBoundary("Audit", AuditViewBody);
+const LogsView = withSurfaceBoundary("Logs", LogsViewBody);
+const SettingsView = withSurfaceBoundary("Settings", SettingsViewBody);
 
 // The conversation canvas (agent-pushed components + chat-driven dashboards)
 // loads only when the rail first opens, keeping it out of the chat bundle.
@@ -361,12 +380,14 @@ export function AppShell() {
                         : "h-full w-[400px]"
                   }`}
                 >
-                  <ChatPanel
-                    variant={isChatView && !showCanvasRail ? "page" : "dock"}
-                    ownerName={ownerName}
-                    docked={!isChatView}
-                    onCollapse={collapseDockFromPanel}
-                  />
+                  <SurfaceBoundary name="Chat">
+                    <ChatPanel
+                      variant={isChatView && !showCanvasRail ? "page" : "dock"}
+                      ownerName={ownerName}
+                      docked={!isChatView}
+                      onCollapse={collapseDockFromPanel}
+                    />
+                  </SurfaceBoundary>
                 </div>
               </div>
             )}
@@ -394,14 +415,16 @@ export function AppShell() {
       {mobileInChat && (
         <div className="flex-1 min-h-0 pb-14" data-testid="chat-container">
           <div className="h-full">
-            <ChatPanel
-              mobile
-              variant="page"
-              ownerName={ownerName}
-              // No canvas on the mobile chat home: a quick action's view
-              // renders in the Dashboard view, so go there.
-              onViewOpened={() => navigate("dashboard")}
-            />
+            <SurfaceBoundary name="Chat">
+              <ChatPanel
+                mobile
+                variant="page"
+                ownerName={ownerName}
+                // No canvas on the mobile chat home: a quick action's view
+                // renders in the Dashboard view, so go there.
+                onViewOpened={() => navigate("dashboard")}
+              />
+            </SurfaceBoundary>
           </div>
         </div>
       )}

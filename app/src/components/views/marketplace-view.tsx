@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import { ExternalLink, Download, Trash2, RefreshCw, Package } from "lucide-react";
 
 import { useRuntimeConfig } from "@/components/runtime-config";
+import { ListSkeleton } from "@/components/business/list-skeleton";
 
 interface InstalledAgent {
   agent_id: string;
@@ -171,6 +172,10 @@ export function MarketplaceView({ visible }: MarketplaceViewProps) {
               <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} />
             </button>
           </div>
+
+          {agents.length === 0 && loading && (
+            <ListSkeleton testId="marketplace-loading" label="Loading installed agents" />
+          )}
 
           {agents.length === 0 && !loading && (
             <div className="text-center py-8 text-muted-foreground text-sm">

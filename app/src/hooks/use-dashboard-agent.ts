@@ -70,8 +70,6 @@ export function useDashboardAgent(): DashboardAgentState {
           body.agentData = agentData;
         }
 
-        console.log("[dashboard-agent] Requesting update, messages:", messages.length, "agentData:", agentData ? Object.keys(agentData) : "none");
-
         const res = await fetch("/api/dashboard/generate", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -82,7 +80,6 @@ export function useDashboardAgent(): DashboardAgentState {
         if (abort.signal.aborted) return;
 
         if (res.status === 204) {
-          console.log("[dashboard-agent] Triage: no update needed (204)");
           setIsUpdating(false);
           return;
         }
@@ -110,7 +107,6 @@ export function useDashboardAgent(): DashboardAgentState {
         } else if (data.html) {
           const validation = validateDashboardCode(data.html);
           if (validation.valid) {
-            console.log("[dashboard-agent] Dashboard updated:", data.html.length, "chars");
             setDashboardCode(validation.code, data.type || "html");
           } else {
             console.warn("[dashboard-agent] Client validation failed:", validation.errors);
@@ -147,7 +143,6 @@ export function useDashboardAgent(): DashboardAgentState {
 
     // Capture agentData at debounce time so it's consistent with the messages
     const agentDataSnapshot = pendingAgentData;
-    console.log("[dashboard-agent] Scheduling update in", DEBOUNCE_MS, "ms for", pendingMessages.length, "messages");
     debounceRef.current = setTimeout(() => {
       handleUpdate(pendingMessages, agentDataSnapshot);
     }, DEBOUNCE_MS);
