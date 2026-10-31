@@ -230,6 +230,20 @@ def goal_judge_enabled() -> bool:
     return _env_bool("ROBOTHOR_JUDGE_ENABLED")
 
 
+def cache_layout_v2_enabled() -> bool:
+    """Keep the request prefix byte-stable so provider prompt caches hit.
+
+    When on, ``LLMClient._build_llm_kwargs`` moves the per-run ``Current
+    time:`` line from the system message to an engine turn before the latest
+    user message, adds Anthropic-direct breakpoints after the tools and before
+    the last two turns, and sends no ``cache_control`` to OpenAI-family or
+    Gemini routes (see ``robothor.engine.cache_layout``). Default OFF; gated by
+    ``ROBOTHOR_CACHE_LAYOUT_V2``. Read from the environment only: it is checked
+    on every model call, on the event loop.
+    """
+    return _env_bool("ROBOTHOR_CACHE_LAYOUT_V2")
+
+
 def curator_enabled() -> bool:
     """True iff the destructive LLM skill-consolidation curator (Rip 5) is active.
 
