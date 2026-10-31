@@ -332,7 +332,13 @@ function Body({ detail }: { detail: Detail }) {
   const indexed = steps.map((step, index) => ({ step, index }));
   const warmup = indexed.filter(({ step }) => step.step_type === "warmup_phase");
   const main = indexed.filter(({ step }) => step.step_type !== "warmup_phase");
-  const pruned = steps.length === 0 && !IN_FLIGHT.has((run.status ?? "").trim());
+  const finishedEmpty = steps.length === 0 && !IN_FLIGHT.has((run.status ?? "").trim());
+  // "Pruned" is only the explanation for a run older than the retention.
+  const startedAt = Date.parse(run.started_at ?? "");
+  const pastRetention =
+    Number.isFinite(startedAt) && Date.now() - startedAt > STEP_RETENTION_DAYS * 864e5;
+  const pruned = finishedEmpty && pastRetention;
+  const noneRecorded = finishedEmpty && !pastRetention;
 
   return (
     <div data-testid="run-detail" className="flex min-w-0 flex-col gap-4 break-words px-4 pb-6 text-sm">
@@ -342,8 +348,13 @@ function Body({ detail }: { detail: Detail }) {
         <h3 className="text-xs font-semibold text-foreground">Steps</h3>
         {pruned ? (
           <p data-testid="run-steps-pruned" className="rounded-md bg-muted p-2 text-xs text-muted-foreground">
-            No steps are recorded for this run. Steps are kept for {STEP_RETENTION_DAYS} days, so an
-            older run keeps its totals here but not its steps.
+            Steps were pruned after {STEP_RETENTION_DAYS} days. This run keeps its totals and cost
+            here, but not its steps.
+          </p>
+        ) : null}
+        {noneRecorded ? (
+          <p data-testid="run-steps-none" className="rounded-md bg-muted p-2 text-xs text-muted-foreground">
+            No steps were recorded for this run.
           </p>
         ) : null}
         {warmup.length > 0 ? (

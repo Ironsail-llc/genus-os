@@ -172,8 +172,8 @@ read-only. It has four parts:
 
 - **A summary strip** over the chosen period: runs, failed (failed or timed
   out), delivered, and cost. It comes from `GET /api/runs/summary`, which counts
-  by status, by delivery category and by agent, and leaves benchmark runs out
-  with the same predicate the analytics module uses
+  by status, by delivery category and by agent. Benchmark runs are left out
+  when decontamination is enforced, with the same predicate the analytics module uses
   (`robothor/engine/analytics.py`, `exclude_benchmark_filter`).
 - **Filters** for status, agent, trigger and period (24 hours, 7 days — the
   default — 30 days, or all time). They change both the table and the summary.
@@ -202,8 +202,9 @@ read-only. It has four parts:
 | pending | none yet, run still pending or running | "delivery pending" |
 | not recorded | none on a finished run, or a status the Helm does not know | neutral, or a warning for an unknown status |
 
-**Steps are pruned after 30 days** (`robothor/engine/retention.py`). An older
-run keeps its row, totals and cost, and the drawer says its steps were pruned.
+**Steps are pruned after 30 days** (`robothor/engine/retention.py`). A run older
+than 30 days keeps its row, totals and cost, and the drawer says its steps were
+pruned. A more recent finished run with no steps says none were recorded.
 The drawer shows what the engine stores: a step's start time is the time it was
 recorded, there is no per-step cost, and an LLM step carries its model, tokens
 and timing but not its prompt or reply.
