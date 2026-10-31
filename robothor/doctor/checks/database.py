@@ -236,6 +236,16 @@ async def _migrations(ctx: DoctorContext) -> Result:
             + " — this cannot be repaired by applying migrations; see 'genus migrate --status'"
         )
     ahead = [row["migration_id"] for row in rows if row["status"] == "AHEAD"]
+    if ahead and pending:
+        # The migrator refuses this ledger (robothor/db/migrate.py), so neither
+        # "the release runs" nor a --fix that applies the pending one is true.
+        return fail(
+            f"{len(ahead)} applied migration(s) newer than this release ("
+            + ", ".join(ahead[:5])
+            + f") sit beside {len(pending)} of its own still pending, first {pending[0]} — "
+            "the migrator refuses this ledger and the release will not start; roll forward, "
+            "or restore the database from before the newer release migrated it"
+        )
     if ahead:
         return fail(
             f"{len(ahead)} applied migration(s) newer than this release: "
