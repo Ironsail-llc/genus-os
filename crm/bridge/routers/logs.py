@@ -331,14 +331,36 @@ def _unavailable(unit: str | None, reason: str) -> dict[str, Any]:
     return payload
 
 
+#: What an operator on a container deployment does instead. Generic on purpose:
+#: the bridge does not know which cluster, or which log tool, it is running under.
+CONTAINER_HINT = (
+    "this deployment writes its logs to standard output; read them with your cluster's log tool"
+)
+
+
+def _logs_url() -> str | None:
+    """The configured ``GENUS_LOGS_URL``, or ``None`` when it is not set."""
+    from robothor.settings import get_settings
+
+    value = get_settings().services.logs_url.strip()
+    return value or None
+
+
 @router.get("/units")
 def list_units(request: Request) -> dict[str, Any]:
-    """Which units the operator may follow, and whether journald is here."""
+    """Which units the operator may follow, and whether journald is here.
+
+    When it is not, the answer also says where the logs ARE: a ``hint`` for the
+    container case and the deployment's own ``logs_url`` when one is configured
+    (``null`` otherwise), so the page can link out instead of showing a dead end.
+    """
     require_operator(request)
     catalog = unit_catalog()
     _, reason = _journalctl()
     if reason is not None:
-        return _unavailable(None, reason)
+        payload = _unavailable(None, reason)
+        payload.update({"hint": CONTAINER_HINT, "logs_url": _logs_url()})
+        return payload
     return {
         "units": [{"name": name, "description": catalog[name]} for name in sorted(catalog)],
         "available": True,
