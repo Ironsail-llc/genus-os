@@ -33,6 +33,7 @@ function secret(name: string, overrides: Record<string, unknown> = {}) {
     shadowed: false,
     shadowed_by: null,
     env_name: name,
+    vault_readable: true,
     ...overrides,
   };
 }
@@ -101,6 +102,52 @@ describe("SecretsPage", () => {
     const row = await screen.findByTestId("secrets-row-EXAMPLE_FRESH_TOKEN");
     expect(within(row).queryByTestId("secrets-overdue-EXAMPLE_FRESH_TOKEN")).toBeNull();
     expect(row).not.toHaveTextContent(/overdue/i);
+  });
+
+  it("does not flag a secret exactly 90 days old: overdue means MORE than 90", async () => {
+    mockSecrets(200, { secrets: [secret("EXAMPLE_EDGE_TOKEN", { updated_at: daysAgo(90) })] });
+    render(<SecretsPage visible role="owner" />);
+    const row = await screen.findByTestId("secrets-row-EXAMPLE_EDGE_TOKEN");
+    expect(within(row).queryByTestId("secrets-overdue-EXAMPLE_EDGE_TOKEN")).toBeNull();
+  });
+
+  it("says the vault could not be read instead of calling its secrets missing", async () => {
+    mockSecrets(200, {
+      secrets: [
+        secret("EXAMPLE_VAULT_TOKEN", {
+          configured: false,
+          source: "none",
+          updated_at: null,
+          vault_readable: false,
+        }),
+      ],
+    });
+    render(<SecretsPage visible role="owner" />);
+    const row = await screen.findByTestId("secrets-row-EXAMPLE_VAULT_TOKEN");
+    expect(screen.getByTestId("secrets-vault-unreadable")).toHaveTextContent(
+      /vault could not be read/i
+    );
+    expect(within(row).getByTestId("secrets-configured-EXAMPLE_VAULT_TOKEN")).toHaveTextContent(
+      /unknown/i
+    );
+    expect(row).not.toHaveTextContent(/not configured/i);
+    expect(row).not.toHaveTextContent(/nowhere/i);
+  });
+
+  it("raises no vault alert when the vault was read", async () => {
+    mockSecrets(200, { secrets: [secret("EXAMPLE_API_TOKEN")] });
+    render(<SecretsPage visible role="owner" />);
+    await screen.findByTestId("secrets-row-EXAMPLE_API_TOKEN");
+    expect(screen.queryByTestId("secrets-vault-unreadable")).toBeNull();
+  });
+
+  it("reads the list when the page becomes visible", async () => {
+    const fetchSpy = mockSecrets(200, { secrets: [secret("EXAMPLE_API_TOKEN")] });
+    const { rerender } = render(<SecretsPage visible={false} role="owner" />);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    rerender(<SecretsPage visible role="owner" />);
+    expect(await screen.findByTestId("secrets-row-EXAMPLE_API_TOKEN")).toBeInTheDocument();
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 
   it("states the rotation window and where secrets are set", async () => {

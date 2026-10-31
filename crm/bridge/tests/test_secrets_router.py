@@ -143,6 +143,12 @@ def test_another_tenants_owner_is_refused(controls_client_as_other_tenant_owner,
     assert controls_client_as_other_tenant_owner.get(SECRETS).status_code == 403
 
 
+def test_a_refusal_is_not_cached_either(controls_client_as_viewer, fake_table):
+    res = controls_client_as_viewer.get(SECRETS)
+    assert res.status_code == 403
+    assert res.headers.get("cache-control") == "no-store"
+
+
 def test_an_admin_is_an_operator(controls_client_as_admin, fake_table):
     assert controls_client_as_admin.get(SECRETS).status_code == 200
 
@@ -170,6 +176,7 @@ def test_each_row_has_exactly_the_public_fields(controls_client_as_operator, fak
             "shadowed",
             "shadowed_by",
             "env_name",
+            "vault_readable",
         }
 
 
@@ -254,3 +261,32 @@ def test_readers_agree_with_genus_config(controls_client_as_operator, monkeypatc
     monkeypatch.setattr(secrets, "status_table", lambda **_: [_row(name)])
     rows = _by_name(controls_client_as_operator.get(SECRETS).json())
     assert rows[name]["readers"] == list(units_for(index[name]))
+
+
+# ── an unreadable vault ──────────────────────────────────────────────────────
+
+
+def test_an_unreadable_vault_is_said_not_hidden(controls_client_as_operator, monkeypatch):
+    """Without the flag, every vault-only credential reads as "not configured"."""
+    from routers import secrets
+
+    rows = [
+        _row(
+            "EXAMPLE_API_TOKEN",
+            configured=False,
+            source="unavailable",
+            in_vault=False,
+            vault_readable=False,
+        )
+    ]
+    monkeypatch.setattr(secrets, "status_table", lambda **_: rows)
+    monkeypatch.setattr(secrets, "field_index", lambda: FAKE_INDEX)
+    res = controls_client_as_operator.get(SECRETS)
+    row = _by_name(res.json())["EXAMPLE_API_TOKEN"]
+    assert row["vault_readable"] is False
+    assert SENTINEL not in res.text
+
+
+def test_a_readable_vault_says_so(controls_client_as_operator, fake_table):
+    rows = _by_name(controls_client_as_operator.get(SECRETS).json())
+    assert all(row["vault_readable"] is True for row in rows.values())

@@ -6,8 +6,9 @@
  *
  * * an operator sees each credential's name, source, last change and readers,
  *   with an old one flagged for rotation and an unrecorded one saying so;
- * * nothing value-shaped reaches the page — the mocked reply carries none, and
- *   the page must not invent one;
+ * * nothing value-shaped reaches the page — one mocked row carries a
+ *   fingerprint and a vault key the bridge would never send, and the page
+ *   must render neither;
  * * the table fits a 390 px screen as well as a 1440 px one, with no
  *   horizontal overflow on the settings body.
  */
@@ -35,6 +36,11 @@ const SECRETS = {
       shadowed: false,
       shadowed_by: null,
       env_name: "EXAMPLE_API_TOKEN",
+      vault_readable: true,
+      // Never sent by the bridge. Here to prove the page renders only the
+      // fields it knows, whatever else a reply carries.
+      fingerprint: "b2:deadbeef",
+      vault_key: "providers/example/api_key",
     },
     {
       name: "EXAMPLE_OLD_SMTP_PASSWORD_WITH_A_LONG_NAME",
@@ -149,6 +155,9 @@ for (const width of [1440, 390]) {
       await expect(page.locator('[data-testid="settings-page-secrets"]')).toContainText(
         "genus vault set"
       );
+
+      const html = await page.locator('[data-testid="settings-page-secrets"]').innerHTML();
+      expect(html).not.toMatch(/fingerprint|vault_key|b2:deadbeef|providers\/example/);
 
       expect(await worstOverflow(page, "settings-page-secrets")).toBeLessThanOrEqual(1);
     });
