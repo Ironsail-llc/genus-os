@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
+from robothor.engine.chat_plan_helpers import _plan_is_expired
 from robothor.engine.models import PlanState
 
 if TYPE_CHECKING:
@@ -80,7 +81,7 @@ def apply_restored_sessions(sessions: dict[str, Any]) -> None:
                     revision_history=plan_data.get("revision_history", []),
                     execution_run_id=plan_data.get("execution_run_id", ""),
                 )
-                if plan.status == "pending" and not chat._plan_is_expired(plan):
+                if plan.status == "pending" and not _plan_is_expired(plan):
                     session.active_plan = plan
                     logger.info("Restored pending plan %s for session %s", plan.plan_id, key)
             restored += 1
