@@ -28,6 +28,18 @@ its own manifest is what is read. There is deliberately no
 ``vault_rotate_from_message`` tool — the assistant simply calls ``vault_set``
 with what it was handed, and the transcript redactor keeps the argument out of
 the stored step.
+
+The one other way through is credential intake (``ROBOTHOR_CREDENTIAL_INTAKE``):
+on ``enforce``, an owner or admin typing to the default chat agent in a
+top-level human chat run. That is decided from the run itself — the caller's
+``user_role``, the agent id and the live session's trigger and parent — never
+from what the message says. A refusal under intake names the gate that held
+and what opens it, so the agent can tell the person instead of guessing.
+
+Once ``vault_set`` holds a value, the redactor knows it: every later
+``redact`` replaces the exact characters with the fingerprint, which is what
+takes a key with no recognisable shape out of the history, ``chat_messages``
+and the run's task text.
 """
 
 from __future__ import annotations
