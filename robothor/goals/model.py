@@ -284,6 +284,20 @@ def transition(
         and not change.note.strip()
     ):
         raise ValueError("a concrete note is required")
+    # Ceilings and the deadline are resume-only: they are the levers that lift a
+    # block, and `resume` is operator-gated. Accepting them on any other action
+    # would be a silent no-op at best (the trap this guards) and, at worst, let a
+    # non-operator run raise its own ceiling. Reject them explicitly.
+    resume_only = {
+        name: getattr(change, name)
+        for name in ("token_budget", "cost_budget_usd", "max_attempts", "deadline_seconds")
+        if getattr(change, name) is not None
+    }
+    if resume_only and action != "resume":
+        raise ValueError(
+            "budget ceilings and deadline can only be changed with action=resume; "
+            f"got {', '.join(sorted(resume_only))} on action={action}"
+        )
     if action == "progress":
         if change.note != g["checkpoint"]:
             g["blocker_count"] = 0
