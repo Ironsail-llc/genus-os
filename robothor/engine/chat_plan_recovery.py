@@ -19,7 +19,8 @@ async def attach_plan(
     import asyncio
     from dataclasses import fields
 
-    from robothor.engine.chat import _get_session, _plan_is_expired, _plan_to_dict
+    from robothor.engine.chat import _get_session
+    from robothor.engine.chat_plan_helpers import _plan_is_expired, _plan_to_dict
     from robothor.engine.chat_store import load_plan_state
     from robothor.engine.models import PlanState
 
