@@ -53,6 +53,10 @@ failed, timed out, aborted or interrupted. The `agent_run` and `run_summary` spa
 (OTLP code 2), the reason as the status message and as `error.message`, and the
 Redis entry's `status` is the run's terminal status.
 
+Run metrics go to the Redis the rest of the engine uses (`ROBOTHOR_REDIS_HOST`,
+`_PORT`, `_DB`, `_PASSWORD`); the older `REDIS_HOST` / `REDIS_PORT` still apply
+when `ROBOTHOR_REDIS_HOST` is left at its default. Each run is published once.
+
 Publishing happens off the engine's event loop: the
 Redis entry and the OTLP export run as background tasks on one shared async Redis
 client and one shared HTTP client (5 s timeout). Traces that finish while an export
