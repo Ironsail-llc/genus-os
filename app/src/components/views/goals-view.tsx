@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { ListSkeleton } from "@/components/business/list-skeleton";
 
 type GoalStatus = "queued" | "running" | "waiting" | "blocked" | "paused" | "review" | "complete" | "canceled";
 interface Evidence { criterion: number; summary: string; reference: string; satisfied: boolean }
@@ -144,6 +145,7 @@ export function GoalsView({ visible }: { visible: boolean }) {
       </form>
       <div className="grid lg:grid-cols-2 gap-4">
         <div className="space-y-2">
+          {!loaded && !error && <ListSkeleton testId="goals-loading" label="Loading goals" />}
           {loaded && goals.length === 0 && <p>No goals yet.</p>}
           {goals.map(goal => <button key={goal.id} onClick={() => void select(goal.id)} className="block w-full border rounded p-3 text-left" disabled={busy}>
             <span className="font-medium">{goal.objective}</span>

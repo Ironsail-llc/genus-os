@@ -19,6 +19,7 @@ import { ProspectRecovery } from "@/components/sales/prospect-recovery";
 import { IntegrationSetup } from "@/components/sales/integration-setup";
 import { SalesReports } from "@/components/sales/sales-reports";
 import { ResearchRequests } from "@/components/sales/research-requests";
+import { ListSkeleton } from "@/components/business/list-skeleton";
 
 const API = "/api/bridge/api/sales";
 type Evidence = { id: string; field: string; value: unknown; url: string; excerpt: string; retrieved_at: string; confidence: string };
@@ -84,7 +85,7 @@ export function SalesView({ visible, role }: { visible: boolean; role?: string |
       <Button variant="outline" disabled={busy} onClick={() => void refresh().catch((e) => setError(String(e)))}>Refresh</Button>
     </PageHeader>
     {error && <p role="alert" className="rounded border border-destructive p-3 text-destructive">{error}</p>}
-    {!data ? <p>Loading sales workspace…</p> : <>
+    {!data ? <ListSkeleton testId="sales-loading" label="Loading the sales workspace" /> : <>
       <div className="flex flex-wrap gap-2" aria-label="Sales controls">{switches.map(([key, label]) =>
         <Button key={key} variant="outline" disabled={busy} aria-pressed={data.settings[key] === true}
           onClick={() => void mutate("/settings", { [key]: data.settings[key] !== true }, "PATCH")}>

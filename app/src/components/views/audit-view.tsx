@@ -11,6 +11,7 @@ import { isAuditReaderRole } from "@/components/layout/nav-config";
 import { readBridgeReply } from "@/lib/bridge/read-reply";
 import { BRIDGE_UNREACHABLE } from "@/lib/bridge/use-bridge-poll";
 import { isIsoTimestamp } from "@/lib/observe/since";
+import { ListSkeleton } from "@/components/business/list-skeleton";
 
 /**
  * Observe › Audit — what was done, and who widened which guardrail.
@@ -487,13 +488,7 @@ export function AuditView({ visible = true, role, roleLoading = false }: AuditVi
           ) : null}
 
           {eventsLoading && events.length === 0 ? (
-            <div
-              className="flex items-center gap-2 p-6 text-xs text-muted-foreground"
-              data-testid="audit-events-loading"
-            >
-              <Loader2 aria-hidden className="size-4 animate-spin" />
-              Reading the audit log…
-            </div>
+            <ListSkeleton testId="audit-events-loading" label="Loading the audit log" className="p-4" />
           ) : null}
 
           {!eventsLoading && !eventsError && events.length === 0 ? (
