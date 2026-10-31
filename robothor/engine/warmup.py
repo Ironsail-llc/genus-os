@@ -956,6 +956,167 @@ def enrich_identity_for_turn(agent_id: str, identity: IdentityContext) -> Enrich
     return fn(*args)
 
 
+def _interactive_section_builders(
+    agent_id: str,
+    *,
+    user_message: str,
+    include_blocks: bool,
+    tenant_id: str,
+    extra_memory_blocks: list[str] | None,
+    sender_name: str,
+    identity: IdentityContext | None,
+    agent_config: AgentConfig | None,
+    parallel: bool,
+    enforce_scope: DataScope | None,
+    observe_scope_obj: DataScope | None,
+    scope_user_id: str | None,
+) -> list[tuple[str, Callable[[], list[str]]]]:
+    """The interactive preamble's sections, as named builders in output order.
+
+    Every condition here is decided without I/O; the builders do the I/O, so
+    ``_run_interactive_sections`` can run them one after another or at once.
+    """
+    from robothor.identity.scope import log_would_drop
+
+    exclude_name = sender_name
+    builders: list[tuple[str, Callable[[], list[str]]]] = []
+
+    # Current-user identity — tell the agent exactly who it's talking to.
+    # `identity` (the unified context) always wins over the legacy
+    # `sender_name` string when both are present.
+    if identity is not None:
+        exclude_name = identity.display_name or sender_name
+
+        def _identity_section() -> list[str]:
+            try:
+                enriched = (
+                    enrich_identity_for_turn(agent_id, identity)
+                    if parallel
+                    else enrich_identity(identity)
+                )
+            except Exception as e:
+                logger.debug("Interactive warmup identity enrichment failed: %s", e)
+                enriched = None
+            try:
+                return [identity.prompt_block(enriched)]
+            except Exception as e:
+                logger.debug("Interactive warmup identity prompt_block failed: %s", e)
+                return []
+
+        builders.append(("identity", _identity_section))
+    elif sender_name:
+        legacy = (
+            f"--- CURRENT USER ---\n"
+            f"You are speaking with {sender_name}. Address them by this name.\n"
+            f"Do not confuse them with other people who may share the same name."
+        )
+        builders.append(("identity", lambda: [legacy]))
+
+    # Core memory blocks — only for new sessions (no prior history)
+    if include_blocks:
+        core_blocks = ["persona", "user_profile", "user_model", "working_context"]
+        # Also include agent-configured warmup blocks (e.g. devops_latest_report)
+        if extra_memory_blocks:
+            core_blocks = list(dict.fromkeys(core_blocks + extra_memory_blocks))
+
+        # user_profile/user_model/working_context describe the OPERATOR —
+        # a restricted identity under enforce must not have them pre-loaded.
+        # persona describes the AGENT and always stays; the identity's own
+        # CRM/memory-graph enrichment (above, via enrich_identity) is what a
+        # restricted caller gets instead.
+        if enforce_scope is not None:
+            core_blocks = [b for b in core_blocks if b not in _OPERATOR_PERSONAL_BLOCKS]
+
+        def _memory_blocks() -> list[str]:
+            out: list[str] = []
+            try:
+                blocks_section = _build_memory_blocks_section(
+                    core_blocks, tenant_id=tenant_id, batched=parallel
+                )
+                if blocks_section:
+                    out.append(blocks_section)
+            except Exception as e:
+                logger.debug("Interactive warmup blocks failed: %s", e)
+
+            if observe_scope_obj is not None:
+                try:
+                    _dropped_blocks = _count_operator_blocks_with_content(tenant_id=tenant_id)
+                    if _dropped_blocks:
+                        log_would_drop(
+                            tool_name="warmup:memory_blocks",
+                            user_id=scope_user_id,
+                            scope=observe_scope_obj,
+                            dropped=_dropped_blocks,
+                            table="agent_memory_blocks",
+                        )
+                except Exception as e:
+                    logger.debug("Interactive warmup observe-scope block count failed: %s", e)
+            return out
+
+        builders.append(("memory_blocks", _memory_blocks))
+
+    # Entity-aware context — if user mentions a name, pull relevant facts
+    # Exclude the sender's name to avoid pulling facts about other people
+    # who share the same name — the sender's identity comes from their
+    # tenant's persona/user_profile blocks, not from entity search.
+    if user_message and len(user_message) > 5:
+
+        def _entity_context() -> list[str]:
+            try:
+                exclude = {exclude_name} if exclude_name else None
+                context = _build_entity_context(
+                    user_message,
+                    tenant_id=tenant_id,
+                    exclude_names=exclude,
+                    scope=enforce_scope,
+                    observe_scope_obj=observe_scope_obj,
+                    user_id=scope_user_id,
+                    batched=parallel,
+                )
+            except Exception as e:
+                logger.debug("Interactive warmup entity context failed: %s", e)
+                return []
+            return [context] if context else []
+
+        builders.append(("entity_context", _entity_context))
+
+    # Dynamic context hooks (date, travel, weather, etc.)
+    def _context_hooks() -> list[str]:
+        try:
+            situational = _run_context_hooks()
+        except Exception as e:
+            logger.debug("Interactive warmup context hooks failed: %s", e)
+            return []
+        return [situational] if situational else []
+
+    builders.append(("context_hooks", _context_hooks))
+
+    builders.extend(
+        _interactive_supervisor_sections(
+            agent_id,
+            tenant_id=tenant_id,
+            scope=enforce_scope,
+            observe_scope_obj=observe_scope_obj,
+            user_id=scope_user_id,
+            agent_config=agent_config,
+        )
+    )
+
+    # Unified agent goal — every agent sees its own (no owner-only scoping).
+    def _agent_goal() -> list[str]:
+        try:
+            from robothor.engine.session_goal import build_agent_goal_context
+
+            goal_section = build_agent_goal_context(tenant_id=tenant_id, agent_id=agent_id)
+        except Exception as e:
+            logger.debug("Interactive warmup agent_goal failed: %s", e)
+            return []
+        return [goal_section] if goal_section else []
+
+    builders.append(("agent_goal", _agent_goal))
+    return builders
+
+
 def build_interactive_preamble(
     agent_id: str,
     user_message: str = "",
@@ -1002,7 +1163,6 @@ def build_interactive_preamble(
     from robothor.engine.feature_flags import warmup_parallel_enabled
 
     parallel = warmup_parallel_enabled()
-    exclude_name = sender_name
 
     # No alert digest here, deliberately. An interactive turn is a human
     # talking; the heartbeat (``build_warmth_preamble``) is the alert reader.
@@ -1020,7 +1180,7 @@ def build_interactive_preamble(
     # the rest of this function is byte-identical to pre-Task-5 behavior in
     # those cases — see ``robothor.identity.scope``.
     from robothor.engine.feature_flags import data_scoping_mode
-    from robothor.identity.scope import log_would_drop, observe_scope, scope_for_query
+    from robothor.identity.scope import observe_scope, scope_for_query
 
     _scoping_mode = data_scoping_mode()
     _enforce_scope: DataScope | None = scope_for_query(_scoping_mode, identity)
@@ -1031,141 +1191,20 @@ def build_interactive_preamble(
         else None
     )
 
-    builders: list[tuple[str, Callable[[], list[str]]]] = []
-
-    # Current-user identity — tell the agent exactly who it's talking to.
-    # `identity` (the unified context) always wins over the legacy
-    # `sender_name` string when both are present.
-    if identity is not None:
-        exclude_name = identity.display_name or sender_name
-
-        def _identity_section() -> list[str]:
-            try:
-                enriched = (
-                    enrich_identity_for_turn(agent_id, identity)
-                    if parallel
-                    else enrich_identity(identity)
-                )
-            except Exception as e:
-                logger.debug("Interactive warmup identity enrichment failed: %s", e)
-                enriched = None
-            try:
-                return [identity.prompt_block(enriched)]
-            except Exception as e:
-                logger.debug("Interactive warmup identity prompt_block failed: %s", e)
-                return []
-
-        builders.append(("identity", _identity_section))
-    elif sender_name:
-        legacy = (
-            f"--- CURRENT USER ---\n"
-            f"You are speaking with {sender_name}. Address them by this name.\n"
-            f"Do not confuse them with other people who may share the same name."
-        )
-        builders.append(("identity", lambda: [legacy]))
-
-    # Core memory blocks — only for new sessions (no prior history)
-    if include_blocks:
-        core_blocks = ["persona", "user_profile", "user_model", "working_context"]
-        # Also include agent-configured warmup blocks (e.g. devops_latest_report)
-        if extra_memory_blocks:
-            core_blocks = list(dict.fromkeys(core_blocks + extra_memory_blocks))
-
-        # user_profile/user_model/working_context describe the OPERATOR —
-        # a restricted identity under enforce must not have them pre-loaded.
-        # persona describes the AGENT and always stays; the identity's own
-        # CRM/memory-graph enrichment (above, via enrich_identity) is what a
-        # restricted caller gets instead.
-        if _enforce_scope is not None:
-            core_blocks = [b for b in core_blocks if b not in _OPERATOR_PERSONAL_BLOCKS]
-
-        def _memory_blocks() -> list[str]:
-            out: list[str] = []
-            try:
-                blocks_section = _build_memory_blocks_section(
-                    core_blocks, tenant_id=tenant_id, batched=parallel
-                )
-                if blocks_section:
-                    out.append(blocks_section)
-            except Exception as e:
-                logger.debug("Interactive warmup blocks failed: %s", e)
-
-            if _observe_scope is not None:
-                try:
-                    _dropped_blocks = _count_operator_blocks_with_content(tenant_id=tenant_id)
-                    if _dropped_blocks:
-                        log_would_drop(
-                            tool_name="warmup:memory_blocks",
-                            user_id=_scope_user_id,
-                            scope=_observe_scope,
-                            dropped=_dropped_blocks,
-                            table="agent_memory_blocks",
-                        )
-                except Exception as e:
-                    logger.debug("Interactive warmup observe-scope block count failed: %s", e)
-            return out
-
-        builders.append(("memory_blocks", _memory_blocks))
-
-    # Entity-aware context — if user mentions a name, pull relevant facts
-    # Exclude the sender's name to avoid pulling facts about other people
-    # who share the same name — the sender's identity comes from their
-    # tenant's persona/user_profile blocks, not from entity search.
-    if user_message and len(user_message) > 5:
-
-        def _entity_context() -> list[str]:
-            try:
-                exclude = {exclude_name} if exclude_name else None
-                context = _build_entity_context(
-                    user_message,
-                    tenant_id=tenant_id,
-                    exclude_names=exclude,
-                    scope=_enforce_scope,
-                    observe_scope_obj=_observe_scope,
-                    user_id=_scope_user_id,
-                    batched=parallel,
-                )
-            except Exception as e:
-                logger.debug("Interactive warmup entity context failed: %s", e)
-                return []
-            return [context] if context else []
-
-        builders.append(("entity_context", _entity_context))
-
-    # Dynamic context hooks (date, travel, weather, etc.)
-    def _context_hooks() -> list[str]:
-        try:
-            situational = _run_context_hooks()
-        except Exception as e:
-            logger.debug("Interactive warmup context hooks failed: %s", e)
-            return []
-        return [situational] if situational else []
-
-    builders.append(("context_hooks", _context_hooks))
-
-    builders.extend(
-        _interactive_supervisor_sections(
-            agent_id,
-            tenant_id=tenant_id,
-            scope=_enforce_scope,
-            observe_scope_obj=_observe_scope,
-            user_id=_scope_user_id,
-            agent_config=agent_config,
-        )
+    builders = _interactive_section_builders(
+        agent_id,
+        user_message=user_message,
+        include_blocks=include_blocks,
+        tenant_id=tenant_id,
+        extra_memory_blocks=extra_memory_blocks,
+        sender_name=sender_name,
+        identity=identity,
+        agent_config=agent_config,
+        parallel=parallel,
+        enforce_scope=_enforce_scope,
+        observe_scope_obj=_observe_scope,
+        scope_user_id=_scope_user_id,
     )
-
-    # Unified agent goal — every agent sees its own (no owner-only scoping).
-    def _agent_goal() -> list[str]:
-        try:
-            from robothor.engine.session_goal import build_agent_goal_context
-
-            goal_section = build_agent_goal_context(tenant_id=tenant_id, agent_id=agent_id)
-        except Exception as e:
-            logger.debug("Interactive warmup agent_goal failed: %s", e)
-            return []
-        return [goal_section] if goal_section else []
-
-    builders.append(("agent_goal", _agent_goal))
 
     sections = _run_interactive_sections(
         builders, parallel=parallel, section_timings=section_timings
@@ -1298,10 +1337,60 @@ def _build_entity_context(
 
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
-        fetch = _fetch_entity_facts_batched if batched else _fetch_entity_facts_per_candidate
-        for rows in fetch(
-            cur, candidates[:max_candidates], tenant_id, v2, scope_clause, scope_params
-        ):
+
+        def _per_candidate() -> Iterator[list[dict[str, Any]]]:
+            # One query per candidate, in candidate order.
+            for entity_name in candidates[:max_candidates]:
+                if v2:
+                    cur.execute(
+                        f"""
+                        SELECT fact_text, category, importance_score, person_id
+                        FROM memory_facts
+                        WHERE is_active = TRUE AND tenant_id = %s
+                          -- Indexed by idx_facts_entities_lower (migration 109).
+                          -- The previous EXISTS(unnest(...)) form was unindexable
+                          -- and scanned the tenant's whole active set, five times
+                          -- per warmup: 13,155 buffers (105 MB) a call against a
+                          -- 128 MB shared_buffers, ~262 ms versus 2.7 ms for every
+                          -- other warmup section. lower() cannot simply be dropped
+                          -- to reuse the raw-array GIN — 646 of 14,714 entity names
+                          -- on this instance collapse under it, and that rewrite
+                          -- was measured losing 37% of matched rows.
+                          AND lower_entities(entities) && ARRAY[lower(%s)]
+                          {scope_clause}
+                        ORDER BY
+                          0.55 * COALESCE(importance_score, 0.5)
+                          + 0.45 * POWER(
+                              0.5,
+                              EXTRACT(EPOCH FROM (now() - created_at)) / 3600.0 / 168.0
+                            ) DESC
+                        LIMIT 3
+                        """,
+                        (tenant_id, entity_name, *scope_params),
+                    )
+                else:
+                    cur.execute(
+                        f"""
+                        SELECT fact_text, category, importance_score, person_id
+                        FROM memory_facts
+                        WHERE is_active = TRUE AND %s = ANY(entities)
+                          AND tenant_id = %s
+                          {scope_clause}
+                        ORDER BY importance_score DESC, created_at DESC
+                        LIMIT 3
+                        """,
+                        (entity_name, tenant_id, *scope_params),
+                    )
+                yield cur.fetchall()
+
+        fetched = (
+            _fetch_entity_facts_batched(
+                cur, candidates[:max_candidates], tenant_id, v2, scope_clause, scope_params
+            )
+            if batched
+            else _per_candidate()
+        )
+        for rows in fetched:
             if observe_scope_obj is not None:
                 _would_drop += rows_dropped_by_scope(rows, observe_scope_obj)
             for f in rows:
@@ -1321,59 +1410,6 @@ def _build_entity_context(
         )
 
     return "\n".join(lines) if len(lines) > 1 else ""
-
-
-def _fetch_entity_facts_per_candidate(
-    cur: Any,
-    candidates: list[str],
-    tenant_id: str,
-    v2: bool,
-    scope_clause: str,
-    scope_params: tuple[Any, ...],
-) -> Iterator[list[dict[str, Any]]]:
-    """Each candidate's top facts, one query per candidate, in candidate order."""
-    for entity_name in candidates:
-        if v2:
-            cur.execute(
-                f"""
-                SELECT fact_text, category, importance_score, person_id
-                FROM memory_facts
-                WHERE is_active = TRUE AND tenant_id = %s
-                  -- Indexed by idx_facts_entities_lower (migration 109).
-                  -- The previous EXISTS(unnest(...)) form was unindexable
-                  -- and scanned the tenant's whole active set, five times
-                  -- per warmup: 13,155 buffers (105 MB) a call against a
-                  -- 128 MB shared_buffers, ~262 ms versus 2.7 ms for every
-                  -- other warmup section. lower() cannot simply be dropped
-                  -- to reuse the raw-array GIN — 646 of 14,714 entity names
-                  -- on this instance collapse under it, and that rewrite
-                  -- was measured losing 37% of matched rows.
-                  AND lower_entities(entities) && ARRAY[lower(%s)]
-                  {scope_clause}
-                ORDER BY
-                  0.55 * COALESCE(importance_score, 0.5)
-                  + 0.45 * POWER(
-                      0.5,
-                      EXTRACT(EPOCH FROM (now() - created_at)) / 3600.0 / 168.0
-                    ) DESC
-                LIMIT 3
-                """,
-                (tenant_id, entity_name, *scope_params),
-            )
-        else:
-            cur.execute(
-                f"""
-                SELECT fact_text, category, importance_score, person_id
-                FROM memory_facts
-                WHERE is_active = TRUE AND %s = ANY(entities)
-                  AND tenant_id = %s
-                  {scope_clause}
-                ORDER BY importance_score DESC, created_at DESC
-                LIMIT 3
-                """,
-                (entity_name, tenant_id, *scope_params),
-            )
-        yield cur.fetchall()
 
 
 def _fetch_entity_facts_batched(
