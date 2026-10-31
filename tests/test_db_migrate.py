@@ -866,3 +866,105 @@ def test_agent_questions_migration_is_manifested_after_the_benchmark_digest_type
     assert "DROP POLICY IF EXISTS tenant_isolation ON agent_questions" in sql
 
     assert "117_agent_questions" in [m.migration_id for m in migrate._discover()]
+
+
+# ── rollback: a ledger that is ahead of this release ─────────────────────────
+
+
+def _known_chain(directory: Path, *names: str) -> dict[str, tuple[Any, ...]]:
+    """Write ``names`` as migrations and return a ledger that applied them all."""
+    history: dict[str, tuple[Any, ...]] = {}
+    for name in names:
+        path = _write_migration(directory, f"{name}.sql", f"SELECT '{name}';\n")
+        version = name.split("_", 1)[0]
+        history[name] = _ledger_row(
+            name, version, path.name, directory.name, migrate._sha256(path)
+        )
+    return history
+
+
+def _unknown_row(migration_id: str, version: str) -> tuple[Any, ...]:
+    """A ledger row for a migration this release does not ship."""
+    return _ledger_row(migration_id, version, f"{migration_id}.sql", "crm", "e" * 64)
+
+
+def test_an_older_release_starts_on_a_ledger_holding_only_newer_migrations(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Rolling back a release that shipped 003 must not wedge every pod. The
+    older release knows 001 and 002, both applied and undrifted; 003 is
+    strictly newer than anything it knows, so it is a forward migration the
+    older code was written before -- additive by the repo's own rules -- and
+    the release starts, saying which migrations it is running beside."""
+    history = _known_chain(tmp_path, "001_first", "002_second")
+    history["003_newer_feature"] = _unknown_row("003_newer_feature", "003")
+    connection = _FakeConnection(history=history)
+
+    with caplog.at_level(logging.WARNING, logger="robothor.db.migrate"):
+        applied = migrate.apply(migrations_dir=tmp_path, connection=connection)
+
+    assert applied == []
+    assert connection.executed_sql == []
+    assert "003_newer_feature" in caplog.text
+
+
+def test_status_reports_a_newer_unknown_migration_as_ahead_not_missing(tmp_path: Path) -> None:
+    history = _known_chain(tmp_path, "001_first", "002_second")
+    history["003_newer_feature"] = _unknown_row("003_newer_feature", "003")
+    connection = _FakeConnection(history=history)
+
+    rows = migrate.status(migrations_dir=tmp_path, connection=connection)
+
+    by_id = {row["migration_id"]: row["status"] for row in rows}
+    assert by_id["003_newer_feature"] == migrate.AHEAD_STATUS
+    assert by_id["001_first"] == by_id["002_second"] == "applied"
+
+
+def test_an_unknown_migration_inside_the_known_range_still_refuses(tmp_path: Path) -> None:
+    """A gap is not a newer release: 002 sits between two migrations this
+    release ships, so a different chain wrote it and nothing is known about
+    what the schema now holds."""
+    history = _known_chain(tmp_path, "001_first", "003_third")
+    history["002_other_chain"] = _unknown_row("002_other_chain", "002")
+    connection = _FakeConnection(history=history)
+
+    with pytest.raises(migrate.MigrationHistoryError, match="002_other_chain"):
+        migrate.apply(migrations_dir=tmp_path, connection=connection)
+    assert migrate.status(migrations_dir=tmp_path, connection=connection)[-1]["status"] == (
+        "MISSING"
+    )
+
+
+def test_an_unknown_migration_at_the_last_known_number_still_refuses(tmp_path: Path) -> None:
+    """Strictly beyond. A renamed file keeps its number, so an unknown id that
+    shares this release's last number is a rename, not a newer release."""
+    history = _known_chain(tmp_path, "001_first", "002_second")
+    history["002_second_renamed"] = _unknown_row("002_second_renamed", "002")
+    connection = _FakeConnection(history=history)
+
+    with pytest.raises(migrate.MigrationHistoryError, match="002_second_renamed"):
+        migrate.apply(migrations_dir=tmp_path, connection=connection)
+
+
+def test_newer_migrations_do_not_excuse_a_pending_known_one(tmp_path: Path) -> None:
+    """The ledger must hold this release's WHOLE chain for the newer rows to
+    read as a later release's. With 002 pending, applying it now would run an
+    old migration over a schema a newer one has already changed."""
+    history = _known_chain(tmp_path, "001_first", "002_second")
+    del history["002_second"]
+    history["003_newer_feature"] = _unknown_row("003_newer_feature", "003")
+    connection = _FakeConnection(history=history)
+
+    with pytest.raises(migrate.MigrationHistoryError, match="003_newer_feature"):
+        migrate.apply(migrations_dir=tmp_path, connection=connection)
+    assert connection.executed_sql == []
+
+
+def test_newer_migrations_do_not_excuse_drift_in_a_known_one(tmp_path: Path) -> None:
+    history = _known_chain(tmp_path, "001_first", "002_second")
+    history["001_first"] = _ledger_row("001_first", "001", "001_first.sql", tmp_path.name, "0" * 64)
+    history["003_newer_feature"] = _unknown_row("003_newer_feature", "003")
+    connection = _FakeConnection(history=history)
+
+    with pytest.raises(migrate.MigrationDriftError, match="checksum"):
+        migrate.apply(migrations_dir=tmp_path, connection=connection)
