@@ -339,11 +339,28 @@ CONTAINER_HINT = (
 
 
 def _logs_url() -> str | None:
-    """The configured ``GENUS_LOGS_URL``, or ``None`` when it is not set."""
+    """The configured ``GENUS_LOGS_URL``, or ``None`` when it is not set.
+
+    Credential-free is enforced here: every operator is shown this link, so a
+    URL carrying a username or password is treated as unset. The warning names
+    the setting and never the value.
+    """
+    from urllib.parse import urlsplit
+
     from robothor.settings import get_settings
 
     value = get_settings().services.logs_url.strip()
-    return value or None
+    if not value:
+        return None
+    try:
+        parts = urlsplit(value)
+        has_credentials = bool(parts.username or parts.password)
+    except ValueError:
+        has_credentials = False
+    if has_credentials:
+        logger.warning("GENUS_LOGS_URL carries credentials; ignoring it")
+        return None
+    return value
 
 
 @router.get("/units")

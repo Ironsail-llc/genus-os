@@ -62,13 +62,16 @@ const LOGS_POLL_MS = 10_000;
 const LINE_CHOICES = [50, 200, 1000];
 
 /**
- * Only an http(s) URL becomes a link. The value is the operator's own setting,
- * but a `javascript:` href is a script on click, whoever typed it.
+ * Only an http(s) URL with no username or password becomes a link. The value
+ * is the operator's own setting, but a `javascript:` href is a script on click,
+ * whoever typed it, and a URL with credentials in it is shown to everyone.
  */
 export function safeLogsUrl(value: unknown): string | null {
   if (typeof value !== "string" || !value.trim()) return null;
   try {
     const parsed = new URL(value.trim());
+    // Credential-free, enforced: every operator sees this link.
+    if (parsed.username || parsed.password) return null;
     return parsed.protocol === "https:" || parsed.protocol === "http:" ? parsed.toString() : null;
   } catch {
     return null;
@@ -364,7 +367,8 @@ export function LogsView({ visible = true, role, roleLoading = false }: LogsView
   return (
     <div className="flex h-full min-w-0 flex-col gap-3 overflow-hidden p-4" data-testid="logs-view">
       <PageHeader title="Logs" description="The journal of the units this instance runs.">
-        {unitsAvailable ? (
+        {/* Not before the first units answer either: on a container it would flash. */}
+        {unitsAvailable && !unitsPoll.loading ? (
           <button
             type="button"
             aria-pressed={autoRefresh}
