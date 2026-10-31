@@ -433,3 +433,21 @@ class TestFollowUpEnrichment:
         enrichment._cache.clear()
         warmup.enrich_identity_for_turn("main", IDENTITY)
         assert db.count("crm_people") == 2
+
+
+class TestRunnerUsesTheTurnHelper:
+    def test_enrichment_call_for_turn_is_what_the_runner_runs(self) -> None:
+        """The runner offloads ``warmup.enrichment_call_for_turn``'s callable
+        (the runner-level test lives in test_runner.py, TestIdentityThreading);
+        ``enrich_identity_for_turn`` is that callable applied."""
+        os.environ["ROBOTHOR_WARMUP_PARALLEL"] = "1"
+        try:
+            fn, args = warmup.enrichment_call_for_turn("main", IDENTITY)
+            assert fn is enrichment.enrich_identity_for_session
+            assert args == ("main", IDENTITY)
+            os.environ["ROBOTHOR_WARMUP_PARALLEL"] = "0"
+            fn, args = warmup.enrichment_call_for_turn("main", IDENTITY)
+            assert fn is enrichment.enrich_identity
+            assert args == (IDENTITY,)
+        finally:
+            os.environ.pop("ROBOTHOR_WARMUP_PARALLEL", None)

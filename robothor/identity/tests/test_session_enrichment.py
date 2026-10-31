@@ -110,3 +110,19 @@ def test_clear_cache_drops_sessions() -> None:
         enrichment.clear_cache()
         enrichment.enrich_identity_for_session("main", _ctx())
     assert calls == ["person-1", "person-1"]
+
+
+def test_held_entry_expires_so_the_history_line_moves() -> None:
+    """``History: N prior interactions, last <ts>`` comes from the enrichment;
+    a held entry with no lifetime froze it until the engine restarted."""
+    calls, patcher = _counting_build()
+    clock = [1000.0]
+    with patcher, patch("robothor.identity.enrichment.time.monotonic", lambda: clock[0]):
+        enrichment.enrich_identity_for_session("main", _ctx())
+        clock[0] += enrichment._SESSION_TTL_SECONDS - 1
+        enrichment.enrich_identity_for_session("main", _ctx())
+        assert calls == ["person-1"]
+        clock[0] += 2
+        enrichment.enrich_identity_for_session("main", _ctx())
+    assert calls == ["person-1", "person-1"]
+    assert 60 < enrichment._SESSION_TTL_SECONDS <= 3600
