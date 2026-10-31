@@ -8,6 +8,7 @@ failing the run that asked.
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -149,3 +150,26 @@ class TestTheWholeQuestion:
         monkeypatch.setattr("robothor.autonomy.identity.scope_for_actor", lambda *_a: identity)
         monkeypatch.setattr("robothor.autonomy.store.AutonomyStore", lambda *a, **k: store)
         assert autonomy_active(identity.tenant_id, "actor", "main") is False
+
+    def test_an_unlinked_actor_is_a_quiet_no(self, monkeypatch, caplog):
+        """A service account with no person is "no owner", not a broken
+        enrolment - it must not warn on every run (the 135x/24h bug)."""
+        from robothor.autonomy.identity import UnlinkedActor
+
+        def unlinked(*_args, **_kwargs):
+            raise UnlinkedActor("account_not_linked_to_person")
+
+        monkeypatch.setattr("robothor.autonomy.identity.scope_for_actor", unlinked)
+        with caplog.at_level(logging.WARNING, logger="robothor.autonomy.availability"):
+            assert autonomy_active("tenant", "actor", "main") is False
+        assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+    def test_an_ambiguous_actor_still_warns(self, monkeypatch, caplog):
+        """More than one person is a real enrolment fault an operator must fix."""
+        def ambiguous(*_args, **_kwargs):
+            raise PermissionError("link_account_identity_before_enrollment")
+
+        monkeypatch.setattr("robothor.autonomy.identity.scope_for_actor", ambiguous)
+        with caplog.at_level(logging.WARNING, logger="robothor.autonomy.availability"):
+            assert autonomy_active("tenant", "actor", "main") is False
+        assert any(r.levelno >= logging.WARNING for r in caplog.records)
