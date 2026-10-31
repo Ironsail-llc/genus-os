@@ -395,7 +395,8 @@ class _TelemetryPublisher:
             try:
                 if self._http is None:
                     httpx = await _import_off_loop("httpx")
-                    self._http = httpx.AsyncClient(timeout=OTLP_TIMEOUT_S)
+                    # The first client loads the TLS trust store (~0.3 s).
+                    self._http = await asyncio.to_thread(httpx.AsyncClient, timeout=OTLP_TIMEOUT_S)
                 await self._http.post(_otlp_url(endpoint), json=_merge_otlp(batch))
             except Exception as e:
                 self._fail("otlp", "Failed to export OTLP trace: %s", e)
