@@ -762,7 +762,10 @@ CAPS = {
     # 1600 -> 1562: webchat attachments added a call site (the intake itself
     # is chat_attachments.py) and paid for it by moving the three pure plan
     # helpers to chat_plan_helpers.py, which chat.py re-exports.
-    "robothor/engine/chat.py": 1562,
+    # 1562 -> 1533: the startup session restore (read off the loop, apply on
+    # it) left for chat_restore.py when the daemon began reading sessions
+    # concurrently, which paid for that split rather than raising this cap.
+    "robothor/engine/chat.py": 1533,
     # 1600 -> 1607 (2026-08-27): fleet admission finally has a caller here.
     # The 75-line implementation went to admission.py; what remains is five
     # irreducible call sites (admit / register / complete / import). The
