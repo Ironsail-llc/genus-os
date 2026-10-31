@@ -346,3 +346,50 @@ class TestPublishOffTheLoop:
         assert len(warnings) == 1
         background_errors = [r for r in caplog.records if r.name == "robothor.engine.task_registry"]
         assert background_errors == []
+
+
+# ── OTLP resource attributes from the standard OTel env ──────────────
+
+
+def _resource(trace: TraceContext) -> dict[str, Any]:
+    attrs = trace.build_otlp_payload()["resourceSpans"][0]["resource"]["attributes"]
+    return {a["key"]: a["value"]["stringValue"] for a in attrs}
+
+
+class TestOtlpResourceAttributes:
+    def test_defaults_without_env(self, monkeypatch):
+        monkeypatch.delenv("OTEL_RESOURCE_ATTRIBUTES", raising=False)
+        monkeypatch.delenv("OTEL_SERVICE_NAME", raising=False)
+        assert _resource(_trace()) == {
+            "service.name": "robothor-engine",
+            "agent.id": "example-agent",
+        }
+
+    def test_resource_attributes_env_is_merged(self, monkeypatch):
+        monkeypatch.delenv("OTEL_SERVICE_NAME", raising=False)
+        monkeypatch.setenv(
+            "OTEL_RESOURCE_ATTRIBUTES",
+            "deployment.environment=staging, service.namespace=example",
+        )
+        assert _resource(_trace()) == {
+            "service.name": "robothor-engine",
+            "agent.id": "example-agent",
+            "deployment.environment": "staging",
+            "service.namespace": "example",
+        }
+
+    def test_env_wins_over_defaults_and_service_name_wins_over_both(self, monkeypatch):
+        monkeypatch.setenv("OTEL_RESOURCE_ATTRIBUTES", "service.name=from-attrs,team=a%20b")
+        assert _resource(_trace())["service.name"] == "from-attrs"
+        assert _resource(_trace())["team"] == "a b"
+        monkeypatch.setenv("OTEL_SERVICE_NAME", "example-service")
+        assert _resource(_trace())["service.name"] == "example-service"
+
+    def test_malformed_entries_are_skipped(self, monkeypatch):
+        monkeypatch.delenv("OTEL_SERVICE_NAME", raising=False)
+        monkeypatch.setenv("OTEL_RESOURCE_ATTRIBUTES", "novalue,=empty,,ok=1, spaced = yes ")
+        res = _resource(_trace())
+        assert res["ok"] == "1"
+        assert res["spaced"] == "yes"
+        assert "novalue" not in res
+        assert "" not in res
