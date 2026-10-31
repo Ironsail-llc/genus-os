@@ -67,8 +67,8 @@ def test_policy_lists_owner_and_member_per_exec_holding_agent(monkeypatch, manif
         monkeypatch,
         RuntimeStatus(binary="podman", available=False, reason="neither podman nor docker"),
     )
-    _write(manifest_dir, "alice", "sandbox: docker\ntools_allowed: [exec]\n")
-    _write(manifest_dir, "bob", "sandbox: host\ntools_allowed: [exec]\n")
+    _write(manifest_dir, "alice", "v2:\n  sandbox: docker\ntools_allowed: [exec]\n")
+    _write(manifest_dir, "bob", "v2:\n  sandbox: host\ntools_allowed: [exec]\n")
     _write(manifest_dir, "carol", "tools_allowed: [read_file]\n")
 
     result = _run("sandbox.policy")
@@ -88,9 +88,29 @@ def test_policy_with_the_flag_off_says_the_legacy_outcome(monkeypatch, manifest_
         monkeypatch,
         RuntimeStatus(binary="podman", available=False, reason="neither podman nor docker"),
     )
-    _write(manifest_dir, "alice", "sandbox: docker\ntools_allowed: [exec]\n")
+    _write(manifest_dir, "alice", "v2:\n  sandbox: docker\ntools_allowed: [exec]\n")
 
     result = _run("sandbox.policy")
 
     assert "playground off" in result.detail
     assert "alice" in result.detail and "run fails" in result.detail
+
+
+def test_policy_reads_the_key_the_engine_reads(monkeypatch, manifest_dir) -> None:
+    """The engine reads ``v2.sandbox``; a top-level ``sandbox:`` is ignored by
+    it, so the doctor must ignore it too rather than report a container the
+    engine will never ask for (or miss one it will)."""
+    monkeypatch.setenv("ROBOTHOR_SANDBOX_PLAYGROUND", "1")
+    _runtime(
+        monkeypatch,
+        RuntimeStatus(binary="podman", available=False, reason="neither podman nor docker"),
+    )
+    _write(manifest_dir, "dave", "v2:\n  sandbox: docker\ntools_allowed: [exec]\n")
+    _write(manifest_dir, "erin", "sandbox: docker\ntools_allowed: [exec]\n")
+
+    lines = _run("sandbox.policy").detail.splitlines()
+
+    dave = next(line for line in lines if line.startswith("dave"))
+    erin = next(line for line in lines if line.startswith("erin"))
+    assert "owner host (degraded)" in dave and "member refuse" in dave
+    assert "owner host," in erin and "member host" in erin

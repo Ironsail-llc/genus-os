@@ -131,3 +131,27 @@ def test_a_role_that_may_run_on_the_host() -> None:
     assert sp.role_may_run_on_host("ADMIN")
     assert not sp.role_may_run_on_host("member")
     assert not sp.role_may_run_on_host("")
+
+
+def test_a_sub_agents_unlock_names_the_top_level_run_not_the_role() -> None:
+    """The person behind a sub-agent may already be the owner; "an owner or
+    admin can run it" tells them nothing. The unlock is the parent run."""
+    plan = _plan(role="owner", root=False)
+    assert "top-level run" in plan.unlock
+    assert "parent agent" in plan.unlock
+    assert "An owner or admin can run it" not in plan.unlock
+    assert "install" in plan.unlock
+
+
+@pytest.mark.parametrize(
+    ("manifest", "expected"),
+    [
+        ({"v2": {"sandbox": "docker"}}, "docker"),
+        ({"v2": {"sandbox": "host"}}, "host"),
+        ({"sandbox": "docker"}, "local"),
+        ({}, "local"),
+        ({"v2": None}, "local"),
+    ],
+)
+def test_the_manifest_sandbox_accessor_reads_what_the_engine_reads(manifest, expected) -> None:
+    assert sp.manifest_sandbox(manifest) == expected
