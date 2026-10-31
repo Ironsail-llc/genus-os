@@ -6,24 +6,8 @@ import dynamic from "next/dynamic";
 import { useSession } from "next-auth/react";
 import { Sidebar } from "./sidebar";
 import { MobileTabBar } from "./mobile-tab-bar";
-import { isComingSoonView, viewGroupLabel, viewTitles } from "./nav-config";
+import { isComingSoonView, viewGroupLabel, viewTitles, type ViewId } from "./nav-config";
 import { ChatPanel } from "@/components/chat-panel";
-import { DashboardView } from "@/components/views/dashboard-view";
-import { InboxView } from "@/components/views/inbox-view";
-import { GoalsView } from "@/components/views/goals-view";
-import { TasksView } from "@/components/views/tasks-view";
-import { SalesView } from "@/components/views/sales-view";
-import { AgentsView } from "@/components/views/agents-view";
-import { MarketplaceView } from "@/components/views/marketplace-view";
-import { FleetView } from "@/components/views/fleet-view";
-import { RunsView } from "@/components/views/runs-view";
-import { AutomationsView } from "@/components/views/automations-view";
-import { HealthView } from "@/components/views/health-view";
-import { MemoryView } from "@/components/views/memory-view";
-import { AuditView } from "@/components/views/audit-view";
-import { LogsView } from "@/components/views/logs-view";
-import { ComingSoonView } from "@/components/views/coming-soon-view";
-import { SettingsView } from "@/components/views/settings-view";
 import { MfaSetupBanner } from "@/components/mfa-setup-banner";
 import { ThemeToggle } from "@/components/business/theme-toggle";
 import { CommandPalette } from "@/components/business/command-palette";
@@ -41,6 +25,90 @@ import { readChatDockOpen, subscribeChatDockOpen, writeChatDockOpen } from "@/li
 const LiveCanvas = dynamic(
   () => import("@/components/canvas/live-canvas").then((m) => m.LiveCanvas),
   { ssr: false },
+);
+
+/** What stands in a view's place while its chunk downloads on first visit. */
+function ViewLoading() {
+  return (
+    <div
+      className="flex h-full flex-col gap-3 p-4"
+      data-testid="view-loading"
+      aria-busy="true"
+      aria-label="Loading"
+    >
+      <div className="h-6 w-48 animate-pulse rounded-md bg-muted" />
+      <div className="h-24 w-full max-w-3xl animate-pulse rounded-lg bg-muted/60" />
+      <div className="h-24 w-full max-w-3xl animate-pulse rounded-lg bg-muted/60" />
+    </div>
+  );
+}
+
+// Each view is its own chunk, fetched the first time the operator opens it:
+// the first load of the Helm carries the shell and the chat, not sixteen
+// screens. The shell is client-only, so none of them renders on the server.
+const DashboardView = dynamic(
+  () => import("@/components/views/dashboard-view").then((m) => m.DashboardView),
+  { ssr: false, loading: ViewLoading },
+);
+const SalesView = dynamic(
+  () => import("@/components/views/sales-view").then((m) => m.SalesView),
+  { ssr: false, loading: ViewLoading },
+);
+const InboxView = dynamic(
+  () => import("@/components/views/inbox-view").then((m) => m.InboxView),
+  { ssr: false, loading: ViewLoading },
+);
+const GoalsView = dynamic(
+  () => import("@/components/views/goals-view").then((m) => m.GoalsView),
+  { ssr: false, loading: ViewLoading },
+);
+const TasksView = dynamic(
+  () => import("@/components/views/tasks-view").then((m) => m.TasksView),
+  { ssr: false, loading: ViewLoading },
+);
+const AgentsView = dynamic(
+  () => import("@/components/views/agents-view").then((m) => m.AgentsView),
+  { ssr: false, loading: ViewLoading },
+);
+const MarketplaceView = dynamic(
+  () => import("@/components/views/marketplace-view").then((m) => m.MarketplaceView),
+  { ssr: false, loading: ViewLoading },
+);
+const FleetView = dynamic(
+  () => import("@/components/views/fleet-view").then((m) => m.FleetView),
+  { ssr: false, loading: ViewLoading },
+);
+const RunsView = dynamic(
+  () => import("@/components/views/runs-view").then((m) => m.RunsView),
+  { ssr: false, loading: ViewLoading },
+);
+const AutomationsView = dynamic(
+  () => import("@/components/views/automations-view").then((m) => m.AutomationsView),
+  { ssr: false, loading: ViewLoading },
+);
+const MemoryView = dynamic(
+  () => import("@/components/views/memory-view").then((m) => m.MemoryView),
+  { ssr: false, loading: ViewLoading },
+);
+const AuditView = dynamic(
+  () => import("@/components/views/audit-view").then((m) => m.AuditView),
+  { ssr: false, loading: ViewLoading },
+);
+const LogsView = dynamic(
+  () => import("@/components/views/logs-view").then((m) => m.LogsView),
+  { ssr: false, loading: ViewLoading },
+);
+const HealthView = dynamic(
+  () => import("@/components/views/health-view").then((m) => m.HealthView),
+  { ssr: false, loading: ViewLoading },
+);
+const SettingsView = dynamic(
+  () => import("@/components/views/settings-view").then((m) => m.SettingsView),
+  { ssr: false, loading: ViewLoading },
+);
+const ComingSoonView = dynamic(
+  () => import("@/components/views/coming-soon-view").then((m) => m.ComingSoonView),
+  { ssr: false, loading: ViewLoading },
 );
 
 function HeaderClock() {
@@ -70,6 +138,14 @@ export function AppShell() {
 
   // Chat-first on both desktop and mobile; the view round-trips through ?v=.
   const { view, settingsPage, navigate } = useViewRoute();
+
+  // A view mounts the first time it is shown and then stays mounted, hidden by
+  // its own `visible` prop, so its state survives switching away. A view never
+  // opened is neither downloaded nor mounted. Adjusted during render, not in an
+  // effect, so the first frame of a newly opened view is already its skeleton.
+  const [visited, setVisited] = useState<ReadonlySet<ViewId>>(() => new Set([view]));
+  if (!visited.has(view)) setVisited(new Set(visited).add(view));
+  const opened = (id: ViewId) => visited.has(id);
 
   // The role the auth layer already exposes. Used for nav gating only — server
   // -side authorization of these screens is NOT this component's job and is
@@ -251,73 +327,89 @@ export function AppShell() {
           </header>
 
           <div className="flex-1 min-h-0 flex">
-            {/* Views stay mounted; the chat view hands the width to the panel. */}
+            {/* Views mount on first visit and then stay mounted; the chat view hands the width to the panel. */}
             <div
               className={`relative flex-1 min-w-0 min-h-0 ${isChatView && !isMobile ? "hidden" : ""}`}
               data-testid="views-container"
             >
-              <DashboardView visible={view === "dashboard"} />
-              <SalesView visible={view === "sales"} role={role} />
-              <InboxView
-                visible={view === "inbox"}
-                items={inbox.items}
-                isLoading={inbox.isLoading}
-                error={inbox.error}
-                unrenderable={inbox.unrenderable}
-                refusedAsNonOperator={inbox.refusedAsNonOperator}
-                onRefresh={() => void inbox.refresh()}
-                onAnswer={inbox.answer}
-                onOpenRuns={() => navigate("runs")}
-                role={role}
-                roleLoading={roleLoading}
-              />
-              <GoalsView visible={view === "goals"} />
-              <TasksView
-                visible={view === "tasks"}
-                tasks={tasks}
-                isLoading={tasksLoading}
-                onApprove={approveTask}
-                onReject={rejectTask}
-                onAnswer={answerQuestion}
-              />
-              <AgentsView
-                visible={view === "agents"}
-                agents={agents}
-                summary={agentSummary}
-                isLoading={agentsLoading}
-                role={role}
-                roleLoading={roleLoading}
-              />
-              <MarketplaceView visible={view === "marketplace"} />
-              <FleetView visible={view === "fleet"} />
-              <RunsView visible={view === "runs"} />
+              {opened("dashboard") && <DashboardView visible={view === "dashboard"} />}
+              {opened("sales") && <SalesView visible={view === "sales"} role={role} />}
+              {opened("inbox") && (
+                <InboxView
+                  visible={view === "inbox"}
+                  items={inbox.items}
+                  isLoading={inbox.isLoading}
+                  error={inbox.error}
+                  unrenderable={inbox.unrenderable}
+                  refusedAsNonOperator={inbox.refusedAsNonOperator}
+                  onRefresh={() => void inbox.refresh()}
+                  onAnswer={inbox.answer}
+                  onOpenRuns={() => navigate("runs")}
+                  role={role}
+                  roleLoading={roleLoading}
+                />
+              )}
+              {opened("goals") && <GoalsView visible={view === "goals"} />}
+              {opened("tasks") && (
+                <TasksView
+                  visible={view === "tasks"}
+                  tasks={tasks}
+                  isLoading={tasksLoading}
+                  onApprove={approveTask}
+                  onReject={rejectTask}
+                  onAnswer={answerQuestion}
+                />
+              )}
+              {opened("agents") && (
+                <AgentsView
+                  visible={view === "agents"}
+                  agents={agents}
+                  summary={agentSummary}
+                  isLoading={agentsLoading}
+                  role={role}
+                  roleLoading={roleLoading}
+                />
+              )}
+              {opened("marketplace") && <MarketplaceView visible={view === "marketplace"} />}
+              {opened("fleet") && <FleetView visible={view === "fleet"} />}
+              {opened("runs") && <RunsView visible={view === "runs"} />}
               {/*
                 Automations keeps the "workflows" view id: the sidebar, every
                 bookmark and the nav tests all address it by that name, and the
                 label has read "Automations" since B6. Only the contents changed.
               */}
-              <AutomationsView
-                visible={view === "workflows"}
-                role={role}
-                roleLoading={roleLoading}
-              />
+              {opened("workflows") && (
+                <AutomationsView
+                  visible={view === "workflows"}
+                  role={role}
+                  roleLoading={roleLoading}
+                />
+              )}
               {/*
-                The three Observe screens. Each is handed the role because
-                every view here stays mounted: without it a member's Helm would
-                put an operator-gated read on the bridge on every page load,
-                for a screen they never opened and may not see.
+                The three Observe screens. Each is handed the role because a
+                view stays mounted once opened: without it a member's Helm would
+                keep an operator-gated read on the bridge going for a screen
+                they may not see.
               */}
-              <MemoryView visible={view === "memory"} role={role} roleLoading={roleLoading} />
-              <AuditView visible={view === "audit"} role={role} roleLoading={roleLoading} />
-              <LogsView visible={view === "logs"} role={role} roleLoading={roleLoading} />
-              <HealthView visible={view === "health"} />
-              <SettingsView
-                visible={view === "settings"}
-                page={settingsPage}
-                onPageChange={(page) => navigate("settings", page)}
-                role={role}
-                roleLoading={roleLoading}
-              />
+              {opened("memory") && (
+                <MemoryView visible={view === "memory"} role={role} roleLoading={roleLoading} />
+              )}
+              {opened("audit") && (
+                <AuditView visible={view === "audit"} role={role} roleLoading={roleLoading} />
+              )}
+              {opened("logs") && (
+                <LogsView visible={view === "logs"} role={role} roleLoading={roleLoading} />
+              )}
+              {opened("health") && <HealthView visible={view === "health"} />}
+              {opened("settings") && (
+                <SettingsView
+                  visible={view === "settings"}
+                  page={settingsPage}
+                  onPageChange={(page) => navigate("settings", page)}
+                  role={role}
+                  roleLoading={roleLoading}
+                />
+              )}
               {isComingSoonView(view) && <ComingSoonView view={view} />}
             </div>
 

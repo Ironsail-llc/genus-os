@@ -1,21 +1,53 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { Loader2, Lock } from "lucide-react";
 import { PageHeader } from "@/components/business/page-header";
 import { ThemeToggle } from "@/components/business/theme-toggle";
 import { ErrorBoundary } from "@/components/error-boundary";
-import { ChannelsPage } from "@/components/views/settings/channels-page";
-import { ConfigPage } from "@/components/views/settings/config-page";
-import { FlagsPage } from "@/components/views/settings/flags-page";
-import { PluginsPage } from "@/components/views/settings/plugins-page";
-import { ProvidersPage } from "@/components/views/settings/providers-page";
-import { UsersPage } from "@/components/views/settings/users-page";
 import {
   isOperatorRole,
   settingsPages,
   type SettingsPage,
   type SettingsPageId,
 } from "@/components/layout/nav-config";
+
+/** What stands in a sub-page's place while its chunk downloads. */
+function PageLoading() {
+  return (
+    <div className="flex flex-col gap-3 p-4" data-testid="settings-page-loading" aria-busy="true">
+      <div className="h-5 w-40 animate-pulse rounded-md bg-muted" />
+      <div className="h-20 w-full max-w-2xl animate-pulse rounded-lg bg-muted/60" />
+    </div>
+  );
+}
+
+// Only the active sub-page is ever rendered, so each is its own chunk, fetched
+// when it is first opened (the plugins page alone is the size of a view).
+const ProvidersPage = dynamic(
+  () => import("@/components/views/settings/providers-page").then((m) => m.ProvidersPage),
+  { ssr: false, loading: PageLoading },
+);
+const ChannelsPage = dynamic(
+  () => import("@/components/views/settings/channels-page").then((m) => m.ChannelsPage),
+  { ssr: false, loading: PageLoading },
+);
+const UsersPage = dynamic(
+  () => import("@/components/views/settings/users-page").then((m) => m.UsersPage),
+  { ssr: false, loading: PageLoading },
+);
+const ConfigPage = dynamic(
+  () => import("@/components/views/settings/config-page").then((m) => m.ConfigPage),
+  { ssr: false, loading: PageLoading },
+);
+const FlagsPage = dynamic(
+  () => import("@/components/views/settings/flags-page").then((m) => m.FlagsPage),
+  { ssr: false, loading: PageLoading },
+);
+const PluginsPage = dynamic(
+  () => import("@/components/views/settings/plugins-page").then((m) => m.PluginsPage),
+  { ssr: false, loading: PageLoading },
+);
 
 interface SettingsViewProps {
   visible: boolean;

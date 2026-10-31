@@ -26,6 +26,10 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+// Each sub-page loads on demand; the first import of a real page module in a
+// test file includes its transform, which can outlast the default one second.
+const CHUNK_WAIT = { timeout: 5000 };
+
 function renderSettings(overrides: Partial<React.ComponentProps<typeof SettingsView>> = {}) {
   const props: React.ComponentProps<typeof SettingsView> = {
     visible: true,
@@ -74,10 +78,10 @@ describe("SettingsView", () => {
     expect(page.textContent!.length).toBeGreaterThan(30);
   });
 
-  it("gives an operator the real Plugins page, not a placeholder", () => {
+  it("gives an operator the real Plugins page, not a placeholder", async () => {
     renderSettings({ page: "plugins" });
+    expect(await screen.findByTestId("plugins-refresh", {}, CHUNK_WAIT)).toBeInTheDocument();
     expect(screen.getByTestId("settings-page-plugins").textContent).not.toMatch(/coming soon/i);
-    expect(screen.getByTestId("plugins-refresh")).toBeInTheDocument();
   });
 
   it("keeps the Plugins page away from a non-operator, request and all", () => {
@@ -94,23 +98,23 @@ describe("SettingsView", () => {
     expect(onPageChange).toHaveBeenCalledWith("plugins");
   });
 
-  it("gives the Flags page the governed-flags screen, with the session's role", () => {
+  it("gives the Flags page the governed-flags screen, with the session's role", async () => {
     renderSettings({ page: "flags" });
-    expect(screen.getByTestId("flags-page")).toHaveAttribute("data-role", "owner");
+    expect(await screen.findByTestId("flags-page", {}, CHUNK_WAIT)).toHaveAttribute("data-role", "owner");
   });
 
-  it("gives the Config page the schema-driven form", () => {
+  it("gives the Config page the schema-driven form", async () => {
     renderSettings({ page: "config" });
-    expect(screen.getByTestId("config-page")).toBeInTheDocument();
+    expect(await screen.findByTestId("config-page", {}, CHUNK_WAIT)).toBeInTheDocument();
     expect(screen.queryByText(/coming soon/i)).toBeNull();
   });
 
-  it("lets the Config page send the operator to Flags for a verdict", () => {
+  it("lets the Config page send the operator to Flags for a verdict", async () => {
     // A governed field is editable on both screens, but only Flags says what
     // the control is actually DOING — so the link has to go somewhere.
     const onPageChange = vi.fn();
     renderSettings({ page: "config", onPageChange });
-    fireEvent.click(screen.getByTestId("config-page"));
+    fireEvent.click(await screen.findByTestId("config-page", {}, CHUNK_WAIT));
     expect(onPageChange).toHaveBeenCalledWith("flags");
   });
 
@@ -125,19 +129,19 @@ describe("SettingsView", () => {
     expect(screen.queryByTestId("settings-subnav")).toBeNull();
   });
 
-  it("gives an operator the real Providers page, not a placeholder", () => {
+  it("gives an operator the real Providers page, not a placeholder", async () => {
     renderSettings({ page: "providers" });
-    expect(screen.getByTestId("providers-page")).toBeInTheDocument();
+    expect(await screen.findByTestId("providers-page", {}, CHUNK_WAIT)).toBeInTheDocument();
     expect(screen.getByTestId("settings-page-providers").textContent).not.toMatch(/coming soon/i);
   });
 
-  it("gives an operator the real Channels and Users pages, not placeholders", () => {
+  it("gives an operator the real Channels and Users pages, not placeholders", async () => {
     renderSettings({ page: "channels" });
-    expect(screen.getByTestId("channels-page")).toBeInTheDocument();
+    expect(await screen.findByTestId("channels-page", {}, CHUNK_WAIT)).toBeInTheDocument();
     expect(screen.getByTestId("settings-page-channels").textContent).not.toMatch(/coming soon/i);
 
     renderSettings({ page: "users" });
-    expect(screen.getByTestId("users-page")).toBeInTheDocument();
+    expect(await screen.findByTestId("users-page", {}, CHUNK_WAIT)).toBeInTheDocument();
     expect(screen.getByTestId("settings-page-users").textContent).not.toMatch(/coming soon/i);
   });
 
