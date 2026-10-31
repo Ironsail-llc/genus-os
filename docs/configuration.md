@@ -681,7 +681,12 @@ local inference slots, one is kept for interactive requests, and a waiting
 interactive request is served first.
 
 A run waiting for its lane has not started: no run row, timeout or budget is
-touched while it waits. A sub-agent a run waits on shares its parent's slot.
+touched while it waits. The scheduler and the workflow engine take the slot
+before starting their own clocks (a cron run's safety timeout, a workflow's
+`timeout_seconds`), so a run queued behind a burst is never timed out, or
+counted toward its circuit breaker, for waiting. A whole workflow holds one
+background slot and its steps share it. `ROBOTHOR_MAX_CONCURRENT_BACKGROUND`
+never goes below 1. A sub-agent a run waits on shares its parent's slot.
 Work a turn leaves running after it ends, such as the background review fork,
 is background: its thread calls go to background workers, and a run it starts
 takes its own background slot. The thread split is installed when the engine starts, so turn
