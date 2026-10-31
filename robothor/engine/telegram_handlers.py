@@ -31,10 +31,8 @@ if TYPE_CHECKING:
 
 from robothor.constants import DEFAULT_TENANT
 from robothor.engine import attachments, telegram_attachments
-from robothor.engine.chat import (
-    _plan_is_expired,
-    get_shared_session,
-)
+from robothor.engine.chat import get_shared_session
+from robothor.engine.chat_plan_helpers import _plan_is_expired
 from robothor.engine.chat_store import (
     clear_plan_state_async,
     clear_session_async,

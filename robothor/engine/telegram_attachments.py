@@ -33,7 +33,8 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from aiogram.types import Message
 
 from robothor.engine import attachments
-from robothor.engine.chat import _plan_is_expired, get_shared_session
+from robothor.engine.chat import get_shared_session
+from robothor.engine.chat_plan_helpers import _plan_is_expired
 
 logger = logging.getLogger(__name__)
 
