@@ -3,6 +3,7 @@
 import { useCallback, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useAppQueryClient } from "@/lib/query/query-client";
+import { executeTool, refusalOf } from "@/lib/query/fetch-refused";
 
 type HealthTier = "healthy" | "degraded" | "failed" | "sleeping" | "unknown";
 
@@ -59,29 +60,8 @@ export const AGENTS_QUERY_KEY = ["agents", "status"] as const;
 
 const EMPTY_SUMMARY: AgentSummary = { healthy: 0, degraded: 0, failed: 0, sleeping: 0, total: 0 };
 
-/** A refusal or a request that never got an answer, reported, not shown as zero agents. */
-class FetchRefused extends Error {
-  constructor(readonly endpoint: string, readonly status: number) {
-    super(`${endpoint} answered ${status}`);
-  }
-}
-
 async function fetchAgentStatus(signal: AbortSignal): Promise<AgentInfo[]> {
-  let res: Response;
-  try {
-    res = await fetch("/api/actions/execute", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ tool: "agent_status", params: {} }),
-      signal,
-    });
-  } catch (err) {
-    if (signal.aborted) throw err;
-    // Status 0 means "no response" (offline, connection refused).
-    throw new FetchRefused("/api/actions/execute", 0);
-  }
-  if (!res.ok) throw new FetchRefused("/api/actions/execute", res.status);
-  const json = await res.json();
+  const json = await executeTool("agent_status", {}, signal);
   return json.data?.agents || [];
 }
 
@@ -112,10 +92,7 @@ export function useAgents() {
   const summary = useMemo(() => (query.data ? summarize(query.data) : EMPTY_SUMMARY), [query.data]);
   // A refused fetch must be reportable: "no agents" and "could not ask" are
   // not the same answer. Cleared by the next good answer.
-  const error =
-    query.error instanceof FetchRefused
-      ? { endpoint: query.error.endpoint, status: query.error.status }
-      : null;
+  const error = refusalOf(query.error);
   const { refetch: refetchQuery } = query;
   const refetch = useCallback(async () => {
     await refetchQuery();

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useAppQueryClient } from "@/lib/query/query-client";
+import { executeTool, refusalOf } from "@/lib/query/fetch-refused";
 import { useEventStream } from "@/lib/event-bus/use-event-stream";
 
 export interface Task {
@@ -43,13 +44,6 @@ export function tasksQueryKey(agentFilter?: string, priorityFilter?: string) {
   return ["tasks", { agentFilter: agentFilter ?? null, priorityFilter: priorityFilter ?? null }] as const;
 }
 
-/** A refusal or a request that never got an answer, reported, not shown as an empty board. */
-class FetchRefused extends Error {
-  constructor(readonly endpoint: string, readonly status: number) {
-    super(`${endpoint} answered ${status}`);
-  }
-}
-
 async function fetchTaskList(
   signal: AbortSignal,
   agentFilter?: string,
@@ -59,22 +53,7 @@ async function fetchTaskList(
   if (agentFilter) params.set("assignedToAgent", agentFilter);
   if (priorityFilter) params.set("priority", priorityFilter);
   params.set("limit", "100");
-
-  let res: Response;
-  try {
-    res = await fetch("/api/actions/execute", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ tool: "list_tasks", params: Object.fromEntries(params) }),
-      signal,
-    });
-  } catch (err) {
-    if (signal.aborted) throw err;
-    // Status 0 means "no response" (offline, connection refused).
-    throw new FetchRefused("/api/actions/execute", 0);
-  }
-  if (!res.ok) throw new FetchRefused("/api/actions/execute", res.status);
-  const json = await res.json();
+  const json = await executeTool("list_tasks", Object.fromEntries(params), signal);
   return json.data?.tasks || [];
 }
 
@@ -104,10 +83,7 @@ export function useTasks(options: UseTasksOptions = {}) {
   const tasks = useMemo(() => query.data ?? [], [query.data]);
   // A refused fetch must be reportable: an empty board and an unreachable
   // board look identical to the operator otherwise.
-  const error =
-    query.error instanceof FetchRefused
-      ? { endpoint: query.error.endpoint, status: query.error.status }
-      : null;
+  const error = refusalOf(query.error);
   const isLoading = query.isFetching || query.isPending;
 
   const { refetch: refetchQuery } = query;

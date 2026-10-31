@@ -26,7 +26,6 @@ function hide(hidden: boolean) {
     configurable: true,
   });
   document.dispatchEvent(new Event("visibilitychange"));
-  window.dispatchEvent(new Event("visibilitychange"));
 }
 
 function renderGoals(visible = true) {

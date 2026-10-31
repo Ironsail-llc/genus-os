@@ -24,8 +24,13 @@ import {
   QueryClientContext,
   QueryClientProvider,
   focusManager,
+  notifyManager,
 } from "@tanstack/react-query";
 import { useContext, useEffect, useState, type ReactNode } from "react";
+
+// An answer reaches its readers in the same task it arrived in, as a hook's own
+// setState did, rather than one macrotask later. React batches the renders.
+notifyManager.setScheduler(queueMicrotask);
 
 // Tab visibility is read where the browser announces it, on `document`, like
 // every other visibility listener in the app. With no argument the manager
