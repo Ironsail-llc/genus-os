@@ -513,3 +513,160 @@ class TestPrewarm:
 
         await daemon._shutdown_mcp_pool()
         assert pool._sessions == {}
+
+
+# ── review follow-ups: a failed fetch, a stale entry, a changed config ───
+
+
+class TestAFailedFetchIsNeverCached:
+    @pytest.mark.asyncio
+    async def test_a_list_cancelled_mid_flight_does_not_poison_the_next_run(
+        self, monkeypatch: pytest.MonkeyPatch, pool: Any, cache_on: None
+    ) -> None:
+        """A cancel mid-request leaves an unread response on a stdio pipe.
+
+        Reusing that pipe reads the stale response as the next answer, which
+        for ``tools/list`` parses as an empty list. The fake models exactly
+        that: once a request on a session has been cancelled, every later
+        ``list_tools`` on the SAME session answers ``[]``.
+        """
+        counters = _install_fake_stdio(monkeypatch)
+        monkeypatch.setattr(mcp_client, "ADAPTER_CONNECT_TIMEOUT_S", 0.2)
+        real_list = mcp_client.McpClientSession.list_tools
+        first = {"done": False}
+
+        async def _desyncing(self: Any) -> list[dict[str, Any]]:
+            if getattr(self, "_poisoned", False):
+                return []
+            if not first["done"]:
+                first["done"] = True
+                self._poisoned = True
+                await asyncio.sleep(30)
+            return await real_list(self)
+
+        monkeypatch.setattr(mcp_client.McpClientSession, "list_tools", _desyncing)
+        adapter = _adapter("slow")
+
+        timed_out = await _register([adapter])
+        assert timed_out.get_adapter_route("slow_tool") is None
+        # The timeout put it in backoff, as before; the next run is a retry.
+        type(timed_out)._adapter_failures.clear()
+
+        retried = await _register([adapter])
+        assert retried.get_adapter_route("slow_tool") == "slow"
+        # The pipe the cancel left behind was thrown away, not reused.
+        assert counters.starts == {"slow": 2}
+
+    @pytest.mark.asyncio
+    async def test_a_failed_list_is_not_cached(
+        self, monkeypatch: pytest.MonkeyPatch, pool: Any, cache_on: None
+    ) -> None:
+        counters = _install_fake_stdio(monkeypatch)
+        real_list = mcp_client.McpClientSession.list_tools
+        calls = {"n": 0}
+
+        async def _fails_once(self: Any) -> list[dict[str, Any]]:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("MCP error -32000: not ready")
+            return await real_list(self)
+
+        monkeypatch.setattr(mcp_client.McpClientSession, "list_tools", _fails_once)
+        mcp_client.register_adapter(_adapter("alpha"))
+
+        with pytest.raises(RuntimeError):
+            await pool.list_tools_cached("alpha")
+        tools = await pool.list_tools_cached("alpha")
+
+        assert [t["name"] for t in tools] == ["alpha_tool"]
+        assert counters.list_calls == {"alpha": 1}
+
+
+class TestEntriesExpire:
+    @pytest.mark.asyncio
+    async def test_an_entry_older_than_the_ttl_is_refetched(
+        self, monkeypatch: pytest.MonkeyPatch, pool: Any, cache_on: None
+    ) -> None:
+        """An HTTP session never drops, so age is the only thing that can retire its list."""
+        counters = _install_fake_stdio(monkeypatch)
+        monkeypatch.setattr(mcp_client, "TOOL_LIST_TTL_S", 0.05)
+        mcp_client.register_adapter(_adapter("alpha"))
+
+        await pool.list_tools_cached("alpha")
+        await pool.list_tools_cached("alpha")
+        assert counters.list_calls == {"alpha": 1}
+
+        await asyncio.sleep(0.1)
+        await pool.list_tools_cached("alpha")
+        assert counters.list_calls == {"alpha": 2}
+
+    def test_the_default_ttl_is_bounded(self) -> None:
+        assert 0 < mcp_client.TOOL_LIST_TTL_S <= 3600
+
+
+class TestAChangedConfigRestartsTheSession:
+    @pytest.mark.asyncio
+    async def test_the_refetch_comes_from_a_session_built_on_the_new_config(
+        self, monkeypatch: pytest.MonkeyPatch, pool: Any, cache_on: None
+    ) -> None:
+        counters = _install_fake_stdio(monkeypatch)
+
+        await _register([_adapter("alpha")])
+        changed = AdapterConfig(
+            name="alpha", transport="stdio", command=["example-mcp-server", "--v2"]
+        )
+        await _register([changed])
+
+        assert counters.list_calls == {"alpha": 2}
+        assert counters.starts == {"alpha": 2}
+        assert pool._sessions["alpha"].config.command == ["example-mcp-server", "--v2"]
+
+    @pytest.mark.asyncio
+    async def test_flag_off_keeps_the_existing_session(
+        self, monkeypatch: pytest.MonkeyPatch, pool: Any, cache_off: None
+    ) -> None:
+        counters = _install_fake_stdio(monkeypatch)
+
+        await _register([_adapter("alpha")])
+        await _register(
+            [AdapterConfig(name="alpha", transport="stdio", command=["example-mcp-server", "-x"])]
+        )
+
+        assert counters.starts == {"alpha": 1}
+
+
+class TestShutdownOrdering:
+    @pytest.mark.asyncio
+    async def test_a_session_added_during_shutdown_does_not_break_it(
+        self, monkeypatch: pytest.MonkeyPatch, pool: Any, cache_on: None
+    ) -> None:
+        _install_fake_stdio(monkeypatch)
+        for n in ("alpha", "bravo"):
+            mcp_client.register_adapter(_adapter(n))
+        alpha = await pool.get_session("alpha")
+        bravo = await pool.get_session("bravo")
+        real_stop = type(alpha).stop
+        stopped: list[str] = []
+
+        async def _stop_and_race(self: Any) -> None:
+            stopped.append(self.config.name)
+            if self.config.name == "alpha":
+                # A late caller sneaks a session in mid-shutdown.
+                pool._sessions["late"] = type(self)(mcp_client.McpServerConfig(name="late"))
+            await real_stop(self)
+
+        monkeypatch.setattr(type(alpha), "stop", _stop_and_race)
+        await pool.shutdown()
+
+        assert {"alpha", "bravo"} <= set(stopped)
+        assert bravo._process is None
+
+    def test_the_daemon_stops_the_pool_after_everything_that_dispatches_tools(self) -> None:
+        import inspect
+
+        from robothor.engine import daemon
+
+        src = inspect.getsource(daemon.main)
+        pool_at = src.index("await _shutdown_mcp_pool()")
+        for stopper in ("await scheduler.stop()", "await hooks.stop()", "await bot.stop("):
+            assert src.index(stopper) < pool_at, stopper
