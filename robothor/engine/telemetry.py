@@ -8,10 +8,12 @@ stored as metadata on the run. Metrics published to Redis for dashboards.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import time
 import uuid
+from collections import deque
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -20,6 +22,12 @@ if TYPE_CHECKING:
     from collections.abc import Generator
 
 logger = logging.getLogger(__name__)
+
+TELEMETRY_STREAM = "robothor:events:telemetry"
+TELEMETRY_STREAM_MAXLEN = 5000
+OTLP_TIMEOUT_S = 5.0
+REDIS_TIMEOUT_S = 5.0
+OTLP_BATCH_MAX = 64
 
 
 def _otlp_value(v: Any) -> dict[str, Any]:
@@ -177,7 +185,47 @@ class TraceContext:
         }
 
     def publish_metrics(self, run_data: dict[str, Any]) -> None:
-        """Publish run metrics to Redis event bus. Best-effort."""
+        """Publish run metrics to Redis and, if configured, OTLP. Best-effort.
+
+        Inside a running event loop this never blocks it: the stream fields and
+        the OTLP payload are built here, and the network writes run as tracked
+        background tasks on shared async clients (see ``_TelemetryPublisher``).
+        With no running loop (CLI, worker threads) it publishes synchronously.
+        """
+        try:
+            fields = self._stream_fields(run_data)
+            endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                self._publish_sync(fields, endpoint, run_data)
+                return
+            payload = self.build_otlp_payload(run_data) if endpoint else None
+            _get_publisher(loop).submit(fields, endpoint, payload)
+        except Exception as e:
+            logger.debug("Failed to publish telemetry: %s", e)
+
+    def _stream_fields(self, run_data: dict[str, Any]) -> dict[str, str]:
+        """The ``robothor:events:telemetry`` entry for this run."""
+        return {
+            "type": "agent.run.completed",
+            "agent_id": self.agent_id,
+            "run_id": self.run_id,
+            "trace_id": self.trace_id,
+            "span_count": str(len(self.spans)),
+            "duration_ms": str(run_data.get("duration_ms", 0)),
+            "status": run_data.get("status", ""),
+            "input_tokens": str(run_data.get("input_tokens", 0)),
+            "output_tokens": str(run_data.get("output_tokens", 0)),
+            "cache_creation_tokens": str(run_data.get("cache_creation_tokens", 0)),
+            "cache_read_tokens": str(run_data.get("cache_read_tokens", 0)),
+            "cache_hit_ratio": str(run_data.get("cache_hit_ratio", 0)),
+        }
+
+    def _publish_sync(
+        self, fields: dict[Any, Any], endpoint: str | None, run_data: dict[str, Any]
+    ) -> None:
+        """Synchronous publish, for callers with no running event loop."""
         try:
             import redis
 
@@ -186,31 +234,13 @@ class TraceContext:
                 port=int(os.environ.get("REDIS_PORT", "6379")),
                 decode_responses=True,
             )
-            r.xadd(
-                "robothor:events:telemetry",
-                {
-                    "type": "agent.run.completed",
-                    "agent_id": self.agent_id,
-                    "run_id": self.run_id,
-                    "trace_id": self.trace_id,
-                    "span_count": str(len(self.spans)),
-                    "duration_ms": str(run_data.get("duration_ms", 0)),
-                    "status": run_data.get("status", ""),
-                    "input_tokens": str(run_data.get("input_tokens", 0)),
-                    "output_tokens": str(run_data.get("output_tokens", 0)),
-                    "cache_creation_tokens": str(run_data.get("cache_creation_tokens", 0)),
-                    "cache_read_tokens": str(run_data.get("cache_read_tokens", 0)),
-                    "cache_hit_ratio": str(run_data.get("cache_hit_ratio", 0)),
-                },
-                maxlen=5000,
-            )
+            r.xadd(TELEMETRY_STREAM, fields, maxlen=TELEMETRY_STREAM_MAXLEN)
         except Exception as e:
             logger.debug("Failed to publish telemetry to Redis: %s", e)
 
         # Optionally export to OTLP collector
-        otlp_endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")
-        if otlp_endpoint:
-            self._export_otlp(otlp_endpoint, run_data)
+        if endpoint:
+            self._export_otlp(endpoint, run_data)
 
     def build_otlp_payload(self, run_data: dict[str, Any] | None = None) -> dict[str, Any]:
         """Build a full OTLP/HTTP traces payload — span attributes, durations, and
@@ -250,7 +280,103 @@ class TraceContext:
         try:
             import httpx
 
-            url = f"{endpoint.rstrip('/')}/v1/traces"
-            httpx.post(url, json=self.build_otlp_payload(run_data), timeout=5.0)
+            httpx.post(
+                _otlp_url(endpoint), json=self.build_otlp_payload(run_data), timeout=OTLP_TIMEOUT_S
+            )
         except Exception as e:
             logger.debug("Failed to export OTLP trace: %s", e)
+
+
+def _otlp_url(endpoint: str) -> str:
+    return f"{endpoint.rstrip('/')}/v1/traces"
+
+
+def _merge_otlp(payloads: list[dict[str, Any]]) -> dict[str, Any]:
+    """One OTLP/HTTP request body carrying every payload's resourceSpans."""
+    if len(payloads) == 1:
+        return payloads[0]
+    return {"resourceSpans": [rs for p in payloads for rs in p["resourceSpans"]]}
+
+
+class _TelemetryPublisher:
+    """Shared async telemetry sinks for one event loop.
+
+    One ``redis.asyncio`` client and one ``httpx.AsyncClient``, created on
+    first use. Each run's XADD is its own background task; OTLP payloads go on
+    a queue drained by a single exporter task, so payloads queued while
+    a POST is in flight leave together in the next one. Every task is spawned
+    under the engine's TaskRegistry (drained on shutdown). A failing sink logs
+    one WARNING, then DEBUG; nothing here ever reaches the run.
+    """
+
+    def __init__(self, loop: asyncio.AbstractEventLoop) -> None:
+        self.loop = loop
+        self._redis: Any = None
+        self._http: Any = None
+        self._otlp_queue: deque[tuple[str, dict[str, Any]]] = deque()
+        self._exporter: asyncio.Task[Any] | None = None
+        self._warned: set[str] = set()
+
+    def submit(
+        self, fields: dict[str, str], endpoint: str | None, payload: dict[str, Any] | None
+    ) -> None:
+        from robothor.engine.task_registry import get_task_registry
+
+        registry = get_task_registry()
+        registry.spawn(self._xadd(fields), name="telemetry:redis")
+        if not endpoint or payload is None:
+            return
+        self._otlp_queue.append((endpoint, payload))
+        if self._exporter is None or self._exporter.done():
+            self._exporter = registry.spawn(self._drain_otlp(), name="telemetry:otlp")
+
+    async def _xadd(self, fields: dict[str, str]) -> None:
+        try:
+            if self._redis is None:
+                import redis.asyncio as aioredis
+
+                self._redis = aioredis.Redis(
+                    host=os.environ.get("REDIS_HOST", "localhost"),
+                    port=int(os.environ.get("REDIS_PORT", "6379")),
+                    decode_responses=True,
+                    socket_connect_timeout=REDIS_TIMEOUT_S,
+                    socket_timeout=REDIS_TIMEOUT_S,
+                )
+            await self._redis.xadd(TELEMETRY_STREAM, fields, maxlen=TELEMETRY_STREAM_MAXLEN)
+        except Exception as e:
+            self._fail("redis", "Failed to publish telemetry to Redis: %s", e)
+
+    async def _drain_otlp(self) -> None:
+        while self._otlp_queue:
+            endpoint = self._otlp_queue[0][0]
+            batch: list[dict[str, Any]] = []
+            while (
+                self._otlp_queue
+                and len(batch) < OTLP_BATCH_MAX
+                and self._otlp_queue[0][0] == endpoint
+            ):
+                batch.append(self._otlp_queue.popleft()[1])
+            try:
+                if self._http is None:
+                    import httpx
+
+                    self._http = httpx.AsyncClient(timeout=OTLP_TIMEOUT_S)
+                await self._http.post(_otlp_url(endpoint), json=_merge_otlp(batch))
+            except Exception as e:
+                self._fail("otlp", "Failed to export OTLP trace: %s", e)
+
+    def _fail(self, sink: str, msg: str, *args: Any) -> None:
+        level = logging.DEBUG if sink in self._warned else logging.WARNING
+        self._warned.add(sink)
+        logger.log(level, msg, *args)
+
+
+_publisher: _TelemetryPublisher | None = None
+
+
+def _get_publisher(loop: asyncio.AbstractEventLoop) -> _TelemetryPublisher:
+    """The publisher bound to ``loop`` (async clients cannot cross loops)."""
+    global _publisher
+    if _publisher is None or _publisher.loop is not loop:
+        _publisher = _TelemetryPublisher(loop)
+    return _publisher

@@ -344,7 +344,5 @@ class TestPublishOffTheLoop:
             and "OTLP" in r.getMessage()
         ]
         assert len(warnings) == 1
-        background_errors = [
-            r for r in caplog.records if r.name == "robothor.engine.task_registry"
-        ]
+        background_errors = [r for r in caplog.records if r.name == "robothor.engine.task_registry"]
         assert background_errors == []
