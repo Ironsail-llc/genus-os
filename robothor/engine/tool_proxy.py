@@ -43,7 +43,6 @@ import uuid
 from contextvars import ContextVar, Token
 from typing import TYPE_CHECKING, Any, Protocol
 
-from robothor.engine.capability_tier import effective_tier
 from robothor.engine.tools.constants import SPAWN_TOOLS
 
 if TYPE_CHECKING:
@@ -287,7 +286,6 @@ class RunToolProxy:
             task_author_override=req.agent_config.task_author_override,
             is_benchmark=session.run.is_benchmark,
             identity=getattr(session, "identity", None),
-            capability_tier=effective_tier(session.run),
         )
         elapsed_ms = int((asyncio.get_running_loop().time() - started) * 1000)
 

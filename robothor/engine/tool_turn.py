@@ -44,7 +44,6 @@ import uuid
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from robothor.engine.capability_tier import effective_tier
 from robothor.engine.parallel_tools import parallel_limit, plan_batches
 from robothor.engine.post_execution import apply_post_execution_guardrails
 from robothor.engine.repeat_guard import drain_repeat_notes
@@ -314,7 +313,6 @@ class ToolTurnMixin:
             "task_author_override": req.agent_config.task_author_override,
             "is_benchmark": req.session.run.is_benchmark,
             "identity": getattr(req.session, "identity", None),
-            "capability_tier": effective_tier(req.session.run),
         }
         if req.trace:
             with req.trace.span("tool_call", tool=call.tool_name):

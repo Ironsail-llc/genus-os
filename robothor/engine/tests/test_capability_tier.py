@@ -263,6 +263,7 @@ class TestRunIdentity:
 
 @pytest.mark.asyncio
 async def test_the_tool_context_carries_the_effective_tier():
+    from robothor.engine.capability_tier import clear_effective_tier, set_effective_tier
     from robothor.engine.tools import dispatch
 
     seen = {}
@@ -271,49 +272,63 @@ async def test_the_tool_context_carries_the_effective_tier():
         seen["tier"] = ctx.capability_tier
         return {"error": "stop here"}
 
-    with (
-        patch.object(dispatch, "_refuse_before_handler", AsyncMock(return_value=None)),
-        patch.object(dispatch, "_runtime_denial", _capture),
-    ):
-        await dispatch._execute_tool("read_file", {}, capability_tier="unrestricted")
+    token = set_effective_tier("unrestricted")
+    try:
+        with (
+            patch.object(dispatch, "_refuse_before_handler", AsyncMock(return_value=None)),
+            patch.object(dispatch, "_runtime_denial", _capture),
+        ):
+            await dispatch._execute_tool("read_file", {})
+    finally:
+        clear_effective_tier(token)
 
     assert seen["tier"] == "unrestricted"
 
 
-@pytest.mark.asyncio
-async def test_a_proxied_call_carries_the_effective_tier(engine_config):
-    from robothor.engine.runner import AgentRunner
-    from robothor.engine.session import AgentSession
-    from robothor.engine.tool_proxy import RunToolProxy, proxy_allow_set
-    from robothor.engine.tool_turn import ToolTurnRequest
-
-    with patch("robothor.engine.runner.get_registry") as mock_reg:
+class TestTheTierIsPublishedWithTheToolset:
+    def _registry(self):
         registry = MagicMock()
-        registry.execute = AsyncMock(return_value={"ok": True})
-        mock_reg.return_value = registry
-        runner = AgentRunner(engine_config)
-        runner.registry = registry
+        registry.should_defer.return_value = False
+        return registry
 
-    config = AgentConfig(id="proxy-agent", name="Proxy Agent", model_primary="m")
-    session = AgentSession(agent_id=config.id)
-    session.run.capability_tier = "unrestricted"
-    session.run.capability_tier_mode = "enforce"
-    req = ToolTurnRequest(
-        assistant_msg=MagicMock(tool_calls=[]),
-        session=session,
-        agent_config=config,
-        iteration=0,
-        allowed_tool_set=frozenset({"read_file"}),
-        readonly_mode=False,
-        readonly_tool_set=frozenset(),
-    )
-    proxy = RunToolProxy(
-        runner=runner, req=req, allowed=proxy_allow_set(req, registry), max_calls=5
-    )
+    def test_it_is_visible_while_published_and_gone_after(self):
+        from robothor.engine.capability_tier import current_effective_tier, resolve_tier
+        from robothor.engine.toolset_prep import publish_toolset, withdraw_toolset
 
-    await proxy.call("read_file", {"path": "a.txt"})
+        decision = resolve_tier("owner", interactive=True, identity_verified=True, mode="enforce")
+        tokens = publish_toolset(self._registry(), _default_agent(), ["read_file"], decision)
+        try:
+            assert current_effective_tier() == "unrestricted"
+        finally:
+            withdraw_toolset(tokens)
+        assert current_effective_tier() == ""
 
-    assert registry.execute.await_args.kwargs["capability_tier"] == "unrestricted"
+    def test_observe_publishes_no_tier(self):
+        from robothor.engine.capability_tier import current_effective_tier, resolve_tier
+        from robothor.engine.toolset_prep import publish_toolset, withdraw_toolset
+
+        decision = resolve_tier("owner", interactive=True, identity_verified=True, mode="observe")
+        tokens = publish_toolset(self._registry(), _default_agent(), ["read_file"], decision)
+        try:
+            assert current_effective_tier() == ""
+        finally:
+            withdraw_toolset(tokens)
+
+    def test_a_child_run_inline_restores_its_parents_tier(self):
+        """spawn_agent runs the child's execute inline in the parent's task."""
+        from robothor.engine.capability_tier import current_effective_tier, resolve_tier
+        from robothor.engine.toolset_prep import publish_toolset, withdraw_toolset
+
+        owner = resolve_tier("owner", interactive=True, identity_verified=True, mode="enforce")
+        child = resolve_tier("owner", interactive=False, identity_verified=True, mode="enforce")
+        parent_tokens = publish_toolset(self._registry(), _default_agent(), [], owner)
+        try:
+            child_tokens = publish_toolset(self._registry(), _default_agent(), [], child)
+            assert current_effective_tier() == "standard"
+            withdraw_toolset(child_tokens)
+            assert current_effective_tier() == "unrestricted"
+        finally:
+            withdraw_toolset(parent_tokens)
 
 
 # ── End to end through the runner ────────────────────────────────────────
@@ -349,7 +364,15 @@ def runner(engine_config):
         registry.get_tool_names.side_effect = _names
         registry.build_for_agent.side_effect = _schemas
         registry.should_defer.return_value = False
-        registry.execute = AsyncMock(return_value={"ok": True})
+        registry.tier_seen = []
+
+        async def _execute(*args, **kwargs):
+            from robothor.engine.capability_tier import current_effective_tier
+
+            registry.tier_seen.append(current_effective_tier())
+            return {"ok": True}
+
+        registry.execute = AsyncMock(side_effect=_execute)
         mock_reg.return_value = registry
         r = AgentRunner(engine_config)
         r.registry = registry
@@ -468,9 +491,8 @@ class TestTheRunner:
         assert run.capability_tier == "unrestricted"
         assert runner.registry.build_for_agent.call_args.kwargs["tier"] == "unrestricted"
         runner.registry.execute.assert_awaited_once()
-        kwargs = runner.registry.execute.await_args.kwargs
         assert runner.registry.execute.await_args.args[0] == "claude_code_start"
-        assert kwargs["capability_tier"] == "unrestricted"
+        assert runner.registry.tier_seen == ["unrestricted"]
         assert [e["action"] for e in events] == ["allowed"]
         assert events[0]["mode"] == "enforce"
         assert events[0]["off_loop"]
@@ -488,7 +510,7 @@ class TestTheRunner:
         )
 
         assert run.capability_tier == "elevated"
-        assert runner.registry.execute.await_args.kwargs["capability_tier"] == "elevated"
+        assert runner.registry.tier_seen == ["elevated"]
         assert [e["action"] for e in events] == ["allowed"]
 
     async def test_enforce_member_gets_nothing_new(

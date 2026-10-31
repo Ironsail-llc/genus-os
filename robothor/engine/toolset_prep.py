@@ -179,11 +179,11 @@ def with_discovery_note(preamble: str, prepared: PreparedToolset) -> str:
 
 
 def publish_toolset(
-    registry: Any, agent_config: Any, tool_names: list[str], *, tier: str = ""
+    registry: Any, agent_config: Any, tool_names: list[str], capability: Any = None
 ) -> tuple[Any, ...]:
     """Install this run's tool context vars; returns tokens for withdrawal.
 
-    Two of them, and they are not the same thing:
+    Three of them, and they are not the same thing:
 
     * the DEFERRED allow-set, set only when the toolset is deferred, is what
       ``tool_call`` checks — it is a security boundary, and setting it on a run
@@ -192,27 +192,33 @@ def publish_toolset(
     * the agent's TOOLSET, set on every run, gates nothing. It exists so
       ``tool_search`` can answer a non-deferred run with the agent's own tools
       instead of "only available on deferred runs", which it returned 18 times
-      in one week to an agent that went on calling it.
+      in one week to an agent that went on calling it;
+    * the run's EFFECTIVE capability tier (``capability``, the run's
+      ``TierDecision`` or None), which dispatch copies onto ``ToolContext``.
     """
+    from robothor.engine.capability_tier import set_effective_tier
     from robothor.engine.tools.dispatch import set_agent_toolset, set_deferred_allowed
 
+    tier = capability.effective if capability is not None else ""
     tier_kw = {"tier": tier} if tier else {}
     defer_token = (
         set_deferred_allowed(registry.deferred_whitelist(agent_config, **tier_kw))
         if registry.should_defer(agent_config, **tier_kw)
         else None
     )
-    return (defer_token, set_agent_toolset(frozenset(tool_names)))
+    return (defer_token, set_agent_toolset(frozenset(tool_names)), set_effective_tier(tier))
 
 
 def withdraw_toolset(tokens: tuple[Any, ...]) -> None:
     """Undo :func:`publish_toolset`. Safe to call with anything it returned."""
+    from robothor.engine.capability_tier import clear_effective_tier
     from robothor.engine.tools.dispatch import clear_agent_toolset, clear_deferred_allowed
 
-    defer_token, toolset_token = tokens
+    defer_token, toolset_token, tier_token = tokens
     if defer_token is not None:
         clear_deferred_allowed(defer_token)
     clear_agent_toolset(toolset_token)
+    clear_effective_tier(tier_token)
 
 
 async def prepare_toolset(

@@ -24,6 +24,7 @@ The tier is that value. Rules:
 from __future__ import annotations
 
 import logging
+from contextvars import ContextVar, Token
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -79,16 +80,22 @@ def resolve_tier(
     return TierDecision(tier, role, f"role {role or 'unknown'}", mode)
 
 
-def stamp_capability_tier(run: Any, *, interactive: bool, identity: Any) -> TierDecision | None:
-    """Resolve this run's tier and record it on the run. None when the flag is off."""
+def stamp_capability_tier(run: Any, trigger_type: Any, identity: Any) -> TierDecision | None:
+    """Resolve this run's tier and record it on the run. None when the flag is off.
+
+    Called once per run, after the human's role and identity are resolved. A
+    trigger in the runner's ``_SYSTEM_TRIGGER_TYPES`` has no interactive human.
+    """
     from robothor.engine.feature_flags import role_capabilities_mode
 
     mode = role_capabilities_mode()
     if mode == "off":
         return None
+    from robothor.engine.runner import _SYSTEM_TRIGGER_TYPES
+
     decision = resolve_tier(
         run.user_role,
-        interactive=interactive,
+        interactive=trigger_type not in _SYSTEM_TRIGGER_TYPES,
         identity_verified=bool(identity is not None and getattr(identity, "verified", False)),
         mode=mode,
     )
@@ -98,11 +105,23 @@ def stamp_capability_tier(run: Any, *, interactive: bool, identity: Any) -> Tier
     return decision
 
 
-def effective_tier(run: Any) -> str:
-    """The tier a gate may act on for this run: set only under enforce."""
-    if getattr(run, "capability_tier_mode", "") == "enforce":
-        return str(getattr(run, "capability_tier", "") or "")
-    return ""
+#: The effective tier of the run whose tools are executing. Installed and
+#: withdrawn with the run's toolset (toolset_prep.publish_toolset), so a
+#: sub-agent run inline in its parent's task restores the parent's on exit.
+_effective_tier_var: ContextVar[str] = ContextVar("capability_tier", default="")
+
+
+def set_effective_tier(tier: str) -> Token[str]:
+    return _effective_tier_var.set(tier)
+
+
+def clear_effective_tier(token: Token[str]) -> None:
+    _effective_tier_var.reset(token)
+
+
+def current_effective_tier() -> str:
+    """What ``ToolContext.capability_tier`` carries: the tier under enforce, else ``""``."""
+    return _effective_tier_var.get()
 
 
 def record_tier_event(run_id: str, decision: TierDecision, unlocked: tuple[str, ...]) -> None:
