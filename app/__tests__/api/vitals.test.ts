@@ -6,11 +6,16 @@ vi.mock("@/lib/event-bus/redis-client", () => ({
 }));
 
 import { POST } from "@/app/api/vitals/route";
+import { VITALS_MAX_BODY_BYTES, VITALS_RATE_LIMIT } from "@/lib/web-vitals";
 
-function post(body: unknown): Request {
+function post(body: unknown, clientIp?: string): Request {
   return new Request("http://localhost:3004/api/vitals", {
     method: "POST",
-    headers: { "content-type": "text/plain" },
+    headers: {
+      "content-type": "text/plain",
+      // The edge appends the real client; 10.0.0.1 is the trusted proxy.
+      ...(clientIp ? { "x-forwarded-for": `${clientIp}, 10.0.0.1` } : {}),
+    },
     body: typeof body === "string" ? body : JSON.stringify(body),
   });
 }
@@ -119,5 +124,42 @@ describe("POST /api/vitals", () => {
     await POST(post({ ...LCP, view: "made-up-view" }));
 
     expect(mockWriteVital.mock.calls[0][0]).not.toHaveProperty("view");
+  });
+
+  describe("reachable signed out, so it is bounded", () => {
+    beforeEach(() => {
+      process.env.GENUS_DASHBOARD_TRUSTED_PROXIES = "10.0.0.1/32";
+    });
+    afterEach(() => {
+      delete process.env.GENUS_DASHBOARD_TRUSTED_PROXIES;
+    });
+
+    it("answers 429 and records nothing once one client spends its window", async () => {
+      for (let i = 0; i < VITALS_RATE_LIMIT; i += 1) {
+        expect((await POST(post(LCP, "192.0.2.10"))).status).toBe(204);
+      }
+      mockWriteVital.mockClear();
+      logSpy.mockClear();
+
+      const res = await POST(post(LCP, "192.0.2.10"));
+
+      expect(res.status).toBe(429);
+      expect(res.headers.get("retry-after")).toMatch(/^\d+$/);
+      expect(mockWriteVital).not.toHaveBeenCalled();
+      expect(webVitalLines(logSpy)).toHaveLength(0);
+    });
+
+    it("limits each client separately", async () => {
+      for (let i = 0; i < VITALS_RATE_LIMIT; i += 1) await POST(post(LCP, "192.0.2.20"));
+
+      expect((await POST(post(LCP, "192.0.2.21"))).status).toBe(204);
+    });
+
+    it("refuses an oversized body with 413 before parsing it", async () => {
+      const res = await POST(post({ ...LCP, pad: "x".repeat(VITALS_MAX_BODY_BYTES) }, "192.0.2.30"));
+
+      expect(res.status).toBe(413);
+      expect(mockWriteVital).not.toHaveBeenCalled();
+    });
   });
 });
