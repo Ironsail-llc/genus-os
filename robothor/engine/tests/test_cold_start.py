@@ -27,11 +27,13 @@ from starlette.testclient import TestClient
 from robothor.engine import daemon
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
     from pathlib import Path
 
 SLOW = 0.3  # seconds; each slow fake step
 
 ALICE_KEY = "agent:main:alice"
+CUSTOM_MAIN_KEY = "agent:main:alice-desk"
 ALICE_HISTORY = [{"role": "user", "content": "hi"}]
 
 
@@ -85,6 +87,7 @@ class _Harness:
         self.scan_results: list[Any] = []
         self.history_when_channels_start: list[Any] | None = None
         self.serve_health_kwargs: dict[str, Any] = {}
+        self.main_key_during_restore: str | None = None
         self.session_load_seconds = 0.0
 
     @property
@@ -107,7 +110,7 @@ async def _noop(*_args: Any, **_kwargs: Any) -> None:
 
 
 @pytest.fixture
-def harness(monkeypatch: pytest.MonkeyPatch, fleet: Path) -> _Harness:
+def harness(monkeypatch: pytest.MonkeyPatch, fleet: Path) -> Iterator[_Harness]:
     """Patch every subsystem ``main`` starts with a fake.
 
     Three fakes are slow (300 ms each) and independent of one another:
@@ -134,6 +137,7 @@ def harness(monkeypatch: pytest.MonkeyPatch, fleet: Path) -> _Harness:
         manifest_dir=fleet / "docs" / "agents",
         workflow_dir=fleet / "docs" / "workflows",
         bot_token="",
+        main_session_key=CUSTOM_MAIN_KEY,
     )
 
     real_scan = config_mod.load_manifest_dir
@@ -165,6 +169,18 @@ def harness(monkeypatch: pytest.MonkeyPatch, fleet: Path) -> _Harness:
         return {ALICE_KEY: {"history": list(ALICE_HISTORY)}}
 
     monkeypatch.setattr(chat, "load_all_sessions", fake_load_sessions)
+    # init_chat sets these module globals; restore them after the test.
+    monkeypatch.setattr(chat, "_config", None)
+    monkeypatch.setattr(chat, "_runner", None)
+    real_apply = chat.apply_restored_sessions
+
+    def recording_apply(sessions: dict[str, Any]) -> None:
+        # The cache pins the main session by key while it hydrates; it must
+        # be this engine's key, not the fallback.
+        h.main_key_during_restore = chat.get_main_session_key()
+        real_apply(sessions)
+
+    monkeypatch.setattr(chat, "apply_restored_sessions", recording_apply)
     chat._cache.sessions.pop(ALICE_KEY, None)
 
     def fake_notify(state: str) -> None:
@@ -258,7 +274,8 @@ def harness(monkeypatch: pytest.MonkeyPatch, fleet: Path) -> _Harness:
 
     m(daemon, "_start_channels", fake_channels)
     m(daemon, "_sd_notify", fake_notify)
-    return h
+    yield h
+    chat._cache.sessions.pop(ALICE_KEY, None)
 
 
 async def _cancel_leftovers() -> None:
@@ -405,6 +422,12 @@ class TestSessionRestoreIsOffTheLoop:
         await _run_to_ready(harness)
 
         assert harness.history_when_channels_start == ALICE_HISTORY
+
+    @pytest.mark.asyncio
+    async def test_the_restore_sees_this_engines_main_session_key(self, harness):
+        await _run_to_ready(harness)
+
+        assert harness.main_key_during_restore == CUSTOM_MAIN_KEY
 
     @pytest.mark.asyncio
     async def test_the_health_server_does_not_restore_a_second_time(self, harness):
