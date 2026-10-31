@@ -728,15 +728,34 @@ def _delivery_outcome(response: JSONResponse) -> tuple[str, str]:
 def _log_delivery(
     delivery_log: logging.Logger, config: WebhookConfig, channel: str, response: JSONResponse
 ) -> None:
-    """One line per delivery: channel, outcome, status and reason -- never the payload."""
+    """One line per delivery: channel, outcome, status and reason -- never the payload.
+
+    The channel is the CONFIGURED name when the path matched one, else
+    ``unknown``: the raw path segment is sender-controlled and never logged.
+    The reason can echo it (``Unknown channel: ...``), so it is sanitised.
+    """
+    configured = config.channels.get(channel)
     outcome, reason = _delivery_outcome(response)
     delivery_log.info(
-        "webhook delivery channel=%s outcome=%s status=%d reason=%r",
-        channel if channel in config.channels else "unknown",
+        "webhook delivery channel=%s outcome=%s status=%d reason=%s",
+        configured.name if configured is not None else "unknown",
         outcome,
         response.status_code,
-        reason,
+        _log_safe(reason),
     )
+
+
+_LOG_UNSAFE = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+_LOG_FIELD_MAX = 120
+
+
+def _log_safe(value: str) -> str:
+    """A sender-derived value fit for one log line: control characters (CR,
+    LF, ESC and the rest) become ``?`` and the result is capped in length."""
+    cleaned = _LOG_UNSAFE.sub("?", value)
+    if len(cleaned) > _LOG_FIELD_MAX:
+        cleaned = cleaned[:_LOG_FIELD_MAX] + "..."
+    return cleaned or "-"
 
 
 def get_webhook_router(
