@@ -3,9 +3,32 @@ import {
   ATTACHMENT_LIMITS_TEXT,
   MAX_ATTACHMENTS,
   MAX_ATTACHMENT_BYTES,
+  attachmentMime,
   checkAttachment,
   stripAttachmentNote,
 } from "../attachments";
+
+describe("attachmentMime: the extension and the type must agree", () => {
+  it.each([
+    ["tool.exe", "text/plain"],
+    ["evil.png", "text/plain"],
+    ["notes.txt", "image/png"],
+    ["archive.zip", ""],
+  ])("refuses %s as %j", (name, type) => {
+    expect(attachmentMime(name, type)).toBeNull();
+  });
+
+  it.each([
+    ["notes.txt", "text/plain", "text/plain"],
+    ["photo.jpg", "image/jpeg", "image/jpeg"],
+    ["README.md", "", "text/markdown"],
+    ["notes.md", "text/x-markdown", "text/markdown"],
+    ["notes.md", "text/plain", "text/plain"],
+    ["README", "text/plain", "text/plain"],
+  ])("takes %s as %j and sends %s", (name, type, sent) => {
+    expect(attachmentMime(name, type)).toBe(sent);
+  });
+});
 
 describe("stripAttachmentNote", () => {
   const NOTE = "[1 file attached — kept on disk; use the paths below]\n- a.txt — document, 2 B\n   path: /inbox/a.txt";

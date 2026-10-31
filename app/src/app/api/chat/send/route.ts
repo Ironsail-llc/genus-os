@@ -8,13 +8,49 @@ function json(status: number, body: Record<string, unknown>): Response {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 }
 
+/**
+ * The request's JSON, or the refusal to answer instead. A body shorter than
+ * its Content-Length arrived truncated (a proxy that buffered only part of
+ * it): 413. One that does not parse: 400. Either way no turn starts, and the
+ * browser is told so rather than handed a bare 500 and a recovery card.
+ */
+/** What the browser may send. Shapes, not guarantees: every field is checked below. */
+interface SendBody {
+  message?: string;
+  request_id?: string;
+  agent?: string;
+  join_running?: boolean;
+  attachments?: AttachmentPayload[];
+}
+
+async function readBody(req: Request): Promise<SendBody | Response> {
+  let raw: string;
+  try {
+    raw = await req.text();
+  } catch {
+    return json(400, { error: "the request body could not be read", request_admitted: false });
+  }
+  const declared = Number(req.headers.get("content-length") ?? NaN);
+  if (Number.isFinite(declared) && new TextEncoder().encode(raw).length < declared) {
+    return json(413, { error: "the message and its files arrived incomplete; they are too large", request_admitted: false });
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed as SendBody;
+  } catch {
+    // fall through to the refusal
+  }
+  return json(400, { error: "the request body is not valid JSON", request_admitted: false });
+}
+
 export async function POST(req: Request) {
   // Refused before it is read: three files at the limit, base64'd, fit well
   // inside this, so a larger body can only be one the checks below would refuse.
   if (Number(req.headers.get("content-length") ?? 0) > MAX_SEND_BODY_BYTES) {
     return json(413, { error: "the message and its files are too large", request_admitted: false });
   }
-  const body = await req.json();
+  const body = await readBody(req);
+  if (body instanceof Response) return body;
   const message = body.message;
   const attachments: AttachmentPayload[] | undefined = body.attachments;
   const hasFiles = Array.isArray(attachments) && attachments.length > 0;

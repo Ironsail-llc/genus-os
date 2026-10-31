@@ -109,6 +109,16 @@ describe("attaching files to a chat turn", () => {
     expect(screen.getAllByTestId("attachment-chip")).toHaveLength(3);
   });
 
+  it("refuses a file whose extension is not supported, whatever type it claims", async () => {
+    engine();
+    render(<ChatPanel />);
+    attach(file("tool.exe", "text/plain"), file("evil.png", "text/plain"));
+    const refusal = await screen.findByTestId("attach-refusal");
+    expect(refusal).toHaveTextContent("tool.exe is not a supported type");
+    expect(refusal).toHaveTextContent("evil.png is not a supported type");
+    expect(screen.queryByTestId("attachment-chip")).toBeNull();
+  });
+
   it("accepts a markdown file the browser gave no type, by its extension", async () => {
     engine();
     render(<ChatPanel />);
@@ -187,6 +197,29 @@ describe("attaching files to a chat turn", () => {
     ]);
     render(<ChatPanel />);
     expect(await screen.findByTestId("message-attachment")).toHaveTextContent("a.txt");
+  });
+
+  it("a paste that carries text pastes the text and ignores the image beside it", async () => {
+    engine();
+    render(<ChatPanel />);
+    const input = screen.getByTestId("chat-input");
+    const notPrevented = fireEvent.paste(input, {
+      clipboardData: { types: ["text/plain", "text/html", "Files"], files: [file("cells.png", "image/png")], getData: () => "A1\tB1" },
+    });
+    expect(notPrevented).toBe(true);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.queryByTestId("attachment-chip")).toBeNull();
+    expect(screen.queryByTestId("attach-refusal")).toBeNull();
+  });
+
+  it("a paste with only files attaches them", async () => {
+    engine();
+    render(<ChatPanel />);
+    const notPrevented = fireEvent.paste(screen.getByTestId("chat-input"), {
+      clipboardData: { types: ["Files"], files: [file("shot.png", "image/png")] },
+    });
+    expect(notPrevented).toBe(false);
+    expect(await screen.findByTestId("attachment-chip")).toHaveTextContent("shot.png");
   });
 
   it("refuses files pasted or dropped in Plan mode, inline", async () => {
