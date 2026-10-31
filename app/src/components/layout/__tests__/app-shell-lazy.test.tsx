@@ -53,6 +53,8 @@ vi.mock("@/components/canvas/live-canvas", () => ({
   LiveCanvas: () => <div data-testid="live-canvas" />,
 }));
 vi.mock("@/components/mfa-setup-banner", () => ({ MfaSetupBanner: () => null }));
+const reload = vi.hoisted(() => ({ page: vi.fn() }));
+vi.mock("@/lib/reload-page", () => ({ reloadPage: () => reload.page() }));
 vi.mock("next-auth/react", () => ({
   useSession: () => ({ data: { role: "owner" }, status: "authenticated", update: vi.fn() }),
   SessionProvider: ({ children }: { children: React.ReactNode }) => children,
@@ -111,6 +113,7 @@ describe("AppShell — views load on first visit", () => {
     vi.resetModules();
     lazy.loaded = [];
     lazy.mounts = {};
+    reload.page.mockClear();
     for (const [path, exportName, name] of VIEW_MODULES) {
       vi.doMock(path, () => ({ [exportName]: stub(name) }));
     }
@@ -118,6 +121,7 @@ describe("AppShell — views load on first visit", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     window.history.replaceState(null, "", "/");
   });
 
@@ -167,5 +171,33 @@ describe("AppShell — views load on first visit", () => {
     expect(screen.queryByTestId("stub-settings")).toBeNull();
     expect(screen.queryByTestId("stub-memory")).toBeNull();
     expect(Object.keys(lazy.mounts)).toEqual(["runs"]);
+  });
+
+  /**
+   * A tab opened before a deploy asks for chunk hashes the new build no longer
+   * serves. That failure must cost the one view, not the Helm, and say what
+   * fixes it: a reload.
+   */
+  it("keeps the Helm up when a view's chunk fails to load, and offers a reload", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.doMock("@/components/views/goals-view", () => {
+      const error = new Error("Failed to load chunk /_next/static/chunks/goals.js");
+      error.name = "ChunkLoadError";
+      throw error;
+    });
+    await renderShellAt("?v=goals");
+
+    const panel = await screen.findByTestId("view-load-failed");
+    expect(panel.textContent).toMatch(/updated/i);
+    expect(screen.getByTestId("sidebar")).toBeInTheDocument();
+    expect(screen.getByTestId("chat-panel")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("view-load-failed-reload"));
+    expect(reload.page).toHaveBeenCalledTimes(1);
+
+    // Another screen still works, and the failed one's panel leaves with it.
+    fireEvent.click(screen.getByTestId("nav-tasks"));
+    expect(await screen.findByTestId("stub-tasks")).toBeVisible();
+    expect(screen.queryByTestId("view-load-failed")).toBeNull();
   });
 });

@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { render, screen, fireEvent } from "@testing-library/react";
 
 /**
  * Settings downloads only the sub-page being shown. Each page module is a
@@ -7,6 +7,8 @@ import { render, screen } from "@testing-library/react";
  * of page modules Settings asked for.
  */
 const lazy = vi.hoisted(() => ({ loaded: [] as string[] }));
+const reload = vi.hoisted(() => ({ page: vi.fn() }));
+vi.mock("@/lib/reload-page", () => ({ reloadPage: () => reload.page() }));
 
 function stub(name: string) {
   lazy.loaded.push(name);
@@ -38,10 +40,15 @@ async function renderSettings(page: string) {
   );
 }
 
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
 describe("SettingsView — sub-pages load on demand", () => {
   beforeEach(() => {
     vi.resetModules();
     lazy.loaded = [];
+    reload.page.mockClear();
     for (const [path, exportName, name] of PAGE_MODULES) {
       vi.doMock(path, () => ({ [exportName]: stub(name) }));
     }
@@ -57,5 +64,22 @@ describe("SettingsView — sub-pages load on demand", () => {
     await renderSettings("appearance");
     expect(await screen.findByTestId("settings-page-appearance")).toBeInTheDocument();
     expect(lazy.loaded).toEqual([]);
+  });
+
+  it("says a page that failed to download needs a reload, not another page", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.doMock("@/components/views/settings/plugins-page", () => {
+      const error = new Error("Failed to load chunk /_next/static/chunks/plugins.js");
+      error.name = "ChunkLoadError";
+      throw error;
+    });
+    await renderSettings("plugins");
+
+    const panel = await screen.findByTestId("settings-page-load-failed");
+    expect(panel.textContent).toMatch(/updated/i);
+    expect(panel.textContent).not.toMatch(/answer from the engine/i);
+    expect(screen.queryByTestId("settings-page-error")).toBeNull();
+    fireEvent.click(screen.getByTestId("settings-page-load-failed-reload"));
+    expect(reload.page).toHaveBeenCalledTimes(1);
   });
 });
