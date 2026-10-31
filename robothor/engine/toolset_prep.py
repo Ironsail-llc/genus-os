@@ -40,6 +40,9 @@ class PreparedToolset:
     #: prompt paragraph and the browser schema wording turn on together — they
     #: describe one feature, and both used to ship to everyone.
     autonomy_active: bool = False
+    #: Opt-in tools the run's capability tier added (enforce) or would have
+    #: added (observe). Empty when no widening tier was resolved.
+    tier_unlocked: tuple[str, ...] = ()
 
 
 def deferred_toolset_note(visible: int, reachable: int) -> str:
@@ -175,7 +178,9 @@ def with_discovery_note(preamble: str, prepared: PreparedToolset) -> str:
     return "\n\n".join(parts)
 
 
-def publish_toolset(registry: Any, agent_config: Any, tool_names: list[str]) -> tuple[Any, ...]:
+def publish_toolset(
+    registry: Any, agent_config: Any, tool_names: list[str], *, tier: str = ""
+) -> tuple[Any, ...]:
     """Install this run's tool context vars; returns tokens for withdrawal.
 
     Two of them, and they are not the same thing:
@@ -191,9 +196,10 @@ def publish_toolset(registry: Any, agent_config: Any, tool_names: list[str]) -> 
     """
     from robothor.engine.tools.dispatch import set_agent_toolset, set_deferred_allowed
 
+    tier_kw = {"tier": tier} if tier else {}
     defer_token = (
-        set_deferred_allowed(registry.deferred_whitelist(agent_config))
-        if registry.should_defer(agent_config)
+        set_deferred_allowed(registry.deferred_whitelist(agent_config, **tier_kw))
+        if registry.should_defer(agent_config, **tier_kw)
         else None
     )
     return (defer_token, set_agent_toolset(frozenset(tool_names)))
@@ -219,6 +225,7 @@ async def prepare_toolset(
     deep_plan: bool,
     tenant_id: str | None = None,
     actor_id: str | None = None,
+    capability: Any = None,
 ) -> PreparedToolset:
     """Load this agent's adapters, then pick and wrap its toolset.
 
@@ -226,13 +233,26 @@ async def prepare_toolset(
     a live autonomy grant? — and it is answered HERE, once, instead of at each
     of the two places that spend tokens on the answer. Both used to spend them
     unconditionally, on every instance, enrolled or not.
+
+    ``capability`` is the run's ``TierDecision`` (or None with the flag off).
+    Its effective tier picks the toolset; a widening tier also reports which
+    opt-in tools it added, or under observe would have added.
     """
     await _load_adapters(registry, agent_config, agent_id)
 
     if not readonly_mode:
         autonomy = await _autonomy_active(tenant_id, actor_id, agent_id)
-        schemas = registry.build_for_agent(agent_config, autonomy=autonomy)
-        names = registry.get_tool_names(agent_config)
+        # Passed only when there is one, so a run with the flag off makes the
+        # same registry calls it always made (any registry, not just ours).
+        tier = capability.effective if capability is not None else ""
+        tier_kw = {"tier": tier} if tier else {}
+        schemas = registry.build_for_agent(agent_config, autonomy=autonomy, **tier_kw)
+        names = registry.get_tool_names(agent_config, **tier_kw)
+        unlocked: tuple[str, ...] = ()
+        if capability is not None and capability.widens:
+            baseline = set(registry.get_tool_names(agent_config))
+            widened = registry.get_tool_names(agent_config, tier=capability.tier)
+            unlocked = tuple(n for n in widened if n not in baseline)
         advertised = {str(schema.get("function", {}).get("name", "")) for schema in schemas}
         reachable = tuple(n for n in names if n not in advertised)
         return PreparedToolset(
@@ -242,6 +262,7 @@ async def prepare_toolset(
             reachable_names=reachable,
             discovery_note=deferred_toolset_note(len(schemas), len(reachable)),
             autonomy_active=autonomy,
+            tier_unlocked=unlocked,
         )
 
     from robothor.engine.prompts import (

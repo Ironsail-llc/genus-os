@@ -35,6 +35,11 @@ import litellm
 
 from robothor.db.connection import current_tenant_scope
 from robothor.engine.cancel_outcome import _cancel_outcome, terminal_run
+from robothor.engine.capability_tier import (
+    effective_tier,
+    record_tier_event,
+    stamp_capability_tier,
+)
 from robothor.engine.chat_backstop import protect_if_human_chat
 from robothor.engine.checkpoint import save_iteration
 from robothor.engine.config import (
@@ -674,6 +679,15 @@ class AgentRunner(
             if effective_identity is None and spawn_context.identity:
                 effective_identity = spawn_context.identity
 
+        # Capability tier — what the human's role lets this session be offered
+        # (robothor/engine/capability_tier.py). Stamped after spawn inheritance
+        # so it reads the final user_role. None while the flag is off.
+        _capability = stamp_capability_tier(
+            session.run,
+            interactive=trigger_type not in _SYSTEM_TRIGGER_TYPES,
+            identity=effective_identity,
+        )
+
         # Contact 360 linkage — stamp person_id from the effective identity
         # first (covers WEBCHAT, whose trigger_detail carries no chat_id for
         # resolve_run_person_id to key off). Fall back to the existing
@@ -971,6 +985,7 @@ class AgentRunner(
             deep_plan=deep_plan,
             tenant_id=resolved_tenant,
             actor_id=effective_user_id,
+            capability=_capability,
         )
         tool_schemas = _prepared.tool_schemas
         tool_names = _prepared.tool_names
@@ -1090,6 +1105,17 @@ class AgentRunner(
                         )
                 except Exception as e:
                     logger.warning("Failed to record run start: %s", _sanitize(e))
+
+                # Evidence for ROBOTHOR_ROLE_CAPABILITIES_MODE: one row per run a
+                # widening tier was resolved for. After create_run, so the row
+                # has a run to point at; off the loop, it is a DB write.
+                if _capability is not None and _capability.widens:
+                    await asyncio.to_thread(
+                        record_tier_event,
+                        session.run.id,
+                        _capability,
+                        _prepared.tier_unlocked,
+                    )
 
                 # Auto-create CRM task if configured (skip for sub-agent runs)
                 if should_create_auto_task(agent_config, spawn_context):
@@ -1304,7 +1330,12 @@ class AgentRunner(
 
                 # The deferred allow-set that gates tool_call, and the toolset
                 # tool_search reads. toolset_prep says why they are two things.
-                _toolset_tokens = publish_toolset(self.registry, agent_config, tool_names)
+                _toolset_tokens = publish_toolset(
+                    self.registry,
+                    agent_config,
+                    tool_names,
+                    tier=effective_tier(session.run),
+                )
 
                 from robothor.engine.request_runtime import observe_request
 

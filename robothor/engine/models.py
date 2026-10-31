@@ -586,6 +586,12 @@ class AgentRun:
     tenant_id: str = field(default_factory=lambda: DEFAULT_TENANT)
     user_id: str = ""
     user_role: str = ""
+    # The capability tier user_role maps to (robothor/engine/capability_tier.py),
+    # the ROBOTHOR_ROLE_CAPABILITIES_MODE it was resolved under, and why. All
+    # three stay "" while the flag is off.
+    capability_tier: str = ""
+    capability_tier_mode: str = ""
+    capability_tier_reason: str = ""
     agent_id: str = ""
 
     trigger_type: TriggerType = TriggerType.MANUAL

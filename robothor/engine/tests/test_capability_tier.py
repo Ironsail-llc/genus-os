@@ -339,7 +339,9 @@ def runner(engine_config):
         registry = MagicMock()
 
         def _names(config, tier=""):
-            return ["read_file", "claude_code_start"] if tier else ["read_file"]
+            # The real registry widens only for these two tiers (TestTheRegistry).
+            widening = tier in ("unrestricted", "elevated")
+            return ["read_file", "claude_code_start"] if widening else ["read_file"]
 
         def _schemas(config, autonomy=False, tier=""):
             return [{"type": "function", "function": {"name": n}} for n in _names(config, tier)]

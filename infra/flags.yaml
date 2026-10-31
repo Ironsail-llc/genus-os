@@ -65,6 +65,16 @@ flags:
       (models.py human_approval_timeout), not the 600s this entry used to say.
       Probe-verified: deletes escalate, gws_gmail_send and search_memory stay
       autonomous.
+  - name: ROBOTHOR_ROLE_CAPABILITIES_MODE
+    owner: ops
+    mode: "off"
+    soak: >
+      New. Off is today's toolset. Turn on in observe first: each owner/admin
+      chat run writes one role_capability guardrail row naming the opt-in tools
+      the tier would unlock; promote to enforce once those rows match what the
+      owner expects to be offered. Only widens, only for a verified identity on
+      an interactive run; RBAC and every other guardrail still decide.
+
   - name: ROBOTHOR_SANDBOX_DEFAULT_MODE
     owner: ops
     mode: observe

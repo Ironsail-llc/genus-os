@@ -154,6 +154,12 @@ class ToolContext:
     # to compute the "own data + shared" DataScope for a call; None is the
     # unaffected, pre-Task-5 default every existing caller gets.
     identity: IdentityContext | None = None
+    # The run's EFFECTIVE capability tier (robothor/engine/capability_tier.py):
+    # "unrestricted" / "elevated" / "standard" / "restricted" under
+    # ROBOTHOR_ROLE_CAPABILITIES_MODE=enforce, "" otherwise. A gate that widens
+    # for the owner reads this one field instead of re-deriving it from
+    # user_role, trigger and identity.
+    capability_tier: str = ""
 
 
 def get_db() -> Any:
@@ -551,6 +557,7 @@ async def _execute_tool(
     task_author_override: str = "",
     is_benchmark: bool = False,
     identity: IdentityContext | None = None,
+    capability_tier: str = "",
 ) -> dict[str, Any]:
     """Route tool call to the correct handler.
 
@@ -575,6 +582,7 @@ async def _execute_tool(
         task_author_override=task_author_override,
         is_benchmark=is_benchmark,
         identity=identity,
+        capability_tier=capability_tier,
     )
     denial = await _runtime_denial(name, args, ctx)
     if denial:
