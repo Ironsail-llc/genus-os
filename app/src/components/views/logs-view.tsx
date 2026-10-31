@@ -22,9 +22,11 @@ import { isLogSince } from "@/lib/observe/since";
  * and the easiest one to get wrong — an appliance fault reported where there is
  * none sends an operator looking for a problem that does not exist.
  *
- * **A container is told where its logs are.** The unavailable answer carries a
- * `hint` (pods write to standard output; read them with the cluster's log tool)
- * and the deployment's own `logs_url` when one is configured, so the page links
+ * **A container is told where its logs are.** The unavailable answer carries
+ * the deployment's own `logs_url` when one is configured and, only when there
+ * is no journalctl binary at all, a `hint` (pods write to standard output; read
+ * them with the cluster's log tool). A journalctl that failed is a systemd
+ * host and gets no cluster wording, so the page links
  * out instead of ending the conversation. While journald is unavailable there
  * is nothing to read and nothing to beat: Auto-refresh is hidden, no lines
  * request is ever sent (an empty `unit=` would earn a 422 and a red banner),
@@ -58,10 +60,6 @@ const BRIDGE = "/api/bridge";
 const LOGS_POLL_MS = 10_000;
 
 const LINE_CHOICES = [50, 200, 1000];
-
-/** Said when the bridge sends no hint of its own (an older bridge). */
-const CONTAINER_HINT =
-  "this deployment writes its logs to standard output; read them with your cluster's log tool";
 
 /**
  * Only an http(s) URL becomes a link. The value is the operator's own setting,
@@ -418,19 +416,29 @@ export function LogsView({ visible = true, role, roleLoading = false }: LogsView
         >
           <FileText aria-hidden className="mb-3 size-6 text-muted-foreground/60" strokeWidth={1.5} />
           <p className="text-sm font-medium text-foreground">
-            Logs are read outside the dashboard on this deployment
+            {unitsHint
+              ? "Logs are read outside the dashboard on this deployment"
+              : "Logs are not available on this deployment"}
           </p>
-          <p
-            data-testid="logs-unavailable-hint"
-            className="mt-1 max-w-xl text-xs text-foreground/80 first-letter:uppercase"
-          >
-            {sentence(unitsHint ?? CONTAINER_HINT)}
-          </p>
-          <p className="mt-1 max-w-xl text-xs text-muted-foreground">
-            Nothing is broken. Read the pods&rsquo; output with your cluster&rsquo;s log tool, or
-            the log service this deployment ships to. On a systemd install, the bridge&rsquo;s
-            service user also has to be able to read the journals it is asked for.
-          </p>
+          {unitsHint ? (
+            <>
+              <p
+                data-testid="logs-unavailable-hint"
+                className="mt-1 max-w-xl text-xs text-foreground/80 first-letter:uppercase"
+              >
+                {sentence(unitsHint)}
+              </p>
+              <p className="mt-1 max-w-xl text-xs text-muted-foreground">
+                Nothing is broken. Read the pods&rsquo; output with your cluster&rsquo;s log tool,
+                or the log service this deployment ships to.
+              </p>
+            </>
+          ) : (
+            <p className="mt-1 max-w-xl text-xs text-muted-foreground">
+              The bridge could not use journald here; its reason is below. On a systemd install,
+              the bridge&rsquo;s service user has to be able to read the journals it is asked for.
+            </p>
+          )}
           {logsUrl ? (
             <a
               data-testid="logs-external-link"

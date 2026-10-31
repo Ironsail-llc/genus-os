@@ -350,16 +350,22 @@ def _logs_url() -> str | None:
 def list_units(request: Request) -> dict[str, Any]:
     """Which units the operator may follow, and whether journald is here.
 
-    When it is not, the answer also says where the logs ARE: a ``hint`` for the
-    container case and the deployment's own ``logs_url`` when one is configured
-    (``null`` otherwise), so the page can link out instead of showing a dead end.
+    When it is not, the answer also carries the deployment's own ``logs_url``
+    (``null`` when unset), so the page can link out instead of showing a dead
+    end, and, when there is no ``journalctl`` binary at all (a container), a
+    ``hint`` saying where the logs are.
     """
     require_operator(request)
     catalog = unit_catalog()
     _, reason = _journalctl()
     if reason is not None:
         payload = _unavailable(None, reason)
-        payload.update({"hint": CONTAINER_HINT, "logs_url": _logs_url()})
+        payload["logs_url"] = _logs_url()
+        # The container hint only where there is no journalctl at all. One
+        # that is installed but failed is a systemd host, and a cluster's log
+        # tool is the wrong place to send its operator.
+        if _which("journalctl") is None:
+            payload["hint"] = CONTAINER_HINT
         return payload
     return {
         "units": [{"name": name, "description": catalog[name]} for name in sorted(catalog)],
