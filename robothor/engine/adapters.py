@@ -271,10 +271,17 @@ def verify_adapter_integrity(adapter: AdapterConfig) -> tuple[bool, str]:
     resolved = exe if Path(exe).is_absolute() else (shutil.which(exe) or "")
     if not resolved or not Path(resolved).is_file():
         return False, f"pinned executable not found: {exe}"
-    try:
-        digest = hashlib.sha256(Path(resolved).read_bytes()).hexdigest()
-    except OSError as e:
-        return False, f"pinned executable unreadable: {e}"
+    identity = _cache_identity(Path(resolved))
+    cached = _digest_cache.get(resolved)
+    if identity is not None and cached is not None and cached[0] == identity:
+        digest = cached[1]
+    else:
+        try:
+            digest = hashlib.sha256(Path(resolved).read_bytes()).hexdigest()
+        except OSError as e:
+            return False, f"pinned executable unreadable: {e}"
+        if identity is not None:
+            _digest_cache[resolved] = (identity, digest)
     if digest != adapter.command_sha256.lower():
         return False, (
             f"sha256 mismatch for {resolved}: expected {adapter.command_sha256[:12]}…, "
@@ -294,16 +301,28 @@ def load_adapters(adapter_dir: Path | None = None) -> list[AdapterConfig]:
 
     import yaml
 
+    from robothor.engine.config import env_snapshot, env_snapshot_holds
+
     adapters: list[AdapterConfig] = []
     for path in sorted(d.glob("*.yaml")):
+        key = _adapter_file_key(path)
+        cached = _adapter_file_cache.get(str(path))
+        if key is not None and cached is not None:
+            cached_key, snapshot, cached_adapter = cached
+            if cached_key == key and env_snapshot_holds(snapshot):
+                if cached_adapter is not None:
+                    adapters.append(cached_adapter)
+                continue
         try:
             with path.open() as f:
-                data = yaml.safe_load(f)
+                text = f.read()
+            data = yaml.safe_load(text)
+            adapter = _parse_adapter(data) if isinstance(data, dict) else None
+            if key is not None:
+                _adapter_file_cache[str(path)] = (key, env_snapshot(text, _ENV_VAR_RE), adapter)
             if not isinstance(data, dict):
                 logger.warning("Adapter file %s is not a YAML mapping, skipping", path)
-                continue
-            adapter = _parse_adapter(data)
-            if adapter:
+            elif adapter:
                 adapters.append(adapter)
                 logger.info(
                     "Loaded adapter '%s' (%s) from %s", adapter.name, adapter.transport, path
@@ -335,7 +354,47 @@ def get_loaded_adapters() -> list[AdapterConfig]:
 
 
 def refresh_adapters(adapter_dir: Path | None = None) -> list[AdapterConfig]:
-    """Reload all adapters from disk and update the module-level cache."""
+    """Reload all adapters from disk and update the module-level cache.
+
+    A reload means "re-read the disk", so the per-file cache goes first.
+    """
     global _loaded_adapters
+    _adapter_file_cache.clear()
     _loaded_adapters = load_adapters(adapter_dir)
     return _loaded_adapters
+
+
+# ── File caches (ROBOTHOR_CONFIG_CACHE) ──────────────────────────────────────
+
+#: ``{path: (key, ${VAR} values, parsed adapter or None for a refused file)}``.
+_adapter_file_cache: dict[
+    str, tuple[tuple[Any, ...], tuple[tuple[str, str | None], ...], AdapterConfig | None]
+] = {}
+
+#: ``{resolved binary path: (file identity, sha256 hex)}``.
+_digest_cache: dict[str, tuple[tuple[int, int, int, int], str]] = {}
+
+
+def reset_adapter_cache() -> None:
+    """Forget every parsed adapter file and binary digest."""
+    _adapter_file_cache.clear()
+    _digest_cache.clear()
+
+
+def _cache_identity(path: Path) -> tuple[int, int, int, int] | None:
+    """The file's identity when the cache is on; None (do not cache) when off."""
+    from robothor.engine.config import file_identity
+    from robothor.engine.feature_flags import config_cache_enabled
+
+    return file_identity(path) if config_cache_enabled() else None
+
+
+def _adapter_file_key(path: Path) -> tuple[Any, ...] | None:
+    """What a parsed adapter depends on besides its ``${VAR}`` values: its
+    file, and the plugin set its tool names are checked against."""
+    identity = _cache_identity(path)
+    if identity is None:
+        return None
+    from robothor.plugins.loader import generation
+
+    return (identity, generation())

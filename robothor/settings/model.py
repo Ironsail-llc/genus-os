@@ -2066,6 +2066,16 @@ class FlagSettings(SettingsGroup):
         "write the agent_reviews rows the achievement score is built on.",
         governed=True,
     )
+    config_cache: bool = declare(
+        False,
+        "ROBOTHOR_CONFIG_CACHE",
+        "Reuse an agent's merged and validated manifest, its adapter configs "
+        "and the digest of a pinned adapter binary between runs while the "
+        "files they came from are unchanged. A plugin sync, a plugin reload "
+        "or a defaults reload drops them.",
+        restart_required=False,
+        since="unreleased",
+    )
     disable_all_rips: bool = declare(
         False,
         "ROBOTHOR_DISABLE_ALL_RIPS",

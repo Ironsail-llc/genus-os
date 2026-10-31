@@ -179,6 +179,12 @@ Then add the `example_*` tool names to the agent's `tools_allowed` in
 can see them; the allowlist controls *whether* they're exposed). Tools are
 discovered from the bridge's `tools/list` at registration — no per-tool code.
 
+With `ROBOTHOR_CONFIG_CACHE` on, a run re-parses an adapter YAML only when the
+file's inode, size, mtime or ctime changes, or a `${...}` value it names
+changes, and re-hashes a pinned binary only when its inode, size, mtime or
+ctime changes. Edits and rotated secrets still reach the next run. A plugin
+reload makes every adapter be judged again.
+
 ## Verify
 
 ```bash

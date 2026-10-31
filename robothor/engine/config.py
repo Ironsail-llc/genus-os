@@ -5,6 +5,7 @@ Engine configuration — loads agent configs from YAML manifests and env vars.
 from __future__ import annotations
 
 import contextlib
+import copy
 import logging
 import os
 import re
@@ -853,13 +854,130 @@ _defaults_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 
 
 def reset_defaults_cache() -> None:
-    """Forget every parsed ``_defaults.yaml``.
+    """Forget every parsed ``_defaults.yaml``, and every manifest built on one.
 
     The mtime check catches an ordinary edit, but not a write that preserved
     the timestamp — so the admin reload route drops the cache outright rather
-    than trusting it to notice.
+    than trusting it to notice. The merged-manifest cache goes with it: a
+    reload means "re-read the disk", and a cached merge is a read of it.
     """
     _defaults_cache.clear()
+    reset_manifest_cache()
+
+
+# ── Merged-manifest cache (ROBOTHOR_CONFIG_CACHE) ───────────────────
+
+#: The value of every ``${VAR}`` a file named, when it was read.
+EnvSnapshot = tuple[tuple[str, str | None], ...]
+
+#: ``{(agent, path, workspace, trigger): (key, config, schema issues, ${VAR}
+#: values)}`` for :func:`load_agent_config`. The key is everything the merged
+#: document depends on (:func:`_manifest_cache_key`), so an entry is served only
+#: for the inputs it was built from; one slot per agent and trigger means an
+#: edit replaces its entry rather than piling up beside it.
+_manifest_cache: dict[
+    tuple[Any, ...], tuple[tuple[Any, ...], AgentConfig, list[Any], EnvSnapshot]
+] = {}
+
+
+def reset_manifest_cache() -> None:
+    """Forget every cached merged manifest."""
+    _manifest_cache.clear()
+
+
+def invalidate_config_caches() -> None:
+    """Drop every config cache this process holds: defaults, manifests, adapters.
+
+    In-process only. The engine's own plugin-sync route calls it; the
+    ``genus plugin sync`` CLI runs in another process and cannot, which is
+    fine: the manifests it rewrites change stat and miss on their own, and
+    the reload it tells the operator to run moves the plugin generation every
+    key carries.
+    """
+    from robothor.engine.adapters import reset_adapter_cache
+
+    reset_defaults_cache()
+    reset_adapter_cache()
+
+
+def file_identity(path: Path) -> tuple[int, int, int, int] | None:
+    """``(inode, size, mtime_ns, ctime_ns)``, or None when the file is not there.
+
+    The inode and ctime are what make this safe against an atomic rename that
+    kept the old mtime and size: ``os.replace`` brings a new inode, and no
+    unprivileged write can put a ctime back.
+    """
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    return (st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+
+
+def environment_fingerprint() -> int:
+    """One number for the ``ROBOTHOR_*`` environment.
+
+    Those variables shape the merged document (``ROBOTHOR_OVERRIDE_*``, the
+    schema mode, the last-resort model, the default service role). The rest of
+    the environment is left out on purpose: libraries set variables of their
+    own on import, and a key over all of them missed on every second load.
+    """
+    return hash(frozenset((k, v) for k, v in os.environ.items() if k.startswith("ROBOTHOR_")))
+
+
+def env_snapshot(text: str, pattern: re.Pattern[str] = _ENV_VAR_RE) -> EnvSnapshot:
+    """The current value of every ``${VAR}`` a file names.
+
+    Read from the raw text, so a placeholder in a comment is counted too: one
+    variable too many costs a needless miss, one too few a stale secret.
+    """
+    return tuple((name, os.environ.get(name)) for name in sorted(set(pattern.findall(text))))
+
+
+def env_snapshot_holds(snapshot: EnvSnapshot) -> bool:
+    """True while every variable in ``snapshot`` still has the value it had."""
+    return all(os.environ.get(name) == value for name, value in snapshot)
+
+
+def _inside(directory: Path, path: Path) -> Path | None:
+    """``path`` resolved, when it resolves inside ``directory``; else None.
+
+    The cache reads the manifest a second time, so it re-proves what the
+    loader's agent-id check already guarantees: the path cannot leave the
+    manifest directory. A manifest symlinked elsewhere is simply not cached.
+    """
+    root = os.path.realpath(directory)
+    real = os.path.realpath(path)
+    if not real.startswith(root + os.sep):
+        return None
+    return Path(real)
+
+
+def _manifest_cache_key(
+    agent_id: str,
+    manifest_path: Path,
+    identity: tuple[int, int, int, int],
+    manifest_dir: Path,
+    workspace: Path | None,
+    trigger_type: str | None,
+) -> tuple[Any, ...]:
+    from robothor.engine.manifest_schema import schema_mode
+    from robothor.plugins.loader import generation
+
+    project = file_identity(workspace / ".robothor" / "config.yaml") if workspace else None
+    return (
+        agent_id,
+        str(manifest_path),
+        identity,
+        file_identity(manifest_dir / "_defaults.yaml"),
+        str(workspace) if workspace else None,
+        project,
+        trigger_type,
+        schema_mode(),
+        environment_fingerprint(),
+        repr(_get_runtime_overrides()),
+        generation(),
+    )
 
 
 def _load_defaults(manifest_dir: Path) -> dict[str, Any]:
@@ -1270,7 +1388,7 @@ def load_agent_config(
     """
     defaults = _load_defaults(manifest_dir)
 
-    def _build_config(manifest_data: dict[str, Any]) -> AgentConfig:
+    def _build_config(manifest_data: dict[str, Any]) -> tuple[AgentConfig, list[Any]]:
         merged = _merged_manifest(
             manifest_data,
             agent_id=agent_id,
@@ -1304,7 +1422,7 @@ def load_agent_config(
 
         config = manifest_to_agent_config(merged)
         config.validation_warnings = warnings
-        return config
+        return config, issues
 
     # Prevent path traversal — agent_id must be a simple identifier
     import re as _re  # noqa: PLC0415
@@ -1315,14 +1433,41 @@ def load_agent_config(
     # agent_id is now validated — safe to use in path construction
     safe_id = str(agent_id)  # break taint chain after validation
     manifest_path = manifest_dir / f"{safe_id}.yaml"
+    from robothor.engine.feature_flags import config_cache_enabled
+
+    cache_path = _inside(manifest_dir, manifest_path) if config_cache_enabled() else None
+    identity = file_identity(cache_path) if cache_path is not None else None
+    key = (
+        _manifest_cache_key(
+            agent_id, manifest_path, identity, manifest_dir, workspace, trigger_type
+        )
+        if identity is not None
+        else None
+    )
+    slot = (agent_id, str(manifest_path), str(workspace) if workspace else None, trigger_type)
+    entry = _manifest_cache.get(slot) if key is not None else None
+    if entry is not None and entry[0] == key and env_snapshot_holds(entry[3]):
+        _key, cached, issues, _snapshot = entry
+        # The ladder runs on every load, hit or miss: observe's counter is
+        # "how often", and enforce must refuse every time it is asked.
+        _apply_schema_mode(agent_id, issues)
+        return copy.deepcopy(cached)
     if manifest_path.is_file():
         data = load_manifest(manifest_path)
         if data:
-            return _build_config(data)
+            config, issues = _build_config(data)
+            if key is not None and cache_path is not None:
+                # A second read, for the ${VAR} names: a file gone since the
+                # parse is simply not cached, never an exception callers of
+                # this function have no answer for.
+                with contextlib.suppress(OSError):
+                    snapshot = env_snapshot(cache_path.read_text())
+                    _manifest_cache[slot] = (key, copy.deepcopy(config), issues, snapshot)
+            return config
     # Fallback: scan all manifests for matching ID
     for m in load_all_manifests(manifest_dir):
         if m["id"] == agent_id:
-            return _build_config(m)
+            return _build_config(m)[0]
     return None
 
 

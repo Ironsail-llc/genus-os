@@ -326,6 +326,9 @@ async def _load_adapters(registry: Any, agent_config: Any, agent_id: str) -> Non
         if agent_config.mcp_servers:
             configure_mcp_servers(agent_config.mcp_servers)
 
+        # Through load_adapters on every run, never the watcher's list: with
+        # ROBOTHOR_CONFIG_CACHE on its per-file cache makes this a stat per
+        # file, and it still re-checks each file's identity and ${VAR} values.
         adapters = get_adapters_for_agent(agent_id)
         for adapter in adapters:
             register_adapter(adapter)
