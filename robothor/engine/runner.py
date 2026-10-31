@@ -55,7 +55,9 @@ from robothor.engine.context_budget import keep_context_within_budget
 # deliberately re-exported; a plain import reads to mypy as a private detail,
 # which is the right default and the wrong one here.
 from robothor.engine.deliverable_contract import task_text_for_run  # noqa: E402
+from robothor.engine.early_done import release_then_finalize
 from robothor.engine.error_actions import apply_error_recovery, inject_error_feedback
+from robothor.engine.feature_flags import early_done_enabled
 from robothor.engine.finalization_budget import FinalizationBudget  # noqa: E402
 from robothor.engine.injection_screen import screen_run_prompt
 from robothor.engine.journal_resume import maybe_prepend_journal_resume
@@ -547,6 +549,7 @@ class AgentRunner(
         identity: IdentityContext | None = None,
         live_inbox: LiveInbox | None = None,
         user_images: list[dict[str, Any]] | None = None,
+        on_complete: Callable[[AgentRun], Awaitable[None]] | None = None,
     ) -> AgentRun:
         """Execute an agent with the given message.
 
@@ -564,6 +567,9 @@ class AgentRunner(
                 ``spawn_context.identity`` (attribution only — a child's own
                 prompt never renders the CURRENT USER block, since its
                 trigger_type is SUB_AGENT, not an interactive one).
+            on_complete: with ``ROBOTHOR_EARLY_DONE``, awaited with the completed
+                run before finalization, which then runs in the background
+                under the task registry (``early_done.py``). Success path only.
         Returns the completed AgentRun with full metadata.
         """
         message = protect_if_human_chat(message, trigger_type)
@@ -1491,8 +1497,10 @@ class AgentRunner(
         # ── [VERIFIER] ran inside the run's scope, above ──
         output_text = verified_output if verified else session.get_final_text()
 
-        # ── [TELEMETRY] Publish run metrics ──
-        self._publish_run_telemetry(trace, session.run)
+        if on_complete is not None and early_done_enabled():  # answer first
+            done: AgentRun = validated_completion(session, output_text or "")
+            fin = {"trace": trace, "agent_config": agent_config, "spawn_context": spawn_context}
+            return await release_then_finalize(self, done, session, on_complete, **fin)
 
         return self._finish_run(
             validated_completion(session, output_text or ""),

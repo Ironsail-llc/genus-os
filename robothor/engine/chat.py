@@ -80,6 +80,7 @@ from robothor.engine.chat_store import (
     save_message_async,
     save_plan_state_async,
 )
+from robothor.engine.early_done import EarlyRelease, chat_done_event
 from robothor.engine.feature_flags import per_user_sessions_mode
 from robothor.engine.live_inbox import LiveInbox, history_text
 from robothor.engine.models import DeepRunState, PlanState, RunStatus, TriggerType
@@ -88,6 +89,7 @@ from robothor.engine.sanitize import sanitize_log
 
 if TYPE_CHECKING:
     from robothor.engine.config import EngineConfig
+    from robothor.engine.models import AgentRun
     from robothor.engine.runner import AgentRunner
     from robothor.identity import IdentityContext
 
@@ -431,6 +433,13 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
             if len(parts) >= 2:
                 agent_id = parts[1]
 
+            async def send_done(run: AgentRun) -> dict[str, Any]:
+                pending.extend(seal_live_inbox(session, inbox))  # nothing joins a finished run
+                delivered = await delivery_result(run, auth)
+                await queue.put(chat_done_event(run, delivered))
+                return delivered
+
+            early = EarlyRelease(send_done)  # ROBOTHOR_EARLY_DONE
             run = await _runner.execute(
                 agent_id=agent_id,
                 message=message,
@@ -447,10 +456,13 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
                 identity=identity,
                 live_inbox=inbox,
                 user_images=attached.images or None,
+                on_complete=early.callback(),
             )
             pending.extend(seal_live_inbox(session, inbox))
 
-            delivered = await delivery_result(run, auth)
+            delivered = (
+                early.result if early.result is not None else await delivery_result(run, auth)
+            )
             final_text = delivered["text"]
             # Always record user message (plus what joined mid-run) in session history
             append_turn(
@@ -462,7 +474,7 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
 
             # Persist to DB (fire-and-forget)
             if final_text and _config:
-                asyncio.create_task(
+                early.spawn(
                     save_exchange_async(
                         session_key,
                         history_text(message, inbox.taken),
@@ -471,7 +483,8 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
                         model_override=session.model_override,
                         tenant_id=auth.tenant_id,
                         user_extras=attached.extras,
-                    )
+                    ),
+                    name=f"chat-save:{session_key}",
                 )
 
             # Ingest conversation to memory (fire-and-forget)
@@ -493,22 +506,8 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
                     name=f"conv-ingest:{session_key}",
                 )
 
-            # Signal completion with metadata
-            await queue.put(
-                {
-                    "event": "done",
-                    "data": {
-                        **delivered,
-                        "status": run.status.value,
-                        "model": run.model_used,
-                        "input_tokens": run.input_tokens,
-                        "output_tokens": run.output_tokens,
-                        "duration_ms": run.duration_ms,
-                        "total_cost_usd": round(run.total_cost_usd, 4),
-                        "run_id": run.id,
-                    },
-                }
-            )
+            if not early.released:  # signal completion with metadata
+                await queue.put(chat_done_event(run, delivered))
         except asyncio.CancelledError:
             turn = history_text(message, inbox.taken)
             if await deliver_interruption(queue, session, auth, session_key, turn, aborted=True):

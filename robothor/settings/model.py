@@ -1781,6 +1781,14 @@ class FlagSettings(SettingsGroup):
         "a suppressed person, enforce blocks it.",
         governed=True,
     )
+    early_done: bool = declare(
+        False,
+        "ROBOTHOR_EARLY_DONE",
+        "Send a chat answer (webchat done event, Telegram reply) as soon as the "
+        "run's final text is settled, and finish telemetry, post-run "
+        "bookkeeping and persistence in the background. Output-altering "
+        "post-run policies still run first.",
+    )
     ha_dedup_enabled: bool = declare(
         False,
         "ROBOTHOR_HA_DEDUP_ENABLED",
