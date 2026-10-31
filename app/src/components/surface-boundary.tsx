@@ -2,6 +2,7 @@
 
 import { Component, Fragment, type ComponentType, type ReactNode } from "react";
 import { ErrorNotice } from "@/components/error-notice";
+import { isChunkLoadError } from "@/lib/chunk-load-error";
 
 /**
  * A wall around one surface of the shell: the chat panel, or one view.
@@ -11,6 +12,10 @@ import { ErrorNotice } from "@/components/error-notice";
  * (a fresh key, so its state starts over), and Report sends the message to the
  * dashboard error reporter. Views stay mounted while hidden, so a failed one
  * that is not on screen shows nothing until the operator opens it.
+ *
+ * A chunk that failed to download is not a render failure: Retry cannot fetch
+ * a chunk the server no longer serves. It is thrown on to the boundary above
+ * (the lazy-view loader's Reload panel, or the route's error page).
  *
  * Deliberately not a logger: React already writes the error and the component
  * stack to the console, and Report is the operator's choice.
@@ -45,6 +50,7 @@ export class SurfaceBoundary extends Component<SurfaceBoundaryProps, SurfaceBoun
     const { name, visible = true, children } = this.props;
     const { error, attempt } = this.state;
     if (!error) return <Fragment key={attempt}>{children}</Fragment>;
+    if (isChunkLoadError(error)) throw error;
     if (!visible) return null;
     return (
       <div className="h-full overflow-y-auto p-4">
