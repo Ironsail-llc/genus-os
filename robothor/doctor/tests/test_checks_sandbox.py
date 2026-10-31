@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -11,6 +11,9 @@ from robothor.doctor.checks import sandbox as sandbox_checks
 from robothor.doctor.registry import builtin_checks
 from robothor.doctor.tests.conftest import make_ctx
 from robothor.engine.sandbox import RuntimeStatus
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def _run(check_id: str):

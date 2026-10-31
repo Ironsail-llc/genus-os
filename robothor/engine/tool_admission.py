@@ -33,6 +33,7 @@ from typing import TYPE_CHECKING, Any
 
 from robothor.constants import GUARDRAIL_BLOCKED_ERROR_TYPE
 from robothor.engine.run_deadline import wrapup_refusal
+from robothor.engine.sandbox_policy import guardrail_context
 from robothor.engine.sanitize import sanitize_log as _sanitize
 
 if TYPE_CHECKING:
@@ -261,6 +262,7 @@ class ToolAdmissionMixin:
             tool_args,
             agent_id=agent_config.id,
             prior_steps=session.run.steps,
+            **guardrail_context(session),  # sandbox playground: role + container
         )
 
         # ── [OBSERVE] Allowed, but a rollout-gated guardrail would have

@@ -1124,6 +1124,14 @@ class EngineSettings(SettingsGroup):
         "Empty leaves exec unrouted, which is sandboxing in name only.",
         governed=True,
     )
+    sandbox_playground: bool = declare(
+        False,
+        "ROBOTHOR_SANDBOX_PLAYGROUND",
+        "When a container is wanted but cannot start, run exec on the engine host "
+        "for an owner or admin (with a note) and refuse it for anyone else with the "
+        "gate and unlock named, instead of failing the run.",
+        since="unreleased",
+    )
     sandbox_start_retries: int = declare(
         1,
         "ROBOTHOR_SANDBOX_START_RETRIES",

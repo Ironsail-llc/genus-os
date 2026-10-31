@@ -210,7 +210,10 @@ CAPS = {
     # for the merged tree, so this is the MEASURED count of the rebase result
     # rather than 405 minus the extraction, which would bank one side's saving
     # as the other's headroom.
-    "robothor/engine/tool_admission.py": 362,
+    # 362 -> 364: the sandbox playground passes the run's role and container
+    # state to the exec allowlist. One import and one kwargs line; the logic
+    # lives in sandbox_policy.guardrail_context.
+    "robothor/engine/tool_admission.py": 364,
     # Capped at the size it was extracted at, like schedule_reconcile.py: a new
     # module with no cap is how the next branch's "just one more case" lands
     # somewhere the ratchet is not looking. One branch, one dependency, and it
@@ -665,7 +668,9 @@ CAPS = {
     "robothor/engine/override_reasons.py": 190,
     "robothor/engine/provenance_markers.py": 286,
     "robothor/engine/skill_contract.py": 73,
-    "robothor/engine/code_exec_guards.py": 116,
+    # 116 -> 117: the sandbox playground lets an owner or admin's snippet run
+    # on the host; one import, and the decision is sandbox_policy's.
+    "robothor/engine/code_exec_guards.py": 117,
     # 122 -> 129: the same disclosure, said where the reaper is, because this
     # is the `finally` that `os._exit` skips and a reader here is the one who
     # would otherwise conclude the reaper is complete.
