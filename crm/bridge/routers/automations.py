@@ -48,6 +48,7 @@ import psycopg2.extras
 from fastapi import APIRouter, HTTPException, Request
 
 from robothor.db.connection import get_connection
+from robothor.engine.ambient import KIND_AMBIENT
 from robothor.engine.sanitize import sanitize_log
 from robothor.engine.schedule_reconcile import KIND_AGENT, KIND_HEARTBEAT, KIND_WORKER
 from routers import agent_manifests
@@ -72,11 +73,12 @@ _RUN_COLUMNS = (
     "delivery_channel, delivery_mode, verified_status, outcome_assessment"
 )
 
-#: The engine's three job kinds, imported so the two sides cannot drift.
-#: ``schedule_reconcile`` composes ``<id>``, ``<id>:heartbeat`` and
-#: ``<id>:worker``; everything here that parses or builds one of those ids goes
-#: through :func:`_split_job_id` or :func:`_jobs_of`.
-_JOB_SUFFIXES = frozenset({KIND_HEARTBEAT, KIND_WORKER})
+#: The engine's job kinds, imported so the two sides cannot drift.
+#: ``schedule_reconcile`` composes ``<id>``, ``<id>:heartbeat``,
+#: ``<id>:worker`` and (while ``ROBOTHOR_AMBIENT`` is on) ``<id>:ambient``;
+#: everything here that parses or builds one of those ids goes through
+#: :func:`_split_job_id` or :func:`_jobs_of`.
+_JOB_SUFFIXES = frozenset({KIND_HEARTBEAT, KIND_WORKER, KIND_AMBIENT})
 
 
 def _threshold() -> int:
@@ -180,7 +182,38 @@ def _jobs_of(document: dict[str, Any]) -> list[dict[str, Any]]:
                 "delivery_to": sub_delivery.get("to") or base["delivery_to"],
             }
         )
+
+    jobs.extend(_ambient_job(document, base, summary))
     return jobs
+
+
+def _ambient_job(
+    document: dict[str, Any], base: dict[str, Any], summary: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """The ``<id>:ambient`` card, when the engine would be running that job.
+
+    Only while ``ROBOTHOR_AMBIENT`` is not ``off``, which is exactly when the
+    scheduler registers the job and writes its row; a card for a job the
+    engine is not running would say something false the other way.
+    """
+    from robothor.engine.feature_flags import ambient_mode
+
+    digest_at = _block(document, KIND_AMBIENT).get("digest_at")
+    if not digest_at or ambient_mode() == "off":
+        return []
+    agent_id = base["agent_id"]
+    return [
+        {
+            **base,
+            "id": f"{agent_id}:{KIND_AMBIENT}",
+            "kind": KIND_AMBIENT,
+            "editable": False,
+            "name": f"{base['name'] or agent_id} · {KIND_AMBIENT}",
+            "cron": str(digest_at),
+            "timezone": summary["timezone"],
+            "delivery": "none",
+        }
+    ]
 
 
 def _manifests() -> list[dict[str, Any]]:

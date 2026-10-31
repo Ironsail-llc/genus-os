@@ -2119,6 +2119,18 @@ class FlagSettings(SettingsGroup):
         "Two rungs only -- there is nothing to alert about.",
         governed=True,
     )
+    ambient: str = declare(
+        "off",
+        "ROBOTHOR_AMBIENT",
+        "Ambient follow-ups for agents whose manifest has an `ambient:` block: "
+        "'off' (default) schedules nothing, 'observe' finds stalled threads, "
+        "composes the nudges, digests and replies it would send and records them "
+        "as ambient_proposal run steps and a digest file without sending, "
+        "'enforce' sends per each kind's tier (auto sends, approve asks the "
+        "approval gate first, never is not proposed). Any other value is 'off'.",
+        since="unreleased",
+        governed=True,
+    )
 
 
 # ---------------------------------------------------------------------------

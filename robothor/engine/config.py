@@ -520,6 +520,17 @@ def _normalized_tags(raw: Any) -> list[str]:
     return out
 
 
+def _parse_ambient(raw: Any) -> Any:
+    """The ``ambient:`` block, or ``None`` when the agent has not opted in.
+
+    Imported late: ``robothor.engine.ambient`` reaches into the tool constants,
+    and the manifest loader is imported by nearly everything.
+    """
+    from robothor.engine.ambient import parse_ambient
+
+    return parse_ambient(raw)
+
+
 def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
     """Convert a YAML manifest dict to an AgentConfig."""
     model = manifest.get("model", {})
@@ -700,6 +711,7 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
         heartbeat=heartbeat,
         worker=worker,
         channel_bus=channel_bus_config,
+        ambient=_parse_ambient(manifest.get("ambient")),
         # Safety cap — absolute max iterations (infinite-loop protection only)
         safety_cap=int(schedule.get("safety_cap", v2.get("safety_cap", 200))),
         **_spawn_options(v2),

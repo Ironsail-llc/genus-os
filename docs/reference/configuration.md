@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-488 settings in 18 groups.
+489 settings in 18 groups.
 
 ## autonomy
 
@@ -407,6 +407,7 @@ Guardrails and feature gates. Ones marked governed are inventoried in `infra/fla
 | `ROBOTHOR_ACT_OBSERVE_MODE` | str | `observe` | `robothor-engine` | no | legacy | **governed.** The act-then-observe rule: a call that changed something at the other end invalidates what the run knew about that source. 'observe' (default) logs what would have been said, 'enforce' tells the agent once at a deliverable check-in, 'off' says nothing. Blocks nothing on any rung. |
 | `ROBOTHOR_ADMISSION_ENABLED` | bool | `false` | `robothor-engine` | no | legacy | Run the admission check that refuses work an agent is not equipped to do rather than letting it fail late. |
 | `ROBOTHOR_ADMISSION_MODE` | str | `observe` | `robothor-engine` | no | legacy | **governed.** Admission ladder position: observe logs refusals, enforce applies them. |
+| `ROBOTHOR_AMBIENT` | str | `off` | `robothor-engine` | no | unreleased | **governed.** Ambient follow-ups for agents whose manifest has an `ambient:` block: 'off' (default) schedules nothing, 'observe' finds stalled threads, composes the nudges, digests and replies it would send and records them as ambient_proposal run steps and a digest file without sending, 'enforce' sends per each kind's tier (auto sends, approve asks the approval gate first, never is not proposed). Any other value is 'off'. |
 | `ROBOTHOR_APPROVAL_FAILCLOSED_ENABLED` | bool | `false` | `robothor-engine` | no | legacy | Switch for fail-closed human approval: a tool an agent must ask about is denied when the operator does not answer in time. |
 | `ROBOTHOR_APPROVAL_MODE` | str | `observe` | `robothor-engine` | no | legacy | **governed.** Human-approval ladder position: observe records what would have been escalated, enforce actually asks and denies on timeout. |
 | `ROBOTHOR_BENCHMARK_DECONTAMINATION_ENABLED` | bool | `false` | `robothor-engine` | no | legacy | Switch for separating benchmark-harness traffic from production metrics, so a nightly suite does not read as fleet activity. |

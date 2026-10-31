@@ -947,3 +947,17 @@ flags:
       that fires it and (b) twenty real task specs read read-only from the
       benchmark checkout that produce nothing. Only after both does a promotion
       date belong here at all.
+
+  - name: ROBOTHOR_AMBIENT
+    owner: ops
+    mode: "off"
+    soak: >
+      NEW. Ambient follow-ups (docs/AMBIENT.md): an agent whose manifest has an
+      `ambient:` block finds threads where a person wrote and nobody answered,
+      and proposes a nudge, a digest or a reply on the operator's behalf, each
+      held to the tier the manifest gives it (auto / approve / never). Off in
+      every environment until staging sets observe; observe records each
+      proposal as an ambient_proposal run step and a digest file and sends
+      nothing. Promote a deployment to enforce only after the operator has read
+      a week of observe digests and the tiers in the opted-in manifests say
+      what they want sent alone.

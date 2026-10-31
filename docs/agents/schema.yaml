@@ -366,6 +366,47 @@ optional:
     wake_preamble_history_lines:
       type: integer
       default: 8
+  # ── Ambient follow-ups (opt-in; does nothing while ROBOTHOR_AMBIENT=off) ─
+  # See docs/AMBIENT.md. Watches what this agent already reads, finds threads
+  # where a person wrote and nobody answered, and proposes follow-ups, each
+  # held to its tier. ROBOTHOR_AMBIENT=observe records them and sends nothing.
+  ambient:
+    watch:
+      type: list[string]
+      description: >-
+        Sources to watch. "inbox" is the CRM conversation inbox;
+        "stream:<name>" is a Redis stream this agent already lists in
+        streams.read, whose events carry thread_id and direction
+        (inbound/outbound). Anything else is rejected.
+    stalled_after:
+      type: string
+      description: >-
+        Required. How long a person's message may wait for a reply before the
+        thread counts as stalled: a duration such as 30m, 4h, 1d or 1h30m.
+    digest_at:
+      type: string
+      description: >-
+        Required. When the ambient pass runs: a 5-field cron expression
+        ("0 9,15 * * *") or comma-separated HH:MM times ("09:00, 15:30") in
+        the agent's schedule timezone. One scheduler job per agent.
+    tiers:
+      nudge_thread:
+        type: string
+        enum: [auto, approve, never]
+        default: approve
+        description: Tell the operator (the agent's delivery target) that a thread is waiting.
+      send_digest:
+        type: string
+        enum: [auto, approve, never]
+        default: approve
+        description: Send the operator one digest of every stalled thread.
+      reply_on_behalf:
+        type: string
+        enum: [auto, approve, never]
+        default: never
+        description: >-
+          Reply in the thread itself, as us. Inbox threads only. auto sends
+          alone, approve asks the approval gate first, never is not proposed.
   # ── Worker (a second cron lane with its own instruction + budget) ─
   # Same shape as heartbeat. Inherits model + tools from the parent agent.
   worker:

@@ -19,6 +19,7 @@ from croniter import croniter  # type: ignore[import-untyped,unused-ignore]
 
 from robothor.constants import DEFAULT_TENANT
 from robothor.engine.admission import admit, complete, register
+from robothor.engine.ambient import KIND_AMBIENT
 from robothor.engine.config import (
     ManifestScan,
     load_agent_config_or_broken,
@@ -431,6 +432,7 @@ class CronScheduler:
             KIND_AGENT: self._run_agent,
             KIND_HEARTBEAT: self._run_heartbeat,
             KIND_WORKER: self._run_worker,
+            KIND_AMBIENT: self._run_ambient,
         }[kind]
 
     def _add_job(self, spec: JobSpec) -> bool:
@@ -904,6 +906,67 @@ class CronScheduler:
             override_config,
             f"heartbeat:{agent_config.heartbeat.cron_expr}",
         )
+
+    async def _run_ambient(self, agent_id: str) -> None:
+        """One ambient follow-up pass for an agent (``robothor.engine.ambient``).
+
+        The same guards as every scheduled LLM run: leader only, deduplicated,
+        the circuit breaker, fleet admission (registered so other runs count
+        it), and the ``agent_schedules`` row updated afterwards. The pass itself
+        decides whether ``ROBOTHOR_AMBIENT`` lets it compose or send anything.
+        No safety timeout: an enforce pass waits on people answering approvals.
+        """
+        from robothor.engine.ambient import AmbientWorker
+        from robothor.engine.leader import is_leader
+
+        if not is_leader():
+            return
+        agent_config = load_agent_config_or_broken(agent_id, self.config.manifest_dir, "ambient")
+        if not agent_config or not agent_config.ambient:
+            logger.error("Agent config or ambient block not found for: %s", agent_id)
+            return
+        dedup_key = f"{agent_id}:ambient"
+        if not await try_acquire(dedup_key):
+            logger.warning("Ambient pass skipped: %s already running", dedup_key)
+            return
+        try:
+            tripped = await asyncio.to_thread(
+                self._circuit_breaker_tripped, dedup_key, agent_config
+            )
+            if tripped or not admit(agent_id, agent_config, self.config):
+                return
+            register(dedup_key, agent_id)
+            try:
+                worker = AmbientWorker(self.runner, tenant_id=self.config.tenant_id)
+                result = await worker.run_pass(agent_config)
+            except Exception:  # one agent's pass, never the scheduler
+                logger.exception("Ambient pass failed for %s", agent_id)
+                return
+            finally:
+                complete(dedup_key)
+            if result.run_id:
+                await asyncio.to_thread(self._record_ambient_state, dedup_key, result)
+        finally:
+            await release(dedup_key)
+
+    @staticmethod
+    def _record_ambient_state(dedup_key: str, result: Any) -> None:
+        """The ``<agent>:ambient`` row's last run, for the fleet view and the breaker."""
+        failed = result.run_status in ("failed", "timeout")
+        try:
+            previous = get_schedule(dedup_key) if failed else None
+            update_schedule_state(
+                agent_id=dedup_key,
+                last_run_at=result.started_at,
+                last_run_id=result.run_id,
+                last_status=result.run_status,
+                last_duration_ms=result.duration_ms,
+                consecutive_errors=(
+                    ((previous or {}).get("consecutive_errors", 0) or 0) + 1 if failed else 0
+                ),
+            )
+        except Exception as e:
+            logger.warning("Failed to update schedule state for %s: %s", dedup_key, e)
 
     async def _run_worker(self, agent_id: str) -> None:
         """Execute a drain/worker run for an agent.
