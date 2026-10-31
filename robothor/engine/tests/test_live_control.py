@@ -15,7 +15,7 @@ import pytest
 
 from robothor.engine import live_control, session_registry
 from robothor.engine.loop_guards import GuardState, check_iteration_guards
-from robothor.engine.models import RunStatus, TriggerType
+from robothor.engine.models import RunStatus, StepType, TriggerType
 from robothor.engine.request_runtime import observe_request
 from robothor.engine.session import AgentSession
 
@@ -314,3 +314,34 @@ class TestASteerDuringTheFinalAnswer:
         session = _session()
         session.messages.append({"role": "assistant", "content": "Here is the report."})
         assert await keep_going_after_answer(session, None, "Here is the report.") is False
+
+
+class TestASteerIsARunStep:
+    """The Runs drawer and the run steps API read `run.steps`: a steer the run
+    took must be there, with its text, where it landed."""
+
+    def test_a_steer_taken_at_the_boundary_is_recorded_as_a_step(self):
+        session = _session()
+        session.steer("use the EU region")
+        _boundary(session)
+        steers = [s for s in session.run.steps if s.step_type == StepType.STEER]
+        assert len(steers) == 1
+        assert steers[0].tool_input == {"text": "use the EU region"}
+        assert steers[0].run_id == session.run_id and steers[0].step_number > 0
+
+    @pytest.mark.asyncio
+    async def test_a_steer_taken_at_the_final_answer_is_recorded_too(self):
+        from robothor.engine.live_inbox import keep_going_after_answer
+
+        session = _session()
+        session.messages.append({"role": "assistant", "content": "Here is the report."})
+        session.steer("use the EU region")
+        await keep_going_after_answer(session, None, "Here is the report.")
+        assert [s.tool_input for s in session.run.steps if s.step_type == StepType.STEER] == [
+            {"text": "use the EU region"}
+        ]
+
+    def test_no_steer_records_no_step(self):
+        session = _session()
+        _boundary(session)
+        assert not [s for s in session.run.steps if s.step_type == StepType.STEER]
