@@ -25,6 +25,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import math
 import operator as _op
 import re
 import time
@@ -79,6 +80,26 @@ DISPATCHED_STEPS_KEY = "_dispatched_steps"
 STEP_IO_MAX_BYTES = 64 * 1024
 
 
+def _jsonb_safe(value: Any) -> Any:
+    """``value`` with NUL characters dropped and non-finite floats as text."""
+    if isinstance(value, str):
+        return value.replace("\x00", "")
+    if isinstance(value, float) and not math.isfinite(value):
+        return str(value)
+    if isinstance(value, dict):
+        return {
+            (k.replace("\x00", "") if isinstance(k, str) else k): _jsonb_safe(v)
+            for k, v in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_jsonb_safe(v) for v in value]
+    return value
+
+
+def _jsonb_default(value: Any) -> str:
+    return str(value).replace("\x00", "")
+
+
 def _capped_json(value: Any, limit: int = STEP_IO_MAX_BYTES) -> str | None:
     """Serialise a step input or output for JSONB, capped at ``limit`` bytes.
 
@@ -88,7 +109,9 @@ def _capped_json(value: Any, limit: int = STEP_IO_MAX_BYTES) -> str | None:
     """
     if value is None:
         return None
-    text = json.dumps(value, default=str)
+    # allow_nan=False and no NUL: Postgres JSONB rejects both, and a rejected
+    # value would lose the whole step row, not just this column.
+    text = json.dumps(_jsonb_safe(value), default=_jsonb_default, allow_nan=False)
     size = len(text.encode())
     if size <= limit:
         return text
@@ -340,13 +363,20 @@ def parse_workflow(data: dict[str, Any]) -> WorkflowDef:
             _parse_step(sub, inside_parallel=True) for sub in s.get("parallel_steps", [])
         ]
 
+        tool_args = s.get("tool_args") or {}
+        if not isinstance(tool_args, dict):
+            raise ValueError(
+                f"step {s.get('id')!r}: tool_args must be a mapping "
+                f"(got {type(tool_args).__name__})"
+            )
+
         return WorkflowStepDef(
             id=s["id"],
             type=step_type,
             agent_id=s.get("agent_id", ""),
             message=s.get("message", ""),
             tool_name=s.get("tool_name", ""),
-            tool_args=s.get("tool_args") or {},
+            tool_args=tool_args,
             tool_timeout_seconds=tool_timeout,
             input_expr=s.get("input", ""),
             branches=branches,
@@ -1185,7 +1215,10 @@ class WorkflowEngine:
             # Known before dispatch, so the running row already says what the
             # step was asked to do — even if it never returns.
             result.tool_name = step.tool_name
-            result.tool_input = self._render_tool_args(step, run)
+            # A definition that cannot render is left to _run_tool_step, which
+            # renders again inside the step's try and so fails the step.
+            with contextlib.suppress(Exception):
+                result.tool_input = self._render_tool_args(step, run)
         self._persist_step_start(run, result, redispatch=redispatch)
         run.context.setdefault(IN_FLIGHT_STEP_KEY, []).append(step.id)
 
@@ -1965,9 +1998,18 @@ class WorkflowEngine:
         """
         try:
             from robothor.db.connection import get_connection
+            from robothor.engine.guardrails import redact_secrets
 
-            output = _capped_json(result.tool_output) if result.tool_output else None
-            text = result.output_text[:2000] if result.output_text else None
+            # Redacted as the agent path redacts a tool result before recording
+            # it: the run-detail routes serve both columns.
+            output = (
+                _capped_json(redact_secrets(result.tool_output)) if result.tool_output else None
+            )
+            text = (
+                redact_secrets(result.output_text)[:2000].replace("\x00", "")
+                if result.output_text
+                else None
+            )
 
             with get_connection() as conn:
                 cur = conn.cursor()

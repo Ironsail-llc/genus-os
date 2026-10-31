@@ -154,12 +154,23 @@ def _workflow_runs(workflow_id: str, limit: int) -> list[dict]:
     return [_iso(r) for r in rows]
 
 
+#: ``workflow_runs.trigger_type`` of a scheduled plugin job's run.
+_PLUGIN_JOB = "plugin_job"
+
+
 def _workflow_run(workflow_id: str, run_id: str) -> dict | None:
-    """One run of one workflow, with each step's tool name, input, output and error."""
+    """One run of one workflow, with each step's tool name, input, output and error.
+
+    A scheduled plugin job records no steps; its detail carries what the job
+    returned (``result``, and ``result_truncated`` when the engine capped it).
+    A workflow's own run context is never served: it holds every step's raw
+    output.
+    """
     runs = _rows(
         "SELECT id, workflow_id, status, trigger_type, trigger_detail, steps_total, "
         "steps_completed, steps_failed, steps_skipped, duration_ms, started_at, "
-        "completed_at, error_message "
+        "completed_at, error_message, "
+        "CASE WHEN trigger_type = 'plugin_job' THEN context END AS context "
         "FROM workflow_runs WHERE id = %s AND workflow_id = %s",
         (run_id, workflow_id),
     )
@@ -174,6 +185,11 @@ def _workflow_run(workflow_id: str, run_id: str) -> dict | None:
     )
     detail = _iso(runs[0])
     detail["id"] = str(detail["id"])
+    context = detail.pop("context", None)
+    if detail.get("trigger_type") == _PLUGIN_JOB and isinstance(context, dict):
+        for key in ("result", "result_truncated"):
+            if key in context:
+                detail[key] = context[key]
     detail["steps"] = [
         {k: (str(v) if k == "agent_run_id" and v is not None else v) for k, v in _iso(s).items()}
         for s in steps
