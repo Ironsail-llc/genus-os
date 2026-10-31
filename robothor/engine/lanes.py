@@ -43,13 +43,12 @@ from contextlib import asynccontextmanager, contextmanager
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar
 
-# Imported here, not on first use: a first use is on the event loop, inside a
-# run, and these imports are not free. ``feature_flags`` is the exception: it
-# reaches the database driver, and workflow.py (imported by tools that run with
-# no driver installed) imports this module. The daemon reads the flag once at
-# start (``install_lane_executor``), so the loop never pays for that import.
+# Only stdlib-backed imports at module level: workflow.py imports this module,
+# and the manifest validator imports workflow.py with nothing but PyYAML
+# installed. ``feature_flags`` (database driver) and ``metrics``
+# (prometheus_client) are imported on first use; the daemon's
+# ``install_lane_executor`` makes that first use happen at start, not in a run.
 from robothor.engine.agent_priority import _INTERACTIVE_TRIGGERS
-from robothor.engine.metrics import set_lane_occupancy
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable, Coroutine, Iterator
@@ -140,6 +139,8 @@ def lane_for_trigger(trigger_type: Any) -> Lane:
 
 def _publish(lane: Lane, active: int, waiting: int) -> None:
     try:
+        from robothor.engine.metrics import set_lane_occupancy
+
         set_lane_occupancy(lane.value, active, waiting)
     except Exception:  # noqa: BLE001 - metrics are never load-bearing
         logger.debug("Could not publish lane occupancy", exc_info=True)
@@ -432,5 +433,8 @@ def install_lane_executor(loop: asyncio.AbstractEventLoop) -> bool:
     if not lanes_enabled():
         return False
     loop.set_default_executor(LaneExecutor())
-    logger.info("Execution lanes on: %s", get_lanes().snapshot())
+    lanes = get_lanes()
+    for lane in Lane:  # also loads the metrics module now, not inside a run
+        _publish(lane, 0, 0)
+    logger.info("Execution lanes on: %s", lanes.snapshot())
     return True
