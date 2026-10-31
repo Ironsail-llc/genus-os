@@ -242,6 +242,44 @@ A viewer is refused with 403 on every route and the drawer says operator access
 is required; a run that no longer exists answers 404 and the drawer says it is
 gone.
 
+## Dashboard web vitals
+
+The dashboard reports its own Core Web Vitals (LCP, INP, CLS, FCP, TTFB) from
+every page load. The browser beacons each metric to `POST /api/vitals`, which
+writes it twice:
+
+- **One log line per metric** on the dashboard's standard output, so any log
+  pipeline that collects container output picks it up:
+
+  ```json
+  {"event":"web_vital","name":"LCP","value":812.4,"rating":"good","path":"/","view":"chat","id":"v1-…","navigation_type":"navigate"}
+  ```
+
+- **One entry on the Redis stream `robothor:events:vitals`**, capped at about
+  10,000 entries. It is not one of the live event-bus streams, so the
+  dashboard's own views never read it.
+
+`rating` is web-vitals' own `good` / `needs-improvement` / `poor`. `path` is the
+pathname without its query string and `view` is the dashboard view (`?v=`);
+no tenant, user or session is recorded. A Redis outage loses the stream entry,
+never the log line, and never fails the page.
+
+`GENUS_DASHBOARD_WEB_VITALS=false` turns it off at both ends: the page mounts
+no reporter and the route stores and logs nothing
+([configuration reference](reference/configuration.md)).
+
+Two CI gates sit beside it, both in `app/`:
+
+- `pnpm bundle:check`, after `pnpm build`, compares each page route's gzipped
+  first-load JavaScript with `app/bundle-budget.json` and fails a route over
+  its budget or without one. `node scripts/bundle-budget.mjs --write` resets
+  every budget to the current size plus 5%; raise one on purpose, in the pull
+  request that needs it.
+- `e2e/perf.spec.ts` fails when the chat takes longer than its budget to paint
+  or to show the first streamed token, or when a tab holds more than one
+  event-stream connection. `PERF_CHAT_PAINT_BUDGET_MS` and
+  `PERF_FIRST_DELTA_BUDGET_MS` override the budgets for a measuring run.
+
 ## Notes
 
 - Export is best-effort (a 5s-timeout POST per run); a collector outage never
