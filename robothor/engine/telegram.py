@@ -644,36 +644,12 @@ class TelegramBot(
                     attachments=self._live_attachments(inbox, attachments),
                 )
 
-                # Delete status message, deliver final output as new message.
-                # Capture the Telegram Message objects returned by send_message
+                # Capture the Telegram Message objects the reply went out as,
                 # so the channel bus can map platform_message_ids to the
                 # assistant chat_message row we'll persist below.
-                # Progress mode finalises the progress message in place when
-                # the answer fits one edit; anything else goes out as before.
-                finalised = None
-                if progress is not None and run.output_text:
-                    finalised = await progress.finalise(run.output_text)
-                sent_messages: list[Any] = []
-                if finalised is not None:
-                    sent_messages = finalised
-                else:
-                    if progress is not None:
-                        await progress.aclose()
-                    if stream_msg_id is not None:
-                        with contextlib.suppress(Exception):
-                            await self.bot.delete_message(
-                                chat_id=int(chat_id), message_id=stream_msg_id
-                            )
-                    if run.output_text:
-                        sent_messages = await self.send_message(chat_id, run.output_text)
-                    elif run.error_message:
-                        sent_messages = await self.send_message(
-                            chat_id, f"Error: {run.error_message}"
-                        )
-                    else:
-                        sent_messages = await self.send_message(
-                            chat_id, "Done. No output produced."
-                        )
+                sent_messages = await self._finalise_progress_and_send(
+                    chat_id, stream_msg_id, progress, run
+                )
 
                 await self._record_interactive_delivery(run, sent_messages)
 
@@ -823,6 +799,36 @@ class TelegramBot(
 
         task = asyncio.create_task(run_agent())
         self._active_tasks[chat_id] = task
+
+    async def _finalise_progress_and_send(
+        self,
+        chat_id: str,
+        stream_msg_id: int | None,
+        progress: TelegramProgress | None,
+        run: Any,
+    ) -> list[Any]:
+        """Deliver a finished run's answer; the one place a turn's reply goes out.
+
+        Progress mode (``progress`` set) finalises the progress message in
+        place when the answer fits one edit. Otherwise the status message is
+        deleted and the answer (or the error, or "no output") is sent as new
+        messages. Returns the delivered Message objects, so the caller can
+        record delivery and map platform message ids.
+        """
+        if progress is not None and run.output_text:
+            finalised = await progress.finalise(run.output_text)
+            if finalised is not None:
+                return finalised
+        if progress is not None:
+            await progress.aclose()
+        if stream_msg_id is not None:
+            with contextlib.suppress(Exception):
+                await self.bot.delete_message(chat_id=int(chat_id), message_id=stream_msg_id)
+        if run.output_text:
+            return await self.send_message(chat_id, run.output_text)
+        if run.error_message:
+            return await self.send_message(chat_id, f"Error: {run.error_message}")
+        return await self.send_message(chat_id, "Done. No output produced.")
 
     def _build_background_config(self) -> Any:
         """Build agent config with continuous-mode overrides for background plan execution."""
