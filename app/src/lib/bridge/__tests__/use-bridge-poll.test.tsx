@@ -211,6 +211,22 @@ describe("useBridgePoll", () => {
     await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThan(1));
   });
 
+  it("aborts the request in flight when the caller unmounts", async () => {
+    const signals: AbortSignal[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+        if (init?.signal) signals.push(init.signal);
+        return new Promise<Response>(() => {});
+      })
+    );
+    const { unmount } = render(<Probe visible />);
+    await waitFor(() => expect(signals).toHaveLength(1));
+    expect(signals[0].aborted).toBe(false);
+    unmount();
+    expect(signals[0].aborted).toBe(true);
+  });
+
   it("answers a refusal in the server's own words", async () => {
     mockFetch(() => ({ status: 503, body: { detail: "the account store is unavailable" } }));
     render(<Probe visible />);
