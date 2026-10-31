@@ -1447,6 +1447,30 @@ async def _scan_fleet_and_warm_prompts(config: Any, clock: StartupClock) -> Any:
     return scan
 
 
+async def _recover_scan_and_restore(runner: Any, config: Any, clock: StartupClock) -> Any:
+    """The concurrent middle of startup; returns the one manifest scan.
+
+    Recovery, coding jobs, the manifest scan (with the system-prompt warm)
+    and the webchat session read do not depend on one another, so they run
+    together. The sessions are then applied on the loop, with the chat
+    config in place so the cache pins THIS engine's main session key:
+    Telegram, Slack and inbound channels share that cache, and none of them
+    has started yet.
+    """
+    from robothor.engine import chat, chat_restore
+
+    _recovered, _coding, scan, sessions = await clock.together(
+        recovery=_recover_interrupted_work(runner, config),
+        coding_jobs=_start_coding_jobs(),  # resume interrupted Claude Code jobs, reap old ones
+        manifests=_scan_fleet_and_warm_prompts(config, clock),
+        sessions=asyncio.to_thread(chat_restore.load_persisted_sessions, config),
+    )
+    chat.init_chat(runner, config, restore=False)
+    if sessions is not None:
+        chat_restore.apply_restored_sessions(sessions)
+    return scan
+
+
 async def main() -> int:
     """Start all engine subsystems. Returns the process exit code."""
     # Own SIGTERM/SIGINT before anything slow, so a stop during startup also
@@ -1515,18 +1539,7 @@ async def main() -> int:
 
     runner, sales_runtime_assets = await clock.step("runner", _create_runner_with_assets(config))
 
-    from robothor.engine.chat import apply_restored_sessions, load_persisted_sessions
-
-    _recovered, _coding, scan, sessions = await clock.together(
-        recovery=_recover_interrupted_work(runner, config),
-        coding_jobs=_start_coding_jobs(),  # resume interrupted Claude Code jobs, reap old ones
-        manifests=_scan_fleet_and_warm_prompts(config, clock),
-        sessions=asyncio.to_thread(load_persisted_sessions, config),
-    )
-    # Applied here, on the loop: Telegram, Slack and inbound channels share
-    # this cache, and none of them has started yet.
-    if sessions is not None:
-        apply_restored_sessions(sessions)
+    scan = await _recover_scan_and_restore(runner, config, clock)
 
     _init_fleet_capacity(config)
 

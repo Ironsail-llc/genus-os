@@ -759,7 +759,10 @@ CAPS = {
     # The finalization cluster (what a run may spend AFTER its loop ends)
     # was extracted here rather than growing run_budget past its cap.
     "robothor/engine/finalization_budget.py": 160,
-    "robothor/engine/chat.py": 1600,
+    # 1600 -> 1567: the startup session restore (read off the loop, apply on
+    # it) left for chat_restore.py when the daemon began reading sessions
+    # concurrently, which paid for that split rather than raising this cap.
+    "robothor/engine/chat.py": 1567,
     # 1600 -> 1607 (2026-08-27): fleet admission finally has a caller here.
     # The 75-line implementation went to admission.py; what remains is five
     # irreducible call sites (admit / register / complete / import). The

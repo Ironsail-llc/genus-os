@@ -104,7 +104,11 @@ KNOWN_LARGE: dict[str, int] = {
     # 364 -> 354: the shutdown announcement left for _announce_shutdown, which
     # is what paid for owning SIGTERM in here (the handler install and the
     # stop-signal task) rather than raising this number for it.
-    "daemon.py::main": 354,
+    # 354 -> 348: the concurrent middle of startup (recovery, coding jobs,
+    # the manifest scan and the webchat session read) left for
+    # _recover_scan_and_restore, which is what paid for the startup clock and
+    # the dependency-graph comment rather than raising this number for them.
+    "daemon.py::main": 348,
     "telegram.py::_run_interactive": 384,
     # 343 -> 325: the benchmark break-out moved to _benchmark_spend, which is
     # what paid for un-scoping it from the production tenant (the graded

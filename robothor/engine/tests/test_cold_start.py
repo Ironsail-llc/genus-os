@@ -172,7 +172,9 @@ def harness(monkeypatch: pytest.MonkeyPatch, fleet: Path) -> Iterator[_Harness]:
     # init_chat sets these module globals; restore them after the test.
     monkeypatch.setattr(chat, "_config", None)
     monkeypatch.setattr(chat, "_runner", None)
-    real_apply = chat.apply_restored_sessions
+    from robothor.engine import chat_restore
+
+    real_apply = chat_restore.apply_restored_sessions
 
     def recording_apply(sessions: dict[str, Any]) -> None:
         # The cache pins the main session by key while it hydrates; it must
@@ -180,7 +182,7 @@ def harness(monkeypatch: pytest.MonkeyPatch, fleet: Path) -> Iterator[_Harness]:
         h.main_key_during_restore = chat.get_main_session_key()
         real_apply(sessions)
 
-    monkeypatch.setattr(chat, "apply_restored_sessions", recording_apply)
+    monkeypatch.setattr(chat_restore, "apply_restored_sessions", recording_apply)
     chat._cache.sessions.pop(ALICE_KEY, None)
 
     def fake_notify(state: str) -> None:
