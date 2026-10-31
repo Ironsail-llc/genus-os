@@ -503,6 +503,25 @@ def test_unavailable_units_carry_the_configured_logs_url(
     assert body["hint"].strip()
 
 
+def test_a_journalctl_that_fails_gets_no_container_hint(
+    controls_client_as_operator, journal, monkeypatch
+):
+    """journalctl is installed but failed: a systemd host, not a container.
+
+    Telling that operator to use a cluster's log tool would point them at a
+    cluster that does not exist. The configured URL still travels.
+    """
+    from robothor.settings import reset_settings
+
+    journal.state["returncode"] = 1
+    monkeypatch.setenv("GENUS_LOGS_URL", "https://logs.example.invalid/search")
+    reset_settings()
+    body = controls_client_as_operator.get(UNITS).json()
+    assert body["available"] is False
+    assert "hint" not in body
+    assert body["logs_url"] == "https://logs.example.invalid/search"
+
+
 def test_available_units_carry_no_hint(controls_client_as_operator, journal, monkeypatch):
     """The hint is for the unavailable case only; a journald box lists units."""
     monkeypatch.setenv("GENUS_LOGS_URL", "https://logs.example.invalid/search")

@@ -327,6 +327,23 @@ describe("Observe › Logs", () => {
       expect(screen.queryByTestId("logs-external-link")).toBeNull();
     });
 
+    it("does not send a systemd host to a cluster when journalctl merely failed", async () => {
+      container({
+        units: [],
+        available: false,
+        reason: "journalctl exited non-zero",
+        logs_url: null,
+      });
+      render(<LogsView role="owner" />);
+
+      const state = await screen.findByTestId("logs-unavailable");
+      expect(state.textContent).toContain("journalctl exited non-zero");
+      expect(state.textContent).not.toContain("cluster");
+      expect(state.textContent).not.toContain("outside the dashboard");
+      expect(screen.queryByTestId("logs-unavailable-hint")).toBeNull();
+      expect(screen.queryByTestId("logs-error")).toBeNull();
+    });
+
     it("hides auto-refresh, which would have nothing to beat", async () => {
       container();
       render(<LogsView role="owner" />);
