@@ -17,8 +17,10 @@ import {
   humanizeStatus,
   runDeliveredReading,
   toneClass,
+  verdictTone,
 } from "@/lib/automations/run-truth";
 import { relativeTime } from "@/lib/inbox/pending";
+import { formatCost, formatTokens } from "./runs-format";
 
 const BRIDGE_URL = "/api/bridge";
 
@@ -103,7 +105,7 @@ export function truncation(output: unknown): { total: number | null; content: un
   return null;
 }
 
-const fmt = (n: number) => n.toLocaleString("en-US");
+const fmt = formatTokens;
 const present = (v: unknown) => v !== null && v !== undefined && !(typeof v === "object" && Object.keys(v as object).length === 0);
 
 function Field({ label, children, testId }: { label: string; children: React.ReactNode; testId?: string }) {
@@ -174,7 +176,7 @@ function Header({ run }: { run: DetailRun }) {
         </Field>
         <Field label="Cost">
           <span className="font-mono text-[11px]">
-            {typeof run.total_cost_usd === "number" ? `$${run.total_cost_usd.toFixed(4)}` : "—"}
+            {formatCost(run.total_cost_usd) ?? "—"}
           </span>
         </Field>
         <Field label="Delivery">
@@ -186,11 +188,7 @@ function Header({ run }: { run: DetailRun }) {
           {run.verified_status ? (
             <span
               data-testid={`run-verified-${run.id}`}
-              className={
-                run.verified_status === "verified" || run.verified_status === "no_claims"
-                  ? "text-muted-foreground"
-                  : "text-warning"
-              }
+              className={toneClass(verdictTone(run.verified_status))}
             >
               {humanizeStatus(run.verified_status)}
             </span>

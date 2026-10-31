@@ -165,6 +165,11 @@ export function runDeliveredReading(
 /** `verified_status` values from `robothor/engine/run_verification.py`. */
 const GOOD_VERDICT = new Set(["verified", "no_claims"]);
 
+/** How a `verified_status` reads: a clean verdict is quiet, any finding is a warning. */
+export function verdictTone(verdict: string | null | undefined): Tone {
+  return GOOD_VERDICT.has((verdict ?? "").trim()) ? "unknown" : "warn";
+}
+
 /** …and the self-rated `outcome_assessment` from the run finalizer. */
 const GOOD_OUTCOME = new Set(["successful"]);
 const BAD_OUTCOME = new Set(["incorrect", "abandoned"]);

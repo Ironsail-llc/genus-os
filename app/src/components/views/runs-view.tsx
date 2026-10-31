@@ -14,17 +14,16 @@ import {
   humanizeStatus,
   runDeliveredReading,
   toneClass,
+  verdictTone,
 } from "@/lib/automations/run-truth";
 import { relativeTime } from "@/lib/inbox/pending";
 import { RunDetailDrawer } from "./run-detail-drawer";
+import { formatCost, formatTokens } from "./runs-format";
 
 const BRIDGE_URL = "/api/bridge";
 
 /** One page of the list; a full page is the only evidence there is another. */
 const PAGE = 50;
-
-/** `verified_status` values that are not a finding — see run_verification.py. */
-const GOOD_VERDICT = new Set(["verified", "no_claims"]);
 
 /** Run statuses from `robothor/engine/models.py` `RunStatus`. */
 const STATUSES = [
@@ -128,14 +127,6 @@ function query(filters: Filters, extra: Record<string, number> = {}): string {
   if (filters.trigger) params.set("trigger", filters.trigger);
   if (filters.period !== "all") params.set("since", filters.period);
   return params.toString();
-}
-
-export function formatTokens(n: number): string {
-  return n.toLocaleString("en-US");
-}
-
-export function formatCost(usd: number | null | undefined, digits = 4): string | null {
-  return typeof usd === "number" && Number.isFinite(usd) ? `$${usd.toFixed(digits)}` : null;
 }
 
 function errorText(status: number): string {
@@ -414,7 +405,7 @@ export function RunsView({ visible = true }: { visible?: boolean }) {
                       {r.verified_status ? (
                         <span
                           data-testid={`run-verification-${r.id}`}
-                          className={GOOD_VERDICT.has(r.verified_status) ? "text-muted-foreground" : "text-warning"}
+                          className={toneClass(verdictTone(r.verified_status))}
                         >
                           {humanizeStatus(r.verified_status)}
                         </span>
