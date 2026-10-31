@@ -225,7 +225,7 @@ jobs:
           # lines it writes, and the ANSI escapes make `uv pip install -r`
           # fail with "Unexpected '', expected ... the start of a requirement".
           uv export --frozen --no-emit-project --no-hashes \
-            --extra dev --extra api --extra vision --extra tui \
+            --extra dev --extra api --extra vision --extra tui --extra random-order \
             --output-file /tmp/requirements.txt
           # opencv-python-headless is not a declared dependency — it is the
           # headless wheel CI needs in place of the GUI one `vision` pulls — so
@@ -238,10 +238,17 @@ jobs:
           uv pip install --system -r /tmp/requirements.txt opencv-python-headless
           # The project itself, without re-resolving what the lock just pinned.
           uv pip install --system --no-deps -e .
+      # In a random order (pytest-randomly, the random-order extra above), so an
+      # order dependency between tests fails here rather than surviving as a
+      # flake. The seed is the run number: fixed for the run, different across
+      # runs, and printed in the header as "Using --randomly-seed=N". A failure
+      # reproduces locally with the same `-p randomly --randomly-seed=N`.
       - name: Run the complete Python unit suite
         run: >-
           pytest tests/ robothor/
           -m "not integration and not llm and not slow and not e2e"
+          -p randomly
+          --randomly-seed=${{ github.run_number }}
           --cov=robothor
           --cov-report=term-missing:skip-covered
           --cov-fail-under=60

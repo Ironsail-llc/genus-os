@@ -41,13 +41,35 @@ def test_new_goal_attempt_retains_its_trusted_limit():
     assert restore(ctx, saved).deadline == now
 
 
+#: How long the checkpoint read takes. 0.2 s is what a loaded runner's thread
+#: pool hand-off plus a real read costs; the deadline under test must not be
+#: spent before the action is even entered because the machine was busy.
+@pytest.mark.parametrize("load_seconds", [0.0, 0.2], ids=["fast-load", "slow-load"])
 @pytest.mark.parametrize("expired", [False, True])
-async def test_restored_deadline_bounds_execution_after_checkpoint_load(monkeypatch, expired):
-    deadline = datetime.now(UTC) + timedelta(seconds=-1 if expired else 0.08)
-    monkeypatch.setattr(
-        "robothor.engine.checkpoint.CheckpointManager.load_latest",
-        lambda *a, **k: {"runtime_context": {"deadline": deadline.isoformat()}},
-    )
+async def test_restored_deadline_bounds_execution_after_checkpoint_load(
+    monkeypatch, expired, load_seconds
+):
+    import time
+
+    now = datetime.now(UTC)
+    deadline = now + timedelta(seconds=-1 if expired else 0.08)
+
+    class _Frozen(datetime):
+        """The deadline clock stopped at ``now``: how long the checkpoint read
+        took is the machine's business, and must not spend the 80 ms the run
+        is given once it starts. The window itself is still a real timer."""
+
+        @classmethod
+        def now(cls, tz=None):
+            return now
+
+    monkeypatch.setattr("robothor.engine.runtime.deadlines.datetime", _Frozen)
+
+    def load_latest(*a, **k):
+        time.sleep(load_seconds)  # runs on asyncio.to_thread, as the real read does
+        return {"runtime_context": {"deadline": deadline.isoformat()}}
+
+    monkeypatch.setattr("robothor.engine.checkpoint.CheckpointManager.load_latest", load_latest)
     monkeypatch.setattr("robothor.engine.runtime.controls.stopped", lambda *a: False)
     entered = []
 

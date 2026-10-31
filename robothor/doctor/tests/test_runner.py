@@ -19,6 +19,10 @@ from robothor.doctor.context import DoctorContext
 from robothor.doctor.model import Check, FixResult, Result
 from robothor.doctor.runner import CheckSelectionError, run_sync
 
+# A subprocess here may take up to 120 s by its own bound; pytest.ini's 30 s
+# would stop the test first whenever the machine is busy (tests/test_suite_hygiene.py).
+pytestmark = pytest.mark.timeout(180)
+
 
 def _ctx(**kwargs) -> DoctorContext:
     kwargs.setdefault("timeout_s", 0.2)
@@ -151,9 +155,12 @@ def _threads() -> int:
 
 
 def _open_fds() -> int:
+    """This process's open descriptors: ``/proc/self/fd`` on Linux, the
+    equivalent ``/dev/fd`` on macOS and the BSDs."""
     from pathlib import Path
 
-    return len(list(Path("/proc/self/fd").iterdir()))
+    proc = Path("/proc/self/fd")
+    return len(list((proc if proc.is_dir() else Path("/dev/fd")).iterdir()))
 
 
 def _blocking_check(check_id: str) -> Check:

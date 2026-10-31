@@ -25,6 +25,19 @@ import pytest
 from robothor.plugins import generation, reload_plugins
 
 
+@pytest.fixture(autouse=True)
+def _rebuild_after_each_test():
+    """Invalidate whatever a test built under its patched discovery.
+
+    Torn down after ``monkeypatch`` has restored the real ``_discover``, so the
+    next build is the real plugin set. Without it, a handler map cached while
+    a fake plugin was mounted outlived the test, and whichever test ran next
+    in a random order saw ``hot_probe`` in its baseline.
+    """
+    yield
+    reload_plugins()
+
+
 class TestGeneration:
     def test_generation_is_stable_until_reloaded(self):
         assert generation() == generation()

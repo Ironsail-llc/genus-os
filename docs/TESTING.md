@@ -365,3 +365,38 @@ bash ~/robothor/run_tests.sh
 # Full suite including LLM tests
 bash ~/robothor/run_tests.sh --all
 ```
+
+## Running the Suite on macOS
+
+CI runs on Linux, and so does production. The unit suite also runs on a
+developer Mac, with three things to know.
+
+**Skips that name what is missing.** Some tests exercise something only Linux
+or GNU tools provide: `SO_PEERCRED` and `/proc` in the `execute_code` sandbox,
+`prctl` child reaping, and the host scripts under `scripts/` that need
+util-linux and coreutils (`findmnt`, `flock`, `timeout`, `getent`, GNU `stat`,
+`mv -T`, `date -d`) or bash 4. They skip with a reason naming the capability,
+not the OS, from the markers in `tests/platform_capabilities.py`. Read them
+with `-rs`; a Mac with GNU coreutils and util-linux on `PATH` runs more of
+them. A script that can be written portably is fixed instead
+(`tests/test_suite_hygiene.py` holds the portability gates). None of these
+skips happen on CI.
+
+**Timeouts under load.** `pytest.ini` stops any test at 30 s. A test that runs
+a script with a longer `subprocess` bound carries its own
+`pytest.mark.timeout` at least that bound (`tests/test_suite_hygiene.py`
+enforces it), and a timing test proves what it claims with an event or a
+stopped clock, never with elapsed wall time. Dashboard files whose first test
+pays a cold import set their own Vitest `testTimeout`.
+
+**Random order.** CI runs the unit suite in a random order and prints the seed
+(`Using --randomly-seed=N` in the job header). To reproduce an order-dependent
+failure:
+
+```bash
+pip install -e ".[dev,random-order]"
+pytest tests/ robothor/ -m "not slow and not llm and not e2e and not integration" -p randomly --randomly-seed=N
+```
+
+Without the `random-order` extra the suite runs in file order. Pass
+`-p no:randomly` to switch the plugin off once it is installed.

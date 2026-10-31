@@ -68,6 +68,9 @@ def _clean_provider_state(monkeypatch):
     yield
     key_pool.reset_shared_pools()
     key_pool._env_displaced.clear()
+    # The snapshot was built from this test's fake vault; left behind, its
+    # keys were what the next test in the process resolved.
+    key_pool.reset_vault_availability()
 
 
 #: The real vault-timestamp reader, captured before the autouse fixture stubs

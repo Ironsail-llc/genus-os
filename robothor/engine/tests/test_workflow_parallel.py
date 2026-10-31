@@ -97,18 +97,56 @@ async def test_branches_run_and_results_land_in_context(engine_config):
     assert run.context["steps"]["join"]["status"] == "completed"
 
 
-@pytest.mark.asyncio
-async def test_branches_actually_overlap(engine_config, monkeypatch):
-    """Concurrency is the point — prove overlap, don't assume it."""
-    starts: list[float] = []
+class _LoadedClock:
+    """``time.monotonic`` as a busy machine reports it.
 
-    async def slow_agent_step(step, run, wf):
+    A loaded runner stretches every wall-clock interval the test measures
+    (0.47 s for three 0.15 s branches was seen). Scaling the clock reproduces
+    that deterministically, so a test that proves overlap with elapsed time
+    fails here exactly as it does on a loaded box.
+    """
+
+    def __init__(self, factor: float) -> None:
+        self._real = time.monotonic
+        self._origin = self._real()
+        self._factor = factor
+
+    def __call__(self) -> float:
+        return self._origin + (self._real() - self._origin) * self._factor
+
+
+@pytest.fixture(params=[1.0, 4.0], ids=["idle", "loaded"])
+def machine_load(request, monkeypatch):
+    if request.param != 1.0:
+        monkeypatch.setattr(time, "monotonic", _LoadedClock(request.param))
+    return request.param
+
+
+@pytest.mark.asyncio
+async def test_branches_actually_overlap(engine_config, monkeypatch, machine_load):
+    """Concurrency is the point — prove overlap, don't assume it.
+
+    Proven with a barrier, not with elapsed time: every branch waits until all
+    three have started. Run in parallel, the third arrival releases all of
+    them; run one at a time, the first branch waits for two that never start
+    and the bound below fails it. Elapsed time measured the machine's load as
+    much as the engine (0.47 s against a 0.40 s limit on a busy runner).
+    """
+    branches = 3
+    started = 0
+    all_started = asyncio.Event()
+
+    async def barrier_step(step, run, wf):
         from datetime import UTC, datetime
 
         from robothor.engine.models import WorkflowStepResult
 
-        starts.append(time.monotonic())
-        await asyncio.sleep(0.15)
+        nonlocal started
+        started += 1
+        if started == branches:
+            all_started.set()
+        # Generous: it bounds only the sequential failure, never a pass.
+        await asyncio.wait_for(all_started.wait(), timeout=5)
         return WorkflowStepResult(
             step_id=step.id,
             step_type=step.type,
@@ -127,15 +165,14 @@ async def test_branches_actually_overlap(engine_config, monkeypatch):
         )
     ]
     engine = _make_engine(engine_config, steps)
-    monkeypatch.setattr(engine, "_execute_single_step", slow_agent_step)
+    monkeypatch.setattr(engine, "_execute_single_step", barrier_step)
 
-    t0 = time.monotonic()
     run = await engine.execute("test-wf")
-    elapsed = time.monotonic() - t0
 
-    assert run.status == RunStatus.COMPLETED, run.error_message
-    assert elapsed < 0.40, f"3 x 0.15s branches took {elapsed:.2f}s — they ran sequentially"
-    assert max(starts) - min(starts) < 0.1, "branches did not start together"
+    assert run.status == RunStatus.COMPLETED, (
+        f"branches did not all run at once — {started} of {branches} started: {run.error_message}"
+    )
+    assert started == branches
 
 
 @pytest.mark.asyncio

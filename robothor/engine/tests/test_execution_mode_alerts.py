@@ -15,7 +15,22 @@ And never from a test: 92 of 145 production escalation rows were once pytest
 fixture models.
 """
 
+import pytest
+
 import robothor.engine.execution_mode_alerts as ema
+
+
+@pytest.fixture(autouse=True)
+def _unlatched():
+    """Every test starts and ends with the once-per-mode latch clear.
+
+    The latch is module state. A test that entered "local" without leaving it
+    left the latch set, and the next test to expect an entry page, in a random
+    order, got none.
+    """
+    ema.reset_for_test()
+    yield
+    ema.reset_for_test()
 
 
 class TestItNeverPagesFromATestSession:
