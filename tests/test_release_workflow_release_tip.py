@@ -193,6 +193,31 @@ def _stub_npx(
     stub.chmod(0o755)
 
 
+def _flaky_ls_remote(bin_dir: Path, codes: list[int]) -> Path:
+    """Put a `git` on PATH whose first `ls-remote` calls exit with `codes`.
+
+    Every other git call, and every `ls-remote` after `codes` runs out, goes
+    to the real git. Returns the file that logs each `ls-remote` call.
+    """
+    bin_dir.mkdir(exist_ok=True)
+    real = shutil.which("git")
+    calls = bin_dir / "ls_remote_calls"
+    calls.write_text("", encoding="utf-8")
+    script = f"""#!/usr/bin/env bash
+if [ "$1" = ls-remote ]; then
+  echo call >> {str(calls)!r}
+  n=$(wc -l < {str(calls)!r} | tr -d ' ')
+  codes=({" ".join(str(c) for c in codes)})
+  if [ "$n" -le "${{#codes[@]}}" ]; then exit "${{codes[$((n - 1))]}}"; fi
+fi
+exec {real!r} "$@"
+"""
+    git = bin_dir / "git"
+    git.write_text(script, encoding="utf-8")
+    git.chmod(0o755)
+    return calls
+
+
 def _run_semantic(
     jobs: dict, repo: Path, tmp_path: Path
 ) -> tuple[subprocess.CompletedProcess[str], str]:
@@ -206,6 +231,7 @@ def _run_semantic(
         "GIT_CONFIG_NOSYSTEM": "1",
         "GIT_COMMITTER_NAME": "Alice",
         "GIT_COMMITTER_EMAIL": "alice@example.com",
+        "LS_REMOTE_RETRY_SECONDS": "0",
     }
     result = _run(script, repo, env)
     return result, out.read_text(encoding="utf-8")
@@ -350,6 +376,45 @@ class TestTagMustReachTheRemote:
         result, outputs = _run_semantic(jobs, repo, tmp_path)
         assert result.returncode == 0, result.stdout + result.stderr
         assert "new_release_published=true" in outputs
+
+    def test_unreachable_remote_is_retried_then_fails_distinctly(
+        self, jobs: dict, repo: Path, tmp_path: Path
+    ) -> None:
+        # A network or auth error (128) is not "no such tag" (2): it is
+        # retried, and if it never clears the step fails saying it could
+        # not verify, rather than calling a pushed tag missing.
+        _commit(repo, "fix: a change")
+        _stub_npx(tmp_path / "bin", "Published release 1.2.3", 0, tag="v1.2.3")
+        calls = _flaky_ls_remote(tmp_path / "bin", [128, 128, 128])
+        result, outputs = _run_semantic(jobs, repo, tmp_path)
+        assert result.returncode != 0
+        assert len(calls.read_text(encoding="utf-8").splitlines()) == 3
+        assert "could not verify" in result.stdout
+        assert "not on the remote" not in result.stdout
+        assert "new_release_published=true" not in outputs
+
+    def test_transient_remote_error_is_retried_then_published(
+        self, jobs: dict, repo: Path, tmp_path: Path
+    ) -> None:
+        _commit(repo, "fix: a change")
+        _stub_npx(tmp_path / "bin", "Published release 1.2.3", 0, tag="v1.2.3")
+        calls = _flaky_ls_remote(tmp_path / "bin", [128])
+        result, outputs = _run_semantic(jobs, repo, tmp_path)
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert len(calls.read_text(encoding="utf-8").splitlines()) == 2
+        assert "::warning::" in result.stdout
+        assert "new_release_published=true" in outputs
+        assert "new_release_version=1.2.3" in outputs
+
+    def test_missing_tag_is_not_retried(self, jobs: dict, repo: Path, tmp_path: Path) -> None:
+        _commit(repo, "fix: a change")
+        _stub_npx(tmp_path / "bin", "tag push rejected", 0, tag="v1.2.3", push=False)
+        calls = _flaky_ls_remote(tmp_path / "bin", [])
+        result, outputs = _run_semantic(jobs, repo, tmp_path)
+        assert result.returncode != 0
+        assert len(calls.read_text(encoding="utf-8").splitlines()) == 1
+        assert "not on the remote" in result.stdout
+        assert "new_release_published=false" in outputs
 
     def test_colour_is_off_so_the_skip_regex_sees_plain_text(self, jobs: dict) -> None:
         env = _step(jobs["release"], "Run semantic-release")["env"]
