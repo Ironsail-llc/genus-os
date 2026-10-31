@@ -401,3 +401,127 @@ class TestEmptyToolArgs:
         assert run.status == RunStatus.COMPLETED, run.error_message
         sql, params = _step_inserts(statements)[0]
         assert json.loads(_column_value(sql, params, "tool_input")) == {}
+
+
+# ── review: stored outputs are redacted like the agent path's ──────────
+
+#: Credential-shaped, never a real key: the redactor matches on the shape.
+_FAKE_TOKEN = "ghp_" + "A1b2C3d4E5" * 4
+
+
+class TestStoredOutputIsRedacted:
+    """The agent path runs ``redact_secrets`` on a tool result before it is
+    recorded; a workflow step's stored output and output text must follow the
+    same rule, since the run-detail routes serve both."""
+
+    @pytest.mark.asyncio
+    async def test_credential_in_a_tool_result_is_not_stored(
+        self, engine_config, no_side_effects
+    ) -> None:
+        engine = _engine(
+            engine_config,
+            _definition({"query": "x"}),
+            {"stdout": f"token={_FAKE_TOKEN}", "exit_code": 0},
+        )
+        with _capture_sql() as statements:
+            run = await _run(engine)
+
+        assert run.status == RunStatus.COMPLETED, run.error_message
+        final = [(s, p) for s, p in _step_updates(statements) if "tool_output" in s][0]
+        stored = json.loads(_set_value(*final, "tool_output"))
+        assert _FAKE_TOKEN not in json.dumps(stored)
+        assert "[REDACTED" in stored["stdout"]
+        assert stored["exit_code"] == 0
+        text = _set_value(*final, "output_text")
+        assert text is not None and _FAKE_TOKEN not in text
+
+    def test_fallback_insert_redacts_the_output_too(self, engine_config) -> None:
+        engine = WorkflowEngine(engine_config, runner=MagicMock())
+        result = WorkflowStepResult(
+            step_id="lookup",
+            step_type=WorkflowStepType.TOOL,
+            status=WorkflowStepStatus.COMPLETED,
+            tool_name="search_records",
+            tool_input={"query": "x"},
+            tool_output={"stdout": f"token={_FAKE_TOKEN}"},
+            output_text=f"token={_FAKE_TOKEN}",
+        )
+        with _capture_sql(rowcount=0) as statements:
+            engine._persist_step(WorkflowRun(workflow_id="step-io-flow"), result)
+
+        sql, params = _step_inserts(statements)[0]
+        assert _FAKE_TOKEN not in json.dumps(params, default=str)
+
+
+# ── review: stored step io is always JSONB-safe ───────────────────────
+
+
+def _strict_loads(text: str) -> Any:
+    """``json.loads`` as Postgres JSONB reads it: no NaN or Infinity."""
+
+    def _reject(name: str) -> Any:
+        raise ValueError(f"JSONB rejects {name}")
+
+    return json.loads(text, parse_constant=_reject)
+
+
+class TestStepIOIsJsonbSafe:
+    def test_a_nul_character_is_dropped(self) -> None:
+        text = workflow_module._capped_json({"body": "before\x00after"})
+        assert text is not None
+        assert "\\u0000" not in text
+        assert _strict_loads(text) == {"body": "beforeafter"}
+
+    @pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+    def test_a_non_finite_number_is_stored_as_valid_json(self, value: float) -> None:
+        text = workflow_module._capped_json({"score": value, "ok": True})
+        assert text is not None
+        _strict_loads(text)  # raises on NaN / Infinity
+
+    @pytest.mark.asyncio
+    async def test_a_nul_in_a_rendered_argument_still_writes_the_step_row(
+        self, engine_config, no_side_effects
+    ) -> None:
+        engine = _engine(engine_config, _definition({"query": "{{ who }}"}), {"ok": True})
+        with _capture_sql() as statements:
+            await engine.execute(
+                "step-io-flow",
+                trigger_type="manual",
+                initial_context={"who": "Al\x00ice"},
+                user_id="alice",
+                user_role="owner",
+            )
+        sql, params = _step_inserts(statements)[0]
+        stored = _column_value(sql, params, "tool_input")
+        assert "\\u0000" not in stored
+        assert _strict_loads(stored) == {"query": "Alice"}
+
+
+# ── review: a malformed tool_args fails the step, never escapes it ──────
+
+
+class TestMalformedToolArgs:
+    @pytest.mark.parametrize("bad", [["a", "b"], "a string", 7])
+    def test_parse_workflow_rejects_a_non_mapping_tool_args(self, bad: Any) -> None:
+        data = _definition({})
+        data["steps"][0]["tool_args"] = bad
+        with pytest.raises(ValueError, match="tool_args"):
+            parse_workflow(data)
+
+    @pytest.mark.asyncio
+    async def test_a_tool_args_that_cannot_render_fails_the_step_with_a_row(
+        self, engine_config, no_side_effects
+    ) -> None:
+        """A definition built past the parser can still carry a non-mapping
+        ``tool_args``; the step must end FAILED with a row, as it did before
+        rendering moved ahead of the step's ``try``."""
+        engine = _engine(engine_config, _definition({"query": "x"}), {"ok": True})
+        wf = engine._workflows["step-io-flow"]
+        wf.steps[0].tool_args = ["not", "a", "mapping"]  # type: ignore[assignment]
+        run = WorkflowRun(workflow_id=wf.id, context={})
+        with _capture_sql() as statements:
+            result = await engine._execute_single_step(wf.steps[0], run, wf)
+
+        assert result.status == WorkflowStepStatus.FAILED
+        assert _step_inserts(statements), "no step row was written"
+        engine.runner.registry.execute.assert_not_called()

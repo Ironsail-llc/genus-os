@@ -336,3 +336,73 @@ def test_a_plugin_jobs_runs_are_listed_under_its_job_id(controls_client_as_opera
     r = controls_client_as_operator.get("/api/workflows/plugin:nightly_sweep/runs")
     assert r.status_code == 200
     assert r.json() == [{"id": "pj1", "status": "failed", "trigger_type": "plugin_job"}]
+
+
+def _detail_rows(run: dict):
+    def _rows(sql, params):
+        if "FROM workflow_runs" in sql:
+            return [run]
+        return []
+
+    return _rows
+
+
+def test_run_detail_of_a_plugin_job_carries_its_result(monkeypatch):
+    """A plugin job records no steps; what it returned is the run's detail."""
+    monkeypatch.setattr(
+        workflows,
+        "_rows",
+        _detail_rows(
+            {
+                "id": RUN_ID,
+                "workflow_id": "plugin:nightly_sweep",
+                "status": "completed",
+                "trigger_type": "plugin_job",
+                "context": {"result": {"swept": 3}},
+            }
+        ),
+    )
+    detail = workflows._workflow_run("plugin:nightly_sweep", RUN_ID)
+    assert detail["steps"] == []
+    assert detail["result"] == {"swept": 3}
+    assert "context" not in detail
+
+
+def test_run_detail_of_a_plugin_job_says_when_its_result_was_truncated(monkeypatch):
+    monkeypatch.setattr(
+        workflows,
+        "_rows",
+        _detail_rows(
+            {
+                "id": RUN_ID,
+                "workflow_id": "plugin:nightly_sweep",
+                "status": "completed",
+                "trigger_type": "plugin_job",
+                "context": {"result": '{"rows": [', "result_truncated": True},
+            }
+        ),
+    )
+    detail = workflows._workflow_run("plugin:nightly_sweep", RUN_ID)
+    assert detail["result"] == '{"rows": ['
+    assert detail["result_truncated"] is True
+
+
+def test_run_detail_of_a_workflow_never_serves_its_context(monkeypatch):
+    """A workflow's run context holds every step's raw output; only a plugin
+    job's own result is served."""
+    monkeypatch.setattr(
+        workflows,
+        "_rows",
+        _detail_rows(
+            {
+                "id": RUN_ID,
+                "workflow_id": "intel",
+                "status": "completed",
+                "trigger_type": "manual",
+                "context": {"steps": {"fetch": {"tool_output": "raw"}}, "result": "x"},
+            }
+        ),
+    )
+    detail = workflows._workflow_run("intel", RUN_ID)
+    assert "context" not in detail
+    assert "result" not in detail

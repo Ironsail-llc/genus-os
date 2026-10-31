@@ -120,6 +120,75 @@ describe("WorkflowRunDrawer", () => {
     expect(await screen.findByTestId("run-drawer-empty")).toBeTruthy();
   });
 
+  it("shows a plugin job's returned result instead of an empty step list", async () => {
+    vi.spyOn(global, "fetch").mockResolvedValue(
+      reply({
+        ...FAILED_RUN_DETAIL,
+        status: "completed",
+        trigger_type: "plugin_job",
+        error_message: null,
+        steps: [],
+        result: { swept: 3, skipped: 0 },
+      })
+    );
+    openDrawer();
+    const result = await screen.findByTestId("run-drawer-job-result");
+    expect(result.querySelector("pre")?.textContent).toBe('{\n  "swept": 3,\n  "skipped": 0\n}');
+    expect(screen.queryByTestId("run-drawer-empty")).toBeNull();
+  });
+
+  it("says a plugin job's result was truncated when the engine capped it", async () => {
+    vi.spyOn(global, "fetch").mockResolvedValue(
+      reply({
+        ...FAILED_RUN_DETAIL,
+        trigger_type: "plugin_job",
+        steps: [],
+        result: '{"rows": [',
+        result_truncated: true,
+      })
+    );
+    openDrawer();
+    const result = await screen.findByTestId("run-drawer-job-result");
+    expect(result.textContent).toMatch(/truncated/i);
+    expect(result.querySelector("pre")?.textContent).toBe('{"rows": [');
+  });
+
+  it("says a plugin job that returned nothing returned nothing", async () => {
+    vi.spyOn(global, "fetch").mockResolvedValue(
+      reply({ ...FAILED_RUN_DETAIL, trigger_type: "plugin_job", steps: [] })
+    );
+    openDrawer();
+    const empty = await screen.findByTestId("run-drawer-empty");
+    expect(empty.textContent).toMatch(/no result recorded/i);
+    expect(empty.textContent).not.toMatch(/before any step/i);
+  });
+
+  it("lists a retried step once per attempt without duplicate React keys", async () => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const attempt = {
+      step_id: "fetch",
+      step_type: "tool",
+      tool_name: "search_records",
+      tool_input: { query: "x" },
+    };
+    vi.spyOn(global, "fetch").mockResolvedValue(
+      reply({
+        ...FAILED_RUN_DETAIL,
+        steps: [
+          { ...attempt, status: "failed", started_at: "2026-06-15T11:00:00+00:00" },
+          { ...attempt, status: "completed", started_at: "2026-06-15T11:00:02+00:00" },
+        ],
+      })
+    );
+    openDrawer();
+    await screen.findAllByTestId("run-step-fetch");
+    expect(screen.getAllByTestId("run-step-fetch")).toHaveLength(2);
+    const keyWarnings = errors.mock.calls.filter((args) =>
+      args.some((a) => typeof a === "string" && a.includes("same key"))
+    );
+    expect(keyWarnings).toEqual([]);
+  });
+
   it("says an operator-only refusal is one", async () => {
     vi.spyOn(global, "fetch").mockResolvedValue(reply({ detail: "forbidden" }, 403));
     openDrawer();
