@@ -706,3 +706,25 @@ async def test_an_unknown_sandbox_value_fails_closed(git_repo, coding_env, monke
     job = await _start(mgr, git_repo)
     await mgr.wait(job.id, TENANT, timeout_s=20)
     assert runner.calls[0].settings["sandbox"]["failIfUnavailable"] is True
+
+
+async def test_a_refusal_names_the_setting_that_set_the_root(
+    git_repo, coding_env, monkeypatch, tmp_path
+):
+    from robothor.engine.coding.jobs import check_repo_path
+
+    monkeypatch.delenv("ROBOTHOR_CODING_REPO_ROOTS")
+    monkeypatch.setenv("ROBOTHOR_CODING_WORKSPACE", str(tmp_path / "coding"))
+    with pytest.raises(ValueError) as err:
+        check_repo_path(str(git_repo))
+    assert "ROBOTHOR_CODING_WORKSPACE" in str(err.value)
+    assert "ROBOTHOR_CODING_REPO_ROOTS" not in str(err.value)
+
+    monkeypatch.setenv("ROBOTHOR_CODING_REPO_ROOTS", str(tmp_path / "src"))
+    from robothor.settings import reset_settings
+
+    reset_settings()
+    with pytest.raises(ValueError) as err:
+        check_repo_path(str(git_repo))
+    assert "ROBOTHOR_CODING_REPO_ROOTS" in str(err.value)
+    assert "ROBOTHOR_CODING_WORKSPACE" in str(err.value)

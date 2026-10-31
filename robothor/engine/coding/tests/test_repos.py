@@ -258,3 +258,35 @@ def test_the_token_is_only_ever_sent_to_github():
     for url in ("https://git.example.org/team/app.git", "https://github.com.example.org/a/b"):
         assert "GIT_CONFIG_COUNT" not in repos.git_env(url, TOKEN), url
     assert "GIT_CONFIG_COUNT" in repos.git_env("https://github.com/example/demo.git", TOKEN)
+
+
+# ── QA round 1 ────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("exc", [FileNotFoundError(2, "No such file", "git"), OSError(5, "I/O")])
+async def test_a_clone_that_cannot_even_start_leaves_nothing_behind(
+    workspace, remote, monkeypatch, exc
+):
+    real = asyncio.create_subprocess_exec
+
+    async def broken(*argv, **kw):
+        raise exc
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", broken)
+    with pytest.raises(repos.RepoError, match="git"):
+        await repos.ensure_repo(remote, token="")
+    assert not (workspace / "example" / "demo").exists()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", real)
+    again = await repos.ensure_repo(remote, token="")
+    assert again.cloned is True
+
+
+async def test_a_cancelled_clone_leaves_nothing_behind(workspace, remote, monkeypatch):
+    async def cancelled(*argv, **kw):
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", cancelled)
+    with pytest.raises(asyncio.CancelledError):
+        await repos.ensure_repo(remote, token="")
+    assert not (workspace / "example" / "demo").exists()

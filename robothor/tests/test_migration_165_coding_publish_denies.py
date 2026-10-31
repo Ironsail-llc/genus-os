@@ -1,8 +1,8 @@
 """165: who may clone a repository for coding and open a pull request.
 
 ``user`` and ``member`` -- humans other than the operator -- are denied both
-``coding_repo_prepare`` and ``coding_publish``. ``service`` (every unattended
-run) is denied ``coding_publish``: a pull request leaves the host, and only a
+``claude_code_repo_prepare`` and ``claude_code_publish``. ``service`` (every unattended
+run) is denied ``claude_code_publish``: a pull request leaves the host, and only a
 person with the owner's or an admin's role opens one. ``owner`` and ``admin``
 keep their catch-all allow.
 """
@@ -25,7 +25,13 @@ def test_migration_file_exists_and_is_in_the_manifest():
 
 def test_the_migration_names_both_tools_and_the_three_roles():
     sql = (MIGRATIONS_DIR / f"{MIGRATION}.sql").read_text()
-    for token in ("'coding_publish'", "'coding_repo_prepare'", "'user'", "'member'", "'service'"):
+    for token in (
+        "'claude_code_publish'",
+        "'claude_code_repo_prepare'",
+        "'user'",
+        "'member'",
+        "'service'",
+    ):
         assert token in sql, token
     assert "'deny'" in sql and "'__default__'" in sql
 
@@ -54,22 +60,22 @@ def _decision(scratch_db, monkeypatch, role: str, tool: str) -> str | None:
 @pytest.mark.integration
 @pytest.mark.parametrize("role", ["user", "member", "service"])
 def test_publish_is_denied_below_the_operator(scratch_db, monkeypatch, role):
-    assert _decision(scratch_db, monkeypatch, role, "coding_publish") is not None
+    assert _decision(scratch_db, monkeypatch, role, "claude_code_publish") is not None
 
 
 @pytest.mark.integration
 @pytest.mark.parametrize("role", ["user", "member"])
 def test_prepare_is_denied_to_other_humans(scratch_db, monkeypatch, role):
-    assert _decision(scratch_db, monkeypatch, role, "coding_repo_prepare") is not None
+    assert _decision(scratch_db, monkeypatch, role, "claude_code_repo_prepare") is not None
 
 
 @pytest.mark.integration
 def test_unattended_runs_may_still_prepare(scratch_db, monkeypatch):
-    assert _decision(scratch_db, monkeypatch, "service", "coding_repo_prepare") is None
+    assert _decision(scratch_db, monkeypatch, "service", "claude_code_repo_prepare") is None
 
 
 @pytest.mark.integration
 @pytest.mark.parametrize("role", ["owner", "admin"])
-@pytest.mark.parametrize("tool", ["coding_publish", "coding_repo_prepare"])
+@pytest.mark.parametrize("tool", ["claude_code_publish", "claude_code_repo_prepare"])
 def test_the_operator_keeps_both(scratch_db, monkeypatch, role, tool):
     assert _decision(scratch_db, monkeypatch, role, tool) is None
