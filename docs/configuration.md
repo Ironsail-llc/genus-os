@@ -466,6 +466,28 @@ SOPS stays — as the bootstrap layer. See
 [the SOPS runbook](runbooks/SOPS_BOOTSTRAP.md) for shrinking the file to just
 that.
 
+### The Secrets page
+
+**Settings › Secrets** in the Helm is `genus secrets status` for an operator
+who is not on the box. It lists every credential the instance declares or
+holds, and for each one shows whether it is configured, which store holds it
+(vault, environment, both, or neither), when the vault row last changed, and
+which services read it: the restart units the setting's declaration names, or
+`robothor-engine` and `robothor-bridge` for a credential nothing declares. A
+row whose two copies differ says which store is not being served.
+
+It never shows a value, a fingerprint or the vault key a row sits under. The
+bridge route behind it (`GET /api/secrets`) does not send them, is
+operator-only (owner or admin of the platform tenant), and is marked
+`no-store`. Use `genus secrets status` on the box when you need fingerprints
+to compare two copies.
+
+A credential whose last change is more than **90 days** old carries a
+*rotation overdue* chip, and one with no recorded change (an environment-only
+value, or a row from before change times were kept) says *never recorded*.
+The page does not write: set or rotate a credential with `genus vault set`,
+then restart the services listed as its readers.
+
 ### The rules the platform enforces
 
 1. **A credential never goes in `config.yaml`.** `genus config set` refuses a
