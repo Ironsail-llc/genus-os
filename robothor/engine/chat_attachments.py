@@ -26,10 +26,12 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import contextlib
 import hashlib
+import logging
 import uuid
 from dataclasses import dataclass, field
-from pathlib import PurePath
+from pathlib import Path, PurePath
 from typing import Any
 
 from robothor.engine import attachments
@@ -69,6 +71,8 @@ ACCEPTED_MIMES = frozenset(
 
 CHANNEL = "webchat"
 
+logger = logging.getLogger(__name__)
+
 
 class AttachmentRefusal(Exception):  # noqa: N818 - a refusal, not a failure
     """One attachment the turn cannot carry, with the HTTP status that says why."""
@@ -77,6 +81,10 @@ class AttachmentRefusal(Exception):  # noqa: N818 - a refusal, not a failure
         super().__init__(message)
         self.status = status
         self.message = message
+
+    def body(self) -> dict[str, Any]:
+        """The JSON answer: the reason, and that no turn was started."""
+        return {"error": self.message, "request_admitted": False}
 
 
 @dataclass
@@ -146,18 +154,38 @@ def parse_attachments(raw: Any) -> list[_Incoming]:
 
 
 async def _enrich(noted: attachments.NotedAttachment, item: _Incoming) -> None:
-    """The extracted text of a document, as Telegram's intake gathers it."""
+    """The extracted text of a document, as Telegram's intake gathers it.
+
+    Best-effort, like Telegram's: the file is already on disk and its path is
+    in the note, so a failure here leaves an un-enriched entry with a note
+    saying why, never a failed turn.
+    """
+    try:
+        await _extract(noted, item)
+    except Exception as exc:  # noqa: BLE001 - the file is already kept
+        logger.warning("Could not read the text of webchat attachment %s: %s", item.name, exc)
+        noted.text = ""
+        noted.text_total_chars = 0
+        noted.error = "the text could not be extracted; read_file the path to open it"
+
+
+async def _extract(noted: attachments.NotedAttachment, item: _Incoming) -> None:
+    from robothor.engine import file_extract
+
     if noted.row.get("secret") or noted.row.get("kind") == "image":
         return
     suffix = PurePath(item.name).suffix.lower()
     extract = attachments.extractable(suffix, item.mime)
+    if extract == "text" and file_extract.looks_binary(item.data[:8192]):
+        # The mail path's guard: a NUL byte means these are not text, and
+        # decoding them would quote a page of replacement characters.
+        noted.error = "not quoted: the bytes are not text; read_file the path to inspect it"
+        return
     if extract == "text":
         whole = item.data.decode("utf-8", errors="replace")
         noted.text_total_chars = len(whole)
         noted.text = whole[: attachments.TEXT_EXTRACT_CHARS]
     elif extract is not None:
-        from robothor.engine import file_extract
-
         whole = await asyncio.to_thread(
             file_extract.describe_bytes,
             item.data,
@@ -166,6 +194,19 @@ async def _enrich(noted: attachments.NotedAttachment, item: _Incoming) -> None:
         )
         noted.text_total_chars = len(whole)
         noted.text = whole
+
+
+def _forget(rows: list[dict[str, Any]]) -> None:
+    """Remove what this turn wrote, so a refused turn leaves no files behind.
+
+    A deduplicated row's file was already there before this turn, from an
+    earlier one, and is left alone.
+    """
+    for row in rows:
+        if row.get("deduplicated"):
+            continue
+        with contextlib.suppress(OSError):
+            Path(str(row.get("path", ""))).unlink()
 
 
 def _model_for(config: Any, session: Any, session_key: str) -> str:
@@ -188,6 +229,10 @@ async def prepare_turn(
 ) -> WebchatTurn:
     """Check, keep and describe the request's files. Raises :class:`AttachmentRefusal`."""
     incoming = parse_attachments(body.get("attachments"))
+    if incoming and body.get("join_running"):
+        # A follow-up joins a run whose prompt is already built: there is no
+        # turn left for the files' note or their image blocks to ride on.
+        raise AttachmentRefusal(422, "files cannot be added to a running task; send them next")
     if not incoming:
         return WebchatTurn(text=message)
     from robothor.engine.model_registry import image_capability
@@ -198,18 +243,32 @@ async def prepare_turn(
     noted_all: list[attachments.NotedAttachment] = []
     for index, item in enumerate(incoming):
         kind = attachments.kind_for(item.mime, item.name)
-        row = await asyncio.to_thread(
-            attachments.save_attachment,
-            chat_id=session_key or "main",
-            file_id=f"{request_id}:{index}",
-            file_unique_id=hashlib.sha256(item.data).hexdigest(),
-            name=item.name,
-            data=item.data,
-            kind=kind,
-            mime=item.mime,
-            workspace=getattr(config, "workspace", None),
-            channel=CHANNEL,
-        )
+        try:
+            row = await asyncio.to_thread(
+                attachments.save_attachment,
+                chat_id=session_key or "main",
+                file_id=f"{request_id}:{index}",
+                file_unique_id=hashlib.sha256(item.data).hexdigest(),
+                name=item.name,
+                data=item.data,
+                kind=kind,
+                mime=item.mime,
+                workspace=getattr(config, "workspace", None),
+                channel=CHANNEL,
+            )
+        except Exception as exc:  # noqa: BLE001 - answered, and the turn's files removed
+            # Telegram's rule: a file that cannot be kept is an answer to the
+            # operator, never a traceback. No turn starts, so nothing the
+            # turn already wrote is worth keeping.
+            logger.warning("Could not keep webchat attachment %s: %s", item.name, exc)
+            _forget(turn.rows)
+            raise AttachmentRefusal(
+                500, f"{attachments.safe_name(item.name)} could not be kept; try sending it again"
+            ) from None
+        if attachments.safe_name(item.name) != item.name:
+            # The chip shows what the operator sent; the stored name is the
+            # sanitised one (`Résumé.txt` becomes `R-sum.txt`).
+            row.setdefault("original_name", item.name)
         noted = attachments.NotedAttachment(row=row)
         await _enrich(noted, item)
         noted_all.append(noted)

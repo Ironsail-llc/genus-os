@@ -385,15 +385,15 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
 
     session_key = _effective_session_key(auth, session_key)
     session = _get_session(session_key)
-    # Sent while this session's run works: join it (chat_live.py).
-    if body.get("join_running"):
-        return single_event_response(join_running_turn(session, auth, session_key, body))
     try:  # files ride with the turn: kept in the inbox, named in the note
         attached = await prepare_turn(
             body, message, session=session, session_key=session_key, config=_config
         )
     except AttachmentRefusal as refusal:
-        return JSONResponse({"error": refusal.message}, status_code=refusal.status)
+        return JSONResponse(refusal.body(), status_code=refusal.status)
+    # Sent while this session's run works: join it (chat_live.py).
+    if body.get("join_running"):
+        return single_event_response(join_running_turn(session, auth, session_key, body))
     message = attached.text
     inbox = LiveInbox()
     pending: list[str] = []

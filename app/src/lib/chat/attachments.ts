@@ -24,9 +24,18 @@ export const ACCEPTED_TYPES: Record<string, string[]> = {
   "application/pdf": [".pdf"],
 };
 
+/** The size limit as people read it: "5 MB". */
+export const MAX_ATTACHMENT_SIZE_TEXT = `${MAX_ATTACHMENT_BYTES / (1024 * 1024)} MB`;
+
 /** What the composer says, word for word, about what it takes. */
 export const ATTACHMENT_LIMITS_TEXT =
-  "Images (PNG, JPG, GIF, WebP) and text, Markdown, CSV, JSON or PDF · up to 5 MB each · 3 per message";
+  `Images (PNG, JPG, GIF, WebP) and text, Markdown, CSV, JSON or PDF · up to ${MAX_ATTACHMENT_SIZE_TEXT} each · ${MAX_ATTACHMENTS} per message`;
+
+/**
+ * The largest `/api/chat/send` body the route reads: every file at the limit,
+ * base64 (4 bytes per 3), plus a megabyte for the message and the JSON.
+ */
+export const MAX_SEND_BODY_BYTES = Math.ceil((MAX_ATTACHMENT_BYTES * MAX_ATTACHMENTS * 4) / 3) + 1024 * 1024;
 
 /** The `accept` attribute for the file input. */
 export const ACCEPT_ATTRIBUTE = Object.entries(ACCEPTED_TYPES)
@@ -92,7 +101,7 @@ export function checkAttachment(item: unknown): { status: number; error: string 
   }
   const padding = data.endsWith("==") ? 2 : data.endsWith("=") ? 1 : 0;
   const decoded = (data.length / 4) * 3 - padding;
-  if (decoded > MAX_ATTACHMENT_BYTES) return { status: 413, error: `${name} is larger than 5 MB` };
+  if (decoded > MAX_ATTACHMENT_BYTES) return { status: 413, error: `${name} is larger than ${MAX_ATTACHMENT_SIZE_TEXT}` };
   if (size !== undefined && size !== decoded) {
     return { status: 422, error: `${name}'s size does not match its data` };
   }
@@ -128,7 +137,11 @@ export async function readAsBase64(file: File): Promise<string> {
  * the words; the files are the chips.
  */
 export function stripAttachmentNote(content: string): string {
-  const at = content.search(/\[\d+ files? attached — /);
+  // The note starts the turn or follows a blank line, and it is the LAST such
+  // block: anything earlier that looks like one is the operator's own text.
+  const pattern = /(^|\n\n)\[\d+ files? attached — kept on disk; use the paths below\]/g;
+  let at = -1;
+  for (const match of content.matchAll(pattern)) at = match.index;
   return at < 0 ? content : content.slice(0, at).trim();
 }
 

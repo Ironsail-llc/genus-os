@@ -18,6 +18,7 @@ import {
   ATTACHMENT_LIMITS_TEXT,
   MAX_ATTACHMENTS,
   MAX_ATTACHMENT_BYTES,
+  MAX_ATTACHMENT_SIZE_TEXT,
   attachmentKind,
   attachmentMime,
   formatSize,
@@ -30,8 +31,19 @@ export interface PendingAttachment extends AttachmentPayload {
   id: string;
 }
 
-/** What the composer holds, and the one refusal it is showing. */
-export function useChatAttachments() {
+/** Why files cannot be added right now, said the same way wherever they come from. */
+export const NOT_IN_PLAN_OR_DEEP = "Files go with an ordinary message, not in Plan or Deep mode.";
+export const NOT_WHILE_RUNNING = "Files go with your next message, not the running task.";
+
+/**
+ * What the composer holds, and the one refusal it is showing.
+ *
+ * `blocked` is the reason files cannot be added at the moment (Plan or Deep
+ * mode, a running reply), or null. The paperclip is disabled then, and a
+ * paste or a drop gets that reason as an inline refusal, so no route in can
+ * leave a file pending that the next send would silently ignore.
+ */
+export function useChatAttachments(blocked: string | null = null) {
   const [files, setFiles] = useState<PendingAttachment[]>([]);
   const [refusal, setRefusal] = useState<string | null>(null);
   // The count the NEXT add is checked against: a paste and a drop can land
@@ -46,12 +58,16 @@ export function useChatAttachments() {
   const add = useCallback(async (incoming: ArrayLike<File> | null | undefined) => {
     const list = Array.from(incoming ?? []);
     if (!list.length) return;
+    if (blocked) {
+      setRefusal(blocked);
+      return;
+    }
     const refusals: string[] = [];
     const accepted: Array<{ file: File; mime: string }> = [];
     for (const file of list) {
       const mime = attachmentMime(file.name, file.type);
       if (!mime) refusals.push(`${file.name} is not a supported type.`);
-      else if (file.size > MAX_ATTACHMENT_BYTES) refusals.push(`${file.name} is larger than 5 MB.`);
+      else if (file.size > MAX_ATTACHMENT_BYTES) refusals.push(`${file.name} is larger than ${MAX_ATTACHMENT_SIZE_TEXT}.`);
       else if (held.current.length + accepted.length >= MAX_ATTACHMENTS) {
         refusals.push(`Only ${MAX_ATTACHMENTS} files per message: ${file.name} was not added.`);
       } else accepted.push({ file, mime });
@@ -75,7 +91,7 @@ export function useChatAttachments() {
     const done = read.filter((r): r is PendingAttachment => r !== null);
     commit([...held.current.filter((f) => !ids.has(f.id)), ...done]);
     setRefusal(refusals.length ? refusals.join(" ") : null);
-  }, []);
+  }, [blocked]);
 
   const remove = useCallback((id: string) => {
     commit(held.current.filter((f) => f.id !== id));
@@ -87,7 +103,15 @@ export function useChatAttachments() {
     setRefusal(null);
   }, []);
 
-  return { files, refusal, add, remove, clear };
+  /** Drop everything pending, saying which files went and why. */
+  const drop = useCallback((why: string) => {
+    if (!held.current.length) return;
+    const gone = held.current;
+    commit([]);
+    setRefusal(`${gone.map((f) => f.name).join(", ")} ${gone.length === 1 ? "was" : "were"} removed: ${why}`);
+  }, []);
+
+  return { files, refusal, add, remove, clear, drop };
 }
 
 /** The paperclip and the hidden input it opens. */

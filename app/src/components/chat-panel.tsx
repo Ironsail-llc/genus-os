@@ -18,7 +18,7 @@ import { ChatMarkdown, CHAT_PROSE } from "@/components/chat/chat-markdown";
 import { ChatAskCard, type ApprovalKind } from "@/components/chat-ask-card";
 import { ChatLanding } from "@/components/chat/chat-landing";
 import { ToolsPopover } from "@/components/chat/tools-popover";
-import { AttachButton, MessageAttachments, PendingAttachments, useChatAttachments } from "@/components/chat/chat-attachments";
+import { AttachButton, MessageAttachments, NOT_IN_PLAN_OR_DEEP, NOT_WHILE_RUNNING, PendingAttachments, useChatAttachments } from "@/components/chat/chat-attachments";
 import { attachmentKind, historyAttachments, stripAttachmentNote, type AttachmentSummary } from "@/lib/chat/attachments";
 import { repeatsQuickAction } from "@/components/business/quick-action-labels";
 import {
@@ -166,7 +166,6 @@ export function ChatPanel({
     }
   }, [notifyCanvas, renderOnCanvas]);
   const [input, setInput] = useState("");
-  const attachments = useChatAttachments();
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamingText, setStreamingText] = useState("");
   const [activePlan, setActivePlan] = useState<ActivePlan | null>(null);
@@ -208,6 +207,15 @@ export function ChatPanel({
   const [deepMode, setDeepMode] = useState(false);
   const [deepPlan, setDeepPlan] = useState(false);
   const [isDeepReasoning, setIsDeepReasoning] = useState(false);
+  // Files go with an ordinary, fresh message only; any other time a paste or a
+  // drop is refused inline, and switching into Plan or Deep drops what waits.
+  const attachBlocked = planMode || deepMode ? NOT_IN_PLAN_OR_DEEP
+    : isStreaming || isPlanExecuting || isPlanning || isDeepReasoning ? NOT_WHILE_RUNNING : null;
+  const attachments = useChatAttachments(attachBlocked);
+  const dropAttachments = attachments.drop;
+  useEffect(() => {
+    if (planMode || deepMode) dropAttachments("Plan and Deep mode do not take files.");
+  }, [planMode, deepMode, dropAttachments]);
   const [deepElapsed, setDeepElapsed] = useState(0);
   const [, setDeepCost] = useState<{ time_s: number; cost: number } | null>(null);
   const throttledStreamingText = useThrottle(streamingText, 100);
@@ -1758,7 +1766,7 @@ export function ChatPanel({
           )}
           <AttachButton
             onFiles={(files) => void attachments.add(files)}
-            disabled={planMode || deepMode || isStreaming || isPlanExecuting || isPlanning || isDeepReasoning}
+            disabled={attachBlocked !== null}
           />
           <textarea
             ref={inputRef}

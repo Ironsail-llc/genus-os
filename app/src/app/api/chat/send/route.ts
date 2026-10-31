@@ -1,13 +1,19 @@
 import { getEngineClient } from "@/lib/engine/server-client";
 import { ensureCanvasPromptInjected } from "@/lib/engine/session-state";
 import { resolveChatAgent } from "@/lib/chat/agent-guard";
-import { checkAttachments, type AttachmentPayload } from "@/lib/chat/attachments";
+import { MAX_SEND_BODY_BYTES, checkAttachments, type AttachmentPayload } from "@/lib/chat/attachments";
+import { EngineRefusal, REFUSAL_STATUSES } from "@/lib/engine/engine-refusal";
 
 function json(status: number, body: Record<string, unknown>): Response {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 }
 
 export async function POST(req: Request) {
+  // Refused before it is read: three files at the limit, base64'd, fit well
+  // inside this, so a larger body can only be one the checks below would refuse.
+  if (Number(req.headers.get("content-length") ?? 0) > MAX_SEND_BODY_BYTES) {
+    return json(413, { error: "the message and its files are too large", request_admitted: false });
+  }
   const body = await req.json();
   const message = body.message;
   const attachments: AttachmentPayload[] | undefined = body.attachments;
@@ -20,7 +26,9 @@ export async function POST(req: Request) {
   // Files ride with the turn. Checked here against the composer's own limits
   // (413 too many or too large, 422 a type off the list or bytes that are not
   // base64) and again by the engine, which keeps them.
-  const refused = checkAttachments(attachments);
+  const refused = hasFiles && body.join_running === true
+    ? { status: 422, error: "files cannot be added to a running task; send them next" }
+    : checkAttachments(attachments);
   if (refused) {
     return json(refused.status, { error: refused.error, request_admitted: false });
   }
@@ -72,6 +80,12 @@ export async function POST(req: Request) {
       },
     });
   } catch (err) {
+    if (err instanceof EngineRefusal) {
+      // A refusal keeps its status; an engine failure before admission is
+      // still this route's 502, but with the engine's words and no turn.
+      const status = REFUSAL_STATUSES.has(err.status) ? err.status : 502;
+      return json(status, { error: err.message, request_admitted: false });
+    }
     return json(502, { error: `Engine error: ${String(err)}` });
   }
 }
