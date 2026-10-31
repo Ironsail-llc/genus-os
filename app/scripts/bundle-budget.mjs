@@ -10,6 +10,7 @@
  *
  *   node scripts/bundle-budget.mjs            # check against bundle-budget.json
  *   node scripts/bundle-budget.mjs --write    # reset budgets to current + 5%
+ *   pnpm bundle:check [--write]               # the same, from app/
  *
  * Exits 1 when a route is over its budget or has none: a new page needs a
  * budget, and a budget is raised on purpose, in review, never by drift.
@@ -142,6 +143,12 @@ function main(argv) {
   }
   const { ok, failures } = checkBudgets(sizes, budgets);
   for (const failure of failures) console.error(failure);
+  if (!ok) {
+    console.error(
+      "\nIf this growth is intended, regenerate the budgets (current size + 5%) and commit them:\n" +
+        "  pnpm build && pnpm bundle:check --write   # rewrites app/bundle-budget.json"
+    );
+  }
   return ok ? 0 : 1;
 }
 

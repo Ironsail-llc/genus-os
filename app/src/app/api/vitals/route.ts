@@ -12,6 +12,7 @@
 
 import { ALL_VIEW_IDS } from "@/components/layout/nav-config";
 import { writeVital } from "@/lib/event-bus/redis-client";
+import { serverLog } from "@/lib/server-log";
 import { parseVital, webVitalsEnabled } from "@/lib/web-vitals";
 
 export const runtime = "nodejs";
@@ -33,7 +34,7 @@ export async function POST(req: Request) {
   // Only views the dashboard has, so the field never takes arbitrary values.
   if (vital.view && !(ALL_VIEW_IDS as readonly string[]).includes(vital.view)) delete vital.view;
 
-  console.log(JSON.stringify({ event: "web_vital", ...vital }));
+  serverLog({ event: "web_vital", ...vital });
   try {
     await writeVital(vital);
   } catch {
