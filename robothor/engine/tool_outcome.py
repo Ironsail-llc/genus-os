@@ -18,6 +18,7 @@ failing three times is not a reason to end the run.
 from __future__ import annotations
 
 import contextlib
+import json
 import logging
 from typing import Any
 
@@ -28,6 +29,29 @@ logger = logging.getLogger(__name__)
 
 #: Failures of the same tool, in one run, before the agent is told to stop.
 CIRCUIT_BREAKER_THRESHOLD = 3
+
+
+def error_text(result: Any) -> str | None:
+    """Why this tool call failed, as text, or None when it did not.
+
+    A handler fails by answering ``{"error": ...}``. The step's
+    ``error_message`` is what ``analytics.tool_success_rate`` counts, and it is
+    a text column, so an ``error`` that is an object or a bare ``True`` is
+    turned into text here rather than stored as-is or dropped.
+    """
+    if not isinstance(result, dict):
+        return None
+    error = result.get("error")
+    if not error:
+        return None
+    if isinstance(error, str):
+        return error
+    if isinstance(error, dict) and isinstance(error.get("message"), str) and error["message"]:
+        return str(error["message"])
+    if error is True:
+        message = result.get("message")
+        return message if isinstance(message, str) and message else "tool reported an error"
+    return json.dumps(error, default=str)
 
 
 def record_tool_outcome(

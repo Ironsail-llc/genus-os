@@ -165,6 +165,33 @@ audited `POST /api/automations/{id}/reset-breaker`, operator-only and
 tenant-scoped — zeroes `consecutive_errors` so it fires again on its next
 scheduled run. Before this the only way back was an `UPDATE` typed into psql.
 
+## Workflow runs, step by step
+
+A workflow run records what each tool step was given and what it returned: the
+tool name and its rendered arguments are written to `workflow_run_steps` when
+the step starts (so a step that never returns still shows what it was asked to
+do), and the tool's output when it ends. A credential-named argument, or the
+value of a `vault_set` step, is stored as `<redacted>`, and credential-shaped
+values in the output (API keys, tokens) are replaced with a marker naming
+their kind, as the agent path does for a tool result. Each is capped at 64 KB
+of JSON; a larger payload is stored as `{"_truncated": true, "original_bytes":
+N, "preview": "..."}` and the run carries on. NUL characters are dropped and
+`NaN`/`Infinity` are stored as text, since JSONB rejects both.
+
+`GET /api/workflows/{workflow_id}/runs` on the bridge lists a workflow's recent
+runs with `steps_completed`, `steps_failed` and `steps_skipped`, and
+`GET /api/workflows/{workflow_id}/runs/{run_id}` returns one run with each
+step's `tool_name`, `tool_input`, `tool_output` and `error_message`. The step
+payloads hold whatever the tools saw, so the route is for owners and admins
+only (other roles get 403) and is sent with `Cache-Control: no-store`.
+
+In the dashboard, Automations → Workflows reads the same two routes: a workflow
+that has run expands to list its runs, and opening one shows each step's tool,
+status, error, and input and output as collapsible JSON. A truncated payload is
+shown as its preview with the original size. A scheduled plugin job records no
+steps, so its run shows the value the job returned instead (the detail route's
+`result`, with `result_truncated` when it was cut).
+
 ## Notes
 
 - Export is best-effort (a 5s-timeout POST per run); a collector outage never
