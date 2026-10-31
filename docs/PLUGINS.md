@@ -218,6 +218,26 @@ for at most five minutes per engine lifetime before anyone noticed.
 An entry needs a five-field cron expression and a callable. Anything
 malformed is skipped with a warning rather than raised.
 
+Every execution is recorded as a run, the way a workflow's is: a
+`workflow_runs` row whose `workflow_id` is the job id (`plugin:<name>`) and
+whose `trigger_type` is `plugin_job`. The row is `running` while the job
+runs, then `completed` with its duration and the value the callable returned
+(stored under `result` in the run's `context`, cut at 16,000 characters with
+`result_truncated: true`), or `failed` with the exception's type and message
+(`cancelled` when an engine shutdown interrupts a coroutine job). The
+exception still reaches the scheduler, and the row belongs to the engine's
+own tenant. So a job appears in the
+dashboard's workflow list and under `GET /api/workflows/plugin:<name>/runs`
+on the bridge, and the stale-run reaper and the workflow failure detectors
+watch it too. Return a small dict that says what the run did. Recording is
+best effort: if the database is unreachable the job still runs.
+
+Those watchers were sized for workflows, so they apply to a job's run as
+they stand: a run still `running` after 25 minutes raises the stuck-workflow
+alert, and one still `running` after two hours is marked `timeout` by the
+reaper. A job that finishes after that still writes its final status, but
+the alert has already gone out. Keep a job well inside that, splitting long work across runs.
+
 ## Proposing an external effect
 
 A tool or job that sends something into the world — an email, a payment, a

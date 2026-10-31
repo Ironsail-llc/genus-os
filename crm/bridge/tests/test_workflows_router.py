@@ -319,3 +319,20 @@ def test_run_detail_reads_steps_with_tool_columns(monkeypatch):
 def test_run_detail_helper_returns_none_for_an_unknown_run(monkeypatch):
     monkeypatch.setattr(workflows, "_rows", lambda sql, params: [])
     assert workflows._workflow_run("intel", RUN_ID) is None
+
+
+def test_a_plugin_jobs_runs_are_listed_under_its_job_id(controls_client_as_operator, monkeypatch):
+    """Scheduled plugin jobs record their runs in workflow_runs keyed by
+    ``plugin:<name>``; the existing runs route must answer for that id."""
+    monkeypatch.setattr(
+        workflows,
+        "_workflow_runs",
+        lambda wid, limit: (
+            [{"id": "pj1", "status": "failed", "trigger_type": "plugin_job"}]
+            if wid == "plugin:nightly_sweep"
+            else []
+        ),
+    )
+    r = controls_client_as_operator.get("/api/workflows/plugin:nightly_sweep/runs")
+    assert r.status_code == 200
+    assert r.json() == [{"id": "pj1", "status": "failed", "trigger_type": "plugin_job"}]
