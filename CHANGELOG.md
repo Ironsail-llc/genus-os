@@ -1,3 +1,9 @@
+## [1.122.0](https://github.com/Ironsail-llc/genus-os/compare/v1.121.0...v1.122.0) (2026-10-31)
+
+### Features
+
+* **dashboard:** runs, memory edit, refresh grace, config, logs pages (GEN-126) ([553c671](https://github.com/Ironsail-llc/genus-os/commit/553c67116add1b1a67ec35e2e1d2f4a68de37378)), closes [#795](https://github.com/Ironsail-llc/genus-os/issues/795) [#797](https://github.com/Ironsail-llc/genus-os/issues/797) [#792](https://github.com/Ironsail-llc/genus-os/issues/792) [#794](https://github.com/Ironsail-llc/genus-os/issues/794) [#793](https://github.com/Ironsail-llc/genus-os/issues/793) [#796](https://github.com/Ironsail-llc/genus-os/issues/796)
+
 ## [1.121.0](https://github.com/Ironsail-llc/genus-os/compare/v1.120.0...v1.121.0) (2026-10-31)
 
 ### Features
