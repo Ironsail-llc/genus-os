@@ -68,7 +68,8 @@ def step_metrics(steps: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
 
     return {
         "setup_total_ms": setup_total,
-        "tool_ms": tool_ms,
+        # No model call recorded means no steps were found, not zero tool time.
+        "tool_ms": tool_ms if llm else None,
         "tool_overhead_ms": overhead,
         "tool_calls": tool_calls,
         "llm_calls": len(llm),

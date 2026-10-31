@@ -96,3 +96,14 @@ class StatementCounter:
 def _close(thing: Any) -> None:
     with contextlib.suppress(Exception):  # closing is best-effort
         thing.close()
+
+
+def open_counter(
+    db_url: str, log: Callable[[str], None]
+) -> tuple[StatementCounter, dict[str, str]]:
+    """A counter, opened, and the result ``notes`` saying why it is off if it is."""
+    counter = StatementCounter(dsn=db_url)
+    if counter.open():
+        return counter, {}
+    log(f"db_statements: off ({counter.reason})")
+    return counter, {"db_statements": counter.reason}

@@ -11,7 +11,7 @@ import time
 import uuid
 from typing import TYPE_CHECKING, Any
 
-from bench.turn.dbstats import StatementCounter
+from bench.turn.dbstats import open_counter
 from bench.turn.sse import parse_sse, turn_timings
 from bench.turn.steps import step_metrics
 
@@ -101,14 +101,7 @@ def run_http(
 ) -> dict[str, Any]:
     import httpx
 
-    counter = StatementCounter(dsn=db_url)
-    counter.open()
-    if not counter.available:
-        log(f"db_statements: off ({counter.reason})")
-
-    notes: dict[str, str] = {}
-    if not counter.available:
-        notes["db_statements"] = counter.reason
+    counter, notes = open_counter(db_url, log)
     turns: list[dict[str, Any]] = []
     meta: list[dict[str, Any]] = []
     ready: float | None = None
@@ -145,7 +138,7 @@ def run_http(
             steps = step_metrics(_run_steps(db_url, timing.run_id or ""))
             turn["setup_total_ms"] = steps["setup_total_ms"]
             turn["tool_overhead_ms"] = steps["tool_overhead_ms"]
-            turn["tool_ms"] = steps["tool_ms"] if steps["llm_calls"] else None
+            turn["tool_ms"] = steps["tool_ms"]
             turns.append(turn)
             meta.append(
                 {"turn": i, "run_id": timing.run_id, "status": timing.status, "error": timing.error}

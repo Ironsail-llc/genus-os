@@ -20,7 +20,7 @@ import logging
 import time
 from typing import TYPE_CHECKING, Any
 
-from bench.turn.dbstats import StatementCounter
+from bench.turn.dbstats import open_counter
 from bench.turn.logparse import parse_setup_line
 from bench.turn.steps import step_metrics
 from bench.turn.tokens import estimate_prompt_tokens
@@ -105,12 +105,7 @@ async def _run(
     set_runner(runner, config)
     agent_id = agent or config.default_chat_agent
 
-    counter = StatementCounter(dsn=db_url)
-    counter.open()
-    notes: dict[str, str] = {}
-    if not counter.available:
-        notes["db_statements"] = counter.reason
-        log(f"db_statements: off ({counter.reason})")
+    counter, notes = open_counter(db_url, log)
 
     setup = _SetupCapture()
     runner_logger = logging.getLogger("robothor.engine.runner")
@@ -155,7 +150,7 @@ async def _run(
                 "done_ms": (t_done - t0) * 1000.0,
                 "finalize_tail_ms": (t_done - calls[-1][1]) * 1000.0 if calls else None,
                 "tool_overhead_ms": steps["tool_overhead_ms"],
-                "tool_ms": steps["tool_ms"] if steps["llm_calls"] else None,
+                "tool_ms": steps["tool_ms"],
                 "db_statements": counter.delta(before, after),
                 "prompt_tokens": (
                     estimate_prompt_tokens(first[2].get("messages") or [], first[2].get("tools"))
