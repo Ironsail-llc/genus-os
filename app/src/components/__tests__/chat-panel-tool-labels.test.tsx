@@ -36,6 +36,28 @@ describe.each([
     expect(screen.getByRole("button", { name: "Deep mode" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Tools and MCP servers" })).toBeVisible();
   });
+
+  it("tells a screen reader whether Plan and Deep are on", () => {
+    stubFetch();
+    render(<ChatPanel mobile={mobile} />);
+    const plan = screen.getByRole("button", { name: "Plan mode" });
+    const deep = screen.getByRole("button", { name: "Deep mode" });
+
+    expect(plan).toHaveAttribute("aria-pressed", "false");
+    expect(deep).toHaveAttribute("aria-pressed", "false");
+
+    fireEvent.click(plan);
+    expect(plan).toHaveAttribute("aria-pressed", "true");
+    expect(deep).toHaveAttribute("aria-pressed", "false");
+
+    // Deep plans first, but the Plan toggle is not the one that is on.
+    fireEvent.click(deep);
+    expect(deep).toHaveAttribute("aria-pressed", "true");
+    expect(plan).toHaveAttribute("aria-pressed", "false");
+
+    fireEvent.click(deep);
+    expect(deep).toHaveAttribute("aria-pressed", "false");
+  });
 });
 
 describe("ChatPanel Tools button and the default agent", () => {
