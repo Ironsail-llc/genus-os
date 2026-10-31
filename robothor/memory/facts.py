@@ -573,22 +573,46 @@ async def update_fact(
                     "audit_snapshot_id": snap_id,
                 }
 
-        # Apply the update with a fresh hash over the new state.
-        new_category = category if category is not None else current_category
-        new_person = str(current_person) if current_person else None
-        new_hash = compute_fact_hash(
-            fact_text,
-            tenant_id=current_tenant or resolved_tenant,
-            category=new_category or "",
-            person_id=new_person,
-        )
+    # Apply the update with a fresh hash over the new state.
+    new_category = category if category is not None else current_category
+    new_person = str(current_person) if current_person else None
+    new_hash = compute_fact_hash(
+        fact_text,
+        tenant_id=current_tenant or resolved_tenant,
+        category=new_category or "",
+        person_id=new_person,
+    )
 
+    # A changed text gets a fresh vector, the way store_fact embeds a new
+    # fact, so search ranks it by its new words. Embedded between the two
+    # connections: the call must not hold a pool slot. On failure the old
+    # vector stays (nothing backfills a missing one) and the row says it is
+    # stale; a fresh vector clears that flag.
+    vector: list[float] | None = None
+    merged: dict[str, Any] = dict(metadata or {})
+    if fact_text != (current_text or ""):
+        try:
+            vector = await llm_client.get_embedding_async(fact_text)
+        except Exception as exc:  # noqa: BLE001 -- any provider failure degrades the same way
+            logger.warning(
+                "update_fact: fact %d saved without a fresh embedding: %s",
+                fact_id,
+                type(exc).__name__,
+            )
+            merged["embedding_stale"] = True
+    cleared = ["embedding_stale"] if vector is not None else []
+
+    with get_connection() as conn:
+        cur = conn.cursor()
+        # Metadata is merged onto the stored object, never replaced, so keys the
+        # caller did not send (operator_confirmed among them) survive.
         cur.execute(
             """
             UPDATE memory_facts
                SET fact_text = %s,
                    category = COALESCE(%s, category),
-                   metadata = COALESCE(%s::jsonb, metadata),
+                   embedding = COALESCE(%s::vector, embedding),
+                   metadata = (COALESCE(metadata, '{}'::jsonb) - %s::text[]) || %s::jsonb,
                    content_hash = %s,
                    updated_at = NOW()
              WHERE id = %s AND tenant_id = %s
@@ -596,7 +620,9 @@ async def update_fact(
             (
                 fact_text,
                 category,
-                json.dumps(metadata) if metadata is not None else None,
+                vector,
+                cleared,
+                json.dumps(merged),
                 new_hash,
                 fact_id,
                 resolved_tenant,

@@ -30,6 +30,7 @@ if TYPE_CHECKING:
 
 from robothor.constants import DEFAULT_TENANT
 from robothor.db.connection import get_connection
+from robothor.memory.confirmed import NOT_OPERATOR_CONFIRMED_SQL
 
 logger = logging.getLogger(__name__)
 
@@ -129,8 +130,13 @@ def supersede_with_validity(
     *,
     tenant_id: str = "",
     classification: str = "update",
-) -> None:
+    force: bool = False,
+) -> bool:
     """Supersede ``old_id`` by ``new_id``, bounding the old fact in world-time.
+
+    Returns whether ``old_id`` was superseded. An operator-confirmed fact is
+    refused (a no-op, logged) unless ``force=True``: callers already skip such
+    facts, and this is the defence in depth for one that does not.
 
     Deliberately keeps the existing ``is_active = FALSE`` behaviour so retrieval
     is unchanged and this cannot regress recall. The addition is ``valid_to``:
@@ -149,17 +155,27 @@ def supersede_with_validity(
         # One statement, so a crash cannot leave the old fact hidden but
         # unbounded — which would be invisible to both the normal and the
         # point-in-time read path.
+        guard = "" if force else f"AND {NOT_OPERATOR_CONFIRMED_SQL}"
         cur.execute(
-            """
+            f"""
             UPDATE memory_facts
             SET is_active = FALSE,
                 superseded_by = %s,
                 valid_to = COALESCE(valid_to, NOW()),
                 updated_at = NOW()
-            WHERE id = %s AND tenant_id = %s
+            WHERE id = %s AND tenant_id = %s {guard}
             """,
             (new_id, old_id, tenant),
         )
+        if not force and cur.rowcount == 0:
+            logger.info(
+                "supersede_with_validity: fact %s not superseded by %s "
+                "(operator-confirmed or absent) for %s",
+                old_id,
+                new_id,
+                tenant,
+            )
+            return False
         # The successor is true from now. COALESCE so a re-run cannot walk
         # valid_from forward and silently shorten the fact's history.
         cur.execute(
@@ -174,3 +190,4 @@ def supersede_with_validity(
     logger.debug(
         "supersede_with_validity: %s -> %s (%s) for %s", old_id, new_id, classification, tenant
     )
+    return True

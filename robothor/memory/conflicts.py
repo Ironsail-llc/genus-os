@@ -24,6 +24,7 @@ from robothor.db.connection import get_connection
 from robothor.llm import ollama as llm_client
 from robothor.memory import generation
 from robothor.memory.bitemporal import record_conflict_decision, supersede_with_validity
+from robothor.memory.confirmed import is_operator_confirmed
 from robothor.memory.facts import _write_dedup_enabled, store_fact
 from robothor.memory.vector_tuning import apply_hnsw_session
 
@@ -113,6 +114,7 @@ async def find_similar_facts(
                 confidence,
                 source_type,
                 is_active,
+                metadata,
                 1 - (embedding <=> %s::vector) as similarity
             FROM memory_facts
             WHERE embedding IS NOT NULL
@@ -243,7 +245,9 @@ async def resolve_and_store(
         similarity_threshold: Minimum similarity to trigger classification.
 
     Returns:
-        Dict with 'action' (stored/skipped/superseded) and optionally 'new_id'.
+        Dict with 'action' (stored/skipped/superseded/reinforced/kept_confirmed)
+        and optionally 'new_id'. ``kept_confirmed`` means the best match is
+        operator-confirmed: the new fact was stored superseded by it.
     """
     similar = await find_similar_facts(
         fact["fact_text"],
@@ -315,6 +319,31 @@ async def resolve_and_store(
         return {
             "action": "skipped",
             "existing_id": best_match["id"],
+            "reasoning": classification["reasoning"],
+        }
+
+    if kind in ("contradiction", "update") and is_operator_confirmed(best_match):
+        # The operator's correction outranks any re-extraction, whatever its
+        # confidence. The new fact is kept on record, superseded BY the
+        # confirmed one, so the pipeline's view is not lost and the operator's
+        # stays the active answer.
+        new_id = await store_fact(fact, source_content, source_type, tenant_id=tenant_id)
+        if new_id:
+            supersede_with_validity(
+                new_id, best_match["id"], tenant_id=tenant_id, classification=kind
+            )
+        logger.info(
+            "resolve_and_store: fact %s is operator-confirmed; new fact %s kept superseded (%s)",
+            best_match["id"],
+            new_id,
+            kind,
+        )
+        _record(action="kept_confirmed", new_fact_id=new_id or None)
+        return {
+            "action": "kept_confirmed",
+            "new_id": new_id,
+            "existing_id": best_match["id"],
+            "classification": kind,
             "reasoning": classification["reasoning"],
         }
 
