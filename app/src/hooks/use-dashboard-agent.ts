@@ -70,7 +70,6 @@ export function useDashboardAgent(): DashboardAgentState {
           body.agentData = agentData;
         }
 
-
         const res = await fetch("/api/dashboard/generate", {
           method: "POST",
           headers: { "Content-Type": "application/json" },

@@ -108,6 +108,15 @@ App Router route per view.
 - **Settings is a container view** with its own grouped sub-navigation. Its
   pages are placeholders that say what will live there; Flags is the existing
   controls screen and Appearance carries the theme toggle.
+- **Failures stay local.** The chat panel and every view sit behind their own
+  `SurfaceBoundary` (`components/surface-boundary.tsx`): one that throws while
+  drawing shows a notice with Retry (re-mounts it) and Report (one POST to
+  `/api/dashboard/error`), and the rest of the Helm carries on. A route that
+  throws lands on `app/error.tsx`, the root layout on `app/global-error.tsx`;
+  unknown paths get `app/not-found.tsx`. List views show `ListSkeleton` rows
+  while their first read is in flight.
+- **Theme** follows the OS light/dark setting until the operator picks one
+  with the toggle; the pick is stored per browser and wins from then on.
 - **Mobile** gets Chat · Inbox · Agents · More; More opens a sheet with
   everything else, built from the same config.
 - **Role gating is UX only.** The sidebar, the sheet and the palette hide
