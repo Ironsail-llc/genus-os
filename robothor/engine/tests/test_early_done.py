@@ -162,7 +162,8 @@ class TestRunnerReleasesTheAnswerFirst:
         # The answer went out first; finalization finished afterwards.
         assert timeline.marks["on_complete"] < timeline.marks["finish_end"]
         assert timeline.marks["execute_returned"] < timeline.marks["finish_end"]
-        assert timeline.marks["on_complete"] < SLOW_FINISH_S / 2
+        # Before finalization even started, not merely before it ended.
+        assert timeline.marks["on_complete"] < timeline.marks["finish_start"]
 
     @pytest.mark.asyncio
     @pytest.mark.usefixtures("early_done_off")
