@@ -28,6 +28,10 @@ DRAIN_THRESHOLD = 60_000
 # Number of recent messages to always keep verbatim
 KEEP_RECENT = 20
 
+# Compaction v2 backoff yields once the context is this far past the trigger
+# (the same 1.2x ContextControl.skip uses for "materially larger").
+BACKOFF_YIELD_RATIO = 1.2
+
 # ── Compression hooks ──────────────────────────────────────────────
 
 _pre_compress_hooks: list[Callable[..., Any]] = []
@@ -253,7 +257,14 @@ async def maybe_compress(
     from robothor.engine.feature_flags import compaction_v2_enabled
 
     v2 = compaction_v2_enabled()
-    if v2 and state is not None and state.backing_off(_min_gap_iterations()):
+    # The gap damps small growth only: a context far past the trigger is
+    # summarised anyway, or the ceiling would drop what a summary could keep.
+    if (
+        v2
+        and state is not None
+        and est < compress_at * BACKOFF_YIELD_RATIO
+        and state.backing_off(_min_gap_iterations())
+    ):
         logger.info(
             "Compaction v2: backing off at iteration %d (last compaction at %s)",
             state.iteration,
@@ -290,7 +301,7 @@ async def maybe_compress(
         threshold=compress_at,
         drain_to=min(DRAIN_THRESHOLD, max(1, int(compress_at * 0.75))),
         broken_models=broken_models,
-        preferred_model=preferred_model,
+        preferred_model=preferred_model or (state.compaction_model if state else None) or None,
     )
 
     compressed = _restore_output_contract(messages, result.messages)

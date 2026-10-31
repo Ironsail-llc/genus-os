@@ -1053,6 +1053,10 @@ V2_SLICE_MAX_CHARS = 32_000
 
 SUMMARY_MARKER = "[Conversation summary]"
 
+#: Messages one fact-extraction call reads in full (`build_extraction_input`
+#: keeps the last 40 parts, one per message at most).
+FACT_INPUT_MESSAGES = 40
+
 ITERATIVE_SUMMARY_PROMPT = """You keep the running summary of a long agent run. Update the previous summary \
 with the new conversation slice: keep decisions, findings, numbers, file paths \
 and unfinished work; drop what the slice supersedes. Return only the updated \
@@ -1198,20 +1202,37 @@ def _take_previous_summary(
     return "\n".join(p for p in previous if p), rest
 
 
-def _slice_text(messages: list[dict[str, Any]]) -> str:
-    """The new slice as summary input: prose previews and tool-result summaries."""
-    parts: list[str] = []
+def _slice_chunks(messages: list[dict[str, Any]], cap: int = V2_SLICE_MAX_CHARS) -> list[str]:
+    """The slice as summary input, split on message boundaries into chunks of
+    at most ``cap`` characters, oldest first.
+
+    Every message lands in exactly one chunk: the caller folds them all into
+    the summary, so nothing between the head and the cut leaves context
+    unsummarised. One part is a prose preview or a tool-result summary, each
+    far under the cap.
+    """
+    chunks: list[str] = []
+    current: list[str] = []
+    size = 0
     for msg in messages:
         role = msg.get("role", "unknown")
         text = _content_text(msg.get("content"))
         if not text:
             continue
         if role in ("user", "assistant"):
-            parts.append(f"{role}: {text[:400]}")
+            part = f"{role}: {text[:400]}"
         elif role == "tool":
-            parts.append(f"tool: {extract_tool_summary(text)[:TOOL_FACT_CHARS]}")
-    joined = "\n".join(parts)
-    return joined[-V2_SLICE_MAX_CHARS:]
+            part = f"tool: {extract_tool_summary(text)[:TOOL_FACT_CHARS]}"
+        else:
+            continue
+        if current and size + len(part) + 1 > cap:
+            chunks.append("\n".join(current))
+            current, size = [], 0
+        current.append(part)
+        size += len(part) + 1
+    if current:
+        chunks.append("\n".join(current))
+    return chunks
 
 
 async def _summary_chain(
@@ -1238,8 +1259,8 @@ async def _summary_chain(
     return usable
 
 
-async def update_summary(previous: str, new_slice: list[dict[str, Any]], chain: list[str]) -> str:
-    """One call: the previous summary plus the new slice, updated. Raises on failure."""
+async def update_summary(previous: str, slice_text: str, chain: list[str]) -> str:
+    """One call: the previous summary plus one chunk of the slice. Raises on failure."""
     response = await _acompletion_over_chain(
         chain,
         messages=[
@@ -1248,7 +1269,7 @@ async def update_summary(previous: str, new_slice: list[dict[str, Any]], chain: 
                 "role": "user",
                 "content": (
                     f"Previous summary:\n{previous or '(none)'}\n\n"
-                    f"New conversation slice:\n{_slice_text(new_slice)}"
+                    f"New conversation slice:\n{slice_text}"
                 ),
             },
         ],
@@ -1343,7 +1364,13 @@ async def _compact_v2(
     try:
         if not chain:
             raise RuntimeError("no model chain to summarise with")
-        summary = await update_summary(previous, old_messages, chain)
+        # Folded chunk by chunk, the summary carried forward, so a slice over
+        # the per-call cap is summarised in full rather than from its newest end.
+        summary = previous
+        for chunk in _slice_chunks(old_messages):
+            summary = await update_summary(summary, chunk, chain)
+        if not summary:
+            raise RuntimeError("nothing in the slice to summarise")
     except Exception as e:  # noqa: BLE001 — freeze, never drop the middle
         logger.warning(
             "Compaction v2: summary failed on every model (%s) — keeping %d messages, "
@@ -1353,7 +1380,14 @@ async def _compact_v2(
         )
         return result(working, 1, degraded=True)
 
-    facts = _merge_retained_facts(await extract_facts(old_messages, model=chain), retained_msgs)
+    # Extraction reads at most FACT_INPUT_MESSAGES messages per call
+    # (`build_extraction_input`), so it walks the slice the same way.
+    new_facts: list[CompactionFact] = []
+    for i in range(0, len(old_messages), FACT_INPUT_MESSAGES):
+        new_facts.extend(
+            await extract_facts(old_messages[i : i + FACT_INPUT_MESSAGES], model=chain)
+        )
+    facts = _merge_retained_facts(new_facts, retained_msgs)
 
     result_msgs = list(head_msgs)
     if facts:

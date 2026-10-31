@@ -232,7 +232,8 @@ default, `ROBOTHOR_COMPACTION_V2` switches it to a hardened path:
 - **The summariser is the agent's own chain** (primary, then fallbacks, minus
   models the run has proven dead), dialled through the same pooled completion
   path as the agent's turns. A manifest may name a chain member as
-  `model.compaction` to be tried first, typically its small/fast model. A
+  `model.compaction` to be tried first, typically its small/fast model (the
+  LLM client's pre-flight compaction reads it from the run's state). A
   caller with no chain (idle chat compression) gets the fleet chain from
   `_defaults.yaml`, never a model the platform picked.
 - **An LLM-free pre-pass runs first**, outside the protected head and the
@@ -242,9 +243,13 @@ default, `ROBOTHOR_COMPACTION_V2` switches it to a hardened path:
   JSON over 1,000 characters is truncated (still valid JSON). When that brings
   the context under the drain target, no model is called.
 - **The summary is updated, not rebuilt**: the previous `[Conversation
-  summary]` and only the new slice go to one call.
+  summary]` and only the new slice are folded into it, in chunks of at most
+  32,000 characters with the summary carried from one chunk to the next, so
+  every message that leaves context reaches a summary call and a
+  fact-extraction call.
 - **Anti-thrash**: a run does not compact again within
-  `ROBOTHOR_COMPACTION_MIN_GAP_ITERATIONS` iterations of its last compaction.
+  `ROBOTHOR_COMPACTION_MIN_GAP_ITERATIONS` iterations of its last compaction,
+  unless the context is already 1.2x past the trigger.
 - **Freeze on failure**: when every model fails to summarise, the messages are
   kept (no placeholder, no drain of the middle) and the run's `compaction` step
   records `degraded: true`.

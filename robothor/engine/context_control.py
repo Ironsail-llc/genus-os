@@ -21,6 +21,9 @@ class ContextControl:
     # compaction ran at (ROBOTHOR_COMPACTION_V2 anti-thrash backoff).
     iteration: int = 0
     last_compaction_iteration: int | None = None
+    #: The agent's manifest ``model.compaction``, for paths that have no agent
+    #: config of their own (the LLM client's pre-flight compaction).
+    compaction_model: str = ""
     #: A compaction found the context over budget and could not summarise it.
     degraded: bool = False
 
