@@ -156,6 +156,44 @@ class TestMigrate:
         out = capsys.readouterr().out
         assert "required tables present" in out
 
+    def test_check_accepts_a_schema_ahead_of_this_release(self, capsys):
+        """The migration Job runs --check after apply. After a rollback the
+        ledger holds a later release's migrations; refusing them there failed
+        the Job, and every pod's wait-for-migrations init container with it."""
+        mock_conn = MagicMock()
+        mock_cur = MagicMock()
+        mock_cur.fetchall.return_value = [(t,) for t in REQUIRED_TABLES]
+        mock_conn.cursor.return_value.__enter__ = MagicMock(return_value=mock_cur)
+        mock_conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
+
+        current = [
+            {"migration_id": "001_init", "status": "applied"},
+            {"migration_id": "999_newer_feature", "status": "AHEAD"},
+        ]
+        with (
+            patch("psycopg2.connect", return_value=mock_conn),
+            patch("robothor.db.migrate.status", return_value=current),
+        ):
+            rc = main(["migrate", "--check"])
+
+        assert rc == 0
+        assert "999_newer_feature" in capsys.readouterr().out
+
+    def test_check_still_refuses_a_migration_this_release_does_not_know(self, capsys):
+        mock_conn = MagicMock()
+        current = [
+            {"migration_id": "001_init", "status": "applied"},
+            {"migration_id": "001b_other_chain", "status": "MISSING"},
+        ]
+        with (
+            patch("psycopg2.connect", return_value=mock_conn),
+            patch("robothor.db.migrate.status", return_value=current),
+        ):
+            rc = main(["migrate", "--check"])
+
+        assert rc == 1
+        assert "001b_other_chain" in capsys.readouterr().out
+
     def test_check_reports_missing(self, capsys):
         """--check should report missing tables."""
         mock_conn = MagicMock()
