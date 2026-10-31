@@ -498,6 +498,7 @@ def engine_flag_readers() -> dict[str, tuple[object, str]]:
         # entry in `_UNSET_DEFAULTS` — an override that merely repeated the
         # declaration would fail the test below that forbids exactly that.
         "ROBOTHOR_ACT_OBSERVE_MODE": (ff.act_observe_mode, ""),
+        "ROBOTHOR_AMBIENT": (ff.ambient_mode, ""),
         "ROBOTHOR_ADMISSION_MODE": (ff.execution_mode_admission_mode, "ROBOTHOR_ADMISSION_ENABLED"),
         "ROBOTHOR_APPROVAL_MODE": (ff.approval_mode, "ROBOTHOR_APPROVAL_FAILCLOSED_ENABLED"),
         "ROBOTHOR_BENCHMARK_DECONTAMINATION_MODE": (

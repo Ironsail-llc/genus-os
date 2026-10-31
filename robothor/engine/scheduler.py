@@ -910,8 +910,11 @@ class CronScheduler:
     async def _run_ambient(self, agent_id: str) -> None:
         """One ambient follow-up pass for an agent (``robothor.engine.ambient``).
 
-        Leader-only and deduplicated like every scheduled run. The pass itself
+        The same guards as every scheduled LLM run: leader only, deduplicated,
+        the circuit breaker, fleet admission (registered so other runs count
+        it), and the ``agent_schedules`` row updated afterwards. The pass itself
         decides whether ``ROBOTHOR_AMBIENT`` lets it compose or send anything.
+        No safety timeout: an enforce pass waits on people answering approvals.
         """
         from robothor.engine.ambient import AmbientWorker
         from robothor.engine.leader import is_leader
@@ -927,12 +930,43 @@ class CronScheduler:
             logger.warning("Ambient pass skipped: %s already running", dedup_key)
             return
         try:
-            worker = AmbientWorker(self.runner, tenant_id=self.config.tenant_id)
-            await worker.run_pass(agent_config)
-        except Exception:  # one agent's pass, never the scheduler
-            logger.exception("Ambient pass failed for %s", agent_id)
+            tripped = await asyncio.to_thread(
+                self._circuit_breaker_tripped, dedup_key, agent_config
+            )
+            if tripped or not admit(agent_id, agent_config, self.config):
+                return
+            register(dedup_key, agent_id)
+            try:
+                worker = AmbientWorker(self.runner, tenant_id=self.config.tenant_id)
+                result = await worker.run_pass(agent_config)
+            except Exception:  # one agent's pass, never the scheduler
+                logger.exception("Ambient pass failed for %s", agent_id)
+                return
+            finally:
+                complete(dedup_key)
+            if result.run_id:
+                await asyncio.to_thread(self._record_ambient_state, dedup_key, result)
         finally:
             await release(dedup_key)
+
+    @staticmethod
+    def _record_ambient_state(dedup_key: str, result: Any) -> None:
+        """The ``<agent>:ambient`` row's last run, for the fleet view and the breaker."""
+        failed = result.run_status in ("failed", "timeout")
+        try:
+            previous = get_schedule(dedup_key) if failed else None
+            update_schedule_state(
+                agent_id=dedup_key,
+                last_run_at=result.started_at,
+                last_run_id=result.run_id,
+                last_status=result.run_status,
+                last_duration_ms=result.duration_ms,
+                consecutive_errors=(
+                    ((previous or {}).get("consecutive_errors", 0) or 0) + 1 if failed else 0
+                ),
+            )
+        except Exception as e:
+            logger.warning("Failed to update schedule state for %s: %s", dedup_key, e)
 
     async def _run_worker(self, agent_id: str) -> None:
         """Execute a drain/worker run for an agent.

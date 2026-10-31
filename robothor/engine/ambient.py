@@ -41,6 +41,7 @@ from robothor.engine.models import (
     AgentRun,
     AmbientConfig,
     DeliveryMode,
+    RunStatus,
     RunStep,
     StepType,
     TriggerType,
@@ -94,9 +95,15 @@ DEFAULT_TIERS = {NUDGE_THREAD: TIER_APPROVE, SEND_DIGEST: TIER_APPROVE, REPLY_ON
 #: ``tool_name`` of the checkpoint step each proposal is recorded as, and the
 #: prefix of the tool name an approval card shows.
 PROPOSAL_STEP = "ambient_proposal"
-#: Guardrail name on the approval request, so a session grant ("Approve All")
-#: covers ambient proposals and nothing else.
+#: Guardrail name on the approval request, suffixed with the pass's run id so a
+#: session grant ("Approve All") covers that one pass's proposals and nothing
+#: else: the approval manager keeps grants for the life of the process, and one
+#: tap must not turn an ``approve`` tier into ``auto`` for every later pass.
 APPROVAL_GUARDRAIL = "ambient_tier"
+#: Pages of open conversations read per pass, 100 each. The inbox is ordered by
+#: most recent activity, so a cut drops the longest-waiting threads first.
+_INBOX_PAGE_SIZE = 100
+_INBOX_MAX_PAGES = 100
 
 #: What happened to a proposal; recorded on its step and in the digest.
 OBSERVED = "observed"
@@ -105,6 +112,8 @@ DENIED = "denied"
 NO_APPROVER = "no_approver"
 NO_TARGET = "no_target"
 SEND_FAILED = "send_failed"
+#: A kind this engine has no way to deliver yet (``reply_on_behalf``).
+UNSUPPORTED = "unsupported"
 
 INBOX = "inbox"
 STREAM_PREFIX = "stream:"
@@ -331,8 +340,21 @@ def _inbox_threads(tenant_id: str) -> list[Thread]:
     """Open CRM conversations with their messages. Sync: call through a thread."""
     from robothor.crm.dal import list_conversations, list_messages
 
+    conversations: list[dict[str, Any]] = []
+    for page in range(1, _INBOX_MAX_PAGES + 1):
+        batch = list_conversations(
+            status="open", page=page, page_size=_INBOX_PAGE_SIZE, tenant_id=tenant_id
+        )
+        conversations += batch
+        if len(batch) < _INBOX_PAGE_SIZE:
+            break
+    else:
+        logger.warning(
+            "ambient: more than %d open conversations; the oldest were not read",
+            _INBOX_PAGE_SIZE * _INBOX_MAX_PAGES,
+        )
     threads = []
-    for convo in list_conversations(status="open", page_size=100, tenant_id=tenant_id):
+    for convo in conversations:
         rows = list_messages(int(convo["id"]), tenant_id=tenant_id)
         messages = []
         for row in rows if isinstance(rows, list) else []:
@@ -469,15 +491,12 @@ def parse_proposals(
 
     A kind that was not asked for, a thread ref that is not one of the stalled
     threads, an empty body and a duplicate are all dropped. Output with no
-    headers at all is taken as the digest when digests are allowed.
+    headers at all proposes nothing: it is as likely to be narration ("let me
+    check the conversations first") as a digest, and under ``send_digest:
+    auto`` it would be sent.
     """
     by_ref = {s.ref: s for s in stalled}
     headers = list(_HEADER_RE.finditer(output))
-    if not headers:
-        text = output.strip()
-        if text and SEND_DIGEST in kinds:
-            return [Proposal(SEND_DIGEST, tiers[SEND_DIGEST], text, "digest")]
-        return []
     proposals: list[Proposal] = []
     seen: set[tuple[str, str]] = set()
     for i, header in enumerate(headers):
@@ -507,14 +526,19 @@ def composing_config(agent: AgentConfig) -> AgentConfig:
     The worker decides what is sent; a composing run that could call a send
     tool would make ``observe`` a lie.
     """
-    from robothor.engine.tools.constants import READONLY_TOOLS
+    from robothor.engine.tools.constants import GOAL_TOOLS, READONLY_TOOLS
+    from robothor.goals.tools import TOOL_NAMES as PURSUIT_GOAL_TOOLS
 
     base = set(agent.tools_allowed) if agent.tools_allowed else set(READONLY_TOOLS)
     tools = sorted(base & READONLY_TOOLS) or [_INERT_TOOL]
+    # The registry appends the goal tools to any explicit list (and the
+    # pursuit-goal tools for main); deny the ones that write.
+    appended = (set(GOAL_TOOLS) | set(PURSUIT_GOAL_TOOLS)) - READONLY_TOOLS
     return dataclasses.replace(
         agent,
         delivery_mode=DeliveryMode.NONE,
         tools_allowed=tools,
+        tools_denied=sorted(set(agent.tools_denied) | appended),
         tools_opt_in=[],
         auto_task=False,
         session_target="isolated",
@@ -529,6 +553,9 @@ class AmbientPass:
     agent_id: str
     mode: str
     run_id: str | None = None
+    run_status: str | None = None
+    duration_ms: int | None = None
+    started_at: datetime | None = None
     stalled: list[StalledThread] = field(default_factory=list)
     proposals: list[Proposal] = field(default_factory=list)
 
@@ -555,7 +582,11 @@ class AmbientWorker:
         self._channel_resolver = channel_resolver or _default_channel
         self._approver = approver or _default_approver
         self._record_steps = record_steps or _default_record_steps
-        self._send_reply = send_reply or (lambda t, text: _inbox_reply(t, text, tenant_id))
+        # No default: the CRM inbox is a log of conversations held elsewhere,
+        # and a row written there reaches nobody. Until a reply can go out on
+        # the channel the conversation lives on, reply_on_behalf is recorded
+        # as unsupported rather than claimed as sent.
+        self._send_reply = send_reply
         self._digest_dir = digest_dir
         self._now = now or (lambda: datetime.now(UTC))
 
@@ -586,11 +617,31 @@ class AmbientWorker:
             agent_config=composing_config(agent),
         )
         result.run_id = run.id
-        result.proposals = parse_proposals(run.output_text or "", result.stalled, kinds, cfg.tiers)
-        for proposal in result.proposals:
-            proposal.outcome = (
-                OBSERVED if mode == "observe" else await self._dispatch(agent, run, proposal)
+        result.run_status = run.status.value
+        result.duration_ms = run.duration_ms
+        result.started_at = run.started_at
+        if run.status != RunStatus.COMPLETED:
+            # A failed, timed-out or cancelled run's text is whatever the model
+            # last said, not a finished proposal.
+            logger.warning(
+                "ambient %s (%s): composing run %s ended %s; nothing proposed",
+                agent.id,
+                mode,
+                run.id,
+                run.status.value,
             )
+            return result
+        result.proposals = parse_proposals(run.output_text or "", result.stalled, kinds, cfg.tiers)
+        if mode == "observe":
+            outcomes = [OBSERVED] * len(result.proposals)
+        else:
+            # Together, not one after another: each approval can wait up to
+            # human_approval_timeout, and the pass holds its dedup lock meanwhile.
+            outcomes = await asyncio.gather(
+                *(self._dispatch(agent, run, p) for p in result.proposals)
+            )
+        for proposal, outcome in zip(result.proposals, outcomes, strict=True):
+            proposal.outcome = outcome
             logger.info(
                 "ambient %s (%s): %s -> %s [%s, %s]",
                 agent.id,
@@ -614,19 +665,21 @@ class AmbientWorker:
                 run_id=run.id,
                 tool_name=f"{PROPOSAL_STEP}:{proposal.kind}",
                 tool_args={"target": proposal.target, "text": proposal.text},
-                guardrail_name=APPROVAL_GUARDRAIL,
+                guardrail_name=f"{APPROVAL_GUARDRAIL}:{run.id}",
                 reason=f"{proposal.kind} is on the approve tier in this agent's ambient block",
                 timeout_seconds=agent.human_approval_timeout,
             )
             if not approved:
                 return DENIED
         elif proposal.tier != TIER_AUTO:
-            return "not_sent"
+            return UNSUPPORTED
         return await self._send(agent, proposal)
 
     async def _send(self, agent: AgentConfig, proposal: Proposal) -> str:
         try:
             if proposal.kind == REPLY_ON_BEHALF:
+                if self._send_reply is None:
+                    return UNSUPPORTED
                 if proposal.thread is None:
                     return NO_TARGET
                 delivered = await self._send_reply(proposal.thread, proposal.text)
@@ -721,15 +774,3 @@ async def _default_record_steps(steps: list[RunStep]) -> None:
     from robothor.engine.tracking import create_steps_batch
 
     await asyncio.to_thread(create_steps_batch, steps)
-
-
-async def _inbox_reply(thread: StalledThread, text: str, tenant_id: str) -> bool:
-    """Post ``text`` as our reply in an inbox thread. Other sources cannot be replied to."""
-    if thread.source != INBOX:
-        return False
-    from robothor.crm.dal import send_message
-
-    sent = await asyncio.to_thread(
-        send_message, int(thread.thread_id), text, "outgoing", False, tenant_id
-    )
-    return sent is not None
