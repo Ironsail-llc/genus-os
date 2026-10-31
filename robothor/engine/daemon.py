@@ -1490,7 +1490,9 @@ async def main() -> int:
     #   -> config -> runner
     #   -> {resume -> stale-run reap -> repair recovery
     #       || coding jobs
-    #       || manifest scan -> system-prompt warm}
+    #       || manifest scan -> system-prompt warm
+    #       || webchat session read}
+    #   -> session cache hydrated, on the loop, before any channel task
     #   -> hooks, workflows, scheduler, event hooks (all fed the one scan)
     #   -> federation -> subsystem tasks + channels -> READY=1
     #
@@ -1513,11 +1515,18 @@ async def main() -> int:
 
     runner, sales_runtime_assets = await clock.step("runner", _create_runner_with_assets(config))
 
-    _recovered, _coding, scan = await clock.together(
+    from robothor.engine.chat import apply_restored_sessions, load_persisted_sessions
+
+    _recovered, _coding, scan, sessions = await clock.together(
         recovery=_recover_interrupted_work(runner, config),
         coding_jobs=_start_coding_jobs(),  # resume interrupted Claude Code jobs, reap old ones
         manifests=_scan_fleet_and_warm_prompts(config, clock),
+        sessions=asyncio.to_thread(load_persisted_sessions, config),
     )
+    # Applied here, on the loop: Telegram, Slack and inbound channels share
+    # this cache, and none of them has started yet.
+    if sessions is not None:
+        apply_restored_sessions(sessions)
 
     _init_fleet_capacity(config)
 
@@ -1677,7 +1686,7 @@ async def main() -> int:
         asyncio.create_task(scheduler.start(scan=scan), name="scheduler"),
         asyncio.create_task(hooks.start(manifests=list(scan.manifests)), name="hooks"),
         asyncio.create_task(
-            serve_health(config, runner, workflow_engine, scheduler),
+            serve_health(config, runner, workflow_engine, scheduler, restore_sessions=False),
             name="health",
         ),
         asyncio.create_task(_watchdog(config, scheduler, workflow_engine), name="watchdog"),

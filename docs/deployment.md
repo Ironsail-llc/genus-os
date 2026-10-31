@@ -1150,8 +1150,9 @@ not depend on one another (resuming interrupted runs, coding jobs, the manifest
 scan and system-prompt warm-up) run concurrently; the order the rest keep is
 written out at the top of `daemon.main`. The manifest directory is read once
 per startup and shared, the database pool and every installed agent's system
-prompt are warm before READY=1, and webchat sessions are restored off the
-event loop before the port opens.
+prompt are warm before READY=1, and webchat sessions are read off the event
+loop and applied before any channel (web, Telegram, Slack, inbound) starts, so
+the first message after a restart sees its history.
 
 ## Verified fleet artifacts
 

@@ -1789,8 +1789,12 @@ async def serve_health(
     runner: AgentRunner | None = None,
     workflow_engine: Any = None,
     scheduler: Any = None,
+    restore_sessions: bool = True,
 ) -> None:
     """Start the health endpoint server.
+
+    ``restore_sessions=False`` when the caller has already restored the
+    webchat sessions (the daemon does, off the loop, before any channel).
 
     ``scheduler`` is the live :class:`CronScheduler` — threaded through so
     ``POST /api/admin/scheduler/reconcile`` acts on THIS process's job registry
@@ -1805,14 +1809,8 @@ async def serve_health(
         runner=runner,
         workflow_engine=workflow_engine,
         scheduler=scheduler,
-        restore_sessions=False,
+        restore_sessions=restore_sessions,
     )
-    if runner is not None:
-        # Off the loop, and before the port binds, so no chat request can
-        # race the restore.
-        from robothor.engine.chat import restore_sessions
-
-        await restore_sessions(config)
     uvi_config = uvicorn.Config(
         app,
         host=os.environ.get("ROBOTHOR_ENGINE_HOST", "127.0.0.1"),

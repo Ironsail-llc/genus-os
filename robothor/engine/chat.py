@@ -311,13 +311,39 @@ def get_main_session_key() -> str:
     return "agent:main:primary"
 
 
-def _restore_sessions(config: EngineConfig) -> None:
-    """Restore webchat sessions from PostgreSQL at startup."""
+def load_persisted_sessions(config: EngineConfig) -> dict[str, Any] | None:
+    """Read every persisted webchat session. Blocking: call it in a thread.
+
+    Only the read: the result is applied with :func:`apply_restored_sessions`
+    on the event loop, because the session cache is shared with Telegram,
+    Slack and inbound channels and is not safe to mutate from a worker thread.
+    Returns None when the read fails (logged), as the old restore did.
+    """
     try:
-        sessions = load_all_sessions(
+        sessions: dict[str, Any] = load_all_sessions(
             limit_per_session=MAX_HISTORY,
             tenant_id=config.tenant_id,
         )
+        return sessions
+    except Exception as e:
+        logger.warning("Failed to load persisted webchat sessions: %s", e)
+        return None
+
+
+def _restore_sessions(config: EngineConfig) -> None:
+    """Restore webchat sessions from PostgreSQL at startup."""
+    sessions = load_persisted_sessions(config)
+    if sessions is not None:
+        apply_restored_sessions(sessions)
+
+
+def apply_restored_sessions(sessions: dict[str, Any]) -> None:
+    """Hydrate the shared session cache from :func:`load_persisted_sessions`.
+
+    Runs on the event loop, before any channel can take a turn, so a message
+    right after a restart sees its history rather than an empty session.
+    """
+    try:
         restored = 0
         for key, data in sessions.items():
             session = _get_session(key)
@@ -354,14 +380,15 @@ def _restore_sessions(config: EngineConfig) -> None:
         if restored:
             logger.info("Restored %d chat sessions from DB", restored)
     except Exception as e:
-        logger.warning("Failed to load persisted webchat sessions: %s", e)
+        logger.warning("Failed to restore persisted webchat sessions: %s", e)
 
 
 def init_chat(runner: AgentRunner, config: EngineConfig, restore: bool = True) -> None:
     """Initialize module with shared runner and config. Called once from daemon.
 
-    ``restore=False`` leaves the session restore to the caller, which the
-    daemon's health server does off the event loop (:func:`restore_sessions`).
+    ``restore=False`` leaves the session restore to the caller: the daemon
+    reads them off the loop (:func:`load_persisted_sessions`) and applies them
+    on it (:func:`apply_restored_sessions`) before any channel starts.
     """
     global _runner, _config
     _runner = runner
@@ -369,11 +396,6 @@ def init_chat(runner: AgentRunner, config: EngineConfig, restore: bool = True) -
     if restore:
         _restore_sessions(config)
     logger.info("Chat endpoints initialized")
-
-
-async def restore_sessions(config: EngineConfig) -> None:
-    """Restore webchat sessions from PostgreSQL in a thread, off the loop."""
-    await asyncio.to_thread(_restore_sessions, config)
 
 
 @router.post("/send", response_model=None)
