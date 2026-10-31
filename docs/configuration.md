@@ -366,6 +366,26 @@ Everything else is refused, including any sub-agent one of them spawns — a
 spawned child runs under its own agent id, so its own manifest is what is
 checked.
 
+**Credential intake in chat** (`ROBOTHOR_CREDENTIAL_INTAKE`, default `off`) is
+the second way through, and the only other one. On `enforce`, the default chat
+agent (`ROBOTHOR_DEFAULT_CHAT_AGENT`) may use the vault tools without the tier
+when all three hold: the person in the conversation is an `owner` or `admin`,
+the run is a top-level run a person started by typing (chat, Telegram, Slack,
+a plugin channel, the IDE or the CLI), and the run has no parent. A member or
+viewer, a sub-agent, and a cron, hook or workflow run of the same agent are
+refused, and the refusal carries `gate` (`role`, `chat_agent` or `human_chat`)
+and `unlock`, the sentence the agent can give the person. `observe` refuses
+exactly as `off` and logs `credential intake would allow` for each call
+`enforce` would let through.
+
+A value stored with `vault_set` is then redacted by value, as
+`<redacted:b2:xxxxxxxx>`, from every later redaction pass (history, stored chat
+messages, the run's task text, logs) — which is what takes a key with no
+recognisable shape, such as 32 bare hex characters, out of the places the
+person's message reached. Each row records `stored_by`, `via` and `run_id` in
+its metadata, and `vault_get` returns them with `last_resolved_at`, when a
+reader in the engine was last served the credential.
+
 This is deliberately **not** the `role:` field. `role:` feeds RBAC, and setting
 it to a value no `role_permissions` row seeds (`main`, `operator`) denies that
 agent *every* tool under `ROBOTHOR_RBAC_MODE=enforce`. Two postures, two
