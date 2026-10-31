@@ -109,9 +109,16 @@ def _signed_post(client, body: bytes, delivery_id: str = "dlv-1"):
 def test_routes_are_exactly_the_webhook_post_and_the_two_probes():
     app = hooks_server.create_app(_config())
 
+    # FastAPI keeps an included router as a lazy group rather than flattening
+    # its routes into ``app.routes``, so walk into it.
+    routes = [
+        candidate
+        for outer in app.routes
+        for candidate in getattr(getattr(outer, "original_router", None), "routes", (outer,))
+    ]
     served = {
         f"{method} {route.path}"
-        for route in app.routes
+        for route in routes
         for method in (getattr(route, "methods", None) or {"WS"})
         if method != "HEAD"
     }
@@ -260,3 +267,23 @@ def test_main_serves_on_robothor_hooks_port(monkeypatch):
     ):
         hooks_server.main()
     assert run.call_args.kwargs["port"] == 19123
+
+
+def test_main_binds_all_interfaces_by_default(monkeypatch):
+    monkeypatch.delenv("ROBOTHOR_HOOKS_HOST", raising=False)
+    with (
+        patch("uvicorn.run") as run,
+        patch.object(hooks_server, "create_app", return_value=object()),
+    ):
+        hooks_server.main()
+    assert run.call_args.kwargs["host"] == "0.0.0.0"  # noqa: S104
+
+
+def test_main_binds_robothor_hooks_host(monkeypatch):
+    monkeypatch.setenv("ROBOTHOR_HOOKS_HOST", "127.0.0.1")
+    with (
+        patch("uvicorn.run") as run,
+        patch.object(hooks_server, "create_app", return_value=object()),
+    ):
+        hooks_server.main()
+    assert run.call_args.kwargs["host"] == "127.0.0.1"
