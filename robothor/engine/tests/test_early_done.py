@@ -729,3 +729,31 @@ class TestReviewFollowUps:
         on_complete.assert_awaited_once_with(run)
         assert "finish_end" in timeline.marks
         assert any("policy bug" in r.getMessage() for r in caplog.records)
+
+
+# ── Telemetry sees the final status ──────────────────────────────────────
+
+
+@pytest.mark.usefixtures("_mock_run_persistence")
+class TestTelemetryIsPublishedWithTheFinalStatus:
+    """Publishing a run's telemetry closes its trace; it must not happen while
+    the run still reads ``running``. Finalization publishes once the status is
+    final, so the success path makes no publish of its own before that."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("flag", ["1", ""])
+    async def test_every_publish_sees_a_terminal_status(
+        self, runner, agent_config, monkeypatch, flag
+    ):
+        monkeypatch.setenv("ROBOTHOR_EARLY_DONE", flag)
+        statuses: list[RunStatus] = []
+
+        def spy(self, trace, run) -> None:
+            statuses.append(run.status)
+
+        with patch.object(AgentRunner, "_publish_run_telemetry", spy):
+            run = await _execute(runner, agent_config, on_complete=AsyncMock())
+            await get_task_registry().drain(timeout=5.0)
+
+        assert run.status == RunStatus.COMPLETED
+        assert RunStatus.RUNNING not in statuses, statuses
