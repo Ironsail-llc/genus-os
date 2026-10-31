@@ -168,14 +168,22 @@ the run in flight, so it is not added to the conversation's history as a turn of
 its own; the answer it shapes is. When no run can take it (the task is between
 its last step and its answer) it falls back to the follow-up behaviour above.
 
-**Stop** then halts the run at its next step instead of cancelling the request:
-the run finishes as `cancelled` (not `failed`) and its record is written like
-any other run's. If no live run is found it falls back to the ordinary stop.
+**Stop** then stops the run the way Telegram's *Interrupt* button and
+`POST /api/runs/{run_id}/interrupt` do, instead of cancelling the browser's
+request: the run's interrupt flag is set and the runtime's durable stop is
+recorded, so the run ends at its next iteration boundary at the latest. If no
+live run is found it falls back to the ordinary stop.
 
-For API clients: `POST /chat/steer` with `{"text": "..."}` and
-`POST /chat/interrupt` resolve the session key exactly like `/chat/send` and
-answer `{"ok": …, "found": …}`; `found` is false when nothing of yours is
-running. `GET /chat/steer` answers `{"enabled": …}`. With the setting off the
+Steer and Stop reach only the turn this tab sent. Two tabs on one agent are two
+turns, and each tab's steer and Stop name their own turn by its request id.
+
+For API clients: `POST /chat/steer` with `{"text": "...", "request_id": "..."}`
+and `POST /chat/interrupt` with `{"request_id": "..."}` name the turn by the
+`request_id` it was sent to `/chat/send` with, and resolve the session key
+exactly like `/chat/send`. Only the user who sent that turn can reach it, and a
+turn sent without a `request_id` cannot be steered. Both answer
+`{"ok": …, "found": …}`; `found` is false when that turn has no live run, and a
+missing `request_id` is a 400. `GET /chat/steer` answers `{"enabled": …}`. With the setting off the
 two POST routes answer 404.
 
 ## The docked chat panel

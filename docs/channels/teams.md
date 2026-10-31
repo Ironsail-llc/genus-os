@@ -214,7 +214,7 @@ commands rather than turns:
 | Message | What it does |
 |---------|--------------|
 | `/steer <text>` | Adds `<text>` to the conversation's running task, at its next step. No new turn starts |
-| `/stop` | Stops the conversation's running task at its next step; the run ends as `cancelled` |
+| `/stop` | Stops the conversation's running task the way Telegram's *Interrupt* does: at its next step at the latest |
 
 They pass the same access gate as any message, and answer "Nothing is running
 here." when nothing is. While a run works, the bot posts one progress activity

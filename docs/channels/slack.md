@@ -108,10 +108,11 @@ commands, and each message run shows its progress:
 | Command | What it does |
 |---------|--------------|
 | `/steer <text>` | Adds `<text>` to the channel's running task. It joins the run at its next step as an operator steering update; it is not a new message to answer |
-| `/stop` | Stops the channel's running task at its next step. The run ends as `cancelled`, not `failed` |
+| `/stop` | Stops the channel's running task the way Telegram's *Interrupt* does: at its next step at the latest |
 
 Both are answered with "Nothing is running here." when the channel has no live
-run, and both pass the same access decision as a message: a sender who could
+run (and with "Stop could not be confirmed." or "Steer could not be delivered."
+if recording it failed), and both pass the same access decision as a message: a sender who could
 not drive the agent here cannot steer or stop it either. Add the two commands to
 the app's **Slash Commands** in the Slack app settings, the same way as `/clear`.
 
