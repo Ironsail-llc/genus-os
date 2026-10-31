@@ -537,7 +537,7 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
                 session.active_task = None
 
     # Start agent as background task
-    task = start(session, run_agent, auth, session_key, body.get("request_id"))
+    task = start(session, run_agent, auth, session_key, body.get("request_id"), steerable=True)
     register_live_inbox(session, auth, inbox)  # before any await: see chat_live.py
 
     async def sse_generator() -> AsyncGenerator[str, None]:

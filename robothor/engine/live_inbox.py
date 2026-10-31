@@ -114,8 +114,40 @@ def absorb_operator_steer(session: Any) -> None:
     text = session.consume_pending_steer()
     if text:
         session.messages.append({"role": "user", "content": f"[operator steering update]\n{text}"})
+        _record_steer_step(session, text)
+        # Recorded with the turn by its channel: a webchat run's inbox, or
+        # the steer log its conversation scope handed it (live_control.py).
+        inbox = getattr(session, "live_inbox", None)
+        taken = getattr(session, "steers_taken", None)
+        if inbox is not None:
+            inbox.taken.append(FollowUp(text, {"steer": True}))
+        elif isinstance(taken, list):
+            taken.append(text)
         _count_user_turn(session)
         logger.info("Live steer injected into run %s", session.run_id)
+
+
+def _record_steer_step(session: Any, text: str) -> None:
+    """A run step, so the run steps API and the Runs drawer show the steer."""
+    from datetime import UTC, datetime
+
+    from robothor.engine.models import RunStep, StepType
+
+    steps = getattr(session.run, "steps", None)
+    if not isinstance(steps, list):
+        return  # a session double with no ledger
+    session._step_counter = getattr(session, "_step_counter", 0) + 1
+    now = datetime.now(UTC)
+    steps.append(
+        RunStep(
+            run_id=session.run_id,
+            step_number=session._step_counter,
+            step_type=StepType.STEER,
+            tool_input={"text": text},
+            started_at=now,
+            completed_at=now,
+        )
+    )
 
 
 def _count_user_turn(session: Any) -> None:
@@ -154,14 +186,28 @@ def absorb_followups(session: Any) -> bool:
 
 
 def absorb_late_followups(session: Any) -> bool:
-    """At a final answer: fold in what arrived during the call and keep going."""
-    inbox: LiveInbox | None = getattr(session, "live_inbox", None)
-    if inbox is None or session.late_extensions >= MAX_LATE_EXTENSIONS:
+    """At a final answer: fold in what arrived during the call and keep going.
+
+    An operator steer that arrived during the call counts too: it was accepted
+    while the run was live, and the loop top that normally reads it is not
+    reached again once the model answers without tools. Without this it would
+    be acknowledged and then lost when the run ends.
+    """
+    if session.late_extensions >= MAX_LATE_EXTENSIONS:
         return False
-    if not absorb_followups(session):
+    steered = _absorb_late_steer(session)
+    inbox: LiveInbox | None = getattr(session, "live_inbox", None)
+    followed = inbox is not None and absorb_followups(session)
+    if not (steered or followed):
         return False
     session.late_extensions += 1
     return True
+
+
+def _absorb_late_steer(session: Any) -> bool:
+    before = len(session.messages)
+    absorb_operator_steer(session)
+    return len(session.messages) > before
 
 
 async def extend_for_late_followups(session: Any, answer: str | None) -> bool:
@@ -190,7 +236,8 @@ def _text_of(content: Any) -> str:
 
 async def deliver_interim(session: Any, text: str) -> None:
     """Hand the superseded answer to the channel; it must never fail the run."""
-    callback = session.live_inbox.on_interim
+    inbox = getattr(session, "live_inbox", None)
+    callback = inbox.on_interim if inbox is not None else None
     if callback is None or not text.strip():
         return
     try:
@@ -216,12 +263,20 @@ async def keep_going_after_answer(
     return await extend_for_late_followups(session, answer)
 
 
-def history_text(original: str, absorbed: list[FollowUp]) -> str:
-    """The user row a channel stores: the request plus what was added mid-run."""
-    if not absorbed:
+def history_text(original: str, absorbed: list[FollowUp], steered: list[str] | None = None) -> str:
+    """The user row a channel stores: the request plus what was added mid-run.
+
+    ``steered`` is what the run took as operator steers
+    (``live_control.conversation_scope``), so the next turn still knows them.
+    """
+    lines = [
+        f"[{'steered' if item.meta.get('steer') else 'added'} while working] {item.text}"
+        for item in absorbed
+    ]
+    lines += [f"[steered while working] {text}" for text in steered or []]
+    if not lines:
         return original
-    added = "\n\n".join(f"[added while working] {item.text}" for item in absorbed)
-    return f"{original}\n\n{added}"
+    return original + "\n\n" + "\n\n".join(lines)
 
 
 def followup_text(session: Any) -> str:

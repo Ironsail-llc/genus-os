@@ -22,6 +22,7 @@ import robothor.engine
 from robothor.db.migrate import _discover
 from robothor.engine.models import (
     RunStatus,
+    StepType,
     TriggerType,
     WorkflowStepStatus,
     WorkflowStepType,
@@ -194,4 +195,19 @@ class TestWorkflowStepStatusConstraintDrift:
             f"WorkflowStepType members {sorted(missing)} are not in "
             f"workflow_run_steps_step_type_check (newest definition: {source.name}). "
             "This is the exact shape of the `parallel` defect migration 106 fixed."
+        )
+
+
+class TestRunStepTypeConstraintDrift:
+    """`agent_run_steps.step_type` has drifted before (migration 062): a step
+    the CHECK rejects is swallowed by the step flush and never reaches the
+    run's ledger, the Runs drawer or the run steps API."""
+
+    def test_every_step_type_member_is_allowed_by_the_check(self):
+        allowed, source = _newest_check_values("agent_run_steps", "step_type")
+        missing = {s.value for s in StepType} - set(allowed)
+        assert not missing, (
+            f"StepType members {sorted(missing)} are not in "
+            f"agent_run_steps_step_type_check (newest definition: {source.name}). "
+            "Add a constraint migration (see crm/migrations/062_step_type_warmup_phase.sql)."
         )

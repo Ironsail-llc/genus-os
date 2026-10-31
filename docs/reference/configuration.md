@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-488 settings in 18 groups.
+489 settings in 18 groups.
 
 ## autonomy
 
@@ -360,6 +360,7 @@ How the instance reaches people, and who it says it is.
 | `ROBOTHOR_SLACK_APP_TOKEN` | str | _(unset)_ | `robothor-engine` | yes | legacy | Slack app-level token for socket mode. |
 | `ROBOTHOR_SLACK_BOT_TOKEN` | str | _(unset)_ | `robothor-engine` | yes | legacy | Slack bot token. The Slack channel starts only when it and the app token are both set. |
 | `ROBOTHOR_SLACK_VERIFY_TARGET` | str | _(empty)_ | `robothor-engine` | no | 1.70.0 | Conversation `genus channel verify slack` and the doctor's Slack check post their test message to -- a channel id (C.../G.../D...) or a user id (U.../W...), never a #name. Used by verify and the doctor only: delivery never falls back to it, so an agent whose manifest names no target fails loudly instead of posting somewhere nobody chose. |
+| `ROBOTHOR_STEER_EVERYWHERE` | bool | `false` | no | no | unreleased | Steer and stop a live run from every chat surface, and show its progress there: the dashboard chat's composer steers the running task and Stop halts it at the next step (POST /chat/steer, /chat/interrupt); Slack gains /steer and /stop and the Teams channel accepts them typed; Slack and Teams post one progress line per run and edit it in place. Off, every surface behaves as before. |
 | `ROBOTHOR_TEAMS_ACCESS` | str | `pairing` | `robothor-engine` | no | 1.90.0 | Inbound access policy for Teams. Defaults to `pairing`: an unknown sender in a 1:1 chat is answered with a one-shot code and reaches nothing until an operator approves it. A field of its own rather than `channel_access_default` so that configuring one surface does not silently change the posture of another. |
 | `ROBOTHOR_TEAMS_APP_ID` | str | _(empty)_ | `robothor-engine` | no | 1.90.0 | Entra application (client) id of the Azure Bot backing the `teams` channel, which ships as the `genus-teams` plugin. Not a secret -- it is the `aud` every inbound activity's token is checked against, and it is printed in the portal -- so it lives here rather than in the vault, where the doctor could not read it on an instance with no master key. |
 | `ROBOTHOR_TEAMS_APP_PASSWORD` | str | _(unset)_ | `robothor-engine` | yes | 1.90.0 | Client secret for the Teams bot's Entra application. Read through the secrets accessor, so `genus channel add teams` may put it in this instance's vault instead of the environment. |

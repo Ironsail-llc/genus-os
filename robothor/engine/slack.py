@@ -13,6 +13,7 @@ import logging
 import os
 from typing import Any
 
+from robothor.engine import live_control
 from robothor.engine.channels import inbound as inbound_replies
 from robothor.engine.channels.slack_credentials import (
     APP_TOKEN_ENV,
@@ -26,6 +27,11 @@ logger = logging.getLogger(__name__)
 
 # Maximum message length for Slack
 MAX_SLACK_LENGTH = 4000
+
+
+def _session_key(channel: str) -> str:
+    """The shared-session key of a Slack channel's conversation."""
+    return f"agent:main:slack:{channel}"
 
 
 class SlackBot:
@@ -53,8 +59,50 @@ class SlackBot:
         (and writes back) before the clear.
         """
         from robothor.engine import chat, chat_store
-        from robothor.engine.channels import access
         from robothor.engine.channels.inbound import conversation_turn
+
+        tenant_id, refusal = await self._command_tenant(channel, user_id)
+        if tenant_id is None:
+            return refusal
+
+        session_key = _session_key(channel)
+        async with conversation_turn(session_key):
+            chat.get_shared_session(session_key).history.clear()
+            await chat_store.clear_session_async(session_key, tenant_id=tenant_id)
+        return "Session cleared."
+
+    def _register_run_commands(self, app: Any) -> None:
+        """``/steer`` and ``/stop``, only with ``ROBOTHOR_STEER_EVERYWHERE`` on."""
+        if not live_control.steer_everywhere_enabled():
+            return
+
+        @app.command("/steer")  # type: ignore[untyped-decorator]
+        async def handle_steer(ack: Any, respond: Any, command: dict[str, Any]) -> None:
+            await ack()
+            reply = await self._steer_command(
+                command.get("channel_id", ""),
+                user_id=command.get("user_id", ""),
+                text=command.get("text", ""),
+            )
+            if reply:
+                await respond(reply)
+
+        @app.command("/stop")  # type: ignore[untyped-decorator]
+        async def handle_stop(ack: Any, respond: Any, command: dict[str, Any]) -> None:
+            await ack()
+            reply = await self._stop_command(
+                command.get("channel_id", ""), user_id=command.get("user_id", "")
+            )
+            if reply:
+                await respond(reply)
+
+    async def _command_tenant(self, channel: str, user_id: str) -> tuple[str | None, str]:
+        """The tenant a command in ``channel`` acts in, or ``None`` and the refusal.
+
+        The same access decision a message takes: a sender who could not drive
+        the agent here cannot steer or stop its run either.
+        """
+        from robothor.engine.channels import access
 
         decision = await access.evaluate(
             "slack",
@@ -65,15 +113,41 @@ class SlackBot:
             mode=self._access_mode(),
         )
         if not decision.allowed:
-            return decision.refusal
+            return None, decision.refusal
         identity = decision.identity
-        tenant_id = identity.tenant_id if identity else self.config.tenant_id
+        return (identity.tenant_id if identity else self.config.tenant_id), ""
 
-        session_key = f"agent:main:slack:{channel}"
-        async with conversation_turn(session_key):
-            chat.get_shared_session(session_key).history.clear()
-            await chat_store.clear_session_async(session_key, tenant_id=tenant_id)
-        return "Session cleared."
+    async def _steer_command(self, channel: str, *, user_id: str, text: str) -> str:
+        """``/steer <text>``: add guidance to the channel's live run."""
+        text = (text or "").strip()
+        if not text:
+            return live_control.STEER_USAGE
+        tenant_id, refusal = await self._command_tenant(channel, user_id)
+        if tenant_id is None:
+            return refusal
+        return await live_control.steer_reply(_session_key(channel), text, tenant_id=tenant_id)
+
+    async def _stop_command(self, channel: str, *, user_id: str) -> str:
+        """``/stop``: halt the channel's live run at its next step."""
+        tenant_id, refusal = await self._command_tenant(channel, user_id)
+        if tenant_id is None:
+            return refusal
+        return await live_control.stop_reply(_session_key(channel), tenant_id=tenant_id)
+
+    def _progress(self, channel: str) -> live_control.ProgressMessage | None:
+        """The run's progress message in ``channel``, with the flag on and a client."""
+        client = getattr(self._app, "client", None) if self._app else None
+        if client is None or not live_control.steer_everywhere_enabled():
+            return None
+
+        async def post(text: str) -> Any:
+            response = await client.chat_postMessage(channel=channel, text=text)
+            return response.get("ts") if response else None
+
+        async def edit(ts: Any, text: str) -> None:
+            await client.chat_update(channel=channel, ts=ts, text=text)
+
+        return live_control.ProgressMessage(post, edit)
 
     @staticmethod
     def _allowed_users() -> set[str]:
@@ -201,6 +275,8 @@ class SlackBot:
             if reply:
                 await respond(reply)
 
+        self._register_run_commands(app)
+
         # Register platform sender for delivery
         from robothor.engine.delivery import register_platform_sender
 
@@ -314,13 +390,15 @@ class SlackBot:
         # conversations into every log shipper this instance has.
         from robothor.engine.channels.inbound import handle_message
 
+        progress = self._progress(channel)
+        extra: dict[str, Any] = {"on_progress": progress.on_event} if progress else {}
         result = await handle_message(
             channel="slack",
             native_id=user_id,
             text=text,
             runner=self.runner,
             tenant_id=self.config.tenant_id,
-            session_key=f"agent:main:slack:{channel}",
+            session_key=_session_key(channel),
             trigger_type=TriggerType.SLACK,
             display_name=str((event.get("user_profile") or {}).get("display_name") or ""),
             surface=self._surface(event, channel),
@@ -331,7 +409,10 @@ class SlackBot:
             # handed a pairing code by a gate that was also, separately,
             # correct.
             mode=self._access_mode(),
+            **extra,
         )
+        if progress is not None:
+            await progress.close(live_control.PROGRESS_DONE)
 
         # The four call shapes, exactly as this method sent them before the
         # pipeline was extracted: a refusal is `say(text=…)` with no markdown

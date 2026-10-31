@@ -183,3 +183,4 @@ crm/157_run_workflow_tool_denies.sql
 crm/158_operation_action_proposer.sql
 crm/161_session_rotation_grace.sql
 crm/162_agent_runs_started_at.sql
+crm/164_step_type_steer.sql

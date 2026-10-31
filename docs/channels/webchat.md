@@ -158,6 +158,40 @@ starts a run itself; without the flag the endpoint behaves as it always has. The
 running turn's own stream adds two events: `interim` (a superseded answer) and
 `pending_followups` (messages the turn never took, to send as the next turn).
 
+### Steering instead (`ROBOTHOR_STEER_EVERYWHERE`)
+
+With `ROBOTHOR_STEER_EVERYWHERE=true` the composer becomes a steer input while a
+reply streams: its placeholder reads *Steer the running task...*, and what you
+send is handed to the run as an operator steering update, read before its next
+model call. The note under it reads *Steering the run*. A steer is guidance for
+the run in flight: it is not a turn of its own, but once the run has read it,
+it is kept with the turn in the conversation's history (as
+`[steered while working] …`), so a reload and the next turn still know it. The
+run also records it as a `steer` step carrying the text, so the Runs page's
+run detail and the run steps API show where it landed. A steer that arrives while the agent writes
+its final answer is not lost: the run takes another turn with it, and the
+answer already written stays on screen as its own message, exactly as for a
+follow-up. When no live run can take it, it falls back to the follow-up
+behaviour above.
+
+**Stop** then stops the run the way Telegram's *Interrupt* button and
+`POST /api/runs/{run_id}/interrupt` do, instead of cancelling the browser's
+request: the run's interrupt flag is set and the runtime's durable stop is
+recorded, so the run ends at its next iteration boundary at the latest. If no
+live run is found it falls back to the ordinary stop.
+
+Steer and Stop reach only the turn this tab sent. Two tabs on one agent are two
+turns, and each tab's steer and Stop name their own turn by its request id.
+
+For API clients: `POST /chat/steer` with `{"text": "...", "request_id": "..."}`
+and `POST /chat/interrupt` with `{"request_id": "..."}` name the turn by the
+`request_id` it was sent to `/chat/send` with, and resolve the session key
+exactly like `/chat/send`. Only the user who sent that turn can reach it, and a
+turn sent without a `request_id` cannot be steered. Both answer
+`{"ok": …, "found": …}`; `found` is false when that turn has no live run, and a
+missing `request_id` is a 400. `GET /chat/steer` answers `{"enabled": …}`. With the setting off the
+two POST routes answer 404.
+
 ## Attaching files
 
 The paperclip at the left of the composer adds files to the message you are

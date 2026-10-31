@@ -47,6 +47,7 @@ from fastapi import APIRouter, Request, Response
 from genus_teams import ask as ask_module
 from genus_teams.credentials import teams_credentials
 from genus_teams.jwt_validation import TokenRejectedError, validate_activity_token
+from robothor.engine import live_control
 from robothor.engine.channels import access, conversations
 
 logger = logging.getLogger(__name__)
@@ -509,18 +510,37 @@ async def _handle(
         logger.error("Teams: no runner is bound, so an authenticated message went nowhere")
         return
 
+    session_key = f"agent:main:teams:{conversation_id}"
+    if live_control.steer_everywhere_enabled() and _is_run_command(text):
+        reply = await _run_command(
+            channel,
+            text,
+            native_id=native_id,
+            display_name=display_name,
+            session_key=session_key,
+            surface=surface,
+        )
+        if reply:
+            await channel.send(conversation_id, reply)
+        return
+
+    progress = _progress(channel, conversation_id)
+    extra: dict[str, Any] = {"on_progress": progress.on_event} if progress else {}
     result = await handle_message(
         channel=channel.name,
         native_id=native_id,
         text=text,
         runner=runner,
         tenant_id=channel.tenant_id,
-        session_key=f"agent:main:teams:{conversation_id}",
+        session_key=session_key,
         trigger_type=TriggerType.CHANNEL,
         reply_target=conversation_id,
         display_name=display_name,
         surface=surface,
+        **extra,
     )
+    if progress is not None:
+        await progress.close(live_control.PROGRESS_DONE)
     # "" means send nothing: a suppressed pairing reply, or an unknown sender in
     # a room who must not learn that anybody is listening.
     if not result.reply:
@@ -531,3 +551,56 @@ async def _handle(
     # the answer to a question asked in a shared room lands in a 1:1 chat, or
     # the other way round. The conversation an activity arrived in cannot move.
     await channel.send(conversation_id, result.reply)
+
+
+def _is_run_command(text: str) -> bool:
+    word = (text or "").strip().split(" ", 1)[0].lower()
+    return word in {"/steer", "/stop"}
+
+
+async def _run_command(
+    channel: Any,
+    text: str,
+    *,
+    native_id: str,
+    display_name: str,
+    session_key: str,
+    surface: str,
+) -> str:
+    """``/steer <text>`` or ``/stop`` for the conversation's live run.
+
+    Gated like a message: a sender who could not drive the agent here cannot
+    steer or stop its run. Never a new turn.
+    """
+    decision = await access.evaluate(
+        channel.name,
+        native_id,
+        tenant_id=channel.tenant_id,
+        display_name=display_name,
+        surface=surface,
+    )
+    if not decision.allowed:
+        return str(decision.refusal or "")
+    identity = decision.identity
+    tenant_id = identity.tenant_id if identity else channel.tenant_id
+    word, _, rest = text.strip().partition(" ")
+    if word.lower() == "/stop":
+        return await live_control.stop_reply(session_key, tenant_id=tenant_id)
+    guidance = rest.strip()
+    if not guidance:
+        return live_control.STEER_USAGE
+    return await live_control.steer_reply(session_key, guidance, tenant_id=tenant_id)
+
+
+def _progress(channel: Any, conversation_id: str) -> Any:
+    """The run's progress activity, with the flag on and a channel that can post one."""
+    if not live_control.steer_everywhere_enabled() or not hasattr(channel, "post_progress"):
+        return None
+
+    async def post(text: str) -> Any:
+        return await channel.post_progress(conversation_id, text)
+
+    async def edit(activity_id: Any, text: str) -> None:
+        await channel.update_progress(conversation_id, activity_id, text)
+
+    return live_control.ProgressMessage(post, edit)

@@ -281,6 +281,10 @@ class AgentSession:
         # Chat messages sent while this run works (live_inbox.py). The channel
         # owns the inbox; the loop drains it at its safe points.
         self.live_inbox: Any = None
+        # The chat conversation this run answers (live_control.py); None otherwise.
+        self.conversation_key: str | None = None
+        # Where the steers this run absorbs are recorded for its channel.
+        self.steers_taken: list[str] | None = None
         self.late_extensions: int = 0
 
     @property

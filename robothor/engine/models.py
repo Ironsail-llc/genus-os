@@ -98,6 +98,8 @@ class StepType(StrEnum):
     DEEP_REASON = "deep_reason"
     COMPACTION = "compaction"
     WARMUP_PHASE = "warmup_phase"
+    #: An operator steer the run took mid-flight; ``tool_input`` holds its text.
+    STEER = "steer"
 
 
 class DeliveryMode(StrEnum):
