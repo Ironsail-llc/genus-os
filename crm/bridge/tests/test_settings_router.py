@@ -1275,26 +1275,31 @@ def test_a_malformed_file_raises_a_fresh_error_on_every_read_in_the_scope(clean_
 # ── the schema changes only on restart, so the browser may keep it ───────────
 
 
-def test_the_schema_carries_an_etag_and_a_private_cache_lifetime(controls_client_as_operator):
+def test_the_schema_carries_a_weak_etag_and_is_always_revalidated(controls_client_as_operator):
     first = controls_client_as_operator.get(SCHEMA)
     second = controls_client_as_operator.get(SCHEMA)
     assert first.status_code == 200
     etag = first.headers.get("etag")
-    assert etag and etag.startswith('"') and etag.endswith('"'), etag
+    # Weak: the dashboard proxy re-serialises the JSON, so the bytes the browser
+    # holds are equivalent to the bridge's, not identical.
+    assert etag and etag.startswith('W/"') and etag.endswith('"'), etag
     assert second.headers.get("etag") == etag, "the same schema must carry the same tag"
-    assert first.headers.get("cache-control") == "private, max-age=300"
+    # Revalidated on every load: no window in which an upgrade's new fields, or
+    # a signed-out session's copy, is served without asking.
+    assert first.headers.get("cache-control") == "private, no-cache"
 
 
 def test_a_matching_if_none_match_is_answered_304_without_the_body(
     controls_client_as_operator,
 ):
     etag = controls_client_as_operator.get(SCHEMA).headers["etag"]
-    for header in (etag, f"W/{etag}", f'"something-else", {etag}', "*"):
+    strong = etag.removeprefix("W/")
+    for header in (etag, strong, f'"something-else", {etag}', "*"):
         r = controls_client_as_operator.get(SCHEMA, headers={"If-None-Match": header})
         assert r.status_code == 304, header
         assert r.content == b"", header
         assert r.headers.get("etag") == etag, header
-        assert r.headers.get("cache-control") == "private, max-age=300", header
+        assert r.headers.get("cache-control") == "private, no-cache", header
 
 
 def test_a_stale_if_none_match_gets_the_whole_schema(controls_client_as_operator):
