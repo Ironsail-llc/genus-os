@@ -228,7 +228,8 @@ class LocalInferenceGate:
             return None
         return lane is Lane.INTERACTIVE or _turn_is_interactive()
 
-    def _wait_as(self, priority: bool | None, delta: int) -> None:
+    def _count_interactive_waiter(self, priority: bool | None, delta: int) -> None:
+        """Track interactive requests in the queue, which background work defers to."""
         if priority:
             with self._cv:
                 self._interactive_waiting = max(0, self._interactive_waiting + delta)
@@ -237,7 +238,7 @@ class LocalInferenceGate:
         deadline = time.monotonic() + (DEFAULT_WAIT_SECONDS if timeout is None else timeout)
         reason = "no slot"
         priority = self._priority(lane)
-        self._wait_as(priority, +1)
+        self._count_interactive_waiter(priority, +1)
         try:
             while True:
                 if self._paced_now(lane):
@@ -248,7 +249,7 @@ class LocalInferenceGate:
                     raise LocalCapacityBusyError(f"local inference gate: {reason}")
                 time.sleep(_POLL_SECONDS)
         finally:
-            self._wait_as(priority, -1)
+            self._count_interactive_waiter(priority, -1)
 
     async def _acquire_async(self, lane: Lane, timeout: float | None) -> None:
         import asyncio
@@ -256,7 +257,7 @@ class LocalInferenceGate:
         deadline = time.monotonic() + (DEFAULT_WAIT_SECONDS if timeout is None else timeout)
         reason = "no slot"
         priority = self._priority(lane)
-        self._wait_as(priority, +1)
+        self._count_interactive_waiter(priority, +1)
         try:
             while True:
                 if self._paced_now(lane):
@@ -267,7 +268,7 @@ class LocalInferenceGate:
                     raise LocalCapacityBusyError(f"local inference gate: {reason}")
                 await asyncio.sleep(_POLL_SECONDS)
         finally:
-            self._wait_as(priority, -1)
+            self._count_interactive_waiter(priority, -1)
 
     def acquire_sync(self, lane: Lane = Lane.NORMAL, timeout: float | None = None) -> None:
         """Take a slot from synchronous code. Pair with ``release()`` in a finally."""
