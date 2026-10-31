@@ -585,17 +585,11 @@ async def _run_command(
     tenant_id = identity.tenant_id if identity else channel.tenant_id
     word, _, rest = text.strip().partition(" ")
     if word.lower() == "/stop":
-        found = await asyncio.to_thread(
-            live_control.interrupt_conversation, session_key, tenant_id=tenant_id
-        )
-        return live_control.STOPPING_REPLY if found else live_control.NOTHING_RUNNING
+        return await live_control.stop_reply(session_key, tenant_id=tenant_id)
     guidance = rest.strip()
     if not guidance:
         return live_control.STEER_USAGE
-    found = await asyncio.to_thread(
-        live_control.steer_conversation, session_key, guidance, tenant_id=tenant_id
-    )
-    return live_control.STEERING_REPLY if found else live_control.NOTHING_RUNNING
+    return await live_control.steer_reply(session_key, guidance, tenant_id=tenant_id)
 
 
 def _progress(channel: Any, conversation_id: str) -> Any:

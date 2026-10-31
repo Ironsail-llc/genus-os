@@ -26,14 +26,14 @@ function keyed(sessionKey: string): { session_key?: string } {
   return sessionKey ? { session_key: sessionKey } : {};
 }
 
-/** Add `text` to the session's live run, at its next step. */
-export async function chatSteer(sessionKey: string, text: string): Promise<SteerResult> {
-  return post("/chat/steer", { ...keyed(sessionKey), text });
+/** Add `text` to the live run of the turn `requestId` names, at its next step. */
+export async function chatSteer(sessionKey: string, text: string, requestId: string): Promise<SteerResult> {
+  return post("/chat/steer", { ...keyed(sessionKey), text, request_id: requestId });
 }
 
-/** Halt the session's live run at its next step. */
-export async function chatInterrupt(sessionKey: string): Promise<SteerResult> {
-  return post("/chat/interrupt", keyed(sessionKey));
+/** Stop the live run of the turn `requestId` names. */
+export async function chatInterrupt(sessionKey: string, requestId: string): Promise<SteerResult> {
+  return post("/chat/interrupt", { ...keyed(sessionKey), request_id: requestId });
 }
 
 /** Whether the engine has steer mode on. */

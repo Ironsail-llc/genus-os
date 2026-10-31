@@ -8,7 +8,6 @@ Shares sessions with Telegram and web chat via the existing session system.
 
 from __future__ import annotations
 
-import asyncio
 import contextlib
 import logging
 import os
@@ -126,20 +125,14 @@ class SlackBot:
         tenant_id, refusal = await self._command_tenant(channel, user_id)
         if tenant_id is None:
             return refusal
-        found = await asyncio.to_thread(
-            live_control.steer_conversation, _session_key(channel), text, tenant_id=tenant_id
-        )
-        return live_control.STEERING_REPLY if found else live_control.NOTHING_RUNNING
+        return await live_control.steer_reply(_session_key(channel), text, tenant_id=tenant_id)
 
     async def _stop_command(self, channel: str, *, user_id: str) -> str:
         """``/stop``: halt the channel's live run at its next step."""
         tenant_id, refusal = await self._command_tenant(channel, user_id)
         if tenant_id is None:
             return refusal
-        found = await asyncio.to_thread(
-            live_control.interrupt_conversation, _session_key(channel), tenant_id=tenant_id
-        )
-        return live_control.STOPPING_REPLY if found else live_control.NOTHING_RUNNING
+        return await live_control.stop_reply(_session_key(channel), tenant_id=tenant_id)
 
     def _progress(self, channel: str) -> live_control.ProgressMessage | None:
         """The run's progress message in ``channel``, with the flag on and a client."""

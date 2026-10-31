@@ -54,11 +54,16 @@ __all__ = [
 #: The longest progress line any channel is handed.
 MAX_LINE = 120
 
+#: How long closing waits for a progress write already on its way, in seconds.
+_WRITE_WAIT = 5.0
+
 #: What a channel's ``/steer`` and ``/stop`` answer, the same words everywhere.
 STEERING_REPLY = "Steering the run."
 STOPPING_REPLY = "Stopping the run."
 NOTHING_RUNNING = "Nothing is running here."
 STEER_USAGE = "Usage: /steer <what the running task should change>"
+STOP_FAILED = "Stop could not be confirmed."
+STEER_FAILED = "Steer could not be delivered."
 
 #: What a run's progress message reads once the run has ended.
 PROGRESS_DONE = "Done."
@@ -129,6 +134,26 @@ def interrupt_conversation(key: str, message: str | None = None, *, tenant_id: s
     return run_id is not None and interrupt_session(run_id, message)
 
 
+async def steer_reply(key: str, text: str, *, tenant_id: str) -> str:
+    """A channel's answer to ``/steer``: off the loop, and an answer even on failure."""
+    try:
+        found = await asyncio.to_thread(steer_conversation, key, text, tenant_id=tenant_id)
+    except Exception:  # noqa: BLE001 - the sender is told; the log has the cause
+        logger.exception("A channel steer could not be delivered")
+        return STEER_FAILED
+    return STEERING_REPLY if found else NOTHING_RUNNING
+
+
+async def stop_reply(key: str, *, tenant_id: str) -> str:
+    """A channel's answer to ``/stop``: off the loop, and an answer even on failure."""
+    try:
+        found = await asyncio.to_thread(interrupt_conversation, key, tenant_id=tenant_id)
+    except Exception:  # noqa: BLE001 - the sender is told; the log has the cause
+        logger.exception("A channel stop could not be recorded")
+        return STOP_FAILED
+    return STOPPING_REPLY if found else NOTHING_RUNNING
+
+
 # ── progress ─────────────────────────────────────────────────────────────
 
 
@@ -193,6 +218,7 @@ class ProgressMessage:
         self._posted = False
         self._next_allowed = 0.0
         self._worker: asyncio.Task[None] | None = None
+        self._writing = False
         self._closed = False
 
     async def on_event(self, event: dict[str, Any]) -> None:
@@ -213,9 +239,15 @@ class ProgressMessage:
         self._closed = True
         worker, self._worker = self._worker, None
         if worker is not None and not worker.done():
-            worker.cancel()
-            with contextlib.suppress(asyncio.CancelledError, Exception):
-                await worker
+            if self._writing:
+                # A write is on its way to the platform: let it land, or the
+                # message it creates is never finished (and never reads Done).
+                with contextlib.suppress(Exception):
+                    await asyncio.wait_for(asyncio.shield(worker), timeout=_WRITE_WAIT)
+            if not worker.done():
+                worker.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await worker
         if not self._posted and self._latest is None:
             return  # nothing was ever shown; nothing to finish
         text = final or self._latest
@@ -235,6 +267,7 @@ class ProgressMessage:
             self._next_allowed = time.monotonic() + self._min_interval
 
     async def _write(self, text: str) -> None:
+        self._writing = True
         try:
             if not self._posted:
                 self._posted = True
@@ -246,3 +279,5 @@ class ProgressMessage:
             self._written = text
         except Exception as e:  # noqa: BLE001 - lost progress is not a lost answer
             logger.debug("Channel progress update failed: %s", type(e).__name__)
+        finally:
+            self._writing = False

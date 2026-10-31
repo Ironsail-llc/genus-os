@@ -56,6 +56,15 @@ describe("steer and interrupt routes", () => {
     expect(steer.chatSteer).not.toHaveBeenCalled();
   });
 
+  it("refuses a steer or stop that names no turn", async () => {
+    const steerRoute = await import("../steer/route");
+    const stopRoute = await import("../interrupt/route");
+    expect((await steerRoute.POST(post({ text: "x" }))).status).toBe(400);
+    expect((await stopRoute.POST(post({}))).status).toBe(400);
+    expect(steer.chatSteer).not.toHaveBeenCalled();
+    expect(steer.chatInterrupt).not.toHaveBeenCalled();
+  });
+
   it("refuses an empty steer", async () => {
     const { POST } = await import("../steer/route");
     const res = await POST(post({ text: "  " }));
@@ -85,7 +94,7 @@ describe("steer and interrupt routes", () => {
   it("says so when the engine cannot confirm the interrupt", async () => {
     steer.chatInterrupt.mockRejectedValueOnce(new Error("down"));
     const { POST } = await import("../interrupt/route");
-    const res = await POST(post({ agent: "scheduler" }));
+    const res = await POST(post({ agent: "scheduler", request_id: "request-1" }));
     expect(res.status).toBe(502);
   });
 });

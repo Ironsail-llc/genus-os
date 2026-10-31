@@ -733,7 +733,7 @@ export function ChatPanel({
     setMessages((prev) => [...prev, { id: item.id, role: "user", content: text, timestamp: new Date(), note: "Sending…" }]);
     setInput("");
     inFlightFollowups.current = [...inFlightFollowups.current, item];
-    if (steerMode && (await steerRun(text, agent))) {
+    if (steerMode && (await steerRun(text, agent, requestIdRef.current))) {
       inFlightFollowups.current = inFlightFollowups.current.filter((f) => f.id !== item.id);
       noteMessages([item.id], STEERED_NOTE);
       return;
@@ -1299,8 +1299,8 @@ export function ChatPanel({
   const handleAbort = async () => {
     if (isStopping) return;
     discardFollowups();
-    if (steerMode && isStreaming && (await interruptRun(agent))) {
-      setStopNotice("Stopping at the next step…");
+    if (steerMode && isStreaming && (await interruptRun(agent, requestIdRef.current))) {
+      setStopNotice("Stopping the run…");
       return;
     }
     const stoppedRequest = requestIdRef.current;
