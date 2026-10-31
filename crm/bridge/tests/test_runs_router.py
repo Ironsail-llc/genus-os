@@ -275,3 +275,11 @@ def test_delivery_buckets_normalise_case_whitespace_and_empty():
     assert "lower(btrim(delivery_status))" in sql
     assert "delivery_status IN" not in sql
     assert "NULLIF(btrim(delivery_status), '') IS NULL" in sql
+
+
+def test_detail_404_for_a_valid_uuid_that_is_gone(controls_client_as_operator, fake_runs):
+    """A well-formed id with no row is the "run is gone" answer, not a 500."""
+    r = controls_client_as_operator.get("/api/runs/22222222-2222-4222-8222-222222222222")
+    assert r.status_code == 404
+    assert r.json()["detail"] == "unknown run"
+    assert r.headers.get("cache-control") == "no-store"
