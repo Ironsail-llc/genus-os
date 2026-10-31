@@ -57,10 +57,15 @@ class FakeClock:
 
 
 class FakeSessions:
-    """``user_sessions`` by refresh-token hash, with the rotation columns."""
+    """``user_sessions`` by refresh-token hash, with the rotation columns.
+
+    ``db_ahead`` is how far the database's clock runs ahead of the pod that
+    checks the token: ``rotated_at`` is the database's ``NOW()``.
+    """
 
     def __init__(self, clock: FakeClock) -> None:
         self.clock = clock
+        self.db_ahead = timedelta(0)
         self.rows: dict[str, dict] = {}
         self.calls: list[dict] = []
 
@@ -87,7 +92,7 @@ class FakeSessions:
         row = self.rows.get(h)
         if row is None:
             return None
-        now = self.clock.now
+        now = self.clock.now + self.db_ahead
         if row["revoked_at"] is None:
             row["revoked_at"] = row["rotated_at"] = now
             row["rotated_to"] = successor_hash
@@ -203,3 +208,42 @@ async def test_another_sessions_replay_gets_its_own_pair_never_this_one(test_cli
 async def test_an_unknown_token_is_refused(test_client, sessions):
     r = await _refresh(test_client, "never-issued")
     assert r.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_the_window_runs_from_the_first_spend_not_the_last_replay(
+    test_client, sessions, clock
+):
+    sessions.add(ALICE["id"], "alice-refresh-token")
+    first = await _refresh(test_client, "alice-refresh-token")
+    clock.advance(20)
+    replay = await _refresh(test_client, "alice-refresh-token")
+    assert replay.status_code == 200
+    assert replay.json() == first.json()
+    clock.advance(11)  # 31 s after the first spend, 11 s after the replay
+    assert (await _refresh(test_client, "alice-refresh-token")).status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_a_database_clock_ahead_of_the_bridge_still_yields_a_valid_token(
+    test_client, sessions
+):
+    """``iat`` comes from the database clock and is checked on the pod's.
+
+    A database a second ahead used to mint a token that PyJWT rejected as
+    "not yet valid" the moment it was issued. (A second rather than half a
+    second: ``iat`` is whole seconds, and only a full second ahead makes the
+    old behaviour fail on every run instead of half of them.)
+    """
+    from robothor.auth import tokens
+
+    sessions.db_ahead = timedelta(seconds=1)
+    sessions.add(ALICE["id"], "alice-refresh-token")
+    r = await _refresh(test_client, "alice-refresh-token")
+    assert r.status_code == 200
+    claims = tokens.decode_token(r.json()["access_token"])
+    assert claims["sub"] == ALICE["id"]
+    # Backdated by the skew allowance; the lifetime still ends TTL after rotation.
+    assert claims["exp"] - claims["iat"] == (
+        tokens.ACCESS_TTL_SECONDS + tokens.ROTATION_CLOCK_SKEW_SECONDS
+    )

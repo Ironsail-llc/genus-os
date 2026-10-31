@@ -268,3 +268,41 @@ def test_the_stored_reason_is_trimmed(controls_client_as_operator, fake_store):
     )
     assert r.status_code == 200
     assert fake_store.last_reason == "promote"
+
+
+def test_a_reason_over_500_characters_is_refused_with_a_flat_422(
+    controls_client_as_operator, fake_store
+):
+    from unittest.mock import patch
+
+    with patch("routers._audit.log_event") as log_event:
+        r = controls_client_as_operator.patch(
+            "/api/controls/ROBOTHOR_RBAC_MODE", json={"value": "enforce", "reason": "x" * 501}
+        )
+    assert r.status_code == 422
+    assert isinstance(r.json()["detail"], str), r.json()
+    assert "500" in r.json()["detail"]
+    assert fake_store.last_write is None
+    log_event.assert_not_called()
+
+
+def test_a_reason_of_exactly_500_characters_is_stored_and_audited(
+    controls_client_as_operator, fake_store
+):
+    from unittest.mock import patch
+
+    reason = "y" * 500
+    with patch("routers._audit.log_event") as log_event:
+        r = controls_client_as_operator.patch(
+            "/api/controls/ROBOTHOR_RBAC_MODE", json={"value": "enforce", "reason": reason}
+        )
+    assert r.status_code == 200
+    assert fake_store.last_reason == reason
+    assert log_event.call_args.kwargs["details"]["reason"] == reason
+
+
+def test_the_audit_module_documents_the_reason_exception():
+    from routers import _audit
+
+    assert "control.set" in (_audit.__doc__ or "")
+    assert "500" in (_audit.__doc__ or "")

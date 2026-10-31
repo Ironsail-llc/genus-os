@@ -282,7 +282,27 @@ def test_a_disabled_account_gets_no_successor(alice):
     cur.execute("UPDATE user_accounts SET status = 'disabled' WHERE id = %s", (alice,))
     conn.commit()
     conn.close()
-    _rotate(raw)
+    # Refused outright: the route must not hand out a successor it never stored.
+    assert _rotate(raw) is None
     _, successor_hash = tokens.successor_refresh_token(raw)
     assert accounts.get_active_session(successor_hash) is None
     assert _live_sessions(alice) == 0
+    # And the token is spent all the same; re-enabling the account does not revive it.
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute("UPDATE user_accounts SET status = 'active' WHERE id = %s", (alice,))
+    conn.commit()
+    conn.close()
+    assert _rotate(raw) is None
+
+
+@pytest.mark.integration
+def test_the_window_runs_from_the_first_spend(alice):
+    raw = _session(alice)
+    first = _rotate(raw)
+    _age_rotation(raw, 20)
+    replay = _rotate(raw)
+    assert replay is not None and replay["user_id"] == first["user_id"]
+    # A replay does not restart the window: 31 s after the first spend, refused.
+    _age_rotation(raw, 11)
+    assert _rotate(raw) is None
