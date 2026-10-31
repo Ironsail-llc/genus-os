@@ -202,9 +202,11 @@ async def health() -> dict[str, Any]:
             "reranker": {"available": reranker_ok},
             "web_search": {"available": searxng_ok},
             "memory_db": {"available": True},
-            # Optional: reported, never part of the overall status.
-            "vision": dict(_vision_state),
         },
+        # Optional dependencies sit beside `components`, not in it: consumers
+        # (the dashboard among them) read any component with available=false
+        # as a failing check, and vision is not required for this service.
+        "optional": {"vision": dict(_vision_state)},
     }
 
 

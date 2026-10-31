@@ -4,7 +4,7 @@ Every read-only vision proxy route used to swallow the error and answer
 "not available" — no log line, and the orchestrator's /health never mentioned
 vision at all. So a crashed vision service and a box that never had one looked
 the same to the operator. These tests pin the two signals: a log record naming
-the route, and a `vision` component in /health that reports the last failure
+the route, and an `optional.vision` entry in /health that reports the last failure
 (without flipping the overall status: vision is optional).
 """
 
