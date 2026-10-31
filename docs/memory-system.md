@@ -160,7 +160,7 @@ When a new fact arrives, the pipeline checks for similar existing facts:
 
 An operator-confirmed match (`metadata.operator_confirmed`, set by an edit in
 the Helm) is never superseded: the new fact is stored superseded by it and the
-result's `action` is `kept_confirmed`. Prune, consolidation and dechurn skip
+result's `action` is `kept_confirmed`. Prune, consolidation, dechurn and resolution capture skip
 confirmed facts too. `update_fact` re-embeds a changed text, sets
 `metadata.embedding_stale` if the embedding fails, and merges `metadata` rather
 than replacing it.
