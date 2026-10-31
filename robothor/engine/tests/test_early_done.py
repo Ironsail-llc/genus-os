@@ -505,3 +505,92 @@ class TestTelegramAnswer:
         assert sent == ["The answer is 42."]
         assert timeline.marks["finish_end"] < timeline.marks["telegram_sent"]
         assert runner.kwargs.get("on_complete") is None
+
+
+# ── Execution lanes ──────────────────────────────────────────────────────
+
+
+def _fake_lanes_module():
+    """A stand-in for ``robothor.engine.lanes``: a Lane enum and ``in_lane``."""
+    import contextlib
+    import contextvars
+    import enum
+    import types
+
+    lane_var: contextvars.ContextVar[str | None] = contextvars.ContextVar("lane", default=None)
+
+    class Lane(enum.StrEnum):
+        INTERACTIVE = "interactive"
+        BACKGROUND = "background"
+
+    @contextlib.contextmanager
+    def in_lane(lane):
+        token = lane_var.set(lane)
+        try:
+            yield
+        finally:
+            lane_var.reset(token)
+
+    module = types.ModuleType("robothor.engine.lanes")
+    module.Lane = Lane
+    module.in_lane = in_lane
+    module.lane_var = lane_var
+    return module
+
+
+class _LaneRecordingRunner:
+    def __init__(self, engine_config, lane_var=None) -> None:
+        self.config = engine_config
+        self.lane_var = lane_var
+        self.finished_in: list[Any] = []
+
+    def _publish_run_telemetry(self, trace, run) -> None:
+        return None
+
+    def _finish_run(self, run, **kwargs):
+        self.finished_in.append(self.lane_var.get() if self.lane_var else "no-lanes")
+        return run
+
+    async def _persist_run(self, run) -> None:
+        return None
+
+
+class TestFinalizationRunsInTheBackgroundLane:
+    @pytest.mark.asyncio
+    async def test_finalization_is_spawned_in_the_background_lane(self, engine_config, monkeypatch):
+        import sys
+
+        from robothor.engine.early_done import release_then_finalize
+
+        lanes = _fake_lanes_module()
+        monkeypatch.setitem(sys.modules, "robothor.engine.lanes", lanes)
+        runner = _LaneRecordingRunner(engine_config, lanes.lane_var)
+        run = AgentRun(id="run-lane-1", status=RunStatus.COMPLETED, output_text="ok")
+        seen_by_caller: list[Any] = []
+
+        async def on_complete(r: AgentRun) -> None:
+            seen_by_caller.append(lanes.lane_var.get())
+
+        with lanes.in_lane(lanes.Lane.INTERACTIVE):
+            await release_then_finalize(runner, run, None, on_complete)
+            # The caller's own context is untouched by the background spawn.
+            assert lanes.lane_var.get() == lanes.Lane.INTERACTIVE
+        await get_task_registry().drain(timeout=5.0)
+
+        assert seen_by_caller == [lanes.Lane.INTERACTIVE]
+        assert runner.finished_in == [lanes.Lane.BACKGROUND]
+
+    @pytest.mark.asyncio
+    async def test_without_a_lanes_module_finalization_still_runs(self, engine_config, monkeypatch):
+        import sys
+
+        from robothor.engine.early_done import release_then_finalize
+
+        monkeypatch.setitem(sys.modules, "robothor.engine.lanes", None)  # import fails
+        runner = _LaneRecordingRunner(engine_config)
+        run = AgentRun(id="run-lane-2", status=RunStatus.COMPLETED, output_text="ok")
+
+        await release_then_finalize(runner, run, None, AsyncMock())
+        await get_task_registry().drain(timeout=5.0)
+
+        assert runner.finished_in == ["no-lanes"]
