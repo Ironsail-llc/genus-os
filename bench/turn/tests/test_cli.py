@@ -113,3 +113,18 @@ def test_completed_turns_record_a_baseline(tmp_path: Path, monkeypatch: pytest.M
     code = main(["--half", "inprocess", "--baseline", str(baseline), "--update-baseline"])
     assert code == 0
     assert json.loads(baseline.read_text())["summary"]["done_ms"]["p50"] == 10.0
+
+
+def test_warmup_turns_are_dropped_from_the_summary_and_kept_apart() -> None:
+    from bench.turn.cli import split_warmup
+
+    turns = [{"done_ms": 500.0}, {"done_ms": 40.0}, {"done_ms": 42.0}]
+    meta = [{"turn": 0}, {"turn": 1}, {"turn": 2}]
+    kept, kept_meta, warm = split_warmup(turns, meta, 1)
+    assert kept == [{"done_ms": 40.0}, {"done_ms": 42.0}]
+    assert [m["turn"] for m in kept_meta] == [1, 2]
+    assert warm == [{"done_ms": 500.0}]
+
+
+def test_warmup_defaults_to_one_turn() -> None:
+    assert build_parser().parse_args([]).warmup == 1
