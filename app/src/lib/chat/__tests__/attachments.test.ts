@@ -47,6 +47,11 @@ describe("stripAttachmentNote", () => {
     expect(stripAttachmentNote(`${own}\n\n${NOTE}`)).toBe(own);
   });
 
+  it("keeps what was added while the agent worked, after the note", () => {
+    const turn = `what is this?\n\n${NOTE}\n\n[added while working] and this one too`;
+    expect(stripAttachmentNote(turn)).toBe("what is this?\n\n[added while working] and this one too");
+  });
+
   it("cuts at the LAST note, so a quoted note above it survives", () => {
     const quoted = `earlier I saw:\n\n[3 files attached — kept on disk]\nlike that`;
     expect(stripAttachmentNote(`${quoted}\n\n${NOTE}`)).toBe(quoted);

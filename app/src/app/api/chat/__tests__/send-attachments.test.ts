@@ -184,6 +184,29 @@ describe("/api/chat/send with attachments", () => {
     expect(engine.chatSend).not.toHaveBeenCalled();
   });
 
+  it("413s a chunked body that grows past the ceiling, without a Content-Length", async () => {
+    const { POST } = await import("../send/route");
+    const { MAX_SEND_BODY_BYTES } = await import("@/lib/chat/attachments");
+    const chunk = new TextEncoder().encode("a".repeat(1024 * 1024));
+    let sent = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (sent > MAX_SEND_BODY_BYTES + 2 * chunk.length) return controller.close();
+        sent += chunk.length;
+        controller.enqueue(chunk);
+      },
+    });
+    const req = new Request("http://helm.test/api/chat/send", {
+      method: "POST", body, duplex: "half",
+    } as RequestInit & { duplex: "half" });
+    expect(req.headers.get("content-length")).toBeNull();
+    const res = await POST(req);
+    expect(res.status).toBe(413);
+    expect(await res.json()).toMatchObject({ request_admitted: false });
+    expect(sent).toBeLessThan(MAX_SEND_BODY_BYTES + 3 * chunk.length);
+    expect(engine.chatSend).not.toHaveBeenCalled();
+  });
+
   it("leaves a plain send's engine call exactly as it was", async () => {
     await send({ message: "hi", request_id: REQUEST });
     expect(engine.chatSend).toHaveBeenCalledWith("hi", "", REQUEST);
