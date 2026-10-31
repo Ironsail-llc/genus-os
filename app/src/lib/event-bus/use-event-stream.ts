@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
+import { streamsKey, subscribe } from "./event-stream-hub";
 
 export interface StreamEvent {
   id: string;
@@ -13,21 +14,29 @@ export interface StreamEvent {
   correlation_id: string;
 }
 
+const DEFAULT_STREAMS = ["email", "crm", "health", "agent"];
+
 interface UseEventStreamOptions {
   streams?: string[];
   maxEvents?: number;
   enabled?: boolean;
 }
 
+/** How many event ids each subscriber remembers to drop replays. */
+const SEEN_IDS_LIMIT = 1000;
+
 /**
  * React hook for consuming the event bus SSE stream.
  *
- * Returns live events from Redis Streams via /api/events/stream.
- * Automatically reconnects on connection loss.
+ * Returns live events from Redis Streams via /api/events/stream. Every caller
+ * in a tab shares one EventSource (see event-stream-hub.ts); the connection
+ * is keyed by the set of streams, so passing a new array literal on each
+ * render does not reconnect. Reconnects back off exponentially, and events the
+ * server replays on a new connection are delivered once.
  */
 export function useEventStream(options: UseEventStreamOptions = {}) {
   const {
-    streams = ["email", "crm", "health", "agent"],
+    streams = DEFAULT_STREAMS,
     maxEvents = 100,
     enabled = true,
   } = options;
@@ -35,68 +44,51 @@ export function useEventStream(options: UseEventStreamOptions = {}) {
   const [events, setEvents] = useState<StreamEvent[]>([]);
   const [connected, setConnected] = useState(false);
   const [synced, setSynced] = useState(false);
-  const eventSourceRef = useRef<EventSource | null>(null);
-  const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout>>(undefined);
-  const connectRef = useRef<(() => void) | null>(null);
-
-  const connect = useCallback(() => {
-    if (!enabled) return;
-
-    const streamsParam = streams.join(",");
-    const es = new EventSource(`/api/events/stream?streams=${streamsParam}`);
-    eventSourceRef.current = es;
-
-    es.addEventListener("message", (e) => {
-      try {
-        const event: StreamEvent = JSON.parse(e.data);
-        setEvents((prev) => {
-          const next = [event, ...prev];
-          return next.slice(0, maxEvents);
-        });
-      } catch {
-        // Invalid JSON — skip
-      }
-    });
-
-    es.addEventListener("sync", () => {
-      setSynced(true);
-    });
-
-    es.addEventListener("heartbeat", () => {
-      // Connection alive
-    });
-
-    es.addEventListener("error", () => {
-      // Will auto-reconnect
-    });
-
-    es.onopen = () => {
-      setConnected(true);
-    };
-
-    es.onerror = () => {
-      setConnected(false);
-      es.close();
-      // Reconnect after 3 seconds
-      reconnectTimeoutRef.current = setTimeout(() => connectRef.current?.(), 3000);
-    };
-  }, [enabled, streams, maxEvents]);
+  const maxEventsRef = useRef(maxEvents);
+  const streamsRef = useRef(streams);
+  const seenRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
-    connectRef.current = connect;
+    maxEventsRef.current = maxEvents;
+    streamsRef.current = streams;
   });
 
+  // Stable across renders for the same set of streams, whatever the order.
+  const key = streamsKey(streams);
+
   useEffect(() => {
-    connect();
+    if (!enabled || !key) return;
+    // The caller's order, for the request URL; `key` decides when it changes.
+    const wanted = [...new Set(streamsRef.current)];
+    const seen = seenRef.current;
+
+    const unsubscribe = subscribe({
+      streams: wanted,
+      onMessage: (data) => {
+        let event: StreamEvent;
+        try {
+          event = JSON.parse(data);
+        } catch {
+          return; // Invalid JSON — skip
+        }
+        if (event.stream && !wanted.includes(event.stream)) return;
+        const seenId = `${event.stream}:${event.id}`;
+        if (seen.has(seenId)) return;
+        seen.add(seenId);
+        if (seen.size > SEEN_IDS_LIMIT) {
+          seen.delete(seen.values().next().value as string);
+        }
+        setEvents((prev) => [event, ...prev].slice(0, maxEventsRef.current));
+      },
+      onOpen: () => setConnected(true),
+      onClose: () => setConnected(false),
+      onSync: () => setSynced(true),
+    });
     return () => {
-      if (eventSourceRef.current) {
-        eventSourceRef.current.close();
-      }
-      if (reconnectTimeoutRef.current) {
-        clearTimeout(reconnectTimeoutRef.current);
-      }
+      unsubscribe();
+      setConnected(false);
     };
-  }, [connect]);
+  }, [enabled, key]);
 
   const clearEvents = useCallback(() => {
     setEvents([]);

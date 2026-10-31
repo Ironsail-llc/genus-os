@@ -4,15 +4,17 @@
  * GET /api/events/stream?streams=email,crm,health
  *
  * Streams real-time events from Redis Streams to the browser.
- * Uses XREAD with BLOCK for efficient polling.
+ * Uses XREAD with BLOCK for efficient polling, on a Redis connection of its
+ * own per request (a blocking read occupies the connection it runs on).
  */
 
 import { NextRequest } from "next/server";
 import {
   readRecent,
-  readSince,
+  openStreamReader,
   isValidStream,
   type StreamName,
+  type StreamReader,
 } from "@/lib/event-bus/redis-client";
 
 export const runtime = "nodejs";
@@ -31,13 +33,33 @@ export async function GET(request: NextRequest) {
 
   // Send initial recent events, then stream new ones
   const encoder = new TextEncoder();
+  let reader: StreamReader | null = null;
+  let cancelled = false;
+  const stop = () => {
+    cancelled = true;
+    const r = reader;
+    reader = null;
+    void r?.close();
+  };
+  request.signal?.addEventListener("abort", stop);
+
   const stream = new ReadableStream({
     async start(controller) {
+      // Where each stream's live read starts: the newest event replayed below,
+      // so an event written between the replay and the first XREAD (or
+      // between two XREADs) is still delivered. "$" would skip it.
+      const lastIds: Partial<Record<StreamName, string>> = {};
       try {
         // Send recent events first (last 20 per stream)
         for (const streamName of requestedStreams) {
+          // Validate the key against the allow-list before using it as an
+          // object property to block remote property injection.
+          if (!isValidStream(streamName)) continue;
+          lastIds[streamName] = "$";
           try {
             const recent = await readRecent(streamName, 20);
+            // XREVRANGE is newest first; an empty stream starts from the beginning.
+            lastIds[streamName] = recent[0]?.id ?? "0-0";
             for (const event of recent.reverse()) {
               const data = JSON.stringify({
                 stream: streamName,
@@ -57,22 +79,17 @@ export async function GET(request: NextRequest) {
           encoder.encode(`event: sync\ndata: {"status":"synced"}\n\n`)
         );
 
-        // Track last IDs per stream
-        const lastIds: Partial<Record<StreamName, string>> = {};
-        for (const s of requestedStreams) {
-          // Validate the key against the allow-list before using it as an
-          // object property to block remote property injection.
-          if (!isValidStream(s)) continue;
-          lastIds[s] = "$"; // Only new events from now
-        }
+        if (cancelled) return;
+        reader = openStreamReader();
 
         // Long-poll loop
         let iterations = 0;
         const MAX_ITERATIONS = 600; // ~50 minutes at 5s blocks
-        while (iterations < MAX_ITERATIONS) {
+        while (iterations < MAX_ITERATIONS && !cancelled && reader) {
           iterations++;
           try {
-            const results = await readSince(lastIds, 5000);
+            const results = await reader.readSince(lastIds, 5000);
+            if (cancelled) break;
             for (const { stream: streamName, events } of results) {
               for (const event of events) {
                 const data = JSON.stringify({
@@ -93,6 +110,7 @@ export async function GET(request: NextRequest) {
               );
             }
           } catch {
+            if (cancelled) break; // The reader was closed under a pending read
             // Redis connection error — send error and close
             controller.enqueue(
               encoder.encode(
@@ -105,8 +123,17 @@ export async function GET(request: NextRequest) {
       } catch {
         // Stream setup error
       } finally {
-        controller.close();
+        request.signal?.removeEventListener("abort", stop);
+        stop();
+        try {
+          controller.close();
+        } catch {
+          // Already closed by the client
+        }
       }
+    },
+    cancel() {
+      stop();
     },
   });
 
