@@ -17,8 +17,8 @@ export interface EventStreamSubscriber {
   onSync: () => void;
 }
 
-export const RECONNECT_BASE_MS = 1000;
-export const RECONNECT_MAX_MS = 30_000;
+const RECONNECT_BASE_MS = 1000;
+const RECONNECT_MAX_MS = 30_000;
 
 const subscribers = new Set<EventStreamSubscriber>();
 let source: EventSource | null = null;
