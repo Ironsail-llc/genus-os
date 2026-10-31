@@ -170,6 +170,31 @@ The Helm remembers the choice in this browser, so a reload keeps the panel the
 way you left it. The panel opens by default, and on a phone the chat is always
 a view of its own.
 
+## What the agent can reach
+
+The wrench button beside **Plan** and **Deep** in the composer (the **Tools**
+chip on a phone) opens a read-only list of what the agent in this chat can use:
+
+- **MCP servers**, each with its health (**Ready** when the session is up and
+  initialized, **Starting** while it is still handshaking, **Stopped** when it
+  is not running) and how many tools it contributed. How the engine reaches a
+  server (its command or URL) is never shown.
+- **Tools**, counted by where they come from: core, each plugin, each MCP
+  server, and the opt-in families. Open a group to see the names.
+- **The manifest's lists**: how many tools it allows by name (or that it has no
+  allow list, which means every tool that is not opt-in), and its deny list.
+
+Nothing here turns a tool on or off. An agent's tools are set by its manifest,
+so **Manage in agent settings** opens the agent editor for that agent
+(`?v=agents&agent=<id>`), where `tools_allowed` is edited. `tools_denied` is
+set in the manifest file itself. After a save the engine reconciles, and the
+dialog shows the new list the next time it opens.
+
+The list is operator information, so a member sees a sentence saying so. The
+data comes from two engine routes, `GET /api/admin/agents/{id}/tools` and
+`GET /api/admin/mcp/servers`, which the bridge proxies as
+`GET /api/agents/{id}/tools` and `GET /api/mcp/servers` for operators.
+
 ## `genus channel verify webchat` exits 2
 
 Exit code 2 means "there was nothing to verify", and this channel declares no
