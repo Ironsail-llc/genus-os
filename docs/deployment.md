@@ -1023,6 +1023,12 @@ anything a spreadsheet would evaluate is prefixed with an apostrophe, so an
 audit detail cannot become a formula or carry a credential off the box. A
 failed export is a real `500` rather than an empty file.
 
+An agent's tool calls are recorded with the agent's id as `actor`, so
+`?actor=<agent id>` is the filter by agent identity; the Helm's Audit page
+offers the fleet's ids in an Agent picker for an operator (the fleet listing is
+operator-only, so an auditor types the id into Actor instead), and the export
+carries the same filter.
+
 `audit_log` has no tenant column, so **the export is appliance-wide**, not
 caller-tenant-wide — the same rows `GET /api/audit/events` has always returned.
 The `<tenant>` in the filename names who exported it, not what is inside.
