@@ -69,9 +69,16 @@ describe("SettingsView — sub-pages load on demand", () => {
   it("says a page that failed to download needs a reload, not another page", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     vi.doMock("@/components/views/settings/plugins-page", () => {
+      // The export throws on access, as the dynamic import's `.then` reads it:
+      // the shell sees the loader reject with the chunk error itself. (An error
+      // thrown by the factory reaches it wrapped in vitest's own message.)
       const error = new Error("Failed to load chunk /_next/static/chunks/plugins.js");
       error.name = "ChunkLoadError";
-      throw error;
+      return {
+        get PluginsPage() {
+          throw error;
+        },
+      };
     });
     await renderSettings("plugins");
 

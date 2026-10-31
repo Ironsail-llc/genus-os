@@ -1,10 +1,12 @@
 "use client";
 
-import dynamic from "next/dynamic";
+import dynamic, { type DynamicOptionsLoadingProps } from "next/dynamic";
 import { Loader2, Lock } from "lucide-react";
 import { PageHeader } from "@/components/business/page-header";
 import { ThemeToggle } from "@/components/business/theme-toggle";
 import { ErrorBoundary } from "@/components/error-boundary";
+import { isChunkLoadError } from "@/lib/chunk-load-error";
+import { reloadPage } from "@/lib/reload-page";
 import {
   isOperatorRole,
   settingsPages,
@@ -12,8 +14,9 @@ import {
   type SettingsPageId,
 } from "@/components/layout/nav-config";
 
-/** What stands in a sub-page's place while its chunk downloads. */
-function PageLoading() {
+/** What stands in a sub-page's place while its chunk downloads (a failure is rethrown, as in the shell). */
+function PageLoading({ error }: DynamicOptionsLoadingProps) {
+  if (error) throw error;
   return (
     <div className="flex flex-col gap-3 p-4" data-testid="settings-page-loading" aria-busy="true">
       <div className="h-5 w-40 animate-pulse rounded-md bg-muted" />
@@ -160,6 +163,31 @@ function PageFailed() {
   );
 }
 
+/**
+ * What a sub-page whose code did not download leaves behind. Usually the Helm
+ * was updated since this tab opened; another page needs its own chunk too, so
+ * the way out is a reload, not the sidebar.
+ */
+function PageLoadFailed() {
+  return (
+    <div className="flex flex-col gap-2 p-4" data-testid="settings-page-load-failed">
+      <p className="text-sm font-medium text-foreground">This page could not be loaded</p>
+      <p className="max-w-xl text-xs text-muted-foreground">
+        The Helm was probably updated since this tab was opened, and the page&apos;s code is no
+        longer on the server. Reload to get the new version; nothing has been changed.
+      </p>
+      <button
+        type="button"
+        onClick={reloadPage}
+        data-testid="settings-page-load-failed-reload"
+        className="mt-1 self-start rounded-md border border-border px-2.5 py-1 text-xs text-foreground hover:bg-accent"
+      >
+        Reload
+      </button>
+    </div>
+  );
+}
+
 export function SettingsView({
   visible,
   page,
@@ -262,7 +290,10 @@ export function SettingsView({
             failure: a boundary that latches would make one bad payload look
             like a broken Settings screen forever.
           */}
-          <ErrorBoundary key={active.id} fallback={<PageFailed />}>
+          <ErrorBoundary
+            key={active.id}
+            fallback={(error) => (isChunkLoadError(error) ? <PageLoadFailed /> : <PageFailed />)}
+          >
             <PageBody page={active} role={role} onPageChange={onPageChange} />
           </ErrorBoundary>
         </div>

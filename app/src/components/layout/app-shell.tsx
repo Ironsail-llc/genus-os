@@ -1,14 +1,17 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { flushSync } from "react-dom";
-import dynamic from "next/dynamic";
+import dynamic, { type DynamicOptionsLoadingProps } from "next/dynamic";
 import { useSession } from "next-auth/react";
 import { Sidebar } from "./sidebar";
 import { MobileTabBar } from "./mobile-tab-bar";
 import { isComingSoonView, viewGroupLabel, viewTitles, type ViewId } from "./nav-config";
 import { ChatPanel } from "@/components/chat-panel";
 import { MfaSetupBanner } from "@/components/mfa-setup-banner";
+import { ErrorBoundary } from "@/components/error-boundary";
+import { isChunkLoadError } from "@/lib/chunk-load-error";
+import { reloadPage } from "@/lib/reload-page";
 import { ThemeToggle } from "@/components/business/theme-toggle";
 import { CommandPalette } from "@/components/business/command-palette";
 import { useTasks } from "@/hooks/use-tasks";
@@ -27,8 +30,13 @@ const LiveCanvas = dynamic(
   { ssr: false },
 );
 
-/** What stands in a view's place while its chunk downloads on first visit. */
-function ViewLoading() {
+/**
+ * What stands in a view's place while its chunk downloads on first visit.
+ * A failed download is rethrown so the view's boundary shows it: the app
+ * router's loader throws by itself, the pages-router one hands it here.
+ */
+function ViewLoading({ error }: DynamicOptionsLoadingProps) {
+  if (error) throw error;
   return (
     <div
       className="flex h-full flex-col gap-3 p-4"
@@ -40,6 +48,52 @@ function ViewLoading() {
       <div className="h-24 w-full max-w-3xl animate-pulse rounded-lg bg-muted/60" />
       <div className="h-24 w-full max-w-3xl animate-pulse rounded-lg bg-muted/60" />
     </div>
+  );
+}
+
+/**
+ * What a view that failed leaves in its place. A chunk that did not download
+ * usually means the Helm was updated since this tab opened (the new build no
+ * longer serves the old chunk hashes), so the way out is a reload.
+ */
+function ViewFailed({ chunk }: { chunk: boolean }) {
+  return (
+    <div
+      className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center"
+      data-testid="view-load-failed"
+    >
+      <p className="text-sm font-medium text-foreground">
+        {chunk ? "This screen could not be loaded" : "This screen failed to render"}
+      </p>
+      <p className="max-w-sm text-xs text-muted-foreground">
+        {chunk
+          ? "The Helm was probably updated since this tab was opened. Reload to get the new version; nothing has been changed."
+          : "Something in it threw while drawing. Reload the Helm, or pick another screen; nothing has been changed."}
+      </p>
+      <button
+        type="button"
+        onClick={reloadPage}
+        data-testid="view-load-failed-reload"
+        className="mt-1 rounded-md border border-border px-2.5 py-1 text-xs text-foreground hover:bg-accent"
+      >
+        Reload
+      </button>
+    </div>
+  );
+}
+
+/**
+ * A wall around one lazily loaded view: its chunk failing to download (or the
+ * view throwing) costs that screen, not the sidebar, the chat and every other
+ * view. The panel shows only while the view is the active one.
+ */
+function ViewBoundary({ visible, children }: { visible: boolean; children: ReactNode }) {
+  return (
+    <ErrorBoundary
+      fallback={(error) => (visible ? <ViewFailed chunk={isChunkLoadError(error)} /> : null)}
+    >
+      {children}
+    </ErrorBoundary>
   );
 }
 
@@ -145,7 +199,14 @@ export function AppShell() {
   // effect, so the first frame of a newly opened view is already its skeleton.
   const [visited, setVisited] = useState<ReadonlySet<ViewId>>(() => new Set([view]));
   if (!visited.has(view)) setVisited(new Set(visited).add(view));
-  const opened = (id: ViewId) => visited.has(id);
+  // Each opened view sits behind its own boundary, so a chunk that fails to
+  // download costs that screen and nothing else.
+  const mount = (id: ViewId, element: ReactNode) =>
+    visited.has(id) && (
+      <ViewBoundary key={id} visible={view === id}>
+        {element}
+      </ViewBoundary>
+    );
 
   // The role the auth layer already exposes. Used for nav gating only — server
   // -side authorization of these screens is NOT this component's job and is
@@ -332,9 +393,10 @@ export function AppShell() {
               className={`relative flex-1 min-w-0 min-h-0 ${isChatView && !isMobile ? "hidden" : ""}`}
               data-testid="views-container"
             >
-              {opened("dashboard") && <DashboardView visible={view === "dashboard"} />}
-              {opened("sales") && <SalesView visible={view === "sales"} role={role} />}
-              {opened("inbox") && (
+              {mount("dashboard", <DashboardView visible={view === "dashboard"} />)}
+              {mount("sales", <SalesView visible={view === "sales"} role={role} />)}
+              {mount(
+                "inbox",
                 <InboxView
                   visible={view === "inbox"}
                   items={inbox.items}
@@ -347,10 +409,11 @@ export function AppShell() {
                   onOpenRuns={() => navigate("runs")}
                   role={role}
                   roleLoading={roleLoading}
-                />
+                />,
               )}
-              {opened("goals") && <GoalsView visible={view === "goals"} />}
-              {opened("tasks") && (
+              {mount("goals", <GoalsView visible={view === "goals"} />)}
+              {mount(
+                "tasks",
                 <TasksView
                   visible={view === "tasks"}
                   tasks={tasks}
@@ -358,9 +421,10 @@ export function AppShell() {
                   onApprove={approveTask}
                   onReject={rejectTask}
                   onAnswer={answerQuestion}
-                />
+                />,
               )}
-              {opened("agents") && (
+              {mount(
+                "agents",
                 <AgentsView
                   visible={view === "agents"}
                   agents={agents}
@@ -368,22 +432,23 @@ export function AppShell() {
                   isLoading={agentsLoading}
                   role={role}
                   roleLoading={roleLoading}
-                />
+                />,
               )}
-              {opened("marketplace") && <MarketplaceView visible={view === "marketplace"} />}
-              {opened("fleet") && <FleetView visible={view === "fleet"} />}
-              {opened("runs") && <RunsView visible={view === "runs"} />}
+              {mount("marketplace", <MarketplaceView visible={view === "marketplace"} />)}
+              {mount("fleet", <FleetView visible={view === "fleet"} />)}
+              {mount("runs", <RunsView visible={view === "runs"} />)}
               {/*
                 Automations keeps the "workflows" view id: the sidebar, every
                 bookmark and the nav tests all address it by that name, and the
                 label has read "Automations" since B6. Only the contents changed.
               */}
-              {opened("workflows") && (
+              {mount(
+                "workflows",
                 <AutomationsView
                   visible={view === "workflows"}
                   role={role}
                   roleLoading={roleLoading}
-                />
+                />,
               )}
               {/*
                 The three Observe screens. Each is handed the role because a
@@ -391,26 +456,34 @@ export function AppShell() {
                 keep an operator-gated read on the bridge going for a screen
                 they may not see.
               */}
-              {opened("memory") && (
-                <MemoryView visible={view === "memory"} role={role} roleLoading={roleLoading} />
+              {mount(
+                "memory",
+                <MemoryView visible={view === "memory"} role={role} roleLoading={roleLoading} />,
               )}
-              {opened("audit") && (
-                <AuditView visible={view === "audit"} role={role} roleLoading={roleLoading} />
+              {mount(
+                "audit",
+                <AuditView visible={view === "audit"} role={role} roleLoading={roleLoading} />,
               )}
-              {opened("logs") && (
-                <LogsView visible={view === "logs"} role={role} roleLoading={roleLoading} />
+              {mount(
+                "logs",
+                <LogsView visible={view === "logs"} role={role} roleLoading={roleLoading} />,
               )}
-              {opened("health") && <HealthView visible={view === "health"} />}
-              {opened("settings") && (
+              {mount("health", <HealthView visible={view === "health"} />)}
+              {mount(
+                "settings",
                 <SettingsView
                   visible={view === "settings"}
                   page={settingsPage}
                   onPageChange={(page) => navigate("settings", page)}
                   role={role}
                   roleLoading={roleLoading}
-                />
+                />,
               )}
-              {isComingSoonView(view) && <ComingSoonView view={view} />}
+              {isComingSoonView(view) && (
+                <ViewBoundary visible>
+                  <ComingSoonView view={view} />
+                </ViewBoundary>
+              )}
             </div>
 
             {/* The conversation canvas, when open, is the chat view's main

@@ -181,9 +181,16 @@ describe("AppShell — views load on first visit", () => {
   it("keeps the Helm up when a view's chunk fails to load, and offers a reload", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     vi.doMock("@/components/views/goals-view", () => {
+      // The export throws on access, as the dynamic import's `.then` reads it:
+      // the shell sees the loader reject with the chunk error itself. (An error
+      // thrown by the factory reaches it wrapped in vitest's own message.)
       const error = new Error("Failed to load chunk /_next/static/chunks/goals.js");
       error.name = "ChunkLoadError";
-      throw error;
+      return {
+        get GoalsView() {
+          throw error;
+        },
+      };
     });
     await renderShellAt("?v=goals");
 
