@@ -283,6 +283,88 @@ describe("Observe › Logs", () => {
     expect(requests.filter((u) => /\/api\/logs\?/.test(u))).toHaveLength(0);
   });
 
+  describe("on a deployment without journald (a container)", () => {
+    const HINT =
+      "this deployment writes its logs to standard output; read them with your cluster's log tool";
+    const CONTAINER = { ...NO_JOURNALD, hint: HINT, logs_url: null };
+    const CONTAINER_WITH_LINK = { ...CONTAINER, logs_url: "https://logs.example.invalid/search" };
+
+    function container(body: unknown = CONTAINER) {
+      respond([[/\/api\/logs\/units/, () => ({ body })]]);
+    }
+
+    it("says where the logs are, calmly, with the reason as a footnote", async () => {
+      container();
+      render(<LogsView role="owner" />);
+
+      const state = await screen.findByTestId("logs-unavailable");
+      expect(state.textContent).toContain(HINT);
+      expect(screen.getByTestId("logs-unavailable-reason").textContent).toContain(
+        "journalctl is not installed"
+      );
+      expect(state.textContent).toContain("your cluster's log tool");
+      expect(screen.queryByTestId("logs-error")).toBeNull();
+      expect(screen.queryByTestId("logs-external-link")).toBeNull();
+    });
+
+    it("links out to the deployment's logs when a logs URL is configured", async () => {
+      container(CONTAINER_WITH_LINK);
+      render(<LogsView role="owner" />);
+
+      const link = await screen.findByTestId("logs-external-link");
+      expect(link.tagName).toBe("A");
+      expect(link).toHaveAttribute("href", "https://logs.example.invalid/search");
+      expect(link).toHaveAttribute("target", "_blank");
+      expect(link).toHaveAttribute("rel", "noreferrer");
+      expect(link.textContent).toContain("Open logs");
+    });
+
+    it("never links to a URL that is not http or https", async () => {
+      container({ ...CONTAINER, logs_url: "javascript:alert(1)" });
+      render(<LogsView role="owner" />);
+
+      await screen.findByTestId("logs-unavailable");
+      expect(screen.queryByTestId("logs-external-link")).toBeNull();
+    });
+
+    it("hides auto-refresh, which would have nothing to beat", async () => {
+      container();
+      render(<LogsView role="owner" />);
+
+      await screen.findByTestId("logs-unavailable");
+      expect(screen.queryByTestId("logs-auto")).toBeNull();
+      expect(screen.getByTestId("logs-refresh")).toBeTruthy();
+    });
+
+    it("re-asks availability on Refresh, and never sends a read", async () => {
+      container();
+      render(<LogsView role="owner" />);
+      await screen.findByTestId("logs-unavailable");
+      const unitsAsked = () => requests.filter((u) => /\/api\/logs\/units/.test(u)).length;
+      expect(unitsAsked()).toBe(1);
+
+      fireEvent.click(screen.getByTestId("logs-refresh"));
+      await waitFor(() => expect(unitsAsked()).toBe(2));
+      expect(requests.filter((u) => /\/api\/logs\?/.test(u))).toHaveLength(0);
+      expect(screen.queryByTestId("logs-error")).toBeNull();
+    });
+
+    it("shows the units once a Refresh finds journald", async () => {
+      let answer: unknown = CONTAINER;
+      respond([
+        [/\/api\/logs\/units/, () => ({ body: answer })],
+        [/\/api\/logs\?/, () => ({ body: LINES })],
+      ]);
+      render(<LogsView role="owner" />);
+      await screen.findByTestId("logs-unavailable");
+
+      answer = UNITS;
+      fireEvent.click(screen.getByTestId("logs-refresh"));
+      expect(await screen.findByTestId("logs-pane")).toBeTruthy();
+      expect(screen.getByTestId("logs-auto")).toBeTruthy();
+    });
+  });
+
   it("renders an unavailable READ the same way, with the read's own reason", async () => {
     respond([
       [/\/api\/logs\/units/, () => ({ body: UNITS })],
