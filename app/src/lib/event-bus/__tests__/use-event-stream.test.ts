@@ -310,11 +310,46 @@ describe("useEventStream", () => {
     await expectReconnectAfter(2000);
     await expectReconnectAfter(4000);
 
-    // A successful open resets the delay.
+    // A connection that stays up for 30 s resets the delay.
     act(() => {
       MockEventSource.lastInstance?.onopen?.();
     });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
     await expectReconnectAfter(1000);
+  });
+
+  it("keeps backing off when connections open and then drop at once", async () => {
+    // Redis down, app up: the route answers 200, sends sync, then an error.
+    MockEventSource.autoOpen = false;
+    renderHook(() => useEventStream({ streams: ["agent"] }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    const openThenDrop = async (expectedDelay: number) => {
+      const before = constructedUrls.length;
+      act(() => {
+        const es = MockEventSource.lastInstance!;
+        es.onopen?.();
+        es._emit("sync", { status: "synced" });
+        es._fail();
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(expectedDelay - 1);
+      });
+      expect(constructedUrls).toHaveLength(before);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1);
+      });
+      expect(constructedUrls).toHaveLength(before + 1);
+    };
+
+    await openThenDrop(1000);
+    await openThenDrop(2000);
+    await openThenDrop(4000);
+    await openThenDrop(8000);
   });
 
   it("caps the reconnect delay at 30 seconds", async () => {
