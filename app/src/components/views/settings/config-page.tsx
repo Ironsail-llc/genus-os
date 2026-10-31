@@ -7,6 +7,7 @@ import { PageHeader } from "@/components/business/page-header";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
+import { Skeleton } from "@/components/ui/skeleton";
 import { readBridgeReply } from "@/lib/bridge/read-reply";
 import { BRIDGE_UNREACHABLE } from "@/lib/bridge/use-bridge-poll";
 import {
@@ -59,6 +60,12 @@ import {
  * and cannot change without a restart, and a poll over the values would
  * overwrite unsaved edits. Refresh is a button, because a re-read is a thing
  * the operator chooses, having seen what they would lose.
+ *
+ * The two are fetched together but drawn as each arrives: the groups as soon
+ * as the schema is in, the controls once the values are. A section opened in
+ * between shows a placeholder per setting, never a control seeded from
+ * nothing — an input with no value behind it invites an edit of a value the
+ * operator has not seen.
  */
 
 const BRIDGE = "/api/bridge";
@@ -133,6 +140,8 @@ export function ConfigPage({ visible = true, onOpenFlags }: ConfigPageProps) {
   const [groups, setGroups] = useState<SettingGroup[] | null>(null);
   const [values, setValues] = useState<Record<string, SettingValue>>({});
   const [ignoredUnits, setIgnoredUnits] = useState<string[]>([]);
+  /** Whether `values` holds an answer yet; a failed first read is not "loading". */
+  const [valuesState, setValuesState] = useState<"loading" | "ready" | "failed">("loading");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -148,23 +157,38 @@ export function ConfigPage({ visible = true, onOpenFlags }: ConfigPageProps) {
 
   const load = useCallback(async () => {
     setLoading(true);
+    // A Refresh keeps the values on screen until the new ones land.
+    setValuesState((prev) => (prev === "ready" ? prev : "loading"));
+    const valuesFailed = () => setValuesState((prev) => (prev === "ready" ? prev : "failed"));
+    // Both requests leave together; the schema is drawn the moment it is in,
+    // because the values are the slow half (the bridge resolves every field).
+    const schemaReq = fetch(`${BRIDGE}/api/settings/schema`);
+    const valuesReq = fetch(`${BRIDGE}/api/settings`);
+    // Awaited below, but possibly not at all if the schema fails first.
+    valuesReq.catch(() => undefined);
     try {
-      const [schemaRes, valuesRes] = await Promise.all([
-        fetch(`${BRIDGE}/api/settings/schema`),
-        fetch(`${BRIDGE}/api/settings`),
-      ]);
-      const bad = !schemaRes.ok ? schemaRes : !valuesRes.ok ? valuesRes : null;
-      if (bad) {
-        setError(await readBridgeReply(bad));
+      const schemaRes = await schemaReq;
+      if (!schemaRes.ok) {
+        setError(await readBridgeReply(schemaRes));
+        valuesFailed();
         return;
       }
       setGroups(normalizeSchema(await schemaRes.json()));
+
+      const valuesRes = await valuesReq;
+      if (!valuesRes.ok) {
+        setError(await readBridgeReply(valuesRes));
+        valuesFailed();
+        return;
+      }
       const read = normalizeValues(await valuesRes.json());
       setValues(read.values);
       setIgnoredUnits(read.pendingRestart);
+      setValuesState("ready");
       setError(null);
     } catch {
       setError(BRIDGE_UNREACHABLE);
+      valuesFailed();
     } finally {
       setLoading(false);
     }
@@ -480,7 +504,30 @@ export function ConfigPage({ visible = true, onOpenFlags }: ConfigPageProps) {
                 </span>
               </button>
 
-              {expanded ? (
+              {expanded && valuesState === "loading" ? (
+                <div
+                  data-testid={`config-values-loading-${group.id}`}
+                  aria-busy="true"
+                  aria-label={`Reading the values of ${group.label}`}
+                  className="flex min-w-0 flex-col gap-2 border-t border-border p-3"
+                >
+                  {shown.map((field) => (
+                    <Skeleton key={field.name} data-testid="config-field-skeleton" className="h-14 w-full" />
+                  ))}
+                </div>
+              ) : null}
+
+              {expanded && valuesState === "failed" ? (
+                <p
+                  data-testid={`config-values-unavailable-${group.id}`}
+                  className="border-t border-border p-3 text-xs text-muted-foreground"
+                >
+                  This instance did not say what these settings are set to — see the message above,
+                  then Refresh.
+                </p>
+              ) : null}
+
+              {expanded && valuesState === "ready" ? (
                 <div className="flex min-w-0 flex-col gap-2 border-t border-border p-3">
                   {hidden > 0 ? (
                     <p

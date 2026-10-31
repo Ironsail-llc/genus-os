@@ -529,6 +529,115 @@ describe("Settings › Flags", () => {
     expect(await screen.findByTestId("flags-empty")).toBeInTheDocument();
   });
 
+  describe("when the session has lapsed", () => {
+    const UNAUTHORIZED = () =>
+      ({
+        ok: false,
+        status: 401,
+        json: async () => ({ error: "authentication required" }),
+      }) as Response;
+
+    /**
+     * The bridge as the BFF proxies it, with `/api/settings` and/or
+     * `/api/controls` answering 401 for the first `failures` reads.
+     */
+    function mockLapsed(opts: { settings?: number; controls?: number }) {
+      const reads = { settings: 0, controls: 0 };
+      vi.spyOn(global, "fetch").mockImplementation((async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/api/controls")) {
+          reads.controls += 1;
+          if (reads.controls <= (opts.controls ?? 0)) return UNAUTHORIZED();
+          return { ok: true, status: 200, json: async () => CONTROLS } as Response;
+        }
+        if (url.includes("/schema")) {
+          return { ok: true, status: 200, json: async () => SCHEMA } as Response;
+        }
+        reads.settings += 1;
+        if (reads.settings <= (opts.settings ?? 0)) return UNAUTHORIZED();
+        return { ok: true, status: 200, json: async () => VALUES } as Response;
+      }) as typeof fetch);
+      return reads;
+    }
+
+    it("retries a 401 once, and renders normally when the retry succeeds", async () => {
+      // The BFF refreshes the session on the way through the first request;
+      // the second read carries the rotated token.
+      const reads = mockLapsed({ settings: 1, controls: 1 });
+      render(<FlagsPage visible role="owner" />);
+      expect(await screen.findByTestId("flag-apply-ROBOTHOR_RBAC_MODE")).toBeInTheDocument();
+      await waitFor(() =>
+        expect(screen.getByTestId("flag-verdict-ROBOTHOR_RBAC_MODE")).toHaveAttribute(
+          "data-status",
+          "ENFORCING"
+        )
+      );
+      expect(reads.settings).toBe(2);
+      expect(reads.controls).toBe(2);
+      expect(screen.queryByTestId("flags-signin")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("flags-error")).not.toBeInTheDocument();
+    });
+
+    it("asks the operator to sign in, and offers no controls, when the values stay 401", async () => {
+      const reads = mockLapsed({ settings: 99 });
+      render(<FlagsPage visible role="owner" />);
+      const prompt = await screen.findByTestId("flags-signin");
+      expect(prompt).toHaveTextContent(/sign in/i);
+      expect(within(prompt).getByRole("link")).toHaveAttribute(
+        "href",
+        expect.stringMatching(/^\/signin/)
+      );
+      await waitFor(() => expect(reads.controls).toBeGreaterThan(0));
+      expect(reads.settings).toBe(2);
+      expect(screen.queryByTestId("flags-error")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("flag-ROBOTHOR_RBAC_MODE")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("flag-apply-ROBOTHOR_RBAC_MODE")).not.toBeInTheDocument();
+    });
+
+    it("asks the operator to sign in when the verdicts stay 401, not the amber warning", async () => {
+      const reads = mockLapsed({ controls: 99 });
+      render(<FlagsPage visible role="owner" />);
+      expect(await screen.findByTestId("flags-signin")).toBeInTheDocument();
+      expect(reads.controls).toBe(2);
+      expect(screen.queryByTestId("flags-verdict-error")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("flag-apply-ROBOTHOR_RBAC_MODE")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("flag-value-ROBOTHOR_RBAC_MODE-off")).not.toBeInTheDocument();
+    });
+  });
+
+  it("clears the loaded flags when a reload fails, rather than leaving them beside the error", async () => {
+    let failValues = false;
+    vi.spyOn(global, "fetch").mockImplementation((async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/controls")) {
+        return { ok: true, status: 200, json: async () => CONTROLS } as Response;
+      }
+      if (url.includes("/schema")) {
+        return { ok: true, status: 200, json: async () => SCHEMA } as Response;
+      }
+      if (failValues) {
+        return {
+          ok: false,
+          status: 500,
+          json: async () => ({ detail: "settings file unreadable" }),
+        } as Response;
+      }
+      return { ok: true, status: 200, json: async () => VALUES } as Response;
+    }) as typeof fetch);
+
+    render(<FlagsPage visible role="owner" />);
+    expect(await screen.findByTestId("flag-apply-ROBOTHOR_RBAC_MODE")).toBeInTheDocument();
+
+    failValues = true;
+    fireEvent.click(screen.getByTestId("flags-refresh"));
+
+    expect(await screen.findByTestId("flags-error")).toHaveTextContent("settings file unreadable");
+    await waitFor(() =>
+      expect(screen.queryByTestId("flag-ROBOTHOR_RBAC_MODE")).not.toBeInTheDocument()
+    );
+    expect(screen.queryByTestId("flag-apply-ROBOTHOR_RBAC_MODE")).not.toBeInTheDocument();
+  });
+
   it("touches nothing while it is not the page on screen", () => {
     mockBridge();
     render(<FlagsPage visible={false} role="owner" />);

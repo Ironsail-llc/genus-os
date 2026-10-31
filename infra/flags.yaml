@@ -952,7 +952,7 @@ flags:
     owner: ops
     mode: "off"
     soak: >
-      NEW in 1.118.0. Lets a root-tenant owner or admin switch into a
+      NEW in 1.123.0. Lets a root-tenant owner or admin switch into a
       descendant tenant through POST /api/auth/switch-tenant (the AssumeRole
       pattern: the acting tenant is carried in the token, never in a header).
       `off` refuses every switch with 403; `observe` runs the full validation,

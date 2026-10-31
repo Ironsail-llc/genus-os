@@ -54,6 +54,67 @@ except ImportError:  # pragma: no cover - only without the `api` extra
 
 logger = logging.getLogger(__name__)
 
+#: Step columns that are JSONB and go out as JSON, not as their ``str()``.
+_STEP_JSON_COLUMNS = frozenset({"tool_input", "tool_output"})
+
+
+def _workflow_run_detail(run_id: str, tenant_id: str) -> tuple[int, dict[str, Any]]:
+    """``(status, body)`` for ``GET /api/workflows/runs/{run_id}``.
+
+    The step payloads carry whatever the tools saw, so the route needs the
+    control capability (``robothor.engine.auth``), reads only this engine's
+    tenant, and is sent ``no-store``.
+    """
+    import uuid
+
+    try:
+        uuid.UUID(run_id)
+    except ValueError:
+        return 404, {"error": "Run not found"}
+    try:
+        from robothor.db.connection import get_connection
+
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """SELECT id, workflow_id, status, trigger_type, trigger_detail,
+                          steps_total, steps_completed, steps_failed, steps_skipped,
+                          duration_ms, error_message, context,
+                          started_at, completed_at
+                   FROM workflow_runs WHERE id = %s AND tenant_id = %s""",
+                (run_id, tenant_id),
+            )
+            run_row = cur.fetchone()
+            if not run_row:
+                return 404, {"error": "Run not found"}
+            cols = [d[0] for d in cur.description]
+            run_data: dict[str, Any] = {
+                c: str(v) if v is not None else None for c, v in zip(cols, run_row, strict=False)
+            }
+
+            cur.execute(
+                """SELECT step_id, step_type, status, agent_id, agent_run_id,
+                          tool_name, tool_input, tool_output,
+                          condition_branch, output_text,
+                          error_message, duration_ms, started_at, completed_at
+                   FROM workflow_run_steps WHERE run_id = %s
+                   ORDER BY created_at""",
+                (run_id,),
+            )
+            step_rows = cur.fetchall()
+            step_cols = [d[0] for d in cur.description]
+            run_data["steps"] = [
+                {
+                    c: v if c in _STEP_JSON_COLUMNS or v is None else str(v)
+                    for c, v in zip(step_cols, row, strict=False)
+                }
+                for row in step_rows
+            ]
+            return 200, run_data
+    except Exception:
+        logger.exception("Failed to get workflow run")
+        return 500, {"error": "Internal server error"}
+
 
 def validate_engine_auth_configuration() -> None:
     """Fail closed unless the Engine's token-verification mode is safe."""
@@ -1421,54 +1482,12 @@ def create_health_app(
             return {"error": "Internal server error"}
 
     @app.get("/api/workflows/runs/{run_id}")
-    async def get_workflow_run(run_id: str) -> dict[str, Any]:
-        """Get workflow run detail with step results."""
-        try:
-            from robothor.db.connection import get_connection
+    async def get_workflow_run(run_id: str) -> Any:
+        """Workflow run detail with each step's tool name, input, output and error."""
+        from fastapi.responses import JSONResponse
 
-            with get_connection() as conn:
-                cur = conn.cursor()
-                # Get run
-                cur.execute(
-                    """SELECT id, workflow_id, status, trigger_type, trigger_detail,
-                              steps_total, steps_completed, steps_failed, steps_skipped,
-                              duration_ms, error_message, context,
-                              started_at, completed_at
-                       FROM workflow_runs WHERE id = %s""",
-                    (run_id,),
-                )
-                run_row = cur.fetchone()
-                if not run_row:
-                    return {"error": "Run not found"}
-                cols = [d[0] for d in cur.description]
-                run_data: dict[str, Any] = {
-                    c: str(v) if v is not None else None
-                    for c, v in zip(cols, run_row, strict=False)
-                }
-
-                # Get steps
-                cur.execute(
-                    """SELECT step_id, step_type, status, agent_id, agent_run_id,
-                              tool_name, condition_branch, output_text,
-                              error_message, duration_ms, started_at, completed_at
-                       FROM workflow_run_steps WHERE run_id = %s
-                       ORDER BY created_at""",
-                    (run_id,),
-                )
-                step_rows = cur.fetchall()
-                step_cols = [d[0] for d in cur.description]
-                run_data["steps"] = [
-                    {
-                        c: str(v) if v is not None else None
-                        for c, v in zip(step_cols, row, strict=False)
-                    }
-                    for row in step_rows
-                ]
-
-                return run_data
-        except Exception:
-            logger.exception("Failed to get workflow run")
-            return {"error": "Internal server error"}
+        status, body = _workflow_run_detail(run_id, config.tenant_id)
+        return JSONResponse(body, status_code=status, headers={"Cache-Control": "no-store"})
 
     # ── v2 Enhancement endpoints ─────────────────────────────────────
 

@@ -68,6 +68,9 @@ Renders:
 {{- $_ := set $serviceEnv "ROBOTHOR_ENGINE_URL" (include "genus-os.engineUrl" $root) -}}
 {{- $_ := set $serviceEnv "GENUS_TENANT_ENGINE_URL_TEMPLATE" (include "genus-os.tenantEngineUrlTemplate" $root) -}}
 {{- end -}}
+{{- with ($root.Values.logs | default dict).url -}}
+{{- $_ := set $serviceEnv "GENUS_LOGS_URL" (toString .) -}}
+{{- end -}}
 {{- /* The bridge gates and routes on the root tenant: it must agree with the
        root engine (and the dashboard) about which tenant that is. */ -}}
 {{- $_ := set $serviceEnv "ROBOTHOR_DEFAULT_TENANT" (include "genus-os.rootTenant" $root) -}}
