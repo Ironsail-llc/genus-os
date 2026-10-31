@@ -173,6 +173,18 @@ export function AgentManifests({
     void loadModels();
   }, [visible, loadAgents, loadModels]);
 
+  // `?agent=<id>` opens that agent's editor once the fleet has loaded. The
+  // chat's Tools dialog links here, because the manifest is where an agent's
+  // tools are changed. An id the fleet does not have opens nothing.
+  const [linkedAgent, setLinkedAgent] = useState<string | null>(() =>
+    typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("agent")
+  );
+  useEffect(() => {
+    if (!linkedAgent || !agents) return;
+    if (agents.some((row) => row.id === linkedAgent)) setPanel({ agentId: linkedAgent });
+    setLinkedAgent(null);
+  }, [linkedAgent, agents]);
+
   /**
    * The engine's half of a write, which a 2xx alone does not settle.
    *

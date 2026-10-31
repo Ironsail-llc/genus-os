@@ -17,6 +17,7 @@ import { ChatRecovery, type ChatRecoveryRequest } from "@/components/chat-recove
 import { ChatMarkdown, CHAT_PROSE } from "@/components/chat/chat-markdown";
 import { ChatAskCard, type ApprovalKind } from "@/components/chat-ask-card";
 import { ChatLanding } from "@/components/chat/chat-landing";
+import { ToolsPopover } from "@/components/chat/tools-popover";
 import { repeatsQuickAction } from "@/components/business/quick-action-labels";
 import {
   isKeyableAgentId,
@@ -1632,6 +1633,7 @@ export function ChatPanel({
                   ? "bg-warning/15 text-warning border border-warning/30"
                   : "bg-muted/50 text-muted-foreground border border-transparent"
               } disabled:opacity-50`}
+              aria-label="Plan mode"
               data-testid="plan-toggle"
             >
               <ClipboardList className="w-3.5 h-3.5" />
@@ -1658,11 +1660,13 @@ export function ChatPanel({
                   ? "bg-primary/15 text-primary border border-primary/30"
                   : "bg-muted/50 text-muted-foreground border border-transparent"
               } disabled:opacity-50`}
+              aria-label="Deep mode"
               data-testid="deep-toggle"
             >
               <Brain className="w-3.5 h-3.5" />
               Deep
             </button>
+            <ToolsPopover agentId={agent || defaultAgent || "main"} mobile />
           </div>
         ) : null}
 
@@ -1683,6 +1687,7 @@ export function ChatPanel({
                     }}
                     className={planMode && !deepMode ? "text-warning bg-warning/10 hover:bg-warning/20" : planMode && deepMode ? "text-primary bg-primary/10 hover:bg-primary/20" : "text-muted-foreground hover:text-foreground"}
                     disabled={isStreaming || isPlanExecuting || isPlanning || isDeepReasoning}
+                    aria-label="Plan mode"
                     data-testid="plan-toggle"
                   >
                     <ClipboardList className="w-4 h-4" />
@@ -1713,6 +1718,7 @@ export function ChatPanel({
                     }}
                     className={deepMode ? "text-primary bg-primary/10 hover:bg-primary/20" : "text-muted-foreground hover:text-foreground"}
                     disabled={isStreaming || isPlanExecuting || isPlanning || isDeepReasoning}
+                    aria-label="Deep mode"
                     data-testid="deep-toggle"
                   >
                     <Brain className="w-4 h-4" />
@@ -1723,6 +1729,9 @@ export function ChatPanel({
                 </TooltipContent>
               </Tooltip>
             </TooltipProvider>
+          )}
+          {!mobile && (
+            <ToolsPopover agentId={agent || defaultAgent || "main"} />
           )}
           <textarea
             ref={inputRef}

@@ -40,6 +40,7 @@ def _default_tenant() -> str:
 
 from middleware import AuthMiddleware, CorrelationMiddleware, RBACMiddleware, TenantMiddleware
 from routers.agent_manifests import router as agent_manifests_router
+from routers.agent_tools import router as agent_tools_router
 from routers.agents import router as agents_router
 from routers.approvals import router as approvals_router
 from routers.audit import router as audit_router
@@ -179,6 +180,7 @@ app.include_router(sales_router)
 app.include_router(sales_ingestion_router)
 app.include_router(auth_router)
 app.include_router(agents_router)
+app.include_router(agent_tools_router)
 app.include_router(people_router)
 app.include_router(providers_router)
 app.include_router(conversations_router)

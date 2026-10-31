@@ -37,7 +37,7 @@ const TOOLS_URL = "/api/bridge/api/agents/example-agent/tools";
 const SERVERS_URL = "/api/bridge/api/mcp/servers";
 
 function installFetch(replies: Record<string, { status?: number; body: unknown }> = {}) {
-  const table = {
+  const table: Record<string, { status?: number; body: unknown }> = {
     [TOOLS_URL]: { body: TOOLS },
     [SERVERS_URL]: { body: SERVERS },
     ...replies,
