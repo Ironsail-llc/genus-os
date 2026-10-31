@@ -4,6 +4,8 @@ import { memo, type ComponentProps } from "react";
 import { ChatRecovery, type ChatRecoveryRequest } from "@/components/chat-recovery";
 import { ChatMarkdown, CHAT_PROSE } from "@/components/chat/chat-markdown";
 import { MessageActions } from "@/components/chat/message-actions";
+import { MessageAttachments } from "@/components/chat/chat-attachments";
+import type { AttachmentSummary } from "@/lib/chat/attachments";
 import { formatMessageTime, fullMessageTime } from "@/lib/chat/format-timestamp";
 
 /** One message in the chat's scrollback. */
@@ -16,6 +18,8 @@ export interface ChatBubbleMessage {
   note?: string;
   /** When it was sent: the stored time for history, absent when unknown. */
   timestamp?: Date;
+  /** Files sent with a user turn. */
+  attachments?: AttachmentSummary[];
 }
 
 interface MessageBubbleProps {
@@ -72,7 +76,10 @@ export const MessageBubble = memo(function MessageBubble({
                 <ChatMarkdown content={msg.content} />
               )
             ) : (
-              <p>{msg.content}</p>
+              <>
+                {msg.content && <p>{msg.content}</p>}
+                <MessageAttachments attachments={msg.attachments} />
+              </>
             )}
             {msg.note && (
               <p className="mt-1 text-[11px] opacity-75" data-testid="message-note">{msg.note}</p>

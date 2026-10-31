@@ -1,4 +1,5 @@
 import { stripMarkers } from "@/lib/engine/marker-interceptor";
+import { historyAttachments, stripAttachmentNote, type AttachmentSummary } from "@/lib/chat/attachments";
 
 /**
  * Chat history rows, as the engine answers them, turned into messages for the
@@ -16,6 +17,8 @@ export interface HistoryMessage {
   timestamp?: Date;
   /** The stored row's id: the cursor "Load earlier" pages back from. */
   serverId?: number;
+  /** Files sent with a user turn, by summary (the engine keeps the bytes). */
+  attachments?: AttachmentSummary[];
 }
 
 type Block = { type: string; text?: string };
@@ -48,12 +51,16 @@ export function historyToMessages(rows: unknown): HistoryMessage[] {
     .filter(({ row }) => row.role === "user" || row.role === "assistant")
     .map(({ row, i }) => {
       const serverId = typeof row.id === "number" ? row.id : undefined;
+      const files = row.role === "user" ? historyAttachments(row) : [];
+      const content = stripMarkers(text(row.content)).trim();
       return {
         id: serverId !== undefined ? `hist-${serverId}` : `hist-${i}`,
         role: row.role as "user" | "assistant",
-        content: stripMarkers(text(row.content)).trim(),
+        // The engine's note about where the files went is for the agent, not the reader.
+        content: files.length ? stripAttachmentNote(content) : content,
         timestamp: when(row.timestamp),
         serverId,
+        ...(files.length ? { attachments: files } : {}),
       };
     });
 }

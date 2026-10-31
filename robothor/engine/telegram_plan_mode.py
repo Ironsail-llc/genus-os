@@ -31,10 +31,7 @@ if TYPE_CHECKING:
     from aiogram import Bot
     from aiogram.types import Message
 
-from robothor.engine.chat import (
-    _extract_plan_text,
-    _plan_is_expired,
-)
+from robothor.engine.chat_plan_helpers import _extract_plan_text, _plan_is_expired
 from robothor.engine.chat_store import (
     clear_plan_state_async,
     save_exchange_async,

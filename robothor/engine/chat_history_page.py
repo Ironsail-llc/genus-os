@@ -72,3 +72,13 @@ async def history_page(
     if page is not None:
         return page
     return {"messages": [] if older else tail, "hasMore": False}
+
+
+async def history_response(
+    history: list[Any], session_key: str, limit: int, query: Mapping[str, str], auth: Any
+) -> dict[str, Any]:
+    """The whole ``/chat/history`` body: the page between the key and the recovery scope."""
+    from robothor.engine.runtime.chat_control import recovery_scope
+
+    page = await history_page(history, session_key, limit, query, auth)
+    return {"sessionKey": session_key, **page, "recoveryScope": recovery_scope(auth, session_key)}

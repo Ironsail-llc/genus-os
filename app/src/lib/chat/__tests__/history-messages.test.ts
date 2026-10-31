@@ -39,6 +39,19 @@ describe("historyToMessages", () => {
     expect(msg.content).toBe("Done.");
   });
 
+  it("keeps a user turn's files and drops the engine's note about them", () => {
+    const [msg] = historyToMessages([
+      {
+        role: "user",
+        content: "see this\n\n[1 file attached — kept on disk; use the paths below]\n- /w/inbox/a.png",
+        extras: { attachments: [{ original_name: "a.png", size: 12, kind: "image" }] },
+        id: 4,
+      },
+    ]);
+    expect(msg.content).toBe("see this");
+    expect(msg.attachments).toEqual([{ name: "a.png", size: 12, kind: "image" }]);
+  });
+
   it("tolerates a payload that is not a list", () => {
     expect(historyToMessages(undefined)).toEqual([]);
     expect(historyToMessages({} as unknown)).toEqual([]);
