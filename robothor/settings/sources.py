@@ -338,7 +338,10 @@ def _read_settings_block() -> dict[str, Any]:
         return _read_settings_file()
     block, error = once
     if error is not None:
-        raise error
+        # A fresh error each time, chained to the original: re-raising the one
+        # object would prepend this read's frames to its traceback on every
+        # read -- hundreds per request.
+        raise ValueError(*error.args) from error.__cause__
     # A deep copy, because every read used to hand back a freshly parsed
     # mapping, and a caller that edits what it was given must not edit what
     # the next caller in the scope reads.

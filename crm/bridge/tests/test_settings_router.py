@@ -1245,9 +1245,7 @@ def test_one_read_per_request_answers_exactly_what_a_read_per_field_did(
     assert body["pending_restart"] == sorted(operator.units_for(operator.record(RESTART_STR)))
 
 
-def test_a_malformed_file_raises_a_fresh_error_on_every_read_in_the_scope(
-    clean_env, env_workspace
-):
+def test_a_malformed_file_raises_a_fresh_error_on_every_read_in_the_scope(clean_env, env_workspace):
     """The scope's one read may be a ValueError. Re-raising that one object on
     every read grows its traceback by a frame chain per read -- hundreds per
     request -- so each read raises an equal error of its own."""
