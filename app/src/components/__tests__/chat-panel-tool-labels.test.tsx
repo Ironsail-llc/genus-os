@@ -74,6 +74,19 @@ describe("ChatPanel Tools button and the default agent", () => {
           json: async () => ({ default_agent: "example-main", agents: [{ id: "example-main", name: "Example", chattable: true }] }),
         };
       }
+      if (url === "/api/bridge/api/agents/example-main/tools") {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            agent: "example-main",
+            groups: { core: ["read_file"], plugins: {}, mcp: {}, opt_in: [] },
+            allowed: [],
+            denied: [],
+            count: 1,
+          }),
+        };
+      }
       return { ok: true, status: 200, json: async () => ({ messages: [], agents: [], active: false, servers: [] }) };
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -93,6 +106,8 @@ describe("ChatPanel Tools button and the default agent", () => {
     expect(fetchMock.mock.calls.map(([url]) => String(url))).not.toContain(
       "/api/bridge/api/agents/main/tools"
     );
+    // Let the reply render before teardown, so nothing lands after it.
+    expect(await screen.findByTestId("tools-total")).toHaveTextContent("1 tool");
   });
 });
 
@@ -113,7 +128,9 @@ describe("ChatPanel Tools button for a member", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Tools and MCP servers" }));
 
-    expect(await screen.findByTestId("tools-no-agent")).toHaveTextContent(/only an operator/i);
+    const note = await screen.findByTestId("tools-no-agent");
+    expect(note).toHaveTextContent(/only an operator/i);
+    expect(note).not.toHaveTextContent(/not been told/i);
     expect(fetchMock.mock.calls.map(([url]) => String(url)).some((url) => url.includes("/tools"))).toBe(false);
   });
 });

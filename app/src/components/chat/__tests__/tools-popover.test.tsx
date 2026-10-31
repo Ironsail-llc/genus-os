@@ -196,8 +196,31 @@ describe("ToolsPopover — the dialog", () => {
     fireEvent.click(button);
 
     const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByTestId("tools-no-agent")).toHaveTextContent(/only an operator/i);
+    expect(within(dialog).getByTestId("tools-no-agent")).toHaveTextContent(
+      /not been told which agent/i
+    );
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("tells a member only that the list is the operator's", async () => {
+    // A member's chat IS on the default agent; the listing that would name it
+    // was refused for their role. "No agent known" would be untrue for them.
+    const fetchMock = installFetch();
+    render(<ToolsPopover agentId={null} listingRefused />);
+    fireEvent.click(screen.getByRole("button", { name: "Tools and MCP servers" }));
+
+    const note = await screen.findByTestId("tools-no-agent");
+    expect(note).toHaveTextContent(/only an operator/i);
+    expect(note).not.toHaveTextContent(/not been told/i);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("treats an answer without tool groups as an error, not a crash", async () => {
+    installFetch({ [TOOLS_URL]: { body: { agent: "example-agent" } } });
+    render(<ToolsPopover agentId="example-agent" />);
+    fireEvent.click(screen.getByRole("button", { name: "Tools and MCP servers" }));
+
+    expect(await screen.findByTestId("tools-error")).toHaveTextContent(/unexpected/i);
   });
 
   it("ignores a reply for an agent the chat has since left", async () => {
