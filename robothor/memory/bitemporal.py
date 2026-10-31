@@ -191,3 +191,31 @@ def supersede_with_validity(
         "supersede_with_validity: %s -> %s (%s) for %s", old_id, new_id, classification, tenant
     )
     return True
+
+
+def keep_overruled(new_id: int, kept_id: int, *, tenant_id: str = "") -> None:
+    """Record ``new_id`` as overruled by ``kept_id`` without touching ``kept_id``.
+
+    For a new extraction that conflicts with an operator-confirmed fact. One
+    statement on the new row only: inactive, ``superseded_by`` the kept fact,
+    and a zero-width validity interval (it was never the believed state). The
+    kept fact's own ``valid_from`` is left alone; writing it here would make the
+    operator's fact "true only from now", and a point-in-time read before that
+    moment would return the extraction it overruled.
+    """
+    tenant = tenant_id or DEFAULT_TENANT
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE memory_facts
+            SET is_active = FALSE,
+                superseded_by = %s,
+                valid_from = COALESCE(valid_from, NOW()),
+                valid_to = COALESCE(valid_to, NOW()),
+                updated_at = NOW()
+            WHERE id = %s AND tenant_id = %s
+            """,
+            (kept_id, new_id, tenant),
+        )
+        conn.commit()

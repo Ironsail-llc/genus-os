@@ -23,7 +23,11 @@ from robothor.constants import DEFAULT_TENANT
 from robothor.db.connection import get_connection
 from robothor.llm import ollama as llm_client
 from robothor.memory import generation
-from robothor.memory.bitemporal import record_conflict_decision, supersede_with_validity
+from robothor.memory.bitemporal import (
+    keep_overruled,
+    record_conflict_decision,
+    supersede_with_validity,
+)
 from robothor.memory.confirmed import is_operator_confirmed
 from robothor.memory.facts import _write_dedup_enabled, store_fact
 from robothor.memory.vector_tuning import apply_hnsw_session
@@ -247,7 +251,7 @@ async def resolve_and_store(
     Returns:
         Dict with 'action' (stored/skipped/superseded/reinforced/kept_confirmed)
         and optionally 'new_id'. ``kept_confirmed`` means the best match is
-        operator-confirmed: the new fact was stored superseded by it.
+        operator-confirmed: the new fact was stored, inactive and superseded by it.
     """
     similar = await find_similar_facts(
         fact["fact_text"],
@@ -322,18 +326,36 @@ async def resolve_and_store(
             "reasoning": classification["reasoning"],
         }
 
-    if kind in ("contradiction", "update") and is_operator_confirmed(best_match):
-        # The operator's correction outranks any re-extraction, whatever its
-        # confidence. The new fact is kept on record, superseded BY the
-        # confirmed one, so the pipeline's view is not lost and the operator's
-        # stays the active answer.
+    if kind in ("contradiction", "update"):
         new_id = await store_fact(fact, source_content, source_type, tenant_id=tenant_id)
+        # An UPDATE and a CONTRADICTION are both bounded in world-time, but they
+        # are now recorded distinctly. They mean different things — for an update
+        # the old fact was genuinely true until now; for a contradiction one of
+        # the two was always wrong and the bound is a guess about which. Acting
+        # on that difference needs an error rate, and until this table existed
+        # there was none: the classification deactivated rows and vanished.
+        #
+        # An operator-confirmed match is never superseded, whatever the new
+        # fact's confidence. supersede_with_validity also refuses one confirmed
+        # after the similarity search; both cases land in the branch below.
+        if not is_operator_confirmed(best_match) and supersede_with_validity(
+            best_match["id"], new_id, tenant_id=tenant_id, classification=kind
+        ):
+            _record(action="superseded", new_fact_id=new_id)
+            return {
+                "action": "superseded",
+                "new_id": new_id,
+                "old_id": best_match["id"],
+                "classification": kind,
+                "reasoning": classification["reasoning"],
+            }
+
+        # Kept on record, overruled BY the confirmed fact, so the pipeline's
+        # view is not lost and the operator's stays the active answer.
         if new_id:
-            supersede_with_validity(
-                new_id, best_match["id"], tenant_id=tenant_id, classification=kind
-            )
+            keep_overruled(new_id, best_match["id"], tenant_id=tenant_id)
         logger.info(
-            "resolve_and_store: fact %s is operator-confirmed; new fact %s kept superseded (%s)",
+            "resolve_and_store: fact %s is operator-confirmed; new fact %s kept overruled (%s)",
             best_match["id"],
             new_id,
             kind,
@@ -343,24 +365,6 @@ async def resolve_and_store(
             "action": "kept_confirmed",
             "new_id": new_id,
             "existing_id": best_match["id"],
-            "classification": kind,
-            "reasoning": classification["reasoning"],
-        }
-
-    if kind in ("contradiction", "update"):
-        new_id = await store_fact(fact, source_content, source_type, tenant_id=tenant_id)
-        # An UPDATE and a CONTRADICTION are both bounded in world-time, but they
-        # are now recorded distinctly. They mean different things — for an update
-        # the old fact was genuinely true until now; for a contradiction one of
-        # the two was always wrong and the bound is a guess about which. Acting
-        # on that difference needs an error rate, and until this table existed
-        # there was none: the classification deactivated rows and vanished.
-        supersede_with_validity(best_match["id"], new_id, tenant_id=tenant_id, classification=kind)
-        _record(action="superseded", new_fact_id=new_id)
-        return {
-            "action": "superseded",
-            "new_id": new_id,
-            "old_id": best_match["id"],
             "classification": kind,
             "reasoning": classification["reasoning"],
         }
