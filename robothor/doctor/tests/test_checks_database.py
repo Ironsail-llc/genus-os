@@ -198,6 +198,26 @@ def test_a_schema_ahead_of_this_release_is_named_as_a_rollback_not_a_mystery(mon
     assert "newer" in result.detail and "roll" in result.detail
 
 
+def test_a_newer_row_beside_a_pending_one_is_reported_as_the_refusal_it_is(monkeypatch) -> None:
+    """The migrator refuses this ledger (a known migration pending next to a
+    newer one), so the doctor must not say the release runs, and must not hide
+    the pending migration or offer a fix the migrator would refuse."""
+    _status_rows(
+        monkeypatch,
+        [
+            {"migration_id": "001", "status": "applied"},
+            {"migration_id": "002_known", "status": "pending"},
+            {"migration_id": "999_newer_feature", "status": "AHEAD"},
+        ],
+    )
+    result = _run("db.migrations", make_ctx())
+    assert result.status == "fail"
+    assert result.fixable is False
+    assert "002_known" in result.detail and "999_newer_feature" in result.detail
+    assert "refuse" in result.detail
+    assert "release runs" not in result.detail
+
+
 def test_the_read_only_path_reports_a_newer_row_as_ahead(monkeypatch) -> None:
     _deny_status(monkeypatch)
     _discovered(monkeypatch, _Migration("114", version="114"))
