@@ -1289,60 +1289,10 @@ def _build_entity_context(
 
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
-        if batched:
-            for rows in _fetch_entity_facts_batched(
-                cur, candidates[:max_candidates], tenant_id, v2, scope_clause, scope_params
-            ):
-                if observe_scope_obj is not None:
-                    _would_drop += rows_dropped_by_scope(rows, observe_scope_obj)
-                for f in rows:
-                    line = f"- {f['fact_text']}"
-                    if chars_used + len(line) > MAX_ENTITY_CONTEXT_CHARS:
-                        break
-                    lines.append(line)
-                    chars_used += len(line)
-        for entity_name in [] if batched else candidates[:max_candidates]:
-            if v2:
-                cur.execute(
-                    f"""
-                    SELECT fact_text, category, importance_score, person_id
-                    FROM memory_facts
-                    WHERE is_active = TRUE AND tenant_id = %s
-                      -- Indexed by idx_facts_entities_lower (migration 109).
-                      -- The previous EXISTS(unnest(...)) form was unindexable
-                      -- and scanned the tenant's whole active set, five times
-                      -- per warmup: 13,155 buffers (105 MB) a call against a
-                      -- 128 MB shared_buffers, ~262 ms versus 2.7 ms for every
-                      -- other warmup section. lower() cannot simply be dropped
-                      -- to reuse the raw-array GIN — 646 of 14,714 entity names
-                      -- on this instance collapse under it, and that rewrite
-                      -- was measured losing 37% of matched rows.
-                      AND lower_entities(entities) && ARRAY[lower(%s)]
-                      {scope_clause}
-                    ORDER BY
-                      0.55 * COALESCE(importance_score, 0.5)
-                      + 0.45 * POWER(
-                          0.5,
-                          EXTRACT(EPOCH FROM (now() - created_at)) / 3600.0 / 168.0
-                        ) DESC
-                    LIMIT 3
-                    """,
-                    (tenant_id, entity_name, *scope_params),
-                )
-            else:
-                cur.execute(
-                    f"""
-                    SELECT fact_text, category, importance_score, person_id
-                    FROM memory_facts
-                    WHERE is_active = TRUE AND %s = ANY(entities)
-                      AND tenant_id = %s
-                      {scope_clause}
-                    ORDER BY importance_score DESC, created_at DESC
-                    LIMIT 3
-                    """,
-                    (entity_name, tenant_id, *scope_params),
-                )
-            rows = cur.fetchall()
+        fetch = _fetch_entity_facts_batched if batched else _fetch_entity_facts_per_candidate
+        for rows in fetch(
+            cur, candidates[:max_candidates], tenant_id, v2, scope_clause, scope_params
+        ):
             if observe_scope_obj is not None:
                 _would_drop += rows_dropped_by_scope(rows, observe_scope_obj)
             for f in rows:
@@ -1362,6 +1312,59 @@ def _build_entity_context(
         )
 
     return "\n".join(lines) if len(lines) > 1 else ""
+
+
+def _fetch_entity_facts_per_candidate(
+    cur: Any,
+    candidates: list[str],
+    tenant_id: str,
+    v2: bool,
+    scope_clause: str,
+    scope_params: tuple[Any, ...],
+) -> Iterator[list[dict[str, Any]]]:
+    """Each candidate's top facts, one query per candidate, in candidate order."""
+    for entity_name in candidates:
+        if v2:
+            cur.execute(
+                f"""
+                SELECT fact_text, category, importance_score, person_id
+                FROM memory_facts
+                WHERE is_active = TRUE AND tenant_id = %s
+                  -- Indexed by idx_facts_entities_lower (migration 109).
+                  -- The previous EXISTS(unnest(...)) form was unindexable
+                  -- and scanned the tenant's whole active set, five times
+                  -- per warmup: 13,155 buffers (105 MB) a call against a
+                  -- 128 MB shared_buffers, ~262 ms versus 2.7 ms for every
+                  -- other warmup section. lower() cannot simply be dropped
+                  -- to reuse the raw-array GIN — 646 of 14,714 entity names
+                  -- on this instance collapse under it, and that rewrite
+                  -- was measured losing 37% of matched rows.
+                  AND lower_entities(entities) && ARRAY[lower(%s)]
+                  {scope_clause}
+                ORDER BY
+                  0.55 * COALESCE(importance_score, 0.5)
+                  + 0.45 * POWER(
+                      0.5,
+                      EXTRACT(EPOCH FROM (now() - created_at)) / 3600.0 / 168.0
+                    ) DESC
+                LIMIT 3
+                """,
+                (tenant_id, entity_name, *scope_params),
+            )
+        else:
+            cur.execute(
+                f"""
+                SELECT fact_text, category, importance_score, person_id
+                FROM memory_facts
+                WHERE is_active = TRUE AND %s = ANY(entities)
+                  AND tenant_id = %s
+                  {scope_clause}
+                ORDER BY importance_score DESC, created_at DESC
+                LIMIT 3
+                """,
+                (entity_name, tenant_id, *scope_params),
+            )
+        yield cur.fetchall()
 
 
 def _fetch_entity_facts_batched(
