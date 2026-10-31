@@ -330,3 +330,43 @@ def test_no_module_outside_the_factory_sets_a_session_level_tenant() -> None:
         and _SESSION_TENANT.search(path.read_text(encoding="utf-8"))
     ]
     assert offenders == [], f"session-level app.tenant_id set outside connection.py: {offenders}"
+
+
+# ---------------------------------------------------------------------------
+# Fakes of the factory must accept its keywords.
+# ---------------------------------------------------------------------------
+
+_PATCHES_FACTORY = re.compile(
+    r"""setattr\(\s*["']robothor\.db\.connection\.get_connection["']\s*,\s*(\w+)"""
+)
+
+_PATCHES_FACTORY_WITH_BARE_LAMBDA = re.compile(
+    r"""setattr\(\s*["']robothor\.db\.connection\.get_connection["']\s*,\s*lambda\s*:"""
+)
+
+
+def test_every_fake_of_the_factory_accepts_its_keywords() -> None:
+    """A fake ``get_connection()`` with no parameters turns ``read_only=True`` into a TypeError.
+
+    ``check_tool_permission`` catches every exception and denies, so a
+    permission test built on such a fake goes vacuous: every deny assertion
+    passes without the migration under test being exercised, and every allow
+    assertion fails.
+    """
+    repo = pathlib.Path(connection.__file__).resolve().parents[2]
+    offenders: list[str] = []
+    for path in [
+        *repo.joinpath("robothor").rglob("test_*.py"),
+        *repo.joinpath("robothor").rglob("conftest.py"),
+        *repo.joinpath("tests").rglob("*.py"),
+    ]:
+        text = path.read_text(encoding="utf-8")
+        where = path.relative_to(repo)
+        offenders.extend(
+            f"{where}: def {name}()"
+            for name in set(_PATCHES_FACTORY.findall(text))
+            if re.search(rf"def {name}\(\s*\)", text)
+        )
+        if _PATCHES_FACTORY_WITH_BARE_LAMBDA.search(text):
+            offenders.append(f"{where}: lambda: ...")
+    assert offenders == [], f"get_connection fakes that reject read_only: {offenders}"
