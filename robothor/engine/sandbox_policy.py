@@ -311,7 +311,7 @@ async def establish_execution_plan(
         agent_id=agent_id,
         user_role=getattr(run, "user_role", "") or "",
         runtime=runtime,
-        is_root_run=not getattr(run, "parent_run_id", None),
+        is_root_run=is_root_run(run),
         is_benchmark=bool(getattr(run, "is_benchmark", False)),
     )
     run_id = str(getattr(run, "id", "") or "")
@@ -378,23 +378,27 @@ async def playground_decision(
     if not _playground_on():
         return decision, _not_handled
     plan = await establish_execution_plan(config, mode, agent_id=agent_id, run=run)
+    if plan.where == "refuse" and _confined_tools_ungated(config):
+        return decision, _not_handled
 
     async def degrade(error: str) -> bool:
-        await establish_execution_plan(config, mode, agent_id=agent_id, run=run, start_error=error)
-        return True
+        failed = await establish_execution_plan(
+            config, mode, agent_id=agent_id, run=run, start_error=error
+        )
+        return not (failed.where == "refuse" and _confined_tools_ungated(config))
 
     return ("host" if plan.where != "sandbox" else decision), degrade
 
 
-def exec_refusal(run_id: str) -> dict[str, Any] | None:
-    """The ``exec`` result for a run whose plan refuses, or None to go ahead."""
+def exec_refusal(run_id: str, *, tool: str = "exec") -> dict[str, Any] | None:
+    """The result for a run whose plan refuses, or None to go ahead."""
     if not _playground_on():
         return None
     plan = exec_plan_for(run_id)
     if plan is None or plan.where != "refuse":
         return None
     return {
-        "error": f"exec did not run: {plan.reason}.",
+        "error": f"{tool} did not run: {plan.reason}.",
         "unlock": plan.unlock,
         "error_type": "exec_unavailable",
     }
@@ -422,10 +426,15 @@ def guardrail_context(session: Any) -> dict[str, Any]:
     from robothor.engine.sandbox import SandboxMode, get_current_sandbox
 
     box = get_current_sandbox()
-    return {
-        "user_role": getattr(getattr(session, "run", None), "user_role", "") or "",
+    run = getattr(session, "run", None)
+    context: dict[str, Any] = {
+        "user_role": getattr(run, "user_role", "") or "",
         "sandboxed": box is not None and box.mode != SandboxMode.LOCAL,
     }
+    plan = exec_plan_for(str(getattr(run, "id", "") or ""))
+    if plan is not None and plan.where == "refuse":
+        context["host_refusal"] = f"{plan.reason}. {plan.unlock}"
+    return context
 
 
 def proxy_may_run_on_host(proxy: Any) -> bool:
@@ -433,7 +442,59 @@ def proxy_may_run_on_host(proxy: Any) -> bool:
     a snippet where the proxy is, the engine host. Nobody else, and never off."""
     if not _playground_on():
         return False
-    run = getattr(getattr(getattr(proxy, "_req", None), "session", None), "run", None)
-    if run is None or getattr(run, "parent_run_id", None):
+    run = _proxy_run(proxy)
+    if run is None or not is_root_run(run):
         return False
     return role_may_run_on_host(getattr(run, "user_role", "") or "")
+
+
+def proxy_plan_refusal(proxy: Any) -> dict[str, Any] | None:
+    """execute_code under a refused plan: the same refusal ``exec`` gets."""
+    run = _proxy_run(proxy)
+    return exec_refusal(str(getattr(run, "id", "") or ""), tool="execute_code")
+
+
+def _proxy_run(proxy: Any) -> Any:
+    return getattr(getattr(getattr(proxy, "_req", None), "session", None), "run", None)
+
+
+def is_root_run(run: Any) -> bool:
+    """A run no other run spawned.
+
+    Not from ``parent_run_id`` alone: a child of a parent whose own row was
+    never recorded (``tracking_disabled``) carries an empty one. A spawned
+    child always has the SUB_AGENT trigger and a nesting depth of at least 1.
+    """
+    trigger = getattr(run, "trigger_type", "")
+    return (
+        not getattr(run, "parent_run_id", None)
+        and int(getattr(run, "nesting_depth", 0) or 0) == 0
+        and str(getattr(trigger, "value", trigger)) != "sub_agent"
+    )
+
+
+#: The tools besides ``exec`` a container confines. With no container, a
+#: refused plan refuses these too, or they would reach the engine host.
+CONFINED_TOOLS: frozenset[str] = frozenset({"browser"})
+CONFINED_TOOL_PREFIXES: tuple[str, ...] = ("desktop_",)
+
+
+def is_confined_tool(tool_name: str) -> bool:
+    return tool_name in CONFINED_TOOLS or tool_name.startswith(CONFINED_TOOL_PREFIXES)
+
+
+def _confined_tools_ungated(config: Any) -> bool:
+    """True when the agent holds a confined tool and has no guardrail engine to
+    refuse it per call -- then a refused plan must fail closed as before."""
+    from robothor.engine.guardrails import compute_effective_guardrails
+
+    denied = set(getattr(config, "tools_denied", None) or [])
+    allowed = list(getattr(config, "tools_allowed", None) or [])
+    holds = not allowed or any(is_confined_tool(t) and t not in denied for t in allowed)
+    if not holds:
+        return False
+    effective = compute_effective_guardrails(
+        list(getattr(config, "guardrails", None) or []),
+        opt_out=bool(getattr(config, "guardrails_opt_out", False)),
+    )
+    return not effective

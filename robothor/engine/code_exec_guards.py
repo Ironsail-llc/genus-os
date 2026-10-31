@@ -69,11 +69,11 @@ def _refuse_if_sandboxed(proxy: Any = None) -> dict[str, Any] | None:
     it, which is the failure this codebase keeps recording.
     """
     from robothor.engine.sandbox import SandboxMode, get_current_sandbox
-    from robothor.engine.sandbox_policy import proxy_may_run_on_host
+    from robothor.engine.sandbox_policy import proxy_may_run_on_host, proxy_plan_refusal
 
     sandbox = get_current_sandbox()
     if sandbox is None or sandbox.mode == SandboxMode.LOCAL or proxy_may_run_on_host(proxy):
-        return None
+        return proxy_plan_refusal(proxy)  # a refused plan with no container
     return {
         "error": (
             "execute_code is not available to a container-sandboxed agent: the "

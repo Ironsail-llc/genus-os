@@ -796,6 +796,7 @@ class GuardrailEngine:
         *,
         user_role: str = "",
         sandboxed: bool = False,
+        host_refusal: str = "",
     ) -> GuardrailResult:
         """Run all enabled pre-execution guardrails on a tool call.
 
@@ -804,8 +805,20 @@ class GuardrailEngine:
         run (e.g. "did we already propose the time via email?") read it.
 
         ``user_role`` and ``sandboxed`` are passed only under the sandbox
-        playground, and only the exec allowlist reads them.
+        playground, and only the exec allowlist reads them. ``host_refusal`` is a
+        refused execution plan: with no container, a tool a container confines
+        (desktop, browser) would reach the engine host, so it is refused here.
         """
+        if host_refusal:
+            from robothor.engine.sandbox_policy import is_confined_tool
+
+            if is_confined_tool(tool_name):
+                return GuardrailResult(
+                    allowed=False,
+                    action="blocked",
+                    reason=f"{tool_name} did not run: {host_refusal}",
+                    guardrail_name="sandbox_playground",
+                )
         observation: GuardrailResult | None = None
         for policy in self.enabled_policies:
             result = self._run_pre_policy(

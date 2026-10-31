@@ -377,14 +377,15 @@ start. It does not change which agents are contained.
 | Who is running | Flag off (today) | Flag on |
 |---|---|---|
 | Owner or admin, root run | run fails at step 0: "Blocked by sandbox_default: sandbox required but could not be started" | run continues; `exec` runs on the engine host, result has `executed_on: host` and an `execution_note` |
-| Member, automated run, sub-agent, benchmark | run fails at step 0 | run continues; each `exec` is refused with `error_type: exec_unavailable`, the gate and an `unlock` |
+| Member, automated run, sub-agent, benchmark | run fails at step 0 | run continues; each `exec` and `execute_code` is refused with `error_type: exec_unavailable`, the gate and an `unlock`, and the desktop and browser tools are blocked by the `sandbox_playground` guardrail. An agent that holds those tools with no guardrails at all (`guardrails_opt_out` and none configured) fails at step 0 as before, because nothing could refuse them per call |
 | Anyone, runtime present | container | container (`executed_on: sandbox`) |
 
 With the flag on, the exec allowlist is skipped inside a container, and an
 owner or admin on the host whose command it would block is allowed and
 recorded as `observed` ("exec_allowlist bypassed by role=owner"). An owner or
 admin on a root run may also use `execute_code` while sandboxed; the snippet
-runs on the engine host.
+runs on the engine host. A root run is one nothing spawned: a sub-agent never
+counts as one, even when its parent's run row was not recorded.
 
 Before turning it on:
 

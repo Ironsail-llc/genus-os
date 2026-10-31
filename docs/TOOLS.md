@@ -1034,7 +1034,9 @@ engine host and the result adds an `execution_note` saying so; repeat it to the
 person rather than claiming the command was isolated. Anyone else gets
 `error_type: exec_unavailable`, an `error` naming the missing runtime and their
 role, and an `unlock` saying who can run it or what the operator would install.
-Nothing ran, so do not retry it: pass the unlock on. With the flag off none of
+`execute_code` is refused the same way, and the desktop and browser tools are
+blocked by the `sandbox_playground` guardrail. Nothing ran, so do not retry it:
+pass the unlock on. With the flag off none of
 these keys appear. The rollout is in
 [Guardrail flips](runbooks/GUARDRAIL_FLIPS.md#sandbox-playground-robothor_sandbox_playground).
 
