@@ -235,3 +235,55 @@ async def test_sequential_calls_reuse_one_tcp_connection(local_server, monkeypat
 
     assert _CountingHandler.connections == 1
     await _close_shared_clients()
+
+
+# ── Two live loops, and state that must not travel between callers ─────
+
+
+async def test_a_second_live_loop_does_not_evict_this_loops_client(monkeypatch):
+    """A worker thread's ``asyncio.run`` (rlm_tool, rerank_sync) runs while the
+    engine loop is alive; each loop keeps its own client, and the engine's is
+    neither replaced nor left unclosed."""
+    factory = _CountingFactory(_ok_transport())
+    monkeypatch.setattr(httpx, "AsyncClient", factory)
+
+    await service_client.call_service("bridge", "GET", "http://bridge.test/a")
+    assert len(factory.made) == 1
+    mine = factory.made[0]
+
+    def worker() -> None:
+        async def call() -> None:
+            await service_client.call_service("bridge", "GET", "http://bridge.test/w")
+
+        asyncio.run(call())
+
+    await asyncio.to_thread(worker)
+    await asyncio.to_thread(worker)
+
+    await service_client.call_service("bridge", "GET", "http://bridge.test/b")
+    # Still the same client on this loop: the worker loops did not evict it.
+    assert factory.made.count(mine) == 1
+    assert not mine.is_closed
+    assert len(factory.made) == 3  # one here, one per worker loop
+    await _close_shared_clients()
+    assert mine.is_closed
+
+
+async def test_shared_clients_never_carry_cookies_between_calls(monkeypatch):
+    """Each call used to have a throwaway client; a shared one must not keep a
+    cookie jar that one tenant's response fills and the next call sends."""
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(
+            200, json={"ok": True}, headers={"Set-Cookie": "session=alice; Path=/"}
+        )
+
+    monkeypatch.setattr(httpx, "AsyncClient", _CountingFactory(httpx.MockTransport(handler)))
+
+    await service_client.call_service("bridge", "GET", "http://bridge.test/a")
+    await service_client.call_service("bridge", "GET", "http://bridge.test/b")
+
+    assert "cookie" not in seen[1].headers
+    await _close_shared_clients()
