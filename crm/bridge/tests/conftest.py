@@ -377,7 +377,7 @@ def controls_client_as_service(_controls_auth_key, monkeypatch):
 
     The capability manifest's endpoint whitelist is patched permissive here
     on purpose: no agent's ``bridge_endpoints`` entry names ``/api/controls``
-    today, so leaving the manifest as-is would make ``RBACMiddleware`` reject
+    today, so leaving the manifest as-is would make the RBAC step of ``BridgeMiddleware`` reject
     the request before it ever reaches the router — a green test for the
     wrong reason. Patching it open proves the 403 in
     ``test_patch_rejects_a_service_token`` comes from the router's own
