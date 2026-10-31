@@ -594,3 +594,138 @@ class TestFinalizationRunsInTheBackgroundLane:
         await get_task_registry().drain(timeout=5.0)
 
         assert runner.finished_in == ["no-lanes"]
+
+
+# ── Review follow-ups ────────────────────────────────────────────────────
+
+
+class _BlockingReleaseRunner:
+    """Uses the real ``release_then_finalize`` with a BLOCKING ``_finish_run``.
+
+    Records whether the live inbox was still open when the answer went out.
+    """
+
+    def __init__(self, engine_config, timeline: _Timeline) -> None:
+        self.config = engine_config
+        self.timeline = timeline
+        self.kwargs: dict[str, Any] = {}
+        self.inbox_open_after_release: bool | None = None
+
+    def _publish_run_telemetry(self, trace, run) -> None:
+        return None
+
+    def _finish_run(self, run, **kwargs):
+        self.timeline.mark("finish_start")
+        time.sleep(SLOW_FINISH_S)  # blocks the loop, as _finish_run does today
+        self.timeline.mark("finish_end")
+        return run
+
+    async def _persist_run(self, run) -> None:
+        return None
+
+    async def execute(self, **kwargs: Any) -> AgentRun:
+        from robothor.engine.early_done import release_then_finalize
+
+        self.kwargs = kwargs
+        run = AgentRun(
+            id="run-early-2",
+            status=RunStatus.COMPLETED,
+            output_text="The answer is 42.",
+            trigger_type=kwargs.get("trigger_type", TriggerType.WEBCHAT),
+            duration_ms=1234,
+        )
+        inbox = kwargs.get("live_inbox")
+
+        async def on_complete(r: AgentRun) -> None:
+            await kwargs["on_complete"](r)
+            if inbox is not None:
+                self.inbox_open_after_release = inbox.is_open
+
+        return await release_then_finalize(self, run, None, on_complete)
+
+
+class TestReviewFollowUps:
+    @pytest.mark.asyncio
+    @pytest.mark.usefixtures("early_done_on")
+    async def test_done_reaches_the_socket_through_http_middleware_before_finalization(
+        self, engine_config, chat_app_with
+    ):
+        """The engine app wraps every route in an ``@app.middleware("http")``,
+        which adds a task hop per streamed chunk; ``done`` must still be sent
+        before the blocking finalization starts."""
+        timeline = _Timeline()
+        runner = _BlockingReleaseRunner(engine_config, timeline)
+        app = chat_app_with(runner)
+
+        @app.middleware("http")
+        async def passthrough(request, call_next):
+            return await call_next(request)
+
+        with patch("robothor.engine.chat.save_exchange_async", new=AsyncMock()):
+            await _stream_chat(app, {"session_key": "test:main:web", "message": "hi"}, timeline)
+            await get_task_registry().drain(timeout=5.0)
+
+        assert timeline.marks["sse_done"] < timeline.marks["finish_start"], timeline.marks
+
+    @pytest.mark.asyncio
+    @pytest.mark.usefixtures("early_done_on")
+    async def test_webchat_seals_the_live_inbox_when_it_releases(
+        self, engine_config, chat_app_with
+    ):
+        timeline = _Timeline()
+        runner = _BlockingReleaseRunner(engine_config, timeline)
+        app = chat_app_with(runner)
+
+        with patch("robothor.engine.chat.save_exchange_async", new=AsyncMock()):
+            await _stream_chat(app, {"session_key": "test:main:web", "message": "hi"}, timeline)
+            await get_task_registry().drain(timeout=5.0)
+
+        assert runner.inbox_open_after_release is False
+
+    @pytest.mark.asyncio
+    @pytest.mark.usefixtures("early_done_on")
+    async def test_telegram_seals_the_live_inbox_before_sending(self, engine_config, telegram_bot):
+        from robothor.engine.chat import get_shared_session
+
+        timeline = _Timeline()
+        runner = _BlockingReleaseRunner(engine_config, timeline)
+        open_at_send: list[bool] = []
+
+        async def send_message(chat_id: str, text: str, *args: Any, **kwargs: Any) -> list[Any]:
+            open_at_send.append(runner.kwargs["live_inbox"].is_open)
+            return [MagicMock(message_id=777)]
+
+        telegram_bot.runner = runner
+        telegram_bot.send_message = send_message
+        session_key = telegram_bot._session_key("12345")
+        await telegram_bot._run_interactive(
+            "12345", session_key, get_shared_session(session_key), "hello"
+        )
+        task = telegram_bot._active_tasks.get("12345")
+        if task:
+            await task
+        await get_task_registry().drain(timeout=5.0)
+
+        assert open_at_send == [False]
+
+    @pytest.mark.asyncio
+    @pytest.mark.usefixtures("early_done_on", "_mock_run_persistence")
+    async def test_a_raising_output_policy_still_releases_and_finalizes(
+        self, runner, agent_config, caplog
+    ):
+        timeline = _Timeline()
+        on_complete = AsyncMock()
+
+        with (
+            patch(
+                "robothor.engine.deliverable_verdict.record_deliverable_verdicts",
+                side_effect=RuntimeError("policy bug"),
+            ),
+            patch.object(AgentRunner, "_finish_run", _slow_finish(timeline)),
+        ):
+            run = await _execute(runner, agent_config, on_complete=on_complete)
+            await get_task_registry().drain(timeout=5.0)
+
+        on_complete.assert_awaited_once_with(run)
+        assert "finish_end" in timeline.marks
+        assert any("policy bug" in r.getMessage() for r in caplog.records)
