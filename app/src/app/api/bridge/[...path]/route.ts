@@ -31,6 +31,11 @@ async function proxy(
       "Content-Type": req.headers.get("content-type") || "application/json",
       ...(await bridgeAuthHeaders()),
     };
+    // A conditional read is the browser's to make: the bridge tags a reply that
+    // only changes on restart (the settings schema) and answers a matching tag
+    // with a bodiless 304, which only saves anything if the tag gets there.
+    const ifNoneMatch = req.headers.get("if-none-match");
+    if (ifNoneMatch) headers["If-None-Match"] = ifNoneMatch;
 
     const res = await fetch(target.toString(), {
       method: req.method,
@@ -41,11 +46,28 @@ async function proxy(
       signal: AbortSignal.timeout(30000),
     });
 
+    // The two headers that make a revalidation work, carried back as the
+    // bridge sent them; anything untagged stays `no-store`.
+    const caching = (): Record<string, string> => {
+      const out: Record<string, string> = {
+        "Cache-Control": res.headers.get("cache-control") || "no-store",
+      };
+      const etag = res.headers.get("etag");
+      if (etag) out.ETag = etag;
+      return out;
+    };
+
+    // A 304 has no body by definition. Rebuilding it as JSON (or as text with
+    // an empty body) throws, and the browser would be told the bridge is down.
+    if (res.status === 304) {
+      return new NextResponse(null, { status: 304, headers: caching() });
+    }
+
     const contentType = res.headers.get("content-type") || "";
     if (contentType.includes("json")) {
       return NextResponse.json(await res.json(), {
         status: res.status,
-        headers: { "Cache-Control": res.headers.get("cache-control") || "no-store" },
+        headers: caching(),
       });
     }
 

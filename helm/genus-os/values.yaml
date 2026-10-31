@@ -530,6 +530,15 @@ bridge:
     enabled: true
     minAvailable: 1
 
+# ─── Logs ────────────────────────────────────────────────────────────────────
+# Pods write their logs to standard output; there is no journald in a
+# container, so the dashboard's Logs page cannot read them. Set url to where
+# this deployment's logs are viewed (your cluster's log tool) and the page
+# links to it. Rendered into the bridge as GENUS_LOGS_URL only when set.
+# Credential-free: every operator sees this link, so never put a token in it.
+logs:
+  url: ""
+
 # ─── Orchestrator (RAG/semantic-search HTTP API) ─────────────────────────────
 orchestrator:
   enabled: true
@@ -828,8 +837,12 @@ networkPolicy:
         components: [engine, bridge, orchestrator]
         cidrs: []
         ports: [{protocol: TCP, port: 6379}]
+      # The bridge embeds a memory fact an operator edits. The chart only
+      # permits the traffic; the deployment gives the bridge
+      # ROBOTHOR_OLLAMA_URL and ROBOTHOR_EMBEDDING_MODEL (without them it
+      # falls back to 127.0.0.1:11434 and flags edited facts embedding_stale).
       ollama:
-        components: [engine, orchestrator]
+        components: [engine, bridge, orchestrator]
         cidrs: []
         ports: [{protocol: TCP, port: 11434}]
       # Hosted client-tokenization/provider APIs (Bridge) and organization
