@@ -494,3 +494,25 @@ class TestQaRoundUnlocks:
         monkeypatch.setattr(vault, "credential_tier", lambda agent_id: "operator")
         out = await github_api._github_list_prs({"repo": "octo/example"}, _ctx(user_role="member"))
         assert "vault_set" in out["unlock"]
+
+
+class TestDeniedByPatternNamesThePattern:
+    """QA D14: the manifest holds the pattern, so the unlock must name it."""
+
+    @pytest.mark.asyncio
+    async def test_a_pattern_deny_names_the_pattern(self, flag_on) -> None:
+        config = _config(tools_denied=["claude_code_*"])
+        verdict = await _admit(
+            tool="claude_code_start", agent_config=config, allowed_tool_set=frozenset({"read_file"})
+        )
+        assert "'claude_code_*'" in verdict.unlock
+        assert "'claude_code_start' from tools_denied" not in verdict.unlock
+        assert "matches 'claude_code_start'" in verdict.unlock
+
+    @pytest.mark.asyncio
+    async def test_an_exact_deny_still_names_the_tool(self, flag_on) -> None:
+        config = _config(tools_denied=["exec"])
+        verdict = await _admit(
+            tool="exec", agent_config=config, allowed_tool_set=frozenset({"read_file"})
+        )
+        assert "removes 'exec' from tools_denied" in verdict.unlock
