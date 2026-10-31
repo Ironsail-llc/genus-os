@@ -116,3 +116,30 @@ def test_count_metrics_ignore_the_min_delta(metric: str) -> None:
 
 def test_timing_metrics_keep_the_min_delta() -> None:
     assert compare(_metric("setup_ms", 4.0), _metric("setup_ms", 8.0), min_delta=5.0).exit_code == 0
+
+
+@pytest.mark.parametrize("metric", ["prompt_tokens", "tool_schemas"])
+def test_exact_metrics_regress_on_any_increase(metric: str) -> None:
+    outcome = compare(_metric(metric, 216.0), _metric(metric, 217.0), threshold=0.10)
+    assert outcome.exit_code == 1
+    assert [r.metric for r in outcome.regressions] == [metric, metric]
+
+
+@pytest.mark.parametrize("metric", ["prompt_tokens", "tool_schemas"])
+def test_an_exact_metric_that_drops_passes_and_says_to_re_record(metric: str) -> None:
+    outcome = compare(_metric(metric, 216.0), _metric(metric, 200.0))
+    assert outcome.exit_code == 0
+    assert "re-record" in outcome.message
+    assert metric in outcome.message
+
+
+def test_db_statements_keeps_ten_percent() -> None:
+    assert compare(_metric("db_statements", 64.0), _metric("db_statements", 65.0)).exit_code == 0
+    assert compare(_metric("db_statements", 64.0), _metric("db_statements", 71.0)).exit_code == 1
+
+
+def test_an_unchanged_exact_metric_gives_no_hint() -> None:
+    assert (
+        "re-record"
+        not in compare(_metric("tool_schemas", 216.0), _metric("tool_schemas", 216.0)).message
+    )
