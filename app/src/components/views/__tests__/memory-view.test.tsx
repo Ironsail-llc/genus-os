@@ -735,6 +735,58 @@ describe("Observe › Memory › edit", () => {
     expect(screen.queryByTestId("memory-confirmed-4711")).toBeNull();
   });
 
+  it("marks the row inactive and closes the editor when the bridge says it is stale", async () => {
+    const sentence = "that fact is inactive; only a fact still believed can be edited.";
+    withEdit(() => ({ status: 409, body: { detail: sentence } }));
+    const editor = await openEditor();
+    fireEvent.change(within(editor).getByTestId("memory-edit-reason-4711"), {
+      target: { value: "the extraction dropped a word" },
+    });
+    fireEvent.click(within(editor).getByTestId("memory-edit-save-4711"));
+
+    await waitFor(() => expect(screen.getByTestId("memory-error-4711").textContent).toBe(sentence));
+    // Forget's rule: a 409 says the page's row is stale, so the row catches up
+    // and nothing offers to act on a fact that is no longer believed.
+    expect(screen.getByTestId("memory-inactive-4711")).toBeTruthy();
+    expect(screen.queryByTestId("memory-editor-4711")).toBeNull();
+    expect(screen.queryByTestId("memory-edit-4711")).toBeNull();
+    expect(screen.queryByTestId("memory-forget-4711")).toBeNull();
+  });
+
+  it("puts the operator back in the text when the text is what was refused", async () => {
+    const sentence =
+      "text under 15 characters would be retired by the nightly prune; say more or forget the fact";
+    withEdit(() => ({ status: 422, body: { detail: sentence } }));
+    const editor = await openEditor();
+    const text = within(editor).getByTestId("memory-edit-text-4711");
+    fireEvent.change(text, { target: { value: "Alice is CTO" } });
+    fireEvent.change(within(editor).getByTestId("memory-edit-reason-4711"), {
+      target: { value: "promoted" },
+    });
+    fireEvent.click(within(editor).getByTestId("memory-edit-save-4711"));
+
+    await waitFor(() => expect(screen.getByTestId("memory-error-4711").textContent).toBe(sentence));
+    expect(document.activeElement).toBe(text);
+    expect(screen.getByTestId("memory-editor-4711")).toBeTruthy();
+  });
+
+  it("lands a duplicate-text 409 in the text field", async () => {
+    withEdit(() => ({
+      status: 409,
+      body: { detail: "an active fact with this text already exists" },
+    }));
+    const editor = await openEditor();
+    const text = within(editor).getByTestId("memory-edit-text-4711");
+    fireEvent.change(text, { target: { value: "Bob prefers coffee" } });
+    fireEvent.change(within(editor).getByTestId("memory-edit-reason-4711"), {
+      target: { value: "make them agree" },
+    });
+    fireEvent.click(within(editor).getByTestId("memory-edit-save-4711"));
+
+    await waitFor(() => expect(screen.getByTestId("memory-error-4711")).toBeTruthy());
+    expect(document.activeElement).toBe(text);
+  });
+
   it("lands a 422 on the reason field", async () => {
     withEdit(() => ({
       status: 422,
