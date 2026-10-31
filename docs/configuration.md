@@ -863,6 +863,26 @@ manifest directory, and the repository's own template test, against every
 bundle under `templates/agents/`. So an unknown key is a recommended doctor
 finding on a live box and a hard failure in CI for a shipped template.
 
+### When a chat turn pays for a planner call
+
+A planning phase is a separate LLM call made before the tool loop. Today the
+router runs it for any message over 500 characters, so every long chat turn
+costs one call more than its answer. With `ROBOTHOR_ROUTER_V2=1` (off by
+default) a Telegram, webchat or plugin-channel turn plans only when one of
+these holds:
+
+- the turn is in plan mode, or executes an approved plan;
+- the manifest asks for it (`planning_enabled: true` or
+  `difficulty_class: complex`);
+- the message lists at least three steps: numbered or bulleted lines, or the
+  words "then", "after that", "afterwards" and "finally" between actions. This
+  is a text match, not a model call, and it only keeps a plan the length rule
+  would have made; a short message is routed exactly as before.
+
+The run keeps the rest of the complex profile (verification, checkpoints,
+scratchpad), and the model it runs on and its fallback chain do not change.
+Scheduled, workflow, hook and sub-agent runs are not affected.
+
 ## Web fetch and web search
 
 `web_fetch` resolves a host, refuses any private, loopback, link-local or

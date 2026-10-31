@@ -191,6 +191,20 @@ def narrow_memory_search_enabled() -> bool:
     return _env_bool("MEMORY_NARROW_SEARCH")
 
 
+def router_v2_enabled() -> bool:
+    """Stop message length alone forcing a planner call on a chat turn.
+
+    Off: any message over 500 characters is routed ``complex`` and the complex
+    preset runs a separate planner LLM call before the tool loop. On: for
+    Telegram, webchat and plugin-channel turns (not plan mode, approved-plan
+    execution or resumed runs) planning is requested only by the manifest or by
+    a message that lists several steps (``router.requests_multistep_work``),
+    and the classified deadline is applied once per run instead of twice.
+    Default OFF; gated by ``ROBOTHOR_ROUTER_V2``.
+    """
+    return _env_bool("ROBOTHOR_ROUTER_V2")
+
+
 def compaction_hardening_enabled() -> bool:
     """Return True iff compaction hardening (Rip 18 / G7) is active.
 
