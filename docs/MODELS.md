@@ -65,6 +65,33 @@ OpenAI accepts at most 128 tools on one request. An agent with broad tool access
 can exceed that; deferred tool loading (`ROBOTHOR_RIP_16_ENABLED`) keeps the
 advertised set small.
 
+## Prompt caching
+
+Providers cache a request's prefix, so whatever changes from one run to the next
+has to come after whatever does not. The system prompt ends with a
+`Current time:` line, and by default it stays there: Anthropic direct gets one
+`cache_control` breakpoint just before it, and every other route caches nothing
+past the first message.
+
+`ROBOTHOR_CACHE_LAYOUT_V2=1` moves that line out of the system prompt into an
+`[engine]` turn just before the latest user message, never into the operator's
+own text. The system prompt (guardrail summary included), the tool list and the
+earlier conversation then stay byte-identical between turns. What each route
+gets on top:
+
+| Route | Caching | What the engine sends |
+|---|---|---|
+| Anthropic direct (`anthropic/…`) | explicit breakpoints | `cache_control` on the last tool, the system prompt, and the last user or tool message before the final two turns (three of the four allowed) |
+| Other Claude routes the library marks cacheable (`vertex_ai/claude…`, `bedrock/…`) | explicit | the system-prompt breakpoint only, as before |
+| OpenAI (`openai/…`, `azure/…`, bare `gpt-…`) | automatic for prefixes of 1024+ tokens | no `cache_control` |
+| Gemini (`gemini/…`, `vertex_ai/gemini…`) | implicit | no `cache_control` (a marker would request explicit context caching, which Gemini refuses on agent calls) |
+| OpenRouter (`openrouter/…`) | whatever the upstream does | no `cache_control`, as before |
+
+The time turn is sent as role `developer`; on Anthropic and Gemini it is
+rewritten to a user turn like every other engine turn. The cache-hit rate is in
+the run's `cache_read_tokens` and the emitted cache-hit-rate metric; compare it
+before and after turning the flag on.
+
 ## Where models are chosen
 
 | Surface | Source |
