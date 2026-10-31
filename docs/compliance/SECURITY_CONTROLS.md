@@ -33,7 +33,10 @@ Status meanings:
   and an explicit issuer/subject binding for an existing user; email matching
   does not silently link accounts, and just-in-time users do not receive a
   privileged role. A failed Bridge exchange or refresh clears dashboard
-  authority instead of leaving a partial session.
+  authority instead of leaving a partial session. A refresh token spent less
+  than 30 seconds earlier and presented again returns the same rotated pair, so
+  concurrent dashboard replicas do not sign the operator out; signed-out or
+  revoked tokens get no such window.
 - **Evidence:** `app/src/lib/auth.ts`, `app/src/proxy.ts`,
   `crm/bridge/routers/auth.py`, `robothor/auth/` and auth tests.
 - **Limitations/actions:** The operator must configure the IdP, redirect URIs,

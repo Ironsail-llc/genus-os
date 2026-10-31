@@ -28,7 +28,7 @@ Use these metric names consistently so cross-agent analytics work:
 | `operator_rating_avg`                 | quality      | `agent_reviews` rating avg (`reviewer_type='operator'`)    |
 | `substantive_output_rate`             | quality      | fraction where `char_length(output_text) >= min_output`    |
 | `error_rate`                          | correctness  | `status='failed'` / total runs                             |
-| `tool_success_rate`                   | correctness  | fraction of tool_call steps with no `error_message`        |
+| `tool_success_rate`                   | correctness  | fraction of tool_call steps with no `error_message` (a result carrying `error` sets it) |
 | `recovery_rate`                       | correctness  | fraction of runs where an error step was followed by a non-error step in the same run |
 | `task_completion_rate`                | correctness  | resolved tasks / created tasks                             |
 | `experiment_measure_success_rate`     | correctness  | experiment_measure calls without error (auto-researcher)   |
