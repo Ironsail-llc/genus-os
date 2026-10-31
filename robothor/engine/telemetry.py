@@ -9,8 +9,10 @@ stored as metadata on the run. Metrics published to Redis for dashboards.
 from __future__ import annotations
 
 import asyncio
+import importlib
 import logging
 import os
+import sys
 import time
 import uuid
 from collections import deque
@@ -349,8 +351,7 @@ class _TelemetryPublisher:
     async def _xadd(self, fields: dict[str, str]) -> None:
         try:
             if self._redis is None:
-                import redis.asyncio as aioredis
-
+                aioredis = await _import_off_loop("redis.asyncio")
                 self._redis = aioredis.Redis(
                     host=os.environ.get("REDIS_HOST", "localhost"),
                     port=int(os.environ.get("REDIS_PORT", "6379")),
@@ -374,8 +375,7 @@ class _TelemetryPublisher:
                 batch.append(self._otlp_queue.popleft()[1])
             try:
                 if self._http is None:
-                    import httpx
-
+                    httpx = await _import_off_loop("httpx")
                     self._http = httpx.AsyncClient(timeout=OTLP_TIMEOUT_S)
                 await self._http.post(_otlp_url(endpoint), json=_merge_otlp(batch))
             except Exception as e:
@@ -385,6 +385,14 @@ class _TelemetryPublisher:
         level = logging.DEBUG if sink in self._warned else logging.WARNING
         self._warned.add(sink)
         logger.log(level, msg, *args)
+
+
+async def _import_off_loop(name: str) -> Any:
+    """Import a module in a worker thread: a cold ``import redis`` takes ~0.3 s."""
+    module = sys.modules.get(name)
+    if module is not None:
+        return module
+    return await asyncio.to_thread(importlib.import_module, name)
 
 
 _publisher: _TelemetryPublisher | None = None
