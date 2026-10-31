@@ -18,7 +18,9 @@ import type { Session } from "next-auth";
 import { auth } from "@/lib/auth";
 
 const PUBLIC_PREFIXES = ["/signin", "/api/auth", "/setup", "/api/setup"];
-const PUBLIC_PATHS = new Set(["/api/live", "/api/ready"]);
+// /api/vitals: a signed-out page (sign-in) reports its web vitals too. The
+// route is bounded on its own: strict schema, per-client limit, body cap.
+const PUBLIC_PATHS = new Set(["/api/live", "/api/ready", "/api/vitals"]);
 
 /**
  * How long a setup-status answer is reused. The gate below runs on EVERY

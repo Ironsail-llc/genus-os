@@ -20,6 +20,16 @@ export function webVitalsEnabled(
   return !OFF.has(raw);
 }
 
+/**
+ * The sink is public (the sign-in page reports too), so it is bounded: this
+ * many beacons per client per window, and bodies no larger than this. A page
+ * load sends about five. Without GENUS_DASHBOARD_TRUSTED_PROXIES the client
+ * address cannot be verified and every client shares one window.
+ */
+export const VITALS_RATE_LIMIT = 120;
+export const VITALS_RATE_WINDOW_MS = 60_000;
+export const VITALS_MAX_BODY_BYTES = 2048;
+
 export const METRIC_NAMES = ["CLS", "FCP", "FID", "INP", "LCP", "TTFB"] as const;
 export const RATINGS = ["good", "needs-improvement", "poor"] as const;
 const NAVIGATION_TYPES = new Set([

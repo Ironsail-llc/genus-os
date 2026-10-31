@@ -2220,6 +2220,8 @@ class ServiceSettings(SettingsGroup):
         "logs one JSON line per metric (event web_vital: name, value, rating, "
         "path without its query string, view) and appends it to the capped "
         "Redis stream robothor:events:vitals. No tenant or user is recorded. "
+        "The route is public so the sign-in page reports too, and is limited "
+        "per client (GENUS_DASHBOARD_TRUSTED_PROXIES identifies the client). "
         "False mounts no reporter and the route stores and logs nothing.",
         since="unreleased",
         restart_units=("robothor-app",),

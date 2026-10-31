@@ -264,6 +264,13 @@ pathname without its query string and `view` is the dashboard view (`?v=`);
 no tenant, user or session is recorded. A Redis outage loses the stream entry,
 never the log line, and never fails the page.
 
+The route is reachable signed out, so the sign-in page's vitals are kept too.
+That is why it is bounded: the strict schema above, bodies up to 2 KB (413
+otherwise), and 120 beacons per client per minute (429 with `Retry-After`; a
+page load sends about five). The client is the address
+`GENUS_DASHBOARD_TRUSTED_PROXIES` lets the dashboard verify; without that
+setting every client shares one window.
+
 `GENUS_DASHBOARD_WEB_VITALS=false` turns it off at both ends: the page mounts
 no reporter and the route stores and logs nothing
 ([configuration reference](reference/configuration.md)).
