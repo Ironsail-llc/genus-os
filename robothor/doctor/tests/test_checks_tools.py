@@ -1674,3 +1674,64 @@ class TestTheGateIsOfferedNeverRecommended:
         assert result.status == "pass", result.detail
         assert "not a gap" in result.detail, result.detail
         assert "opt-in" in result.detail, result.detail
+
+
+# ── tools.deferred_tools_reachable ────────────────────────────────────
+
+
+class TestDeferredToolsReachable:
+    """With deferral on by default, a granted tool the model cannot see has to
+    be findable through ``tool_search``, or it is not granted in any sense
+    that matters to the agent."""
+
+    @pytest.fixture(autouse=True)
+    def _defaults(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        for name in ("ROBOTHOR_RIP_16_ENABLED", "ROBOTHOR_DISABLE_ALL_RIPS"):
+            monkeypatch.delenv(name, raising=False)
+
+    @pytest.mark.asyncio
+    async def test_real_tools_are_reachable(self, instance: Path) -> None:
+        _write_agent(
+            instance,
+            "broad",
+            {"tools_allowed": ["read_file", "gws_gmail_search", "create_person"]},
+        )
+        result = await _run("tools.deferred_tools_reachable")
+        assert result.status == "pass", result.detail
+
+    @pytest.mark.asyncio
+    async def test_a_named_tool_that_is_neither_loaded_nor_searchable_fails(
+        self, instance: Path
+    ) -> None:
+        _write_agent(instance, "broad", {"tools_allowed": ["read_file", "no_such_tool_xyz"]})
+        result = await _run("tools.deferred_tools_reachable")
+        assert result.status == "fail"
+        assert "broad" in result.detail
+        assert "no_such_tool_xyz" in result.detail
+
+    @pytest.mark.asyncio
+    async def test_a_registered_schema_with_no_searchable_words_fails(
+        self, instance: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from robothor.engine.tools import registry as registry_module
+
+        real = registry_module.builtin_schemas
+
+        def with_a_blank_one() -> dict:
+            schemas = real()
+            schemas["is_it"] = {
+                "type": "function",
+                "function": {"name": "is_it", "description": "", "parameters": {}},
+            }
+            return schemas
+
+        monkeypatch.setattr(registry_module, "builtin_schemas", with_a_blank_one)
+        _write_agent(instance, "broad", {"tools_allowed": ["read_file"]})
+        result = await _run("tools.deferred_tools_reachable")
+        assert result.status == "fail"
+        assert "is_it" in result.detail
+
+    @pytest.mark.asyncio
+    async def test_the_shipped_templates_pass(self, stock_instance: Path) -> None:
+        result = await _run("tools.deferred_tools_reachable")
+        assert result.status == "pass", result.detail
