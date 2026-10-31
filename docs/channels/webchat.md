@@ -167,7 +167,7 @@ chip takes it off again. A message can be only files, with no text.
 
 | | |
 |---|---|
-| Types | Images (PNG, JPG, GIF, WebP); text, Markdown, CSV, JSON and PDF |
+| Types | Images (PNG, JPG, GIF, WebP); text, Markdown, CSV, JSON and PDF — by type **and** extension |
 | Largest file | **5 MB** |
 | Files per message | **3** |
 
@@ -175,7 +175,15 @@ The composer states these limits and refuses a file that breaks one with a line
 under the chips, keeping everything else you added. The dashboard's send route
 and the engine check the same limits again: too many files or too large a file
 is refused with `413`, an unsupported type or a body that is not valid base64
-with `422`. A file that claims to be a picture but is not is also a `422`. Every
+with `422`. A file that claims to be a picture but is not is also a `422`.
+
+The file's extension is part of its type. It must be one of `.png`, `.jpg`,
+`.jpeg`, `.gif`, `.webp`, `.txt`, `.md`, `.markdown`, `.csv`, `.json` or `.pdf`,
+and name the same kind of file as the declared type: `tool.exe` sent as
+`text/plain`, or `evil.png` sent as text, is refused as "not a supported type"
+(`422`). A name with no extension (`README`, `.env`) is taken on its declared
+type only if the bytes agree: an image's magic number, a PDF's `%PDF` header,
+or no NUL byte for text. The route checks the name; the engine checks both. Every
 refusal answers `request_admitted: false`: no turn started, and nothing was kept.
 A file the engine cannot write (a full disk, say) is refused the same way, and
 whatever that turn had already written is removed.
@@ -210,10 +218,14 @@ sent as `original_name`, and that is what the chip shows. The rows use the same
 fields as Telegram's, `telegram_file_id` and `telegram_file_unique_id` included:
 for a webchat file those hold `<request id>:<n>` and the sha256 of the bytes.
 
-**A file named like a credentials file is quarantined.** `.env`,
-`credentials.json`, `id_rsa` and the like are saved under the day's `secret/`
-directory, and the note says the file was kept but not read: its contents never
-reach the prompt, and `read_file` and `send_file` refuse it. This is the
+**A file named like a credentials file is quarantined.** The test is the
+engine's secrets-path rule (`robothor/engine/secret_paths.py`): `.env`,
+`credentials.json`, `id_rsa` and the other names it recognises are saved under
+the day's `secret/` directory, and the note says the file was kept but not read.
+A name ending in a documentation suffix (`.txt`, `.md`) is treated as notes
+*about* a secret, not the secret, so `aws_credentials.txt` is kept and quoted
+like any other text file. A quarantined file's contents never reach the
+prompt, and `read_file` and `send_file` refuse it. This is the
 Telegram rule, described in full in
 [the Telegram channel](telegram.md#the-attachment-row).
 
