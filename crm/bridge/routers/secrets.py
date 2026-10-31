@@ -25,8 +25,8 @@ Operator-only (``require_operator``), ``Cache-Control: no-store``, and a plain
 
 ``DELETE /api/secrets/{name}`` removes the VAULT row behind a listed name. It
 takes the environment name the list shows, never a vault key -- the list sends
-none, so the page has none to send back -- and finds the row the accessor would
-serve. Bootstrap credentials are refused (409), as the vault tools refuse them;
+none, so the page has none to send back -- and finds that row in the same table
+the list was built from. Each listed row says whether it is ``removable``. Bootstrap credentials are refused (409), as the vault tools refuse them;
 a name with no vault row is 404. Audited as ``secret.delete`` with the name
 only, then the engine is told to reload its cached readers.
 """
@@ -40,7 +40,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from robothor.secrets.classification import is_bootstrap
-from robothor.secrets.status import SecretStatus, status_for_name, status_table
+from robothor.secrets.status import SecretStatus, status_table
 from robothor.settings.operator import DEFAULT_UNITS, units_for
 from robothor.settings.registry import field_index
 from routers._audit import audited
@@ -77,7 +77,14 @@ def _public(row: SecretStatus, index: dict[str, dict[str, Any]]) -> dict[str, An
         # False when the vault could not be read at all. Without it a
         # vault-only credential reads as "not configured" during an outage.
         "vault_readable": row.vault_readable,
+        # Whether DELETE will act on this row: the page offers Remove only here.
+        "removable": _removable(row),
     }
+
+
+def _removable(row: SecretStatus) -> bool:
+    """A vault row, found under a key, that is not a bootstrap credential."""
+    return bool(row.in_vault and row.vault_key and not row.bootstrap and not is_bootstrap(row.name))
 
 
 _NO_STORE = {"Cache-Control": "no-store"}
@@ -132,8 +139,13 @@ def delete_secret(name: str, request: Request) -> JSONResponse:
             f"{name} is a bootstrap credential: it brings this instance up, so it is "
             "changed in the instance's secrets file, not removed here.",
         )
-    row = status_for_name(name, tenant_id=PLATFORM_TENANT)
-    if not row.in_vault or not row.vault_key:
+    # The same table the list was built from, so the row is found under the
+    # vault key the list found it at. Looking the name up again without that
+    # key missed every row nothing reads, and answered 404 for them.
+    row = next((r for r in status_table(tenant_id=PLATFORM_TENANT) if r.name == name), None)
+    if row is not None and row.bootstrap:
+        raise _refuse(409, f"{name} is a bootstrap credential and is not removed here.")
+    if row is None or not _removable(row) or not row.vault_key:
         raise _refuse(404, f"{name} has no vault row to remove")
     deleted = _vault_delete(row.vault_key, tenant_id=PLATFORM_TENANT)
     audited(request, "secret.delete", action=name, status="ok" if deleted else "error")

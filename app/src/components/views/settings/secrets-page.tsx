@@ -53,6 +53,11 @@ interface SecretRow {
   envName: string;
   /** False when the vault could not be read: absent from it is then unknown, not "no". */
   vaultReadable: boolean;
+  /**
+   * The bridge's answer to "will DELETE act on this row": a vault row that is
+   * not a bootstrap credential. Absent (an older bridge) means no.
+   */
+  removable: boolean;
 }
 
 const SOURCE_LABEL: Record<SecretSource, string> = {
@@ -84,6 +89,7 @@ function normalize(body: unknown): SecretRow[] {
       shadowedBy: typeof row.shadowed_by === "string" ? row.shadowed_by : null,
       envName: typeof row.env_name === "string" && row.env_name ? row.env_name : row.name,
       vaultReadable: row.vault_readable !== false,
+      removable: row.removable === true,
     });
   }
   return rows;
@@ -334,6 +340,7 @@ function SecretRowView({
   const [armed, setArmed] = useState(false);
   const [removing, setRemoving] = useState(false);
   const inVault = row.source === "vault" || row.source === "both";
+  const canRemove = inVault && row.removable;
   const age = ageInDays(row.updatedAt, now);
   const overdue = age !== null && age > ROTATION_DAYS;
   const cell = "block py-1 md:table-cell md:py-2 md:pr-3 md:align-top";
@@ -409,7 +416,7 @@ function SecretRowView({
         )}
       </td>
       <td className={cell}>
-        {inVault &&
+        {canRemove &&
           (armed ? (
             <span className="inline-flex flex-col gap-1">
               <Button

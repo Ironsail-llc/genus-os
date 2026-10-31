@@ -226,14 +226,18 @@ def environment_credential_names() -> set[str]:
     A third, hand-written list would be the drift defect. There isn't one.
     """
     from robothor.engine.exec_env import looks_like_a_credential_name
-    from robothor.secrets.classification import declared_secret_names
+    from robothor.secrets.classification import declared_secret_names, non_secret_env_names
     from robothor.settings.env import process_env_names
 
     declared = declared_secret_names()
+    # A name the settings model declares and does NOT mark secret is a setting,
+    # whatever it is called: ``ROBOTHOR_CREDENTIAL_INTAKE`` is a feature flag,
+    # and the shape match alone listed it as a credential.
+    settings_only = non_secret_env_names()
     return {
         name
         for name in process_env_names()
-        if name in declared or looks_like_a_credential_name(name)
+        if name in declared or (name not in settings_only and looks_like_a_credential_name(name))
     }
 
 
