@@ -134,13 +134,15 @@ async def _run(
                 user_role="owner",
             )
             t_done = time.perf_counter()
+            # Taken before the drain: a model call a background task makes
+            # after the reply is not this turn's, and would skew the tail.
+            calls = list(llm.calls)
             # What the daemon's loop would finish after the reply: the run's
             # background persist. Counted in db_statements, not in done_ms.
             await get_task_registry().drain(timeout=30.0)
             await asyncio.sleep(settle_ms / 1000.0)
             after = counter.snapshot()
 
-            calls = list(llm.calls)
             steps = step_metrics(_step_dicts(run))
             first = calls[0] if calls else None
             turn: dict[str, Any] = {

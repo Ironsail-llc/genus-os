@@ -468,8 +468,11 @@ jobs:
       - name: Benchmark Telegram-shaped turns and compare with the baseline
         if: steps.scope.outputs.run == 'true'
         run: |
-          # --min-delta 5: a shared runner moves a ~40 ms turn by a few ms
-          # from run to run, and 10% of 40 ms is inside that noise.
+          # pipefail: without it the step takes tee's 0, and neither a
+          # regression (exit 1) nor a failed turn (exit 2) fails the job.
+          set -o pipefail
+          # --min-delta 5 (also the default): a shared runner moves a ~40 ms
+          # turn by a few ms from run to run, and 10% of 40 ms is inside that.
           python -m bench.turn --half inprocess --runs 20 --model "$BENCH_MODEL" \
             --min-delta 5 --baseline bench/turn/baselines/ci-inprocess.json \
             --out "$RUNNER_TEMP/bench-turn-inprocess.json" 2>&1 \

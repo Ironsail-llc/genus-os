@@ -94,7 +94,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--threshold", type=float, default=0.10, help="regression threshold (default 0.10)"
     )
-    p.add_argument("--min-delta", type=float, default=1.0, help="ignore changes smaller than this")
+    p.add_argument(
+        "--min-delta",
+        type=float,
+        default=5.0,
+        help="ignore changes smaller than this, in the metric's unit (default 5)",
+    )
     p.add_argument("--update-baseline", action="store_true", help="write this run as the baseline")
     p.add_argument(
         "--compare", default="", metavar="RESULT", help="compare a saved result; drive nothing"

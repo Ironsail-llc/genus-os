@@ -521,6 +521,9 @@ jobs:
           DB_URL="host=127.0.0.1 port=${ROBOTHOR_DB_PORT:-5432} dbname=${ROBOTHOR_DB_NAME:-robothor} user=${ROBOTHOR_DB_USER:-robothor} password=${ROBOTHOR_DB_PASSWORD:-}"
           RESTART="cd ~/genus && docker compose --env-file genus.env -f docker-compose.yml -f docker-compose.apps.yml restart engine"
           cd "$GITHUB_WORKSPACE"
+          # Report-only still has to report: continue-on-error marks a failed
+          # step, and without pipefail tee's 0 would hide the failure.
+          set -o pipefail
           python -m bench.turn --half http --runs 20 --engine-url "$ENGINE_URL" \
             --token "$TOKEN" --db-url "$DB_URL" --restart-cmd "$RESTART" \
             --baseline bench/turn/baselines/ci-http.json \

@@ -58,8 +58,10 @@ and `-inprocess` inserted before the extension.
 
 The result is compared with `bench/turn/baselines/<half>.json` (or
 `--baseline FILE`). A p50 or p95 more than `--threshold` (default `0.10`, 10%)
-over the baseline's, and more than `--min-delta` (default 1) in absolute
-terms, is a regression. A metric missing on either side is skipped and
+over the baseline's, and more than `--min-delta` (default 5, in the metric's
+own unit) in absolute terms, is a regression. A smaller floor flags scheduler
+noise on the sub-10 ms metrics: a clean local re-run moved
+`finalize_tail_ms` p95 from 2.3 to 5.2 ms. A metric missing on either side is skipped and
 listed. Exit codes: 0 within threshold, 1 regression, 2 the benchmark could
 not run or a turn did not complete (timings of a failed run measure the
 failure, so they are neither compared nor recorded).
@@ -113,7 +115,7 @@ The `bench-turn` job in `.github/workflows/ci.yml` runs the unit tests in
 `robothor/engine/` (or a manual dispatch) it also runs the in-process half:
 20 turns against pgvector Postgres started with `pg_stat_statements` preloaded,
 Redis and the mock model (`tests/acceptance/mock_llm`), compared with
-`baselines/ci-inprocess.json` with `--min-delta 5`, and uploads the result as the `bench-turn`
+`baselines/ci-inprocess.json`, and uploads the result as the `bench-turn`
 artifact. A whole stack per pull request is too heavy, so the http half runs
 nightly in the install gate's compose job, report only, and uploads
 `bench-turn-http`.
