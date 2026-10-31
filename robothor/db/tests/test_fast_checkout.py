@@ -370,3 +370,10 @@ def test_every_fake_of_the_factory_accepts_its_keywords() -> None:
         if _PATCHES_FACTORY_WITH_BARE_LAMBDA.search(text):
             offenders.append(f"{where}: lambda: ...")
     assert offenders == [], f"get_connection fakes that reject read_only: {offenders}"
+
+
+def test_a_real_psycopg2_connection_can_be_weakly_keyed() -> None:
+    """The memo is a WeakKeyDictionary; the fakes above prove nothing about psycopg2."""
+    import psycopg2.extensions
+
+    assert psycopg2.extensions.connection.__weakrefoffset__ != 0
