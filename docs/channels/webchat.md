@@ -158,6 +158,21 @@ starts a run itself; without the flag the endpoint behaves as it always has. The
 running turn's own stream adds two events: `interim` (a superseded answer) and
 `pending_followups` (messages the turn never took, to send as the next turn).
 
+## When `done` arrives
+
+A reply's `done` event carries the final text, `run_id`, `status`, token counts
+and `duration_ms`. By default it is sent after the run is fully finalized:
+telemetry, post-run guardrail bookkeeping, claim verification and the run-row
+write all come first. With `ROBOTHOR_EARLY_DONE=1` it is sent as soon as the
+final text is settled, and that work finishes in the background under the
+engine task registry, so `genus run` and engine shutdown still wait for it.
+Telegram sends its reply at the same point.
+
+A post-run policy that can change what you are shown still runs first: the
+deliverable contract in `enforce` mode turns the reply into the failure notice
+before `done` goes out. A failure in the background finalization is logged and
+noted on the run's `error_message`; the reply you already have stands.
+
 ## The docked chat panel
 
 Chat is the Helm's home view. On any other view the chat stays docked as a
