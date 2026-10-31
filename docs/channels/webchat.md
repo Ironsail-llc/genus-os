@@ -165,8 +165,11 @@ reply streams: its placeholder reads *Steer the running task...*, and what you
 send is handed to the run as an operator steering update, read before its next
 model call. The note under it reads *Steering the run*. A steer is guidance for
 the run in flight, so it is not added to the conversation's history as a turn of
-its own; the answer it shapes is. When no run can take it (the task is between
-its last step and its answer) it falls back to the follow-up behaviour above.
+its own; the answer it shapes is. A steer that arrives while the agent writes
+its final answer is not lost: the run takes another turn with it, and the
+answer already written stays on screen as its own message, exactly as for a
+follow-up. When no live run can take it, it falls back to the follow-up
+behaviour above.
 
 **Stop** then stops the run the way Telegram's *Interrupt* button and
 `POST /api/runs/{run_id}/interrupt` do, instead of cancelling the browser's

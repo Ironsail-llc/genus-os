@@ -154,14 +154,28 @@ def absorb_followups(session: Any) -> bool:
 
 
 def absorb_late_followups(session: Any) -> bool:
-    """At a final answer: fold in what arrived during the call and keep going."""
-    inbox: LiveInbox | None = getattr(session, "live_inbox", None)
-    if inbox is None or session.late_extensions >= MAX_LATE_EXTENSIONS:
+    """At a final answer: fold in what arrived during the call and keep going.
+
+    An operator steer that arrived during the call counts too: it was accepted
+    while the run was live, and the loop top that normally reads it is not
+    reached again once the model answers without tools. Without this it would
+    be acknowledged and then lost when the run ends.
+    """
+    if session.late_extensions >= MAX_LATE_EXTENSIONS:
         return False
-    if not absorb_followups(session):
+    steered = _absorb_late_steer(session)
+    inbox: LiveInbox | None = getattr(session, "live_inbox", None)
+    followed = inbox is not None and absorb_followups(session)
+    if not (steered or followed):
         return False
     session.late_extensions += 1
     return True
+
+
+def _absorb_late_steer(session: Any) -> bool:
+    before = len(session.messages)
+    absorb_operator_steer(session)
+    return len(session.messages) > before
 
 
 async def extend_for_late_followups(session: Any, answer: str | None) -> bool:
@@ -190,7 +204,8 @@ def _text_of(content: Any) -> str:
 
 async def deliver_interim(session: Any, text: str) -> None:
     """Hand the superseded answer to the channel; it must never fail the run."""
-    callback = session.live_inbox.on_interim
+    inbox = getattr(session, "live_inbox", None)
+    callback = inbox.on_interim if inbox is not None else None
     if callback is None or not text.strip():
         return
     try:
