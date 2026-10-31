@@ -184,6 +184,30 @@ def _escalate_unfinished_todos(
     return True
 
 
+def _off_loop(fn: Any, *args: Any, label: str, **kwargs: Any) -> None:
+    """Run blocking run-end bookkeeping in a tracked worker thread. Never raises.
+
+    The spawn-or-run-sync pattern ``_persist_run`` uses: with a running loop the
+    call goes to a thread under the task registry (so the shutdown drain waits
+    for it); with none (CLI, tests) it runs here.
+    """
+
+    def guarded() -> None:
+        try:
+            fn(*args, **kwargs)
+        except Exception as e:  # noqa: BLE001 - bookkeeping never breaks a run
+            logger.warning("%s error: %s", label, _sanitize(e))
+
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        guarded()
+        return
+    from robothor.engine.task_registry import get_task_registry
+
+    get_task_registry().spawn(asyncio.to_thread(guarded), name=f"finish-run:{label}")
+
+
 class RunFinalizationMixin:
     """Post-run finalization for AgentRunner. See module docstring for the contract."""
 
@@ -473,23 +497,17 @@ class RunFinalizationMixin:
                 logger.warning("todo escalation error: %s", _sanitize(e))
 
         # ── [RECENT ACTIONS] Cross-session surface for tracked agents ──
-        try:
-            from robothor.engine.recent_actions import record_run
+        # A file write: off the loop (the persisted row does not read it).
+        from robothor.engine.recent_actions import record_run
 
-            record_run(run, agent_config=agent_config)
-        except Exception as e:
-            logger.warning("recent_actions write error: %s", _sanitize(e))
+        _off_loop(record_run, run, agent_config=agent_config, label="recent_actions write")
 
         # ── [CONTACT 360] Timeline activity emission ──
         # Best-effort: no-op when the run is not linked to a person (cron jobs
-        # and the like).  Runs in the caller thread; it's a single idempotent
-        # INSERT, fast enough that backgrounding isn't worth the complexity.
-        try:
-            from robothor.engine.run_person_link import emit_run_timeline_activity
+        # and the like). One idempotent INSERT, off the loop like the rest.
+        from robothor.engine.run_person_link import emit_run_timeline_activity
 
-            emit_run_timeline_activity(run)
-        except Exception as e:  # noqa: BLE001
-            logger.warning("timeline_activity emit error: %s", _sanitize(e))
+        _off_loop(emit_run_timeline_activity, run, label="timeline_activity emit")
 
         # ── [HOOKS] AGENT_END lifecycle hook (fire-and-forget) ──
         try:
@@ -528,7 +546,9 @@ class RunFinalizationMixin:
         # verdict columns. Flag-gated and exception-suppressed — verification
         # is bookkeeping and must never break the agent's actual work.
         self._verify_run_claims(run)
-        self._verify_metric_trends(run)
+        # Reads the agent's previous output (a SELECT) and stamps nothing on
+        # the run, so it runs off the loop beside the persistence below.
+        _off_loop(self._verify_metric_trends, run, label="metric trend check")
 
         # Spawn DB persistence as a background task so the caller gets the run back immediately.
         try:
@@ -715,7 +735,14 @@ class RunFinalizationMixin:
             return None
 
     async def _persist_run(self, run: AgentRun) -> None:
-        """Persist run state and steps to the database in a background thread."""
+        """Persist run state and steps to the database in a background thread.
+
+        Flushes the event writer first: the run's audit and guardrail rows are
+        written by the time its final state is.
+        """
+        from robothor.engine.event_writer import get_event_writer
+
+        await get_event_writer().flush()
         await asyncio.to_thread(self._persist_run_sync, run)
 
     async def _escalate_unfinished_todos_bg(self, kwargs: dict[str, Any]) -> None:

@@ -12,6 +12,7 @@ for as long as it takes.
 from __future__ import annotations
 
 import asyncio
+import threading
 import time
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -58,6 +59,17 @@ class SlowProbe:
             f"a loop callback waited {worst * 1000:.0f} ms behind a {SLOW_SECONDS * 1000:.0f} ms "
             "blocking call: the call runs on the event loop"
         )
+
+
+async def warm_executor(workers: int = 8) -> None:
+    """Start the loop's default thread-pool workers before anything is timed."""
+    gate = threading.Barrier(workers, timeout=2)
+    await asyncio.gather(*(asyncio.to_thread(gate.wait) for _ in range(workers)))
+
+
+@pytest.fixture(autouse=True)
+async def _warm_pool():
+    await warm_executor()
 
 
 # ── chat.py: identity resolution on a cache miss ──────────────────────────
@@ -293,11 +305,25 @@ async def test_finish_run_bookkeeping_runs_off_the_loop(request, monkeypatch, si
     )
     monkeypatch.setattr("robothor.engine.tracking._insert_guardrail_event", MagicMock())
 
-    run = AgentRun(agent_id="example-agent")
-    run.status = RunStatus.COMPLETED
-    run.output_text = "Fleet health: 52.8% (↓0.5pp WoW)"
-    run.person_id = "person-1"
+    def finished_run() -> AgentRun:
+        run = AgentRun(agent_id="example-agent")
+        run.status = RunStatus.COMPLETED
+        run.output_text = "Fleet health: 52.8% (↓0.5pp WoW)"
+        run.person_id = "person-1"
+        return run
 
+    # Warm up first, so what is measured is the call under test and not this
+    # test loop's fresh thread pool starting its workers (Thread.start() waits
+    # on the loop thread) or a module being imported for the first time.
+    with monkeypatch.context() as warm:
+        for name in ("record_run", "emit_run_timeline_activity"):
+            module = "recent_actions" if name == "record_run" else "run_person_link"
+            warm.setattr(f"robothor.engine.{module}.{name}", quiet)
+        warm.setattr(RunFinalizationMixin, "_previous_delivered_output", staticmethod(quiet))
+        engine._finish_run(finished_run())
+        await asyncio.sleep(0.1)
+
+    run = finished_run()
     started = time.monotonic()
     finished = engine._finish_run(run)
     returned_after = time.monotonic() - started

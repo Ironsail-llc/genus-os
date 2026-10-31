@@ -1724,6 +1724,10 @@ async def main() -> int:
     from robothor.engine.task_registry import get_task_registry
 
     await get_task_registry().drain(timeout=DRAIN_TIMEOUT_SECONDS)
+    # Then every audit and guardrail row those tasks queued (event_writer.py).
+    from robothor.engine.event_writer import get_event_writer
+
+    await get_event_writer().shutdown()
 
     await _stop_coding_jobs()  # unmarked, so the next start resumes them
 

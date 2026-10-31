@@ -8,6 +8,7 @@ the conversation loop where it left off.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
 import logging
@@ -209,9 +210,12 @@ async def save_iteration(
             todo_state = session.todo_list.to_dict()
         except Exception:  # noqa: BLE001 - a checklist is never worth the run
             todo_state = None
-    checkpoint.save(
+    # json.dumps of the whole conversation plus an INSERT: off the loop. The
+    # thread gets its own copy of the message list, which the loop may extend.
+    await asyncio.to_thread(
+        checkpoint.save,
         step_number=session._step_counter,
-        messages=session.messages,
+        messages=list(session.messages),
         scratchpad=scratchpad.to_dict() if scratchpad else None,
         plan=plan_result.raw if plan_result and hasattr(plan_result, "raw") else None,
         todo_list=todo_state,
