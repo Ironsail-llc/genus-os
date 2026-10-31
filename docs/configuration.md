@@ -605,6 +605,10 @@ to "everything" from a page that is meant to be read-only — add the unit to
 is the live answer for any given box. See
 [Deployment](deployment.md#the-helms-observe-pages).
 
+Where there is no journald (a container), `GENUS_LOGS_URL` is the one logs
+setting: a credential-free link to where this deployment's logs are viewed,
+which the Logs page offers as **Open logs**. Helm sets it from `logs.url`.
+
 ## Channels
 
 Which channels exist, and whether each one is actually set up, is visible over

@@ -1011,6 +1011,21 @@ for: membership of `systemd-journal` is enough for the system journal, and the
 route reports `available: false` rather than empty output if it is missing. In
 Kubernetes and Docker Compose, use the container runtime's own log stream.
 
+**Where a container's logs are.** Pods and containers write their logs to
+standard output, and the cluster's log tool (`kubectl logs`, `docker compose
+logs`, or the log service the cluster ships to) is where they are read. The
+unavailable answer of `GET /api/logs/units` says so in a `hint`, and carries
+`logs_url`: the value of `GENUS_LOGS_URL`, or `null` when it is unset. Set it to
+the page where this deployment's logs are viewed and the Logs page links to it.
+With the Helm chart, set `logs.url`; the chart renders `GENUS_LOGS_URL` on the
+bridge only when the value is non-empty. The URL is shown to every operator, so
+it must be **credential-free**: never a link that carries a token.
+
+```yaml
+logs:
+  url: https://logs.example.com/search?service=genus-os
+```
+
 ### Using the Observe pages
 
 The Helm's **Observe** group carries three screens over those routes. Memory
@@ -1046,8 +1061,12 @@ re-reads a larger window up to the route's 500-row ceiling, and anything bigger
 is an export.
 
 **Observe › Logs needs journald.** In a container there is none, and the page
-says so in the bridge's own words rather than showing an error — nothing is
-broken. Where journald is present, pick a unit from the derived allowlist,
+says so calmly rather than showing an error — nothing is broken. It says the
+deployment writes its logs to standard output and that they are read with the
+cluster's log tool, shows the bridge's reason underneath, and offers **Open
+logs** (a new tab) when `GENUS_LOGS_URL` is configured. Auto-refresh is hidden
+in that state, because there is nothing to beat, and **Refresh** asks the bridge
+again whether journald is available. Where journald is present, pick a unit from the derived allowlist,
 choose 50/200/1000 lines and a time window, and filter. Auto-refresh is off by
 default and beats every ten seconds when switched on: each read is one
 `journalctl` process on the box. The "window full" notice means the line limit
