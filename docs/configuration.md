@@ -175,9 +175,8 @@ it records the reason you type alongside it.
 Config lists its sections as soon as it knows which settings exist, and each
 section's values fill in once the instance has read them; config.yaml is read
 once for the whole page, so a slow volume costs one read, not one per setting.
-The list of settings changes only when the bridge restarts, so the browser
-keeps it for up to five minutes and then asks whether it changed; after an
-upgrade that adds a setting, reload the page once that window has passed.
+The list of settings changes only when the bridge restarts, so on every load
+the browser asks whether it changed and downloads it again only when it has.
 
 After a save that is *not* hot, Config shows a banner naming the units to
 restart — `robothor-engine`, `robothor-bridge`, whatever the settings you
