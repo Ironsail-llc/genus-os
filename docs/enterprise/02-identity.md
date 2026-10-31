@@ -50,6 +50,40 @@ genus user mfa-reset alice@example.com
 Rotating `GENUS_AUTH_SIGNING_KEY` invalidates every enrolled second factor,
 because it derives the key that encrypts stored TOTP secrets. Plan the resets.
 
+## Sessions and refresh
+
+A signed-in browser holds a fifteen-minute access token and a thirty-day
+refresh token. The dashboard swaps the refresh token for a new pair shortly
+before the access token expires, and each refresh token works once: the swap
+spends it.
+
+When the dashboard runs more than one replica, two of them can make that swap
+for the same browser at the same moment. A refresh token spent **less than 30
+seconds ago** and presented again therefore gets the same new pair the first
+request received, rather than a 401, so the second replica keeps the operator
+signed in. No second session is created, and the new token is never stored in
+the clear: it is derived from the old one with the signing key, and only its
+hash is kept, as for every refresh token. Outside that window the rule is
+unchanged:
+
+- a refresh token presented more than 30 seconds after it was spent is refused;
+- a token that was signed out, or revoked by an operator or a password change,
+  is refused at once (the window covers rotation only);
+- once the new session itself has signed out or been revoked, the old token is
+  refused too.
+
+The 30 seconds run from the first refresh, by the database's clock; a replay
+does not extend them. The access token from a refresh is dated a few seconds
+before the refresh itself, so a database clock slightly ahead of the Bridge's
+cannot produce a token that is not yet valid; it still expires fifteen minutes
+after the refresh.
+
+The window is `REFRESH_REUSE_GRACE_SECONDS` in `robothor/auth/tokens.py`, and it
+is the length of time a stolen, already-spent refresh token stays useful, which
+is why it is short. Session affinity on the dashboard is not needed and should
+not be added to work around refresh failures: the Bridge resolves the race
+whichever replica a request lands on.
+
 ## OIDC and Cloudflare Access
 
 Both are additive. Configure the issuer allowlist and the dashboard's Access

@@ -112,15 +112,38 @@ test.describe("Observe › Logs", () => {
   test("renders a container with no journald as a state, not a failure", async ({ page }) => {
     await setupShell(page);
     const reason = "journald is not available on this deployment (journalctl is not installed)";
-    await page.route(/\/api\/bridge\/api\/logs\/units/, (route) =>
-      json(route, { units: [], available: false, reason })
-    );
+    const hint =
+      "this deployment writes its logs to standard output; read them with your cluster's log tool";
+    const logsUrl = "https://logs.example.invalid/search";
+    let unitsAsked = 0;
+    let linesAsked = 0;
+    await page.route(/\/api\/bridge\/api\/logs\/units/, (route) => {
+      unitsAsked += 1;
+      return json(route, { units: [], available: false, reason, hint, logs_url: logsUrl });
+    });
+    await page.route(/\/api\/bridge\/api\/logs\?/, (route) => {
+      linesAsked += 1;
+      return json(route, { detail: "unit must be one of the installed units" }, 422);
+    });
 
     await page.goto(LOGS_URL, { waitUntil: "networkidle" });
     await expect(page.locator('[data-testid="logs-view"]')).toBeVisible({ timeout: 15000 });
+    await expect(page.locator('[data-testid="logs-unavailable"]')).toContainText(hint);
     await expect(page.locator('[data-testid="logs-unavailable"]')).toContainText(reason);
+    const link = page.locator('[data-testid="logs-external-link"]');
+    await expect(link).toHaveAttribute("href", logsUrl);
+    await expect(link).toHaveAttribute("target", "_blank");
+    await expect(page.locator('[data-testid="logs-auto"]')).toHaveCount(0);
     await expect(page.locator('[data-testid="logs-error"]')).toHaveCount(0);
     await expect(page.locator('[data-testid="logs-pane"]')).toHaveCount(0);
+
+    // Refresh asks whether journald is here now; it never sends a read, so the
+    // 422 an empty unit would earn can never turn the page red.
+    const before = unitsAsked;
+    await page.locator('[data-testid="logs-refresh"]').click();
+    await expect.poll(() => unitsAsked).toBeGreaterThan(before);
+    await expect(page.locator('[data-testid="logs-error"]')).toHaveCount(0);
+    expect(linesAsked).toBe(0);
   });
 
   test("keeps the controls and the pane usable on a 390 px screen", async ({ page }) => {

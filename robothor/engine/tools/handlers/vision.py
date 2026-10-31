@@ -356,12 +356,24 @@ async def _set_vision_mode(args: dict[str, Any], ctx: ToolContext) -> dict[str, 
     return await _vision_call("POST", "/mode", json={"mode": mode}, timeout=30.0)
 
 
+def _bridge_url(path: str) -> str:
+    """The bridge as this deployment reaches it: ``BRIDGE_URL`` when set.
+
+    ``Config.bridge_url`` is always loopback, which is right only when the
+    bridge shares the engine's host. Split into containers it is not there,
+    and every call answered "bridge service offline".
+    """
+    from robothor.services import get_service_url
+
+    return get_service_url("bridge", path) or f"{_cfg().bridge_url}{path}"
+
+
 @_handler("log_interaction")
 async def _log_interaction(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     return await call_service(
         "bridge",
         "POST",
-        f"{_cfg().bridge_url}/log-interaction",
+        _bridge_url("/log-interaction"),
         json={
             k: args.get(k, "")
             for k in [

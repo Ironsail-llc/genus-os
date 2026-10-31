@@ -86,17 +86,90 @@ const BAD_RUN = new Set(["failed", "timeout", "cancelled"]);
 export const DELIVERED = new Set(["delivered", "sent", "ok", "success"]);
 
 /**
+ * `delivery_status` values the engine writes when it CHOSE not to send
+ * (`robothor/engine/delivery.py`): a silent agent, a sub-agent whose parent
+ * reports, a trivial or filtered answer, no output, an event-bus publish, or a
+ * pre-delivery hook that held it back. Quiet by design — never a failure.
+ */
+export const NO_DELIVERY_EXPECTED = new Set([
+  "silent",
+  "suppressed_sub_agent",
+  "suppressed_trivial",
+  "suppressed_filtered",
+  "no_output",
+  "published",
+]);
+
+/**
+ * The delivery buckets, the same ones `GET /api/runs/summary` counts
+ * (`crm/bridge/routers/runs.py`, `_DELIVERY_CATEGORY_SQL`).
+ */
+export type DeliveryCategory = "delivered" | "none_expected" | "failed" | "pending" | "not_recorded";
+
+/**
  * Run statuses that have not finished yet.
  *
  * A run still going has no delivery status because it has not got there, which
  * is not the same as a finished run that failed to send. Reading the first as
  * "not delivered" in warn colour put a red cell on every automation the
- * operator happened to be watching mid-fire.
+ * operator happened to be watching mid-fire. `awaiting_approval` is suspended
+ * on a human decision and has not finished either.
  */
-const IN_FLIGHT = new Set(["pending", "running"]);
+export const IN_FLIGHT = new Set(["pending", "running", "awaiting_approval"]);
+
+/** Which bucket one run's `delivery_status` falls in. Total: any input has an answer. */
+export function deliveryCategory(
+  deliveryStatus: string | null | undefined,
+  runStatus: string | null | undefined
+): DeliveryCategory {
+  const status = (deliveryStatus ?? "").trim();
+  if (!status) return IN_FLIGHT.has((runStatus ?? "").trim()) ? "pending" : "not_recorded";
+  const lower = status.toLowerCase();
+  if (DELIVERED.has(lower)) return "delivered";
+  if (NO_DELIVERY_EXPECTED.has(lower) || lower.startsWith("blocked_by_hook:")) return "none_expected";
+  if (lower.startsWith("failed") || lower.startsWith("partial:") || lower.startsWith("unknown_mode:")) {
+    return "failed";
+  }
+  return "not_recorded";
+}
+
+/**
+ * One agent run's delivery, as the Runs page reads it.
+ *
+ * Unlike `deliveredReading` there is no automation config to consult, so the
+ * run's own `delivery_status` is the whole story: an intentional non-send says
+ * "no delivery expected" in a neutral tone, and only a send that failed, partly
+ * failed or had no route is red. A status nobody has taught this file is a
+ * warning, never a failure.
+ */
+export function runDeliveredReading(
+  run: Pick<AutomationRun, "status" | "delivery_status" | "delivery_channel" | "delivered_at">,
+  now: number = Date.now()
+): Reading & { category: DeliveryCategory } {
+  const category = deliveryCategory(run.delivery_status, run.status);
+  const status = (run.delivery_status ?? "").trim();
+  if (category === "pending") return { text: "delivery pending", tone: "unknown", category };
+  if (category === "none_expected") {
+    return { text: `no delivery expected · ${humanizeStatus(status)}`, tone: "unknown", category };
+  }
+  if (!status) return { text: "not recorded", tone: "unknown", category };
+
+  const channel = (run.delivery_channel ?? "").trim();
+  const when = relativeTime(run.delivered_at, now);
+  const words = [humanizeStatus(status)];
+  if (channel) words.push(`via ${channel}`);
+  if (when && category === "delivered") words.push(when);
+  const tone: Tone = category === "delivered" ? "good" : category === "failed" ? "bad" : "warn";
+  return { text: words.join(" · "), tone, category };
+}
 
 /** `verified_status` values from `robothor/engine/run_verification.py`. */
 const GOOD_VERDICT = new Set(["verified", "no_claims"]);
+
+/** How a `verified_status` reads: a clean verdict is quiet, any finding is a warning. */
+export function verdictTone(verdict: string | null | undefined): Tone {
+  return GOOD_VERDICT.has((verdict ?? "").trim()) ? "unknown" : "warn";
+}
 
 /** …and the self-rated `outcome_assessment` from the run finalizer. */
 const GOOD_OUTCOME = new Set(["successful"]);
@@ -153,7 +226,19 @@ export function deliveredReading(
   const words = [humanizeStatus(status)];
   if (channel) words.push(`via ${channel}`);
   if (when) words.push(when);
-  return { text: words.join(" · "), tone: DELIVERED.has(status.toLowerCase()) ? "good" : "bad" };
+  // An announcing automation whose run chose silence did not fail to deliver.
+  const category = deliveryCategory(status, run.status);
+  // Same tones as `runDeliveredReading`: only a real failure is red, and a
+  // status nobody has taught this file is a warning.
+  const tone: Tone =
+    category === "delivered"
+      ? "good"
+      : category === "none_expected"
+        ? "unknown"
+        : category === "failed"
+          ? "bad"
+          : "warn";
+  return { text: words.join(" · "), tone };
 }
 
 /**

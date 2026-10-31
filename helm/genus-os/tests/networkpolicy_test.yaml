@@ -137,6 +137,28 @@ tests:
           path: spec.podSelector.matchExpressions[2].values
           content: dashboard
 
+  - it: ollama egress admits the bridge, which embeds an edited memory fact
+    set:
+      networkPolicy.enabled: true
+      networkPolicy.egress.enabled: true
+      networkPolicy.egress.destinations.ollama.cidrs: [10.42.32.7/32]
+    documentSelector:
+      path: metadata.name
+      value: gos-genus-os-ollama-egress
+    asserts:
+      - equal:
+          path: spec.egress[0].ports[0].port
+          value: 11434
+      - contains:
+          path: spec.podSelector.matchExpressions[2].values
+          content: bridge
+      - contains:
+          path: spec.podSelector.matchExpressions[2].values
+          content: engine
+      - notContains:
+          path: spec.podSelector.matchExpressions[2].values
+          content: dashboard
+
   - it: dashboard external egress is limited to the identity destination
     set:
       networkPolicy.enabled: true

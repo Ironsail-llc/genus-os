@@ -122,3 +122,33 @@ async def test_log_interaction_handler_sends_bearer_token():
     )
     assert auth.user_id == "engine:main"
     assert auth.has_scope("integration:write")
+
+
+async def test_log_interaction_reaches_the_bridge_at_its_configured_url(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """The handler posts to ``BRIDGE_URL``, not a hard-coded loopback.
+
+    Where the engine and the bridge run as separate containers, the bridge is
+    not on the engine's 127.0.0.1, and every call answered "bridge service
+    offline". The deployment already sets ``BRIDGE_URL`` on the engine.
+    """
+    from robothor.engine.tools.handlers.vision import HANDLERS
+
+    monkeypatch.setenv("BRIDGE_URL", "http://bridge.internal:9100/")
+    seen: dict[str, str] = {}
+
+    async def _fake_call_service(service, method, url, *, json=None, headers=None, timeout=10.0):
+        seen["url"] = url
+        return {"status": "ok"}
+
+    with patch(
+        "robothor.engine.tools.handlers.vision.call_service",
+        new=AsyncMock(side_effect=_fake_call_service),
+    ):
+        ctx = ToolContext(agent_id="example-agent", tenant_id="test-tenant")
+        await HANDLERS["log_interaction"](
+            {"contact_name": "Alice", "channel": "email", "direction": "outgoing"}, ctx
+        )
+
+    assert seen["url"] == "http://bridge.internal:9100/log-interaction"

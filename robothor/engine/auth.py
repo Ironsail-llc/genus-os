@@ -64,6 +64,8 @@ _CONTROL_PATHS = (
     re.compile(r"^/api/runs/[^/]+/(?:resume|steer|interrupt)$"),
     re.compile(r"^/api/agents/[^/]+/trigger$"),
     re.compile(r"^/api/workflows/[^/]+/execute$"),
+    # A run's step detail carries every tool input and output the run saw.
+    re.compile(r"^/api/workflows/runs/[^/]+$"),
 )
 
 
