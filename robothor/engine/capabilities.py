@@ -116,8 +116,15 @@ def _grant_unlock(facts: Facts, tool: str) -> tuple[str, str]:
     from robothor.engine.tools.constants import OPT_IN_TOOLS, SPAWN_TOOLS
 
     path = f"docs/agents/{facts.agent_id}.yaml"
-    if any(fnmatch(tool, pattern) for pattern in facts.tools_denied):
+    denied_by = next((p for p in facts.tools_denied if fnmatch(tool, p)), None)
+    if denied_by == tool:
         return "tools_denied", f"an operator removes '{tool}' from tools_denied in {path}"
+    if denied_by is not None:
+        # The manifest holds the pattern, not the tool: name what is there.
+        return "tools_denied", (
+            f"an operator removes or narrows the tools_denied entry '{denied_by}' (it "
+            f"matches '{tool}') in {path}"
+        )
     if tool in SPAWN_TOOLS and not facts.can_spawn_agents:
         return "can_spawn_agents", f"an operator sets can_spawn_agents: true in {path}"
     key = (
