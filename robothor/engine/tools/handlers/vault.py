@@ -234,6 +234,15 @@ def _operator_denial(ctx: ToolContext, tool: str) -> dict[str, Any] | None:
     }
 
 
+async def _denial(ctx: ToolContext, tool: str) -> dict[str, Any] | None:
+    """:func:`_operator_denial`, off the event loop.
+
+    It reads the agent's manifest from disk and the governed intake flag from
+    the database; either would stall every other run on the loop thread.
+    """
+    return await asyncio.to_thread(_operator_denial, ctx, tool)
+
+
 def _resolve_env_name(key: str) -> str:
     """The environment name this vault row exports to, for the source lookup."""
     from robothor.vault.naming import env_name
@@ -250,7 +259,7 @@ async def _vault_get(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     or a ``secrets:`` grant in its manifest — not the credential in its context
     window.
     """
-    denial = _operator_denial(ctx, "vault_get")
+    denial = await _denial(ctx, "vault_get")
     if denial:
         return denial
 
@@ -309,7 +318,7 @@ async def _vault_set(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     conversation. That is asserted in ``test_vault_set_is_redacted.py`` rather
     than assumed here.
     """
-    denial = _operator_denial(ctx, "vault_set")
+    denial = await _denial(ctx, "vault_set")
     if denial:
         return denial
 
@@ -424,7 +433,7 @@ async def _vault_test(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     The kind is inferred from the KEY, never passed in, so this cannot be used
     to run a vendor probe against an arbitrary value the caller supplies.
     """
-    denial = _operator_denial(ctx, "vault_test")
+    denial = await _denial(ctx, "vault_test")
     if denial:
         return denial
 
@@ -504,7 +513,7 @@ def _safe_hint(hint: str | None, value: str) -> str | None:
 
 @_handler("vault_list")
 async def _vault_list(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
-    denial = _operator_denial(ctx, "vault_list")
+    denial = await _denial(ctx, "vault_list")
     if denial:
         return denial
 
@@ -520,7 +529,7 @@ async def _vault_list(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 
 @_handler("vault_delete")
 async def _vault_delete(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
-    denial = _operator_denial(ctx, "vault_delete")
+    denial = await _denial(ctx, "vault_delete")
     if denial:
         return denial
 
