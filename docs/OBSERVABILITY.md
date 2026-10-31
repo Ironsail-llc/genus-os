@@ -192,6 +192,56 @@ shown as its preview with the original size. A scheduled plugin job records no
 steps, so its run shows the value the job returned instead (the detail route's
 `result`, with `result_truncated` when it was cut).
 
+## Runs in the Helm — every run, and what one run did
+
+The Helm's **Runs** view (Observe › Runs, `?v=runs`) is operator-only and
+read-only. It has four parts:
+
+- **A summary strip** over the chosen period: runs, failed (failed or timed
+  out), delivered, and cost. It comes from `GET /api/runs/summary`, which counts
+  by status, by delivery category and by agent. Benchmark runs are left out
+  when decontamination is enforced, with the same predicate the analytics module uses
+  (`robothor/engine/analytics.py`, `exclude_benchmark_filter`).
+  The summary leaves benchmark runs out only when decontamination is enforced,
+  and the table always shows them, so the two can differ by exactly those rows.
+- **Filters** for status, agent, trigger and period (24 hours, 7 days — the
+  default — 30 days, or all time). They change both the table and the summary.
+- **A full-width table** with agent, trigger, status, started, duration, model,
+  tokens, cost, delivery and verification, 50 rows at a time with **Load more**
+  (`GET /api/runs?status=&agent=&trigger=&since=<hours>&limit=<≤200>&offset=`).
+- **A run detail drawer**, opened by selecting a row (`GET /api/runs/{id}`, sent
+  with `Cache-Control: no-store`). Its header carries the trigger and its
+  detail, start, duration, the models tried, tokens including cache reads and
+  writes, cost, the delivery reading, the verifier's verdict, the agent's own
+  outcome assessment with its notes, and the task text. Below it, each step is a
+  row (number, kind, tool or model, duration, tokens, ok or error, the error
+  text); a tool step expands to its input, redacted when it was recorded, and
+  its output, which the engine caps at 4,000 characters when it records it — the
+  drawer says so when an output was cut. Warm-up steps are grouped under
+  **Warm-up**, and guardrail events are listed with their reason.
+
+**Delivery categories.** Delivery is read the same way by the summary
+(`crm/bridge/routers/runs.py`) and the table (`app/src/lib/automations/run-truth.ts`):
+
+| Category | `delivery_status` | Reads as |
+|---|---|---|
+| delivered | `delivered`, `sent`, `ok`, `success` | the channel and when it landed |
+| none expected | `silent`, `suppressed_sub_agent`, `suppressed_trivial`, `suppressed_filtered`, `no_output`, `published`, `blocked_by_hook:*` | "no delivery expected", in a neutral tone |
+| failed | `failed*`, `partial:<sent>/<expected>`, `unknown_mode:*` | red — the only red delivery |
+| pending | none yet, run still pending, running or `awaiting_approval` | "delivery pending" |
+| not recorded | none on a finished run, or a status the Helm does not know | neutral, or a warning for an unknown status |
+
+**Steps are pruned after 30 days** (`robothor/engine/retention.py`). A run older
+than 30 days keeps its row, totals and cost, and the drawer says its steps were
+pruned. A more recent finished run with no steps says none were recorded.
+The drawer shows what the engine stores: a step's start time is the time it was
+recorded, there is no per-step cost, and an LLM step carries its model, tokens
+and timing but not its prompt or reply.
+
+A viewer is refused with 403 on every route and the drawer says operator access
+is required; a run that no longer exists answers 404 and the drawer says it is
+gone.
+
 ## Notes
 
 - Export is best-effort (a 5s-timeout POST per run); a collector outage never

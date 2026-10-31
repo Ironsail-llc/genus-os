@@ -40,6 +40,9 @@ Renders:
 {{- if $root.Values.orchestrator.enabled -}}
 {{- $_ := set $serviceEnv "MEMORY_URL" (printf "http://%s-orchestrator:%v" (include "genus-os.fullname" $root) $root.Values.orchestrator.service.port) -}}
 {{- end -}}
+{{- with ($root.Values.logs | default dict).url -}}
+{{- $_ := set $serviceEnv "GENUS_LOGS_URL" (toString .) -}}
+{{- end -}}
 {{- end -}}
 {{- $componentEnv := mergeOverwrite $serviceEnv ($cv.env | default dict) -}}
 {{- if and (eq $component "engine") $root.Values.workspace.configMap.name $root.Values.workspace.persistence.enabled -}}

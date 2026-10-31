@@ -5,8 +5,11 @@ import {
   deliveredReading,
   durationText,
   nextRunClaim,
+  IN_FLIGHT,
+  deliveryCategory,
   normalizeAutomations,
   ranReading,
+  runDeliveredReading,
   type Automation,
   type AutomationRun,
 } from "../run-truth";
@@ -202,5 +205,90 @@ describe("normalizeAutomations", () => {
     expect(normalizeAutomations(null)).toEqual([]);
     expect(normalizeAutomations({ automations: "nope" })).toEqual([]);
     expect(normalizeAutomations({ automations: [null, 3, { id: "ok" }] })).toHaveLength(1);
+  });
+});
+
+describe("one agent run's delivery", () => {
+  it("names a delivery, its channel and when it landed", () => {
+    expect(runDeliveredReading(run(), NOW)).toEqual({
+      text: "delivered · via telegram · 3 hours ago",
+      tone: "good",
+      category: "delivered",
+    });
+  });
+
+  it("an intentional non-send reads as no delivery expected, in a neutral tone", () => {
+    for (const status of [
+      "silent",
+      "suppressed_sub_agent",
+      "suppressed_trivial",
+      "suppressed_filtered",
+      "no_output",
+      "published",
+      "blocked_by_hook:quiet_hours",
+    ]) {
+      const reading = runDeliveredReading(run({ delivery_status: status }), NOW);
+      expect(reading.category).toBe("none_expected");
+      expect(reading.tone).toBe("unknown");
+      expect(reading.text).toMatch(/^no delivery expected/);
+    }
+  });
+
+  it("a send that failed, partly failed or had no route is a real failure", () => {
+    for (const status of ["failed:telegram_send", "partial:1/3", "unknown_mode:shout", "failed"]) {
+      const reading = runDeliveredReading(run({ delivery_status: status }), NOW);
+      expect(reading.category).toBe("failed");
+      expect(reading.tone).toBe("bad");
+    }
+  });
+
+  it("a run in flight is pending, and a finished one with nothing recorded says so", () => {
+    expect(
+      runDeliveredReading(run({ status: "running", delivery_status: null }), NOW).category
+    ).toBe("pending");
+    const none = runDeliveredReading(run({ delivery_status: null, delivered_at: null }), NOW);
+    expect(none).toEqual({ text: "not recorded", tone: "unknown", category: "not_recorded" });
+  });
+
+  it("a status it has never heard of is a warning, never red", () => {
+    const reading = runDeliveredReading(run({ delivery_status: "queued_somewhere" }), NOW);
+    expect(reading.tone).toBe("warn");
+    expect(reading.category).toBe("not_recorded");
+  });
+
+  it("buckets the same way the bridge summary does", () => {
+    expect(deliveryCategory("Delivered", "completed")).toBe("delivered");
+    expect(deliveryCategory("silent", "completed")).toBe("none_expected");
+    expect(deliveryCategory("partial:2/3", "completed")).toBe("failed");
+    expect(deliveryCategory(null, "pending")).toBe("pending");
+    expect(deliveryCategory(null, "completed")).toBe("not_recorded");
+  });
+
+  it("an announcing automation whose last run chose silence is not a failure", () => {
+    const quiet = automation({ last_run: run({ delivery_status: "silent", delivered_at: null }) });
+    expect(deliveredReading(quiet, NOW).tone).toBe("unknown");
+  });
+});
+
+describe("in flight", () => {
+  it("a run awaiting approval has not finished, everywhere", () => {
+    expect([...IN_FLIGHT].sort()).toEqual(["awaiting_approval", "pending", "running"]);
+    expect(deliveryCategory(null, "awaiting_approval")).toBe("pending");
+    expect(
+      runDeliveredReading(run({ status: "awaiting_approval", delivery_status: null }), NOW).text
+    ).toBe("delivery pending");
+  });
+});
+
+describe("one reading of an unknown delivery status", () => {
+  it("an automation's last run with a status nobody taught us is a warning, as on Runs", () => {
+    const odd = automation({ last_run: run({ delivery_status: "queued_somewhere" }) });
+    expect(deliveredReading(odd, NOW).tone).toBe("warn");
+  });
+
+  it("buckets a padded or upper-case status, and an empty one, like the bridge", () => {
+    expect(deliveryCategory("  SILENT ", "completed")).toBe("none_expected");
+    expect(deliveryCategory("  ", "running")).toBe("pending");
+    expect(deliveryCategory("", "completed")).toBe("not_recorded");
   });
 });
