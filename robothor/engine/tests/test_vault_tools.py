@@ -386,19 +386,69 @@ async def test_vault_get_says_who_stored_it(stored, monkeypatch):
     assert result["via"] == "chat:webchat"
 
 
-@pytest.mark.asyncio
-async def test_vault_get_says_when_the_credential_was_last_used(stored, monkeypatch):
+@pytest.fixture
+def no_stamps(monkeypatch):
+    """No usage stamps from earlier tests, and no audit metadata to read."""
     from robothor import secrets as secrets_module
     from robothor import vault
 
     monkeypatch.setattr(vault, "get_metadata", lambda key, **kw: {}, raising=False)
-    before = await HANDLERS["vault_get"]({"key": "providers/github/api_key"}, _ctx())
-    assert before["last_resolved_at"] is None
+    secrets_module._last_resolved.clear()
+    yield
+    secrets_module._last_resolved.clear()
 
+
+async def _last_resolved(key: str = "providers/github/api_key"):
+    return (await HANDLERS["vault_get"]({"key": key}, _ctx()))["last_resolved_at"]
+
+
+@pytest.mark.asyncio
+async def test_vault_get_says_when_a_reader_last_used_the_credential(stored, no_stamps):
+    """Readers ask by their own name (``GITHUB_TOKEN``), never by the vault
+    key's exported name, so the stamp has to be found through the names that
+    resolve to the row."""
+    from robothor import secrets as secrets_module
+
+    assert await _last_resolved() is None
+    assert secrets_module.get_secret("GITHUB_TOKEN") is not None
+    assert await _last_resolved(), "a real reader's resolve did not show up"
+
+
+@pytest.mark.asyncio
+async def test_a_vault_test_probe_is_not_a_use(stored, no_stamps, monkeypatch):
+    """Main runs ``vault_test`` right after ``vault_set``; reporting the probe
+    as use would say "in use" when nothing but the probe has dialled."""
+    from robothor.secrets import testers
+
+    async def probe(kind, value):
+        return testers.TestOutcome(ok=True, identity_hint=None, error_class=None)
+
+    monkeypatch.setattr(testers, "probe", probe)
+    await HANDLERS["vault_test"]({"key": "providers/github/api_key"}, _ctx())
+    assert await _last_resolved() is None
+
+
+@pytest.mark.asyncio
+async def test_writing_one_credential_keeps_the_others_usage(stored, no_stamps):
+    """A write resets the accessor's cache; it must not erase every other
+    credential's record of use."""
+    from robothor import secrets as secrets_module
+
+    secrets_module.get_secret("GITHUB_TOKEN")
+    await HANDLERS["vault_set"](
+        {"key": "providers/openweather/api_key", "value": "c0ffee42" * 4}, _ctx()
+    )
     secrets_module.reset_secret_cache()
-    from robothor.secrets.status import resolve_for_key
+    assert await _last_resolved(), "a write to another key erased this key's usage"
 
-    resolved = resolve_for_key("providers/github/api_key", tenant_id="default")
-    assert resolved is not None
-    after = await HANDLERS["vault_get"]({"key": "providers/github/api_key"}, _ctx())
-    assert after["last_resolved_at"], "a vault resolve must stamp last_resolved_at"
+
+@pytest.mark.asyncio
+async def test_rotating_a_credential_clears_its_own_usage(stored, no_stamps):
+    """After a rotation, "last used" must describe the new value, not the old."""
+    from robothor import secrets as secrets_module
+
+    secrets_module.get_secret("GITHUB_TOKEN")
+    await HANDLERS["vault_set"](
+        {"key": "providers/github/api_key", "value": "ghp_FAKE4444"}, _ctx()
+    )
+    assert await _last_resolved() is None

@@ -250,6 +250,18 @@ async def test_enforce_refuses_an_unattended_run_of_the_chat_agent(intake, monke
 
 
 @pytest.mark.asyncio
+async def test_enforce_refuses_a_manual_trigger(intake, monkeypatch):
+    """``MANUAL`` is the CLI, but also the API trigger and resume endpoints and
+    the unattended repair-resume of the chat agent, which runs as ``owner``.
+    None of those is a person handing over a credential in chat."""
+    monkeypatch.setenv("ROBOTHOR_CREDENTIAL_INTAKE", "enforce")
+    session = intake["live"](trigger=TriggerType.MANUAL)
+    result = await HANDLERS["vault_set"](_store_args(), _ctx(session))
+    assert result.get("gate") == "human_chat"
+    assert intake["writes"] == []
+
+
+@pytest.mark.asyncio
 async def test_enforce_refuses_a_call_with_no_live_run(intake, monkeypatch):
     """No session to read the trigger from is not evidence of a person."""
     monkeypatch.setenv("ROBOTHOR_CREDENTIAL_INTAKE", "enforce")
