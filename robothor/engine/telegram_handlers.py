@@ -46,6 +46,18 @@ from robothor.engine.telegram_grades import format_agent_grades as format_agent_
 
 logger = logging.getLogger(__name__)
 
+
+async def _edit_callback_message(callback: Any, method: str, *args: Any, **kwargs: Any) -> None:
+    """Edit the message a button sits on. Cosmetic, so a failure is logged, never raised."""
+    msg = callback.message
+    if not msg or not hasattr(msg, method):
+        return
+    try:
+        await getattr(msg, method)(*args, **kwargs)
+    except Exception as e:  # noqa: BLE001 - e.g. the message was deleted; the action stands
+        logger.debug("Telegram %s on a callback message failed: %s", method, e)
+
+
 #: What a `perm:` tap that settled nothing is told, in the alert and appended to
 #: the prompt itself. One sentence for every reason a request can be gone
 #: (swept, timed out, already decided, lost to a restart): the operator's next
@@ -567,13 +579,7 @@ class TelegramHandlersMixin:
                 return
             session.active_plan.status = "approved"
             await callback.answer("Executing plan...")
-            # Remove inline keyboard
-            try:
-                msg = callback.message
-                if msg and hasattr(msg, "edit_reply_markup"):
-                    await msg.edit_reply_markup(reply_markup=None)
-            except Exception:
-                pass
+            await _edit_callback_message(callback, "edit_reply_markup", reply_markup=None)
             # Fire-and-forget — execute in background so Telegram handler is freed
             task = asyncio.create_task(
                 self._execute_approved_plan(chat_id, session_key, session, expected_plan_id=plan_id)
@@ -590,13 +596,7 @@ class TelegramHandlersMixin:
                 name=f"tg-reject-plan:{chat_id}",
             )
             session.active_plan = None
-            # Remove inline keyboard
-            try:
-                msg = callback.message
-                if msg and hasattr(msg, "edit_reply_markup"):
-                    await msg.edit_reply_markup(reply_markup=None)
-            except Exception:
-                pass
+            await _edit_callback_message(callback, "edit_reply_markup", reply_markup=None)
             await callback.answer("Plan rejected")
             await self.send_message(chat_id, "Plan rejected. Send a new message.")
 
@@ -626,15 +626,12 @@ class TelegramHandlersMixin:
 
         # Update the keyboard to reflect selection
         kb = self._build_model_keyboard(model_id)
-        try:
-            msg = callback.message
-            if msg and hasattr(msg, "edit_text"):
-                await msg.edit_text(
-                    f"<b>Model switched to:</b> {html.escape(display)}",
-                    reply_markup=kb,
-                )
-        except Exception:
-            pass
+        await _edit_callback_message(
+            callback,
+            "edit_text",
+            f"<b>Model switched to:</b> {html.escape(display)}",
+            reply_markup=kb,
+        )
         await callback.answer(f"Switched to {display}")
 
     # ── Permission approval callbacks ──

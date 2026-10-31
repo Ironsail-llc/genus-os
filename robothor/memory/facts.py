@@ -847,15 +847,15 @@ async def _append_auxiliary(
         try:
             insights = await search_insights(query, limit=3, tenant_id=tenant_id)
             result.extend(insights)
-        except Exception:
-            pass  # Insight search is best-effort
+        except Exception as e:  # noqa: BLE001 - best-effort leg; the facts still return
+            logger.warning("search_facts: insight leg failed: %s: %s", type(e).__name__, e)
     if include_episodes:
         try:
             from robothor.memory.episodes import search_episodes
 
             result.extend(await search_episodes(query, limit=3, tenant_id=tenant_id))
-        except Exception:
-            pass  # Episode search is best-effort
+        except Exception as e:  # noqa: BLE001 - best-effort leg; the facts still return
+            logger.warning("search_facts: episode leg failed: %s: %s", type(e).__name__, e)
     if include_chat_turns and embedding is not None:
         try:
             from robothor.engine.chat_store import search_chat_turns
@@ -869,8 +869,8 @@ async def _append_auxiliary(
                 t["confidence"] = 0.5
                 t["rrf_score"] = 0.3 * float(t.get("similarity", 0))
             result.extend(turns)
-        except Exception:
-            pass  # Chat turn search is best-effort
+        except Exception as e:  # noqa: BLE001 - best-effort leg; the facts still return
+            logger.warning("search_facts: chat turn leg failed: %s: %s", type(e).__name__, e)
     return result
 
 
@@ -1130,11 +1130,16 @@ async def search_facts(
                 )
             elif include_insights:
                 # Legacy reranked-path behaviour (flag off): insights only.
-                try:
-                    insights = await search_insights(query, limit=3, tenant_id=tenant_id)
-                    reranked.extend(insights)
-                except Exception:
-                    pass
+                reranked = await _append_auxiliary(
+                    reranked,
+                    query=query,
+                    embedding=embedding,
+                    tenant_id=tenant_id,
+                    _tenant=_tenant,
+                    include_insights=True,
+                    include_episodes=False,
+                    include_chat_turns=False,
+                )
             return _mark_degraded(reranked)
         except Exception as e:
             logger.warning("search_facts rerank failed, falling back: %s", e)

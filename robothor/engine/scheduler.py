@@ -206,7 +206,7 @@ async def _maybe_emit_heartbeat_status_ping(
     try:
         await sender(chat_id, ping)
         logger.info("Emitted heartbeat status ping for %s: %s", dedup_key, delivery_status)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - a status ping is best-effort
         logger.warning("Failed to emit heartbeat status ping for %s: %s", dedup_key, e)
 
 
@@ -341,7 +341,7 @@ class CronScheduler:
                 )
                 if deleted:
                     logger.info("Pruned %d stale schedule(s): %s", len(deleted), deleted)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - pruning retries on the next start
                 logger.warning("Failed to prune stale schedules: %s", e)
 
         # Register workflow cron jobs
@@ -387,7 +387,7 @@ class CronScheduler:
                     coalesce=True,
                     misfire_grace_time=3600,
                 )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - an optional job; the scheduler still boots
             logger.warning("could not register memory vault projection: %s", e)
 
         await self._register_workflow_cron_jobs()
@@ -413,7 +413,7 @@ class CronScheduler:
         if sales_runtime is not None:
             try:
                 await sales_runtime.bootstrap()
-            except Exception:
+            except Exception:  # noqa: BLE001 - verification reports, it never blocks boot
                 # Keep operator/core access alive. Managed queues lack an admitted
                 # generation, and /ready reports failed native verification.
                 logger.exception("Managed sales startup verification failed")
@@ -477,7 +477,7 @@ class CronScheduler:
                 enabled=spec.enabled,
                 **spec.upsert,
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - the row is re-written on the next fire
             logger.warning("Failed to upsert schedule for %s: %s", spec.job_id, e)
             self._rows.forget(spec.job_id)
             return
@@ -504,7 +504,7 @@ class CronScheduler:
                     agent_config, delay_seconds=spawned * CATCH_UP_STAGGER_SECONDS
                 ):
                     spawned += 1
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - one agent's catch-up must not stop the rest
                 logger.warning("Cron catch-up check failed for %s: %s", agent_config.id, e)
 
     def _catch_up_one(self, agent_config: AgentConfig, delay_seconds: float = 0.0) -> bool:
@@ -529,7 +529,7 @@ class CronScheduler:
 
         try:
             prev_occurrence = croniter(agent_config.cron_expr, now).get_prev(datetime)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - a bad cron skips this agent only
             logger.warning("Cron catch-up: invalid cron expression for %s: %s", agent_config.id, e)
             return False
 
@@ -672,14 +672,14 @@ class CronScheduler:
                             requires_human=True,
                             tenant_id=self.config.tenant_id,
                         )
-                    except Exception as e:
+                    except Exception as e:  # noqa: BLE001 - the pause task is a courtesy; the breaker still trips
                         logger.warning(
                             "Circuit breaker: failed to create paused-agent task for %s: %s",
                             dedup_key,
                             e,
                         )
                     return True
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - a breaker read failure lets the run go ahead
             # A failed breaker read must be visible: otherwise a failing agent
             # keeps firing every tick precisely when the DB is unhealthy
             # (audit 2026-05-29).
@@ -703,7 +703,7 @@ class CronScheduler:
                 last_status="timeout",
                 consecutive_errors=consecutive_errors,
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - the run outcome stands without the counter
             # If timeout recording stops, consecutive-error tracking silently
             # stalls and the breaker never trips (audit 2026-05-29).
             logger.warning("Failed to record timeout for circuit breaker (%s): %s", dedup_key, e)
@@ -746,7 +746,7 @@ class CronScheduler:
                         len(conversation_history),
                         session_key,
                     )
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - runs without history rather than not at all
                 logger.warning("Failed to load persistent session for %s: %s", dedup_key, e)
 
         run = await self.runner.execute(
@@ -779,7 +779,7 @@ class CronScheduler:
                         channel="cron",
                     )
                     logger.debug("Saved persistent session for %s", session_key)
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001 - the run already happened; saving is best-effort
                     logger.warning("Failed to save persistent session for %s: %s", dedup_key, e)
 
         # Deliver output
@@ -802,7 +802,7 @@ class CronScheduler:
                     delivered_at=run.delivered_at,
                     delivery_channel=run.delivery_channel,
                 )
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - the run already happened; logged
                 logger.warning("Failed to persist delivery status for %s: %s", agent_id, e)
 
         # Update schedule state
@@ -824,7 +824,7 @@ class CronScheduler:
                 last_duration_ms=run.duration_ms,
                 consecutive_errors=consecutive_errors,
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - the run already happened; logged
             logger.warning("Failed to update schedule state for %s: %s", dedup_key, e)
 
         logger.info(
@@ -881,7 +881,7 @@ class CronScheduler:
                     mode,
                     resurfaced[:10],
                 )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - phase-0 is best-effort; the run proceeds
             # Never fail the beat because of the resurface hook.
             logger.warning("resurface_due_followups failed in %s phase-0: %s", mode, e)
 
@@ -977,7 +977,7 @@ class CronScheduler:
                 )
                 if session_data and session_data.get("history"):
                     conversation_history = session_data["history"]
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - the wake proceeds without history
                 logger.debug("channel_wake: failed to load main session: %s", e)
 
             trigger_detail = f"channel_event:{chat_id}:batch={len(run_ids)}"
@@ -1000,7 +1000,7 @@ class CronScheduler:
                     from robothor.engine.delivery import deliver
 
                     await deliver(agent_config, run)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - one wake must not take down the bus consumer
                 logger.warning("channel_wake execute failed: %s", e)
         finally:
             await release(dedup_key)
@@ -1027,7 +1027,7 @@ class CronScheduler:
 
         try:
             cron_workflows = list(self.workflow_engine.get_workflows_for_cron())
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - logged at ERROR and alerted below
             logger.error("Could not enumerate cron-triggered workflows: %s", e)
             await self._alert_workflow_cron_failure(
                 "Workflow cron registration skipped entirely",
@@ -1057,7 +1057,7 @@ class CronScheduler:
                     coalesce=True,
                     misfire_grace_time=60,
                 )
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - recorded per workflow and alerted below
                 failures[wf.id] = f"{type(e).__name__}: {e}"
                 logger.error(
                     "Workflow cron registration FAILED for %s (cron=%s tz=%s): %s: %s",
@@ -1167,7 +1167,7 @@ class CronScheduler:
                 run.status.value,
                 run.duration_ms,
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - one workflow run must not stop the scheduler
             logger.error("Workflow cron failed for %s: %s", workflow_id, e)
 
     def _build_payload(self, config: AgentConfig) -> str:
@@ -1225,10 +1225,11 @@ class CronScheduler:
                     asyncio.create_task(
                         self._run_user_cronjob(job["agent_id"], job["prompt"], job_id)
                     )
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001 - one job must not starve the other due jobs
                     logger.warning("user_cron job %s failed to fire: %s", job_id, e)
-        except Exception as e:
-            logger.debug("user_cron tick error: %s", e)
+        except Exception as e:  # noqa: BLE001 - the next tick retries
+            # WARNING: at DEBUG a broken user-cron table meant no job ever fired, silently.
+            logger.warning("user_cron tick error: %s", e)
 
     async def _run_user_cronjob(self, agent_id: str, prompt: str, job_id: str) -> None:
         """Execute a user-cron fire under the per-agent dedup lock."""
@@ -1345,7 +1346,7 @@ class CronScheduler:
                 result.pruned = delete_stale_schedules(
                     set(declared), tenant_id=self.config.tenant_id
                 )
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - reconcile retries on the next scan
                 logger.warning("Reconcile: failed to prune stale DB rows: %s", e)
 
         # Remove orphaned APScheduler in-memory jobs — including the jobs of an

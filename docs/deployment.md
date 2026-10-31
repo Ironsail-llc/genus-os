@@ -1137,7 +1137,7 @@ plugin that was turned off is loading again. See
 | Service | Endpoint | Expected |
 |---------|----------|----------|
 | Engine | `GET /health` on :18800 | `{"status": "ok"}`; `/ready` is the one an orchestrator gates on, and it carries the fleet check |
-| Orchestrator (RAG API) | `GET /health` on :9099 | `{"status": "ok"}` |
+| Orchestrator (RAG API) | `GET /health` on :9099 | `{"status": "ok"}`; `optional.vision` (beside `components`, so it never degrades the dashboard's view) reports whether the last proxied vision call reached the vision service (`available`, `last_error`), without affecting `status` |
 | Bridge | `GET /health` on :9100 | `{"status": "ok"}`; its `/ready` also checks the orchestrator and the SSO secret, and reports the engine without gating on it (see below) |
 | Dashboard | `GET /api/health` on :3004 | 200; `/api/ready` is what the compose healthcheck polls |
 | Vision | `GET /health` on :8600 | `{"status": "ok", "mode": "..."}` |
