@@ -162,6 +162,9 @@ HOST_ROLES: frozenset[str] = frozenset({"owner", "admin"})
 #: set would leak back into the parent when it returned.
 _MAX_PLANS = 4096
 
+#: Where the live run carries its plan (see ``exec_plan_for``).
+_RUN_ATTR = "_exec_plan"
+
 _UNLOCK = (
     "An owner or admin can run it, or the operator can install a sandbox runtime "
     "(rootless podman) on the engine or select one with ROBOTHOR_SANDBOX_BACKEND."
@@ -217,10 +220,16 @@ def resolve_execution_plan(
 
     missing = runtime.reason or f"{runtime.binary} is not available"
     if not is_root_run:
-        why = f"there is no sandbox runtime on this engine ({missing}), and a sub-agent never falls back to the host"
+        why = (
+            f"there is no sandbox runtime on this engine ({missing}), and a "
+            "sub-agent never falls back to the host"
+        )
         return ExecPlan(where="refuse", reason=why, unlock=_UNLOCK, user_role=role)
     if is_benchmark:
-        why = f"there is no sandbox runtime on this engine ({missing}), and a benchmark run never falls back to the host"
+        why = (
+            f"there is no sandbox runtime on this engine ({missing}), and a "
+            "benchmark run never falls back to the host"
+        )
         return ExecPlan(where="refuse", reason=why, unlock=_UNLOCK, user_role=role)
     if role in HOST_ROLES:
         return ExecPlan(
@@ -251,9 +260,20 @@ def set_exec_plan(run_id: str, plan: ExecPlan) -> None:
 
 
 def exec_plan_for(run_id: str) -> ExecPlan | None:
-    """The plan recorded for this run, or None (flag off, or no plan made)."""
+    """The plan for this run, or None (flag off, or no plan made).
+
+    The live session's run carries it for the run's whole lifetime; the bounded
+    table covers callers with no registered session. A busy instance starts more
+    runs than the table holds, and a refused plan that fell out of it would let
+    a member's exec run on the host.
+    """
     if not run_id:
         return None
+    from robothor.engine.session_registry import lookup
+
+    live = getattr(getattr(lookup(run_id), "run", None), _RUN_ATTR, None)
+    if isinstance(live, ExecPlan):
+        return live
     return _plans.get(run_id)
 
 
@@ -293,6 +313,7 @@ async def establish_execution_plan(
     )
     run_id = str(getattr(run, "id", "") or "")
     set_exec_plan(run_id, plan)
+    setattr(run, _RUN_ATTR, plan)  # lives exactly as long as the run
     if plan.degraded or plan.where == "refuse":
         await asyncio.to_thread(
             _record,
