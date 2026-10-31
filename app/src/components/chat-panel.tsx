@@ -13,8 +13,13 @@ import {
 import { useVisualState } from "@/hooks/use-visual-state";
 import { useThrottle } from "@/hooks/use-throttle";
 import { MarkerInterceptor, stripMarkers } from "@/lib/engine/marker-interceptor";
-import { ChatRecovery, type ChatRecoveryRequest } from "@/components/chat-recovery";
-import { ChatMarkdown, CHAT_PROSE } from "@/components/chat/chat-markdown";
+import { type ChatRecoveryRequest } from "@/components/chat-recovery";
+import { ChatMarkdown } from "@/components/chat/chat-markdown";
+import { MessageBubble } from "@/components/chat/message-bubble";
+import { useMessageWindow } from "@/components/chat/use-message-window";
+import { usePinnedScroll } from "@/components/chat/use-pinned-scroll";
+import { useStableCallback } from "@/components/chat/use-stable-callback";
+import { readChatStream, type ChatStreamData } from "@/lib/chat/read-chat-stream";
 import { ChatAskCard, type ApprovalKind } from "@/components/chat-ask-card";
 import { ChatLanding } from "@/components/chat/chat-landing";
 import { repeatsQuickAction } from "@/components/business/quick-action-labels";
@@ -205,7 +210,6 @@ export function ChatPanel({
   const [deepElapsed, setDeepElapsed] = useState(0);
   const [, setDeepCost] = useState<{ time_s: number; cost: number } | null>(null);
   const throttledStreamingText = useThrottle(streamingText, 100);
-  const scrollEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   // Live follow-ups: messages typed while a turn runs. The engine takes them
@@ -254,10 +258,15 @@ export function ChatPanel({
 
   const currentAgentName = chattable.find((row) => row.id === agent)?.name ?? aiName;
 
-  // Scroll to bottom on new messages (throttled during streaming)
-  useEffect(() => {
-    scrollEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, throttledStreamingText, activePlan, isDeepReasoning]);
+  // Follow the bottom while the reader is there (throttled during streaming);
+  // sending a message brings them back to it.
+  const sentCount = useMemo(() => messages.filter((m) => m.role === "user").length, [messages]);
+  const { containerRef: scrollRef, onScroll: onListScroll } = usePinnedScroll<HTMLDivElement>(
+    [messages, throttledStreamingText, activePlan, isDeepReasoning],
+    sentCount,
+  );
+  const { visible: visibleMessages, hiddenCount, showEarlier } = useMessageWindow(messages);
+  const onBubbleRecovered = useStableCallback(recoverMessage);
 
   /** An `approval_required` event: the agent asked something and is waiting.
    *
@@ -612,18 +621,12 @@ export function ChatPanel({
         return;
       }
 
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let sseBuffer = "";
-      let sseEventType = "";
-      let sseData = "";
       let fullResponse = "";
       let gotPlanEvent = false;
       let receivedTerminal = false;
 
-      const handleSSEEvent = (eventType: string, data: string) => {
+      const handleSSEEvent = (eventType: string, parsed: ChatStreamData) => {
         try {
-          const parsed = JSON.parse(data);
           if (handleSharedStreamEvent(eventType, parsed)) {
             return;
           }
@@ -650,31 +653,7 @@ export function ChatPanel({
         } catch { /* skip */ }
       };
 
-      const processLine = (line: string) => {
-        if (line === "") {
-          if (sseData) handleSSEEvent(sseEventType || "delta", sseData);
-          sseEventType = "";
-          sseData = "";
-        } else if (line.startsWith("event: ")) {
-          sseEventType = line.slice(7);
-        } else if (line.startsWith("data: ")) {
-          sseData += (sseData ? "\n" : "") + line.slice(6);
-        }
-      };
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        sseBuffer += decoder.decode(value, { stream: true });
-        const lines = sseBuffer.split("\n");
-        sseBuffer = lines.pop() || "";
-        for (const line of lines) processLine(line);
-      }
-      sseBuffer += decoder.decode();
-      if (sseBuffer) {
-        for (const line of sseBuffer.split("\n")) processLine(line);
-      }
-      if (sseData) handleSSEEvent(sseEventType || "delta", sseData);
+      for await (const { event, data } of readChatStream(res)) handleSSEEvent(event, data);
 
       setIsPlanning(false);
       setStreamingText("");
@@ -834,20 +813,14 @@ export function ChatPanel({
         return;
       }
 
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let sseBuffer = "";
-      let sseEventType = "";
-      let sseData = "";
       let fullResponse = "";
       let receivedTerminal = false;
       const collectedAgentData: Record<string, unknown> = {};
 
       const interceptor = new MarkerInterceptor();
 
-      const handleSSEEvent = (eventType: string, data: string) => {
+      const handleSSEEvent = (eventType: string, parsed: ChatStreamData) => {
         try {
-          const parsed = JSON.parse(data);
           if (handleSharedStreamEvent(eventType, parsed)) {
             return;
           }
@@ -951,50 +924,7 @@ export function ChatPanel({
         }
       };
 
-      // Proper SSE parser: buffer event type + data until empty-line boundary.
-      // The old parser used lines[i-1] to detect event types, which broke when
-      // TCP chunks split between the "event:" and "data:" lines — the done event
-      // would be misidentified as a delta, doubling the message text.
-      const processLine = (line: string) => {
-        if (line === "") {
-          // Empty line = SSE event boundary — dispatch accumulated event
-          if (sseData) {
-            handleSSEEvent(sseEventType || "delta", sseData);
-          }
-          sseEventType = "";
-          sseData = "";
-        } else if (line.startsWith("event: ")) {
-          sseEventType = line.slice(7);
-        } else if (line.startsWith("data: ")) {
-          sseData += (sseData ? "\n" : "") + line.slice(6);
-        }
-      };
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        sseBuffer += decoder.decode(value, { stream: true });
-        const lines = sseBuffer.split("\n");
-        sseBuffer = lines.pop() || "";
-
-        for (const line of lines) {
-          processLine(line);
-        }
-      }
-
-      // Flush TextDecoder and process any remaining buffer data
-      sseBuffer += decoder.decode();
-      if (sseBuffer.length > 0) {
-        const remaining = sseBuffer.split("\n");
-        for (const line of remaining) {
-          processLine(line);
-        }
-      }
-      // Dispatch any accumulated event that wasn't terminated by an empty line
-      if (sseData) {
-        handleSSEEvent(sseEventType || "delta", sseData);
-      }
+      for await (const { event, data } of readChatStream(res)) handleSSEEvent(event, data);
 
       // Clear streaming state BEFORE adding the message to avoid duplicate display
       setIsStreaming(false);
@@ -1127,87 +1057,45 @@ export function ChatPanel({
         return;
       }
 
-      // Stream the execution response
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let sseBuffer = "";
-      let sseEventType = "";
-      let sseData = "";
+      // Stream the execution response. A bare event (no `event:` line) was never
+      // a delta on this stream.
       let fullResponse = "";
       let receivedTerminal = false;
       let costInfo: { time_s: number; cost: number } | null = null;
 
-      const processLine = (line: string) => {
-        if (line === "") {
-          if (sseData) {
-            try {
-              const parsed = JSON.parse(sseData);
-              if (handleSharedStreamEvent(sseEventType, parsed)) {
-                sseEventType = "";
-                sseData = "";
-                return;
-              }
-              if (sseEventType === "delta") {
-                fullResponse += parsed.text || "";
-                setStreamingText(fullResponse);
-              } else if (sseEventType === "deep_progress") {
-                setDeepElapsed(parsed.elapsed_s || 0);
-              } else if (sseEventType === "deep_result") {
-                fullResponse = parsed.response || fullResponse;
-                costInfo = {
-                  time_s: parsed.execution_time_s || 0,
-                  cost: parsed.cost_usd || 0,
-                };
-              } else if (sseEventType === "done") {
-                const terminal = terminalOutcome(parsed, fullResponse);
-                if (terminal !== undefined) {
-                  receivedTerminal = true;
-                  fullResponse = terminal;
-                }
-                if (parsed.cost_usd && !costInfo) {
-                  costInfo = {
-                    time_s: parsed.execution_time_s || 0,
-                    cost: parsed.cost_usd || 0,
-                  };
-                }
-              } else if (sseEventType === "error") {
-                fullResponse = `Error: ${parsed.error || "Unknown error"}`;
-              }
-            } catch { /* skip */ }
-          }
-          sseEventType = "";
-          sseData = "";
-        } else if (line.startsWith("event: ")) {
-          sseEventType = line.slice(7);
-        } else if (line.startsWith("data: ")) {
-          sseData += (sseData ? "\n" : "") + line.slice(6);
-        }
-      };
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        sseBuffer += decoder.decode(value, { stream: true });
-        const lines = sseBuffer.split("\n");
-        sseBuffer = lines.pop() || "";
-        for (const line of lines) processLine(line);
-      }
-      sseBuffer += decoder.decode();
-      if (sseBuffer) {
-        for (const line of sseBuffer.split("\n")) processLine(line);
-      }
-      if (sseData) {
+      const handleSSEEvent = (eventType: string, parsed: ChatStreamData) => {
         try {
-          const parsed = JSON.parse(sseData);
-          if (sseEventType === "done") {
+          if (handleSharedStreamEvent(eventType, parsed)) return;
+          if (eventType === "delta") {
+            fullResponse += parsed.text || "";
+            setStreamingText(fullResponse);
+          } else if (eventType === "deep_progress") {
+            setDeepElapsed(parsed.elapsed_s || 0);
+          } else if (eventType === "deep_result") {
+            fullResponse = parsed.response || fullResponse;
+            costInfo = {
+              time_s: parsed.execution_time_s || 0,
+              cost: parsed.cost_usd || 0,
+            };
+          } else if (eventType === "done") {
             const terminal = terminalOutcome(parsed, fullResponse);
             if (terminal !== undefined) {
               receivedTerminal = true;
               fullResponse = terminal;
             }
+            if (parsed.cost_usd && !costInfo) {
+              costInfo = {
+                time_s: parsed.execution_time_s || 0,
+                cost: parsed.cost_usd || 0,
+              };
+            }
+          } else if (eventType === "error") {
+            fullResponse = `Error: ${parsed.error || "Unknown error"}`;
           }
         } catch { /* skip */ }
-      }
+      };
+
+      for await (const { event, data } of readChatStream(res, { defaultEvent: "" })) handleSSEEvent(event, data);
 
       if (!receivedTerminal) fullResponse = OUTCOME_UNKNOWN;
       else if (fullResponse !== OUTCOME_UNKNOWN) {
@@ -1417,7 +1305,7 @@ export function ChatPanel({
       </div>
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto p-4">
+      <div ref={scrollRef} onScroll={onListScroll} className="flex-1 overflow-y-auto p-4">
         <div className="space-y-4" data-testid="message-list">
           {messages.length === 0 && !isStreaming && variant === "page" && historySettledFor === agentQuery && (
             <ChatLanding
@@ -1447,35 +1335,20 @@ export function ChatPanel({
             </div>
           )}
 
-          {messages.map((msg) => (
-            <div
-              key={msg.id}
-              className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
-              data-testid={`message-${msg.role}`}
-            >
-              <div
-                className={`max-w-[85%] rounded-lg px-3 py-2 text-sm ${
-                  msg.role === "user"
-                    ? "bg-primary text-primary-foreground"
-                    : "bg-muted border-l-2 border-l-primary"
-                }`}
+          {hiddenCount > 0 && (
+            <div className="flex justify-center">
+              <button
+                type="button"
+                onClick={showEarlier}
+                className="text-xs text-muted-foreground hover:text-foreground"
+                data-testid="show-earlier"
               >
-                {msg.role === "assistant" ? (
-                  msg.recovery ? (
-                    <div className={CHAT_PROSE}>
-                      <ChatRecovery request={msg.recovery} messageId={msg.id} onRecovered={recoverMessage} />
-                    </div>
-                  ) : (
-                    <ChatMarkdown content={msg.content} />
-                  )
-                ) : (
-                  <p>{msg.content}</p>
-                )}
-                {msg.note && (
-                  <p className="mt-1 text-[11px] opacity-75" data-testid="message-note">{msg.note}</p>
-                )}
-              </div>
+                Show {hiddenCount} earlier {hiddenCount === 1 ? "message" : "messages"}
+              </button>
             </div>
+          )}
+          {visibleMessages.map((msg) => (
+            <MessageBubble key={msg.id} msg={msg} onRecovered={onBubbleRecovered} />
           ))}
 
           {/* The agent's own question — `approval_required` over the run's stream */}
@@ -1610,7 +1483,6 @@ export function ChatPanel({
               </div>
             </div>
           )}
-          <div ref={scrollEndRef} />
         </div>
       </div>
 

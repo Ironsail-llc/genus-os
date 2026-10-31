@@ -39,6 +39,8 @@ export function useDashboardAgent(): DashboardAgentState {
   const {
     pendingMessages,
     pendingAgentData,
+    pendingTurn,
+    claimTurn,
     setIsUpdating,
     setDashboardCode,
   } = useVisualState();
@@ -149,6 +151,8 @@ export function useDashboardAgent(): DashboardAgentState {
     const agentDataSnapshot = pendingAgentData;
     console.log("[dashboard-agent] Scheduling update in", DEBOUNCE_MS, "ms for", pendingMessages.length, "messages");
     debounceRef.current = setTimeout(() => {
+      // One generation per turn, however many canvases are open.
+      if (!claimTurn(pendingTurn)) return;
       handleUpdate(pendingMessages, agentDataSnapshot);
     }, DEBOUNCE_MS);
 
@@ -157,7 +161,7 @@ export function useDashboardAgent(): DashboardAgentState {
         clearTimeout(debounceRef.current);
       }
     };
-  }, [pendingMessages, pendingAgentData, handleUpdate]);
+  }, [pendingMessages, pendingAgentData, pendingTurn, claimTurn, handleUpdate]);
 
   const retry = useCallback(() => {
     const last = lastRequestRef.current;

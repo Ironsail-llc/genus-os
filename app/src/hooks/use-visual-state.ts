@@ -73,6 +73,10 @@ interface VisualStateContextType {
   pendingMessages: Array<{ role: string; content: string }> | null;
   pendingAgentData: Record<string, unknown> | null;
   notifyConversationUpdate: (messages: Array<{ role: string; content: string }>, agentData?: Record<string, unknown>) => void;
+  /** Which turn `pendingMessages` is: it counts up with every notify. */
+  pendingTurn: number;
+  /** True for the first canvas to claim `turn`, false for every later one. */
+  claimTurn: (turn: number) => boolean;
 
   // Canvas actions (Phase 4)
   pendingAction: ActionRequest | null;
@@ -106,6 +110,7 @@ export function VisualStateProvider({
   const [pendingAgentData, setPendingAgentData] = useState<
     Record<string, unknown> | null
   >(null);
+  const [pendingTurn, setPendingTurn] = useState(0);
 
   // Phase 4: Canvas actions
   const [pendingAction, setPendingAction] = useState<ActionRequest | null>(null);
@@ -197,9 +202,24 @@ export function VisualStateProvider({
     (messages: Array<{ role: string; content: string }>, agentData?: Record<string, unknown>) => {
       setPendingMessages(messages);
       setPendingAgentData(agentData && Object.keys(agentData).length > 0 ? agentData : null);
+      setPendingTurn((turn) => turn + 1);
     },
     []
   );
+
+  // Each mounted canvas (the chat's rail, the dashboard's AI canvas) runs its
+  // own dashboard agent, and their results land in this one shared slot. The
+  // first to claim a turn generates it; the rest would pay for a second
+  // triage+generate pipeline whose answer overwrites the first.
+  // Created once per provider; claiming a turn must not re-render anything.
+  const [claimTurn] = useState(() => {
+    let claimed = 0;
+    return (turn: number) => {
+      if (turn <= claimed) return false;
+      claimed = turn;
+      return true;
+    };
+  });
 
   const currentView =
     viewStack.length > 0 ? viewStack[viewStack.length - 1] : null;
@@ -229,6 +249,8 @@ export function VisualStateProvider({
         pendingMessages,
         pendingAgentData,
         notifyConversationUpdate,
+        pendingTurn,
+        claimTurn,
         pendingAction,
         lastActionResult,
         submitAction,

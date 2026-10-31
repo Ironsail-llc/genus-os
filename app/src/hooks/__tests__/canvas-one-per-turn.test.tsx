@@ -7,7 +7,7 @@
  * same shared slot.
  */
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, act, waitFor } from "@testing-library/react";
+import { render, fireEvent, screen, waitFor } from "@testing-library/react";
 import { VisualStateProvider, useVisualState } from "@/hooks/use-visual-state";
 import { useDashboardAgent } from "@/hooks/use-dashboard-agent";
 
@@ -16,16 +16,21 @@ function Canvas() {
   return null;
 }
 
-let notify: ReturnType<typeof useVisualState>["notifyConversationUpdate"];
-function Chat() {
-  notify = useVisualState().notifyConversationUpdate;
-  return null;
-}
-
 const turn = (reply: string) => [
   { role: "user", content: "Show me the week" },
   { role: "assistant", content: reply },
 ];
+
+/** The chat's side: each button ends one turn with a long reply. */
+function Chat() {
+  const { notifyConversationUpdate } = useVisualState();
+  return (
+    <>
+      <button data-testid="first" onClick={() => notifyConversationUpdate(turn("first ".repeat(50)))} />
+      <button data-testid="second" onClick={() => notifyConversationUpdate(turn("second ".repeat(50)))} />
+    </>
+  );
+}
 
 function generateCalls(fetcher: ReturnType<typeof vi.fn>) {
   return fetcher.mock.calls.filter(([url]) => String(url) === "/api/dashboard/generate").length;
@@ -44,7 +49,7 @@ describe("canvas generation per turn", () => {
         <Canvas />
       </VisualStateProvider>,
     );
-    act(() => notify(turn("x".repeat(250))));
+    fireEvent.click(screen.getByTestId("first"));
     await waitFor(() => expect(generateCalls(fetcher)).toBeGreaterThan(0));
     await new Promise((r) => setTimeout(r, 400));
     expect(generateCalls(fetcher)).toBe(1);
@@ -60,9 +65,9 @@ describe("canvas generation per turn", () => {
         <Canvas />
       </VisualStateProvider>,
     );
-    act(() => notify(turn("first ".repeat(50))));
+    fireEvent.click(screen.getByTestId("first"));
     await waitFor(() => expect(generateCalls(fetcher)).toBe(1));
-    act(() => notify(turn("second ".repeat(50))));
+    fireEvent.click(screen.getByTestId("second"));
     await waitFor(() => expect(generateCalls(fetcher)).toBe(2));
     await new Promise((r) => setTimeout(r, 400));
     expect(generateCalls(fetcher)).toBe(2);
@@ -76,7 +81,7 @@ describe("canvas generation per turn", () => {
         <Chat />
       </VisualStateProvider>,
     );
-    act(() => notify(turn("x".repeat(250))));
+    fireEvent.click(screen.getByTestId("first"));
     await new Promise((r) => setTimeout(r, 400));
     expect(generateCalls(fetcher)).toBe(0);
   });
