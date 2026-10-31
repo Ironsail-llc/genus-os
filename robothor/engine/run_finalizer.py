@@ -391,6 +391,7 @@ class RunFinalizationMixin:
                 if failed:
                     span.status = "error"
                     span.status_message = reason
+            trace.end_run(status=status, trigger_type=str(run.trigger_type), error=reason)
 
             trace.publish_metrics(
                 {

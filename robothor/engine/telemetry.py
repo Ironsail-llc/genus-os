@@ -31,6 +31,9 @@ TELEMETRY_STREAM_MAXLEN = 5000
 OTLP_TIMEOUT_S = 5.0
 REDIS_TIMEOUT_S = 5.0
 OTLP_BATCH_MAX = 64
+ROOT_SPAN_NAME = "agent_run"
+# OTLP SpanKind enum values.
+_OTLP_SPAN_KIND = {"internal": 1, "server": 2, "client": 3}
 
 
 def _otlp_value(v: Any) -> dict[str, Any]:
@@ -125,6 +128,7 @@ class Span:
     attributes: dict[str, Any] = field(default_factory=dict)
     status: str = "ok"  # ok, error
     status_message: str = ""
+    kind: str = "internal"  # internal, server, client (OTel SpanKind)
 
     @property
     def duration_ms(self) -> int:
@@ -158,10 +162,42 @@ class TraceContext:
     spans: list[Span] = field(default_factory=list)
     # Set once the run's metrics have been published (one publish per trace).
     published: bool = False
+    # The run's root span (``agent_run``), open from start_run() to end_run().
+    _root: Span | None = None
     _span_stack: list[Span] = field(default_factory=list)
 
+    def start_run(self, start_time: float | None = None) -> None:
+        """Open the run's root span; every span opened after it is its child."""
+        if self._root is not None:
+            return
+        self._root = Span(
+            name=ROOT_SPAN_NAME,
+            parent_span_id=self.parent_span_id or None,
+            start_time=start_time or time.time(),
+            kind="server",
+        )
+        self._span_stack.insert(0, self._root)
+
+    def end_run(self, *, status: str, trigger_type: str, error: str = "") -> None:
+        """Close the run's root span at run exit. Idempotent; no-op without start_run()."""
+        root = self._root
+        if root is None or root.end_time:
+            return
+        root.end_time = time.time()
+        root.attributes["run.status"] = status
+        root.attributes["run.trigger_type"] = trigger_type
+        if error:
+            root.status = "error"
+            root.status_message = error
+            root.attributes["error.message"] = error
+        if root in self._span_stack:
+            self._span_stack.remove(root)
+        self.spans.append(root)
+
     @contextmanager
-    def span(self, name: str, **attributes: Any) -> Generator[Span, None, None]:
+    def span(
+        self, name: str, *, span_kind: str = "internal", **attributes: Any
+    ) -> Generator[Span, None, None]:
         """Context manager for a timed span."""
         parent_id = self._span_stack[-1].span_id if self._span_stack else None
         s = Span(
@@ -169,6 +205,7 @@ class TraceContext:
             parent_span_id=parent_id,
             start_time=time.time(),
             attributes=attributes,
+            kind=span_kind,
         )
         self._span_stack.append(s)
         try:
@@ -300,6 +337,7 @@ class TraceContext:
             "endTimeUnixNano": str(int(s.end_time * 1e9)) if s.end_time else "0",
             "attributes": _otlp_attrs(s.attributes),
             "status": _otlp_status(s),
+            "kind": _OTLP_SPAN_KIND.get(s.kind, _OTLP_SPAN_KIND["internal"]),
         }
 
     def _export_otlp(self, endpoint: str, run_data: dict[str, Any]) -> None:
