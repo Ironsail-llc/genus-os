@@ -21,6 +21,16 @@ Works with any OTLP/HTTP intake:
 
 ## What's emitted
 
+Each run's trace has one root span, `agent_run`, that opens when the run starts
+and closes when it exits, so its duration is the run's turn time. It carries
+`run.status` and `run.trigger_type`. Every `llm_call`, `tool_call` and
+`run_summary` span of the run is its child, and a sub-agent's `agent_run` is a
+child of the parent run's span. Spans carry an OpenTelemetry span kind:
+`agent_run` is SERVER, `llm_call` is CLIENT, everything else is INTERNAL. In a
+backend that names trace metrics by span kind, such as Datadog, the operations
+are `server.request` (`agent_run`), `client.request` (`llm_call`) and
+`Internal` (`tool_call`, `run_summary`), with the span name as the resource.
+
 Per `llm_call` span (GenAI conventions):
 - `gen_ai.system` (anthropic / openai / google / …)
 - `gen_ai.request.model`
@@ -38,7 +48,7 @@ stream `robothor:events:telemetry` for the dashboards.
 ## Publishing never blocks a run
 
 Every run publishes its trace when it ends, whatever the outcome: completed,
-failed, timed out, aborted or interrupted. The `run_summary` span carries
+failed, timed out, aborted or interrupted. The `agent_run` and `run_summary` spans carry
 `run.status`; a failed, timed-out or cancelled run exports it with error status
 (OTLP code 2), the reason as the status message and as `error.message`, and the
 Redis entry's `status` is the run's terminal status.
