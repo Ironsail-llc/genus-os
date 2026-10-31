@@ -161,5 +161,21 @@ for (const width of [1440, 390]) {
 
       expect(await worstOverflow(page, "settings-page-secrets")).toBeLessThanOrEqual(1);
     });
+
+    test("the Remove control and its confirmation fit the screen", async ({ page }) => {
+      await setupMocks(page);
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto(SECRETS_URL, { waitUntil: "networkidle" });
+
+      const remove = page.locator('[data-testid="secrets-remove-EXAMPLE_API_TOKEN"]');
+      await expect(remove).toBeVisible({ timeout: 15000 });
+      await expect(remove).toHaveAccessibleName(/remove EXAMPLE_API_TOKEN/i);
+      await remove.click();
+      await expect(
+        page.locator('[data-testid="secrets-remove-confirm-EXAMPLE_API_TOKEN"]')
+      ).toBeVisible();
+
+      expect(await worstOverflow(page, "settings-page-secrets")).toBeLessThanOrEqual(1);
+    });
   });
 }
