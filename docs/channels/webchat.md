@@ -197,7 +197,8 @@ row was stored; a user turn is stored with its reply, so both show the time the
 reply finished), the response carries `hasMore`, and the Helm shows each
 message's time and a **Load earlier messages** button. Pages go back by
 `before=<id>`, or by `offset`; `limit` is the page size (50 from the Helm).
-A first page the database cannot answer falls back to the in-memory tail.
+A first page the database cannot answer falls back to the in-memory tail. A turn that ended with no reply text is kept in memory but never stored,
+so a stored page leaves it out.
 With the setting off the endpoint answers exactly as before, and the Helm
 shows no times on history and no button.
 
