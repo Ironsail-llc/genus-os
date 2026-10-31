@@ -81,19 +81,13 @@ from robothor.engine.chat_store import (
 from robothor.engine.early_done import EarlyRelease, chat_done_event
 from robothor.engine.feature_flags import per_user_sessions_mode
 from robothor.engine.live_inbox import LiveInbox, history_text
-from robothor.engine.models import (
-    PLAN_TTL_SECONDS,
-    AgentRun,
-    DeepRunState,
-    PlanState,
-    RunStatus,
-    TriggerType,
-)
+from robothor.engine.models import PLAN_TTL_SECONDS, DeepRunState, PlanState, RunStatus, TriggerType
 from robothor.engine.runtime.chat_control import start, stop
 from robothor.engine.sanitize import sanitize_log
 
 if TYPE_CHECKING:
     from robothor.engine.config import EngineConfig
+    from robothor.engine.models import AgentRun
     from robothor.engine.runner import AgentRunner
     from robothor.identity import IdentityContext
 
@@ -431,6 +425,7 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
                 agent_id = parts[1]
 
             async def send_done(run: AgentRun) -> dict[str, Any]:
+                pending.extend(seal_live_inbox(session, inbox))  # nothing joins a finished run
                 delivered = await delivery_result(run, auth)
                 await queue.put(chat_done_event(run, delivered))
                 return delivered

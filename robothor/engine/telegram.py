@@ -576,6 +576,7 @@ class TelegramBot(
                     # Delete the status message, deliver the final output as a
                     # new message. The returned Message objects let the channel
                     # bus map platform_message_ids to the persisted row below.
+                    self._seal_live_inbox(chat_id, inbox)  # nothing joins a finished run
                     if stream_msg_id is not None:
                         with contextlib.suppress(Exception):
                             await self.bot.delete_message(

@@ -39,6 +39,8 @@ logger = logging.getLogger(__name__)
 T = TypeVar("T")
 
 _APPLIED = "_output_policies_applied"
+#: How long background finalization waits for a released answer to be sent.
+RELEASE_GRACE_S = 0.05
 
 
 def apply_output_policies(run: AgentRun, session: Any, workspace: Any) -> None:
@@ -60,7 +62,12 @@ async def release_then_finalize(
     **finish_kwargs: Any,
 ) -> AgentRun:
     """Apply the output-altering policies, release the run, finalize in the background."""
-    apply_output_policies(completed, session, runner.config.workspace)
+    try:
+        apply_output_policies(completed, session, runner.config.workspace)
+    except Exception as exc:  # degrade as the flag-off path does: lose the verdict, not the run
+        logger.error(
+            "run %s: output policy failed: %s", completed.id, _sanitize(exc), exc_info=True
+        )
     try:
         await on_complete(completed)
     finally:  # a failed release must not leave the run unfinalized
@@ -92,7 +99,10 @@ async def _finalize(runner: Any, run: AgentRun, **finish_kwargs: Any) -> None:
     The caller already has the answer, so a failure here is logged and recorded
     on the run row rather than raised.
     """
-    await asyncio.sleep(0)  # let the released answer reach its transport first
+    # Let the released answer reach its socket first. The loop is idle here, so
+    # a short real wait covers every task hop on the way (HTTP middleware, the
+    # SSE generator); _finish_run still blocks the loop until it goes off-loop.
+    await asyncio.sleep(RELEASE_GRACE_S)
     try:
         runner._publish_run_telemetry(finish_kwargs.get("trace"), run)
         runner._finish_run(run, **finish_kwargs)
