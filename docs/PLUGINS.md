@@ -483,6 +483,14 @@ concurrent handlers as you like. Pass `record_turn=False` for a message that
 should not be remembered, and `history_limit=N` to hand the run only the last
 N turns — a cheap bound on prompt size for a chat that can run long.
 
+**Stream if your surface can show it.** Pass `stream=<async callable>` and,
+with `ROBOTHOR_CHANNEL_STREAMING` on, it is called with the run's cumulative
+text as the model writes it, including interim text from a tool turn. The text
+can restart shorter (a new model call, or a stream retried once on the same
+model after a transient failure), so render it by replacing what you showed,
+never by appending. The returned `reply` is still the complete answer. With
+the flag off, or no callback, the run is exactly what it was without one.
+
 **Declare your chunk size if you split.** `register_platform_sender(...,
 chunk_size=N)` is how the platform tells a truncated send from a complete one.
 Without it, two answers are recorded `failed:<name>_unproven`, because neither
