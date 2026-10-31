@@ -94,7 +94,7 @@ describe("ChatPanel render cost of a streaming delta", () => {
     expect(streamedRenders).toBeGreaterThan(1);
 
     const extra = probe.renders.get(historyAssistant)! - before;
-    console.info(`[render-probe] history bubble markdown renders during ${DELTAS} deltas: ${extra}`);
-    expect(extra).toBe(0);
+    // The count is the measurement: 22 on the old panel over these 20 deltas, 0 now.
+    expect(extra, `history bubble markdown renders during ${DELTAS} deltas`).toBe(0);
   });
 });
