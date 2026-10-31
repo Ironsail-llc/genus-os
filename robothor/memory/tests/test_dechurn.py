@@ -54,3 +54,19 @@ def test_threshold_respected() -> None:
     ]
     # Different decisions, low overlap → not collapsed even though same entity.
     assert cluster_near_dup_losers(facts, jaccard=0.9) == []
+
+
+def test_active_fact_load_skips_operator_confirmed_facts() -> None:
+    # A confirmed fact is neither a loser nor a winner: dechurn never sees it.
+    from unittest.mock import MagicMock
+
+    from robothor.memory.confirmed import NOT_OPERATOR_CONFIRMED_SQL
+    from robothor.memory.dechurn import _load_active_facts
+
+    cur = MagicMock()
+    cur2 = cur.connection.cursor.return_value
+    cur2.fetchall.return_value = []
+    assert _load_active_facts(cur, "test-tenant") == []
+    sql = cur2.execute.call_args.args[0]
+    assert "is_active = TRUE" in sql
+    assert NOT_OPERATOR_CONFIRMED_SQL in sql
