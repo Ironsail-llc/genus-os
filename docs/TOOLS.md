@@ -18,12 +18,28 @@ narrower thing.
 
 ### Deferred loading
 
-When an agent's allowed set is larger than the deferral threshold, the engine
-advertises only a small always-on core plus three meta-tools, and the rest load
-on demand. A broad agent with 98 allowed tools is shown **19** schemas — the 16
-`CORE_TOOLS` that are registered, plus the three meta-tools — so it carries
-about a fifth of the schemas, and rather less than a fifth of the tokens, on
-every call.
+Deferral is **on by default** (`ROBOTHOR_RIP_16_ENABLED`; set it to `0` to send
+every allowed schema on every request again). When an agent's allowed set is
+larger than the deferral threshold (`ROBOTHOR_DEFERRED_TOOLS_THRESHOLD`, 40),
+the engine advertises only the agent's always-loaded core plus three
+meta-tools, and the rest load on demand. Curated agents under the threshold
+keep their whole set and never pay a search round-trip.
+
+The core is two things, both cut to what the agent is allowed:
+
+* the platform's fixed `CORE_TOOLS` (file, shell, web, memory reads, skills,
+  calendar, the CRM task verbs, goals);
+* the tools **this agent called in its latest runs** (`agent_run_steps`, the
+  last `ROBOTHOR_DEFERRED_TOOLS_RECENT_RUNS` runs, default 10; a `tool_call`
+  counts as the tool it ran), at most 16, most-used first. So an inbox agent
+  that sends mail every day is shown `gws_gmail_send` directly. The lookup runs
+  off the event loop, waits at most a second, is cached per agent for ten
+  minutes, and on any failure the core is just `CORE_TOOLS`. `0` turns it off.
+
+On a stock checkout `main` (no `tools_allowed`, so every registered tool) is
+shown 30 schemas instead of 206: about 6,600 estimated schema tokens per call
+instead of about 32,000, before any plugin adds its tools — and plugin tools
+add nothing to that figure unless the agent used them recently.
 
 The three meta-tools:
 
@@ -1436,6 +1452,13 @@ another way; and an unresolvable name is dropped after one journald warning.
 Results name agents and tools, never instruction text. "Registered" means a
 built-in, an adapter route, or a tool a loaded plugin declares; a disabled or
 failed plugin's tools still resolve to nothing.
+
+**`tools.deferred_tools_reachable`** — every `tools_allowed` entry is either
+in the always-loaded core or registered with words `tool_search` can match
+(an adapter tool counts by its name, since its schema is only known once the
+engine connects), and every registered schema — built-in or plugin — has at
+least one searchable word in its name, description or `keywords`. A granted
+tool that fails this is one a deferred agent can never reach.
 
 **`calendar.operator_calendar_writable`** (required, and skipped entirely on an
 instance where no agent holds a calendar tool) — the instance's Google account

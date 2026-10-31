@@ -180,13 +180,7 @@ def deferred_tools_recent_runs() -> int:
     round-trip. ``0`` keeps the core static. Reads
     ``ROBOTHOR_DEFERRED_TOOLS_RECENT_RUNS`` (default 10).
     """
-    raw = os.environ.get("ROBOTHOR_DEFERRED_TOOLS_RECENT_RUNS", "").strip()
-    if not raw:
-        return 10
-    try:
-        return max(0, int(raw))
-    except ValueError:
-        return 10
+    return _env_int("ROBOTHOR_DEFERRED_TOOLS_RECENT_RUNS", 10, minimum=0)
 
 
 def cron_warmup_recall_enabled() -> bool:
@@ -269,13 +263,18 @@ def deferred_tools_threshold() -> int:
     tool_search round-trip); only broad-access agents (e.g. main) defer.
     Reads ``ROBOTHOR_DEFERRED_TOOLS_THRESHOLD`` (default 40).
     """
-    raw = os.environ.get("ROBOTHOR_DEFERRED_TOOLS_THRESHOLD", "").strip()
+    return _env_int("ROBOTHOR_DEFERRED_TOOLS_THRESHOLD", 40, minimum=1)
+
+
+def _env_int(name: str, default: int, *, minimum: int) -> int:
+    """An integer tuning knob: unset or unparseable is ``default``, floored at ``minimum``."""
+    raw = os.environ.get(name, "").strip()
     if not raw:
-        return 40
+        return default
     try:
-        return max(1, int(raw))
+        return max(minimum, int(raw))
     except ValueError:
-        return 40
+        return default
 
 
 def symbolic_memory_mode() -> SymbolicMode:

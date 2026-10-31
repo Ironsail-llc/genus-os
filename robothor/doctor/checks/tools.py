@@ -520,16 +520,14 @@ def _scan_deferred_reachability(directory: Path, adapter_names: set[str]) -> lis
     lines: list[str] = []
     if unsearchable:
         lines.append("no searchable words in schema: " + ", ".join(sorted(unsearchable)))
-    advertised = CORE_TOOLS | TOOLSEARCH_TOOLS
+    # Reachable: registered and either always advertised or in the index; or
+    # an adapter tool, known offline by name only.
+    reachable = {n for n in schemas if n in CORE_TOOLS | TOOLSEARCH_TOOLS or n not in unsearchable}
+    reachable |= adapter_names
     for manifest in _scan_manifests(directory):
         agent_id = str(manifest.get("id") or "")
-        unreachable = sorted(
-            name
-            for name in {str(n) for n in (manifest.get("tools_allowed") or [])}
-            if not (name in advertised and name in schemas)
-            and not (name in schemas and name not in unsearchable)
-            and name not in adapter_names
-        )
+        declared = {str(n) for n in (manifest.get("tools_allowed") or [])}
+        unreachable = sorted(declared - reachable)
         if unreachable:
             lines.append(f"{agent_id}: neither loaded nor searchable: " + ", ".join(unreachable))
     return lines
