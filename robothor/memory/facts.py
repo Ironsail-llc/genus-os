@@ -516,6 +516,12 @@ async def update_fact(
         {"error": "drift_refused", "fact_id": int, "audit_snapshot_id": int|None}
 
     The drift check is fully bypassed when Rip 7 is off (default).
+
+    A changed ``fact_text`` is re-embedded between the read and the write. That
+    call is not bounded here (it has the provider client's own timeout and
+    retries), so a slow provider delays the write and widens the unlocked gap
+    after the drift check. A caller that needs a bound sets its own, as the
+    bridge's edit route does.
     """
     resolved_tenant = tenant_id or DEFAULT_TENANT
 
