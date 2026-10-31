@@ -187,6 +187,14 @@ dev = [
     "types-requests>=2.31",
     "types-PyYAML>=6.0",
 ]
+# Runs the suite in a random order, with the seed printed in the header, so
+# an order dependency between tests fails the day it is introduced. Its own
+# extra rather than part of `dev`: installed, the plugin reorders EVERY pytest
+# run, and only the unit suite has been proven order-independent. CI's unit
+# job installs it; locally, `pip install -e ".[random-order]"` (docs/TESTING.md).
+random-order = [
+    "pytest-randomly>=3.16",
+]
 all = [
     "genusos[api,vision,rlm,tui,channels,federation,mcp,browser,autonomy,dev]",
 ]
