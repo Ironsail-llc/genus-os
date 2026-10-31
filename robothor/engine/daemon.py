@@ -1471,6 +1471,11 @@ async def main() -> int:
 
     await _start_coding_jobs()  # resume interrupted Claude Code jobs, reap old ones
 
+    # Background, never awaited here: a slow MCP server must not delay startup.
+    from robothor.engine.task_registry import get_task_registry as _get_task_registry
+
+    _get_task_registry().spawn(_prewarm_mcp_adapters(), name="mcp-adapter-prewarm")
+
     _init_fleet_capacity(config)
 
     # Initialize inter-agent messaging + teams so the send_agent_message /
@@ -1745,6 +1750,10 @@ async def main() -> int:
     except Exception as e:
         logger.debug("Leader elector stop failed: %s", e)
 
+    # After everything that can dispatch a tool has stopped, or a late call
+    # would respawn a session nothing is left to stop.
+    await _shutdown_mcp_pool()
+
     # Cancel remaining tasks
     for task in pending:
         task.cancel()
@@ -1813,6 +1822,49 @@ async def _stop_coding_jobs() -> None:
             await manager.shutdown()
     except Exception as e:  # noqa: BLE001 - shutdown continues regardless
         logger.debug("Coding job shutdown failed: %s", e)
+
+
+async def _prewarm_mcp_adapters() -> None:
+    """Open adapter sessions and cache their tool lists. Never fatal.
+
+    Only under ``ROBOTHOR_CONFIG_CACHE``: with it off nothing caches the list,
+    so warming would buy the first run nothing.
+    """
+    from robothor.engine.feature_flags import config_cache_enabled
+
+    if not config_cache_enabled():
+        return
+    try:
+        from robothor.engine.adapters import load_adapters
+        from robothor.engine.mcp_client import prewarm_adapter_sessions
+
+        adapters = await asyncio.to_thread(load_adapters)
+        if not adapters:
+            return
+        warmed = await prewarm_adapter_sessions(adapters)
+        logger.info(
+            "Startup: pre-warmed %d of %d MCP adapter session(s)", len(warmed), len(adapters)
+        )
+    except Exception as e:  # noqa: BLE001 - a warm cache is an optimisation
+        logger.warning("Startup: MCP adapter pre-warm failed: %s", _sanitize(e))
+
+
+async def _shutdown_mcp_pool() -> None:
+    """Stop MCP sessions and close their clients. Never fatal.
+
+    Only under ``ROBOTHOR_CONFIG_CACHE``, which is what keeps an HTTP client
+    open between requests; off, exit leaves the pool as it always has.
+    """
+    from robothor.engine.feature_flags import config_cache_enabled
+
+    if not config_cache_enabled():
+        return
+    try:
+        from robothor.engine.mcp_client import get_mcp_client_pool
+
+        await get_mcp_client_pool().shutdown()
+    except Exception as e:  # noqa: BLE001 - shutdown continues regardless
+        logger.debug("MCP pool shutdown failed: %s", e)
 
 
 def _record_watchdog_event(event_type: str, detail: str) -> None:

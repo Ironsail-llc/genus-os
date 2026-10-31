@@ -1745,6 +1745,16 @@ class FlagSettings(SettingsGroup):
         "needs the meetings.space.settings OAuth scope, and a failure is a "
         "note on the booking, never a failed booking.",
     )
+    config_cache: bool = declare(
+        False,
+        "ROBOTHOR_CONFIG_CACHE",
+        "Cache configuration-derived state between runs instead of rebuilding "
+        "it each time: an MCP adapter's tool list is reused for up to ten "
+        "minutes while its session lives (a dropped session, a changed adapter "
+        "config, a plugin reload, a failed fetch or an explicit refresh "
+        "refetches it), adapters connect concurrently, an HTTP MCP server keeps one "
+        "client, and adapter sessions are pre-warmed at engine start.",
+    )
     curator_apply: bool = declare(
         False,
         "ROBOTHOR_CURATOR_APPLY",
