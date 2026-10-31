@@ -181,7 +181,9 @@ class TestScanReasons:
         dist = _Dist("acme-tools")
         lockfile.record_install(
             "acme-tools",
-            version="1.2.3",
+            # The installed distribution's own version: a sync over the same
+            # bytes is what "keeps them" means.
+            version=dist.version,
             manifest_sha256=lockfile.manifest_digest(dist),
             kinds=("genus.tools",),
             verdict="review",

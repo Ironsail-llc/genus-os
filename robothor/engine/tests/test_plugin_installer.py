@@ -244,10 +244,14 @@ def test_record_install_writes_the_source_and_sync_keeps_it(tmp_path) -> None:
         publisher_key_id=KEY_ID,
         installed_at="2026-09-15T00:00:00+00:00",
     )
+    # The digest of the distribution the later sync finds, so that sync is
+    # over the SAME bytes. A sync over changed bytes drops the install facts on
+    # purpose (`TestSyncOverChangedBytes` in test_plugin_lockfile.py).
+    dist = SimpleNamespace(name="acme-tools", version="1.2.3", files=(), read_text=lambda n: None)
     lockfile.record_install(
         "acme-tools",
         version="1.2.3",
-        manifest_sha256="a" * 64,
+        manifest_sha256=lockfile.manifest_digest(dist),
         kinds=("genus.tools",),
         verdict="safe",
         dist_sha256="b" * 64,
@@ -267,7 +271,6 @@ def test_record_install_writes_the_source_and_sync_keeps_it(tmp_path) -> None:
     # to tell this platform's install from a hand-rolled one.
     from unittest.mock import patch
 
-    dist = SimpleNamespace(name="acme-tools", version="1.2.3", files=(), read_text=lambda n: None)
     with (
         patch.object(lockfile, "installed_distributions", return_value={"acme-tools": dist}),
         patch.object(lockfile, "entry_point_groups", return_value={"acme-tools": {"genus.tools"}}),

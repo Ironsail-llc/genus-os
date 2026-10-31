@@ -43,7 +43,7 @@ import json
 import logging
 import os
 import tempfile
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -705,23 +705,37 @@ def sync(path: Path | None = None, *, force: bool = False) -> SyncResult:
     updated: list[str] = []
     for name, dist in sorted(installed_distributions().items()):
         previous = existing.get(name)
+        version = str(getattr(dist, "version", "") or "")
+        digest = manifest_digest(dist)
+        # What the install established -- verdict, scan reasons, the wheel's
+        # hash, the key that signed its index -- is about the bytes it
+        # installed. A sync over a changed version or manifest is recording
+        # different bytes (a hand `pip install -U`, an edited package), and
+        # carrying those facts forward is how such a plugin came to read as
+        # signed, pinned and scanned. Only the operator's decision (`enabled`)
+        # and the ORIGIN survive: `remove` reads the origin to know this
+        # platform put the distribution there, and that is still true.
+        same = previous is not None and (
+            previous.version == version and previous.manifest_sha256 == digest
+        )
+        kept = previous if same else None
         row = LockRow(
             name=name,
-            version=str(getattr(dist, "version", "") or ""),
-            manifest_sha256=manifest_digest(dist),
-            verdict=previous.verdict if previous else UNSCANNED,
+            version=version,
+            manifest_sha256=digest,
+            verdict=kept.verdict if kept else UNSCANNED,
             enabled=previous.enabled if previous else True,
             kinds=tuple(sorted(groups.get(name, set()))),
             recorded_at=now,
-            dist_sha256=previous.dist_sha256 if previous else "",
-            members_accounted=previous.members_accounted if previous else 0,
-            scan_reasons=previous.scan_reasons if previous else (),
-            # Carried like `enabled` and `verdict`, and for the same reason:
-            # a rebuild that forgot WHERE a plugin came from would make every
-            # `genus plugin remove` refuse the next time, or -- worse, if the
-            # refusal were dropped instead -- let it uninstall a distribution
-            # the operator installed themselves.
-            source=previous.source if previous else None,
+            dist_sha256=kept.dist_sha256 if kept else "",
+            members_accounted=kept.members_accounted if kept else 0,
+            scan_reasons=kept.scan_reasons if kept else (),
+            # Carried like `enabled`, and for the same reason: a rebuild that
+            # forgot WHERE a plugin came from would make every `genus plugin
+            # remove` refuse the next time, or -- worse, if the refusal were
+            # dropped instead -- let it uninstall a distribution the operator
+            # installed themselves.
+            source=_carried_source(previous, same=same),
         )
         rows[name] = row
         if previous is None:
@@ -754,6 +768,19 @@ def sync(path: Path | None = None, *, force: bool = False) -> SyncResult:
         discarded_disables=discarded_disables,
         rejected_copy=rejected_copy,
     )
+
+
+def _carried_source(previous: LockRow | None, *, same: bool) -> LockSource | None:
+    """The previous row's source, minus the signing key once the bytes changed.
+
+    The key id is evidence that an index signature checked out for the wheel
+    that was installed; it says nothing about bytes that replaced it.
+    """
+    if previous is None or previous.source is None:
+        return None
+    if same:
+        return previous.source
+    return replace(previous.source, publisher_key_id="")
 
 
 def record_install(

@@ -452,11 +452,18 @@ export function AuditView({ visible = true, role, roleLoading = false }: AuditVi
               <NativeSelect
                 data-testid="audit-filter-agent"
                 aria-label="Agent"
-                value={agentIds.includes(draft.actor) ? draft.actor : ""}
+                value={draft.actor}
                 onChange={(event) => setDraft({ ...draft, actor: event.target.value })}
                 className="max-w-[180px]"
               >
                 <option value="">Any agent</option>
+                {draft.actor && !agentIds.includes(draft.actor) ? (
+                  // The Actor box holds something outside the fleet: say so,
+                  // rather than reading "Any agent" over a filtered table.
+                  <option value={draft.actor} disabled>
+                    {draft.actor} (not a fleet agent)
+                  </option>
+                ) : null}
                 {agentIds.map((id) => (
                   <option key={id} value={id}>
                     {id}
