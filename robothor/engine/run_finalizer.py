@@ -48,6 +48,7 @@ from robothor.engine.interactive_recency import (  # noqa: F401
 from robothor.engine.models import (
     AgentRun,
     DeliveryMode,
+    RunStatus,
 )
 from robothor.engine.reasoning_replay import same_model
 
@@ -79,6 +80,10 @@ INIT_TIMEOUT_SECONDS = 60
 # keeps a stale binding alive).
 
 logger = logging.getLogger(__name__)
+
+# Run exits that export an error span (status code 2) carrying the reason.
+_ERROR_STATUSES = frozenset({RunStatus.FAILED, RunStatus.TIMEOUT, RunStatus.CANCELLED})
+_REASON_MAX = 500
 
 
 def _escalate_unfinished_todos(
@@ -362,27 +367,34 @@ class RunFinalizationMixin:
 
         Best-effort: telemetry must never break a completed run.
         """
-        if not trace:
+        if not trace or getattr(trace, "published", False) is True:
             return
         with contextlib.suppress(Exception):
             from robothor.engine.telemetry import cache_hit_ratio, gen_ai_attributes
 
+            trace.published = True
+            status = str(run.status)
+            failed = run.status in _ERROR_STATUSES
+            reason = (run.error_message or status)[:_REASON_MAX] if failed else ""
             hit_ratio = cache_hit_ratio(run.cache_read_tokens, run.input_tokens)
-            with trace.span(
-                "run_summary",
-                **gen_ai_attributes(
-                    model=run.model_used or "",
-                    input_tokens=run.input_tokens,
-                    output_tokens=run.output_tokens,
-                    cache_read_tokens=run.cache_read_tokens,
-                    cache_creation_tokens=run.cache_creation_tokens,
-                ),
-            ):
-                pass
+            attrs = gen_ai_attributes(
+                model=run.model_used or "",
+                input_tokens=run.input_tokens,
+                output_tokens=run.output_tokens,
+                cache_read_tokens=run.cache_read_tokens,
+                cache_creation_tokens=run.cache_creation_tokens,
+            )
+            attrs["run.status"] = status
+            if failed:
+                attrs["error.message"] = reason
+            with trace.span("run_summary", **attrs) as span:
+                if failed:
+                    span.status = "error"
+                    span.status_message = reason
 
             trace.publish_metrics(
                 {
-                    "status": "completed",
+                    "status": status,
                     "duration_ms": run.duration_ms or 0,
                     "input_tokens": run.input_tokens,
                     "output_tokens": run.output_tokens,
@@ -409,6 +421,9 @@ class RunFinalizationMixin:
         (e.g. requires_human_task_closure) will run against the finished run.
         """
         from robothor.engine.task_completion import capture_pending_items
+
+        # ── [TELEMETRY] Every exit path publishes the run's trace, once ──
+        self._publish_run_telemetry(trace, run)
 
         capture_pending_items(run, session)
         # ── [GUARDRAIL] Post-run checks (require finished run + config) ──

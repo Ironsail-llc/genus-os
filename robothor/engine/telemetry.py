@@ -124,6 +124,7 @@ class Span:
     end_time: float = 0.0
     attributes: dict[str, Any] = field(default_factory=dict)
     status: str = "ok"  # ok, error
+    status_message: str = ""
 
     @property
     def duration_ms(self) -> int:
@@ -155,6 +156,8 @@ class TraceContext:
     parent_trace_id: str = ""
     parent_span_id: str = ""
     spans: list[Span] = field(default_factory=list)
+    # Set once the run's metrics have been published (one publish per trace).
+    published: bool = False
     _span_stack: list[Span] = field(default_factory=list)
 
     @contextmanager
@@ -193,7 +196,8 @@ class TraceContext:
         Inside a running event loop this never blocks it: the stream fields and
         the OTLP payload are built here, and the network writes run as tracked
         background tasks on shared async clients (see ``_TelemetryPublisher``).
-        With no running loop (CLI, worker threads) it publishes synchronously.
+        From a worker thread it hands off to the engine loop's publisher; with no
+        engine loop at all (CLI) it publishes synchronously.
         """
         try:
             fields = self._stream_fields(run_data)
@@ -201,10 +205,18 @@ class TraceContext:
             try:
                 loop = asyncio.get_running_loop()
             except RuntimeError:
-                self._publish_sync(fields, endpoint, run_data)
-                return
+                loop = None
             payload = self.build_otlp_payload(run_data) if endpoint else None
-            _get_publisher(loop).submit(fields, endpoint, payload)
+            if loop is not None:
+                _get_publisher(loop).submit(fields, endpoint, payload)
+                return
+            # A worker thread (a finalizer under asyncio.to_thread): hand the
+            # write to the engine loop's publisher when there is one.
+            publisher = _publisher
+            if publisher is not None and publisher.loop.is_running():
+                publisher.loop.call_soon_threadsafe(publisher.submit, fields, endpoint, payload)
+                return
+            self._publish_sync(fields, endpoint, run_data)
         except Exception as e:
             logger.debug("Failed to publish telemetry: %s", e)
 
@@ -290,7 +302,7 @@ class TraceContext:
             "startTimeUnixNano": str(int(s.start_time * 1e9)) if s.start_time else "0",
             "endTimeUnixNano": str(int(s.end_time * 1e9)) if s.end_time else "0",
             "attributes": _otlp_attrs(s.attributes),
-            "status": {"code": 2 if s.status == "error" else 1},
+            "status": _otlp_status(s),
         }
 
     def _export_otlp(self, endpoint: str, run_data: dict[str, Any]) -> None:
@@ -303,6 +315,13 @@ class TraceContext:
             )
         except Exception as e:
             logger.debug("Failed to export OTLP trace: %s", e)
+
+
+def _otlp_status(s: Span) -> dict[str, Any]:
+    status: dict[str, Any] = {"code": 2 if s.status == "error" else 1}
+    if s.status == "error" and s.status_message:
+        status["message"] = s.status_message
+    return status
 
 
 def _otlp_url(endpoint: str) -> str:

@@ -1489,9 +1489,6 @@ class AgentRunner(
         # ── [VERIFIER] ran inside the run's scope, above ──
         output_text = verified_output if verified else session.get_final_text()
 
-        # ── [TELEMETRY] Publish run metrics ──
-        self._publish_run_telemetry(trace, session.run)
-
         return self._finish_run(
             validated_completion(session, output_text or ""),
             trace=trace,
