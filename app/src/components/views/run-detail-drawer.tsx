@@ -327,7 +327,7 @@ function StepsTable({ steps, label }: { steps: { step: Step; index: number }[]; 
   );
 }
 
-function Body({ detail }: { detail: Detail }) {
+function Body({ detail, loadedAt }: { detail: Detail; loadedAt: number }) {
   const { run, steps, guardrail_events: events } = detail;
   const indexed = steps.map((step, index) => ({ step, index }));
   const warmup = indexed.filter(({ step }) => step.step_type === "warmup_phase");
@@ -336,7 +336,7 @@ function Body({ detail }: { detail: Detail }) {
   // "Pruned" is only the explanation for a run older than the retention.
   const startedAt = Date.parse(run.started_at ?? "");
   const pastRetention =
-    Number.isFinite(startedAt) && Date.now() - startedAt > STEP_RETENTION_DAYS * 864e5;
+    Number.isFinite(startedAt) && loadedAt - startedAt > STEP_RETENTION_DAYS * 864e5;
   const pruned = finishedEmpty && pastRetention;
   const noneRecorded = finishedEmpty && !pastRetention;
 
@@ -401,7 +401,7 @@ function Body({ detail }: { detail: Detail }) {
 export function RunDetailDrawer({ runId, onClose }: { runId: string | null; onClose: () => void }) {
   // Keyed by run id, so a newly chosen run never shows the last one's answer
   // and nothing has to be reset when the choice changes.
-  const [loaded, setLoaded] = useState<{ id: string; detail?: Detail; error?: string } | null>(null);
+  const [loaded, setLoaded] = useState<{ id: string; detail?: Detail; error?: string; at?: number } | null>(null);
   const current = loaded && loaded.id === runId ? loaded : null;
   const detail = current?.detail ?? null;
   const error = current?.error ?? null;
@@ -432,6 +432,9 @@ export function RunDetailDrawer({ runId, onClose }: { runId: string | null; onCl
         }
         setLoaded({
           id: runId,
+          // When the answer arrived: the pruned-steps note compares the run's
+          // age against this, so a render never reads the clock.
+          at: Date.now(),
           detail: {
             run: body.run,
             steps: Array.isArray(body.steps) ? body.steps : [],
@@ -472,7 +475,7 @@ export function RunDetailDrawer({ runId, onClose }: { runId: string | null; onCl
             <Skeleton className="h-4 w-1/2" />
           </div>
         ) : null}
-        {detail ? <Body detail={detail} /> : null}
+        {detail ? <Body detail={detail} loadedAt={current?.at ?? 0} /> : null}
       </SheetContent>
     </Sheet>
   );
