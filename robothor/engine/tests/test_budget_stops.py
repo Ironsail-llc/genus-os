@@ -424,3 +424,34 @@ def test_every_run_step_type_is_allowed_by_the_check():
     allowed, source = _newest_check_values("agent_run_steps", "step_type")
     missing = {s.value for s in StepType} - set(allowed)
     assert not missing, f"{sorted(missing)} not allowed by {source.name}"
+
+
+# ── An observed hourly cap raises the existing alert, once an hour ──────────
+
+
+class TestTheObservedHourlyCapAlerts:
+    @pytest.mark.asyncio
+    async def test_crossing_the_cap_alerts_once_and_admits_every_run(
+        self, _no_cap_env, _admission_enforcing, _restore_pool, published, monkeypatch
+    ):
+        import robothor.engine.admission as adm
+        from robothor.engine import budget_stops
+
+        monkeypatch.setattr(adm, "_record_deferral", lambda *a, **k: None)
+        monkeypatch.setattr(budget_stops, "_last_alert", {})
+        alerts: list[tuple[str, str]] = []
+
+        async def _alert(level: str, title: str, body: str, **_kw: Any) -> bool:
+            alerts.append((level, title))
+            return True
+
+        monkeypatch.setattr("robothor.engine.alerts.alert", _alert)
+        _over_the_hourly_cap("observe")
+
+        assert adm.admit("crm-dedup", _cron_agent(), None) is True
+        assert adm.admit("crm-dedup", _cron_agent(), None) is True
+        await asyncio.sleep(0)
+
+        assert len(alerts) == 1, alerts
+        assert alerts[0][0] == "warning"
+        assert "hourly_cost_cap" in alerts[0][1]
