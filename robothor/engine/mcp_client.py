@@ -99,6 +99,14 @@ class McpClientSession:
         # Bumped whenever the session's server-side state is thrown away, so a
         # tool list fetched before that is never served after it.
         self._epoch = 0
+        # True from the moment a request goes onto the pipe until its response
+        # has been read. Still True with the lock free means a request was
+        # abandoned mid-flight and its answer will be misread by the next one.
+        self._desynced = False
+
+    def out_of_step(self) -> bool:
+        """A request was written and abandoned; the pipe cannot be trusted."""
+        return self._desynced and not self._lock.locked()
 
     async def start(self) -> None:
         """Start the MCP server subprocess.
@@ -157,6 +165,7 @@ class McpClientSession:
 
             payload = json.dumps(request)
             header = f"Content-Length: {len(payload)}\r\n\r\n"
+            self._desynced = True
             self._process.stdin.write(header.encode() + payload.encode())
             await self._process.stdin.drain()
 
@@ -165,6 +174,7 @@ class McpClientSession:
                 self._read_response(),
                 timeout=self.config.timeout_seconds,
             )
+            self._desynced = False
 
             if "error" in response:
                 err = response["error"]
@@ -447,10 +457,10 @@ class McpClientPool:
     def _retire(self, server_name: str, session: McpClientSession | McpHttpSession) -> None:
         """Drop a session that can no longer be trusted and stop it in the background.
 
-        A request cancelled mid-flight leaves its response unread on a stdio
-        pipe, and the next request on that pipe would read it as its own
-        answer. A session built from a config that has since changed runs the
-        old command. Neither is reused.
+        A stdio request abandoned after it was written leaves its response
+        unread on the pipe, and the next request would read it as its own
+        answer (:meth:`McpClientSession.out_of_step`). A session built from a
+        config that has since changed runs the old command. Neither is reused.
         """
         if self._sessions.get(server_name) is session:
             del self._sessions[server_name]
@@ -468,6 +478,15 @@ class McpClientPool:
             and _config_cache_enabled()
         ):
             logger.info("MCP server '%s': config changed, restarting its session", server_name)
+            self._retire(server_name, existing)
+        elif (
+            isinstance(existing, McpClientSession)
+            and existing.out_of_step()
+            and _config_cache_enabled()
+        ):
+            logger.info(
+                "MCP server '%s': a request was abandoned mid-flight, restarting", server_name
+            )
             self._retire(server_name, existing)
         if server_name in self._sessions:
             session = self._sessions[server_name]
@@ -522,9 +541,12 @@ class McpClientPool:
         try:
             tools = await session.list_tools()
         except BaseException:
-            # Timed out, cancelled or failed: nothing is cached, and the
-            # session is not trusted again (see _retire).
-            self._retire(server_name, session)
+            # Timed out, cancelled or failed: nothing is cached. The session is
+            # retired only when this left its pipe out of step — a list that
+            # merely waited behind another run's call wrote nothing, and an
+            # HTTP request leaves nothing unread, so both stay.
+            if isinstance(session, McpClientSession) and session.out_of_step():
+                self._retire(server_name, session)
             raise
         self._tool_cache[server_name] = _ToolListEntry(
             session=session, key=key, tools=list(tools), fetched_at=time.monotonic()
