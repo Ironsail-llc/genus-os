@@ -285,12 +285,17 @@ class ToolTurnMixin:
         from robothor.engine.runner import _resolve_tool_timeout
 
         if req.on_tool:
+            # Redacted as the stored step is: this event goes straight to the
+            # webchat SSE stream and the Telegram progress handler, and a
+            # ``vault_set`` carries a credential in its arguments by design.
+            from robothor.secrets.redaction import redact_tool_arguments
+
             with contextlib.suppress(Exception):
                 await req.on_tool(
                     {
                         "event": "tool_start",
                         "tool": call.tool_name,
-                        "args": call.tool_args,
+                        "args": redact_tool_arguments(call.tool_name, call.tool_args),
                         "call_id": call.tc.id,
                     }
                 )

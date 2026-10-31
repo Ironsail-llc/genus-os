@@ -947,3 +947,19 @@ flags:
       that fires it and (b) twenty real task specs read read-only from the
       benchmark checkout that produce nothing. Only after both does a promotion
       date belong here at all.
+
+  - name: ROBOTHOR_CREDENTIAL_INTAKE
+    owner: ops
+    mode: "off"
+    soak: >
+      New. Grants, rather than blocks: on enforce, an owner or admin typing to
+      the default chat agent in a top-level human chat run may use the vault
+      tools without the manifest's `v2.credentials: operator` tier, so a key
+      handed over in chat is stored, tested and used by the agent. observe
+      refuses exactly as off and logs "credential intake would allow" for each
+      call enforce would let through. An unknown value reads as off.
+      Promotion: observe on a staging instance until the log shows the owner's
+      hand-overs and no would-allow line for a member, sub-agent or unattended
+      run; then enforce there; production follows the deployment's runbook.
+      The tool_start argument redaction and the known-value redaction that
+      ship with it are unflagged.

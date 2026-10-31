@@ -157,7 +157,11 @@ def status_for_name(
         # "Nobody knows" is not "no row". A caller that conflates them reports
         # green while a dead environment value is being served.
         from_vault, found_at, vault_readable = None, None, False
-    resolved: ResolvedSecret = resolve_secret(name, vault_key=vault_key, tenant_id=tenant)
+    # A status read reports on the credential without using it, so it does not
+    # count as "last resolved".
+    resolved: ResolvedSecret = resolve_secret(
+        name, vault_key=vault_key, tenant_id=tenant, stamp=False
+    )
 
     shadowed = bool(from_env and from_vault and from_env != from_vault)
     return SecretStatus(
