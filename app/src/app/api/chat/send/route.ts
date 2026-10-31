@@ -2,7 +2,7 @@ import { getEngineClient } from "@/lib/engine/server-client";
 import { ensureCanvasPromptInjected } from "@/lib/engine/session-state";
 import { resolveChatAgent } from "@/lib/chat/agent-guard";
 import { MAX_SEND_BODY_BYTES, checkAttachments, type AttachmentPayload } from "@/lib/chat/attachments";
-import { EngineRefusal } from "@/lib/engine/engine-refusal";
+import { EngineRefusal, REFUSAL_STATUSES } from "@/lib/engine/engine-refusal";
 
 function json(status: number, body: Record<string, unknown>): Response {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -81,7 +81,10 @@ export async function POST(req: Request) {
     });
   } catch (err) {
     if (err instanceof EngineRefusal) {
-      return json(err.status, { error: err.message, request_admitted: false });
+      // A refusal keeps its status; an engine failure before admission is
+      // still this route's 502, but with the engine's words and no turn.
+      const status = REFUSAL_STATUSES.has(err.status) ? err.status : 502;
+      return json(status, { error: err.message, request_admitted: false });
     }
     return json(502, { error: `Engine error: ${String(err)}` });
   }

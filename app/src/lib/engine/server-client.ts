@@ -129,10 +129,13 @@ class EngineClient {
         ...(attachments?.length ? { attachments } : {}),
       }),
     });
-    if (REFUSAL_STATUSES.has(res.status)) {
-      // The engine checked the request and said no (an attachment the route
-      // let through, say): its words, not "Engine error".
-      const payload = await res.json().catch(() => ({}));
+    // The engine checked the request and said no (an attachment the route let
+    // through, say), or failed before it admitted a turn and said so
+    // (`request_admitted: false`, e.g. a file it could not keep): its words,
+    // not "Engine error", and never a turn to recover.
+    // The body is read only on failure, where nothing else will read it.
+    const payload = res.ok ? {} : await Promise.resolve().then(() => res.json()).catch(() => ({}));
+    if (REFUSAL_STATUSES.has(res.status) || (!res.ok && payload?.request_admitted === false)) {
       const error = typeof payload?.error === "string" ? payload.error
         : typeof payload?.detail === "string" ? payload.detail : `Engine refused the request (${res.status})`;
       throw new EngineRefusal(res.status, error);
