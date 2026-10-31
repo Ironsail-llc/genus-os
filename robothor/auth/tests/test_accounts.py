@@ -322,18 +322,6 @@ def test_revoke_binding_grant_true_then_false():
         assert accounts.revoke_binding_grant("grant-2") is False
 
 
-def test_consume_active_session_is_atomic():
-    row = {"id": "session-1", "user_id": "uid-1"}
-    conn, cur = _mock_conn([row])
-    with patch("robothor.auth.accounts.get_connection", return_value=conn):
-        assert accounts.consume_active_session("hash-1") == row
-    sql = " ".join(str(c[0][0]) for c in cur.execute.call_args_list)
-    assert "UPDATE user_sessions" in sql
-    assert "revoked_at IS NULL" in sql
-    assert "RETURNING *" in sql
-    conn.commit.assert_called_once()
-
-
 def test_revoke_session_true_then_false():
     conn, cur = _mock_conn([], rowcount=1)
     with patch("robothor.auth.accounts.get_connection", return_value=conn):

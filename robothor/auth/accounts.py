@@ -523,7 +523,7 @@ def _consume_binding_grant(
     cur: Any, tenant_id: str, email: str, presenting_issuer: str
 ) -> dict[str, Any] | None:
     """Atomically spend one live grant (single UPDATE ... RETURNING, mirroring
-    ``consume_active_session``): two concurrent sign-ins must not both bind.
+    ``rotate_session``): two concurrent sign-ins must not both bind.
     Issuer-pinned grants are only spendable by that IdP."""
     cur.execute(
         """UPDATE sso_binding_grants
@@ -592,27 +592,6 @@ def get_active_session(refresh_token_hash: str) -> dict[str, Any] | None:
             (refresh_token_hash,),
         )
         row = cur.fetchone()
-        return dict(row) if row else None
-
-
-def consume_active_session(refresh_token_hash: str) -> dict[str, Any] | None:
-    """Atomically revoke and return one valid refresh session.
-
-    Rotation must be a single database operation: a separate read followed by
-    a revoke allows two concurrent requests to reuse the same refresh token.
-    """
-    with get_connection() as conn:
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-        cur.execute(
-            """UPDATE user_sessions
-               SET revoked_at = NOW()
-               WHERE refresh_token_hash = %s
-                 AND revoked_at IS NULL AND expires_at > NOW()
-               RETURNING *""",
-            (refresh_token_hash,),
-        )
-        row = cur.fetchone()
-        conn.commit()
         return dict(row) if row else None
 
 
