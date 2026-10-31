@@ -19,6 +19,7 @@ from typing import Any
 
 from robothor.constants import DEFAULT_TENANT
 from robothor.db.connection import get_connection
+from robothor.memory.confirmed import is_operator_confirmed
 from robothor.memory.conflicts import _supersede_fact, find_similar_facts
 from robothor.memory.facts import store_fact
 
@@ -91,7 +92,9 @@ async def record_resolution(
             open_item, limit=_MAX_SUPERSEDE, threshold=_SUPERSEDE_SIMILARITY, tenant_id=tenant
         )
         for m in matches:
-            if m["id"] == new_id:
+            # An operator-confirmed fact is the operator's word, not an open
+            # item the pipeline may close.
+            if m["id"] == new_id or is_operator_confirmed(m):
                 continue
             _supersede_fact(m["id"], new_id, tenant_id=tenant)
             superseded.append(m["id"])
