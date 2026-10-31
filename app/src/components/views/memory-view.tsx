@@ -275,6 +275,7 @@ export function MemoryView({ visible = true, role, roleLoading = false }: Memory
   const reasonRefs = useRef<Record<number, HTMLInputElement | null>>({});
   const [drafts, setDrafts] = useState<Record<number, EditDraft>>({});
   const editReasonRefs = useRef<Record<number, HTMLInputElement | null>>({});
+  const editTextRefs = useRef<Record<number, HTMLTextAreaElement | null>>({});
 
   const { busyRow, rowErrors, act, clearRow } = useRowActions();
 
@@ -444,11 +445,27 @@ export function MemoryView({ visible = true, role, roleLoading = false }: Memory
           if (fact) replaceFact(fact);
           setDrafts((previous) => without(previous, id));
         },
-        (res) => {
-          // A 409 (another active fact already says this) keeps the editor
-          // open with the draft: the text is what has to change. A 422 is
-          // about the request, and the reason is the field it is usually about.
-          if (res.status === 422) editReasonRefs.current[id]?.focus();
+        (res, message) => {
+          // A 409 that says the fact is inactive is Forget's 409: the page's
+          // row is stale. The row catches up and the editor closes with it —
+          // the sentence stays on the row — because nothing can be done to a
+          // fact that is no longer believed.
+          if (res.status === 409 && /inactive/i.test(message)) {
+            setFacts((previous) =>
+              previous.map((row) => (row.id === id ? { ...row, isActive: false } : row))
+            );
+            setDrafts((previous) => without(previous, id));
+            return;
+          }
+          // Otherwise the draft stays, and the operator is put back in the
+          // field the refusal is about: the reason when it names the reason,
+          // the text for everything else (a duplicate, a text the prune would
+          // retire).
+          if (res.status === 422 && /reason/i.test(message)) {
+            editReasonRefs.current[id]?.focus();
+          } else {
+            editTextRefs.current[id]?.focus();
+          }
         }
       );
     },
@@ -736,6 +753,9 @@ export function MemoryView({ visible = true, role, roleLoading = false }: Memory
                   reasonRef={(element) => {
                     editReasonRefs.current[fact.id] = element;
                   }}
+                  textRef={(element) => {
+                    editTextRefs.current[fact.id] = element;
+                  }}
                 />
               ) : null}
 
@@ -874,10 +894,20 @@ interface FactEditorProps {
   onSave: () => void;
   onCancel: () => void;
   reasonRef: (element: HTMLInputElement | null) => void;
+  textRef: (element: HTMLTextAreaElement | null) => void;
 }
 
 /** One fact's inline editor. The draft lives in the view; this only renders it. */
-function FactEditor({ id, draft, busy, onChange, onSave, onCancel, reasonRef }: FactEditorProps) {
+function FactEditor({
+  id,
+  draft,
+  busy,
+  onChange,
+  onSave,
+  onCancel,
+  reasonRef,
+  textRef,
+}: FactEditorProps) {
   const chips = entityList(draft.entities);
   // Counted trimmed, as the bridge counts it.
   const text = draft.text.trim();
@@ -904,6 +934,7 @@ function FactEditor({ id, draft, busy, onChange, onSave, onCancel, reasonRef }: 
         data-testid={`memory-edit-text-${id}`}
         aria-label="Fact text"
         value={draft.text}
+        ref={textRef}
         rows={3}
         onChange={(event) => onChange({ text: event.target.value })}
         className="w-full min-w-0 resize-y rounded-md border border-input bg-background px-2 py-1.5 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
