@@ -46,6 +46,16 @@ REFRESH_TTL_SECONDS = 30 * 24 * 60 * 60  # 30 days
 #: the time a stolen, already-used token stays useful. Operators: see
 #: docs/enterprise/02-identity.md, "Sessions and refresh".
 REFRESH_REUSE_GRACE_SECONDS = 30
+
+#: How far a rotated access token's ``iat`` is set BEFORE the rotation time.
+#:
+#: Rotation takes ``iat`` from the database clock (``rotated_at``) so a replay
+#: mints the identical token, but the token is checked on the bridge's clock,
+#: and PyJWT rejects an ``iat`` in the future. A database a fraction of a
+#: second ahead would make a fresh token "not yet valid". So ``iat`` is
+#: backdated by this much and ``exp`` stays ``rotated_at + ACCESS_TTL_SECONDS``:
+#: the lifetime is not extended, and the pair is still identical on replay.
+ROTATION_CLOCK_SKEW_SECONDS = 5
 _ISSUER = "genus-os"
 DEFAULT_AUDIENCE = "genus-bridge"
 

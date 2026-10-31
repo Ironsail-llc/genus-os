@@ -60,6 +60,12 @@ class FlagPatch(BaseModel):
     reason: Any = None
 
 
+#: The longest reason accepted. It is stored in ``feature_flag_audit`` and
+#: carried in the ``control.set`` audit event, which is exported to a SIEM; a
+#: sentence explaining a guardrail change fits in far less.
+MAX_REASON = 500
+
+
 def _reason(raw: Any) -> str:
     """The operator's sentence, trimmed, or a flat 422.
 
@@ -72,6 +78,10 @@ def _reason(raw: Any) -> str:
     text = (raw or "").strip()
     if not text:
         raise HTTPException(status_code=422, detail="a reason is required to change a flag")
+    if len(text) > MAX_REASON:
+        raise HTTPException(
+            status_code=422, detail=f"a reason must be at most {MAX_REASON} characters"
+        )
     return text
 
 

@@ -641,6 +641,9 @@ def rotate_session(
     * the successor it links to is the one derived from this token
       (``successor_hash``), belongs to the same user and is still live.
 
+    A token of an account that is no longer active is spent and refused
+    (``None``); no successor is stored for it.
+
     Anything else is ``None``, as an unknown token always was. No second
     session is minted for a replay: the caller rebuilds the same pair from the
     token itself (``tokens.successor_refresh_token``).
@@ -667,11 +670,16 @@ def rotate_session(
                 (successor_hash, ttl_seconds, user_agent, ip, spent["user_id"]),
             )
             successor = cur.fetchone()
-            if successor:
-                cur.execute(
-                    "UPDATE user_sessions SET rotated_to = %s WHERE id = %s",
-                    (successor["id"], spent["id"]),
-                )
+            if not successor:
+                # Inactive account: the token is spent, and nothing replaces it.
+                # Refused here, so no caller can hand out a successor that was
+                # never stored.
+                conn.commit()
+                return None
+            cur.execute(
+                "UPDATE user_sessions SET rotated_to = %s WHERE id = %s",
+                (successor["id"], spent["id"]),
+            )
             conn.commit()
             return {
                 "user_id": spent["user_id"],
@@ -700,16 +708,34 @@ def token_pair(
     account: dict[str, Any],
     *,
     refresh_token: str,
-    issued_at: int | None = None,
+    rotated_at: int | None = None,
     jti: str | None = None,
 ) -> dict[str, Any]:
-    """The response every sign-in path returns, for a refresh token already stored."""
+    """The response every sign-in path returns, for a refresh token already stored.
+
+    ``rotated_at`` (whole seconds, the database clock) pins the access token's
+    times so a replay of the rotation mints it identically: ``iat`` is
+    ``rotated_at - ROTATION_CLOCK_SKEW_SECONDS``, so a database clock slightly
+    ahead of the verifier never yields a token that is not yet valid, and
+    ``exp`` is ``rotated_at + ACCESS_TTL_SECONDS``, so the lifetime is not
+    extended. Without it, both come from the local clock.
+    """
     from robothor.auth import tokens
 
     if account.get("status") != "active":
         raise AccountInactiveError("account is not active")
+    if rotated_at is None:
+        issued_at, ttl = None, tokens.ACCESS_TTL_SECONDS
+    else:
+        issued_at = rotated_at - tokens.ROTATION_CLOCK_SKEW_SECONDS
+        ttl = tokens.ACCESS_TTL_SECONDS + tokens.ROTATION_CLOCK_SKEW_SECONDS
     access = tokens.issue_access_token(
-        str(account["id"]), account["tenant_id"], account["role"], issued_at=issued_at, jti=jti
+        str(account["id"]),
+        account["tenant_id"],
+        account["role"],
+        ttl_seconds=ttl,
+        issued_at=issued_at,
+        jti=jti,
     )
     return {
         "access_token": access,

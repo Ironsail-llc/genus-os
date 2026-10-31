@@ -229,9 +229,11 @@ def refresh(body: RefreshRequest, request: Request) -> dict[str, Any] | JSONResp
     presented again gets the SAME pair back: two dashboard replicas refreshing
     one browser's session at once must both succeed, and they share nothing
     but this route. The successor and the access token's ``jti`` are derived
-    from the presented token, and the access token's ``iat`` is the rotation
-    time, so the replay rebuilds the first answer byte for byte without any
-    secret being stored. After the window, or for a token that was signed out
+    from the presented token, and the access token's times are pinned to the
+    rotation time (``iat`` backdated by ``ROTATION_CLOCK_SKEW_SECONDS`` so a
+    database clock ahead of this one cannot mint a not-yet-valid token), so
+    the replay rebuilds the first answer byte for byte without any secret
+    being stored. After the window, or for a token that was signed out
     rather than rotated, it is a 401 as before.
     """
     raw = body.refresh_token
@@ -255,7 +257,7 @@ def refresh(body: RefreshRequest, request: Request) -> dict[str, Any] | JSONResp
     return accounts.token_pair(
         account,
         refresh_token=successor_raw,
-        issued_at=int(session["rotated_at"].timestamp()),
+        rotated_at=int(session["rotated_at"].timestamp()),
         jti=tokens.successor_jti(raw),
     )
 
