@@ -12,9 +12,12 @@ Every section wrapped in try/except — never crashes, silently degrades.
 
 from __future__ import annotations
 
+import contextvars
 import logging
 import os
+import threading
 import time
+from concurrent.futures import Future, ThreadPoolExecutor, wait
 from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import UTC, datetime
@@ -28,7 +31,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
 
     from robothor.engine.models import AgentConfig
-    from robothor.identity import IdentityContext
+    from robothor.identity import EnrichedIdentity, IdentityContext
     from robothor.identity.scope import DataScope
 
 logger = logging.getLogger(__name__)
@@ -339,17 +342,34 @@ def _build_history_section(agent_id: str) -> str:
     return "\n".join(lines) if len(lines) > 1 else ""
 
 
-def _build_memory_blocks_section(block_names: list[str], tenant_id: str = DEFAULT_TENANT) -> str:
-    """Read memory blocks and format them, flagging stale ones."""
+def _build_memory_blocks_section(
+    block_names: list[str], tenant_id: str = DEFAULT_TENANT, *, batched: bool = False
+) -> str:
+    """Read memory blocks and format them, flagging stale ones.
+
+    ``batched`` reads every block in one SELECT (``read_blocks``) and defers
+    the read accounting to one batched write (``touch_blocks``), instead of one
+    ``UPDATE ... RETURNING`` per block. The text is the same either way.
+    """
     if not block_names:
         return ""
 
-    from robothor.memory.blocks import read_block
+    from robothor.memory.blocks import read_block, read_blocks, touch_blocks
+
+    fetched: dict[str, dict[str, Any]] | None = None
+    if batched:
+        fetched = read_blocks(block_names, tenant_id=tenant_id)
+        if fetched:
+            _defer_write(touch_blocks, list(fetched), tenant_id)
 
     lines = ["--- MEMORY BLOCKS ---"]
     for name in block_names:
         try:
-            result = read_block(name, tenant_id=tenant_id)
+            result = (
+                fetched.get(name, {})
+                if fetched is not None
+                else read_block(name, tenant_id=tenant_id)
+            )
             content = (
                 result.get("content", "")
                 if isinstance(result, dict)
@@ -754,7 +774,7 @@ def _interactive_supervisor_sections(
     observe_scope_obj: DataScope | None,
     user_id: str | None,
     agent_config: AgentConfig | None = None,
-) -> list[str]:
+) -> list[tuple[str, Callable[[], list[str]]]]:
     """The panorama an operator-facing agent gets on an interactive turn.
 
     Three sections that answer "what is going on?" from context alone: live
@@ -770,45 +790,371 @@ def _interactive_supervisor_sections(
     memory fact. A correction absent from the channel the question arrives on
     corrects nothing.
 
-    Each section is independently guarded — one failing must not cost the other
-    two, nor the preamble.
+    Returns the sections as named builders, in order, so the caller can run
+    them one after another or concurrently (``ROBOTHOR_WARMUP_PARALLEL``) and
+    join them in this order either way. Each builder is independently guarded —
+    one failing must not cost the other two, nor the preamble.
+    """
+
+    def _host_state() -> list[str]:
+        try:
+            from robothor.engine.host_state import host_state_section
+
+            # The config matters, and passing only the id was a defect: without
+            # it the reach sentence took its "no primary is configured" branch on
+            # every interactive turn, so main told the operator — in chat, under
+            # a header saying to prefer this over memory — that it had no
+            # configured primary. It has one; manifests carry model.primary.
+            live_state = host_state_section(agent_id, agent_config)
+        except Exception as e:
+            logger.debug("Interactive warmup host state failed: %s", e)
+            return []
+        return [live_state] if live_state else []
+
+    builders: list[tuple[str, Callable[[], list[str]]]] = [("host_state", _host_state)]
+    if agent_id != OPERATOR_INBOX_AGENT_ID:
+        return builders
+
+    def _panorama(name: str) -> Callable[[], list[str]]:
+        def _run() -> list[str]:
+            # Looked up at call time so the module attribute is what runs.
+            builder = _open_tasks_section if name == "open_tasks" else _recent_fleet_surfaces
+            try:
+                section = builder(
+                    tenant_id=tenant_id,
+                    scope=scope,
+                    observe_scope_obj=observe_scope_obj,
+                    user_id=user_id,
+                )
+            except Exception as e:
+                logger.debug("Interactive warmup %s failed: %s", name, e)
+                return []
+            return [section] if section else []
+
+        return _run
+
+    builders.append(("open_tasks", _panorama("open_tasks")))
+    builders.append(("fleet_surfaces", _panorama("fleet_surfaces")))
+    return builders
+
+
+# ── Running the interactive sections ──────────────────────────────
+# Sequentially, the first interactive turn waits for the sum of its sections.
+# With ROBOTHOR_WARMUP_PARALLEL on they run on this pool and are joined in
+# their original order, so the text is identical and the wait is the slowest
+# section. Shared by every concurrent warmup in the process and bounded; a
+# section never submits to it, so it cannot deadlock on itself.
+_SECTION_WORKERS = 8
+_section_pool: ThreadPoolExecutor | None = None
+# Writes the read path does not wait for (memory-block read accounting).
+_deferred_pool: ThreadPoolExecutor | None = None
+_deferred_pending: set[Future[Any]] = set()
+_pool_lock = threading.Lock()
+#: A section slower than this in an agent's previous flagged warmup makes the
+#: next one fan out. Below it, the queries are fast enough that a thread
+#: hand-off per section costs more than overlapping them saves.
+FAN_OUT_MIN_SECTION_SECONDS = 0.03
+#: Each agent's slowest section in its previous flagged warmup, in seconds.
+_slowest_section_by_agent: dict[str, float] = {}
+
+
+def _get_section_pool() -> ThreadPoolExecutor:
+    global _section_pool
+    with _pool_lock:
+        if _section_pool is None:
+            _section_pool = ThreadPoolExecutor(
+                max_workers=_SECTION_WORKERS, thread_name_prefix="warmup-section"
+            )
+        return _section_pool
+
+
+def _defer_write(fn: Callable[..., Any], *args: Any) -> None:
+    """Run a best-effort write off the warmup's critical path."""
+    global _deferred_pool
+
+    def _guarded() -> None:
+        try:
+            fn(*args)
+        except Exception as e:
+            logger.debug("Deferred warmup write %s failed: %s", fn.__name__, e)
+
+    with _pool_lock:
+        if _deferred_pool is None:
+            _deferred_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="warmup-deferred")
+        # Copied context: the tenant scope the connection binds to is a ContextVar.
+        future = _deferred_pool.submit(contextvars.copy_context().run, _guarded)
+        _deferred_pending.add(future)
+    future.add_done_callback(_deferred_pending.discard)
+
+
+def wait_for_deferred_writes(timeout: float | None = None) -> bool:
+    """Block until every deferred warmup write has finished. True if they all did."""
+    with _pool_lock:
+        pending = set(_deferred_pending)
+    if not pending:
+        return True
+    _done, not_done = wait(pending, timeout=timeout)
+    return not not_done
+
+
+def _timed(fn: Callable[[], list[str]]) -> tuple[list[str], float]:
+    start = time.perf_counter()
+    parts = fn()
+    return parts, time.perf_counter() - start
+
+
+def _run_interactive_sections(
+    builders: list[tuple[str, Callable[[], list[str]]]],
+    *,
+    parallel: bool,
+    section_timings: dict[str, float] | None,
+    fan_out_key: str = "",
+) -> list[str]:
+    """Run the builders and join their sections in builder order.
+
+    ``parallel`` is the flag. Off, the builders run in place and nothing is
+    timed, as always. On, they are timed, and they fan out to the section pool
+    only when ``fan_out_key``'s previous warmup had a section slower than
+    ``FAN_OUT_MIN_SECTION_SECONDS``: on a fast database a thread hand-off costs
+    more than the queries it overlaps (QA measured the fanned-out preamble at
+    roughly twice the sequential one), so a fast instance stays in place and
+    keeps only the statement savings.
     """
     sections: list[str] = []
-
-    try:
-        from robothor.engine.host_state import host_state_section
-
-        # The config matters, and passing only the id was a defect: without it
-        # the reach sentence took its "no primary is configured" branch on every
-        # interactive turn, so main told the operator — in chat, under a header
-        # saying to prefer this over memory — that it had no configured primary.
-        # It has one; manifests carry model.primary.
-        live_state = host_state_section(agent_id, agent_config)
-        if live_state:
-            sections.append(live_state)
-    except Exception as e:
-        logger.debug("Interactive warmup host state failed: %s", e)
-
-    if agent_id != OPERATOR_INBOX_AGENT_ID:
+    if not parallel:
+        for _name, fn in builders:
+            sections.extend(fn())
         return sections
 
-    for name, builder in (
-        ("open_tasks", _open_tasks_section),
-        ("fleet_surfaces", _recent_fleet_surfaces),
-    ):
-        try:
-            section = builder(
-                tenant_id=tenant_id,
-                scope=scope,
-                observe_scope_obj=observe_scope_obj,
-                user_id=user_id,
-            )
-        except Exception as e:
-            logger.debug("Interactive warmup %s failed: %s", name, e)
-            continue
-        if section:
-            sections.append(section)
+    timings: dict[str, float] = {}
+    with _pool_lock:
+        previous_slowest = _slowest_section_by_agent.get(fan_out_key, 0.0)
+    if previous_slowest > FAN_OUT_MIN_SECTION_SECONDS:
+        sections = _fan_out(builders, timings)
+    else:
+        for name, fn in builders:
+            parts, timings[name] = _timed(fn)
+            sections.extend(parts)
+
+    if timings:
+        with _pool_lock:
+            _slowest_section_by_agent[fan_out_key] = max(timings.values())
+    if section_timings is not None:
+        section_timings.update(timings)
     return sections
+
+
+def _fan_out(
+    builders: list[tuple[str, Callable[[], list[str]]]], timings: dict[str, float]
+) -> list[str]:
+    """Run the builders on the section pool, joined in builder order."""
+    sections: list[str] = []
+    pool = _get_section_pool()
+    # Each section gets a copy of this context: set_warmup_kind and the
+    # connection's tenant scope are ContextVars, which a worker thread does not
+    # otherwise inherit.
+    futures = [
+        (name, pool.submit(contextvars.copy_context().run, _timed, fn)) for name, fn in builders
+    ]
+    for name, future in futures:
+        try:
+            parts, elapsed = future.result()
+        except Exception as e:  # builders guard themselves; belt and braces
+            logger.debug("Interactive warmup %s failed: %s", name, e)
+            parts, elapsed = [], 0.0
+        timings[name] = elapsed
+        sections.extend(parts)
+    return sections
+
+
+def enrichment_call_for_turn(
+    agent_id: str, identity: IdentityContext
+) -> tuple[Callable[..., EnrichedIdentity | None], tuple[Any, ...]]:
+    """The enrichment function and arguments for one interactive turn.
+
+    Returned rather than called so the runner can hand both to
+    ``run_in_executor``. With ``ROBOTHOR_WARMUP_PARALLEL`` on it is the
+    session-held cache (``enrich_identity_for_session``); off, the 60-second
+    ``enrich_identity`` every turn has always used.
+    """
+    from robothor.engine.feature_flags import warmup_parallel_enabled
+
+    if warmup_parallel_enabled():
+        from robothor.identity import enrichment
+
+        return enrichment.enrich_identity_for_session, (agent_id, identity)
+    import robothor.identity as _identity
+
+    return _identity.enrich_identity, (identity,)
+
+
+def enrich_identity_for_turn(agent_id: str, identity: IdentityContext) -> EnrichedIdentity | None:
+    """Identity enrichment for one interactive turn of ``agent_id``."""
+    fn, args = enrichment_call_for_turn(agent_id, identity)
+    return fn(*args)
+
+
+def _interactive_section_builders(
+    agent_id: str,
+    *,
+    user_message: str,
+    include_blocks: bool,
+    tenant_id: str,
+    extra_memory_blocks: list[str] | None,
+    sender_name: str,
+    identity: IdentityContext | None,
+    agent_config: AgentConfig | None,
+    parallel: bool,
+    enforce_scope: DataScope | None,
+    observe_scope_obj: DataScope | None,
+    scope_user_id: str | None,
+) -> list[tuple[str, Callable[[], list[str]]]]:
+    """The interactive preamble's sections, as named builders in output order.
+
+    Every condition here is decided without I/O; the builders do the I/O, so
+    ``_run_interactive_sections`` can run them one after another or at once.
+    """
+    from robothor.identity.scope import log_would_drop
+
+    exclude_name = sender_name
+    builders: list[tuple[str, Callable[[], list[str]]]] = []
+
+    # Current-user identity — tell the agent exactly who it's talking to.
+    # `identity` (the unified context) always wins over the legacy
+    # `sender_name` string when both are present.
+    if identity is not None:
+        exclude_name = identity.display_name or sender_name
+
+        def _identity_section() -> list[str]:
+            try:
+                enriched = (
+                    enrich_identity_for_turn(agent_id, identity)
+                    if parallel
+                    else enrich_identity(identity)
+                )
+            except Exception as e:
+                logger.debug("Interactive warmup identity enrichment failed: %s", e)
+                enriched = None
+            try:
+                return [identity.prompt_block(enriched)]
+            except Exception as e:
+                logger.debug("Interactive warmup identity prompt_block failed: %s", e)
+                return []
+
+        builders.append(("identity", _identity_section))
+    elif sender_name:
+        legacy = (
+            f"--- CURRENT USER ---\n"
+            f"You are speaking with {sender_name}. Address them by this name.\n"
+            f"Do not confuse them with other people who may share the same name."
+        )
+        builders.append(("identity", lambda: [legacy]))
+
+    # Core memory blocks — only for new sessions (no prior history)
+    if include_blocks:
+        core_blocks = ["persona", "user_profile", "user_model", "working_context"]
+        # Also include agent-configured warmup blocks (e.g. devops_latest_report)
+        if extra_memory_blocks:
+            core_blocks = list(dict.fromkeys(core_blocks + extra_memory_blocks))
+
+        # user_profile/user_model/working_context describe the OPERATOR —
+        # a restricted identity under enforce must not have them pre-loaded.
+        # persona describes the AGENT and always stays; the identity's own
+        # CRM/memory-graph enrichment (above, via enrich_identity) is what a
+        # restricted caller gets instead.
+        if enforce_scope is not None:
+            core_blocks = [b for b in core_blocks if b not in _OPERATOR_PERSONAL_BLOCKS]
+
+        def _memory_blocks() -> list[str]:
+            out: list[str] = []
+            try:
+                blocks_section = _build_memory_blocks_section(
+                    core_blocks, tenant_id=tenant_id, batched=parallel
+                )
+                if blocks_section:
+                    out.append(blocks_section)
+            except Exception as e:
+                logger.debug("Interactive warmup blocks failed: %s", e)
+
+            if observe_scope_obj is not None:
+                try:
+                    _dropped_blocks = _count_operator_blocks_with_content(tenant_id=tenant_id)
+                    if _dropped_blocks:
+                        log_would_drop(
+                            tool_name="warmup:memory_blocks",
+                            user_id=scope_user_id,
+                            scope=observe_scope_obj,
+                            dropped=_dropped_blocks,
+                            table="agent_memory_blocks",
+                        )
+                except Exception as e:
+                    logger.debug("Interactive warmup observe-scope block count failed: %s", e)
+            return out
+
+        builders.append(("memory_blocks", _memory_blocks))
+
+    # Entity-aware context — if user mentions a name, pull relevant facts
+    # Exclude the sender's name to avoid pulling facts about other people
+    # who share the same name — the sender's identity comes from their
+    # tenant's persona/user_profile blocks, not from entity search.
+    if user_message and len(user_message) > 5:
+
+        def _entity_context() -> list[str]:
+            try:
+                exclude = {exclude_name} if exclude_name else None
+                context = _build_entity_context(
+                    user_message,
+                    tenant_id=tenant_id,
+                    exclude_names=exclude,
+                    scope=enforce_scope,
+                    observe_scope_obj=observe_scope_obj,
+                    user_id=scope_user_id,
+                    batched=parallel,
+                )
+            except Exception as e:
+                # WARNING, not DEBUG: a failure here empties entity recall
+                # for every turn, and at DEBUG nobody ever saw it.
+                logger.warning("Interactive warmup entity context failed: %s", e)
+                return []
+            return [context] if context else []
+
+        builders.append(("entity_context", _entity_context))
+
+    # Dynamic context hooks (date, travel, weather, etc.)
+    def _context_hooks() -> list[str]:
+        try:
+            situational = _run_context_hooks()
+        except Exception as e:
+            logger.debug("Interactive warmup context hooks failed: %s", e)
+            return []
+        return [situational] if situational else []
+
+    builders.append(("context_hooks", _context_hooks))
+
+    builders.extend(
+        _interactive_supervisor_sections(
+            agent_id,
+            tenant_id=tenant_id,
+            scope=enforce_scope,
+            observe_scope_obj=observe_scope_obj,
+            user_id=scope_user_id,
+            agent_config=agent_config,
+        )
+    )
+
+    # Unified agent goal — every agent sees its own (no owner-only scoping).
+    def _agent_goal() -> list[str]:
+        try:
+            from robothor.engine.session_goal import build_agent_goal_context
+
+            goal_section = build_agent_goal_context(tenant_id=tenant_id, agent_id=agent_id)
+        except Exception as e:
+            logger.debug("Interactive warmup agent_goal failed: %s", e)
+            return []
+        return [goal_section] if goal_section else []
+
+    builders.append(("agent_goal", _agent_goal))
+    return builders
 
 
 def build_interactive_preamble(
@@ -820,6 +1166,7 @@ def build_interactive_preamble(
     sender_name: str = "",
     identity: IdentityContext | None = None,
     agent_config: AgentConfig | None = None,
+    section_timings: dict[str, float] | None = None,
 ) -> str:
     """Build a lightweight warmup preamble for interactive (Telegram) sessions.
 
@@ -845,12 +1192,17 @@ def build_interactive_preamble(
             primary model — but omitting it is not neutral there: without a
             config that section cannot tell "no primary is set" from "nobody
             told me", and it used to assert the former.
+        section_timings: When given and ``ROBOTHOR_WARMUP_PARALLEL`` is on,
+            filled with ``{section name: elapsed seconds}`` for each section
+            that ran, for ``record_warmup_steps``. Left empty when the flag is
+            off, which is what the sequential path has always recorded.
 
     Returns:
         Warmup preamble string, or empty string if nothing to inject.
     """
-    sections: list[str] = []
-    exclude_name = sender_name
+    from robothor.engine.feature_flags import warmup_parallel_enabled
+
+    parallel = warmup_parallel_enabled()
 
     # No alert digest here, deliberately. An interactive turn is a human
     # talking; the heartbeat (``build_warmth_preamble``) is the alert reader.
@@ -868,7 +1220,7 @@ def build_interactive_preamble(
     # the rest of this function is byte-identical to pre-Task-5 behavior in
     # those cases — see ``robothor.identity.scope``.
     from robothor.engine.feature_flags import data_scoping_mode
-    from robothor.identity.scope import log_would_drop, observe_scope, scope_for_query
+    from robothor.identity.scope import observe_scope, scope_for_query
 
     _scoping_mode = data_scoping_mode()
     _enforce_scope: DataScope | None = scope_for_query(_scoping_mode, identity)
@@ -879,111 +1231,27 @@ def build_interactive_preamble(
         else None
     )
 
-    # Current-user identity — tell the agent exactly who it's talking to.
-    # `identity` (the unified context) always wins over the legacy
-    # `sender_name` string when both are present.
-    if identity is not None:
-        try:
-            enriched = enrich_identity(identity)
-        except Exception as e:
-            logger.debug("Interactive warmup identity enrichment failed: %s", e)
-            enriched = None
-        try:
-            sections.append(identity.prompt_block(enriched))
-        except Exception as e:
-            logger.debug("Interactive warmup identity prompt_block failed: %s", e)
-        exclude_name = identity.display_name or sender_name
-    elif sender_name:
-        sections.append(
-            f"--- CURRENT USER ---\n"
-            f"You are speaking with {sender_name}. Address them by this name.\n"
-            f"Do not confuse them with other people who may share the same name."
-        )
-
-    # Core memory blocks — only for new sessions (no prior history)
-    if include_blocks:
-        core_blocks = ["persona", "user_profile", "user_model", "working_context"]
-        # Also include agent-configured warmup blocks (e.g. devops_latest_report)
-        if extra_memory_blocks:
-            core_blocks = list(dict.fromkeys(core_blocks + extra_memory_blocks))
-
-        # user_profile/user_model/working_context describe the OPERATOR —
-        # a restricted identity under enforce must not have them pre-loaded.
-        # persona describes the AGENT and always stays; the identity's own
-        # CRM/memory-graph enrichment (above, via enrich_identity) is what a
-        # restricted caller gets instead.
-        if _enforce_scope is not None:
-            core_blocks = [b for b in core_blocks if b not in _OPERATOR_PERSONAL_BLOCKS]
-
-        try:
-            blocks_section = _build_memory_blocks_section(core_blocks, tenant_id=tenant_id)
-            if blocks_section:
-                sections.append(blocks_section)
-        except Exception as e:
-            logger.debug("Interactive warmup blocks failed: %s", e)
-
-        if _observe_scope is not None:
-            try:
-                _dropped_blocks = _count_operator_blocks_with_content(tenant_id=tenant_id)
-                if _dropped_blocks:
-                    log_would_drop(
-                        tool_name="warmup:memory_blocks",
-                        user_id=_scope_user_id,
-                        scope=_observe_scope,
-                        dropped=_dropped_blocks,
-                        table="agent_memory_blocks",
-                    )
-            except Exception as e:
-                logger.debug("Interactive warmup observe-scope block count failed: %s", e)
-
-    # Entity-aware context — if user mentions a name, pull relevant facts
-    # Exclude the sender's name to avoid pulling facts about other people
-    # who share the same name — the sender's identity comes from their
-    # tenant's persona/user_profile blocks, not from entity search.
-    if user_message and len(user_message) > 5:
-        try:
-            exclude = {exclude_name} if exclude_name else None
-            context = _build_entity_context(
-                user_message,
-                tenant_id=tenant_id,
-                exclude_names=exclude,
-                scope=_enforce_scope,
-                observe_scope_obj=_observe_scope,
-                user_id=_scope_user_id,
-            )
-            if context:
-                sections.append(context)
-        except Exception as e:
-            logger.debug("Interactive warmup entity context failed: %s", e)
-
-    # Dynamic context hooks (date, travel, weather, etc.)
-    try:
-        situational = _run_context_hooks()
-        if situational:
-            sections.append(situational)
-    except Exception as e:
-        logger.debug("Interactive warmup context hooks failed: %s", e)
-
-    sections.extend(
-        _interactive_supervisor_sections(
-            agent_id,
-            tenant_id=tenant_id,
-            scope=_enforce_scope,
-            observe_scope_obj=_observe_scope,
-            user_id=_scope_user_id,
-            agent_config=agent_config,
-        )
+    builders = _interactive_section_builders(
+        agent_id,
+        user_message=user_message,
+        include_blocks=include_blocks,
+        tenant_id=tenant_id,
+        extra_memory_blocks=extra_memory_blocks,
+        sender_name=sender_name,
+        identity=identity,
+        agent_config=agent_config,
+        parallel=parallel,
+        enforce_scope=_enforce_scope,
+        observe_scope_obj=_observe_scope,
+        scope_user_id=_scope_user_id,
     )
 
-    # Unified agent goal — every agent sees its own (no owner-only scoping).
-    try:
-        from robothor.engine.session_goal import build_agent_goal_context
-
-        goal_section = build_agent_goal_context(tenant_id=tenant_id, agent_id=agent_id)
-        if goal_section:
-            sections.append(goal_section)
-    except Exception as e:
-        logger.debug("Interactive warmup agent_goal failed: %s", e)
+    sections = _run_interactive_sections(
+        builders,
+        parallel=parallel,
+        section_timings=section_timings,
+        fan_out_key=f"{tenant_id}:{agent_id}",
+    )
 
     if not sections:
         return ""
@@ -1056,6 +1324,7 @@ def _build_entity_context(
     scope: DataScope | None = None,
     observe_scope_obj: DataScope | None = None,
     user_id: str | None = None,
+    batched: bool = False,
 ) -> str:
     """Extract entities from the user message and pull relevant facts.
 
@@ -1074,6 +1343,9 @@ def _build_entity_context(
             scope and a would-drop count is logged — never used to alter
             the returned text.
         user_id: Identity's stable id, for the observe-mode log line only.
+        batched: Fetch every candidate's facts in one statement (a LATERAL
+            join over the candidate list, same per-candidate filter, order and
+            limit) instead of one query per candidate. Same text.
 
     Budget: max 1000 chars. Stays synchronous (no async search_facts) so it can
     run inside the sync warmup path; recency awareness is done in SQL.
@@ -1108,48 +1380,62 @@ def _build_entity_context(
 
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
-        for entity_name in candidates[:max_candidates]:
-            if v2:
-                cur.execute(
-                    f"""
-                    SELECT fact_text, category, importance_score, person_id
-                    FROM memory_facts
-                    WHERE is_active = TRUE AND tenant_id = %s
-                      -- Indexed by idx_facts_entities_lower (migration 109).
-                      -- The previous EXISTS(unnest(...)) form was unindexable
-                      -- and scanned the tenant's whole active set, five times
-                      -- per warmup: 13,155 buffers (105 MB) a call against a
-                      -- 128 MB shared_buffers, ~262 ms versus 2.7 ms for every
-                      -- other warmup section. lower() cannot simply be dropped
-                      -- to reuse the raw-array GIN — 646 of 14,714 entity names
-                      -- on this instance collapse under it, and that rewrite
-                      -- was measured losing 37% of matched rows.
-                      AND lower_entities(entities) && ARRAY[lower(%s)]
-                      {scope_clause}
-                    ORDER BY
-                      0.55 * COALESCE(importance_score, 0.5)
-                      + 0.45 * POWER(
-                          0.5,
-                          EXTRACT(EPOCH FROM (now() - created_at)) / 3600.0 / 168.0
-                        ) DESC
-                    LIMIT 3
-                    """,
-                    (tenant_id, entity_name, *scope_params),
-                )
-            else:
-                cur.execute(
-                    f"""
-                    SELECT fact_text, category, importance_score, person_id
-                    FROM memory_facts
-                    WHERE is_active = TRUE AND %s = ANY(entities)
-                      AND tenant_id = %s
-                      {scope_clause}
-                    ORDER BY importance_score DESC, created_at DESC
-                    LIMIT 3
-                    """,
-                    (entity_name, tenant_id, *scope_params),
-                )
-            rows = cur.fetchall()
+
+        def _per_candidate() -> Iterator[list[dict[str, Any]]]:
+            # One query per candidate, in candidate order.
+            for entity_name in candidates[:max_candidates]:
+                if v2:
+                    cur.execute(
+                        f"""
+                        SELECT fact_text, category, importance_score, person_id
+                        FROM memory_facts
+                        WHERE is_active = TRUE AND tenant_id = %s
+                          -- Indexed by idx_facts_entities_lower (migration 109).
+                          -- The previous EXISTS(unnest(...)) form was unindexable
+                          -- and scanned the tenant's whole active set, five times
+                          -- per warmup: 13,155 buffers (105 MB) a call against a
+                          -- 128 MB shared_buffers, ~262 ms versus 2.7 ms for every
+                          -- other warmup section. lower() cannot simply be dropped
+                          -- to reuse the raw-array GIN — 646 of 14,714 entity names
+                          -- on this instance collapse under it, and that rewrite
+                          -- was measured losing 37 percent of matched rows.
+                          -- (No bare percent sign in this SQL, comments
+                          -- included: psycopg2 reads it as a parameter.)
+                          AND lower_entities(entities) && ARRAY[lower(%s)]
+                          {scope_clause}
+                        ORDER BY
+                          0.55 * COALESCE(importance_score, 0.5)
+                          + 0.45 * POWER(
+                              0.5,
+                              EXTRACT(EPOCH FROM (now() - created_at)) / 3600.0 / 168.0
+                            ) DESC
+                        LIMIT 3
+                        """,
+                        (tenant_id, entity_name, *scope_params),
+                    )
+                else:
+                    cur.execute(
+                        f"""
+                        SELECT fact_text, category, importance_score, person_id
+                        FROM memory_facts
+                        WHERE is_active = TRUE AND %s = ANY(entities)
+                          AND tenant_id = %s
+                          {scope_clause}
+                        ORDER BY importance_score DESC, created_at DESC
+                        LIMIT 3
+                        """,
+                        (entity_name, tenant_id, *scope_params),
+                    )
+                yield cur.fetchall()
+
+        fetched = (
+            _fetch_entity_facts_batched(
+                cur, candidates[:max_candidates], tenant_id, v2, scope_clause, scope_params
+            )
+            if batched
+            else _per_candidate()
+        )
+        for rows in fetched:
             if observe_scope_obj is not None:
                 _would_drop += rows_dropped_by_scope(rows, observe_scope_obj)
             for f in rows:
@@ -1169,6 +1455,54 @@ def _build_entity_context(
         )
 
     return "\n".join(lines) if len(lines) > 1 else ""
+
+
+def _fetch_entity_facts_batched(
+    cur: Any,
+    candidates: list[str],
+    tenant_id: str,
+    v2: bool,
+    scope_clause: str,
+    scope_params: tuple[Any, ...],
+) -> list[list[dict[str, Any]]]:
+    """Every candidate's top facts in one statement, grouped per candidate in order.
+
+    The per-candidate filter, ordering and ``LIMIT 3`` are the ones
+    ``_build_entity_context`` runs once per candidate; ``WITH ORDINALITY``
+    keeps the candidates in their extraction order.
+    """
+    if v2:
+        match = "tenant_id = %s AND lower_entities(entities) && ARRAY[lower(c.name)]"
+        rank = (
+            "0.55 * COALESCE(importance_score, 0.5) + 0.45 * POWER(0.5, "
+            "EXTRACT(EPOCH FROM (now() - created_at)) / 3600.0 / 168.0)"
+        )
+    else:
+        match = "c.name = ANY(entities) AND tenant_id = %s"
+        rank = "importance_score"
+    cur.execute(
+        f"""
+        SELECT c.ord AS candidate_ordinal,
+               f.fact_text, f.category, f.importance_score, f.person_id
+        FROM unnest(%s::text[]) WITH ORDINALITY AS c(name, ord)
+        CROSS JOIN LATERAL (
+            SELECT fact_text, category, importance_score, person_id, created_at,
+                   {rank} AS rank_score
+            FROM memory_facts
+            WHERE is_active = TRUE AND {match}
+              {scope_clause}
+            ORDER BY rank_score DESC, created_at DESC
+            LIMIT 3
+        ) f
+        ORDER BY c.ord, f.rank_score DESC, f.created_at DESC
+        """,
+        (list(candidates), tenant_id, *scope_params),
+    )
+    grouped: list[list[dict[str, Any]]] = [[] for _ in candidates]
+    for row in cur.fetchall():
+        ordinal = int(row["candidate_ordinal"])
+        grouped[ordinal - 1].append({k: v for k, v in row.items() if k != "candidate_ordinal"})
+    return grouped
 
 
 def _build_peer_section(peer_agent_ids: list[str]) -> str:

@@ -776,7 +776,7 @@ class AgentRunner(
             None, build_system_prompt, agent_config, self.config.workspace
         )
 
-        warmup_future: asyncio.Future[str | None] | None = None
+        warmup_future: asyncio.Future[tuple[str, dict[str, float]] | None] | None = None
         if warmup_kind == "cron":
             from robothor.engine.warmup import build_warmth_preamble, set_warmup_kind
 
@@ -786,7 +786,7 @@ class AgentRunner(
                         agent_config, self.config.workspace, self.config.tenant_id
                     )
 
-            warmup_future = loop.run_in_executor(None, _build_cron_warmup)  # type: ignore[arg-type]
+            warmup_future = loop.run_in_executor(None, _build_cron_warmup)
         elif warmup_kind == "interactive":
             from robothor.engine.warmup import (
                 build_interactive_preamble,
@@ -804,9 +804,12 @@ class AgentRunner(
             elif self.config.operator_name:
                 _sender = self.config.operator_name
 
-            def _build_interactive_warmup() -> str | None:
+            def _build_interactive_warmup() -> tuple[str, dict[str, float]]:
+                # Filled per section only with ROBOTHOR_WARMUP_PARALLEL on;
+                # empty otherwise, which is what was always recorded here.
+                _timings: dict[str, float] = {}
                 with set_warmup_kind("interactive"):
-                    return build_interactive_preamble(
+                    text = build_interactive_preamble(
                         agent_id,
                         message,
                         include_blocks=True,
@@ -816,7 +819,9 @@ class AgentRunner(
                         identity=effective_identity,
                         # Host state names the configured primary from this.
                         agent_config=agent_config,
+                        section_timings=_timings,
                     )
+                return text, _timings
 
             warmup_future = loop.run_in_executor(None, _build_interactive_warmup)
 
@@ -839,8 +844,8 @@ class AgentRunner(
         if warmup_future is not None:
             try:
                 _warmup_result = await warmup_future
-                # build_warmth_preamble returns (preamble, section_timings) for
-                # cron warmup; build_interactive_preamble still returns str.
+                # Both builders hand back (preamble, section_timings); a bare
+                # str is still accepted.
                 if isinstance(_warmup_result, tuple):
                     warmup_preamble, _warmup_section_timings = _warmup_result
                 else:
@@ -862,12 +867,14 @@ class AgentRunner(
             # only — no other warmup DB work (memory blocks, entity context,
             # etc. are already in the transcript).
             try:
-                from robothor.identity import enrich_identity
+                from robothor.engine.warmup import enrichment_call_for_turn
 
-                # enrich_identity does blocking DB work on a cache miss —
-                # offload to the executor so it never blocks the event loop,
-                # mirroring the first-turn warmup path just above.
-                _enriched = await loop.run_in_executor(None, enrich_identity, effective_identity)
+                # Enrichment does blocking DB work on a cache miss — offload to
+                # the executor so it never blocks the event loop, mirroring the
+                # first-turn warmup path just above. With
+                # ROBOTHOR_WARMUP_PARALLEL on it is held for the chat session.
+                _enrich_fn, _enrich_args = enrichment_call_for_turn(agent_id, effective_identity)
+                _enriched = await loop.run_in_executor(None, _enrich_fn, *_enrich_args)
             except Exception as e:
                 logger.debug(
                     "Per-turn identity enrichment failed for %s: %s",

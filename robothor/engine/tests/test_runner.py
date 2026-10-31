@@ -819,6 +819,64 @@ class TestIdentityThreading:
         assert mock_enrich in seen_funcs
 
     @pytest.mark.asyncio
+    async def test_per_turn_enrichment_is_session_held_with_parallel_warmup(
+        self, runner, sample_agent_config, mock_litellm_response, monkeypatch
+    ):
+        """With ROBOTHOR_WARMUP_PARALLEL on, the follow-up turn's enrichment
+        goes through the session-held cache, still offloaded to the executor."""
+        import asyncio as _asyncio
+
+        monkeypatch.setenv("ROBOTHOR_WARMUP_PARALLEL", "1")
+        response = mock_litellm_response(content="Hi Bob")
+        history = [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "hello"},
+        ]
+
+        real_run_in_executor = _asyncio.base_events.BaseEventLoop.run_in_executor
+        seen_funcs = []
+
+        def spy_run_in_executor(self_loop, executor, func, *args):
+            seen_funcs.append(func)
+            return real_run_in_executor(self_loop, executor, func, *args)
+
+        with (
+            patch("robothor.engine.runner.create_run"),
+            patch("robothor.engine.runner.update_run"),
+            patch("robothor.engine.run_finalizer.create_step"),
+            patch("litellm.acompletion", new_callable=AsyncMock, return_value=response),
+            patch("robothor.identity.enrich_identity", return_value=None) as mock_enrich,
+            patch(
+                "robothor.identity.enrichment.enrich_identity_for_session", return_value=None
+            ) as mock_session,
+            patch(
+                "robothor.engine.runner._seconds_since_last_interactive_run",
+                return_value=5.0,
+            ),
+            patch.object(
+                _asyncio.base_events.BaseEventLoop,
+                "run_in_executor",
+                spy_run_in_executor,
+            ),
+        ):
+            run = await runner.execute(
+                "test-agent",
+                "follow-up",
+                agent_config=sample_agent_config,
+                trigger_type=TriggerType.TELEGRAM,
+                trigger_detail="chat:123|sender:Bob",
+                conversation_history=history,
+                tenant_id="t-alpha",
+                user_id="tg-1",
+                user_role="member",
+            )
+
+        assert run.status == RunStatus.COMPLETED
+        assert mock_session in seen_funcs
+        assert mock_enrich not in seen_funcs
+        assert mock_session.call_args.args[0] == "test-agent"
+
+    @pytest.mark.asyncio
     async def test_no_duplicate_block_on_first_turn(
         self, runner, sample_agent_config, mock_litellm_response
     ):
