@@ -353,6 +353,9 @@ class TestTagMustReachTheRemote:
 
     def test_colour_is_off_so_the_skip_regex_sees_plain_text(self, jobs: dict) -> None:
         env = _step(jobs["release"], "Run semantic-release")["env"]
+        # semantic-release's logger (chalk 2 / supports-color 5) ignores
+        # NO_COLOR; FORCE_COLOR=0 is what turns its colour off.
+        assert str(env.get("FORCE_COLOR")) == "0"
         assert str(env.get("NO_COLOR")) == "1"
 
 
