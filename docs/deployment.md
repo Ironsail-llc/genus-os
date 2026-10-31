@@ -988,14 +988,20 @@ editing operator are written to `memory_facts_audit` with
 `metadata.operator_confirmed = {at, by}`, which `GET /api/memory/facts` returns
 as `operator_confirmed`, and a recomputed `content_hash`. An edit whose text
 matches another active fact is a `409` ("an active fact with this text already
-exists"); an inactive fact is a `422`; another tenant's fact is a `404`. The
+exists"); an inactive fact is a `409`, as for forget; another tenant's fact
+is a `404`. A text under 15 characters is a `422` unless the fact's category is
+`decision`, `preference` or `resolution`, because the nightly quality prune
+retires shorter facts in every other category. The
 `memory.edit` audit event carries the fact id and the reason, never the old or
 the new text. **A text edit re-embeds the fact** in the same request, so
 vector search ranks it by its new wording at once; an entities-only edit, or
 one that saves the same words, leaves the vector alone. If the embedding
 provider is unreachable the edit still saves, keeps the old vector and sets
 `metadata.embedding_stale = true` until a later text edit refreshes it — the
-vector is never cleared, because nothing backfills a missing one.
+vector is never cleared, because nothing backfills a missing one. The
+embedding gets one attempt within 8 seconds, so a slow or unreachable provider
+costs the save at most that long rather than outlasting the dashboard's
+30-second request timeout.
 
 **Audit.** `GET /api/controls/audit` reads the guardrail change log
 (`feature_flag_audit`, written on every `PATCH /api/controls`), newest first.
@@ -1059,7 +1065,8 @@ chips), and a reason of 3–500 characters for the audit record. Saving keeps th
 original text in the fact's history first, then shows the row as the bridge
 stored it, with an **Operator-confirmed** badge. If another active fact already
 says the same thing, the save is refused with that message and the editor stays
-open. Inactive facts cannot be edited. Changing the text re-embeds the fact,
+open. Inactive facts cannot be edited, and a text under 15 characters is
+refused for most facts, because the nightly quality prune would retire it. Changing the text re-embeds the fact,
 so search finds it by its new wording straight away (unless the embedding
 provider was unreachable, in which case the old vector is kept and marked
 stale).
