@@ -61,8 +61,9 @@ class EventWriter:
         self._written = 0  # queued rows taken off the queue (under the lock)
         self._loop: asyncio.AbstractEventLoop | None = None
         self._task: asyncio.Task[None] | None = None
-        self._wake: asyncio.Event | None = None
-        self._progress: asyncio.Event | None = None
+        # Re-made for each loop the writer is used on (an Event binds to one).
+        self._wake = asyncio.Event()
+        self._progress = asyncio.Event()
         self._closed = False
 
     def submit(self, fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> None:
@@ -89,7 +90,6 @@ class EventWriter:
             wake = self._ensure_task(loop)
             progress = self._progress
             wake.set()
-            assert progress is not None
             await progress.wait()
 
     async def shutdown(self) -> None:
@@ -115,11 +115,9 @@ class EventWriter:
             self._wake, self._progress = asyncio.Event(), asyncio.Event()
         if self._task is None or self._task.done():
             self._task = loop.create_task(self._run(), name="event-writer")
-        assert self._wake is not None
         return self._wake
 
     async def _run(self) -> None:
-        assert self._wake is not None
         while True:
             await self._wake.wait()
             self._wake.clear()
@@ -130,8 +128,7 @@ class EventWriter:
 
     def _signal_progress(self) -> None:
         progress, self._progress = self._progress, asyncio.Event()
-        if progress is not None:
-            progress.set()
+        progress.set()
 
     def _write_batch(self) -> None:
         with self._lock:
