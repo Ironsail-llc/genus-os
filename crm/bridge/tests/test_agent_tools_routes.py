@@ -126,3 +126,20 @@ def test_a_trailing_newline_in_the_id_is_refused_as_a_422(controls_client_as_ope
 
     assert response.status_code == 422
     assert not fake_engine.calls
+
+
+@pytest.mark.parametrize("engine_status", [401, 403])
+@pytest.mark.parametrize("path", ["/api/agents/example-agent/tools", "/api/mcp/servers"])
+def test_an_engine_refusing_the_bridge_is_a_502_not_the_callers_refusal(
+    controls_client_as_operator, fake_engine, engine_status, path
+):
+    """An engine 401/403 is about the BRIDGE's token or scope. Passed through,
+    the dialog would tell an operator their session ended, or that only an
+    operator may look -- both false. The bridge's own gate still answers 403."""
+    fake_engine.status = engine_status
+
+    response = controls_client_as_operator.get(path)
+
+    assert response.status_code == 502
+    assert response.json()["error"].startswith("the engine refused the bridge's credentials")
+    assert response.headers["cache-control"] == "no-store"

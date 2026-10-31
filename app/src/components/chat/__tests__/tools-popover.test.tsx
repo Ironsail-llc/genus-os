@@ -215,6 +215,18 @@ describe("ToolsPopover — the dialog", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("shows the bridge's words when the engine refused the bridge, not a session or role message", async () => {
+    const message = "the engine refused the bridge's credentials (HTTP 401); check the shared signing key";
+    installFetch({ [TOOLS_URL]: { status: 502, body: { error: message } } });
+    render(<ToolsPopover agentId="example-agent" />);
+    fireEvent.click(screen.getByRole("button", { name: "Tools and MCP servers" }));
+
+    const error = await screen.findByTestId("tools-error");
+    expect(error).toHaveTextContent(message);
+    expect(error).not.toHaveTextContent(/sign in/i);
+    expect(screen.queryByTestId("tools-refused")).toBeNull();
+  });
+
   it("treats an answer without tool groups as an error, not a crash", async () => {
     installFetch({ [TOOLS_URL]: { body: { agent: "example-agent" } } });
     render(<ToolsPopover agentId="example-agent" />);
