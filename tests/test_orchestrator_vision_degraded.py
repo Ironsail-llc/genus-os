@@ -120,10 +120,15 @@ def test_health_reports_vision_down_without_degrading_the_service(
 
     body = asyncio.run(orchestrator.health())
 
-    vision = body["components"]["vision"]
+    vision = body["optional"]["vision"]
     assert vision["available"] is False
     assert vision["last_error"] and "ConnectError" in vision["last_error"]
     assert body["status"] == "ok", "vision is optional; it must not degrade the orchestrator"
+    # The dashboard reads every `components` entry with available=false as a
+    # failing check and shows the orchestrator Degraded. Vision is reported
+    # beside them, never among them.
+    assert "vision" not in body["components"]
+    assert all(c.get("available") is not False for c in body["components"].values())
 
 
 def test_health_clears_the_vision_error_after_a_good_call(
@@ -137,13 +142,13 @@ def test_health_clears_the_vision_error_after_a_good_call(
     )
     asyncio.run(_call("/vision/mode"))
 
-    vision = asyncio.run(orchestrator.health())["components"]["vision"]
+    vision = asyncio.run(orchestrator.health())["optional"]["vision"]
     assert vision == {"available": True, "last_error": None}
 
 
 def test_health_before_any_vision_call_says_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
     _stub_health_probes(monkeypatch)
-    vision = asyncio.run(orchestrator.health())["components"]["vision"]
+    vision = asyncio.run(orchestrator.health())["optional"]["vision"]
     assert vision == {"available": None, "last_error": None}
 
 
