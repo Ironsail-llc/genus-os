@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { KeyRound, Loader2, Lock, RefreshCw, Trash2 } from "lucide-react";
+import { KeyRound, Loader2, Lock, RefreshCw, Trash2, X } from "lucide-react";
 
 import { PageHeader } from "@/components/business/page-header";
 import { Button } from "@/components/ui/button";
@@ -205,8 +205,9 @@ export function SecretsPage({ visible = true, role }: SecretsPageProps) {
         changed and which services read it. Values are never sent to this page. A credential last
         changed more than {ROTATION_DAYS} days ago is flagged for rotation. To set or rotate one,
         run <code className="rounded bg-muted px-1 font-mono">genus vault set &lt;key&gt;</code> on
-        the instance, then restart the services listed as its readers. Remove takes a credential
-        out of the vault; a copy in the environment, if any, is then what readers get.
+        the instance, then restart the services listed as its readers. The bin icon, then its
+        confirmation, takes a credential out of the vault; a copy in the environment, if any, is
+        then what readers get.
       </p>
 
       {forbidden ? (
@@ -300,7 +301,9 @@ function SecretsTable({
           <th className="py-2 pr-3 font-medium">Last change</th>
           <th className="py-2 pr-3 font-medium">Readers</th>
           <th className="py-2 pr-3 font-medium">Rotation</th>
-          <th className="py-2 font-medium">
+          {/* Fixed and narrow: the controls are icon buttons, so the table still
+              fits beside the sidebar, the settings menu and an open chat dock. */}
+          <th className="w-11 py-2 font-medium">
             <span className="sr-only">Actions</span>
           </th>
         </tr>
@@ -408,10 +411,10 @@ function SecretRowView({
       <td className={cell}>
         {inVault &&
           (armed ? (
-            <span className="inline-flex gap-1">
+            <span className="inline-flex flex-col gap-1">
               <Button
                 variant="destructive"
-                size="sm"
+                size="icon-sm"
                 disabled={removing}
                 onClick={async () => {
                   setRemoving(true);
@@ -419,23 +422,32 @@ function SecretRowView({
                   setRemoving(false);
                   setArmed(false);
                 }}
+                aria-label={`Confirm: remove ${row.name} from the vault`}
+                title="Remove from vault"
                 data-testid={`secrets-remove-confirm-${row.name}`}
               >
-                Remove from vault
+                <Trash2 aria-hidden className="size-3.5" />
               </Button>
-              <Button variant="ghost" size="sm" onClick={() => setArmed(false)}>
-                Cancel
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                onClick={() => setArmed(false)}
+                aria-label="Cancel"
+                title="Cancel"
+              >
+                <X aria-hidden className="size-3.5" />
               </Button>
             </span>
           ) : (
             <Button
               variant="outline"
-              size="sm"
+              size="icon-sm"
               onClick={() => setArmed(true)}
+              aria-label={`Remove ${row.name} from the vault`}
+              title="Remove from vault"
               data-testid={`secrets-remove-${row.name}`}
             >
               <Trash2 aria-hidden className="size-3.5" />
-              Remove
             </Button>
           ))}
       </td>
