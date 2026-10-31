@@ -32,11 +32,64 @@ from __future__ import annotations
 
 import fnmatch
 import logging
+import threading
+import time
 from typing import Any
 
 from robothor.constants import DEFAULT_TENANT
 
 logger = logging.getLogger(__name__)
+
+#: How long fetched rule rows are reused before the database is read again.
+#: Every write path in this process calls ``invalidate_permission_cache()``, so
+#: this bounds only changes made from outside it (operator SQL, a migration).
+PERMISSION_CACHE_TTL_SECONDS = 5.0
+
+_cache_lock = threading.Lock()
+_cache_generation = 0
+#: ``(table, tenant_id, role-or-user_id)`` -> ``(rows, generation, fetched_at)``.
+_rule_cache: dict[tuple[str, str, str], tuple[list[Any], int, float]] = {}
+
+
+def _now() -> float:
+    return time.monotonic()
+
+
+def invalidate_permission_cache() -> None:
+    """Drop every cached rule set. Call after any write to the permission tables."""
+    global _cache_generation
+    with _cache_lock:
+        _cache_generation += 1
+        _rule_cache.clear()
+
+
+def _cached_rows(key: tuple[str, str, str], sql: str, params: tuple[Any, ...]) -> list[Any]:
+    """Rows for one rule-set read, from the cache while fresh.
+
+    A hit touches no connection. A read that raises propagates (and is not
+    cached), so the caller still fails closed. The generation is taken before
+    the read: a write that invalidates while the read is in flight leaves the
+    stale rows unstored.
+    """
+    with _cache_lock:
+        hit = _rule_cache.get(key)
+        generation = _cache_generation
+        if (
+            hit is not None
+            and hit[1] == generation
+            and _now() - hit[2] < PERMISSION_CACHE_TTL_SECONDS
+        ):
+            return hit[0]
+    from robothor.db.connection import get_connection
+
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(sql, params)
+        rows = list(cur.fetchall())
+    with _cache_lock:
+        if generation == _cache_generation:
+            _rule_cache[key] = (rows, generation, _now())
+    return rows
 
 
 def check_tool_permission(
@@ -68,58 +121,52 @@ def check_tool_permission(
         return "Missing execution role — access denied"
 
     try:
-        from robothor.db.connection import get_connection
-
-        with get_connection() as conn:
-            cur = conn.cursor()
-
-            if user_id:
-                # Most-specific per-user override wins outright, before role
-                # rules are even considered — same specificity metric as the
-                # role-level evaluation below (exact > glob > catch-all;
-                # deny wins a true tie).
-                cur.execute(
-                    """
-                    SELECT tool_pattern, access
-                    FROM user_permissions
-                    WHERE tenant_id = %s AND user_id = %s
-                    """,
-                    (tenant_id, user_id),
-                )
-                user_rules = cur.fetchall()
-                matching_user = [
-                    (pattern, access)
-                    for pattern, access in user_rules
-                    if fnmatch.fnmatch(tool_name, pattern)
-                ]
-                if matching_user:
-                    pattern, access = max(
-                        matching_user,
-                        key=lambda rule: (
-                            rule[0] == tool_name,
-                            sum(character not in "*?[]" for character in rule[0]),
-                            rule[1] == "deny",
-                        ),
-                    )
-                    if access == "deny":
-                        return (
-                            f"User '{user_id}' denied '{tool_name}' "
-                            f"(user override pattern: {pattern})"
-                        )
-                    return None
-
-            # Fetch both policy levels.  Precedence is evaluated below rather
-            # than delegated to SQL ordering because pattern specificity must
-            # beat a catch-all rule of the opposite access type.
-            cur.execute(
+        if user_id:
+            # Most-specific per-user override wins outright, before role
+            # rules are even considered — same specificity metric as the
+            # role-level evaluation below (exact > glob > catch-all;
+            # deny wins a true tie).
+            user_rules = _cached_rows(
+                ("user_permissions", tenant_id, user_id),
                 """
-                SELECT tool_pattern, access, tenant_id
-                FROM role_permissions
-                WHERE role = %s AND tenant_id IN (%s, '__default__')
+                SELECT tool_pattern, access
+                FROM user_permissions
+                WHERE tenant_id = %s AND user_id = %s
                 """,
-                (user_role, tenant_id),
+                (tenant_id, user_id),
             )
-            rules = cur.fetchall()
+            matching_user = [
+                (pattern, access)
+                for pattern, access in user_rules
+                if fnmatch.fnmatch(tool_name, pattern)
+            ]
+            if matching_user:
+                pattern, access = max(
+                    matching_user,
+                    key=lambda rule: (
+                        rule[0] == tool_name,
+                        sum(character not in "*?[]" for character in rule[0]),
+                        rule[1] == "deny",
+                    ),
+                )
+                if access == "deny":
+                    return (
+                        f"User '{user_id}' denied '{tool_name}' (user override pattern: {pattern})"
+                    )
+                return None
+
+        # Fetch both policy levels.  Precedence is evaluated below rather
+        # than delegated to SQL ordering because pattern specificity must
+        # beat a catch-all rule of the opposite access type.
+        rules = _cached_rows(
+            ("role_permissions", tenant_id, user_role),
+            """
+            SELECT tool_pattern, access, tenant_id
+            FROM role_permissions
+            WHERE role = %s AND tenant_id IN (%s, '__default__')
+            """,
+            (user_role, tenant_id),
+        )
 
         if not rules:
             return f"No permission rules for role '{user_role}' — access denied"
@@ -291,3 +338,4 @@ def seed_default_permissions() -> None:
                 """,
                 (role, pattern, access),
             )
+    invalidate_permission_cache()

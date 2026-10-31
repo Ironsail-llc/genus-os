@@ -498,12 +498,18 @@ async def _refuse_before_handler(
 
 
 async def _runtime_denial(
-    name: str, args: dict[str, Any], ctx: ToolContext
+    name: str, args: dict[str, Any], ctx: ToolContext, *, fresh_stop: bool = False
 ) -> dict[str, Any] | None:
+    """Stop, lease, deadline and goal admission for one tool call.
+
+    The durable stop is the verdict the iteration's provider attempt read
+    (``controls.stopped_for_iteration``); ``fresh_stop`` reads it again, for the
+    recheck right before a journaled side effect is dispatched.
+    """
     from robothor.goals.runtime import admit_tool
 
     try:
-        from robothor.engine.runtime.controls import stopped
+        from robothor.engine.runtime.controls import stopped_for_iteration
         from robothor.engine.runtime.deadlines import require_time
 
         require_time()
@@ -522,7 +528,9 @@ async def _runtime_denial(
 
         if resume_claim.get() is not None:
             await asyncio.to_thread(require_owned)
-        if bool(ctx.run_id) and await asyncio.to_thread(stopped, ctx.tenant_id, ctx.run_id):
+        if bool(ctx.run_id) and await asyncio.to_thread(
+            stopped_for_iteration, ctx.tenant_id, ctx.run_id, refresh=fresh_stop
+        ):
             raise ValueError(
                 "durable stop denies further tool dispatch; reconcile in-flight effects"
             )
