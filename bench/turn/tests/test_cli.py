@@ -188,3 +188,79 @@ def test_warmup_turns_are_dropped_from_the_summary_and_kept_apart() -> None:
 
 def test_warmup_defaults_to_one_turn() -> None:
     assert build_parser().parse_args([]).warmup == 1
+
+
+def _both_sets(folder: Path, value: float) -> None:
+    _sentinels(folder)
+    _write(folder / "inprocess.json", _result(value))
+    _write(folder / "ci-inprocess.json", _result(value))
+
+
+def test_the_ci_set_defaults_timing_metrics_to_thirty_percent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import bench.turn.cli as cli
+
+    _both_sets(tmp_path / "baselines", 100.0)
+    monkeypatch.setattr(cli, "BASELINES", tmp_path / "baselines")
+    current = _write(tmp_path / "c.json", _result(125.0))
+    assert main(["--compare", current, "--baseline-set", "ci"]) == 0
+    assert main(["--compare", current]) == 1  # local: 10%
+
+
+def test_an_explicit_timing_threshold_wins(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import bench.turn.cli as cli
+
+    _both_sets(tmp_path / "baselines", 100.0)
+    monkeypatch.setattr(cli, "BASELINES", tmp_path / "baselines")
+    current = _write(tmp_path / "c.json", _result(125.0))
+    assert main(["--compare", current, "--baseline-set", "ci", "--timing-threshold", "0.2"]) == 1
+    assert main(["--compare", current, "--timing-threshold", "0.3"]) == 0
+
+
+def _summary_file(path: Path, half: str, metrics: dict[str, float]) -> str:
+    return _write(
+        path,
+        {
+            "half": half,
+            "runs": 20,
+            "summary": {m: {"p50": v, "p95": v * 2, "n": 20} for m, v in metrics.items()},
+        },
+    )
+
+
+def test_merge_baselines_takes_the_median_per_metric(tmp_path: Path) -> None:
+    a = _summary_file(tmp_path / "a.json", "inprocess", {"done_ms": 10.0, "db_statements": 64.0})
+    b = _summary_file(tmp_path / "b.json", "inprocess", {"done_ms": 30.0, "db_statements": 64.0})
+    c = _summary_file(tmp_path / "c.json", "inprocess", {"done_ms": 20.0})
+    out = tmp_path / "merged.json"
+    assert main(["--merge-baselines", a, b, c, "--out", str(out)]) == 0
+    merged = json.loads(out.read_text())
+    assert merged["half"] == "inprocess"
+    assert merged["summary"]["done_ms"]["p50"] == 20.0
+    assert merged["summary"]["done_ms"]["p95"] == 40.0
+    assert merged["summary"]["db_statements"]["p50"] == 64.0
+    assert len(merged["merged_from"]) == 3
+    # The merged file is a usable baseline.
+    current = _write(tmp_path / "now.json", _result(20.0))
+    assert main(["--compare", current, "--baseline", str(out)]) == 0
+
+
+def test_merge_baselines_needs_three_runs(tmp_path: Path) -> None:
+    a = _summary_file(tmp_path / "a.json", "inprocess", {"done_ms": 10.0})
+    b = _summary_file(tmp_path / "b.json", "inprocess", {"done_ms": 30.0})
+    assert main(["--merge-baselines", a, b, "--out", str(tmp_path / "m.json")]) == 2
+    assert not (tmp_path / "m.json").exists()
+
+
+def test_merge_baselines_refuses_mixed_halves(tmp_path: Path) -> None:
+    files = [
+        _summary_file(tmp_path / f"{n}.json", half, {"done_ms": 10.0})
+        for n, half in (("a", "inprocess"), ("b", "inprocess"), ("c", "http"))
+    ]
+    assert main(["--merge-baselines", *files, "--out", str(tmp_path / "m.json")]) == 2
+
+
+def test_merge_baselines_needs_out(tmp_path: Path) -> None:
+    files = [_summary_file(tmp_path / f"{n}.json", "inprocess", {"done_ms": 1.0}) for n in "abc"]
+    assert main(["--merge-baselines", *files]) == 2

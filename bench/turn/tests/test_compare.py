@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from bench.turn.compare import EMPTY_BASELINE, compare, is_empty_baseline
 
 
@@ -75,3 +77,42 @@ def test_the_report_names_each_metric() -> None:
     outcome = compare(_result(100.0), _result(200.0))
     assert "done_ms" in outcome.message
     assert "p50" in outcome.message
+
+
+def _metric(metric: str, value: float) -> dict:
+    return {"summary": {metric: {"p50": value, "p95": value, "n": 20}}}
+
+
+def test_timing_metrics_use_the_timing_threshold() -> None:
+    assert (
+        compare(
+            _metric("done_ms", 100.0), _metric("done_ms", 125.0), timing_threshold=0.30
+        ).exit_code
+        == 0
+    )
+    assert (
+        compare(
+            _metric("done_ms", 100.0), _metric("done_ms", 131.0), timing_threshold=0.30
+        ).exit_code
+        == 1
+    )
+
+
+def test_the_timing_threshold_defaults_to_the_threshold() -> None:
+    assert compare(_metric("ttft_ms", 100.0), _metric("ttft_ms", 111.0)).exit_code == 1
+
+
+@pytest.mark.parametrize("metric", ["db_statements", "prompt_tokens", "tool_schemas"])
+def test_count_metrics_keep_the_tight_threshold(metric: str) -> None:
+    outcome = compare(_metric(metric, 100.0), _metric(metric, 115.0), timing_threshold=0.30)
+    assert outcome.exit_code == 1
+
+
+@pytest.mark.parametrize("metric", ["db_statements", "prompt_tokens", "tool_schemas"])
+def test_count_metrics_ignore_the_min_delta(metric: str) -> None:
+    # 10 -> 12 is 20% but only 2 over: still a regression for a count.
+    assert compare(_metric(metric, 10.0), _metric(metric, 12.0), min_delta=5.0).exit_code == 1
+
+
+def test_timing_metrics_keep_the_min_delta() -> None:
+    assert compare(_metric("setup_ms", 4.0), _metric("setup_ms", 8.0), min_delta=5.0).exit_code == 0
