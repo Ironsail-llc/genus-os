@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useLayoutEffect, useRef, type DependencyList } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, type DependencyList } from "react";
 
 /** How close to the bottom (px) still counts as reading the newest text. */
 export const PINNED_THRESHOLD_PX = 80;
@@ -17,6 +17,11 @@ export const PINNED_THRESHOLD_PX = 80;
  *
  * The jump is instant: a smooth scroll restarted on every throttled delta never
  * finishes, and is the thing that dragged readers back down.
+ *
+ * Content can also grow with nothing in `follow` changing: offscreen bubbles
+ * (`content-visibility: auto`) are laid out at a placeholder height until they
+ * render, so the list grows just after the jump. A ResizeObserver on the
+ * container and its content keeps a pinned reader at the bottom through that.
  */
 export function usePinnedScroll<T extends HTMLElement>(follow: DependencyList, repin: unknown) {
   const containerRef = useRef<T>(null);
@@ -43,6 +48,17 @@ export function usePinnedScroll<T extends HTMLElement>(follow: DependencyList, r
     // The caller's list is the dependency list, as with any effect hook.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, follow);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      if (pinned.current) toBottom();
+    });
+    observer.observe(el);
+    if (el.firstElementChild) observer.observe(el.firstElementChild);
+    return () => observer.disconnect();
+  }, [toBottom]);
 
   return { containerRef, onScroll };
 }
