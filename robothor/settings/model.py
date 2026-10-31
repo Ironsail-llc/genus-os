@@ -2069,11 +2069,12 @@ class FlagSettings(SettingsGroup):
     warmup_parallel: bool = declare(
         False,
         "ROBOTHOR_WARMUP_PARALLEL",
-        "Build the interactive warmup preamble's sections concurrently instead "
-        "of one after another, read its memory blocks in one statement, batch "
-        "its entity lookups into one query and cache identity enrichment for "
-        "the chat session. The text is the same; the first turn waits for the "
-        "slowest section rather than the sum of them.",
+        "Make the interactive warmup preamble cheaper: read its memory blocks "
+        "in one statement, batch its entity lookups into one query, reuse "
+        "identity enrichment within a chat session, and build its sections "
+        "concurrently once an agent's previous warmup had a section slower "
+        "than 30 ms (on a fast database they stay sequential, where threads "
+        "would cost more than they save). The text is the same.",
         since="unreleased",
     )
     disable_all_rips: bool = declare(

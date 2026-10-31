@@ -850,6 +850,12 @@ _section_pool: ThreadPoolExecutor | None = None
 _deferred_pool: ThreadPoolExecutor | None = None
 _deferred_pending: set[Future[Any]] = set()
 _pool_lock = threading.Lock()
+#: A section slower than this in an agent's previous flagged warmup makes the
+#: next one fan out. Below it, the queries are fast enough that a thread
+#: hand-off per section costs more than overlapping them saves.
+FAN_OUT_MIN_SECTION_SECONDS = 0.03
+#: Each agent's slowest section in its previous flagged warmup, in seconds.
+_slowest_section_by_agent: dict[str, float] = {}
 
 
 def _get_section_pool() -> ThreadPoolExecutor:
@@ -902,14 +908,47 @@ def _run_interactive_sections(
     *,
     parallel: bool,
     section_timings: dict[str, float] | None,
+    fan_out_key: str = "",
 ) -> list[str]:
-    """Run the builders and join their sections in builder order."""
+    """Run the builders and join their sections in builder order.
+
+    ``parallel`` is the flag. Off, the builders run in place and nothing is
+    timed, as always. On, they are timed, and they fan out to the section pool
+    only when ``fan_out_key``'s previous warmup had a section slower than
+    ``FAN_OUT_MIN_SECTION_SECONDS``: on a fast database a thread hand-off costs
+    more than the queries it overlaps (QA measured the fanned-out preamble at
+    roughly twice the sequential one), so a fast instance stays in place and
+    keeps only the statement savings.
+    """
     sections: list[str] = []
     if not parallel:
         for _name, fn in builders:
             sections.extend(fn())
         return sections
 
+    timings: dict[str, float] = {}
+    with _pool_lock:
+        previous_slowest = _slowest_section_by_agent.get(fan_out_key, 0.0)
+    if previous_slowest > FAN_OUT_MIN_SECTION_SECONDS:
+        sections = _fan_out(builders, timings)
+    else:
+        for name, fn in builders:
+            parts, timings[name] = _timed(fn)
+            sections.extend(parts)
+
+    if timings:
+        with _pool_lock:
+            _slowest_section_by_agent[fan_out_key] = max(timings.values())
+    if section_timings is not None:
+        section_timings.update(timings)
+    return sections
+
+
+def _fan_out(
+    builders: list[tuple[str, Callable[[], list[str]]]], timings: dict[str, float]
+) -> list[str]:
+    """Run the builders on the section pool, joined in builder order."""
+    sections: list[str] = []
     pool = _get_section_pool()
     # Each section gets a copy of this context: set_warmup_kind and the
     # connection's tenant scope are ContextVars, which a worker thread does not
@@ -923,8 +962,7 @@ def _run_interactive_sections(
         except Exception as e:  # builders guard themselves; belt and braces
             logger.debug("Interactive warmup %s failed: %s", name, e)
             parts, elapsed = [], 0.0
-        if section_timings is not None:
-            section_timings[name] = elapsed
+        timings[name] = elapsed
         sections.extend(parts)
     return sections
 
@@ -1074,7 +1112,9 @@ def _interactive_section_builders(
                     batched=parallel,
                 )
             except Exception as e:
-                logger.debug("Interactive warmup entity context failed: %s", e)
+                # WARNING, not DEBUG: a failure here empties entity recall
+                # for every turn, and at DEBUG nobody ever saw it.
+                logger.warning("Interactive warmup entity context failed: %s", e)
                 return []
             return [context] if context else []
 
@@ -1207,7 +1247,10 @@ def build_interactive_preamble(
     )
 
     sections = _run_interactive_sections(
-        builders, parallel=parallel, section_timings=section_timings
+        builders,
+        parallel=parallel,
+        section_timings=section_timings,
+        fan_out_key=f"{tenant_id}:{agent_id}",
     )
 
     if not sections:
@@ -1355,7 +1398,9 @@ def _build_entity_context(
                           -- other warmup section. lower() cannot simply be dropped
                           -- to reuse the raw-array GIN — 646 of 14,714 entity names
                           -- on this instance collapse under it, and that rewrite
-                          -- was measured losing 37% of matched rows.
+                          -- was measured losing 37 percent of matched rows.
+                          -- (No bare percent sign in this SQL, comments
+                          -- included: psycopg2 reads it as a parameter.)
                           AND lower_entities(entities) && ARRAY[lower(%s)]
                           {scope_clause}
                         ORDER BY
