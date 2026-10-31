@@ -30,7 +30,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from robothor.engine import config as engine_config
+from robothor.engine import config as engine_config_module
 from robothor.engine.llm_client import LLMClient
 
 FLAG = "ROBOTHOR_CACHE_LAYOUT_V2"
@@ -77,8 +77,8 @@ def _system_at(hour: int, minute: int) -> str:
         def now(cls, tz=None):  # type: ignore[override]
             return _real_datetime(2026, 3, 4, hour, minute, tzinfo=tz)
 
-    with patch.object(engine_config, "datetime", _Frozen):
-        parts = engine_config._prompt_with_time(STATIC_BODY, "UTC")
+    with patch.object(engine_config_module, "datetime", _Frozen):
+        parts = engine_config_module._prompt_with_time(STATIC_BODY, "UTC")
     # request_runtime.prepare_loop appends the guardrail summary after the tail.
     return parts.full_text() + f"\n\n---\n\n{GUARDRAIL}"
 
@@ -122,18 +122,71 @@ def flag_off(monkeypatch):
 # ─── The system message is the stable prefix ─────────────────────────────
 
 
-@pytest.mark.parametrize("model", ALL_MODELS)
-def test_system_message_byte_identical_a_minute_apart_with_flag_on(flag_on, model):
-    first = _build(model, _messages(_system_at(9, 41), _history(4), "hello"))
-    second = _build(model, _messages(_system_at(9, 42), _history(4), "hello"))
-    assert _dump(first["messages"][0]) == _dump(second["messages"][0])
+RUN_MODELS = [ANTHROPIC_DIRECT, VERTEX_GEMINI, OPENAI, OPENROUTER]
 
 
-@pytest.mark.parametrize("model", ALL_MODELS)
-def test_system_message_differs_a_minute_apart_with_flag_off(flag_off, model):
-    first = _build(model, _messages(_system_at(9, 41), _history(4), "hello"))
-    second = _build(model, _messages(_system_at(9, 42), _history(4), "hello"))
-    assert _dump(first["messages"][0]) != _dump(second["messages"][0])
+async def _two_runs(engine_config, agent_config, mock_litellm_response) -> list[list[dict]]:
+    """Two separate runs through ``AgentRunner.execute`` (what ``engine run`` does),
+    their system prompts built a minute apart. Returns each run's wire messages."""
+    from unittest.mock import AsyncMock
+
+    from robothor.engine.runner import AgentRunner
+
+    sent: list[list[dict]] = []
+
+    async def provider(**kwargs):
+        sent.append(copy.deepcopy(kwargs["messages"]))
+        return mock_litellm_response(content="Done.")
+
+    with patch("robothor.engine.runner.get_registry") as get_registry:
+        registry = MagicMock()
+        registry.build_for_agent.return_value = []
+        registry.get_tool_names.return_value = []
+        get_registry.return_value = registry
+        runner = AgentRunner(engine_config)
+        runner.registry = registry
+        for minute in (41, 42):
+
+            class _Frozen(_real_datetime):
+                @classmethod
+                def now(cls, tz=None, _m=minute):  # type: ignore[override]
+                    return _real_datetime(2026, 3, 4, 9, _m, tzinfo=tz)
+
+            with (
+                patch.object(engine_config_module, "datetime", _Frozen),
+                patch("robothor.engine.runner.create_run"),
+                patch("robothor.engine.runner.update_run", new=MagicMock()),
+                patch("robothor.engine.run_finalizer.create_step"),
+                patch("litellm.acompletion", new=AsyncMock(side_effect=provider)),
+            ):
+                await runner.execute("test-agent", "say hi", agent_config=agent_config)
+    assert len(sent) >= 2
+    return [sent[0], sent[-1]]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", RUN_MODELS)
+async def test_system_message_byte_identical_across_two_runs_with_flag_on(
+    flag_on, model, engine_config, sample_agent_config, mock_litellm_response
+):
+    sample_agent_config.model_primary = model
+    sample_agent_config.model_fallbacks = []
+    first, second = await _two_runs(engine_config, sample_agent_config, mock_litellm_response)
+    assert _dump(first[0]) == _dump(second[0])
+    # The per-run task record still reaches the model, just not in the prefix.
+    assert "CURRENT TASK CONTEXT" in _dump(first[-2])
+    assert "CURRENT TASK CONTEXT" not in _dump(first[0])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", RUN_MODELS)
+async def test_system_message_differs_across_two_runs_with_flag_off(
+    flag_off, model, engine_config, sample_agent_config, mock_litellm_response
+):
+    sample_agent_config.model_primary = model
+    sample_agent_config.model_fallbacks = []
+    first, second = await _two_runs(engine_config, sample_agent_config, mock_litellm_response)
+    assert _dump(first[0]) != _dump(second[0])
 
 
 @pytest.mark.parametrize("model", ALL_MODELS)
