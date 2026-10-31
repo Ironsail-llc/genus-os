@@ -125,12 +125,23 @@ async def _owner_account(ctx: DoctorContext) -> Result:
     cannot tell which side to change. The enumeration is capped, because this
     detail reaches an operator's terminal and the bridge's JSON.
 
+    Not applicable in a CHILD tenant's engine. A child has no owner by design:
+    its most privileged account is an ``admin``, and the owner lives on the
+    root (docs/runbooks/TENANT_HIERARCHY.md). An engine operating as a child
+    (``ROBOTHOR_TENANT_ID`` names a tenant whose ``crm_tenants.parent_tenant_id``
+    is set) is bound to that child for RLS, so it can never see an owner, and
+    reporting "nobody can sign in" there was false on every correct child cell.
+    The parent is read only when ``ROBOTHOR_TENANT_ID`` is set; a root, or a
+    process that names no tenant, is judged exactly as before.
+
     Never repaired automatically: creating a privileged account is an act an
     operator performs deliberately, and a doctor that minted one on its own
     would be a privilege-escalation path that runs from cron.
     """
 
-    def _probe() -> tuple[str, str, dict[str, int]]:
+    engine_tenant = ctx.settings.database.tenant_id
+
+    def _probe() -> tuple[str, str, str, dict[str, int]]:
         from robothor.constants import DEFAULT_TENANT
         from robothor.owner_config import load_owner_config
 
@@ -144,6 +155,15 @@ async def _owner_account(ctx: DoctorContext) -> Result:
             # otherwise raise rather than answer.
             cursor.execute("SELECT current_setting('app.tenant_id', true)")
             scope_row = cursor.fetchone()
+            parent = ""
+            if engine_tenant:
+                # crm_tenants carries no tenant_id column, so RLS does not hide
+                # the engine's own row from a child-scoped connection.
+                cursor.execute(
+                    "SELECT parent_tenant_id FROM crm_tenants WHERE id = %s", (engine_tenant,)
+                )
+                parent_row = cursor.fetchone()
+                parent = str(parent_row[0]) if parent_row and parent_row[0] else ""
             cursor.execute(
                 "SELECT tenant_id, COUNT(*) FROM user_accounts "
                 "WHERE role = 'owner' AND status = 'active' GROUP BY tenant_id"
@@ -151,16 +171,23 @@ async def _owner_account(ctx: DoctorContext) -> Result:
             rows = cursor.fetchall()
         scope = str(scope_row[0]) if scope_row and scope_row[0] else ""
         counts = {str(row[0]): int(row[1]) for row in rows}
-        return tenant_id, scope, counts
+        return tenant_id, scope, parent, counts
 
     try:
-        tenant, scope, counts = await ctx.run_blocking(_probe)
+        tenant, scope, parent, counts = await ctx.run_blocking(_probe)
     except Exception as exc:  # noqa: BLE001 - no table, no database: both are answers
         return fail(f"cannot read user_accounts: {type(exc).__name__}")
 
     here = counts.get(tenant, 0)
     if here:
         return ok(f"{here} active owner account(s) for tenant {tenant}")
+
+    if parent:
+        return ok(
+            f"not applicable: this engine operates as child tenant {engine_tenant} "
+            f"(parent {parent}); a child has no owner by design, its admins sign in "
+            "and the owner account lives on the root tenant"
+        )
 
     elsewhere = {name: n for name, n in counts.items() if n}
     if elsewhere:
