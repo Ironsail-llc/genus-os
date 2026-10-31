@@ -188,18 +188,17 @@ def get_pool(minconn: int = 2, maxconn: int = 30) -> psycopg2.pool.ThreadedConne
         return _pool
 
 
+def _env_flag(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _rls_enabled() -> bool:
     """Whether connections should scope themselves to a tenant via RLS.
 
     Off by default: migration 081 leaves the policy permissive when
     ``app.tenant_id`` is unset, so nothing changes until this is turned on.
     """
-    return os.environ.get("ROBOTHOR_RLS_ENABLED", "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
+    return _env_flag("ROBOTHOR_RLS_ENABLED")
 
 
 def _fast_checkout_enabled() -> bool:
@@ -207,12 +206,7 @@ def _fast_checkout_enabled() -> bool:
 
     Off by default: ``get_connection`` then behaves exactly as it always has.
     """
-    return os.environ.get("ROBOTHOR_DB_FAST_CHECKOUT", "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
+    return _env_flag("ROBOTHOR_DB_FAST_CHECKOUT")
 
 
 # One-shot latch: warn once per process, not on every pooled connection.
