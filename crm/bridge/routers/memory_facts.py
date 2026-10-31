@@ -151,11 +151,15 @@ _COLUMNS = (
     "created_at",
     "superseded_by",
     "operator_confirmed",
+    "embedding_stale",
 )
-#: Payload keys that are not plain columns. ``operator_confirmed`` is one key
+#: Payload keys that are not plain columns. Each is one key
 #: of ``metadata`` rather than the whole JSONB, which can be large and is not
 #: the page's business.
-_EXPRESSIONS = {"operator_confirmed": "metadata -> 'operator_confirmed'"}
+_EXPRESSIONS = {
+    "operator_confirmed": "metadata -> 'operator_confirmed'",
+    "embedding_stale": "COALESCE((metadata ->> 'embedding_stale')::boolean, false)",
+}
 _SELECT = ", ".join(_EXPRESSIONS.get(column, column) for column in _COLUMNS)
 
 
@@ -256,6 +260,9 @@ def _payload(row: tuple[Any, ...]) -> dict[str, Any]:
         "created_at": _iso(record["created_at"]),
         "superseded_by": record["superseded_by"],
         "operator_confirmed": confirmed if isinstance(confirmed, dict) else None,
+        # An edit the embedding provider could not embed: vector search still
+        # ranks this fact by its previous wording (rule 5 in the header).
+        "embedding_stale": bool(record["embedding_stale"]),
     }
 
 
