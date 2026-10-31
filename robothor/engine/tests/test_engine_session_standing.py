@@ -274,3 +274,36 @@ def test_the_switching_refusal_is_accepted_then_closed_4403(secure_engine, switc
     assert kinds[:2] == ["websocket.accept", "websocket.close"], sent
     assert sent[1]["code"] == 4403
     assert sent[1].get("reason") == "tenant switching disabled"
+
+
+class TestRequireStanding:
+    """``require_standing``: the chat router's one-call gate on a verified identity."""
+
+    def test_no_identity_is_authentication_required(self):
+        from fastapi import HTTPException
+
+        from robothor.engine import auth as engine_auth
+
+        with pytest.raises(HTTPException) as refused:
+            engine_auth.require_standing(None)
+        assert (refused.value.status_code, refused.value.detail) == (401, "authentication required")
+
+    def test_an_account_that_no_longer_stands_is_refused(self):
+        from fastapi import HTTPException
+
+        from robothor.engine import auth as engine_auth
+
+        with (
+            patch.object(engine_auth, "session_stands", return_value=False),
+            pytest.raises(HTTPException) as refused,
+        ):
+            engine_auth.require_standing(MagicMock())
+        assert refused.value.status_code == 401
+        assert refused.value.detail == engine_auth.SESSION_NO_LONGER_VALID
+
+    def test_a_standing_identity_is_returned(self):
+        from robothor.engine import auth as engine_auth
+
+        context = MagicMock()
+        with patch.object(engine_auth, "session_stands", return_value=True):
+            assert engine_auth.require_standing(context) is context
