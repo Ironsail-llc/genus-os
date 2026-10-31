@@ -62,8 +62,10 @@ const WIDE_LIMIT = 200;
 
 const REASON_MIN = 3;
 const REASON_MAX = 500;
-/** The bridge's ceiling for an edited fact's text. */
+/** The bridge's ceilings for an edited fact: trimmed text, entity count, one name. */
 const FACT_TEXT_MAX = 2000;
+const ENTITIES_MAX = 50;
+const ENTITY_CHARS_MAX = 200;
 
 type ActiveFilter = "true" | "false" | "all";
 
@@ -96,12 +98,20 @@ interface EditDraft {
   reason: string;
 }
 
-/** The comma-separated entities field as the list it saves: trimmed, no blanks, no repeats. */
+/**
+ * The comma-separated entities field as the list it saves: trimmed, no blanks,
+ * and no repeats ignoring case (the bridge's rule), keeping the first spelling.
+ */
 export function entityList(raw: string): string[] {
   const names: string[] = [];
+  const seen = new Set<string>();
   for (const part of raw.split(",")) {
     const name = part.trim();
-    if (name && !names.includes(name)) names.push(name);
+    const key = name.toLowerCase();
+    if (name && !seen.has(key)) {
+      seen.add(key);
+      names.push(name);
+    }
   }
   return names;
 }
@@ -869,8 +879,15 @@ interface FactEditorProps {
 /** One fact's inline editor. The draft lives in the view; this only renders it. */
 function FactEditor({ id, draft, busy, onChange, onSave, onCancel, reasonRef }: FactEditorProps) {
   const chips = entityList(draft.entities);
+  // Counted trimmed, as the bridge counts it.
   const text = draft.text.trim();
-  const textOk = text.length > 0 && draft.text.length <= FACT_TEXT_MAX;
+  const textOk = text.length > 0 && text.length <= FACT_TEXT_MAX;
+  const entitiesNote =
+    chips.length > ENTITIES_MAX
+      ? `A fact may carry at most ${ENTITIES_MAX} entities.`
+      : chips.some((name) => name.length > ENTITY_CHARS_MAX)
+        ? `An entity name may be at most ${ENTITY_CHARS_MAX} characters.`
+        : null;
   const reasonLength = draft.reason.trim().length;
   const reasonOk = reasonLength >= REASON_MIN && draft.reason.length <= REASON_MAX;
 
@@ -895,7 +912,7 @@ function FactEditor({ id, draft, busy, onChange, onSave, onCancel, reasonRef }: 
         <span data-testid={`memory-edit-text-note-${id}`} className="text-[10px] text-destructive">
           {text.length === 0
             ? "A fact cannot be edited into nothing — forget it instead."
-            : `At most ${FACT_TEXT_MAX} characters.`}
+            : `A fact may be at most ${FACT_TEXT_MAX} characters (${text.length} now).`}
         </span>
       ) : null}
 
@@ -923,6 +940,14 @@ function FactEditor({ id, draft, busy, onChange, onSave, onCancel, reasonRef }: 
             ))
           )}
         </div>
+        {entitiesNote ? (
+          <span
+            data-testid={`memory-edit-entities-note-${id}`}
+            className="text-[10px] text-destructive"
+          >
+            {entitiesNote}
+          </span>
+        ) : null}
       </div>
 
       <div className="flex min-w-0 flex-col gap-1">
@@ -949,7 +974,7 @@ function FactEditor({ id, draft, busy, onChange, onSave, onCancel, reasonRef }: 
         <Button
           size="sm"
           data-testid={`memory-edit-save-${id}`}
-          disabled={!textOk || !reasonOk || busy}
+          disabled={!textOk || entitiesNote !== null || !reasonOk || busy}
           onClick={onSave}
         >
           {busy ? "Saving…" : "Save"}
