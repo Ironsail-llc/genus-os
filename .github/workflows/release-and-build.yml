@@ -235,10 +235,16 @@ jobs:
 
       # The gate verified GATED_SHA, not the tip. Bot `[skip ci]` chores
       # (release bookkeeping, deployment values) never get a CI run of their
-      # own, so the tip may carry those and nothing else. Anything else (a direct push that
-      # landed while the gate ran, or a rewritten main) was not verified by
-      # this run: stop red rather than release it. That push started its own
-      # run, which gates its own SHA and releases the tip after this one.
+      # own, so the tip may carry those and nothing else: the bot's email and
+      # one of the bot's subject shapes. Anyone who can push to main could
+      # forge both, which is the trust `[skip ci]` already carries. Anything
+      # else (a direct push that landed while the gate ran, or a rewritten
+      # main) was not verified by this run: stop red rather than release it.
+      # That push started its own run, which gates its own SHA and releases
+      # the tip after this one. With `cancel-in-progress: false` a third push
+      # replaces the second run while it is pending, so the second push's CI
+      # is never asserted yet the third run releases it. Pushes to main are
+      # PR merges that passed the required CI checks, so that is acceptable.
       - name: Refuse a tip the gate did not verify
         env:
           GATED_SHA: ${{ github.sha }}
@@ -247,12 +253,14 @@ jobs:
             echo "::error::The gated commit $GATED_SHA is not an ancestor of main's tip $(git rev-parse HEAD); main was rewritten. Nothing is released from this run."
             exit 1
           fi
+          bot_email='github-actions[bot]@users.noreply.github.com'
+          bot_subject='^(chore\(release\)|chore\(staging\)|chore\(deploy\)|revert\(deploy\)): .*\[skip ci\]'
           unverified=""
           for commit in $(git rev-list "$GATED_SHA..HEAD"); do
-            author="$(git log -1 --format='%an' "$commit")"
+            email="$(git log -1 --format='%ae' "$commit")"
             subject="$(git log -1 --format='%s' "$commit")"
-            if [ "$author" != "github-actions[bot]" ] || [[ "$subject" != *"[skip ci]"* ]]; then
-              unverified="${unverified}  ${commit} ${author}: ${subject}"$'\n'
+            if [ "$email" != "$bot_email" ] || [[ ! "$subject" =~ $bot_subject ]]; then
+              unverified="${unverified}  ${commit} ${email}: ${subject}"$'\n'
             fi
           done
           if [ -n "$unverified" ]; then
@@ -287,33 +295,43 @@ jobs:
           GIT_AUTHOR_EMAIL: github-actions[bot]@users.noreply.github.com
           GIT_COMMITTER_NAME: github-actions[bot]
           GIT_COMMITTER_EMAIL: github-actions[bot]@users.noreply.github.com
-        # Output is captured: semantic-release reports "behind the remote"
-        # and exits 0 when main moved under it, which would pass green with
-        # nothing released. The tip checkout above makes that a race of
-        # seconds; if it still happens, fail so the skip is seen.
+        # Published means a v* tag on HEAD that did not exist before this
+        # run: the tip can already be a tagged release commit (a re-run, or
+        # a push whose tip is the last release), and that is not a release.
+        # Once a tag is cut the step never fails, so the release always
+        # ships. Only when nothing was published is the captured output
+        # checked for semantic-release's own skip line (anchored to its
+        # logger, so commit messages it echoes cannot match): main moved
+        # under it, it exited 0, and that must not pass green.
         run: |
           log="$(mktemp)"
+          tags_before="$(mktemp)"
+          git tag --list 'v*' | sort > "$tags_before"
           set +e
           npx semantic-release 2>&1 | tee "$log"
           exit_code=${PIPESTATUS[0]}
           set -e
+
+          version="$(git tag --points-at HEAD --list 'v*' | sort | comm -13 "$tags_before" - | head -n1)"
+          if [ -n "$version" ]; then
+            echo "new_release_published=true" >> "$GITHUB_OUTPUT"
+            echo "new_release_version=${version#v}" >> "$GITHUB_OUTPUT"
+            if [ "$exit_code" -ne 0 ]; then
+              echo "::error::semantic-release exited $exit_code after cutting $version. The release ships; the log above names the step that failed."
+            fi
+            exit 0
+          fi
+          echo "new_release_published=false" >> "$GITHUB_OUTPUT"
+          echo "new_release_version=" >> "$GITHUB_OUTPUT"
 
           if [ "$exit_code" -ne 0 ]; then
             echo "semantic-release failed with exit code $exit_code"
             exit "$exit_code"
           fi
 
-          if grep -q "behind the remote" "$log"; then
+          if grep -qE "^(\[[^]]*\] )?\[semantic-release\] [^[]*The local branch [^ ]+ is behind the remote one, therefore a new version won't be published" "$log"; then
             echo "::error::semantic-release skipped the release: main moved during this run, so the local branch is behind the remote. Nothing was published. Re-run this workflow to release main's tip."
             exit 1
-          fi
-
-          if version=$(git describe --tags --exact-match HEAD 2>/dev/null); then
-            echo "new_release_published=true" >> "$GITHUB_OUTPUT"
-            echo "new_release_version=${version#v}" >> "$GITHUB_OUTPUT"
-          else
-            echo "new_release_published=false" >> "$GITHUB_OUTPUT"
-            echo "new_release_version=" >> "$GITHUB_OUTPUT"
           fi
 
   # ───────────────────────────────────────────────────────────────────────
@@ -471,6 +489,8 @@ jobs:
             type=match,pattern=v(\d+\.\d+),group=1,value=v${{ steps.semver.outputs.raw_version }},enable=${{ steps.semver.outputs.raw_version != '' }}
             type=match,pattern=v(\d+),group=1,value=v${{ steps.semver.outputs.raw_version }},enable=${{ steps.semver.outputs.raw_version != '' }}
             type=raw,value=pr-${{ github.event.pull_request.number }}-sha-{{sha}},enable=${{ github.event_name == 'pull_request' }}
+            # `sha-` names the commit this run gated (github.sha); a release
+            # image is built from the release tag, so the version tags name it.
             type=sha,prefix=sha-,format=short
 
       - name: Build & push
