@@ -19,6 +19,10 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass, replace
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from robothor.engine.models import AgentConfig
 
 logger = logging.getLogger(__name__)
 
@@ -135,3 +139,57 @@ def get_route_config(
     if not length_forces_planning and complex_by_length and not requests_multistep_work(message):
         return replace(route, planning=None)
     return route
+
+
+# Interactive surfaces where router v2 stops message length forcing a planner
+# call: a person is waiting on each turn. Every plugin channel is ``channel``.
+CHAT_TRIGGERS = frozenset({"telegram", "webchat", "channel"})
+
+
+def v2_enabled() -> bool:
+    from robothor.engine.feature_flags import router_v2_enabled
+
+    return router_v2_enabled()
+
+
+def chat_turn_v2(trigger_type: Any, readonly_mode: bool, trigger_detail: Any, resume: Any) -> bool:
+    """True when router v2 governs this run: an ordinary chat turn.
+
+    Plan mode, approved-plan execution (``plan-exec:...``) and resumed runs
+    keep today's policy, as does every non-chat trigger.
+    """
+    return (
+        v2_enabled()
+        and str(trigger_type or "") in CHAT_TRIGGERS
+        and not readonly_mode
+        and not str(trigger_detail or "").startswith("plan")
+        and not resume
+    )
+
+
+def route_for(
+    agent_config: AgentConfig, message: str, tool_count: int, *, chat_turn: bool = False
+) -> RouteConfig | None:
+    """Route one run from its manifest and message. Returns None on failure.
+
+    ``chat_turn`` (see ``chat_turn_v2``) stops message length alone forcing a
+    planner call.
+    """
+    try:
+        from robothor.engine.runtime.automatic_planning import context_for
+
+        return get_route_config(
+            message,
+            tool_count,
+            manual_override=agent_config.difficulty_class,
+            # A large available catalogue does not mean an ordinary chat
+            # request needs an auxiliary planning call. Keep configured
+            # planning and long/delegated/resumed work on their old policy.
+            catalogue_implies_complexity=context_for(agent_config) is None,
+            length_forces_planning=not chat_turn,
+        )
+    except Exception as e:
+        from robothor.engine.sanitize import sanitize_log
+
+        logger.debug("Routing failed: %s", sanitize_log(e))
+        return None

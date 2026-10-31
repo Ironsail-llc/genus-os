@@ -168,10 +168,12 @@ class TestLongChatTurn:
         assert fake.planner_calls == 1
 
 
-def _route(cfg, message: str, trigger: TriggerType, **kwargs: Any):
+def _route(cfg, message: str, trigger: TriggerType, readonly_mode: bool = False):
+    from robothor.engine.router import chat_turn_v2
     from robothor.engine.run_lifecycle import RunLifecycleMixin
 
-    return RunLifecycleMixin._apply_routing(None, cfg, message, 0, trigger_type=trigger, **kwargs)
+    chat_turn = chat_turn_v2(trigger, readonly_mode, "", None)
+    return RunLifecycleMixin._apply_routing(None, cfg, message, 0, chat_turn=chat_turn)
 
 
 class TestRouteSignal:
