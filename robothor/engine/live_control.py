@@ -54,6 +54,15 @@ __all__ = [
 #: The longest progress line any channel is handed.
 MAX_LINE = 120
 
+#: What a channel's ``/steer`` and ``/stop`` answer, the same words everywhere.
+STEERING_REPLY = "Steering the run."
+STOPPING_REPLY = "Stopping the run."
+NOTHING_RUNNING = "Nothing is running here."
+STEER_USAGE = "Usage: /steer <what the running task should change>"
+
+#: What a run's progress message reads once the run has ended.
+PROGRESS_DONE = "Done."
+
 _pending_key: ContextVar[str | None] = ContextVar("live_conversation_key", default=None)
 
 

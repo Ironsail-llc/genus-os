@@ -29,12 +29,6 @@ logger = logging.getLogger(__name__)
 # Maximum message length for Slack
 MAX_SLACK_LENGTH = 4000
 
-#: What ``/steer`` and ``/stop`` answer when the channel has no live run.
-NOTHING_RUNNING = "Nothing is running here."
-
-#: What a run's progress message reads once the run has ended.
-PROGRESS_DONE = "Done."
-
 
 def _session_key(channel: str) -> str:
     """The shared-session key of a Slack channel's conversation."""
@@ -66,23 +60,13 @@ class SlackBot:
         (and writes back) before the clear.
         """
         from robothor.engine import chat, chat_store
-        from robothor.engine.channels import access
         from robothor.engine.channels.inbound import conversation_turn
 
-        decision = await access.evaluate(
-            "slack",
-            user_id,
-            tenant_id=self.config.tenant_id,
-            surface=self._surface({}, channel),
-            allowlist=lambda: self._authorized(user_id, channel),
-            mode=self._access_mode(),
-        )
-        if not decision.allowed:
-            return decision.refusal
-        identity = decision.identity
-        tenant_id = identity.tenant_id if identity else self.config.tenant_id
+        tenant_id, refusal = await self._command_tenant(channel, user_id)
+        if tenant_id is None:
+            return refusal
 
-        session_key = f"agent:main:slack:{channel}"
+        session_key = _session_key(channel)
         async with conversation_turn(session_key):
             chat.get_shared_session(session_key).history.clear()
             await chat_store.clear_session_async(session_key, tenant_id=tenant_id)
@@ -138,14 +122,14 @@ class SlackBot:
         """``/steer <text>``: add guidance to the channel's live run."""
         text = (text or "").strip()
         if not text:
-            return "Usage: /steer <what the running task should change>"
+            return live_control.STEER_USAGE
         tenant_id, refusal = await self._command_tenant(channel, user_id)
         if tenant_id is None:
             return refusal
         found = await asyncio.to_thread(
             live_control.steer_conversation, _session_key(channel), text, tenant_id=tenant_id
         )
-        return "Steering the run." if found else NOTHING_RUNNING
+        return live_control.STEERING_REPLY if found else live_control.NOTHING_RUNNING
 
     async def _stop_command(self, channel: str, *, user_id: str) -> str:
         """``/stop``: halt the channel's live run at its next step."""
@@ -155,7 +139,7 @@ class SlackBot:
         found = await asyncio.to_thread(
             live_control.interrupt_conversation, _session_key(channel), tenant_id=tenant_id
         )
-        return "Stopping the run." if found else NOTHING_RUNNING
+        return live_control.STOPPING_REPLY if found else live_control.NOTHING_RUNNING
 
     def _progress(self, channel: str) -> live_control.ProgressMessage | None:
         """The run's progress message in ``channel``, with the flag on and a client."""
@@ -421,7 +405,7 @@ class SlackBot:
             text=text,
             runner=self.runner,
             tenant_id=self.config.tenant_id,
-            session_key=f"agent:main:slack:{channel}",
+            session_key=_session_key(channel),
             trigger_type=TriggerType.SLACK,
             display_name=str((event.get("user_profile") or {}).get("display_name") or ""),
             surface=self._surface(event, channel),
@@ -435,7 +419,7 @@ class SlackBot:
             **extra,
         )
         if progress is not None:
-            await progress.close(PROGRESS_DONE)
+            await progress.close(live_control.PROGRESS_DONE)
 
         # The four call shapes, exactly as this method sent them before the
         # pipeline was extracted: a refusal is `say(text=…)` with no markdown

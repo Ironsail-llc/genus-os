@@ -540,7 +540,7 @@ async def _handle(
         **extra,
     )
     if progress is not None:
-        await progress.close(PROGRESS_DONE)
+        await progress.close(live_control.PROGRESS_DONE)
     # "" means send nothing: a suppressed pairing reply, or an unknown sender in
     # a room who must not learn that anybody is listening.
     if not result.reply:
@@ -551,13 +551,6 @@ async def _handle(
     # the answer to a question asked in a shared room lands in a 1:1 chat, or
     # the other way round. The conversation an activity arrived in cannot move.
     await channel.send(conversation_id, result.reply)
-
-
-#: What ``/steer`` and ``/stop`` answer when the conversation has no live run.
-NOTHING_RUNNING = "Nothing is running here."
-
-#: What a run's progress activity reads once the run has ended.
-PROGRESS_DONE = "Done."
 
 
 def _is_run_command(text: str) -> bool:
@@ -595,14 +588,14 @@ async def _run_command(
         found = await asyncio.to_thread(
             live_control.interrupt_conversation, session_key, tenant_id=tenant_id
         )
-        return "Stopping the run." if found else NOTHING_RUNNING
+        return live_control.STOPPING_REPLY if found else live_control.NOTHING_RUNNING
     guidance = rest.strip()
     if not guidance:
-        return "Usage: /steer <what the running task should change>"
+        return live_control.STEER_USAGE
     found = await asyncio.to_thread(
         live_control.steer_conversation, session_key, guidance, tenant_id=tenant_id
     )
-    return "Steering the run." if found else NOTHING_RUNNING
+    return live_control.STEERING_REPLY if found else live_control.NOTHING_RUNNING
 
 
 def _progress(channel: Any, conversation_id: str) -> Any:
