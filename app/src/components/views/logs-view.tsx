@@ -158,7 +158,7 @@ function timeOf(value: string | null): string {
 }
 
 export interface LogsViewProps {
-  /** The shell keeps every view mounted; this is the load gate. */
+  /** The shell keeps every opened view mounted; this is the load gate. */
   visible?: boolean;
   /** Session role. UX only — the bridge gates both log routes itself. */
   role?: string | null;

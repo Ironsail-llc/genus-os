@@ -240,7 +240,7 @@ export function factsUrl({ query, entity, active, limit, cursor }: FactsQuery): 
 }
 
 export interface MemoryViewProps {
-  /** The shell keeps every view mounted; this is the load gate. */
+  /** The shell keeps every opened view mounted; this is the load gate. */
   visible?: boolean;
   /** Session role. UX only — the bridge gates every memory route itself. */
   role?: string | null;

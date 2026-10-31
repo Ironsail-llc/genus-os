@@ -9,9 +9,9 @@
  * gets the fix. Three copies of a POLL is worse than three copies of a
  * sentence, because each one carries the same four mistakes to get wrong:
  *
- * * **poll only while visible.** `AppShell` mounts every view and hides it with
- *   `display: none`, so an ungated interval puts an operator-gated listing on
- *   every Helm page load whatever the operator is actually looking at.
+ * * **poll only while visible.** `AppShell` keeps every opened view mounted and
+ *   hides it with `display: none`, so an ungated interval keeps an
+ *   operator-gated listing going whatever the operator is actually looking at.
  * * **the loader must not be the effect's dependency.** It is re-created on
  *   every render-relevant change; depending on it tears the interval down and
  *   rebuilds it on each tick, which is how a 60 s poll quietly becomes a much
