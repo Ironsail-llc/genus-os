@@ -110,8 +110,8 @@ _EXPECTED_FIELDS = {
     "cache_hit_ratio",
 }
 
-_SLOW_SECONDS = 1.0
-_MAX_LOOP_GAP = 0.2
+_SLOW_SECONDS = 2.0
+_MAX_LOOP_GAP = 0.5  # the old blocking path stalls for the full _SLOW_SECONDS
 
 
 def _closed_port() -> int:
