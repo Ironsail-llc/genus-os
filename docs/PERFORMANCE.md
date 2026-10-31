@@ -16,7 +16,7 @@ phases, in this order:
 | Name | What it covers | Where you read it |
 |---|---|---|
 | **SETUP** | From the run starting to the agent being ready to call a model: manifest load, warmup preamble (identity, memory blocks, entity context, open tasks), system prompt. | The runner's `SETUP <n>ms agent=... trigger=...` log line (`robothor/engine/runner.py`). |
-| **Setup plus toolset** | SETUP and building the tool list the model is offered. | The run's `tools_built` step. With `ROBOTHOR_WARMUP_PARALLEL` on, each warmup section is its own `warmup_section:<name>` step. |
+| **Setup plus toolset** | SETUP and building the tool list the model is offered. | The run's `tools_built` step. Each warmup section is its own `warmup_section:<name>` step. |
 | **TTFT** (time to first token) | Message sent to the first streamed text (`delta`) the person sees. A turn that does not stream (Telegram today) has no first token; its equivalent is the first model call returning. | The webchat SSE stream; the `llm_call` span. |
 | **done** | Message sent to the `done` event (webchat) or the reply being sent (Telegram). This is the time the person waits. | The `done` event's `duration_ms`; the `agent_run` span. |
 | **Finalize tail** | The gap between the last text and `done`: telemetry, post-run bookkeeping, the run-row write, history save. It is pure waiting for the person. | `done` minus the last `delta`. |
@@ -24,7 +24,7 @@ phases, in this order:
 | **Tool-call overhead** | For each gap between two model calls with tool calls in it: the gap minus the tools' own time. What the loop spends around a tool (admission, audit, guardrails, result shaping). | Derived from the run's steps. |
 | **DB statements** | Statements the engine sent to Postgres for the turn, including the background persist. | `pg_stat_statements`, before and after the turn. |
 | **Prompt tokens** | Size of the first model call: messages plus tool schemas. Most of a large prompt is usually tool schemas. | The first `llm_call` span's `gen_ai.usage.input_tokens`; the benchmark's estimate. |
-| **Cache hit ratio** | Share of input tokens the provider served from its prompt cache. | `gen_ai.usage.cache_hit_ratio` on `llm_call`; `cache_hit_ratio` on the telemetry stream. |
+| **Cache hit ratio** | Share of input tokens the provider served from its prompt cache. | `gen_ai.usage.cache_hit_ratio` (with the cache read and creation token counts) on the run's `run_summary` span; `cache_hit_ratio` on the telemetry stream. Per-call `llm_call` spans do not carry it. |
 
 Engine restart to `/ready` is measured separately: it is the cold-start time an
 operator waits after an upgrade, not part of any turn.
@@ -44,7 +44,10 @@ chosen with `--half http|inprocess|both`:
 | `inprocess` | N Telegram-shaped turns: `runner.execute` with no streaming callback, as the Telegram channel calls it. Runs where the engine's environment is set (inside the engine container, or CI). | `setup_ms` (the SETUP line), `setup_total_ms`, `first_llm_ms`, `done_ms`, `finalize_tail_ms`, `tool_ms`, `tool_overhead_ms`, `db_statements`, `prompt_tokens` (characters / 4, stable rather than exact) and `tool_schemas`. |
 
 The first (cold) turn is a warmup and is kept out of the summary. Each run prints
-p50 and p95 per metric and, with `--out FILE`, writes the JSON result.
+p50 and p95 per metric and, with `--out FILE`, writes the JSON result. With
+`--half both` (the default) it writes one file per half, with `-http` and
+`-inprocess` inserted before the extension (`before.json` becomes
+`before-http.json` and `before-inprocess.json`).
 `db_statements` needs Postgres started with
 `shared_preload_libraries=pg_stat_statements`; without it the count is skipped
 and the reason is kept in the result's `notes`. Run it on a quiet stack: other
@@ -71,12 +74,19 @@ it in its own change so the number has a history.
 
 ### The before/after loop for a setting
 
-1. Stack up on the mock model, setting off. Run the benchmark with
-   `--out before.json`.
+1. Stack up on the mock model, setting off. Run one half at a time, for example
+   `--half inprocess --out before.json`.
 2. Turn the setting on (restart the engine if its row below says so).
-3. Run it again with `--out after.json`.
+3. Run the same half again with `--out after.json`.
 4. Compare: `python -m bench.turn --compare after.json --baseline before.json`.
    Put both p50/p95 tables in the pull request or the rollout note.
+
+Name the files exactly. If you ran `--half both`, compare each half's files on
+both sides (`--compare after-inprocess.json --baseline before-inprocess.json`):
+`--compare` does not add the suffix to `--baseline`, and a baseline file that
+does not exist is treated as an empty baseline, which prints
+`no baseline recorded: comparison skipped` and exits 0 without comparing
+anything. That line means the comparison did not happen.
 
 ## Engine telemetry
 
@@ -92,9 +102,9 @@ Until then a trace has no root span and only successful runs export.
 | Span | Kind | Covers | Attributes worth reading |
 |---|---|---|---|
 | `agent_run` | SERVER | The whole run, from its `started_at` to its exit. **Its duration is the turn time.** A sub-agent's `agent_run` is a child of its parent run's span. | `run.status`, `run.trigger_type`; error status and the reason on a failed, timed-out, cancelled, aborted or interrupted run. |
-| `llm_call` | CLIENT | One model call, including its retries on the same model. | GenAI conventions: `gen_ai.system`, `gen_ai.request.model`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `gen_ai.usage.cache_hit_ratio`, `gen_ai.response.finish_reasons`. |
-| `tool_call` | INTERNAL | One tool handler. | The tool name and its outcome. |
-| `run_summary` | INTERNAL | A marker at run end carrying the run's totals. | `run.status`. |
+| `llm_call` | CLIENT | One model call, including its retries on the same model. | GenAI conventions: `gen_ai.system`, `gen_ai.request.model`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `gen_ai.response.finish_reasons`. |
+| `tool_call` | INTERNAL | One tool handler. | `tool` (the tool's name); error status when the handler raises. |
+| `run_summary` | INTERNAL | A marker at run end carrying the run's totals. | `run.status`; the run's model and token totals, including `gen_ai.usage.cache_hit_ratio` and the cache read and creation tokens. |
 
 A backend that names operations by span kind (Datadog's OpenTelemetry mapping, for
 one) shows `server.request` for `agent_run`, `client.request` for `llm_call` and
@@ -213,8 +223,10 @@ three rows without a pull request yet may change when their pull requests open.
   up to 15 minutes (a change of who the caller resolves to recomputes it; a CRM
   edit to that person can lag by up to 15 minutes).
 - **Default:** off.
-- **Measure:** `setup_ms` and `db_statements`; each section's time is on the run
-  as a `warmup_section:<name>` step, so the slowest section is named.
+- **Measure:** `setup_ms` and `db_statements`. Each section's time is on every
+  run as a `warmup_section:<name>` step, with the flag off too, so record the
+  per-section numbers before turning it on; with it on, the warmup should take
+  about as long as the slowest section.
 - **Rollback:** off, and restart the engine.
 
 ### `ROBOTHOR_EARLY_DONE`
@@ -241,8 +253,8 @@ three rows without a pull request yet may change when their pull requests open.
   final two turns; OpenAI and Gemini get no cache markers and cache the stable
   prefix themselves. `docs/MODELS.md` has the per-route table.
 - **Default:** off.
-- **Measure:** the cache hit ratio (`gen_ai.usage.cache_hit_ratio` on
-  `llm_call`, `cache_hit_ratio` on the telemetry stream) and the run's
+- **Measure:** the cache hit ratio (`gen_ai.usage.cache_hit_ratio` on the
+  `run_summary` span, `cache_hit_ratio` on the telemetry stream) and the run's
   `cache_read_tokens`, before and after; the mock model has no cache, so this one
   is measured against a real provider on a test instance. Cost per turn and TTFT
   follow it.
@@ -313,10 +325,14 @@ three rows without a pull request yet may change when their pull requests open.
 - **Changes:** interactive turns (Telegram, the chat panel, Slack, plugin
   channels, the IDE, the CLI) and background work (cron, hooks, workflows,
   autodream, the curator, ingest, embeddings, post-turn saves) run in separate
-  lanes, each with its own run limit (`ROBOTHOR_MAX_CONCURRENT_INTERACTIVE`,
-  default 3; `ROBOTHOR_MAX_CONCURRENT_BACKGROUND`, default 2) and its own thread
-  workers. A background run asking for a slot while an interactive one waits holds
-  back for up to `ROBOTHOR_LANE_BACKGROUND_YIELD_MS` (default 200). With two or
+  lanes, each with its own thread workers, so blocking background work cannot
+  delay a turn's own blocking calls. Background runs are capped by
+  `ROBOTHOR_MAX_CONCURRENT_BACKGROUND` (default 2). Interactive runs are uncapped
+  by default, as they are without lanes (`ROBOTHOR_MAX_CONCURRENT_INTERACTIVE`,
+  default 0); a cap there queues a turn with no deadline while other turns hold
+  the slots, including turns waiting on an `ask_user` answer. When the
+  interactive lane is capped and a turn is waiting, a background run asking for a
+  slot holds back for up to `ROBOTHOR_LANE_BACKGROUND_YIELD_MS` (default 200). With two or
   more local inference slots, one is kept for interactive requests. A run waiting
   for its lane has not started: no run row, timeout or budget is touched.
 - **Default:** off.
@@ -368,8 +384,9 @@ work.
 - **Budgets that report.** *Pending, with the budgets pull request.* A spend
   budget whose limit you never set (the fleet hourly cost cap, the runaway-token
   hard cap) observes and alerts instead of stopping a run. Every budget or stop
-  that refuses, ends or would have ended a run is recorded as a `budget_stop` run
-  step and an `agent.budget_stop` event, and
+  that refuses, ends or would have ended a run is recorded as a run step of the
+  new `budget_stop` type (its database migration ships with that change) and an
+  `agent.budget_stop` event, and
   `genus doctor --only budget_stops.recent` counts the last day's. The inventory
   of every budget, cap and stop, with its setting and what you see, is
   `BUDGETS_AND_STOPS.md` under `docs/` in the repository. When a run under load
