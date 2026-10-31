@@ -37,6 +37,7 @@ const SECRETS = {
       shadowed_by: null,
       env_name: "EXAMPLE_API_TOKEN",
       vault_readable: true,
+      removable: true,
       // Never sent by the bridge. Here to prove the page renders only the
       // fields it knows, whatever else a reply carries.
       fingerprint: "b2:deadbeef",
@@ -51,6 +52,7 @@ const SECRETS = {
       shadowed: true,
       shadowed_by: "the environment",
       env_name: "EXAMPLE_OLD_SMTP_PASSWORD_WITH_A_LONG_NAME",
+      removable: true,
     },
     {
       name: "EXAMPLE_WEBHOOK_URL",

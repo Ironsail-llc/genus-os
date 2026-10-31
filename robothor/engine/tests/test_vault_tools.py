@@ -452,3 +452,15 @@ async def test_rotating_a_credential_clears_its_own_usage(stored, no_stamps):
         {"key": "providers/github/api_key", "value": "ghp_FAKE4444"}, _ctx()
     )
     assert await _last_resolved() is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool", ["vault_get", "vault_set", "vault_test", "vault_delete"])
+async def test_the_session_signing_key_row_is_refused(stored, monkeypatch, tool):
+    from robothor import vault
+
+    deleted: list[str] = []
+    monkeypatch.setattr(vault, "delete", lambda key, **kw: deleted.append(key) or True)
+    result = await HANDLERS[tool]({"key": "auth/jwt_signing_key", "value": "x" * 40}, _ctx())
+    assert result.get("denied_by") == "bootstrap"
+    assert deleted == []

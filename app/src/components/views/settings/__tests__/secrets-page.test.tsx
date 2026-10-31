@@ -34,6 +34,7 @@ function secret(name: string, overrides: Record<string, unknown> = {}) {
     shadowed_by: null,
     env_name: name,
     vault_readable: true,
+    removable: true,
     ...overrides,
   };
 }
@@ -235,13 +236,28 @@ describe("SecretsPage", () => {
   });
 
   describe("removing a vault row", () => {
+    it("hides Remove on a vault row the bridge says must not be removed", async () => {
+      // The session signing key sits in the vault; removing it signs everyone out.
+      mockSecrets(200, {
+        secrets: [
+          secret("AUTH_JWT_SIGNING_KEY", { removable: false }),
+          secret("EXAMPLE_NO_FLAG_TOKEN", { removable: undefined }),
+        ],
+      });
+      render(<SecretsPage visible role="owner" />);
+      await screen.findByTestId("secrets-row-AUTH_JWT_SIGNING_KEY");
+      expect(screen.queryByTestId("secrets-remove-AUTH_JWT_SIGNING_KEY")).toBeNull();
+      // An older bridge sends no flag at all: no Remove rather than a guess.
+      expect(screen.queryByTestId("secrets-remove-EXAMPLE_NO_FLAG_TOKEN")).toBeNull();
+    });
+
     it("offers Remove only on a row the vault holds", async () => {
       mockSecrets(200, {
         secrets: [
           secret("EXAMPLE_VAULT_TOKEN"),
           secret("EXAMPLE_BOTH_TOKEN", { source: "both" }),
-          secret("EXAMPLE_ENV_TOKEN", { source: "env" }),
-          secret("EXAMPLE_MISSING_TOKEN", { configured: false, source: "none" }),
+          secret("EXAMPLE_ENV_TOKEN", { source: "env", removable: false }),
+          secret("EXAMPLE_MISSING_TOKEN", { configured: false, source: "none", removable: false }),
         ],
       });
       render(<SecretsPage visible role="owner" />);
