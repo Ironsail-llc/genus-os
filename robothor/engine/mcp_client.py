@@ -30,6 +30,18 @@ PROTOCOL_LEGACY = "legacy"
 PROTOCOL_STATELESS = "2026-07-28"
 _KNOWN_PROTOCOLS = (PROTOCOL_LEGACY, PROTOCOL_STATELESS)
 
+#: Per-adapter budget for each of connect and ``tools/list`` during
+#: registration. Each adapter gets its own, so a slow one costs its own tools.
+ADAPTER_CONNECT_TIMEOUT_S = 5.0
+#: How many adapters connect at once under ``ROBOTHOR_CONFIG_CACHE``.
+ADAPTER_CONNECT_CONCURRENCY = 4
+
+
+def _config_cache_enabled() -> bool:
+    from robothor.engine.feature_flags import config_cache_enabled
+
+    return config_cache_enabled()
+
 
 @dataclass(frozen=True)
 class McpServerConfig:
@@ -79,6 +91,9 @@ class McpClientSession:
         self._request_id: int = 0
         self._lock = asyncio.Lock()
         self._initialized = False
+        # Bumped whenever the session's server-side state is thrown away, so a
+        # tool list fetched before that is never served after it.
+        self._epoch = 0
 
     async def start(self) -> None:
         """Start the MCP server subprocess.
@@ -118,6 +133,7 @@ class McpClientSession:
             logger.info("MCP server '%s' stopped", self.config.name)
         self._process = None
         self._initialized = False
+        self._epoch += 1
 
     async def _send_request(self, method: str, params: dict[str, Any] | None = None) -> Any:
         """Send a JSON-RPC 2.0 request and read the response."""
@@ -239,6 +255,11 @@ class McpHttpSession:
         self._session_id: str | None = None
         self._initialized = False
         self._request_id: int = 0
+        self._epoch = 0
+        # One client per endpoint under ROBOTHOR_CONFIG_CACHE, so requests
+        # share its connection pool instead of paying a TCP and TLS handshake
+        # each. Closed by stop().
+        self._client: Any = None
 
     def _next_id(self) -> int:
         self._request_id += 1
@@ -258,8 +279,13 @@ class McpHttpSession:
         elif self._session_id:
             headers["Mcp-Session-Id"] = self._session_id
 
-        async with httpx.AsyncClient(timeout=float(self.config.timeout_seconds)) as client:
-            r = await client.post(self.config.url, headers=headers, json=message)
+        if _config_cache_enabled():
+            if self._client is None or self._client.is_closed:
+                self._client = httpx.AsyncClient(timeout=float(self.config.timeout_seconds))
+            r = await self._client.post(self.config.url, headers=headers, json=message)
+        else:
+            async with httpx.AsyncClient(timeout=float(self.config.timeout_seconds)) as client:
+                r = await client.post(self.config.url, headers=headers, json=message)
 
         if not self.config.stateless and (sid := r.headers.get("Mcp-Session-Id")):
             self._session_id = sid
@@ -277,9 +303,13 @@ class McpHttpSession:
         """No-op for HTTP — connection is stateless per-request."""
 
     async def stop(self) -> None:
-        """Reset session state."""
+        """Reset session state and close the shared client, if any."""
         self._session_id = None
         self._initialized = False
+        self._epoch += 1
+        client, self._client = self._client, None
+        if client is not None:
+            await client.aclose()
 
     async def initialize(self) -> dict[str, Any]:
         """Send the MCP initialize handshake."""
@@ -330,6 +360,7 @@ class McpHttpSession:
         if not self.config.stateless and self._is_session_error(result):
             self._session_id = None
             self._initialized = False
+            self._epoch += 1
             await self._ensure_initialized()
             result = await self._send(
                 {
@@ -390,13 +421,24 @@ class McpClientPool:
     def __init__(self) -> None:
         self._sessions: dict[str, McpClientSession | McpHttpSession] = {}
         self._configs: dict[str, McpServerConfig] = {}
+        self._session_locks: dict[str, asyncio.Lock] = {}
+        self._tool_cache: dict[str, _ToolListEntry] = {}
 
     def register(self, config: McpServerConfig) -> None:
         """Register an MCP server configuration (auto-detects transport)."""
         self._configs[config.name] = config
 
     async def get_session(self, server_name: str) -> McpClientSession | McpHttpSession:
-        """Get or create a session for the named MCP server."""
+        """Get or create a session for the named MCP server.
+
+        Creation is serialised per server, so a pre-warm and a run asking at
+        the same moment share one stdio process instead of spawning two.
+        """
+        lock = self._session_locks.setdefault(server_name, asyncio.Lock())
+        async with lock:
+            return await self._get_session_locked(server_name)
+
+    async def _get_session_locked(self, server_name: str) -> McpClientSession | McpHttpSession:
         if server_name in self._sessions:
             session = self._sessions[server_name]
             # For stdio sessions, check if process is still alive
@@ -418,6 +460,32 @@ class McpClientPool:
         await session.start()
         self._sessions[server_name] = session
         return session
+
+    async def list_tools_cached(
+        self, server_name: str, *, refresh: bool = False
+    ) -> list[dict[str, Any]]:
+        """The server's ``tools/list``, cached for the life of its session.
+
+        Under ``ROBOTHOR_CONFIG_CACHE`` a list is served again only while the
+        session object, its epoch (a stop or an HTTP session reset bumps it),
+        the server's registered config and the plugin generation are all the
+        ones it was fetched under; ``refresh=True`` always refetches. With the
+        flag off every call is a live ``tools/list``, as before.
+        """
+        session = await self.get_session(server_name)
+        if not _config_cache_enabled():
+            return await session.list_tools()
+
+        from robothor.plugins import generation
+
+        key = (session._epoch, self._configs.get(server_name), generation())
+        entry = self._tool_cache.get(server_name)
+        if not refresh and entry and entry.session is session and entry.key == key:
+            logger.debug("MCP server '%s': tool list served from cache", server_name)
+            return list(entry.tools)
+        tools = await session.list_tools()
+        self._tool_cache[server_name] = _ToolListEntry(session=session, key=key, tools=list(tools))
+        return tools
 
     def list_servers(self) -> list[dict[str, Any]]:
         """List configured servers with status."""
@@ -449,6 +517,14 @@ class McpClientPool:
             except Exception as e:
                 logger.warning("Failed to stop MCP session: %s", e)
         self._sessions.clear()
+        self._tool_cache.clear()
+
+
+@dataclass
+class _ToolListEntry:
+    session: McpClientSession | McpHttpSession
+    key: tuple[Any, ...]
+    tools: list[dict[str, Any]]
 
 
 # Singleton
@@ -507,3 +583,61 @@ def register_adapter(adapter: Any) -> None:
                 protocol=protocol,
             )
         )
+
+
+async def fetch_adapter_tools(
+    adapter: Any, pool: McpClientPool | None = None
+) -> list[dict[str, Any]]:
+    """Connect to one adapter and return its tool list, each step under its own timeout."""
+    pool = pool or get_mcp_client_pool()
+    await asyncio.wait_for(pool.get_session(adapter.name), timeout=ADAPTER_CONNECT_TIMEOUT_S)
+    return await asyncio.wait_for(
+        pool.list_tools_cached(adapter.name), timeout=ADAPTER_CONNECT_TIMEOUT_S
+    )
+
+
+async def gather_adapter_tools(
+    adapters: list[Any], pool: McpClientPool | None = None
+) -> list[list[dict[str, Any]] | BaseException]:
+    """``fetch_adapter_tools`` for every adapter, concurrently and bounded.
+
+    Results come back in adapter order, an exception in place of a list for
+    each one that failed, so a caller applies them deterministically.
+    """
+    pool = pool or get_mcp_client_pool()
+    sem = asyncio.Semaphore(ADAPTER_CONNECT_CONCURRENCY)
+
+    async def _one(adapter: Any) -> list[dict[str, Any]]:
+        async with sem:
+            return await fetch_adapter_tools(adapter, pool)
+
+    return await asyncio.gather(*(_one(a) for a in adapters), return_exceptions=True)
+
+
+async def prewarm_adapter_sessions(adapters: list[Any]) -> dict[str, int]:
+    """Open each adapter's session and cache its tool list. ``{name: tool count}``.
+
+    The integrity check runs first, exactly as at registration: an unverified
+    stdio binary is never spawned. Failures are logged and skipped; the run
+    that needs the adapter tries again under the registry's backoff.
+    """
+    from robothor.engine.adapters import verify_adapter_integrity
+
+    admitted = []
+    for adapter in adapters:
+        ok, reason = verify_adapter_integrity(adapter)
+        if not ok:
+            logger.error(
+                "Adapter '%s' not pre-warmed — integrity check failed: %s", adapter.name, reason
+            )
+            continue
+        register_adapter(adapter)
+        admitted.append(adapter)
+
+    warmed: dict[str, int] = {}
+    for adapter, result in zip(admitted, await gather_adapter_tools(admitted), strict=True):
+        if isinstance(result, BaseException):
+            logger.warning("Adapter '%s' pre-warm failed: %s", adapter.name, result)
+        else:
+            warmed[adapter.name] = len(result)
+    return warmed

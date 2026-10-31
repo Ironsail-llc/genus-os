@@ -691,14 +691,21 @@ class ToolRegistry:
         - 5s timeout per adapter connection (don't block agent startup)
         - Failed adapters cached with exponential backoff (5min initial, 30min max)
         - Failures logged once at WARNING, then suppressed until retry window
+
+        Under ``ROBOTHOR_CONFIG_CACHE`` adapters connect concurrently (bounded,
+        each with its own timeout) and a live session's tool list is reused;
+        schemas are still applied in adapter order, so a name clash resolves
+        the same way it does sequentially.
         """
         import asyncio
         import time
 
+        from robothor.engine import mcp_client
         from robothor.engine.adapters import verify_adapter_integrity
-        from robothor.engine.mcp_client import get_mcp_client_pool
+        from robothor.engine.feature_flags import config_cache_enabled
 
-        pool = get_mcp_client_pool()
+        pool = mcp_client.get_mcp_client_pool()
+        admitted: list[Any] = []
         for adapter in adapters:
             # Integrity BEFORE connection: an unverified stdio binary must not
             # even be spawned, let alone asked for its tool list.
@@ -710,81 +717,104 @@ class ToolRegistry:
                     reason,
                 )
                 continue
-            # Check failure cache — skip if in backoff window
-            now = time.monotonic()
-            if adapter.name in self._adapter_failures:
-                fail_time, backoff = self._adapter_failures[adapter.name]
-                if now - fail_time < backoff:
-                    logger.debug(
-                        "Adapter '%s': skipping (backoff %.0fs remaining)",
-                        adapter.name,
-                        backoff - (now - fail_time),
-                    )
-                    continue
+            if self._in_backoff(adapter.name, time.monotonic()):
+                continue
+            if config_cache_enabled():
+                admitted.append(adapter)
+                continue
 
+            now = time.monotonic()
             try:
                 session = await asyncio.wait_for(pool.get_session(adapter.name), timeout=5.0)
                 mcp_tools = await asyncio.wait_for(session.list_tools(), timeout=5.0)
-                allow = set(adapter.tools_allowed)
-                if not allow:
-                    logger.warning(
-                        "Adapter '%s' has no tools_allowed list — registering "
-                        "every tool its server offers (legacy allow-all). Pin "
-                        "the expected tools in the adapter YAML so a changed "
-                        "server cannot sprout new capabilities silently.",
-                        adapter.name,
-                    )
-                drifted: list[str] = []
-                for tool in mcp_tools:
-                    name = tool.get("name", "")
-                    if not name:
-                        continue
-                    if allow and name not in allow:
-                        drifted.append(name)
-                        continue
-                    self._schemas[name] = {
-                        "type": "function",
-                        "function": {
-                            "name": name,
-                            "description": tool.get("description", ""),
-                            "parameters": tool.get(
-                                "inputSchema", {"type": "object", "properties": {}}
-                            ),
-                        },
-                    }
-                    self._adapter_routes[name] = adapter.name
-                if drifted:
-                    # Loud on purpose: the server offered tools the bundle
-                    # never declared. That is the exact supply-chain move —
-                    # a compromised or auto-updated server growing new
-                    # capabilities — and it must read as an event, not debug.
-                    logger.warning(
-                        "Adapter '%s' DRIFT: server offered %d tool(s) not in "
-                        "tools_allowed, refused: %s",
-                        adapter.name,
-                        len(drifted),
-                        ", ".join(sorted(drifted)),
-                    )
-                # Clear failure cache on success
-                self._adapter_failures.pop(adapter.name, None)
-                logger.info("Adapter '%s': discovered %d tools", adapter.name, len(mcp_tools))
+                self._apply_adapter_tools(adapter, mcp_tools)
             except Exception as e:
-                # Exponential backoff: 300s (5min) -> 600s -> 1200s -> max 1800s (30min)
-                _, prev_backoff = self._adapter_failures.get(adapter.name, (0, 150.0))
-                new_backoff = min(prev_backoff * 2, 1800.0)
-                self._adapter_failures[adapter.name] = (now, new_backoff)
-                if prev_backoff <= 150.0:
-                    # First failure or first retry — log at WARNING
-                    logger.warning(
-                        "Adapter '%s' unavailable (backoff %.0fs): %s",
-                        adapter.name,
-                        new_backoff,
-                        e,
-                    )
-                else:
-                    logger.debug(
-                        "Adapter '%s' still unavailable, backoff %.0fs", adapter.name, new_backoff
-                    )
+                self._record_adapter_failure(adapter.name, now, e)
+
+        if not admitted:
+            return
+        now = time.monotonic()
+        results = await mcp_client.gather_adapter_tools(admitted, pool)
+        for adapter, result in zip(admitted, results, strict=True):
+            try:
+                if isinstance(result, BaseException):
+                    raise result
+                self._apply_adapter_tools(adapter, result)
+            except Exception as e:
+                self._record_adapter_failure(adapter.name, now, e)
+
+    def _in_backoff(self, adapter_name: str, now: float) -> bool:
+        """True while a failed adapter sits in its backoff window."""
+        if adapter_name not in self._adapter_failures:
+            return False
+        fail_time, backoff = self._adapter_failures[adapter_name]
+        if now - fail_time < backoff:
+            logger.debug(
+                "Adapter '%s': skipping (backoff %.0fs remaining)",
+                adapter_name,
+                backoff - (now - fail_time),
+            )
+            return True
+        return False
+
+    def _apply_adapter_tools(self, adapter: Any, mcp_tools: list[dict[str, Any]]) -> None:
+        """Register an adapter's offered tools, refusing any outside ``tools_allowed``."""
+        allow = set(adapter.tools_allowed)
+        if not allow:
+            logger.warning(
+                "Adapter '%s' has no tools_allowed list — registering "
+                "every tool its server offers (legacy allow-all). Pin "
+                "the expected tools in the adapter YAML so a changed "
+                "server cannot sprout new capabilities silently.",
+                adapter.name,
+            )
+        drifted: list[str] = []
+        for tool in mcp_tools:
+            name = tool.get("name", "")
+            if not name:
+                continue
+            if allow and name not in allow:
+                drifted.append(name)
+                continue
+            self._schemas[name] = {
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "description": tool.get("description", ""),
+                    "parameters": tool.get("inputSchema", {"type": "object", "properties": {}}),
+                },
+            }
+            self._adapter_routes[name] = adapter.name
+        if drifted:
+            # Loud on purpose: the server offered tools the bundle
+            # never declared. That is the exact supply-chain move —
+            # a compromised or auto-updated server growing new
+            # capabilities — and it must read as an event, not debug.
+            logger.warning(
+                "Adapter '%s' DRIFT: server offered %d tool(s) not in tools_allowed, refused: %s",
+                adapter.name,
+                len(drifted),
+                ", ".join(sorted(drifted)),
+            )
+        # Clear failure cache on success
+        self._adapter_failures.pop(adapter.name, None)
+        logger.info("Adapter '%s': discovered %d tools", adapter.name, len(mcp_tools))
+
+    def _record_adapter_failure(self, adapter_name: str, now: float, e: BaseException) -> None:
+        """Exponential backoff: 300s (5min) -> 600s -> 1200s -> max 1800s (30min)."""
+        _, prev_backoff = self._adapter_failures.get(adapter_name, (0, 150.0))
+        new_backoff = min(prev_backoff * 2, 1800.0)
+        self._adapter_failures[adapter_name] = (now, new_backoff)
+        if prev_backoff <= 150.0:
+            # First failure or first retry — log at WARNING
+            logger.warning(
+                "Adapter '%s' unavailable (backoff %.0fs): %s",
+                adapter_name,
+                new_backoff,
+                e,
+            )
+        else:
+            logger.debug("Adapter '%s' still unavailable, backoff %.0fs", adapter_name, new_backoff)
 
     def get_adapter_route(self, tool_name: str) -> str | None:
         """Return the adapter server name for a tool, or None if not adapter-provided."""

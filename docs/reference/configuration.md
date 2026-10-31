@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-488 settings in 18 groups.
+489 settings in 18 groups.
 
 ## autonomy
 
@@ -417,6 +417,7 @@ Guardrails and feature gates. Ones marked governed are inventoried in `infra/fla
 | `ROBOTHOR_CALENDAR_SEND_UPDATES` | str | `all` | `robothor-engine` | no | legacy | **governed.** Who Google emails when an agent creates or deletes an event with attendees: all, externalOnly, or none. The default sends the invitation — an event nobody was told about is not a meeting, which is how an operator came to be an attendee of a trip he never saw. |
 | `ROBOTHOR_COMPLETION_CONTRACTS_ENABLED` | bool | `false` | `robothor-engine` | no | legacy | Switch for evidence-based completion contracts: a run claiming success must show the tool trace that produced it. |
 | `ROBOTHOR_COMPLETION_CONTRACTS_MODE` | str | `observe` | `robothor-engine` | no | legacy | **governed.** Completion-contract ladder position: observe records unevidenced claims, enforce fails the run that makes one. |
+| `ROBOTHOR_CONFIG_CACHE` | bool | `false` | `robothor-engine` | no | legacy | Cache configuration-derived state between runs instead of rebuilding it each time: an MCP adapter's tool list lives as long as its session (a dropped session, a plugin reload or an explicit refresh refetches it), adapters connect concurrently, an HTTP MCP server keeps one client, and adapter sessions are pre-warmed at engine start. |
 | `ROBOTHOR_CONFIG_STRICT_MODE` | str | `observe` | `robothor-engine` | no | 1.66 | What an unknown key in the settings: block of config.yaml does. 'off' ignores it, 'observe' (default for existing installs) logs one warning naming the key and carries on, 'enforce' refuses to start. Inventoried in infra/flags.yaml but deliberately NOT governed: it is read while settings are being resolved, which happens before and without a database. |
 | `ROBOTHOR_CURATOR_APPLY` | bool | `false` | `robothor-engine` | no | legacy | Let the memory curator write its proposed edits. Off, it only proposes — the prompt-trust boundary for accreted content. |
 | `ROBOTHOR_DELIVERABLE_CONTRACT_ENABLED` | bool | `false` | `robothor-engine` | no | legacy | Hold a run to the deliverable it promised, so 'done' means the artefact exists. |
