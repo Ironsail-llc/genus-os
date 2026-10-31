@@ -37,7 +37,13 @@ stream `robothor:events:telemetry` for the dashboards.
 
 ## Publishing never blocks a run
 
-Telemetry is published when a run finishes, off the engine's event loop: the
+Every run publishes its trace when it ends, whatever the outcome: completed,
+failed, timed out, aborted or interrupted. The `run_summary` span carries
+`run.status`; a failed, timed-out or cancelled run exports it with error status
+(OTLP code 2), the reason as the status message and as `error.message`, and the
+Redis entry's `status` is the run's terminal status.
+
+Publishing happens off the engine's event loop: the
 Redis entry and the OTLP export run as background tasks on one shared async Redis
 client and one shared HTTP client (5 s timeout). Traces that finish while an export
 is in flight are sent together in the next request. A sink that is down logs one
