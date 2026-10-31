@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-488 settings in 18 groups.
+490 settings in 18 groups.
 
 ## autonomy
 
@@ -233,6 +233,7 @@ Cloud model routing, budgets and the failure controls around them.
 | Variable | Type | Default | Restart | Secret | Since | Description |
 | --- | --- | --- | --- | --- | --- | --- |
 | `OPENROUTER_API_BASE` | str | _(empty)_ | no | no | unreleased | OpenAI-compatible endpoint every `openrouter/*` model is dialled at, instead of https://openrouter.ai/api/v1. Point it at a corporate gateway, a recording proxy, or the acceptance gate's mock server. Declared here so the knob is documented and inventoried, but litellm reads the ENVIRONMENT VARIABLE itself -- setting this key in config.yaml alone changes nothing. |
+| `ROBOTHOR_COMPACTION_MIN_GAP_ITERATIONS` | int | `3` | no | no | unreleased | With ROBOTHOR_COMPACTION_V2 on, the fewest agent-loop iterations between two compactions of one run. A context that grows by one tool result must not be summarised again on the next iteration; the hard context ceiling is still enforced every iteration. |
 | `ROBOTHOR_COMPACTION_PROTECT_FIRST_N` | int | `3` | no | no | unreleased | How many messages at the head of a conversation compaction may never summarise away. The statement of the task lives there, and a run that loses it invents the shape of its own output. |
 | `ROBOTHOR_COMPACTION_TRIGGER_TOKENS` | int | `80000` | no | no | legacy | Absolute prompt-token budget above which a run compacts its context. |
 | `ROBOTHOR_DEFERRED_TOOLS_THRESHOLD` | int | `40` | no | no | legacy | Number of tools above which schemas are deferred behind tool search rather than sent in full on every request. |
@@ -415,6 +416,7 @@ Guardrails and feature gates. Ones marked governed are inventoried in `infra/fla
 | `ROBOTHOR_BENCHMARK_SANDBOX_MODE` | str | `observe` | `robothor-engine` | no | legacy | **governed.** Benchmark-sandbox ladder position: observe seeds fixtures and records read-backs without grading them, enforce folds them into the score. |
 | `ROBOTHOR_CALENDAR_MEET_ARTIFACTS` | bool | `true` | `robothor-engine` | no | legacy | Turn Google Meet transcription and smart notes on for meetings the assistant organizes, so it can read them afterwards. Best-effort: needs the meetings.space.settings OAuth scope, and a failure is a note on the booking, never a failed booking. |
 | `ROBOTHOR_CALENDAR_SEND_UPDATES` | str | `all` | `robothor-engine` | no | legacy | **governed.** Who Google emails when an agent creates or deletes an event with attendees: all, externalOnly, or none. The default sends the invitation — an event nobody was told about is not a meeting, which is how an operator came to be an attendee of a trip he never saw. |
+| `ROBOTHOR_COMPACTION_V2` | bool | `false` | no | no | unreleased | Hardened context compaction: summarise with the agent's own model chain (manifest `model.compaction` first, the fleet chain when a caller has none), reclaim tool arguments, old tool results and media without a model call first, update the previous summary instead of rebuilding it, wait ROBOTHOR_COMPACTION_MIN_GAP_ITERATIONS between compactions, and keep the messages (the run's compaction step marked degraded) when every model fails to summarise. |
 | `ROBOTHOR_COMPLETION_CONTRACTS_ENABLED` | bool | `false` | `robothor-engine` | no | legacy | Switch for evidence-based completion contracts: a run claiming success must show the tool trace that produced it. |
 | `ROBOTHOR_COMPLETION_CONTRACTS_MODE` | str | `observe` | `robothor-engine` | no | legacy | **governed.** Completion-contract ladder position: observe records unevidenced claims, enforce fails the run that makes one. |
 | `ROBOTHOR_CONFIG_STRICT_MODE` | str | `observe` | `robothor-engine` | no | 1.66 | What an unknown key in the settings: block of config.yaml does. 'off' ignores it, 'observe' (default for existing installs) logs one warning naming the key and carries on, 'enforce' refuses to start. Inventoried in infra/flags.yaml but deliberately NOT governed: it is read while settings are being resolved, which happens before and without a database. |

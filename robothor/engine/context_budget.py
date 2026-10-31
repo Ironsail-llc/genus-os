@@ -53,6 +53,11 @@ async def keep_context_within_budget(
     """
     if iteration <= 0:
         return
+    from robothor.engine.context_control import control
+
+    state = control.get()
+    if state is not None:
+        state.iteration = iteration
     _thin(session, agent_config, pre_iteration_msg_idx)
     await _compact(session, agent_config, iteration, models, broken_models, hook_registry)
 
@@ -135,7 +140,11 @@ async def _compact_and_enforce(
         )
 
         session.messages[:] = await maybe_compress(
-            session.messages, models, threshold=threshold, broken_models=broken_models
+            session.messages,
+            models,
+            threshold=threshold,
+            broken_models=broken_models,
+            preferred_model=str(getattr(agent_config, "model_compaction", "") or "") or None,
         )
         logger.info(
             "Proactive compaction at iter %d: %d→%d messages (est %d tokens, threshold %d)",

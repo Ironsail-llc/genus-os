@@ -109,6 +109,9 @@ class CompactionResult:
     passes_used: int = 0
     tokens_before: int = 0
     tokens_after: int = 0
+    #: The context was over budget and no model could summarise it, so the
+    #: messages were kept (v2 freeze-on-failure) rather than dropped.
+    degraded: bool = False
 
 
 def extract_tool_summary(content: str) -> str:
@@ -780,6 +783,7 @@ async def compact(
     threshold: int = 80_000,
     drain_to: int = 60_000,
     broken_models: set[str] | None = None,
+    preferred_model: str | None = None,
 ) -> CompactionResult:
     """4-pass graduated compaction.
 
@@ -795,6 +799,13 @@ async def compact(
     Returns:
         CompactionResult with compacted messages and metadata.
     """
+    from robothor.engine.feature_flags import compaction_v2_enabled
+
+    if compaction_v2_enabled():
+        return await _compact_v2(
+            messages, models, threshold, drain_to, broken_models, preferred_model
+        )
+
     from robothor.engine.context import KEEP_RECENT, estimate_tokens
 
     tokens_before = estimate_tokens(messages)
@@ -1049,3 +1060,343 @@ async def compact(
         tokens_before=tokens_before,
         tokens_after=est,
     )
+
+
+# ── Compaction v2 (ROBOTHOR_COMPACTION_V2) ─────────────────────────────
+
+#: Old tool results longer than this become a one-line summary plus a reference.
+V2_TOOL_RESULT_MAX_CHARS = 2_000
+
+#: Tool-call argument JSON longer than this is truncated (kept valid JSON).
+V2_ARGUMENT_MAX_CHARS = 1_000
+
+#: How much of one long argument string survives truncation.
+V2_ARGUMENT_VALUE_CHARS = 200
+
+#: Ceiling on the conversation slice handed to one summary update.
+V2_SLICE_MAX_CHARS = 32_000
+
+SUMMARY_MARKER = "[Conversation summary]"
+
+ITERATIVE_SUMMARY_PROMPT = """You keep the running summary of a long agent run. Update the previous summary \
+with the new conversation slice: keep decisions, findings, numbers, file paths \
+and unfinished work; drop what the slice supersedes. Return only the updated \
+summary, at most 300 words."""
+
+
+def _elide_large_tool_results(
+    messages: list[dict[str, Any]], protect_tail: int, max_chars: int = V2_TOOL_RESULT_MAX_CHARS
+) -> tuple[list[dict[str, Any]], int]:
+    """Replace old oversized tool results with a one-line summary and a reference.
+
+    The reference is the ``tool_call_id`` and the original size, so the agent
+    can tell what it ran and re-run it; the pairing with its call is untouched.
+    """
+    cut = len(messages) - protect_tail
+    out = list(messages)
+    elided = 0
+    for i in range(max(0, cut)):
+        m = messages[i]
+        content = m.get("content")
+        if m.get("role") != "tool" or not isinstance(content, str) or len(content) <= max_chars:
+            continue
+        line = extract_tool_summary(content).replace("\n", " ")[:200]
+        out[i] = {
+            **m,
+            "content": (
+                f"[tool result elided by compaction: {len(content):,} chars, "
+                f"ref {m.get('tool_call_id', '?')}] {line}"
+            ),
+        }
+        elided += 1
+    return out, elided
+
+
+def _truncate_arguments(raw: str, max_chars: int) -> str:
+    """Shorten one call's argument JSON and keep it parseable."""
+    try:
+        parsed = json.loads(raw)
+    except (ValueError, TypeError):
+        parsed = None
+    if isinstance(parsed, dict):
+        short = {
+            k: (
+                v[:V2_ARGUMENT_VALUE_CHARS] + f"... [{len(v):,} chars elided by compaction]"
+                if isinstance(v, str) and len(v) > V2_ARGUMENT_VALUE_CHARS
+                else v
+            )
+            for k, v in parsed.items()
+        }
+        text = json.dumps(short)
+        if len(text) <= max_chars:
+            return text
+    return json.dumps({"_elided_by_compaction": raw[: max_chars // 2], "_original_chars": len(raw)})
+
+
+def _truncate_tool_arguments(
+    messages: list[dict[str, Any]], protect_tail: int, max_chars: int = V2_ARGUMENT_MAX_CHARS
+) -> tuple[list[dict[str, Any]], int]:
+    """Truncate oversized tool-call argument JSON outside the recent tail.
+
+    A ``write_file`` call carries the whole file it wrote, and every later turn
+    re-sends it. Copy-on-write: the session's own dicts are never mutated.
+    """
+    cut = len(messages) - protect_tail
+    out = list(messages)
+    truncated = 0
+    for i in range(max(0, cut)):
+        calls = messages[i].get("tool_calls")
+        if not isinstance(calls, list):
+            continue
+        new_calls: list[Any] = []
+        changed = False
+        for call in calls:
+            fn = call.get("function") if isinstance(call, dict) else None
+            raw = fn.get("arguments") if isinstance(fn, dict) else None
+            if isinstance(fn, dict) and isinstance(raw, str) and len(raw) > max_chars:
+                new_calls.append(
+                    {**call, "function": {**fn, "arguments": _truncate_arguments(raw, max_chars)}}
+                )
+                changed = True
+                truncated += 1
+            else:
+                new_calls.append(call)
+        if changed:
+            out[i] = {**messages[i], "tool_calls": new_calls}
+    return out, truncated
+
+
+def llm_free_pre_pass(
+    messages: list[dict[str, Any]], protect_tail: int
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    """Reclaim tokens with no model call: the v2 pass that runs first.
+
+    Never touches the protected head (the task statement) or the recent tail.
+    Dedupe identical tool results, strip historical media, elide oversized old
+    tool results, truncate oversized argument JSON — in that order, so the
+    dedupe compares the originals.
+    """
+    head_len = protected_prefix_len(messages)
+    body = messages[head_len:]
+    body, deduped = _dedup_tool_results(body, protect_tail)
+    body, media = _strip_historical_media(body, protect_tail)
+    body, elided = _elide_large_tool_results(body, protect_tail)
+    body, args = _truncate_tool_arguments(body, protect_tail)
+    counts = {"deduped": deduped, "media": media, "elided": elided, "arguments": args}
+    return [*messages[:head_len], *body], counts
+
+
+def _is_summary(msg: dict[str, Any]) -> bool:
+    content = msg.get("content")
+    return (
+        msg.get("role") == "user"
+        and isinstance(content, str)
+        and content.startswith(SUMMARY_MARKER)
+    )
+
+
+def _take_previous_summary(
+    messages: list[dict[str, Any]],
+) -> tuple[str, list[dict[str, Any]]]:
+    """The previous compaction's summary text, and the messages without it.
+
+    The acknowledgement turn the summary was paired with goes too.
+    """
+    previous: list[str] = []
+    rest: list[dict[str, Any]] = []
+    skip_ack = False
+    for msg in messages:
+        if _is_summary(msg):
+            previous.append(str(msg["content"])[len(SUMMARY_MARKER) :].strip())
+            skip_ack = True
+            continue
+        if (
+            skip_ack
+            and msg.get("role") == "assistant"
+            and not msg.get("tool_calls")
+            and str(msg.get("content") or "").startswith("Understood")
+        ):
+            skip_ack = False
+            continue
+        skip_ack = False
+        rest.append(msg)
+    return "\n".join(p for p in previous if p), rest
+
+
+def _slice_text(messages: list[dict[str, Any]]) -> str:
+    """The new slice as summary input: prose previews and tool-result summaries."""
+    parts: list[str] = []
+    for msg in messages:
+        role = msg.get("role", "unknown")
+        text = _content_text(msg.get("content"))
+        if not text:
+            continue
+        if role in ("user", "assistant"):
+            parts.append(f"{role}: {text[:400]}")
+        elif role == "tool":
+            parts.append(f"tool: {extract_tool_summary(text)[:TOOL_FACT_CHARS]}")
+    joined = "\n".join(parts)
+    return joined[-V2_SLICE_MAX_CHARS:]
+
+
+async def _summary_chain(
+    models: list[str] | None, broken_models: set[str] | None, preferred_model: str | None
+) -> list[str]:
+    """The agent's chain, minus the dead, with its compaction model first.
+
+    No chain from the caller means the fleet's default chain, never a model
+    the platform picked: the deployment authorised its chain, not ours.
+    """
+    chain = list(models or [])
+    if not chain:
+        from robothor.engine import config as engine_config
+
+        try:
+            # Reads the manifest directory: off the loop.
+            chain = list(await asyncio.to_thread(engine_config.fleet_model_chain))
+        except Exception as e:  # noqa: BLE001 — no chain is reported by the caller
+            logger.warning("Compaction v2: fleet chain unreadable (%s)", sanitize_log(str(e)))
+            chain = []
+    usable = [m for m in chain if m not in (broken_models or set())] or chain
+    if preferred_model and preferred_model in usable:
+        usable = [preferred_model, *(m for m in usable if m != preferred_model)]
+    return usable
+
+
+async def update_summary(previous: str, new_slice: list[dict[str, Any]], chain: list[str]) -> str:
+    """One call: the previous summary plus the new slice, updated. Raises on failure."""
+    response = await _acompletion_over_chain(
+        chain,
+        messages=[
+            {"role": "system", "content": ITERATIVE_SUMMARY_PROMPT},
+            {
+                "role": "user",
+                "content": (
+                    f"Previous summary:\n{previous or '(none)'}\n\n"
+                    f"New conversation slice:\n{_slice_text(new_slice)}"
+                ),
+            },
+        ],
+        temperature=0.1,
+        max_tokens=600,
+    )
+    text: str | None = response.choices[0].message.content
+    if not text or not text.strip():
+        raise RuntimeError("summary model returned no content")
+    return text.strip()
+
+
+def _merge_retained_facts(
+    new_facts: list[CompactionFact], retained_msgs: list[dict[str, Any]]
+) -> list[CompactionFact]:
+    """New facts plus those a previous compaction retained, deduplicated by text."""
+    facts = list(new_facts)
+    for rm in retained_msgs:
+        content = rm.get("content", "")
+        if not isinstance(content, str):
+            continue
+        for line in content.split("\n"):
+            line = line.strip()
+            if not (line.startswith("- [") and "] (p" in line):
+                continue
+            try:
+                cat = line.split("[", 1)[1].split("]", 1)[0]
+                pri = int(line.split("(p", 1)[1].split(")", 1)[0])
+                txt = line.split(") ", 1)[1] if ") " in line else ""
+            except (IndexError, ValueError):
+                continue
+            if txt:
+                facts.append(CompactionFact(category=cat, text=txt, priority=pri))
+    seen: set[str] = set()
+    out: list[CompactionFact] = []
+    for fact in facts:
+        if fact.text not in seen:
+            seen.add(fact.text)
+            out.append(fact)
+    return out
+
+
+async def _compact_v2(
+    messages: list[dict[str, Any]],
+    models: list[str] | None,
+    threshold: int,
+    drain_to: int,
+    broken_models: set[str] | None,
+    preferred_model: str | None,
+) -> CompactionResult:
+    """Pre-pass, then one iterative summary on the agent's chain; freeze on failure."""
+    from robothor.engine.context import KEEP_RECENT, estimate_tokens
+
+    tokens_before = estimate_tokens(messages)
+    if tokens_before < threshold:
+        return CompactionResult(
+            messages=messages, tokens_before=tokens_before, tokens_after=tokens_before
+        )
+
+    working, counts = llm_free_pre_pass(messages, KEEP_RECENT)
+    est = estimate_tokens(working)
+    logger.info(
+        "Compaction v2 pre-pass: ~%d → ~%d tokens (%s)", tokens_before, est, sanitize_log(counts)
+    )
+
+    def result(msgs: list[dict[str, Any]], passes: int, **extra: Any) -> CompactionResult:
+        return CompactionResult(
+            messages=msgs,
+            passes_used=passes,
+            tokens_before=tokens_before,
+            tokens_after=estimate_tokens(msgs),
+            **extra,
+        )
+
+    if est < drain_to:
+        return result(working, 1)
+
+    if len(working) <= KEEP_RECENT + 1:
+        shrunk, _ = _shrink_largest(working, drain_to)
+        return result(shrunk, 1)
+
+    head_msgs, retained_msgs, rest = _split_for_summary(working)
+    previous, rest = _take_previous_summary(rest)
+    split_idx = (
+        _recent_split(rest, max(1024, drain_to // 3), KEEP_RECENT) if len(rest) > KEEP_RECENT else 0
+    )
+    old_messages, recent_messages = rest[:split_idx], rest[split_idx:]
+    if not old_messages:
+        return result(working, 1)
+
+    chain = await _summary_chain(models, broken_models, preferred_model)
+    try:
+        if not chain:
+            raise RuntimeError("no model chain to summarise with")
+        summary = await update_summary(previous, old_messages, chain)
+    except Exception as e:  # noqa: BLE001 — freeze, never drop the middle
+        logger.warning(
+            "Compaction v2: summary failed on every model (%s) — keeping %d messages, "
+            "run marked degraded",
+            sanitize_log(str(e)[:200]),
+            len(working),
+        )
+        return result(working, 1, degraded=True)
+
+    facts = _merge_retained_facts(await extract_facts(old_messages, model=chain), retained_msgs)
+
+    result_msgs = list(head_msgs)
+    if facts:
+        result_msgs.append(_build_retained_context_message(facts, messages))
+    result_msgs.append({"role": "user", "content": f"{SUMMARY_MARKER}\n{summary}"})
+    result_msgs.append(
+        {
+            "role": "assistant",
+            "content": "Understood. I have context from our previous conversation.",
+        }
+    )
+    result_msgs.extend(recent_messages)
+    if estimate_tokens(result_msgs) > drain_to:
+        result_msgs, _ = _shrink_largest(result_msgs, drain_to)
+    logger.info(
+        "Compaction v2: summary updated on %s, ~%d → ~%d tokens",
+        sanitize_log(chain[0]),
+        tokens_before,
+        estimate_tokens(result_msgs),
+    )
+    return result(result_msgs, 3, facts_extracted=facts)

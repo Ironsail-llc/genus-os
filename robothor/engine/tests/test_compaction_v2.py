@@ -62,7 +62,9 @@ class FakeCompletion:
         if self.fail:
             raise RuntimeError(f"{model} is unreachable")
         if kwargs.get("response_format"):
-            content = json.dumps({"facts": [{"category": "decision", "text": "kept", "priority": 4}]})
+            content = json.dumps(
+                {"facts": [{"category": "decision", "text": "kept", "priority": 4}]}
+            )
         else:
             content = self.summary
         message = SimpleNamespace(content=content, tool_calls=None)
@@ -184,9 +186,7 @@ async def test_a_failed_summary_is_not_drained_and_is_recorded_degraded():
     state = ContextControl()
     token = control.set(state)
     try:
-        with patch(
-            "robothor.engine.compaction.pooled_acompletion", new=FakeCompletion(fail=True)
-        ):
+        with patch("robothor.engine.compaction.pooled_acompletion", new=FakeCompletion(fail=True)):
             out = await maybe_compress(messages, CHAIN, threshold=1000)
     finally:
         control.reset(token)
@@ -216,9 +216,7 @@ async def _iterate(iterations: list[int]) -> list[int]:
         compacted_at.append(current["iteration"])
         return CompactionResult(messages=messages[:3], passes_used=3)
 
-    session = SimpleNamespace(
-        messages=[], run_id="run-1", thin_previous_tool_results=lambda **_: 0
-    )
+    session = SimpleNamespace(messages=[], run_id="run-1", thin_previous_tool_results=lambda **_: 0)
     config = SimpleNamespace(id="example-agent", eager_tool_compression=False)
     state = ContextControl()
     token = control.set(state)

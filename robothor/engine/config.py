@@ -654,6 +654,7 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
         description=manifest.get("description", ""),
         model_primary=model.get("primary", ""),
         model_fallbacks=_with_last_resort(model.get("primary", ""), model.get("fallbacks", [])),
+        model_compaction=str(model.get("compaction") or ""),
         response_format=model.get("response_format", "text"),
         provider_order=parse_provider_order(model.get("provider_order", {})),
         cron_expr=schedule.get("cron", ""),
