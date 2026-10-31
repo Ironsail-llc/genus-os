@@ -35,6 +35,7 @@ import logging
 import os
 from typing import Any
 
+from robothor.engine.early_done import apply_output_policies
 from robothor.engine.interactive_recency import (  # noqa: F401
     INTERACTIVE_WARMUP_MAX_AGE_S,
     _seconds_since_last_interactive_run,
@@ -283,9 +284,9 @@ class RunFinalizationMixin:
         # Deliverable contracts: did the run produce the artifact the task
         # named, in the shape it named? The ladder and every side effect live
         # in `deliverable_verdict`, extracted here by this file's own rule.
-        from robothor.engine.deliverable_verdict import record_deliverable_verdicts
-
-        record_deliverable_verdicts(run, session, self.config.workspace)
+        # Output-altering: under ROBOTHOR_EARLY_DONE it already ran before the
+        # answer was released, and this second call is a no-op (early_done.py).
+        apply_output_policies(run, session, self.config.workspace)
 
         # And what the run never finished reading — a separate question from
         # whether the artefact is right, because a run can write exactly the

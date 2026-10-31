@@ -230,6 +230,17 @@ def goal_judge_enabled() -> bool:
     return _env_bool("ROBOTHOR_JUDGE_ENABLED")
 
 
+def early_done_enabled() -> bool:
+    """Release a chat answer before run finalization (``ROBOTHOR_EARLY_DONE``).
+
+    When on, webchat sends its ``done`` event and Telegram sends its reply as
+    soon as the run's final text is settled; telemetry, post-run bookkeeping
+    and persistence finish as a task under the engine task registry. Default
+    OFF. Read from the environment (not a governed flag).
+    """
+    return _env_bool("ROBOTHOR_EARLY_DONE")
+
+
 def curator_enabled() -> bool:
     """True iff the destructive LLM skill-consolidation curator (Rip 5) is active.
 

@@ -46,6 +46,7 @@ from robothor.engine.chat_store import (
 )
 from robothor.engine.chunking import TELEGRAM_MAX_MESSAGE_LENGTH
 from robothor.engine.delivery import set_telegram_sender
+from robothor.engine.early_done import EarlyRelease
 from robothor.engine.models import TriggerType
 from robothor.engine.task_registry import get_task_registry
 from robothor.engine.telegram_format import (
@@ -571,6 +572,25 @@ class TelegramBot(
                 # _chat_user_info entry, or no from_user on the message).
                 _identity = self._build_identity(_user, chat_id, _tenant)
 
+                async def deliver_answer(run: Any) -> list[Any]:
+                    # Delete the status message, deliver the final output as a
+                    # new message. The returned Message objects let the channel
+                    # bus map platform_message_ids to the persisted row below.
+                    if stream_msg_id is not None:
+                        with contextlib.suppress(Exception):
+                            await self.bot.delete_message(
+                                chat_id=int(chat_id), message_id=stream_msg_id
+                            )
+                    if run.output_text:
+                        sent = await self.send_message(chat_id, run.output_text)
+                    elif run.error_message:
+                        sent = await self.send_message(chat_id, f"Error: {run.error_message}")
+                    else:
+                        sent = await self.send_message(chat_id, "Done. No output produced.")
+                    await self._record_interactive_delivery(run, sent)
+                    return sent
+
+                early = EarlyRelease(deliver_answer)  # ROBOTHOR_EARLY_DONE
                 run = await self.runner.execute(
                     agent_id=self.config.default_chat_agent,
                     message=user_text,
@@ -585,6 +605,7 @@ class TelegramBot(
                     user_role=str((_user or {}).get("role") or "user"),
                     identity=_identity,
                     live_inbox=inbox,
+                    on_complete=early.callback(),
                 )
                 run_for_delivery = run
                 self._seal_live_inbox(chat_id, inbox)  # later messages are a new turn
@@ -613,25 +634,7 @@ class TelegramBot(
                     attachments=self._live_attachments(inbox, attachments),
                 )
 
-                # Delete status message, deliver final output as new message.
-                # Capture the Telegram Message objects returned by send_message
-                # so the channel bus can map platform_message_ids to the
-                # assistant chat_message row we'll persist below.
-                if stream_msg_id is not None:
-                    with contextlib.suppress(Exception):
-                        await self.bot.delete_message(
-                            chat_id=int(chat_id), message_id=stream_msg_id
-                        )
-
-                sent_messages: list[Any] = []
-                if run.output_text:
-                    sent_messages = await self.send_message(chat_id, run.output_text)
-                elif run.error_message:
-                    sent_messages = await self.send_message(chat_id, f"Error: {run.error_message}")
-                else:
-                    sent_messages = await self.send_message(chat_id, "Done. No output produced.")
-
-                await self._record_interactive_delivery(run, sent_messages)
+                sent_messages: list[Any] = await early.result_or(run)
 
                 assistant_platform_ids = [
                     str(m.message_id)
