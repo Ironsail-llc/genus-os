@@ -73,9 +73,11 @@ has to come after whatever does not. The system prompt ends with a
 `cache_control` breakpoint just before it, and every other route caches nothing
 past the first message.
 
-`ROBOTHOR_CACHE_LAYOUT_V2=1` moves that line out of the system prompt into an
-`[engine]` turn just before the latest user message, never into the operator's
-own text. The system prompt (guardrail summary included), the tool list and the
+`ROBOTHOR_CACHE_LAYOUT_V2=1` moves that line, and the per-run task-context
+record (run id, request, objective), out of the system prompt into an `[engine]`
+turn just before the latest user message, never into the operator's own text.
+The session keeps the record in its own system message, where compaction and
+its readers expect it; only the request sent to the provider changes. The system prompt (guardrail summary included), the tool list and the
 earlier conversation then stay byte-identical between turns. What each route
 gets on top:
 
