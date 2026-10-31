@@ -1732,8 +1732,6 @@ async def main() -> int:
 
     await _stop_coding_jobs()  # unmarked, so the next start resumes them
 
-    await _shutdown_mcp_pool()
-
     await scheduler.stop()
     await hooks.stop()
     if bot is not None:
@@ -1751,6 +1749,10 @@ async def main() -> int:
         await _elector.stop()
     except Exception as e:
         logger.debug("Leader elector stop failed: %s", e)
+
+    # After everything that can dispatch a tool has stopped, or a late call
+    # would respawn a session nothing is left to stop.
+    await _shutdown_mcp_pool()
 
     # Cancel remaining tasks
     for task in pending:

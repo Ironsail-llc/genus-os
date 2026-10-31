@@ -1749,9 +1749,10 @@ class FlagSettings(SettingsGroup):
         False,
         "ROBOTHOR_CONFIG_CACHE",
         "Cache configuration-derived state between runs instead of rebuilding "
-        "it each time: an MCP adapter's tool list lives as long as its session "
-        "(a dropped session, a plugin reload or an explicit refresh refetches "
-        "it), adapters connect concurrently, an HTTP MCP server keeps one "
+        "it each time: an MCP adapter's tool list is reused for up to ten "
+        "minutes while its session lives (a dropped session, a changed adapter "
+        "config, a plugin reload, a failed fetch or an explicit refresh "
+        "refetches it), adapters connect concurrently, an HTTP MCP server keeps one "
         "client, and adapter sessions are pre-warmed at engine start.",
     )
     curator_apply: bool = declare(

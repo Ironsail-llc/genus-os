@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -35,6 +36,10 @@ _KNOWN_PROTOCOLS = (PROTOCOL_LEGACY, PROTOCOL_STATELESS)
 ADAPTER_CONNECT_TIMEOUT_S = 5.0
 #: How many adapters connect at once under ``ROBOTHOR_CONFIG_CACHE``.
 ADAPTER_CONNECT_CONCURRENCY = 4
+#: Longest a cached ``tools/list`` is served. An HTTP session never "drops",
+#: so without an age limit a remote server that changed its tools would keep
+#: its old list until the engine restarted.
+TOOL_LIST_TTL_S = 600.0
 
 
 def _config_cache_enabled() -> bool:
@@ -423,6 +428,7 @@ class McpClientPool:
         self._configs: dict[str, McpServerConfig] = {}
         self._session_locks: dict[str, asyncio.Lock] = {}
         self._tool_cache: dict[str, _ToolListEntry] = {}
+        self._retiring: set[asyncio.Task[None]] = set()
 
     def register(self, config: McpServerConfig) -> None:
         """Register an MCP server configuration (auto-detects transport)."""
@@ -438,7 +444,31 @@ class McpClientPool:
         async with lock:
             return await self._get_session_locked(server_name)
 
+    def _retire(self, server_name: str, session: McpClientSession | McpHttpSession) -> None:
+        """Drop a session that can no longer be trusted and stop it in the background.
+
+        A request cancelled mid-flight leaves its response unread on a stdio
+        pipe, and the next request on that pipe would read it as its own
+        answer. A session built from a config that has since changed runs the
+        old command. Neither is reused.
+        """
+        if self._sessions.get(server_name) is session:
+            del self._sessions[server_name]
+        self._tool_cache.pop(server_name, None)
+        session._epoch += 1
+        task = asyncio.get_running_loop().create_task(session.stop())
+        self._retiring.add(task)
+        task.add_done_callback(self._retiring.discard)
+
     async def _get_session_locked(self, server_name: str) -> McpClientSession | McpHttpSession:
+        existing = self._sessions.get(server_name)
+        if (
+            existing is not None
+            and existing.config != self._configs.get(server_name)
+            and _config_cache_enabled()
+        ):
+            logger.info("MCP server '%s': config changed, restarting its session", server_name)
+            self._retire(server_name, existing)
         if server_name in self._sessions:
             session = self._sessions[server_name]
             # For stdio sessions, check if process is still alive
@@ -480,11 +510,25 @@ class McpClientPool:
 
         key = (session._epoch, self._configs.get(server_name), generation())
         entry = self._tool_cache.get(server_name)
-        if not refresh and entry and entry.session is session and entry.key == key:
+        if (
+            not refresh
+            and entry
+            and entry.session is session
+            and entry.key == key
+            and time.monotonic() - entry.fetched_at < TOOL_LIST_TTL_S
+        ):
             logger.debug("MCP server '%s': tool list served from cache", server_name)
             return list(entry.tools)
-        tools = await session.list_tools()
-        self._tool_cache[server_name] = _ToolListEntry(session=session, key=key, tools=list(tools))
+        try:
+            tools = await session.list_tools()
+        except BaseException:
+            # Timed out, cancelled or failed: nothing is cached, and the
+            # session is not trusted again (see _retire).
+            self._retire(server_name, session)
+            raise
+        self._tool_cache[server_name] = _ToolListEntry(
+            session=session, key=key, tools=list(tools), fetched_at=time.monotonic()
+        )
         return tools
 
     def list_servers(self) -> list[dict[str, Any]]:
@@ -511,13 +555,17 @@ class McpClientPool:
 
     async def shutdown(self) -> None:
         """Stop all MCP server sessions."""
-        for session in self._sessions.values():
+        # Snapshot first: stop() awaits, and a late get_session may insert.
+        sessions = list(self._sessions.values())
+        self._sessions.clear()
+        self._tool_cache.clear()
+        for session in sessions:
             try:
                 await session.stop()
             except Exception as e:
                 logger.warning("Failed to stop MCP session: %s", e)
-        self._sessions.clear()
-        self._tool_cache.clear()
+        if self._retiring:
+            await asyncio.gather(*self._retiring, return_exceptions=True)
 
 
 @dataclass
@@ -525,6 +573,7 @@ class _ToolListEntry:
     session: McpClientSession | McpHttpSession
     key: tuple[Any, ...]
     tools: list[dict[str, Any]]
+    fetched_at: float
 
 
 # Singleton
