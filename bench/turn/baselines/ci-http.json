@@ -1,6 +1,46 @@
 {
-  "empty": true,
   "half": "http",
-  "note": "No baseline recorded yet. Record one on the reference machine with `python -m bench.turn ... --update-baseline` and commit this file.",
-  "summary": {}
+  "host": {
+    "machine": "x86_64",
+    "python": "3.12.15"
+  },
+  "recorded_at": "2026-10-31T14:17:26+00:00",
+  "runs": 20,
+  "summary": {
+    "done_ms": {
+      "n": 20,
+      "p50": 38.52944149998905,
+      "p95": 63.03834674999253
+    },
+    "engine_ready_ms": {
+      "n": 1,
+      "p50": 6070.927017999992,
+      "p95": 6070.927017999992
+    },
+    "finalize_tail_ms": {
+      "n": 20,
+      "p50": 0.4973005000010744,
+      "p95": 0.7828549500004556
+    },
+    "setup_total_ms": {
+      "n": 20,
+      "p50": 4.0,
+      "p95": 10.100000000000001
+    },
+    "tool_ms": {
+      "n": 20,
+      "p50": 0.0,
+      "p95": 0.0
+    },
+    "tool_overhead_ms": {
+      "n": 20,
+      "p50": 3.6655,
+      "p95": 4.233750000000002
+    },
+    "ttft_ms": {
+      "n": 20,
+      "p50": 38.00330949999875,
+      "p95": 62.77268734999099
+    }
+  }
 }
