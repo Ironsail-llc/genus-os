@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-488 settings in 18 groups.
+489 settings in 18 groups.
 
 ## autonomy
 
@@ -417,6 +417,7 @@ Guardrails and feature gates. Ones marked governed are inventoried in `infra/fla
 | `ROBOTHOR_CALENDAR_SEND_UPDATES` | str | `all` | `robothor-engine` | no | legacy | **governed.** Who Google emails when an agent creates or deletes an event with attendees: all, externalOnly, or none. The default sends the invitation — an event nobody was told about is not a meeting, which is how an operator came to be an attendee of a trip he never saw. |
 | `ROBOTHOR_COMPLETION_CONTRACTS_ENABLED` | bool | `false` | `robothor-engine` | no | legacy | Switch for evidence-based completion contracts: a run claiming success must show the tool trace that produced it. |
 | `ROBOTHOR_COMPLETION_CONTRACTS_MODE` | str | `observe` | `robothor-engine` | no | legacy | **governed.** Completion-contract ladder position: observe records unevidenced claims, enforce fails the run that makes one. |
+| `ROBOTHOR_CONFIG_CACHE` | bool | `false` | no | no | unreleased | Reuse an agent's merged and validated manifest, its adapter configs and the digest of a pinned adapter binary between runs while the files they came from are unchanged. A plugin sync, a plugin reload or a defaults reload drops them. |
 | `ROBOTHOR_CONFIG_STRICT_MODE` | str | `observe` | `robothor-engine` | no | 1.66 | What an unknown key in the settings: block of config.yaml does. 'off' ignores it, 'observe' (default for existing installs) logs one warning naming the key and carries on, 'enforce' refuses to start. Inventoried in infra/flags.yaml but deliberately NOT governed: it is read while settings are being resolved, which happens before and without a database. |
 | `ROBOTHOR_CURATOR_APPLY` | bool | `false` | `robothor-engine` | no | legacy | Let the memory curator write its proposed edits. Off, it only proposes — the prompt-trust boundary for accreted content. |
 | `ROBOTHOR_DELIVERABLE_CONTRACT_ENABLED` | bool | `false` | `robothor-engine` | no | legacy | Hold a run to the deliverable it promised, so 'done' means the artefact exists. |

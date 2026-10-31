@@ -207,11 +207,13 @@ def sync_lockfile(force: bool = False) -> dict[str, Any]:
     plugin the operator had turned off. The reason never names the path: which
     distributions are installed is a platform fact, where the file lives is not.
     """
+    from robothor.engine.config import invalidate_config_caches
     from robothor.plugins.lockfile import sync
 
     result = sync(force=force)
     if not result.ok:
         raise LockfileRefusedError(result.refused or "the lockfile could not be written")
+    invalidate_config_caches()
     return {
         "recorded": [row.name for row in result.recorded],
         "added": list(result.added),

@@ -201,6 +201,21 @@ class TestManifestCache:
         assert cfg is not None
         assert cfg.max_iterations == 7
 
+    def test_a_changed_placeholder_variable_is_seen(self, fleet, cache_on, monkeypatch):
+        """``${VAR}`` expands at load; a cached expansion of an old value would
+        be a stale secret."""
+        monkeypatch.setenv("EXAMPLE_AGENT_MODEL", "openrouter/example/model-e")
+        (fleet / "alice.yaml").write_text(
+            MANIFEST.replace("openrouter/example/model-a", "${EXAMPLE_AGENT_MODEL}")
+        )
+        assert load_agent_config("alice", fleet).model_primary.endswith("model-e")
+        monkeypatch.setenv("EXAMPLE_AGENT_MODEL", "openrouter/example/model-f")
+
+        cfg = load_agent_config("alice", fleet)
+
+        assert cfg is not None
+        assert cfg.model_primary == "openrouter/example/model-f"
+
     def test_a_trigger_type_is_its_own_entry(self, fleet, cache_on, parses):
         load_agent_config("alice", fleet)
         parses.clear()
@@ -370,6 +385,18 @@ class TestAdapterCache:
         (a,) = adapters.load_adapters(adapter_dir)
 
         assert a.url == "http://y/_mcp"
+
+    def test_a_changed_placeholder_variable_is_seen(self, adapter_dir, cache_on, monkeypatch):
+        monkeypatch.setenv("EXAMPLE_ADAPTER_URL", "http://one/_mcp")
+        (adapter_dir / "a.yaml").write_text(
+            "name: a\ntransport: http\nurl: ${EXAMPLE_ADAPTER_URL}\nagents: ['*']\n"
+        )
+        adapters.load_adapters(adapter_dir)
+        monkeypatch.setenv("EXAMPLE_ADAPTER_URL", "http://two/_mcp")
+
+        (a,) = adapters.load_adapters(adapter_dir)
+
+        assert a.url == "http://two/_mcp"
 
     def test_a_removed_adapter_is_gone(self, adapter_dir, cache_on):
         adapters.load_adapters(adapter_dir)

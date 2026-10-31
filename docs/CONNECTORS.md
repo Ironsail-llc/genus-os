@@ -179,6 +179,13 @@ Then add the `example_*` tool names to the agent's `tools_allowed` in
 can see them; the allowlist controls *whether* they're exposed). Tools are
 discovered from the bridge's `tools/list` at registration — no per-tool code.
 
+With `ROBOTHOR_CONFIG_CACHE` on, a run takes its adapters from the list the
+engine's extension watcher keeps (it polls the adapter directory every 10
+seconds) instead of re-reading every YAML, and a pinned binary is re-hashed
+only when its inode, size, mtime or ctime changes. An edited adapter therefore
+reaches runs within one poll; `POST /api/extensions/reload` applies it at once.
+A plugin sync or plugin reload makes every adapter be judged again.
+
 ## Verify
 
 ```bash

@@ -241,6 +241,17 @@ def curator_enabled() -> bool:
     return is_rip_enabled(5)
 
 
+def config_cache_enabled() -> bool:
+    """Reuse a parsed manifest, adapter config and pinned-binary digest between runs.
+
+    When on, ``load_agent_config``, ``load_adapters`` and
+    ``verify_adapter_integrity`` key what they built on the stat of the files
+    it came from and skip the read, parse, merge and validation while nothing
+    changed. Off by default; gated by ``ROBOTHOR_CONFIG_CACHE``.
+    """
+    return _env_bool("ROBOTHOR_CONFIG_CACHE")
+
+
 def deferred_tools_threshold() -> int:
     """Min advertised-tool count above which an agent's set is deferred.
 
