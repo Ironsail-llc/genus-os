@@ -103,7 +103,7 @@ from robothor.engine.run_deadline import (
 )
 from robothor.engine.run_finalizer import RunFinalizationMixin
 from robothor.engine.run_identity import _is_service_caller as _is_service_caller
-from robothor.engine.run_identity import attach_tenant_access, resolve_run_identity
+from robothor.engine.run_identity import attach_tenant_access, resolve_run_identity_off_loop
 from robothor.engine.run_lifecycle import RunLifecycleMixin, spawn_post_stall_autodream
 from robothor.engine.run_llm_calls import LLMCallMixin  # noqa: E402
 from robothor.engine.run_pacing import DeadlinePacer, checkin_note, mode_for_run  # noqa: E402
@@ -484,7 +484,7 @@ class AgentRunner(
         # from this class (Phase A / Slice 1); stateless across runs.
         self._llm = LLMClient()
 
-    def _config_or_refusal(
+    async def _config_or_refusal(
         self,
         agent_id: str,
         agent_config: Any,
@@ -513,7 +513,10 @@ class AgentRunner(
         # `load_for_run` reuses the profile already resolved at admission when
         # there is one, and falls back to `load_agent_config_or_reason`. Reading
         # the manifest again here would undo the runtime's single-lookup work.
-        agent_config, loaded_reason = load_for_run(agent_id, self.config.manifest_dir)
+        # A manifest read (file I/O and YAML parsing): off the event loop.
+        agent_config, loaded_reason = await asyncio.to_thread(
+            load_for_run, agent_id, self.config.manifest_dir
+        )
         if agent_config is not None:
             return agent_config, None
         logger.error("Agent run refused: %s", _sanitize(loaded_reason or reason))
@@ -584,7 +587,7 @@ class AgentRunner(
             user_role,
         )
 
-        agent_config, refusal = self._config_or_refusal(
+        agent_config, refusal = await self._config_or_refusal(
             agent_id, agent_config, message, trigger_type, trigger_detail, resolved_tenant
         )
         if refusal is not None:
@@ -610,7 +613,7 @@ class AgentRunner(
         # explicit kwarg > webchat DB resolution > legacy Telegram `|sender:`
         # parse. A spawn_context-carried identity (sub-agent attribution only)
         # is folded in further below, after spawn inheritance is resolved.
-        effective_identity = resolve_run_identity(
+        effective_identity = await resolve_run_identity_off_loop(
             identity,
             agent_id=agent_id,
             trigger_type=trigger_type,
@@ -687,9 +690,9 @@ class AgentRunner(
             TriggerType.WEBCHAT,
         ):
             try:
-                from robothor.engine.run_person_link import resolve_run_person_id
+                from robothor.engine.run_person_link import resolve_run_person_id_off_loop
 
-                session.run.person_id = resolve_run_person_id(
+                session.run.person_id = await resolve_run_person_id_off_loop(
                     trigger_type=trigger_type,
                     trigger_detail=trigger_detail,
                     tenant_id=resolved_tenant,
@@ -703,7 +706,7 @@ class AgentRunner(
         # it onto a fresh SpawnContext for any children this run spawns.
         session.identity = effective_identity
 
-        attach_tenant_access(session.run, resolved_tenant)
+        await attach_tenant_access(session.run, resolved_tenant)
 
         # Build system prompt + warmup in parallel where possible.
         # Both involve sync I/O so we run them concurrently in the executor.

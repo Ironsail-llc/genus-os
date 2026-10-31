@@ -6,10 +6,11 @@ files ``Failed with result 'timeout'``, which ``OnFailure=`` pages — the same
 operator-visible symptom as a crash, for a stop the operator asked for.
 
 The stop path in ``daemon.main`` awaits, in series: the shutdown announcement
-to the operator's chat, the task-registry drain, and the Telegram dispatcher
-stop, then a tail of steps that are not individually bounded (NATS, scheduler,
-hooks, Slack, the leader elector, cancelling what is left). The three awaited
-bounds are slices of ONE budget below, and the margin is what the tail gets.
+to the operator's chat, the task-registry drain, the event writer's last
+flush, and the Telegram dispatcher stop, then a tail of steps that are not
+individually bounded (NATS, scheduler, hooks, Slack, the leader elector,
+cancelling what is left). The awaited bounds are slices of ONE budget below,
+and the margin is what the tail gets.
 ``robothor/engine/tests/test_daemon_shutdown_budget.py`` reads the unit file
 and fails if ``STOP_BUDGET_SECONDS + STOP_MARGIN_SECONDS`` stops fitting
 inside ``TimeoutStopSec``.
@@ -37,8 +38,16 @@ ANNOUNCE_TIMEOUT_SECONDS = 2.0
 #: waiting it out, so this is rarely reached.
 POLLING_STOP_TIMEOUT_SECONDS = 3.0
 
-#: Tracked background tasks (agent runs in flight). Whatever the other two
+#: The event writer's last flush (event_writer.py), after the drain: the audit
+#: and guardrail rows the drained runs queued. Rows still queued when it runs
+#: out are reported, not waited for.
+EVENT_WRITER_FLUSH_TIMEOUT_SECONDS = 1.0
+
+#: Tracked background tasks (agent runs in flight). Whatever the other
 #: slices leave — the drain is the step worth the most time.
 DRAIN_TIMEOUT_SECONDS = (
-    STOP_BUDGET_SECONDS - ANNOUNCE_TIMEOUT_SECONDS - POLLING_STOP_TIMEOUT_SECONDS
+    STOP_BUDGET_SECONDS
+    - ANNOUNCE_TIMEOUT_SECONDS
+    - POLLING_STOP_TIMEOUT_SECONDS
+    - EVENT_WRITER_FLUSH_TIMEOUT_SECONDS
 )

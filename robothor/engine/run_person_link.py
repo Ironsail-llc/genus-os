@@ -18,6 +18,7 @@ on, and they're easy to unit-test against the test DB.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import TYPE_CHECKING, Any
 
@@ -80,6 +81,11 @@ def resolve_run_person_id(
         return None
     pid = row[0] if not isinstance(row, dict) else row.get("person_id")
     return str(pid) if pid is not None else None
+
+
+async def resolve_run_person_id_off_loop(**kwargs: Any) -> str | None:
+    """:func:`resolve_run_person_id` in a worker thread: it is a DB lookup."""
+    return await asyncio.to_thread(resolve_run_person_id, **kwargs)
 
 
 def emit_run_timeline_activity(run: AgentRun) -> None:

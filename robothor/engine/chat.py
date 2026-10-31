@@ -372,7 +372,7 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
     if _runner is None or _config is None:
         return JSONResponse({"error": "Chat not initialized"}, status_code=503)
     auth = _auth_context(request)
-    identity = _resolve_webchat_identity(auth)
+    identity = await asyncio.to_thread(_resolve_webchat_identity, auth)
 
     body = await request.json()
     session_key: str = body.get("session_key", "")
@@ -772,7 +772,7 @@ async def plan_start(request: Request) -> StreamingResponse | JSONResponse:
             {"error": "Chat not initialized", "request_admitted": False}, status_code=503
         )
     auth = _auth_context(request)
-    identity = _resolve_webchat_identity(auth)
+    identity = await asyncio.to_thread(_resolve_webchat_identity, auth)
 
     body = await request.json()
     session_key: str = body.get("session_key", "")
@@ -948,7 +948,7 @@ async def plan_approve(request: Request) -> StreamingResponse | JSONResponse:
     if _runner is None or _config is None:
         return JSONResponse({"error": "Chat not initialized"}, status_code=503)
     auth = _auth_context(request)
-    identity = _resolve_webchat_identity(auth)
+    identity = await asyncio.to_thread(_resolve_webchat_identity, auth)
 
     body = await request.json()
     session_key: str = body.get("session_key", "")
@@ -1231,7 +1231,7 @@ async def plan_iterate(request: Request) -> StreamingResponse | JSONResponse:
     if _runner is None or _config is None:
         return JSONResponse({"error": "Chat not initialized"}, status_code=503)
     auth = _auth_context(request)
-    identity = _resolve_webchat_identity(auth)
+    identity = await asyncio.to_thread(_resolve_webchat_identity, auth)
 
     body = await request.json()
     session_key: str = body.get("session_key", "")
@@ -1423,7 +1423,7 @@ async def deep_start(request: Request) -> StreamingResponse | JSONResponse:
     if _runner is None or _config is None:
         return JSONResponse({"error": "Chat not initialized"}, status_code=503)
     auth = _auth_context(request)
-    identity = _resolve_webchat_identity(auth)
+    identity = await asyncio.to_thread(_resolve_webchat_identity, auth)
 
     body = await request.json()
     session_key: str = body.get("session_key", "")

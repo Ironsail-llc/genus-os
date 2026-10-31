@@ -424,9 +424,15 @@ def _audit_tool_call(
     status: str = "ok",
     error: str | None = None,
 ) -> None:
-    """Record a tool invocation in the audit log (non-blocking, never raises)."""
+    """Record a tool invocation in the audit log. Never raises.
+
+    The row is queued to the engine's event writer (``event_writer.py``) and
+    INSERTed off the event loop, in call order; with no running loop it is
+    written before this returns.
+    """
     try:
         from robothor.audit.logger import log_event
+        from robothor.engine.event_writer import get_event_writer
         from robothor.secrets.redaction import redact
 
         details: dict[str, Any] = {"tenant_id": tenant_id}
@@ -441,7 +447,8 @@ def _audit_tool_call(
             # anything to compare it against. The arguments were never here;
             # this closes the one field that could carry a value.
             details["error"] = redact(error)[:500]
-        log_event(
+        get_event_writer().submit(
+            log_event,
             event_type="agent.tool_call",
             action=tool_name,
             category="agent",

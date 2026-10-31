@@ -48,15 +48,17 @@ def test_the_budget_plus_margin_fits_inside_timeout_stop_sec():
 
 
 def test_the_bounded_steps_sum_to_the_budget():
-    """The three awaited bounds are slices of the one budget, not three
+    """The awaited bounds are slices of the one budget, not three
     numbers that happen to add up today."""
     assert (
         shutdown_budget.ANNOUNCE_TIMEOUT_SECONDS
         + shutdown_budget.DRAIN_TIMEOUT_SECONDS
+        + shutdown_budget.EVENT_WRITER_FLUSH_TIMEOUT_SECONDS
         + shutdown_budget.POLLING_STOP_TIMEOUT_SECONDS
         == shutdown_budget.STOP_BUDGET_SECONDS
     )
     assert shutdown_budget.DRAIN_TIMEOUT_SECONDS > 0
+    assert shutdown_budget.EVENT_WRITER_FLUSH_TIMEOUT_SECONDS > 0
 
 
 def test_main_uses_the_derived_bounds_not_literals():
@@ -66,6 +68,7 @@ def test_main_uses_the_derived_bounds_not_literals():
     text = Path(src).read_text()
     assert "drain(timeout=DRAIN_TIMEOUT_SECONDS)" in text
     assert "polling_stop_timeout=POLLING_STOP_TIMEOUT_SECONDS" in text
+    assert "shutdown(timeout=EVENT_WRITER_FLUSH_TIMEOUT_SECONDS)" in text
     telegram_src = (Path(src).parent / "telegram.py").read_text()
     assert "wait_for(self.dp.stop_polling(), timeout=5)" not in telegram_src, (
         "telegram.stop() still carries its own literal timeout"
