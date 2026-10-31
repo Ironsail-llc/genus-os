@@ -264,3 +264,40 @@ def test_merge_baselines_refuses_mixed_halves(tmp_path: Path) -> None:
 def test_merge_baselines_needs_out(tmp_path: Path) -> None:
     files = [_summary_file(tmp_path / f"{n}.json", "inprocess", {"done_ms": 1.0}) for n in "abc"]
     assert main(["--merge-baselines", *files]) == 2
+
+
+def _failed_result(tmp_path: Path, name: str) -> str:
+    _summary_file(tmp_path / name, "inprocess", {"done_ms": 10.0})
+    loaded = json.loads((tmp_path / name).read_text())
+    loaded["meta"] = [{"turn": 0, "status": "completed"}, {"turn": 1, "status": "failed"}]
+    return _write(tmp_path / name, loaded)
+
+
+def test_merge_baselines_refuses_a_run_with_failed_turns(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    good = [_summary_file(tmp_path / f"{n}.json", "inprocess", {"done_ms": 1.0}) for n in "ab"]
+    bad = _failed_result(tmp_path, "c.json")
+    out = tmp_path / "m.json"
+    assert main(["--merge-baselines", *good, bad, "--out", str(out)]) == 2
+    assert "failed turns" in capsys.readouterr().err
+    assert not out.exists()
+
+
+def test_compare_and_update_refuse_a_saved_result_with_failed_turns(tmp_path: Path) -> None:
+    baseline = tmp_path / "b.json"
+    _write(baseline, _result(10.0))
+    bad = _failed_result(tmp_path, "c.json")
+    assert main(["--compare", bad, "--baseline", str(baseline)]) == 2
+    assert main(["--compare", bad, "--baseline", str(baseline), "--update-baseline"]) == 2
+    assert json.loads(baseline.read_text()) == _result(10.0)
+
+
+def test_a_corrupt_named_baseline_is_an_error(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    baseline = tmp_path / "b.json"
+    baseline.write_text("{not json")
+    current = _write(tmp_path / "c.json", _result(10.0))
+    assert main(["--compare", current, "--baseline", str(baseline)]) == 2
+    assert "not valid JSON" in capsys.readouterr().err

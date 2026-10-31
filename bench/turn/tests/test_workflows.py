@@ -45,3 +45,20 @@ def test_ci_reads_the_ci_baseline_set_not_a_named_file(name: str) -> None:
         script = str(step["run"])
         assert "--baseline-set ci" in script, f"{label}: compare with --baseline-set ci"
         assert "--baseline " not in script, f"{label}: a named --baseline errors when empty"
+
+
+def test_the_gate_runs_on_every_path_that_feeds_the_prompt() -> None:
+    """prompt_tokens is exact, so a skill or template change must meet the gate too."""
+    (label, step), *_ = [
+        (label, step)
+        for label, step in (
+            (f"ci.yml:bench-turn:{s.get('name')}", s)
+            for s in yaml.safe_load((WORKFLOWS / "ci.yml").read_text())["jobs"]["bench-turn"][
+                "steps"
+            ]
+        )
+        if "git diff --name-only" in str(step.get("run", ""))
+    ]
+    script = str(step["run"])
+    for path in ("robothor/engine/", "agents/", "templates/", "robothor/templates/"):
+        assert path in script, f"{label}: {path} changes the prompt but skips the gate"
