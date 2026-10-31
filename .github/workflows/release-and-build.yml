@@ -322,11 +322,35 @@ jobs:
           set -e
 
           version="$(git tag --points-at HEAD --list 'v*' | sort | comm -13 "$tags_before" - | head -n1)"
-          if [ -n "$version" ] && ! git ls-remote --exit-code --tags origin "refs/tags/$version" >/dev/null; then
-            echo "new_release_published=false" >> "$GITHUB_OUTPUT"
-            echo "new_release_version=" >> "$GITHUB_OUTPUT"
-            echo "::error::semantic-release cut $version but the tag is not on the remote (its push failed). Nothing downstream can build it; fix the push and re-run this workflow."
-            exit 1
+          # `ls-remote --exit-code` exits 2 only when no ref matches; any
+          # other failure (network, auth) says nothing about the tag, so it
+          # is retried and, if it never clears, fails as unverified.
+          tag_on_remote() {
+            local attempt code
+            for attempt in 1 2 3; do
+              code=0
+              git ls-remote --exit-code --tags origin "refs/tags/$1" >/dev/null || code=$?
+              case "$code" in
+                0) tag_state=present; return ;;
+                2) tag_state=missing; return ;;
+              esac
+              echo "::warning::git ls-remote exited $code checking $1 on the remote (attempt $attempt of 3)."
+              if [ "$attempt" -lt 3 ]; then sleep "${LS_REMOTE_RETRY_SECONDS:-5}"; fi
+            done
+            tag_state="unverified (git ls-remote exited $code)"
+          }
+          if [ -n "$version" ]; then
+            tag_on_remote "$version"
+            if [ "$tag_state" != present ]; then
+              echo "new_release_published=false" >> "$GITHUB_OUTPUT"
+              echo "new_release_version=" >> "$GITHUB_OUTPUT"
+              if [ "$tag_state" = missing ]; then
+                echo "::error::semantic-release cut $version but the tag is not on the remote (its push failed). Nothing was built, published or promoted. A re-run treats an existing tag as already released, so once $version is on the remote its build and promotion need a manual run."
+              else
+                echo "::error::semantic-release cut $version but this step could not verify the tag on the remote: $tag_state. Nothing was built, published or promoted. If $version is on the remote, a re-run treats it as already released, so its build and promotion need a manual run."
+              fi
+              exit 1
+            fi
           fi
           if [ -n "$version" ]; then
             echo "new_release_published=true" >> "$GITHUB_OUTPUT"
