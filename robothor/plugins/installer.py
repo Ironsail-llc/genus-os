@@ -768,6 +768,7 @@ def _record(plan: InstallPlan, contents: Any, *, lock_path: Path | None) -> dict
         dist_sha256=plan.sha256,
         source=source,
         members_accounted=plan.members_accounted,
+        scan_reasons=plan.reasons,
         path=lock_path,
     )
     return row.as_json() if row is not None else None

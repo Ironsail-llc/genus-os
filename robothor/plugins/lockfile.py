@@ -152,6 +152,11 @@ class LockRow:
     #: nothing" -- which is why it is omitted rather than written as 0. It is
     #: what makes the verdict beside it a measurement instead of a claim.
     members_accounted: int = 0
+    #: What the install scan said about the bytes it classified, one sentence
+    #: per finding. Empty means "nothing recorded reasons" -- a row ``sync``
+    #: wrote, or a scan that found nothing -- which is why it is omitted rather
+    #: than written as ``[]``: the verdict beside it says which of the two.
+    scan_reasons: tuple[str, ...] = ()
     #: Where this came from, or None for anything this platform did not
     #: install. Added after the lockfile shipped, so it is written only when
     #: set and read only when present -- an older lockfile parses unchanged,
@@ -176,6 +181,8 @@ class LockRow:
             row["dist_sha256"] = self.dist_sha256
         if self.members_accounted:
             row["members_accounted"] = self.members_accounted
+        if self.scan_reasons:
+            row["scan_reasons"] = list(self.scan_reasons)
         if self.source is not None:
             row["source"] = self.source.as_json()
         return row
@@ -385,6 +392,14 @@ def _source_from_json(data: Any) -> LockSource | None:
     )
 
 
+def _reasons(value: Any) -> tuple[str, ...]:
+    """The recorded scan reasons, or none. A hand-edited value that is not a
+    list of strings reads as nothing recorded, never as a partial list."""
+    if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+        return ()
+    return tuple(value)
+
+
 def _row_from_json(data: Any) -> LockRow | None:
     if not isinstance(data, dict):
         return None
@@ -408,6 +423,7 @@ def _row_from_json(data: Any) -> LockRow | None:
         members_accounted=(
             int(data["members_accounted"]) if isinstance(data.get("members_accounted"), int) else 0
         ),
+        scan_reasons=_reasons(data.get("scan_reasons")),
         source=_source_from_json(data.get("source")),
     )
 
@@ -699,6 +715,7 @@ def sync(path: Path | None = None, *, force: bool = False) -> SyncResult:
             recorded_at=now,
             dist_sha256=previous.dist_sha256 if previous else "",
             members_accounted=previous.members_accounted if previous else 0,
+            scan_reasons=previous.scan_reasons if previous else (),
             # Carried like `enabled` and `verdict`, and for the same reason:
             # a rebuild that forgot WHERE a plugin came from would make every
             # `genus plugin remove` refuse the next time, or -- worse, if the
@@ -749,6 +766,7 @@ def record_install(
     dist_sha256: str,
     source: LockSource,
     members_accounted: int = 0,
+    scan_reasons: tuple[str, ...] = (),
     path: Path | None = None,
 ) -> LockRow | None:
     """Write the row for a distribution this platform just installed.
@@ -781,6 +799,7 @@ def record_install(
         recorded_at=datetime.now(UTC).isoformat(timespec="seconds"),
         dist_sha256=dist_sha256,
         members_accounted=members_accounted,
+        scan_reasons=tuple(scan_reasons),
         source=source,
     )
     rows = dict(lock.rows)
@@ -841,6 +860,7 @@ def set_enabled(name: str, enabled: bool, path: Path | None = None) -> LockRow |
         recorded_at=row.recorded_at,
         dist_sha256=row.dist_sha256,
         members_accounted=row.members_accounted,
+        scan_reasons=row.scan_reasons,
         source=row.source,
     )
     rows = dict(lock.rows)
