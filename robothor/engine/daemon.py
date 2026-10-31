@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING, Any
 from robothor.engine.config import EngineConfig
 from robothor.engine.health import serve_health, validate_engine_auth_configuration
 from robothor.engine.hooks import EventHooks
+from robothor.engine.lanes import install_lane_executor
 from robothor.engine.runner import AgentRunner
 from robothor.engine.sanitize import sanitize_log as _sanitize
 from robothor.engine.scheduler import CronScheduler
@@ -1421,6 +1422,7 @@ async def main() -> int:
     # daemon running this same code inherits none of them — which is exactly
     # what happened here for four days, silently.
     _harden_and_state_posture()
+    install_lane_executor(asyncio.get_running_loop())  # ROBOTHOR_EXECUTION_LANES
 
     # A tenant env conflict silently discards every default-tenant write in this
     # process (RLS refuses the row, the caller gets None). Say so at boot rather

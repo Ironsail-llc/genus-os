@@ -94,6 +94,26 @@ class Lane(StrEnum):
     BACKGROUND = "background"  # cron, sweeps, memory maintenance; yields first
 
 
+def _lanes_on() -> bool:
+    """``ROBOTHOR_EXECUTION_LANES``. Off when unreadable: today's first-come gate."""
+    try:
+        from robothor.engine.lanes import lanes_enabled
+
+        return lanes_enabled()
+    except Exception:  # noqa: BLE001 - a gate must not fail on a flag read
+        return False
+
+
+def _turn_is_interactive() -> bool:
+    """Is this request made from inside a person's turn (an interactive lane)?"""
+    try:
+        from robothor.engine.lanes import is_interactive
+
+        return is_interactive()
+    except Exception:  # noqa: BLE001
+        return False
+
+
 class LocalCapacityBusyError(RuntimeError):
     """The device is full or too hot to start new work.
 
@@ -122,6 +142,8 @@ class LocalInferenceGate:
         self._slots = max(1, int(slots))
         self._active = 0
         self._paced = False
+        # Interactive requests waiting for a slot (execution lanes only).
+        self._interactive_waiting = 0
 
     # ── capacity ────────────────────────────────────────────────────────
     @property
@@ -146,9 +168,18 @@ class LocalInferenceGate:
             self._slots = new
             self._cv.notify_all()
 
-    def _try_take(self) -> bool:
+    def _try_take(self, priority: bool | None = None) -> bool:
+        """Take a slot. ``priority`` is None with execution lanes off (first come,
+        first served); otherwise True for an interactive request, which alone may
+        use the slot held back when there are two or more, and goes first."""
         with self._cv:
-            if self._active < self._slots:
+            limit = self._slots
+            if priority is False:
+                if self._interactive_waiting > 0:
+                    return False
+                if self._slots >= 2:
+                    limit = self._slots - 1
+            if self._active < limit:
                 self._active += 1
                 return True
             return False
@@ -187,31 +218,56 @@ class LocalInferenceGate:
         return False
 
     # ── acquisition ─────────────────────────────────────────────────────
+    def _priority(self, lane: Lane) -> bool | None:
+        """None with execution lanes off; else whether this request is interactive.
+
+        Pacing still reads ``lane`` as passed: a NORMAL request made inside a
+        person's turn may use the reserved slot, but it is not exempt from heat.
+        """
+        if not _lanes_on():
+            return None
+        return lane is Lane.INTERACTIVE or _turn_is_interactive()
+
+    def _wait_as(self, priority: bool | None, delta: int) -> None:
+        if priority:
+            with self._cv:
+                self._interactive_waiting = max(0, self._interactive_waiting + delta)
+
     def _acquire_blocking(self, lane: Lane, timeout: float | None) -> None:
         deadline = time.monotonic() + (DEFAULT_WAIT_SECONDS if timeout is None else timeout)
         reason = "no slot"
-        while True:
-            if self._paced_now(lane):
-                reason = "device too hot to start new work"
-            elif self._try_take():
-                return
-            if time.monotonic() >= deadline:
-                raise LocalCapacityBusyError(f"local inference gate: {reason}")
-            time.sleep(_POLL_SECONDS)
+        priority = self._priority(lane)
+        self._wait_as(priority, +1)
+        try:
+            while True:
+                if self._paced_now(lane):
+                    reason = "device too hot to start new work"
+                elif self._try_take(priority):
+                    return
+                if time.monotonic() >= deadline:
+                    raise LocalCapacityBusyError(f"local inference gate: {reason}")
+                time.sleep(_POLL_SECONDS)
+        finally:
+            self._wait_as(priority, -1)
 
     async def _acquire_async(self, lane: Lane, timeout: float | None) -> None:
         import asyncio
 
         deadline = time.monotonic() + (DEFAULT_WAIT_SECONDS if timeout is None else timeout)
         reason = "no slot"
-        while True:
-            if self._paced_now(lane):
-                reason = "device too hot to start new work"
-            elif self._try_take():
-                return
-            if time.monotonic() >= deadline:
-                raise LocalCapacityBusyError(f"local inference gate: {reason}")
-            await asyncio.sleep(_POLL_SECONDS)
+        priority = self._priority(lane)
+        self._wait_as(priority, +1)
+        try:
+            while True:
+                if self._paced_now(lane):
+                    reason = "device too hot to start new work"
+                elif self._try_take(priority):
+                    return
+                if time.monotonic() >= deadline:
+                    raise LocalCapacityBusyError(f"local inference gate: {reason}")
+                await asyncio.sleep(_POLL_SECONDS)
+        finally:
+            self._wait_as(priority, -1)
 
     def acquire_sync(self, lane: Lane = Lane.NORMAL, timeout: float | None = None) -> None:
         """Take a slot from synchronous code. Pair with ``release()`` in a finally."""
@@ -238,6 +294,7 @@ class LocalInferenceGate:
                 "slots": self._slots,
                 "active": self._active,
                 "paced": self._paced,
+                "interactive_waiting": self._interactive_waiting,
                 "pace_background_c": PACE_BACKGROUND_C,
                 "pace_all_c": PACE_ALL_C,
                 "resume_c": RESUME_C,
