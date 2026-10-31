@@ -188,4 +188,36 @@ describe("attaching files to a chat turn", () => {
     render(<ChatPanel />);
     expect(await screen.findByTestId("message-attachment")).toHaveTextContent("a.txt");
   });
+
+  it("refuses files pasted or dropped in Plan mode, inline", async () => {
+    engine();
+    render(<ChatPanel />);
+    fireEvent.click(screen.getByTestId("plan-toggle"));
+    fireEvent.paste(screen.getByTestId("chat-input"), { clipboardData: { files: [file("pasted.png", "image/png")] } });
+    expect(await screen.findByTestId("attach-refusal")).toHaveTextContent("Files go with an ordinary message, not in Plan or Deep mode");
+    fireEvent.drop(screen.getByTestId("chat-composer"), { dataTransfer: { files: [file("dropped.txt", "text/plain")] } });
+    await waitFor(() => expect(screen.getByTestId("attach-refusal")).toBeVisible());
+    expect(screen.queryByTestId("attachment-chip")).toBeNull();
+  });
+
+  it("removes pending files, with a note, when Plan mode is switched on", async () => {
+    engine();
+    render(<ChatPanel />);
+    attach(file("notes.md", "text/markdown"));
+    await screen.findByTestId("attachment-chip");
+    fireEvent.click(screen.getByTestId("plan-toggle"));
+    await waitFor(() => expect(screen.queryByTestId("attachment-chip")).toBeNull());
+    expect(screen.getByTestId("attach-refusal")).toHaveTextContent("notes.md was removed");
+    expect(screen.getByTestId("send-button")).toBeDisabled();
+  });
+
+  it("removes pending files when Deep mode is switched on", async () => {
+    engine();
+    render(<ChatPanel />);
+    attach(file("notes.md", "text/markdown"));
+    await screen.findByTestId("attachment-chip");
+    fireEvent.click(screen.getByTestId("deep-toggle"));
+    await waitFor(() => expect(screen.queryByTestId("attachment-chip")).toBeNull());
+    expect(screen.getByTestId("send-button")).toBeDisabled();
+  });
 });

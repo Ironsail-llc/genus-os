@@ -93,6 +93,34 @@ describe("/api/chat/send with attachments", () => {
     expect(engine.chatSend).not.toHaveBeenCalled();
   });
 
+  it("passes an engine refusal through as the engine's own status and words", async () => {
+    const { EngineRefusal } = await import("@/lib/engine/engine-refusal");
+    engine.chatSend.mockRejectedValue(new EngineRefusal(422, "shot.png is not the picture it claims to be"));
+    const res = await send({ message: "x", request_id: REQUEST, attachments: [file("shot.png", "image/png")] });
+    expect(res.status).toBe(422);
+    expect(await res.json()).toEqual({
+      error: "shot.png is not the picture it claims to be",
+      request_admitted: false,
+    });
+  });
+
+  it("422s files sent to join a running turn", async () => {
+    const res = await send({ message: "x", join_running: true, attachments: [file("a.txt", "text/plain")] });
+    expect(res.status).toBe(422);
+    expect((await res.json()).request_admitted).toBe(false);
+    expect(engine.chatSend).not.toHaveBeenCalled();
+  });
+
+  it("413s a body too large to hold three files before reading it", async () => {
+    const { POST } = await import("../send/route");
+    const json = vi.fn();
+    const req = { headers: new Headers({ "content-length": String(30 * 1024 * 1024) }), json } as unknown as Request;
+    const res = await POST(req);
+    expect(res.status).toBe(413);
+    expect(json).not.toHaveBeenCalled();
+    expect(engine.chatSend).not.toHaveBeenCalled();
+  });
+
   it("leaves a plain send's engine call exactly as it was", async () => {
     await send({ message: "hi", request_id: REQUEST });
     expect(engine.chatSend).toHaveBeenCalledWith("hi", "", REQUEST);
