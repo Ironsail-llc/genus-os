@@ -19,8 +19,8 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-def record_deferral(agent_id: str, reason: str, mode: str, priority: str) -> None:
-    """Leave a row saying the gate fired. Best-effort, never raises.
+def record_deferral(agent_id: str, reason: str, mode: str, priority: str) -> str:
+    """Leave a row saying the gate fired; return its run id. Best-effort.
 
     A guardrail event needs a run to point at (``run_id`` is an FK), so this
     writes a terminal SKIPPED run first -- the shape ``runner.py`` already uses
@@ -49,3 +49,4 @@ def record_deferral(agent_id: str, reason: str, mode: str, priority: str) -> Non
         reason=f"{priority}: {reason}",
         mode=mode,
     )
+    return run_id

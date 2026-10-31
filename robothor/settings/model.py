@@ -612,9 +612,32 @@ class ProviderSettings(SettingsGroup):
     hourly_cost_cap_usd: float = declare(
         5.0,
         "ROBOTHOR_HOURLY_COST_CAP_USD",
-        "Fleet-wide spend ceiling per hour. The engine stops dispatching new "
-        "runs once the rolling hour exceeds it.",
+        "Fleet-wide spend ceiling per hour, checked when fleet admission is on. "
+        "Left at the default it only observes: a run admitted past it carries a "
+        "budget_stop step (mode observe) and a warning alert is raised. Set it "
+        "explicitly in the environment, or set ROBOTHOR_HOURLY_COST_CAP_MODE="
+        "enforce, and scheduled runs are deferred once the rolling hour reaches it.",
         restart_required=False,
+    )
+    hourly_cost_cap_mode: str = declare(
+        "",
+        "ROBOTHOR_HOURLY_COST_CAP_MODE",
+        "observe or enforce for the hourly cost cap. Empty: enforce when "
+        "ROBOTHOR_HOURLY_COST_CAP_USD is set explicitly in the environment, "
+        "observe otherwise. observe wins over an explicit cap. Read from the "
+        "environment at engine start.",
+        since="unreleased",
+    )
+    runaway_hard_cap_mode: str = declare(
+        "",
+        "ROBOTHOR_RUNAWAY_HARD_CAP_MODE",
+        "observe or enforce for the per-run runaway-token hard cap "
+        "(ROBOTHOR_RUNAWAY_HARD_CAP_TOKENS, default 5,000,000). Empty: enforce "
+        "when that cap is set explicitly in the environment, observe otherwise, "
+        "which records a budget_stop step and the critical alert once and lets "
+        "the run continue. Read from the environment on every check.",
+        restart_required=False,
+        since="unreleased",
     )
     model_breaker_threshold: int = declare(
         3,

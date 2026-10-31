@@ -34,6 +34,7 @@ from typing import TYPE_CHECKING, Any
 import litellm
 
 from robothor.db.connection import current_tenant_scope
+from robothor.engine import budget_stops
 from robothor.engine.cancel_outcome import _cancel_outcome, terminal_run
 from robothor.engine.chat_backstop import protect_if_human_chat
 from robothor.engine.checkpoint import save_iteration
@@ -1046,6 +1047,7 @@ class AgentRunner(
                 # Record run in database (sync DB call — run in executor to avoid blocking event loop)
                 import psycopg2
 
+                budget_stops.adopt_pending(session)  # admission's notes, held until now
                 try:
                     await asyncio.to_thread(create_run, session.run)
                 except (psycopg2.IntegrityError, psycopg2.errors.InsufficientPrivilege) as e:
@@ -1880,6 +1882,7 @@ class AgentRunner(
             append_engine_note(session, _dl_note)
 
             if _safety_cap > 0 and _iteration >= _safety_cap:
+                budget_stops.record(session, **budget_stops.safety_cap(_safety_cap, _iteration))
                 await self._force_wrapup(
                     session,
                     models,
@@ -1928,6 +1931,8 @@ class AgentRunner(
                 budget_status = session.check_budget(0, agent_config.max_cost_usd)
                 if budget_status == "exhausted" and not session.run.budget_exhausted:
                     session.run.budget_exhausted = True
+                    stop = budget_stops.cost_cap(agent_config.max_cost_usd, session.run)
+                    budget_stops.record(session, **stop)
                     await self._force_wrapup(
                         session,
                         models,

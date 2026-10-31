@@ -22,6 +22,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from robothor.engine import budget_stops
+
 logger = logging.getLogger(__name__)
 
 
@@ -45,12 +47,12 @@ def admission_mode() -> str:
         return "off"
 
 
-def _record_deferral(agent_id: str, reason: str, mode: str, priority: str) -> None:
+def _record_deferral(agent_id: str, reason: str, mode: str, priority: str) -> str | None:
     """Leave a row saying the gate fired. Delegated so this module stays about
     the verdict; see `admission_evidence` for why the row matters."""
     from robothor.engine.admission_evidence import record_deferral
 
-    record_deferral(agent_id, reason, mode, priority)
+    return record_deferral(agent_id, reason, mode, priority)
 
 
 def admit(agent_id: str, agent_config: Any, engine_config: Any = None) -> bool:
@@ -77,13 +79,14 @@ def admit(agent_id: str, agent_config: Any, engine_config: Any = None) -> bool:
     except Exception:  # noqa: BLE001
         logger.exception("Admission check failed for %s — admitting", agent_id)
         return True
-    if allowed:
-        return True
+    if allowed:  # an observing cost cap admits; the crossing rides on the run
+        return budget_stops.observe_hourly_cap(pool, agent_id)
 
     priority_label = getattr(priority, "value", str(priority))
     logger.warning("Deferring %s (%s) [%s]: %s", agent_id, priority_label, mode, reason)
     try:
-        _record_deferral(agent_id, reason, mode, priority_label)
+        run_id = _record_deferral(agent_id, reason, mode, priority_label)
+        budget_stops.record_hourly_cap_refusal(pool, run_id, agent_id, reason, mode)
     except Exception:  # noqa: BLE001 - evidence is telemetry, not a verdict
         logger.debug("Could not record admission deferral for %s", agent_id, exc_info=True)
 

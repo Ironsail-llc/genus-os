@@ -84,6 +84,9 @@ CHECK_MODULES = (
     # real dispatch, because this control has twice been inert with a green
     # suite and an empty evidence table behind it.
     "step_efficiency",
+    # Beside it, and a reading rather than a probe: which budgets, caps and
+    # stops fired in the last day, observed or enforced.
+    "budget_stops",
     # Opt-in: skips on an instance that never set up the Claude Code driver.
     "claude_code",
     # Before the host, because a plugin is code this platform did not write and

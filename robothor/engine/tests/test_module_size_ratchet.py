@@ -755,7 +755,7 @@ CAPS = {
     # Fleet admission (2026-08-27): extracted from the scheduler rather than
     # growing it past its cap — the pool it drives had no production caller for
     # its whole existence, and the wiring is a cohesive unit of its own.
-    "robothor/engine/admission.py": 105,  # +23: observe/enforce ladder; the evidence writer was extracted to admission_evidence.py
+    "robothor/engine/admission.py": 108,  # +23: observe/enforce ladder; the evidence writer was extracted to admission_evidence.py. +3: the two budget_stop call sites; the record itself lives in budget_stops.py
     # The finalization cluster (what a run may spend AFTER its loop ends)
     # was extracted here rather than growing run_budget past its cap.
     "robothor/engine/finalization_budget.py": 160,
