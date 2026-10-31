@@ -103,7 +103,8 @@ def _settings() -> object:
 
 
 def _check_segment(value: str, raw: str) -> str:
-    if not _SEGMENT.match(value) or value in (".", "..") or value.startswith("-"):
+    # No leading dot: ``.home`` and ``.worktrees`` under the workspace are the engine's.
+    if not _SEGMENT.match(value) or value.startswith(("-", ".")):
         raise RepoError(f"remote {raw!r} does not end in an owner/repo pair")
     return value
 
