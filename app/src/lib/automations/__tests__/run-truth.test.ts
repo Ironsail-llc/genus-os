@@ -5,6 +5,7 @@ import {
   deliveredReading,
   durationText,
   nextRunClaim,
+  IN_FLIGHT,
   deliveryCategory,
   normalizeAutomations,
   ranReading,
@@ -266,5 +267,15 @@ describe("one agent run's delivery", () => {
   it("an announcing automation whose last run chose silence is not a failure", () => {
     const quiet = automation({ last_run: run({ delivery_status: "silent", delivered_at: null }) });
     expect(deliveredReading(quiet, NOW).tone).toBe("unknown");
+  });
+});
+
+describe("in flight", () => {
+  it("a run awaiting approval has not finished, everywhere", () => {
+    expect([...IN_FLIGHT].sort()).toEqual(["awaiting_approval", "pending", "running"]);
+    expect(deliveryCategory(null, "awaiting_approval")).toBe("pending");
+    expect(
+      runDeliveredReading(run({ status: "awaiting_approval", delivery_status: null }), NOW).text
+    ).toBe("delivery pending");
   });
 });

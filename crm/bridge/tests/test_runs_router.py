@@ -249,3 +249,8 @@ def test_list_order_has_a_tie_break(controls_client_as_operator, captured_sql):
     """Runs that started at the same instant must not swap between pages."""
     controls_client_as_operator.get("/api/runs?offset=50")
     assert "ORDER BY started_at DESC NULLS LAST, id DESC LIMIT %s OFFSET %s" in captured_sql[-1][0]
+
+
+def test_a_run_awaiting_approval_is_pending_delivery():
+    """`awaiting_approval` has not finished, so no delivery yet is pending."""
+    assert "status IN ('pending', 'running', 'awaiting_approval')" in runs._DELIVERY_CATEGORY_SQL
