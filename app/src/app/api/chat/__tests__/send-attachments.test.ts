@@ -104,6 +104,17 @@ describe("/api/chat/send with attachments", () => {
     });
   });
 
+  it("answers 502 with the engine's words when the engine failed before admitting the turn", async () => {
+    const { EngineRefusal } = await import("@/lib/engine/engine-refusal");
+    engine.chatSend.mockRejectedValue(new EngineRefusal(500, "a.txt could not be kept; try sending it again"));
+    const res = await send({ message: "x", request_id: REQUEST, attachments: [file("a.txt", "text/plain")] });
+    expect(res.status).toBe(502);
+    expect(await res.json()).toEqual({
+      error: "a.txt could not be kept; try sending it again",
+      request_admitted: false,
+    });
+  });
+
   it("422s files sent to join a running turn", async () => {
     const res = await send({ message: "x", join_running: true, attachments: [file("a.txt", "text/plain")] });
     expect(res.status).toBe(422);

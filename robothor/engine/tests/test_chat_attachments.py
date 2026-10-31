@@ -309,6 +309,29 @@ class TestFailures:
         mock_runner.execute.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_a_file_kept_by_an_earlier_turn_survives_a_failed_one(
+        self, client, engine_config, mock_runner
+    ) -> None:
+        first = _file("a.txt", "text/plain", b"one")
+        await _send(client, "keep", [first])
+        kept = _inbox(engine_config)
+        assert len(kept) == 1
+        real = attachments.save_attachment
+        calls = {"n": 0}
+
+        def second_fails(**kwargs):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                raise OSError("disk full")
+            return real(**kwargs)
+
+        with patch("robothor.engine.attachments.save_attachment", side_effect=second_fails):
+            res = await _send(client, "again", [first, _file("b.txt", "text/plain", b"two")])
+        assert res.status_code == 500
+        assert _inbox(engine_config) == kept
+        assert kept[0].read_bytes() == b"one"
+
+    @pytest.mark.asyncio
     async def test_a_failed_extraction_still_sends_the_file(
         self, client, engine_config, mock_runner
     ) -> None:

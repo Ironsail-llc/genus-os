@@ -30,6 +30,17 @@ describe("chatSend and an engine refusal", () => {
     expect(err.message).toBe("shot.png is not the picture it claims to be");
   });
 
+  it("raises an EngineRefusal for a 500 that says no turn started", async () => {
+    global.fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ error: "a.txt could not be kept; try sending it again", request_admitted: false }), { status: 500 }),
+    );
+    const { EngineRefusal } = await import("../engine-refusal");
+    const err = await (await client()).chatSend("x", "", undefined, false, []).catch((e) => e);
+    expect(err).toBeInstanceOf(EngineRefusal);
+    expect(err.status).toBe(500);
+    expect(err.message).toBe("a.txt could not be kept; try sending it again");
+  });
+
   it("still treats a 500 as an engine error", async () => {
     global.fetch = vi.fn().mockResolvedValue(new Response("boom", { status: 500, statusText: "Internal Server Error" }));
     const { EngineRefusal } = await import("../engine-refusal");
