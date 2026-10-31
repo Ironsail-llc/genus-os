@@ -667,18 +667,24 @@ person's turn needs. `ROBOTHOR_EXECUTION_LANES=1` splits work into two lanes.
 **Interactive** is a run a person is waiting on: Telegram, the chat panel,
 Slack, plugin channels, the IDE and the CLI. **Background** is everything else:
 cron, hooks, workflows, autodream, the curator, memory ingest and embeddings,
-and the post-turn saves. Each lane has its own run limit
-(`ROBOTHOR_MAX_CONCURRENT_INTERACTIVE`, default 3;
-`ROBOTHOR_MAX_CONCURRENT_BACKGROUND`, default 2) and its own thread workers, so
-blocking background work cannot delay a turn's own blocking calls. A background
-run asking for a slot while an interactive one waits holds back for up to
-`ROBOTHOR_LANE_BACKGROUND_YIELD_MS` (default 200). On a device with two or more
+and the post-turn saves. Background runs are capped by `ROBOTHOR_MAX_CONCURRENT_BACKGROUND` (default 2);
+interactive runs are uncapped by default, as they are without lanes
+(`ROBOTHOR_MAX_CONCURRENT_INTERACTIVE`, default 0). A cap there queues a turn,
+with no deadline, while other turns hold the slots, including turns waiting on
+an `ask_user` answer. Each lane has its own thread workers, so blocking
+background work cannot delay a turn's own blocking calls. When the interactive
+lane is capped and a turn is waiting, a background run asking for a slot holds
+back for up to `ROBOTHOR_LANE_BACKGROUND_YIELD_MS` (default 200): this frees no
+interactive slot, but leaves the loop, the CPU and local inference to the turns
+already running. On a device with two or more
 local inference slots, one is kept for interactive requests, and a waiting
 interactive request is served first.
 
 A run waiting for its lane has not started: no run row, timeout or budget is
-touched while it waits. A sub-agent started from inside a run shares its
-parent's slot. The thread split is installed when the engine starts, so turn
+touched while it waits. A sub-agent a run waits on shares its parent's slot.
+Work a turn leaves running after it ends, such as the background review fork,
+is background: its thread calls go to background workers, and a run it starts
+takes its own background slot. The thread split is installed when the engine starts, so turn
 the flag on or off with a restart. Occupancy is on `GET /health` under
 `execution_lanes` and in the `robothor_lane_active` and `robothor_lane_waiting`
 gauges ([Observability](OBSERVABILITY.md)). With the flag off nothing changes.
