@@ -45,9 +45,7 @@ def _succeeds(argv: list[str], expect: str) -> bool:
 @cache
 def _gnu_coreutils() -> bool:
     """GNU spellings the host scripts use: ``date -d``, ``stat -c``, ``touch -d``."""
-    return _succeeds(["date", "-d", "@0", "+%s"], "0") and _succeeds(
-        ["stat", "-c", "%n", "/"], "/"
-    )
+    return _succeeds(["date", "-d", "@0", "+%s"], "0") and _succeeds(["stat", "-c", "%n", "/"], "/")
 
 
 @cache
@@ -92,4 +90,9 @@ needs_linux_prctl = pytest.mark.skipif(
 needs_peer_credentials = pytest.mark.skipif(
     not hasattr(socket, "SO_PEERCRED"),
     reason="needs SO_PEERCRED (Linux) to identify the peer; this kernel refuses every peer",
+)
+
+#: The abstract Unix-socket namespace (``\0name``); Linux only.
+needs_abstract_sockets = pytest.mark.skipif(
+    sys.platform != "linux", reason="needs the Linux abstract Unix-socket namespace"
 )

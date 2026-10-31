@@ -37,6 +37,7 @@ import sys
 import pytest
 
 from robothor.engine.secret_paths import exec_reads_secret
+from tests.platform_capabilities import needs_linux_prctl
 
 FAKE = "ghp_FAKE0000CANARYaaaaaaaaaaaaaaaaaaa"
 
@@ -44,6 +45,7 @@ FAKE = "ghp_FAKE0000CANARYaaaaaaaaaaaaaaaaaaa"
 # ── 1. the engine is not readable through procfs ─────────────────────────────
 
 
+@needs_linux_prctl
 def test_the_engine_hardens_its_own_procfs_entry():
     """``harden_process`` is what makes the probe fail.
 
