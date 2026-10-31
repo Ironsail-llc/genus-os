@@ -1013,9 +1013,11 @@ Kubernetes and Docker Compose, use the container runtime's own log stream.
 
 **Where a container's logs are.** Pods and containers write their logs to
 standard output, and the cluster's log tool (`kubectl logs`, `docker compose
-logs`, or the log service the cluster ships to) is where they are read. The
-unavailable answer of `GET /api/logs/units` says so in a `hint`, and carries
-`logs_url`: the value of `GENUS_LOGS_URL`, or `null` when it is unset. Set it to
+logs`, or the log service the cluster ships to) is where they are read. When
+there is no `journalctl` at all, the unavailable answer of `GET /api/logs/units`
+says so in a `hint`; a `journalctl` that is installed but fails gets no hint,
+because that is a systemd host. Every unavailable answer carries `logs_url`:
+the value of `GENUS_LOGS_URL`, or `null` when it is unset. Set it to
 the page where this deployment's logs are viewed and the Logs page links to it.
 With the Helm chart, set `logs.url`; the chart renders `GENUS_LOGS_URL` on the
 bridge only when the value is non-empty. The URL is shown to every operator, so
