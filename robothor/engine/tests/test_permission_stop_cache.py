@@ -51,7 +51,7 @@ class _CountingDB:
         return sum(1 for sql in self.statements if f"FROM {table}" in sql)
 
     @contextmanager
-    def connect(self) -> Any:
+    def connect(self, *args: Any, **kwargs: Any) -> Any:
         if self.fail:
             raise OSError("synthetic database outage")
         db = self
@@ -236,7 +236,7 @@ def test_a_failed_read_denies_and_is_not_cached(db):
 
 
 @contextmanager
-def _committing_cursor() -> Any:
+def _committing_cursor(*args: Any, **kwargs: Any) -> Any:
     class _Cursor:
         def execute(self, sql: str, params: Any = None) -> None:
             pass
