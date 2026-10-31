@@ -506,3 +506,12 @@ def test_entities_are_deduplicated_ignoring_case(
     )
     _, params = _update(cursor)
     assert ["Alice", "Tea"] in params
+
+
+def test_the_edit_limits_say_what_they_allow(controls_client_as_operator, no_db):
+    """2000 characters and a 200-character name are accepted, so "under" was wrong."""
+    client = controls_client_as_operator
+    text = client.patch(EDIT, json={"fact_text": "x" * 2001, "reason": "too long"}).json()
+    assert "at most 2000" in text["detail"]
+    name = client.patch(EDIT, json={"entities": ["x" * 201], "reason": "too long"}).json()
+    assert "at most 200" in name["detail"]
