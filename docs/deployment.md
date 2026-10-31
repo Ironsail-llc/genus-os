@@ -1005,6 +1005,13 @@ embedding gets one attempt within 8 seconds, so an unreachable provider costs
 the save at most that long rather than outlasting the dashboard's 30-second
 request timeout.
 
+**An operator-confirmed fact is the operator's word, and no automatic path
+retires it.** When a later extraction contradicts or updates it, the new
+extraction is stored already superseded by the confirmed fact, so the
+pipeline's reading stays on record while the operator's stays active; the
+nightly quality prune, consolidation, dechurn and resolution capture all skip
+it. Only an operator's forget (or another edit) changes it.
+
 The bridge needs `ROBOTHOR_OLLAMA_URL` and `ROBOTHOR_EMBEDDING_MODEL` to reach
 the embedding provider; without them it tries `127.0.0.1:11434`. On the Helm
 chart the `ollama` egress class admits the bridge, but the chart sets neither
