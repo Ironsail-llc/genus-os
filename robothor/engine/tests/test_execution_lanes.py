@@ -326,7 +326,9 @@ class TestOccupancyIsVisible:
         monkeypatch.delenv("ROBOTHOR_MAX_CONCURRENT_INTERACTIVE", raising=False)
         monkeypatch.delenv("ROBOTHOR_MAX_CONCURRENT_BACKGROUND", raising=False)
         snap = lanes.get_lanes().snapshot()
-        assert snap["interactive"]["limit"] == 3
+        # 0 = uncapped: interactive turns were never queued before, and a cap
+        # would queue a person behind three open ask_user questions.
+        assert snap["interactive"]["limit"] == 0
         assert snap["background"]["limit"] == 2
 
     async def test_prometheus_gauges_track_occupancy(self, lanes_on):
@@ -375,3 +377,114 @@ class TestCancelledWaiters:
         assert pool.snapshot()["background"]["active"] == 1
         pool.release(Lane.BACKGROUND)
         assert pool.snapshot()["background"]["active"] == 0
+
+
+class TestInteractiveIsUncappedByDefault:
+    async def test_ten_concurrent_interactive_runs_all_start_at_once(self, lanes_on, monkeypatch):
+        monkeypatch.delenv("ROBOTHOR_MAX_CONCURRENT_INTERACTIVE", raising=False)
+        pool = lanes.get_lanes()
+        release = asyncio.Event()
+        started = [asyncio.Event() for _ in range(10)]
+        holders = [
+            asyncio.create_task(_hold(pool, Lane.INTERACTIVE, ev, release)) for ev in started
+        ]
+        t0 = time.perf_counter()
+        await asyncio.wait_for(asyncio.gather(*(ev.wait() for ev in started)), timeout=1.0)
+        assert time.perf_counter() - t0 < 0.1
+        assert pool.snapshot()["interactive"] == {"active": 10, "waiting": 0, "limit": 0}
+        release.set()
+        await asyncio.gather(*holders)
+
+    async def test_an_explicit_interactive_cap_still_bounds(self, lanes_on):
+        pool = ExecutionLanes(interactive_limit=1, background_limit=1, yield_ms=0)
+        release = asyncio.Event()
+        first = asyncio.Event()
+        holder = asyncio.create_task(_hold(pool, Lane.INTERACTIVE, first, release))
+        await first.wait()
+        second = asyncio.Event()
+        waiter = asyncio.create_task(_hold(pool, Lane.INTERACTIVE, second, release))
+        await asyncio.sleep(0.05)
+        assert not second.is_set()
+        release.set()
+        await asyncio.gather(holder, waiter)
+
+
+class TestWorkThatOutlivesItsRun:
+    """A task created inside a run must not ride on the run's slot after it ends."""
+
+    async def test_a_run_started_after_the_parent_released_takes_its_own_slot(
+        self, lanes_on, monkeypatch
+    ):
+        pool = ExecutionLanes(interactive_limit=0, background_limit=2, yield_ms=0)
+        monkeypatch.setattr(lanes, "_LANES", pool)
+        parent_done = asyncio.Event()
+        seen: dict[str, object] = {}
+        forks: list[asyncio.Task[object]] = []
+
+        class FakeRunner:
+            @lanes.lane_gated
+            async def execute(self, agent_id, message, trigger_type=TriggerType.MANUAL):
+                if agent_id == "parent":
+                    forks.append(asyncio.create_task(fork(self)))
+                else:
+                    seen["background_active"] = pool.snapshot()["background"]["active"]
+                    seen["lane"] = lanes.current_lane()
+                return agent_id
+
+        async def fork(runner):
+            await parent_done.wait()
+            return await runner.execute("review", "r", trigger_type=TriggerType.SUB_AGENT)
+
+        await FakeRunner().execute("parent", "hi", trigger_type=TriggerType.WEBCHAT)
+        parent_done.set()
+        await asyncio.wait_for(forks[0], timeout=1.0)
+        assert seen == {"background_active": 1, "lane": Lane.BACKGROUND}
+
+    async def test_work_left_running_after_an_interactive_run_is_background(self, lanes_on):
+        """Its thread calls and local inference must not count as a person's turn."""
+        pool = ExecutionLanes(interactive_limit=0, background_limit=2, yield_ms=0)
+        parent_done = asyncio.Event()
+        seen: list[object] = []
+
+        async def leftover():
+            await parent_done.wait()
+            seen.append(lanes.current_lane())
+            seen.append(lanes.is_interactive())
+
+        tasks = []
+
+        class FakeRunner:
+            @lanes.lane_gated
+            async def execute(self, agent_id, message, trigger_type=TriggerType.MANUAL):
+                tasks.append(asyncio.create_task(leftover()))
+                return agent_id
+
+        import robothor.engine.lanes as mod
+
+        mod._LANES = pool
+        await FakeRunner().execute("parent", "hi", trigger_type=TriggerType.TELEGRAM)
+        parent_done.set()
+        await tasks[0]
+        assert seen == [Lane.BACKGROUND, False]
+
+    async def test_the_background_review_fork_is_detached_from_the_turn(
+        self, lanes_on, monkeypatch
+    ):
+        from robothor.engine import background_review
+
+        seen: list[object] = []
+
+        async def fake_review(session, **kwargs):
+            seen.append(lanes.current_lane())
+            seen.append(lanes._HOLDING.get())
+            return
+
+        monkeypatch.setattr(background_review, "spawn_background_review", fake_review)
+        with lanes.in_lane(Lane.INTERACTIVE):
+            token = lanes._HOLDING.set(lanes._Holder(Lane.INTERACTIVE))
+            try:
+                task = background_review.fire_and_forget(SimpleNamespace(run_id="r1"))
+            finally:
+                lanes._HOLDING.reset(token)
+        await task
+        assert seen == [Lane.BACKGROUND, None]
