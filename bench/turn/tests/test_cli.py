@@ -40,6 +40,8 @@ def test_defaults() -> None:
     assert args.threshold == pytest.approx(0.10)
     assert args.half == "both"
     assert args.engine_url == "http://127.0.0.1:18800"
+    # A few ms of scheduler noise on a sub-10 ms metric is not a regression.
+    assert args.min_delta == pytest.approx(5.0)
 
 
 def _write(path: Path, data: dict) -> str:
