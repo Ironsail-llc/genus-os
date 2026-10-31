@@ -192,7 +192,8 @@ starts at 5 seconds and backs off to a minute, for up to about 50 minutes
 before it is parked in `<stream>:dlq`. Each event is handled off the consumer
 loop, up to 100 at a time: the event's workflows start first, its agents run
 side by side, and one agent's hook runs take turns. Hook agent runs share the
-fleet's `max_concurrent_agents` limit. A long run holds up only later events
+fleet's `max_concurrent_agents` limit (and, with `ROBOTHOR_EXECUTION_LANES` on, a
+background lane slot; see [Configuration](configuration.md)). A long run holds up only later events
 for the same agent, unless 100 of them pile up, when the consumer waits. An
 event read but not yet acknowledged when the engine stops or crashes stays
 pending in Redis and is handled again at the next start if it is under an hour
