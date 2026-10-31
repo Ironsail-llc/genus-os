@@ -11,6 +11,8 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 import robothor.memory.lifecycle as lc
 from robothor.memory.lifecycle import importance_floor
 
@@ -71,3 +73,61 @@ class TestImportanceFloor:
     def test_routine_not_floored(self) -> None:
         assert importance_floor("Bob prefers tea over coffee") == 0.0
         assert importance_floor("") == 0.0
+
+
+class TestOperatorConfirmedFactsAreLeftAlone:
+    """An operator-confirmed fact is never a prune target or a consolidation source."""
+
+    @pytest.mark.asyncio
+    async def test_prune_skips_confirmed_facts_in_both_updates(self) -> None:
+        from robothor.memory.confirmed import NOT_OPERATOR_CONFIRMED_SQL
+
+        ctx, cur = _mock_conn()
+        cur.fetchall.return_value = []
+        with patch.object(lc, "get_connection", return_value=ctx):
+            await lc.prune_low_quality_facts()
+        updates = [c.args[0] for c in cur.execute.call_args_list if "UPDATE" in c.args[0]]
+        assert len(updates) == 2
+        assert all(NOT_OPERATOR_CONFIRMED_SQL in s for s in updates)
+
+    @pytest.mark.asyncio
+    async def test_consolidation_candidates_skip_confirmed_facts(self, monkeypatch: Any) -> None:
+        from robothor.memory.confirmed import NOT_OPERATOR_CONFIRMED_SQL
+
+        monkeypatch.delenv("MEMORY_CONSOLIDATION_GUARD", raising=False)
+        ctx, cur = _mock_conn()
+        seeds = [
+            {"id": i, "fact_text": f"fact {i}", "category": "x", "entities": [], "embedding": [0]}
+            for i in (1, 2, 3)
+        ]
+        cur.fetchall.side_effect = [seeds, [], [], []]
+        with (
+            patch.object(lc, "get_connection", return_value=ctx),
+            patch.object(lc, "apply_hnsw_session"),
+        ):
+            await lc.find_consolidation_candidates(min_group_size=3)
+        selects = [c.args[0] for c in cur.execute.call_args_list]
+        assert len(selects) == 4  # the seed query and one neighbour query per seed
+        assert all(NOT_OPERATOR_CONFIRMED_SQL in s for s in selects)
+
+    @pytest.mark.parametrize("guard", ["0", "1"])
+    def test_supersession_write_skips_a_fact_confirmed_after_selection(
+        self, monkeypatch: Any, guard: str
+    ) -> None:
+        # Candidate selection and this write are separated by the LLM call; a
+        # fact the operator confirms in that window must not be retired.
+        from robothor.memory.confirmed import NOT_OPERATOR_CONFIRMED_SQL
+
+        monkeypatch.setenv("MEMORY_CONSOLIDATION_GUARD", guard)
+        ctx, cur = _mock_conn()
+        cur.fetchone.side_effect = [(0.5,)]
+        with (
+            patch.object(lc, "get_connection", return_value=ctx),
+            patch.object(lc, "_chain_depth", return_value=0),
+        ):
+            lc._apply_consolidation_supersession(99, [1, 2])
+        supersedes = [
+            c.args[0] for c in cur.execute.call_args_list if "SET is_active = FALSE" in c.args[0]
+        ]
+        assert len(supersedes) == 2
+        assert all(NOT_OPERATOR_CONFIRMED_SQL in s for s in supersedes)

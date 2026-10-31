@@ -363,8 +363,13 @@ class AgentSession:
         conversation_history: list[dict[str, Any]] | None = None,
         engine_context: str | None = None,
         autonomy_active: bool = False,
+        user_images: list[dict[str, Any]] | None = None,
     ) -> None:
         """Initialize the session with system prompt and user message.
+
+        ``user_images`` are image blocks sent WITH the user turn (files the
+        operator attached in webchat); the turn's content becomes a list of a
+        text block and those blocks.
 
         ``engine_context`` is the per-turn context the ENGINE assembles for
         the model (the warmup preamble: CURRENT USER block, memory blocks,
@@ -447,7 +452,12 @@ class AgentSession:
             {"role": "system", "content": system_prompt},
             *rendered_history,
             *([{"role": ENGINE_CONTEXT_ROLE, "content": engine_context}] if engine_context else []),
-            {"role": "user", "content": user_message},
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": user_message}, *user_images]
+                if user_images
+                else user_message,
+            },
         ]
         from robothor.engine.task_context import install_context, make_context
 

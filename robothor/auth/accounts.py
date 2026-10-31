@@ -1400,7 +1400,7 @@ def move_account(
             }
             # Filed under the TARGET tenant, so the trail of the tenant the
             # account now belongs to shows how it arrived; both ids are in
-            # ``details``. The column is migration 162's; on a database that
+            # ``details``. The column is migration 163's; on a database that
             # has not applied it yet the row is written without it.
             cur.execute(
                 "SELECT 1 AS present FROM pg_attribute "
