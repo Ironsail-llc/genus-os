@@ -9,6 +9,7 @@ import { ConfigPage } from "@/components/views/settings/config-page";
 import { FlagsPage } from "@/components/views/settings/flags-page";
 import { PluginsPage } from "@/components/views/settings/plugins-page";
 import { ProvidersPage } from "@/components/views/settings/providers-page";
+import { SecretsPage } from "@/components/views/settings/secrets-page";
 import { UsersPage } from "@/components/views/settings/users-page";
 import {
   isOperatorRole,
@@ -68,6 +69,13 @@ function PageBody({
     // API: only an owner may be offered the owner role. UX only — the bridge
     // refuses the same change independently, with a sentence this page prints.
     return <UsersPage visible role={role} />;
+  }
+
+  if (page.id === "secrets") {
+    // Names, sources, last change and readers -- never a value. The role
+    // travels so a non-operator is told the page is not theirs without a
+    // request being made; the bridge refuses one independently.
+    return <SecretsPage visible role={role} />;
   }
 
   if (page.id === "config") {
