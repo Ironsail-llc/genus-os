@@ -36,6 +36,20 @@ _AGENT_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
 
 def _proxied(path: str) -> JSONResponse:
     status, body = asyncio.run(engine_request("GET", path))
+    if status in (401, 403):
+        # The engine refusing the BRIDGE's token or scope, not the caller:
+        # passed through, the dialog would tell an operator their session
+        # ended or that only an operator may look. The caller's own refusal
+        # is ``require_operator``'s 403, which never reaches here.
+        status, body = (
+            502,
+            {
+                "error": (
+                    f"the engine refused the bridge's credentials (HTTP {status}); "
+                    "check the shared signing key"
+                )
+            },
+        )
     return JSONResponse(status_code=status, content=body, headers={"Cache-Control": "no-store"})
 
 

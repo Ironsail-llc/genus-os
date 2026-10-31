@@ -371,7 +371,17 @@ export function ToolsPopover({
         return;
       }
       if (tools.status >= 400 || servers.status >= 400) {
-        settle({ state: "error", message: "The engine did not answer. Check that it is running." });
+        // The bridge's own words when it has any (an engine that refused the
+        // bridge's credentials, say); its bare "engine unavailable" gets the
+        // sentence an operator can act on.
+        const failed = errorText(tools.status >= 400 ? tools.body : servers.body);
+        settle({
+          state: "error",
+          message:
+            failed && failed !== "engine unavailable"
+              ? failed
+              : "The engine did not answer. Check that it is running.",
+        });
         return;
       }
       if (!isToolsReply(tools.body)) {
