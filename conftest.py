@@ -11,10 +11,11 @@ can request them by name without per-suite duplication.
 
 from __future__ import annotations
 
+import os as _os
+
 # Pin DEFAULT_TENANT before any robothor import — the value is captured by
 # function-default kwargs at dal.py import time.
 import pytest
-import os as _os
 
 _os.environ["ROBOTHOR_DEFAULT_TENANT"] = "default"
 
@@ -38,8 +39,6 @@ _os.environ.setdefault("ROBOTHOR_DB_NAME", "robothor_test")
 
 import contextlib  # noqa: E402
 import uuid  # noqa: E402
-
-import pytest  # noqa: E402
 
 # Bridge tests are run from crm/bridge/ as their own rootdir; the tests
 # package isn't on their sys.path. Integration fixtures are optional there,
@@ -229,6 +228,24 @@ def plugin_lockfile(monkeypatch, tmp_path):
 
     lockfile.forget_warnings()
     return path
+
+
+@pytest.fixture(autouse=True)
+def _no_plugin_grants(monkeypatch):
+    """Never let ``load_plugins()`` reach a database for the root's plugin grants.
+
+    The loader asks ``robothor.plugins.grants.forced_states()`` on every load,
+    which reads ``tenant_plugin_grants`` once per plugin generation. Left alone,
+    every plugin test would open a connection to whatever database this box
+    points at, and a grant on it would change what the suite measures. A test
+    that wants grants replaces ``grants._read`` itself.
+    """
+    from robothor.plugins import grants
+
+    monkeypatch.setattr(grants, "_read", lambda tenant_id: {})
+    grants.reset_forced_cache()
+    yield
+    grants.reset_forced_cache()
 
 
 @pytest.fixture(autouse=True)

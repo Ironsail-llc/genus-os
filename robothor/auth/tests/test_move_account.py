@@ -77,6 +77,9 @@ def _conn(
 ) -> tuple[MagicMock, _Cursor]:
     cur = _Cursor(
         [
+            # Tenant ancestry (the root-shell guard): every tenant here is
+            # under acme-parent. First, because it also reads crm_tenants.
+            ("WITH RECURSIVE", {"id": "acme-parent"}),
             ("role = 'owner'", {"n": other_owners}),
             ("COUNT(*)", {"n": 1}),
             ("FROM user_accounts WHERE tenant_id", {"id": "x"} if email_taken else None),
@@ -90,6 +93,24 @@ def _conn(
     conn.cursor.return_value = cur
     conn.autocommit = False
     return conn, cur
+
+
+@pytest.fixture(autouse=True)
+def _root_shell(monkeypatch) -> None:
+    """These tests run as the root's shell; the guard has its own tests."""
+    monkeypatch.setenv("ROBOTHOR_TENANT_ID", "acme-parent")
+
+
+def test_refuses_a_shell_bound_to_a_child(monkeypatch) -> None:
+    monkeypatch.setenv("ROBOTHOR_TENANT_ID", "acme-child-a")
+    conn, cur = _conn()
+    _refused(conn, cur, "root")
+
+
+def test_refuses_a_dry_run_from_a_child_shell_too(monkeypatch) -> None:
+    monkeypatch.setenv("ROBOTHOR_TENANT_ID", "acme-child-a")
+    conn, cur = _conn()
+    _refused(conn, cur, "root", dry_run=True)
 
 
 def _move(conn: MagicMock, **kwargs: Any) -> accounts.MoveReport:

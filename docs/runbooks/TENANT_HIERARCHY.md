@@ -4,8 +4,8 @@ One deployment can serve a **parent** tenant and any number of **child**
 tenants. The parent's owner and admins can switch into a child from the Helm;
 children never see each other or the parent. This runbook is the operator's
 side: what the pieces are, how to add a child, how people land in the right
-tenant, how to move one who landed in the wrong one, and how to prove it all
-holds.
+tenant, how to move one who landed in the wrong one, how to move a workload's
+history to a child's engine, and how to prove it all holds.
 
 The examples use a root tenant `acme-parent` with one child `acme-child-a`,
 and the address `alice@example.com`. Substitute your own. The root is the
@@ -99,6 +99,7 @@ set on each:
 |---|---|---|
 | The child's engine | `ROBOTHOR_TENANT_ID` and `ROBOTHOR_DEFAULT_TENANT` | the child's id (both the same) |
 | The child's engine | `GENUS_EVENT_CONSUMER_GROUP` | `engine-<child id>`, so engines do not share one event-consumer group |
+| The child's engine | `ROBOTHOR_WORKSPACE` | a directory of its own, never the root's. The engine keeps its plugin lockfile there, and a child admin enables and disables plugins in it; on a shared workspace that would reach the root and every sibling. (`ROBOTHOR_PLUGIN_LOCKFILE` alone also separates the lockfile.) |
 | The bridge | `GENUS_TENANT_ENGINE_URLS` | a JSON object mapping each child id to its engine's URL, e.g. `{"acme-child-a": "http://127.0.0.1:18811"}` |
 | The bridge AND every engine | `GENUS_TENANT_SWITCH_MODE` | the same value everywhere (`off`, `observe` or `enforce`) |
 
@@ -131,6 +132,49 @@ Every tenant shares one vault master key. A credential the bridge stores while a
 - **Google Workspace** is not a vault row: it is a file secret mounted into one
   engine (`engine.googleWorkspace` in the chart). Give each tenant's engine its
   own secret. Two engines sharing one would read and send one mailbox for both.
+
+## Plugins are per tenant
+
+Each tenant's engine loads plugins from its own lockfile, so the child decides
+which installed plugins it runs. The chart gives every cell its own workspace,
+and with it its own lockfile; on a single host that is the `ROBOTHOR_WORKSPACE`
+row above. Each engine claims its lockfile for its tenant at boot (a
+`plugins.lock.tenant` marker beside it; the root's engine takes the claim
+back from a child), and an engine whose lockfile another tenant's engine
+claimed logs an error and refuses enable, disable and record with a 409 until
+it has a workspace of its own. A child's workspace starts empty: point it at a
+new directory, and the child's agent manifests and plugin lockfile live
+there. Its admins manage that on the Helm's
+Settings › Plugins page, which lists and toggles the **acting** tenant's
+engine. A root admin switched into the child manages the child's plugins the
+same way.
+
+What is installed stays root: install, remove and record (sync) are root-only
+and act on the root's engine unless the request names a tenant in the root's
+tree.
+
+The root can also force a plugin for one child. As a root owner or admin
+**at home** (not switched in), the Plugins page shows a "For a child tenant"
+control on each plugin card: pick the child, then **Force on**, **Force off**
+or **Let it decide**. Over HTTP it is
+`PUT /api/plugins/{name}/tenants/{tenant_id}` with `{"state": "on" | "off" | null}`.
+The bridge writes the grant, audits it under the child, and reloads the
+child's engine. If that reload fails the answer says so, and the grant
+applies on that engine's next reload or restart.
+
+What the child sees: a forced plugin's switch is locked with "Set by the root
+tenant", and enable or disable on it is refused (409). A plugin forced off is
+not imported at all, and a read error on the grants keeps it refused (fail
+closed), across a restart too, from the copy each engine keeps in its
+workspace (`plugins.lock.grants.json`). The child can read its grants but not
+change them: row-level security lets only the root write them. The full rules are in [PLUGINS.md, Per tenant](../PLUGINS.md#per-tenant).
+
+To check a child's grants directly:
+
+```sql
+SELECT plugin, state, set_by, set_at FROM tenant_plugin_grants
+WHERE tenant_id = 'acme-child-a' ORDER BY plugin;
+```
 
 ## Add people to a child
 
@@ -260,6 +304,12 @@ who may drive an agent) and any pending SSO binding grant; revokes every refresh
 minted for the new tenant; and writes one `auth.account_moved` row to the
 audit log. If any step fails, none of it happened.
 
+Run it from a root shell: `ROBOTHOR_TENANT_ID` unset or the root's id, and
+`ROBOTHOR_DEFAULT_TENANT` the root. The command refuses, dry run included,
+unless the shell's engine tenant is the root of both the account's tenant and
+the target. That also refuses a move between tenants under two different
+roots.
+
 | Flag | Use |
 |------|-----|
 | `--from acme-parent` | The address has an account in more than one tenant. The command refuses and lists them until you pick one. |
@@ -299,6 +349,7 @@ A move is refused, with nothing written, when:
 - the account is an `owner` and the target is a child (children have no
   owner; pass `--role admin`);
 - the target already has an account with that address;
+- the shell's engine tenant is not the root of both tenants;
 - the account's CRM contact has history in the source tenant and
   `--detach-person` was not given.
 
@@ -313,6 +364,97 @@ extend it is gone. The old access token remains valid until it expires (15
 min) unless the session-standing check from the tenant-admin-gates change is
 deployed; with it, the bridge and every engine refuse the token within 30 s
 (immediately if the move runs inside the bridge).
+
+## Move a workload to another tenant
+
+A workload is a set of agents and workflows. When it moves from the tenant
+it ran in (usually the root) to another tenant's engine (usually a child),
+move its history with it, after the child's engine is in place and BEFORE
+the child's engine runs it for the first time. Stop the workload in the
+source first: remove the agents and workflows from the source engine's
+manifests (or disable their schedules) and let anything running finish. The
+move runs at `REPEATABLE READ`, so a write the source engine commits during
+the move is never split between the tenants: it stays in the source, or the
+move fails and changes nothing.
+
+```bash
+genus tenant move-workload --from acme-parent --to acme-child-a \
+  --agent triage --agent intake-helper --workflow intake --dry-run
+genus tenant move-workload --from acme-parent --to acme-child-a \
+  --agent triage --agent intake-helper --workflow intake
+```
+
+`--agent` and `--workflow` repeat; name at least one. `--json` prints the
+report as JSON. The dry run runs every check below, prints the per-table
+counts the live move would write, and changes nothing. The live move does
+everything in **one transaction** and writes one `tenant.workload_moved` row
+to the audit log, filed under the root of the source tenant (the details name
+both tenants, the agents, the workflows and the counts). If any step fails,
+none of it happened. A run that finds nothing to move (a re-run of a move
+that already happened) prints `Nothing to move` and writes no audit row.
+
+Run it from the root's shell: the command refuses unless the shell's engine
+tenant (`ROBOTHOR_TENANT_ID`, else `ROBOTHOR_DEFAULT_TENANT`) is the root of
+both tenants. A shell left bound to a child, or to another root, is refused
+with the tenant it is bound to and the root it needs.
+
+**What moves.** Each named agent's runs, every run descended from them
+(sub-agent runs), and the runs the named workflows' steps started; with
+those runs, their steps, checkpoints, evidence and tool events (which carry
+no tenant column and follow their run), runtime controls and effects,
+breadcrumbs, questions, reviews, interventions, coding jobs, memory-write
+jobs, fact-access records and message reactions. The agents' schedules,
+user cron jobs, benchmark results and managed-agent runs. The workflows'
+runs, their steps and their approvals. The agents' chat sessions (keys of
+the form `agent:<id>:…`), with their messages, approval receipts and channel
+message map. A delivery the channel bus surfaced into another agent's session
+(main's, usually) stays with that session, so a reply in the source still
+finds the message it quotes. The report lists every one of these tables,
+zeros included.
+
+**What stays.** Everything that belongs to the tenant rather than to one
+workload: the CRM, tenant memory and the knowledge base, identities and
+accounts (`move-account` moves those), vault rows and connector mirrors, the
+autonomy ledger, goal pursuits, the operations and sales ledgers, and the
+audit trail, which keeps the tenant each row was written under. The full
+list, with the reason for each table, is `UNTOUCHED_TABLES` in
+`robothor/tenancy/move_workload.py`.
+
+**Links that would cross tenants.** A moved row that links to a row that
+stays in another tenant (a run's CRM contact or task, a session's contact, a
+run whose parent run belongs to an agent that stays) has the link cleared,
+in the same transaction. The report lists each cleared column and its
+count (`Links cleared`).
+
+A move is refused, with nothing written, when:
+
+- either tenant does not exist, or the target is not active;
+- `--from` and `--to` name the same tenant;
+- no `--agent` or `--workflow` is given;
+- the target is not under the same root as the source, or is one of its
+  ancestors (a workload moves to a descendant or a sibling);
+- the shell's engine tenant is not that root;
+- a tenant table in the database has no move classification (a migration
+  newer than the command: upgrade first);
+- any of the workload's runs, workflow runs or coding jobs is still pending,
+  running or awaiting approval, or a run has an unresolved runtime effect
+  (`prepared`, `dispatching`, `uncertain`) or an unfinished memory write
+  (`pending`, `running`);
+- a step of a workflow that is not being moved started one of the
+  workload's runs (name that workflow with `--workflow` too);
+- the workload has an attempt in a goal pursuit, or an open autonomy
+  operation, workflow or handoff;
+- the target already holds a row with the same unique key as a moved row
+  (for example a chat session with the same key); the error names the table
+  and the key;
+- a row that stays in the source references a row that moves.
+
+The command never moves a workload up to an ancestor, so it cannot return a
+workload to the root once it has moved: do the dry run first and read it.
+Between children it moves both ways (`--from acme-child-a --to acme-child-b`
+and back). Moving back does not restore the links the first move cleared:
+they stay empty, and the audit row records only how many were cleared per
+column.
 
 ## Verification queries
 
@@ -349,6 +491,11 @@ SELECT 'user_permissions', tenant_id FROM user_permissions
 -- The move is audited.
 SELECT timestamp, actor, details->>'from_tenant', details->>'to_tenant'
 FROM audit_log WHERE event_type = 'auth.account_moved' ORDER BY timestamp DESC LIMIT 5;
+
+-- After a workload move: the agent's runs are all in the target, and audited.
+SELECT tenant_id, count(*) FROM agent_runs WHERE agent_id = 'triage' GROUP BY tenant_id;
+SELECT timestamp, actor, details->>'to_tenant', details->'counts'
+FROM audit_log WHERE event_type = 'tenant.workload_moved' ORDER BY timestamp DESC LIMIT 5;
 ```
 
 And the isolation check from [TENANT_RLS.md](TENANT_RLS.md), bound to the
@@ -365,6 +512,9 @@ SELECT DISTINCT tenant_id FROM crm_tasks;
 - A move: move the account back (`--to` the old tenant, `--role` the old role
   unless it was `owner`; restore an owner with `genus auth bootstrap` or the
   Users page of the root tenant).
+- A workload move between children: move it back with `move-workload`. A
+  move to a child cannot be undone with the command (it refuses an ancestor
+  as the target). Links a move cleared stay cleared either way.
 - Switching: set `GENUS_TENANT_SWITCH_MODE=off` on the bridge and every
   engine, and restart them. No new switch is issued from then on. An acting
   token issued before the flip is rejected by the bridge once it has restarted

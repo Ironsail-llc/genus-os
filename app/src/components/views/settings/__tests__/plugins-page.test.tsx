@@ -38,6 +38,16 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+// The root operator at home, who is offered every act on this page. The
+// per-tenant behaviour is covered in plugins-tenant-grants.test.tsx.
+vi.mock("next-auth/react", () => ({
+  useSession: () => ({
+    data: { role: "owner", tenantId: "acme-parent", homeTenantId: "acme-parent", rootTenantId: "acme-parent" },
+    status: "authenticated",
+    update: vi.fn(),
+  }),
+}));
+
 import { PluginsPage } from "../plugins-page";
 
 /** The two 502 bodies, one per hop: the bridge's and the app proxy's. */
@@ -282,6 +292,11 @@ function mockBridge(options: {
         status: reply.status,
         json: async () => reply.body,
       } as Response;
+    }
+    // The root operator's child picker. No children here, and never counted
+    // as a listing read.
+    if (url.endsWith("/api/tenants/accessible")) {
+      return { ok: true, status: 200, json: async () => [] } as Response;
     }
     if (options.listReplies) {
       const reply =
