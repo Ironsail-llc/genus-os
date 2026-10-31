@@ -82,7 +82,9 @@ def test_a_url_names_its_last_two_path_segments(url):
     assert (spec.owner, spec.name) == ("example", "demo")
 
 
-@pytest.mark.parametrize("bad", ["", "demo", "-x/demo", "example/../etc", "ext::sh -c id"])
+@pytest.mark.parametrize(
+    "bad", ["", "demo", "-x/demo", "example/../etc", "ext::sh -c id", ".home/demo", "x/.git"]
+)
 def test_malformed_remotes_are_refused(bad):
     with pytest.raises(repos.RepoError):
         repos.parse_remote(bad)
