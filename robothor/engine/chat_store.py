@@ -389,7 +389,7 @@ def load_session(
             SELECT message
             FROM chat_messages
             WHERE session_id = %s
-            ORDER BY created_at DESC
+            ORDER BY id DESC  -- write order; created_at can interleave overlapping turns
             LIMIT %s
             """,
             (session_row["id"], limit),
@@ -495,7 +495,7 @@ def load_all_sessions(
                 SELECT message
                 FROM chat_messages
                 WHERE session_id = %s
-                ORDER BY created_at DESC
+                ORDER BY id DESC  -- write order; created_at can interleave overlapping turns
                 LIMIT %s
                 """,
                 (sess["id"], limit_per_session),
