@@ -239,17 +239,22 @@ def harness(monkeypatch: pytest.MonkeyPatch, fleet: Path) -> _Harness:
     return h
 
 
+async def _cancel_leftovers() -> None:
+    """Cancel the fake subsystem tasks ``main`` left running at READY=1."""
+    current = asyncio.current_task()
+    leftovers = [t for t in asyncio.all_tasks() if t is not current]
+    for task in leftovers:
+        task.cancel()
+    await asyncio.gather(*leftovers, return_exceptions=True)
+
+
 async def _run_to_ready(h: _Harness) -> None:
     h.started = time.perf_counter()
     try:
         with pytest.raises(_ReachedReady):
             await daemon.main()
     finally:
-        current = asyncio.current_task()
-        leftovers = [t for t in asyncio.all_tasks() if t is not current]
-        for task in leftovers:
-            task.cancel()
-        await asyncio.gather(*leftovers, return_exceptions=True)
+        await _cancel_leftovers()
 
 
 class TestManifestsAreParsedOnce:
@@ -297,11 +302,7 @@ class TestIndependentStepsRunConcurrently:
             with pytest.raises(RuntimeError, match="coding jobs exploded"):
                 await daemon.main()
         finally:
-            current = asyncio.current_task()
-            leftovers = [t for t in asyncio.all_tasks() if t is not current]
-            for task in leftovers:
-                task.cancel()
-            await asyncio.gather(*leftovers, return_exceptions=True)
+            await _cancel_leftovers()
 
         assert harness.ready_at is None, "READY=1 must not be sent after a failed step"
 
