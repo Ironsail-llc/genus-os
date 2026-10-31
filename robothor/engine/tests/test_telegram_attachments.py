@@ -423,9 +423,29 @@ class TestPhotos:
         assert caption.strip() in text
 
 
+@pytest.fixture(params=[0.0, 0.5], ids=["idle", "loaded"])
+def route_delay(request, bot) -> float:
+    """Delay every album flush's route, as a loaded machine does.
+
+    The album tests waited a fixed ``asyncio.sleep`` for the timer-driven
+    flush; on a busy runner the flush is still routing when the sleep ends and
+    the test sees no turn at all. Delaying the route reproduces that on any
+    machine.
+    """
+    if request.param:
+        real = bot._route_attachment_turn
+
+        async def slow_route(*args, **kwargs):
+            await asyncio.sleep(request.param)
+            return await real(*args, **kwargs)
+
+        bot._route_attachment_turn = slow_route
+    return request.param
+
+
 class TestAlbums:
     @pytest.mark.asyncio
-    async def test_three_photos_arrive_as_one_turn(self, bot, monkeypatch) -> None:
+    async def test_three_photos_arrive_as_one_turn(self, bot, monkeypatch, route_delay) -> None:
         monkeypatch.setattr(
             "robothor.engine.tools.handlers.images.describe_image_bytes",
             AsyncMock(return_value="a photo"),
@@ -450,7 +470,7 @@ class TestAlbums:
             assert row["path"] in text
 
     @pytest.mark.asyncio
-    async def test_an_album_of_ten_keeps_all_ten(self, bot, monkeypatch) -> None:
+    async def test_an_album_of_ten_keeps_all_ten(self, bot, monkeypatch, route_delay) -> None:
         monkeypatch.setattr(
             "robothor.engine.tools.handlers.images.describe_image_bytes",
             AsyncMock(return_value="a photo"),
@@ -565,7 +585,9 @@ class TestALateAlbumMember:
         assert not routed, "a cancelled flush must not deliver into a closed session"
 
     @pytest.mark.asyncio
-    async def test_a_finished_flush_removes_only_itself(self, bot, monkeypatch) -> None:
+    async def test_a_finished_flush_removes_only_itself(
+        self, bot, monkeypatch, route_delay
+    ) -> None:
         """The bookkeeping must not leak: once every task under a key is done,
         the key goes too."""
         import robothor.engine.telegram_attachments as ta

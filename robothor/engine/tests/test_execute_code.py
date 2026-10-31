@@ -124,7 +124,64 @@ class TestTheClientModuleIsShippable:
         assert "robothor" not in CLIENT_SOURCE.read_text()
 
 
+#: The smallest ``sun_path`` among the kernels this runs on: 104 bytes on
+#: macOS and the BSDs (108 on Linux), including the terminating NUL.
+_SUN_PATH_MAX = 104
+
+
+@pytest.fixture
+def socket_dir():
+    """A per-test directory short enough to bind an AF_UNIX socket in.
+
+    Under the system temp directory, as production's per-run scratch root is
+    (`code_exec._run_scratch_root`), not under pytest's much longer tmp_path.
+    """
+    import shutil
+    import tempfile
+
+    path = Path(tempfile.mkdtemp(prefix="rpc-"))
+    yield path
+    shutil.rmtree(path, ignore_errors=True)
+
+
 class TestTheTransport:
+    def test_the_socket_these_tests_bind_fits_every_kernel(self, tmp_path):
+        """The transport tests bind a real AF_UNIX socket, and the kernel caps
+        its path. pytest's own tmp_path is ~150 bytes on macOS, so every test
+        below failed there with "AF_UNIX path too long" before it tested
+        anything; a short directory is what production uses too
+        (`code_exec._run_scratch_root`)."""
+        server = ToolRpcServer(directory=tmp_path, proxy=_FakeProxy(), max_calls=5)
+        assert len(os.fsencode(server.socket_path)) < _SUN_PATH_MAX, server.socket_path
+
+    @pytest.mark.asyncio
+    async def test_a_kernel_without_peer_credentials_refuses_rather_than_hangs(
+        self, socket_dir, monkeypatch
+    ):
+        """``SO_PEERCRED`` is Linux's. Where the kernel has no such option the
+        peer cannot be identified, and that has to be the same answer as any
+        other unidentifiable peer: a refusal, sent. It used to raise inside the
+        handler before replying, so the connection stayed open and the snippet
+        blocked in ``recv`` until something killed it — the engine suite's
+        hang on macOS."""
+        monkeypatch.delattr(socket, "SO_PEERCRED", raising=False)
+        proxy = _FakeProxy()
+        server = await _serve(proxy, socket_dir)
+        previous = socket.getdefaulttimeout()
+        socket.setdefaulttimeout(10)  # a hang fails this test instead of the suite
+        try:
+            reply = await asyncio.to_thread(
+                _request,
+                server,
+                {"token": server.token, "op": "call", "name": "read_file", "args": {}},
+            )
+        finally:
+            socket.setdefaulttimeout(previous)
+            await server.aclose()
+        assert _spoke(reply), "the server must REFUSE an unidentifiable peer, not hang up"
+        assert reply.get("ok") is False
+        assert proxy.seen == []
+
     @pytest.mark.asyncio
     async def test_a_call_reaches_the_proxy_and_the_result_comes_back(self, tmp_path):
         proxy = _FakeProxy()

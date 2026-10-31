@@ -97,8 +97,33 @@ async def test_branches_run_and_results_land_in_context(engine_config):
     assert run.context["steps"]["join"]["status"] == "completed"
 
 
+class _LoadedClock:
+    """``time.monotonic`` as a busy machine reports it.
+
+    A loaded runner stretches every wall-clock interval the test measures
+    (0.47 s for three 0.15 s branches was seen). Scaling the clock reproduces
+    that deterministically, so a test that proves overlap with elapsed time
+    fails here exactly as it does on a loaded box.
+    """
+
+    def __init__(self, factor: float) -> None:
+        self._real = time.monotonic
+        self._origin = self._real()
+        self._factor = factor
+
+    def __call__(self) -> float:
+        return self._origin + (self._real() - self._origin) * self._factor
+
+
+@pytest.fixture(params=[1.0, 4.0], ids=["idle", "loaded"])
+def machine_load(request, monkeypatch):
+    if request.param != 1.0:
+        monkeypatch.setattr(time, "monotonic", _LoadedClock(request.param))
+    return request.param
+
+
 @pytest.mark.asyncio
-async def test_branches_actually_overlap(engine_config, monkeypatch):
+async def test_branches_actually_overlap(engine_config, monkeypatch, machine_load):
     """Concurrency is the point — prove overlap, don't assume it."""
     starts: list[float] = []
 
