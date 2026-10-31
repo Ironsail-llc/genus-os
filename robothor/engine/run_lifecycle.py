@@ -460,7 +460,10 @@ class RunLifecycleMixin:
                 kwargs["parent_trace_id"] = spawn_context.parent_trace_id
                 kwargs["parent_span_id"] = spawn_context.parent_span_id
 
-            return TraceContext(**kwargs)
+            trace = TraceContext(**kwargs)
+            started = getattr(session.run, "started_at", None)
+            trace.start_run(started.timestamp() if started else None)
+            return trace
         except Exception as e:
             logger.warning("Failed to create trace context: %s", e)
             return None

@@ -154,7 +154,7 @@ class LLMCallMixin:
 
         try:
             if trace:
-                with trace.span("llm_call") as _span:
+                with trace.span("llm_call", span_kind="client") as _span:
                     response = await self._do_llm_call(
                         session,
                         models,

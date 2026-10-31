@@ -1777,11 +1777,12 @@ class TestPublishRunTelemetry:
     """
 
     def _make_run(self, **kw):
-        from robothor.engine.models import AgentRun
+        from robothor.engine.models import AgentRun, RunStatus
 
         defaults = {
             "id": "run-x",
             "agent_id": "main",
+            "status": RunStatus.COMPLETED,
             "model_used": "anthropic/claude-opus-4-8",
             "input_tokens": 1000,
             "output_tokens": 200,
