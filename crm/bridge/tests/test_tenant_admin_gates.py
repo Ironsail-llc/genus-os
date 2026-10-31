@@ -7,8 +7,8 @@ tenant. Every admin route therefore falls into exactly one class:
   approvals, accounts, keys). Any owner/admin whose token acts in that tenant
   may use it: the child's own admin, and a root admin who switched in.
 * ``tenant_audit`` — the same, read-only, plus the ``auditor`` role.
-* ``root`` — appliance-wide state (guardrail flags, settings, logs, plugins,
-  the doctor). Only a root operator AT HOME: a root admin acting in a child is
+* ``root`` — appliance-wide state (guardrail flags, settings, logs, plugin
+  installs and per-child plugin grants, the doctor). Only a root operator AT HOME: a root admin acting in a child is
   not root for that request.
 * ``root_audit`` — appliance-wide and read-only: a root operator or auditor at
   home.
@@ -171,13 +171,16 @@ ROUTE_CLASSES: dict[tuple[str, str], str] = {
     ("GET", "/api/settings/schema"): R,
     ("GET", "/api/settings"): R,
     ("PATCH", "/api/settings"): R,
-    ("GET", "/api/plugins"): R,
+    # ── plugins: each tenant's engine runs its own set. What is installed on
+    #    the box, and the root's per-child grants, stay root. ──
+    ("GET", "/api/plugins"): T,
+    ("POST", "/api/plugins/reload"): T,
+    ("POST", "/api/plugins/{name}/enable"): T,
+    ("POST", "/api/plugins/{name}/disable"): T,
     ("POST", "/api/plugins/sync"): R,
-    ("POST", "/api/plugins/reload"): R,
     ("POST", "/api/plugins/install"): R,
     ("POST", "/api/plugins/{name}/remove"): R,
-    ("POST", "/api/plugins/{name}/enable"): R,
-    ("POST", "/api/plugins/{name}/disable"): R,
+    ("PUT", "/api/plugins/{name}/tenants/{tenant_id}"): R,
     # The external n8n instance is watched by the appliance, not per tenant.
     ("GET", "/api/integrations/n8n/workflows"): R,
     ("GET", "/api/integrations/n8n/workflows/{workflow_id}/executions"): R,

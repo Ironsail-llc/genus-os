@@ -177,13 +177,47 @@ def _with_assets(
     return row
 
 
+class LockfileSharedError(Exception):
+    """This engine's lockfile is another tenant's engine's. Becomes a 409."""
+
+
+def _refuse_a_shared_lockfile() -> None:
+    """Refuse to write a lockfile another tenant's engine owns.
+
+    A child admin may toggle plugins in their own tenant; on a lockfile the
+    root's engine also reads, that toggle would reach the root and every
+    sibling. See ``robothor.plugins.lockfile_owner``.
+    """
+    from robothor.plugins.lockfile_owner import SHARED_REMEDY, foreign_owner
+
+    if foreign_owner() is not None:
+        raise LockfileSharedError(SHARED_REMEDY)
+
+
+class PluginForcedError(Exception):
+    """The root tenant forced this plugin; the child may not toggle it. A 409."""
+
+
 def set_plugin_enabled(name: str, enabled: bool) -> dict[str, Any] | None:
     """Flip one lock row, or None when nothing recorded that distribution.
 
     None is a 404 rather than a created row: a disable that invented a row for
     a name nothing installed would report success and change nothing.
+
+    Raises :class:`PluginForcedError` for a plugin the root tenant forced on or
+    off for this engine's tenant: the row would change and nothing would, which
+    is a control that lies. Only a root operator clearing the grant frees it.
     """
+    from robothor.plugins.grants import canonical, forced_states
     from robothor.plugins.lockfile import set_enabled
+
+    forced = forced_states().get(canonical(name))
+    if forced is not None:
+        raise PluginForcedError(
+            f"this plugin is forced {forced} by the root tenant; only a root "
+            "administrator can change it, by clearing the grant"
+        )
+    _refuse_a_shared_lockfile()
 
     row = set_enabled(name, enabled)
     if row is None:
@@ -209,6 +243,7 @@ def sync_lockfile(force: bool = False) -> dict[str, Any]:
     """
     from robothor.plugins.lockfile import sync
 
+    _refuse_a_shared_lockfile()
     result = sync(force=force)
     if not result.ok:
         raise LockfileRefusedError(result.refused or "the lockfile could not be written")
@@ -452,7 +487,7 @@ def register(app: FastAPI) -> None:
 
         try:
             return await _bounded(fn, *args, **kwargs)
-        except LockfileRefusedError as exc:
+        except (LockfileRefusedError, LockfileSharedError, PluginForcedError) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except (InstallError, RegistryError) as exc:
             # A blocked wheel, an unverifiable index, a hash that did not

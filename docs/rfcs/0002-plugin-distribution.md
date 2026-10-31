@@ -228,11 +228,14 @@ summary would lose the design without saying so.
 
 **Its five open questions, answered as they were asked:**
 
-1. **Tenancy of enablement** — *dropped, deliberately.* One engine process runs
-   one set of plugins, so there is nothing per-tenant to enable. `/api/plugins`
-   refuses a non-primary tenant outright rather than pretending otherwise: a
-   second tenant disabling a plugin would be taking a capability out of
-   somebody else's instance.
+1. **Tenancy of enablement** — *dropped at first; superseded by hierarchical
+   tenancy.* The original answer was that one engine process runs one set of
+   plugins, so there was nothing per-tenant to enable, and `/api/plugins`
+   refused a non-primary tenant outright. Hierarchical tenancy gave every
+   tenant its own engine, so each tenant now enables its own plugins through
+   its own lockfile, and the root tenant may force one on or off for a child
+   (`tenant_plugin_grants`). The current behaviour is in
+   [PLUGINS.md, Per tenant](../PLUGINS.md#per-tenant).
 2. **The trusted-tier signing bar** — *answered by removing the tiers.* There
    is one bar and it applies to everything: the index is Ed25519-signed and the
    key is pinned out of band. "Who is trusted" is therefore whose key the

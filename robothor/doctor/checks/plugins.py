@@ -14,9 +14,11 @@ a decision:
   detection possible; it is not what makes the engine run, and failing an
   install gate over its absence would be a lie about what is broken.
 * ``plugins.load`` — **required.** An installed plugin that is refused is a
-  capability the operator believes they have and do not. The single refusal
-  this accepts is ``disabled by operator``, because that is the operator's own
-  decision arriving back at them.
+  capability the operator believes they have and do not. The refusals this
+  accepts are ``disabled by operator``, because that is the operator's own
+  decision arriving back at them, and ``disabled by the root tenant``, the
+  root's grant for this tenant (``robothor.plugins.grants``). Both reach it as
+  the inventory's ``disabled`` state.
 * ``plugins.drift`` — **required.** A manifest that no longer hashes to what
   was recorded is the case ``verify_adapter_integrity`` exists for, one layer
   up. It deliberately overlaps ``plugins.load``: both go red, and this is the

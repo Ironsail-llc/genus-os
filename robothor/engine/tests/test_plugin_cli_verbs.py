@@ -148,6 +148,23 @@ class TestList:
         assert "uninstall the distribution" not in out
         assert "Refused:" not in out
 
+    def test_a_plugin_the_root_tenant_forced_off_is_not_listed_as_a_fault(
+        self, installed, monkeypatch, capsys
+    ):
+        """A child's operator cannot undo the root's decision, so the list says
+        whose it is and points at nothing they could run."""
+        from robothor.plugins import grants
+
+        monkeypatch.setattr(grants, "_read", lambda tenant_id: {"acme-tools": "off"})
+        grants.reset_forced_cache()
+        cmd_plugin(_args("list"))
+        out = capsys.readouterr().out
+
+        assert grants.ROOT_DISABLED_REASON in out
+        assert "root tenant" in out
+        assert "Refused:" not in out
+        assert "uninstall the distribution" not in out
+
     def test_a_real_refusal_still_says_fix_or_uninstall(self, monkeypatch, capsys):
         monkeypatch.setenv("ROBOTHOR_PLUGIN_MANIFEST_MODE", "enforce")
 
