@@ -243,3 +243,9 @@ def test_detail_is_not_cached(controls_client_as_operator, fake_runs):
 
 def test_detail_requires_operator(controls_client_as_viewer, fake_runs):
     assert controls_client_as_viewer.get("/api/runs/r1").status_code == 403
+
+
+def test_list_order_has_a_tie_break(controls_client_as_operator, captured_sql):
+    """Runs that started at the same instant must not swap between pages."""
+    controls_client_as_operator.get("/api/runs?offset=50")
+    assert "ORDER BY started_at DESC NULLS LAST, id DESC LIMIT %s OFFSET %s" in captured_sql[-1][0]

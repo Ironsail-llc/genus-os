@@ -306,6 +306,27 @@ describe("RunsView page", () => {
     await waitFor(() => expect(screen.queryByTestId("runs-more")).toBeNull());
   });
 
+  it("keeps rows unique when the next page repeats one already shown", async () => {
+    // New runs start at the top between pages, so an offset page can overlap.
+    const page = Array.from({ length: 50 }, (_, i) => ({ ...ROW, id: `p${i}` }));
+    const spy = mockPage(page);
+    render(<RunsView visible />);
+    const more = await screen.findByTestId("runs-more");
+    spy.mockImplementation((url: string | URL | Request) => {
+      const u = String(url);
+      if (u.includes("/api/runs/summary")) {
+        return Promise.resolve({ ok: true, json: async () => SUMMARY } as Response) as never;
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => [{ ...ROW, id: "p49" }, { ...ROW, id: "next" }],
+      } as Response) as never;
+    });
+    fireEvent.click(more);
+    expect(await screen.findByTestId("run-row-next")).toBeTruthy();
+    expect(screen.getAllByTestId("run-row-p49")).toHaveLength(1);
+  });
+
   it("does not offer more when the page was not full", async () => {
     mockPage();
     render(<RunsView visible />);
