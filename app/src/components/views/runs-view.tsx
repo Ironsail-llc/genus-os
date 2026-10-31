@@ -209,7 +209,12 @@ export function RunsView({ visible = true }: { visible?: boolean }) {
       const data = await res.json();
       if (generation.current !== mine) return;
       const rows = Array.isArray(data) ? (data as Run[]) : [];
-      setRuns((prev) => [...prev, ...rows]);
+      // Runs that started since the first page shift the window, so an offset
+      // page can repeat rows already shown; keep the first copy of each.
+      setRuns((prev) => {
+        const seen = new Set(prev.map((r) => r.id));
+        return [...prev, ...rows.filter((r) => !seen.has(r.id))];
+      });
       setPageFull(rows.length === PAGE);
     } catch {
       if (generation.current === mine) setError("Could not reach the bridge.");

@@ -135,7 +135,7 @@ def _list_runs(
     clauses, params = _filters(status, agent, trigger, since)
     sql = (
         f"SELECT {_RUN_COLUMNS} FROM agent_runs{_where(clauses)} "
-        "ORDER BY started_at DESC NULLS LAST LIMIT %s OFFSET %s"
+        "ORDER BY started_at DESC NULLS LAST, id DESC LIMIT %s OFFSET %s"
     )
     rows = _rows(sql, (*params, limit, offset))
     return [_serialize(r) for r in rows]
