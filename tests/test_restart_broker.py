@@ -37,6 +37,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+
 from tests.platform_capabilities import needs_tools
 
 REPO = Path(__file__).resolve().parents[1]

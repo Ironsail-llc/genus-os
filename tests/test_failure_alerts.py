@@ -15,6 +15,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+
 from tests.platform_capabilities import needs_gnu_coreutils
 
 REPO_ROOT = Path(__file__).resolve().parents[1]

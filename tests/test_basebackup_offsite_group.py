@@ -21,6 +21,7 @@ import os
 import stat
 import subprocess
 from pathlib import Path
+
 from tests.platform_capabilities import needs_linux
 
 # The script under test needs Linux tools on every run (tests/platform_capabilities.py).

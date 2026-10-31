@@ -33,6 +33,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+
 from tests.platform_capabilities import needs_bash44
 
 # A subprocess here may take up to 180 s by its own bound; pytest.ini's 30 s

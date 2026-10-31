@@ -20,6 +20,7 @@ import re
 import subprocess
 import time
 from pathlib import Path
+
 from tests.platform_capabilities import needs_tools
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
