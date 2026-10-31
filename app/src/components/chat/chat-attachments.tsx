@@ -49,6 +49,10 @@ export function useChatAttachments(blocked: string | null = null) {
   // The count the NEXT add is checked against: a paste and a drop can land
   // before the first read finishes, and state would still say zero.
   const held = useRef<PendingAttachment[]>([]);
+  // Bumped by every clear and drop. A read that started before the last one
+  // finishes into a composer that has since been emptied (the message was
+  // sent, or Plan mode was switched on) and must not put its file back.
+  const epoch = useRef(0);
 
   const commit = (next: PendingAttachment[]) => {
     held.current = next;
@@ -77,6 +81,7 @@ export function useChatAttachments(blocked: string | null = null) {
       id: crypto.randomUUID(), name: file.name, mime, size: file.size, data: "",
     }));
     held.current = [...held.current, ...placeholders];
+    const started = epoch.current;
     const read = await Promise.all(
       accepted.map(async ({ file }, i) => {
         try {
@@ -87,6 +92,7 @@ export function useChatAttachments(blocked: string | null = null) {
         }
       })
     );
+    if (epoch.current !== started) return;
     const ids = new Set(placeholders.map((p) => p.id));
     const done = read.filter((r): r is PendingAttachment => r !== null);
     commit([...held.current.filter((f) => !ids.has(f.id)), ...done]);
@@ -99,6 +105,7 @@ export function useChatAttachments(blocked: string | null = null) {
   }, []);
 
   const clear = useCallback(() => {
+    epoch.current += 1;
     commit([]);
     setRefusal(null);
   }, []);
@@ -107,6 +114,7 @@ export function useChatAttachments(blocked: string | null = null) {
   const drop = useCallback((why: string) => {
     if (!held.current.length) return;
     const gone = held.current;
+    epoch.current += 1;
     commit([]);
     setRefusal(`${gone.map((f) => f.name).join(", ")} ${gone.length === 1 ? "was" : "were"} removed: ${why}`);
   }, []);

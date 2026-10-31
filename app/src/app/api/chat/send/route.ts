@@ -23,10 +23,40 @@ interface SendBody {
   attachments?: AttachmentPayload[];
 }
 
+/**
+ * The body as text, or null once it passes `MAX_SEND_BODY_BYTES`. Counted
+ * while it streams, because a chunked body carries no Content-Length for the
+ * check at the door to read.
+ */
+async function readBounded(req: Request): Promise<string | null> {
+  if (!req.body) return req.text();
+  const reader = req.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > MAX_SEND_BODY_BYTES) {
+      await reader.cancel().catch(() => {});
+      return null;
+    }
+    chunks.push(value);
+  }
+  const all = new Uint8Array(total);
+  let at = 0;
+  for (const c of chunks) { all.set(c, at); at += c.byteLength; }
+  return new TextDecoder().decode(all);
+}
+
 async function readBody(req: Request): Promise<SendBody | Response> {
   let raw: string;
   try {
-    raw = await req.text();
+    const bounded = await readBounded(req);
+    if (bounded === null) {
+      return json(413, { error: "the message and its files are too large", request_admitted: false });
+    }
+    raw = bounded;
   } catch {
     return json(400, { error: "the request body could not be read", request_admitted: false });
   }

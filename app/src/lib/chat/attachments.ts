@@ -172,7 +172,14 @@ export function stripAttachmentNote(content: string): string {
   const pattern = /(^|\n\n)\[\d+ files? attached — kept on disk; use the paths below\]/g;
   let at = -1;
   for (const match of content.matchAll(pattern)) at = match.index;
-  return at < 0 ? content : content.slice(0, at).trim();
+  if (at < 0) return content;
+  // Only the note block goes: what the operator added while the agent worked
+  // (`[added while working] …`, appended after it) is theirs and stays.
+  const added = content.indexOf("\n\n[added while working] ", at);
+  const kept = content.slice(0, at).trim();
+  if (added < 0) return kept;
+  const rest = content.slice(added).trim();
+  return kept ? `${kept}\n\n${rest}` : rest;
 }
 
 /** The attachment rows a history entry carries, wherever the engine put them. */
