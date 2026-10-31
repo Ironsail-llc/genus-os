@@ -82,3 +82,21 @@ class TestSupersedeWithValidityGuard:
         first = cur.execute.call_args_list[0].args[0]
         assert NOT_OPERATOR_CONFIRMED_SQL not in first
         assert len(cur.execute.call_args_list) == 2
+
+
+class TestKeepOverruledGuard:
+    def test_it_never_touches_the_kept_or_a_confirmed_row(self) -> None:
+        ctx, cur = _mock_conn(rowcount=1)
+        with patch.object(bt, "get_connection", return_value=ctx):
+            assert bt.keep_overruled(99, 7, tenant_id="test-tenant") is True
+        sql, params = cur.execute.call_args.args
+        assert "id <> %s" in sql
+        assert NOT_OPERATOR_CONFIRMED_SQL in sql
+        assert tuple(params) == (7, 99, "test-tenant", 7)
+
+    def test_the_kept_id_itself_is_a_no_op(self) -> None:
+        # store_fact's dedup can answer an existing active id; if that is the
+        # confirmed fact, the guard matches nothing and nothing is deactivated.
+        ctx, _cur = _mock_conn(rowcount=0)
+        with patch.object(bt, "get_connection", return_value=ctx):
+            assert bt.keep_overruled(7, 7, tenant_id="test-tenant") is False

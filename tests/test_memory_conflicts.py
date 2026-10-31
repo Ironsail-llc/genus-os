@@ -77,6 +77,7 @@ async def _resolve(
     *,
     superseded: bool = True,
     prior_overruled: int | None = None,
+    reread: tuple | None = None,
 ) -> _Resolved:
     import robothor.memory.bitemporal as bt
 
@@ -84,7 +85,8 @@ async def _resolve(
     # The conflicts module's own connection: the lookup for an earlier
     # overruled copy of the same extraction.
     lookup = MagicMock()
-    lookup.fetchone.return_value = (prior_overruled,) if prior_overruled else None
+    # ``reread`` is the target's row as read back after a refused supersede.
+    lookup.fetchone.return_value = (prior_overruled,) if prior_overruled else reread
     lookup_conn = MagicMock()
     lookup_conn.cursor.return_value = lookup
     lookup_ctx = MagicMock()
@@ -140,7 +142,9 @@ def _assert_kept_confirmed(r: _Resolved) -> None:
     assert "valid_from = COALESCE(valid_from, NOW())" in sql
     assert "valid_to = COALESCE(valid_to, NOW())" in sql
     assert "WHERE id = %s AND tenant_id = %s" in sql
-    assert params == (7, 99, "test-tenant")  # 7 only as superseded_by
+    # 7 only as superseded_by and in the guard that keeps the write off it.
+    assert params == (7, 99, "test-tenant", 7)
+    assert "id <> %s" in sql
     assert r.record.call_count == 1
     assert r.record.call_args.kwargs["action"] == "kept_confirmed"
     assert r.record.call_args.kwargs["new_fact_id"] == 99
@@ -178,9 +182,20 @@ class TestOperatorConfirmedSurvivesConflicts:
         # Confirmed between the similarity search and the write: the guard in
         # supersede_with_validity refuses, so both facts must not stay active
         # under a "superseded" report.
-        r = await _resolve(_match({}), "contradiction", 1.0, superseded=False)
+        r = await _resolve(_match({}), "contradiction", 1.0, superseded=False, reread=(_CONFIRMED,))
         assert r.supersede.call_args.args[:2] == (7, 99)
         _assert_kept_confirmed(r)
+
+    @pytest.mark.asyncio
+    async def test_a_vanished_target_leaves_the_new_fact_active(self):
+        # Refused because the target is gone, not because it is confirmed: the
+        # new fact is the only current statement and must not be deactivated.
+        r = await _resolve(_match({}), "update", 1.0, superseded=False, reread=None)
+        assert r.out["action"] == "supersede_skipped"
+        assert r.out["new_id"] == 99
+        assert r.statements() == []  # keep_overruled never ran
+        assert r.record.call_args.kwargs["action"] == "supersede_skipped"
+        assert r.record.call_args.kwargs["new_fact_id"] == 99
 
     @pytest.mark.asyncio
     async def test_a_repeated_overruled_extraction_inserts_no_row(self):
