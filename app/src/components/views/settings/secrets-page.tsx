@@ -229,7 +229,8 @@ export function SecretsPage({ visible = true, role }: SecretsPageProps) {
               className="max-w-2xl rounded-lg border border-warning/30 bg-warning/10 p-3 text-xs text-warning"
               data-testid="secrets-vault-unreadable"
             >
-              The vault could not be read, so vault-held credentials show as unknown. Check the
+              The vault could not be read, so vault-held credentials that have no environment
+              value show as unknown. Check the
               vault with <code className="font-mono">genus doctor</code>, then refresh.
             </div>
           )}
@@ -301,9 +302,15 @@ function SecretRowView({ row, now }: { row: SecretRow; now: number }) {
           <span className="text-warning">not configured</span>
         )}
       </td>
-      <td className={cell}>
+      <td className={cell} data-testid={`secrets-source-${row.name}`}>
         <CellLabel>Source</CellLabel>
-        {row.vaultReadable ? SOURCE_LABEL[row.source] : "unknown"}
+        {/* Unknown only when nothing was found: an environment value is still
+            known while the vault is down; only the vault's half is not. */}
+        {row.vaultReadable
+          ? SOURCE_LABEL[row.source]
+          : row.source === "none"
+            ? "unknown"
+            : `${SOURCE_LABEL[row.source]} (vault unknown)`}
         {row.shadowed && (
           <span className="mt-0.5 block text-[11px] text-warning">
             The two copies differ; {row.shadowedBy ?? "one store"} is not being served.
