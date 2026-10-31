@@ -233,7 +233,7 @@ class TestCrossingTheCapByDefault:
         steps = _budget_steps(run.steps)
         assert len(steps) == 1, [s.step_type for s in run.steps]
         detail = steps[0].tool_input
-        assert _FIELDS <= set(detail)
+        assert set(detail) >= _FIELDS
         assert detail["stop"] == "hourly_cost_cap"
         assert detail["mode"] == "observe"
         assert detail["setting"] == "ROBOTHOR_HOURLY_COST_CAP_USD"
@@ -308,9 +308,7 @@ class TestTheRunawayTokenCap:
         monkeypatch.setattr(
             loop_guards, "_spawn_hard_cap_alert", lambda _s, _c, used: alerts.append(used)
         )
-        monkeypatch.setattr(
-            "robothor.engine.runner._send_soft_runaway_alert", lambda *a, **k: None
-        )
+        monkeypatch.setattr("robothor.engine.runner._send_soft_runaway_alert", lambda *a, **k: None)
         session = _session_over(2_000)
         cfg = _cron_agent()
         state = loop_guards.GuardState()
@@ -410,7 +408,9 @@ class TestTelemetryNeverBlocksTheLoop:
             mode="enforce",
         )
         elapsed = time.perf_counter() - started
-        assert elapsed < 0.1, f"record() blocked the event loop for {elapsed:.3f}s"
+        # Half the bus's sleep: an inline publish costs all of it, and a loaded
+        # CI box must not be able to fail this on thread start-up alone.
+        assert elapsed < 0.25, f"record() blocked the event loop for {elapsed:.3f}s"
         assert len(_budget_steps(session.run.steps)) == 1
 
 

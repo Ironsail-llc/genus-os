@@ -235,7 +235,7 @@ def runaway_cap_hit(session: Any, cap: int, used: int, reason: str) -> Mode:
 
 
 def safety_cap(cap: int, iteration: int) -> dict[str, Any]:
-    """The iteration safety valve, for ``_force_wrapup``'s ``stop=``."""
+    """The iteration safety valve: a control, so it always enforces."""
     return _detail(
         "safety_cap",
         f"Safety limit reached ({cap} iterations).",
@@ -258,6 +258,22 @@ def cost_cap(limit: float, run: Any) -> dict[str, Any]:
     )
 
 
+def _hourly_detail(pool: Any, verb: str, mode: str) -> dict[str, Any] | None:
+    """The hourly cap's record, or None when the pool has not reached it."""
+    over = _crossed(pool)
+    if over is None:
+        return None
+    observed, cap = over
+    return _detail(
+        HOURLY_COST_CAP,
+        f"Hourly cost cap {verb}: ${observed:.2f}/${cap:.2f}",
+        "ROBOTHOR_HOURLY_COST_CAP_USD",
+        cap,
+        round(observed, 4),
+        mode,
+    )
+
+
 def _crossed(pool: Any) -> tuple[float, float] | None:
     try:
         over = pool.cost_cap_crossed()
@@ -271,19 +287,9 @@ def observe_hourly_cap(pool: Any, agent_id: str) -> bool:
 
     Returns True: the run was admitted, and this only adds the record.
     """
-    over = _crossed(pool)
-    if over is None:
-        return True
-    observed, cap = over
-    note_pending(
-        agent_id,
-        stop=HOURLY_COST_CAP,
-        reason=f"Hourly cost cap crossed: ${observed:.2f}/${cap:.2f}",
-        setting="ROBOTHOR_HOURLY_COST_CAP_USD",
-        limit=cap,
-        observed=round(observed, 4),
-        mode="observe",
-    )
+    detail = _hourly_detail(pool, "crossed", "observe")
+    if detail is not None:
+        note_pending(agent_id, **detail)
     return True
 
 
@@ -297,17 +303,7 @@ def record_hourly_cap_refusal(
     """
     if not run_id or not reason.startswith("Hourly cost cap"):
         return
-    over = _crossed(pool)
-    if over is None:
-        return
-    observed, cap = over
-    record_for_run(
-        run_id,
-        agent_id,
-        stop=HOURLY_COST_CAP,
-        reason=f"Hourly cost cap reached: ${observed:.2f}/${cap:.2f}",
-        setting="ROBOTHOR_HOURLY_COST_CAP_USD",
-        limit=cap,
-        observed=round(observed, 4),
-        mode="enforce" if admission_mode == "enforce" else "observe",
-    )
+    mode = "enforce" if admission_mode == "enforce" else "observe"
+    detail = _hourly_detail(pool, "reached", mode)
+    if detail is not None:
+        record_for_run(run_id, agent_id, **detail)
