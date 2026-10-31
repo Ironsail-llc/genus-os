@@ -18,6 +18,7 @@ import { ChatMarkdown } from "@/components/chat/chat-markdown";
 import { MessageBubble } from "@/components/chat/message-bubble";
 import { useMessageWindow } from "@/components/chat/use-message-window";
 import { useHistoryPager } from "@/components/chat/use-history-pager";
+import { useTurnActions } from "@/components/chat/use-turn-actions";
 import { historyToMessages } from "@/lib/chat/history-messages";
 import { usePinnedScroll } from "@/components/chat/use-pinned-scroll";
 import { useStableCallback } from "@/components/chat/use-stable-callback";
@@ -1158,23 +1159,15 @@ export function ChatPanel({
   }, [activePlan, planFeedback, sendPlanMessage]);
 
   const busy = isStreaming || isPlanExecuting || isPlanning || isDeepReasoning;
-  // Regenerate: the user turn before this reply goes out again as a new turn.
-  const regenerate = useStableCallback((id: string) => {
-    if (busy) return;
-    const at = messages.findIndex((m) => m.id === id);
-    const asked = messages.slice(0, at).reverse().find((m) => m.role === "user");
-    if (asked) void sendMessage(undefined, asked.content);
-  });
-  // Edit and resend: the text goes back in the composer, and it and everything
-  // after it leave the view. Local only: the engine keeps its history (it has no
-  // truncation), so the agent still sees the earlier exchange.
-  const editMessage = useStableCallback((id: string) => {
-    if (busy) return;
-    const at = messages.findIndex((m) => m.id === id);
-    if (at < 0) return;
-    setInput(messages[at].content);
-    setMessages((prev) => prev.slice(0, at));
-    setTimeout(() => inputRef.current?.focus(), 0);
+  const { regenerate, edit: editMessage } = useTurnActions({
+    messages,
+    setMessages,
+    busy,
+    resend: (text) => void sendMessage(undefined, text),
+    compose: (text) => {
+      setInput(text);
+      setTimeout(() => inputRef.current?.focus(), 0);
+    },
   });
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
