@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useAppQueryClient } from "@/lib/query/query-client";
 
 type GoalStatus = "queued" | "running" | "waiting" | "blocked" | "paused" | "review" | "complete" | "canceled";
@@ -40,7 +40,12 @@ async function api(path = "", init?: RequestInit) {
 const POLL_MS = 30_000;
 const GOALS_KEY = ["bridge", "goals"] as const;
 type GoalList = { goals: Goal[]; enabled: boolean };
-const listGoals = (signal?: AbortSignal): Promise<GoalList> => api("", { signal });
+type Snapshot = { list: GoalList; detail: Goal | null };
+async function readSnapshot(goalId: string | null, signal?: AbortSignal): Promise<Snapshot> {
+  const list: GoalList = await api("", { signal });
+  const detail = goalId ? ((await api(`/${goalId}`, { signal })).goal as Goal) : null;
+  return { list, detail };
+}
 
 export function GoalsView({ visible }: { visible: boolean }) {
   const client = useAppQueryClient();
@@ -63,49 +68,49 @@ export function GoalsView({ visible }: { visible: boolean }) {
   const [cadence, setCadence] = useState("24");
   const [steer, setSteer] = useState("");
 
-  const list = useQuery(
+  // The list and the open goal are one read on one beat, as they always were:
+  // list first, then the open goal's detail.
+  const selectedId = chosen?.id ?? null;
+  const snapshotKey = [...GOALS_KEY, selectedId] as const;
+  const snapshot = useQuery(
     {
-      queryKey: GOALS_KEY,
-      queryFn: ({ signal }) => listGoals(signal),
+      queryKey: snapshotKey,
+      queryFn: ({ signal }) => readSnapshot(selectedId, signal),
       enabled: visible,
       staleTime: POLL_MS,
       refetchInterval: POLL_MS,
+      // Opening another goal keeps the list on screen while its read is out.
+      placeholderData: keepPreviousData,
     },
     client
   );
-  const goals = list.data?.goals ?? [];
-  const enabled = list.data?.enabled ?? false;
-  const loaded = list.data !== undefined;
+  const goals = snapshot.data?.list.goals ?? [];
+  const enabled = snapshot.data?.list.enabled ?? false;
+  const loaded = snapshot.data !== undefined;
 
-  const selectedId = chosen?.id;
-  const detail = useQuery(
-    {
-      queryKey: [...GOALS_KEY, selectedId],
-      queryFn: async ({ signal }) => (await api(`/${selectedId}`, { signal })).goal as Goal,
-      enabled: visible && !!selectedId,
-      staleTime: POLL_MS,
-      refetchInterval: POLL_MS,
-    },
-    client
-  );
   // A polled copy replaces the open goal only when it is the same goal and no
   // older than what an action just put there.
-  const polled = detail.data;
+  const polled = snapshot.data?.detail;
   const selected =
     chosen && polled && polled.id === chosen.id && polled.version >= chosen.version ? polled : chosen;
-  const error = actionError || (list.error ?? detail.error)?.message || "";
+  const error = actionError || snapshot.error?.message || "";
 
   const refresh = useCallback(async () => {
-    await client.fetchQuery({ queryKey: GOALS_KEY, queryFn: () => listGoals(), staleTime: 0 });
-  }, [client]);
+    await client.fetchQuery({
+      queryKey: [...GOALS_KEY, selectedId],
+      queryFn: () => readSnapshot(selectedId),
+      staleTime: 0,
+    });
+  }, [client, selectedId]);
 
-  /** Open a goal, and seed the poll with what was just read so it does not read it again. */
+  /** Open a goal, and seed its snapshot with what was just read so it is not read again. */
   const open = useCallback(
     (goal: Goal) => {
-      client.setQueryData([...GOALS_KEY, goal.id], goal);
+      const list = client.getQueryData<Snapshot>([...GOALS_KEY, selectedId])?.list;
+      if (list) client.setQueryData<Snapshot>([...GOALS_KEY, goal.id], { list, detail: goal });
       setSelected(goal);
     },
-    [client]
+    [client, selectedId]
   );
 
   async function perform(fn: () => Promise<void>) {

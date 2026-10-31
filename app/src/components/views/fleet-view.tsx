@@ -45,7 +45,10 @@ async function fetchFleet(signal: AbortSignal): Promise<Agent[]> {
   if (!res.ok) {
     throw new FleetRefused(res.status === 403 ? "Operator access required." : `Error ${res.status}`);
   }
-  return res.json();
+  // A 200 whose body is not a list (a proxy page, an older bridge) shows as an
+  // empty fleet rather than taking the view down.
+  const body: unknown = await res.json();
+  return Array.isArray(body) ? (body as Agent[]) : [];
 }
 
 export function FleetView({ visible = true }: { visible?: boolean }) {
