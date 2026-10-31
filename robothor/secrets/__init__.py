@@ -146,15 +146,27 @@ _vault_cache: dict[tuple[str, str], tuple[str | None, bool, float]] = {}
 #: epoch seconds, keyed by ``(tenant, env name)``. Answers "is the key I stored
 #: actually being used?" (``vault_get``'s ``last_resolved_at``) without a
 #: database write on a hot read path: an in-process stamp, so it describes THIS
-#: process's readers and starts empty at boot. Status reads do not stamp it;
-#: only :func:`resolve_secret`, which is what a reader that dials calls.
-#: Cleared with the cache on every write.
+#: process's readers and starts empty at boot. Keyed by the name the READER
+#: asked for (``GITHUB_TOKEN``), so a question about a vault row looks across
+#: every name that resolves to it. Status reads and the ``vault_test`` probe do
+#: not stamp it. A write clears the stamps of the key it wrote, and only those:
+#: the cache reset that every write triggers must not erase every other
+#: credential's record of use.
 _last_resolved: dict[tuple[str, str], float] = {}
 
 
 def last_resolved_at(name: str, *, tenant_id: str = DEFAULT_TENANT) -> float | None:
     """When this process last served ``name`` from the vault, or None."""
     return _last_resolved.get((tenant_id, name))
+
+
+def forget_last_resolved(*names: str, tenant_id: str = DEFAULT_TENANT) -> None:
+    """Drop the usage stamps for ``names`` (all of them when none are given)."""
+    if not names:
+        _last_resolved.clear()
+        return
+    for name in names:
+        _last_resolved.pop((tenant_id, name), None)
 
 
 #: How long a cached HIT is served. Short, because this process is not the only
@@ -173,13 +185,8 @@ SECRET_CACHE_MISS_TTL_SECONDS = 3.0
 
 
 def reset_secret_cache() -> None:
-    """Forget what the vault said. Called on every write, and by the suite.
-
-    Clears the last-resolved stamps too: after a write, "last used" must mean
-    the credential now stored, not the one it replaced.
-    """
+    """Forget what the vault said. Called on every write, and by the suite."""
     _vault_cache.clear()
-    _last_resolved.clear()
 
 
 def reset_vault_availability() -> None:

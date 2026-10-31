@@ -130,15 +130,26 @@ def _live_session(ctx: ToolContext) -> Any:
     return lookup(run_id) if run_id else None
 
 
+def _intake_triggers() -> frozenset[Any]:
+    """The chat surfaces a person types a credential into.
+
+    ``HUMAN_AUTHORED_TRIGGERS`` minus ``MANUAL``: that one is the CLI, but also
+    the API trigger and resume endpoints and the unattended repair-resume of
+    the chat agent, which runs as ``owner`` with nobody typing.
+    """
+    from robothor.engine.chat_backstop import HUMAN_AUTHORED_TRIGGERS
+    from robothor.engine.models import TriggerType
+
+    return HUMAN_AUTHORED_TRIGGERS - {TriggerType.MANUAL}
+
+
 def _is_top_level_human_chat(session: Any) -> bool:
-    """A run a person started by typing, with no parent run above it."""
+    """A run a person started in chat, with no parent run above it."""
     if session is None:
         return False
-    from robothor.engine.chat_backstop import HUMAN_AUTHORED_TRIGGERS
-
     run = session.run
     return (
-        run.trigger_type in HUMAN_AUTHORED_TRIGGERS
+        run.trigger_type in _intake_triggers()
         and not run.parent_run_id
         and not getattr(run, "nesting_depth", 0)
     )
@@ -317,8 +328,25 @@ def _last_resolved_iso(key: str, tenant_id: str) -> str | None:
     from robothor.constants import DEFAULT_TENANT
     from robothor.secrets import last_resolved_at
 
-    at = last_resolved_at(_resolve_env_name(key), tenant_id=tenant_id or DEFAULT_TENANT)
-    return datetime.fromtimestamp(at, UTC).isoformat() if at is not None else None
+    tenant = tenant_id or DEFAULT_TENANT
+    stamps = [at for name in _reader_names(key) if (at := last_resolved_at(name, tenant_id=tenant))]
+    return datetime.fromtimestamp(max(stamps), UTC).isoformat() if stamps else None
+
+
+def _reader_names(key: str) -> tuple[str, ...]:
+    """Every name a reader resolves this vault row by, plus its exported name."""
+    from robothor.vault.naming import env_names_for_vault_key, normalise_key
+
+    stored_at = normalise_key(key)
+    return (*env_names_for_vault_key(stored_at), _resolve_env_name(stored_at))
+
+
+def _forget_usage(key: str, tenant_id: str) -> None:
+    """A written or deleted row has not been used yet: drop ITS stamps only."""
+    from robothor.constants import DEFAULT_TENANT
+    from robothor.secrets import forget_last_resolved
+
+    forget_last_resolved(*_reader_names(key), tenant_id=tenant_id or DEFAULT_TENANT)
 
 
 @_handler("vault_set")
@@ -357,6 +385,7 @@ async def _vault_set(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     # person's message already reached — and of everything written after.
     stored_fingerprint = await asyncio.to_thread(fingerprint, value)
     await _forget_the_value_everywhere(value, stored_fingerprint, session)
+    _forget_usage(key, tenant_id)
 
     # A rotation the assistant cannot make take effect is not a rotation it can
     # perform: key_pool caches provider keys and republishes them into the
@@ -561,6 +590,7 @@ async def _vault_delete(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
         return {"success": False, "key": key}
 
     await _reload_cached_readers()
+    _forget_usage(key, tenant_id)
     answer: dict[str, Any] = {"success": True, "key": key}
 
     # Deleting the vault row does not delete the credential: the accessor falls

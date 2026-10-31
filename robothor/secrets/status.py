@@ -208,7 +208,8 @@ def resolve_for_key(key: str, *, tenant_id: str = DEFAULT_TENANT) -> str | None:
     """
     from robothor.vault.naming import env_name
 
-    return resolve_secret(env_name(key), vault_key=key, tenant_id=tenant_id).value
+    # A probe is not a reader using the credential, so it leaves no usage stamp.
+    return resolve_secret(env_name(key), vault_key=key, tenant_id=tenant_id, stamp=False).value
 
 
 def environment_credential_names() -> set[str]:
