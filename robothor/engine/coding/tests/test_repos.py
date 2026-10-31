@@ -211,3 +211,50 @@ def test_redact_removes_the_token_and_its_basic_form():
 def test_shell_metacharacters_in_a_remote_are_refused():
     with pytest.raises(repos.RepoError):
         repos.parse_remote("https://github.com/example/demo;rm -rf ~")
+
+
+# ── review round 1 ────────────────────────────────────────────────────
+
+
+async def test_an_existing_non_git_directory_is_refused_and_left_alone(workspace, remote):
+    dest = workspace / "example" / "demo"
+    dest.mkdir(parents=True)
+    (dest / "notes.txt").write_text("the operator's own copy\n")
+    with pytest.raises(repos.RepoError, match=str(dest)):
+        await repos.ensure_repo(remote, token="")
+    assert (dest / "notes.txt").read_text() == "the operator's own copy\n"
+
+
+async def test_a_failed_clone_removes_only_what_it_created(workspace, tmp_path, monkeypatch):
+    missing = (tmp_path / "remotes" / "example" / "gone.git").as_uri()
+    monkeypatch.setenv("ROBOTHOR_CODING_REMOTES", missing)
+    (workspace / "example").mkdir(parents=True)
+    (workspace / "example" / "keep.txt").write_text("x")
+    with pytest.raises(repos.RepoError):
+        await repos.ensure_repo(missing, token="")
+    assert (workspace / "example" / "keep.txt").exists()
+    assert not (workspace / "example" / "gone").exists()
+
+
+def _install_hook(git_dir: Path, name: str, marker: Path) -> None:
+    hook = git_dir / "hooks" / name
+    hook.parent.mkdir(parents=True, exist_ok=True)
+    hook.write_text(f"#!/bin/sh\nenv > {marker}\n")
+    hook.chmod(0o755)
+
+
+async def test_fetch_and_fast_forward_run_no_repository_hook(workspace, remote, tmp_path):
+    prepared = await repos.ensure_repo(remote, token="")
+    marker = tmp_path / "hook-ran"
+    for name in ("post-merge", "reference-transaction", "post-checkout"):
+        _install_hook(prepared.path / ".git", name, marker)
+    _push_new_commit(tmp_path)
+    again = await repos.ensure_repo(remote, token=TOKEN)
+    assert again.cloned is False
+    assert not marker.exists()
+
+
+def test_the_token_is_only_ever_sent_to_github():
+    for url in ("https://git.example.org/team/app.git", "https://github.com.example.org/a/b"):
+        assert "GIT_CONFIG_COUNT" not in repos.git_env(url, TOKEN), url
+    assert "GIT_CONFIG_COUNT" in repos.git_env("https://github.com/example/demo.git", TOKEN)

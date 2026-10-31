@@ -384,3 +384,35 @@ async def test_the_token_never_reaches_logs(manager, remote, github, audit, capl
     await _call("coding_publish", {"job_id": job["job_id"], "title": "t"})
     assert TOKEN not in caplog.text
     assert TOKEN not in json.dumps(audit)
+
+
+# ── review round 1 ────────────────────────────────────────────────────
+
+
+async def test_publish_runs_no_pre_push_hook(manager, remote, github, audit, tmp_path):
+    job = await _done_job(remote)
+    clone = tmp_path / "coding" / "example" / "demo"
+    marker = tmp_path / "pre-push-ran"
+    hook = clone / ".git" / "hooks" / "pre-push"
+    hook.write_text(f"#!/bin/sh\nenv > {marker}\nexit 1\n")
+    hook.chmod(0o755)
+    out = await _call("coding_publish", {"job_id": job["job_id"], "title": "t"})
+    assert out.get("pr_url") == PR_URL, out
+    assert not marker.exists()
+
+
+async def test_publish_refuses_a_remote_that_is_not_on_github(
+    manager, remote, github, audit, monkeypatch
+):
+    """The token and the PR API are GitHub's: no push to another host, no network."""
+    job = await _done_job(remote)
+    other = "https://git.example.org/example/demo.git"
+    monkeypatch.setenv("ROBOTHOR_CODING_REMOTES", f"{remote},{other}")
+    from robothor.settings import reset_settings
+
+    reset_settings()
+    repo = Path((await _call("coding_repo_prepare", {"repo": remote}))["repo_path"])
+    git(repo, "remote", "set-url", "origin", other)
+    out = await _call("coding_publish", {"job_id": job["job_id"], "title": "t"})
+    assert "GitHub" in out["error"]
+    assert github.requests == []
