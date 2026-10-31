@@ -17,9 +17,15 @@ function post(body: unknown): Request {
 
 const LCP = { name: "LCP", value: 1234.5, rating: "good", path: "/", view: "chat", id: "v1-1", navigation_type: "navigate" };
 
+/**
+ * The structured line goes to standard output as exactly one JSON object per
+ * line, through the server logger -- not console.log, which the dashboard's
+ * lint forbids and which the log pipeline would see as free text.
+ */
 function webVitalLines(spy: ReturnType<typeof vi.spyOn>): Record<string, unknown>[] {
   return spy.mock.calls
     .map((call: unknown[]) => {
+      if (typeof call[0] !== "string" || !call[0].endsWith("\n")) return null;
       try {
         return JSON.parse(String(call[0]));
       } catch {
@@ -36,7 +42,7 @@ describe("POST /api/vitals", () => {
     vi.clearAllMocks();
     delete process.env.GENUS_DASHBOARD_WEB_VITALS;
     mockWriteVital.mockResolvedValue(undefined);
-    logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    logSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
   });
 
   afterEach(() => {

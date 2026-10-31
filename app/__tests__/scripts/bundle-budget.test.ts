@@ -133,4 +133,9 @@ describe("the CLI", () => {
     expect(res.status).toBe(1);
     expect(res.stderr).toMatch(/\/ .*over budget/);
   });
+
+  it("says how to regenerate the budgets when it fails", () => {
+    const res = run({ "/": 10, "/signin": 1_000_000 });
+    expect(res.stderr).toContain("pnpm bundle:check --write");
+  });
 });
