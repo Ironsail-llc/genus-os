@@ -78,7 +78,8 @@ _DELIVERY_CATEGORY_SQL = (
     "OR delivery_status LIKE 'blocked_by_hook:%%' THEN 'none_expected' "
     "WHEN delivery_status LIKE 'failed%%' OR delivery_status LIKE 'partial:%%' "
     "OR delivery_status LIKE 'unknown_mode:%%' THEN 'failed' "
-    "WHEN delivery_status IS NULL AND status IN ('pending', 'running') THEN 'pending' "
+    "WHEN delivery_status IS NULL AND status IN ('pending', 'running', 'awaiting_approval') "
+    "THEN 'pending' "
     "ELSE 'not_recorded' END"
 )
 _DELIVERY_CATEGORIES = ("delivered", "none_expected", "failed", "pending", "not_recorded")

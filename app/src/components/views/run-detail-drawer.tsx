@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
+  IN_FLIGHT,
   completedReading,
   durationText,
   humanizeStatus,
@@ -29,7 +30,6 @@ const OUTPUT_CAP = 4000;
 /** `robothor/engine/retention.py`: steps are pruned after this many days. */
 const STEP_RETENTION_DAYS = 30;
 
-const IN_FLIGHT = new Set(["pending", "running", "awaiting_approval"]);
 
 type DetailRun = {
   id: string;

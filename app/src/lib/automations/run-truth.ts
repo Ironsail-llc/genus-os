@@ -112,9 +112,10 @@ export type DeliveryCategory = "delivered" | "none_expected" | "failed" | "pendi
  * A run still going has no delivery status because it has not got there, which
  * is not the same as a finished run that failed to send. Reading the first as
  * "not delivered" in warn colour put a red cell on every automation the
- * operator happened to be watching mid-fire.
+ * operator happened to be watching mid-fire. `awaiting_approval` is suspended
+ * on a human decision and has not finished either.
  */
-const IN_FLIGHT = new Set(["pending", "running"]);
+export const IN_FLIGHT = new Set(["pending", "running", "awaiting_approval"]);
 
 /** Which bucket one run's `delivery_status` falls in. Total: any input has an answer. */
 export function deliveryCategory(
