@@ -266,6 +266,26 @@ class TestManifestCache:
         with pytest.raises(ManifestSchemaError):
             load_agent_config("bob", fleet)
 
+    def test_a_manifest_that_vanishes_after_the_parse_still_loads(
+        self, fleet, cache_on, monkeypatch
+    ):
+        """The ``${VAR}`` snapshot is a second read; a file deleted between the
+        parse and that read must not turn into an exception callers never
+        expected. The load succeeds and nothing is cached."""
+        real = Path.read_text
+
+        def vanishing(self: Path, *a: Any, **kw: Any) -> str:
+            if self.name == "alice.yaml":
+                raise FileNotFoundError(self.name)
+            return real(self, *a, **kw)
+
+        monkeypatch.setattr(Path, "read_text", vanishing)
+
+        cfg = load_agent_config("alice", fleet)
+
+        assert cfg is not None
+        assert cfg.model_primary == "openrouter/example/model-a"
+
     def test_with_the_flag_off_every_load_parses(self, fleet, parses):
         load_agent_config("alice", fleet)
         parses.clear()
@@ -472,46 +492,71 @@ class TestBinaryDigestCache:
         assert reads.count(script.name) == 2
 
 
-class TestToolsetPrepUsesTheModuleCache:
+class TestToolsetPrepChecksEveryRun:
+    """The run path must keep the guarantees ``load_adapters`` makes.
+
+    The module list the extension watcher keeps is refreshed on a float-mtime
+    change only, so serving it would hand a run an adapter built from an old
+    ``${VAR}`` value (a provider key rotated into the environment while the
+    engine runs) or from a file an atomic rename replaced under the old mtime.
+    """
+
+    @staticmethod
+    async def _served(agent_id: str = "main") -> list[adapters.AdapterConfig]:
+        from robothor.engine import toolset_prep
+
+        registry = MagicMock()
+        registry.register_adapter_tools = AsyncMock()
+        await toolset_prep._load_adapters(registry, SimpleNamespace(mcp_servers=None), agent_id)
+        (served,) = registry.register_adapter_tools.await_args.args
+        return list(served)
+
     @pytest.mark.asyncio
-    async def test_a_loaded_cache_is_used_instead_of_the_disk(
+    async def test_a_rotated_placeholder_value_reaches_the_next_run(
         self, adapter_dir, cache_on, monkeypatch
     ):
-        from robothor.engine import toolset_prep
+        monkeypatch.setattr(adapters, "ADAPTER_DIR", adapter_dir)
+        monkeypatch.setenv("EXAMPLE_ADAPTER_TOKEN", "old-token")
+        (adapter_dir / "a.yaml").write_text(
+            "name: a\ntransport: http\nurl: http://x/_mcp\nagents: ['*']\n"
+            "headers:\n  Authorization: 'Bearer ${EXAMPLE_ADAPTER_TOKEN}'\n"
+        )
+        adapters.refresh_adapters(adapter_dir)  # what the watcher does at start
+        await self._served()
+        monkeypatch.setenv("EXAMPLE_ADAPTER_TOKEN", "new-token")
 
-        adapters.refresh_adapters(adapter_dir)
-        disk = MagicMock(side_effect=AssertionError("read the adapter dir again"))
-        monkeypatch.setattr(adapters, "load_adapters", disk)
-        registry = MagicMock()
-        registry.register_adapter_tools = AsyncMock()
+        (a,) = await self._served()
 
-        await toolset_prep._load_adapters(registry, SimpleNamespace(mcp_servers=None), "main")
-
-        disk.assert_not_called()
-        (served,) = registry.register_adapter_tools.await_args.args
-        assert [a.name for a in served] == ["a"]
+        assert a.headers["Authorization"] == "Bearer new-token"
 
     @pytest.mark.asyncio
-    async def test_an_empty_cache_loads_once(self, adapter_dir, cache_on, monkeypatch):
-        from robothor.engine import toolset_prep
-
+    async def test_a_same_mtime_rewrite_reaches_the_next_run(
+        self, adapter_dir, cache_on, monkeypatch
+    ):
         monkeypatch.setattr(adapters, "ADAPTER_DIR", adapter_dir)
-        real = adapters.load_adapters
-        calls: list[int] = []
+        adapters.refresh_adapters(adapter_dir)
+        await self._served()
+        path = adapter_dir / "a.yaml"
+        before = path.stat()
+        tmp = adapter_dir / ".a.tmp"
+        tmp.write_text("name: a\ntransport: http\nurl: http://y/_mcp\nagents: ['*']\n")
+        os.utime(tmp, ns=(before.st_atime_ns, before.st_mtime_ns))
+        tmp.replace(path)
 
-        def counting(adapter_dir: Path | None = None) -> list[adapters.AdapterConfig]:
-            calls.append(1)
-            return real(adapter_dir)
+        (a,) = await self._served()
 
-        monkeypatch.setattr(adapters, "load_adapters", counting)
-        registry = MagicMock()
-        registry.register_adapter_tools = AsyncMock()
-        agent = SimpleNamespace(mcp_servers=None)
+        assert a.url == "http://y/_mcp"
 
-        await toolset_prep._load_adapters(registry, agent, "main")
-        await toolset_prep._load_adapters(registry, agent, "main")
+    @pytest.mark.asyncio
+    async def test_a_second_run_parses_nothing(self, adapter_dir, cache_on, monkeypatch, parses):
+        monkeypatch.setattr(adapters, "ADAPTER_DIR", adapter_dir)
+        await self._served()
+        parses.clear()
 
-        assert calls == [1]
+        (a,) = await self._served()
+
+        assert a.name == "a"
+        assert parses == []
 
 
 # ── Measurement ──────────────────────────────────────────────────────
