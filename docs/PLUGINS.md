@@ -1185,7 +1185,7 @@ root operator clearing the grant (`{"state": null}`) gives the decision back.
 
 How it works:
 
-* **Where it lives.** `tenant_plugin_grants` (migration 163,
+* **Where it lives.** `tenant_plugin_grants` (migration 164,
   `robothor/plugins/grants.py`), one row per `(tenant_id, plugin)` with who set
   it and when. Not in `crm_tenants.settings`: a child admin may PATCH its own
   tenant's settings, and a save replaces the whole object.

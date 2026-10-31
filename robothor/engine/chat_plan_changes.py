@@ -102,7 +102,7 @@ async def revise_plan(
     tenant_id: str,
     session_key: str,
 ) -> tuple[PlanState | None, str]:
-    from robothor.engine.chat import _extract_plan_text, _plan_is_expired
+    from robothor.engine.chat_plan_helpers import _extract_plan_text, _plan_is_expired
     from robothor.secrets.redaction import redact
 
     output = result_text(run)
