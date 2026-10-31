@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-488 settings in 18 groups.
+492 settings in 18 groups.
 
 ## autonomy
 
@@ -287,6 +287,7 @@ The agent execution layer: bind address, concurrency, pacing, sandbox.
 | `ROBOTHOR_EXEC_SPILL_MAX_BYTES` | int | `8388608` | no | no | unreleased | Largest `exec` spill file, in bytes (default 8 MiB). A command whose output is bigger has its spill cut at this size with a marker saying so, and the result says how much the file holds. Before the spill existed nothing from a command reached the disk at all, so a single `exec` under the 900-second ceiling could otherwise fill the workspace. A spill is also refused outright when writing it would leave the filesystem with less than 64 MiB free. |
 | `ROBOTHOR_HOST_EXEC_SOCKET` | str | _(empty)_ | `robothor-engine` | no | legacy | Unix socket of the host-execution service (robothor-host-exec). The service binds it (empty means /run/robothor-host/exec.sock) and the engine's main agent sends owner commands to it; empty in the engine means host execution is not offered and exec stays in the engine's own sandbox. |
 | `ROBOTHOR_IMPORTANCE_THRESHOLD` | float | `0.3` | `robothor-engine` | no | legacy | Minimum importance score for an extracted fact to be stored. |
+| `ROBOTHOR_LANE_BACKGROUND_YIELD_MS` | int | `200` | `robothor-engine` | no | unreleased | With ROBOTHOR_EXECUTION_LANES on: how long a background run asking for a slot holds back while an interactive run is waiting for one. 0 disables the yield. |
 | `ROBOTHOR_LOCAL_GATE_WAIT_SECONDS` | int | `120` | no | no | legacy | How long a local-tier run waits for a GPU slot before giving up. |
 | `ROBOTHOR_LOCAL_MAX_CONCURRENT` | int | `0` | no | no | legacy | Concurrency ceiling while on the local tier. 0 lets the host profile derive one from VRAM and core count. |
 | `ROBOTHOR_LOCAL_PACE_ALL_C` | int | `85` | no | no | legacy | GPU temperature (C) at which all local work is paced down. |
@@ -296,6 +297,8 @@ The agent execution layer: bind address, concurrency, pacing, sandbox.
 | `ROBOTHOR_MAIN_SESSION_KEY` | str | `agent:main:primary` | `robothor-engine` | no | legacy | Session key of the operator's primary conversation, which channel deliveries are dual-written into. |
 | `ROBOTHOR_MANIFEST_ALERT_DEDUP` | int | `3600` | `robothor-engine` | no | legacy | Seconds between repeat alerts about the same broken manifest. |
 | `ROBOTHOR_MAX_CONCURRENT_AGENTS` | int | `3` | no | no | legacy | How many agent runs may execute at once. |
+| `ROBOTHOR_MAX_CONCURRENT_BACKGROUND` | int | `2` | `robothor-engine` | no | unreleased | With ROBOTHOR_EXECUTION_LANES on: how many background runs (cron, hooks, workflows, everything without a person waiting) may execute at once. Read at the first run. |
+| `ROBOTHOR_MAX_CONCURRENT_INTERACTIVE` | int | `3` | `robothor-engine` | no | unreleased | With ROBOTHOR_EXECUTION_LANES on: how many interactive runs (Telegram, webchat, Slack, plugin channels, IDE, CLI) may execute at once. Read at the first run. |
 | `ROBOTHOR_MAX_CONCURRENT_SPAWNS` | int | `10` | no | no | legacy | How many sub-agent spawns may be in flight at once. |
 | `ROBOTHOR_MAX_ITERATIONS` | int | `20` | no | no | legacy | Default ceiling on tool-call iterations within one agent run. |
 | `ROBOTHOR_MAX_SPAWN_BATCH` | int | `10` | no | no | legacy | Largest number of sub-agents one parent may spawn in a single batch. |
@@ -425,6 +428,7 @@ Guardrails and feature gates. Ones marked governed are inventoried in `infra/fla
 | `ROBOTHOR_DISABLE_ALL_GUARDRAILS` | bool | `false` | `robothor-engine` | no | legacy | Master off switch for every guardrail. A break-glass control: an instance running with this set has no safety checks at all. |
 | `ROBOTHOR_DISABLE_ALL_RIPS` | bool | `false` | `robothor-engine` | no | legacy | Panic switch: forces every rip and every ladder above to 'off' regardless of its own flag. An instance left with this set runs with none of the controls it appears to have. |
 | `ROBOTHOR_DNC_MODE` | str | `observe` | `robothor-engine` | no | legacy | **governed.** Do-not-contact ladder position: observe logs an attempted contact of a suppressed person, enforce blocks it. |
+| `ROBOTHOR_EXECUTION_LANES` | bool | `false` | `robothor-engine` | no | unreleased | Run interactive turns and background work in separate lanes, each with its own concurrency limit and thread executor, and keep a local inference slot for interactive requests, so a burst of scheduled runs cannot delay a reply. Lane occupancy is on /health and /metrics. The thread executor split is installed at engine start, so a change needs a restart to take full effect. |
 | `ROBOTHOR_EXEC_ALLOWLIST_STRICT_ENABLED` | bool | `false` | `robothor-engine` | no | legacy | Switch for rejecting shell-chaining metacharacters in an allowlisted exec command, so an allowlisted binary cannot carry a second one. |
 | `ROBOTHOR_EXEC_ALLOWLIST_STRICT_MODE` | str | `observe` | `robothor-engine` | no | legacy | **governed.** Exec-allowlist ladder position: observe logs the chained command, enforce refuses it. |
 | `ROBOTHOR_EXEC_ENV_MODE` | str | `observe` | `robothor-engine` | no | 1.91.0 | What an agent's `exec` child may see of the engine's environment. enforce builds the child environment from an allowlist — the process essentials plus the non-secret platform settings — so no credential reaches an agent's shell unless that agent's own manifest grants it by name under `secrets:`. observe (the default, so an upgrade takes nothing from an agent that was using it) changes nothing and logs, per agent, the names enforce would have withheld. off disables the control. New installs are set to enforce by the init wizard. |

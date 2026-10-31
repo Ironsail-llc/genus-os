@@ -199,7 +199,10 @@ class TestBackgroundYieldsToAWaitingInteractiveTurn:
         t0 = time.perf_counter()
         async with pool.slot(Lane.BACKGROUND):
             waited = time.perf_counter() - t0
-        assert 0.08 <= waited < 0.3, f"background waited {waited * 1000:.1f} ms"
+        # At least the window, and bounded: the interactive turn is still
+        # waiting, so a background run that waited for it to clear never returns.
+        assert waited >= 0.08, f"background waited only {waited * 1000:.1f} ms"
+        assert pool.snapshot()["interactive"]["waiting"] == 1
 
         release.set()
         await asyncio.gather(holder, waiter)
@@ -342,3 +345,33 @@ class TestOccupancyIsVisible:
         assert block["enabled"] is True
         assert set(block) >= {"enabled", "interactive", "background"}
         assert block["background"]["limit"] >= 1
+
+
+class TestCancelledWaiters:
+    async def test_a_cancelled_waiter_never_frees_a_slot_twice(self, lanes_on):
+        pool = ExecutionLanes(interactive_limit=1, background_limit=2, yield_ms=0)
+        await pool.acquire(Lane.BACKGROUND)
+        await pool.acquire(Lane.BACKGROUND)
+        waiter = asyncio.create_task(pool.acquire(Lane.BACKGROUND))
+        await asyncio.sleep(0.01)
+        waiter.cancel()
+        pool.release(Lane.BACKGROUND)
+        with pytest.raises(asyncio.CancelledError):
+            await waiter
+        # One run still holds its slot.
+        assert pool.snapshot()["background"] == {"active": 1, "waiting": 0, "limit": 2}
+
+    async def test_a_waiter_cancelled_after_the_handover_passes_the_slot_on(self, lanes_on):
+        pool = ExecutionLanes(interactive_limit=1, background_limit=1, yield_ms=0)
+        await pool.acquire(Lane.BACKGROUND)
+        first = asyncio.create_task(pool.acquire(Lane.BACKGROUND))
+        second = asyncio.create_task(pool.acquire(Lane.BACKGROUND))
+        await asyncio.sleep(0.01)
+        pool.release(Lane.BACKGROUND)  # handed to `first`, not yet resumed
+        first.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await first
+        await asyncio.wait_for(second, timeout=1.0)
+        assert pool.snapshot()["background"]["active"] == 1
+        pool.release(Lane.BACKGROUND)
+        assert pool.snapshot()["background"]["active"] == 0
