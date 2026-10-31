@@ -235,7 +235,9 @@ async def _migrations(ctx: DoctorContext) -> Result:
             + ", ".join(broken[:5])
             + " — this cannot be repaired by applying migrations; see 'genus migrate --status'"
         )
-    ahead = [row["migration_id"] for row in rows if row["status"] == "AHEAD"]
+    from robothor.db.migrate import AHEAD_STATUS
+
+    ahead = [row["migration_id"] for row in rows if row["status"] == AHEAD_STATUS]
     if ahead and pending:
         # The migrator refuses this ledger (robothor/db/migrate.py), so neither
         # "the release runs" nor a --fix that applies the pending one is true.
