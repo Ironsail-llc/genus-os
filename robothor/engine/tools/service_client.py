@@ -30,6 +30,7 @@ from typing import Any
 import httpx
 
 from robothor.engine.tools.response_failure import response_failure
+from robothor.http_clients import shared_async_client
 
 logger = logging.getLogger(__name__)
 
@@ -124,8 +125,8 @@ async def call_service(
         return {**_offline_error(service), "circuit_open": True}
 
     try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.request(method, url, json=json, headers=headers)
+        client = shared_async_client("service_client")
+        resp = await client.request(method, url, json=json, headers=headers, timeout=timeout)
     except (httpx.ConnectError, httpx.ConnectTimeout) as e:
         _record_connect_failure(state)
         logger.warning("%s service offline (%s)", service, type(e).__name__)
