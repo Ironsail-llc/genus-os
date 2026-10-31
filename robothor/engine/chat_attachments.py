@@ -272,7 +272,9 @@ async def prepare_turn(
         return WebchatTurn(text=message)
     from robothor.engine.model_registry import image_capability
 
-    sees_images = image_capability(_model_for(config, session, session_key)) == "accepts"
+    # The manifest read is file I/O: off the loop.
+    model = await asyncio.to_thread(_model_for, config, session, session_key)
+    sees_images = image_capability(model) == "accepts"
     request_id = str(body.get("request_id") or uuid.uuid4())
     turn = WebchatTurn(text=message)
     noted_all: list[attachments.NotedAttachment] = []

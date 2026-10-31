@@ -31,6 +31,32 @@ CHECKPOINT_MAX_SECONDS = 300.0
 CHECKPOINT_SCHEMA_VERSION = 1  # increment when checkpoint format changes
 
 
+#: What an image block becomes in a checkpoint row. The picture is base64 of
+#: up to megabytes and a checkpoint is written many times per run; the turn's
+#: text already names the file's path, which is what a resumed run needs.
+IMAGE_PLACEHOLDER = "[image omitted from the checkpoint; its path is named in the turn]"
+
+
+def _without_images(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """A copy of *messages* with every image block replaced by a short note."""
+    out: list[dict[str, Any]] = []
+    for msg in messages:
+        content = msg.get("content") if isinstance(msg, dict) else None
+        if not isinstance(content, list) or not any(
+            isinstance(b, dict) and b.get("type") in ("image_url", "image") for b in content
+        ):
+            out.append(msg)
+            continue
+        blocks = [
+            {"type": "text", "text": IMAGE_PLACEHOLDER}
+            if isinstance(b, dict) and b.get("type") in ("image_url", "image")
+            else b
+            for b in content
+        ]
+        out.append({**msg, "content": blocks})
+    return out
+
+
 @dataclass
 class CheckpointManager:
     """Manages mid-run state snapshots."""
@@ -110,7 +136,7 @@ class CheckpointManager:
                     (
                         self.run_id,
                         step_number,
-                        json.dumps(messages, default=str),
+                        json.dumps(_without_images(messages), default=str),
                         json.dumps(scratchpad, default=str) if scratchpad else None,
                         json.dumps(plan, default=str) if plan else None,
                         CHECKPOINT_SCHEMA_VERSION,
