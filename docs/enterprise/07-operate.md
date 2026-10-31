@@ -35,7 +35,7 @@ request regardless of what the page shows.
 | Page | Answers | Who sees it |
 |---|---|---|
 | **Runs** and **Fleet** | What ran, when, what it delivered, which agents are scheduled and which are off | owner, admin |
-| **Memory** | What the instance believes, and what a forget would actually do | owner, admin |
+| **Memory** | What the instance believes, what a forget would actually do, and corrections | owner, admin |
 | **Audit** | Every audited event, plus the guardrail change log, with a CSV export | owner, admin, **auditor** |
 | **Logs** | A unit's journal, redacted | owner, admin |
 
@@ -52,6 +52,13 @@ episodes cite the fact and which always-in-context blocks quote it, and the
 reason you type goes into the audit record. A fact under twelve characters is
 too short to check against the blocks, and the page says so rather than
 claiming there are none.
+
+**Edit corrects a fact and keeps the original.** Change the text, the entities
+or both, and give a reason. The original goes into the fact's history before
+the change, the audit record carries the fact id and your reason (never the
+text), and the fact shows **Operator-confirmed** afterwards. An edit that would
+duplicate another active fact is refused. The fact is not re-embedded, so
+vector search keeps ranking it by its old wording until it is.
 
 **Audit** has the audit log and the guardrail change log, and **Export CSV**
 carries the same filters the table is showing, up to five thousand rows. Two

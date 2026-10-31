@@ -979,6 +979,20 @@ everything, and a warning that cries wolf is the one that gets ignored.
 and only the named row changes — supersession chains are not followed. A second
 forget is a `409`; a fact in another tenant is a `404`. The audit row carries
 the fact id and the reason, never the text.
+`PATCH /api/memory/facts/{id}` corrects one **active** fact: a body of
+`fact_text`, `entities` (a list of names) or both, and a `reason` under the
+same 3–500 rule. Before the row changes, its original text, entities and the
+editing operator are written to `memory_facts_audit` with
+`reason = 'operator_edit'`. The row then carries
+`metadata.operator_confirmed = {at, by}`, which `GET /api/memory/facts` returns
+as `operator_confirmed`, and a recomputed `content_hash`. An edit whose text
+matches another active fact is a `409` ("an active fact with this text already
+exists"); an inactive fact is a `422`; another tenant's fact is a `404`. The
+`memory.edit` audit event carries the fact id and the reason, never the old or
+the new text. **The embedding is not recomputed.** Nothing backfills a missing
+embedding, so a text edit keeps the old vector and sets
+`metadata.embedding_stale = true`: keyword search finds the new text at once,
+while vector search ranks the fact by its old wording until it is re-embedded.
 
 **Audit.** `GET /api/controls/audit` reads the guardrail change log
 (`feature_flag_audit`, written on every `PATCH /api/controls`), newest first.
@@ -1035,6 +1049,15 @@ supersession chain is followed, and **a memory block that quotes the text still
 quotes it** — an agent carrying that block keeps repeating the fact until the
 block is rewritten. For a fact under twelve characters the page says the text
 is too short to check against the blocks rather than claiming there are none.
+
+**Edit** corrects a fact that the pipeline got wrong. It opens an editor under
+the fact with its text, its entities as a comma-separated list (shown back as
+chips), and a reason of 3–500 characters for the audit record. Saving keeps the
+original text in the fact's history first, then shows the row as the bridge
+stored it, with an **Operator-confirmed** badge. If another active fact already
+says the same thing, the save is refused with that message and the editor stays
+open. Inactive facts cannot be edited. An edit does not re-embed the fact, so
+vector search keeps ranking it by its old wording until it is re-embedded.
 
 **Observe › Audit** has two tabs: the audit log itself, and the guardrail
 change log (every `PATCH /api/controls`, with the reason its operator typed).
