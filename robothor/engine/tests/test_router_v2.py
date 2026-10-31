@@ -115,9 +115,7 @@ async def _turn(runner, agent, message: str, **kwargs: Any) -> tuple[Any, FakeLL
 @pytest.mark.usefixtures("_mock_run_persistence")
 class TestLongChatTurn:
     @pytest.mark.asyncio
-    async def test_flag_on_long_prose_makes_no_planner_call(
-        self, runner, chat_agent, monkeypatch
-    ):
+    async def test_flag_on_long_prose_makes_no_planner_call(self, runner, chat_agent, monkeypatch):
         monkeypatch.setenv("ROBOTHOR_ROUTER_V2", "1")
         run, fake = await _turn(runner, chat_agent, LONG_PROSE)
         assert run.status == RunStatus.COMPLETED
@@ -125,9 +123,7 @@ class TestLongChatTurn:
         assert len(fake.calls) == 1
 
     @pytest.mark.asyncio
-    async def test_flag_off_reproduces_todays_planner_call(
-        self, runner, chat_agent, monkeypatch
-    ):
+    async def test_flag_off_reproduces_todays_planner_call(self, runner, chat_agent, monkeypatch):
         monkeypatch.delenv("ROBOTHOR_ROUTER_V2", raising=False)
         run, fake = await _turn(runner, chat_agent, LONG_PROSE)
         assert run.status == RunStatus.COMPLETED
@@ -194,18 +190,33 @@ class TestRouteSignal:
         assert route.verification is True
 
     def test_three_listed_steps_request_planning(self, chat_agent):
-        assert _route(chat_agent, _numbered(3), TriggerType.WEBCHAT).planning is True
+        message = _numbered(3) + "\n" + LONG_PROSE
+        assert _route(chat_agent, message, TriggerType.WEBCHAT).planning is True
 
     def test_two_listed_steps_do_not(self, chat_agent):
-        assert _route(chat_agent, _numbered(2), TriggerType.WEBCHAT).planning is not True
+        message = _numbered(2) + "\n" + LONG_PROSE
+        assert _route(chat_agent, message, TriggerType.WEBCHAT).planning is not True
 
     def test_bulleted_steps_count(self, chat_agent):
-        message = "Today:\n- book the room\n- send the invite\n- write the agenda"
+        message = "Today:\n- book the room\n- send the invite\n- write the agenda\n" + LONG_PROSE
         assert _route(chat_agent, message, TriggerType.TELEGRAM).planning is True
 
     def test_sequencing_words_count(self, chat_agent):
-        message = "Find the file, then fix the typo, after that run the tests and finally push."
+        message = (
+            "Find the file, then fix the typo, after that run the tests and finally push. "
+            + LONG_PROSE
+        )
         assert _route(chat_agent, message, TriggerType.WEBCHAT).planning is True
+
+    def test_the_signal_never_adds_a_planner_call_to_a_short_message(self, chat_agent):
+        """The signal only keeps a plan the length rule would have bought; a
+        short message is routed exactly as it is today."""
+        from robothor.engine.router import get_route_config
+
+        message = _numbered(3)
+        assert len(message) < 500
+        today = get_route_config(message, 0)
+        assert _route(chat_agent, message, TriggerType.WEBCHAT) == today
 
     @pytest.mark.parametrize("trigger", [TriggerType.CRON, TriggerType.WORKFLOW])
     def test_non_interactive_triggers_are_unchanged(self, chat_agent, trigger):
