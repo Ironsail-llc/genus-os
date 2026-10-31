@@ -24,7 +24,7 @@ _SQL = """
            count(*) AS n
       FROM agent_run_steps
      WHERE step_type = 'budget_stop'
-       AND started_at >= now() - interval '24 hours'
+       AND created_at >= now() - interval '24 hours'
      GROUP BY 1, 2
      ORDER BY 3 DESC, 1, 2
 """

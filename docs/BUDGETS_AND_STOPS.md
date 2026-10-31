@@ -45,6 +45,13 @@ runaway-token cap keeps its `critical` alert in both modes.
 | Fleet hourly cost cap (`hourly_cost_cap`) | `ROBOTHOR_HOURLY_COST_CAP_USD` (5.0); `ROBOTHOR_HOURLY_COST_CAP_MODE` (empty) | Scheduled runs are admitted past the cap. The run carries a `budget_stop` step with mode `observe`, and a warning alert is raised. | Scheduled runs are deferred (a SKIPPED run row) once the rolling hour reaches the cap. The SKIPPED row carries the step with mode `enforce`. |
 | Runaway-token hard cap (`runaway_token_cap`) | `ROBOTHOR_RUNAWAY_HARD_CAP_TOKENS` (5,000,000); `ROBOTHOR_RUNAWAY_HARD_CAP_MODE` (empty) | The step (mode `observe`) and the critical alert are recorded once. The run continues. | The run ends with `budget_exhausted`, and the step has mode `enforce`. |
 
+Both modes and the hourly cap are ordinary settings: set them in the
+environment, in config.yaml, or with `genus config set`, and the engine reads
+them at start. The runaway cap's token count comes from the environment
+variable only; setting it in config.yaml alone switches the guard to enforce at
+the default. When the runaway cap observes, its pages say the run was **not**
+contained.
+
 The hourly cap is only consulted when fleet admission is on
 (`ROBOTHOR_ADMISSION_ENABLED` with `ROBOTHOR_ADMISSION_MODE`). It never applies
 to interactive runs. `ROBOTHOR_HOURLY_COST_CAP_MODE=observe` wins over an
@@ -106,6 +113,11 @@ or workflow run partway through.
 `robothor/autonomy/budget.py` is a monthly spend projection, not a run stop.
 
 ## Open questions for the operator
+
+- **No default spend stop.** With neither cap set, no spend budget stops any
+  run by default. A runaway interactive run is bounded only by its timeout
+  (86,400 s on Telegram). This is the intended change and needs your explicit
+  sign-off. To restore the old protection, set `ROBOTHOR_RUNAWAY_HARD_CAP_MODE=enforce`.
 
 - **Iteration safety cap.** `safety_cap` defaults to 200 and stops a run
   partway. It is recorded as a `budget_stop` step and still enforces. It is

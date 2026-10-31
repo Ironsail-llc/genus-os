@@ -264,7 +264,8 @@ def _int_env_with_fallback(name: str, default: int) -> int:
 # session.run.input_tokens + session.run.output_tokens across the run.
 #   - Crossing ALERT fires a (batched — see RUNAWAY_SOFT_ALERT_WINDOW_SECONDS
 #     below) Telegram warning so the operator can decide whether to intervene.
-#   - Reaching HARD_CAP stops the loop cleanly with budget_exhausted=True.
+#   - Reaching HARD_CAP records a budget_stop step and pages; it stops the loop
+#     (budget_exhausted=True) only when set explicitly or _MODE=enforce.
 # These are fleet-wide, env-tunable but NOT per-agent-manifest-configurable,
 # so a misconfigured manifest can never disable the protection. A main run at
 # Apr 22 16:07 consumed 3.2M input tokens before hitting the 86400s circuit
@@ -273,7 +274,7 @@ RUNAWAY_TOKEN_ALERT = _int_env_with_fallback("ROBOTHOR_RUNAWAY_ALERT_TOKENS", 50
 RUNAWAY_TOKEN_HARD_CAP = _int_env_with_fallback("ROBOTHOR_RUNAWAY_HARD_CAP_TOKENS", 5_000_000)
 
 if RUNAWAY_TOKEN_ALERT >= RUNAWAY_TOKEN_HARD_CAP:
-    # Still safe (the hard cap always protects), but the soft-alert branch
+    # The soft-alert branch
     # becomes unreachable — say so at startup instead of failing silently.
     logger.warning(
         "ROBOTHOR_RUNAWAY_ALERT_TOKENS (%d) >= ROBOTHOR_RUNAWAY_HARD_CAP_TOKENS (%d): "
@@ -373,7 +374,7 @@ def _send_soft_runaway_alert(
         body = (
             f"{count} run{'s' if count != 1 else ''} crossed the soft token "
             f"threshold ({RUNAWAY_TOKEN_ALERT:,}) since the last page: {run_list}. "
-            f"All contained by the budget guard (hard cap {RUNAWAY_TOKEN_HARD_CAP:,})."
+            f"{budget_stops.runaway_cap_note()} (hard cap {RUNAWAY_TOKEN_HARD_CAP:,})."
         )
         get_task_registry().spawn(
             _alert("info", "Runaway-token alerts (batched summary)", body),
@@ -389,7 +390,7 @@ def _send_soft_runaway_alert(
     body = (
         f"run_id={run_id} tokens={tokens:,} (soft threshold {RUNAWAY_TOKEN_ALERT:,}, "
         f"hard cap {RUNAWAY_TOKEN_HARD_CAP:,}) model={model_used}. "
-        f"Contained by the budget guard — cost so far {cost_note}. "
+        f"{budget_stops.runaway_cap_note()} — cost so far {cost_note}. "
         f"Further soft alerts batched for {RUNAWAY_SOFT_ALERT_WINDOW_SECONDS // 60}min."
     )
     get_task_registry().spawn(

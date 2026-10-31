@@ -27,7 +27,6 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import logging
-import os
 import time
 from datetime import UTC, datetime
 from typing import Any, Literal
@@ -50,25 +49,50 @@ _pending: contextvars.ContextVar[tuple[dict[str, Any], ...]] = contextvars.Conte
 )
 
 
-def spend_cap_mode(limit_var: str, mode_var: str) -> Mode:
+def _providers() -> Any:
+    from robothor.settings import get_settings
+
+    return get_settings().providers
+
+
+def spend_cap_mode(mode: Any, limit_explicit: bool) -> Mode:
     """``enforce`` only when the operator asked for it.
 
-    The mode variable wins when it says ``observe`` or ``enforce``. Without it,
-    a limit set explicitly in the environment enforces, and a limit that is
-    only the built-in default observes.
+    The mode setting wins when it says ``observe`` or ``enforce``. Without it,
+    a limit the operator set explicitly enforces, and a limit that is only the
+    built-in default observes.
     """
-    raw = os.environ.get(mode_var, "").strip().lower()
+    raw = str(mode or "").strip().lower()
     if raw in ("observe", "enforce"):
         return raw  # type: ignore[return-value]
-    return "enforce" if os.environ.get(limit_var, "").strip() else "observe"
+    return "enforce" if limit_explicit else "observe"
 
 
 def hourly_cost_cap_mode() -> Mode:
-    return spend_cap_mode("ROBOTHOR_HOURLY_COST_CAP_USD", "ROBOTHOR_HOURLY_COST_CAP_MODE")
+    """Read through the settings, so ``genus config set`` and config.yaml work
+    exactly like the environment, for the mode and for the cap itself."""
+    providers = _providers()
+    return spend_cap_mode(
+        providers.hourly_cost_cap_mode, "hourly_cost_cap_usd" in providers.model_fields_set
+    )
 
 
 def runaway_hard_cap_mode() -> Mode:
-    return spend_cap_mode("ROBOTHOR_RUNAWAY_HARD_CAP_TOKENS", "ROBOTHOR_RUNAWAY_HARD_CAP_MODE")
+    """Read through the settings, like :func:`hourly_cost_cap_mode`."""
+    providers = _providers()
+    return spend_cap_mode(
+        providers.runaway_hard_cap_mode, "runaway_hard_cap_tokens" in providers.model_fields_set
+    )
+
+
+def runaway_cap_note() -> str:
+    """What the runaway pages may honestly say about containment."""
+    if runaway_hard_cap_mode() == "enforce":
+        return "Contained by the budget guard"
+    return (
+        "NOT contained: the hard cap observes and the run continues "
+        "(set ROBOTHOR_RUNAWAY_HARD_CAP_MODE=enforce to stop such runs)"
+    )
 
 
 def _detail(

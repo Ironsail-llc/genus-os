@@ -174,9 +174,16 @@ class EngineConfig:
             nats_url=os.environ.get("ROBOTHOR_NATS_URL", ""),
             max_concurrent_spawns=int(os.environ.get("ROBOTHOR_MAX_CONCURRENT_SPAWNS", "10")),
             max_spawn_batch=int(os.environ.get("ROBOTHOR_MAX_SPAWN_BATCH", "10")),
-            hourly_cost_cap_usd=float(os.environ.get("ROBOTHOR_HOURLY_COST_CAP_USD", "5.0")),
+            hourly_cost_cap_usd=_hourly_cost_cap_usd(),
             hourly_cost_cap_mode=hourly_cost_cap_mode(),
         )
+
+
+def _hourly_cost_cap_usd() -> float:
+    """Through the settings, so a cap in config.yaml is the cap that applies."""
+    from robothor.settings import get_settings
+
+    return float(get_settings().providers.hourly_cost_cap_usd)
 
 
 _ENV_VAR_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
