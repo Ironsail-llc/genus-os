@@ -2,7 +2,7 @@
  * Every composer control names itself. Plan and Deep were icon buttons with a
  * tooltip and no accessible name, so a screen reader announced "button".
  */
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ChatPanel } from "../chat-panel";
@@ -35,5 +35,41 @@ describe.each([
     expect(screen.getByRole("button", { name: "Plan mode" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Deep mode" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Tools and MCP servers" })).toBeVisible();
+  });
+});
+
+describe("ChatPanel Tools button and the default agent", () => {
+  it("asks about the fleet's default agent, never a guessed one", async () => {
+    let releaseListing!: () => void;
+    const gate = new Promise<void>((resolve) => { releaseListing = resolve; });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/bridge/api/agent-manifests") {
+        await gate;
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ default_agent: "example-main", agents: [{ id: "example-main", name: "Example", chattable: true }] }),
+        };
+      }
+      return { ok: true, status: 200, json: async () => ({ messages: [], agents: [], active: false, servers: [] }) };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<ChatPanel />);
+
+    const button = screen.getByRole("button", { name: "Tools and MCP servers" });
+    expect(button).toBeDisabled();
+
+    releaseListing();
+    await waitFor(() => expect(button).toBeEnabled());
+    fireEvent.click(button);
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.map(([url]) => String(url))).toContain(
+        "/api/bridge/api/agents/example-main/tools"
+      )
+    );
+    expect(fetchMock.mock.calls.map(([url]) => String(url))).not.toContain(
+      "/api/bridge/api/agents/main/tools"
+    );
   });
 });

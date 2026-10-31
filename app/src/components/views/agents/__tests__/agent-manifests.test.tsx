@@ -1196,6 +1196,15 @@ describe("AgentManifests — opened from a link", () => {
     expect(panel).toBeVisible();
   });
 
+  it("consumes the link, so a reload does not open the editor again", async () => {
+    window.history.replaceState(null, "", "/?v=agents&agent=invoice-chaser");
+    await renderPage();
+
+    await screen.findByTestId("agent-panel");
+    expect(new URLSearchParams(window.location.search).has("agent")).toBe(false);
+    expect(new URLSearchParams(window.location.search).get("v")).toBe("agents");
+  });
+
   it("opens nothing for an id the fleet does not have", async () => {
     window.history.replaceState(null, "", "/?v=agents&agent=no-such-agent");
     await renderPage();

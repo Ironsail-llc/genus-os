@@ -117,3 +117,12 @@ def test_an_agent_id_that_is_not_an_identifier_never_reaches_the_engine(
 
     assert response.status_code == 422
     assert not fake_engine.calls
+
+
+def test_a_trailing_newline_in_the_id_is_refused_as_a_422(controls_client_as_operator, fake_engine):
+    """``re.match`` with ``$`` admits ``abc\\n``, which the engine client then
+    refuses as a malformed path -- a 500 where a 422 belongs."""
+    response = controls_client_as_operator.get("/api/agents/abc%0A/tools")
+
+    assert response.status_code == 422
+    assert not fake_engine.calls

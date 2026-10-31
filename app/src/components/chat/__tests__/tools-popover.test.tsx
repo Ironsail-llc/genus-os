@@ -160,6 +160,76 @@ describe("ToolsPopover — the dialog", () => {
     expect(await screen.findByTestId("tools-error")).toBeVisible();
   });
 
+  it("shows the engine's own words when it refuses the manifest", async () => {
+    installFetch({
+      [TOOLS_URL]: {
+        status: 422,
+        body: { error: "Agent manifest rejected by schema: example-agent" },
+      },
+    });
+    render(<ToolsPopover agentId="example-agent" />);
+    fireEvent.click(screen.getByRole("button", { name: "Tools and MCP servers" }));
+
+    expect(await screen.findByTestId("tools-error")).toHaveTextContent(
+      "Agent manifest rejected by schema: example-agent"
+    );
+  });
+
+  it("does not call an expired session an engine outage", async () => {
+    installFetch({ [TOOLS_URL]: { status: 401, body: { error: "unauthorized" } } });
+    render(<ToolsPopover agentId="example-agent" />);
+    fireEvent.click(screen.getByRole("button", { name: "Tools and MCP servers" }));
+
+    const error = await screen.findByTestId("tools-error");
+    expect(error).not.toHaveTextContent(/engine/i);
+    expect(error).toHaveTextContent(/sign in/i);
+  });
+
+  it("is disabled until the chat knows which agent it is talking to", () => {
+    const fetchMock = installFetch();
+    render(<ToolsPopover agentId={null} />);
+
+    const button = screen.getByRole("button", { name: "Tools and MCP servers" });
+    expect(button).toBeDisabled();
+    fireEvent.click(button);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("ignores a reply for an agent the chat has since left", async () => {
+    // The first agent's tools answer only after the second agent's have.
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    const OTHER_URL = "/api/bridge/api/agents/other-agent/tools";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === TOOLS_URL) {
+          await firstGate;
+          return { ok: true, status: 200, json: async () => TOOLS } as Response;
+        }
+        if (url === OTHER_URL) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({ ...TOOLS, agent: "other-agent", count: 1, groups: { core: ["read_file"], plugins: {}, mcp: {}, opt_in: [] } }),
+          } as Response;
+        }
+        return { ok: true, status: 200, json: async () => SERVERS } as Response;
+      })
+    );
+    const { rerender } = render(<ToolsPopover agentId="example-agent" />);
+    fireEvent.click(screen.getByRole("button", { name: "Tools and MCP servers" }));
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+    rerender(<ToolsPopover agentId="other-agent" />);
+    fireEvent.click(screen.getByRole("button", { name: "Tools and MCP servers" }));
+    expect(await screen.findByTestId("tools-total")).toHaveTextContent("1 tool");
+
+    releaseFirst();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(screen.getByTestId("tools-total")).toHaveTextContent("1 tool");
+  });
+
   it("opens as a sheet on mobile with the same content", async () => {
     const { dialog } = await openDialog(true);
 

@@ -79,6 +79,7 @@ class FakePool:
                 "transport": "stdio",
                 "command": f"/opt/{SENTINEL}/bin/server",
                 "url": None,
+                "env": {"EXAMPLE_TOKEN": SENTINEL},
                 "running": True,
                 "initialized": True,
                 "protocol": "2025-06-18",
@@ -88,6 +89,7 @@ class FakePool:
                 "transport": "http",
                 "command": None,
                 "url": f"https://{SENTINEL}.example.invalid/mcp",
+                "headers": {"Authorization": f"Bearer {SENTINEL}"},
                 "running": True,
                 "initialized": False,
                 "protocol": "2025-06-18",
@@ -184,6 +186,90 @@ class TestAgentTools:
         assert ".yaml" not in repr(body)
 
 
+class TestRefusedManifest:
+    def test_a_manifest_the_schema_refuses_is_a_422_not_a_404(
+        self, tmp_path, monkeypatch, registry
+    ):
+        (tmp_path / "broken-agent.yaml").write_text(
+            "id: broken-agent\nname: Broken\ntools_allowed: read_file\n"
+        )
+        from robothor.engine import admin_tools
+
+        monkeypatch.setattr(admin_tools, "_manifest_dir", lambda: tmp_path)
+        monkeypatch.setenv("ROBOTHOR_MANIFEST_SCHEMA_MODE", "enforce")
+
+        response = _client().get("/api/admin/agents/broken-agent/tools")
+
+        assert response.status_code == 422
+        assert "schema" in response.json()["error"]
+        assert not registry.configs
+
+
+class TestUnresolvedTools:
+    """Reading an agent's tools must not spend the registry's warn-once alert.
+
+    ``_get_filtered_names`` marks an agent whose ``tools_allowed`` names a tool
+    with no schema and escalates it to the operator -- once per process, and
+    only when there is an event loop to spawn the alert on. Computed on a
+    worker thread, the dialog would mark the agent and drop the alert, and the
+    operator would never hear about that agent's missing tool.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _reset_warn_dedup(self):
+        from robothor.engine.tools.registry import ToolRegistry
+
+        ToolRegistry.reset_unresolved_warnings()
+        yield
+        ToolRegistry.reset_unresolved_warnings()
+
+    def test_the_escalation_still_reaches_the_operator(self, tmp_path, monkeypatch):
+        import asyncio
+
+        from robothor.engine import admin_tools
+        from robothor.engine.tools.registry import ToolRegistry
+
+        (tmp_path / "drifted-agent.yaml").write_text(
+            "id: drifted-agent\nname: Drifted\ntools_allowed: [read_file, bogus_d3_tool]\n"
+        )
+        monkeypatch.setattr(admin_tools, "_manifest_dir", lambda: tmp_path)
+
+        escalations: list[tuple[str, list[str], bool]] = []
+
+        def _record(agent_id, unresolved):
+            try:
+                asyncio.get_running_loop()
+                has_loop = True
+            except RuntimeError:
+                has_loop = False
+            escalations.append((agent_id, unresolved, has_loop))
+
+        monkeypatch.setattr(ToolRegistry, "_escalate_unresolved", staticmethod(_record))
+        real = ToolRegistry()
+        with (
+            patch("robothor.engine.tools.registry.get_registry", return_value=real),
+            patch("robothor.plugins.inventory.inventory", return_value=()),
+        ):
+            response = _client().get("/api/admin/agents/drifted-agent/tools")
+
+        assert response.status_code == 200
+        assert escalations == [("drifted-agent", ["bogus_d3_tool"], True)], (
+            "the alert was attempted where it cannot be spawned, and the "
+            "warn-once flag is now spent"
+        )
+
+    def test_plugin_schemas_are_refreshed_before_the_names_are_read(self, agents_dir, registry):
+        registry.refreshed = 0
+
+        def _refresh():
+            registry.refreshed += 1
+
+        registry._refresh_plugin_schemas_if_stale = _refresh
+        _client().get("/api/admin/agents/example-agent/tools")
+
+        assert registry.refreshed == 1
+
+
 class TestMcpServers:
     def test_it_lists_each_server_with_health_and_a_tool_count(self, registry):
         response = _client().get("/api/admin/mcp/servers")
@@ -206,8 +292,14 @@ class TestMcpServers:
 
         assert SENTINEL not in response.text
         for server in response.json()["servers"]:
-            assert "command" not in server
-            assert "url" not in server
+            assert set(server) <= {
+                "name",
+                "transport",
+                "running",
+                "initialized",
+                "protocol",
+                "tool_count",
+            }
 
 
 class TestScope:
