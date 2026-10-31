@@ -218,6 +218,9 @@ def _mount_subsystem_routers(
 
         init_chat(runner, config)
         app.include_router(chat_router)
+        from robothor.engine.chat_steer import router as chat_steer_router
+
+        app.include_router(chat_steer_router)  # /chat/steer, /chat/interrupt
         init_ide(runner, config)
         app.include_router(ide_router)
 

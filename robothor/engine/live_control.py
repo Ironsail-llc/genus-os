@@ -105,6 +105,16 @@ def conversation_scope(key: str, taken: list[str] | None = None) -> Iterator[lis
         _pending_key.reset(token)
 
 
+def mark_turn(key: str) -> None:
+    """:func:`conversation_scope` for a context that ends with its task.
+
+    ``chat_control.start`` runs this inside the copied context of a webchat
+    turn's task, so the run that task starts belongs to ``key``. Nothing is
+    reset: the context is discarded with the task.
+    """
+    _pending_key.set((key, []) if key else None)
+
+
 def claim_conversation(session: Any) -> None:
     """Give the run going live now the scope's key and steer log; later runs get none.
 

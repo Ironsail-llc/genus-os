@@ -2,8 +2,9 @@
 
 ``POST /chat/steer`` and ``POST /chat/interrupt`` reach the run of the turn the
 body names by ``request_id``; ``GET /chat/steer`` says whether the switch is on.
-Included into the chat router (``chat.py``), so they share its ``/chat`` prefix
-and its authentication dependency. See ``live_control.py`` for how a turn's run
+Mounted beside the chat router (``health.py``) under the same ``/chat`` prefix
+and the same authentication. ``chat_control.start(..., steerable=True)`` marks the
+run a ``/chat/send`` turn starts. See ``live_control.py`` for how a turn's run
 is found, and ``docs/channels/webchat.md`` for the behaviour.
 """
 
@@ -13,23 +14,23 @@ import asyncio
 import logging
 from typing import Any
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
 from robothor.engine import live_control
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter()
+
+def _require_chat_auth(request: Request) -> None:
+    """The chat router's own authentication, so these routes are never looser."""
+    from robothor.engine.chat import _require_chat_auth as require
+
+    require(request)
 
 
-def turn_key(auth: Any, session_key: str, body: dict[str, Any]) -> str:
-    """The key ``/chat/send`` tags its run with; ``""`` (untagged) without a request id.
-
-    Only a turn that names its request id can be steered or stopped.
-    """
-    request_id = body.get("request_id")
-    return webchat_run_key(auth, session_key, request_id) if request_id else ""
+#: Mounted beside the chat router (``health.py``), under the same prefix and auth.
+router = APIRouter(prefix="/chat", dependencies=[Depends(_require_chat_auth)])
 
 
 def webchat_run_key(auth: Any, session_key: str, request_id: Any) -> str:

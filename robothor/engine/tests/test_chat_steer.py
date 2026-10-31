@@ -20,6 +20,7 @@ from httpx import ASGITransport, AsyncClient
 
 from robothor.engine import live_control, session_registry
 from robothor.engine.chat import _sessions, init_chat, router
+from robothor.engine.chat_steer import router as steer_router
 from robothor.engine.loop_guards import GuardState, check_iteration_guards
 from robothor.engine.models import RunStatus, TriggerType
 from robothor.engine.request_runtime import observe_request
@@ -60,6 +61,7 @@ async def client(engine_config, mock_runner):
     with patch("robothor.engine.chat.load_all_sessions", return_value={}):
         init_chat(mock_runner, engine_config)
     app.include_router(router)
+    app.include_router(steer_router)  # mounted beside the chat router, as health.py does
     with (
         patch("robothor.engine.chat.save_exchange_async", new=AsyncMock()),
         patch("robothor.memory.conversation_ingest.ingest_conversation_session", new=AsyncMock()),
@@ -296,3 +298,13 @@ async def test_a_steer_that_never_landed_is_not_claimed_as_heard(client, mock_ru
     await task
     users = [m["content"] for m in get_shared_session(KEY).history if m["role"] == "user"]
     assert users == ["draft the report"]
+
+
+def test_the_engine_mounts_the_steer_routes_beside_the_chat_router():
+    """They live in chat_steer.py (chat.py is at its size ratchet), so the engine
+    app has to mount them itself."""
+    import inspect
+
+    from robothor.engine import health
+
+    assert "chat_steer" in inspect.getsource(health)

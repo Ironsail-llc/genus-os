@@ -47,7 +47,6 @@ from fastapi.responses import JSONResponse
 from starlette.responses import StreamingResponse
 
 from robothor.constants import DEFAULT_TENANT
-from robothor.engine import chat_steer, live_control
 from robothor.engine.chat_delivery import deliver_interruption, deliver_plan_interruption
 from robothor.engine.chat_delivery import final_result as delivery_result
 from robothor.engine.chat_history import MAX_HISTORY as _MAX_HISTORY
@@ -82,7 +81,7 @@ from robothor.engine.chat_store import (
 from robothor.engine.feature_flags import per_user_sessions_mode
 from robothor.engine.live_inbox import LiveInbox, history_text
 from robothor.engine.models import PLAN_TTL_SECONDS, DeepRunState, PlanState, RunStatus, TriggerType
-from robothor.engine.runtime.chat_control import request_key, start, stop
+from robothor.engine.runtime.chat_control import start, stop
 from robothor.engine.sanitize import sanitize_log
 
 if TYPE_CHECKING:
@@ -389,7 +388,6 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
         return single_event_response(join_running_turn(session, auth, session_key, body))
     inbox = LiveInbox()
     pending: list[str] = []
-    live_key = chat_steer.turn_key(auth, session_key, body)  # "" without a request_id
 
     queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
 
@@ -424,23 +422,22 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
             if len(parts) >= 2:
                 agent_id = parts[1]
 
-            with live_control.conversation_scope(live_key):  # /chat/steer finds it
-                run = await _runner.execute(
-                    agent_id=agent_id,
-                    message=message,
-                    trigger_type=TriggerType.WEBCHAT,
-                    trigger_detail=f"webchat:{session_key}",
-                    on_content=on_content,
-                    on_tool=on_tool,
-                    on_status=on_status,
-                    model_override=session.model_override,
-                    conversation_history=list(session.history),
-                    tenant_id=auth.tenant_id,
-                    user_id=auth.user_id,
-                    user_role=auth.role,
-                    identity=identity,
-                    live_inbox=inbox,
-                )
+            run = await _runner.execute(
+                agent_id=agent_id,
+                message=message,
+                trigger_type=TriggerType.WEBCHAT,
+                trigger_detail=f"webchat:{session_key}",
+                on_content=on_content,
+                on_tool=on_tool,
+                on_status=on_status,
+                model_override=session.model_override,
+                conversation_history=list(session.history),
+                tenant_id=auth.tenant_id,
+                user_id=auth.user_id,
+                user_role=auth.role,
+                identity=identity,
+                live_inbox=inbox,
+            )
             pending.extend(seal_live_inbox(session, inbox))
 
             delivered = await delivery_result(run, auth)
@@ -528,7 +525,7 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
                 session.active_task = None
 
     # Start agent as background task
-    task = start(session, run_agent, auth, session_key, body.get("request_id"))
+    task = start(session, run_agent, auth, session_key, body.get("request_id"), steerable=True)
     register_live_inbox(session, auth, inbox)  # before any await: see chat_live.py
 
     async def sse_generator() -> AsyncGenerator[str, None]:
@@ -632,6 +629,7 @@ async def chat_outcome(
     key = _effective_session_key(auth, session_key)
     result = await asyncio.to_thread(read_outcome, auth, key, request_id)
     from robothor.engine.chat_plan_recovery import attach_plan
+    from robothor.engine.runtime.chat_control import request_key
 
     await attach_plan(result, _sessions.get(key), request_key(auth, key, request_id), auth, key)
     if result.get("terminal") and result.get("reconciliation_pending"):
@@ -1596,4 +1594,3 @@ from robothor.engine.chat_effect_attestation import (  # noqa: E402
 )
 
 router.include_router(effect_attestation_router)
-router.include_router(chat_steer.router)
