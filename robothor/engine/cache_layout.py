@@ -8,7 +8,9 @@ ends with a ``Current time:`` line at minute precision, so with it in place the
 first message changes on every run and nothing after it can be reused. This
 module:
 
-* moves that line out of the system message into an engine-context turn
+* moves that line, and the per-run task-context record (run id, request,
+  objective) that ``task_context`` keeps in the session's system message, out
+  of the system message on the wire into one engine-context turn
   (``ENGINE_CONTEXT_ROLE``) immediately before the latest user message. Never
   into the operator's own text: ``_normalize_developer_role`` labels the turn
   ``[engine]`` for every provider and, on Anthropic and Gemini, rewrites it to
@@ -28,6 +30,7 @@ module:
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 _SEPARATOR = "\n\n---\n\n"
@@ -46,12 +49,46 @@ def prepare(model: str, messages: list[dict[str, Any]]) -> tuple[bool, list[dict
     return True, move_time_to_engine_turn(messages), sends_cache_markers(model, cache_system)
 
 
-def move_time_to_engine_turn(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Take the ``Current time:`` line out of the system message.
+def _take_time_line(content: str) -> tuple[str, str]:
+    """(content without the ``Current time:`` line, the line or "")."""
+    start = content.rfind(_TIME_MARKER)
+    if start < 0:
+        return content, ""
+    line_start = start + len(_SEPARATOR)
+    end = content.find("\n", line_start)
+    end = len(content) if end < 0 else end
+    return content[:start] + content[end:], content[line_start:end]
 
-    It is re-sent as its own engine turn before the latest user message. A
-    payload with no time line, no string system message or no user turn is
-    returned untouched (same list object). Copy-on-write: the session keeps
+
+def _take_task_record(content: str) -> tuple[str, str]:
+    """(content without the per-run task-context record, the record or "").
+
+    ``task_context.install_context`` keeps the record (run id, request,
+    objective, steering) in the session's system message so it survives
+    compaction and its readers find it there. Only the copy on the wire moves.
+    """
+    from robothor.engine.task_context import MARKER
+
+    start = content.find(MARKER)
+    if start < 0:
+        return content, ""
+    instruction_end = content.find("\n", start + len(MARKER))
+    if instruction_end < 0:
+        return content, ""
+    try:
+        _, end = json.JSONDecoder().raw_decode(content, instruction_end + 1)
+    except ValueError:
+        return content, ""
+    return content[:start] + content[end:], content[start:end].strip()
+
+
+def move_time_to_engine_turn(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Take the per-run parts out of the system message.
+
+    The ``Current time:`` line and the task-context record change on every run;
+    they are re-sent together as one engine turn before the latest user
+    message. A payload with neither, no string system message or no user turn
+    is returned untouched (same list object). Copy-on-write: the session keeps
     its own messages.
     """
     from robothor.engine.session import ENGINE_CONTEXT_ROLE
@@ -61,19 +98,20 @@ def move_time_to_engine_turn(messages: list[dict[str, Any]]) -> list[dict[str, A
     content = messages[0].get("content")
     if not isinstance(content, str):
         return messages
-    start = content.rfind(_TIME_MARKER)
     last_user = next(
         (i for i in range(len(messages) - 1, 0, -1) if messages[i].get("role") == "user"),
         None,
     )
-    if start < 0 or last_user is None:
+    if last_user is None:
         return messages
-    line_start = start + len(_SEPARATOR)
-    end = content.find("\n", line_start)
-    end = len(content) if end < 0 else end
-    system = {**messages[0], "content": content[:start] + content[end:]}
-    time_turn = {"role": ENGINE_CONTEXT_ROLE, "content": content[line_start:end]}
-    return [system, *messages[1:last_user], time_turn, *messages[last_user:]]
+    content, time_line = _take_time_line(content)
+    content, record = _take_task_record(content)
+    per_run = "\n\n".join(part for part in (time_line, record) if part)
+    if not per_run:
+        return messages
+    system = {**messages[0], "content": content}
+    turn = {"role": ENGINE_CONTEXT_ROLE, "content": per_run}
+    return [system, *messages[1:last_user], turn, *messages[last_user:]]
 
 
 def is_openai_family(model: str) -> bool:
