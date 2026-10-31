@@ -109,6 +109,16 @@ describe("attaching files to a chat turn", () => {
     expect(screen.getAllByTestId("attachment-chip")).toHaveLength(3);
   });
 
+  it("refuses a file whose extension is not supported, whatever type it claims", async () => {
+    engine();
+    render(<ChatPanel />);
+    attach(file("tool.exe", "text/plain"), file("evil.png", "text/plain"));
+    const refusal = await screen.findByTestId("attach-refusal");
+    expect(refusal).toHaveTextContent("tool.exe is not a supported type");
+    expect(refusal).toHaveTextContent("evil.png is not a supported type");
+    expect(screen.queryByTestId("attachment-chip")).toBeNull();
+  });
+
   it("accepts a markdown file the browser gave no type, by its extension", async () => {
     engine();
     render(<ChatPanel />);

@@ -87,6 +87,30 @@ describe("/api/chat/send with attachments", () => {
     expect(engine.chatSend).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["tool.exe", "text/plain"],
+    ["evil.png", "text/plain"],
+    ["notes.txt", "image/png"],
+    ["report.pdf", "text/plain"],
+  ])("422s %s sent as %s: the extension is part of the type", async (name, mime) => {
+    const res = await send({ message: "x", attachments: [file(name, mime)] });
+    expect(res.status).toBe(422);
+    expect((await res.json()).error).toBe(`${name} is not a supported type`);
+    expect(engine.chatSend).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["notes.txt", "text/plain"],
+    ["photo.jpg", "image/jpeg"],
+    ["Photo.JPEG", "image/jpeg"],
+    ["notes.md", "text/plain"],
+    ["README", "text/plain"],
+  ])("passes %s sent as %s", async (name, mime) => {
+    const res = await send({ message: "x", request_id: REQUEST, attachments: [file(name, mime)] });
+    expect(res.status).toBe(200);
+    expect(engine.chatSend).toHaveBeenCalled();
+  });
+
   it("422s attachments that are not a list", async () => {
     const res = await send({ message: "x", attachments: { name: "a.txt" } });
     expect(res.status).toBe(422);

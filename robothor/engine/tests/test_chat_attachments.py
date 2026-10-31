@@ -428,6 +428,7 @@ class TestLimitsAgree:
         assert set(re.findall(r'"([a-z]+/[a-z0-9.+-]+)"', block)) == set(
             chat_attachments.ACCEPTED_MIMES
         )
+        assert set(re.findall(r'"(\.[a-z]+)"', block)) == set(chat_attachments.ACCEPTED_EXTENSIONS)
 
 
 class TestActiveRequestPin:
@@ -448,3 +449,49 @@ class TestActiveRequestPin:
         assert len(out) == 2
         assert out[1][PIN_KEY] == ACTIVE_REQUEST_PIN
         assert out[1]["content"] == turn["content"]
+
+
+JPEG = b"\xff\xd8\xff\xe0" + b"\x00" * 28
+
+
+class TestExtensions:
+    """The name's extension is part of the type: a declared MIME alone is a claim."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("name", "mime", "data"),
+        [
+            ("tool.exe", "text/plain", b"MZ not text"),
+            ("evil.png", "text/plain", b"hello"),
+            ("notes.txt", "image/png", PNG),
+            ("report.pdf", "text/plain", b"hello"),
+            ("blob", "text/plain", b"MZ\x00\x00binary"),
+        ],
+    )
+    async def test_a_name_that_disagrees_with_its_type_is_422(
+        self, client, engine_config, mock_runner, name, mime, data
+    ) -> None:
+        res = await _send(client, "here", [_file(name, mime, data)])
+        assert res.status_code == 422
+        assert res.json()["error"] == f"{name} is not a supported type"
+        mock_runner.execute.assert_not_called()
+        assert _inbox(engine_config) == []
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("name", "mime", "data"),
+        [
+            ("notes.txt", "text/plain", b"hello"),
+            ("photo.jpg", "image/jpeg", JPEG),
+            ("Photo.JPEG", "image/jpeg", JPEG),
+            ("notes.md", "text/plain", b"# hi"),
+            ("README", "text/plain", b"plain words"),
+            ("screenshot", "image/png", PNG),
+        ],
+    )
+    async def test_a_name_that_agrees_with_its_type_is_kept(
+        self, client, engine_config, name, mime, data
+    ) -> None:
+        res = await _send(client, "here", [_file(name, mime, data)])
+        assert res.status_code == 200
+        assert len(_inbox(engine_config)) == 1
