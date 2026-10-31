@@ -298,7 +298,7 @@ class TestTheMetaToolsAreGrantedByDeferral:
     async def test_with_deferral_off_nobody_gets_them(
         self, instance: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.delenv("ROBOTHOR_RIP_16_ENABLED", raising=False)
+        monkeypatch.setenv("ROBOTHOR_RIP_16_ENABLED", "0")
         _write_agent(
             instance,
             "broad",

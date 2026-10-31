@@ -661,6 +661,15 @@ class ProviderSettings(SettingsGroup):
         "rather than sent in full on every request.",
         restart_required=False,
     )
+    deferred_tools_recent_runs: int = declare(
+        10,
+        "ROBOTHOR_DEFERRED_TOOLS_RECENT_RUNS",
+        "How many of an agent's latest runs seed the tools it is always shown "
+        "when its schemas are deferred: the tools it called in them join the "
+        "core set. 0 keeps the core to the platform's fixed list.",
+        restart_required=False,
+        since="unreleased",
+    )
     real_tokenizer_enabled: bool = declare(
         False,
         "ROBOTHOR_REAL_TOKENIZER_ENABLED",
@@ -2093,6 +2102,14 @@ class FlagSettings(SettingsGroup):
         "Rip 5: the destructive LLM skill-consolidation curator pass. The "
         "non-destructive lifecycle runs either way.",
         governed=True,
+    )
+    rip_16_enabled: bool = declare(
+        True,
+        "ROBOTHOR_RIP_16_ENABLED",
+        "Rip 16: deferred tool loading. A broad agent is shown its core tools "
+        "and tool_search/tool_describe/tool_call instead of every schema. On "
+        "by default; 0 sends every allowed schema on every request again.",
+        since="unreleased",
     )
     rip_7_enabled: bool = declare(
         False,

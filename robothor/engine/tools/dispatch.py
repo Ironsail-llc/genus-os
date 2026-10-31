@@ -86,6 +86,30 @@ def get_deferred_allowed() -> frozenset[str] | None:
     return _deferred_allowed_var.get()
 
 
+# ── What a deferred run was actually shown ────────────────────────────
+# The advertised schema names, published beside the allow-set. tool_search
+# marks a hit ``in_toolset`` from this, so a tool that joined the core because
+# the agent used it recently is reported as directly callable rather than as
+# something to reach through tool_call. Gates nothing. Default None, which
+# tool_search reads as "the static CORE_TOOLS".
+_advertised_var: ContextVar[frozenset[str] | None] = ContextVar("_advertised_var", default=None)
+
+
+def set_advertised_toolset(names: frozenset[str]) -> Token[frozenset[str] | None]:
+    """Record the schema names this run was shown; returns a reset token."""
+    return _advertised_var.set(names)
+
+
+def clear_advertised_toolset(token: Token[frozenset[str] | None]) -> None:
+    """Restore the prior advertised-set record."""
+    _advertised_var.reset(token)
+
+
+def get_advertised_toolset() -> frozenset[str] | None:
+    """The schema names this run was shown, or None when nothing published."""
+    return _advertised_var.get()
+
+
 # ── The agent's toolset, deferred or not ───────────────────────────────
 # Published by the runner on EVERY run, so that `tool_search` has something
 # true to answer with when the run is not deferred. It used to answer

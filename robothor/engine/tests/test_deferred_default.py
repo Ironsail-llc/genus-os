@@ -395,5 +395,3 @@ def test_plugin_schemas_are_searchable_by_their_own_keywords(registry) -> None:
     hits = registry.search_tools(sorted(registry._schemas), "find the invoice", limit=3)
     assert hits[0]["name"] == "example_ledger_lookup"
     assert "keywords" not in wire_schema(schema)["function"]
-
-

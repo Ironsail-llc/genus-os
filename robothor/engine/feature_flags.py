@@ -163,9 +163,30 @@ def deferred_tools_enabled() -> bool:
 
     When on, broad-access agents are advertised only a small CORE_TOOLS set plus
     the tool_search/tool_describe/tool_call meta-tools; the rest of their allowed
-    tools load on demand. Off by default; gated by ``ROBOTHOR_RIP_16_ENABLED``.
+    tools load on demand. ON by default (unlike the other rips): set
+    ``ROBOTHOR_RIP_16_ENABLED=0`` to advertise every allowed schema again, and
+    ``ROBOTHOR_DISABLE_ALL_RIPS=1`` still forces it off.
     """
-    return is_rip_enabled(16)
+    if _disabled_all():
+        return False
+    return _env_bool("ROBOTHOR_RIP_16_ENABLED", default=True)
+
+
+def deferred_tools_recent_runs() -> int:
+    """How many of an agent's latest runs seed its always-loaded core.
+
+    A deferred agent is advertised ``CORE_TOOLS`` plus the tools it called in
+    this many recent runs, so a tool it uses every day costs no tool_search
+    round-trip. ``0`` keeps the core static. Reads
+    ``ROBOTHOR_DEFERRED_TOOLS_RECENT_RUNS`` (default 10).
+    """
+    raw = os.environ.get("ROBOTHOR_DEFERRED_TOOLS_RECENT_RUNS", "").strip()
+    if not raw:
+        return 10
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return 10
 
 
 def cron_warmup_recall_enabled() -> bool:
