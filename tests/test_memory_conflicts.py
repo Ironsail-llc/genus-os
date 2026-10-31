@@ -52,8 +52,33 @@ def _match(metadata: Any) -> dict[str, Any]:
     }
 
 
-async def _resolve(match: dict[str, Any], kind: str, confidence: float) -> tuple[dict, MagicMock]:
-    supersede = MagicMock(return_value=True)
+class _Resolved:
+    """What one resolve_and_store call did: its result, the supersede writer's
+    calls, every statement on the bitemporal connection, and the decisions row."""
+
+    def __init__(self, out: dict, supersede: MagicMock, cur: MagicMock, record: MagicMock):
+        self.out = out
+        self.supersede = supersede
+        self.cur = cur
+        self.record = record
+
+    def statements(self) -> list[tuple[str, tuple]]:
+        return [(c.args[0], tuple(c.args[1])) for c in self.cur.execute.call_args_list]
+
+
+async def _resolve(
+    match: dict[str, Any], kind: str, confidence: float, *, superseded: bool = True
+) -> _Resolved:
+    import robothor.memory.bitemporal as bt
+
+    supersede = MagicMock(return_value=superseded)
+    record = MagicMock()
+    cur = MagicMock()
+    conn = MagicMock()
+    conn.cursor.return_value = cur
+    ctx = MagicMock()
+    ctx.__enter__.return_value = conn
+    ctx.__exit__.return_value = False
     with (
         patch.object(conflicts, "find_similar_facts", new=AsyncMock(return_value=[match])),
         patch.object(
@@ -63,7 +88,8 @@ async def _resolve(match: dict[str, Any], kind: str, confidence: float) -> tuple
         ),
         patch.object(conflicts, "store_fact", new=AsyncMock(return_value=99)),
         patch.object(conflicts, "supersede_with_validity", new=supersede),
-        patch.object(conflicts, "record_conflict_decision"),
+        patch.object(conflicts, "record_conflict_decision", new=record),
+        patch.object(bt, "get_connection", return_value=ctx),
     ):
         out = await conflicts.resolve_and_store(
             {
@@ -76,7 +102,27 @@ async def _resolve(match: dict[str, Any], kind: str, confidence: float) -> tuple
             "conversation",
             tenant_id="test-tenant",
         )
-    return out, supersede
+    return _Resolved(out, supersede, cur, record)
+
+
+def _assert_kept_confirmed(r: _Resolved) -> None:
+    """The new row (99) is bounded to a zero-width interval and points at the
+    confirmed fact (7); no statement touches the confirmed row itself."""
+    assert r.out["action"] == "kept_confirmed"
+    assert r.out["new_id"] == 99
+    assert r.out["existing_id"] == 7
+    statements = r.statements()
+    assert len(statements) == 1
+    sql, params = statements[0]
+    assert "SET is_active = FALSE" in sql
+    assert "superseded_by = %s" in sql
+    assert "valid_from = COALESCE(valid_from, NOW())" in sql
+    assert "valid_to = COALESCE(valid_to, NOW())" in sql
+    assert "WHERE id = %s AND tenant_id = %s" in sql
+    assert params == (7, 99, "test-tenant")  # 7 only as superseded_by
+    assert r.record.call_count == 1
+    assert r.record.call_args.kwargs["action"] == "kept_confirmed"
+    assert r.record.call_args.kwargs["new_fact_id"] == 99
 
 
 class TestOperatorConfirmedSurvivesConflicts:
@@ -84,28 +130,36 @@ class TestOperatorConfirmedSurvivesConflicts:
     @pytest.mark.parametrize("kind", ["contradiction", "update"])
     @pytest.mark.parametrize("confidence", [0.5, 1.0])
     async def test_a_confirmed_fact_is_never_superseded(self, kind: str, confidence: float):
-        out, supersede = await _resolve(_match(_CONFIRMED), kind, confidence)
+        r = await _resolve(_match(_CONFIRMED), kind, confidence)
         # The new extraction is stored, then recorded as superseded BY the
-        # confirmed fact: the pipeline's view is kept, the operator's stays active.
-        assert out["new_id"] == 99
-        assert out["existing_id"] == 7
-        assert out["action"] == "kept_confirmed"
-        assert supersede.call_count == 1
-        assert supersede.call_args.args[:2] == (99, 7)
+        # confirmed fact: the pipeline's view is kept, the operator's stays
+        # active and its validity is not rewritten.
+        r.supersede.assert_not_called()
+        _assert_kept_confirmed(r)
 
     @pytest.mark.asyncio
     async def test_metadata_as_a_json_string_is_still_confirmed(self):
         import json
 
-        out, supersede = await _resolve(_match(json.dumps(_CONFIRMED)), "update", 1.0)
-        assert out["action"] == "kept_confirmed"
-        assert supersede.call_args.args[:2] == (99, 7)
+        r = await _resolve(_match(json.dumps(_CONFIRMED)), "update", 1.0)
+        r.supersede.assert_not_called()
+        _assert_kept_confirmed(r)
 
     @pytest.mark.asyncio
     async def test_an_unconfirmed_fact_is_still_superseded(self):
-        out, supersede = await _resolve(_match({}), "update", 1.0)
-        assert out["action"] == "superseded"
-        assert supersede.call_args.args[:2] == (7, 99)
+        r = await _resolve(_match({}), "update", 1.0)
+        assert r.out["action"] == "superseded"
+        assert r.supersede.call_args.args[:2] == (7, 99)
+        assert r.record.call_args.kwargs["action"] == "superseded"
+
+    @pytest.mark.asyncio
+    async def test_a_refused_supersede_is_reported_as_kept_confirmed(self):
+        # Confirmed between the similarity search and the write: the guard in
+        # supersede_with_validity refuses, so both facts must not stay active
+        # under a "superseded" report.
+        r = await _resolve(_match({}), "contradiction", 1.0, superseded=False)
+        assert r.supersede.call_args.args[:2] == (7, 99)
+        _assert_kept_confirmed(r)
 
     @pytest.mark.asyncio
     async def test_similar_facts_carry_their_metadata(self):
