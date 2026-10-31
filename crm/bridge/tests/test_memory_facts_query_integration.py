@@ -489,6 +489,22 @@ def test_the_forget_is_committed_and_visible_to_another_connection(
 
 # ── edit ─────────────────────────────────────────────────────────────────────
 
+#: ``memory_facts.embedding`` is ``vector(1024)``.
+VECTOR = [0.001] * 1024
+
+
+@pytest.fixture
+def embeddings(monkeypatch):
+    """No embedding provider in this lane: a stub that answers ``VECTOR``."""
+    calls: list[str] = []
+
+    async def _embed(text, *_args, **_kwargs):
+        calls.append(text)
+        return VECTOR
+
+    monkeypatch.setattr("robothor.llm.ollama.get_embedding_async", _embed)
+    return calls
+
 
 def _history(db_conn, fact_id: int) -> list[dict]:
     with db_conn.cursor() as cur:
@@ -523,7 +539,7 @@ def _edited(db_conn, fact_id: int) -> dict:
 
 
 def test_an_edit_keeps_the_original_and_marks_the_row_operator_confirmed(
-    controls_client_as_operator, live_db, make_fact, tenants, db_conn, audit_rows
+    controls_client_as_operator, live_db, make_fact, tenants, db_conn, audit_rows, embeddings
 ):
     from robothor.memory.drift import compute_fact_hash
 
@@ -552,9 +568,14 @@ def test_an_edit_keeps_the_original_and_marks_the_row_operator_confirmed(
     confirmed = row["metadata"]["operator_confirmed"]
     assert confirmed["by"].startswith("operator:")
     assert confirmed["at"]
-    # There is no null-embedding backfill to lean on, so the row says its
-    # vector was computed over the old text rather than pretending otherwise.
-    assert row["metadata"]["embedding_stale"] is True
+    # The vector follows the text: re-embedded in the same edit, not flagged.
+    assert "embedding_stale" not in row["metadata"]
+    assert embeddings == [corrected]
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT embedding::text FROM memory_facts WHERE id = %s", (fact_id,))
+        stored = cur.fetchone()[0]
+    assert stored is not None
+    assert stored.startswith("[0.001,")
 
     [history] = _history(db_conn, fact_id)
     assert history["fact_text"] == original
@@ -576,7 +597,7 @@ def test_an_edit_keeps_the_original_and_marks_the_row_operator_confirmed(
 
 
 def test_an_entities_only_edit_leaves_the_text_and_its_embedding_alone(
-    controls_client_as_operator, live_db, make_fact, tenants, db_conn
+    controls_client_as_operator, live_db, make_fact, tenants, db_conn, embeddings
 ):
     platform, _ = tenants
     text = f"Bob prefers coffee {uuid.uuid4().hex[:8]}"
@@ -595,7 +616,7 @@ def test_an_entities_only_edit_leaves_the_text_and_its_embedding_alone(
 
 
 def test_an_edit_onto_another_active_facts_text_is_refused_and_changes_nothing(
-    controls_client_as_operator, live_db, make_fact, tenants, db_conn
+    controls_client_as_operator, live_db, make_fact, tenants, db_conn, embeddings
 ):
     platform, _ = tenants
     marker = uuid.uuid4().hex[:8]
@@ -623,7 +644,7 @@ def test_an_edit_onto_another_active_facts_text_is_refused_and_changes_nothing(
 
 
 def test_editing_an_inactive_fact_is_422_and_writes_nothing(
-    controls_client_as_operator, live_db, make_fact, tenants, db_conn
+    controls_client_as_operator, live_db, make_fact, tenants, db_conn, embeddings
 ):
     platform, _ = tenants
     fact_id = make_fact("Alice moved on", tenant=platform, active=False)
@@ -636,7 +657,7 @@ def test_editing_an_inactive_fact_is_422_and_writes_nothing(
 
 
 def test_editing_another_tenants_fact_is_404_and_changes_nothing(
-    controls_client_as_operator, live_db, make_fact, tenants, db_conn
+    controls_client_as_operator, live_db, make_fact, tenants, db_conn, embeddings
 ):
     _, other = tenants
     fact_id = make_fact("Bob's private note", tenant=other)

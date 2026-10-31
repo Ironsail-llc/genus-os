@@ -267,8 +267,29 @@ class _ScriptedCursor:
         return None
 
 
+VECTOR = [0.25] * 4
+
+
 @pytest.fixture
-def scripted_db(monkeypatch):
+def embeddings(monkeypatch):
+    """The embedding provider, stubbed: records each text, answers ``VECTOR``.
+
+    Set ``state["fail"]`` to make it raise the way an unreachable provider does.
+    """
+    state: dict = {"calls": [], "fail": False}
+
+    async def _embed(text, *_args, **_kwargs):
+        state["calls"].append(text)
+        if state["fail"]:
+            raise ConnectionError("embedding provider unreachable")
+        return VECTOR
+
+    monkeypatch.setattr("robothor.llm.ollama.get_embedding_async", _embed)
+    return state
+
+
+@pytest.fixture
+def scripted_db(monkeypatch, embeddings):
     """Bind the router to a ``_ScriptedCursor``; return a setter for its script."""
     from contextlib import contextmanager
 
@@ -401,3 +422,87 @@ def test_an_edit_snapshots_the_original_before_it_writes(
     snapshot_params = cursor.statements[snapshot_at][1]
     assert "Alice prefers tea" in snapshot_params
     assert "operator_edit" in snapshot_params
+
+
+# ── edit: the embedding follows the text ─────────────────────────────────────
+
+
+def _update(cursor: _ScriptedCursor) -> tuple[str, object]:
+    return next(
+        (sql, params)
+        for sql, params in cursor.statements
+        if sql.lstrip().upper().startswith("UPDATE MEMORY_FACTS")
+    )
+
+
+def _metadata_patch(params) -> dict:
+    import json
+
+    patches = [json.loads(p) for p in params if isinstance(p, str) and p.startswith("{")]
+    assert len(patches) == 1, params
+    return patches[0]
+
+
+def test_a_text_edit_writes_a_fresh_embedding(
+    controls_client_as_operator, scripted_db, embeddings, audit_calls
+):
+    cursor = scripted_db()
+    resp = controls_client_as_operator.patch(EDIT, json=GOOD_EDIT)
+    assert resp.status_code == 200, resp.text
+    assert embeddings["calls"] == ["Alice prefers green tea"]
+    sql, params = _update(cursor)
+    assert "embedding" in sql
+    assert VECTOR in params
+    assert "embedding_stale" not in _metadata_patch(params)
+
+
+def test_an_unreachable_embedding_provider_still_saves_and_marks_the_vector_stale(
+    controls_client_as_operator, scripted_db, embeddings, audit_calls, caplog
+):
+    embeddings["fail"] = True
+    cursor = scripted_db()
+    resp = controls_client_as_operator.patch(EDIT, json=GOOD_EDIT)
+    assert resp.status_code == 200, resp.text
+    _, params = _update(cursor)
+    assert VECTOR not in params
+    assert _metadata_patch(params)["embedding_stale"] is True
+    # The warning says what happened, never what the fact says.
+    assert "green tea" not in caplog.text
+
+
+def test_an_entities_only_edit_asks_for_no_embedding(
+    controls_client_as_operator, scripted_db, embeddings, audit_calls
+):
+    cursor = scripted_db()
+    resp = controls_client_as_operator.patch(
+        EDIT, json={"entities": ["Alice", "Tea"], "reason": "wrong entity name"}
+    )
+    assert resp.status_code == 200, resp.text
+    assert embeddings["calls"] == []
+    _, params = _update(cursor)
+    assert "embedding_stale" not in _metadata_patch(params)
+
+
+def test_an_unchanged_text_keeps_the_stored_vector(
+    controls_client_as_operator, scripted_db, embeddings, audit_calls
+):
+    """Saving the same words (give or take surrounding blanks) is not a text edit."""
+    cursor = scripted_db(locked=("Alice prefers tea ", ["Alice"], True, "fact", None, None))
+    resp = controls_client_as_operator.patch(
+        EDIT, json={"fact_text": "  Alice prefers tea", "reason": "confirming it"}
+    )
+    assert resp.status_code == 200, resp.text
+    _, params = _update(cursor)
+    assert VECTOR not in params
+    assert "embedding_stale" not in _metadata_patch(params)
+
+
+def test_entities_are_deduplicated_ignoring_case(
+    controls_client_as_operator, scripted_db, embeddings, audit_calls
+):
+    cursor = scripted_db()
+    controls_client_as_operator.patch(
+        EDIT, json={"entities": ["Alice", "alice", " ALICE ", "Tea"], "reason": "tidy up"}
+    )
+    _, params = _update(cursor)
+    assert ["Alice", "Tea"] in params
