@@ -158,6 +158,13 @@ When a new fact arrives, the pipeline checks for similar existing facts:
 2. **classify_relationship** -- LLM classifies as `new`, `duplicate`, `update`, or `contradiction`
 3. **Act** -- store (new), skip (duplicate), or supersede (update/contradiction)
 
+An operator-confirmed match (`metadata.operator_confirmed`, set by an edit in
+the Helm) is never superseded: the new fact is stored superseded by it and the
+result's `action` is `kept_confirmed`. Prune, consolidation, dechurn and resolution capture skip
+confirmed facts too. `update_fact` re-embeds a changed text, sets
+`metadata.embedding_stale` if the embedding fails, and merges `metadata` rather
+than replacing it.
+
 ```python
 from robothor.memory.conflicts import resolve_and_store
 
@@ -166,7 +173,7 @@ result = await resolve_and_store(
     source_content="...",
     source_type="email",
 )
-# result["action"] is one of: "stored", "skipped", "superseded"
+# result["action"] is one of: "stored", "skipped", "superseded", "reinforced", "kept_confirmed"
 # If superseded: result["old_id"] points to the fact that was deactivated
 ```
 

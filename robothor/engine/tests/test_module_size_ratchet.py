@@ -759,7 +759,10 @@ CAPS = {
     # The finalization cluster (what a run may spend AFTER its loop ends)
     # was extracted here rather than growing run_budget past its cap.
     "robothor/engine/finalization_budget.py": 160,
-    "robothor/engine/chat.py": 1600,
+    # 1600 -> 1562: webchat attachments added a call site (the intake itself
+    # is chat_attachments.py) and paid for it by moving the three pure plan
+    # helpers to chat_plan_helpers.py, which chat.py re-exports.
+    "robothor/engine/chat.py": 1562,
     # 1600 -> 1607 (2026-08-27): fleet admission finally has a caller here.
     # The 75-line implementation went to admission.py; what remains is five
     # irreducible call sites (admit / register / complete / import). The

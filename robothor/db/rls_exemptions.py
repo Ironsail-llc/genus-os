@@ -18,7 +18,7 @@ RLS_EXEMPT_TENANT_TABLES: dict[str, str] = {
     "audit_log": (
         "The appliance-wide audit trail. The platform's root operator or auditor "
         "at home reads every tenant's rows and the untenanted rows written before "
-        "migration 162; everyone else is scoped by explicit predicates in "
+        "migration 163; everyone else is scoped by explicit predicates in "
         "routers._operator.audit_scope. With RLS on it, the bridge's per-request "
         "tenant binding would hide exactly the rows the root reader is meant to see."
     ),

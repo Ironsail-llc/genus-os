@@ -1,4 +1,6 @@
 import type { NextConfig } from "next";
+// Relative, not `@/`: this file is loaded before the app's path aliases exist.
+import { MAX_SEND_BODY_BYTES } from "./src/lib/chat/attachments";
 
 export const SECURITY_HEADERS = [
   { key: "X-Content-Type-Options", value: "nosniff" },
@@ -21,6 +23,13 @@ const nextConfig: NextConfig = {
   outputFileTracingRoot: process.cwd(),
   turbopack: { root: process.cwd() },
   serverExternalPackages: ["ws", "dompurify"],
+  experimental: {
+    // `/api/chat/send` runs behind `src/proxy.ts`, and Next buffers a proxied
+    // body only up to this limit (10 MB by default), handing the route the
+    // rest truncated. A turn carrying three files at the limit is larger, so
+    // the proxy takes exactly what the send route itself will read.
+    proxyClientMaxBodySize: MAX_SEND_BODY_BYTES,
+  },
   async headers() {
     return [{ source: "/:path*", headers: [...SECURITY_HEADERS] }];
   },

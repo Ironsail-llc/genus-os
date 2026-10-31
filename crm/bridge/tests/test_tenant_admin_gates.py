@@ -71,6 +71,8 @@ ADMIN_ROUTER_MODULES = (
     "routers.settings",
     "routers.plugins",
     "routers.n8n",
+    "routers.agent_tools",
+    "routers.secrets",
 )
 
 #: Every gate a handler may call. Each is wrapped in every admin router module
@@ -121,6 +123,9 @@ ROUTE_CLASSES: dict[tuple[str, str], str] = {
     ("POST", "/api/automations/{agent_id}/reset-breaker"): T,
     ("GET", "/api/runs"): T,
     ("GET", "/api/runs/summary"): T,
+    # ── the chat Tools dialog: the acting tenant's engine ──
+    ("GET", "/api/agents/{agent_id}/tools"): T,
+    ("GET", "/api/mcp/servers"): T,
     ("GET", "/api/runs/{run_id}"): T,
     ("GET", "/api/workflows"): T,
     ("GET", "/api/workflows/{workflow_id}/runs"): T,
@@ -160,6 +165,7 @@ ROUTE_CLASSES: dict[tuple[str, str], str] = {
     ("GET", "/api/controls"): R,
     ("PATCH", "/api/controls/{name}"): R,
     ("GET", "/api/health/system"): R,
+    ("GET", "/api/secrets"): R,
     ("GET", "/api/logs/units"): R,
     ("GET", "/api/logs"): R,
     ("GET", "/api/settings/schema"): R,
@@ -399,7 +405,7 @@ def test_no_classification_is_stale() -> None:
 
 
 def test_the_enumeration_did_not_collapse() -> None:
-    assert len(_admin_routes()) >= 78
+    assert len(_admin_routes()) >= 81
 
 
 # ─── The gate matrix, over HTTP ───────────────────────────────────────
@@ -676,6 +682,23 @@ class TestActingTenantIsTheScope:
         assert response.status_code == 200, response.text
         assert vault_set.call_args.kwargs["tenant_id"] == CHILD_A
         assert ("POST", "/api/admin/secrets/reload", CHILD_A) in calls
+
+    def test_the_tools_dialog_asks_the_acting_tenants_engine(self, root_is_parent):
+        calls: list[tuple[str, str, str | None]] = []
+
+        async def engine(method, path, *, json=None, timeout=30, tenant=None):
+            calls.append((method, path, tenant))
+            return 200, {}
+
+        with patch("routers.agent_tools.engine_request", new=engine):
+            tools = _client(CHILD_A, home=ROOT).get("/api/agents/main/tools")
+            servers = _client(CHILD_A, home=ROOT).get("/api/mcp/servers")
+        assert tools.status_code == 200, tools.text
+        assert servers.status_code == 200, servers.text
+        assert calls == [
+            ("GET", "/api/admin/agents/main/tools", CHILD_A),
+            ("GET", "/api/admin/mcp/servers", CHILD_A),
+        ]
 
     def test_memory_store_ingests_into_the_acting_tenant(self, root_is_parent):
         async def ingest(*args, **kwargs):

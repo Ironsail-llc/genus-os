@@ -285,6 +285,13 @@ def _mount_subsystem_routers(
 
     register_admin_approvals(app)
 
+    # What an agent can reach: its tools by source and the MCP servers. The
+    # registry and the pool are objects in THIS process, so the chat's Tools
+    # dialog has to ask here.
+    from robothor.engine.admin_tools import register as register_admin_tools
+
+    register_admin_tools(app)
+
     # The receiving half of an armed plugin channel. `Channel.inbound_router`
     # has been a declared-and-empty slot since the channel protocol landed, and
     # a channel that receives over HTTP cannot mount itself. Only channels the
