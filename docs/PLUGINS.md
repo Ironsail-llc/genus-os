@@ -229,7 +229,8 @@ exception still reaches the scheduler, and the row belongs to the engine's
 own tenant. So a job appears in the
 dashboard's workflow list and under `GET /api/workflows/plugin:<name>/runs`
 on the bridge, and the stale-run reaper and the workflow failure detectors
-watch it too. Return a small dict that says what the run did. Recording is
+watch it too. Return a small dict that says what the run did: opening the
+run in the dashboard shows it. Recording is
 best effort: if the database is unreachable the job still runs.
 
 Those watchers were sized for workflows, so they apply to a job's run as
