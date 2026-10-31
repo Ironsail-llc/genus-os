@@ -426,11 +426,11 @@ jobs:
           if [ "$EVENT" = "workflow_dispatch" ]; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           elif [ "$EVENT" = "pull_request" ] \
-              && git diff --name-only "origin/${BASE_REF}...HEAD" | grep -q '^robothor/engine/'; then
+              && git diff --name-only "origin/${BASE_REF}...HEAD" | grep -qE '^(robothor/engine/|robothor/templates/|agents/|templates/)'; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "run=false" >> "$GITHUB_OUTPUT"
-            echo "no robothor/engine/ change: the benchmark is skipped"
+            echo "no change to the engine or the prompt's sources: the benchmark is skipped"
           fi
       # Not a `services:` container: those cannot take a command, and
       # pg_stat_statements only works when the server preloads it.

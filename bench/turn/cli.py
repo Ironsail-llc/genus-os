@@ -148,12 +148,23 @@ def _baseline_path(args: argparse.Namespace, half: str) -> Path:
     return BASELINES / f"{prefix}{half}.json"
 
 
+class RefusedError(Exception):
+    """A file the benchmark will not compare, record or merge; exit 2 with the reason."""
+
+
 def _load(path: Path) -> dict[str, Any] | None:
     try:
         data = json.loads(path.read_text())
     except FileNotFoundError:
         return None
+    except ValueError as exc:
+        raise RefusedError(f"{path}: not valid JSON ({exc})") from exc
     return data if isinstance(data, dict) else None
+
+
+def failed_turns(result: dict[str, Any]) -> list[dict[str, Any]]:
+    """Turns that did not complete. Their timings measure the failure, not a turn."""
+    return [m for m in result.get("meta") or [] if m.get("status") != "completed"]
 
 
 def _print_summary(result: dict[str, Any]) -> None:
@@ -284,6 +295,12 @@ def merge_baselines(paths: list[str], out: str) -> int:
         if data is None or is_empty_baseline(data):
             print(f"{path}: missing or empty", file=sys.stderr)
             return 2
+        if failed_turns(data):
+            print(
+                f"{path}: has failed turns; a failed run is never part of a baseline",
+                file=sys.stderr,
+            )
+            return 2
         loaded.append(data)
     halves = {str(d.get("half")) for d in loaded}
     if len(halves) != 1:
@@ -316,14 +333,25 @@ def merge_baselines(paths: list[str], out: str) -> int:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
-    if args.merge_baselines is not None:
-        return merge_baselines(args.merge_baselines, args.out)
+    try:
+        if args.merge_baselines is not None:
+            return merge_baselines(args.merge_baselines, args.out)
+        return _main(args)
+    except RefusedError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
 
+
+def _main(args: argparse.Namespace) -> int:
     if args.compare:
         result = _load(Path(args.compare))
         if result is None:
             print(f"cannot read {args.compare}", file=sys.stderr)
             return 2
+        if failed_turns(result):
+            raise RefusedError(
+                f"{args.compare}: has failed turns; it is neither compared nor recorded"
+            )
         half = str(result.get("half") or "inprocess")
         return _judge(args, half, result)
 
@@ -337,7 +365,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{half} half failed: {exc}", file=sys.stderr)
             return 2
         _print_summary(result)
-        failed = [m for m in result.get("meta") or [] if m.get("status") != "completed"]
+        failed = failed_turns(result)
         if args.out:
             out = _per_half(args.out, half, args.half == "both")
             out.write_text(json.dumps(result, indent=2, default=str) + "\n")

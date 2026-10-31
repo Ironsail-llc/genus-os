@@ -75,7 +75,9 @@ A clean local re-run moved `finalize_tail_ms` p95 from 2.3 to 5.2 ms, which is
 noise under a 5 ms floor. A metric missing on either side is skipped and
 listed. Exit codes: 0 within threshold, 1 regression, 2 the benchmark could
 not run or a turn did not complete (timings of a failed run measure the
-failure, so they are neither compared nor recorded).
+failure, so they are neither compared nor recorded; a saved result with failed
+turns is refused by `--compare`, `--update-baseline` and `--merge-baselines`
+too, and a baseline that is not valid JSON exits 2).
 
 The committed baselines start as an empty sentinel (`"empty": true`). Against
 one picked from the committed set (not named with `--baseline`), comparison is
@@ -85,7 +87,7 @@ baseline on the machine it will be compared on, and commit the file:
 | File | Recorded on | Compared by |
 |------|-------------|-------------|
 | `baselines/http.json`, `baselines/inprocess.json` | The local stack with the mock model | You, before and after an engine change |
-| `baselines/ci-inprocess.json` | The `bench-turn` job in `.github/workflows/ci.yml` (download its `bench-turn` artifact) | That job, on every pull request touching `robothor/engine/` |
+| `baselines/ci-inprocess.json` | The `bench-turn` job in `.github/workflows/ci.yml` (download its `bench-turn` artifact) | That job, on every pull request touching `robothor/engine/`, `robothor/templates/`, `agents/` or `templates/` |
 | `baselines/ci-http.json` | The compose job in `.github/workflows/install-gate.yml` | That step, nightly, report only |
 
 `--compare RESULT.json` compares a saved result without driving anything, and
@@ -139,7 +141,8 @@ commit them.
 
 The `bench-turn` job in `.github/workflows/ci.yml` runs the unit tests in
 `bench/turn/tests/` on every push. On a pull request that touches
-`robothor/engine/` (or a manual dispatch) it also runs the in-process half:
+`robothor/engine/` or a source of the prompt (`robothor/templates/`, `agents/`,
+`templates/`), or on a manual dispatch, it also runs the in-process half:
 20 turns against pgvector Postgres started with `pg_stat_statements` preloaded,
 Redis and the mock model (`tests/acceptance/mock_llm`), compared with
 `baselines/ci-inprocess.json`, and uploads the result as the `bench-turn`
