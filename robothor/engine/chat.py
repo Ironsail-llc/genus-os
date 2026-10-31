@@ -357,13 +357,23 @@ def _restore_sessions(config: EngineConfig) -> None:
         logger.warning("Failed to load persisted webchat sessions: %s", e)
 
 
-def init_chat(runner: AgentRunner, config: EngineConfig) -> None:
-    """Initialize module with shared runner and config. Called once from daemon."""
+def init_chat(runner: AgentRunner, config: EngineConfig, restore: bool = True) -> None:
+    """Initialize module with shared runner and config. Called once from daemon.
+
+    ``restore=False`` leaves the session restore to the caller, which the
+    daemon's health server does off the event loop (:func:`restore_sessions`).
+    """
     global _runner, _config
     _runner = runner
     _config = config
-    _restore_sessions(config)
+    if restore:
+        _restore_sessions(config)
     logger.info("Chat endpoints initialized")
+
+
+async def restore_sessions(config: EngineConfig) -> None:
+    """Restore webchat sessions from PostgreSQL in a thread, off the loop."""
+    await asyncio.to_thread(_restore_sessions, config)
 
 
 @router.post("/send", response_model=None)

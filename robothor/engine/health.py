@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any
 from robothor import __version__
 from robothor.engine.models import TriggerType
 from robothor.engine.sanitize import sanitize_log
+from robothor.engine.startup import startup_ms
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -188,6 +189,7 @@ def _mount_subsystem_routers(
     config: EngineConfig,
     runner: AgentRunner | None,
     scheduler: Any = None,
+    restore_sessions: bool = True,
 ) -> None:
     """Attach every subsystem that owns its own router.
 
@@ -216,7 +218,7 @@ def _mount_subsystem_routers(
         from robothor.engine.ide import init_ide
         from robothor.engine.ide import router as ide_router
 
-        init_chat(runner, config)
+        init_chat(runner, config, restore=restore_sessions)
         app.include_router(chat_router)
         init_ide(runner, config)
         app.include_router(ide_router)
@@ -399,14 +401,19 @@ def create_health_app(
     runner: AgentRunner | None = None,
     workflow_engine: Any = None,
     scheduler: Any = None,
+    restore_sessions: bool = True,
 ) -> Any:
-    """Create a lightweight FastAPI health app."""
+    """Create a lightweight FastAPI health app.
+
+    ``restore_sessions=False`` skips the synchronous webchat session restore;
+    :func:`serve_health` then restores them in a thread before it serves.
+    """
     from fastapi import FastAPI
 
     app = FastAPI(title="Genus OS Agent Engine", docs_url=None, redoc_url=None)
 
     _install_engine_auth(app, config)
-    _mount_subsystem_routers(app, config, runner, scheduler)
+    _mount_subsystem_routers(app, config, runner, scheduler, restore_sessions)
 
     # ── Buddy / KAIROS / Extensions API routes ───────────────────────────
 
@@ -1043,6 +1050,8 @@ def create_health_app(
                 "bot_configured": bool(config.bot_token),
                 "agents": agents,
                 "execution_mode": _execution_mode_block(),
+                # Milliseconds this process took to reach READY=1; null before.
+                "startup_ms": startup_ms(),
             }
         except Exception:
             logger.exception("Health check failed")
@@ -1792,8 +1801,18 @@ async def serve_health(
     import uvicorn
 
     app = create_health_app(
-        config, runner=runner, workflow_engine=workflow_engine, scheduler=scheduler
+        config,
+        runner=runner,
+        workflow_engine=workflow_engine,
+        scheduler=scheduler,
+        restore_sessions=False,
     )
+    if runner is not None:
+        # Off the loop, and before the port binds, so no chat request can
+        # race the restore.
+        from robothor.engine.chat import restore_sessions
+
+        await restore_sessions(config)
     uvi_config = uvicorn.Config(
         app,
         host=os.environ.get("ROBOTHOR_ENGINE_HOST", "127.0.0.1"),

@@ -163,18 +163,19 @@ def harness(monkeypatch: pytest.MonkeyPatch, fleet: Path) -> _Harness:
         def __init__(self, *_args: Any, **_kwargs: Any) -> None:
             self.trigger_channel_event = _noop
 
-        async def start(self, *args: Any, **kwargs: Any) -> None:
+        def start(self, *args: Any, **kwargs: Any) -> Any:
+            # Recorded at the call: the task's body may not run before READY.
             h.scheduler_start_args = args
             h.scheduler_start_kwargs = kwargs
-            await _forever()
+            return _forever()
 
     class FakeEventHooks:
         def __init__(self, *_args: Any, **_kwargs: Any) -> None:
             pass
 
-        async def start(self, *args: Any, **kwargs: Any) -> None:
+        def start(self, *args: Any, **kwargs: Any) -> Any:
             h.hooks_start_kwargs = {"args": args, **kwargs}
-            await _forever()
+            return _forever()
 
     class FakeWorkflowEngine:
         def __init__(self, *_args: Any, **_kwargs: Any) -> None:
@@ -375,8 +376,12 @@ class TestSessionRestoreIsOffTheLoop:
     async def test_serve_health_does_not_stall_the_loop_and_restores_first(self, monkeypatch):
         from robothor.engine import chat, health
 
+        # Long enough to tell apart from building the app itself (~150 ms of
+        # route registration that still runs on the loop, out of scope here).
+        restore_seconds = 0.8
+
         def slow_load(**_kwargs: Any) -> dict[str, Any]:
-            time.sleep(SLOW)
+            time.sleep(restore_seconds)
             return {"agent:main:alice": {"history": [{"role": "user", "content": "hi"}]}}
 
         monkeypatch.setattr(chat, "load_all_sessions", slow_load)
@@ -425,6 +430,11 @@ class TestSessionRestoreIsOffTheLoop:
             finally:
                 done.set()
 
+        # Build the app once first, so first-import cost (the chat stack, the
+        # IDE websocket, the webhook ingress) is not mistaken for the restore.
+        _health_body()
+        import robothor.engine.ide  # noqa: F401
+
         tick = asyncio.create_task(ticker())
         await asyncio.sleep(0.02)  # let the ticker take its first reading
         await serve()
@@ -432,7 +442,7 @@ class TestSessionRestoreIsOffTheLoop:
 
         chat._cache.sessions.pop("agent:main:alice", None)
         assert restored_when_serving == [True], "sessions must be restored before serving"
-        assert max(gaps) < 0.15, f"event loop stalled {max(gaps) * 1000:.0f} ms"
+        assert max(gaps) < restore_seconds / 2, f"event loop stalled {max(gaps) * 1000:.0f} ms"
 
 
 class TestConsumersUseTheSharedScan:
