@@ -376,6 +376,22 @@ class TestTrust:
         assert trust["manifest"] == {"sha256": None, "matches": None}
         assert trust["scan"]["verdict"] is None
 
+    def test_a_hand_upgrade_recorded_by_sync_is_not_verified(self, client, lock_path):
+        """Install signed, change the installed bytes, then do what the drift
+        message says (sync). The row now describes bytes nothing signed, pinned
+        or scanned, and must not say otherwise."""
+        with patch.object(loader, "_discover", lambda: [_EP()]):
+            self._record()
+        upgraded = _EP(dist=_Dist(version="2.0.0", manifest=_MANIFEST + "jobs:\n  - x\n"))
+        with patch.object(loader, "_discover", lambda: [upgraded]):
+            lockfile.sync()
+            trust = self._trust(client)
+        assert trust["signature"]["verified"] is False
+        assert trust["wheel"]["pinned"] is False
+        assert trust["scan"]["verdict"] == "unscanned"
+        assert trust["scan"]["reasons"] == []
+        assert trust["manifest"]["matches"] is True
+
     def test_trust_carries_no_filesystem_path(self, client, one_plugin):
         self._record()
         raw = json.dumps(self._trust(client))

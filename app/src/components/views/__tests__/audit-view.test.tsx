@@ -441,6 +441,22 @@ describe("Observe › Audit — filter by agent", () => {
     expect(screen.getByTestId("audit-export").getAttribute("href")).toContain("actor=bob");
   });
 
+  it("does not claim Any agent while the Actor box holds an id outside the fleet", async () => {
+    withFleet(() => ({ body: MANIFESTS }));
+    render(<AuditView role="owner" />);
+    const picker = await screen.findByTestId("audit-filter-agent");
+
+    fireEvent.change(screen.getByTestId("audit-filter-actor"), {
+      target: { value: "agent:partial" },
+    });
+    expect(picker).toHaveValue("agent:partial");
+    const custom = within(picker).getByRole("option", { name: /agent:partial/ });
+    expect(custom).toBeDisabled();
+    expect(within(picker).getByRole("option", { name: "Any agent" })).not.toHaveAttribute(
+      "selected"
+    );
+  });
+
   it("draws no picker when the fleet cannot be read", async () => {
     withFleet(() => ({ status: 403, body: { detail: "operator only" } }));
     render(<AuditView role="owner" />);

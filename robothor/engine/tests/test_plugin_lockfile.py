@@ -213,6 +213,85 @@ class TestScanReasons:
         row = lockfile.read_lockfile().row("acme-tools")
         assert row is not None and len(row.scan_reasons) == 2
 
+    def test_a_sync_over_changed_bytes_does_not_carry_them(self, lock_path):
+        """The reasons describe the wheel that was scanned. Once the installed
+        manifest is different bytes, they describe nothing that is installed."""
+        self._installed(lock_path)
+        changed = _Dist("acme-tools", manifest=_MANIFEST + "services:\n  - anything\n")
+        with patch.object(loader, "_discover", lambda: [_EP("probe", dist=changed)]):
+            lockfile.sync()
+        row = lockfile.read_lockfile().row("acme-tools")
+        assert row is not None and row.scan_reasons == ()
+
+
+class TestSyncOverChangedBytes:
+    """A sync that re-records a distribution whose version or manifest changed
+    since install is recording DIFFERENT BYTES. What the install established --
+    the scan's verdict and reasons, the wheel's hash, the key that signed the
+    index it came from -- was about the old bytes, and carrying it forward is
+    how a hand-upgraded plugin came to read as signed, pinned and scanned."""
+
+    def _install_signed(self):
+        dist = _Dist("acme-tools", "1.0")
+        lockfile.record_install(
+            "acme-tools",
+            version="1.0",
+            manifest_sha256=lockfile.manifest_digest(dist),
+            kinds=("genus.tools",),
+            verdict="safe",
+            dist_sha256="a" * 64,
+            source=lockfile.LockSource(
+                origin="registry",
+                index_url="https://index.example/index.json",
+                publisher_key_id="k1",
+                installed_at="2026-10-01T00:00:00+00:00",
+            ),
+            members_accounted=9,
+            scan_reasons=("acme/__init__.py:1: imports httpx",),
+        )
+
+    def _sync(self, dist):
+        with patch.object(loader, "_discover", lambda: [_EP("probe", dist=dist)]):
+            lockfile.sync()
+        row = lockfile.read_lockfile().row("acme-tools")
+        assert row is not None
+        return row
+
+    def _assert_install_facts_dropped(self, row):
+        assert row.verdict == lockfile.UNSCANNED
+        assert row.dist_sha256 == ""
+        assert row.members_accounted == 0
+        assert row.scan_reasons == ()
+        # Still ours to remove: `remove` reads the origin, not the evidence.
+        assert row.source is not None and row.source.origin == "registry"
+        assert row.source.publisher_key_id == ""
+
+    def test_a_changed_manifest_drops_the_install_facts(self, lock_path):
+        self._install_signed()
+        row = self._sync(_Dist("acme-tools", "1.0", manifest=_MANIFEST + "services:\n  - x\n"))
+        self._assert_install_facts_dropped(row)
+
+    def test_a_changed_version_drops_the_install_facts(self, lock_path):
+        self._install_signed()
+        row = self._sync(_Dist("acme-tools", "2.0"))
+        self._assert_install_facts_dropped(row)
+
+    def test_unchanged_bytes_keep_them(self, lock_path):
+        self._install_signed()
+        row = self._sync(_Dist("acme-tools", "1.0"))
+        assert row.verdict == "safe"
+        assert row.dist_sha256 == "a" * 64
+        assert row.members_accounted == 9
+        assert row.scan_reasons == ("acme/__init__.py:1: imports httpx",)
+        assert row.source is not None and row.source.publisher_key_id == "k1"
+
+    def test_the_operators_decision_survives_either_way(self, lock_path):
+        self._install_signed()
+        lockfile.set_enabled("acme-tools", False)
+        row = self._sync(_Dist("acme-tools", "2.0"))
+        assert row.enabled is False
+
+
     def test_a_row_written_before_they_existed_reads_as_none(self, lock_path):
         lock_path.write_text(
             json.dumps(
