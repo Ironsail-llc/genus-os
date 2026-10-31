@@ -548,6 +548,7 @@ class AgentRunner(
         user_role: str = "",
         identity: IdentityContext | None = None,
         live_inbox: LiveInbox | None = None,
+        user_images: list[dict[str, Any]] | None = None,
     ) -> AgentRun:
         """Execute an agent with the given message.
 
@@ -1016,6 +1017,7 @@ class AgentRunner(
             conversation_history=conversation_history,
             engine_context=engine_preamble or None,
             autonomy_active=_prepared.autonomy_active,
+            user_images=user_images,
         )
 
         session.readonly_mode = readonly_mode

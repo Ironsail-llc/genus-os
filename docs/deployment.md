@@ -835,6 +835,11 @@ per-pod volume such as `emptyDir`.
 - [ ] Set `ROBOTHOR_CAPABILITIES_MANIFEST` if the deployment keeps its
       `agent_capabilities.json` outside the workspace
 - [ ] Set up monitoring (health endpoints return JSON)
+- [ ] If a reverse proxy, ingress or tunnel sits in front of the dashboard, let it
+      admit request bodies of about 22 MB on `POST /api/chat/send`: a chat message
+      can carry three 5 MB files, base64-encoded (see
+      [Attaching files](channels/webchat.md#attaching-files)). A smaller limit
+      refuses those messages before they reach the dashboard
 - [ ] Back up PostgreSQL daily (`pg_dump robothor_memory`)
 
 ## Diagnostics (`genus doctor`)
@@ -1009,6 +1014,13 @@ vector is never cleared, because nothing backfills a missing one. The
 embedding gets one attempt within 8 seconds, so an unreachable provider costs
 the save at most that long rather than outlasting the dashboard's 30-second
 request timeout.
+
+**An operator-confirmed fact is the operator's word, and no automatic path
+retires it.** When a later extraction contradicts or updates it, the new
+extraction is stored already superseded by the confirmed fact, so the
+pipeline's reading stays on record while the operator's stays active; the
+nightly quality prune, consolidation, dechurn and resolution capture all skip
+it. Only an operator's forget (or another edit) changes it.
 
 The bridge needs `ROBOTHOR_OLLAMA_URL` and `ROBOTHOR_EMBEDDING_MODEL` to reach
 the embedding provider; without them it tries `127.0.0.1:11434`. On the Helm

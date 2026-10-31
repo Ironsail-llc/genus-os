@@ -106,7 +106,13 @@ def as_history(rows: Any) -> ChatHistory:
 MAX_HISTORY = 40  # 20 turns (user + assistant)
 
 
-def append_turn(session: Any, *, user_message: str, assistant_text: str | None = None) -> None:
+def append_turn(
+    session: Any,
+    *,
+    user_message: str,
+    assistant_text: str | None = None,
+    user_extras: dict[str, Any] | None = None,
+) -> None:
     """Record one exchange in a session's history, and trim it.
 
     Lives beside :class:`ChatHistory` rather than in ``chat.py`` because it is
@@ -119,7 +125,15 @@ def append_turn(session: Any, *, user_message: str, assistant_text: str | None =
     covered anyway. What this adds is the TRIM, and one obvious place for a
     caller to reach for.
     """
-    session.history.append({"role": "user", "content": user_message})
+    row: dict[str, Any] = {"role": "user", "content": user_message}
+    if user_extras:
+        # What arrived with the turn (attached files), beside the text: the
+        # Helm reads the names back from here. Only role + content reach the
+        # model (`session._render_history_for_llm`).
+        from robothor.engine.chat_store import _redact_captions
+
+        row["extras"] = _redact_captions(user_extras)
+    session.history.append(row)
     if assistant_text:
         session.history.append({"role": "assistant", "content": assistant_text})
     if len(session.history) > MAX_HISTORY:

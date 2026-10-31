@@ -1,0 +1,136 @@
+/**
+ * Every composer control names itself. Plan and Deep were icon buttons with a
+ * tooltip and no accessible name, so a screen reader announced "button".
+ */
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { ChatPanel } from "../chat-panel";
+
+vi.mock("@/hooks/use-visual-state", () => ({
+  useVisualState: () => ({ notifyConversationUpdate: vi.fn(), setRender: vi.fn() }),
+}));
+vi.mock("@/hooks/use-throttle", () => ({ useThrottle: (value: string) => value }));
+
+function stubFetch() {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ messages: [], agents: [], active: false }) })),
+  );
+}
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
+
+describe.each([
+  ["desktop", false],
+  ["mobile", true],
+])("ChatPanel composer controls (%s)", (_name, mobile) => {
+  it("labels Plan, Deep and Tools", () => {
+    stubFetch();
+    render(<ChatPanel mobile={mobile} />);
+
+    expect(screen.getByRole("button", { name: "Plan mode" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Deep mode" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Tools and MCP servers" })).toBeVisible();
+  });
+
+  it("tells a screen reader whether Plan and Deep are on", () => {
+    stubFetch();
+    render(<ChatPanel mobile={mobile} />);
+    const plan = screen.getByRole("button", { name: "Plan mode" });
+    const deep = screen.getByRole("button", { name: "Deep mode" });
+
+    expect(plan).toHaveAttribute("aria-pressed", "false");
+    expect(deep).toHaveAttribute("aria-pressed", "false");
+
+    fireEvent.click(plan);
+    expect(plan).toHaveAttribute("aria-pressed", "true");
+    expect(deep).toHaveAttribute("aria-pressed", "false");
+
+    // Deep plans first, but the Plan toggle is not the one that is on.
+    fireEvent.click(deep);
+    expect(deep).toHaveAttribute("aria-pressed", "true");
+    expect(plan).toHaveAttribute("aria-pressed", "false");
+
+    fireEvent.click(deep);
+    expect(deep).toHaveAttribute("aria-pressed", "false");
+  });
+});
+
+describe("ChatPanel Tools button and the default agent", () => {
+  it("asks about the fleet's default agent, never a guessed one", async () => {
+    let releaseListing!: () => void;
+    const gate = new Promise<void>((resolve) => { releaseListing = resolve; });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/bridge/api/agent-manifests") {
+        await gate;
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ default_agent: "example-main", agents: [{ id: "example-main", name: "Example", chattable: true }] }),
+        };
+      }
+      if (url === "/api/bridge/api/agents/example-main/tools") {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            agent: "example-main",
+            groups: { core: ["read_file"], plugins: {}, mcp: {}, opt_in: [] },
+            allowed: [],
+            denied: [],
+            count: 1,
+          }),
+        };
+      }
+      return { ok: true, status: 200, json: async () => ({ messages: [], agents: [], active: false, servers: [] }) };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<ChatPanel />);
+
+    // Opened before the listing answers: no agent yet, so nothing is asked.
+    fireEvent.click(screen.getByRole("button", { name: "Tools and MCP servers" }));
+    expect(await screen.findByTestId("tools-no-agent")).toBeVisible();
+
+    // The listing names the default; the open dialog asks about THAT agent.
+    releaseListing();
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.map(([url]) => String(url))).toContain(
+        "/api/bridge/api/agents/example-main/tools"
+      )
+    );
+    expect(fetchMock.mock.calls.map(([url]) => String(url))).not.toContain(
+      "/api/bridge/api/agents/main/tools"
+    );
+    // Let the reply render before teardown, so nothing lands after it.
+    expect(await screen.findByTestId("tools-total")).toHaveTextContent("1 tool");
+  });
+});
+
+describe("ChatPanel Tools button for a member", () => {
+  it("opens and says the list is the operator's, without asking the bridge", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/bridge/api/agent-manifests") {
+        return { ok: false, status: 403, json: async () => ({ detail: "operator role required" }) };
+      }
+      return { ok: true, status: 200, json: async () => ({ messages: [], agents: [], active: false }) };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<ChatPanel />);
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.map(([url]) => String(url))).toContain("/api/bridge/api/agent-manifests")
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Tools and MCP servers" }));
+
+    const note = await screen.findByTestId("tools-no-agent");
+    expect(note).toHaveTextContent(/only an operator/i);
+    expect(note).not.toHaveTextContent(/not been told/i);
+    expect(fetchMock.mock.calls.map(([url]) => String(url)).some((url) => url.includes("/tools"))).toBe(false);
+  });
+});
