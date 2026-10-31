@@ -29,7 +29,7 @@ import logging
 import math
 import os
 import random
-from contextlib import asynccontextmanager
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -93,7 +93,9 @@ class _TimedClient:
         kwargs.setdefault("timeout", self._timeout)
         return await self._client.post(url, **kwargs)
 
-    def stream(self, method: str, url: str, **kwargs: Any) -> Any:
+    def stream(
+        self, method: str, url: str, **kwargs: Any
+    ) -> AbstractAsyncContextManager[httpx.Response]:
         kwargs.setdefault("timeout", self._timeout)
         return self._client.stream(method, url, **kwargs)
 

@@ -13,6 +13,9 @@ LLM-actionable errors instead of raw exception text:
   dead service: after ``BREAKER_THRESHOLD`` consecutive connect failures the
   cached offline error is returned without dialing for
   ``BREAKER_COOLDOWN_SECONDS``, then one probe is allowed (half-open).
+- every call goes through one pooled client per event loop
+  (``robothor/http_clients.py``), so repeat calls reuse a kept-alive
+  connection; the caller's ``timeout`` travels with each request.
 
 ``bridge_headers`` mints (and caches) the short-lived service token the
 bridge's fail-closed auth middleware requires — see crm/bridge/middleware.py:
