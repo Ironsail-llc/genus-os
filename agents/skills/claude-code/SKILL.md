@@ -25,7 +25,7 @@ you never report a claim — only evidence.
 ## 0. Get the repository on disk
 
 If the code lives in a remote (`owner/repo`) rather than a checkout already on
-the host, call `coding_repo_prepare(repo="owner/repo")` first and use the
+the host, call `claude_code_repo_prepare(repo="owner/repo")` first and use the
 `repo_path` it returns. It clones once and fetches on every later call, so call
 it again before each new job. If it refuses, the refusal names the setting the
 operator has to change (`ROBOTHOR_CODING_WORKSPACE`, `ROBOTHOR_CODING_REMOTES`):
@@ -111,7 +111,7 @@ If a goal is open, record the job's `evidence` items on it (they are already in
 the `test_run` / `commit` shape goals accept). The work is on a branch, not
 merged and not pushed: say so, and say what the next step is (review, PR).
 
-To open the pull request, call `coding_publish(job_id, title, body, ticket?)`:
+To open the pull request, call `claude_code_publish(job_id, title, body, ticket?)`:
 it pushes the job's branch and opens a **draft** PR, and returns `pr_url`. Put
 the evidence above in `body`, and give the operator the `pr_url`. It never
 merges; the operator does. If it refuses, say which gate (the role, or

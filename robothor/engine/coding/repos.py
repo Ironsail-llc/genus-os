@@ -1,6 +1,6 @@
 """Repositories a coding job may work on, put on disk by the engine itself.
 
-``coding_repo_prepare`` names a remote; this module clones it once into
+``claude_code_repo_prepare`` names a remote; this module clones it once into
 ``ROBOTHOR_CODING_WORKSPACE/<owner>/<repo>`` and fetches (then fast-forwards
 the default branch) on every later call, so ``claude_code_start`` always has a
 current checkout to branch a job from. The workspace is a repo root of its own
@@ -165,7 +165,7 @@ def workspace_dir() -> Path:
     configured = str(_settings().workspace or "").strip()
     if not configured:
         raise RepoError(
-            "coding_repo_prepare is off until ROBOTHOR_CODING_WORKSPACE names the directory "
+            "claude_code_repo_prepare is off until ROBOTHOR_CODING_WORKSPACE names the directory "
             "repositories are cloned into"
         )
     return Path(configured).expanduser()
@@ -260,7 +260,7 @@ async def origin_remote(repo: Path) -> RemoteSpec:
     if code != 0 or not url:
         raise RepoError(
             f"{repo} has no origin remote; only clones of a ROBOTHOR_CODING_REMOTES entry "
-            "(coding_repo_prepare) can be published"
+            "(claude_code_repo_prepare) can be published"
         )
     return allowed_remote(url)
 
@@ -288,7 +288,14 @@ async def ensure_repo(raw: str, *, token: str) -> PreparedRepo:
                     dest.parent, "clone", "--quiet", "--", spec.url, str(dest),
                     url=spec.url, token=token,
                 )  # fmt: skip
-            except RepoError:
+            except OSError as exc:
+                shutil.rmtree(dest, ignore_errors=True)
+                raise RepoError(
+                    f"git could not run ({exc.strerror or exc}); is git installed?"
+                ) from None
+            except BaseException:
+                # RepoError, a cancellation, anything: the directory this call
+                # created goes, or every later prepare would be refused.
                 shutil.rmtree(dest, ignore_errors=True)
                 raise
         else:

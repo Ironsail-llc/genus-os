@@ -129,8 +129,10 @@ TOOL_HINTS: dict[str, ToolHint] = {
     "claude_code_status": ToolHint(keywords=(*_CODING, "status", "progress", "check")),
     "claude_code_followup": ToolHint(keywords=(*_CODING, "followup", "follow", "correct", "retry")),
     "claude_code_cancel": ToolHint(keywords=(*_CODING, "cancel", "stop", "abort")),
-    "coding_repo_prepare": ToolHint(keywords=(*_CODING, "clone", "checkout", "fetch", "prepare")),
-    "coding_publish": ToolHint(keywords=(*_CODING, *_PR, "publish", "push", "open", "draft")),
+    "claude_code_repo_prepare": ToolHint(
+        keywords=(*_CODING, "clone", "checkout", "fetch", "prepare")
+    ),
+    "claude_code_publish": ToolHint(keywords=(*_CODING, *_PR, "publish", "push", "open", "draft")),
     # ── Live Gmail ────────────────────────────────────────────────────
     "gws_gmail_search": ToolHint(
         keywords=(

@@ -3255,8 +3255,8 @@ class CodingSettings(SettingsGroup):
     workspace: str = declare(
         "",
         "ROBOTHOR_CODING_WORKSPACE",
-        "Directory coding_repo_prepare clones repositories into, one per remote at "
-        "<dir>/<owner>/<repo>, created on first use. Empty turns coding_repo_prepare off. "
+        "Directory claude_code_repo_prepare clones repositories into, one per remote at "
+        "<dir>/<owner>/<repo>, created on first use. Empty turns claude_code_repo_prepare off. "
         "When set it is also a repo root for claude_code_start, in addition to "
         "ROBOTHOR_CODING_REPO_ROOTS.",
         restart_required=False,
@@ -3265,7 +3265,7 @@ class CodingSettings(SettingsGroup):
     remotes: str = declare(
         "",
         "ROBOTHOR_CODING_REMOTES",
-        "Comma-separated remotes coding_repo_prepare may clone and coding_publish may "
+        "Comma-separated remotes claude_code_repo_prepare may clone and claude_code_publish may "
         "push to: owner/repo (a GitHub repository) or a full clone URL. Empty refuses "
         "every remote.",
         restart_required=False,
@@ -3274,9 +3274,9 @@ class CodingSettings(SettingsGroup):
     pr_enabled: bool = declare(
         False,
         "ROBOTHOR_CODING_PR_ENABLED",
-        "Lets coding_publish push a verified coding job's branch to its allowlisted "
+        "Lets claude_code_publish push a verified coding job's branch to its allowlisted "
         "remote and open a draft pull request (GITHUB_TOKEN from the vault). Off refuses "
-        "every coding_publish. Nothing merges a pull request.",
+        "every claude_code_publish. Nothing merges a pull request.",
         restart_required=False,
         since="unreleased",
     )

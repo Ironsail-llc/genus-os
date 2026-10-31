@@ -1455,10 +1455,10 @@ _CLAUDE_CODE_SCHEMAS: dict[str, dict[str, Any]] = {
             },
         },
     },
-    "coding_repo_prepare": {
+    "claude_code_repo_prepare": {
         "type": "function",
         "function": {
-            "name": "coding_repo_prepare",
+            "name": "claude_code_repo_prepare",
             "description": (
                 "Use this before claude_code_start when the code lives in a remote repository: "
                 "clones an allowlisted remote into the coding workspace (or fetches and "
@@ -1476,10 +1476,10 @@ _CLAUDE_CODE_SCHEMAS: dict[str, dict[str, Any]] = {
             },
         },
     },
-    "coding_publish": {
+    "claude_code_publish": {
         "type": "function",
         "function": {
-            "name": "coding_publish",
+            "name": "claude_code_publish",
             "description": (
                 "Use this after a claude_code job is done with its verify passed: pushes the "
                 "job's branch to the repository's allowlisted origin and opens a DRAFT pull "

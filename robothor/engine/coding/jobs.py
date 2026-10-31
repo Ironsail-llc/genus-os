@@ -451,20 +451,23 @@ def check_repo_path(raw: str) -> Path:
     roots = [
         Path(r.strip()).expanduser().resolve() for r in configured.split(os.pathsep) if r.strip()
     ]
+    named = (
+        [f"ROBOTHOR_CODING_REPO_ROOTS ({os.pathsep.join(str(r) for r in roots)})"] if roots else []
+    )
     clones = str(_settings().workspace or "").strip()
     if clones:
-        # Where coding_repo_prepare clones: always a root of its own.
+        # Where claude_code_repo_prepare clones: always a root of its own.
         roots.append(Path(clones).expanduser().resolve())
+        named.append(f"ROBOTHOR_CODING_WORKSPACE ({roots[-1]})")
     if not roots:
         raise ValueError(
             "coding jobs are disabled until ROBOTHOR_CODING_REPO_ROOTS names the directories "
             "repositories may live under (path-separated, for example ~/src), or "
-            "ROBOTHOR_CODING_WORKSPACE names where coding_repo_prepare clones them"
+            "ROBOTHOR_CODING_WORKSPACE names where claude_code_repo_prepare clones them"
         )
     resolved = path.resolve()
     if not any(resolved.is_relative_to(root) for root in roots):
-        shown = os.pathsep.join(str(r) for r in roots)
-        raise ValueError(f"repo_path is outside ROBOTHOR_CODING_REPO_ROOTS ({shown})")
+        raise ValueError(f"repo_path is outside {' and '.join(named)}")
     workspace = sandbox.live_workspace()
     if workspace is not None and workspace.resolve().is_relative_to(resolved):
         raise ValueError(

@@ -466,11 +466,13 @@ async def test_every_publish_refusal_is_audited_with_its_reason(
         in (await publish({"job_id": job["job_id"], "title": "t"}))["details"]["reason"]
     )
 
+    _manager(_commit_ok)  # the fixture's runner spent its one committing round above
     started = await _call(
         "claude_code_start",
         {"task": "t", "repo_path": str(git_repo), "acceptance": {"verify_command": VERIFY}},
     )
-    await _call("claude_code_wait", {"job_id": started["job_id"], "timeout_s": 20})
+    waited = await _call("claude_code_wait", {"job_id": started["job_id"], "timeout_s": 20})
+    assert waited["status"] == "done", waited
     stray = await publish({"job_id": started["job_id"], "title": "t"})
     assert "ROBOTHOR_CODING_REMOTES" in stray["details"]["reason"]
     assert github.requests == []

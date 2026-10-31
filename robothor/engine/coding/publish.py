@@ -1,6 +1,6 @@
 """A verified coding job's branch, pushed and opened as a draft pull request.
 
-``coding_publish`` is the only way a job's work leaves the host: a job's own
+``claude_code_publish`` is the only way a job's work leaves the host: a job's own
 shell may never push (:data:`robothor.engine.coding.sandbox.NEVER`). This
 module pushes the job's ``genus/cc-*`` branch to the clone's origin -- which
 must be a ``ROBOTHOR_CODING_REMOTES`` entry -- and opens a **draft** pull

@@ -226,13 +226,13 @@ repository that is not on the host yet to a draft pull request:
 
 | Tool | Purpose |
 |---|---|
-| `coding_repo_prepare` | Clone an allowlisted remote (`repo`: `owner/repo` on GitHub, or a clone URL) into `ROBOTHOR_CODING_WORKSPACE/<owner>/<repo>`, or fetch and fast-forward the clone that is already there. Returns the `repo_path` to give `claude_code_start`, the default branch and `head_sha`, and whether it `cloned`. |
-| `coding_publish` | Push a `done` job's `genus/cc-<id>` branch (verify passed, a commit made) to the clone's origin and open a **draft** pull request through the GitHub REST API: `job_id`, `title`, optional `body`, `ticket` (appended to the title) and `base` (default: the remote's default branch). Returns `pr_url`. Owner or admin only; never merges. |
+| `claude_code_repo_prepare` | Clone an allowlisted remote (`repo`: `owner/repo` on GitHub, or a clone URL) into `ROBOTHOR_CODING_WORKSPACE/<owner>/<repo>`, or fetch and fast-forward the clone that is already there. Returns the `repo_path` to give `claude_code_start`, the default branch and `head_sha`, and whether it `cloned`. |
+| `claude_code_publish` | Push a `done` job's `genus/cc-<id>` branch (verify passed, a commit made) to the clone's origin and open a **draft** pull request through the GitHub REST API: `job_id`, `title`, optional `body`, `ticket` (appended to the title) and `base` (default: the remote's default branch). Returns `pr_url`. Owner or admin only; never merges. |
 
-Use `coding_repo_prepare` when the code lives in a remote and
+Use `claude_code_repo_prepare` when the code lives in a remote and
 `ROBOTHOR_CODING_WORKSPACE` is set; use a `repo_path` under
 `ROBOTHOR_CODING_REPO_ROOTS` for a checkout the operator already keeps on the
-host. Use `coding_publish` instead of the `git`/`gh` tools for a coding job's
+host. Use `claude_code_publish` instead of the `git`/`gh` tools for a coding job's
 branch: it publishes only verified work, only to an allowlisted remote, and
 needs no `gh` binary.
 
@@ -248,14 +248,14 @@ needs no `gh` binary.
   a git argv, never in the clone's `.git/config`, and every error is redacted.
   These git calls run with `core.hooksPath=/dev/null` and `core.fsmonitor=false`,
   like every other engine-side git call, so no repository hook runs with the
-  token. `coding_publish` opens pull requests on GitHub only.
+  token. `claude_code_publish` opens pull requests on GitHub only.
 - **The clone path.** A directory already at `<workspace>/<owner>/<repo>` that
   is not a clone is refused and left alone; a failed clone removes only the
   directory it created.
-- **Who.** The handler refuses `coding_publish` to anyone but the owner or an
+- **Who.** The handler refuses `claude_code_publish` to anyone but the owner or an
   admin and writes a `coding.publish` audit event for every refusal, push
   failure and published pull request. Migration 165 also denies both tools to
-  `user` and `member`, and `coding_publish` to `service` (every unattended run).
+  `user` and `member`, and `claude_code_publish` to `service` (every unattended run).
 - **Where a job's private home goes.** With `ROBOTHOR_CODING_WORKSPACE` set,
   a job's `HOME`/`CLAUDE_CONFIG_DIR` is `<workspace>/.home/<job>`, so it lands on
   the writable coding volume even where the service user's home is read-only.
