@@ -40,6 +40,8 @@ import {
 
 const BRIDGE = "/api/bridge";
 export const TOOLS_LABEL = "Tools and MCP servers";
+const TITLE = "Tools";
+const DESCRIPTION = "What this agent can call, and the MCP servers behind it.";
 
 export interface AgentToolsReply {
   agent: string;
@@ -292,9 +294,6 @@ export function ToolsPopover({ agentId, mobile = false, disabled = false }: Tool
     [fetchAll]
   );
 
-  const description = "What this agent can call, and the MCP servers behind it.";
-  const title = "Tools";
-
   if (mobile) {
     return (
       <>
@@ -312,8 +311,8 @@ export function ToolsPopover({ agentId, mobile = false, disabled = false }: Tool
         <Sheet open={open} onOpenChange={onOpenChange}>
           <SheetContent side="bottom" className="max-h-[85vh] px-4 pb-6">
             <SheetHeader className="px-0">
-              <SheetTitle>{title}</SheetTitle>
-              <SheetDescription>{description}</SheetDescription>
+              <SheetTitle>{TITLE}</SheetTitle>
+              <SheetDescription>{DESCRIPTION}</SheetDescription>
             </SheetHeader>
             <ToolsBody agentId={agentId} load={load} />
           </SheetContent>
@@ -347,8 +346,8 @@ export function ToolsPopover({ agentId, mobile = false, disabled = false }: Tool
       <Dialog open={open} onOpenChange={onOpenChange}>
         <DialogContent className="max-h-[85vh] overflow-hidden flex flex-col">
           <DialogHeader>
-            <DialogTitle>{title}</DialogTitle>
-            <DialogDescription>{description}</DialogDescription>
+            <DialogTitle>{TITLE}</DialogTitle>
+            <DialogDescription>{DESCRIPTION}</DialogDescription>
           </DialogHeader>
           <ToolsBody agentId={agentId} load={load} />
         </DialogContent>
