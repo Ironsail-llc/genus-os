@@ -51,11 +51,13 @@ def _connect() -> Any:
 
 
 @pytest.fixture
-def world() -> Iterator[dict[str, Any]]:
+def world(monkeypatch) -> Iterator[dict[str, Any]]:
     """acme-parent (root) with alice@example.com and one row per linked table;
-    acme-child-a beneath it. Everything is removed afterwards."""
+    acme-child-a beneath it. The shell is the root's. Everything is removed
+    afterwards."""
     sfx = uuid.uuid4().hex[:8]
     parent, child = f"acme-parent-{sfx}", f"acme-child-a-{sfx}"
+    monkeypatch.setenv("ROBOTHOR_TENANT_ID", parent)
     conn = _connect()
     conn.autocommit = True
     cur = conn.cursor()
@@ -227,6 +229,17 @@ def test_the_audit_row_is_filed_under_the_target_tenant(world) -> None:
         (f"user_account:{world['user_id']}",),
     )
     assert [r[0] for r in cur.fetchall()] == [world["child"]]
+
+
+def test_a_shell_bound_to_the_child_is_refused_and_moves_nothing(world, monkeypatch) -> None:
+    """The move is the root operator's, as for ``move-workload``."""
+    monkeypatch.setenv("ROBOTHOR_TENANT_ID", world["child"])
+    cur = world["cur"]
+    with pytest.raises(accounts.AccountMoveError, match="root") as exc:
+        accounts.move_account(world["user_id"], world["child"], actor="cli:test")
+    assert world["parent"] in str(exc.value)
+    assert set(_where(cur, world).values()) == {world["parent"]}
+    assert _audit_rows(cur, world["user_id"]) == []
 
 
 def test_dry_run_counts_and_moves_nothing(world) -> None:

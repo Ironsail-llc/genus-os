@@ -1254,7 +1254,8 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # tenant — multi-tenant administration
     tenant_parser = subparsers.add_parser(
-        "tenant", help="Create, list, and inspect tenants; claim SSO domains; move accounts"
+        "tenant",
+        help="Create, list, and inspect tenants; claim SSO domains; move accounts and workloads",
     )
     tenant_sub = tenant_parser.add_subparsers(dest="tenant_command")
     tenant_create = tenant_sub.add_parser("create", help="Create a new tenant")
@@ -1308,6 +1309,28 @@ def _build_parser() -> argparse.ArgumentParser:
         "--dry-run", action="store_true", help="Show what would move; change nothing"
     )
     tenant_move.add_argument("--json", action="store_true", help="Print the report as JSON")
+    tenant_workload = tenant_sub.add_parser(
+        "move-workload",
+        help="Move the history of named agents and workflows to another tenant",
+    )
+    tenant_workload.add_argument(
+        "--from", dest="from_tenant", required=True, help="Tenant the workload ran in"
+    )
+    tenant_workload.add_argument(
+        "--to",
+        required=True,
+        help="Target tenant ID: a descendant or sibling under the same root",
+    )
+    tenant_workload.add_argument(
+        "--agent", action="append", default=[], help="Agent ID to move (repeatable)"
+    )
+    tenant_workload.add_argument(
+        "--workflow", action="append", default=[], help="Workflow ID to move (repeatable)"
+    )
+    tenant_workload.add_argument(
+        "--dry-run", action="store_true", help="Show what would move; change nothing"
+    )
+    tenant_workload.add_argument("--json", action="store_true", help="Print the report as JSON")
 
     # engine
     # run -- quick single-shot agent execution

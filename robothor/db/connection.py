@@ -230,6 +230,12 @@ def effective_tenant() -> str:
         return ""
     if override:
         return override
+    return process_tenant()
+
+
+def process_tenant() -> str:
+    """The tenant this process runs as, from its environment: ``ROBOTHOR_TENANT_ID``,
+    else ``ROBOTHOR_DEFAULT_TENANT``, else ``""``. No context override applies."""
     return os.environ.get("ROBOTHOR_TENANT_ID", "") or os.environ.get("ROBOTHOR_DEFAULT_TENANT", "")
 
 
@@ -393,7 +399,9 @@ connection already checked out.
     ``analytics.get_fleet_health`` and ``tracking.get_agent_stats``. Two are
     the operator-only account move, ``accounts.move_account`` and its lookup
     ``accounts.accounts_for_email`` (``genus tenant move-account``), which by
-    definition reads one tenant and writes another. From
+    definition reads one tenant and writes another. One is the operator-only
+    workload move, ``tenancy.move_workload.move_workload`` (``genus tenant
+    move-workload``), for the same reason. From
     2026-09-13 every graded task run executes as the ``benchmark-sandbox``
     tenant, so a query bound to the owning tenant cannot see the fleet's own
     benchmark traffic at all — ``/costs`` reported ``benchmark_cost_usd =
