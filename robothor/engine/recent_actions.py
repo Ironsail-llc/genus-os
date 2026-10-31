@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 from datetime import UTC
 from pathlib import Path
 from typing import Any
@@ -49,6 +50,10 @@ _NOTABLE_TOOLS: set[str] = {
 
 # Ring-buffer window. Newest entries at top; oldest trimmed.
 _MAX_ENTRIES = 20
+
+# Runs finish in worker threads (run_finalizer._off_loop): one writer at a time,
+# or two runs finishing together read the same list and one entry is lost.
+_WRITE_LOCK = threading.Lock()
 
 # Path is instance-scoped (brain/ is gitignored, per root CLAUDE.md).
 _RELATIVE_PATH = "brain/memory/main-recent-actions.md"
@@ -160,14 +165,26 @@ def record_run(run: Any, agent_config: Any = None) -> None:
     try:
         path = log_path()
         path.parent.mkdir(parents=True, exist_ok=True)
-        existing = _read_existing_lines(path)
-        new_lines = [line] + existing
-        new_lines = new_lines[:_MAX_ENTRIES]
-        header = (
-            "# main-recent-actions.md — engine-written, do not edit by hand\n"
-            "# Newest first. Ring buffer of last "
-            f"{_MAX_ENTRIES} notable actions across all main sessions.\n"
-        )
-        path.write_text(header + "\n".join(new_lines) + "\n")
+        with _WRITE_LOCK:
+            existing = _read_existing_lines(path)
+            new_lines = [line] + existing
+            new_lines = new_lines[:_MAX_ENTRIES]
+            header = (
+                "# main-recent-actions.md — engine-written, do not edit by hand\n"
+                "# Newest first. Ring buffer of last "
+                f"{_MAX_ENTRIES} notable actions across all main sessions.\n"
+            )
+            _replace(path, header + "\n".join(new_lines) + "\n")
     except Exception as e:
         logger.warning("recent_actions: write failed: %s", e)
+
+
+def _replace(path: Path, text: str) -> None:
+    """Write beside the log, then rename over it: a reader (the next run's
+    warmup) never sees a truncated file, and a failed write keeps the old one."""
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    try:
+        tmp.write_text(text)
+        tmp.replace(path)
+    finally:
+        tmp.unlink(missing_ok=True)

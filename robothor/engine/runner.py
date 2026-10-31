@@ -103,7 +103,7 @@ from robothor.engine.run_deadline import (
 )
 from robothor.engine.run_finalizer import RunFinalizationMixin
 from robothor.engine.run_identity import _is_service_caller as _is_service_caller
-from robothor.engine.run_identity import attach_tenant_access, resolve_run_identity
+from robothor.engine.run_identity import attach_tenant_access, resolve_run_identity_off_loop
 from robothor.engine.run_lifecycle import RunLifecycleMixin, spawn_post_stall_autodream
 from robothor.engine.run_llm_calls import LLMCallMixin  # noqa: E402
 from robothor.engine.run_pacing import DeadlinePacer, checkin_note, mode_for_run  # noqa: E402
@@ -613,8 +613,7 @@ class AgentRunner(
         # explicit kwarg > webchat DB resolution > legacy Telegram `|sender:`
         # parse. A spawn_context-carried identity (sub-agent attribution only)
         # is folded in further below, after spawn inheritance is resolved.
-        effective_identity = await asyncio.to_thread(
-            resolve_run_identity,
+        effective_identity = await resolve_run_identity_off_loop(
             identity,
             agent_id=agent_id,
             trigger_type=trigger_type,
@@ -691,10 +690,9 @@ class AgentRunner(
             TriggerType.WEBCHAT,
         ):
             try:
-                from robothor.engine.run_person_link import resolve_run_person_id
+                from robothor.engine.run_person_link import resolve_run_person_id_off_loop
 
-                session.run.person_id = await asyncio.to_thread(
-                    resolve_run_person_id,
+                session.run.person_id = await resolve_run_person_id_off_loop(
                     trigger_type=trigger_type,
                     trigger_detail=trigger_detail,
                     tenant_id=resolved_tenant,
@@ -708,7 +706,7 @@ class AgentRunner(
         # it onto a fresh SpawnContext for any children this run spawns.
         session.identity = effective_identity
 
-        await asyncio.to_thread(attach_tenant_access, session.run, resolved_tenant)
+        await attach_tenant_access(session.run, resolved_tenant)
 
         # Build system prompt + warmup in parallel where possible.
         # Both involve sync I/O so we run them concurrently in the executor.

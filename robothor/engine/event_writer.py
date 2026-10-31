@@ -18,14 +18,18 @@ Contract:
   when it submitted (tenant scope, run context), not the writer task's.
 - **flush()** returns once every row submitted before it has been written. The
   run's persist task flushes at run end; the daemon calls ``shutdown()`` after
-  the task-registry drain, which flushes and stops the task.
+  the task-registry drain, which flushes (bounded by its own slice of the stop
+  budget, ``shutdown_budget.EVENT_WRITER_FLUSH_TIMEOUT_SECONDS``) and stops the
+  task.
 - **No loop, no queue.** Called with no running loop (the CLI, a worker thread
   already off the loop) a submit writes inline before returning, behind any
   rows still queued — today's behaviour for those callers.
 - **Never raises.** A failing row is logged at ERROR and the rows behind it are
   still written.
 
-Loss window: nothing queued is lost on a normal shutdown. On a hard crash
+Loss window: nothing queued is lost on a normal shutdown, unless the database
+is so slow the shutdown flush runs out of its time; then the rows left are
+counted in an ERROR line. On a hard crash
 (SIGKILL, OOM) the rows still queued are lost — at most the rows submitted
 while the in-flight batch was being written, i.e. one batch's write time
 (single-digit milliseconds per row on a healthy database).
@@ -92,18 +96,31 @@ class EventWriter:
             wake.set()
             await progress.wait()
 
-    async def shutdown(self) -> None:
-        """Flush, stop the task, and write any later submit inline."""
+    async def shutdown(self, timeout: float | None = None) -> None:
+        """Flush (for at most ``timeout`` seconds), stop the task, and write any
+        later submit inline. Rows still queued when the time runs out are
+        reported at ERROR and dropped: a stuck database must not spend the
+        daemon's whole stop budget."""
         self._ensure_task(asyncio.get_running_loop())
-        await self.flush()
+        timed_out = False
+        try:
+            await asyncio.wait_for(self.flush(), timeout)
+        except TimeoutError:
+            timed_out = True
+            logger.error(
+                "event writer: shutdown flush timed out after %ss; %d row(s) not written",
+                timeout,
+                len(self._pending),
+            )
         self._closed = True
         task, self._task = self._task, None
         if task is not None and not task.done():
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await task
-        with self._lock:
-            self._write_pending(limit=None)
+        if not timed_out:
+            with self._lock:
+                self._write_pending(limit=None)
 
     # ── internals ────────────────────────────────────────────────────────
 
@@ -124,11 +141,20 @@ class EventWriter:
             while self._pending:
                 await asyncio.to_thread(self._write_batch)
                 self._signal_progress()
+            if self._written < self._submitted:
+                # A worker thread took the last rows to write inline and holds
+                # the lock while it does: wait for it there, not by waking
+                # flush() on every loop tick until it finishes.
+                await asyncio.to_thread(self._wait_for_inline_writer)
             self._signal_progress()
 
     def _signal_progress(self) -> None:
         progress, self._progress = self._progress, asyncio.Event()
         progress.set()
+
+    def _wait_for_inline_writer(self) -> None:
+        with self._lock:
+            pass
 
     def _write_batch(self) -> None:
         with self._lock:

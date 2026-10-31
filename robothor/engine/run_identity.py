@@ -19,6 +19,7 @@ autonomous work to whoever last used the channel.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -93,11 +94,21 @@ def _is_service_caller(user_role: str, user_id: str) -> bool:
     )
 
 
-def attach_tenant_access(run: Any, tenant_id: str) -> None:
-    """Resolve hierarchical access, restricting failures to the run's own tenant."""
+async def attach_tenant_access(run: Any, tenant_id: str) -> None:
+    """Resolve hierarchical access, restricting failures to the run's own tenant.
+
+    The lookup is a DB query, so it runs in a worker thread, off the loop.
+    """
     from robothor.engine.permissions import resolve_accessible_tenants
 
     try:
-        run.accessible_tenant_ids = resolve_accessible_tenants(tenant_id, run.user_role)
+        run.accessible_tenant_ids = await asyncio.to_thread(
+            resolve_accessible_tenants, tenant_id, run.user_role
+        )
     except Exception:
         run.accessible_tenant_ids = (tenant_id,)
+
+
+async def resolve_run_identity_off_loop(identity: Any, **kwargs: Any) -> Any:
+    """:func:`resolve_run_identity` in a worker thread (a webchat miss is a DB query)."""
+    return await asyncio.to_thread(resolve_run_identity, identity, **kwargs)

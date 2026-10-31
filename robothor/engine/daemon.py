@@ -35,6 +35,7 @@ from robothor.engine.scheduler import CronScheduler
 from robothor.engine.shutdown_budget import (
     ANNOUNCE_TIMEOUT_SECONDS,
     DRAIN_TIMEOUT_SECONDS,
+    EVENT_WRITER_FLUSH_TIMEOUT_SECONDS,
     POLLING_STOP_TIMEOUT_SECONDS,
 )
 from robothor.engine.telegram import TelegramBot
@@ -1727,7 +1728,7 @@ async def main() -> int:
     # Then every audit and guardrail row those tasks queued (event_writer.py).
     from robothor.engine.event_writer import get_event_writer
 
-    await get_event_writer().shutdown()
+    await get_event_writer().shutdown(timeout=EVENT_WRITER_FLUSH_TIMEOUT_SECONDS)
 
     await _stop_coding_jobs()  # unmarked, so the next start resumes them
 
