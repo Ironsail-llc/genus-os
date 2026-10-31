@@ -396,7 +396,7 @@ Two databases on the same instance:
 | `pr_review_messages` | Each Google Chat message the pr-review intake handled, once, with what it did or the error it raised — a failing message is recorded and skipped, never retried. Tenant RLS |
 | `pr_review_cursors` | Where each Chat source's last intake poll stopped. Tenant RLS |
 | `plugin_state` | Plugin data (migration 154): one JSON object per (tenant, plugin, kind, key), with an optional `expires_at`. A plugin wheel cannot ship a migration, so each "table" a plugin needs is a row kind here, read and written through `robothor.plugins.state.PluginState`. Expired rows are hidden from reads at once; the daemon's watchdog purges them hourly for the instance's tenant, and rows for other tenants need `PluginState.purge_expired()`. Tenant RLS |
-| `tenant_plugin_grants` | The root tenant's per-child plugin decisions (migration 160): one row per (tenant, plugin) with `state` `on` or `off`, `set_by` and `set_at`. The child's engine reads its own rows once per plugin generation through `robothor.plugins.grants`; `off` is refused before import and `on` loads despite the child's lockfile. Written only by the root-only bridge route `PUT /api/plugins/{name}/tenants/{tenant_id}`. Tenant RLS for reads; writes only from a connection scoped to the row's root tenant (`tenant_plugin_grants_root`) or unbound |
+| `tenant_plugin_grants` | The root tenant's per-child plugin decisions (migration 163): one row per (tenant, plugin) with `state` `on` or `off`, `set_by` and `set_at`. The child's engine reads its own rows once per plugin generation through `robothor.plugins.grants`; `off` is refused before import and `on` loads despite the child's lockfile. Written only by the root-only bridge route `PUT /api/plugins/{name}/tenants/{tenant_id}`. Tenant RLS for reads; writes only from a connection scoped to the row's root tenant (`tenant_plugin_grants_root`) or unbound |
 | `kb_documents` | One curated reference document per (tenant, collection, doc\_id) for the knowledge base (migration 155): title, source URI, metadata, version and the SHA-256 that lets an unchanged upsert skip. Collections are named `<plugin>/<topic>`. Tenant RLS |
 | `kb_chunks` | A knowledge-base document split into overlapping chunks, each with a 1024-dim embedding (HNSW cosine) and a generated `tsvector` (GIN) for hybrid search; deleted with their document. Tenant RLS |
 | `n8n_workflows` | The external n8n instance's workflows as of the n8n monitor's latest listing (migration 156): name, active, tag names, n8n's own update time. A workflow deleted in n8n leaves on the next listing. Tenant RLS |
@@ -1128,6 +1128,24 @@ fifteen minutes". Rows still `running` when the run ends are closed out as
 `error_message` names the step — or, for a parallel fan-out, the steps — that
 were in flight. `WorkflowStepStatus` is held against that CHECK constraint by
 `test_schema_drift.py`, the same guard its three sibling enums already had.
+
+A tool step's row also says what the step was asked to do and what it got
+back: `tool_name` and `tool_input` (its arguments, templates rendered) are
+written with the `running` row, so they are there even if the step never
+returns, and `tool_output` when it ends. The stored input is redacted first,
+as `agent_run_steps.tool_input` is (`redact_tool_arguments`: a credential-named
+argument or a `vault_set` value becomes `<redacted>`); the tool still gets the
+real arguments. Each is capped at 64 KB of JSON
+(`STEP_IO_MAX_BYTES` in `robothor/engine/workflow.py`); a larger payload is
+stored as `{"_truncated": true, "original_bytes": N, "preview": "..."}` and the
+run carries on. Because these payloads hold whatever the tools saw, they are
+read only through routes for owners and admins, and never cached:
+
+| Route | Service | Returns |
+|-------|---------|---------|
+| `GET /api/workflows/runs/{run_id}` | engine (`engine:control`, the engine's tenant) | the run, and each step's tool name, input, output and error |
+| `GET /api/workflows/{workflow_id}/runs` | bridge (operator) | the workflow's recent runs, with `steps_completed`, `steps_failed`, `steps_skipped` |
+| `GET /api/workflows/{workflow_id}/runs/{run_id}` | bridge (operator) | the same step detail as the engine route; 404 for a run of another workflow |
 
 #### Engine admin routes
 

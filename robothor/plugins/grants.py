@@ -1,7 +1,7 @@
 """The root tenant's per-child plugin decisions: ``tenant_plugin_grants``.
 
 A root operator may force one plugin ``on`` or ``off`` for one child tenant
-(migration 160). The child's engine reads its own rows; ``off`` is refused
+(migration 163). The child's engine reads its own rows; ``off`` is refused
 before import and ``on`` loads even when the child's lockfile row says
 disabled. No row means the child's own lockfile decides, exactly as before.
 
@@ -90,7 +90,7 @@ def _connection(tenant_id: str, connect: Callable[[], Any] | None) -> Any:
 def _root(root_tenant: str | None) -> str:
     """The tenant a grant WRITE binds to: the root, never the child.
 
-    Migration 160 lets only a connection scoped to the row's root tenant (or an
+    Migration 163 lets only a connection scoped to the row's root tenant (or an
     unbound one) insert, change or delete a grant, so a child's own scope
     cannot touch the root's decision.
     """

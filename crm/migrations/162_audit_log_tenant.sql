@@ -1,4 +1,4 @@
--- Migration 159: the audit log records which tenant an event happened in.
+-- Migration 162: the audit log records which tenant an event happened in.
 --
 -- audit_log had no tenant: the export was appliance-wide, so no child tenant's
 -- admin could be given its own trail without being handed every tenant's. The

@@ -27,7 +27,7 @@ EXPECTED_CALLERS: set[str] = {
     "crm/bridge/routers/auth.py::switch_tenant",
     "robothor/auth/accounts.py::get_account_by_idp",
     "robothor/auth/accounts.py::jit_provision",
-    "robothor/auth/accounts.py::consume_active_session",
+    "robothor/auth/accounts.py::rotate_session",
     # Local (password) sign-in: the account for an address may live in any
     # tenant, exactly as an SSO identity may. Reads one address's rows only.
     "robothor/auth/accounts.py::login_account_for_email",

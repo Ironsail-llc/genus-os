@@ -22,8 +22,11 @@ Two sources are custom:
 
 from __future__ import annotations
 
+import copy
 import logging
 import os
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -36,6 +39,8 @@ from pydantic_settings import PydanticBaseSettingsSource
 from robothor.settings.config_file import write_setting, write_settings
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
+    from collections.abc import Iterator
+
     from pydantic.fields import FieldInfo
 
 __all__ = [
@@ -43,6 +48,7 @@ __all__ = [
     "DeclaredEnvSource",
     "config_yaml_path",
     "owner_config_override_path",
+    "read_settings_once",
     "reset_unknown_key_warnings",
     "strict_mode",
     "unknown_config_keys",
@@ -277,6 +283,46 @@ class DeclaredEnvSource(PydanticBaseSettingsSource):
         return values
 
 
+#: What one read of config.yaml produced -- ``(block, None)`` or ``({}, the
+#: ValueError)`` -- for the scope :func:`read_settings_once` opened, or None
+#: outside one. A context variable rather than a module global: the bridge
+#: serves requests on a threadpool, and one request's read must never answer
+#: another's.
+_READ_ONCE: ContextVar[tuple[dict[str, Any], ValueError | None] | None] = ContextVar(
+    "settings_block_read_once", default=None
+)
+
+
+@contextmanager
+def read_settings_once() -> Iterator[None]:
+    """Answer every read of the settings block inside this scope from one read.
+
+    A caller listing every declared field asks "is this in the file?" once per
+    field, and each question used to open and parse config.yaml afresh --
+    hundreds of parses for one page, against a file that may sit on a network
+    volume. Inside the scope the file is read once, on entry, and every read
+    returns what that read returned: an equal block (a fresh copy each time,
+    as before) or the same ValueError. Outside it nothing changes.
+
+    Scoped, not cached: the next scope reads the file again, so a write made
+    between two requests is never answered with the old contents, and no
+    mtime or invalidation rule has to be right for that to hold. Re-entering
+    inside an open scope keeps the outer read.
+    """
+    if _READ_ONCE.get() is not None:
+        yield
+        return
+    try:
+        outcome: tuple[dict[str, Any], ValueError | None] = (_read_settings_file(), None)
+    except ValueError as exc:
+        outcome = ({}, exc)
+    token = _READ_ONCE.set(outcome)
+    try:
+        yield
+    finally:
+        _READ_ONCE.reset(token)
+
+
 def _read_settings_block() -> dict[str, Any]:
     """The ``settings:`` block of the instance's config.yaml, verbatim.
 
@@ -284,7 +330,25 @@ def _read_settings_block() -> dict[str, Any]:
     naming the file, when the file exists but cannot be read as the shape it
     must be -- a malformed config file is the one case where starting on
     defaults would be worse than not starting.
+
+    Inside :func:`read_settings_once` the answer is the scope's one read.
     """
+    once = _READ_ONCE.get()
+    if once is None:
+        return _read_settings_file()
+    block, error = once
+    if error is not None:
+        # A fresh error each time, chained to the original: re-raising the one
+        # object would prepend this read's frames to its traceback on every
+        # read -- hundreds per request.
+        raise ValueError(*error.args) from error.__cause__
+    # A deep copy, because every read used to hand back a freshly parsed
+    # mapping, and a caller that edits what it was given must not edit what
+    # the next caller in the scope reads.
+    return copy.deepcopy(block)
+
+
+def _read_settings_file() -> dict[str, Any]:
     path = config_yaml_path()
     if path is None:
         return {}
