@@ -120,6 +120,13 @@ interface Preview {
   alreadyInactive: boolean;
 }
 
+/** `record` without the row `id` — a closed card or editor, by key. */
+function without<T>(record: Record<number, T>, id: number): Record<number, T> {
+  const next = { ...record };
+  delete next[id];
+  return next;
+}
+
 function str(value: unknown): string | null {
   return typeof value === "string" && value ? value : null;
 }
@@ -339,11 +346,7 @@ export function MemoryView({ visible = true, role, roleLoading = false }: Memory
 
   const closePreview = useCallback(
     (id: number) => {
-      setPreviews((previous) => {
-        const next = { ...previous };
-        delete next[id];
-        return next;
-      });
+      setPreviews((previous) => without(previous, id));
       clearRow(String(id));
     },
     [clearRow]
@@ -359,11 +362,7 @@ export function MemoryView({ visible = true, role, roleLoading = false }: Memory
         (body) => {
           const fact = normalizeFact((body as Record<string, unknown>)?.fact);
           if (fact) replaceFact(fact);
-          setPreviews((previous) => {
-            const next = { ...previous };
-            delete next[id];
-            return next;
-          });
+          setPreviews((previous) => without(previous, id));
           setReasons((previous) => ({ ...previous, [id]: "" }));
         },
         (res) => {
@@ -378,11 +377,7 @@ export function MemoryView({ visible = true, role, roleLoading = false }: Memory
             setFacts((previous) =>
               previous.map((row) => (row.id === id ? { ...row, isActive: false } : row))
             );
-            setPreviews((previous) => {
-              const next = { ...previous };
-              delete next[id];
-              return next;
-            });
+            setPreviews((previous) => without(previous, id));
           }
           // Anything the server refused about the request itself belongs beside
           // the only field the operator can change.
@@ -406,11 +401,7 @@ export function MemoryView({ visible = true, role, roleLoading = false }: Memory
 
   const closeEditor = useCallback(
     (id: number) => {
-      setDrafts((previous) => {
-        const next = { ...previous };
-        delete next[id];
-        return next;
-      });
+      setDrafts((previous) => without(previous, id));
       clearRow(String(id));
     },
     [clearRow]
@@ -441,11 +432,7 @@ export function MemoryView({ visible = true, role, roleLoading = false }: Memory
         (body) => {
           const fact = normalizeFact((body as Record<string, unknown>)?.fact);
           if (fact) replaceFact(fact);
-          setDrafts((previous) => {
-            const next = { ...previous };
-            delete next[id];
-            return next;
-          });
+          setDrafts((previous) => without(previous, id));
         },
         (res) => {
           // A 409 (another active fact already says this) keeps the editor
