@@ -10,6 +10,7 @@ import argparse
 import json
 import os
 import platform
+import statistics
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -20,6 +21,12 @@ from bench.turn.stats import summarize
 
 BASELINES = Path(__file__).resolve().parent / "baselines"
 HALVES = ("http", "inprocess")
+
+#: Three CI runs of the same code put done_ms p50 at 30.6, 40.3 and 44.0 ms.
+CI_TIMING_THRESHOLD = 0.30
+
+#: A baseline merged from fewer runs is one noisy run with extra steps.
+MIN_MERGE_RUNS = 3
 
 
 def _default_db_url() -> str:
@@ -100,6 +107,13 @@ def build_parser() -> argparse.ArgumentParser:
         "or baselines/ci-<half>.json (ci); an empty one skips the comparison",
     )
     p.add_argument(
+        "--timing-threshold",
+        type=float,
+        default=None,
+        help="regression threshold for timing metrics (default 0.30 with --baseline-set ci, "
+        "where shared runners vary about 20%% run to run; otherwise --threshold)",
+    )
+    p.add_argument(
         "--threshold", type=float, default=0.10, help="regression threshold (default 0.10)"
     )
     p.add_argument(
@@ -111,6 +125,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--update-baseline", action="store_true", help="write this run as the baseline")
     p.add_argument(
         "--compare", default="", metavar="RESULT", help="compare a saved result; drive nothing"
+    )
+    p.add_argument(
+        "--merge-baselines",
+        nargs="+",
+        default=None,
+        metavar="RESULT",
+        help="write the per-metric median of three or more results (or baselines) to --out",
     )
     return p
 
@@ -168,7 +189,16 @@ def _judge(args: argparse.Namespace, half: str, result: dict[str, Any]) -> int:
                 file=sys.stderr,
             )
             return 2
-    outcome = compare(baseline, result, threshold=args.threshold, min_delta=args.min_delta)
+    timing = args.timing_threshold
+    if timing is None:
+        timing = CI_TIMING_THRESHOLD if args.baseline_set == "ci" else args.threshold
+    outcome = compare(
+        baseline,
+        result,
+        threshold=args.threshold,
+        min_delta=args.min_delta,
+        timing_threshold=timing,
+    )
     print(f"\nagainst {path}: {outcome.message}")
     return outcome.exit_code
 
@@ -240,8 +270,54 @@ def _drive(args: argparse.Namespace, half: str, db_url: str) -> dict[str, Any]:
     }
 
 
+def merge_baselines(paths: list[str], out: str) -> int:
+    """The per-metric median p50/p95 of several results, written as one baseline."""
+    if not out:
+        print("--merge-baselines needs --out", file=sys.stderr)
+        return 2
+    if len(paths) < MIN_MERGE_RUNS:
+        print(f"--merge-baselines needs at least {MIN_MERGE_RUNS} runs", file=sys.stderr)
+        return 2
+    loaded = []
+    for path in paths:
+        data = _load(Path(path))
+        if data is None or is_empty_baseline(data):
+            print(f"{path}: missing or empty", file=sys.stderr)
+            return 2
+        loaded.append(data)
+    halves = {str(d.get("half")) for d in loaded}
+    if len(halves) != 1:
+        print(f"cannot merge different halves: {sorted(halves)}", file=sys.stderr)
+        return 2
+    metrics = sorted({m for d in loaded for m in d["summary"]})
+    summary: dict[str, dict[str, Any]] = {}
+    for metric in metrics:
+        rows = [d["summary"][metric] for d in loaded if metric in d["summary"]]
+        row: dict[str, Any] = {"n": sum(int(r.get("n") or 0) for r in rows)}
+        for stat in ("p50", "p95"):
+            values = [float(r[stat]) for r in rows if r.get(stat) is not None]
+            row[stat] = statistics.median(values) if values else None
+        summary[metric] = row
+    merged = {
+        "half": halves.pop(),
+        "runs": sum(int(d.get("runs") or 0) for d in loaded),
+        "recorded_at": datetime.now(UTC).isoformat(timespec="seconds"),
+        "merged_from": [
+            {"file": Path(p).name, "recorded_at": d.get("recorded_at"), "host": d.get("host")}
+            for p, d in zip(paths, loaded, strict=True)
+        ],
+        "summary": summary,
+    }
+    Path(out).write_text(json.dumps(merged, indent=2, sort_keys=True) + "\n")
+    print(f"merged baseline of {len(loaded)} runs written: {out}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+
+    if args.merge_baselines is not None:
+        return merge_baselines(args.merge_baselines, args.out)
 
     if args.compare:
         result = _load(Path(args.compare))

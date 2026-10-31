@@ -23,6 +23,11 @@ EMPTY_BASELINE: dict[str, Any] = {
 
 STATS = ("p50", "p95")
 
+#: Counts, not durations: the same code gives the same number run after run
+#: (prompt_tokens, tool_schemas) or nearly (db_statements), so they keep the
+#: tight threshold and no absolute floor. Every other metric is a timing.
+COUNT_METRICS = frozenset({"db_statements", "prompt_tokens", "tool_schemas"})
+
 
 @dataclass(frozen=True)
 class Regression:
@@ -67,7 +72,10 @@ def compare(
     *,
     threshold: float = 0.10,
     min_delta: float = 5.0,
+    timing_threshold: float | None = None,
 ) -> Comparison:
+    """``threshold`` for counts (no floor); ``timing_threshold`` plus ``min_delta`` for timings."""
+    timing = threshold if timing_threshold is None else timing_threshold
     outcome = Comparison(threshold=threshold)
     if is_empty_baseline(baseline):
         outcome.no_baseline = True
@@ -91,16 +99,18 @@ def compare(
             b, c = base[metric].get(stat), now[metric].get(stat)
             if b is None or c is None:
                 continue
-            limit = b * (1.0 + threshold)
-            bad = c > limit and (c - b) > min_delta
+            is_count = metric in COUNT_METRICS
+            limit = b * (1.0 + (threshold if is_count else timing))
+            bad = c > limit and (c - b) > (0.0 if is_count else min_delta)
             verdict = "REGRESSION" if bad else "ok"
             outcome.lines.append(f"  {metric:<22} {stat} {b:>10.1f} -> {c:>10.1f}  {verdict}")
             if bad:
                 outcome.regressions.append(Regression(metric, stat, float(b), float(c)))
+    limits = f"counts {threshold:.0%}, timings {timing:.0%} and {min_delta:g} over"
     head = (
-        f"{len(outcome.regressions)} regression(s) over {threshold:.0%}"
+        f"{len(outcome.regressions)} regression(s) ({limits})"
         if outcome.regressed
-        else f"within threshold ({threshold:.0%})"
+        else f"within threshold ({limits})"
     )
     outcome.lines.insert(0, head)
     return outcome

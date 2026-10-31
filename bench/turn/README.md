@@ -59,11 +59,19 @@ and `-inprocess` inserted before the extension.
 The result is compared with the committed set: `bench/turn/baselines/<half>.json`
 by default, `bench/turn/baselines/ci-<half>.json` with `--baseline-set ci` (what
 CI uses), or one file named with `--baseline FILE`. A named file that is
-missing or is the empty sentinel exits 2, so a mistyped path cannot pass. A p50 or p95 more than `--threshold` (default `0.10`, 10%)
-over the baseline's, and more than `--min-delta` (default 5, in the metric's
-own unit) in absolute terms, is a regression. A smaller floor flags scheduler
-noise on the sub-10 ms metrics: a clean local re-run moved
-`finalize_tail_ms` p95 from 2.3 to 5.2 ms. A metric missing on either side is skipped and
+missing or is the empty sentinel exits 2, so a mistyped path cannot pass.
+
+The threshold depends on the metric:
+
+| Metric | Regression when the p50 or p95 is |
+|--------|-----------------------------------|
+| Counts: `db_statements`, `prompt_tokens`, `tool_schemas` | more than `--threshold` (default 10%) over the baseline. No absolute floor: the same code gives the same count, so a small increase is real. |
+| Timings: every `*_ms` metric | more than `--timing-threshold` over the baseline **and** more than `--min-delta` (default 5 ms) over it in absolute terms. `--timing-threshold` defaults to 30% with `--baseline-set ci` and to `--threshold` otherwise. |
+
+The two looser timing defaults come from measurements. Three CI runs of the
+same code put `done_ms` p50 at 30.6, 40.3 and 44.0 ms, a spread wider than 10%.
+A clean local re-run moved `finalize_tail_ms` p95 from 2.3 to 5.2 ms, which is
+noise under a 5 ms floor. A metric missing on either side is skipped and
 listed. Exit codes: 0 within threshold, 1 regression, 2 the benchmark could
 not run or a turn did not complete (timings of a failed run measure the
 failure, so they are neither compared nor recorded).
@@ -71,8 +79,7 @@ failure, so they are neither compared nor recorded).
 The committed baselines start as an empty sentinel (`"empty": true`). Against
 one picked from the committed set (not named with `--baseline`), comparison is
 a no-op that prints `no baseline recorded`. Record a real
-baseline on the machine it will be compared on with `--update-baseline`, and
-commit the file:
+baseline on the machine it will be compared on, and commit the file:
 
 | File | Recorded on | Compared by |
 |------|-------------|-------------|
@@ -81,8 +88,24 @@ commit the file:
 | `baselines/ci-http.json` | The compose job in `.github/workflows/install-gate.yml` | That step, nightly, report only |
 
 `--compare RESULT.json` compares a saved result without driving anything, and
-with `--update-baseline` turns a saved result (a CI artifact, say) into the
-baseline.
+with `--update-baseline` turns a saved result into the baseline.
+
+**Re-recording a CI baseline.** One run is not a baseline: runners vary. Record
+it from at least three dispatched runs and keep the median of each metric:
+
+```bash
+gh workflow run ci.yml --ref <branch>       # three times, one after another
+gh run download <run-id> -n bench-turn -D run-1   # likewise run-2, run-3
+python -m bench.turn --merge-baselines run-1/bench-turn-inprocess.json \
+  run-2/bench-turn-inprocess.json run-3/bench-turn-inprocess.json \
+  --out bench/turn/baselines/ci-inprocess.json
+```
+
+`--merge-baselines` refuses fewer than three files or files from different
+halves. It writes the median p50 and p95 per metric, and lists the merged runs
+under `merged_from`. Dispatched runs on one ref queue behind each other, and a
+third dispatch replaces a queued second, so start each one after the previous
+run has begun.
 
 ## On the local stack
 

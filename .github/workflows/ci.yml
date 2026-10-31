@@ -471,8 +471,8 @@ jobs:
           # pipefail: without it the step takes tee's 0, and neither a
           # regression (exit 1) nor a failed turn (exit 2) fails the job.
           set -o pipefail
-          # --min-delta 5 (also the default): a shared runner moves a ~40 ms
-          # turn by a few ms from run to run, and 10% of 40 ms is inside that.
+          # --baseline-set ci: timings regress past 30% and 5 ms (shared
+          # runners spread ~20% run to run), counts past 10% with no floor.
           python -m bench.turn --half inprocess --runs 20 --model "$BENCH_MODEL" \
             --min-delta 5 --baseline-set ci \
             --out "$RUNNER_TEMP/bench-turn-inprocess.json" 2>&1 \
