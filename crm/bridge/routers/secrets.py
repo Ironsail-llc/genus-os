@@ -32,7 +32,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from robothor.secrets.status import SecretStatus, status_table
-from robothor.settings.operator import units_for
+from robothor.settings.operator import DEFAULT_UNITS, units_for
 from robothor.settings.registry import field_index
 from routers._operator import PLATFORM_TENANT, require_operator
 
@@ -52,7 +52,7 @@ def _source(row: SecretStatus) -> str:
 
 def _public(row: SecretStatus, index: dict[str, dict[str, Any]]) -> dict[str, Any]:
     declared = index.get(row.name)
-    readers = units_for(declared) if declared else units_for({"restart_units": None})
+    readers = units_for(declared) if declared else DEFAULT_UNITS
     return {
         "name": row.name,
         "configured": row.configured,
