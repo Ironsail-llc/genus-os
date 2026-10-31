@@ -109,3 +109,25 @@ class TestOperatorConfirmedFactsAreLeftAlone:
         selects = [c.args[0] for c in cur.execute.call_args_list]
         assert len(selects) == 4  # the seed query and one neighbour query per seed
         assert all(NOT_OPERATOR_CONFIRMED_SQL in s for s in selects)
+
+    @pytest.mark.parametrize("guard", ["0", "1"])
+    def test_supersession_write_skips_a_fact_confirmed_after_selection(
+        self, monkeypatch: Any, guard: str
+    ) -> None:
+        # Candidate selection and this write are separated by the LLM call; a
+        # fact the operator confirms in that window must not be retired.
+        from robothor.memory.confirmed import NOT_OPERATOR_CONFIRMED_SQL
+
+        monkeypatch.setenv("MEMORY_CONSOLIDATION_GUARD", guard)
+        ctx, cur = _mock_conn()
+        cur.fetchone.side_effect = [(0.5,)]
+        with (
+            patch.object(lc, "get_connection", return_value=ctx),
+            patch.object(lc, "_chain_depth", return_value=0),
+        ):
+            lc._apply_consolidation_supersession(99, [1, 2])
+        supersedes = [
+            c.args[0] for c in cur.execute.call_args_list if "SET is_active = FALSE" in c.args[0]
+        ]
+        assert len(supersedes) == 2
+        assert all(NOT_OPERATOR_CONFIRMED_SQL in s for s in supersedes)

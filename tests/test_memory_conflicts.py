@@ -56,6 +56,10 @@ class _Resolved:
     """What one resolve_and_store call did: its result, the supersede writer's
     calls, every statement on the bitemporal connection, and the decisions row."""
 
+    store: AsyncMock
+    classify: AsyncMock
+    lookup: MagicMock
+
     def __init__(self, out: dict, supersede: MagicMock, cur: MagicMock, record: MagicMock):
         self.out = out
         self.supersede = supersede
@@ -67,11 +71,27 @@ class _Resolved:
 
 
 async def _resolve(
-    match: dict[str, Any], kind: str, confidence: float, *, superseded: bool = True
+    match: dict[str, Any],
+    kind: str,
+    confidence: float,
+    *,
+    superseded: bool = True,
+    prior_overruled: int | None = None,
 ) -> _Resolved:
     import robothor.memory.bitemporal as bt
 
     supersede = MagicMock(return_value=superseded)
+    # The conflicts module's own connection: the lookup for an earlier
+    # overruled copy of the same extraction.
+    lookup = MagicMock()
+    lookup.fetchone.return_value = (prior_overruled,) if prior_overruled else None
+    lookup_conn = MagicMock()
+    lookup_conn.cursor.return_value = lookup
+    lookup_ctx = MagicMock()
+    lookup_ctx.__enter__.return_value = lookup_conn
+    lookup_ctx.__exit__.return_value = False
+    store = AsyncMock(return_value=99)
+    classify = AsyncMock(return_value={"classification": kind, "reasoning": "r"})
     record = MagicMock()
     cur = MagicMock()
     conn = MagicMock()
@@ -81,14 +101,11 @@ async def _resolve(
     ctx.__exit__.return_value = False
     with (
         patch.object(conflicts, "find_similar_facts", new=AsyncMock(return_value=[match])),
-        patch.object(
-            conflicts,
-            "classify_relationship",
-            new=AsyncMock(return_value={"classification": kind, "reasoning": "r"}),
-        ),
-        patch.object(conflicts, "store_fact", new=AsyncMock(return_value=99)),
+        patch.object(conflicts, "classify_relationship", new=classify),
+        patch.object(conflicts, "store_fact", new=store),
         patch.object(conflicts, "supersede_with_validity", new=supersede),
         patch.object(conflicts, "record_conflict_decision", new=record),
+        patch.object(conflicts, "get_connection", return_value=lookup_ctx),
         patch.object(bt, "get_connection", return_value=ctx),
     ):
         out = await conflicts.resolve_and_store(
@@ -102,7 +119,11 @@ async def _resolve(
             "conversation",
             tenant_id="test-tenant",
         )
-    return _Resolved(out, supersede, cur, record)
+    resolved = _Resolved(out, supersede, cur, record)
+    resolved.store = store
+    resolved.classify = classify
+    resolved.lookup = lookup
+    return resolved
 
 
 def _assert_kept_confirmed(r: _Resolved) -> None:
@@ -159,6 +180,34 @@ class TestOperatorConfirmedSurvivesConflicts:
         # under a "superseded" report.
         r = await _resolve(_match({}), "contradiction", 1.0, superseded=False)
         assert r.supersede.call_args.args[:2] == (7, 99)
+        _assert_kept_confirmed(r)
+
+    @pytest.mark.asyncio
+    async def test_a_repeated_overruled_extraction_inserts_no_row(self):
+        # The first pass left row 55 inactive, superseded by the confirmed
+        # fact 7. Re-ingesting the same source must not mint another dead row,
+        # nor pay for another classification.
+        r = await _resolve(_match(_CONFIRMED), "contradiction", 1.0, prior_overruled=55)
+        r.store.assert_not_awaited()
+        r.classify.assert_not_awaited()
+        r.supersede.assert_not_called()
+        assert r.out["action"] == "kept_confirmed"
+        assert r.out["new_id"] == 55
+        assert r.out["existing_id"] == 7
+        assert r.record.call_args.kwargs["action"] == "kept_confirmed"
+        assert r.record.call_args.kwargs["new_fact_id"] == 55
+        assert r.record.call_args.kwargs["existing_fact_id"] == 7
+        # The lookup is tenant-scoped, by content hash, among rows overruled by 7.
+        sql, params = r.lookup.execute.call_args_list[0].args
+        assert "content_hash = %s" in sql
+        assert "superseded_by = %s" in sql
+        assert "tenant_id = %s" in sql
+        assert "test-tenant" in params and 7 in params
+
+    @pytest.mark.asyncio
+    async def test_the_first_overruled_extraction_is_still_stored(self):
+        r = await _resolve(_match(_CONFIRMED), "contradiction", 1.0, prior_overruled=None)
+        r.store.assert_awaited_once()
         _assert_kept_confirmed(r)
 
     @pytest.mark.asyncio
