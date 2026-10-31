@@ -114,8 +114,13 @@ def absorb_operator_steer(session: Any) -> None:
     text = session.consume_pending_steer()
     if text:
         session.messages.append({"role": "user", "content": f"[operator steering update]\n{text}"})
+        # Recorded with the turn by its channel: a webchat run's inbox, or
+        # the steer log its conversation scope handed it (live_control.py).
+        inbox = getattr(session, "live_inbox", None)
         taken = getattr(session, "steers_taken", None)
-        if isinstance(taken, list):
+        if inbox is not None:
+            inbox.taken.append(FollowUp(text, {"steer": True}))
+        elif isinstance(taken, list):
             taken.append(text)
         _count_user_turn(session)
         logger.info("Live steer injected into run %s", session.run_id)
@@ -240,7 +245,10 @@ def history_text(original: str, absorbed: list[FollowUp], steered: list[str] | N
     ``steered`` is what the run took as operator steers
     (``live_control.conversation_scope``), so the next turn still knows them.
     """
-    lines = [f"[added while working] {item.text}" for item in absorbed]
+    lines = [
+        f"[{'steered' if item.meta.get('steer') else 'added'} while working] {item.text}"
+        for item in absorbed
+    ]
     lines += [f"[steered while working] {text}" for text in steered or []]
     if not lines:
         return original

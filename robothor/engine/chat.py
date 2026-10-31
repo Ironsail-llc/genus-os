@@ -47,7 +47,7 @@ from fastapi.responses import JSONResponse
 from starlette.responses import StreamingResponse
 
 from robothor.constants import DEFAULT_TENANT
-from robothor.engine import live_control
+from robothor.engine import chat_steer, live_control
 from robothor.engine.chat_delivery import deliver_interruption, deliver_plan_interruption
 from robothor.engine.chat_delivery import final_result as delivery_result
 from robothor.engine.chat_history import MAX_HISTORY as _MAX_HISTORY
@@ -136,17 +136,6 @@ def _resolve_webchat_identity(auth: Any) -> IdentityContext | None:
     from robothor.identity import resolve_identity
 
     return resolve_identity("webchat", auth.user_id, auth.tenant_id)
-
-
-def webchat_run_key(auth: Any, session_key: str, request_id: Any) -> str:
-    """The live-run key of ONE webchat turn: tenant, user, session and request id.
-
-    A session key alone is not enough. Webchat runs several turns on one key at
-    once (two tabs, two turns), and the owner's and service callers' keys are
-    shared, so steer and interrupt name the turn the way ``/chat/abort`` does
-    (``chat_control.request_key``), and only the user who sent it can reach it.
-    """
-    return f"webchat:{request_key(auth, session_key, request_id)}"
 
 
 def derive_user_session_key(agent_id: str, user_id: str) -> str:
@@ -400,11 +389,7 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
         return single_event_response(join_running_turn(session, auth, session_key, body))
     inbox = LiveInbox()
     pending: list[str] = []
-    steered: list[str] = []  # the operator steers the run took (live_control.py)
-    # Only a turn that names its request id can be steered or stopped by it.
-    live_key = (
-        webchat_run_key(auth, session_key, body["request_id"]) if body.get("request_id") else ""
-    )
+    live_key = chat_steer.turn_key(auth, session_key, body)  # "" without a request_id
 
     queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
 
@@ -439,9 +424,7 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
             if len(parts) >= 2:
                 agent_id = parts[1]
 
-            # Inside this turn's scope, so /chat/steer and /chat/interrupt can
-            # find this run by the turn's key (live_control.py).
-            with live_control.conversation_scope(live_key, steered):
+            with live_control.conversation_scope(live_key):  # /chat/steer finds it
                 run = await _runner.execute(
                     agent_id=agent_id,
                     message=message,
@@ -465,7 +448,7 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
             # Always record user message (plus what joined mid-run) in session history
             append_turn(
                 session,
-                user_message=history_text(message, inbox.taken, steered),
+                user_message=history_text(message, inbox.taken),
                 assistant_text=final_text or None,
             )
 
@@ -474,7 +457,7 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
                 asyncio.create_task(
                     save_exchange_async(
                         session_key,
-                        history_text(message, inbox.taken, steered),
+                        history_text(message, inbox.taken),
                         final_text,
                         channel="webchat",
                         model_override=session.model_override,
@@ -518,12 +501,12 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
                 }
             )
         except asyncio.CancelledError:
-            turn = history_text(message, inbox.taken, steered)
+            turn = history_text(message, inbox.taken)
             if await deliver_interruption(queue, session, auth, session_key, turn, aborted=True):
                 return
             await queue.put({"event": "done", "data": {"text": "", "aborted": True}})
         except Exception as e:
-            turn = history_text(message, inbox.taken, steered)
+            turn = history_text(message, inbox.taken)
             if await deliver_interruption(queue, session, auth, session_key, turn):
                 return
             logger.error("Chat agent error: %s", e, exc_info=True)
@@ -649,7 +632,6 @@ async def chat_outcome(
     key = _effective_session_key(auth, session_key)
     result = await asyncio.to_thread(read_outcome, auth, key, request_id)
     from robothor.engine.chat_plan_recovery import attach_plan
-    from robothor.engine.runtime.chat_control import request_key
 
     await attach_plan(result, _sessions.get(key), request_key(auth, key, request_id), auth, key)
     if result.get("terminal") and result.get("reconciliation_pending"):
@@ -673,71 +655,6 @@ async def chat_abort(request: Request) -> JSONResponse:
     if result.get("aborted"):  # only a run that was actually cancelled
         drop_live_inbox(session, stopped_request)
     return JSONResponse(result)
-
-
-@router.get("/steer")
-async def chat_steer_mode() -> JSONResponse:
-    """Whether steer and interrupt are on (``ROBOTHOR_STEER_EVERYWHERE``)."""
-    return JSONResponse({"enabled": live_control.steer_everywhere_enabled()})
-
-
-@router.post("/steer")
-async def chat_steer(request: Request) -> JSONResponse:
-    """Steer one turn's live run: the text joins it at the next iteration boundary.
-
-    The body names the turn by the ``request_id`` it was sent with, and the run
-    is found by :func:`webchat_run_key` (tenant, user, session, request), so a
-    caller can steer only a turn they sent. ``found`` is false when that turn
-    has no live run.
-    """
-    if not live_control.steer_everywhere_enabled():
-        return JSONResponse({"error": "not found"}, status_code=404)
-    auth = _auth_context(request)
-    body = await request.json()
-    text = str(body.get("text") or "").strip()
-    if not text:
-        return JSONResponse({"error": "text required"}, status_code=400)
-    if not body.get("request_id"):
-        return JSONResponse({"error": "request_id required"}, status_code=400)
-    session_key = _effective_session_key(auth, body.get("session_key", ""))
-    key = webchat_run_key(auth, session_key, body["request_id"])
-    # Off the loop: the steer is recorded as an operator signal in the database.
-    found = await asyncio.to_thread(
-        live_control.steer_conversation, key, text, tenant_id=auth.tenant_id
-    )
-    return JSONResponse({"ok": found, "found": found})
-
-
-@router.post("/interrupt")
-async def chat_interrupt(request: Request) -> JSONResponse:
-    """Stop one turn's live run the way the runs API and Telegram's Interrupt do.
-
-    It goes through ``interrupt_api.interrupt_session``: the run's interrupt
-    flag (honoured at the next iteration boundary, where the run ends as
-    CANCELLED) and the durable runtime stop, which may end the run's task
-    sooner. The turn is named by ``request_id``, as for :func:`chat_steer`.
-    """
-    if not live_control.steer_everywhere_enabled():
-        return JSONResponse({"error": "not found"}, status_code=404)
-    auth = _auth_context(request)
-    body = await request.json()
-    if not body.get("request_id"):
-        return JSONResponse({"error": "request_id required"}, status_code=400)
-    session_key = _effective_session_key(auth, body.get("session_key", ""))
-    key = webchat_run_key(auth, session_key, body["request_id"])
-    message = body.get("message")
-    try:
-        # Off the loop: the durable stop is written to the database.
-        found = await asyncio.to_thread(
-            live_control.interrupt_conversation,
-            key,
-            str(message) if message else None,
-            tenant_id=auth.tenant_id,
-        )
-    except Exception:
-        logger.exception("Chat interrupt could not be recorded")
-        return JSONResponse({"error": "interrupt could not be recorded"}, status_code=502)
-    return JSONResponse({"ok": found, "found": found})
 
 
 @router.post("/clear")
@@ -1679,3 +1596,4 @@ from robothor.engine.chat_effect_attestation import (  # noqa: E402
 )
 
 router.include_router(effect_attestation_router)
+router.include_router(chat_steer.router)

@@ -94,6 +94,7 @@ class _FakeRun:
     async def execute(self, **kwargs):
         session = AgentSession("main", TriggerType.WEBCHAT, None, kwargs["tenant_id"])
         session.start("system", kwargs["message"], [])
+        session.live_inbox = kwargs.get("live_inbox")  # as AgentRunner.execute does
         self.session = session
         async with observe_request(session, None):
             self.live.set()
@@ -189,7 +190,7 @@ async def test_a_steer_needs_text(client, flag_on):
 async def test_another_tenants_run_on_the_same_key_is_out_of_reach(client, flag_on):
     session = AgentSession("main", TriggerType.WEBCHAT, None, "another-tenant")
     session.start("system", "x", [])
-    from robothor.engine.chat import webchat_run_key
+    from robothor.engine.chat_steer import webchat_run_key
 
     owner = SimpleNamespace(tenant_id="another-tenant", user_id="loopback-development-operator")
     with live_control.conversation_scope(webchat_run_key(owner, KEY, RID_A)):
