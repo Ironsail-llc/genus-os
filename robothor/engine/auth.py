@@ -224,6 +224,21 @@ def session_stands(context: AuthContext) -> bool:
     return session_standing.stands(context.user_id, context.home_tenant_id)
 
 
+def require_standing(context: AuthContext | None) -> AuthContext:
+    """``context``, or a 401: none verified, or its account no longer stands.
+
+    Blocking, like :func:`session_stands`: a sync FastAPI dependency (which
+    runs in the threadpool) calls it directly.
+    """
+    from fastapi import HTTPException
+
+    if context is None:
+        raise HTTPException(status_code=401, detail="authentication required")
+    if not session_stands(context):
+        raise HTTPException(status_code=401, detail=SESSION_NO_LONGER_VALID)
+    return context
+
+
 def request_context(request: Request) -> AuthContext:
     """Return the identity installed by Engine middleware or fail closed."""
 
