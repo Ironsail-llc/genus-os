@@ -288,3 +288,34 @@ class TestTheUserTurnKeepsItsOwnTime:
         user_at = saved.await_args.kwargs.get("user_at")
         assert isinstance(user_at, datetime)
         assert before <= user_at <= datetime.now(UTC)
+
+
+class TestTheRestoredHistoryKeepsInsertionOrder:
+    """A webchat prompt is now stored at the time it arrived, and its reply at
+    the time it finished. In the shared session, a turn from another channel
+    can be stored in between, so sorting the restore by ``created_at`` would
+    pull a prompt away from its reply. ``id`` is the order rows were written."""
+
+    @staticmethod
+    def _history_sql(cur) -> list[str]:
+        return [
+            c[0][0]
+            for c in cur.execute.call_args_list
+            if "FROM chat_messages" in c[0][0] and "SELECT message" in c[0][0]
+        ]
+
+    def test_load_session_orders_by_id(self, chat_db):
+        chat_db.fetchone.return_value = {"id": 7, "model_override": None}
+        chat_store.load_session("s:key", tenant_id="t1")
+        (sql,) = self._history_sql(chat_db)
+        assert "ORDER BY id DESC" in " ".join(sql.split())
+
+    def test_load_all_sessions_orders_by_id(self, chat_db):
+        chat_db.fetchall.side_effect = [
+            [{"id": 7, "session_key": "s:key", "model_override": None, "plan_state": None}],
+            [],
+        ]
+        chat_store.load_all_sessions(tenant_id="t1")
+        sqls = self._history_sql(chat_db)
+        assert sqls
+        assert all("ORDER BY id DESC" in " ".join(s.split()) for s in sqls)
