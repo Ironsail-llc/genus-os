@@ -275,6 +275,7 @@ class TestEnforceRoutesThroughTheTier:
         await h.worker.run_pass(
             _agent(nudge_thread="never", send_digest="never", reply_on_behalf="auto")
         )
+        # An injected reply path is used; the default has none (see test_ambient_review).
         assert h.replies == [
             ("inbox:12", "Hi Alice, thanks for your patience, we are looking into it.")
         ]
@@ -312,12 +313,12 @@ class TestNeverIsNotEvenProposed:
 
 
 class TestUnstructuredOutput:
-    async def test_plain_text_becomes_the_digest_when_digests_are_allowed(self, tmp_path, observe):
+    async def test_plain_text_is_not_taken_as_a_digest(self, tmp_path, observe):
+        # Unstructured output is as likely to be narration ("let me check...")
+        # as a digest, and under `send_digest: auto` it would be sent.
         h = _harness(tmp_path, output="Alice has waited six hours on the invoice thread.")
         result = await h.worker.run_pass(_agent())
-        assert [(p.kind, p.text) for p in result.proposals] == [
-            ("send_digest", "Alice has waited six hours on the invoice thread.")
-        ]
+        assert result.proposals == []
 
     async def test_a_nudge_for_a_thread_that_is_not_stalled_is_dropped(self, tmp_path, observe):
         h = _harness(tmp_path, output="### nudge_thread inbox:999\nMade up.\n")
