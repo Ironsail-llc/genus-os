@@ -113,6 +113,25 @@ def _register_plugin_commands(parser: argparse.ArgumentParser) -> dict[str, dict
     return commands
 
 
+def cli_actor() -> str:
+    """``cli:<user>``, the actor a command records for the shell that ran it.
+
+    ``getpass.getuser()`` already consults ``LOGNAME``/``USER`` (and two more
+    variables) before the passwd database, and raises only when all of those
+    are missing, as in a container with no passwd entry for its uid. That must
+    not crash the command, so it falls back to the uid itself: still the
+    account that ran it, and still reconcilable against the box's own logs.
+    """
+    import getpass
+    import os
+
+    try:
+        user = getpass.getuser()
+    except Exception:  # noqa: BLE001 - no user name is not a reason to refuse
+        user = f"uid{os.getuid()}"
+    return f"cli:{user}"
+
+
 def _invoked_name() -> str:
     """Return the console-script name the user actually typed.
 
@@ -1138,6 +1157,12 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     user_add.add_argument("--telegram-id", default=None, help="Telegram user id")
     user_add.add_argument("--email", default=None, help="Email address")
+    user_add.add_argument(
+        "--sso",
+        action="store_true",
+        help="Create the account for SSO sign-in: active, with no password, ready for "
+        "`auth grant-binding` (the same shape as the Helm's SSO invite)",
+    )
     user_add_person = user_add.add_mutually_exclusive_group()
     user_add_person.add_argument(
         "--person-id", default=None, help="Link to an existing crm_people row"
@@ -1226,7 +1251,9 @@ def _build_parser() -> argparse.ArgumentParser:
     )
 
     # tenant — multi-tenant administration
-    tenant_parser = subparsers.add_parser("tenant", help="Create, list, and inspect tenants")
+    tenant_parser = subparsers.add_parser(
+        "tenant", help="Create, list, and inspect tenants; claim SSO domains; move accounts"
+    )
     tenant_sub = tenant_parser.add_subparsers(dest="tenant_command")
     tenant_create = tenant_sub.add_parser("create", help="Create a new tenant")
     tenant_create.add_argument("id", help="Tenant ID (e.g. acme)")
@@ -1240,6 +1267,45 @@ def _build_parser() -> argparse.ArgumentParser:
         "status", help="Show tenant details, memory stats, and recent run counts"
     )
     tenant_status.add_argument("tenant_id", help="Tenant ID")
+    tenant_domains = tenant_sub.add_parser(
+        "set-domains",
+        help="Set the email domains whose new SSO users are provisioned into this tenant",
+    )
+    tenant_domains.add_argument("tenant_id", help="Tenant ID")
+    tenant_domains.add_argument(
+        "domains",
+        nargs="*",
+        help="Email domains (e.g. example.com); none clears the tenant's claim",
+    )
+    tenant_move = tenant_sub.add_parser(
+        "move-account",
+        help="Move an account and every row linked to it to another tenant",
+    )
+    tenant_move.add_argument("--email", required=True, help="The account's email address")
+    tenant_move.add_argument("--to", required=True, help="Target tenant ID")
+    tenant_move.add_argument(
+        "--from",
+        dest="from_tenant",
+        default=None,
+        help="Source tenant ID, when the address has an account in more than one tenant",
+    )
+    tenant_move.add_argument(
+        "--role",
+        choices=["admin", "member", "viewer"],
+        default=None,
+        help="Role in the target tenant (default: keep it; an owner moving into a "
+        "child tenant needs --role admin)",
+    )
+    tenant_move.add_argument(
+        "--detach-person",
+        action="store_true",
+        help="Leave the account's CRM contact and its history in the source tenant and "
+        "give the account a new contact in the target (required when that contact has history)",
+    )
+    tenant_move.add_argument(
+        "--dry-run", action="store_true", help="Show what would move; change nothing"
+    )
+    tenant_move.add_argument("--json", action="store_true", help="Print the report as JSON")
 
     # engine
     # run -- quick single-shot agent execution

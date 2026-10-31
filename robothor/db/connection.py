@@ -214,10 +214,20 @@ _warned_superuser = False
 # concurrent production run.
 _tenant_override: ContextVar[str | None] = ContextVar("db_tenant_override", default=None)
 
+#: The override value :func:`unbound_scope` sets. Not a tenant id: a NUL byte
+#: cannot appear in a Postgres text value, so no real tenant can collide with it.
+_UNBOUND = "\x00unbound"
+
 
 def effective_tenant() -> str:
-    """The tenant this context's connections bind to. Override, then env."""
+    """The tenant this context's connections bind to. Override, then env.
+
+    Inside :func:`unbound_scope` this is ``""`` — the permissive branch of the
+    migration-081 policy.
+    """
     override = _tenant_override.get()
+    if override == _UNBOUND:
+        return ""
     if override:
         return override
     return os.environ.get("ROBOTHOR_TENANT_ID", "") or os.environ.get("ROBOTHOR_DEFAULT_TENANT", "")
@@ -245,8 +255,15 @@ def current_tenant_scope() -> str | None:
     different tenant than the connection is bound to is refused by the RLS
     ``WITH CHECK``, and the refusal surfaces as an opaque InsufficientPrivilege
     at INSERT time rather than at the point the wrong tenant was chosen.
+
+    ``None`` inside :func:`unbound_scope` too: it binds no tenant, so a caller
+    that defaults a tenant from the scope falls back to its own default rather
+    than writing under a sentinel.
     """
-    return _tenant_override.get()
+    override = _tenant_override.get()
+    if override == _UNBOUND:
+        return None
+    return override
 
 
 #: pgvector walks the hnsw graph BEFORE applying WHERE predicates, so a
@@ -357,41 +374,71 @@ def _apply_tenant_scope(conn: psycopg2.extensions.connection) -> None:
         raise
 
 
+_RLS_WIDENING_DOC = """The platform's two deliberate RLS widenings, documented once.
+
+Both take the permissive branch of the migration-081 policy (an empty
+``app.tenant_id``), so a query inside either can read every tenant's rows.
+Neither is a convenience; each is pinned to its callers by a grep test, and
+a new caller reds that test on purpose.
+
+``read_every_tenant_in_transaction(conn)`` — THIS TRANSACTION, on a
+connection already checked out.
+    ``set_config(..., is_local => true)``, so the relaxation reverts on
+    commit or rollback and a pooled connection cannot carry it to the next
+    borrower. Refuses an autocommit connection, where it would revert before
+    the next statement. Pinned to its callers by
+    ``test_benchmark_decontamination.py::
+    TestTheRlsWideningCallersArePinned``. Three are the benchmark **audit and
+    spend** queries ``analytics._benchmark_spend``,
+    ``analytics.get_fleet_health`` and ``tracking.get_agent_stats``. Two are
+    the operator-only account move, ``accounts.move_account`` and its lookup
+    ``accounts.accounts_for_email`` (``genus tenant move-account``), which by
+    definition reads one tenant and writes another. From
+    2026-09-13 every graded task run executes as the ``benchmark-sandbox``
+    tenant, so a query bound to the owning tenant cannot see the fleet's own
+    benchmark traffic at all — ``/costs`` reported ``benchmark_cost_usd =
+    0.0`` and the decontamination rollout's observe rung went silent.
+    Widening the WHERE clause alone does not fix that: RLS filters the rows
+    before the predicate is reached. Use it only for a query already
+    restricted to rows no tenant owns in the ordinary sense, or for an
+    operator action that must span tenants by definition. Deliberately not
+    suppressed on error: a query that believes it can see every tenant and
+    cannot returns a wrong number silently.
+
+``with unbound_scope():`` — every connection CHECKED OUT inside the block.
+    Sets this context's tenant override to an "unbound" sentinel, so
+    ``_apply_tenant_scope`` binds ``app.tenant_id = ''`` at checkout (a
+    session-level setting, re-applied by the next checkout, so the pool is
+    safe for the same reason it is after any ``tenant_scope``). It overrides
+    an enclosing ``tenant_scope`` — which is the point: the bridge binds every
+    authenticated request to its token's tenant, and a sign-in has to find an
+    account before anyone knows which tenant it is in. ``(idp_issuer,
+    idp_subject)`` is unique platform-wide, so a lookup bound to the default
+    tenant misses a child tenant's account, ``jit_provision`` then INSERTs a
+    duplicate, and sign-in 500s on a UniqueViolation. Pinned by
+    ``tests/test_unbound_scope_callers.py`` to the sign-in paths only: the
+    bridge's ``/api/auth`` sso, login, refresh, logout and switch-tenant
+    routes, and ``accounts.get_account_by_idp``, ``jit_provision``,
+    ``rotate_session`` and ``login_account_for_email`` (password
+    sign-in for an account in any tenant). ``current_tenant_scope()`` reports ``None``
+    inside it, so nothing that defaults a tenant from the scope writes under
+    the sentinel.
+
+Both are no-ops while ``ROBOTHOR_RLS_ENABLED`` is unset, and both are inert
+for a SUPERUSER connection, which bypasses RLS anyway.
+"""
+
+
+@contextmanager
+def unbound_scope() -> Generator[None, None, None]:
+    token = _tenant_override.set(_UNBOUND)
+    try:
+        yield
+    finally:
+        _tenant_override.reset(token)
+
+
 def read_every_tenant_in_transaction(conn: psycopg2.extensions.connection) -> None:
-    """A deliberate RLS widening: let THIS TRANSACTION read every tenant's rows.
-
-    Not a convenience and not a bug fix — a widening of row-level security,
-    scoped as narrowly as the mechanism allows, and pinned to its three call
-    sites by ``test_benchmark_decontamination.py::
-    TestTheRlsWideningHasExactlyThreeCallers``. Those three are the benchmark
-    **audit and spend** queries: ``analytics._benchmark_spend``,
-    ``analytics.get_fleet_health`` and ``tracking.get_agent_stats``. A fourth
-    caller reds that test on purpose, because every call site added here is
-    another query that can read across tenants.
-
-    The RLS policy (migration 081) has a permissive branch for an empty
-    ``app.tenant_id``; this takes it, with ``set_config(..., is_local => true)``
-    so the relaxation is scoped to the current transaction and reverts on
-    commit or rollback. A pooled connection therefore cannot carry it to the
-    next borrower — the failure mode ``_apply_tenant_scope`` exists to prevent.
-
-    **Use this only for a query that is already restricted to rows no tenant
-    owns in the ordinary sense.** The one caller class today is the benchmark
-    spend break-out: from 2026-09-13 every graded task run executes as the
-    ``benchmark-sandbox`` tenant, so a query bound to the owning tenant cannot
-    see the fleet's own benchmark traffic at all — ``/costs`` reported
-    ``benchmark_cost_usd = 0.0`` and the decontamination rollout's observe rung
-    went silent. Widening the WHERE clause alone does not fix that: RLS filters
-    the rows before the predicate is reached, so without this the fix is inert
-    on exactly the instances that turned isolation on.
-
-    A no-op when RLS is disabled, and deliberately not suppressed on error: a
-    query that believes it can see every tenant and cannot returns a wrong
-    number silently.
-
-    Args:
-        conn: the connection whose current transaction is relaxed.
-    """
     if not _rls_enabled():
         return
     if getattr(conn, "autocommit", False):
@@ -403,6 +450,10 @@ def read_every_tenant_in_transaction(conn: psycopg2.extensions.connection) -> No
         )
     with conn.cursor() as cur:
         cur.execute("SELECT set_config('app.tenant_id', '', true)")
+
+
+unbound_scope.__doc__ = _RLS_WIDENING_DOC
+read_every_tenant_in_transaction.__doc__ = _RLS_WIDENING_DOC
 
 
 @contextmanager

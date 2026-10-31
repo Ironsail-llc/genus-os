@@ -19,7 +19,9 @@ uses), or :data:`~robothor.settings.operator.DEFAULT_UNITS` for a credential
 nothing declares: naming too few readers is how a rotation reports done while
 a service is still holding the old value.
 
-Operator-only (``require_operator``), ``Cache-Control: no-store``, and a plain
+Root-operator only (``require_root_operator``): the table is the platform
+tenant's vault and the appliance's environment, which no child tenant's admin
+may read, exactly as Settings. ``Cache-Control: no-store``, and a plain
 ``def`` because the table reads the vault through synchronous psycopg2
 (``crm/bridge/tests/test_route_concurrency.py``).
 """
@@ -34,7 +36,7 @@ from fastapi.responses import JSONResponse
 from robothor.secrets.status import SecretStatus, status_table
 from robothor.settings.operator import DEFAULT_UNITS, units_for
 from robothor.settings.registry import field_index
-from routers._operator import PLATFORM_TENANT, require_operator
+from routers._operator import PLATFORM_TENANT, require_root_operator
 
 router = APIRouter(prefix="/api/secrets", tags=["secrets"])
 
@@ -71,7 +73,7 @@ def _public(row: SecretStatus, index: dict[str, dict[str, Any]]) -> dict[str, An
 @router.get("")
 def list_secrets(request: Request) -> JSONResponse:
     try:
-        require_operator(request)
+        require_root_operator(request)
     except HTTPException as refused:
         # The refusal is no-store too, like the list (``runs.py`` does the same).
         raise HTTPException(

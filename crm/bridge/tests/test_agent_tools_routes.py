@@ -2,8 +2,9 @@
 
 Both answers live in the engine (the registry and the MCP pool are objects in
 THAT process), so this router is a gate and a proxy and nothing else. The gate
-is operator-only: a tool list and a server list describe what the appliance can
-do, which is operator information. A rejected caller never reaches the engine.
+is tenant-admin: an agent and the MCP pool belong to one tenant's engine, so
+another tenant's owner is answered by ITS OWN engine, never this one. A rejected
+caller never reaches the engine.
 """
 
 from __future__ import annotations
@@ -46,10 +47,12 @@ ENGINE_SERVERS = {
 class FakeEngine:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str]] = []
+        self.tenants: list[str | None] = []
         self.status = 200
 
-    async def __call__(self, method, path, *, json=None, timeout=30):
+    async def __call__(self, method, path, *, json=None, timeout=30, tenant=None):
         self.calls.append((method, path))
+        self.tenants.append(tenant)
         if path.endswith("/mcp/servers"):
             return self.status, ENGINE_SERVERS
         return self.status, ENGINE_TOOLS
@@ -67,7 +70,6 @@ def fake_engine():
     [
         "controls_client_as_viewer",
         "controls_client_as_service",
-        "controls_client_as_other_tenant_owner",
     ],
 )
 @pytest.mark.parametrize("path", ["/api/agents/example-agent/tools", "/api/mcp/servers"])
@@ -77,6 +79,16 @@ def test_a_non_operator_is_refused_before_the_engine_is_called(
     client = request.getfixturevalue(client_name)
     assert client.get(path).status_code == 403
     assert not fake_engine.calls, "a rejected caller reached the engine"
+
+
+@pytest.mark.parametrize("path", ["/api/agents/example-agent/tools", "/api/mcp/servers"])
+def test_another_tenants_owner_is_answered_by_its_own_engine(
+    controls_client_as_other_tenant_owner, path, fake_engine
+):
+    from robothor.constants import PLATFORM_TENANT
+
+    assert controls_client_as_other_tenant_owner.get(path).status_code == 200
+    assert fake_engine.tenants and PLATFORM_TENANT not in fake_engine.tenants
 
 
 def test_it_proxies_the_agents_tools(controls_client_as_operator, fake_engine):

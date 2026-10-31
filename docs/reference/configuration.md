@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-488 settings in 18 groups.
+495 settings in 18 groups.
 
 ## autonomy
 
@@ -264,6 +264,7 @@ The agent execution layer: bind address, concurrency, pacing, sandbox.
 
 | Variable | Type | Default | Restart | Secret | Since | Description |
 | --- | --- | --- | --- | --- | --- | --- |
+| `GENUS_EVENT_CONSUMER_GROUP` | str | `engine` | `robothor-engine` | no | unreleased | Redis consumer group this engine reads the event streams with. Redis hands each event to one reader per group, so every engine sharing a Redis needs a group of its own. The root tenant's engine keeps 'engine' so its stream offsets survive upgrades; each child-tenant engine needs its own, e.g. 'engine-<tenant>', set by its deployment. An engine on any other group ignores events that carry no tenant. The root group is only ever read by a root tenant (one with no parent in crm_tenants); a child engine on it stops reading and logs an error naming this setting. Also read from `ROBOTHOR_EVENT_CONSUMER_GROUP`. |
 | `ROBOTHOR_ALERT_COOLDOWN_SECONDS` | int | `3600` | `robothor-engine` | no | legacy | Minimum seconds between repeats of the same unit-failure alert. |
 | `ROBOTHOR_ALERT_SELFTEST` | bool | `false` | `robothor-engine` | no | legacy | Fire one info-level alert shortly after boot to prove the alert path delivers. Leave off outside a delivery test. |
 | `ROBOTHOR_ALERT_SPOOL_CAP` | int | `50` | `robothor-engine` | no | legacy | Most alerts held on the retry spool; beyond it the oldest are dropped. |
@@ -392,6 +393,10 @@ Who may reach the bridge and the dashboard, and how that is proven.
 | `GENUS_OIDC_ISSUERS` | str | _(empty)_ | `robothor-bridge`, `robothor-app` | no | legacy | Comma-separated OIDC issuer URLs whose tokens the bridge accepts. |
 | `GENUS_OWNER_MFA_REQUIRED` | bool | `true` | `robothor-bridge`, `robothor-app` | no | 1.69.0 | Tell an owner account with no second factor to enrol one while local login is on. Setting it false gives up the only compensating control for a public password endpoint: one argon2-verified password then becomes the entire authentication for the instance and its stored credentials, and the operator is never prompted. |
 | `GENUS_SETUP_TOKEN_TTL_SECONDS` | int | `1800` | `robothor-bridge`, `robothor-app` | no | 1.69.0 | How long the first-run setup link printed by `genus init` stays usable. The link reaches a page that creates the owner account, so a long window turns a terminal scrollback into a standing credential; raise it only for an install someone has to walk away from. |
+| `GENUS_TENANT_ENGINE_URLS` | str | _(empty)_ | `robothor-bridge`, `robothor-app` | no | 1.123.0 | Optional JSON object mapping a tenant id to the base URL of that tenant's engine, e.g. {"acme-child-a": "http://127.0.0.1:18801"}. An explicit entry wins over GENUS_TENANT_ENGINE_URL_TEMPLATE; meant for local development and one-off overrides. Empty means none. Also read from `ROBOTHOR_TENANT_ENGINE_URLS`. |
+| `GENUS_TENANT_ENGINE_URL_TEMPLATE` | str | _(empty)_ | `robothor-bridge`, `robothor-app` | no | 1.123.0 | Base URL of a child tenant's engine, with the literal {tenant} placeholder the bridge and dashboard substitute with the tenant id, e.g. http://engine-{tenant}:18800. Empty means every tenant is served by the instance's own engine. Also read from `ROBOTHOR_TENANT_ENGINE_URL_TEMPLATE`. |
+| `GENUS_TENANT_SWITCH_ALLOW_INERT_RLS` | bool | `false` | `robothor-bridge` | no | 1.123.0 | Let tenant switching issue tokens while row-level security is inert (ROBOTHOR_RLS_ENABLED unset, or a superuser connection). A deliberate escape hatch: without RLS the acting tenant is enforced only by each query's own WHERE clause. Also read from `ROBOTHOR_TENANT_SWITCH_ALLOW_INERT_RLS`. |
+| `GENUS_TENANT_SWITCH_MODE` | str | `off` | `robothor-bridge` | no | 1.123.0 | Whether a root-tenant owner or admin may switch into a descendant tenant (POST /api/auth/switch-tenant). 'off' refuses every switch; 'observe' runs the full check, records a would-allow / would-deny tenant.switch audit row and still refuses; 'enforce' issues the acting token — and only while row-level security is genuinely enforcing. Any other value reads as 'off'. Also read from `ROBOTHOR_TENANT_SWITCH_MODE`. |
 | `GENUS_TRUSTED_PROXIES` | str | _(empty)_ | `robothor-bridge`, `robothor-app` | no | 1.69.0 | Comma-separated peer addresses or CIDR ranges allowed to assert the end user's address in X-Client-IP (the dashboard pod, a reverse proxy). Empty trusts nobody, loopback included; the real peer address is used. |
 | `ROBOTHOR_BRIDGE_HOST` | str | `127.0.0.1` | `robothor-bridge`, `robothor-app` | no | legacy | Address the bridge binds to. Anything but loopback requires real authentication to be configured. |
 | `ROBOTHOR_BRIDGE_PORT` | int | `9100` | `robothor-bridge`, `robothor-app` | no | legacy | Bridge HTTP port. |
@@ -497,6 +502,8 @@ Secret material that belongs to no single service.
 
 | Variable | Type | Default | Restart | Secret | Since | Description |
 | --- | --- | --- | --- | --- | --- | --- |
+| `GENUS_FINGERPRINT_SALT_FILE` | str | _(unset)_ | `robothor-engine`, `robothor-bridge` | yes | 1.123.0 | Path of THE credential-fingerprint salt file, instead of <workspace>/.fingerprint-salt, so fingerprints agree across the bridge and every engine cell. Never generated under an override: a missing file logs an error and fingerprints degrade to the unsalted form. Empty keeps the workspace salt, created on first use. Also read from `ROBOTHOR_FINGERPRINT_SALT_FILE`. |
+| `GENUS_VAULT_KEY_FILE` | str | _(unset)_ | `robothor-engine`, `robothor-bridge` | yes | 1.123.0 | Path of THE vault master key file (32 bytes), instead of <workspace>/.vault-key, so the bridge and every engine cell share one key (typically a read-only Secret mount). Under it nothing is ever generated: a missing or wrong-length file is an error naming this variable. Empty keeps the workspace key, generated on first boot. Also read from `ROBOTHOR_VAULT_KEY_FILE`. |
 | `ROBOTHOR_ENV_FILE` | str | `/etc/robothor/robothor.env` | `robothor-engine`, `robothor-bridge` | no | legacy | The EnvironmentFile systemd loads secrets from. It is instance data, never in git; the path is what the platform declares. |
 | `ROBOTHOR_INTENT_HMAC_SECRET` | str | _(unset)_ | `robothor-engine`, `robothor-bridge` | yes | legacy | Key that signs memory intents so a stored intent cannot be forged. Signing raises rather than falling back when it is unset. |
 | `ROBOTHOR_SECRETS_BACKEND` | str | _(empty)_ | `robothor-secrets`, `robothor-engine`, `robothor-bridge`, `robothor-app`, `robothor-orchestrator` | no | 1.69.0 | Where scripts/load-secrets.sh gets this instance's credentials: `sops` (decrypt /etc/robothor/secrets.enc.json with the age key), `file` (a plaintext file the operator manages, mode 0600 or 0400), or `env` (they are already in the unit environment, so an empty secrets.env is written). Empty means auto-detect: sops if an encrypted store exists, else file if one exists, else env. SOPS is therefore opt-in rather than a precondition for starting. |
@@ -661,7 +668,14 @@ process naming its replacement. They stop being read after two minor releases.
 | `CODEX_HOME` | `ROBOTHOR_CODEX_HOME` |
 | `OLLAMA_URL` | `ROBOTHOR_OLLAMA_URL` |
 | `ROBOTHOR_ENVIRONMENT` | `GENUS_ENVIRONMENT` |
+| `ROBOTHOR_EVENT_CONSUMER_GROUP` | `GENUS_EVENT_CONSUMER_GROUP` |
+| `ROBOTHOR_FINGERPRINT_SALT_FILE` | `GENUS_FINGERPRINT_SALT_FILE` |
 | `ROBOTHOR_OWNER_EMAIL` | `~/.robothor/owner.yaml` |
 | `ROBOTHOR_OWNER_NAME` | `~/.robothor/owner.yaml` |
+| `ROBOTHOR_TENANT_ENGINE_URLS` | `GENUS_TENANT_ENGINE_URLS` |
+| `ROBOTHOR_TENANT_ENGINE_URL_TEMPLATE` | `GENUS_TENANT_ENGINE_URL_TEMPLATE` |
+| `ROBOTHOR_TENANT_SWITCH_ALLOW_INERT_RLS` | `GENUS_TENANT_SWITCH_ALLOW_INERT_RLS` |
+| `ROBOTHOR_TENANT_SWITCH_MODE` | `GENUS_TENANT_SWITCH_MODE` |
+| `ROBOTHOR_VAULT_KEY_FILE` | `GENUS_VAULT_KEY_FILE` |
 | `TELEGRAM_BOT_TOKEN` | `ROBOTHOR_TELEGRAM_BOT_TOKEN` |
 | `TELEGRAM_CHAT_ID` | `ROBOTHOR_TELEGRAM_CHAT_ID` |

@@ -1,6 +1,8 @@
-"""Operator-scoped, read-only run accounting: recent runs, and per-run steps +
-guardrail blocks + cost. Reads through the RLS-scoped connection, so the operator
-sees the platform tenant's runs only."""
+"""Tenant-scoped, read-only run accounting: recent runs, the period summary, and
+per-run steps + guardrail blocks + cost, for the ACTING tenant. Every run query
+names the tenant as well as reading through the RLS-scoped connection, so
+isolation does not depend on row-level security being on. Steps and guardrail
+events are reached only through a run the tenant owns."""
 
 from __future__ import annotations
 
@@ -8,11 +10,12 @@ import uuid
 from decimal import Decimal
 
 import psycopg2.extras
+from deps import get_tenant_id
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 
 from robothor.db.connection import get_connection
 from robothor.engine.analytics import exclude_benchmark_filter
-from routers._operator import require_operator
+from routers._operator import require_tenant_admin
 
 router = APIRouter(prefix="/api/runs", tags=["runs"])
 
@@ -108,11 +111,18 @@ def _serialize(row: dict) -> dict:
 
 
 def _filters(
-    status: str | None, agent: str | None, trigger: str | None, since: int | None
+    tenant_id: str,
+    status: str | None,
+    agent: str | None,
+    trigger: str | None,
+    since: int | None,
 ) -> tuple[list[str], list]:
-    """The WHERE predicates and their parameters. Values are always parameters."""
-    clauses: list[str] = []
-    params: list = []
+    """The WHERE predicates and their parameters. Values are always parameters.
+
+    The tenant predicate is always first and always present.
+    """
+    clauses: list[str] = ["tenant_id = %s"]
+    params: list = [tenant_id]
     for column, value in (("status", status), ("agent_id", agent), ("trigger_type", trigger)):
         if value:
             clauses.append(f"{column} = %s")
@@ -124,11 +134,12 @@ def _filters(
 
 
 def _where(clauses: list[str]) -> str:
-    return f" WHERE {' AND '.join(clauses)}" if clauses else ""
+    return f" WHERE {' AND '.join(clauses)}"
 
 
 def _list_runs(
     *,
+    tenant_id: str,
     status: str | None = None,
     agent: str | None = None,
     trigger: str | None = None,
@@ -136,7 +147,7 @@ def _list_runs(
     limit: int = 50,
     offset: int = 0,
 ) -> list[dict]:
-    clauses, params = _filters(status, agent, trigger, since)
+    clauses, params = _filters(tenant_id, status, agent, trigger, since)
     sql = (
         f"SELECT {_RUN_COLUMNS} FROM agent_runs{_where(clauses)} "
         "ORDER BY started_at DESC NULLS LAST, id DESC LIMIT %s OFFSET %s"
@@ -147,6 +158,7 @@ def _list_runs(
 
 def _summary(
     *,
+    tenant_id: str,
     status: str | None = None,
     agent: str | None = None,
     trigger: str | None = None,
@@ -157,7 +169,7 @@ def _summary(
     Benchmark traffic is excluded with the analytics module's own predicate,
     so this strip agrees with every other operator-facing number.
     """
-    clauses, params = _filters(status, agent, trigger, since)
+    clauses, params = _filters(tenant_id, status, agent, trigger, since)
     clauses.append(exclude_benchmark_filter())
     sql = (
         f"SELECT agent_id, status, {_DELIVERY_CATEGORY_SQL} AS delivery, "
@@ -196,10 +208,11 @@ def _summary(
     }
 
 
-def _get_run(run_id: str) -> dict | None:
+def _get_run(run_id: str, tenant_id: str) -> dict | None:
     rows = _rows(
-        f"SELECT {_RUN_COLUMNS}, {_RUN_DETAIL_COLUMNS} FROM agent_runs WHERE id = %s",
-        (run_id,),
+        f"SELECT {_RUN_COLUMNS}, {_RUN_DETAIL_COLUMNS} FROM agent_runs "
+        "WHERE id = %s AND tenant_id = %s",
+        (run_id, tenant_id),
     )
     return _serialize(rows[0]) if rows else None
 
@@ -235,8 +248,9 @@ def list_runs(
     limit: int = 50,
     offset: int = 0,
 ) -> list[dict]:
-    require_operator(request)
+    require_tenant_admin(request)
     return _list_runs(
+        tenant_id=get_tenant_id(request),
         status=status,
         agent=agent,
         trigger=trigger,
@@ -255,13 +269,19 @@ def runs_summary(
     trigger: str | None = None,
     since: int | None = _Since,
 ) -> dict:
-    require_operator(request)
-    return _summary(status=status, agent=agent, trigger=trigger, since=since)
+    require_tenant_admin(request)
+    return _summary(
+        tenant_id=get_tenant_id(request),
+        status=status,
+        agent=agent,
+        trigger=trigger,
+        since=since,
+    )
 
 
 @router.get("/{run_id}")
 def get_run(run_id: str, request: Request, response: Response) -> dict:
-    require_operator(request)
+    require_tenant_admin(request)
     # Task text, tool input and output: never kept by a shared cache.
     response.headers["Cache-Control"] = "no-store"
     try:
@@ -271,7 +291,7 @@ def get_run(run_id: str, request: Request, response: Response) -> dict:
         raise HTTPException(
             status_code=404, detail="unknown run", headers={"Cache-Control": "no-store"}
         ) from None
-    run = _get_run(run_id)
+    run = _get_run(run_id, get_tenant_id(request))
     if run is None:
         raise HTTPException(
             status_code=404, detail="unknown run", headers={"Cache-Control": "no-store"}

@@ -107,16 +107,14 @@ def _require_chat_auth(request: Request) -> None:
     """Route-level auth so the router is safe even when mounted standalone."""
 
     from robothor.auth.deps import AuthContext
-    from robothor.engine.auth import authenticate_http_request
+    from robothor.engine import auth as engine_auth
 
     if isinstance(getattr(request.state, "auth", None), AuthContext):
         return
     if _config is None:
         raise HTTPException(status_code=503, detail="Chat not initialized")
-    context = authenticate_http_request(request, tenant_id=_config.tenant_id)
-    if context is None:
-        raise HTTPException(status_code=401, detail="authentication required")
-    request.state.auth = context
+    context = engine_auth.authenticate_http_request(request, tenant_id=_config.tenant_id)
+    request.state.auth = engine_auth.require_standing(context)  # sync: runs in the threadpool
 
 
 def _auth_context(request: Request) -> Any:

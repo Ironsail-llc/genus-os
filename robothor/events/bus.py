@@ -316,6 +316,27 @@ def _stream_key(stream: str) -> str:
     return f"{STREAM_PREFIX}{stream}"
 
 
+def publishing_tenant() -> str:
+    """The tenant an event published from here belongs to, or ``""``.
+
+    The enclosing ``tenant_scope`` if there is one, else the tenant this
+    process operates as -- ``ROBOTHOR_TENANT_ID``, then
+    ``ROBOTHOR_DEFAULT_TENANT``, read now. That is the order an engine
+    identifies itself by (``EngineConfig.tenant_id``) and the one its RLS
+    connections bind with, so an engine's own unscoped events (its webhooks)
+    carry its own tenant even when the two variables disagree.
+
+    A process with no tenant configured publishes untagged rather than
+    stamping the literal fallback ``default``: untagged events belong to the
+    root, which is where such a process's events have always gone.
+    """
+    try:
+        from robothor.db.connection import effective_tenant
+    except ImportError:  # psycopg2 absent: no scope can be open either
+        return ""
+    return effective_tenant()
+
+
 def _make_envelope(
     event_type: str,
     payload: dict[str, Any],
@@ -358,7 +379,9 @@ def publish(
         actor: Agent or system identity
         correlation_id: Optional trace ID for correlation
         agent_id: Agent identity for RBAC check (None = no check, backward compat)
-        tenant_id: Tenant identifier for multi-tenant filtering
+        tenant_id: The tenant the event belongs to. Defaults to
+            :func:`publishing_tenant`; engines ignore other tenants' events
+            and treat an untagged one as the root tenant's.
 
     Returns:
         Stream message ID on success, None on failure.
@@ -413,7 +436,7 @@ def publish(
             source=source,
             actor=actor,
             correlation_id=correlation_id,
-            tenant_id=tenant_id,
+            tenant_id=tenant_id or publishing_tenant(),
         )
         key = _stream_key(stream)
         msg_id: str | None = r.xadd(key, envelope, maxlen=MAXLEN, approximate=True)

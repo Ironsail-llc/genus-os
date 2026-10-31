@@ -214,13 +214,13 @@ class TestExecCannotPrintIt:
         assert "stdout" not in result
         assert CANARY not in str(result)
 
-    def test_copying_it_out_is_left_to_the_send_gate(self, tmp_path) -> None:
-        """`exec_reads_secret` does not object to `cp` — not for this file and
-        not for a `.env` on disk either; it gates on the commands that PRINT.
-        Moving the bytes without reading them is closed one door further on, by
-        `attachment_gate.refuse_to_send`, which scans what `send_file` is about
-        to hand the channel. Asserted so the shape of the guarantee is on the
-        record rather than assumed: this is where the copy-out stops."""
+    def test_copying_it_out_is_refused_and_the_send_gate_still_stands(self, tmp_path) -> None:
+        """`cp` is now a reader whose arguments are checked: copying a secrets
+        file under a neutral name and printing the copy was how the vault
+        master key was printed end to end (`cp <key> ws/k.bin && od ws/k.bin`).
+        This test used to pin the opposite, leaving the copy-out to
+        `attachment_gate.refuse_to_send` alone; that gate still stands one door
+        further on, for a copy made by any route this module cannot see."""
         from robothor.engine.attachment_gate import refuse_to_send
         from robothor.engine.secret_paths import exec_reads_secret
 
@@ -228,7 +228,7 @@ class TestExecCannotPrintIt:
         copy = tmp_path / "report.txt"
         copy.write_bytes(Path(row["path"]).read_bytes())
 
-        assert exec_reads_secret(f"cp {row['path']} {copy}") is None
+        assert exec_reads_secret(f"cp {row['path']} {copy}") is not None
         assert refuse_to_send(copy, tmp_path) is not None
 
 
