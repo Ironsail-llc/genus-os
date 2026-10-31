@@ -237,3 +237,54 @@ class TestHistoryEndpoint:
 
         assert res.json()["messages"] == []
         assert res.json()["hasMore"] is False
+
+
+class TestTheUserTurnKeepsItsOwnTime:
+    """Both rows of an exchange are written when the reply finishes, so a
+    reloaded chat showed the prompt at the reply's time. The user row now
+    carries the time the message arrived."""
+
+    def test_save_exchange_stores_the_user_rows_own_time(self, chat_db):
+        chat_db.fetchone.return_value = {"id": 1}
+        asked = T0 - timedelta(seconds=40)
+
+        chat_store.save_exchange("s:key", "question", "answer", tenant_id="t1", user_at=asked)
+
+        inserts = [
+            c for c in chat_db.execute.call_args_list if "INSERT INTO chat_messages" in c[0][0]
+        ]
+        assert len(inserts) == 2
+        user_sql, user_params = inserts[0][0]
+        assistant_sql, assistant_params = inserts[1][0]
+        assert asked in user_params
+        assert asked not in assistant_params
+        assert "created_at" in user_sql
+
+    def test_without_a_time_both_rows_take_the_database_clock(self, chat_db):
+        chat_db.fetchone.return_value = {"id": 1}
+        chat_store.save_exchange("s:key", "question", "answer", tenant_id="t1")
+        inserts = [
+            c for c in chat_db.execute.call_args_list if "INSERT INTO chat_messages" in c[0][0]
+        ]
+        assert all(
+            None in params or "created_at" not in sql for sql, params in (c[0] for c in inserts)
+        )
+
+    @pytest.mark.asyncio
+    async def test_webchat_send_records_when_the_message_arrived(self, client, mock_runner):
+        before = datetime.now(UTC)
+
+        async def slow_reply(**kwargs):
+            return AgentRun(
+                status=RunStatus.COMPLETED, output_text="later", trigger_type=TriggerType.WEBCHAT
+            )
+
+        mock_runner.execute = AsyncMock(side_effect=slow_reply)
+        saved = AsyncMock()
+        with patch("robothor.engine.chat.save_exchange_async", new=saved):
+            await client.post("/chat/send", json={"session_key": "time:key", "message": "hi"})
+
+        assert saved.await_count == 1
+        user_at = saved.await_args.kwargs.get("user_at")
+        assert isinstance(user_at, datetime)
+        assert before <= user_at <= datetime.now(UTC)
