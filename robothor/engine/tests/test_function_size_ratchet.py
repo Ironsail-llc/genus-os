@@ -112,9 +112,6 @@ KNOWN_LARGE: dict[str, int] = {
     # 325 -> 326: +1 for reporting an unreadable break-out as None rather than
     # as zero spend, which is a different claim about the fleet.
     "analytics.py::get_agent_stats": 326,
-    # 303 -> 301: the reconcile reporting moved to _log_reconcile, which is
-    # what paid for reporting added/replaced as well as pruned.
-    "daemon.py::_watchdog": 298,
     "chat.py::plan_approve": 286,
     "compaction.py::compact": 276,
     # -7: rate-limit wait and the malformed-tool-call verdict extracted;
