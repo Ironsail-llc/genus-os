@@ -970,8 +970,8 @@ def _release_lifecycle_lock() -> None:
         )
         r.delete(_LIFECYCLE_LOCK_KEY)
         r.close()
-    except Exception:
-        pass  # Lock will expire via TTL
+    except Exception as e:  # noqa: BLE001 - the lock's TTL is the backstop
+        logger.warning("Lifecycle lock release failed, it will expire via TTL: %s", e)
 
 
 # Step 2 (decay) processes facts in chunks of this size, each inside its own

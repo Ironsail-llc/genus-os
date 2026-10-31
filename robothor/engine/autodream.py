@@ -126,8 +126,8 @@ def _get_last_run_ts_with_source() -> tuple[float | None, str]:
                     logger.warning("autoDream Redis timestamp invalid/future (%r) — ignoring", val)
                     return None, "invalid"
                 return ts, "redis"
-    except Exception:
-        pass
+    except Exception as e:  # noqa: BLE001 - fall through to the file tier
+        logger.debug("autoDream last-run Redis read failed, trying the file: %s", e)
 
     # Filesystem fallback (survives Redis restarts).
     try:

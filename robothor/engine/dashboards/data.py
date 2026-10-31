@@ -231,7 +231,7 @@ def get_cron_status() -> dict[str, Any]:
                     system_crons.append({"schedule": schedule, "command": command})
                 else:
                     system_crons.append({"schedule": "?", "command": line[:50]})
-    except Exception:
-        pass
+    except Exception as e:  # noqa: BLE001 - a malformed line must not cost the whole page
+        logger.debug("crontab listing unavailable: %s", e)
 
     return {"systemCrons": system_crons}

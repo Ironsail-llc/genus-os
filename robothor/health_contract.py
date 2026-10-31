@@ -100,8 +100,8 @@ async def wait_for_ready(
                 resp = await client.get(f"{url}/ready")
                 if resp.status_code == 200:
                     return True
-        except Exception:
-            pass
+        except Exception as e:  # noqa: BLE001 - not up yet; poll again until the deadline
+            logger.debug("Waiting for %s/ready: %s: %s", url, type(e).__name__, e)
         await asyncio.sleep(min(delay, max_backoff))
         delay *= 2
 

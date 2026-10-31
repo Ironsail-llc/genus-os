@@ -2020,8 +2020,113 @@ async def _run_outage_detectors(tenant_id: str) -> None:
         fired = await search_quota_detector()
         if fired:
             logger.info("Detectors: Brave quota alert fired")
+    except Exception as e:  # noqa: BLE001 - the next tick retries
+        # WARNING, not DEBUG: a detector that raises means nothing alerts.
+        logger.warning("Detectors: outage checks failed: %s", e)
+
+
+async def _run_tick_detectors(tick_count: int, tenant_id: str) -> None:
+    """The fast failure-mode detectors, each on its own tick cadence.
+
+    Disabled via ROBOTHOR_DETECTORS_ENABLED=0. A detector that raises is a
+    WARNING: it is the alarm, so its failure must not be quieter than DEBUG.
+    """
+    # Runaway burn: every 4 ticks = 2 minutes
+    if tick_count % 4 == 0:
+        try:
+            from robothor.engine.detectors import runaway_burn_detector
+
+            fired = await runaway_burn_detector()
+            if fired:
+                logger.info("Detectors: %d runaway-burn alerts fired", fired)
+        except Exception as e:
+            logger.warning("Detectors: runaway_burn check failed: %s", e)
+
+    # Repeat errors + tool degradation: every 10 ticks = 5 minutes
+    if tick_count % 10 == 0:
+        try:
+            from robothor.engine.detectors import (
+                repeat_error_detector,
+                tool_degradation_detector,
+            )
+
+            fired = await repeat_error_detector(tenant_id=tenant_id)
+            if fired:
+                logger.info("Detectors: %d repeat-error alerts fired", fired)
+            fired = await tool_degradation_detector()
+            if fired:
+                logger.info("Detectors: %d tool-degradation alerts fired", fired)
+        except Exception as e:
+            logger.warning("Detectors: pattern checks failed: %s", e)
+
+    # Zombie runner: every 20 ticks = 10 minutes
+    if tick_count % 20 == 0:
+        try:
+            from robothor.engine.detectors import zombie_runner_detector
+
+            fired = await zombie_runner_detector()
+            if fired:
+                logger.info("Detectors: %d zombie-runner alerts fired", fired)
+        except Exception as e:
+            logger.warning("Detectors: zombie_runner check failed: %s", e)
+
+    # Workflow health (stuck runs + failure streaks): every 20 ticks = 10 min
+    if tick_count % 20 == 0:
+        try:
+            from robothor.engine.detectors import (
+                stuck_workflow_detector,
+                workflow_failure_streak_detector,
+            )
+
+            fired = await stuck_workflow_detector()
+            if fired:
+                logger.info("Detectors: %d stuck-workflow alerts fired", fired)
+            fired = await workflow_failure_streak_detector()
+            if fired:
+                logger.info("Detectors: %d workflow-failure-streak alerts fired", fired)
+        except Exception as e:
+            logger.warning("Detectors: workflow health checks failed: %s", e)
+
+
+async def _check_autodream_staleness(config: EngineConfig) -> None:
+    """Warn, then page once per episode, when autoDream has stopped running."""
+    global _autodream_stale_alerted  # noqa: PLW0603
+
+    try:
+        from robothor.engine.autodream import COOLDOWN_SECONDS
+
+        last_run, source = _resolve_last_run()
+        staleness = (time.time() - last_run) if last_run is not None else None
+        decision = _autodream_staleness_decision(
+            staleness,
+            _autodream_stale_alerted,
+            _AUTODREAM_MAX_DEFER_SECONDS,
+            COOLDOWN_SECONDS,
+        )
+        if decision["reset"]:
+            _autodream_stale_alerted = False
+        if decision["warn"] and staleness is not None:
+            logger.warning(
+                "Watchdog: autoDream stale (last run %.0f min ago, source=%s)",
+                staleness / 60,
+                source,
+            )
+        if decision["alert"] and staleness is not None:
+            from robothor.engine.delivery import get_telegram_sender
+
+            sender = get_telegram_sender()
+            if sender and config.default_chat_id:
+                hours = int(staleness / 3600)
+                await sender(
+                    config.default_chat_id,
+                    f"*Watchdog Alert*\n\nautoDream has not run for {hours}h "
+                    f"(source: {source}). Memory consolidation may be stalled.",
+                )
+                # Latch only after a delivered page so a transient
+                # sender outage doesn't suppress the alert.
+                _autodream_stale_alerted = True
     except Exception as e:
-        logger.debug("Detectors: outage checks failed: %s", e)
+        logger.warning("Watchdog: autoDream staleness check failed: %s", e)
 
 
 async def _watchdog(
@@ -2030,8 +2135,6 @@ async def _watchdog(
     workflow_engine: WorkflowEngine | None = None,
 ) -> None:
     """Subsystem watchdog — pings PostgreSQL and Redis every 30s, notifies systemd, cleans stale sessions daily."""
-    global _autodream_stale_alerted  # noqa: PLW0603
-
     pg_failures = 0
     redis_failures = 0
     tick_count = 0
@@ -2132,62 +2235,7 @@ async def _watchdog(
                 logger.warning("Watchdog: zombie reaper failed: %s", e)
 
         # Failure-mode detectors — read-only, alerts only, never kills runs.
-        # Disabled via ROBOTHOR_DETECTORS_ENABLED=0.
-        # Runaway burn: every 4 ticks = 2 minutes
-        if tick_count % 4 == 0:
-            try:
-                from robothor.engine.detectors import runaway_burn_detector
-
-                fired = await runaway_burn_detector()
-                if fired:
-                    logger.info("Detectors: %d runaway-burn alerts fired", fired)
-            except Exception as e:
-                logger.debug("Detectors: runaway_burn check failed: %s", e)
-
-        # Repeat errors + tool degradation: every 10 ticks = 5 minutes
-        if tick_count % 10 == 0:
-            try:
-                from robothor.engine.detectors import (
-                    repeat_error_detector,
-                    tool_degradation_detector,
-                )
-
-                fired = await repeat_error_detector(tenant_id=config.tenant_id)
-                if fired:
-                    logger.info("Detectors: %d repeat-error alerts fired", fired)
-                fired = await tool_degradation_detector()
-                if fired:
-                    logger.info("Detectors: %d tool-degradation alerts fired", fired)
-            except Exception as e:
-                logger.debug("Detectors: pattern checks failed: %s", e)
-
-        # Zombie runner: every 20 ticks = 10 minutes
-        if tick_count % 20 == 0:
-            try:
-                from robothor.engine.detectors import zombie_runner_detector
-
-                fired = await zombie_runner_detector()
-                if fired:
-                    logger.info("Detectors: %d zombie-runner alerts fired", fired)
-            except Exception as e:
-                logger.debug("Detectors: zombie_runner check failed: %s", e)
-
-        # Workflow health (stuck runs + failure streaks): every 20 ticks = 10 min
-        if tick_count % 20 == 0:
-            try:
-                from robothor.engine.detectors import (
-                    stuck_workflow_detector,
-                    workflow_failure_streak_detector,
-                )
-
-                fired = await stuck_workflow_detector()
-                if fired:
-                    logger.info("Detectors: %d stuck-workflow alerts fired", fired)
-                fired = await workflow_failure_streak_detector()
-                if fired:
-                    logger.info("Detectors: %d workflow-failure-streak alerts fired", fired)
-            except Exception as e:
-                logger.debug("Detectors: workflow health checks failed: %s", e)
+        await _run_tick_detectors(tick_count, config.tenant_id)
 
         # Sustained outages (dead tool dependency, primary model unreached):
         # every 2h on wall-clock, first pass ~10 min after boot. These read
@@ -2257,41 +2305,7 @@ async def _watchdog(
 
         # autoDream staleness check (every 20 ticks = 10 min)
         if tick_count % 20 == 0 and tick_count > 20:
-            try:
-                from robothor.engine.autodream import COOLDOWN_SECONDS
-
-                last_run, source = _resolve_last_run()
-                staleness = (time.time() - last_run) if last_run is not None else None
-                decision = _autodream_staleness_decision(
-                    staleness,
-                    _autodream_stale_alerted,
-                    _AUTODREAM_MAX_DEFER_SECONDS,
-                    COOLDOWN_SECONDS,
-                )
-                if decision["reset"]:
-                    _autodream_stale_alerted = False
-                if decision["warn"] and staleness is not None:
-                    logger.warning(
-                        "Watchdog: autoDream stale (last run %.0f min ago, source=%s)",
-                        staleness / 60,
-                        source,
-                    )
-                if decision["alert"] and staleness is not None:
-                    from robothor.engine.delivery import get_telegram_sender
-
-                    sender = get_telegram_sender()
-                    if sender and config.default_chat_id:
-                        hours = int(staleness / 3600)
-                        await sender(
-                            config.default_chat_id,
-                            f"*Watchdog Alert*\n\nautoDream has not run for {hours}h "
-                            f"(source: {source}). Memory consolidation may be stalled.",
-                        )
-                        # Latch only after a delivered page so a transient
-                        # sender outage doesn't suppress the alert.
-                        _autodream_stale_alerted = True
-            except Exception as e:
-                logger.debug("Watchdog: autoDream staleness check failed: %s", e)
+            await _check_autodream_staleness(config)
 
         # Alert after 3 consecutive PG failures
         if pg_failures == 3:

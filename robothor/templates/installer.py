@@ -8,6 +8,7 @@ files, then writes them to the locations the engine expects.
 from __future__ import annotations
 
 import difflib
+import logging
 import os
 import tempfile
 from pathlib import Path
@@ -27,6 +28,8 @@ from robothor.templates.safety import (
     validate_sha256,
     workspace_path,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _find_repo_root() -> Path:
@@ -841,8 +844,8 @@ department: {department}
 
         report = score_hub_readiness(out_path)
         hub_readiness_score = report.score
-    except Exception:
-        pass
+    except Exception as e:  # noqa: BLE001 - the score is advisory; the bundle is written
+        logger.warning("Hub readiness scoring failed for %s, recording 0: %s", agent_id, e)
 
     return {
         "agent_id": agent_id,

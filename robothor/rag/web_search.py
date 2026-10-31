@@ -14,6 +14,7 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 from typing import Any
 
@@ -24,6 +25,8 @@ import httpx
 # this path kept hammering a credential the pool had already retired and
 # could not rotate to a spare. No-op for unpooled providers.
 from robothor.engine.pooled_completion import acompletion as pooled_acompletion
+
+logger = logging.getLogger(__name__)
 
 
 def _searxng_url() -> str:
@@ -37,8 +40,8 @@ def _searxng_url() -> str:
         svc_url = get_service_url("searxng")
         if svc_url:
             return svc_url
-    except Exception:
-        pass
+    except Exception as e:  # noqa: BLE001 - fall back to the default URL
+        logger.debug("SearXNG URL not in the service registry, using the default: %s", e)
     return "http://localhost:8888"
 
 

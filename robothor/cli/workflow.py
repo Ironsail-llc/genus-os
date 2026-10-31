@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import argparse  # noqa: TC003
+import logging
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 def cmd_engine_workflow(args: argparse.Namespace) -> int:
@@ -135,8 +138,8 @@ def _operator_identity() -> str:
         name = getattr(cfg, "name", "") or ""
         if name:
             return f"operator:{name}"
-    except Exception:
-        pass
+    except Exception as e:  # noqa: BLE001 - the OS user is the documented fallback
+        logger.debug("Owner config unavailable, recording the OS user as decider: %s", e)
     try:
         return f"cli:{getpass.getuser()}"
     except Exception:

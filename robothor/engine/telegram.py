@@ -68,7 +68,11 @@ from robothor.engine.telegram_handlers import (  # noqa: E402
     TelegramHandlersMixin,
 )
 from robothor.engine.telegram_live import TelegramLiveFollowupMixin  # noqa: E402
-from robothor.engine.telegram_plan_mode import TYPING_INTERVAL, PlanModeMixin  # noqa: E402
+from robothor.engine.telegram_plan_mode import (  # noqa: E402
+    TYPING_INTERVAL,
+    PlanModeMixin,
+    edit_status_text,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -490,17 +494,10 @@ class TelegramBot(
                 if (now - last_status_time) < tool_status_interval:
                     return
                 label = _friendly_tool_name(event.get("tool", ""))
-                try:
-                    if stream_msg_id is not None:
-                        await self.bot.edit_message_text(
-                            chat_id=int(chat_id),
-                            message_id=stream_msg_id,
-                            text=f"\U0001f527 {label}...",
-                            parse_mode=None,
-                        )
-                        last_status_time = now
-                except Exception:
-                    pass
+                if await edit_status_text(
+                    self.bot, chat_id, stream_msg_id, f"\U0001f527 {label}..."
+                ):
+                    last_status_time = now
             elif event.get("event") == "todo_updated":
                 todos = event.get("todos", [])
                 try:

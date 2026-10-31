@@ -54,6 +54,20 @@ logger = logging.getLogger(__name__)
 TYPING_INTERVAL = 4  # seconds between typing indicator refreshes
 
 
+async def edit_status_text(bot: Any, chat_id: str, message_id: int | None, text: str) -> bool:
+    """Edit a status message in place; True when it changed. Cosmetic, so a failure is logged."""
+    if message_id is None:
+        return False
+    try:
+        await bot.edit_message_text(
+            chat_id=int(chat_id), message_id=message_id, text=text, parse_mode=None
+        )
+    except Exception as e:  # noqa: BLE001 - e.g. "message is not modified"; the run goes on
+        logger.debug("Telegram status edit failed (chat %s): %s", chat_id, e)
+        return False
+    return True
+
+
 def _plan_state_to_dict(plan: PlanState) -> dict[str, Any]:
     """Serialize PlanState to dict for DB persistence."""
     return {
@@ -306,16 +320,7 @@ class PlanModeMixin:
             nonlocal progress_msg_id
             elapsed = progress.get("elapsed_s", 0)
             text = f"\U0001f9e0 Deep reasoning... {elapsed}s elapsed"
-            try:
-                if progress_msg_id is not None:
-                    await self.bot.edit_message_text(
-                        chat_id=int(chat_id),
-                        message_id=progress_msg_id,
-                        text=text,
-                        parse_mode=None,
-                    )
-            except Exception:
-                pass
+            await edit_status_text(self.bot, chat_id, progress_msg_id, text)
 
         run_for_delivery: Any = None
         try:
@@ -613,16 +618,7 @@ class PlanModeMixin:
             nonlocal progress_msg_id
             elapsed = progress.get("elapsed_s", 0)
             text = f"\U0001f9e0 Deep reasoning... {elapsed}s elapsed"
-            try:
-                if progress_msg_id is not None:
-                    await self.bot.edit_message_text(
-                        chat_id=int(chat_id),
-                        message_id=progress_msg_id,
-                        text=text,
-                        parse_mode=None,
-                    )
-            except Exception:
-                pass
+            await edit_status_text(self.bot, chat_id, progress_msg_id, text)
 
         run_for_delivery: Any = None
         try:

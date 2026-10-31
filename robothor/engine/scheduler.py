@@ -1227,8 +1227,9 @@ class CronScheduler:
                     )
                 except Exception as e:
                     logger.warning("user_cron job %s failed to fire: %s", job_id, e)
-        except Exception as e:
-            logger.debug("user_cron tick error: %s", e)
+        except Exception as e:  # noqa: BLE001 - the next tick retries
+            # WARNING: at DEBUG a broken user-cron table meant no job ever fired, silently.
+            logger.warning("user_cron tick error: %s", e)
 
     async def _run_user_cronjob(self, agent_id: str, prompt: str, job_id: str) -> None:
         """Execute a user-cron fire under the per-agent dedup lock."""

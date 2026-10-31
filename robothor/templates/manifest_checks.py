@@ -11,9 +11,12 @@ Usage:
 
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 try:
     from apscheduler.triggers.cron import CronTrigger
@@ -239,8 +242,8 @@ def check_tools_registered(manifest: dict[str, Any], registered: set[str]) -> Ch
                 f"Unregistered tools (may be adapter-provided): {unknown}",
                 faults=[f"unregistered tool: {name!r}" for name in unknown],
             )
-    except Exception:
-        pass
+    except Exception as e:  # noqa: BLE001 - without adapter info the strict FAIL below applies
+        logger.debug("Adapter lookup failed for %r: %s", manifest.get("id", ""), e)
 
     return result.fail(
         f"Unknown tools in tools_allowed: {unknown}",
