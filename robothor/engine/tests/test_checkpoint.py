@@ -49,3 +49,48 @@ class TestCheckpointManager:
         with patch("robothor.db.connection.get_connection", side_effect=Exception("no db")):
             result = CheckpointManager.load_latest("nonexistent")
         assert result is None
+
+
+class TestCheckpointImages:
+    """A turn's image blocks are not copied into every checkpoint row."""
+
+    def _saved_messages(self, messages):
+        import json
+
+        mgr = CheckpointManager(run_id="test")
+        mgr.record_success()
+        mock_conn = MagicMock()
+        mock_conn.__enter__ = MagicMock(return_value=mock_conn)
+        mock_conn.__exit__ = MagicMock(return_value=False)
+        cursor = MagicMock()
+        mock_conn.cursor.return_value = cursor
+        with patch("robothor.db.connection.get_connection", return_value=mock_conn):
+            assert mgr.save(1, messages) is True
+        return json.loads(cursor.execute.call_args.args[1][2])
+
+    def test_image_blocks_become_a_short_placeholder(self):
+        data = "A" * 200_000
+        turn = {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "look at this\n   path: /inbox/shot.png"},
+                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{data}"}},
+            ],
+        }
+        saved = self._saved_messages([{"role": "system", "content": "sys"}, turn])
+        assert data not in str(saved)
+        content = saved[1]["content"]
+        assert content[0] == turn["content"][0]
+        assert content[1]["type"] == "text"
+        assert "image" in content[1]["text"]
+        assert len(str(saved)) < 1_000
+
+    def test_the_callers_messages_are_not_changed(self):
+        block = {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}
+        turn = {"role": "user", "content": [{"type": "text", "text": "x"}, block]}
+        self._saved_messages([turn])
+        assert turn["content"][1] is block
+
+    def test_text_only_messages_are_stored_as_they_are(self):
+        msgs = [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}]
+        assert self._saved_messages(msgs) == msgs

@@ -1,3 +1,9 @@
+## [1.123.0](https://github.com/Ironsail-llc/genus-os/compare/v1.122.0...v1.123.0) (2026-10-31)
+
+### Features
+
+* **dashboard:** secrets, chat files and tools, confirmed facts, release train (GEN-132) ([91408b3](https://github.com/Ironsail-llc/genus-os/commit/91408b39c41268476cec96d94ae459e1661dd606)), closes [#800](https://github.com/Ironsail-llc/genus-os/issues/800) [#801](https://github.com/Ironsail-llc/genus-os/issues/801) [#802](https://github.com/Ironsail-llc/genus-os/issues/802) [#803](https://github.com/Ironsail-llc/genus-os/issues/803) [#806](https://github.com/Ironsail-llc/genus-os/issues/806) [#808](https://github.com/Ironsail-llc/genus-os/issues/808)
+
 ## [1.122.0](https://github.com/Ironsail-llc/genus-os/compare/v1.121.0...v1.122.0) (2026-10-31)
 
 ### Features

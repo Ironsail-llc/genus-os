@@ -25,6 +25,7 @@ const PAGE_MODULES: Array<[path: string, exportName: string, name: string]> = [
   ["@/components/views/settings/plugins-page", "PluginsPage", "plugins"],
   ["@/components/views/settings/providers-page", "ProvidersPage", "providers"],
   ["@/components/views/settings/users-page", "UsersPage", "users"],
+  ["@/components/views/settings/secrets-page", "SecretsPage", "secrets"],
 ];
 
 async function renderSettings(page: string) {

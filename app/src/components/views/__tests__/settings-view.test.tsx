@@ -62,20 +62,20 @@ describe("SettingsView", () => {
     expect(subnav.querySelectorAll("[data-testid^='settings-subgroup-']").length).toBeGreaterThan(1);
   });
 
-  it("marks the active page with aria-current and shows its content", () => {
+  it("marks the active page with aria-current and shows its content", async () => {
     renderSettings({ page: "secrets" });
     expect(screen.getByTestId("settings-nav-secrets")).toHaveAttribute("aria-current", "page");
-    expect(screen.getByTestId("settings-page-secrets")).toBeInTheDocument();
+    expect(await screen.findByTestId("settings-page-secrets", {}, CHUNK_WAIT)).toBeInTheDocument();
     expect(screen.queryByTestId("settings-page-providers")).toBeNull();
   });
 
-  it("says what will live on a placeholder page", () => {
-    // Secrets is still a placeholder; Plugins stopped being one when the real
-    // screen landed, and the assertion moved rather than being deleted.
+  it("gives an operator the real Secrets page, not a placeholder", async () => {
+    // Secrets was the last placeholder; like Plugins before it, the assertion
+    // moved to the real screen rather than being deleted.
     renderSettings({ page: "secrets" });
+    expect(await screen.findByTestId("secrets-loading", {}, CHUNK_WAIT)).toBeInTheDocument();
     const page = screen.getByTestId("settings-page-secrets");
-    expect(page.textContent).toMatch(/soon/i);
-    expect(page.textContent!.length).toBeGreaterThan(30);
+    expect(page.textContent).not.toMatch(/coming soon/i);
   });
 
   it("gives an operator the real Plugins page, not a placeholder", async () => {

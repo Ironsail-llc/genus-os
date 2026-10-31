@@ -35,6 +35,10 @@ const ChannelsPage = dynamic(
   () => import("@/components/views/settings/channels-page").then((m) => m.ChannelsPage),
   { ssr: false, loading: PageLoading },
 );
+const SecretsPage = dynamic(
+  () => import("@/components/views/settings/secrets-page").then((m) => m.SecretsPage),
+  { ssr: false, loading: PageLoading },
+);
 const UsersPage = dynamic(
   () => import("@/components/views/settings/users-page").then((m) => m.UsersPage),
   { ssr: false, loading: PageLoading },
@@ -103,6 +107,13 @@ function PageBody({
     // API: only an owner may be offered the owner role. UX only — the bridge
     // refuses the same change independently, with a sentence this page prints.
     return <UsersPage visible role={role} />;
+  }
+
+  if (page.id === "secrets") {
+    // Names, sources, last change and readers -- never a value. The role
+    // travels so a non-operator is told the page is not theirs without a
+    // request being made; the bridge refuses one independently.
+    return <SecretsPage visible role={role} />;
   }
 
   if (page.id === "config") {
