@@ -4,6 +4,7 @@
  */
 import type { ChatMessage } from "./types";
 import { bridgeAuthHeaders } from "@/lib/bridge-auth";
+import type { AttachmentPayload } from "@/lib/chat/attachments";
 
 const ENGINE_URL = process.env.ROBOTHOR_ENGINE_URL || "http://127.0.0.1:18800";
 
@@ -105,7 +106,13 @@ class EngineClient {
    * Send a chat message. Returns the raw Response with SSE body.
    * Caller is responsible for reading the SSE stream.
    */
-  async chatSend(message: string, sessionKey = "", requestId?: string, joinRunning = false): Promise<Response> {
+  async chatSend(
+    message: string,
+    sessionKey = "",
+    requestId?: string,
+    joinRunning = false,
+    attachments?: AttachmentPayload[],
+  ): Promise<Response> {
     // `join_running`: sent while this session's turn works, so offer it to that
     // turn instead of starting another (robothor/engine/chat_live.py).
     const res = await fetchStream(`${ENGINE_URL}/chat/send`, {
@@ -116,6 +123,9 @@ class EngineClient {
         ...keyed(sessionKey),
         ...(requestId ? { request_id: requestId } : {}),
         ...(joinRunning ? { join_running: true } : {}),
+        // Files attached to the turn ({name, mime, size, data}), checked by the
+        // route and again by the engine (robothor/engine/chat_attachments.py).
+        ...(attachments?.length ? { attachments } : {}),
       }),
     });
     if (!res.ok) {

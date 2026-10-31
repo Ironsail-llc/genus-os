@@ -158,6 +158,53 @@ starts a run itself; without the flag the endpoint behaves as it always has. The
 running turn's own stream adds two events: `interim` (a superseded answer) and
 `pending_followups` (messages the turn never took, to send as the next turn).
 
+## Attaching files
+
+The paperclip at the left of the composer adds files to the message you are
+about to send. You can also paste a screenshot into the box or drop files onto
+the composer. Each file shows as a chip with its name and size, and the × on a
+chip takes it off again. A message can be only files, with no text.
+
+| | |
+|---|---|
+| Types | Images (PNG, JPG, GIF, WebP); text, Markdown, CSV, JSON and PDF |
+| Largest file | **5 MB** |
+| Files per message | **3** |
+
+The composer states these limits and refuses a file that breaks one with a line
+under the chips, keeping everything else you added. The dashboard's send route
+and the engine check the same limits again: too many files or too large a file
+is refused with `413`, an unsupported type or a body that is not valid base64
+with `422`. A file that claims to be a picture but is not is also a `422`.
+Attaching is off in Plan and Deep mode and while a reply streams.
+
+Files land in the same inbox Telegram uses, one channel over:
+
+```
+<workspace>/inbox/webchat/<session>/<YYYY-MM-DD>/<sha256>-<safe-name>
+<workspace>/inbox/webchat/<session>/<YYYY-MM-DD>/secret/<sha256>-<safe-name>
+```
+
+They are kept `0600`, deduplicated by the hash of their bytes, and pruned by the
+same retention sweep (see [the Telegram inbox](telegram.md#receiving-the-inbox)).
+The agent's turn is your message first, then the same structured note Telegram
+writes: each file's path, kind and size, `call view_image on <path>` for a
+picture, and the extracted text of a text or PDF file. When the model the chat
+runs on is known to accept images, a picture is also sent to it directly; when
+it is not, or nobody has said, the note alone goes and the agent can look with
+`view_image`.
+
+**A file named like a credentials file is quarantined.** `.env`,
+`credentials.json`, `id_rsa` and the like are saved under the day's `secret/`
+directory, and the note says the file was kept but not read: its contents never
+reach the prompt, and `read_file` and `send_file` refuse it. This is the
+Telegram rule, described in full in
+[the Telegram channel](telegram.md#the-attachment-row).
+
+The names stay with the conversation. The stored user turn records the files
+beside the text (`extras.attachments` on `GET /chat/history`, `attachments` on
+the persisted row), so a reload shows the same chips under your message.
+
 ## The docked chat panel
 
 Chat is the Helm's home view. On any other view the chat stays docked as a

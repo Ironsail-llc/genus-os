@@ -47,6 +47,7 @@ from fastapi.responses import JSONResponse
 from starlette.responses import StreamingResponse
 
 from robothor.constants import DEFAULT_TENANT
+from robothor.engine.chat_attachments import AttachmentRefusal, prepare_turn
 from robothor.engine.chat_delivery import deliver_interruption, deliver_plan_interruption
 from robothor.engine.chat_delivery import final_result as delivery_result
 from robothor.engine.chat_history import MAX_HISTORY as _MAX_HISTORY
@@ -65,6 +66,7 @@ from robothor.engine.chat_plan_claim import (
     approval_retry,
     finish_plan,
 )
+from robothor.engine.chat_plan_helpers import _extract_plan_text, _plan_is_expired, _plan_to_dict
 from robothor.engine.chat_result import result_text
 from robothor.engine.chat_session_cache import SessionCache
 from robothor.engine.chat_store import (
@@ -80,7 +82,7 @@ from robothor.engine.chat_store import (
 )
 from robothor.engine.feature_flags import per_user_sessions_mode
 from robothor.engine.live_inbox import LiveInbox, history_text
-from robothor.engine.models import PLAN_TTL_SECONDS, DeepRunState, PlanState, RunStatus, TriggerType
+from robothor.engine.models import DeepRunState, PlanState, RunStatus, TriggerType
 from robothor.engine.runtime.chat_control import start, stop
 from robothor.engine.sanitize import sanitize_log
 
@@ -378,7 +380,7 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
     session_key: str = body.get("session_key", "")
     message: str = body.get("message", "")
 
-    if not message:
+    if not message and not body.get("attachments"):
         return JSONResponse({"error": "message required"}, status_code=400)
 
     session_key = _effective_session_key(auth, session_key)
@@ -386,6 +388,13 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
     # Sent while this session's run works: join it (chat_live.py).
     if body.get("join_running"):
         return single_event_response(join_running_turn(session, auth, session_key, body))
+    try:  # files ride with the turn: kept in the inbox, named in the note
+        attached = await prepare_turn(
+            body, message, session=session, session_key=session_key, config=_config
+        )
+    except AttachmentRefusal as refusal:
+        return JSONResponse({"error": refusal.message}, status_code=refusal.status)
+    message = attached.text
     inbox = LiveInbox()
     pending: list[str] = []
 
@@ -437,6 +446,7 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
                 user_role=auth.role,
                 identity=identity,
                 live_inbox=inbox,
+                user_images=attached.images or None,
             )
             pending.extend(seal_live_inbox(session, inbox))
 
@@ -447,6 +457,7 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
                 session,
                 user_message=history_text(message, inbox.taken),
                 assistant_text=final_text or None,
+                user_extras=attached.extras,
             )
 
             # Persist to DB (fire-and-forget)
@@ -459,6 +470,7 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
                         channel="webchat",
                         model_override=session.model_override,
                         tenant_id=auth.tenant_id,
+                        user_extras=attached.extras,
                     )
                 )
 
@@ -713,52 +725,6 @@ async def chat_export(request: Request) -> JSONResponse:
 
     md = chat_session_to_markdown(session, session_key=session_key)
     return JSONResponse({"markdown": md, "session_key": session_key})
-
-
-# ─── Plan Mode Helpers ────────────────────────────────────────────────
-
-
-def _plan_is_expired(plan: PlanState) -> bool:
-    """Check if a pending plan has exceeded its TTL."""
-    if not plan.created_at:
-        return True
-    try:
-        created = datetime.fromisoformat(plan.created_at)
-        elapsed = (datetime.now(UTC) - created).total_seconds()
-        return elapsed > PLAN_TTL_SECONDS
-    except (ValueError, TypeError):
-        return True
-
-
-def _extract_plan_text(output: str) -> str:
-    """Extract plan text from agent output, stripping the [PLAN_READY] marker."""
-    if not output or output.startswith("[PLAN_FAILED]"):
-        return ""
-    marker = "[PLAN_READY]"
-    idx = output.find(marker)
-    if idx != -1:
-        return output[:idx].strip()
-    return output.strip()
-
-
-def _plan_to_dict(plan: PlanState) -> dict[str, Any]:
-    """Serialize PlanState for JSON responses."""
-    return {
-        "plan_id": plan.plan_id,
-        "plan_text": plan.plan_text,
-        "original_message": plan.original_message,
-        "status": plan.status,
-        "created_at": plan.created_at,
-        "exploration_run_id": plan.exploration_run_id,
-        "rejection_feedback": plan.rejection_feedback,
-        "revision_count": plan.revision_count,
-        "revision_history": plan.revision_history,
-        "execution_run_id": plan.execution_run_id,
-        "approval_request_id": plan.approval_request_id,
-        "deep_plan": plan.deep_plan,
-        "plan_hash": plan.plan_hash,
-        "task_context": plan.task_context,
-    }
 
 
 # ─── Plan Mode Endpoints ─────────────────────────────────────────────
