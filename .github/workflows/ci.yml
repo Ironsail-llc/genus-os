@@ -472,7 +472,8 @@ jobs:
           # regression (exit 1) nor a failed turn (exit 2) fails the job.
           set -o pipefail
           # --baseline-set ci: timings regress past 30% and 5 ms (shared
-          # runners spread ~20% run to run), counts past 10% with no floor.
+          # runners spread ~20% run to run), db_statements past 10%, and
+          # prompt_tokens and tool_schemas on any increase.
           python -m bench.turn --half inprocess --runs 20 --model "$BENCH_MODEL" \
             --min-delta 5 --baseline-set ci \
             --out "$RUNNER_TEMP/bench-turn-inprocess.json" 2>&1 \

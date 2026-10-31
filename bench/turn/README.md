@@ -65,7 +65,8 @@ The threshold depends on the metric:
 
 | Metric | Regression when the p50 or p95 is |
 |--------|-----------------------------------|
-| Counts: `db_statements`, `prompt_tokens`, `tool_schemas` | more than `--threshold` (default 10%) over the baseline. No absolute floor: the same code gives the same count, so a small increase is real. |
+| Exact: `prompt_tokens`, `tool_schemas` | above the baseline at all (0%). The same code gives the same number every run, so one more tool schema is a regression. A decrease passes and prints a hint to re-record the baseline, so the gain is locked in. |
+| `db_statements` | more than `--threshold` (default 10%) over the baseline, with no absolute floor. Background persists move its p95 by a few statements from run to run (80 and 84 on the same code). |
 | Timings: every `*_ms` metric | more than `--timing-threshold` over the baseline **and** more than `--min-delta` (default 5 ms) over it in absolute terms. `--timing-threshold` defaults to 30% with `--baseline-set ci` and to `--threshold` otherwise. |
 
 The two looser timing defaults come from measurements. Three CI runs of the

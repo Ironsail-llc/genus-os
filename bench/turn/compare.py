@@ -28,6 +28,11 @@ STATS = ("p50", "p95")
 #: tight threshold and no absolute floor. Every other metric is a timing.
 COUNT_METRICS = frozenset({"db_statements", "prompt_tokens", "tool_schemas"})
 
+#: Identical run after run on the same code: any increase is a real change
+#: (one more tool schema, a longer preamble), so these get a 0% threshold.
+#: A decrease passes, with a hint that the baseline is now stale.
+EXACT_METRICS = frozenset({"prompt_tokens", "tool_schemas"})
+
 
 @dataclass(frozen=True)
 class Regression:
@@ -100,9 +105,12 @@ def compare(
             if b is None or c is None:
                 continue
             is_count = metric in COUNT_METRICS
-            limit = b * (1.0 + (threshold if is_count else timing))
+            allowed = 0.0 if metric in EXACT_METRICS else threshold if is_count else timing
+            limit = b * (1.0 + allowed)
             bad = c > limit and (c - b) > (0.0 if is_count else min_delta)
             verdict = "REGRESSION" if bad else "ok"
+            if metric in EXACT_METRICS and c < b:
+                verdict = "ok (lower: re-record the baseline to lock it in)"
             outcome.lines.append(f"  {metric:<22} {stat} {b:>10.1f} -> {c:>10.1f}  {verdict}")
             if bad:
                 outcome.regressions.append(Regression(metric, stat, float(b), float(c)))
