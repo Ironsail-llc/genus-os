@@ -40,6 +40,7 @@ def _default_tenant() -> str:
 
 from middleware import AuthMiddleware, CorrelationMiddleware, RBACMiddleware, TenantMiddleware
 from routers.agent_manifests import router as agent_manifests_router
+from routers.agent_tools import router as agent_tools_router
 from routers.agents import router as agents_router
 from routers.approvals import router as approvals_router
 from routers.audit import router as audit_router
@@ -66,6 +67,7 @@ from routers.providers import router as providers_router
 from routers.pursuit_goals import router as pursuit_goals_router
 from routers.routines import router as routines_router
 from routers.runs import router as runs_router
+from routers.secrets import router as secrets_router
 from routers.settings import router as settings_router
 from routers.setup import router as setup_router
 from routers.system_health import router as system_health_router
@@ -179,6 +181,7 @@ app.include_router(sales_router)
 app.include_router(sales_ingestion_router)
 app.include_router(auth_router)
 app.include_router(agents_router)
+app.include_router(agent_tools_router)
 app.include_router(people_router)
 app.include_router(providers_router)
 app.include_router(conversations_router)
@@ -210,6 +213,10 @@ app.include_router(flag_audit_router)
 # setting whose store happens to be a table -- PATCH /api/settings routes one
 # through the same robothor.flags.store call this router's PATCH makes.
 app.include_router(settings_router)
+# Secrets: names, sources, last change and readers -- never a value. Beside
+# Settings because the Config page shows a credential as a status and sends
+# the operator here, and both read the same settings declarations.
+app.include_router(secrets_router)
 app.include_router(fleet_router)
 app.include_router(runs_router)
 app.include_router(system_health_router)

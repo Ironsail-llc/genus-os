@@ -1180,3 +1180,35 @@ describe("AgentManifests — I-5, the panel is a sheet on a phone", () => {
     expect(panel.className).toContain("md:static");
   });
 });
+
+describe("AgentManifests — opened from a link", () => {
+  afterEach(() => {
+    window.history.replaceState(null, "", "/");
+  });
+
+  it("opens the editor for the agent the link names", async () => {
+    // The chat's Tools dialog sends the operator here with `agent=<id>`.
+    window.history.replaceState(null, "", "/?v=agents&agent=invoice-chaser");
+    await renderPage();
+
+    const panel = await screen.findByTestId("agent-panel");
+    await waitFor(() => expect(callsTo("GET", "/api/bridge/api/agent-manifests/invoice-chaser")).toHaveLength(1));
+    expect(panel).toBeVisible();
+  });
+
+  it("consumes the link, so a reload does not open the editor again", async () => {
+    window.history.replaceState(null, "", "/?v=agents&agent=invoice-chaser");
+    await renderPage();
+
+    await screen.findByTestId("agent-panel");
+    expect(new URLSearchParams(window.location.search).has("agent")).toBe(false);
+    expect(new URLSearchParams(window.location.search).get("v")).toBe("agents");
+  });
+
+  it("opens nothing for an id the fleet does not have", async () => {
+    window.history.replaceState(null, "", "/?v=agents&agent=no-such-agent");
+    await renderPage();
+
+    expect(screen.queryByTestId("agent-panel")).toBeNull();
+  });
+});
