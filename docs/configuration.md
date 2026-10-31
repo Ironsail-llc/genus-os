@@ -659,6 +659,30 @@ can opt out per message, or hand the run only the last few turns, through
 `handle_message`'s `record_turn` and `history_limit` arguments
 ([Plugins](PLUGINS.md)).
 
+### Interactive turns and background work
+
+By default every run shares one event loop and one thread pool, so a burst of
+scheduled and hook runs can hold the workers and the local inference slots a
+person's turn needs. `ROBOTHOR_EXECUTION_LANES=1` splits work into two lanes.
+**Interactive** is a run a person is waiting on: Telegram, the chat panel,
+Slack, plugin channels, the IDE and the CLI. **Background** is everything else:
+cron, hooks, workflows, autodream, the curator, memory ingest and embeddings,
+and the post-turn saves. Each lane has its own run limit
+(`ROBOTHOR_MAX_CONCURRENT_INTERACTIVE`, default 3;
+`ROBOTHOR_MAX_CONCURRENT_BACKGROUND`, default 2) and its own thread workers, so
+blocking background work cannot delay a turn's own blocking calls. A background
+run asking for a slot while an interactive one waits holds back for up to
+`ROBOTHOR_LANE_BACKGROUND_YIELD_MS` (default 200). On a device with two or more
+local inference slots, one is kept for interactive requests, and a waiting
+interactive request is served first.
+
+A run waiting for its lane has not started: no run row, timeout or budget is
+touched while it waits. A sub-agent started from inside a run shares its
+parent's slot. The thread split is installed when the engine starts, so turn
+the flag on or off with a restart. Occupancy is on `GET /health` under
+`execution_lanes` and in the `robothor_lane_active` and `robothor_lane_waiting`
+gauges ([Observability](OBSERVABILITY.md)). With the flag off nothing changes.
+
 ### How replies look in Telegram
 
 Agents write Markdown; Telegram is read on a phone. Every Telegram send goes
