@@ -107,6 +107,10 @@ def repo(tmp_path: Path) -> Path:
     path = tmp_path / "repo"
     path.mkdir()
     _git(path, "init", "-q", "-b", "main")
+    # A bare `origin`, as on the runner: a release is only a release once
+    # its tag is on the remote.
+    _git(tmp_path, "init", "-q", "--bare", "origin.git")
+    _git(path, "remote", "add", "origin", str(tmp_path / "origin.git"))
     return path
 
 
@@ -174,11 +178,16 @@ class TestTipGuard:
 # ── semantic-release: a skip is never green ───────────────────────────────
 
 
-def _stub_npx(bin_dir: Path, output: str | list[str], code: int, tag: str | None = None) -> None:
+def _stub_npx(
+    bin_dir: Path, output: str | list[str], code: int, tag: str | None = None, push: bool = True
+) -> None:
+    """Stand in for semantic-release: print lines, cut (and push) a tag, exit."""
     bin_dir.mkdir(exist_ok=True)
     lines = [output] if isinstance(output, str) else output
     printed = "".join(f"printf '%s\\n' {line!r}\n" for line in lines)
     tag_line = f"git tag {tag}\n" if tag else ""
+    if tag and push:
+        tag_line += f"git push -q origin {tag}\n"
     stub = bin_dir / "npx"
     stub.write_text(f"#!/usr/bin/env bash\n{printed}{tag_line}exit {code}\n", encoding="utf-8")
     stub.chmod(0o755)
@@ -312,6 +321,39 @@ class TestSemanticReleaseOrdering:
         assert result.returncode == 0, result.stdout + result.stderr
         assert "new_release_published=false" in outputs
         assert "new_release_version=1.0.0" not in outputs
+
+
+class TestTagMustReachTheRemote:
+    def test_local_only_tag_fails_unpublished(self, jobs: dict, repo: Path, tmp_path: Path) -> None:
+        # The tag push failed: the tag exists only on the runner. Nothing
+        # downstream could check it out, so the step fails here instead.
+        _commit(repo, "fix: a change")
+        _stub_npx(tmp_path / "bin", "tag push rejected", 1, tag="v1.2.3", push=False)
+        result, outputs = _run_semantic(jobs, repo, tmp_path)
+        assert result.returncode != 0
+        assert "::error::" in result.stdout
+        assert "new_release_published=true" not in outputs
+        assert "new_release_published=false" in outputs
+
+    def test_local_only_tag_fails_even_on_exit_zero(
+        self, jobs: dict, repo: Path, tmp_path: Path
+    ) -> None:
+        _commit(repo, "fix: a change")
+        _stub_npx(tmp_path / "bin", "Published release 1.2.3", 0, tag="v1.2.3", push=False)
+        result, outputs = _run_semantic(jobs, repo, tmp_path)
+        assert result.returncode != 0
+        assert "new_release_published=true" not in outputs
+
+    def test_tag_on_the_remote_is_published(self, jobs: dict, repo: Path, tmp_path: Path) -> None:
+        _commit(repo, "fix: a change")
+        _stub_npx(tmp_path / "bin", "Published release 1.2.3", 0, tag="v1.2.3", push=True)
+        result, outputs = _run_semantic(jobs, repo, tmp_path)
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "new_release_published=true" in outputs
+
+    def test_colour_is_off_so_the_skip_regex_sees_plain_text(self, jobs: dict) -> None:
+        env = _step(jobs["release"], "Run semantic-release")["env"]
+        assert str(env.get("NO_COLOR")) == "1"
 
 
 class TestTipGuardAllowlist:
