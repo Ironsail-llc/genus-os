@@ -68,15 +68,17 @@ export function resolveRedisConnection(
 
 let redisClient: Redis | null = null;
 
+function createClient(): Redis {
+  const connection = resolveRedisConnection();
+  const options = { maxRetriesPerRequest: 3, lazyConnect: true };
+  return "url" in connection
+    ? new Redis(connection.url, options)
+    : new Redis({ ...connection, ...options });
+}
+
+/** The shared client, for non-blocking reads only. */
 function getRedis(): Redis {
-  if (!redisClient) {
-    const connection = resolveRedisConnection();
-    const options = { maxRetriesPerRequest: 3, lazyConnect: true };
-    redisClient =
-      "url" in connection
-        ? new Redis(connection.url, options)
-        : new Redis({ ...connection, ...options });
-  }
+  if (!redisClient) redisClient = createClient();
   return redisClient;
 }
 
@@ -131,7 +133,44 @@ export async function readSince(
   lastIds: Partial<Record<StreamName, string>>,
   blockMs: number = 5000
 ): Promise<{ stream: StreamName; events: EventEnvelope[] }[]> {
-  const redis = getRedis();
+  return xreadSince(getRedis(), lastIds, blockMs);
+}
+
+export interface StreamReader {
+  readSince: (
+    lastIds: Partial<Record<StreamName, string>>,
+    blockMs?: number
+  ) => Promise<{ stream: StreamName; events: EventEnvelope[] }[]>;
+  close: () => Promise<void>;
+}
+
+/**
+ * A reader on its own Redis connection, for one SSE client.
+ *
+ * XREAD BLOCK holds the connection it runs on until it returns, so readers
+ * that shared one connection queued behind each other: N open streams added
+ * up to N x blockMs of latency. Each reader blocks on its own, and close()
+ * releases it when the client goes away.
+ */
+export function openStreamReader(): StreamReader {
+  const redis = createClient();
+  return {
+    readSince: (lastIds, blockMs = 5000) => xreadSince(redis, lastIds, blockMs),
+    close: async () => {
+      try {
+        await redis.quit();
+      } catch {
+        redis.disconnect();
+      }
+    },
+  };
+}
+
+async function xreadSince(
+  redis: Redis,
+  lastIds: Partial<Record<StreamName, string>>,
+  blockMs: number
+): Promise<{ stream: StreamName; events: EventEnvelope[] }[]> {
   const streams: string[] = [];
   const ids: string[] = [];
 

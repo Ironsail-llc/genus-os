@@ -103,6 +103,8 @@ Seven Redis Streams carry events between services:
 
 Standard envelope format. Consumer groups for parallel processing. RBAC via `agent_capabilities.json`. Dual-write to JSON files as fallback when Redis is unavailable.
 
+The dashboard reads these streams live through `/api/events/stream` (server-sent events). Each browser tab opens one connection, shared by every view that listens, and reconnects with backoff from 1 s to 30 s. On the server each connection replays the last 20 events per stream, then blocks on a Redis connection of its own, reading from the newest event it replayed, so an event written between reads is never skipped and one tab's blocking read never delays another's.
+
 ## Agent RBAC
 
 Each agent declares its capabilities in `agent_capabilities.json`: which tools it can call, which streams it can read/write, which Bridge endpoints it can access. Unknown agents get full access (backward compatible). The bridge is stricter: a request carrying an agent's service token (what `log_interaction` sends) is refused with 403 `agent not authorized` unless that agent is listed under `agents`, whatever `default_policy` says.
