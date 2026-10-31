@@ -1,3 +1,5 @@
+import { MAX_ATTACHMENTS, MAX_ATTACHMENT_SIZE_TEXT } from "./attachments";
+
 /** A lost response is not permission to repeat a possibly dispatched action. */
 export const OUTCOME_UNKNOWN =
   "Connection interrupted. Checking the recorded result…";
@@ -23,6 +25,14 @@ export function terminalOutcome(
 }
 
 
+/**
+ * A 413 that is not the dashboard's own JSON came from something in front of
+ * it (a reverse proxy with a smaller body limit): the request never reached
+ * the route, so nothing was dispatched.
+ */
+export const TOO_LARGE_TO_SEND =
+  `That message and its files are too large to send. Files can be up to ${MAX_ATTACHMENT_SIZE_TEXT} each, ${MAX_ATTACHMENTS} per message; if they already are, the server in front of the dashboard is set to a lower limit.`;
+
 /** Only an explicit pre-dispatch refusal can discard the pending request. */
 export async function requestFailure(response: Response): Promise<{ text: string; rejected: boolean }> {
   try {
@@ -30,6 +40,7 @@ export async function requestFailure(response: Response): Promise<{ text: string
     const text = typeof body?.error === "string" && body.error ? body.error : OUTCOME_UNKNOWN;
     return { text, rejected: response.ok === false && body?.request_admitted === false && text !== OUTCOME_UNKNOWN };
   } catch {
+    if (response.status === 413) return { text: TOO_LARGE_TO_SEND, rejected: true };
     return { text: OUTCOME_UNKNOWN, rejected: false };
   }
 }
