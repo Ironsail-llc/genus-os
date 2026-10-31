@@ -72,6 +72,12 @@ unchanged:
 - once the new session itself has signed out or been revoked, the old token is
   refused too.
 
+The 30 seconds run from the first refresh, by the database's clock; a replay
+does not extend them. The access token from a refresh is dated a few seconds
+before the refresh itself, so a database clock slightly ahead of the Bridge's
+cannot produce a token that is not yet valid; it still expires fifteen minutes
+after the refresh.
+
 The window is `REFRESH_REUSE_GRACE_SECONDS` in `robothor/auth/tokens.py`, and it
 is the length of time a stolen, already-spent refresh token stays useful, which
 is why it is short. Session affinity on the dashboard is not needed and should

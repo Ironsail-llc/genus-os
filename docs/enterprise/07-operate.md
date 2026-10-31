@@ -76,9 +76,9 @@ a value it will not show you.
 **Settings › Flags** is every governed flag, its rungs, and the verdict: what
 the control has done, and when it last did it. A change is live within seconds,
 needs no restart, and records the reason you type beside it — that reason is
-the row you will want in six weeks. The Bridge refuses a change with a blank
-reason, and writes each change to the audit log as `control.set`, with who made
-it, the flag, the new value and the reason.
+the row you will want in six weeks. The Bridge refuses a change whose reason
+is blank or over 500 characters, and writes each change to the audit log as
+`control.set`, with who made it, the flag, the new value and the reason.
 
 If your session has ended, the page says so and offers **Sign in** instead of
 showing flags it cannot read or change; it retries once first, so a refresh
