@@ -51,7 +51,7 @@ def test_a_new_inbound_after_our_reply_restarts_the_clock():
     stalled = find_stalled(threads, FOUR_HOURS, NOW)
     assert [s.thread_id for s in stalled] == ["follow-up"]
     # The clock runs from the first unanswered inbound, not the last one.
-    assert stalled[0].last_inbound_at == _at(7)
+    assert stalled[0].waiting_since == _at(7)
 
 
 def test_the_clock_starts_at_the_first_unanswered_inbound():

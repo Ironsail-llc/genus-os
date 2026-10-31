@@ -98,6 +98,14 @@ PROPOSAL_STEP = "ambient_proposal"
 #: covers ambient proposals and nothing else.
 APPROVAL_GUARDRAIL = "ambient_tier"
 
+#: What happened to a proposal; recorded on its step and in the digest.
+OBSERVED = "observed"
+SENT = "sent"
+DENIED = "denied"
+NO_APPROVER = "no_approver"
+NO_TARGET = "no_target"
+SEND_FAILED = "send_failed"
+
 INBOX = "inbox"
 STREAM_PREFIX = "stream:"
 INBOUND = "inbound"
@@ -266,8 +274,8 @@ class StalledThread:
     thread_id: str
     person: str
     subject: str
-    #: When the wait began: the first inbound after our last reply.
-    last_inbound_at: datetime
+    #: When the wait began: the first inbound message after our last reply.
+    waiting_since: datetime
     waited_seconds: int
 
     @property
@@ -300,7 +308,7 @@ def find_stalled(
                 thread_id=thread.thread_id,
                 person=thread.person or waiting[0].author,
                 subject=thread.subject,
-                last_inbound_at=since,
+                waiting_since=since,
                 waited_seconds=waited,
             )
         )
@@ -436,7 +444,7 @@ def build_prompt(agent: AgentConfig, stalled: list[StalledThread], kinds: list[s
         who = s.person or "someone"
         lines.append(
             f"- {s.ref}: {who}{about}, waiting {_waited(s.waited_seconds)} "
-            f"since {s.last_inbound_at.astimezone(UTC).strftime('%Y-%m-%d %H:%M')} UTC"
+            f"since {s.waiting_since.astimezone(UTC).strftime('%Y-%m-%d %H:%M')} UTC"
         )
     lines += [
         "",
@@ -581,7 +589,7 @@ class AmbientWorker:
         result.proposals = parse_proposals(run.output_text or "", result.stalled, kinds, cfg.tiers)
         for proposal in result.proposals:
             proposal.outcome = (
-                "observed" if mode == "observe" else await self._dispatch(agent, run, proposal)
+                OBSERVED if mode == "observe" else await self._dispatch(agent, run, proposal)
             )
             logger.info(
                 "ambient %s (%s): %s -> %s [%s, %s]",
@@ -600,7 +608,7 @@ class AmbientWorker:
         if proposal.tier == TIER_APPROVE:
             manager = self._approver()
             if manager is None:
-                return "no_approver"
+                return NO_APPROVER
             approved = await manager.request_approval(
                 agent_id=agent.id,
                 run_id=run.id,
@@ -611,7 +619,7 @@ class AmbientWorker:
                 timeout_seconds=agent.human_approval_timeout,
             )
             if not approved:
-                return "denied"
+                return DENIED
         elif proposal.tier != TIER_AUTO:
             return "not_sent"
         return await self._send(agent, proposal)
@@ -620,20 +628,18 @@ class AmbientWorker:
         try:
             if proposal.kind == REPLY_ON_BEHALF:
                 if proposal.thread is None:
-                    return "no_target"
-                return (
-                    "sent"
-                    if await self._send_reply(proposal.thread, proposal.text)
-                    else ("send_failed")
-                )
-            channel = self._channel_resolver(agent.delivery_channel)
-            if channel is None or not agent.delivery_to:
-                return "no_target"
-            receipt = await channel.send(agent.delivery_to, proposal.text)
-            return "sent" if getattr(receipt, "complete", bool(receipt)) else "send_failed"
+                    return NO_TARGET
+                delivered = await self._send_reply(proposal.thread, proposal.text)
+            else:
+                channel = self._channel_resolver(agent.delivery_channel)
+                if channel is None or not agent.delivery_to:
+                    return NO_TARGET
+                receipt = await channel.send(agent.delivery_to, proposal.text)
+                delivered = bool(getattr(receipt, "complete", receipt))
         except Exception as error:  # noqa: BLE001 - one proposal, not the pass
             logger.warning("ambient %s: %s send failed: %s", agent.id, proposal.kind, error)
-            return "send_failed"
+            return SEND_FAILED
+        return SENT if delivered else SEND_FAILED
 
     async def _record(
         self, run: AgentRun, proposals: list[Proposal], mode: str, now: datetime
