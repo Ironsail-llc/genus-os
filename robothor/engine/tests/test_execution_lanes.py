@@ -505,3 +505,29 @@ class TestImportsStayLight:
             [sys.executable, "-c", code], capture_output=True, text=True, timeout=120
         )
         assert result.returncode == 0, result.stderr[-2000:]
+
+    def test_workflow_imports_with_only_the_validators_dependencies(self):
+        """CI's validate-agents job installs PyYAML and nothing else, then imports
+        the workflow engine to check budgets; a failed import fails the job."""
+        import subprocess
+        import sys
+
+        code = "\n".join(
+            [
+                "import sys",
+                "class OnlyYaml:",
+                "    def find_spec(self, name, path=None, target=None):",
+                "        top = name.split('.')[0]",
+                "        if top in sys.stdlib_module_names or top in ('yaml', '_yaml', 'robothor'):",
+                "            return None",
+                "        raise ModuleNotFoundError(f'No module named {top!r}')",
+                "sys.meta_path.insert(0, OnlyYaml())",
+                "import robothor.engine.workflow",
+                "from robothor.engine.llm_budgets import REFERENCE_CHAIN",
+                "from robothor.engine.workflow_budget import report_step_budgets",
+            ]
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", code], capture_output=True, text=True, timeout=120
+        )
+        assert result.returncode == 0, result.stderr[-2000:]
