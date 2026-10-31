@@ -102,4 +102,21 @@ describe("useHistoryPager", () => {
     expect(result.current.pager.loading).toBe(false);
     expect(result.current.messages).toHaveLength(2);
   });
+
+  it("never prepends rows with no stored id, and stops offering when a page has none", async () => {
+    // An engine with pages switched off answers any page with its in-memory
+    // tail: the newest rows, without ids. Prepending them would show the tail twice.
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ messages: [{ role: "user", content: "row 51" }, { role: "assistant", content: "row 52" }] }),
+    });
+    const { result } = setup();
+    act(() => result.current.pager.settle(true));
+    await act(async () => {
+      await result.current.pager.loadEarlier();
+    });
+    expect(result.current.messages.map((m) => m.content)).toEqual(["row 51", "row 52"]);
+    expect(result.current.pager.hasMore).toBe(false);
+  });
 });
+

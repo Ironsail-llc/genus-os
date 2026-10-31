@@ -240,4 +240,47 @@ describe("ChatPanel polish", () => {
     expect(list.getByText("kept reply")).toBeInTheDocument();
     expect(sends).toHaveLength(0);
   });
+
+  it("keeps the reader's place when an older page loads above them", async () => {
+    serve(
+      {
+        messages: [
+          { role: "user", content: "newer", id: 3, timestamp: T(3) },
+          { role: "assistant", content: "newer reply", id: 4, timestamp: T(4) },
+          { role: "user", content: "newest", id: 5, timestamp: T(5) },
+        ],
+        hasMore: true,
+      },
+      { 3: { messages: [{ role: "user", content: "older", id: 1 }, { role: "assistant", content: "old reply", id: 2 }], hasMore: false } },
+    );
+    render(<ChatPanel />);
+    await screen.findByText("newest");
+    // jsdom lays nothing out: every row is 100 px tall, the viewport 100 px.
+    const box = screen.getByTestId("message-list").parentElement as HTMLElement;
+    Object.defineProperty(box, "scrollHeight", {
+      configurable: true,
+      get: () => box.querySelectorAll("[data-testid=message-row]").length * 100,
+    });
+    Object.defineProperty(box, "clientHeight", { configurable: true, value: 100 });
+    box.scrollTop = 0; // the reader went up to the button
+    fireEvent.scroll(box);
+
+    fireEvent.click(screen.getByRole("button", { name: /load earlier/i }));
+    await screen.findByText("older");
+    // 300 px of content was below the top of the view; it still is.
+    await vi.waitFor(() => expect(box.scrollTop).toBe(200));
+  });
+
+  it("shows an older page even past the render window, instead of hiding it behind Show earlier", async () => {
+    const newest: Row[] = Array.from({ length: 200 }, (_, i) => ({
+      role: i % 2 ? "assistant" : "user",
+      content: `msg ${i + 3}`,
+      id: i + 3,
+    }));
+    serve({ messages: newest, hasMore: true }, { 3: { messages: [{ role: "user", content: "older", id: 1 }, { role: "assistant", content: "old reply", id: 2 }], hasMore: false } });
+    render(<ChatPanel />);
+    fireEvent.click(await screen.findByRole("button", { name: /load earlier/i }));
+    expect(await screen.findByText("older")).toBeInTheDocument();
+    expect(screen.queryByTestId("show-earlier")).toBeNull();
+  });
 });
