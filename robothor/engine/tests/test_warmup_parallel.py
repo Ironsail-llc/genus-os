@@ -62,14 +62,15 @@ MESSAGE = "Did Bob update the Example plan with Carol yesterday?"
 class FakeDB:
     """Postgres stand-in: every statement sleeps, and every statement is logged."""
 
-    def __init__(self) -> None:
+    def __init__(self, delay: float = STATEMENT_SECONDS) -> None:
         self.statements: list[str] = []
+        self.delay = delay
         self._lock = threading.Lock()
 
     def charge(self, sql: str) -> None:
         with self._lock:
             self.statements.append(" ".join(sql.split()))
-        time.sleep(STATEMENT_SECONDS)
+        time.sleep(self.delay)
 
     def count(self, needle: str) -> int:
         with self._lock:
@@ -152,6 +153,11 @@ class _Cursor:
         return list(self._rows)
 
 
+def _forget_fan_out() -> None:
+    """Drop what the warmup remembers about each agent's previous sections."""
+    getattr(warmup, "_slowest_section_by_agent", {}).clear()
+
+
 @pytest.fixture
 def db():
     """The fake DB wired under every section the interactive preamble runs."""
@@ -194,6 +200,7 @@ def db():
     saved = _CONTEXT_HOOKS.copy()
     _CONTEXT_HOOKS[:] = [_hook]
     enrichment.clear_cache()
+    _forget_fan_out()
     env = {k: v for k, v in os.environ.items() if k != "ROBOTHOR_WARMUP_PARALLEL"}
     env.pop("ROBOTHOR_DATA_SCOPING", None)
     env.pop("MEMORY_WARMUP_RECALL_V2", None)
@@ -212,6 +219,7 @@ def db():
     finally:
         _CONTEXT_HOOKS[:] = saved
         enrichment.clear_cache()
+        _forget_fan_out()
 
 
 def _build(parallel: bool, timings: dict[str, float] | None = None) -> tuple[str, float]:
@@ -342,6 +350,7 @@ class TestWallTime:
         db.statements.clear()
         _, sequential_s = _build(parallel=False)
         sequential_statements = len(db.statements)
+        _build(parallel=True)  # the first flagged warmup learns its sections are slow
         timings: dict[str, float] = {}
         _, parallel_s = _build(parallel=True, timings=timings)
 
@@ -451,3 +460,182 @@ class TestRunnerUsesTheTurnHelper:
             assert args == (IDENTITY,)
         finally:
             os.environ.pop("ROBOTHOR_WARMUP_PARALLEL", None)
+
+
+def _hook_thread_recorder() -> list[str]:
+    """Replace the context hook with one that records the thread it ran on."""
+    names: list[str] = []
+
+    def _hook() -> str:
+        names.append(threading.current_thread().name)
+        return "Date: 2026-01-02"
+
+    _CONTEXT_HOOKS[:] = [_hook]
+    return names
+
+
+def _median(values: list[float]) -> float:
+    ordered = sorted(values)
+    return ordered[len(ordered) // 2]
+
+
+class TestFanOutOnlyWhenItPays:
+    """Threads cost more than a fast database's queries save.
+
+    On a fast Postgres the fan-out made the preamble slower (QA measured
+    24.8 ms sequential against 56.3 ms parallel). With the flag on the
+    statement savings always apply; the sections fan out only once the agent's
+    previous warmup had a slow section.
+    """
+
+    def test_fast_db_stays_on_the_calling_thread_and_is_no_slower(self, db: FakeDB) -> None:
+        db.delay = 0.002
+        threads = _hook_thread_recorder()
+        caller = threading.current_thread().name
+        _build(parallel=False)  # imports
+        _build(parallel=True)
+        off: list[float] = []
+        on: list[float] = []
+        for _ in range(5):
+            off.append(_build(parallel=False)[1])
+            on.append(_build(parallel=True)[1])
+        assert set(threads) == {caller}, threads
+        assert _median(on) <= _median(off), (on, off)
+
+    def test_fast_db_flag_on_still_saves_statements(self, db: FakeDB) -> None:
+        db.delay = 0.0
+        _build(parallel=False)
+        off_statements = len(db.statements)
+        db.statements.clear()
+        _build(parallel=True)
+        warmup.wait_for_deferred_writes(timeout=2.0)
+        assert db.count("memory_facts") == 1  # one entity query
+        assert db.count("RETURNING") == 0  # no per-block write-to-read
+        assert len(db.statements) < off_statements
+
+    def test_slow_db_fans_out_from_the_second_warmup_and_is_faster(self, db: FakeDB) -> None:
+        threads = _hook_thread_recorder()
+        caller = threading.current_thread().name
+        _build(parallel=False)  # imports
+        _, sequential_s = _build(parallel=False)
+        _build(parallel=True)
+        assert threads[-1] == caller  # nothing known yet: run in place
+        timings: dict[str, float] = {}
+        _, fanned_s = _build(parallel=True, timings=timings)
+        assert threads[-1] != caller  # the last warmup had a slow section
+        assert fanned_s < sequential_s
+        assert fanned_s < 1.5 * max(timings.values())
+
+    def test_the_fanned_out_hooks_still_see_the_warmup_kind(self, db: FakeDB) -> None:
+        seen: list[str | None] = []
+
+        def _hook() -> str:
+            seen.append(warmup.current_warmup_kind())
+            return "kind seen"
+
+        _CONTEXT_HOOKS[:] = [_hook]
+        os.environ["ROBOTHOR_WARMUP_PARALLEL"] = "1"
+        with warmup.set_warmup_kind("interactive"):
+            build_interactive_preamble("main", MESSAGE, tenant_id=TENANT, identity=IDENTITY)
+            build_interactive_preamble("main", MESSAGE, tenant_id=TENANT, identity=IDENTITY)
+        assert seen == ["interactive", "interactive"]
+
+
+class _InterpolatingCursor:
+    """Formats each statement the way psycopg2's pyformat paramstyle does.
+
+    A bare ``%`` that is not ``%s`` / ``%%`` consumes a parameter or raises;
+    psycopg2 reports it as an IndexError at execute time.
+    """
+
+    def __init__(self) -> None:
+        self.statements: list[str] = []
+
+    def execute(self, sql: str, params: Any = ()) -> None:
+        self.statements.append(sql % tuple(repr(p) for p in params))
+
+    def fetchall(self) -> list[Any]:
+        return []
+
+
+class TestEntitySqlInterpolates:
+    @pytest.mark.parametrize("v2", ["0", "1"])
+    @pytest.mark.parametrize("batched", [False, True])
+    def test_every_entity_statement_formats_with_its_params(self, v2: str, batched: bool) -> None:
+        cur = _InterpolatingCursor()
+
+        class _Conn:
+            def cursor(self, cursor_factory: Any = None) -> _InterpolatingCursor:
+                return cur
+
+        @contextmanager
+        def _conn(*a: Any, **kw: Any):
+            yield _Conn()
+
+        with (
+            patch.dict(os.environ, {"MEMORY_WARMUP_RECALL_V2": v2}),
+            patch("robothor.db.get_connection", _conn),
+        ):
+            warmup._build_entity_context(
+                "Did Bob update the Example plan?", tenant_id=TENANT, batched=batched
+            )
+        assert cur.statements
+        for statement in cur.statements:
+            assert TENANT in statement
+
+    def test_a_failed_entity_lookup_is_logged_at_warning(
+        self, db: FakeDB, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        import logging
+
+        os.environ["ROBOTHOR_WARMUP_PARALLEL"] = "0"
+        with (
+            patch(
+                "robothor.engine.warmup._build_entity_context",
+                side_effect=IndexError("tuple index out of range"),
+            ),
+            caplog.at_level(logging.WARNING, logger="robothor.engine.warmup"),
+        ):
+            build_interactive_preamble("main", MESSAGE, tenant_id=TENANT)
+        assert any(
+            r.levelno == logging.WARNING and "entity context" in r.getMessage()
+            for r in caplog.records
+        )
+
+
+@pytest.mark.integration
+class TestEntitySqlMogrify:
+    """The same statements through a real psycopg2 cursor's ``mogrify``."""
+
+    @pytest.mark.parametrize("v2", ["0", "1"])
+    @pytest.mark.parametrize("batched", [False, True])
+    def test_mogrify_accepts_every_entity_statement(self, v2: str, batched: bool) -> None:
+        from robothor.db import get_connection as real_get_connection
+
+        with real_get_connection() as real:
+            real_cur = real.cursor()
+            mogrified: list[bytes] = []
+
+            class _Cur:
+                def execute(self, sql: str, params: Any = ()) -> None:
+                    mogrified.append(real_cur.mogrify(sql, params))
+
+                def fetchall(self) -> list[Any]:
+                    return []
+
+            class _Conn:
+                def cursor(self, cursor_factory: Any = None) -> _Cur:
+                    return _Cur()
+
+            @contextmanager
+            def _conn(*a: Any, **kw: Any):
+                yield _Conn()
+
+            with (
+                patch.dict(os.environ, {"MEMORY_WARMUP_RECALL_V2": v2}),
+                patch("robothor.db.get_connection", _conn),
+            ):
+                warmup._build_entity_context(
+                    "Did Bob update the Example plan?", tenant_id=TENANT, batched=batched
+                )
+        assert mogrified
