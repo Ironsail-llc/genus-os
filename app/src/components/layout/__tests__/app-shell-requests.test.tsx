@@ -6,7 +6,7 @@
  * Three readers of one listing must cost one request, not three.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 vi.mock("@/hooks/use-visual-state", () => ({
   useVisualState: () => ({
@@ -103,14 +103,16 @@ afterEach(() => {
 });
 
 describe("AppShell — requests on load", () => {
-  it("reads tasks and agents once each with the shell, the landing and the dashboard mounted", async () => {
+  it("reads tasks and agents once each across the shell, the landing and the Dashboard view", async () => {
     const { AppShell } = await import("../app-shell");
     render(<AppShell />);
 
-    // All three readers are on the page: the shell's badges, the chat home's
-    // landing, and the Dashboard view mounted behind display:none.
+    // The shell's badges and the chat home's landing read on load. The
+    // Dashboard view is opened as well, so its reader is counted whether views
+    // mount up front (behind display:none) or on first visit.
     expect(await screen.findByTestId("chat-landing", {}, { timeout: 10_000 })).toBeInTheDocument();
-    expect(screen.getByTestId("default-dashboard")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("nav-dashboard"));
+    expect(await screen.findByTestId("default-dashboard", {}, { timeout: 10_000 })).toBeInTheDocument();
     await waitFor(() => expect(count("list_tasks")).toBeGreaterThan(0));
     await waitFor(() => expect(count("agent_status")).toBeGreaterThan(0));
     // Let any straggling effects fire before counting.
