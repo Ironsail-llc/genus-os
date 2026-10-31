@@ -27,6 +27,7 @@ let isOpen = false;
 let isSynced = false;
 let attempt = 0;
 let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+let stableTimer: ReturnType<typeof setTimeout> | undefined;
 let reconcileQueued = false;
 
 /** The union of subscribed streams, in first-subscribed order. */
@@ -51,6 +52,8 @@ function covers(streams: readonly string[]): boolean {
 function teardown() {
   if (reconnectTimer) clearTimeout(reconnectTimer);
   reconnectTimer = undefined;
+  if (stableTimer) clearTimeout(stableTimer);
+  stableTimer = undefined;
   if (source) source.close();
   source = null;
   sourceStreams = [];
@@ -74,7 +77,14 @@ function open(streams: string[]) {
   });
   es.onopen = () => {
     if (source !== es) return;
-    attempt = 0;
+    // The backoff resets only once the connection has stayed up: when Redis
+    // is down the route still answers 200, then errors straight away, and
+    // resetting on open would retry every second for the whole outage.
+    if (stableTimer) clearTimeout(stableTimer);
+    stableTimer = setTimeout(() => {
+      stableTimer = undefined;
+      attempt = 0;
+    }, RECONNECT_MAX_MS);
     isOpen = true;
     for (const sub of subscribers) sub.onOpen();
   };
