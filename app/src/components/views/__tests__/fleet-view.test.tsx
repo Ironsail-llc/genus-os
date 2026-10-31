@@ -49,6 +49,17 @@ describe("FleetView states", () => {
   });
 });
 
+describe("FleetView payload", () => {
+  it("shows the empty state, not a crash, when a 200 carries something other than a list", async () => {
+    vi.spyOn(global, "fetch").mockResolvedValue({
+      ok: true,
+      json: async () => ({ messages: [], active: false }),
+    } as Response);
+    render(<FleetView visible />);
+    expect(await screen.findByTestId("fleet-empty")).toBeTruthy();
+  });
+});
+
 describe("FleetView cache", () => {
   it("paints from cache without a request when shown again within a minute", async () => {
     const spy = vi.spyOn(global, "fetch").mockResolvedValue({
