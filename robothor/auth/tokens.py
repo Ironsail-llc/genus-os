@@ -15,7 +15,9 @@ which mints tokens after SSO, shares the key via the same secret channel.
 
 from __future__ import annotations
 
+import base64
 import hashlib
+import hmac
 import secrets
 import time
 from typing import TYPE_CHECKING, Any
@@ -29,6 +31,21 @@ ALGORITHM = "HS256"
 ACCESS_TTL_SECONDS = 15 * 60  # 15 minutes
 SERVICE_TTL_SECONDS = 5 * 60  # service credentials are deliberately short-lived
 REFRESH_TTL_SECONDS = 30 * 24 * 60 * 60  # 30 days
+
+#: How long a refresh token that has just been rotated may be presented again
+#: and answered with the SAME pair it was rotated to.
+#:
+#: The dashboard runs more than one replica with no session affinity, and each
+#: replica de-duplicates concurrent refreshes only in its own process. Two
+#: replicas can therefore present one refresh token a few milliseconds apart;
+#: without this window the second one got a 401 and the operator's next page
+#: read failed with "authentication required". Inside the window the replay
+#: gets the successor the first caller already received (no second session and
+#: no new secret); after it, or once that successor has signed out or been
+#: revoked, the token is refused exactly as before. Short on purpose: it is
+#: the time a stolen, already-used token stays useful. Operators: see
+#: docs/enterprise/02-identity.md, "Sessions and refresh".
+REFRESH_REUSE_GRACE_SECONDS = 30
 _ISSUER = "genus-os"
 DEFAULT_AUDIENCE = "genus-bridge"
 
@@ -170,6 +187,8 @@ def issue_access_token(
     audience: str = DEFAULT_AUDIENCE,
     scopes: Iterable[str] | None = None,
     agent_id: str | None = None,
+    issued_at: int | None = None,
+    jti: str | None = None,
 ) -> str:
     """Mint a signed access JWT carrying a complete verified identity.
 
@@ -177,6 +196,10 @@ def issue_access_token(
     ``user_id`` for source compatibility).  Callers may select another
     audience for engine/orchestrator tokens, but verifiers must request that
     same audience explicitly.
+
+    ``issued_at`` and ``jti`` default to now and a random id. Refresh rotation
+    passes both (the rotation time and :func:`successor_jti`) so that a replay
+    inside :data:`REFRESH_REUSE_GRACE_SECONDS` mints the identical token.
     """
     if typ not in _TOKEN_TYPES:
         raise ValueError(f"unsupported token type: {typ}")
@@ -193,7 +216,7 @@ def issue_access_token(
     if not normalized_scopes:
         raise ValueError("at least one scope is required")
 
-    now = int(time.time())
+    now = int(time.time()) if issued_at is None else int(issued_at)
     claims: dict[str, Any] = {
         "sub": user_id,
         "tid": tenant_id,
@@ -204,7 +227,7 @@ def issue_access_token(
         "aud": audience,
         "scope": " ".join(normalized_scopes),
         "iss": _ISSUER,
-        "jti": secrets.token_urlsafe(24),
+        "jti": jti or secrets.token_urlsafe(24),
         "iat": now,
         "exp": now + ttl_seconds,
     }
@@ -374,3 +397,30 @@ def new_refresh_token() -> tuple[str, str]:
 def hash_refresh_token(raw: str) -> str:
     """SHA-256 of the opaque refresh token (the only form persisted)."""
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _derive(label: bytes, raw: str, size: int) -> str:
+    """``size`` bytes of HMAC-SHA512(signing key, label || raw), URL-safe."""
+    digest = hmac.new(
+        signing_key().encode("utf-8"), label + b"\x00" + raw.encode("utf-8"), hashlib.sha512
+    ).digest()[:size]
+    return base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
+
+
+def successor_refresh_token(raw: str) -> tuple[str, str]:
+    """Return ``(raw, hash)`` of the token ``raw`` rotates to.
+
+    Derived rather than random, so that a replay of ``raw`` inside the grace
+    window can hand back the successor the first caller received without the
+    raw successor ever being stored: only its hash is persisted, as for every
+    refresh token. Keyed by the signing key, so the successor of a token
+    cannot be computed by anyone who holds only the token. 48 bytes, the same
+    64-character shape :func:`new_refresh_token` mints.
+    """
+    successor = _derive(b"genus-refresh-successor", raw, 48)
+    return successor, hash_refresh_token(successor)
+
+
+def successor_jti(raw: str) -> str:
+    """The ``jti`` of the access token minted when ``raw`` is rotated."""
+    return _derive(b"genus-refresh-successor-jti", raw, 24)

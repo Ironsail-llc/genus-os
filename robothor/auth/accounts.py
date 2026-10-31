@@ -616,6 +616,114 @@ def consume_active_session(refresh_token_hash: str) -> dict[str, Any] | None:
         return dict(row) if row else None
 
 
+def rotate_session(
+    refresh_token_hash: str,
+    successor_hash: str,
+    *,
+    ttl_seconds: int,
+    grace_seconds: int,
+    user_agent: str | None = None,
+    ip: str | None = None,
+) -> dict[str, Any] | None:
+    """Rotate one refresh session to ``successor_hash``, tolerating a replay.
+
+    Returns ``{"user_id", "rotated_at", "replayed"}`` or ``None`` (refuse).
+
+    The first caller spends the token and, in the SAME transaction, inserts
+    the successor session (only for an active account) and links the two
+    (``rotated_to``). A second caller holding the same token blocks on the row
+    lock until that commits, finds it spent, and is answered with the same
+    rotation — ``replayed: True`` — when all of these hold:
+
+    * the token was ROTATED (``rotated_at`` set), not signed out or revoked;
+    * less than ``grace_seconds`` ago, by the database clock, so every bridge
+      and dashboard pod agrees on the window;
+    * the successor it links to is the one derived from this token
+      (``successor_hash``), belongs to the same user and is still live.
+
+    Anything else is ``None``, as an unknown token always was. No second
+    session is minted for a replay: the caller rebuilds the same pair from the
+    token itself (``tokens.successor_refresh_token``).
+    """
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            """UPDATE user_sessions
+               SET revoked_at = NOW(), rotated_at = NOW()
+               WHERE refresh_token_hash = %s
+                 AND revoked_at IS NULL AND expires_at > NOW()
+               RETURNING id, user_id, rotated_at""",
+            (refresh_token_hash,),
+        )
+        spent = cur.fetchone()
+        if spent:
+            cur.execute(
+                """INSERT INTO user_sessions
+                       (user_id, refresh_token_hash, expires_at, user_agent, ip)
+                   SELECT a.id, %s, NOW() + make_interval(secs => %s), %s, %s
+                   FROM user_accounts a
+                   WHERE a.id = %s AND a.status = 'active'
+                   RETURNING id""",
+                (successor_hash, ttl_seconds, user_agent, ip, spent["user_id"]),
+            )
+            successor = cur.fetchone()
+            if successor:
+                cur.execute(
+                    "UPDATE user_sessions SET rotated_to = %s WHERE id = %s",
+                    (successor["id"], spent["id"]),
+                )
+            conn.commit()
+            return {
+                "user_id": spent["user_id"],
+                "rotated_at": spent["rotated_at"],
+                "replayed": False,
+            }
+        cur.execute(
+            """SELECT old.user_id, old.rotated_at
+               FROM user_sessions old
+               JOIN user_sessions new ON new.id = old.rotated_to
+               WHERE old.refresh_token_hash = %s
+                 AND old.rotated_at > NOW() - make_interval(secs => %s)
+                 AND new.refresh_token_hash = %s
+                 AND new.user_id = old.user_id
+                 AND new.revoked_at IS NULL AND new.expires_at > NOW()""",
+            (refresh_token_hash, grace_seconds, successor_hash),
+        )
+        replay = cur.fetchone()
+        conn.commit()
+        if not replay:
+            return None
+        return {"user_id": replay["user_id"], "rotated_at": replay["rotated_at"], "replayed": True}
+
+
+def token_pair(
+    account: dict[str, Any],
+    *,
+    refresh_token: str,
+    issued_at: int | None = None,
+    jti: str | None = None,
+) -> dict[str, Any]:
+    """The response every sign-in path returns, for a refresh token already stored."""
+    from robothor.auth import tokens
+
+    if account.get("status") != "active":
+        raise AccountInactiveError("account is not active")
+    access = tokens.issue_access_token(
+        str(account["id"]), account["tenant_id"], account["role"], issued_at=issued_at, jti=jti
+    )
+    return {
+        "access_token": access,
+        "refresh_token": refresh_token,
+        "user": {
+            "id": str(account["id"]),
+            "email": str(account["email"]),
+            "display_name": account["display_name"],
+            "role": account["role"],
+            "tenant_id": account["tenant_id"],
+        },
+    }
+
+
 def issue_for_account(
     account: dict[str, Any], *, user_agent: str | None = None, ip: str | None = None
 ) -> dict[str, Any]:
@@ -634,8 +742,8 @@ def issue_for_account(
 
     if account.get("status") != "active":
         raise AccountInactiveError("account is not active")
-    access = tokens.issue_access_token(str(account["id"]), account["tenant_id"], account["role"])
     raw_refresh, refresh_hash = tokens.new_refresh_token()
+    pair = token_pair(account, refresh_token=raw_refresh)
     create_session(
         str(account["id"]),
         refresh_hash,
@@ -643,17 +751,7 @@ def issue_for_account(
         user_agent=user_agent,
         ip=ip,
     )
-    return {
-        "access_token": access,
-        "refresh_token": raw_refresh,
-        "user": {
-            "id": str(account["id"]),
-            "email": str(account["email"]),
-            "display_name": account["display_name"],
-            "role": account["role"],
-            "tenant_id": account["tenant_id"],
-        },
-    }
+    return pair
 
 
 def revoke_user_sessions(user_id: str, *, except_refresh_hash: str | None = None) -> int:
