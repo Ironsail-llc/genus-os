@@ -1,3 +1,10 @@
+## [1.124.0](https://github.com/Ironsail-llc/genus-os/compare/v1.123.0...v1.124.0) (2026-11-01)
+
+### Features
+
+* **cli:** scaffold writes programmatic.json and a release workflow (GEN-296) ([#847](https://github.com/Ironsail-llc/genus-os/issues/847)) ([8ba2ab3](https://github.com/Ironsail-llc/genus-os/commit/8ba2ab32cde9512b6f6cea2967b3a4ce97a5be75))
+* **engine:** webhook receiver as its own process and chart component (GEN-276) ([#845](https://github.com/Ironsail-llc/genus-os/issues/845)) ([ca99c96](https://github.com/Ironsail-llc/genus-os/commit/ca99c96799a07fd687a466212ef2b55907f508d4)), closes [#846](https://github.com/Ironsail-llc/genus-os/issues/846)
+
 ## [1.123.0](https://github.com/Ironsail-llc/genus-os/compare/v1.122.0...v1.123.0) (2026-10-31)
 
 ### Features
