@@ -54,10 +54,20 @@ def _secure_mode(monkeypatch) -> None:
 # ─── Engine client: one pool, not one per call ───────────────────────
 
 
+def _share(monkeypatch, client: httpx.AsyncClient | None) -> None:
+    """Install *client* as the lifespan's, bound to the running loop, as the
+    lifespan itself does."""
+    import bridge_service
+
+    monkeypatch.setattr(bridge_service, "http_client", client)
+    monkeypatch.setattr(
+        bridge_service, "http_client_loop", asyncio.get_running_loop(), raising=False
+    )
+
+
 class TestTheEngineClientIsShared:
     @pytest.mark.asyncio
     async def test_two_engine_calls_use_the_lifespan_client(self, signing_key, monkeypatch):
-        import bridge_service
         from routers import _engine_client
 
         seen: list[str] = []
@@ -74,7 +84,7 @@ class TestTheEngineClientIsShared:
             return real_client(**kwargs)
 
         shared = real_client(transport=httpx.MockTransport(_handler), timeout=30.0)
-        monkeypatch.setattr(bridge_service, "http_client", shared)
+        _share(monkeypatch, shared)
         monkeypatch.setattr(_engine_client.httpx, "AsyncClient", _spy)
         try:
             first = await _engine_client.engine_request("GET", "/api/admin/tools")
@@ -91,7 +101,6 @@ class TestTheEngineClientIsShared:
     async def test_the_per_call_timeout_still_applies_on_the_shared_client(
         self, signing_key, monkeypatch
     ):
-        import bridge_service
         from routers import _engine_client
 
         timeouts: list[dict[str, Any]] = []
@@ -101,7 +110,7 @@ class TestTheEngineClientIsShared:
             return httpx.Response(200, json={})
 
         shared = httpx.AsyncClient(transport=httpx.MockTransport(_handler), timeout=30.0)
-        monkeypatch.setattr(bridge_service, "http_client", shared)
+        _share(monkeypatch, shared)
         try:
             await _engine_client.engine_request("GET", "/api/admin/tools", timeout=4.0)
         finally:
@@ -113,14 +122,13 @@ class TestTheEngineClientIsShared:
     async def test_a_dead_engine_on_the_shared_client_is_still_a_502(
         self, signing_key, monkeypatch
     ):
-        import bridge_service
         from routers import _engine_client
 
         def _refuse(request: httpx.Request) -> httpx.Response:
             raise httpx.ConnectError("connection refused")
 
         shared = httpx.AsyncClient(transport=httpx.MockTransport(_refuse))
-        monkeypatch.setattr(bridge_service, "http_client", shared)
+        _share(monkeypatch, shared)
         try:
             status, body = await _engine_client.engine_request("GET", "/api/admin/tools")
         finally:
@@ -133,7 +141,6 @@ class TestTheEngineClientIsShared:
     ):
         """A closed lifespan client is no client: the call falls back to a
         one-off client instead of raising ``RuntimeError`` into a 500."""
-        import bridge_service
         from routers import _engine_client
 
         # A mock transport, so the suite's network guard does not answer
@@ -142,7 +149,7 @@ class TestTheEngineClientIsShared:
             transport=httpx.MockTransport(lambda request: httpx.Response(200, json={}))
         )
         await closed.aclose()
-        monkeypatch.setattr(bridge_service, "http_client", closed)
+        _share(monkeypatch, closed)
 
         def _refuse(request: httpx.Request) -> httpx.Response:
             raise httpx.ConnectError("connection refused")
@@ -155,6 +162,45 @@ class TestTheEngineClientIsShared:
         )
         status, body = await _engine_client.engine_request("GET", "/api/admin/tools")
         assert (status, body) == (502, {"error": "engine unavailable"})
+
+    @pytest.mark.asyncio
+    async def test_a_call_from_another_event_loop_does_not_use_the_lifespan_client(
+        self, signing_key, monkeypatch
+    ):
+        """An httpx client belongs to the loop it was opened on. A ``def``
+        route that drives ``engine_request`` with ``asyncio.run`` in a worker
+        thread runs on a second loop, and must get a client of its own."""
+        from routers import _engine_client
+
+        shared_calls: list[str] = []
+
+        def _shared_handler(request: httpx.Request) -> httpx.Response:
+            shared_calls.append(str(request.url))
+            return httpx.Response(200, json={"via": "shared"})
+
+        shared = httpx.AsyncClient(transport=httpx.MockTransport(_shared_handler))
+        _share(monkeypatch, shared)
+
+        real_client = httpx.AsyncClient
+        monkeypatch.setattr(
+            _engine_client.httpx,
+            "AsyncClient",
+            lambda **kwargs: real_client(
+                transport=httpx.MockTransport(
+                    lambda request: httpx.Response(200, json={"via": "own"})
+                ),
+                **kwargs,
+            ),
+        )
+        try:
+            answer = await asyncio.to_thread(
+                lambda: asyncio.run(_engine_client.engine_request("GET", "/api/admin/tools"))
+            )
+        finally:
+            await shared.aclose()
+
+        assert answer == (200, {"via": "own"})
+        assert shared_calls == [], "the lifespan's client was used from another loop"
 
     @pytest.mark.asyncio
     async def test_the_lifespan_forgets_its_client_on_shutdown(self, monkeypatch):
@@ -172,12 +218,13 @@ class TestTheEngineClientIsShared:
 
         async with bridge_service.lifespan(bridge_service.app):
             assert bridge_service.http_client is not None
+            assert bridge_service.http_client_loop is asyncio.get_running_loop()
         assert bridge_service.http_client is None
+        assert bridge_service.http_client_loop is None
 
     @staticmethod
     def _flaky_shared(monkeypatch, error: Exception) -> list[str]:
         """A shared client whose first request fails with *error*, then answers."""
-        import bridge_service
 
         attempts: list[str] = []
 
@@ -188,7 +235,7 @@ class TestTheEngineClientIsShared:
             return httpx.Response(200, json={"ok": True})
 
         shared = httpx.AsyncClient(transport=httpx.MockTransport(_handler))
-        monkeypatch.setattr(bridge_service, "http_client", shared)
+        _share(monkeypatch, shared)
         return attempts
 
     @pytest.mark.asyncio

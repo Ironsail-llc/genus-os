@@ -143,3 +143,22 @@ def test_an_engine_refusing_the_bridge_is_a_502_not_the_callers_refusal(
     assert response.status_code == 502
     assert response.json()["error"].startswith("the engine refused the bridge's credentials")
     assert response.headers["cache-control"] == "no-store"
+
+
+@pytest.mark.parametrize("path", ["/api/agents/example-agent/tools", "/api/mcp/servers"])
+def test_the_engine_call_runs_on_the_server_loop_not_a_new_one(
+    controls_client_as_operator, fake_engine, path, monkeypatch
+):
+    """The routes await the engine on the loop serving the request. Starting a
+    second loop in a worker thread would hand the lifespan's pooled client,
+    which belongs to the server loop, to a loop it was never opened on."""
+    import asyncio
+
+    def _no_second_loop(*args, **kwargs):
+        raise AssertionError("a route started a second event loop")
+
+    monkeypatch.setattr(asyncio, "run", _no_second_loop)
+
+    response = controls_client_as_operator.get(path)
+
+    assert response.status_code == 200
