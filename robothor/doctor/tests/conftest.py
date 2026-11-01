@@ -114,6 +114,7 @@ def _isolated_settings(monkeypatch):
     a check would read a live workspace, a live owner email and a live token,
     and the result would depend on whose machine it is.
     """
+    from robothor.config import reset_config
     from robothor.settings import reset_settings
     from robothor.settings.aliases import DEPRECATED_ALIASES, reset_alias_warnings
 
@@ -132,6 +133,12 @@ def _isolated_settings(monkeypatch):
     monkeypatch.setenv("ROBOTHOR_WORKSPACE", tempfile.mkdtemp(prefix="genus-doctor-"))
     reset_alias_warnings()
     reset_settings()
+    # robothor.config caches its own snapshot of the environment (the database
+    # name among it). Built under the stripped environment above, it would
+    # outlive the test and point a later module's database guard at the
+    # default name, so it is dropped on both sides as settings are.
+    reset_config()
     yield
     reset_settings()
+    reset_config()
     reset_alias_warnings()
