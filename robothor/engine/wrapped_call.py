@@ -12,14 +12,75 @@ was then journalled as an uncertain write that fenced every later wait.
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
-__all__ = ["WRAPPER_TOOL", "inner_call", "is_read_only_call"]
+__all__ = [
+    "WRAPPER_TOOL",
+    "MalformedToolCallError",
+    "inner_call",
+    "is_read_only_call",
+    "unwrap",
+    "wrapped_arguments",
+]
 
 WRAPPER_TOOL = "tool_call"
+
+_HOW_TO_SEND = (
+    "send tool_call with name set to the tool to run and arguments as an object "
+    "of its parameters; tool_describe(name=...) gives the schema"
+)
+
+
+class MalformedToolCallError(ValueError):
+    """A ``tool_call`` the model built wrongly: a bad call it can fix, not a crash."""
+
+
+def wrapped_arguments(raw: Any) -> dict[str, Any] | None:
+    """The wrapped call's arguments as an object, or ``None`` if they are not one.
+
+    Models often serialise ``arguments`` as a JSON string instead of an object;
+    a string that parses to an object is the same call. Missing (or empty)
+    arguments mean none.
+    """
+    if raw is None or raw == "":
+        return {}
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+        except ValueError:
+            return None
+        return parsed if isinstance(parsed, dict) else None
+    return None
+
+
+def unwrap(args: Any) -> tuple[str, dict[str, Any]]:
+    """``(name, arguments)`` of the call a ``tool_call`` wraps.
+
+    Raises :class:`MalformedToolCallError` naming what is wrong with the wrapper
+    and how to send it, so admission and the handler refuse it the same way.
+    """
+    args = args if isinstance(args, dict) else {}
+    inner = args.get("name")
+    if not isinstance(inner, str) or not inner.strip():
+        raise MalformedToolCallError(
+            f"tool_call needs name: the tool to run, as a string; {_HOW_TO_SEND}"
+        )
+    inner = inner.strip()
+    if inner == WRAPPER_TOOL:
+        raise MalformedToolCallError(f"tool_call cannot wrap another tool_call; {_HOW_TO_SEND}")
+    arguments = wrapped_arguments(args.get("arguments"))
+    if arguments is None:
+        raise MalformedToolCallError(
+            f"tool_call arguments for {inner!r} must be an object (or a JSON string of one), "
+            f"not {type(args.get('arguments')).__name__}; {_HOW_TO_SEND}"
+        )
+    return inner, arguments
 
 
 def inner_call(name: str, arguments: Any = None) -> tuple[str, dict[str, Any]]:
@@ -35,8 +96,8 @@ def inner_call(name: str, arguments: Any = None) -> tuple[str, dict[str, Any]]:
     inner = args.get("name")
     if not isinstance(inner, str) or not inner.strip() or inner.strip() == WRAPPER_TOOL:
         return name, args
-    wrapped = args.get("arguments")
-    return inner.strip(), wrapped if isinstance(wrapped, dict) else {}
+    wrapped = wrapped_arguments(args.get("arguments"))
+    return inner.strip(), wrapped if wrapped is not None else {}
 
 
 def _read_only_by_arguments(name: str, arguments: dict[str, Any]) -> bool:

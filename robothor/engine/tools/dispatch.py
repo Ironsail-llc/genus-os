@@ -13,6 +13,7 @@ import httpx
 
 from robothor.constants import DEFAULT_TENANT
 from robothor.engine.tools.response_failure import http_status_failure, tool_response_failure
+from robothor.engine.wrapped_call import MalformedToolCallError
 
 if TYPE_CHECKING:
     from robothor.config import Config
@@ -378,6 +379,8 @@ def _describe_exception(e: BaseException) -> tuple[str, bool]:
     is reclassified — a KeyError from a cache lookup deep inside a handler is
     still a crash, and still says so.
     """
+    if isinstance(e, MalformedToolCallError):
+        return (str(e), False)
     if isinstance(e, KeyError) and e.args:
         key = e.args[0]
         if isinstance(key, str) and _ARG_NAME_RE.match(key):

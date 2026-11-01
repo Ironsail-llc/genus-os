@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any
 
 from robothor.engine.tools.constants import TOOLSEARCH_TOOLS
 from robothor.engine.tools.dispatch import get_agent_toolset, get_deferred_allowed
+from robothor.engine.wrapped_call import MalformedToolCallError, unwrap
 
 if TYPE_CHECKING:
     from robothor.engine.tools.dispatch import ToolContext
@@ -214,9 +215,10 @@ async def _tool_describe(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
 async def _tool_call(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.engine.tools.registry import get_registry
 
-    name = str(args.get("name", "")).strip()
-    if not name:
-        return {"error": "name is required"}
+    try:
+        name, tool_args = unwrap(args)
+    except MalformedToolCallError as e:
+        return {"error": str(e)}
     if name in TOOLSEARCH_TOOLS:
         return {"error": f"{name} cannot invoke itself or another meta-tool"}
     allowed = _allowed_names()
@@ -265,9 +267,6 @@ async def _tool_call(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             "error": f"tool '{name}' is not in your allow-list",
             "did_you_mean": _closest(name, allowed),
         }
-    tool_args = args.get("arguments", {})
-    if not isinstance(tool_args, dict):
-        return {"error": "arguments must be an object"}
 
     # The out-of-allow-list check above (against the _deferred_allowed set) is
     # what prevents escalation; we never reach registry.execute for a denied
