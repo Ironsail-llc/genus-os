@@ -397,3 +397,58 @@ def test_install_and_remove_run_off_the_event_loop() -> None:
     assert "install_plugin" in source
     install_body = source[source.index("async def install(") :]
     assert "_write(" in install_body.split("@router")[0]
+
+
+# ─── A read-only plugin directory ───────────────────────────────────────────
+# A deployment mounts ROBOTHOR_PLUGIN_DIR read-only into the engine and
+# installs through an install Job that mounts the volume itself. The engine's
+# own install and remove would get as far as pip and fail on the filesystem;
+# they say what to do instead, before anything is fetched.
+
+READ_ONLY = "plugin directory is read-only in this engine; install with the install Job"
+
+
+@pytest.fixture
+def read_only_plugin_dir(tmp_path, monkeypatch):
+    plugin_dir = tmp_path / ".plugins"
+    plugin_dir.mkdir()
+    monkeypatch.setenv("ROBOTHOR_PLUGIN_DIR", str(plugin_dir))
+    from robothor.settings import reset_settings
+
+    reset_settings()
+    with patch("robothor.engine.admin_plugins._writable", return_value=False):
+        yield plugin_dir
+
+
+def test_install_into_a_read_only_plugin_dir_is_refused(client, read_only_plugin_dir) -> None:
+    with patch.object(installer, "install") as install:
+        response = client.post("/api/admin/plugins/install", json={"name": "acme-tools"})
+    assert response.status_code == 409
+    assert READ_ONLY in response.json()["detail"]
+    assert install.call_count == 0
+
+
+def test_remove_from_a_read_only_plugin_dir_is_refused(client, read_only_plugin_dir) -> None:
+    with patch.object(installer, "remove") as remove:
+        response = client.post("/api/admin/plugins/acme-tools/remove", json={})
+    assert response.status_code == 409
+    assert READ_ONLY in response.json()["detail"]
+    assert remove.call_count == 0
+
+
+def test_a_dry_run_against_a_read_only_plugin_dir_still_plans(client, read_only_plugin_dir) -> None:
+    """A dry run writes nothing, so it still answers the plan."""
+    outcome = installer.InstallOutcome(plan=_plan(), installed=False, dry_run=True)
+    with patch.object(installer, "install", return_value=outcome) as install:
+        response = client.post(
+            "/api/admin/plugins/install", json={"name": "acme-tools", "dry_run": True}
+        )
+    assert response.status_code == 200
+    assert install.call_count == 1
+
+
+def test_the_writable_check_is_the_filesystem_answer(tmp_path) -> None:
+    from robothor.engine import admin_plugins
+
+    assert admin_plugins._writable(tmp_path) is True
+    assert admin_plugins._writable(tmp_path / "missing") is False

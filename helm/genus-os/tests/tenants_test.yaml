@@ -685,6 +685,206 @@ tests:
           path: spec.template.spec.containers[0].env
           content: {name: ROBOTHOR_PLUGIN_DIR, value: /workspace/.plugins}
 
+  # ─── Plugin directories are read-only to the engine ────────────────────────
+  # Code on the engine's import path runs inside the engine, with its database
+  # and signing credentials. The engine's agents can write its workspace, so a
+  # plugin dir (or a PYTHONPATH entry) on that workspace is mounted again,
+  # read-only, over the read-write workspace mount. Installs go through the
+  # install Job, which mounts the claim itself.
+  - it: a cell's plugin dir is mounted read-only over its writable workspace
+    template: engine/tenants.yaml
+    set:
+      tenants:
+        - id: acme-child-a
+          workspace:
+            persistence: {enabled: true}
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content: {name: workspace, mountPath: /workspace, readOnly: false}
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: workspace
+            mountPath: /workspace/.plugins
+            subPath: .plugins
+            readOnly: true
+
+  - it: an init container creates a cell's plugin dir as the engine's user before it starts
+    template: engine/tenants.yaml
+    set:
+      global.imageTag: v1.2.3
+      tenants:
+        - id: acme-child-a
+          workspace:
+            persistence: {enabled: true}
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: spec.template.spec.initContainers[?(@.name == "plugin-dirs")].command
+          value: [mkdir, -p, --, /workspace/.plugins]
+      - equal:
+          path: spec.template.spec.initContainers[?(@.name == "plugin-dirs")].image
+          value: ghcr.io/ironsail-llc/genus-os/python:v1.2.3
+      - equal:
+          path: spec.template.spec.initContainers[?(@.name == "plugin-dirs")].securityContext
+          value:
+            runAsNonRoot: true
+            runAsUser: 1000
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+      - equal:
+          path: spec.template.spec.initContainers[?(@.name == "plugin-dirs")].volumeMounts
+          value:
+            - name: workspace
+              mountPath: /workspace
+      - equal:
+          path: spec.template.spec.securityContext.fsGroup
+          value: 1000
+
+  - it: a cell's read-only plugin mount follows the workspace mount path
+    template: engine/tenants.yaml
+    set:
+      workspace.mountPath: /data/ws
+      workspace.persistence.enabled: true
+      tenants:
+        - id: acme-child-a
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: workspace
+            mountPath: /data/ws/.plugins
+            subPath: .plugins
+            readOnly: true
+      - equal:
+          path: spec.template.spec.initContainers[?(@.name == "plugin-dirs")].command
+          value: [mkdir, -p, --, /data/ws/.plugins]
+
+  - it: every import-path directory a cell's env puts on its workspace is read-only
+    template: engine/tenants.yaml
+    set:
+      tenants:
+        - id: acme-child-a
+          workspace:
+            persistence: {enabled: true}
+          env:
+            ROBOTHOR_PLUGIN_DIR: /workspace/custom-plugins
+            PYTHONPATH: /workspace/custom-plugins:/workspace/lib/:/opt/vendor
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: workspace
+            mountPath: /workspace/custom-plugins
+            subPath: custom-plugins
+            readOnly: true
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: workspace
+            mountPath: /workspace/lib
+            subPath: lib
+            readOnly: true
+      - notContains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content: {mountPath: /opt/vendor}
+          any: true
+      - equal:
+          path: spec.template.spec.initContainers[?(@.name == "plugin-dirs")].command
+          value: [mkdir, -p, --, /workspace/custom-plugins, /workspace/lib]
+
+  - it: a cell whose import path is its whole workspace is refused
+    template: engine/tenants.yaml
+    set:
+      tenants:
+        - id: acme-child-a
+          workspace:
+            persistence: {enabled: true}
+          env:
+            PYTHONPATH: /workspace/plugins/..
+    asserts:
+      - failedTemplate:
+          errorPattern: "is the writable workspace"
+
+  - it: a cell without a plugin dir gets no plugin init container or extra mount
+    template: engine/tenants.yaml
+    set:
+      tenants:
+        - id: acme-child-a
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - notContains:
+          path: spec.template.spec.initContainers
+          content: {name: plugin-dirs}
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content: {mountPath: /workspace/.plugins}
+          any: true
+
+  - it: the root engine's own plugin dir is mounted read-only too
+    template: engine/workload.yaml
+    documentIndex: 0
+    set:
+      workspace.persistence.enabled: true
+      engine.env.ROBOTHOR_PLUGIN_DIR: /workspace/.plugins
+      engine.env.PYTHONPATH: /workspace/.plugins
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: workspace
+            mountPath: /workspace/.plugins
+            subPath: .plugins
+            readOnly: true
+      - equal:
+          path: spec.template.spec.initContainers[?(@.name == "plugin-dirs")].command
+          value: [mkdir, -p, --, /workspace/.plugins]
+      - contains:
+          path: spec.template.spec.initContainers
+          content: {name: wait-for-migrations}
+          any: true
+
+  - it: the root engine's plugin dir is read-only with migrations off
+    template: engine/workload.yaml
+    documentIndex: 0
+    set:
+      migrations.enabled: false
+      workspace.persistence.enabled: true
+      engine.env.ROBOTHOR_PLUGIN_DIR: /workspace/.plugins
+      engine.env.PYTHONPATH: /workspace/.plugins
+    asserts:
+      - equal:
+          path: spec.template.spec.initContainers[?(@.name == "plugin-dirs")].command
+          value: [mkdir, -p, --, /workspace/.plugins]
+
+  - it: a root engine without a plugin dir is unchanged
+    template: engine/workload.yaml
+    documentIndex: 0
+    set:
+      workspace.persistence.enabled: true
+    asserts:
+      - notContains:
+          path: spec.template.spec.initContainers
+          content: {name: plugin-dirs}
+          any: true
+
   # ─── Per-cell provider credentials ─────────────────────────────────────────
   - it: a cell may read its own provider secret class
     template: engine/tenants.yaml
