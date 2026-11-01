@@ -113,7 +113,9 @@ def test_the_release_workflow_releases_the_wheel_and_its_checksums_on_a_tag(tmp_
     trigger = workflow.get("on", workflow.get(True))
     assert trigger["push"]["tags"] == ["v*"]
     job = workflow["jobs"]["release"]
-    assert job["runs-on"] == "ubuntu-26.04"
+    # The same runner the scaffold's ci.yml tests on.
+    ci = yaml.safe_load((root / ".github" / "workflows" / "ci.yml").read_text())
+    assert job["runs-on"] == ci["jobs"]["test-and-build"]["runs-on"] == "ubuntu-latest"
     assert job["permissions"] == {"contents": "write"}
     steps = " ".join(
         f"{s.get('run', '')} {s.get('with', {}).get('files', '')}" for s in job["steps"]
@@ -122,6 +124,18 @@ def test_the_release_workflow_releases_the_wheel_and_its_checksums_on_a_tag(tmp_
     assert "dist/*.whl" in steps
     assert "genus-plugin.yaml" in steps
     assert "GITHUB_REF_NAME" in steps
+
+
+def test_the_release_job_runs_the_tests_before_it_builds_the_wheel(tmp_path) -> None:
+    # A released version is never rebuilt, so a wheel whose tests fail must
+    # never get as far as being built.
+    root = scaffold.scaffold(NAME, tmp_path / NAME)
+    workflow = yaml.safe_load((root / ".github" / "workflows" / "release.yml").read_text())
+    runs = [str(s.get("run", "")) for s in workflow["jobs"]["release"]["steps"]]
+    tests = next(i for i, run in enumerate(runs) if "pytest" in run)
+    build = next(i for i, run in enumerate(runs) if "build --wheel" in run)
+    assert ".[test]" in runs[tests]
+    assert tests < build
 
 
 @pytest.mark.parametrize(
