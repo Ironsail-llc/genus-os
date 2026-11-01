@@ -268,6 +268,19 @@ _MCP_LIST_TOOLS_REFRESH_PARAM: dict[str, Any] = {
     ),
 }
 
+
+def _mcp_list_tools_properties() -> dict[str, Any]:
+    """``mcp_list_tools``'s parameters, outside ``get_engine_schemas`` for the size ratchet."""
+    from robothor.engine.feature_flags import config_cache_enabled
+
+    props: dict[str, Any] = {
+        "server_name": {"type": "string", "description": "Name of the MCP server"},
+    }
+    if config_cache_enabled():
+        props["refresh"] = dict(_MCP_LIST_TOOLS_REFRESH_PARAM)
+    return props
+
+
 # Long descriptions live out here: get_engine_schemas is already one of the
 # engine's largest functions and the size ratchet only lets it shrink.
 _WEB_SEARCH_DESCRIPTION = (
@@ -3800,22 +3813,11 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
             "description": "List tools available on a specific external MCP server.",
             "parameters": {
                 "type": "object",
-                "properties": {
-                    "server_name": {
-                        "type": "string",
-                        "description": "Name of the MCP server",
-                    },
-                },
+                "properties": _mcp_list_tools_properties(),
                 "required": ["server_name"],
             },
         },
     }
-    from robothor.engine.feature_flags import config_cache_enabled
-
-    if config_cache_enabled():
-        schemas["mcp_list_tools"]["function"]["parameters"]["properties"]["refresh"] = dict(
-            _MCP_LIST_TOOLS_REFRESH_PARAM
-        )
     schemas["mcp_call_tool"] = {
         "type": "function",
         "function": {

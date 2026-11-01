@@ -49,7 +49,10 @@ KNOWN_LARGE: dict[str, int] = {
     # them gained a `shadow_bundled` argument (writing a skill over a name the
     # platform ships is now asked for explicitly), and the cluster it travelled
     # out with paid 17 lines back 169 times over.
-    "tools/schemas.py::get_engine_schemas": 3248,
+    # 3248 -> 3239: `mcp_list_tools`'s parameters left for
+    # `_mcp_list_tools_properties`, which is what paid for its flag-gated
+    # `refresh` argument.
+    "tools/schemas.py::get_engine_schemas": 3239,
     # -29: every subsystem router mount extracted to _mount_subsystem_routers,
     # which is what made room for the /api/admin registration rather than
     # raising this number for it.

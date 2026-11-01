@@ -1471,10 +1471,7 @@ async def main() -> int:
 
     await _start_coding_jobs()  # resume interrupted Claude Code jobs, reap old ones
 
-    # Background, never awaited here: a slow MCP server must not delay startup.
-    from robothor.engine.task_registry import get_task_registry as _get_task_registry
-
-    _get_task_registry().spawn(_prewarm_mcp_adapters(), name="mcp-adapter-prewarm")
+    _spawn_mcp_prewarm()
 
     _init_fleet_capacity(config)
 
@@ -1750,9 +1747,7 @@ async def main() -> int:
     except Exception as e:
         logger.debug("Leader elector stop failed: %s", e)
 
-    # After everything that can dispatch a tool has stopped, or a late call
-    # would respawn a session nothing is left to stop.
-    await _shutdown_mcp_pool()
+    await _shutdown_mcp_pool()  # last: a later tool call would respawn a session
 
     # Cancel remaining tasks
     for task in pending:
@@ -1822,6 +1817,14 @@ async def _stop_coding_jobs() -> None:
             await manager.shutdown()
     except Exception as e:  # noqa: BLE001 - shutdown continues regardless
         logger.debug("Coding job shutdown failed: %s", e)
+
+
+def _spawn_mcp_prewarm() -> None:
+    """Start the adapter pre-warm in the background, never awaited: a slow MCP
+    server must not delay startup."""
+    from robothor.engine.task_registry import get_task_registry
+
+    get_task_registry().spawn(_prewarm_mcp_adapters(), name="mcp-adapter-prewarm")
 
 
 async def _prewarm_mcp_adapters() -> None:
