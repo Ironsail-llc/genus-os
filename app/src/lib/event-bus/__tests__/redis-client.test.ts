@@ -4,6 +4,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const mockXrevrange = vi.fn();
 const mockXread = vi.fn();
 const mockXlen = vi.fn();
+const mockXadd = vi.fn();
 const mockQuit = vi.fn();
 const mockConstructor = vi.fn();
 
@@ -13,6 +14,7 @@ vi.mock("ioredis", () => {
     xrevrange = mockXrevrange;
     xread = mockXread;
     xlen = mockXlen;
+    xadd = mockXadd;
     quit = mockQuit;
     constructor(...args: unknown[]) {
       mockConstructor(...args);
@@ -30,6 +32,7 @@ import {
   streamKey,
   closeRedis,
   resolveRedisConnection,
+  writeVital,
 } from "../redis-client";
 
 beforeEach(async () => {
@@ -242,5 +245,24 @@ describe("client construction", () => {
     } finally {
       vi.unstubAllEnvs();
     }
+  });
+});
+
+describe("writeVital", () => {
+  it("appends the metric to the vitals stream, capped, outside the event-bus streams", async () => {
+    mockXadd.mockResolvedValue("1-0");
+
+    await writeVital({ name: "LCP", value: 812.4, rating: "good", path: "/", view: "chat" });
+
+    expect(mockXadd).toHaveBeenCalledTimes(1);
+    const args = mockXadd.mock.calls[0];
+    expect(args.slice(0, 4)).toEqual(["robothor:events:vitals", "MAXLEN", "~", "10000"]);
+    expect(args[4]).toBe("*");
+    const fields: Record<string, string> = {};
+    for (let i = 5; i < args.length; i += 2) fields[args[i]] = args[i + 1];
+    expect(fields).toMatchObject({ name: "LCP", value: "812.4", rating: "good", path: "/", view: "chat" });
+    expect(fields.timestamp).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    // The live views never stream vitals: it is not one of the readable streams.
+    expect(isValidStream("vitals")).toBe(false);
   });
 });

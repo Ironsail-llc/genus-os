@@ -22,7 +22,8 @@ test("reviews a release, commits it, and restores a cancelled rollback", async (
     const request = route.request();
     const path = new URL(request.url()).pathname;
     let body: unknown = {};
-    if (["POST", "PATCH"].includes(request.method())) writes.push({ path, body: request.postDataJSON() });
+    // Web-vitals beacons are telemetry, not a write the page makes on the operator's behalf.
+    if (["POST", "PATCH"].includes(request.method()) && path !== "/api/vitals") writes.push({ path, body: request.postDataJSON() });
     if (path === "/api/auth/session") body = { user: { name: "Operator", email: "operator@example.com" }, role: "owner", expires: "2099-01-01T00:00:00Z" };
     else if (path === "/api/bridge/api/sales") body = { prospects: [], actions: [], jobs: [], budgets: [], settings: {} };
     else if (path === "/api/sales/deployment") body = { configured: true, settings_revision: selected ? 2 : 1, selected_release_id: selected, pending, history,

@@ -8,6 +8,8 @@
 
 import Redis from "ioredis";
 
+import type { Vital } from "@/lib/web-vitals";
+
 const STREAM_PREFIX = "robothor:events:";
 
 const VALID_STREAMS = [
@@ -181,6 +183,23 @@ export async function streamLengths(): Promise<
     }
   }
   return result;
+}
+
+const VITALS_STREAM = `${STREAM_PREFIX}vitals`;
+/** Roughly a day of a busy dashboard; XADD trims approximately, which is cheap. */
+const VITALS_MAXLEN = "10000";
+
+/**
+ * Append one web-vitals metric to its own capped stream. Deliberately not one
+ * of VALID_STREAMS: the live views have no use for it, and readers of the
+ * event bus never see it.
+ */
+export async function writeVital(vital: Vital): Promise<void> {
+  const fields: string[] = ["timestamp", new Date().toISOString()];
+  for (const [key, value] of Object.entries(vital)) {
+    if (value !== undefined) fields.push(key, String(value));
+  }
+  await getRedis().xadd(VITALS_STREAM, "MAXLEN", "~", VITALS_MAXLEN, "*", ...fields);
 }
 
 export function isValidStream(name: string): name is StreamName {

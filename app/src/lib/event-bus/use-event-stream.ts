@@ -39,10 +39,13 @@ export function useEventStream(options: UseEventStreamOptions = {}) {
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const connectRef = useRef<(() => void) | null>(null);
 
+  // Callers write the list inline, so compare it by contents: a new array with
+  // the same streams on every render must not reconnect on every render.
+  const streamsParam = streams.join(",");
+
   const connect = useCallback(() => {
     if (!enabled) return;
 
-    const streamsParam = streams.join(",");
     const es = new EventSource(`/api/events/stream?streams=${streamsParam}`);
     eventSourceRef.current = es;
 
@@ -80,7 +83,7 @@ export function useEventStream(options: UseEventStreamOptions = {}) {
       // Reconnect after 3 seconds
       reconnectTimeoutRef.current = setTimeout(() => connectRef.current?.(), 3000);
     };
-  }, [enabled, streams, maxEvents]);
+  }, [enabled, streamsParam, maxEvents]);
 
   useEffect(() => {
     connectRef.current = connect;

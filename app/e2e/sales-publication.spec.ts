@@ -12,7 +12,8 @@ test("uploads and reviews a claim packet, then confirms an uncertain publication
   await page.route("**/api/**", async (route) => {
     const request = route.request(); const url = new URL(request.url()); const path = url.pathname;
     let body: unknown = {}; let status = 200;
-    if (["POST", "PATCH"].includes(request.method())) writes.push({ path, body: request.postDataJSON() });
+    // Web-vitals beacons are telemetry, not a write the page makes on the operator's behalf.
+    if (["POST", "PATCH"].includes(request.method()) && path !== "/api/vitals") writes.push({ path, body: request.postDataJSON() });
     if (path === "/api/auth/session") body = { user: { name: "Operator", email: "operator@example.com" }, role: "owner", expires: "2099-01-01T00:00:00Z" };
     else if (path === "/api/bridge/api/sales") body = { prospects: [], actions: [], jobs: [], budgets: [], settings: {} };
     else if (path === "/api/bridge/api/sales/settings") body = { config: {}, revision: 0 };

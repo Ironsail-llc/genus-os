@@ -1,0 +1,12 @@
+{
+  "description": "Gzipped first-load JS budget per page route, in bytes. Checked in CI by scripts/bundle-budget.mjs. Raise a budget on purpose, in the pull request that needs it.",
+  "routes": {
+    "/": 403842,
+    "/_global-error": 142834,
+    "/_not-found": 176437,
+    "/account/autonomy": 188130,
+    "/account/security": 181467,
+    "/setup": 181678,
+    "/signin": 177721
+  }
+}

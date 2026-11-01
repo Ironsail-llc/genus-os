@@ -220,7 +220,11 @@ pnpm dev          # http://localhost:3004
 pnpm build        # production build
 npx vitest run    # unit tests (187 tests)
 npx playwright test  # E2E tests
+pnpm bundle:check # after a build: first-load JS per route vs bundle-budget.json
 ```
+
+Web vitals, the bundle budget and the chat perf spec (`e2e/perf.spec.ts`) are
+described in [Observability](../docs/OBSERVABILITY.md#dashboard-web-vitals).
 
 ## Keyboard Shortcuts
 

@@ -168,4 +168,37 @@ describe("useEventStream", () => {
 
     expect(result.current.events).toHaveLength(0);
   });
+  it("keeps one connection when the caller re-renders with an equal streams list", async () => {
+    // The caller writes `streams: ["agent"]` inline, so every render passes a
+    // new array with the same contents. That is not a reason to reconnect.
+    const { rerender } = renderHook(() => useEventStream({ streams: ["agent"], maxEvents: 20 }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10);
+    });
+    for (let i = 0; i < 5; i += 1) rerender();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10);
+    });
+
+    expect(constructedUrls).toEqual(["/api/events/stream?streams=agent"]);
+    expect(MockEventSource.lastInstance?.closed).toBe(false);
+  });
+
+  it("reconnects when the set of streams actually changes", async () => {
+    const { rerender } = renderHook(({ streams }) => useEventStream({ streams }), {
+      initialProps: { streams: ["agent"] },
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10);
+    });
+    rerender({ streams: ["agent", "crm"] });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10);
+    });
+
+    expect(constructedUrls).toEqual([
+      "/api/events/stream?streams=agent",
+      "/api/events/stream?streams=agent,crm",
+    ]);
+  });
 });
