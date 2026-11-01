@@ -235,6 +235,15 @@ EVIDENCE_SOURCES: dict[str, EvidenceSource] = {
         "session_key LIKE 'agent:%:user:%'",
         time_column="last_active_at",
     ),
+    # A credential the default chat agent stored because a person handed it
+    # over in chat: `vault_set` stamps `via: chat:<trigger>` on the row's
+    # metadata. Silence on enforce means nobody has handed one over, not that
+    # it works.
+    "ROBOTHOR_CREDENTIAL_INTAKE": EvidenceSource(
+        "vault_secrets",
+        "metadata->>'via' LIKE 'chat:%'",
+        time_column="updated_at",
+    ),
 }
 
 

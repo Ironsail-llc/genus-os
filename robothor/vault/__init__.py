@@ -11,7 +11,7 @@ Public API:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from robothor.constants import DEFAULT_TENANT
 from robothor.vault.crypto import get_master_key, init_master_key
@@ -19,6 +19,7 @@ from robothor.vault.dal import (
     delete_secret,
     export_secrets,
     get_secret,
+    get_secret_metadata,
     list_keys,
     set_secret,
 )
@@ -35,7 +36,12 @@ def get(key: str, *, tenant_id: str = DEFAULT_TENANT) -> str | None:
 
 
 def set(  # noqa: A001
-    key: str, value: str, *, category: str = "credential", tenant_id: str = DEFAULT_TENANT
+    key: str,
+    value: str,
+    *,
+    category: str = "credential",
+    tenant_id: str = DEFAULT_TENANT,
+    metadata: dict[str, Any] | None = None,
 ) -> None:
     """Encrypt and store a secret.
 
@@ -47,7 +53,19 @@ def set(  # noqa: A001
     one door every write goes through.
     """
     master_key = get_master_key()
-    set_secret(normalise_key(key), value, master_key, category=category, tenant_id=tenant_id)
+    set_secret(
+        normalise_key(key),
+        value,
+        master_key,
+        category=category,
+        metadata=metadata,
+        tenant_id=tenant_id,
+    )
+
+
+def get_metadata(key: str, *, tenant_id: str = DEFAULT_TENANT) -> dict[str, Any] | None:
+    """A row's audit metadata (who stored it, how), never its value."""
+    return get_secret_metadata(normalise_key(key), tenant_id=tenant_id)
 
 
 def delete(key: str, *, tenant_id: str = DEFAULT_TENANT) -> bool:
@@ -68,4 +86,4 @@ def export_env(*, tenant_id: str = DEFAULT_TENANT) -> dict[str, str]:
     return export_secrets(master_key, tenant_id=tenant_id)
 
 
-__all__ = ["get", "set", "delete", "list", "export_env", "init_master_key"]
+__all__ = ["get", "set", "get_metadata", "delete", "list", "export_env", "init_master_key"]

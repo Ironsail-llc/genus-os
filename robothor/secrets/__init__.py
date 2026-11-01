@@ -142,6 +142,33 @@ class ResolvedSecret(NamedTuple):
 #: one of their writes invisible to a running engine until a restart.
 _vault_cache: dict[tuple[str, str], tuple[str | None, bool, float]] = {}
 
+#: When a reader was last served each credential from the vault, as wall-clock
+#: epoch seconds, keyed by ``(tenant, env name)``. Answers "is the key I stored
+#: actually being used?" (``vault_get``'s ``last_resolved_at``) without a
+#: database write on a hot read path: an in-process stamp, so it describes THIS
+#: process's readers and starts empty at boot. Keyed by the name the READER
+#: asked for (``GITHUB_TOKEN``), so a question about a vault row looks across
+#: every name that resolves to it. Status reads and the ``vault_test`` probe do
+#: not stamp it. A write clears the stamps of the key it wrote, and only those:
+#: the cache reset that every write triggers must not erase every other
+#: credential's record of use.
+_last_resolved: dict[tuple[str, str], float] = {}
+
+
+def last_resolved_at(name: str, *, tenant_id: str = DEFAULT_TENANT) -> float | None:
+    """When this process last served ``name`` from the vault, or None."""
+    return _last_resolved.get((tenant_id, name))
+
+
+def forget_last_resolved(*names: str, tenant_id: str = DEFAULT_TENANT) -> None:
+    """Drop the usage stamps for ``names`` (all of them when none are given)."""
+    if not names:
+        _last_resolved.clear()
+        return
+    for name in names:
+        _last_resolved.pop((tenant_id, name), None)
+
+
 #: How long a cached HIT is served. Short, because this process is not the only
 #: writer: ``genus vault set``, ``genus secrets migrate``, ``genus channel add``
 #: and the setup wizard are all separate processes, and on ``main`` a CLI write
@@ -276,6 +303,7 @@ def resolve_secret(
     vault_key: str | None = None,
     tenant_id: str = DEFAULT_TENANT,
     live: bool = False,
+    stamp: bool = True,
 ) -> ResolvedSecret:
     """Resolve one credential and report which layer answered.
 
@@ -294,6 +322,8 @@ def resolve_secret(
             that will act on "missing" (generate a key, for instance) and must
             not act on a five-minute-old verdict about a vault that may have
             recovered.
+        stamp: record this as a use in :func:`last_resolved_at`. False for a
+            status read, which reports on a credential without using it.
     """
     # Built from the NAME, before anything is fetched. Every log line below
     # goes through it, so the only expression that reaches a logger is a field
@@ -311,12 +341,16 @@ def resolve_secret(
             label.resolved_from_env(bootstrap=True)
             return ResolvedSecret(from_env, "env")
         from_vault, available = _vault_read(name, vault_key, tenant_id, live=live)
+        if from_vault is not None and stamp:
+            _last_resolved[(tenant_id, name)] = time.time()
         return _absent_or(label, from_vault, available)
 
     # Application credential: the vault is the store the operator and the
     # assistant manage, so a row there beats whatever the box booted with.
     from_vault, available = _vault_read(name, vault_key, tenant_id, live=live)
     if from_vault is not None:
+        if stamp:
+            _last_resolved[(tenant_id, name)] = time.time()
         label.resolved_from_vault(ahead_of_env=True)
         return ResolvedSecret(from_vault, "vault")
 

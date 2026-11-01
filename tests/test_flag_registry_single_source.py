@@ -82,6 +82,11 @@ HISTORICAL_GOVERNED_FLAGS: frozenset[str] = frozenset(
         # Ambient follow-ups ship at `off` and move to `observe` then
         # `enforce` from Controls, for the same reason as the three above.
         "ROBOTHOR_AMBIENT",
+        # Added 2026-10-31 with credential intake. Governed because it GRANTS
+        # the vault tools to the chat agent on an owner's hand-over, and an
+        # operator who sees a would-allow line for the wrong caller must be
+        # able to move it back to off from Controls, not from /etc.
+        "ROBOTHOR_CREDENTIAL_INTAKE",
     }
 )
 

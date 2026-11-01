@@ -454,6 +454,29 @@ def telegram_role_gates_mode() -> TelegramRoleGatesMode:
     return "off"
 
 
+CredentialIntakeMode = Literal["off", "observe", "enforce"]
+_VALID_CREDENTIAL_INTAKE_MODES = frozenset(("off", "observe", "enforce"))
+
+
+def credential_intake_mode() -> CredentialIntakeMode:
+    """Whether an owner can hand the default chat agent a credential in chat.
+
+    Single env var ``ROBOTHOR_CREDENTIAL_INTAKE``. ``"off"`` (default) keeps
+    the vault tools behind the manifest's ``v2.credentials: operator`` tier
+    only. ``"observe"`` still refuses, and logs each call ``"enforce"`` would
+    have allowed. ``"enforce"`` also allows an owner or admin typing to the
+    default chat agent in a top-level human chat run (see
+    ``tools/handlers/vault.py``).
+
+    An unrecognised value lands on ``"off"``: this flag GRANTS access, so a
+    typo must not open the vault.
+    """
+    raw = _resolve_raw("ROBOTHOR_CREDENTIAL_INTAKE", "off").strip().lower()
+    if raw in _VALID_CREDENTIAL_INTAKE_MODES:
+        return raw  # type: ignore[return-value]
+    return "off"
+
+
 DataScopingMode = Literal["off", "observe", "enforce"]
 _VALID_DATA_SCOPING_MODES = frozenset(("off", "observe", "enforce"))
 

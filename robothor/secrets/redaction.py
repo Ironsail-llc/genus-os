@@ -33,13 +33,21 @@ from __future__ import annotations
 
 import json
 import re
+import threading
+from collections import OrderedDict
 from typing import Any
 
 __all__ = [
+    "MAX_KNOWN_VALUES",
+    "MIN_KNOWN_VALUE_CHARS",
     "PLACEHOLDER",
     "SECRET_TOOL_ARGUMENTS",
     "cut_private_input",
+    "forget_known_values",
+    "known_value_count",
     "redact",
+    "redact_known_value",
+    "register_known_value",
     "redact_assistant_turn",
     "redact_message",
     "redact_tool_arguments",
@@ -320,6 +328,74 @@ _SHAPES = (
 _CREDENTIAL_SHAPED = re.compile("|".join(_SHAPES), re.IGNORECASE)
 
 
+# ── known values ─────────────────────────────────────────────────────────────
+#
+# The exception to "shapes, not values" above, and a narrow one: a credential
+# this process has been HANDED and stored. A weather or maps key is often 32
+# bare hex characters with no prefix, so the shape pass cannot see it; once the
+# vault holds it the process knows the exact characters, and every later
+# ``redact`` takes them out. Registered by ``vault_set`` only.
+
+#: Shorter than this is not registered: a short value is an ordinary word, and
+#: redacting it would eat text out of every log line on the instance.
+MIN_KNOWN_VALUE_CHARS = 8
+
+#: How many values are held. Oldest first out. The process already holds each
+#: one in the vault cache; this bounds how many it holds HERE.
+MAX_KNOWN_VALUES = 256
+
+_known_lock = threading.Lock()
+_known: OrderedDict[str, str] = OrderedDict()
+#: Longest first, so a value that contains another is replaced whole. Rebuilt
+#: on every registration; read without the lock as an immutable snapshot.
+_known_snapshot: tuple[tuple[str, str], ...] = ()
+
+
+def redact_known_value(text: str, value: str, replacement: str) -> str:
+    """``text`` with every occurrence of ``value`` replaced."""
+    if not text or not value:
+        return text
+    return text.replace(value, replacement)
+
+
+def register_known_value(value: str, *, fingerprint: str) -> bool:
+    """Redact ``value`` from every later :func:`redact` call, as its fingerprint.
+
+    Returns False, and registers nothing, for a value under
+    :data:`MIN_KNOWN_VALUE_CHARS` once stripped.
+    """
+    global _known_snapshot  # noqa: PLW0603
+    cleaned = (value or "").strip()
+    if len(cleaned) < MIN_KNOWN_VALUE_CHARS:
+        return False
+    with _known_lock:
+        _known.pop(cleaned, None)
+        _known[cleaned] = f"<redacted:{fingerprint}>"
+        while len(_known) > MAX_KNOWN_VALUES:
+            _known.popitem(last=False)
+        _known_snapshot = tuple(sorted(_known.items(), key=lambda kv: -len(kv[0])))
+    return True
+
+
+def forget_known_values() -> None:
+    """Drop every registered value. For the suite."""
+    global _known_snapshot  # noqa: PLW0603
+    with _known_lock:
+        _known.clear()
+        _known_snapshot = ()
+
+
+def known_value_count() -> int:
+    return len(_known_snapshot)
+
+
+def _redact_known(text: str) -> str:
+    for value, replacement in _known_snapshot:
+        if value in text:
+            text = text.replace(value, replacement)
+    return text
+
+
 def redact(text: str) -> str:
     """``text`` with every credential-shaped run replaced by :data:`PLACEHOLDER`.
 
@@ -352,7 +428,8 @@ def redact(text: str) -> str:
         # it goes — as a plain placeholder. Truncating a log at an attacker's
         # ``/secure`` and replacing the tail with an advisory sentence was the
         # same injection surface as the payment prose.
-        named = _ASSIGNMENT.sub(_redact_assignment, cut_private_input(text))
+        known = _redact_known(text) if _known_snapshot else text
+        named = _ASSIGNMENT.sub(_redact_assignment, cut_private_input(known))
         return _CREDENTIAL_SHAPED.sub(PLACEHOLDER, named)
     except Exception:  # noqa: BLE001 - pragma: no cover - a regex that cannot fail
         # If this ever somehow raises, printing nothing beats printing a token.
