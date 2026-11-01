@@ -29,6 +29,7 @@ present; do not treat an instance path as a shipped security control.
 | Writing the release note for a change you are shipping | `changelog.d/README.md` + `docs/DOC_MAINTENANCE.md` |
 | Deploying (compose upgrade, systemd units, Helm) | `docs/deployment.md` |
 | Diagnosing an instance | `genus doctor`; `docs/deployment.md` (Diagnostics) |
+| Why a turn is slow, measuring it, the performance settings | `docs/PERFORMANCE.md` |
 | What a setting does | `docs/configuration.md` (the tour) + `docs/reference/configuration.md` (generated, every setting) |
 | What a command does | `docs/reference/cli.md` (generated from the parser) |
 | Runbooks for the first instance only | `docs/instance/README.md` |

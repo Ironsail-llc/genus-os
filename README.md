@@ -18,7 +18,7 @@ Your infrastructure. Your data. Your rules.
   <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.11+-blue.svg" alt="Python 3.11+"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green.svg" alt="MIT License"></a>
   <a href="https://github.com/Ironsail-llc/genus-os/actions/workflows/ci.yml"><img src="https://github.com/Ironsail-llc/genus-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <img src="https://img.shields.io/badge/tests-11%2C000%2B%20passing-brightgreen.svg" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-19%2C000%2B%20passing-brightgreen.svg" alt="Tests">
 </p>
 
 ---
@@ -213,6 +213,7 @@ Useful operating references:
 - [Entity Kernel treasury boundary](docs/ENTITY_KERNEL_TREASURY.md)
 - [Payment-data boundary](docs/compliance/PAYMENT_DATA.md)
 - [Security controls inventory](docs/compliance/SECURITY_CONTROLS.md)
+- [Performance: turn timing, traces and the performance settings](docs/PERFORMANCE.md)
 
 Genus OS does not store raw PAN or CVC/CVV for either customers or the
 organization's own cards. Customer flows use payment-provider tokens; Entity
@@ -342,7 +343,7 @@ genus engine history        # Recent runs with status and duration
 python scripts/validate_agents.py --agent <id>  # Validate manifest
 ```
 
-The engine provides **110+ tools** — CRM operations, memory search, file I/O, shell execution, web fetch, task coordination, git operations, voice calling, desktop automation, browser control, inter-agent messaging, MCP client calls, experiment/benchmark tracking, and more. Each agent sees only the tools in its `tools_allowed` list.
+The engine provides **240+ built-in tools** — CRM operations, memory search, file I/O, shell execution, web fetch, task coordination, git operations, voice calling, desktop automation, browser control, inter-agent messaging, MCP client calls, experiment/benchmark tracking, and more. Each agent sees only the tools in its `tools_allowed` list.
 
 ### Agent Engine v2
 
@@ -687,7 +688,7 @@ claim that every possible side effect is captured.
                          │
 ┌────────────────────────┴────────────────────────────────┐
 │  Agent Engine                                            │
-│  YAML manifests · workflow pipelines · 110+ tools        │
+│  YAML manifests · workflow pipelines · 240+ tools        │
 │  APScheduler · Redis Stream hooks · Telegram delivery    │
 │  v2: guardrails · planning · checkpoints · telemetry    │
 │  sub-agents · analytics · Nightwatch                     │
@@ -722,7 +723,7 @@ claim that every possible side effect is captured.
 robothor/
 ├── robothor/               # Python package — the intelligence layer
 │   ├── engine/             # Agent Engine: runner, tools, scheduler, hooks, workflows,
-│   │   ├── tools/          #   110+ tools organized by handler module (26 handlers)
+│   │   ├── tools/          #   240+ built-in tools, organized by handler module (49 handlers)
 │   │   └── tests/          #   analytics, guardrails, planner, telemetry, sub-agents
 │   ├── memory/             # Two-tier memory, facts, entities, lifecycle
 │   ├── rag/                # Semantic search, reranking, context assembly
