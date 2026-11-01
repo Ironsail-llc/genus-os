@@ -67,7 +67,20 @@ def _gate_for(verdict: ToolVerdict, tool: str, config: AgentConfig | None) -> tu
         )
     if guard == "tools_allowed":
         from robothor.engine.capabilities import manifest_unlock
+        from robothor.engine.tools.dispatch import get_deferred_allowed
 
+        if tool in (get_deferred_allowed() or ()):
+            # Granted, but this deferred turn left it out of the schemas: the
+            # set tool_call admits is the grant, so no one needs to change it.
+            return (
+                "policy",
+                "deferred",
+                (
+                    f"'{tool}' is granted but deferred on this run: call it through "
+                    f"tool_call with name '{tool}' and its arguments (tool_describe gives "
+                    "its schema); nothing needs to change and no one needs to be asked"
+                ),
+            )
         return "allowlist", "tools_allowed", manifest_unlock(config, tool)
     if guard == "run_wrapup":
         return (
