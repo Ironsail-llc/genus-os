@@ -102,8 +102,11 @@ const VIEW_MODULES: Array<[path: string, exportName: string, name: string]> = [
   ["@/components/views/settings-view", "SettingsView", "settings"],
 ];
 
-// A slow machine can take longer than the default second to import a view.
-const CHUNK_WAIT = { timeout: 5000 };
+// A slow machine can take longer than the default second to import a view;
+// with every dashboard slice in the shell, a busy full run takes more than 5 s.
+const CHUNK_WAIT = { timeout: 10_000 };
+// A test waits on up to two chunks, so it needs more than one CHUNK_WAIT.
+const TEST_TIMEOUT = { timeout: 30_000 };
 
 async function renderShellAt(search: string) {
   window.history.replaceState(null, "", `/${search}`);
@@ -111,7 +114,7 @@ async function renderShellAt(search: string) {
   return render(<AppShell />);
 }
 
-describe("AppShell — views load on first visit", () => {
+describe("AppShell — views load on first visit", TEST_TIMEOUT, () => {
   beforeEach(() => {
     vi.resetModules();
     lazy.loaded = [];
