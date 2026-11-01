@@ -254,6 +254,20 @@ upgrade that first adds the label, the root Service has no endpoints until
 the new root pod is ready. To avoid that gap, upgrade the chart first and add
 cells afterwards.
 
+Because that selector has no tenant, it also matches every cell's pods, so
+`kubectl exec deploy/<fullname>-engine` or `kubectl logs deploy/<fullname>-engine`
+can land in a cell's engine and act as that tenant. Once `tenants` is
+non-empty, pick the root engine's pod by its label instead:
+
+```sh
+pod="$(kubectl get pod --namespace <namespace> -o name \
+  -l app.kubernetes.io/instance=<release>,app.kubernetes.io/component=engine,genus-os/tenant=<rootTenant>)"
+kubectl exec "$pod" --namespace <namespace> -- genus doctor
+```
+
+A cell's own Deployment selects on its tenant, so
+`deploy/<fullname>-engine-<id>` is safe.
+
 **Tenant identity.** Every engine pod gets `ROBOTHOR_TENANT_ID` and
 `ROBOTHOR_DEFAULT_TENANT` set to the same value: the cell's `id`, or
 `global.rootTenant` on the root engine. The two must agree in one process
