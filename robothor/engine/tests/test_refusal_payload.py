@@ -567,6 +567,20 @@ class TestADeferredToolIsNotAnAllowlistRefusal:
         assert "operator" not in verdict.unlock
 
     @pytest.mark.asyncio
+    async def test_the_unlock_promises_only_what_this_gate_knows(self, flag_on) -> None:
+        """This gate knows the tool is in the deferred grant, so the manifest
+        needs no change. It cannot know what admission, hooks, guardrails or
+        RBAC will say to the wrapped call, so it must not promise that no one
+        needs to be asked: rule 22 relays this sentence to the person."""
+        verdict = await _admit_deferred(
+            {"read_file", "write_file", "tool_call"},
+            tool="write_file",
+            allowed_tool_set=frozenset({"read_file"}),
+        )
+        assert "manifest" in verdict.unlock
+        assert "asked" not in verdict.unlock
+
+    @pytest.mark.asyncio
     async def test_a_tool_outside_the_grant_is_still_an_allowlist_refusal(self, flag_on) -> None:
         verdict = await _admit_deferred(
             {"read_file", "tool_call"}, tool="write_file", allowed_tool_set=frozenset({"read_file"})
