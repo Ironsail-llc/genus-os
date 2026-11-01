@@ -3795,18 +3795,21 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
                         "type": "string",
                         "description": "Name of the MCP server",
                     },
-                    "refresh": {
-                        "type": "boolean",
-                        "description": (
-                            "Ask the server again instead of returning the tool "
-                            "list cached for its current session."
-                        ),
-                    },
                 },
                 "required": ["server_name"],
             },
         },
     }
+    from robothor.engine.feature_flags import config_cache_enabled
+
+    if config_cache_enabled():
+        schemas["mcp_list_tools"]["function"]["parameters"]["properties"]["refresh"] = {
+            "type": "boolean",
+            "description": (
+                "Ask the server again instead of returning the tool "
+                "list cached for its current session."
+            ),
+        }
     schemas["mcp_call_tool"] = {
         "type": "function",
         "function": {
