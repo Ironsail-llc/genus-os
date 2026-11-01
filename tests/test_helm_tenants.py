@@ -17,6 +17,7 @@ Helm job builds them, the Python job does not.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -372,3 +373,19 @@ def test_the_plugin_dir_init_step_accepts_an_ordinary_installed_tree(tmp_path: P
     command = _plugin_dirs_command(str(tmp_path))
     result = subprocess.run(command, capture_output=True, text=True, check=False)
     assert result.returncode == 0, result.stderr
+
+
+def test_the_plugin_dir_init_step_refuses_a_hardlinked_file(tmp_path: Path) -> None:
+    """``.plugins/somepkg/__init__.py`` hardlinked to a scratch file shares one
+    inode, so writing the scratch name through the read-write workspace mount
+    changes the code Python imports; the engine image installs with
+    ``UV_LINK_MODE=copy``, so a legitimate install leaves one link per file."""
+    (tmp_path / "scratch").mkdir()
+    scratch = tmp_path / "scratch" / "x.py"
+    scratch.write_text("")
+    (tmp_path / ".plugins" / "somepkg").mkdir(parents=True)
+    os.link(scratch, tmp_path / ".plugins" / "somepkg" / "__init__.py")
+    command = _plugin_dirs_command(str(tmp_path))
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    assert result.returncode != 0
+    assert "hardlinked" in result.stderr
