@@ -371,7 +371,7 @@ async def _publish(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     base = str(args.get("base") or "").strip() or await repos.default_branch(repo)
     details = {"job_id": job_id, "remote": remote.slug, "branch": branch, "base": base}
     try:
-        await publish.push_branch(repo, branch, remote, token)
+        await publish.push_branch(repo, branch, commit, remote, token)
         pr = await publish.open_draft_pr(
             remote,
             head=branch,

@@ -277,7 +277,7 @@ repository that is not on the host yet to a draft pull request:
 | Tool | Purpose |
 |---|---|
 | `claude_code_repo_prepare` | Clone an allowlisted remote (`repo`: `owner/repo` on GitHub, or a clone URL) into `ROBOTHOR_CODING_WORKSPACE/<owner>/<repo>`, or fetch and fast-forward the clone that is already there. Returns the `repo_path` to give `claude_code_start`, the default branch and `head_sha`, and whether it `cloned`. |
-| `claude_code_publish` | Push a `done` job's `genus/cc-<id>` branch (verify passed, a commit made) to the clone's origin and open a **draft** pull request through the GitHub REST API: `job_id`, `title`, optional `body`, `ticket` (appended to the title) and `base` (default: the remote's default branch). Returns `pr_url`. Owner or admin only; never merges. |
+| `claude_code_publish` | Push the commit that passed a `done` job's verify to its `genus/cc-<id>` branch on the clone's origin (refused if the branch has moved since) and open a **draft** pull request through the GitHub REST API: `job_id`, `title`, optional `body`, `ticket` (appended to the title) and `base` (default: the remote's default branch). Returns `pr_url`. Owner or admin only; never merges. |
 
 Use `claude_code_repo_prepare` when the code lives in a remote and
 `ROBOTHOR_CODING_WORKSPACE` is set; use a `repo_path` under
@@ -299,6 +299,13 @@ needs no `gh` binary.
   These git calls run with `core.hooksPath=/dev/null` and `core.fsmonitor=false`,
   like every other engine-side git call, so no repository hook runs with the
   token. `claude_code_publish` opens pull requests on GitHub only.
+- **What is pushed, and where.** `claude_code_publish` pushes the verified
+  commit itself (`<sha>:refs/heads/genus/cc-<id>`) and refuses when the branch
+  no longer points at it: another job's shell can write `genus/*` refs, so the
+  tip at publish time is not trusted. Every fetch URL and every push URL of the
+  clone's origin (`pushurl`, several `url` entries, `pushInsteadOf` rewrites)
+  must be the same `ROBOTHOR_CODING_REMOTES` entry, checked again just before
+  the push.
 - **The clone path.** A directory already at `<workspace>/<owner>/<repo>` that
   is not a clone is refused and left alone; a failed clone removes only the
   directory it created.
@@ -309,6 +316,9 @@ needs no `gh` binary.
 - **Where a job's private home goes.** With `ROBOTHOR_CODING_WORKSPACE` set,
   a job's `HOME`/`CLAUDE_CONFIG_DIR` is `<workspace>/.home/<job>`, so it lands on
   the writable coding volume even where the service user's home is read-only.
+  Every job runs as the same user, so `<workspace>/.home` is on every job's
+  sandbox `denyRead` list and its `Read`/`Edit`/`Write` deny rules, as
+  `~/.config` is: no job reads another job's home or transcripts.
 - **Progress.** While a run waits on a job, every line the job reports
   (`recent` in the status view) also reaches that run's live status as a
   `coding_progress` event.

@@ -255,14 +255,29 @@ async def default_branch(dest: Path) -> str:
 
 
 async def origin_remote(repo: Path) -> RemoteSpec:
-    """The allowlisted remote ``repo``'s origin points at, or ``RepoError``."""
-    code, url = await git(repo, "remote", "get-url", "origin", check=False)
-    if code != 0 or not url:
+    """The allowlisted remote ``repo``'s origin points at, or ``RepoError``.
+
+    Every fetch URL and every push URL (``pushurl``, several ``url`` entries,
+    ``pushInsteadOf`` rewrites: what ``git push origin`` really reaches) must be
+    that same allowlisted repository.
+    """
+    code, fetch = await git(repo, "remote", "get-url", "--all", "origin", check=False)
+    urls = [u for u in fetch.splitlines() if u.strip()]
+    if code != 0 or not urls:
         raise RepoError(
             f"{repo} has no origin remote; only clones of a ROBOTHOR_CODING_REMOTES entry "
             "(claude_code_repo_prepare) can be published"
         )
-    return allowed_remote(url)
+    _, push = await git(repo, "remote", "get-url", "--push", "--all", "origin")
+    urls += [u for u in push.splitlines() if u.strip()]
+    spec = allowed_remote(urls[0])
+    for url in urls[1:]:
+        if allowed_remote(url).key != spec.key:
+            raise RepoError(
+                f"{repo}'s origin reaches both {spec.slug} and {parse_remote(url).slug}; "
+                "each of its fetch and push URLs must be the same ROBOTHOR_CODING_REMOTES entry"
+            )
+    return spec
 
 
 async def ensure_repo(raw: str, *, token: str) -> PreparedRepo:

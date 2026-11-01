@@ -37,6 +37,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from robothor.engine.coding.env import job_homes_root
 from robothor.engine.coding.runner import MODES
 
 __all__ = [
@@ -152,6 +153,9 @@ def secret_paths(home: Path, workspace: Path | None) -> list[str]:
     found = [str(home / rel) for rel in _HOME_SECRETS]
     if workspace is not None:
         found += [str(workspace / rel) for rel in _WORKSPACE_SECRETS]
+    homes = job_homes_root()
+    if homes is not None:
+        found.append(str(homes))  # every job's private home, its own included
     found += list(_SYSTEM_SECRETS)
     return list(dict.fromkeys(found))
 

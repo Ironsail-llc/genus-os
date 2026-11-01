@@ -89,6 +89,11 @@ def remote(tmp_path, monkeypatch, coding_env):
     monkeypatch.setenv("ROBOTHOR_CODING_WORKSPACE", str(tmp_path / "coding"))
     monkeypatch.setenv("ROBOTHOR_CODING_REMOTES", url)
     monkeypatch.setenv("ROBOTHOR_CODING_PR_ENABLED", "true")
+    # The fake runner commits with this process's git, in a fresh clone with no
+    # user config: a CI runner has no global identity to fall back on.
+    for role in ("AUTHOR", "COMMITTER"):
+        monkeypatch.setenv(f"GIT_{role}_NAME", "Alice Example")
+        monkeypatch.setenv(f"GIT_{role}_EMAIL", "agent@example.com")
     from robothor.engine.coding import repos
 
     monkeypatch.setattr(repos, "github_token", lambda tenant_id: TOKEN)
@@ -497,3 +502,89 @@ async def test_an_unverified_job_refusal_is_audited(remote, github, audit):
         jobs_mod.use_manager(None)
     denied = _denials(audit)
     assert len(denied) == 1 and "done" in denied[0]["details"]["reason"]
+
+
+# ── review round 4 ────────────────────────────────────────────────────
+
+
+def _move_branch(repo: Path, branch: str) -> str:
+    """What another job's shell can do: point the job's branch at an unverified commit."""
+    tree = git(repo, "rev-parse", f"refs/heads/{branch}^{{tree}}")
+    parent = git(repo, "rev-parse", f"refs/heads/{branch}")
+    moved = git(repo, "commit-tree", tree, "-p", parent, "-m", "unverified")
+    git(repo, "update-ref", f"refs/heads/{branch}", moved)
+    return moved
+
+
+async def test_publish_refuses_a_branch_that_moved_after_verify(
+    manager, remote, github, audit, tmp_path
+):
+    job = await _done_job(remote)
+    clone = tmp_path / "coding" / "example" / "demo"
+    moved = _move_branch(clone, job["branch"])
+    assert moved != job["commit_sha"]
+
+    out = await _call("claude_code_publish", {"job_id": job["job_id"], "title": "t"})
+
+    assert "error" in out, out
+    assert "moved" in out["error"]
+    assert job["commit_sha"] in out["error"]
+    assert job["branch"] not in _remote_branches(remote)
+    assert moved not in _remote_branches(remote).values()
+    assert github.requests == []
+    statuses = [e["status"] for e in audit if e["action"] == "claude_code_publish"]
+    assert statuses == ["error"]
+
+
+async def test_publish_pushes_the_verified_sha_itself(manager, remote, github, monkeypatch):
+    """The refspec names the verified commit, not the branch whose tip could change."""
+    from robothor.engine.coding import repos
+
+    calls: list[tuple[str, ...]] = []
+    real = repos.git
+
+    async def spy(cwd, *args, **kw):
+        calls.append(args)
+        return await real(cwd, *args, **kw)
+
+    monkeypatch.setattr(repos, "git", spy)
+    job = await _done_job(remote)
+    out = await _call("claude_code_publish", {"job_id": job["job_id"], "title": "t"})
+    assert out.get("pr_url") == PR_URL, out
+    pushes = [a for a in calls if a and a[0] == "push"]
+    assert len(pushes) == 1
+    assert f"{job['commit_sha']}:refs/heads/{job['branch']}" in pushes[0]
+
+
+@pytest.mark.parametrize(
+    "setup",
+    [
+        "pushurl",  # fetch from the allowlisted repo, push somewhere else
+        "second-url",  # a second remote.origin.url: git pushes to every one
+        "push-instead-of",  # a rewrite of the allowlisted URL for pushes only
+    ],
+)
+async def test_publish_checks_every_push_url_against_the_allowlist(
+    manager, remote, github, audit, tmp_path, setup
+):
+    from robothor.engine.coding.tests.test_repos import _bare_remote as make_bare
+
+    job = await _done_job(remote)
+    clone = tmp_path / "coding" / "example" / "demo"
+    other_root = tmp_path / "elsewhere"
+    other_root.mkdir()
+    other = make_bare(other_root, owner="other")
+    if setup == "pushurl":
+        git(clone, "config", "remote.origin.pushurl", other)
+    elif setup == "second-url":
+        git(clone, "config", "--add", "remote.origin.url", other)
+    else:
+        git(clone, "config", f"url.{other}.pushInsteadOf", remote)
+
+    out = await _call("claude_code_publish", {"job_id": job["job_id"], "title": "t"})
+
+    assert "error" in out, out
+    assert "ROBOTHOR_CODING_REMOTES" in out["error"]
+    assert job["branch"] not in _remote_branches(other)
+    assert job["branch"] not in _remote_branches(remote)
+    assert github.requests == []

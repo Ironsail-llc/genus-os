@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from robothor.engine.coding.runner import MODES
 from robothor.engine.coding.sandbox import (
     JobPaths,
     build_permissions,
@@ -149,3 +150,43 @@ def test_read_only_bash_can_find_the_merge_base_but_not_write_a_merge(tmp_path, 
 
     assert "Bash(git merge-base:*)" in allowed
     assert not any("merge-tree" in rule for rule in allowed)
+
+
+# ── job homes on the coding workspace ─────────────────────────────────
+
+
+def _covers(entries: list[str], target: Path) -> bool:
+    return any(target == Path(e) or Path(e) in target.parents for e in entries)
+
+
+def test_no_job_can_read_another_jobs_home_on_the_coding_workspace(tmp_path, monkeypatch):
+    """Job homes moved off the denied ~/.config: each job is still denied every other's."""
+    from robothor.engine.coding.env import job_config_dir
+    from robothor.settings import reset_settings
+
+    monkeypatch.setenv("ROBOTHOR_CODING_WORKSPACE", str(tmp_path / "coding"))
+    reset_settings()
+    home_a, home_b = job_config_dir("job-a"), job_config_dir("job-b")
+
+    for own, other in ((home_a, home_b), (home_b, home_a)):
+        paths = _paths(tmp_path / own.name)
+        for mode in MODES:
+            deny_read = build_sandbox_settings(mode, paths, allowed_domains=())["sandbox"][
+                "filesystem"
+            ]["denyRead"]
+            assert _covers(deny_read, other), (mode, deny_read)
+            _, denied = build_permissions(mode, paths)
+            for tool in ("Read", "Edit", "Write"):
+                assert any(
+                    r.startswith(f"{tool}(/") and _covers([r[len(tool) + 2 : -4]], other)
+                    for r in denied
+                    if r.endswith("/**)")
+                ), (mode, tool)
+
+
+def test_without_a_coding_workspace_no_extra_home_path_is_denied(tmp_path, monkeypatch):
+    from robothor.settings import reset_settings
+
+    monkeypatch.delenv("ROBOTHOR_CODING_WORKSPACE", raising=False)
+    reset_settings()
+    assert not [p for p in secret_paths(HOME, WS) if p.endswith("/.home")]
