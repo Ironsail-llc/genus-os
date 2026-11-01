@@ -2,8 +2,9 @@
 
 ``claude_code_publish`` is the only way a job's work leaves the host: a job's own
 shell may never push (:data:`robothor.engine.coding.sandbox.NEVER`). This
-module pushes the job's ``genus/cc-*`` branch to the clone's origin -- which
-must be a ``ROBOTHOR_CODING_REMOTES`` entry -- and opens a **draft** pull
+module pushes the commit that passed the job's verify to its ``genus/cc-*`` branch on
+the clone's origin -- every fetch and push URL of which must be a
+``ROBOTHOR_CODING_REMOTES`` entry -- and opens a **draft** pull
 request through the GitHub REST API (httpx; no ``gh`` binary). Nothing here
 merges, approves or marks ready: a person reviews the draft.
 """
@@ -37,12 +38,31 @@ class PublishedPr:
     draft: bool
 
 
-async def push_branch(repo: Path, branch: str, remote: repos.RemoteSpec, token: str) -> None:
-    """``git push origin <branch>`` from ``repo``, the token in the environment only."""
+async def push_branch(
+    repo: Path, branch: str, commit: str, remote: repos.RemoteSpec, token: str
+) -> None:
+    """Push the verified ``commit`` to ``origin``'s ``refs/heads/<branch>``.
+
+    The refspec names the commit, not the branch, and a branch whose tip is no
+    longer ``commit`` is refused: another job's shell can write ``genus/*``
+    refs, so the tip at publish time may be code that never passed verify.
+    Origin's push URLs are checked again under the clone lock. The token is in
+    the environment only.
+    """
     async with repos.clone_lock(repo):
         try:
+            _, tip = await repos.git(
+                repo, "rev-parse", "--verify", f"refs/heads/{branch}^{{commit}}"
+            )
+            if tip != commit:
+                raise PublishError(
+                    f"branch {branch} moved since verify: it points at {tip}, but the verified "
+                    f"commit is {commit}; start a new job for the new work"
+                )
+            if (await repos.origin_remote(repo)).key != remote.key:
+                raise PublishError(f"{repo}'s origin changed during publish")
             await repos.git(
-                repo, "push", "--quiet", "origin", f"refs/heads/{branch}:refs/heads/{branch}",
+                repo, "push", "--quiet", "origin", f"{commit}:refs/heads/{branch}",
                 url=remote.url, token=token,
             )  # fmt: skip
         except repos.RepoError as exc:
