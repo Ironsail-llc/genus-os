@@ -320,9 +320,9 @@ A Genus OS plugin. Docs: `docs/PLUGINS.md` in the Genus OS repository.
 
 Bump `version` in `pyproject.toml` and `programmatic.json` together, then push
 a `vX.Y.Z` tag. The release workflow refuses a tag that names another version
-or one already released, builds the wheel reproducibly, checks it carries
-`genus-plugin.yaml`, and publishes it with `SHA256SUMS`. A released version is
-never rebuilt: tag a new one.
+or one already released, runs the tests, builds the wheel with fixed timestamps
+(`SOURCE_DATE_EPOCH`), checks it carries `genus-plugin.yaml`, and publishes it
+with `SHA256SUMS`. A released version is never rebuilt: tag a new one.
 
 ## Rules
 

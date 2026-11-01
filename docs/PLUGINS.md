@@ -27,9 +27,10 @@ index reads: the plugin's display name, its `id` (the plugin name), the same
 `version` as `pyproject.toml`, `format: genus-plugin/v1`, a description and
 tags. `.github/workflows/release.yml` runs on a `vX.Y.Z` tag: it checks that the
 tag, `pyproject.toml` and `programmatic.json` name the same version and that no
-release exists for the tag yet, builds the wheel reproducibly, checks it carries
-`genus-plugin.yaml`, and publishes the wheel with its `SHA256SUMS` as a GitHub
-release. A released version is never rebuilt; bump the version and tag again.
+release exists for the tag yet, runs the tests, builds the wheel with fixed
+timestamps (`SOURCE_DATE_EPOCH`), checks it carries `genus-plugin.yaml`, and
+publishes the wheel with its `SHA256SUMS` as a GitHub release. A released
+version is never rebuilt; bump the version and tag again.
 
 ## A tool plugin
 
