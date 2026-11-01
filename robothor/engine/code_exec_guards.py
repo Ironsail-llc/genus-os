@@ -65,8 +65,8 @@ def _refuse_if_sandboxed(proxy: Any = None) -> dict[str, Any] | None:
     with `--network none` and no host environment. The tool proxy lives in the
     engine process, so a snippet in that container could not reach it — and
     running the snippet on the HOST instead would silently undo the isolation
-    the manifest asked for. Refusing names the trade; falling back would hide
-    it, which is the failure this codebase keeps recording.
+    the manifest asked for. Refusing names the trade -- except for the playground's
+    owner or admin DRIVING the run, whose host snippet is recorded (stamp_location).
     """
     from robothor.engine.sandbox import SandboxMode, get_current_sandbox
     from robothor.engine.sandbox_policy import proxy_may_run_on_host, proxy_plan_refusal

@@ -231,6 +231,13 @@ class ExecPlan:
             "needs podman or a configured sandbox backend."
         )
 
+    def beside_note(self, tool: str) -> str:
+        """What a host run beside this run's live container tells the agent."""
+        return (
+            f"Ran on the engine host, not in this run's live container, under your "
+            f"{self.user_role} permissions: {tool} cannot reach the tool proxy from inside it."
+        )
+
 
 def role_may_run_on_host(user_role: str) -> bool:
     """True for the roles that may run a contained command on the host."""
@@ -466,17 +473,12 @@ async def stamp_location(
     import asyncio
 
     plan = exec_plan_for(run_id)
-    off_box = plan is not None and where != "sandbox"
-    degraded = off_box and plan is not None and plan.degraded
-    beside = off_box and plan is not None and plan.where == "sandbox"
     result["executed_on"] = where
-    if degraded and plan is not None:
-        result["execution_note"] = plan.host_note
-    elif beside and plan is not None:
-        result["execution_note"] = (
-            f"Ran on the engine host, not in this run's live container, under your "
-            f"{plan.user_role} permissions: {tool} cannot reach the tool proxy from inside it."
-        )
+    degraded = beside = False
+    if plan is not None and where != "sandbox":
+        degraded, beside = plan.degraded, plan.where == "sandbox"
+        if note := plan.host_note if degraded else plan.beside_note(tool) if beside else "":
+            result["execution_note"] = note
     await asyncio.to_thread(
         record_exec_location, run_id, where, degraded=degraded, beside=beside, tool=tool
     )
