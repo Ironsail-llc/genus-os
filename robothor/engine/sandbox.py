@@ -13,6 +13,7 @@ import logging
 import os
 import shutil
 import subprocess
+import threading
 import time
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -128,6 +129,7 @@ class RuntimeStatus:
 
 
 _runtime_cache: tuple[float, RuntimeStatus] | None = None
+_probe_lock = threading.Lock()
 
 
 def reset_runtime_status_cache() -> None:
@@ -148,12 +150,23 @@ def runtime_status(*, refresh: bool = False) -> RuntimeStatus:
     would let a fallback route around the operator's hardening choice.
     """
     global _runtime_cache
-    now = time.monotonic()
-    if not refresh and _runtime_cache is not None and now - _runtime_cache[0] < RUNTIME_STATUS_TTL:
-        return _runtime_cache[1]
-    status = _probe_runtime()
-    _runtime_cache = (now, status)
-    return status
+    if not refresh and (hit := _cached_status()) is not None:
+        return hit
+    # Single flight: runs that start together while the cache is cold wait on
+    # one `<binary> info`, rather than each forking its own against a slow daemon.
+    with _probe_lock:
+        if not refresh and (hit := _cached_status()) is not None:
+            return hit
+        status = _probe_runtime()
+        _runtime_cache = (time.monotonic(), status)
+        return status
+
+
+def _cached_status() -> RuntimeStatus | None:
+    cached = _runtime_cache
+    if cached is not None and time.monotonic() - cached[0] < RUNTIME_STATUS_TTL:
+        return cached[1]
+    return None
 
 
 def _probe_runtime() -> RuntimeStatus:

@@ -1,9 +1,11 @@
 """The exec allowlist under the sandbox playground.
 
-An allowlist is the agent author's restriction on HOST commands. Inside a
-container with no network and no host environment it guards nothing, and an
-owner or admin is not bound by it: their command is allowed and recorded as an
-observation. A member on the host is held to it as today. Flag off: unchanged.
+An allowlist is the agent author's restriction on commands. An owner or admin
+DRIVING this run (a person on an interactive surface, on the run nothing
+spawned) is not bound by it: their command is allowed and recorded as an
+observation. Everyone else keeps it, inside a container or out: a member, a
+cron or other automated run whose service role happens to read "owner", and a
+sub-agent an owner's chat spawned. Flag off: unchanged.
 """
 
 from __future__ import annotations
@@ -14,6 +16,24 @@ from typing import Any
 import pytest
 
 from robothor.engine.guardrails import GuardrailEngine
+from robothor.engine.sandbox import Sandbox, SandboxMode, sandbox_var
+from robothor.engine.sandbox_policy import guardrail_context
+
+
+def _session(*, role: str, trigger: str, depth: int = 0, user_id: str = "u-1") -> Any:
+    run = type(
+        "_R",
+        (),
+        {
+            "id": f"run-{trigger}-{depth}",
+            "user_role": role,
+            "user_id": user_id,
+            "trigger_type": trigger,
+            "nesting_depth": depth,
+            "parent_run_id": None,
+        },
+    )()
+    return type("_S", (), {"run": run})()
 
 
 def _engine() -> GuardrailEngine:
@@ -23,13 +43,12 @@ def _engine() -> GuardrailEngine:
     )
 
 
-def _check(*, user_role: str = "", sandboxed: bool = False, command: str = "curl example.com"):
+def _check(*, user_role: str = "", command: str = "curl example.com"):
     return _engine().check_pre_execution(
         "exec",
         {"command": command},
         agent_id="a",
         user_role=user_role,
-        sandboxed=sandboxed,
     )
 
 
@@ -44,16 +63,58 @@ def off(monkeypatch):
 
 
 def test_flag_off_blocks_everyone_as_today(off) -> None:
-    for role, sandboxed in (("owner", False), ("member", False), ("member", True)):
-        result = _check(user_role=role, sandboxed=sandboxed)
-        assert not result.allowed, (role, sandboxed)
+    for role in ("owner", "member"):
+        result = _check(user_role=role)
+        assert not result.allowed, role
         assert result.guardrail_name == "exec_allowlist"
 
 
-def test_inside_a_container_the_allowlist_is_skipped(playground) -> None:
-    result = _check(user_role="member", sandboxed=True)
+def test_a_member_inside_a_container_keeps_the_allowlist(playground) -> None:
+    """A container may have bridge networking and always has the workspace
+    mounted, so the allowlist still guards something there."""
+    token = sandbox_var.set(Sandbox(mode=SandboxMode.DOCKER, container_id="c1", run_id="r"))
+    try:
+        kwargs = guardrail_context(_session(role="member", trigger="webchat"))
+    finally:
+        sandbox_var.reset(token)
+    result = _engine().check_pre_execution(
+        "exec", {"command": "curl example.com"}, agent_id="a", **kwargs
+    )
+    assert not result.allowed
+    assert result.guardrail_name == "exec_allowlist"
+
+
+@pytest.mark.parametrize(
+    ("trigger", "depth", "user_id"),
+    [
+        ("cron", 0, "service:a"),  # a service role that reads "owner"
+        ("hook", 0, ""),
+        ("workflow", 0, "service:workflow:w"),
+        ("sub_agent", 1, "u-owner"),  # spawned from an owner's chat
+        ("webchat", 0, "service:a"),  # a service credential on webchat
+    ],
+)
+def test_only_a_run_an_owner_is_driving_gets_the_bypass(
+    playground, trigger, depth, user_id
+) -> None:
+    kwargs = guardrail_context(
+        _session(role="owner", trigger=trigger, depth=depth, user_id=user_id)
+    )
+    result = _engine().check_pre_execution(
+        "exec", {"command": "curl example.com"}, agent_id="a", **kwargs
+    )
+    assert not result.allowed, (trigger, depth, user_id)
+    assert result.guardrail_name == "exec_allowlist"
+
+
+@pytest.mark.parametrize("trigger", ["webchat", "telegram", "slack", "ide", "manual"])
+def test_an_owner_driving_an_interactive_run_gets_the_bypass(playground, trigger) -> None:
+    kwargs = guardrail_context(_session(role="owner", trigger=trigger))
+    result = _engine().check_pre_execution(
+        "exec", {"command": "curl example.com"}, agent_id="a", **kwargs
+    )
     assert result.allowed
-    assert result.action != "blocked"
+    assert result.action == "observed"
 
 
 @pytest.mark.parametrize("role", ["owner", "admin"])
@@ -83,6 +144,7 @@ class _Run:
     tenant_id = "default"
     trigger_type = "manual"
     user_role = "owner"
+    user_id = "u-owner"
 
 
 class _Session:
@@ -131,10 +193,10 @@ async def _admit(monkeypatch) -> dict[str, Any]:
     return recorder.kwargs
 
 
-async def test_admission_passes_the_role_and_sandbox_state(playground, monkeypatch) -> None:
+async def test_admission_passes_the_acting_role(playground, monkeypatch) -> None:
     kwargs = await _admit(monkeypatch)
     assert kwargs.get("user_role") == "owner"
-    assert kwargs.get("sandboxed") is False
+    assert "sandboxed" not in kwargs
 
 
 async def test_admission_flag_off_passes_nothing_new(off, monkeypatch) -> None:

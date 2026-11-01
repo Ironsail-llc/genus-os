@@ -590,9 +590,11 @@ def sandbox_playground_enabled() -> bool:
 
     Gated on ``ROBOTHOR_SANDBOX_PLAYGROUND`` (default off). When on, a run whose
     container is wanted but cannot be started is not failed: an owner or admin
-    on a root run runs ``exec`` on the engine host with a note, and anyone else
-    is refused per call with the gate and the unlock named
-    (``sandbox_policy.resolve_execution_plan``). Off is today's behaviour.
+    driving a root run runs ``exec`` on the engine host with a note, and anyone
+    else is refused per call with the gate and the unlock named
+    (``sandbox_policy.resolve_execution_plan``). That owner or admin is also not
+    bound by the exec allowlist and may run ``execute_code`` beside a live
+    container (``sandbox_policy.acting_host_role``). Off is today's behaviour.
     """
     return _env_bool("ROBOTHOR_SANDBOX_PLAYGROUND")
 

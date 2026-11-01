@@ -155,3 +155,67 @@ def test_a_sub_agents_unlock_names_the_top_level_run_not_the_role() -> None:
 )
 def test_the_manifest_sandbox_accessor_reads_what_the_engine_reads(manifest, expected) -> None:
     assert sp.manifest_sandbox(manifest) == expected
+
+
+class _Run:
+    def __init__(self, *, role: str, trigger: str, user_id: str = "u-1") -> None:
+        self.id = f"policy-{role}-{trigger}"
+        self.user_role = role
+        self.user_id = user_id
+        self.trigger_type = trigger
+        self.nesting_depth = 0
+        self.parent_run_id = None
+
+
+@pytest.mark.parametrize(
+    ("trigger", "user_id"),
+    [("cron", "service:example-agent"), ("hook", ""), ("webchat", "service:example-agent")],
+)
+async def test_an_owner_service_role_on_an_automated_run_is_refused(
+    monkeypatch, trigger, user_id
+) -> None:
+    """A manifest may declare `role: owner`; a cron run then carries "owner"
+    with no person behind it. The host fallback is for a person's own run."""
+    monkeypatch.setattr("robothor.engine.sandbox.runtime_status", lambda **_k: ABSENT)
+    monkeypatch.setattr(sp, "_record", lambda *_a, **_k: None)
+    plan = await sp.establish_execution_plan(
+        _Cfg(),
+        "off",
+        agent_id="example-agent",
+        run=_Run(role="owner", trigger=trigger, user_id=user_id),
+    )
+    assert plan.where == "refuse"
+    assert "no person" in plan.reason
+
+
+async def test_an_owner_driving_a_chat_still_falls_back_to_the_host(monkeypatch) -> None:
+    monkeypatch.setattr("robothor.engine.sandbox.runtime_status", lambda **_k: ABSENT)
+    monkeypatch.setattr(sp, "_record", lambda *_a, **_k: None)
+    plan = await sp.establish_execution_plan(
+        _Cfg(), "off", agent_id="example-agent", run=_Run(role="owner", trigger="webchat")
+    )
+    assert plan.where == "host"
+    assert plan.degraded is True
+
+
+@pytest.mark.parametrize("sandbox", ["", "local", "host"])
+async def test_an_agent_that_never_wants_a_container_is_never_probed(monkeypatch, sandbox) -> None:
+    def _never(**_k):
+        raise AssertionError("probed the runtime for an agent that wants no container")
+
+    monkeypatch.setattr("robothor.engine.sandbox.runtime_status", _never)
+    monkeypatch.setattr(sp, "_record", lambda *_a, **_k: None)
+    plan = await sp.establish_execution_plan(
+        _Cfg(sandbox=sandbox),
+        "off",
+        agent_id="example-agent",
+        run=_Run(role="member", trigger="webchat"),
+    )
+    assert plan.where == "host"
+    assert plan.degraded is False
+
+
+def test_the_no_person_triggers_are_the_runners_system_triggers() -> None:
+    from robothor.engine.runner import _SYSTEM_TRIGGER_TYPES
+
+    assert {str(t.value) for t in _SYSTEM_TRIGGER_TYPES} == set(sp.NO_PERSON_TRIGGERS)

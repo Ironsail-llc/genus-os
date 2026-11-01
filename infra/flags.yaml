@@ -994,14 +994,19 @@ flags:
       NEW (unreleased). A bool, not a ladder. When a container is wanted (manifest
       `sandbox: docker`, or ROBOTHOR_SANDBOX_DEFAULT_MODE=enforce) and the engine
       has no runtime, or the container fails to start, the run is no longer
-      failed at step 0: an owner or admin on a root run runs `exec` on the engine
-      host with an `execution_note`, and anyone else (member, automated run,
-      sub-agent, benchmark) is refused per call with `error_type:
-      exec_unavailable` and the unlock named. Every exec result carries
-      `executed_on` and writes one `exec_location` guardrail event; each degraded
-      or refused plan writes one `sandbox_playground` row (action observed).
-      The containment scope does not widen: agents the ladder leaves on the host
-      stay there. Off is byte-identical to the release before it.
+      failed at step 0: an owner or admin driving a root run (an interactive
+      trigger, not a service credential) runs `exec` on the engine host with an
+      `execution_note`, and anyone else (member, automated run whatever its
+      service role, sub-agent, benchmark) is refused per call with `error_type:
+      exec_unavailable` and the unlock named. Every exec and execute_code result
+      carries `executed_on` and writes one `exec_location` guardrail event; each
+      degraded or refused plan writes one `sandbox_playground` row (action
+      observed). Which agents are containerised does not change. What the flag
+      DOES widen, for the owner or admin driving the run and nobody else: the
+      exec allowlist does not bind them (an `observed` row per bypass), and
+      execute_code runs on the engine host even beside a live container (an
+      `exec_location` row naming it). Members keep the allowlist inside a
+      container too. Off is byte-identical to the release before it.
 
       Evidence to read before turning it on anywhere: `genus doctor` rows
       sandbox.runtime and sandbox.policy, then agent_guardrail_events rows with

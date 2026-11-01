@@ -148,14 +148,29 @@ def opted_out_of_containment(manifests: Iterable[dict[str, Any]]) -> list[str]:
 # The legacy decision above still says WHEN a container is wanted. What it
 # never said is what happens when one is wanted and the engine has no runtime
 # to start it: the run was failed at step 0, the owner included. Under the
-# playground the run continues and this plan says where each `exec` goes. The
-# containment scope does not widen: an agent the legacy ladder leaves on the
-# host stays there, because a `--network none` container round an agent that
-# never asked for one would block work that runs today.
+# playground the run continues and this plan says where each `exec` goes. An
+# agent the legacy ladder leaves on the host stays there, because a
+# `--network none` container round an agent that never asked for one would
+# block work that runs today.
+#
+# What DOES widen, and only for an owner or admin driving the run themselves
+# (``acting_host_role``): the exec allowlist does not bind them, and
+# `execute_code` runs on the engine host even beside a live container. Both
+# are recorded. A member, an automated run and a sub-agent are not widened.
 
 #: Roles whose own permissions may stand in for a missing container. The
 #: human's role is the limit, not the infrastructure.
 HOST_ROLES: frozenset[str] = frozenset({"owner", "admin"})
+
+#: Triggers with no person on the other end: the runner's system triggers
+#: (``runner._SYSTEM_TRIGGER_TYPES``, pinned equal by a test). Their role is
+#: the agent's service role, which a manifest may set to "owner".
+NO_PERSON_TRIGGERS: frozenset[str] = frozenset(
+    {"cron", "hook", "event", "workflow", "sub_agent", "federation", "channel_event"}
+)
+
+#: Stands in for a probe that was not needed: no container is wanted.
+_NOT_PROBED = RuntimeStatus(binary="", available=False, reason="not probed")
 
 #: Plans kept for this many runs. Keyed by run id rather than a ContextVar: a
 #: spawned sub-agent runs inline in its parent's context, so a ContextVar it
@@ -216,6 +231,13 @@ class ExecPlan:
             "needs podman or a configured sandbox backend."
         )
 
+    def beside_note(self, tool: str) -> str:
+        """What a host run beside this run's live container tells the agent."""
+        return (
+            f"Ran on the engine host, not in this run's live container, under your "
+            f"{self.user_role} permissions: {tool} cannot reach the tool proxy from inside it."
+        )
+
 
 def role_may_run_on_host(user_role: str) -> bool:
     """True for the roles that may run a contained command on the host."""
@@ -231,8 +253,13 @@ def resolve_execution_plan(
     runtime: RuntimeStatus,
     is_root_run: bool = True,
     is_benchmark: bool = False,
+    person_drives: bool = True,
 ) -> ExecPlan:
-    """The plan for one run. Pure: the runtime is probed by the caller."""
+    """The plan for one run. Pure: the runtime is probed by the caller.
+
+    ``person_drives`` is false for a run with no person behind it; its role is
+    then a service role and never earns the host fallback.
+    """
     role = (user_role or "").strip().lower()
     if resolve_sandbox_decision(config, mode, agent_id=agent_id) != "docker":
         return ExecPlan(where="host", user_role=role)
@@ -252,14 +279,16 @@ def resolve_execution_plan(
             "benchmark run never falls back to the host"
         )
         return ExecPlan(where="refuse", reason=why, unlock=_UNLOCK, user_role=role)
-    if role in HOST_ROLES:
+    if role in HOST_ROLES and person_drives:
         return ExecPlan(
             where="host",
             reason=f"no container runtime could be used on this instance: {missing}",
             degraded=True,
             user_role=role,
         )
-    who = role or "none: this is an automated run with no person behind it"
+    who = (
+        role if person_drives else ""
+    ) or "none: this is an automated run with no person behind it"
     why = (
         f"there is no sandbox runtime on this engine ({missing}) and your role "
         f"({who}) does not allow host execution"
@@ -321,6 +350,8 @@ async def establish_execution_plan(
             available=False,
             reason=f"the container could not be started: {start_error}",
         )
+    elif resolve_sandbox_decision(config, mode, agent_id=agent_id) != "docker":
+        runtime = _NOT_PROBED  # no container wanted: the plan never reads it
     else:
         runtime = await asyncio.to_thread(_sandbox.runtime_status)
     plan = resolve_execution_plan(
@@ -331,6 +362,7 @@ async def establish_execution_plan(
         runtime=runtime,
         is_root_run=is_root_run(run),
         is_benchmark=bool(getattr(run, "is_benchmark", False)),
+        person_drives=person_drives(run),
     )
     run_id = str(getattr(run, "id", "") or "")
     set_exec_plan(run_id, plan)
@@ -346,13 +378,23 @@ async def establish_execution_plan(
     return plan
 
 
-def record_exec_location(run_id: str, where: str, *, degraded: bool = False) -> None:
-    """One ``exec_location`` row per exec. Blocking: call it off the loop."""
-    reason = f"executed_on={where}" + (" (container wanted, none available)" if degraded else "")
-    _record(run_id, "exec_location", "allowed", reason)
+def record_exec_location(
+    run_id: str, where: str, *, degraded: bool = False, beside: bool = False, tool: str = "exec"
+) -> None:
+    """One ``exec_location`` row per exec. Blocking: call it off the loop.
+
+    ``beside`` is an owner's snippet that ran on the host while the run's
+    container was live: the one widening past a working container.
+    """
+    reason = f"executed_on={where}"
+    if degraded:
+        reason += " (container wanted, none available)"
+    elif beside:
+        reason += " (a live container was running; widened by the driving owner or admin)"
+    _record(run_id, "exec_location", "allowed", reason, tool=tool)
 
 
-def _record(run_id: str, name: str, action: str, reason: str) -> None:
+def _record(run_id: str, name: str, action: str, reason: str, *, tool: str = "exec") -> None:
     try:
         from robothor.engine.tracking import log_guardrail_event
 
@@ -360,7 +402,7 @@ def _record(run_id: str, name: str, action: str, reason: str) -> None:
             run_id=run_id,
             guardrail_name=name,
             action=action,
-            tool_name="exec",
+            tool_name=tool,
             reason=reason,
             mode="playground",
             step_number=0,
@@ -422,18 +464,24 @@ def exec_refusal(run_id: str, *, tool: str = "exec") -> dict[str, Any] | None:
     }
 
 
-async def stamp_location(result: dict[str, Any], where: str, run_id: str) -> dict[str, Any]:
-    """Say where one ``exec`` ran, and record it once. Flag off: untouched."""
+async def stamp_location(
+    result: dict[str, Any], where: str, run_id: str, *, tool: str = "exec"
+) -> dict[str, Any]:
+    """Say where one ``exec`` (or snippet) ran, and record it once. Flag off: untouched."""
     if not isinstance(result, dict) or not _playground_on():
         return result
     import asyncio
 
     plan = exec_plan_for(run_id)
-    degraded = plan is not None and plan.degraded and where != "sandbox"
     result["executed_on"] = where
-    if degraded and plan is not None:
-        result["execution_note"] = plan.host_note
-    await asyncio.to_thread(record_exec_location, run_id, where, degraded=degraded)
+    degraded = beside = False
+    if plan is not None and where != "sandbox":
+        degraded, beside = plan.degraded, plan.where == "sandbox"
+        if note := plan.host_note if degraded else plan.beside_note(tool) if beside else "":
+            result["execution_note"] = note
+    await asyncio.to_thread(
+        record_exec_location, run_id, where, degraded=degraded, beside=beside, tool=tool
+    )
     return result
 
 
@@ -441,14 +489,8 @@ def guardrail_context(session: Any) -> dict[str, Any]:
     """Extra ``check_pre_execution`` kwargs under the playground; {} when off."""
     if not _playground_on():
         return {}
-    from robothor.engine.sandbox import SandboxMode, get_current_sandbox
-
-    box = get_current_sandbox()
     run = getattr(session, "run", None)
-    context: dict[str, Any] = {
-        "user_role": getattr(run, "user_role", "") or "",
-        "sandboxed": box is not None and box.mode != SandboxMode.LOCAL,
-    }
+    context: dict[str, Any] = {"user_role": acting_host_role(run)}
     plan = exec_plan_for(str(getattr(run, "id", "") or ""))
     if plan is not None and plan.where == "refuse":
         context["host_refusal"] = f"{plan.reason}. {plan.unlock}"
@@ -456,14 +498,33 @@ def guardrail_context(session: Any) -> dict[str, Any]:
 
 
 def proxy_may_run_on_host(proxy: Any) -> bool:
-    """execute_code under the playground: an owner or admin on a root run may run
-    a snippet where the proxy is, the engine host. Nobody else, and never off."""
-    if not _playground_on():
-        return False
-    run = _proxy_run(proxy)
-    if run is None or not is_root_run(run):
-        return False
-    return role_may_run_on_host(getattr(run, "user_role", "") or "")
+    """execute_code under the playground: an owner or admin driving the run may
+    run a snippet where the proxy is, the engine host. Nobody else, never off."""
+    return _playground_on() and bool(acting_host_role(_proxy_run(proxy)))
+
+
+def person_drives(run: Any) -> bool:
+    """A person is on the other end of this run: an interactive trigger and no
+    service credential. Fails closed when the run says nothing about it."""
+    trigger = getattr(run, "trigger_type", "") or ""
+    trigger = str(getattr(trigger, "value", trigger))
+    user_id = str(getattr(run, "user_id", "") or "")
+    return (
+        bool(trigger) and trigger not in NO_PERSON_TRIGGERS and not user_id.startswith("service:")
+    )
+
+
+def acting_host_role(run: Any) -> str:
+    """The owner or admin role of the person DRIVING this run, else "".
+
+    Not the bare ``user_role``: an automated run carries the agent's service
+    role, which a manifest may set to "owner", and a sub-agent inherits its
+    requester's role though nobody is driving it.
+    """
+    role = (getattr(run, "user_role", "") or "").strip().lower()
+    if run is None or role not in HOST_ROLES or not is_root_run(run) or not person_drives(run):
+        return ""
+    return role
 
 
 def proxy_plan_refusal(proxy: Any) -> dict[str, Any] | None:
