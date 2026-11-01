@@ -81,7 +81,7 @@ async def admit_plan(
 def approval_refusal(session: ChatSession, plan_id: str) -> JSONResponse | None:
     from fastapi.responses import JSONResponse
 
-    from robothor.engine.chat import _plan_is_expired
+    from robothor.engine.chat_plan_helpers import _plan_is_expired
 
     if not session.active_plan or session.active_plan.plan_id != plan_id:
         return JSONResponse(

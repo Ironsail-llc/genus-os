@@ -32,6 +32,7 @@ from robothor.constants import DEFAULT_TENANT
 from robothor.db.connection import get_connection
 from robothor.llm import ollama as llm_client
 from robothor.memory import generation
+from robothor.memory.confirmed import NOT_OPERATOR_CONFIRMED_SQL
 from robothor.memory.vector_tuning import apply_hnsw_session
 
 logger = logging.getLogger(__name__)
@@ -143,11 +144,13 @@ def _apply_consolidation_supersession(new_id: int, source_ids: list[int]) -> Non
             if guard and _chain_depth(cur, source_id) >= _MAX_CHAIN_DEPTH:
                 logger.debug("consolidation: skip supersede of deep-chain fact %s", source_id)
                 continue
+            # Re-checked here: selection and this write are separated by the
+            # LLM call, and a fact confirmed in that window must survive.
             cur.execute(
-                """
+                f"""
                 UPDATE memory_facts
                 SET is_active = FALSE, superseded_by = %s, updated_at = NOW()
-                WHERE id = %s AND is_active = TRUE
+                WHERE id = %s AND is_active = TRUE AND {NOT_OPERATOR_CONFIRMED_SQL}
                 """,
                 (new_id, source_id),
             )
@@ -285,7 +288,8 @@ async def find_consolidation_candidates(
             consolidated_at IS NULL. Uses smaller LIMIT (100 vs 500).
 
     Returns:
-        List of groups, where each group is a list of fact dicts.
+        List of groups, where each group is a list of fact dicts. An
+        operator-confirmed fact is never in one: consolidation would retire it.
     """
     unconsolidated_filter = "AND consolidated_at IS NULL" if unconsolidated_only else ""
     # WS-2: never feed a consolidation output back into consolidation — that is
@@ -302,6 +306,7 @@ async def find_consolidation_candidates(
             SELECT id, fact_text, category, entities, embedding
             FROM memory_facts
             WHERE is_active = TRUE AND embedding IS NOT NULL
+              AND {NOT_OPERATOR_CONFIRMED_SQL}
               {unconsolidated_filter}
               {consolidation_filter}
             ORDER BY created_at DESC
@@ -334,6 +339,7 @@ async def find_consolidation_candidates(
                 WHERE is_active = TRUE
                   AND embedding IS NOT NULL
                   AND id != %s
+                  AND {NOT_OPERATOR_CONFIRMED_SQL}
                   {consolidation_filter}
                 ORDER BY embedding <=> %s::vector
                 LIMIT 10
@@ -396,7 +402,8 @@ async def prune_low_quality_facts() -> dict[str, Any]:
         - decay_score < 0.1 AND importance_score < 0.3 AND access_count = 0
         - fact_text < 15 characters (garbage that got in before quality gate)
 
-    Never prunes: decisions, preferences (category-protected).
+    Never prunes: decisions, preferences, resolutions (category-protected), or
+    an operator-confirmed fact.
 
     Returns:
         Dict with pruning statistics.
@@ -406,11 +413,12 @@ async def prune_low_quality_facts() -> dict[str, Any]:
 
         # Prune short garbage
         cur.execute(
-            """
+            f"""
             UPDATE memory_facts SET is_active = false, updated_at = NOW()
             WHERE is_active = true
               AND length(fact_text) < 15
               AND category NOT IN ('decision', 'preference', 'resolution')
+              AND {NOT_OPERATOR_CONFIRMED_SQL}
             RETURNING id, fact_text
             """
         )
@@ -418,13 +426,14 @@ async def prune_low_quality_facts() -> dict[str, Any]:
 
         # Prune decayed, unimportant, never-accessed facts
         cur.execute(
-            """
+            f"""
             UPDATE memory_facts SET is_active = false, updated_at = NOW()
             WHERE is_active = true
               AND decay_score < 0.1
               AND importance_score < 0.3
               AND access_count = 0
               AND category NOT IN ('decision', 'preference', 'resolution')
+              AND {NOT_OPERATOR_CONFIRMED_SQL}
             RETURNING id, fact_text
             """
         )

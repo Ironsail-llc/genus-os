@@ -163,7 +163,7 @@ export const settingsPages: SettingsPage[] = [
     group: "Access",
     icon: KeyRound,
     description:
-      "The encrypted secret store — which secrets exist, when each was last rotated, and which service reads it. Values are never shown here.",
+      "Credentials: which exist, where each sits, when it last changed, and which service reads it. Values are never shown.",
   },
   {
     id: "config",
