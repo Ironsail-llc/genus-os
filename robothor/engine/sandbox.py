@@ -46,9 +46,14 @@ DEFAULT_START_RETRIES = 1
 DEFAULT_START_RETRY_SECONDS = 3.0
 
 
+def _env_text(name: str) -> str:
+    """An operator override as stripped text; empty when unset. Read live."""
+    return os.environ.get(name, "").strip()
+
+
 def _env_number(name: str, default: float) -> float:
     """Read an operator override, falling back rather than failing closed."""
-    raw = os.environ.get(name, "").strip()
+    raw = _env_text(name)
     if not raw:
         return default
     try:
@@ -94,7 +99,7 @@ def sandbox_binary() -> str:
     explicit `ROBOTHOR_SANDBOX_BINARY` always wins; otherwise prefer the
     rootless runtime that is actually installed.
     """
-    explicit = os.environ.get("ROBOTHOR_SANDBOX_BINARY", "").strip()
+    explicit = _env_text("ROBOTHOR_SANDBOX_BINARY")
     if explicit:
         return explicit
     for candidate in ("podman", "docker"):
@@ -170,12 +175,12 @@ def _cached_status() -> RuntimeStatus | None:
 
 
 def _probe_runtime() -> RuntimeStatus:
-    backend = os.environ.get(SANDBOX_BACKEND_ENV, "").strip()
+    backend = _env_text(SANDBOX_BACKEND_ENV)
     if backend:
         return RuntimeStatus(binary=f"backend:{backend}", available=True)
 
     binary = sandbox_binary()
-    explicit = bool(os.environ.get("ROBOTHOR_SANDBOX_BINARY", "").strip())
+    explicit = bool(_env_text("ROBOTHOR_SANDBOX_BINARY"))
     if not shutil.which(binary):
         if explicit:
             reason = f"ROBOTHOR_SANDBOX_BINARY names {binary}, which is not installed"
@@ -236,7 +241,7 @@ def active_sandbox_backend() -> Any:
     hardening step into an invisible downgrade, which is the failure this
     whole seam exists to avoid.
     """
-    name = os.environ.get(SANDBOX_BACKEND_ENV, "").strip()
+    name = _env_text(SANDBOX_BACKEND_ENV)
     if not name:
         return None
 
