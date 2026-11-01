@@ -1149,6 +1149,9 @@ def config_cache_enabled() -> bool:
     Covers the MCP side: each adapter's ``tools/list`` result is kept for the
     life of its session, adapters connect concurrently, an HTTP MCP session
     keeps one ``httpx.AsyncClient``, and the daemon pre-warms adapter sessions
-    at start. Default OFF; gated by ``ROBOTHOR_CONFIG_CACHE``.
+    at start. Covers the config side: ``load_agent_config``, ``load_adapters``
+    and ``verify_adapter_integrity`` key what they built on the stat of the
+    files it came from and skip the read, parse, merge and validation while
+    nothing changed. Default OFF; gated by ``ROBOTHOR_CONFIG_CACHE``.
     """
     return _env_bool("ROBOTHOR_CONFIG_CACHE")
