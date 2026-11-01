@@ -428,6 +428,79 @@ disable and sync write only the lockfile under `.robothor/`, which stays
 writable. An agent's `write_file` and `exec` also refuse the plugin directory
 and the lockfile files.
 
+**Installing plugins with the install Job.** The chart does not render this
+Job: an install is an operator act, run when it is wanted, not on every sync.
+It runs `genus plugin install` and `genus plugin sync` in the engine image
+against the engine's workspace claim, mounted read-write. Three things must
+match the engine it installs for: the claim (`<fullname>-workspace-<id>` for a
+cell, `<fullname>-workspace` or `workspace.persistence.existingClaim` for the
+root), the tenant (`<id>`, or `global.rootTenant` for the root) and the
+`workspace.mountPath`. A `ReadWriteOnce` claim (the default) is attached to one
+node, so the Job carries a pod affinity to the engine's pod and runs on its
+node; with `ReadWriteOncePod`, or a volume that cannot attach twice, scale the
+engine to zero first and drop the affinity. For a cell `child-a` in release
+`gos` with the default names:
+
+```yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: gos-plugin-install-child-a
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 3600
+  template:
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext: {fsGroup: 1000, seccompProfile: {type: RuntimeDefault}}
+      affinity:
+        podAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/instance: gos
+                  app.kubernetes.io/component: engine
+                  genus-os/tenant: child-a
+      containers:
+        - name: install
+          image: ghcr.io/ironsail-llc/genus-os/python:<the engine's tag>
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          env:
+            - {name: ROBOTHOR_WORKSPACE, value: /workspace}
+            - {name: ROBOTHOR_PLUGIN_DIR, value: /workspace/.plugins}
+            - {name: PYTHONPATH, value: /workspace/.plugins}
+            - {name: ROBOTHOR_TENANT_ID, value: child-a}
+            - {name: ROBOTHOR_DEFAULT_TENANT, value: child-a}
+            - {name: HOME, value: /tmp}
+          command: [sh, -c]
+          args:
+            - genus plugin install acme-tools==1.2.3 && genus plugin sync --strict
+          volumeMounts:
+            - {name: workspace, mountPath: /workspace}
+            - {name: tmp, mountPath: /tmp}
+            - {name: cache, mountPath: /app/.cache}
+      volumes:
+        - name: workspace
+          persistentVolumeClaim: {claimName: gos-genus-os-workspace-child-a}
+        - {name: tmp, emptyDir: {}}
+        - {name: cache, emptyDir: {}}
+```
+
+Add `--index <url>` or `--accept-review` to the install as the plan requires
+(run it once with `--dry-run` to read the plan). When the Job has finished,
+reload the engine from Settings › Plugins (**Reload**) or restart its
+Deployment. Removing a plugin is the same Job running `genus plugin remove
+<name>`. When upgrading to this chart, list what each engine's `.plugins`
+already holds: the read-only mount stops new writes, and it does not remove a
+file an agent wrote there before.
+
 To turn the plugin directory off for a cell, set both variables to empty in its
 `env`, which installs into the image's own environment as on a default root
 engine:
