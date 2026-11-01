@@ -1,0 +1,271 @@
+suite: hooks workload (standalone webhook receiver)
+templates:
+  - hooks/workload.yaml
+  - hooks/configmap.yaml
+release:
+  name: gos
+  namespace: genus
+tests:
+  - it: renders nothing by default
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders a Deployment, Service and PodDisruptionBudget when enabled
+    template: hooks/workload.yaml
+    set:
+      hooks.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 3
+      - isKind:
+          of: Deployment
+        documentIndex: 0
+      - isKind:
+          of: Service
+        documentIndex: 1
+      - isKind:
+          of: PodDisruptionBudget
+        documentIndex: 2
+
+  - it: the Deployment runs two replicas with a surge-only rolling update
+    template: hooks/workload.yaml
+    set:
+      hooks.enabled: true
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: metadata.name
+          value: gos-genus-os-hooks
+      - equal:
+          path: spec.replicas
+          value: 2
+      - equal:
+          path: spec.strategy.type
+          value: RollingUpdate
+      - equal:
+          path: spec.strategy.rollingUpdate.maxUnavailable
+          value: 0
+      - equal:
+          path: spec.strategy.rollingUpdate.maxSurge
+          value: 1
+      - equal:
+          path: spec.template.metadata.labels["app.kubernetes.io/component"]
+          value: hooks
+      - equal:
+          path: spec.selector.matchLabels["app.kubernetes.io/component"]
+          value: hooks
+
+  - it: the container runs the hooks server on the hooks port
+    template: hooks/workload.yaml
+    set:
+      hooks.enabled: true
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].name
+          value: hooks
+      - equal:
+          path: spec.template.spec.containers[0].command
+          value: ["python", "-m", "robothor.engine.hooks_server"]
+      - equal:
+          path: spec.template.spec.containers[0].ports[0].containerPort
+          value: 18801
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ROBOTHOR_HOOKS_PORT
+            value: "18801"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ROBOTHOR_HOOKS_HOST
+            value: 0.0.0.0
+
+  - it: probes hit /live and /ready
+    template: hooks/workload.yaml
+    set:
+      hooks.enabled: true
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.path
+          value: /live
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.path
+          value: /ready
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.port
+          value: http
+
+  - it: mounts the channels ConfigMap and points ROBOTHOR_WEBHOOKS_CONFIG at it
+    template: hooks/workload.yaml
+    set:
+      hooks.enabled: true
+    documentIndex: 0
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ROBOTHOR_WEBHOOKS_CONFIG
+            value: /etc/robothor/webhooks/webhooks.yaml
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: webhooks
+            mountPath: /etc/robothor/webhooks
+            readOnly: true
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: webhooks
+            configMap:
+              name: gos-genus-os-hooks-webhooks
+
+  - it: has no workspace volume and no migrations init container
+    template: hooks/workload.yaml
+    set:
+      hooks.enabled: true
+      migrations.enabled: true
+    documentIndex: 0
+    asserts:
+      - notContains:
+          path: spec.template.spec.volumes
+          content:
+            name: workspace
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: workspace
+          any: true
+      - notExists:
+          path: spec.template.spec.initContainers
+      - notContains:
+          path: spec.template.spec.volumes
+          content:
+            name: migration-api-token
+          any: true
+
+  - it: reads only the cache and engine-providers secrets
+    template: hooks/workload.yaml
+    set:
+      hooks.enabled: true
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].envFrom
+          value:
+            - secretRef:
+                name: gos-genus-os-cache
+            - secretRef:
+                name: gos-genus-os-engine-providers
+
+  - it: refuses the database secret class
+    template: hooks/workload.yaml
+    set:
+      hooks.enabled: true
+      hooks.secretRefs: [cache, database]
+    asserts:
+      - failedTemplate:
+          errorPattern: hooks.secretRefs forbids secret class "database"
+
+  - it: rolls the pods when the channels change
+    template: hooks/workload.yaml
+    set:
+      hooks.enabled: true
+      hooks.channels:
+        example:
+          secret_env: EXAMPLE_WEBHOOK_SECRET
+    documentIndex: 0
+    asserts:
+      - exists:
+          path: spec.template.metadata.annotations["checksum/webhooks"]
+
+  - it: the Service is named <release>-hooks and listens on the hooks port
+    template: hooks/workload.yaml
+    set:
+      hooks.enabled: true
+    documentIndex: 1
+    asserts:
+      - equal:
+          path: metadata.name
+          value: gos-genus-os-hooks
+      - equal:
+          path: spec.ports[0].port
+          value: 18801
+      - equal:
+          path: spec.ports[0].targetPort
+          value: http
+      - equal:
+          path: spec.selector["app.kubernetes.io/component"]
+          value: hooks
+
+  - it: a custom hooks.port moves the container, Service and env together
+    template: hooks/workload.yaml
+    set:
+      hooks.enabled: true
+      hooks.port: 18901
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].ports[0].containerPort
+          value: 18901
+        documentIndex: 0
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ROBOTHOR_HOOKS_PORT
+            value: "18901"
+        documentIndex: 0
+      - equal:
+          path: spec.ports[0].port
+          value: 18901
+        documentIndex: 1
+
+  - it: the PodDisruptionBudget keeps one pod available
+    template: hooks/workload.yaml
+    set:
+      hooks.enabled: true
+    documentIndex: 2
+    asserts:
+      - equal:
+          path: spec.minAvailable
+          value: 1
+      - equal:
+          path: spec.selector.matchLabels["app.kubernetes.io/component"]
+          value: hooks
+
+  - it: the ConfigMap renders hooks.channels as webhooks.yaml
+    template: hooks/configmap.yaml
+    set:
+      hooks.enabled: true
+      hooks.channels:
+        example:
+          stream: example
+          secret_env: EXAMPLE_WEBHOOK_SECRET
+          signature_scheme: hmac_hex
+    asserts:
+      - isKind:
+          of: ConfigMap
+      - equal:
+          path: metadata.name
+          value: gos-genus-os-hooks-webhooks
+      - equal:
+          path: metadata.labels["app.kubernetes.io/component"]
+          value: hooks
+      - matchRegex:
+          path: data["webhooks.yaml"]
+          pattern: "(?m)^channels:\\n  example:\\n"
+      - matchRegex:
+          path: data["webhooks.yaml"]
+          pattern: "secret_env: EXAMPLE_WEBHOOK_SECRET"
+
+  - it: an empty channel map still renders a loadable webhooks.yaml
+    template: hooks/configmap.yaml
+    set:
+      hooks.enabled: true
+    asserts:
+      - equal:
+          path: data["webhooks.yaml"]
+          value: |
+            channels: {}

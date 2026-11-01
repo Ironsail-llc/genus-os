@@ -1,0 +1,121 @@
+suite: hooks component wiring (service account, network policy)
+release:
+  name: gos
+  namespace: genus
+tests:
+  - it: no hooks service account by default
+    template: serviceaccount.yaml
+    asserts:
+      - notEqual:
+          path: metadata.name
+          value: gos-genus-os-hooks
+
+  - it: a hooks service account renders when enabled
+    template: serviceaccount.yaml
+    set:
+      hooks.enabled: true
+    documentSelector:
+      path: metadata.name
+      value: gos-genus-os-hooks
+    asserts:
+      - isKind:
+          of: ServiceAccount
+      - equal:
+          path: automountServiceAccountToken
+          value: false
+
+  - it: the hooks pods accept the ingress controller on the hooks port
+    template: networkpolicy.yaml
+    set:
+      hooks.enabled: true
+      networkPolicy.enabled: true
+      networkPolicy.egress.enabled: true
+    documentSelector:
+      path: metadata.name
+      value: gos-genus-os-allow-traefik-hooks
+    asserts:
+      - equal:
+          path: spec.podSelector.matchLabels["app.kubernetes.io/component"]
+          value: hooks
+      - equal:
+          path: spec.ingress[0].ports[0].port
+          value: 18801
+
+  - it: the hooks pods accept the smoke-test pod
+    template: networkpolicy.yaml
+    set:
+      hooks.enabled: true
+      networkPolicy.enabled: true
+      networkPolicy.egress.enabled: true
+    documentSelector:
+      path: metadata.name
+      value: gos-genus-os-hooks-internal-ingress
+    asserts:
+      - equal:
+          path: spec.ingress[0].from[0].podSelector.matchLabels["app.kubernetes.io/component"]
+          value: helm-test
+      - equal:
+          path: spec.ingress[0].ports[0].port
+          value: 18801
+
+  - it: the hooks pods may reach the in-chart cache
+    template: networkpolicy.yaml
+    set:
+      hooks.enabled: true
+      networkPolicy.enabled: true
+      networkPolicy.egress.enabled: true
+    documentSelector:
+      path: metadata.name
+      value: gos-genus-os-hooks-internal-egress
+    asserts:
+      - equal:
+          path: spec.egress[0].to[0].podSelector.matchLabels["app.kubernetes.io/name"]
+          value: valkey
+
+  - it: the in-chart cache accepts the hooks pods
+    template: networkpolicy.yaml
+    set:
+      hooks.enabled: true
+      networkPolicy.enabled: true
+      networkPolicy.egress.enabled: true
+    documentSelector:
+      path: metadata.name
+      value: gos-genus-os-redis-ingress
+    asserts:
+      - contains:
+          path: spec.ingress[0].from
+          content:
+            podSelector:
+              matchLabels:
+                app.kubernetes.io/name: genus-os
+                app.kubernetes.io/instance: gos
+                app.kubernetes.io/component: hooks
+
+  - it: an external egress destination may name the hooks component
+    template: networkpolicy.yaml
+    set:
+      hooks.enabled: true
+      networkPolicy.enabled: true
+      networkPolicy.egress.enabled: true
+      networkPolicy.egress.destinations.redis.components: [engine, hooks]
+      networkPolicy.egress.destinations.redis.cidrs: [10.0.0.10/32]
+    documentSelector:
+      path: metadata.name
+      value: gos-genus-os-redis-egress
+    asserts:
+      - contains:
+          path: spec.podSelector.matchExpressions[2].values
+          content: hooks
+
+  - it: no hooks network policy renders by default
+    template: networkpolicy.yaml
+    set:
+      networkPolicy.enabled: true
+      networkPolicy.egress.enabled: true
+    asserts:
+      - notEqual:
+          path: spec.podSelector.matchLabels["app.kubernetes.io/component"]
+          value: hooks
+      - notMatchRegex:
+          path: metadata.name
+          pattern: hooks
