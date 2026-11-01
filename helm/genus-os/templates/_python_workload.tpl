@@ -251,10 +251,11 @@ spec:
           {{- /* Create each import-path directory, and refuse one that is, or
                  sits under, a symlink: a read-only mount of a link would be a
                  read-only view of a directory still writable through the
-                 workspace mount. pwd -P resolves every component, and find refuses a
-                 symlink anywhere inside, since wheels never ship one. */}}
+                 workspace mount. pwd -P resolves every component; find refuses a
+                 symlink anywhere inside (wheels ship none) and a file with a
+                 second hard link (the image installs with UV_LINK_MODE=copy). */}}
           command:
-            {{- toYaml (concat (list "sh" "-c" "for d in \"$@\"; do if [ -L \"$d\" ]; then echo \"plugin-dirs: $d is a symlink; remove it (inspect what it held) before starting\" >&2; exit 1; fi; mkdir -p -- \"$d\" || exit 1; if [ \"$(cd -- \"$d\" && pwd -P)\" != \"$d\" ]; then echo \"plugin-dirs: $d resolves through a symlink; refusing\" >&2; exit 1; fi; if [ -n \"$(find \"$d\" -type l -print 2>/dev/null | head -n 1)\" ]; then echo \"plugin-dirs: $d contains a symlink; remove it (inspect where it points) before starting\" >&2; exit 1; fi; done" "plugin-dirs") $importDirs) | nindent 12 }}
+            {{- toYaml (concat (list "sh" "-c" "for d in \"$@\"; do if [ -L \"$d\" ]; then echo \"plugin-dirs: $d is a symlink; remove it (inspect what it held) before starting\" >&2; exit 1; fi; mkdir -p -- \"$d\" || exit 1; if [ \"$(cd -- \"$d\" && pwd -P)\" != \"$d\" ]; then echo \"plugin-dirs: $d resolves through a symlink; refusing\" >&2; exit 1; fi; if [ -n \"$(find \"$d\" -type l -print 2>/dev/null | head -n 1)\" ]; then echo \"plugin-dirs: $d contains a symlink; remove it (inspect where it points) before starting\" >&2; exit 1; fi; if [ -n \"$(find \"$d\" -type f -links +1 -print 2>/dev/null | head -n 1)\" ]; then echo \"plugin-dirs: $d holds a hardlinked file; reinstall its plugins into a fresh directory before starting\" >&2; exit 1; fi; done" "plugin-dirs") $importDirs) | nindent 12 }}
           volumeMounts:
             - name: workspace
               mountPath: {{ $ws.mountPath | quote }}

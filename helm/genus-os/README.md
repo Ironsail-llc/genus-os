@@ -424,7 +424,11 @@ app user rather than by kubelet. The init step refuses to start the pod if the
 directory is a symlink, resolves through one, or contains one anywhere inside:
 a read-only mount of a link would still be writable through the workspace, so
 remove the link, after inspecting what it held or where it points, before the
-engine can start. Installed wheels never contain symlinks. An import-path entry
+engine can start. Installed wheels never contain symlinks. It also refuses a
+file in the directory that has a second hard link, which would share its
+contents with a writable path; the engine image installs with
+`UV_LINK_MODE=copy`, so a legitimate install never leaves one. If it trips,
+reinstall that directory's plugins into a fresh one. An import-path entry
 that is the workspace itself fails the render. Nothing in the engine writes there: installs go
 through an install Job that mounts the workspace claim read-write directly,
 the engine's install and remove routes answer 409 saying so, and enable,
