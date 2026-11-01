@@ -40,15 +40,11 @@ def _resolve(path: str | os.PathLike[str]) -> Path:
 
 def _managed() -> tuple[list[Path], list[Path]]:
     """(directories, files) no agent tool may write, resolved."""
+    from robothor.plugins.installer import _plugin_target_dir
+
     dirs: list[Path] = []
     files: list[Path] = []
-    try:
-        from robothor.settings import get_settings
-
-        plugin_dir = str(get_settings().paths.plugin_dir or "").strip()
-    except Exception as exc:  # noqa: BLE001 - unresolvable settings mean no plugin dir
-        logger.debug("Plugin dir: settings unavailable (%s)", type(exc).__name__)
-        plugin_dir = ""
+    plugin_dir = _plugin_target_dir()
     if plugin_dir:
         dirs.append(_resolve(plugin_dir))
     try:
@@ -134,6 +130,7 @@ _GLOB_CHARS = frozenset("*?[")
 
 
 def _expand_variables(word: str, cwd: str) -> str:
+    from robothor.plugins.installer import _plugin_target_dir
     from robothor.settings.env import process_env_get
 
     def value(match: re.Match[str]) -> str:
@@ -141,12 +138,7 @@ def _expand_variables(word: str, cwd: str) -> str:
         if name == "PWD":
             return cwd
         if name == "ROBOTHOR_PLUGIN_DIR":
-            try:
-                from robothor.settings import get_settings
-
-                return str(get_settings().paths.plugin_dir or "")
-            except Exception:  # noqa: BLE001 - an unknown value expands to nothing
-                return ""
+            return _plugin_target_dir()
         return process_env_get(name, "") or ""
 
     return _VARIABLE.sub(value, word)
