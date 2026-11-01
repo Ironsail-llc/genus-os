@@ -236,13 +236,20 @@ class TestPrepareToolset:
         assert "claude_code_start" in advertised
         assert "claude_code_start" in prepared.tier_unlocked
 
-    async def test_enforce_on_a_deferred_run_makes_what_it_unlocks_reachable(self, registry):
+    async def test_enforce_on_a_deferred_run_makes_what_it_unlocks_reachable(
+        self, registry, monkeypatch
+    ):
         from robothor.engine.capability_tier import resolve_tier
 
+        monkeypatch.setenv("ROBOTHOR_RIP_16_ENABLED", "1")
+        monkeypatch.delenv("ROBOTHOR_DISABLE_ALL_RIPS", raising=False)
         decision = resolve_tier("owner", interactive=True, identity_verified=True, mode="enforce")
         prepared = await self._prepare(registry, decision)
 
-        assert "claude_code_start" in prepared.tool_names
+        advertised = {s["function"]["name"] for s in prepared.tool_schemas}
+        assert "tool_search" in advertised  # the run was deferred
+        assert "claude_code_start" not in advertised
+        assert "claude_code_start" in prepared.reachable_names
         assert "claude_code_start" in prepared.tier_unlocked
 
     async def test_no_decision_is_todays_toolset(self, registry):
