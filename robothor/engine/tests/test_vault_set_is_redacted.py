@@ -242,3 +242,204 @@ async def test_the_tool_start_event_does_not_stream_the_credential():
     assert not leaked, "tool_start streamed the credential"
     assert start["args"]["key"] == "providers/github/api_key"
     assert call.tool_args["value"] == FAKE_TOKEN, "the handler must still get the real value"
+
+
+# ── a credential reached through a wrapper ───────────────────────────────────
+#
+# On a deferred run the model does not call ``vault_set``; it calls
+# ``tool_call {name: vault_set, arguments: {key, value}}``. The tool NAME every
+# redaction site sees is then ``tool_call``, and the value sits one level down.
+# Redaction has to follow the call to the tool it actually reaches.
+
+#: Not credential-shaped on purpose: 32 hex characters, the form an API key
+#: usually takes, which no shape pattern can tell from a digest. Only the
+#: argument-level rule can catch it.
+PLAIN_HEX_VALUE = "0123456789abcdef0123456789abcdef"
+
+
+def _wrapped_vault_set(value: str = PLAIN_HEX_VALUE) -> dict:
+    return {
+        "name": "vault_set",
+        "arguments": {"key": "providers/weather/api_key", "value": value},
+    }
+
+
+def test_a_vault_set_reached_through_tool_call_is_redacted():
+    from robothor.secrets.redaction import PLACEHOLDER, redact_tool_arguments
+
+    cleaned = redact_tool_arguments("tool_call", _wrapped_vault_set())
+    assert PLAIN_HEX_VALUE not in json.dumps(cleaned)
+    assert cleaned["name"] == "vault_set"
+    assert cleaned["arguments"]["key"] == "providers/weather/api_key"
+    assert cleaned["arguments"]["value"] == PLACEHOLDER
+
+
+def test_a_doubly_wrapped_vault_set_is_redacted():
+    from robothor.secrets.redaction import PLACEHOLDER, redact_tool_arguments
+
+    outer = {"name": "tool_call", "arguments": _wrapped_vault_set()}
+    cleaned = redact_tool_arguments("tool_call", outer)
+    assert PLAIN_HEX_VALUE not in json.dumps(cleaned)
+    assert cleaned["arguments"]["arguments"]["value"] == PLACEHOLDER
+    assert cleaned["arguments"]["arguments"]["key"] == "providers/weather/api_key"
+
+
+def test_a_wrapped_call_whose_arguments_are_a_json_string_is_redacted():
+    """Models send ``arguments`` as a JSON string often enough that the
+    wrapper's own handler is not the only reader that has to cope."""
+    from robothor.secrets.redaction import redact_tool_arguments
+
+    wrapped = {"name": "vault_set", "arguments": json.dumps(_wrapped_vault_set()["arguments"])}
+    cleaned = redact_tool_arguments("tool_call", wrapped)
+    assert PLAIN_HEX_VALUE not in json.dumps(cleaned)
+
+
+def test_a_credential_named_argument_nested_in_a_wrapper_is_redacted():
+    """``mcp_call_tool`` forwards an ``arguments`` object to an external tool;
+    a nested ``api_key`` is the same credential it is at the top level."""
+    from robothor.secrets.redaction import PLACEHOLDER, redact_tool_arguments
+
+    cleaned = redact_tool_arguments(
+        "mcp_call_tool",
+        {"server_name": "s", "tool_name": "t", "arguments": {"api_key": PLAIN_HEX_VALUE}},
+    )
+    assert cleaned["arguments"]["api_key"] == PLACEHOLDER
+    assert cleaned["tool_name"] == "t"
+
+
+def test_a_known_value_inside_a_wrapper_is_redacted():
+    """Known-value redaction applies to the wrapper's arguments too: a value
+    the vault already holds, pasted into an ordinary nested argument."""
+    from robothor.secrets.redaction import (
+        forget_known_values,
+        redact_tool_arguments,
+        register_known_value,
+    )
+
+    register_known_value(PLAIN_HEX_VALUE, fingerprint="abcd")
+    try:
+        cleaned = redact_tool_arguments(
+            "tool_call",
+            {
+                "name": "write_file",
+                "arguments": {"path": "notes.md", "content": f"key is {PLAIN_HEX_VALUE}"},
+            },
+        )
+    finally:
+        forget_known_values()
+    assert PLAIN_HEX_VALUE not in json.dumps(cleaned)
+    assert cleaned["arguments"]["path"] == "notes.md"
+
+
+def test_wrapper_redaction_never_mutates_the_arguments_the_tool_ran_with():
+    from robothor.secrets.redaction import redact_tool_arguments
+
+    original = {"name": "tool_call", "arguments": _wrapped_vault_set()}
+    redact_tool_arguments("tool_call", original)
+    assert original["arguments"]["arguments"]["value"] == PLAIN_HEX_VALUE
+
+
+def test_a_tool_call_wrapped_vault_set_is_redacted_in_the_stored_step():
+    session = _session()
+    step = session.record_tool_call(
+        tool_name="tool_call",
+        tool_input=_wrapped_vault_set(),
+        tool_output={"success": True, "key": "providers/weather/api_key"},
+        tool_call_id="call_w1",
+    )
+    assert PLAIN_HEX_VALUE not in json.dumps(step.tool_input, default=str), (
+        "the credential was written into agent_run_steps.tool_input"
+    )
+    assert PLAIN_HEX_VALUE not in json.dumps(session.messages, default=str)
+    assert step.tool_input["arguments"]["key"] == "providers/weather/api_key"
+
+
+def test_a_doubly_wrapped_vault_set_is_redacted_in_the_stored_step():
+    session = _session()
+    step = session.record_tool_call(
+        tool_name="tool_call",
+        tool_input={"name": "tool_call", "arguments": _wrapped_vault_set()},
+        tool_output={"error": "tool_call cannot invoke itself or another meta-tool"},
+        tool_call_id="call_w2",
+    )
+    assert PLAIN_HEX_VALUE not in json.dumps(step.tool_input, default=str)
+
+
+def test_the_assistant_echo_of_a_wrapped_vault_set_is_redacted():
+    """The provider's reply carries the call as a JSON string; that message is
+    replayed to the provider and recorded, so it is a store like the step."""
+    from robothor.secrets.redaction import redact_assistant_turn
+
+    message = {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {
+                "id": "c1",
+                "type": "function",
+                "function": {"name": "tool_call", "arguments": json.dumps(_wrapped_vault_set())},
+            }
+        ],
+    }
+    cleaned = redact_assistant_turn(message)
+    assert PLAIN_HEX_VALUE not in json.dumps(cleaned)
+    assert message["tool_calls"][0]["function"]["arguments"].count(PLAIN_HEX_VALUE) == 1
+
+
+async def _tool_start_for(tool_name: str, tool_args: dict) -> dict:
+    from types import SimpleNamespace
+
+    from robothor.engine.tool_turn import ToolTurnMixin
+
+    events: list = []
+
+    async def execute(name, args, **kwargs):
+        return {"success": True}
+
+    executor = ToolTurnMixin.__new__(ToolTurnMixin)
+    executor.registry = SimpleNamespace(execute=execute)  # type: ignore[attr-defined]
+    executor.config = SimpleNamespace(workspace="/tmp")  # type: ignore[attr-defined]
+    call = SimpleNamespace(
+        tool_name=tool_name,
+        tool_args=tool_args,
+        tc=SimpleNamespace(id="c1"),
+        result=None,
+        elapsed_ms=0,
+    )
+    await executor._execute_one(call, _turn_request(events))  # type: ignore[arg-type]
+    (start,) = [e for e in events if e.get("event") == "tool_start"]
+    return start
+
+
+@pytest.mark.asyncio
+async def test_the_tool_start_event_does_not_stream_a_tool_call_wrapped_credential():
+    args = _wrapped_vault_set()
+    start = await _tool_start_for("tool_call", args)
+    assert PLAIN_HEX_VALUE not in json.dumps(start, default=str), (
+        "tool_start streamed the credential"
+    )
+    assert start["tool"] == "tool_call"
+    assert start["args"]["arguments"]["key"] == "providers/weather/api_key"
+    assert args["arguments"]["value"] == PLAIN_HEX_VALUE, (
+        "the handler must still get the real value"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_tool_start_event_does_not_stream_a_doubly_wrapped_credential():
+    start = await _tool_start_for(
+        "tool_call", {"name": "tool_call", "arguments": _wrapped_vault_set()}
+    )
+    assert PLAIN_HEX_VALUE not in json.dumps(start, default=str)
+
+
+def test_a_workflow_step_stores_a_wrapped_vault_set_redacted():
+    from types import SimpleNamespace
+
+    from robothor.engine.workflow import _stored_tool_input
+
+    stored = _stored_tool_input(
+        SimpleNamespace(tool_name="tool_call", tool_input=_wrapped_vault_set())  # type: ignore[arg-type]
+    )
+    assert stored is not None
+    assert PLAIN_HEX_VALUE not in stored
