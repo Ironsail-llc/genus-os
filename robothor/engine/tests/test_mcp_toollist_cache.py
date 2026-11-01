@@ -244,11 +244,34 @@ class TestToolListCache:
         assert counters.list_calls == {"alpha": 2}
         assert r1["tools"] == r2["tools"] == r3["tools"]
 
-    def test_mcp_list_tools_schema_declares_refresh(self) -> None:
+    def test_mcp_list_tools_schema_declares_refresh(self, cache_on: None) -> None:
         from robothor.engine.tools.schemas import get_engine_schemas
 
         props = get_engine_schemas()["mcp_list_tools"]["function"]["parameters"]["properties"]
         assert props["refresh"]["type"] == "boolean"
+        assert "server_name" in props
+
+    def test_flag_off_mcp_list_tools_schema_is_unchanged(self, cache_off: None) -> None:
+        """With the flag off the prompt carries exactly the schema it had before."""
+        from robothor.engine.tools.schemas import get_engine_schemas
+
+        assert get_engine_schemas()["mcp_list_tools"] == {
+            "type": "function",
+            "function": {
+                "name": "mcp_list_tools",
+                "description": "List tools available on a specific external MCP server.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "server_name": {
+                            "type": "string",
+                            "description": "Name of the MCP server",
+                        },
+                    },
+                    "required": ["server_name"],
+                },
+            },
+        }
 
     @pytest.mark.asyncio
     async def test_flag_off_lists_live_every_run(
