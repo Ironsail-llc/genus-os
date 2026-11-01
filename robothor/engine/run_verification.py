@@ -37,14 +37,16 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-# Reuse, don't re-derive: the completion-claim phrasings and the negation
-# window are already tuned in completion_contract, and the two controls must
-# not disagree about what "the task is complete" means.
 from robothor.engine.completion_contract import (
     _COMPLETION_CLAIM_PATTERNS,
     _NEGATION_RE,
     _NEGATION_WINDOW,
 )
+
+# Reuse, don't re-derive: the completion-claim phrasings and the negation
+# window are already tuned in completion_contract, and the two controls must
+# not disagree about what "the task is complete" means.
+from robothor.engine.wrapped_call import wrapped_arguments
 
 __all__ = [
     "RESOLUTION_BLOCKING_STATUSES",
@@ -880,8 +882,8 @@ def resolve_tool_input(step: Any) -> dict[str, Any]:
     if _get(step, "tool_name") != "tool_call":
         return payload
     for _ in range(4):
-        args = payload.get("arguments")
-        if not isinstance(args, dict):
+        args = wrapped_arguments(payload.get("arguments"))
+        if args is None:
             return {}
         if args.get("name") == "tool_call" or payload.get("name") == "tool_call":
             payload = args
