@@ -133,3 +133,35 @@ def test_a_selected_plugin_backend_is_trusted_to_start_its_own_runtime(monkeypat
 
     assert status.available is True
     assert "example-backend" in status.binary
+
+
+def test_concurrent_callers_share_one_probe(monkeypatch) -> None:
+    """When the cache is cold and the daemon is slow, runs that start together
+    wait on ONE `<binary> info`, not one each."""
+    import threading
+    import time
+
+    monkeypatch.setattr(sandbox_mod.shutil, "which", lambda name: f"/usr/bin/{name}")
+    calls = 0
+    lock = threading.Lock()
+
+    def _run(*_a: Any, **_k: Any) -> _Proc:
+        nonlocal calls
+        with lock:
+            calls += 1
+        time.sleep(0.2)
+        return _Proc(0)
+
+    monkeypatch.setattr(sandbox_mod.subprocess, "run", _run)
+    answers: list[bool] = []
+    threads = [
+        threading.Thread(target=lambda: answers.append(sandbox_mod.runtime_status().available))
+        for _ in range(5)
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+
+    assert calls == 1
+    assert answers == [True] * 5
