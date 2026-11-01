@@ -313,7 +313,9 @@ async def _execute_code(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
     else:
         raw = raw_http_responses(merged or [])
         shaped.update(unread_proxy_responses(proxied + raw, result.stdout))
-    return shaped
+    from robothor.engine.sandbox_policy import stamp_location  # playground: where it ran
+
+    return await stamp_location(shaped, "host", ctx.run_id, tool="execute_code")
 
 
 def _resolved_timeout(args: dict[str, Any], ctx: ToolContext) -> int:

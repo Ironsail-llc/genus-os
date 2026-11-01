@@ -795,7 +795,6 @@ class GuardrailEngine:
         prior_steps: list[Any] | None = None,
         *,
         user_role: str = "",
-        sandboxed: bool = False,
         host_refusal: str = "",
     ) -> GuardrailResult:
         """Run all enabled pre-execution guardrails on a tool call.
@@ -804,8 +803,9 @@ class GuardrailEngine:
         (in order). Guardrails that need to inspect context from earlier in the
         run (e.g. "did we already propose the time via email?") read it.
 
-        ``user_role`` and ``sandboxed`` are passed only under the sandbox
-        playground, and only the exec allowlist reads them. ``host_refusal`` is a
+        ``user_role`` is passed only under the sandbox playground, and only the
+        exec allowlist reads it: the role of the owner or admin DRIVING this run,
+        empty for anyone else (``sandbox_policy.acting_host_role``). ``host_refusal`` is a
         refused execution plan: with no container, a tool a container confines
         (desktop, browser) would reach the engine host, so it is refused here.
         """
@@ -828,7 +828,6 @@ class GuardrailEngine:
                 agent_id,
                 prior_steps or [],
                 user_role=user_role,
-                sandboxed=sandboxed,
             )
             if not result.allowed:
                 return result
@@ -860,7 +859,6 @@ class GuardrailEngine:
         prior_steps: list[Any],
         *,
         user_role: str = "",
-        sandboxed: bool = False,
     ) -> GuardrailResult:
         """Dispatch to the correct pre-execution policy."""
         if policy == "no_destructive_writes":
@@ -874,9 +872,7 @@ class GuardrailEngine:
         if policy == "rate_limit":
             return self._check_rate_limit(agent_id)
         if policy == "exec_allowlist":
-            return self._check_exec_allowlist(
-                tool_name, tool_args, agent_id, user_role=user_role, sandboxed=sandboxed
-            )
+            return self._check_exec_allowlist(tool_name, tool_args, agent_id, user_role=user_role)
         if policy == "write_path_restrict":
             return self._check_write_path(tool_name, tool_args, agent_id)
         if policy == "desktop_safety":
@@ -1016,22 +1012,20 @@ class GuardrailEngine:
         tool_args: dict[str, Any],
         agent_id: str,
         user_role: str = "",
-        sandboxed: bool = False,
     ) -> GuardrailResult:
         """The allowlist, as the sandbox playground reads it.
 
-        An allowlist restricts HOST commands. Under ROBOTHOR_SANDBOX_PLAYGROUND a
-        command inside a container (no network, no host environment) skips it,
-        and an owner or admin on the host whose command it would block is
-        allowed and recorded as an observation: the human's role is the limit.
-        Without the flag, or for anyone else, it is the allowlist as before.
+        Under ROBOTHOR_SANDBOX_PLAYGROUND an owner or admin DRIVING this run
+        (``user_role`` is empty for anyone else, including an automated run
+        whose service role reads "owner" and a sub-agent) whose command the
+        allowlist would block is allowed and recorded as an observation: the
+        person's role is the limit. Everyone else keeps the allowlist, inside a
+        container or out. Without the flag it is the allowlist as before.
         """
-        if (user_role or sandboxed) and self._exec_allowlists.get(agent_id):
+        if user_role and self._exec_allowlists.get(agent_id):
             from robothor.engine.feature_flags import sandbox_playground_enabled
 
             if sandbox_playground_enabled():
-                if sandboxed and tool_name in ("exec", "shell"):
-                    return GuardrailResult()
                 verdict = self._exec_allowlist_verdict(tool_name, tool_args, agent_id)
                 from robothor.engine.sandbox_policy import role_may_run_on_host
 
