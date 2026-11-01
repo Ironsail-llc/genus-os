@@ -248,8 +248,12 @@ spec:
           imagePullPolicy: {{ include "genus-os.imagePullPolicy" (dict "root" $root "component" $component "values" $cv) }}
           securityContext:
             {{- toYaml $root.Values.global.securityContext | nindent 12 }}
+          {{- /* Create each import-path directory, and refuse one that is, or
+                 sits under, a symlink: a read-only mount of a link would be a
+                 read-only view of a directory still writable through the
+                 workspace mount. pwd -P resolves every component. */}}
           command:
-            {{- toYaml (concat (list "mkdir" "-p" "--") $importDirs) | nindent 12 }}
+            {{- toYaml (concat (list "sh" "-c" "for d in \"$@\"; do if [ -L \"$d\" ]; then echo \"plugin-dirs: $d is a symlink; remove it (inspect what it held) before starting\" >&2; exit 1; fi; mkdir -p -- \"$d\" || exit 1; if [ \"$(cd -- \"$d\" && pwd -P)\" != \"$d\" ]; then echo \"plugin-dirs: $d resolves through a symlink; refusing\" >&2; exit 1; fi; done" "plugin-dirs") $importDirs) | nindent 12 }}
           volumeMounts:
             - name: workspace
               mountPath: {{ $ws.mountPath | quote }}

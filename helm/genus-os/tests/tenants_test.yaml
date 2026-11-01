@@ -726,8 +726,14 @@ tests:
       value: Deployment
     asserts:
       - equal:
-          path: spec.template.spec.initContainers[?(@.name == "plugin-dirs")].command
-          value: [mkdir, -p, --, /workspace/.plugins]
+          path: spec.template.spec.initContainers[?(@.name == "plugin-dirs")].command[0]
+          value: sh
+      - equal:
+          path: spec.template.spec.initContainers[?(@.name == "plugin-dirs")].command[3]
+          value: plugin-dirs
+      - equal:
+          path: spec.template.spec.initContainers[?(@.name == "plugin-dirs")].command[4]
+          value: /workspace/.plugins
       - equal:
           path: spec.template.spec.initContainers[?(@.name == "plugin-dirs")].image
           value: ghcr.io/ironsail-llc/genus-os/python:v1.2.3
@@ -768,8 +774,14 @@ tests:
             subPath: .plugins
             readOnly: true
       - equal:
-          path: spec.template.spec.initContainers[?(@.name == "plugin-dirs")].command
-          value: [mkdir, -p, --, /data/ws/.plugins]
+          path: spec.template.spec.initContainers[?(@.name == "plugin-dirs")].command[0]
+          value: sh
+      - equal:
+          path: spec.template.spec.initContainers[?(@.name == "plugin-dirs")].command[3]
+          value: plugin-dirs
+      - equal:
+          path: spec.template.spec.initContainers[?(@.name == "plugin-dirs")].command[4]
+          value: /data/ws/.plugins
 
   - it: every import-path directory a cell's env puts on its workspace is read-only
     template: engine/tenants.yaml
@@ -804,8 +816,17 @@ tests:
           content: {mountPath: /opt/vendor}
           any: true
       - equal:
-          path: spec.template.spec.initContainers[?(@.name == "plugin-dirs")].command
-          value: [mkdir, -p, --, /workspace/custom-plugins, /workspace/lib]
+          path: spec.template.spec.initContainers[?(@.name == "plugin-dirs")].command[0]
+          value: sh
+      - equal:
+          path: spec.template.spec.initContainers[?(@.name == "plugin-dirs")].command[3]
+          value: plugin-dirs
+      - equal:
+          path: spec.template.spec.initContainers[?(@.name == "plugin-dirs")].command[4]
+          value: /workspace/custom-plugins
+      - equal:
+          path: spec.template.spec.initContainers[?(@.name == "plugin-dirs")].command[5]
+          value: /workspace/lib
 
   - it: a cell whose import path is its whole workspace is refused
     template: engine/tenants.yaml
@@ -854,8 +875,14 @@ tests:
             subPath: .plugins
             readOnly: true
       - equal:
-          path: spec.template.spec.initContainers[?(@.name == "plugin-dirs")].command
-          value: [mkdir, -p, --, /workspace/.plugins]
+          path: spec.template.spec.initContainers[?(@.name == "plugin-dirs")].command[0]
+          value: sh
+      - equal:
+          path: spec.template.spec.initContainers[?(@.name == "plugin-dirs")].command[3]
+          value: plugin-dirs
+      - equal:
+          path: spec.template.spec.initContainers[?(@.name == "plugin-dirs")].command[4]
+          value: /workspace/.plugins
       - contains:
           path: spec.template.spec.initContainers
           content: {name: wait-for-migrations}
@@ -871,8 +898,14 @@ tests:
       engine.env.PYTHONPATH: /workspace/.plugins
     asserts:
       - equal:
-          path: spec.template.spec.initContainers[?(@.name == "plugin-dirs")].command
-          value: [mkdir, -p, --, /workspace/.plugins]
+          path: spec.template.spec.initContainers[?(@.name == "plugin-dirs")].command[0]
+          value: sh
+      - equal:
+          path: spec.template.spec.initContainers[?(@.name == "plugin-dirs")].command[3]
+          value: plugin-dirs
+      - equal:
+          path: spec.template.spec.initContainers[?(@.name == "plugin-dirs")].command[4]
+          value: /workspace/.plugins
 
   - it: a root engine without a plugin dir is unchanged
     template: engine/workload.yaml

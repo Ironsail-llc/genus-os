@@ -302,7 +302,8 @@ def test_no_engine_can_write_its_own_import_path() -> None:
         assert "plugin-dirs" in init, name
         assert init["plugin-dirs"]["image"] == engine["image"], name
         assert init["plugin-dirs"]["securityContext"] == engine["securityContext"], name
-        assert set(init["plugin-dirs"]["command"][3:]) == on_workspace, name
+        assert init["plugin-dirs"]["command"][:2] == ["sh", "-c"], name
+        assert set(init["plugin-dirs"]["command"][4:]) == on_workspace, name
 
 
 def _plugin_dirs_command(workspace_mount: str) -> list[str]:
