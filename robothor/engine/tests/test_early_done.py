@@ -92,6 +92,9 @@ def _response(content: str = "The answer is 42.") -> MagicMock:
     usage = MagicMock()
     usage.prompt_tokens = 10
     usage.completion_tokens = 5
+    usage.cache_creation_input_tokens = 0  # as a provider reports them, so
+    usage.cache_read_input_tokens = 0  # run telemetry gets real numbers
+    usage.prompt_tokens_details = None
     response.usage = usage
     return response
 
@@ -757,3 +760,24 @@ class TestTelemetryIsPublishedWithTheFinalStatus:
 
         assert run.status == RunStatus.COMPLETED
         assert RunStatus.RUNNING not in statuses, statuses
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("flag", ["1", ""])
+    async def test_a_successful_run_publishes_its_metrics_once(
+        self, runner, agent_config, monkeypatch, flag
+    ):
+        """With the flag on or off (the default), a completed run still sends
+        its metrics to the event bus, and sends them once."""
+        monkeypatch.setenv("ROBOTHOR_EARLY_DONE", flag)
+        published: list[dict[str, Any]] = []
+
+        def spy(self, run_data: dict[str, Any]) -> None:
+            published.append(run_data)
+
+        with patch("robothor.engine.telemetry.TraceContext.publish_metrics", spy):
+            run = await _execute(runner, agent_config, on_complete=AsyncMock())
+            await get_task_registry().drain(timeout=5.0)
+
+        assert run.status == RunStatus.COMPLETED
+        assert len(published) == 1, published
+        assert published[0]["status"] == "completed"
