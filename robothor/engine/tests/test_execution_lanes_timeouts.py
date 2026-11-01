@@ -131,21 +131,27 @@ class TestTheSchedulerClockStartsAfterTheSlot:
         pool.release(Lane.BACKGROUND)
 
 
+def _one_step_workflow_engine(tmp_path, *, timeout_seconds: int):
+    """A workflow engine holding one single-step workflow, `test-wf`."""
+    from robothor.engine.config import EngineConfig
+    from robothor.engine.models import WorkflowDef, WorkflowStepDef, WorkflowStepType
+    from robothor.engine.workflow import WorkflowEngine
+
+    engine = WorkflowEngine(
+        EngineConfig(workspace=tmp_path, manifest_dir=tmp_path / "agents"), runner=MagicMock()
+    )
+    step = WorkflowStepDef(id="t", type=WorkflowStepType.TRANSFORM, transform_expr="value")
+    engine._workflows["test-wf"] = WorkflowDef(
+        id="test-wf", name="Test WF", steps=[step], timeout_seconds=timeout_seconds
+    )
+    return engine
+
+
 class TestTheWorkflowClockStartsAfterTheSlot:
     async def test_a_queued_workflow_does_not_start_its_timeout(
         self, lanes_on, pool, clock_entries, tmp_path
     ):
-        from robothor.engine.config import EngineConfig
-        from robothor.engine.models import WorkflowDef, WorkflowStepDef, WorkflowStepType
-        from robothor.engine.workflow import WorkflowEngine
-
-        engine = WorkflowEngine(
-            EngineConfig(workspace=tmp_path, manifest_dir=tmp_path / "agents"), runner=MagicMock()
-        )
-        step = WorkflowStepDef(id="t", type=WorkflowStepType.TRANSFORM, transform_expr="value")
-        engine._workflows["test-wf"] = WorkflowDef(
-            id="test-wf", name="Test WF", steps=[step], timeout_seconds=1
-        )
+        engine = _one_step_workflow_engine(tmp_path, timeout_seconds=1)
         engine._persist_run_start = MagicMock()
         engine._persist_run_end = MagicMock()
         engine._persist_step = MagicMock()
@@ -206,21 +212,11 @@ class TestAQueuedWorkflowIsNotYetRunning:
     async def test_the_row_is_pending_until_the_slot_is_taken(
         self, lanes_on, pool, tmp_path, monkeypatch
     ):
-        from robothor.engine.config import EngineConfig
-        from robothor.engine.models import WorkflowDef, WorkflowStepDef, WorkflowStepType
-        from robothor.engine.workflow import WorkflowEngine
-
         log: list[tuple[str, Any]] = []
         monkeypatch.setattr(
             "robothor.db.connection.get_connection", lambda *a, **k: _RecordingConn(log)
         )
-        engine = WorkflowEngine(
-            EngineConfig(workspace=tmp_path, manifest_dir=tmp_path / "agents"), runner=MagicMock()
-        )
-        step = WorkflowStepDef(id="t", type=WorkflowStepType.TRANSFORM, transform_expr="value")
-        engine._workflows["test-wf"] = WorkflowDef(
-            id="test-wf", name="Test WF", steps=[step], timeout_seconds=5
-        )
+        engine = _one_step_workflow_engine(tmp_path, timeout_seconds=5)
         engine._persist_step = MagicMock()
 
         await pool.acquire(Lane.BACKGROUND)  # the lane is full
@@ -252,21 +248,11 @@ class TestAQueuedWorkflowIsNotYetRunning:
 
     async def test_flag_off_starts_running_as_before(self, pool, tmp_path, monkeypatch):
         monkeypatch.delenv("ROBOTHOR_EXECUTION_LANES", raising=False)
-        from robothor.engine.config import EngineConfig
-        from robothor.engine.models import WorkflowDef, WorkflowStepDef, WorkflowStepType
-        from robothor.engine.workflow import WorkflowEngine
-
         log: list[tuple[str, Any]] = []
         monkeypatch.setattr(
             "robothor.db.connection.get_connection", lambda *a, **k: _RecordingConn(log)
         )
-        engine = WorkflowEngine(
-            EngineConfig(workspace=tmp_path, manifest_dir=tmp_path / "agents"), runner=MagicMock()
-        )
-        step = WorkflowStepDef(id="t", type=WorkflowStepType.TRANSFORM, transform_expr="value")
-        engine._workflows["test-wf"] = WorkflowDef(
-            id="test-wf", name="Test WF", steps=[step], timeout_seconds=5
-        )
+        engine = _one_step_workflow_engine(tmp_path, timeout_seconds=5)
         engine._persist_step = MagicMock()
 
         run = await asyncio.wait_for(engine.execute("test-wf"), timeout=2.0)
