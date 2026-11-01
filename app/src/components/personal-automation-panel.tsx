@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { useAppQueryClient } from "@/lib/query/query-client";
 import { PersonalAutomationPayment } from "./personal-automation-payment";
 import { PersonalAutomationHandoffs, type ExternalHandoff } from "./personal-automation-handoffs";
 import { PersonalAutomationAudit } from "./personal-automation-audit";
@@ -34,9 +36,9 @@ function verificationSenders(value: FormDataEntryValue | null): Record<string, s
   return Object.fromEntries(entries);
 }
 
-async function api(path: string, method = "GET", data?: unknown) {
+async function api(path: string, method = "GET", data?: unknown, signal?: AbortSignal) {
   const response = await fetch(`/api/bridge/api/autonomy/${path}`, {
-    method, headers: { "Content-Type": "application/json" }, cache: "no-store",
+    method, headers: { "Content-Type": "application/json" }, cache: "no-store", signal,
     body: data === undefined ? undefined : JSON.stringify(data),
   });
   const body = await response.json();
@@ -44,7 +46,21 @@ async function api(path: string, method = "GET", data?: unknown) {
   return body;
 }
 
+/**
+ * Status and the operations journal, re-read every 30 seconds while the tab is
+ * visible. There is no autonomy event on the stream yet; every write below
+ * refreshes straight away, so the beat only catches changes made elsewhere.
+ */
+const POLL_MS = 30_000;
+const AUTONOMY_KEY = ["bridge", "autonomy", "snapshot"] as const;
+type Snapshot = { state: Status; journal: { operations: Operation[]; handoffs?: ExternalHandoff[] } };
+async function loadSnapshot(signal?: AbortSignal): Promise<Snapshot> {
+  const [state, journal] = await Promise.all([api("status", "GET", undefined, signal), api("operations", "GET", undefined, signal)]);
+  return { state, journal };
+}
+
 export function PersonalAutomationPanel() {
+  const client = useAppQueryClient();
   const intakeStarted = useRef(false);
   const intakeGeneration = useRef(0);
   const [intake, setIntake] = useState<{ token: string; origin: string | null } | null>(null);
@@ -74,24 +90,26 @@ export function PersonalAutomationPanel() {
     window.addEventListener("hashchange", loadIntake);
     return () => window.removeEventListener("hashchange", loadIntake);
   }, []);
-  const [status, setStatus] = useState<Status | null>(null);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [kind, setKind] = useState("profile");
   const [answerCount, setAnswerCount] = useState(1);
   const [anyWebsite, setAnyWebsite] = useState(false);
-  const [operations, setOperations] = useState<Operation[]>([]);
-  const [handoffs, setHandoffs] = useState<ExternalHandoff[]>([]);
 
+  const snapshot = useQuery(
+    { queryKey: AUTONOMY_KEY, queryFn: ({ signal }) => loadSnapshot(signal), staleTime: POLL_MS, refetchInterval: POLL_MS },
+    client
+  );
+  const status: Status | null = snapshot.data?.state ?? null;
+  const operations: Operation[] = snapshot.data?.journal.operations ?? [];
+  const handoffs: ExternalHandoff[] = snapshot.data?.journal.handoffs || [];
+  // A first read that failed says why; a later poll that fails keeps the last answer quietly.
+  const shownMessage = message || (snapshot.data ? "" : snapshot.error?.message ?? "");
   async function refresh() {
-    const [state, journal] = await Promise.all([api("status"), api("operations")]);
-    setStatus(state); setOperations(journal.operations); setHandoffs(journal.handoffs || []);
+    // A poll already on the wire may have left before the write; it is
+    // cancelled and read again rather than handed back.
+    await client.refetchQueries({ queryKey: AUTONOMY_KEY }, { cancelRefetch: true, throwOnError: true });
   }
-  useEffect(() => {
-    refresh().catch(e => setMessage(e.message));
-    const timer = setInterval(() => { refresh().catch(() => {}); }, 5000);
-    return () => clearInterval(timer);
-  }, []);
   async function act(work: () => Promise<unknown>) {
     setBusy(true); setMessage("");
     try { await work(); await refresh(); setMessage("Saved."); }
@@ -154,7 +172,7 @@ export function PersonalAutomationPanel() {
   };
 
   return <div className="space-y-8">
-    {message && <p role="status" className="rounded border p-3">{message}</p>}
+    {shownMessage && <p role="status" className="rounded border p-3">{shownMessage}</p>}
     <PersonalAutomationHandoffs handoffs={handoffs} refresh={refresh} />
     {operations.length > 0 && <section className="space-y-3">
       <h2 className="text-lg font-medium">Recent tasks</h2>

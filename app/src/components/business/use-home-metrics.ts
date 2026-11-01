@@ -43,17 +43,44 @@ function probeHealth() {
     );
 }
 
+const tabHidden = () => typeof document !== "undefined" && document.hidden;
+
+function startHealthBeat() {
+  if (healthInterval === null) healthInterval = setInterval(probeHealth, HEALTH_POLL_MS);
+}
+
+function stopHealthBeat() {
+  if (healthInterval !== null) clearInterval(healthInterval);
+  healthInterval = null;
+}
+
+// A tab nobody is looking at does not poll. Back on screen, the figure is of
+// unknown age, so it is read once before the beat restarts.
+function onHealthVisibility() {
+  if (tabHidden()) {
+    stopHealthBeat();
+    return;
+  }
+  probeHealth();
+  startHealthBeat();
+}
+
 function subscribeHealth(listener: () => void) {
   healthListeners.add(listener);
   if (healthListeners.size === 1) {
     probeHealth();
-    healthInterval = setInterval(probeHealth, HEALTH_POLL_MS);
+    if (!tabHidden()) startHealthBeat();
+    if (typeof document !== "undefined") {
+      document.addEventListener("visibilitychange", onHealthVisibility);
+    }
   }
   return () => {
     healthListeners.delete(listener);
     if (healthListeners.size === 0) {
-      if (healthInterval) clearInterval(healthInterval);
-      healthInterval = null;
+      stopHealthBeat();
+      if (typeof document !== "undefined") {
+        document.removeEventListener("visibilitychange", onHealthVisibility);
+      }
       healthState = { health: healthState.health, failure: null };
     }
   };
@@ -66,7 +93,9 @@ const getServerHealthState = () => SERVER_HEALTH_STATE;
 /**
  * The home figures the Dashboard view and the chat landing both show:
  * services healthy of total, active tasks, agents online. Read-only, no model
- * call. Health is polled every 30 seconds while any consumer is mounted.
+ * call. Health is polled every 30 seconds while any consumer is mounted and
+ * the tab is visible. Tasks and agents come from the shared query cache, so
+ * the shell and every home view reading them cost one request each.
  */
 export function useHomeMetrics() {
   const { health, failure: healthFailure } = useSyncExternalStore(
