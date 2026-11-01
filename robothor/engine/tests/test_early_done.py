@@ -733,6 +733,22 @@ class TestReviewFollowUps:
         assert "finish_end" in timeline.marks
         assert any("policy bug" in r.getMessage() for r in caplog.records)
 
+    @pytest.mark.asyncio
+    @pytest.mark.usefixtures("early_done_on", "_mock_run_persistence")
+    async def test_a_raising_output_policy_is_not_retried_after_the_answer(
+        self, runner, agent_config
+    ):
+        """The policy runs once per run, as with the flag off: a retry in the
+        background could change the status after the answer was shown."""
+        with patch(
+            "robothor.engine.deliverable_verdict.record_deliverable_verdicts",
+            side_effect=RuntimeError("policy bug"),
+        ) as policy:
+            await _execute(runner, agent_config, on_complete=AsyncMock())
+            await get_task_registry().drain(timeout=5.0)
+
+        assert policy.call_count == 1
+
 
 # ── Telemetry sees the final status ──────────────────────────────────────
 
