@@ -627,15 +627,62 @@ def redact_tool_arguments(tool_name: str, arguments: Any) -> Any:
     """
     if not isinstance(arguments, dict):
         return arguments
+    return _redact_call(tool_name, arguments, 0)
+
+
+#: How deep a nested argument is followed. Past it, the value is the placeholder:
+#: nothing legitimate nests this far, and a redactor that gave up by passing the
+#: rest through would be the hole it exists to close.
+_MAX_ARGUMENT_DEPTH = 16
+
+
+def _redact_call(tool_name: str, arguments: dict[Any, Any], depth: int) -> dict[str, Any]:
+    """One call's arguments, redacted as the tool ``tool_name`` would need.
+
+    A dict that carries a string ``name`` and an ``arguments`` field is a call
+    to that named tool — ``tool_call {name: vault_set, arguments: {…}}`` on a
+    deferred run, or a wrapper of a wrapper — so its ``arguments`` are redacted
+    as the EFFECTIVE tool's, not the wrapper's. Everything else nested is
+    followed too: a credential one level down is still a credential.
+    """
     named = SECRET_TOOL_ARGUMENTS.get(tool_name, frozenset())
+    inner = arguments.get("name")
+    inner_name = inner if isinstance(inner, str) and "arguments" in arguments else None
     cleaned: dict[str, Any] = {}
     for key, value in arguments.items():
         if key in named or _argument_reads_as_a_credential(str(key)):
             cleaned[key] = PLACEHOLDER
-        elif isinstance(value, str):
+        elif key == "arguments" and inner_name is not None:
+            cleaned[key] = _redact_wrapped_arguments(inner_name, value, depth + 1)
+        else:
             # A credential the model pasted into an ordinary argument still
             # goes; this is the same pass every log line already gets.
-            cleaned[key] = redact(value)
-        else:
-            cleaned[key] = value
+            cleaned[key] = _redact_value(value, depth + 1)
     return cleaned
+
+
+def _redact_wrapped_arguments(tool_name: str, value: Any, depth: int) -> Any:
+    """A wrapper's ``arguments``: an object, or the JSON string of one."""
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except (TypeError, ValueError):
+            return redact(value)
+        if isinstance(parsed, dict) and depth <= _MAX_ARGUMENT_DEPTH:
+            return json.dumps(_redact_call(tool_name, parsed, depth))
+        return redact(value)
+    if isinstance(value, dict) and depth <= _MAX_ARGUMENT_DEPTH:
+        return _redact_call(tool_name, value, depth)
+    return _redact_value(value, depth)
+
+
+def _redact_value(value: Any, depth: int) -> Any:
+    if isinstance(value, str):
+        return redact(value)
+    if not isinstance(value, (dict, list, tuple)):
+        return value
+    if depth > _MAX_ARGUMENT_DEPTH:
+        return PLACEHOLDER
+    if isinstance(value, dict):
+        return _redact_call("", value, depth)
+    return [_redact_value(item, depth + 1) for item in value]
