@@ -101,6 +101,8 @@ class StepType(StrEnum):
     #: A budget, cap or stop refused, ended or degraded the run -- or, in
     #: observe mode, would have. Detail in tool_input; see budget_stops.py.
     BUDGET_STOP = "budget_stop"
+    #: An operator steer the run took mid-flight; ``tool_input`` holds its text.
+    STEER = "steer"
 
 
 class DeliveryMode(StrEnum):

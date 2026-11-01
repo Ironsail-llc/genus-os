@@ -36,10 +36,12 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from robothor.constants import DEFAULT_TENANT
+from robothor.engine import live_control
 from robothor.engine.channel_streaming import channel_stream_scope, channel_streaming_enabled
 from robothor.engine.channels import access
 from robothor.engine.chat import get_shared_session
 from robothor.engine.chat_history import append_turn
+from robothor.engine.live_inbox import history_text
 from robothor.engine.models import RunStatus, TriggerType
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -196,6 +198,7 @@ async def handle_message(
     record_turn: bool = True,
     history_limit: int | None = None,
     stream: Callable[[str], Awaitable[None]] | None = None,
+    on_progress: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
 ) -> InboundResult:
     """Gate one inbound message and, if it is allowed, run it.
 
@@ -234,6 +237,14 @@ async def handle_message(
             transient failure — so render it by replacing, never appending. The
             reply in the result is still the complete answer. Flag off, or
             ``None``, the run is today's.
+        on_progress: optional. Called with the run's tool and status events
+            (``tool_start``, ``tool_end``, ``iteration_start`` and the rest), the
+            runner's ``on_tool`` and ``on_status``; feed them to
+            :class:`robothor.engine.live_control.ProgressMessage`. ``None``, the
+            run reports no progress, as before.
+
+    The run executes inside ``live_control.conversation_scope(session_key)``, so
+    ``/steer`` and ``/stop`` on the channel can reach it by its session key.
 
     Messages sharing a ``session_key`` run one after another; different
     conversations run concurrently, up to the fleet-wide
@@ -277,7 +288,11 @@ async def handle_message(
         history = list(session.history) if session.history else []
         if history_limit is not None:
             history = _last_turns(history, history_limit)
+        steered: list[str] = []  # the /steer texts the run took (live_control.py)
         try:
+            progress: dict[str, Any] = (
+                {"on_tool": on_progress, "on_status": on_progress} if on_progress else {}
+            )
             run_kwargs: dict[str, Any] = {
                 "agent_id": agent_id,
                 "message": text,
@@ -288,13 +303,15 @@ async def handle_message(
                 "user_role": (identity.role if identity else "") or "user",
                 "identity": identity,
                 "conversation_history": history or None,
+                **progress,
             }
             async with _fleet_slots():
-                if stream is not None and channel_streaming_enabled():
-                    with channel_stream_scope():
-                        run = await runner.execute(**run_kwargs, on_content=stream)
-                else:
-                    run = await runner.execute(**run_kwargs)
+                with live_control.conversation_scope(session_key, steered):
+                    if stream is not None and channel_streaming_enabled():
+                        with channel_stream_scope():
+                            run = await runner.execute(**run_kwargs, on_content=stream)
+                    else:
+                        run = await runner.execute(**run_kwargs)
         except Exception:
             # Logged with a traceback here, where it reaches the journal; the
             # SENDER gets FAILED_REPLY, which names nothing.
@@ -308,11 +325,12 @@ async def handle_message(
         # reports most failures by RETURNING the run (failed, timeout,
         # cancelled), and a timed-out run can carry partial text; recording
         # either would teach the next turn an answer that was never given.
+        recorded = history_text(text, [], steered)
         if record_turn and output and getattr(run, "status", None) == RunStatus.COMPLETED:
             # Guarded: this function never raises, and the answer is already
             # made — a history that could not be written loses memory, not it.
             try:
-                append_turn(session, user_message=text, assistant_text=output)
+                append_turn(session, user_message=recorded, assistant_text=output)
             except Exception:
                 logger.exception("channel %s could not record a turn", channel)
             # Persisted the way the Helm's turns are, so the conversation is
@@ -324,7 +342,7 @@ async def handle_message(
             try:
                 await save_exchange_async(
                     session_key,
-                    text,
+                    recorded,
                     output,
                     channel=channel,
                     model_override=getattr(session, "model_override", None),

@@ -556,3 +556,50 @@ class TestSlackIsBuiltOnIt:
 
         branch = function_def("robothor.engine.slack", "_on_message")
         assert "execute" not in called_names(branch)
+
+
+@pytest.mark.asyncio
+async def test_a_steer_the_run_took_is_recorded_with_the_turn(monkeypatch, store):
+    """Slack and Teams record the exchange; a /steer the run applied belongs in it."""
+    from types import SimpleNamespace
+
+    from robothor.engine import live_control, session_registry
+    from robothor.engine.loop_guards import GuardState, check_iteration_guards
+    from robothor.engine.request_runtime import observe_request
+    from robothor.engine.session import AgentSession
+
+    monkeypatch.setattr(inbound.access, "evaluate", _allow())
+
+    class _SteeredRunner:
+        async def execute(self, **kw: Any) -> Any:
+            session = AgentSession("main", kw["trigger_type"], None, kw["tenant_id"])
+            session.start("system", kw["message"], [])
+            async with observe_request(session, None):
+                assert live_control.steer_conversation(
+                    "agent:main:teams:conv-1", "use the EU region", tenant_id=kw["tenant_id"]
+                )
+                check_iteration_guards(
+                    session,
+                    SimpleNamespace(id="main"),
+                    watchdog=None,
+                    wallclock_deadline=None,
+                    wallclock_ceiling=0,
+                    state=GuardState(),
+                )
+            return session.complete("the answer")
+
+    try:
+        await inbound.handle_message(
+            channel="teams",
+            native_id=ALICE,
+            text="draft the report",
+            runner=_SteeredRunner(),
+            tenant_id=TENANT,
+            session_key="agent:main:teams:conv-1",
+        )
+    finally:
+        for run_id in session_registry.active_run_ids():
+            session_registry.unregister(run_id)
+    assert len(store.saved) == 1
+    saved = store.saved[0]["user_content"]
+    assert "draft the report" in saved and "use the EU region" in saved
