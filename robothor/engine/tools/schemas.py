@@ -1455,6 +1455,58 @@ _CLAUDE_CODE_SCHEMAS: dict[str, dict[str, Any]] = {
             },
         },
     },
+    "claude_code_repo_prepare": {
+        "type": "function",
+        "function": {
+            "name": "claude_code_repo_prepare",
+            "description": (
+                "Use this before claude_code_start when the code lives in a remote repository: "
+                "clones an allowlisted remote into the coding workspace (or fetches and "
+                "fast-forwards an existing clone) and returns the repo_path to start a job on."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "repo": {
+                        "type": "string",
+                        "description": "owner/repo on GitHub, or the clone URL",
+                    },
+                },
+                "required": ["repo"],
+            },
+        },
+    },
+    "claude_code_publish": {
+        "type": "function",
+        "function": {
+            "name": "claude_code_publish",
+            "description": (
+                "Use this after a claude_code job is done with its verify passed: pushes the "
+                "job's branch to the repository's allowlisted origin and opens a DRAFT pull "
+                "request, returning its URL. It never merges. Owner or admin only."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "job_id": _JOB_ID_PARAM,
+                    "title": {"type": "string", "description": "Pull request title"},
+                    "body": {
+                        "type": "string",
+                        "description": "Pull request body: what changed, and the job's evidence",
+                    },
+                    "ticket": {
+                        "type": "string",
+                        "description": "Optional ticket key (ABC-123), appended to the title",
+                    },
+                    "base": {
+                        "type": "string",
+                        "description": "Branch to open against (default: the remote's default)",
+                    },
+                },
+                "required": ["job_id", "title"],
+            },
+        },
+    },
 }
 
 

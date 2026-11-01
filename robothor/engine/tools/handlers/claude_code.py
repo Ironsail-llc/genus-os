@@ -15,6 +15,9 @@ outright, because a job spends real money and writes real commits.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -245,8 +248,157 @@ async def _cancel(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     return _view(job)
 
 
+# ── putting a repository on disk, and publishing a verified job ──────
+
+#: Roles that may open a pull request from chat. Unattended runs dispatch as
+#: ``service`` and never publish (migration 165 denies it at the RBAC gate too).
+_PUBLISH_ROLES = frozenset({"owner", "admin", "super_admin"})
+_TICKET = re.compile(r"^[A-Z][A-Z0-9]+-\d+$")
+
+
+async def _github_token(tenant_id: str) -> str:
+    from robothor.engine.coding import repos
+
+    with contextlib.suppress(Exception):
+        return await asyncio.to_thread(repos.github_token, tenant_id) or ""
+    return ""
+
+
+async def _audit_publish(ctx: ToolContext, status: str, details: dict[str, Any]) -> None:
+    from robothor.audit.logger import log_event
+
+    await asyncio.to_thread(
+        log_event,
+        "coding.publish",
+        "claude_code_publish",
+        category="agent",
+        actor=ctx.agent_id or "unknown",
+        user_id=ctx.user_id,
+        details={"tenant_id": ctx.tenant_id, "run_id": ctx.run_id, "role": ctx.user_role} | details,
+        status=status,
+    )
+
+
+async def _prepare(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    if ctx.is_benchmark:
+        return _benchmark_refusal("claude_code_repo_prepare")
+    from robothor.engine.coding import repos
+
+    repo = str(args.get("repo") or "").strip()
+    try:
+        repos.workspace_dir()
+        repos.allowed_remote(repo)
+        prepared = await repos.ensure_repo(repo, token=await _github_token(ctx.tenant_id))
+    except repos.RepoError as exc:
+        return {"error": str(exc)}
+    return {
+        "repo_path": str(prepared.path),
+        "remote": prepared.remote.slug,
+        "default_branch": prepared.default_branch,
+        "head_sha": prepared.head_sha,
+        "cloned": prepared.cloned,
+        "next": "claude_code_start with this repo_path; then claude_code_publish once it is done",
+    }
+
+
+def _unpublishable(job: CodingJob) -> str:
+    """Why ``job`` may not be published; empty when it may."""
+    verify = job.result.get("verify") or {}
+    if str(job.status) != "done" or not verify.get("passed") or not job.result.get("commit_sha"):
+        return (
+            f"coding job {job.id!r} is {job.status}; only a done job whose verify passed "
+            "and that made a commit can be published"
+        )
+    if job.mode != "code" or not job.branch:
+        return f"a {job.mode} job has no branch to publish"
+    return ""
+
+
+async def _publish(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    if ctx.is_benchmark:
+        return _benchmark_refusal("claude_code_publish")
+    from robothor.engine.coding import publish, repos
+    from robothor.engine.coding.jobs import get_manager
+    from robothor.settings import get_settings
+
+    job_id = str(args.get("job_id") or "")
+
+    async def deny(reason: str) -> dict[str, Any]:
+        """Every refusal is audited, with the sentence the agent is given."""
+        await _audit_publish(ctx, "denied", {"job_id": job_id, "reason": reason[:300]})
+        return {"error": reason}
+
+    if ctx.user_role not in _PUBLISH_ROLES:
+        return await deny(
+            "claude_code_publish needs the owner or admin role; this caller's role is "
+            f"{ctx.user_role or 'no role'}"
+        )
+    if not get_settings().coding.pr_enabled:
+        return await deny("pull requests are off until ROBOTHOR_CODING_PR_ENABLED=true")
+    title = str(args.get("title") or "").strip()
+    if not title:
+        return await deny("title is required")
+    ticket = str(args.get("ticket") or "").strip()
+    if ticket:
+        if not _TICKET.match(ticket):
+            return await deny(f"ticket must look like ABC-123, not {ticket!r}")
+        if ticket not in title:
+            title = f"{title} ({ticket})"
+    job = await get_manager().get(job_id, ctx.tenant_id, agent_id=_scope(ctx))
+    if job is None:
+        return await deny(_not_found(job_id)["error"])
+    refusal = _unpublishable(job)
+    if refusal:
+        return await deny(refusal)
+    branch = str(job.branch)  # _unpublishable refused a job without one
+    commit = str(job.result["commit_sha"])
+    repo = Path(job.repo_path)
+    try:
+        remote = await repos.origin_remote(repo)
+    except repos.RepoError as exc:
+        return await deny(str(exc))
+    if remote.host and remote.host != repos.GITHUB_HOST:
+        return await deny(
+            f"claude_code_publish opens pull requests on GitHub only; {remote.slug}'s "
+            f"origin is on {remote.host}"
+        )
+    token = await _github_token(ctx.tenant_id)
+    if not token:
+        return await deny(
+            "GITHUB_TOKEN not configured: store a token with contents and "
+            "pull-request write access in the vault"
+        )
+    base = str(args.get("base") or "").strip() or await repos.default_branch(repo)
+    details = {"job_id": job_id, "remote": remote.slug, "branch": branch, "base": base}
+    try:
+        await publish.push_branch(repo, branch, remote, token)
+        pr = await publish.open_draft_pr(
+            remote,
+            head=branch,
+            base=base,
+            title=title,
+            body=str(args.get("body") or ""),
+            token=token,
+        )
+    except publish.PublishError as exc:
+        await _audit_publish(ctx, "error", details | {"reason": str(exc)[:300]})
+        return {"error": str(exc)}
+    await _audit_publish(ctx, "ok", details | {"pr_url": pr.url})
+    return {
+        "pr_url": pr.url,
+        "pr_number": pr.number,
+        "draft": pr.draft,
+        "branch": branch,
+        "base": base,
+        "commit_sha": commit,
+        "remote": remote.slug,
+    }
+
+
 HANDLERS["claude_code_start"] = _start
 HANDLERS["claude_code_status"] = _status
 HANDLERS["claude_code_wait"] = _wait
 HANDLERS["claude_code_followup"] = _followup
 HANDLERS["claude_code_cancel"] = _cancel
+HANDLERS["claude_code_repo_prepare"] = _prepare
+HANDLERS["claude_code_publish"] = _publish

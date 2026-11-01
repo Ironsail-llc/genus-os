@@ -651,3 +651,80 @@ async def test_the_reaper_removes_old_finished_jobs_and_spares_recent_ones(git_r
     assert Path(recent.worktree_path).exists()
     assert recent.branch in git(git_repo, "branch", "--list")
     assert await mgr.reap(retention_days=7) == 0  # idempotent
+
+
+# ── the coding workspace and the sandbox switch ───────────────────────
+
+
+async def test_the_coding_workspace_is_an_implicit_root(git_repo, coding_env, monkeypatch):
+    from robothor.engine.coding.jobs import check_repo_path
+
+    monkeypatch.delenv("ROBOTHOR_CODING_REPO_ROOTS")
+    monkeypatch.setenv("ROBOTHOR_CODING_WORKSPACE", str(git_repo.parent))
+    assert check_repo_path(str(git_repo)) == git_repo.resolve()
+
+
+async def test_the_coding_workspace_still_refuses_the_live_workspace(
+    git_repo, coding_env, monkeypatch, tmp_path
+):
+    from robothor.engine.coding.jobs import check_repo_path
+
+    monkeypatch.delenv("ROBOTHOR_CODING_REPO_ROOTS")
+    monkeypatch.setenv("ROBOTHOR_CODING_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(git_repo / "live"))
+    with pytest.raises(ValueError, match="workspace"):
+        check_repo_path(str(git_repo))
+    with pytest.raises(ValueError, match="outside"):
+        check_repo_path("/somewhere/else")
+
+
+async def test_the_sandbox_block_is_sent_by_default(git_repo, coding_env):
+    runner = FakeRunner(_commit_ok)
+    mgr = _manager(runner)
+    job = await _start(mgr, git_repo)
+    await mgr.wait(job.id, TENANT, timeout_s=20)
+    assert runner.calls[0].settings["sandbox"]["failIfUnavailable"] is True
+
+
+async def test_sandbox_off_omits_the_block_but_keeps_the_permission_rules(
+    git_repo, coding_env, monkeypatch
+):
+    monkeypatch.setenv("ROBOTHOR_CODING_SANDBOX", "off")
+    runner = FakeRunner(_commit_ok)
+    mgr = _manager(runner)
+    job = await _start(mgr, git_repo)
+    done = await mgr.wait(job.id, TENANT, timeout_s=20)
+    assert done.status == JobStatus.DONE
+    assert runner.calls[0].settings is None
+    assert "Bash(git push:*)" in runner.calls[0].disallowed_tools
+
+
+async def test_an_unknown_sandbox_value_fails_closed(git_repo, coding_env, monkeypatch):
+    monkeypatch.setenv("ROBOTHOR_CODING_SANDBOX", "maybe")
+    runner = FakeRunner(_commit_ok)
+    mgr = _manager(runner)
+    job = await _start(mgr, git_repo)
+    await mgr.wait(job.id, TENANT, timeout_s=20)
+    assert runner.calls[0].settings["sandbox"]["failIfUnavailable"] is True
+
+
+async def test_a_refusal_names_the_setting_that_set_the_root(
+    git_repo, coding_env, monkeypatch, tmp_path
+):
+    from robothor.engine.coding.jobs import check_repo_path
+
+    monkeypatch.delenv("ROBOTHOR_CODING_REPO_ROOTS")
+    monkeypatch.setenv("ROBOTHOR_CODING_WORKSPACE", str(tmp_path / "coding"))
+    with pytest.raises(ValueError) as err:
+        check_repo_path(str(git_repo))
+    assert "ROBOTHOR_CODING_WORKSPACE" in str(err.value)
+    assert "ROBOTHOR_CODING_REPO_ROOTS" not in str(err.value)
+
+    monkeypatch.setenv("ROBOTHOR_CODING_REPO_ROOTS", str(tmp_path / "src"))
+    from robothor.settings import reset_settings
+
+    reset_settings()
+    with pytest.raises(ValueError) as err:
+        check_repo_path(str(git_repo))
+    assert "ROBOTHOR_CODING_REPO_ROOTS" in str(err.value)
+    assert "ROBOTHOR_CODING_WORKSPACE" in str(err.value)

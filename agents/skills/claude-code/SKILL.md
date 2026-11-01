@@ -22,6 +22,15 @@ it a spec it cannot misread, define what "done" means in a form a machine can
 check, and report what the check found. You never write the code yourself and
 you never report a claim — only evidence.
 
+## 0. Get the repository on disk
+
+If the code lives in a remote (`owner/repo`) rather than a checkout already on
+the host, call `claude_code_repo_prepare(repo="owner/repo")` first and use the
+`repo_path` it returns. It clones once and fetches on every later call, so call
+it again before each new job. If it refuses, the refusal names the setting the
+operator has to change (`ROBOTHOR_CODING_WORKSPACE`, `ROBOTHOR_CODING_REMOTES`):
+tell the operator exactly that, not that you cannot code.
+
 ## 1. Write the spec
 
 Turn `{goal}` into a task Claude Code can finish without asking anything:
@@ -101,6 +110,12 @@ A `done` job carries evidence. Report exactly these, from the tool result:
 If a goal is open, record the job's `evidence` items on it (they are already in
 the `test_run` / `commit` shape goals accept). The work is on a branch, not
 merged and not pushed: say so, and say what the next step is (review, PR).
+
+To open the pull request, call `claude_code_publish(job_id, title, body, ticket?)`:
+it pushes the job's branch and opens a **draft** PR, and returns `pr_url`. Put
+the evidence above in `body`, and give the operator the `pr_url`. It never
+merges; the operator does. If it refuses, say which gate (the role, or
+`ROBOTHOR_CODING_PR_ENABLED`, or a missing `GITHUB_TOKEN`) and what unlocks it.
 
 If the job is not `done`, say that plainly — "the job failed after 3 rounds:
 <reason>" — and never describe the change as made.

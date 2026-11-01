@@ -93,9 +93,19 @@ _GENERIC_GIT_EMAIL = "agent@example.com"
 
 
 def job_config_dir(job_id: str, *, base: dict[str, str] | None = None) -> Path:
-    """``$XDG_CONFIG_HOME/robothor/claude-code/<job_id>``, ~/.config when unset."""
+    """``<ROBOTHOR_CODING_WORKSPACE>/.home/<job_id>`` when that is set, else
+    ``$XDG_CONFIG_HOME/robothor/claude-code/<job_id>`` (~/.config when unset).
+
+    The coding workspace is the volume a container gives coding jobs; the
+    service user's home there is read-only, so the private home goes with it.
+    """
     if not _JOB_ID_RE.match(job_id or ""):
         raise ValueError(f"not a job id: {job_id!r}")
+    from robothor.settings import get_settings
+
+    clones = str(get_settings().coding.workspace or "").strip()
+    if clones:
+        return Path(clones).expanduser() / ".home" / job_id
     source = os.environ if base is None else base
     xdg = (source.get("XDG_CONFIG_HOME") or "").strip()
     if xdg:

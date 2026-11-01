@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-515 settings in 18 groups.
+519 settings in 18 groups.
 
 ## autonomy
 
@@ -70,9 +70,13 @@ Host paths for the isolated personal browser service and clients.
 | `ROBOTHOR_CODING_GIT_EMAIL` | str | _(empty)_ | no | no | unreleased | Author email on coding-job commits. Empty uses the target repository's user.email, then a generic placeholder address. |
 | `ROBOTHOR_CODING_GIT_NAME` | str | _(empty)_ | no | no | unreleased | Author name on coding-job commits. Empty uses the target repository's user.name, then a generic agent name. |
 | `ROBOTHOR_CODING_MAX_CONCURRENT` | int | `2` | `robothor-engine` | no | unreleased | Coding jobs one tenant may run at once; more wait as `queued`. |
+| `ROBOTHOR_CODING_PR_ENABLED` | bool | `false` | no | no | unreleased | Lets claude_code_publish push a verified coding job's branch to its allowlisted remote and open a draft pull request (GITHUB_TOKEN from the vault). Off refuses every claude_code_publish. Nothing merges a pull request. |
+| `ROBOTHOR_CODING_REMOTES` | str | _(empty)_ | no | no | unreleased | Comma-separated remotes claude_code_repo_prepare may clone and claude_code_publish may push to: owner/repo (a GitHub repository) or a full clone URL. Empty refuses every remote. |
 | `ROBOTHOR_CODING_REPO_ROOTS` | str | _(empty)_ | no | no | unreleased | Path-separated directories a coding job's repo_path must sit under. REQUIRED: empty refuses every claude_code_start. The live workspace itself, the service user's home itself, and any directory containing either are refused even under a root. The job still works only in its own worktree and never on main/master. |
 | `ROBOTHOR_CODING_RETENTION_DAYS` | int | `7` | no | no | unreleased | Days a finished coding job's worktree, private config directory and genus/cc-* branch are kept before the reaper removes them. Merge or push a job's branch before then. |
+| `ROBOTHOR_CODING_SANDBOX` | str | `required` | no | no | unreleased | `required` (the default) runs a coding job's Bash inside Claude Code's sandbox and fails the job where the sandbox cannot start. `off` sends no sandbox settings, for hosts that cannot run bubblewrap (containers without user namespaces): the job's Bash then runs with the engine's own access, and only the Edit/Write and secret-path permission rules still apply. Any other value is treated as `required`. |
 | `ROBOTHOR_CODING_VERIFY_TIMEOUT` | float | `900.0` | no | no | unreleased | Seconds a coding job's acceptance verify_command may run before it is killed and counted as a failure. |
+| `ROBOTHOR_CODING_WORKSPACE` | str | _(empty)_ | no | no | unreleased | Directory claude_code_repo_prepare clones repositories into, one per remote at <dir>/<owner>/<repo>, created on first use. Empty turns claude_code_repo_prepare off. When set it is also a repo root for claude_code_start, in addition to ROBOTHOR_CODING_REPO_ROOTS. |
 | `ROBOTHOR_CODING_WORKTREE_ROOT` | str | _(empty)_ | no | no | unreleased | Where coding jobs' git worktrees are created, one directory per job. Empty means <workspace>/.genus/worktrees. Must be writable by the engine: under the shipped unit that means inside the workspace or a ReadWritePaths= drop-in. |
 
 ## pr_review

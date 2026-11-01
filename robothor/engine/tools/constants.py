@@ -53,6 +53,9 @@ CLAUDE_CODE_TOOLS = frozenset(
         "claude_code_wait",
         "claude_code_followup",
         "claude_code_cancel",
+        # Clone an allowlisted remote; push a verified job and open a draft PR.
+        "claude_code_repo_prepare",
+        "claude_code_publish",
     }
 )
 

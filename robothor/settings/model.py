@@ -3529,6 +3529,45 @@ class CodingSettings(SettingsGroup):
         restart_required=False,
         since="unreleased",
     )
+    workspace: str = declare(
+        "",
+        "ROBOTHOR_CODING_WORKSPACE",
+        "Directory claude_code_repo_prepare clones repositories into, one per remote at "
+        "<dir>/<owner>/<repo>, created on first use. Empty turns claude_code_repo_prepare off. "
+        "When set it is also a repo root for claude_code_start, in addition to "
+        "ROBOTHOR_CODING_REPO_ROOTS.",
+        restart_required=False,
+        since="unreleased",
+    )
+    remotes: str = declare(
+        "",
+        "ROBOTHOR_CODING_REMOTES",
+        "Comma-separated remotes claude_code_repo_prepare may clone and claude_code_publish may "
+        "push to: owner/repo (a GitHub repository) or a full clone URL. Empty refuses "
+        "every remote.",
+        restart_required=False,
+        since="unreleased",
+    )
+    pr_enabled: bool = declare(
+        False,
+        "ROBOTHOR_CODING_PR_ENABLED",
+        "Lets claude_code_publish push a verified coding job's branch to its allowlisted "
+        "remote and open a draft pull request (GITHUB_TOKEN from the vault). Off refuses "
+        "every claude_code_publish. Nothing merges a pull request.",
+        restart_required=False,
+        since="unreleased",
+    )
+    sandbox: str = declare(
+        "required",
+        "ROBOTHOR_CODING_SANDBOX",
+        "`required` (the default) runs a coding job's Bash inside Claude Code's sandbox and "
+        "fails the job where the sandbox cannot start. `off` sends no sandbox settings, for "
+        "hosts that cannot run bubblewrap (containers without user namespaces): the job's "
+        "Bash then runs with the engine's own access, and only the Edit/Write and secret-path "
+        "permission rules still apply. Any other value is treated as `required`.",
+        restart_required=False,
+        since="unreleased",
+    )
     allowed_domains: str = declare(
         "",
         "ROBOTHOR_CODING_ALLOWED_DOMAINS",
