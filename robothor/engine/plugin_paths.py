@@ -228,6 +228,8 @@ def exec_writes_managed(command: str, *, cwd: str | None = None) -> str | None:
         expanded = Path(_expand_variables(target, shell_cwd)).expanduser()
         bases.extend([os.path.normpath(Path(base) / expanded) for base in bases])
 
+    if any(_runs_a_plugin_write(seg) for seg in segments):
+        return REFUSAL
     named = any(
         _names_managed(tok, bases, dirs, files, shell_cwd) for seg in segments for tok in seg
     )
@@ -238,6 +240,24 @@ def exec_writes_managed(command: str, *, cwd: str | None = None) -> str | None:
     # sinks that cannot hold a file (`2>/dev/null`, `2>&1`) are not one.
     writes = not all(_only_reads(*_command_word(seg)) for seg in segments if not _is_sink(seg))
     return REFUSAL if writes else None
+
+
+#: The platform CLI's names, and the module it runs as with ``python -m``.
+_CLI_NAMES = frozenset({"genus", "genusos", "robothor", "robothor.cli"})
+
+
+def _runs_a_plugin_write(segment: list[str]) -> bool:
+    """``genus plugin install|remove|sync|enable|disable``, however spelled.
+
+    The CLI finds the plugin directory and the lockfile from settings, which
+    reach the command's environment, so it names no path for the rule above
+    to see.
+    """
+    names = [tok.rsplit("/", 1)[-1] for tok in segment]
+    for i, name in enumerate(names):
+        if name in _CLI_NAMES and names[i + 1 : i + 2] == ["plugin"]:
+            return any(verb in _GENUS_PLUGIN_WRITES for verb in names[i + 2 : i + 3])
+    return False
 
 
 def _is_sink(segment: list[str]) -> bool:

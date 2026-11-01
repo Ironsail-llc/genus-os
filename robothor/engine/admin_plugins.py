@@ -28,6 +28,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import os
 import re
 import threading
 from typing import TYPE_CHECKING, Any, TypeVar
@@ -387,22 +388,40 @@ PLUGIN_DIR_READ_ONLY = (
 )
 
 
-def _writable(path: Any) -> bool:
-    """Whether this process may write *path* (False for a read-only mount)."""
-    import os
+def _read_only(path: Any) -> bool:
+    """Whether *path* is on a read-only filesystem, as a read-only mount is.
 
-    return os.access(path, os.W_OK)
+    Asked of the nearest directory that exists: pip ``--target`` creates a
+    missing plugin directory, so one nobody has made yet is an ordinary first
+    install. Permissions are not the question either; only the mount is.
+    """
+    from pathlib import Path
+
+    probe = Path(path)
+    while not probe.exists() and probe != probe.parent:
+        probe = probe.parent
+    try:
+        return bool(os.statvfs(probe).f_flag & os.ST_RDONLY)
+    except OSError:
+        return False
 
 
-def _refuse_a_read_only_plugin_dir() -> None:
-    """409 when ``ROBOTHOR_PLUGIN_DIR`` is set and this engine cannot write it."""
+def _refuse_a_read_only_plugin_dir(name: str | None = None) -> None:
+    """409 when ``ROBOTHOR_PLUGIN_DIR`` is set and on a read-only mount.
+
+    With *name*, only when that distribution is installed there: a remove of
+    one that is not drops its lockfile row and never touches the directory.
+    """
     from fastapi import HTTPException
 
-    from robothor.plugins.installer import _plugin_target_dir
+    from robothor.plugins import installer
 
-    target = _plugin_target_dir()
-    if target and not _writable(target):
-        raise HTTPException(status_code=409, detail=PLUGIN_DIR_READ_ONLY)
+    target = installer._plugin_target_dir()
+    if not target or not _read_only(target):
+        return
+    if name is not None and installer._plugin_dir_distribution(name) is None:
+        return
+    raise HTTPException(status_code=409, detail=PLUGIN_DIR_READ_ONLY)
 
 
 def install_plugin(
@@ -610,7 +629,7 @@ def register(app: FastAPI) -> None:
         """Uninstall a plugin this platform installed and drop its row."""
         body = payload or {}
         plugin = _checked(name)
-        _refuse_a_read_only_plugin_dir()
+        _refuse_a_read_only_plugin_dir(plugin)
         return await _write(remove_plugin, plugin, force=bool(body.get("force")))
 
     @router.post("/plugins/{name}/enable")
