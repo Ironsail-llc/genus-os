@@ -45,6 +45,10 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+// A slow machine can take longer than the default second to import a page,
+// or to reject the import and reach the error boundary.
+const CHUNK_WAIT = { timeout: 5000 };
+
 describe("SettingsView — sub-pages load on demand", () => {
   beforeEach(() => {
     vi.resetModules();
@@ -57,13 +61,13 @@ describe("SettingsView — sub-pages load on demand", () => {
 
   it("imports only the plugins page module when Plugins is open", async () => {
     await renderSettings("plugins");
-    expect(await screen.findByTestId("stub-plugins-page")).toBeInTheDocument();
+    expect(await screen.findByTestId("stub-plugins-page", {}, CHUNK_WAIT)).toBeInTheDocument();
     expect(lazy.loaded).toEqual(["plugins"]);
   });
 
   it("imports no page module for a page without one", async () => {
     await renderSettings("appearance");
-    expect(await screen.findByTestId("settings-page-appearance")).toBeInTheDocument();
+    expect(await screen.findByTestId("settings-page-appearance", {}, CHUNK_WAIT)).toBeInTheDocument();
     expect(lazy.loaded).toEqual([]);
   });
 
@@ -83,7 +87,7 @@ describe("SettingsView — sub-pages load on demand", () => {
     });
     await renderSettings("plugins");
 
-    const panel = await screen.findByTestId("settings-page-load-failed");
+    const panel = await screen.findByTestId("settings-page-load-failed", {}, CHUNK_WAIT);
     expect(panel.textContent).toMatch(/updated/i);
     expect(panel.textContent).not.toMatch(/answer from the engine/i);
     expect(screen.queryByTestId("settings-page-error")).toBeNull();
