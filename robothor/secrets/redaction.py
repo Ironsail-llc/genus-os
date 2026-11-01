@@ -674,9 +674,13 @@ def _redact_wrapped_arguments(tool_name: str, value: Any, depth: int) -> Any:
             parsed = json.loads(value)
         except (TypeError, ValueError):
             return redact(value)
-        if isinstance(parsed, dict) and depth <= _MAX_ARGUMENT_DEPTH:
-            return json.dumps(_redact_call(tool_name, parsed, depth))
-        return redact(value)
+        if not isinstance(parsed, dict):
+            return redact(value)
+        if depth > _MAX_ARGUMENT_DEPTH:
+            # Same rule as the dict branch: past the cap the whole call is
+            # the placeholder, never a shape-only pass over its text.
+            return PLACEHOLDER
+        return json.dumps(_redact_call(tool_name, parsed, depth))
     if isinstance(value, dict) and depth <= _MAX_ARGUMENT_DEPTH:
         return _redact_call(tool_name, value, depth)
     return _redact_value(value, depth)

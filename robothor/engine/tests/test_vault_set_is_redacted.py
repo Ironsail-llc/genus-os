@@ -454,3 +454,21 @@ def test_a_padded_wrapped_tool_name_is_redacted_as_the_tool_it_reaches(padded):
     wrapped = {"name": padded, "arguments": _wrapped_vault_set()["arguments"]}
     cleaned = redact_tool_arguments("tool_call", wrapped)
     assert cleaned["arguments"]["value"] == PLACEHOLDER
+
+
+def test_a_json_string_wrapper_past_the_depth_cap_is_the_placeholder():
+    """A dict wrapper past the cap becomes the placeholder; a JSON-string
+    wrapper at the same depth has to as well, or the cap is a hole: shape-only
+    redaction cannot see a plain hex credential the argument rule would catch."""
+    from robothor.secrets import redaction
+    from robothor.secrets.redaction import PLACEHOLDER, redact_tool_arguments
+
+    innermost = {"name": "vault_set", "arguments": json.dumps({"value": PLAIN_HEX_VALUE})}
+    wrapped = innermost
+    # The vault_set wrapper lands exactly at the cap, so its JSON-string
+    # arguments are the first thing past it.
+    for _ in range(redaction._MAX_ARGUMENT_DEPTH):
+        wrapped = {"name": "tool_call", "arguments": wrapped}
+    cleaned = redact_tool_arguments("tool_call", wrapped)
+    assert PLAIN_HEX_VALUE not in json.dumps(cleaned)
+    assert PLACEHOLDER in json.dumps(cleaned)
