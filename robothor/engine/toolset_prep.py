@@ -18,6 +18,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
+from robothor.constants import DEFAULT_TENANT
 from robothor.engine.sanitize import sanitize_log as _sanitize
 
 logger = logging.getLogger(__name__)
@@ -175,10 +176,17 @@ def with_discovery_note(preamble: str, prepared: PreparedToolset) -> str:
     return "\n\n".join(parts)
 
 
-def publish_toolset(registry: Any, agent_config: Any, tool_names: list[str]) -> tuple[Any, ...]:
+def publish_toolset(
+    registry: Any,
+    agent_config: Any,
+    tool_names: list[str],
+    advertised: Any = None,
+) -> tuple[Any, ...]:
     """Install this run's tool context vars; returns tokens for withdrawal.
 
-    Two of them, and they are not the same thing:
+    Two of them, and they are not the same thing (plus, on a deferred run
+    given ``advertised``, the schema names the model was shown, which
+    ``tool_search`` uses to say which hits are already directly callable):
 
     * the DEFERRED allow-set, set only when the toolset is deferred, is what
       ``tool_call`` checks — it is a security boundary, and setting it on a run
@@ -189,21 +197,35 @@ def publish_toolset(registry: Any, agent_config: Any, tool_names: list[str]) -> 
       instead of "only available on deferred runs", which it returned 18 times
       in one week to an agent that went on calling it.
     """
-    from robothor.engine.tools.dispatch import set_agent_toolset, set_deferred_allowed
+    from robothor.engine.tools.dispatch import (
+        set_advertised_toolset,
+        set_agent_toolset,
+        set_deferred_allowed,
+    )
 
+    deferred = registry.should_defer(agent_config)
     defer_token = (
-        set_deferred_allowed(registry.deferred_whitelist(agent_config))
-        if registry.should_defer(agent_config)
+        set_deferred_allowed(registry.deferred_whitelist(agent_config)) if deferred else None
+    )
+    advertised_token = (
+        set_advertised_toolset(frozenset(advertised))
+        if deferred and advertised is not None
         else None
     )
-    return (defer_token, set_agent_toolset(frozenset(tool_names)))
+    return (defer_token, set_agent_toolset(frozenset(tool_names)), advertised_token)
 
 
 def withdraw_toolset(tokens: tuple[Any, ...]) -> None:
     """Undo :func:`publish_toolset`. Safe to call with anything it returned."""
-    from robothor.engine.tools.dispatch import clear_agent_toolset, clear_deferred_allowed
+    from robothor.engine.tools.dispatch import (
+        clear_advertised_toolset,
+        clear_agent_toolset,
+        clear_deferred_allowed,
+    )
 
-    defer_token, toolset_token = tokens
+    defer_token, toolset_token, advertised_token = tokens
+    if advertised_token is not None:
+        clear_advertised_toolset(advertised_token)
     if defer_token is not None:
         clear_deferred_allowed(defer_token)
     clear_agent_toolset(toolset_token)
@@ -231,7 +253,15 @@ async def prepare_toolset(
 
     if not readonly_mode:
         autonomy = await _autonomy_active(tenant_id, actor_id, agent_id)
-        schemas = registry.build_for_agent(agent_config, autonomy=autonomy)
+        if _defers(registry, agent_config):
+            # Only a deferred run asks, and only it pays the (cached, off-loop)
+            # lookup: the tools this agent used lately join its core.
+            from robothor.engine import recent_tools
+
+            recent = await recent_tools.recent_tool_names(agent_id, tenant_id or DEFAULT_TENANT)
+            schemas = registry.build_for_agent(agent_config, autonomy=autonomy, recent=recent)
+        else:
+            schemas = registry.build_for_agent(agent_config, autonomy=autonomy)
         names = registry.get_tool_names(agent_config)
         advertised = {str(schema.get("function", {}).get("name", "")) for schema in schemas}
         reachable = tuple(n for n in names if n not in advertised)
@@ -264,6 +294,12 @@ async def prepare_toolset(
         wrapped = preamble + system_prompt + PLAN_MODE_SUFFIX
 
     return PreparedToolset(tool_schemas=tool_schemas, tool_names=tool_names, system_prompt=wrapped)
+
+
+def _defers(registry: Any, agent_config: Any) -> bool:
+    """Does this registry defer this agent? ``False`` for a registry that cannot say."""
+    should_defer = getattr(registry, "should_defer", None)
+    return bool(should_defer(agent_config)) if callable(should_defer) else False
 
 
 #: How long a run will wait to find out how wordy its own prompt should be.

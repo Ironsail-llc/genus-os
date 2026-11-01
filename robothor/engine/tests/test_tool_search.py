@@ -53,9 +53,16 @@ def registry():
 
 
 class TestDeferralDecision:
-    def test_off_by_default(self, registry):
-        # Flag defaults off → never defers, even for a broad-access agent.
+    def test_off_when_switched_off(self, registry, monkeypatch):
+        # Deferral is on by default; ROBOTHOR_RIP_16_ENABLED=0 → never defers,
+        # even for a broad-access agent.
+        monkeypatch.setenv("ROBOTHOR_RIP_16_ENABLED", "0")
         assert registry.should_defer(_cfg()) is False
+
+    def test_on_by_default(self, registry, monkeypatch):
+        monkeypatch.delenv("ROBOTHOR_RIP_16_ENABLED", raising=False)
+        monkeypatch.delenv("ROBOTHOR_DISABLE_ALL_RIPS", raising=False)
+        assert registry.should_defer(_cfg()) is True
 
     def test_defers_broad_agent_when_enabled(self, registry, monkeypatch):
         monkeypatch.setenv("ROBOTHOR_RIP_16_ENABLED", "1")
@@ -75,7 +82,8 @@ class TestSchemaReduction:
         names = set(registry.get_tool_names(_cfg()))
         assert not (names & TOOLSEARCH_TOOLS)
 
-    def test_non_deferred_returns_full_no_meta(self, registry):
+    def test_non_deferred_returns_full_no_meta(self, registry, monkeypatch):
+        monkeypatch.setenv("ROBOTHOR_RIP_16_ENABLED", "0")
         advertised = _names(registry.build_for_agent(_cfg()))
         assert not (advertised & TOOLSEARCH_TOOLS)
         assert len(advertised) > 40  # broad agent, full set

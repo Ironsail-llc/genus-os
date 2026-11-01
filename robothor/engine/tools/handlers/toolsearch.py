@@ -48,8 +48,13 @@ def _advertised_names(ctx: ToolContext) -> set[str]:
     campaign whose current lever is step efficiency.
     """
     from robothor.engine.tools.constants import CORE_TOOLS, TOOLSEARCH_TOOLS
+    from robothor.engine.tools.dispatch import get_advertised_toolset
     from robothor.engine.tools.registry import get_registry
 
+    published = get_advertised_toolset()
+    if published is not None:
+        # The run's own advertised set: CORE plus the tools it used recently.
+        return set(published)
     registry = get_registry()
     return {n for n in (CORE_TOOLS | TOOLSEARCH_TOOLS) if n in registry._schemas}
 

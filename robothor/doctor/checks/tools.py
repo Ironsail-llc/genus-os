@@ -500,6 +500,65 @@ async def _tools_named_but_not_granted(ctx: DoctorContext) -> Result:
     return fail(f"{len(lines)} agent(s) with a tools/instructions mismatch: {shown}")
 
 
+# ── tools.deferred_tools_reachable ────────────────────────────────────
+
+
+def _scan_deferred_reachability(directory: Path, adapter_names: set[str]) -> list[str]:
+    """Findings, one line each: unsearchable schemas first, then per agent.
+
+    Builds the registry the engine builds (built-ins plus loaded plugins), so
+    the index judged is the one ``tool_search`` reads. Adapter tools are only
+    names offline — the registry learns their schemas by connecting — so a
+    granted adapter tool counts as reachable by its name.
+    """
+    from robothor.engine.tools.constants import CORE_TOOLS, TOOLSEARCH_TOOLS
+    from robothor.engine.tools.registry import ToolRegistry
+
+    registry = ToolRegistry()
+    schemas = set(registry._schemas)  # noqa: SLF001 - the index tool_search ranks
+    unsearchable = set(registry.unsearchable_names())
+    lines: list[str] = []
+    if unsearchable:
+        lines.append("no searchable words in schema: " + ", ".join(sorted(unsearchable)))
+    # Reachable: registered and either always advertised or in the index; or
+    # an adapter tool, known offline by name only.
+    reachable = {n for n in schemas if n in CORE_TOOLS | TOOLSEARCH_TOOLS or n not in unsearchable}
+    reachable |= adapter_names
+    for manifest in _scan_manifests(directory):
+        agent_id = str(manifest.get("id") or "")
+        declared = {str(n) for n in (manifest.get("tools_allowed") or [])}
+        unreachable = sorted(declared - reachable)
+        if unreachable:
+            lines.append(f"{agent_id}: neither loaded nor searchable: " + ", ".join(unreachable))
+    return lines
+
+
+async def _deferred_tools_reachable(ctx: DoctorContext) -> Result:
+    """Every granted tool can reach the model, deferred or not.
+
+    With deferred loading on (the default), a broad agent is shown its core
+    and finds the rest through ``tool_search``. A ``tools_allowed`` entry that
+    is not advertised and not in the search index is a grant the agent can
+    never use, and from inside the turn it looks like a tool that does not
+    exist. The same holds for a registered schema — a plugin's included —
+    with no searchable word in its name, description or keywords.
+    """
+    directory = _manifest_dir(ctx)
+    if not directory.is_dir():
+        return skip(f"no manifest directory at {directory}")
+    try:
+        adapters = await ctx.run_blocking(_adapter_names)
+        lines = await ctx.run_blocking(_scan_deferred_reachability, directory, adapters)
+    except Exception as exc:  # noqa: BLE001 - a scan that raises is a failure
+        return fail(f"cannot scan the tool index: {type(exc).__name__}")
+    if not lines:
+        return ok("every granted tool is either loaded or findable through tool_search")
+    shown = "; ".join(lines[:_MAX_LISTED])
+    if len(lines) > _MAX_LISTED:
+        shown += f"; and {len(lines) - _MAX_LISTED} more"
+    return fail(f"{len(lines)} tool reachability finding(s): {shown}")
+
+
 # ── tools.exec_allowlist_bypasses_denied_tool ─────────────────────────
 
 #: ``(probe command, the native tools that do the same thing)``. An
@@ -1037,6 +1096,13 @@ CHECKS: tuple[Check, ...] = (
         category="agents",
         severity="info",
         run=_approval_gate_not_armed,
+    ),
+    Check(
+        id="tools.deferred_tools_reachable",
+        title="Every granted tool is loaded or findable through tool_search",
+        category="tools",
+        severity="recommended",
+        run=_deferred_tools_reachable,
     ),
     Check(
         id="tools.exec_allowlist_bypasses_denied_tool",

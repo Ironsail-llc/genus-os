@@ -69,6 +69,15 @@ available to any agent whose manifest lists it in `tools_allowed`.
 A tool normally ships in two groups: the handler and its schema. The engine
 keeps those in separate registries and so does the loader.
 
+A broad agent is shown only its core tools and finds the rest with
+`tool_search` (see [deferred loading](TOOLS.md#deferred-loading)), so a plugin
+tool is usually reached by search. Search ranks the tool's name words and
+description; a schema may also carry `"keywords": ["invoice", "receipt"]`
+inside its `function` block — the words an operator would use for it. They
+are read by search and stripped before the schema is sent to a model.
+`genus doctor` (`tools.deferred_tools_reachable`) fails on a schema with no
+searchable word at all.
+
 ## The rules, and why
 
 **The contract version is checked and mismatches are refused.** This engine

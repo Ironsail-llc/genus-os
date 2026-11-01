@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-499 settings in 18 groups.
+501 settings in 18 groups.
 
 ## autonomy
 
@@ -237,6 +237,7 @@ Cloud model routing, budgets and the failure controls around them.
 | `ROBOTHOR_COMPACTION_MIN_GAP_ITERATIONS` | int | `3` | no | no | unreleased | With ROBOTHOR_COMPACTION_V2 on, the fewest agent-loop iterations between two compactions of one run. A context that grows by one tool result must not be summarised again on the next iteration; the hard context ceiling is still enforced every iteration. |
 | `ROBOTHOR_COMPACTION_PROTECT_FIRST_N` | int | `3` | no | no | unreleased | How many messages at the head of a conversation compaction may never summarise away. The statement of the task lives there, and a run that loses it invents the shape of its own output. |
 | `ROBOTHOR_COMPACTION_TRIGGER_TOKENS` | int | `80000` | no | no | legacy | Absolute prompt-token budget above which a run compacts its context. |
+| `ROBOTHOR_DEFERRED_TOOLS_RECENT_RUNS` | int | `10` | no | no | unreleased | How many of an agent's latest runs seed the tools it is always shown when its schemas are deferred: the tools it called in them join the core set. 0 keeps the core to the platform's fixed list. |
 | `ROBOTHOR_DEFERRED_TOOLS_THRESHOLD` | int | `40` | no | no | legacy | Number of tools above which schemas are deferred behind tool search rather than sent in full on every request. |
 | `ROBOTHOR_EAGER_TOOL_COMPRESSION` | bool | `false` | `robothor-engine` | no | legacy | Fleet default for compressing tool results as soon as they land rather than at the next compaction. A manifest setting wins over it. |
 | `ROBOTHOR_HOURLY_COST_CAP_USD` | float | `5.0` | no | no | legacy | Fleet-wide spend ceiling per hour. The engine stops dispatching new runs once the rolling hour exceeds it. |
@@ -453,6 +454,7 @@ Guardrails and feature gates. Ones marked governed are inventoried in `infra/fla
 | `ROBOTHOR_RBAC_MODE` | str | `observe` | `robothor-engine` | no | legacy | **governed.** RBAC ladder position: observe records the denials it would have made, alert also notifies, enforce denies. |
 | `ROBOTHOR_RIP_13_ENABLED` | bool | `false` | `robothor-engine` | no | legacy | Rip 13: symbolic compaction of tool logs into a symbol graph. |
 | `ROBOTHOR_RIP_13_MODE` | str | `observe` | `robothor-engine` | no | legacy | **governed.** Rip 13 ladder position: observe logs the tokens compaction would have saved, enforce injects the compact graph instead of raw tool output. Two rungs only -- there is nothing to alert about. |
+| `ROBOTHOR_RIP_16_ENABLED` | bool | `true` | `robothor-engine` | no | unreleased | Rip 16: deferred tool loading. A broad agent is shown its core tools and tool_search/tool_describe/tool_call instead of every schema. On by default; 0 sends every allowed schema on every request again. |
 | `ROBOTHOR_RIP_1_ENABLED` | bool | `false` | `robothor-engine` | no | legacy | **governed.** Rip 1: per-agent memory scoping, so an agent reads the blocks it owns rather than the whole workspace. |
 | `ROBOTHOR_RIP_4_ENABLED` | bool | `false` | `robothor-engine` | no | legacy | **governed.** Rip 4: structured tool-result envelopes the runner can check instead of prose it can only quote. |
 | `ROBOTHOR_RIP_5_ENABLED` | bool | `false` | `robothor-engine` | no | legacy | **governed.** Rip 5: the destructive LLM skill-consolidation curator pass. The non-destructive lifecycle runs either way. |

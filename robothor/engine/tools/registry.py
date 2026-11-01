@@ -809,13 +809,20 @@ class ToolRegistry:
         return set(self._adapter_routes)
 
     def build_for_agent(
-        self, config: AgentConfig, *, autonomy: bool = False
+        self,
+        config: AgentConfig,
+        *,
+        autonomy: bool = False,
+        recent: frozenset[str] = frozenset(),
     ) -> list[dict[str, Any]]:
         """Return filtered tool schemas for an agent based on allow/deny lists.
 
-        When deferral (Rip 16 / G4) is active for this agent, advertise only the
-        CORE_TOOLS subset plus the tool_search/tool_describe/tool_call meta-tools;
-        the agent's other allowed tools load on demand. Enforcement of the real
+        When deferral (Rip 16 / G4) is active for this agent, advertise only its
+        core — CORE_TOOLS plus ``recent`` (the tools it called in its latest
+        runs, see :mod:`robothor.engine.recent_tools`), both cut to what it is
+        allowed — and the tool_search/tool_describe/tool_call meta-tools; the
+        agent's other allowed tools load on demand. ``recent`` never widens
+        reach: a name outside the allowed set is ignored. Enforcement of the real
         allow-list lives in the tool_call/tool_describe handlers, which check the
         ``_deferred_allowed`` set the runner publishes via ``set_deferred_allowed``
         (see deferred_whitelist) — so tool_call cannot reach a denied tool.
@@ -833,7 +840,7 @@ class ToolRegistry:
             seen: set[str] = set()
             advertised: list[str] = []
             for n in [*names, *sorted(TOOLSEARCH_TOOLS)]:
-                in_core = n in CORE_TOOLS or n in TOOLSEARCH_TOOLS
+                in_core = n in CORE_TOOLS or n in TOOLSEARCH_TOOLS or n in recent
                 if in_core and n in self._schemas and n not in seen:
                     seen.add(n)
                     advertised.append(n)
@@ -865,6 +872,29 @@ class ToolRegistry:
         tool_call to a denied tool is refused before registry.execute.
         """
         return frozenset(self._get_filtered_names(config)) | TOOLSEARCH_TOOLS
+
+    def unsearchable_names(self) -> list[str]:
+        """Registered tools ``tool_search`` can never return for any query.
+
+        A schema is in the search index only through its words — its name, its
+        ``keywords`` and its description. One whose every word is a stopword or
+        too short to count has none, and on a deferred run that tool is granted
+        and unreachable. Built-in and plugin schemas alike.
+        """
+        self._refresh_plugin_schemas_if_stale()
+        missing: list[str] = []
+        for name, schema in self._schemas.items():
+            fn = schema.get("function", {})
+            words = " ".join(
+                [
+                    name.replace("_", " "),
+                    str(fn.get("description", "")),
+                    *(str(k) for k in fn.get("keywords", ())),
+                ]
+            )
+            if not _query_terms(words):
+                missing.append(name)
+        return sorted(missing)
 
     def search_tools(self, names: Any, query: str, limit: int = 10) -> list[SearchHit]:
         """Rank a set of tool names against a free-text query.
