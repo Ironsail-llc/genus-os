@@ -17,6 +17,7 @@ Start:
 from __future__ import annotations
 
 import json
+import logging
 import os
 import time
 import uuid
@@ -35,6 +36,8 @@ from robothor import __version__
 from robothor.engine.config import fleet_uses_ollama
 from robothor.rag.pipeline import run_pipeline
 from robothor.rag.profiles import RAG_PROFILES
+
+logger = logging.getLogger(__name__)
 
 # ─── Configuration ────────────────────────────────────────────────────
 
@@ -64,8 +67,8 @@ def _harden_at_import() -> None:
         from robothor.engine.process_hardening import harden_process
 
         harden_process()
-    except Exception:  # noqa: BLE001 - a hardening step must never block a boot
-        pass
+    except Exception as e:  # noqa: BLE001 - a hardening step must never block a boot
+        logger.warning("Process hardening skipped: %s: %s", type(e).__name__, e)
 
 
 app = FastAPI(
@@ -200,6 +203,10 @@ async def health() -> dict[str, Any]:
             "web_search": {"available": searxng_ok},
             "memory_db": {"available": True},
         },
+        # Optional dependencies sit beside `components`, not in it: consumers
+        # (the dashboard among them) read any component with available=false
+        # as a failing check, and vision is not required for this service.
+        "optional": {"vision": dict(_vision_state)},
     }
 
 
@@ -398,6 +405,23 @@ def _vision_url(path: str) -> str:
     return f"{VISION_SERVICE_URL}{path}"
 
 
+#: What the last proxied vision call found. ``available`` is None until a call
+#: has been made; /health reports it so a dead vision service is visible.
+_vision_state: dict[str, Any] = {"available": None, "last_error": None}
+
+
+def _vision_reached() -> None:
+    _vision_state.update(available=True, last_error=None)
+
+
+def _vision_unreachable(path: str, exc: Exception) -> None:
+    """Record and log a failed vision call. WARNING on the first, DEBUG while it stays down."""
+    error = f"{path}: {type(exc).__name__}: {exc}"
+    level = logging.DEBUG if _vision_state["available"] is False else logging.WARNING
+    logger.log(level, "Vision service unreachable at %s", error)
+    _vision_state.update(available=False, last_error=error)
+
+
 @app.post("/vision/look")
 async def vision_look(req: VisionLookRequest | None = None) -> Any:
     """Proxy to vision service — capture and analyze a snapshot."""
@@ -419,9 +443,10 @@ async def vision_detect() -> Any:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.get(_vision_url("/detections"))
             if resp.status_code == 200:
+                _vision_reached()
                 return resp.json()
-    except Exception:
-        pass
+    except Exception as e:  # noqa: BLE001 - the route answers "not available" instead
+        _vision_unreachable("/detections", e)
     raise HTTPException(status_code=503, detail="Vision service not available")
 
 
@@ -432,9 +457,10 @@ async def vision_identify() -> Any:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.get(_vision_url("/identifications"))
             if resp.status_code == 200:
+                _vision_reached()
                 return resp.json()
-    except Exception:
-        pass
+    except Exception as e:  # noqa: BLE001 - the route answers "not available" instead
+        _vision_unreachable("/identifications", e)
     raise HTTPException(status_code=503, detail="Vision service not available")
 
 
@@ -445,9 +471,10 @@ async def vision_status() -> Any:
         async with httpx.AsyncClient(timeout=5.0) as client:
             resp = await client.get(_vision_url("/health"))
             if resp.status_code == 200:
+                _vision_reached()
                 return resp.json()
-    except Exception:
-        pass
+    except Exception as e:  # noqa: BLE001 - the route answers "not available" instead
+        _vision_unreachable("/health", e)
     return {"running": False, "people_present": [], "last_detection": None}
 
 
@@ -471,9 +498,10 @@ async def vision_mode_get() -> Any:
         async with httpx.AsyncClient(timeout=5.0) as client:
             resp = await client.get(_vision_url("/mode"))
             if resp.status_code == 200:
+                _vision_reached()
                 return resp.json()
-    except Exception:
-        pass
+    except Exception as e:  # noqa: BLE001 - the route answers "not available" instead
+        _vision_unreachable("/mode", e)
     return {"mode": "unknown", "error": "Vision service not reachable"}
 
 
@@ -513,9 +541,10 @@ async def vision_enrolled() -> Any:
         async with httpx.AsyncClient(timeout=5.0) as client:
             resp = await client.get(_vision_url("/enrolled"))
             if resp.status_code == 200:
+                _vision_reached()
                 return resp.json()
-    except Exception:
-        pass
+    except Exception as e:  # noqa: BLE001 - the route answers "not available" instead
+        _vision_unreachable("/enrolled", e)
     return {"enrolled_faces": [], "count": 0, "error": "Vision service not reachable"}
 
 

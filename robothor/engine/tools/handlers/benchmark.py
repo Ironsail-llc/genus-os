@@ -1260,8 +1260,8 @@ async def _judge_output(output: str, rubric: list[str], model: str) -> JudgeOutc
                         if is_periodic_quota_exhausted(e)
                         else Retirement.CREDIT_EXHAUSTED,
                     )
-            except Exception:  # noqa: BLE001 — grading must not break on this
-                pass
+            except Exception as retire_exc:  # noqa: BLE001 — grading must not break on this
+                logger.warning("Judge key retirement failed for %s: %s", model, retire_exc)
             last_error = f"judge call failed: {detail}"
             logger.warning(
                 "Judge LLM call failed (attempt %d/%d): %s", attempt + 1, JUDGE_ATTEMPTS, detail

@@ -830,8 +830,8 @@ async def _action_snapshot(args: dict[str, Any], ctx: ToolContext) -> dict[str, 
                     "Screenshot included for visual inspection. "
                     "Use act(kind='click', x=..., y=...) for coordinate-based interaction."
                 )
-            except Exception:
-                pass  # Screenshot failure is non-fatal
+            except Exception as e:  # noqa: BLE001 - the ARIA snapshot still returns
+                logger.debug("Snapshot vision-fallback screenshot failed: %s", e)
 
         return result
 

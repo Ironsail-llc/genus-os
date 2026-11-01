@@ -323,8 +323,8 @@ async def homepage(request: Request) -> HTMLResponse:
             if resp.status_code == 200:
                 engine_data = resp.json()
                 agents = engine_data.get("agents", {})
-    except Exception:
-        pass
+    except Exception as e:  # noqa: BLE001 - the page renders with an empty fleet
+        logger.warning("Homepage: engine health fetch failed: %s: %s", type(e).__name__, e)
 
     # Vision mode
     vision_mode = "unknown"
@@ -338,8 +338,8 @@ async def homepage(request: Request) -> HTMLResponse:
             resp = await client.get(_vision_health)
             if resp.status_code == 200:
                 vision_mode = resp.json().get("mode", "unknown")
-    except Exception:
-        pass
+    except Exception as e:  # noqa: BLE001 - "unknown" is what the page shows
+        logger.debug("Homepage: vision mode fetch failed: %s: %s", type(e).__name__, e)
 
     html = _render_template(
         "homepage.html",

@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import subprocess
 from typing import TYPE_CHECKING, Any
 
 from robothor.engine.tools.constants import PROTECTED_BRANCHES
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -117,8 +120,9 @@ async def _git_commit(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             current_branch = branch_proc.stdout.strip()
             if current_branch in PROTECTED_BRANCHES:
                 return {"error": f"Cannot commit on protected branch: {current_branch}"}
-        except Exception:
-            pass  # proceed — branch check is best-effort
+        except (OSError, subprocess.SubprocessError) as e:
+            # Fail-open, as before, but never silently: the guard did not run.
+            logger.warning("git_commit: protected-branch check skipped in %s: %s", repo_path, e)
 
         try:
             # Stage files

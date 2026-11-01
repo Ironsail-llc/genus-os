@@ -1604,8 +1604,8 @@ def _travel_status() -> str | None:
         )
         if content and content.strip():
             return f"Travel: {content.strip()[:200]}"
-    except Exception:
-        pass
+    except Exception as e:  # noqa: BLE001 - a context hook never blocks warmup
+        logger.debug("Warmup travel_status block unavailable: %s", e)
     return None
 
 
@@ -1618,8 +1618,8 @@ def _weather_context() -> str | None:
             content = weather_file.read_text().strip()
             if content:
                 return f"Weather: {content[:200]}"
-    except Exception:
-        pass
+    except (OSError, UnicodeDecodeError) as e:
+        logger.debug("Warmup weather status unreadable: %s", e)
     return None
 
 
@@ -1662,8 +1662,8 @@ def _git_status_context(config: AgentConfig) -> str | None:
         )
         if status.stdout.strip():
             parts.append(f"Branch & status:\n{status.stdout.strip()}")
-    except Exception:
-        pass
+    except (OSError, subprocess.SubprocessError) as e:
+        logger.debug("Warmup git status skipped: %s", e)
     try:
         log = subprocess.run(
             ["git", "log", "--oneline", "-5"],
@@ -1674,8 +1674,8 @@ def _git_status_context(config: AgentConfig) -> str | None:
         )
         if log.stdout.strip():
             parts.append(f"Recent commits:\n{log.stdout.strip()}")
-    except Exception:
-        pass
+    except (OSError, subprocess.SubprocessError) as e:
+        logger.debug("Warmup git log skipped: %s", e)
     return "Git:\n" + "\n".join(parts) if parts else None
 
 

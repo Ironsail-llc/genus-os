@@ -71,8 +71,8 @@ async def build_self_model(days: int = 7) -> dict[str, Any]:
             result = detect_anomalies(aid)
             if result.get("anomalies"):
                 anomalies.append(result)
-        except Exception:
-            pass
+        except Exception as e:  # noqa: BLE001 - one agent's anomaly scan must not stop the model
+            logger.debug("Self-model: anomaly detection failed for %s: %s", aid, e)
 
     # Failure patterns
     failure_patterns: dict[str, Any] = {}
@@ -101,8 +101,8 @@ async def build_self_model(days: int = 7) -> dict[str, Any]:
             if content:
                 # Truncate to last 1000 chars to keep LLM context reasonable
                 learnings[block_name] = content[-1000:]
-        except Exception:
-            pass
+        except Exception as e:  # noqa: BLE001 - a missing learnings block is normal
+            logger.debug("Self-model: could not read %s: %s", block_name, e)
 
     # ── LLM synthesis ─────────────────────────────────────────────────────
     data_summary = _format_data_for_synthesis(
