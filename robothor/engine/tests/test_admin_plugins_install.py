@@ -416,7 +416,7 @@ def read_only_plugin_dir(tmp_path, monkeypatch):
     from robothor.settings import reset_settings
 
     reset_settings()
-    with patch("robothor.engine.admin_plugins._writable", return_value=False):
+    with patch("robothor.engine.admin_plugins._read_only", return_value=True):
         yield plugin_dir
 
 
@@ -429,7 +429,10 @@ def test_install_into_a_read_only_plugin_dir_is_refused(client, read_only_plugin
 
 
 def test_remove_from_a_read_only_plugin_dir_is_refused(client, read_only_plugin_dir) -> None:
-    with patch.object(installer, "remove") as remove:
+    with (
+        patch.object(installer, "_plugin_dir_distribution", return_value=object()),
+        patch.object(installer, "remove") as remove,
+    ):
         response = client.post("/api/admin/plugins/acme-tools/remove", json={})
     assert response.status_code == 409
     assert READ_ONLY in response.json()["detail"]
@@ -447,8 +450,38 @@ def test_a_dry_run_against_a_read_only_plugin_dir_still_plans(client, read_only_
     assert install.call_count == 1
 
 
-def test_the_writable_check_is_the_filesystem_answer(tmp_path) -> None:
+def test_removing_a_plugin_not_in_the_plugin_dir_still_runs(client, read_only_plugin_dir) -> None:
+    """The "gone" path only drops the lockfile row and retires workspace files;
+    it never touches the plugin dir, so a read-only one is no reason to refuse."""
+    with (
+        patch.object(installer, "_plugin_dir_distribution", return_value=None),
+        patch.object(installer, "remove", return_value={"name": "acme-tools"}) as remove,
+    ):
+        response = client.post("/api/admin/plugins/acme-tools/remove", json={})
+    assert response.status_code == 200
+    assert remove.call_count == 1
+
+
+def test_a_writable_directory_is_not_read_only(tmp_path) -> None:
     from robothor.engine import admin_plugins
 
-    assert admin_plugins._writable(tmp_path) is True
-    assert admin_plugins._writable(tmp_path / "missing") is False
+    assert admin_plugins._read_only(tmp_path) is False
+
+
+def test_a_missing_directory_on_a_writable_filesystem_is_not_read_only(tmp_path) -> None:
+    """pip --target creates a missing directory, so a plugin dir nobody has
+    made yet is an ordinary first install, not a read-only mount."""
+    from robothor.engine import admin_plugins
+
+    assert admin_plugins._read_only(tmp_path / "not-yet" / ".plugins") is False
+
+
+def test_a_read_only_filesystem_is_read_only(tmp_path) -> None:
+    import os
+
+    from robothor.engine import admin_plugins
+
+    real = os.statvfs(tmp_path)
+    fake = MagicMock(f_flag=real.f_flag | os.ST_RDONLY)
+    with patch("robothor.engine.admin_plugins.os.statvfs", return_value=fake):
+        assert admin_plugins._read_only(tmp_path / ".plugins") is True
