@@ -1496,13 +1496,15 @@ class AgentRunner(
         # ── [VERIFIER] ran inside the run's scope, above ──
         output_text = verified_output if verified else session.get_final_text()
 
+        done: AgentRun = validated_completion(session, output_text or "")
         if on_complete is not None and early_done_enabled():  # answer first
-            done: AgentRun = validated_completion(session, output_text or "")
             fin = {"trace": trace, "agent_config": agent_config, "spawn_context": spawn_context}
             return await release_then_finalize(self, done, session, on_complete, **fin)
 
+        # ── [TELEMETRY] Publish run metrics, now that the status is final ──
+        self._publish_run_telemetry(trace, done)
         return self._finish_run(
-            validated_completion(session, output_text or ""),
+            done,
             trace=trace,
             agent_config=agent_config,
             session=session,
