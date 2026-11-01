@@ -1735,3 +1735,60 @@ class TestDeferredToolsReachable:
     async def test_the_shipped_templates_pass(self, stock_instance: Path) -> None:
         result = await _run("tools.deferred_tools_reachable")
         assert result.status == "pass", result.detail
+
+
+# ── tools.inability_copy ──────────────────────────────────────────────
+
+
+class TestInabilityCopy:
+    """Instruction text that tells the agent it cannot do something is how an
+    agent with the tool learns to refuse. A reason belongs there instead."""
+
+    @pytest.mark.asyncio
+    async def test_a_bare_inability_outside_a_fence_is_reported(self, instance: Path) -> None:
+        _write_agent(
+            instance,
+            "example-agent",
+            {},
+            instructions="Be helpful.\nI cannot send email.\nYou can't edit code here.\n",
+        )
+        result = await _run("tools.inability_copy")
+        assert result.status == "fail"
+        assert "example-agent" in result.detail
+        assert "I cannot send email." in result.detail
+
+    @pytest.mark.asyncio
+    async def test_a_fenced_example_is_not_reported(self, instance: Path) -> None:
+        _write_agent(
+            instance,
+            "example-agent",
+            {},
+            instructions="Quote it like this:\n```\nI cannot help with that.\n```\n",
+        )
+        result = await _run("tools.inability_copy")
+        assert result.status == "pass"
+
+    @pytest.mark.asyncio
+    async def test_the_shipped_templates_pass(self, stock_instance: Path) -> None:
+        result = await _run("tools.inability_copy")
+        assert result.status == "pass", result.detail
+
+    def test_no_shipped_instruction_template_claims_an_inability(self) -> None:
+        """The stock instance copies manifests only, so read the shipped
+        instruction text directly."""
+        from pathlib import Path as _Path
+
+        from robothor.doctor.checks.tools import inability_claims
+
+        repo = _Path(__file__).resolve().parents[3]
+        found = {
+            str(path.relative_to(repo)): inability_claims(path.read_text())
+            for path in sorted(repo.glob("templates/**/*.md"))
+        }
+        assert {k: v for k, v in found.items() if v} == {}
+
+    def test_conditions_are_not_claims(self) -> None:
+        from robothor.doctor.checks.tools import inability_claims
+
+        assert inability_claims("If you cannot find it, ask.") == []
+        assert inability_claims("- You can't rerun a workflow.") == ["You can't rerun a workflow."]

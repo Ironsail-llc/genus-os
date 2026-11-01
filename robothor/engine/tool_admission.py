@@ -28,43 +28,19 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from robothor.constants import GUARDRAIL_BLOCKED_ERROR_TYPE
 from robothor.engine.run_deadline import wrapup_refusal
 from robothor.engine.sanitize import sanitize_log as _sanitize
+from robothor.engine.tool_verdict import ToolVerdict as ToolVerdict  # re-exported
+from robothor.engine.tool_verdict import with_gate
 
 if TYPE_CHECKING:
     from robothor.engine.models import AgentConfig
     from robothor.engine.session import AgentSession
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class ToolVerdict:
-    """What admission control decided about one tool call.
-
-    ``allowed`` is the only field the happy path reads; the rest describe how
-    a refusal should be recorded, and exist so the differences between gates
-    are visible rather than buried in each gate's copy of the refusal tail.
-    """
-
-    allowed: bool
-    #: What the model is told. Also what lands in the step's error_message.
-    message: str = ""
-    #: Merged into the recorded tool_output, e.g. {"guard": "plan_mode"} —
-    #: this is how an operator reading the ledger later knows which control
-    #: fired, without parsing the message text.
-    output: dict[str, Any] = field(default_factory=dict)
-    #: Whether this refusal counts toward the escalation threshold.
-    escalate: bool = False
-    #: Whether this refusal joins the iteration's error list — which drives
-    #: error feedback to the model and the recovery machinery.
-    count_as_iteration_error: bool = True
-    #: Possibly rewritten by a MODIFY hook; the caller uses this, not its own.
-    tool_args: dict[str, Any] = field(default_factory=dict)
 
 
 def _system_trigger_types() -> frozenset[Any]:
@@ -104,7 +80,12 @@ class ToolAdmissionMixin:
         # below and defeat the point of having the contract at all.
         _active_watchdog: Any
 
-    async def _admit_tool_call(
+    async def _admit_tool_call(self, **kw: Any) -> ToolVerdict:
+        """Every gate in order (``_run_gates``); a refusal carries its gate and unlock."""
+        verdict = await self._run_gates(**kw)
+        return with_gate(verdict, kw["tool_name"], kw.get("agent_config"))
+
+    async def _run_gates(
         self,
         *,
         tc: Any,

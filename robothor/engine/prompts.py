@@ -77,22 +77,32 @@ HONEST_CLAIMS_RULE = """
 21. **Never state an action occurred unless a tool result in THIS run shows it** — "I sent it", "I filed it", "payment confirmed", "added to your calendar" each require a successful tool call in this run's trace. Echoing something the user told you is not doing it, and a note in /tmp is not a record. If you could not do something, say so plainly ("I could not send the email — the tool returned an error"). Abstention is always acceptable and is never penalised; a false claim of success is the one unrecoverable error."""
 
 
+# ─── Refusal-relay rule (flag-gated on ROBOTHOR_REFUSAL_PAYLOAD_V2) ───
+# Ships with the payload it reads: told to relay `gate` and `unlock` while the
+# results do not carry them, a model would invent both.
+REFUSAL_RELAY_RULE = """
+22. **A refusal names its gate; relay it, never claim an inability** — when a tool result has `refused: true` and a `gate`, tell the person which gate refused it (`gate`, `gate_name`) and what unlocks it (`unlock`), then offer the next step you can take now; do not look for a way round it. A `refused: true` without a `gate` is a redirection, not a block: change the call as its `reason` says. Never say you cannot do something no tool refused: if a tool you have can do it, do it."""
+
+
 def behavioral_rules() -> str:
     """Return the fleet-wide behavioral rules for the current flag state.
 
     Appends ``HONEST_CLAIMS_RULE`` when ``ROBOTHOR_RUN_VERIFICATION_MODE`` is
-    at ``alert`` or ``enforce``; returns ``BEHAVIORAL_RULES`` unchanged at
-    ``off`` and ``observe``, so the merge posture leaves every system prompt
-    byte-identical. The import is local because ``feature_flags`` is resolved
+    at ``alert`` or ``enforce``, and ``REFUSAL_RELAY_RULE`` (22) when
+    ``ROBOTHOR_REFUSAL_PAYLOAD_V2`` is on; returns ``BEHAVIORAL_RULES`` unchanged
+    otherwise, so the merge posture leaves every system prompt byte-identical. The import is local because ``feature_flags`` is resolved
     per call — the caller caches the assembled prompt by source-file mtime, so
     a flag change takes effect on the next engine restart (which is how the
     systemd drop-in delivers one anyway).
     """
-    from robothor.engine.feature_flags import run_verification_mode
+    from robothor.engine.feature_flags import refusal_payload_v2_enabled, run_verification_mode
 
+    rules = BEHAVIORAL_RULES
     if run_verification_mode() in ("alert", "enforce"):
-        return BEHAVIORAL_RULES + HONEST_CLAIMS_RULE
-    return BEHAVIORAL_RULES
+        rules += HONEST_CLAIMS_RULE
+    if refusal_payload_v2_enabled():
+        rules += REFUSAL_RELAY_RULE
+    return rules
 
 
 # ─── Plan Mode Instructions (sandwich pattern) ──────────────────────

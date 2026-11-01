@@ -485,6 +485,25 @@ def _audit_tool_call(
         pass
 
 
+def _rbac_unlock(user_role: str, name: str, denied: str) -> str:
+    """What unlocks a per-user RBAC denial, from where the caller stands.
+
+    Telling an owner or admin that "an owner or admin can do it" sends them to
+    themselves; what gates them is the rule itself.
+    """
+    role = user_role or "none"
+    if role in ("owner", "admin"):
+        return (
+            f"Your role '{role}' is refused '{name}' by a specific RBAC rule ({denied}), "
+            "not by its rank. An owner changes that rule: an allow row for role "
+            f"'{role}' and '{name}' in role_permissions"
+        )
+    return (
+        f"Your role here is '{role}', which may not use '{name}'. An owner or admin can "
+        "do it, or grant that role the tool (a role_permissions allow row)"
+    )
+
+
 async def _refuse_before_handler(
     name: str,
     *,
@@ -511,8 +530,15 @@ async def _refuse_before_handler(
         check_tool_permission, user_role, tenant_id, name, user_id=user_id
     )
     if denied:
+        from robothor.engine.refusal import refusal
+
         _audit_tool_call(name, agent_id, tenant_id, user_id=user_id, status="denied", error=denied)
-        return {"error": denied}
+        return refusal(
+            denied,
+            gate="role",
+            name="rbac",
+            unlock=_rbac_unlock(user_role, name, denied),
+        )
 
     # ── Per-task tool whitelist (Rip 1) ──
     # If a parent forked us with a restricted toolset (e.g. the
@@ -521,9 +547,20 @@ async def _refuse_before_handler(
     # the handler ever sees it.
     whitelist = _thread_tool_whitelist.get()
     if whitelist is not None and name not in whitelist:
+        from robothor.engine.refusal import refusal
+
         msg = f"Tool '{name}' denied by per-task whitelist"
         _audit_tool_call(name, agent_id, tenant_id, user_id=user_id, status="denied", error=msg)
-        return {"error": msg, "denied_by_whitelist": True}
+        return refusal(
+            msg,
+            gate="allowlist",
+            name="per_task_whitelist",
+            unlock=(
+                "This forked task may use only the tools its parent run gave it; report "
+                f"back and let the parent run call '{name}'"
+            ),
+            denied_by_whitelist=True,
+        )
 
     return None
 

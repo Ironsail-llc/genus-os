@@ -559,6 +559,62 @@ async def _deferred_tools_reachable(ctx: DoctorContext) -> Result:
     return fail(f"{len(lines)} tool reachability finding(s): {shown}")
 
 
+# ── tools.inability_copy ──────────────────────────────────────────────
+
+#: A first-person or second-person statement of inability, at the start of a
+#: sentence or line. Case-sensitive on purpose: "if you cannot find it" is a
+#: condition, "You cannot edit code." is a claim the agent will repeat to the
+#: person even when it holds the tool.
+_INABILITY_RE = re.compile(
+    r"(?:^|(?<=[.!?:]\s)|(?<=^[-*]\s))(?:I|You)\s+(?:cannot|can't|can not|are unable to"
+    r"|am unable to)\b[^\n]*",
+    re.MULTILINE,
+)
+
+
+def inability_claims(text: str) -> list[str]:
+    """Inability statements in ``text`` outside fenced code and HTML comments."""
+    text = _FENCE_RE.sub("", text)
+    text = _HTML_COMMENT_RE.sub("", text)
+    return [match.group(0).strip() for match in _INABILITY_RE.finditer(text)]
+
+
+def _scan_inability_copy(directory: Path, workspace: Path) -> list[str]:
+    lines: list[str] = []
+    for manifest in _scan_manifests(directory):
+        found = inability_claims(_read_instruction_text(workspace, manifest))
+        if found:
+            lines.append(f"{manifest.get('id')}: " + " | ".join(found[:3]))
+    return lines
+
+
+async def _inability_copy(ctx: DoctorContext) -> Result:
+    """Instructions tell the agent it cannot do something.
+
+    The agent repeats such a line to the person whether or not it holds the
+    tool, and it outlives the restriction it described. State the reason and
+    the unlock instead ("n8n workflows are edited in n8n; send the operator
+    the execution link"), or name the gate the engine enforces.
+    """
+    directory = _manifest_dir(ctx)
+    if not directory.is_dir():
+        return skip(f"no manifest directory at {directory}")
+    workspace = _workspace(ctx)
+    try:
+        lines = await ctx.run_blocking(_scan_inability_copy, directory, workspace)
+    except Exception as exc:  # noqa: BLE001 - a scan that raises is a failure
+        return fail(f"cannot scan the instructions: {type(exc).__name__}")
+    if not lines:
+        return ok("no instruction file tells its agent it cannot do something")
+    shown = "; ".join(lines[:_MAX_LISTED])
+    if len(lines) > _MAX_LISTED:
+        shown += f"; and {len(lines) - _MAX_LISTED} more"
+    return fail(
+        f"{len(lines)} agent(s) told they cannot do something; say why and what unlocks "
+        f"it instead: {shown}"
+    )
+
+
 # ── tools.exec_allowlist_bypasses_denied_tool ─────────────────────────
 
 #: ``(probe command, the native tools that do the same thing)``. An
@@ -1103,6 +1159,13 @@ CHECKS: tuple[Check, ...] = (
         category="tools",
         severity="recommended",
         run=_deferred_tools_reachable,
+    ),
+    Check(
+        id="tools.inability_copy",
+        title="Instructions do not tell an agent it cannot do something",
+        category="tools",
+        severity="recommended",
+        run=_inability_copy,
     ),
     Check(
         id="tools.exec_allowlist_bypasses_denied_tool",
