@@ -64,15 +64,17 @@ def get_tool_whitelist() -> frozenset[str] | None:
 # enforced by the advertised schema list, which deferral shrinks to core+meta).
 #
 # This is deliberately SEPARATE from _thread_tool_whitelist: it gates only
-# tool_call, not all dispatch, so it cannot wrongly restrict a non-deferring
-# sub-agent that inherits the parent task's context. Default None.
+# tool_call, not all dispatch. Default None. The runner sets it on EVERY run
+# (None when the run is not deferred): spawn_agent runs a child inline in the
+# parent's task, and a child that inherited the parent's set would read the
+# parent's grant as its own.
 _deferred_allowed_var: ContextVar[frozenset[str] | None] = ContextVar(
     "_deferred_allowed_var", default=None
 )
 
 
-def set_deferred_allowed(allowed: frozenset[str]) -> Token[frozenset[str] | None]:
-    """Record the deferred-run allow-set; returns a reset token."""
+def set_deferred_allowed(allowed: frozenset[str] | None) -> Token[frozenset[str] | None]:
+    """Record the deferred-run allow-set (None: not deferred); returns a reset token."""
     return _deferred_allowed_var.set(allowed)
 
 
