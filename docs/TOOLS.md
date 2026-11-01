@@ -1542,10 +1542,14 @@ capabilities its granted tools give it (`exec`, `write_files`, `git_pr`,
 `coding_jobs`, `browser`, `spawn`, `vault_set`, `send_mail`, and `host_exec` for
 `main`), and for each one it lacks, the gate and the unlock (a manifest key, or
 a setting such as `ROBOTHOR_CODING_REPO_ROOTS` or `ROBOTHOR_HOST_EXEC_SOCKET`). `vault_set` is listed as available only when the
-manifest declares `credentials: operator` under `v2:`, or, for `main`, when
-`ROBOTHOR_CREDENTIAL_INTAKE=enforce` (then in an owner's or admin's own chat);
-coding jobs are available when either `ROBOTHOR_CODING_WORKSPACE` or
-`ROBOTHOR_CODING_REPO_ROOTS` is set. It
+manifest declares `credentials: operator` under `v2:`, or, for the default chat
+agent, when credential intake is enforced (then in an owner's or admin's own
+chat); coding jobs are available when `ROBOTHOR_CODING_REPO_ROOTS` is set, or a
+coding workspace is. Credential intake (`ROBOTHOR_CREDENTIAL_INTAKE`) and the
+coding workspace (`ROBOTHOR_CODING_WORKSPACE`) are counted, and offered as
+unlocks, only in a build that has them: the block asks the vault handler's
+feature flags and the coding settings, not the environment, so a variable this
+build does not read is never offered as a fix. It
 tells the agent to relay a refusal's gate and unlock only when
 `ROBOTHOR_REFUSAL_PAYLOAD_V2` is also on, since only then do refusals carry them.
 It reads only the manifest and the engine's settings, so it is the same on every

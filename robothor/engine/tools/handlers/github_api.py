@@ -63,13 +63,18 @@ async def _vault_set_admitted(ctx: ToolContext) -> bool:
     """Whether this caller's vault_set would pass the credential gate. Fails closed."""
     import asyncio as _asyncio
 
-    from robothor.engine.capabilities import env_facts
+    from robothor.engine.capabilities import credential_intake_mode
     from robothor.engine.tools.handlers import vault
+    from robothor.settings import get_settings
 
     agent_id = str(getattr(ctx, "agent_id", "") or "")
     role = str(getattr(ctx, "user_role", "") or "").lower()
-    intake = env_facts()[1]
-    if intake == "enforce" and agent_id == "main" and role in ("owner", "admin"):
+    chat_agent = get_settings().engine.default_chat_agent or "main"
+    if (
+        credential_intake_mode() == "enforce"
+        and agent_id == chat_agent
+        and role in ("owner", "admin")
+    ):
         return True
     try:
         # The tier is read from the manifest file: off the event loop.

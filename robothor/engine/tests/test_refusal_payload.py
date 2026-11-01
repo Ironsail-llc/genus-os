@@ -477,23 +477,38 @@ class TestQaRoundUnlocks:
     async def test_github_unlock_names_vault_set_only_when_it_would_be_admitted(
         self, flag_on, monkeypatch
     ) -> None:
+        from robothor.engine import feature_flags
         from robothor.engine.tools.handlers import github_api, vault
 
         monkeypatch.setattr(github_api, "_get_token", lambda: "")
-        monkeypatch.delenv("ROBOTHOR_CREDENTIAL_INTAKE", raising=False)
         monkeypatch.setattr(vault, "credential_tier", lambda agent_id: "")
+        monkeypatch.setattr(feature_flags, "credential_intake_mode", lambda: "off", raising=False)
         out = await github_api._github_list_prs({"repo": "octo/example"}, _ctx(user_role="owner"))
         assert "vault_set" not in out["unlock"]
         assert "GITHUB_TOKEN" in out["unlock"]
 
-        monkeypatch.setenv("ROBOTHOR_CREDENTIAL_INTAKE", "enforce")
+        monkeypatch.setattr(feature_flags, "credential_intake_mode", lambda: "enforce")
         out = await github_api._github_list_prs({"repo": "octo/example"}, _ctx(user_role="owner"))
         assert "vault_set" in out["unlock"]
 
-        monkeypatch.delenv("ROBOTHOR_CREDENTIAL_INTAKE")
+        monkeypatch.setattr(feature_flags, "credential_intake_mode", lambda: "off")
         monkeypatch.setattr(vault, "credential_tier", lambda agent_id: "operator")
         out = await github_api._github_list_prs({"repo": "octo/example"}, _ctx(user_role="member"))
         assert "vault_set" in out["unlock"]
+
+    @pytest.mark.asyncio
+    async def test_github_unlock_ignores_an_intake_env_this_build_does_not_read(
+        self, flag_on, monkeypatch
+    ) -> None:
+        from robothor.engine import feature_flags
+        from robothor.engine.tools.handlers import github_api, vault
+
+        monkeypatch.setattr(github_api, "_get_token", lambda: "")
+        monkeypatch.setattr(vault, "credential_tier", lambda agent_id: "")
+        monkeypatch.setenv("ROBOTHOR_CREDENTIAL_INTAKE", "enforce")
+        monkeypatch.delattr(feature_flags, "credential_intake_mode", raising=False)
+        out = await github_api._github_list_prs({"repo": "octo/example"}, _ctx(user_role="owner"))
+        assert "vault_set" not in out["unlock"]
 
 
 class TestDeniedByPatternNamesThePattern:

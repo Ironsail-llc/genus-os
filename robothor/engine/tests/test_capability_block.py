@@ -213,12 +213,32 @@ def test_flag_off_the_body_equals_one_built_without_the_block(tmp_path, monkeypa
 
 
 # ── QA round: vault_set and coding jobs follow what actually admits them ──
+#
+# Credential intake and the coding workspace are separate features. The report
+# names them, and counts them as admitting anything, only when the running tree
+# has them: the vault handler's intake mode (``feature_flags.credential_intake_mode``)
+# and the coding settings' ``workspace`` field. An environment variable by
+# itself is not a gate.
+
+
+def _without_intake(monkeypatch) -> None:
+    """This build has no credential intake, whichever tree the test runs on."""
+    from robothor.engine import feature_flags
+
+    monkeypatch.delattr(feature_flags, "credential_intake_mode", raising=False)
+
+
+def _with_intake(monkeypatch, mode: str) -> None:
+    from robothor.engine import feature_flags
+
+    monkeypatch.setattr(feature_flags, "credential_intake_mode", lambda: mode, raising=False)
 
 
 class TestVaultSetFollowsTheCredentialGate:
     """``vault_set`` is refused unless the manifest declares the operator
-    credential tier, or credential intake is enforced for an owner's or
-    admin's chat with main. Granting the tool is not enough."""
+    credential tier, or credential intake (where this build has it) is enforced
+    for an owner's or admin's chat with the default chat agent. Granting the
+    tool is not enough."""
 
     def _vault(self, **facts):
         from robothor.engine.capabilities import Facts, assess
@@ -227,7 +247,7 @@ class TestVaultSetFollowsTheCredentialGate:
         return {c.key: c for c in rows}
 
     def test_no_tier_and_intake_off_is_gated_naming_both_unlocks(self) -> None:
-        rows = self._vault(agent_id="main")
+        rows = self._vault(agent_id="main", credential_intake="off")
         vault = rows["vault_set"]
         assert vault.available is False
         assert vault.gate == "flag"
@@ -235,6 +255,15 @@ class TestVaultSetFollowsTheCredentialGate:
         assert "ROBOTHOR_CREDENTIAL_INTAKE=enforce" in vault.unlock
         assert "credentials: operator" in vault.unlock
         assert "vault_set" not in rows["git_pr"].note
+
+    def test_without_intake_in_this_build_main_is_gated_on_the_tier_only(self) -> None:
+        rows = self._vault(agent_id="main")
+        vault = rows["vault_set"]
+        assert vault.available is False
+        assert vault.gate == "allowlist"
+        assert vault.gate_name == "credential_tier"
+        assert "credentials: operator" in vault.unlock
+        assert "CREDENTIAL_INTAKE" not in vault.unlock
 
     def test_observe_is_still_gated(self) -> None:
         assert (
@@ -258,20 +287,48 @@ class TestVaultSetFollowsTheCredentialGate:
         assert vault.available is True
         assert "owner or admin" in vault.note
 
-    def test_the_prompt_reads_the_tier_and_the_intake_env(self, tmp_path, monkeypatch) -> None:
+    def test_intake_follows_the_default_chat_agent_not_the_name_main(self) -> None:
+        moved = {"default_chat_agent": "example-agent", "credential_intake": "enforce"}
+        assert self._vault(agent_id="example-agent", **moved)["vault_set"].available is True
+        assert self._vault(agent_id="main", **moved)["vault_set"].available is False
+
+    def test_the_probe_reads_the_mode_the_vault_handler_reads(self, monkeypatch) -> None:
+        from robothor.engine import capabilities
+
+        monkeypatch.setenv("ROBOTHOR_CREDENTIAL_INTAKE", "enforce")
+        _without_intake(monkeypatch)
+        assert capabilities.credential_intake_mode() is None
+        _with_intake(monkeypatch, "observe")
+        assert capabilities.credential_intake_mode() == "observe"
+
+    def test_the_intake_env_alone_admits_nothing_without_intake_in_the_build(
+        self, tmp_path, monkeypatch
+    ) -> None:
         monkeypatch.setenv(FLAG, "1")
-        monkeypatch.delenv("ROBOTHOR_CREDENTIAL_INTAKE", raising=False)
+        monkeypatch.setenv("ROBOTHOR_CREDENTIAL_INTAKE", "enforce")
+        _without_intake(monkeypatch)
+        config = _agent(tmp_path, id="main", tools_allowed=["vault_set", "read_file"])
+        block = _static(config, tmp_path)
+        block = block[block.index(HEADER) :]
+        assert "- vault_set:" in block[block.index("Gated") :]
+        assert "ROBOTHOR_CREDENTIAL_INTAKE" not in block
+
+    def test_the_prompt_reads_the_tier_and_the_intake_mode(self, tmp_path, monkeypatch) -> None:
+        monkeypatch.setenv(FLAG, "1")
+        _with_intake(monkeypatch, "off")
         config = _agent(tmp_path, id="main", tools_allowed=["vault_set", "read_file"])
         body = _static(config, tmp_path)
         assert "- vault_set:" in body[body.index("Gated") :]
         engine_config_module._prompt_cache.clear()
-        monkeypatch.setenv("ROBOTHOR_CREDENTIAL_INTAKE", "enforce")
+        _with_intake(monkeypatch, "enforce")
         body = _static(config, tmp_path)
         assert "- vault_set:" in body[body.index(HEADER) : body.index("Gated")]
 
 
 class TestCodingJobsAcceptTheCodingWorkspace:
-    """A coding workspace is an implicit repo root: with it set, a job starts."""
+    """Where this build's coding settings declare a workspace, it is an
+    implicit repo root: with it set, a job starts. Where they do not, only
+    ``ROBOTHOR_CODING_REPO_ROOTS`` admits a job and only it is named."""
 
     def test_the_workspace_alone_satisfies_the_roots(self) -> None:
         from robothor.engine.capabilities import Facts, assess
@@ -287,15 +344,60 @@ class TestCodingJobsAcceptTheCodingWorkspace:
     def test_with_neither_set_both_are_named(self) -> None:
         from robothor.engine.capabilities import Facts, assess
 
-        rows = {c.key: c for c in assess({"claude_code_start"}, Facts(agent_id="main"))}
+        rows = {
+            c.key: c
+            for c in assess({"claude_code_start"}, Facts(agent_id="main", coding_workspace=""))
+        }
         coding = rows["coding_jobs"]
         assert coding.available is False
         assert "ROBOTHOR_CODING_REPO_ROOTS" in coding.unlock
         assert "ROBOTHOR_CODING_WORKSPACE" in coding.unlock
 
-    def test_the_prompt_reads_the_workspace_env(self, tmp_path, monkeypatch) -> None:
+    def test_without_a_workspace_in_this_build_only_the_roots_are_named(self) -> None:
+        from robothor.engine.capabilities import Facts, assess
+
+        rows = {c.key: c for c in assess({"claude_code_start"}, Facts(agent_id="main"))}
+        coding = rows["coding_jobs"]
+        assert coding.available is False
+        assert "ROBOTHOR_CODING_REPO_ROOTS" in coding.unlock
+        assert "ROBOTHOR_CODING_WORKSPACE" not in coding.unlock
+
+    def test_the_probe_reads_the_coding_settings_field(self) -> None:
+        from types import SimpleNamespace
+
+        from robothor.engine import capabilities
+
+        without = SimpleNamespace(coding=SimpleNamespace(repo_roots=""))
+        assert capabilities.coding_workspace(without) is None
+        landed = SimpleNamespace(coding=SimpleNamespace(repo_roots="", workspace=" /srv/coding "))
+        assert capabilities.coding_workspace(landed) == "/srv/coding"
+
+    def test_the_probe_agrees_with_this_trees_settings_model(self, monkeypatch) -> None:
+        from robothor.engine import capabilities
+        from robothor.settings import get_settings, reset_settings
+        from robothor.settings.model import CodingSettings
+
+        monkeypatch.setenv("ROBOTHOR_CODING_WORKSPACE", "/srv/coding")
+        reset_settings()
+        found = capabilities.coding_workspace(get_settings())
+        if "workspace" in CodingSettings.model_fields:
+            assert found == "/srv/coding"
+        else:
+            assert found is None
+
+    def test_the_prompt_reads_the_probed_workspace(self, tmp_path, monkeypatch) -> None:
+        from robothor.engine import capabilities
+
         monkeypatch.setenv(FLAG, "1")
-        monkeypatch.setenv("ROBOTHOR_CODING_WORKSPACE", str(tmp_path / "coding"))
         config = _agent(tmp_path, tools_allowed=["claude_code_start", "read_file"])
+        monkeypatch.setattr(capabilities, "coding_workspace", lambda settings: None)
+        body = _static(config, tmp_path)
+        block = body[body.index(HEADER) :]
+        assert "- coding_jobs:" in block[block.index("Gated") :]
+        assert "ROBOTHOR_CODING_WORKSPACE" not in block
+        engine_config_module._prompt_cache.clear()
+        monkeypatch.setattr(
+            capabilities, "coding_workspace", lambda settings: str(tmp_path / "coding")
+        )
         body = _static(config, tmp_path)
         assert "- coding_jobs:" in body[body.index(HEADER) : body.index("Gated")]
