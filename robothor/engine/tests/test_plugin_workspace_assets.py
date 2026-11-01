@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import sys
 import zipfile
 from importlib import metadata
 from types import SimpleNamespace
@@ -767,6 +768,9 @@ def test_an_editable_install_finds_the_manifest_next_to_its_package(tmp_path, mo
     (pkg / "__init__.py").write_text("raise RuntimeError('must not be imported')\n")
     (pkg / "genus-plugin.yaml").write_text(_MANIFEST)
     monkeypatch.syspath_prepend(str(src))
+    # find_spec answers from sys.modules first: an earlier test that synced a
+    # plugin of the same name leaves its (since removed) package there.
+    monkeypatch.delitem(sys.modules, "example_agent", raising=False)
 
     class _Editable:
         files = ()

@@ -242,6 +242,9 @@ def harness(monkeypatch: pytest.MonkeyPatch, fleet: Path) -> Iterator[_Harness]:
     m("robothor.engine.messaging.init_messenger", lambda: None)
     m("robothor.engine.teams.init_team_manager", lambda: None)
     m("robothor.engine.leader.LeaderElector", FakeElector)
+    # main() installs its elector process-wide (leader.set_elector); restore the
+    # real one after the test, or a later test asks the fake whether it leads.
+    m("robothor.engine.leader._elector", None)
     m("robothor.engine.hook_registry.register_plugin_hooks", lambda _r: None)
     m("robothor.engine.buddy_hooks.register_buddy_hooks", lambda _r: None)
     m("robothor.engine.tools.set_runner", lambda *_a: None)

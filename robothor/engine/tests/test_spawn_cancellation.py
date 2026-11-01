@@ -438,7 +438,13 @@ class TestTheRegistryEndIsWired:
                         timeout=0,
                     )
                 )
-                await asyncio.sleep(0.1)
+                # Cancel once the child is running, not after a fixed pause: a
+                # cold first import of the spawn path can take longer than one.
+                for _ in range(500):
+                    if runner.session is not None:
+                        break
+                    await asyncio.sleep(0.01)
+                await asyncio.sleep(0.01)
                 task.cancel()
                 with pytest.raises(asyncio.CancelledError):
                     await task
