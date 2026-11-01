@@ -54,10 +54,20 @@ def _secure_mode(monkeypatch) -> None:
 # ─── Engine client: one pool, not one per call ───────────────────────
 
 
+def _share(monkeypatch, client: httpx.AsyncClient | None) -> None:
+    """Install *client* as the lifespan's, bound to the running loop, as the
+    lifespan itself does."""
+    import bridge_service
+
+    monkeypatch.setattr(bridge_service, "http_client", client)
+    monkeypatch.setattr(
+        bridge_service, "http_client_loop", asyncio.get_running_loop(), raising=False
+    )
+
+
 class TestTheEngineClientIsShared:
     @pytest.mark.asyncio
     async def test_two_engine_calls_use_the_lifespan_client(self, signing_key, monkeypatch):
-        import bridge_service
         from routers import _engine_client
 
         seen: list[str] = []
@@ -74,7 +84,7 @@ class TestTheEngineClientIsShared:
             return real_client(**kwargs)
 
         shared = real_client(transport=httpx.MockTransport(_handler), timeout=30.0)
-        monkeypatch.setattr(bridge_service, "http_client", shared)
+        _share(monkeypatch, shared)
         monkeypatch.setattr(_engine_client.httpx, "AsyncClient", _spy)
         try:
             first = await _engine_client.engine_request("GET", "/api/admin/tools")
@@ -91,7 +101,6 @@ class TestTheEngineClientIsShared:
     async def test_the_per_call_timeout_still_applies_on_the_shared_client(
         self, signing_key, monkeypatch
     ):
-        import bridge_service
         from routers import _engine_client
 
         timeouts: list[dict[str, Any]] = []
@@ -101,7 +110,7 @@ class TestTheEngineClientIsShared:
             return httpx.Response(200, json={})
 
         shared = httpx.AsyncClient(transport=httpx.MockTransport(_handler), timeout=30.0)
-        monkeypatch.setattr(bridge_service, "http_client", shared)
+        _share(monkeypatch, shared)
         try:
             await _engine_client.engine_request("GET", "/api/admin/tools", timeout=4.0)
         finally:
@@ -113,19 +122,160 @@ class TestTheEngineClientIsShared:
     async def test_a_dead_engine_on_the_shared_client_is_still_a_502(
         self, signing_key, monkeypatch
     ):
-        import bridge_service
         from routers import _engine_client
 
         def _refuse(request: httpx.Request) -> httpx.Response:
             raise httpx.ConnectError("connection refused")
 
         shared = httpx.AsyncClient(transport=httpx.MockTransport(_refuse))
-        monkeypatch.setattr(bridge_service, "http_client", shared)
+        _share(monkeypatch, shared)
         try:
             status, body = await _engine_client.engine_request("GET", "/api/admin/tools")
         finally:
             await shared.aclose()
         assert (status, body) == (502, {"error": "engine unavailable"})
+
+    @pytest.mark.asyncio
+    async def test_a_call_after_the_shared_client_closed_is_not_a_500(
+        self, signing_key, monkeypatch
+    ):
+        """A closed lifespan client is no client: the call falls back to a
+        one-off client instead of raising ``RuntimeError`` into a 500."""
+        from routers import _engine_client
+
+        # A mock transport, so the suite's network guard does not answer
+        # before the closed client gets the chance to raise.
+        closed = httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda request: httpx.Response(200, json={}))
+        )
+        await closed.aclose()
+        _share(monkeypatch, closed)
+
+        def _refuse(request: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectError("connection refused")
+
+        real_client = httpx.AsyncClient
+        monkeypatch.setattr(
+            _engine_client.httpx,
+            "AsyncClient",
+            lambda **kwargs: real_client(transport=httpx.MockTransport(_refuse), **kwargs),
+        )
+        status, body = await _engine_client.engine_request("GET", "/api/admin/tools")
+        assert (status, body) == (502, {"error": "engine unavailable"})
+
+    @pytest.mark.asyncio
+    async def test_a_call_from_another_event_loop_does_not_use_the_lifespan_client(
+        self, signing_key, monkeypatch
+    ):
+        """An httpx client belongs to the loop it was opened on. A ``def``
+        route that drives ``engine_request`` with ``asyncio.run`` in a worker
+        thread runs on a second loop, and must get a client of its own."""
+        from routers import _engine_client
+
+        shared_calls: list[str] = []
+
+        def _shared_handler(request: httpx.Request) -> httpx.Response:
+            shared_calls.append(str(request.url))
+            return httpx.Response(200, json={"via": "shared"})
+
+        shared = httpx.AsyncClient(transport=httpx.MockTransport(_shared_handler))
+        _share(monkeypatch, shared)
+
+        real_client = httpx.AsyncClient
+        monkeypatch.setattr(
+            _engine_client.httpx,
+            "AsyncClient",
+            lambda **kwargs: real_client(
+                transport=httpx.MockTransport(
+                    lambda request: httpx.Response(200, json={"via": "own"})
+                ),
+                **kwargs,
+            ),
+        )
+        try:
+            answer = await asyncio.to_thread(
+                lambda: asyncio.run(_engine_client.engine_request("GET", "/api/admin/tools"))
+            )
+        finally:
+            await shared.aclose()
+
+        assert answer == (200, {"via": "own"})
+        assert shared_calls == [], "the lifespan's client was used from another loop"
+
+    @pytest.mark.asyncio
+    async def test_the_lifespan_forgets_its_client_on_shutdown(self, monkeypatch):
+        import bridge_service
+
+        from robothor.autonomy import handoff_worker
+
+        async def _idle() -> None:
+            await asyncio.Event().wait()
+
+        monkeypatch.setattr(bridge_service, "_routine_trigger_loop", _idle)
+        monkeypatch.setattr(handoff_worker, "recover_checks", _idle)
+        monkeypatch.setattr(handoff_worker, "purge_expired_observations", _idle)
+        monkeypatch.setattr(bridge_service, "http_client", None)
+
+        async with bridge_service.lifespan(bridge_service.app):
+            assert bridge_service.http_client is not None
+            assert bridge_service.http_client_loop is asyncio.get_running_loop()
+        assert bridge_service.http_client is None
+        assert bridge_service.http_client_loop is None
+
+    @staticmethod
+    def _flaky_shared(monkeypatch, error: Exception) -> list[str]:
+        """A shared client whose first request fails with *error*, then answers."""
+
+        attempts: list[str] = []
+
+        def _handler(request: httpx.Request) -> httpx.Response:
+            attempts.append(request.method)
+            if len(attempts) == 1:
+                raise error
+            return httpx.Response(200, json={"ok": True})
+
+        shared = httpx.AsyncClient(transport=httpx.MockTransport(_handler))
+        _share(monkeypatch, shared)
+        return attempts
+
+    @pytest.mark.asyncio
+    async def test_a_stale_pooled_connection_is_retried_once_for_a_read(
+        self, signing_key, monkeypatch
+    ):
+        from routers import _engine_client
+
+        attempts = self._flaky_shared(
+            monkeypatch,
+            httpx.RemoteProtocolError("Server disconnected without sending a response."),
+        )
+        assert await _engine_client.engine_request("GET", "/api/admin/tools") == (
+            200,
+            {"ok": True},
+        )
+        assert attempts == ["GET", "GET"]
+
+    @pytest.mark.asyncio
+    async def test_a_dropped_post_is_not_replayed(self, signing_key, monkeypatch):
+        """The engine may have acted on a POST before the connection dropped."""
+        from routers import _engine_client
+
+        attempts = self._flaky_shared(
+            monkeypatch,
+            httpx.RemoteProtocolError("Server disconnected without sending a response."),
+        )
+        status, _ = await _engine_client.engine_request("POST", "/api/admin/scheduler/reconcile")
+        assert status == 502
+        assert attempts == ["POST"]
+
+    @pytest.mark.asyncio
+    async def test_a_refused_connect_is_retried_once_for_any_method(self, signing_key, monkeypatch):
+        """A connect that failed sent nothing, so a retry cannot repeat a write."""
+        from routers import _engine_client
+
+        attempts = self._flaky_shared(monkeypatch, httpx.ConnectError("connection refused"))
+        status, _ = await _engine_client.engine_request("POST", "/api/admin/scheduler/reconcile")
+        assert status == 200
+        assert attempts == ["POST", "POST"]
 
 
 # ─── Manifest listing: stat, do not re-parse ─────────────────────────
@@ -250,6 +400,41 @@ class TestTheManifestListingIsCached:
         row = next(row for row in body["agents"] if row["id"] == "demo-agent-2")
         assert row["enabled"] is False
 
+    def test_an_environment_change_is_seen_by_the_next_listing(
+        self, controls_client_as_operator, fleet, monkeypatch
+    ):
+        """Manifests expand ``${VAR}`` from the environment, so the
+        environment is part of what the cached scan was read under."""
+        monkeypatch.setenv("DEMO_AGENT_BLURB", "first blurb")
+        path = fleet / "demo-agent-0.yaml"
+        document = yaml.safe_load(path.read_text())
+        document["description"] = "${DEMO_AGENT_BLURB}"
+        path.write_text(yaml.safe_dump(document, sort_keys=False))
+
+        def _blurb() -> str:
+            body = controls_client_as_operator.get("/api/agent-manifests").json()
+            return next(row for row in body["agents"] if row["id"] == "demo-agent-0")["description"]
+
+        assert _blurb() == "first blurb"
+        monkeypatch.setenv("DEMO_AGENT_BLURB", "second blurb")
+        assert _blurb() == "second blurb"
+
+    def test_an_invalidation_during_a_scan_is_not_hidden_by_the_cache(self, tmp_path):
+        """A write that lands while a scan is running drops the cache before
+        the scan stores its result; that result must not be kept, or the next
+        listing is served from a view older than the write."""
+        from routers import manifest_listing_cache as cache
+
+        (tmp_path / "demo-agent.yaml").write_text("id: demo-agent\n")
+        cache.invalidate_manifest_listing()
+
+        def _scan_racing_a_write() -> str:
+            cache.invalidate_manifest_listing()
+            return "before the write"
+
+        assert cache.cached_scan(tmp_path, _scan_racing_a_write) == "before the write"
+        assert cache.cached_scan(tmp_path, lambda: "after the write") == "after the write"
+
 
 async def _engine_stub(method, path, *, json=None, timeout=30):
     if path == "/api/admin/tools":
@@ -329,6 +514,20 @@ class TestTheKnownAgentSetIsCached:
         )
         client.get("/live")
         assert list_agents_calls["n"] == 2
+
+    def test_a_capabilities_manifest_that_failed_to_load_is_still_cached(
+        self, signing_key, monkeypatch, tmp_path, list_agents_calls
+    ):
+        """A manifest that would not load is an empty manifest, and that is
+        the same object on every request, so the cache still hits."""
+        from robothor.events.capabilities import reset
+
+        monkeypatch.setenv("ROBOTHOR_CAPABILITIES_MANIFEST", str(tmp_path / "absent.json"))
+        reset()
+        client = self._service_client(monkeypatch)
+        for _ in range(3):
+            assert client.get("/live").status_code == 403
+        assert list_agents_calls["n"] == 1
 
     def test_an_unknown_agent_is_still_refused_from_the_cache(self, signing_key, monkeypatch):
         from bridge_service import app

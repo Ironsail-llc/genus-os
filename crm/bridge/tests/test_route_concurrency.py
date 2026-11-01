@@ -191,6 +191,12 @@ def test_only_genuinely_async_routes_run_on_the_event_loop():
         ("POST", "/api/sales/prospects/{prospect_id}/pipedrive/adopt"),
         ("POST", "/api/sales/actions/{action_id}/gmail/inspect"),
         ("POST", "/api/sales/actions/{action_id}/gmail/reconcile"),
+        # The chat's Tools dialog reads. Each is one engine call and nothing
+        # else, and awaiting it on the server loop is what lets it share the
+        # lifespan's pooled client; a `def` route would have to start a second
+        # loop in its worker thread to drive the call at all.
+        ("GET", "/api/agents/{agent_id}/tools"),
+        ("GET", "/api/mcp/servers"),
         # The Instantly webhook streams an untrusted request body under
         # `asyncio.timeout`, which a `def` handler cannot do at all: the body
         # is read incrementally so an oversized one is refused before it is

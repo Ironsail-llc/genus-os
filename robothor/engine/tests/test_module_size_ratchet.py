@@ -817,8 +817,8 @@ CAPS = {
     # seam (nothing there touches the filesystem, the engine or a request, which
     # is what lets it take its inputs as parameters instead of importing the
     # router's resolvers back).
-    # 1107 -> 1056: the listing's scan cache moved to _manifest_listing.py.
-    "crm/bridge/routers/agent_manifests.py": 1056,
+    # 1060 -> 1047: the listing's scan cache moved to manifest_listing_cache.py.
+    "crm/bridge/routers/agent_manifests.py": 1047,
     # 250 -> 260: `introduced` now carries the record of getting this wrong
     # twice in opposite directions — keyed too loosely it missed an added
     # fault, keyed too tightly it refused a partial repair — plus the per-fault

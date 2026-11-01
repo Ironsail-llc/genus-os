@@ -1115,6 +1115,26 @@ class TestAgent:
         fake_installer.assert_awaited_once()
         assert response.json()["reconcile"] == {"applied": True}
 
+    async def test_an_install_drops_the_cached_manifest_listing(
+        self, test_client, claim, workspace, fake_installer, tmp_path
+    ):
+        """The install writes manifests; the next fleet listing must not be
+        served from a scan taken before it, whatever the file clock says."""
+        from routers import manifest_listing_cache as cache
+
+        listing = tmp_path / "listing"
+        listing.mkdir()
+        (listing / "demo-agent.yaml").write_text("id: demo-agent\n")
+        assert cache.cached_scan(listing, lambda: "before") == "before"
+        assert cache.cached_scan(listing, lambda: "unused") == "before"
+
+        response = await test_client.post(
+            "/api/setup/agent", json={"preset": "standard"}, headers=_auth(claim)
+        )
+
+        assert response.status_code == 200
+        assert cache.cached_scan(listing, lambda: "after") == "after"
+
     async def test_an_unknown_preset_is_422(self, test_client, claim, workspace, fake_installer):
         response = await test_client.post(
             "/api/setup/agent", json={"preset": "nonsense"}, headers=_auth(claim)

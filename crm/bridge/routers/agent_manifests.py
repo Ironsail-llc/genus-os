@@ -58,13 +58,12 @@ from robothor.templates.safety import (
     validate_identifier,
     workspace_path,
 )
-from routers import _manifest_listing as listing
 from routers import _manifest_validation as validation
 from routers._audit import audited
 from routers._engine_client import engine_request
-from routers._manifest_listing import invalidate_manifest_listing
 from routers._manifest_rows import _broken, _chat_fields, _summary
 from routers._operator import require_operator
+from routers.manifest_listing_cache import cached_scan, invalidate_manifest_listing
 
 logger = logging.getLogger(__name__)
 
@@ -356,14 +355,6 @@ def _scan() -> Any:
     from robothor.engine.config import load_manifest_dir
 
     return load_manifest_dir(_manifest_dir())
-
-
-# The listing's scan cache lives in `_manifest_listing`. Its invalidator is
-# imported by name: the writes below call it, and so do the installer routes.
-
-
-def _cached_scan() -> Any:
-    return listing.cached_scan(_manifest_dir(), _scan)
 
 
 def _parse(text: str) -> dict[str, Any]:
@@ -741,7 +732,7 @@ async def list_manifests(request: Request) -> dict[str, Any]:
     takes the other nineteen agents off the page with it.
     """
     require_operator(request)
-    scan = await asyncio.to_thread(_cached_scan)
+    scan = await asyncio.to_thread(lambda: cached_scan(_manifest_dir(), _scan))
     main_agent_id = _main_agent_id()
     agents: list[dict[str, Any]] = []
     undescribable: list[dict[str, str]] = []

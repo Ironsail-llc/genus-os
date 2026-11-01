@@ -67,6 +67,7 @@ from robothor.setup_token import setup_complete
 from routers._audit import audited
 from routers.agent_manifests import reconcile_engine_schedules
 from routers.auth import BodyTooLarge, credential_body
+from routers.manifest_listing_cache import invalidate_manifest_listing
 
 logger = logging.getLogger(__name__)
 
@@ -667,7 +668,12 @@ async def install_agents(request: Request, _gated: Ceremony, _claim: Claim) -> d
     if not preset:
         raise HTTPException(status_code=422, detail="a preset is required")
 
-    outcome = await asyncio.to_thread(install_preset, preset, auto_yes=True)
+    try:
+        outcome = await asyncio.to_thread(install_preset, preset, auto_yes=True)
+    finally:
+        # Whether or not it finished: a partial install can still have written
+        # a manifest, and the fleet listing must not be served from before it.
+        invalidate_manifest_listing()
     if outcome["unknown_preset"]:
         raise HTTPException(
             status_code=422,
