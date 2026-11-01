@@ -74,12 +74,15 @@ from robothor.engine.chat_store import (
 )
 from robothor.engine.chat_store import (
     clear_session_async,
-    load_all_sessions,
     load_session,
     save_exchange_async,
     save_message_async,
     save_plan_state_async,
 )
+
+# Re-exported on purpose: chat_restore calls it through this module, so tests
+# that patch ``chat.load_all_sessions`` reach the startup restore.
+from robothor.engine.chat_store import load_all_sessions as load_all_sessions
 from robothor.engine.feature_flags import per_user_sessions_mode
 from robothor.engine.live_inbox import LiveInbox, history_text
 from robothor.engine.models import DeepRunState, PlanState, RunStatus, TriggerType
@@ -314,57 +317,25 @@ def get_main_session_key() -> str:
 
 
 def _restore_sessions(config: EngineConfig) -> None:
-    """Restore webchat sessions from PostgreSQL at startup."""
-    try:
-        sessions = load_all_sessions(
-            limit_per_session=MAX_HISTORY,
-            tenant_id=config.tenant_id,
-        )
-        restored = 0
-        for key, data in sessions.items():
-            session = _get_session(key)
-            history = data.get("history", [])
-            if history:
-                session.history = history
-            model = data.get("model_override")
-            if model:
-                session.model_override = model
-            # Hydrate pending plan if present and not expired
-            plan_data = data.get("plan_state")
-            if plan_data and isinstance(plan_data, dict):
-                plan = PlanState(
-                    plan_id=plan_data.get("plan_id", ""),
-                    plan_text=plan_data.get("plan_text", ""),
-                    original_message=plan_data.get("original_message", ""),
-                    status=plan_data.get("status", "pending"),
-                    created_at=plan_data.get("created_at", ""),
-                    exploration_run_id=plan_data.get("exploration_run_id", ""),
-                    approval_request_id=plan_data.get("approval_request_id", ""),
-                    rejection_feedback=plan_data.get("rejection_feedback", ""),
-                    plan_hash=plan_data.get("plan_hash", ""),
-                    task_context=plan_data.get("task_context", {}),
-                    creator_sender_info=plan_data.get("creator_sender_info"),
-                    deep_plan=plan_data.get("deep_plan", False),
-                    revision_count=plan_data.get("revision_count", 0),
-                    revision_history=plan_data.get("revision_history", []),
-                    execution_run_id=plan_data.get("execution_run_id", ""),
-                )
-                if plan.status == "pending" and not _plan_is_expired(plan):
-                    session.active_plan = plan
-                    logger.info("Restored pending plan %s for session %s", plan.plan_id, key)
-            restored += 1
-        if restored:
-            logger.info("Restored %d chat sessions from DB", restored)
-    except Exception as e:
-        logger.warning("Failed to load persisted webchat sessions: %s", e)
+    """Restore webchat sessions from PostgreSQL at startup (``chat_restore``)."""
+    from robothor.engine.chat_restore import apply_restored_sessions, load_persisted_sessions
+
+    sessions = load_persisted_sessions(config)
+    if sessions is not None:
+        apply_restored_sessions(sessions)
 
 
-def init_chat(runner: AgentRunner, config: EngineConfig) -> None:
-    """Initialize module with shared runner and config. Called once from daemon."""
+def init_chat(runner: AgentRunner, config: EngineConfig, restore: bool = True) -> None:
+    """Initialize module with shared runner and config. Called once from daemon.
+
+    ``restore=False`` leaves the session restore to the caller: the daemon
+    reads and applies them through ``chat_restore`` before any channel starts.
+    """
     global _runner, _config
     _runner = runner
     _config = config
-    _restore_sessions(config)
+    if restore:
+        _restore_sessions(config)
     logger.info("Chat endpoints initialized")
 
 

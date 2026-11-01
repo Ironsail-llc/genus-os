@@ -37,6 +37,7 @@ from robothor.engine.shutdown_budget import (
     DRAIN_TIMEOUT_SECONDS,
     POLLING_STOP_TIMEOUT_SECONDS,
 )
+from robothor.engine.startup import StartupClock, warm_db_pool, warm_system_prompts
 from robothor.engine.telegram import TelegramBot
 from robothor.engine.workflow import WorkflowEngine
 from robothor.engine.workflow_registry import set_workflow_engine
@@ -1401,11 +1402,81 @@ async def _bootstrap_owner_links() -> None:
         logger.exception("bootstrap_owner_person_links failed (non-fatal)")
 
 
+async def _recover_interrupted_work(runner: Any, config: Any) -> None:
+    """Resume interrupted runs, reap what is left, then recover repairs.
+
+    Resume BEFORE reaping: `_cleanup_stale_runs` marks every interrupted row
+    terminal, which would destroy exactly what resume recovers. This runs
+    after the runner is constructed because resume needs something to resume
+    WITH — when it ran earlier it had no runner, and quietly counted runs it
+    never executed. Repair recovery comes last, so the runs it starts are
+    never mistaken for stale ones.
+    """
+    try:
+        resumed = await resume_interrupted_runs(runner)
+        if resumed:
+            logger.info("Startup: resumed %d interrupted agent runs", resumed)
+    except Exception as e:
+        logger.warning("Startup resume failed, continuing to reap: %s", _sanitize(e))
+
+    cleaned = await asyncio.to_thread(_cleanup_stale_runs, config.tenant_id)
+    if cleaned:
+        logger.info("Startup: cleaned %d stale agent runs", cleaned)
+
+    from robothor.engine.repair_recovery import recover as recover_repairs
+
+    await recover_repairs(runner, config)
+
+
+async def _scan_fleet_and_warm_prompts(config: Any, clock: StartupClock) -> Any:
+    """Read the manifest directory once for the whole startup, off the loop.
+
+    The one scan feeds the hook loader, the scheduler, the event hooks and the
+    startup announcement, which each used to read the directory again. Then
+    every installed agent's system prompt is built into the cache, so the
+    first turn after a deploy does not pay for it.
+    """
+    from robothor.engine import config as config_mod
+
+    scan = await asyncio.to_thread(config_mod.load_manifest_dir, config.manifest_dir)
+    agent_ids = [str(m.get("id", "")) for m in scan.manifests if m.get("id")]
+    await clock.step(
+        "prompts",
+        asyncio.to_thread(warm_system_prompts, agent_ids, config.manifest_dir, config.workspace),
+    )
+    return scan
+
+
+async def _recover_scan_and_restore(runner: Any, config: Any, clock: StartupClock) -> Any:
+    """The concurrent middle of startup; returns the one manifest scan.
+
+    Recovery, coding jobs, the manifest scan (with the system-prompt warm)
+    and the webchat session read do not depend on one another, so they run
+    together. The sessions are then applied on the loop, with the chat
+    config in place so the cache pins THIS engine's main session key:
+    Telegram, Slack and inbound channels share that cache, and none of them
+    has started yet.
+    """
+    from robothor.engine import chat, chat_restore
+
+    _recovered, _coding, scan, sessions = await clock.together(
+        recovery=_recover_interrupted_work(runner, config),
+        coding_jobs=_start_coding_jobs(),  # resume interrupted Claude Code jobs, reap old ones
+        manifests=_scan_fleet_and_warm_prompts(config, clock),
+        sessions=asyncio.to_thread(chat_restore.load_persisted_sessions, config),
+    )
+    chat.init_chat(runner, config, restore=False)
+    if sessions is not None:
+        chat_restore.apply_restored_sessions(sessions)
+    return scan
+
+
 async def main() -> int:
     """Start all engine subsystems. Returns the process exit code."""
     # Own SIGTERM/SIGINT before anything slow, so a stop during startup also
     # takes the drain path instead of the default disposition's instant death.
     stop_requested = _install_shutdown_signals()
+    clock = StartupClock()
 
     # Reject unsafe production authentication before touching the database,
     # loading agents, or starting any background subsystem. The Engine verifies
@@ -1435,10 +1506,29 @@ async def main() -> int:
     # can be classified as 'daemon_restart' rather than 'post_llm_crash'.
     _set_daemon_start_ts()
 
-    await _bootstrap_owner_links()
-
-    # Vault-held provider keys into os.environ before any subsystem reads one.
-    await load_provider_secrets_at_startup()
+    # Startup dependency graph; an arrow means "must finish before". Steps
+    # inside one {...} do not depend on one another and run concurrently.
+    #
+    #   posture + migrations check -> DB pool
+    #   -> {owner links || vault provider secrets}  (secrets precede config)
+    #   -> config -> runner
+    #   -> {resume -> stale-run reap -> repair recovery
+    #       || coding jobs
+    #       || manifest scan -> system-prompt warm
+    #       || webchat session read}
+    #   -> session cache hydrated, on the loop, before any channel task
+    #   -> hooks, workflows, scheduler, event hooks (all fed the one scan)
+    #   -> federation -> subsystem tasks + channels -> READY=1
+    #
+    # Resume precedes the reap (the reap marks terminal exactly what resume
+    # recovers), and repair recovery follows it so its new runs are never
+    # reaped. A step that raises fails startup as it did in sequence.
+    await clock.step("db_pool", asyncio.to_thread(warm_db_pool))
+    await clock.together(
+        owner_links=_bootstrap_owner_links(),
+        # Vault-held provider keys into os.environ before any subsystem reads one.
+        secrets=load_provider_secrets_at_startup(),
+    )
 
     # Load config
     config = EngineConfig.from_env()
@@ -1447,29 +1537,9 @@ async def main() -> int:
     logger.info("Health port: %d", config.port)
     logger.info("Telegram bot: %s", "configured" if config.bot_token else "disabled")
 
-    runner, sales_runtime_assets = await _create_runner_with_assets(config)
+    runner, sales_runtime_assets = await clock.step("runner", _create_runner_with_assets(config))
 
-    # Resume BEFORE reaping: `_cleanup_stale_runs` marks every interrupted row
-    # terminal, which would destroy exactly what resume recovers. This block
-    # sits after the runner is constructed because resume needs something to
-    # resume WITH — when it ran earlier it had no runner, and quietly counted
-    # runs it never executed.
-    try:
-        resumed = await resume_interrupted_runs(runner)
-        if resumed:
-            logger.info("Startup: resumed %d interrupted agent runs", resumed)
-    except Exception as e:
-        logger.warning("Startup resume failed, continuing to reap: %s", _sanitize(e))
-
-    cleaned = await asyncio.to_thread(_cleanup_stale_runs, config.tenant_id)
-    if cleaned:
-        logger.info("Startup: cleaned %d stale agent runs", cleaned)
-
-    from robothor.engine.repair_recovery import recover as recover_repairs
-
-    await recover_repairs(runner, config)
-
-    await _start_coding_jobs()  # resume interrupted Claude Code jobs, reap old ones
+    scan = await _recover_scan_and_restore(runner, config, clock)
 
     _init_fleet_capacity(config)
 
@@ -1546,11 +1616,9 @@ async def main() -> int:
         hook_registry.register_many(global_hooks)
         logger.info("Loaded %d global lifecycle hooks", len(global_hooks))
 
-    # Load per-agent lifecycle hooks from manifests
-    from robothor.engine.config import load_all_manifests
-
+    # Load per-agent lifecycle hooks from the startup scan
     agent_hook_count = 0
-    for manifest in load_all_manifests(config.manifest_dir):
+    for manifest in scan.manifests:
         agent_id = manifest.get("id", "")
         agent_hooks = load_hooks_from_manifest(manifest, agent_id)
         if agent_hooks:
@@ -1623,15 +1691,15 @@ async def main() -> int:
         logger.warning("Channel-bus debouncer init failed (non-fatal): %s", e)
 
     # Federation — start NATS if connections exist (no-op otherwise)
-    nats_mgr = await _start_federation(config, runner=runner)
+    nats_mgr = await clock.step("federation", _start_federation(config, runner=runner))
 
     # Start all subsystems concurrently
     tasks = [
         *_background_workers(config.tenant_id),
-        asyncio.create_task(scheduler.start(), name="scheduler"),
-        asyncio.create_task(hooks.start(), name="hooks"),
+        asyncio.create_task(scheduler.start(scan=scan), name="scheduler"),
+        asyncio.create_task(hooks.start(manifests=list(scan.manifests)), name="hooks"),
         asyncio.create_task(
-            serve_health(config, runner, workflow_engine, scheduler),
+            serve_health(config, runner, workflow_engine, scheduler, restore_sessions=False),
             name="health",
         ),
         asyncio.create_task(_watchdog(config, scheduler, workflow_engine), name="watchdog"),
@@ -1649,17 +1717,17 @@ async def main() -> int:
     if bot is not None:
         tasks.insert(0, asyncio.create_task(bot.start_polling(), name="telegram"))
 
-    slack_bot = await _start_channels(runner, config, tasks)
+    slack_bot = await clock.step("channels", _start_channels(runner, config, tasks))
 
     logger.info("All subsystems started")
+    clock.finish()
     _sd_notify("READY=1")
 
     # Startup announcement (best-effort)
     try:
-        from robothor.engine.config import load_all_manifests, manifest_to_agent_config
+        from robothor.engine.config import manifest_to_agent_config
 
-        manifests = load_all_manifests(config.manifest_dir)
-        scheduled = sum(1 for m in manifests if manifest_to_agent_config(m).cron_expr)
+        scheduled = sum(1 for m in scan.manifests if manifest_to_agent_config(m).cron_expr)
         from robothor.engine.delivery import get_telegram_sender
 
         sender = get_telegram_sender()

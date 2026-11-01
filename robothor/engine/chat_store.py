@@ -381,7 +381,7 @@ def load_session(
             SELECT message
             FROM chat_messages
             WHERE session_id = %s
-            ORDER BY created_at DESC
+            ORDER BY created_at DESC, id DESC
             LIMIT %s
             """,
             (session_row["id"], limit),
@@ -405,7 +405,8 @@ def load_all_sessions(
     """Load all active sessions with their messages.
 
     Returns {session_key: {"history": [...], "model_override": str|None}}.
-    Used at startup to populate in-memory caches.
+    Used at startup to populate in-memory caches. ``id`` breaks ``created_at``
+    ties: a turn and its reply are written in one transaction and share it.
     """
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -434,7 +435,7 @@ def load_all_sessions(
                 SELECT message
                 FROM chat_messages
                 WHERE session_id = %s
-                ORDER BY created_at DESC
+                ORDER BY created_at DESC, id DESC
                 LIMIT %s
                 """,
                 (sess["id"], limit_per_session),

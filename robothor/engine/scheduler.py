@@ -294,13 +294,18 @@ class CronScheduler:
         self._rows = RowLedger()
         self._goal_task: asyncio.Task[None] | None = None
 
-    async def start(self) -> None:
-        """Load manifests and start the scheduler."""
+    async def start(self, scan: ManifestScan | None = None) -> None:
+        """Load manifests and start the scheduler.
+
+        ``scan`` is the daemon's one startup read of the manifest directory;
+        without it the directory is read here, as before.
+        """
         # At boot a broken manifest is strictly worse than at reconcile time:
         # the agent gets no job at all, rather than keeping a stale one. Same
         # dedup key as the watchdog path, so a restart during a known-broken
         # window does not double-page.
-        scan = load_manifest_dir(self.config.manifest_dir)
+        if scan is None:
+            scan = load_manifest_dir(self.config.manifest_dir)
         await alert_manifest_scan(scan, context="scheduler start")
         manifests = list(scan.manifests)
         loaded = 0

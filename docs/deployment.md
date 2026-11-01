@@ -1154,6 +1154,18 @@ plugin that was turned off is loading again. See
 | Dashboard | `GET /api/health` on :3004 | 200; `/api/ready` is what the compose healthcheck polls |
 | Vision | `GET /health` on :8600 | `{"status": "ok", "mode": "..."}` |
 
+The engine's `/health` also carries `startup_ms`: how long this process took
+from start to READY=1, or `null` while it is still starting. The same number
+is logged once at startup as `STARTUP <total>ms <step>=<ms> ...`, one entry
+per startup step, so a slow restart names the step that cost it. Steps that do
+not depend on one another (resuming interrupted runs, coding jobs, the manifest
+scan and system-prompt warm-up) run concurrently; the order the rest keep is
+written out at the top of `daemon.main`. The manifest directory is read once
+per startup and shared, the database pool and every installed agent's system
+prompt are warm before READY=1, and webchat sessions are read off the event
+loop and applied before any channel (web, Telegram, Slack, inbound) starts, so
+the first message after a restart sees its history.
+
 ## Verified fleet artifacts
 
 `robothor.templates.fleet_release.build_release(source, destination, specification)`

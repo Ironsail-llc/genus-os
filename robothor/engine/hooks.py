@@ -100,12 +100,15 @@ _LEGACY_EVENT_TRIGGERS: dict[str, list[dict[str, Any]]] = {
 }
 
 
-def build_event_triggers(manifest_dir: Any) -> dict[str, list[dict[str, Any]]]:
+def build_event_triggers(
+    manifest_dir: Any, manifests: list[dict[str, Any]] | None = None
+) -> dict[str, list[dict[str, Any]]]:
     """Build event trigger map from agent manifests.
 
     Scans all manifests for `hooks` entries and aggregates them into a
     stream → triggers dict. Falls back to _LEGACY_EVENT_TRIGGERS if no
-    manifests define hooks.
+    manifests define hooks. ``manifests`` is an already-read fleet (the
+    daemon's startup scan); without it the directory is read here.
     """
     from pathlib import Path
 
@@ -118,7 +121,8 @@ def build_event_triggers(manifest_dir: Any) -> dict[str, list[dict[str, Any]]]:
         logger.warning("Manifest dir not found for hooks: %s", manifest_dir)
         return dict(_LEGACY_EVENT_TRIGGERS)
 
-    manifests = load_all_manifests(manifest_dir)
+    if manifests is None:
+        manifests = load_all_manifests(manifest_dir)
     for raw in manifests:
         config = manifest_to_agent_config(raw)
         for hook in config.hooks:
@@ -359,8 +363,12 @@ class EventHooks:
             await asyncio.gather(*tasks, return_exceptions=True)
             self._in_flight.difference_update(tasks)
 
-    async def start(self) -> None:
-        """Start consuming Redis streams."""
+    async def start(self, manifests: list[dict[str, Any]] | None = None) -> None:
+        """Start consuming Redis streams.
+
+        ``manifests`` is the daemon's startup scan, so the event triggers are
+        built without reading the manifest directory again.
+        """
         try:
             import redis.asyncio as aioredis
         except ImportError:
@@ -390,7 +398,7 @@ class EventHooks:
         consumer_name = f"engine-{self.config.tenant_id}"
 
         # Build triggers from manifests (with legacy fallback)
-        self._event_triggers = build_event_triggers(self.config.manifest_dir)
+        self._event_triggers = build_event_triggers(self.config.manifest_dir, manifests)
         bare_streams = list(self._event_triggers.keys())
 
         # Build prefixed stream keys and a reverse lookup
