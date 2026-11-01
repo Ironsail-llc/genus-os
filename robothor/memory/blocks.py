@@ -164,7 +164,7 @@ def list_blocks(tenant_id: str = DEFAULT_TENANT) -> dict[str, Any]:
     Returns:
         dict with a 'blocks' list, each entry containing name, size, last_written_at.
     """
-    with get_connection() as conn:
+    with get_connection(read_only=True) as conn:
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT block_name, length(content) AS size, last_written_at "

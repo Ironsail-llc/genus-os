@@ -399,6 +399,14 @@ class DatabaseSettings(SettingsGroup):
         "applies. Inert unless the DB user is a non-superuser; federation "
         "refuses to activate a link while it is off.",
     )
+    fast_checkout: bool = declare(
+        False,
+        "ROBOTHOR_DB_FAST_CHECKOUT",
+        "Check connections out without a thread per call, re-send the tenant "
+        "binding and vector-scan setting only when they change, and run "
+        "read-only helpers without a transaction. Needs session-preserving "
+        "connections: not behind a transaction-mode pooler.",
+    )
     tenant_id: str = declare(
         "",
         "ROBOTHOR_TENANT_ID",

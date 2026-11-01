@@ -36,7 +36,7 @@ def _decision(scratch_db, monkeypatch, role: str, tool: str) -> str | None:
     _, dsn = scratch_db(through=MIGRATION)
 
     @contextlib.contextmanager
-    def connect():
+    def connect(**_kw):
         conn = psycopg2.connect(dsn)
         try:
             yield conn

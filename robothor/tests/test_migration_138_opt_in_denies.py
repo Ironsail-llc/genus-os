@@ -126,7 +126,7 @@ def test_the_live_decision_matches_the_rows(scratch_db, monkeypatch, role, tool,
     _, dsn = scratch_db(through="138_opt_in_tool_denies")
 
     @contextlib.contextmanager
-    def connect():
+    def connect(**_kw):
         conn = psycopg2.connect(dsn)
         try:
             yield conn

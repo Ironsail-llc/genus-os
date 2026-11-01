@@ -35,6 +35,20 @@ That is why migration 082 exists.
 `robothor/db/connection.py` binds `app.tenant_id` on each connection when
 `ROBOTHOR_RLS_ENABLED=1`. Off by default, so this is a no-op until you turn it on.
 
+With `ROBOTHOR_DB_FAST_CHECKOUT=1` the binding is remembered per pooled
+connection and `set_config` is sent only when the tenant differs from the one
+the connection already carries; a connection reused for another tenant is
+always re-bound. That memo assumes `connection.py` is the only code that sets
+`app.tenant_id` at session level (anything else uses `set_config(..., true)`,
+which reverts at commit), and it assumes session-preserving connections, so
+leave the flag off behind a transaction-mode pooler.
+
+The flag also drops the default path's fixed 10-second cap per checkout. A
+checkout that has to open a connection is bounded by `ROBOTHOR_DB_CONNECT_TIMEOUT`
+instead, and while the database is unreachable those checkouts queue behind
+the pool lock, one `connect_timeout` each. Keep `ROBOTHOR_DB_CONNECT_TIMEOUT`
+above 0 when the flag is on.
+
 ## Turning it on
 
 ```bash

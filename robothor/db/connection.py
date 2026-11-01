@@ -18,6 +18,7 @@ import logging
 import os
 import sys
 import threading
+import weakref
 from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any
@@ -187,18 +188,25 @@ def get_pool(minconn: int = 2, maxconn: int = 30) -> psycopg2.pool.ThreadedConne
         return _pool
 
 
+def _env_flag(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _rls_enabled() -> bool:
     """Whether connections should scope themselves to a tenant via RLS.
 
     Off by default: migration 081 leaves the policy permissive when
     ``app.tenant_id`` is unset, so nothing changes until this is turned on.
     """
-    return os.environ.get("ROBOTHOR_RLS_ENABLED", "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
+    return _env_flag("ROBOTHOR_RLS_ENABLED")
+
+
+def _fast_checkout_enabled() -> bool:
+    """Whether checkouts skip the per-call thread and remember session settings.
+
+    Off by default: ``get_connection`` then behaves exactly as it always has.
+    """
+    return _env_flag("ROBOTHOR_DB_FAST_CHECKOUT")
 
 
 # One-shot latch: warn once per process, not on every pooled connection.
@@ -405,9 +413,104 @@ def read_every_tenant_in_transaction(conn: psycopg2.extensions.connection) -> No
         cur.execute("SELECT set_config('app.tenant_id', '', true)")
 
 
+#: What each pooled connection's SESSION currently carries, as applied by
+#: :func:`_apply_session_settings`: ``{"ann": mode, "tenant": tenant}``. Keyed
+#: weakly by the connection object, so a connection the pool closes and drops
+#: takes its entry with it and a new connection always starts unknown. Only
+#: consulted under ``ROBOTHOR_DB_FAST_CHECKOUT``.
+_session_memo: weakref.WeakKeyDictionary[Any, dict[str, str]] = weakref.WeakKeyDictionary()
+_session_memo_lock = threading.Lock()
+
+
+def _forget_session(conn: object) -> None:
+    with _session_memo_lock:
+        _session_memo.pop(conn, None)
+
+
+def _apply_session_settings(conn: psycopg2.extensions.connection) -> None:
+    """Bring this connection's session to the current tenant and scan mode.
+
+    Runs with the connection in autocommit, so the settings are committed on
+    their own and a rollback of the caller's transaction cannot silently undo
+    them behind the memo. Each setting is sent only when the memo says the
+    session carries something else -- in particular a connection last used
+    by a different tenant ALWAYS re-runs ``set_config``.
+    """
+    with _session_memo_lock:
+        known = dict(_session_memo.get(conn, {}))
+
+    _warn_once_about_a_superuser_connection(conn)
+    if _rls_enabled():
+        tenant = effective_tenant()
+        if known.get("tenant") != tenant:
+            # Forget first: if the bind fails the connection's state is unknown.
+            _forget_session(conn)
+            _apply_tenant_scope(conn)
+            known["tenant"] = tenant
+    if known.get("ann") != ANN_ITERATIVE_SCAN_MODE:
+        # Best-effort, as on the default path; remembered either way so an
+        # older pgvector does not pay a failing statement on every checkout.
+        _apply_ann_scan_mode(conn)
+        known["ann"] = ANN_ITERATIVE_SCAN_MODE
+
+    with _session_memo_lock:
+        _session_memo[conn] = known
+
+
+@contextmanager
+def _fast_connection(
+    pool: psycopg2.pool.ThreadedConnectionPool,
+    autocommit: bool,
+    read_only: bool,
+) -> Generator[psycopg2.extensions.connection, None, None]:
+    """``get_connection`` under ``ROBOTHOR_DB_FAST_CHECKOUT``.
+
+    ``pool.getconn()`` runs in the caller's thread, so the late-connection
+    race the default path's watchdog thread needed cannot occur. It never
+    waits for a connection to come free -- psycopg2 raises ``PoolError`` at
+    once when the pool is exhausted.
+
+    What it does NOT keep is the default path's fixed 10 s cap per checkout.
+    ``getconn`` holds the pool lock while it opens a new connection, bounded
+    only by libpq's ``connect_timeout`` (``ROBOTHOR_DB_CONNECT_TIMEOUT``; 0
+    means wait forever), and every other checkout and return waits on that
+    lock. Against a database that silently drops packets, checkouts that must
+    open a connection therefore queue: the k-th waits up to about k times
+    ``connect_timeout``. Checkouts served from idle pooled connections are
+    unaffected once the lock is free.
+    """
+    try:
+        conn = pool.getconn()
+    except Exception as exc:
+        raise ConnectionError("Failed to acquire DB connection from pool") from exc
+
+    transactional = not (autocommit or read_only)
+    try:
+        conn.autocommit = True
+        _apply_session_settings(conn)
+        if transactional:
+            conn.autocommit = False
+        yield conn
+        if transactional:
+            conn.commit()
+    except BaseException:
+        if transactional and not conn.closed:
+            conn.rollback()
+        raise
+    finally:
+        try:
+            if conn.closed:
+                _forget_session(conn)
+            elif conn.autocommit:
+                conn.autocommit = False
+        finally:
+            pool.putconn(conn)
+
+
 @contextmanager
 def get_connection(
     autocommit: bool = False,
+    read_only: bool = False,
 ) -> Generator[psycopg2.extensions.connection, None, None]:
     """Get a connection from the pool.
 
@@ -417,8 +520,17 @@ def get_connection(
                 cur.execute("SELECT 1")
         # Connection is returned to pool automatically.
         # On exception, transaction is rolled back.
+
+    ``read_only=True`` declares that the block only reads. Under
+    ``ROBOTHOR_DB_FAST_CHECKOUT`` it then runs without a transaction (no
+    BEGIN, no COMMIT), so each statement sees its own snapshot and any write
+    it did make would commit at once. Ignored while the flag is off.
     """
     pool = get_pool()
+    if _fast_checkout_enabled():
+        with _fast_connection(pool, autocommit, read_only) as fast_conn:
+            yield fast_conn
+        return
     # Use a threading timeout to avoid blocking indefinitely when pool is exhausted
     conn = None
     acquisition_error: Exception | None = None
@@ -501,3 +613,5 @@ def close_pool() -> None:
     if _pool is not None:
         _pool.closeall()
         _pool = None
+    with _session_memo_lock:
+        _session_memo.clear()

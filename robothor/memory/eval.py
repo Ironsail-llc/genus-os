@@ -198,7 +198,9 @@ def record_benchmark_row(row: dict[str, Any]) -> bool:
         with get_connection() as conn:
             assert_test_database_write(connection_database_name(conn), "benchmark_results")
             cur = conn.cursor()
-            cur.execute("SELECT set_config('app.tenant_id', %s, false)", (DEFAULT_TENANT,))
+            # Transaction-local: reverts at commit, so the pooled connection's
+            # session binding (owned by robothor.db.connection) is untouched.
+            cur.execute("SELECT set_config('app.tenant_id', %s, true)", (DEFAULT_TENANT,))
             cur.execute(
                 """
                 INSERT INTO benchmark_results
