@@ -862,6 +862,11 @@ class TestTheRlsWideningCallersArePinned:
         # by definition a question across tenants. Projects the credential-free
         # admin columns only.
         "robothor/auth/accounts.py::accounts_for_email",
+        # Operator-only (`genus tenant move-workload`): re-tenanting a
+        # workload's history reads the source tenant's rows and writes the
+        # target's in one transaction, for the same reason as move_account.
+        # Its predicates name the source tenant and the workload's own keys.
+        "robothor/tenancy/move_workload.py::move_workload",
     }
 
     HELPER = "read_every_tenant_in_transaction"
