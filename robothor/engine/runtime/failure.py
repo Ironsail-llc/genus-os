@@ -21,6 +21,11 @@ def failed_or_stopped(
     if isinstance(error, DurableStopError):
         logger.warning("Agent %s cancelled by durable stop", sanitize_log(session.run.agent_id))
         session.record_error(str(error))
+        # A control, not a budget: it always stops. Recorded like one so the
+        # Runs view shows WHY the run ended, beside every budget stop.
+        from robothor.engine import budget_stops
+
+        budget_stops.record_durable_stop(session, str(error))
         return session.cancelled("Stopped as requested.")
     logger.error(
         "Agent %s failed: %s",

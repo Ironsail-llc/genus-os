@@ -98,6 +98,9 @@ class StepType(StrEnum):
     DEEP_REASON = "deep_reason"
     COMPACTION = "compaction"
     WARMUP_PHASE = "warmup_phase"
+    #: A budget, cap or stop refused, ended or degraded the run -- or, in
+    #: observe mode, would have. Detail in tool_input; see budget_stops.py.
+    BUDGET_STOP = "budget_stop"
 
 
 class DeliveryMode(StrEnum):

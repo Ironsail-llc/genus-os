@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-503 settings in 18 groups.
+506 settings in 18 groups.
 
 ## autonomy
 
@@ -240,7 +240,8 @@ Cloud model routing, budgets and the failure controls around them.
 | `ROBOTHOR_DEFERRED_TOOLS_RECENT_RUNS` | int | `10` | no | no | unreleased | How many of an agent's latest runs seed the tools it is always shown when its schemas are deferred: the tools it called in them join the core set. 0 keeps the core to the platform's fixed list. |
 | `ROBOTHOR_DEFERRED_TOOLS_THRESHOLD` | int | `40` | no | no | legacy | Number of tools above which schemas are deferred behind tool search rather than sent in full on every request. |
 | `ROBOTHOR_EAGER_TOOL_COMPRESSION` | bool | `false` | `robothor-engine` | no | legacy | Fleet default for compressing tool results as soon as they land rather than at the next compaction. A manifest setting wins over it. |
-| `ROBOTHOR_HOURLY_COST_CAP_USD` | float | `5.0` | no | no | legacy | Fleet-wide spend ceiling per hour. The engine stops dispatching new runs once the rolling hour exceeds it. |
+| `ROBOTHOR_HOURLY_COST_CAP_MODE` | str | _(empty)_ | `robothor-engine` | no | unreleased | observe or enforce for the hourly cost cap. Empty: enforce when ROBOTHOR_HOURLY_COST_CAP_USD is set explicitly (environment or config.yaml), observe otherwise. observe wins over an explicit cap. Read at engine start. |
+| `ROBOTHOR_HOURLY_COST_CAP_USD` | float | `5.0` | no | no | legacy | Fleet-wide spend ceiling per hour, checked when fleet admission is on. Left at the default it only observes: a run admitted past it carries a budget_stop step (mode observe) and a warning alert is raised. Set it explicitly (environment or config.yaml), or set ROBOTHOR_HOURLY_COST_CAP_MODE=enforce, and scheduled runs are deferred once the rolling hour reaches it. |
 | `ROBOTHOR_LAST_RESORT_MODEL` | str | _(empty)_ | `robothor-engine` | no | legacy | Model appended to every agent's fallback chain so a run always has somewhere to land when the cloud providers are down. Manifest validation checks each chain ends here. |
 | `ROBOTHOR_MODEL_BREAKER_ALERT_DEDUP` | int | `21600` | `robothor-engine` | no | legacy | Seconds between repeat alerts for the same tripped model. |
 | `ROBOTHOR_MODEL_BREAKER_COOLDOWN` | int | `600` | `robothor-engine` | no | legacy | Seconds an opened model breaker stays open before a trial request. |
@@ -253,6 +254,8 @@ Cloud model routing, budgets and the failure controls around them.
 | `ROBOTHOR_RLM_MAX_TIMEOUT` | int | `240` | `robothor-engine` | no | legacy | Wall-clock seconds a single recursive language model call may take. |
 | `ROBOTHOR_RLM_ROOT_MODEL` | str | `openrouter/anthropic/claude-sonnet-4.6` | `robothor-engine` | no | legacy | Model the recursive language model tool runs its root call on. |
 | `ROBOTHOR_RLM_SUB_MODEL` | str | `openrouter/anthropic/claude-haiku-4.5` | `robothor-engine` | no | legacy | Model the recursive language model tool runs child calls on. |
+| `ROBOTHOR_RUNAWAY_HARD_CAP_MODE` | str | _(empty)_ | `robothor-engine` | no | unreleased | observe or enforce for the per-run runaway-token hard cap (ROBOTHOR_RUNAWAY_HARD_CAP_TOKENS, default 5,000,000). Empty: enforce when that cap is set explicitly in the environment, observe otherwise, which records a budget_stop step and the critical alert once and lets the run continue. Read at engine start. |
+| `ROBOTHOR_RUNAWAY_HARD_CAP_TOKENS` | int | `5000000` | `robothor-engine` | no | legacy | Per-run token count (input plus output) at which the runaway guard records a budget_stop step and pages critical. It stops the run only when set explicitly or ROBOTHOR_RUNAWAY_HARD_CAP_MODE=enforce. The engine takes the number from the environment variable; setting it in config.yaml alone switches the guard to enforce at the default. |
 | `ROBOTHOR_VISION_BATCH_CONCURRENCY` | int | `4` | no | no | unreleased | Ceiling on the vision calls `analyze_image` keeps in flight at once. An agent may ask for fewer and never for more, so an operator on a single-GPU box can hold it at 1 or 2 without an agent overruling them. Four is what one local VLM serves without queueing into its own timeout; a remote backend takes more, up to the platform's own 16. |
 | `ROBOTHOR_VISION_BATCH_DEADLINE` | float | `600.0` | no | no | unreleased | Seconds one whole `analyze_image` call gets. Images not reached by then come back as errors rather than answers. Without it a backend that hangs for EVERY image would hold a single tool call open for the per-image timeout times 200 divided by the concurrency. |
 | `ROBOTHOR_VISION_BATCH_MAX_CHARS` | int | `3500` | no | no | unreleased | How much of an `analyze_image` result comes back inline. Past it the full per-image table is written to a JSON file under <workspace>/.robothor/analyze_image/ and the result carries the path, the first rows and the totals. The default sits just under the 4000-character cap the step writer truncates a tool result at, so what the agent reads is also what the run record keeps -- and a larger value is clamped back to 3800 for that reason, rather than silently flattening the run's per-image record. 0 or less means the default; there is no way to turn the bound off, because the result it bounds reached 108,000 tokens in one message before it existed. |

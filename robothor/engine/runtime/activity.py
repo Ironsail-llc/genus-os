@@ -44,7 +44,13 @@ def stop_local(tenant: str, run_id: str, note: str) -> None:
     with _lock:
         activity = _active.get((tenant, run_id))
     if activity is not None:
-        activity.sessions[run_id].interrupt(note)
+        session = activity.sessions[run_id]
+        session.interrupt(note)
+        # Before the cancel: a stop that lands mid-call ends the run without
+        # any later provider request reaching the durable-stop refusal.
+        from robothor.engine.budget_stops import record_durable_stop
+
+        record_durable_stop(session, note)
         activity.loop.call_soon_threadsafe(activity.task.cancel, note)
 
 

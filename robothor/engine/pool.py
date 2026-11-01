@@ -71,9 +71,14 @@ class FleetPool:
         max_concurrent: int = 3,
         hourly_cost_cap_usd: float = 5.0,
         reserved_slots: int = 0,
+        cost_cap_mode: str = "enforce",
     ) -> None:
         self._max_concurrent = max_concurrent
         self._hourly_cost_cap_usd = hourly_cost_cap_usd
+        # `observe` admits past the cap; the crossing is recorded by the caller
+        # (`budget_stops`). The engine resolves the mode from its config, where
+        # an unset cap observes; constructing a pool directly keeps `enforce`.
+        self.cost_cap_mode = cost_cap_mode
         # Slots BACKGROUND work may not occupy. A cap alone still lets nightly
         # sweeps fill every slot and leave an operator's message third in line;
         # holding one back makes that structurally impossible. Default 0 keeps
@@ -133,14 +138,26 @@ class FleetPool:
                 )
 
             # Hourly cost check
-            if self._hourly_cost_cap_usd > 0:
-                current = self._hourly_cost_total()
-                if current >= self._hourly_cost_cap_usd:
-                    return False, (
-                        f"Hourly cost cap reached: ${current:.2f}/${self._hourly_cost_cap_usd:.2f}"
-                    )
+            crossed = self._cost_cap_crossed()
+            if crossed is not None and self.cost_cap_mode == "enforce":
+                current, cap = crossed
+                return False, f"Hourly cost cap reached: ${current:.2f}/${cap:.2f}"
 
             return True, ""
+
+    def cost_cap_crossed(self) -> tuple[float, float] | None:
+        """``(spent, cap)`` when the rolling hour has reached the cap, else None."""
+        with self._lock:
+            return self._cost_cap_crossed()
+
+    def _cost_cap_crossed(self) -> tuple[float, float] | None:
+        """Must be called under lock."""
+        if self._hourly_cost_cap_usd <= 0:
+            return None
+        current = self._hourly_cost_total()
+        if current < self._hourly_cost_cap_usd:
+            return None
+        return current, self._hourly_cost_cap_usd
 
     def register_run(self, run_id: str, agent_id: str) -> None:
         """Register a new active run."""
@@ -195,6 +212,7 @@ class FleetPool:
                 "max_concurrent": self._max_concurrent,
                 "hourly_cost_usd": round(self._hourly_cost_total(), 4),
                 "hourly_cost_cap_usd": self._hourly_cost_cap_usd,
+                "hourly_cost_cap_mode": self.cost_cap_mode,
                 "active_agents": [
                     {"run_id": r.run_id, "agent_id": r.agent_id, "cost_usd": r.cost_usd}
                     for r in self._active.values()
@@ -227,6 +245,7 @@ def init_fleet_pool(
     max_concurrent: int = 3,
     hourly_cost_cap_usd: float = 5.0,
     reserved_slots: int = 0,
+    cost_cap_mode: str = "enforce",
 ) -> FleetPool:
     """Initialize the fleet pool singleton."""
     global _fleet_pool
@@ -234,5 +253,6 @@ def init_fleet_pool(
         max_concurrent=max_concurrent,
         hourly_cost_cap_usd=hourly_cost_cap_usd,
         reserved_slots=reserved_slots,
+        cost_cap_mode=cost_cap_mode,
     )
     return _fleet_pool

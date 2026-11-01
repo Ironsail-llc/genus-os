@@ -182,9 +182,11 @@ def test_a_flagged_watchdog_stops_the_run():
 # ── Runaway tokens ───────────────────────────────────────────────────
 
 
-def test_the_hard_cap_stops_the_run_and_marks_the_budget_exhausted():
+def test_the_hard_cap_stops_the_run_and_marks_the_budget_exhausted(monkeypatch):
+    """When the operator sets the cap. Unset, it observes (test_budget_stops.py)."""
     from robothor.engine.runner import RUNAWAY_TOKEN_HARD_CAP
 
+    monkeypatch.setenv("ROBOTHOR_RUNAWAY_HARD_CAP_TOKENS", str(RUNAWAY_TOKEN_HARD_CAP))
     session = _session(input_tokens=RUNAWAY_TOKEN_HARD_CAP, output_tokens=0)
 
     assert _call(session) is True
@@ -192,9 +194,10 @@ def test_the_hard_cap_stops_the_run_and_marks_the_budget_exhausted():
     assert session.errors and "runaway_token_cap_hit" in session.errors[0]
 
 
-def test_the_cap_counts_input_and_output_together():
+def test_the_cap_counts_input_and_output_together(monkeypatch):
     from robothor.engine.runner import RUNAWAY_TOKEN_HARD_CAP
 
+    monkeypatch.setenv("ROBOTHOR_RUNAWAY_HARD_CAP_MODE", "enforce")
     half = RUNAWAY_TOKEN_HARD_CAP // 2 + 1
     assert _call(_session(input_tokens=half, output_tokens=half)) is True
 

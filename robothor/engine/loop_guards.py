@@ -30,6 +30,7 @@ import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from robothor.engine import budget_stops
 from robothor.engine.live_inbox import absorb_followups, absorb_operator_steer
 from robothor.goals.runtime import stop_pursuit
 
@@ -44,6 +45,7 @@ class GuardState:
     """One-shot notices retained across iterations; checks continue after notice."""
 
     runaway_alerted: bool = False
+    runaway_cap_observed: bool = False  # an observing hard cap records once
     #: Whether the agent has already been told a credential was found. The
     #: REDACTION that accompanies it is not latched — only the notice is.
     secret_notified: bool = False
@@ -128,7 +130,7 @@ def _watchdog_aborted(session: Any, watchdog: Any) -> bool:
 
 
 def _runaway(session: Any, agent_config: Any, state: GuardState) -> bool:
-    """Fleet-wide token guard: alert at 500K, hard stop at 5M."""
+    """Fleet-wide token guard: alert at 500K, 5M records (and stops when set)."""
     from robothor.engine.runner import (
         RUNAWAY_TOKEN_ALERT,
         RUNAWAY_TOKEN_HARD_CAP,
@@ -137,7 +139,7 @@ def _runaway(session: Any, agent_config: Any, state: GuardState) -> bool:
 
     used = (session.run.input_tokens or 0) + (session.run.output_tokens or 0)
 
-    if used >= RUNAWAY_TOKEN_HARD_CAP:
+    if used >= RUNAWAY_TOKEN_HARD_CAP and not state.runaway_cap_observed:
         reason = f"runaway_token_cap_hit ({used}/{RUNAWAY_TOKEN_HARD_CAP})"
         logger.error(
             "Runaway-token hard cap hit: agent=%s run=%s tokens=%d",
@@ -146,6 +148,10 @@ def _runaway(session: Any, agent_config: Any, state: GuardState) -> bool:
             used,
         )
         _spawn_hard_cap_alert(session, agent_config, used)
+        mode = budget_stops.runaway_cap_hit(session, RUNAWAY_TOKEN_HARD_CAP, used, reason)
+        if mode == "observe":  # an unset cap records once and the run goes on
+            state.runaway_cap_observed = True
+            return False
         session.run.budget_exhausted = True
         session.record_error(reason)
         return True
@@ -186,7 +192,8 @@ def _spawn_hard_cap_alert(session: Any, agent_config: Any, used: int) -> None:
             _alert(
                 "critical",
                 f"Runaway-token hard cap: {agent_config.id}",
-                f"run_id={session.run_id} tokens={used:,} model={session.run.model_used}",
+                f"run_id={session.run_id} tokens={used:,} model={session.run.model_used}. "
+                f"{budget_stops.runaway_cap_note()}.",
             ),
             name=f"runaway-hardcap-alert:{agent_config.id}",
         )
