@@ -379,6 +379,32 @@ def _swallow(future: asyncio.Future[Any]) -> None:
         future.result()
 
 
+#: What install and remove answer when this engine cannot write its plugin
+#: directory: a deployment mounts it read-only into the engine, because code
+#: there runs inside the engine, and installs with a Job that mounts the volume.
+PLUGIN_DIR_READ_ONLY = (
+    "The plugin directory is read-only in this engine; install with the install Job."
+)
+
+
+def _writable(path: Any) -> bool:
+    """Whether this process may write *path* (False for a read-only mount)."""
+    import os
+
+    return os.access(path, os.W_OK)
+
+
+def _refuse_a_read_only_plugin_dir() -> None:
+    """409 when ``ROBOTHOR_PLUGIN_DIR`` is set and this engine cannot write it."""
+    from fastapi import HTTPException
+
+    from robothor.plugins.installer import _plugin_target_dir
+
+    target = _plugin_target_dir()
+    if target and not _writable(target):
+        raise HTTPException(status_code=409, detail=PLUGIN_DIR_READ_ONLY)
+
+
 def install_plugin(
     name: str,
     version: str | None = None,
@@ -568,6 +594,8 @@ def register(app: FastAPI) -> None:
         index = body.get("index")
         if index is not None and not str(index).startswith("https://"):
             raise HTTPException(status_code=422, detail="index must be an https URL")
+        if not body.get("dry_run"):
+            _refuse_a_read_only_plugin_dir()
         return await _write(
             install_plugin,
             spec,
@@ -581,7 +609,9 @@ def register(app: FastAPI) -> None:
     async def remove(name: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         """Uninstall a plugin this platform installed and drop its row."""
         body = payload or {}
-        return await _write(remove_plugin, _checked(name), force=bool(body.get("force")))
+        plugin = _checked(name)
+        _refuse_a_read_only_plugin_dir()
+        return await _write(remove_plugin, plugin, force=bool(body.get("force")))
 
     @router.post("/plugins/{name}/enable")
     async def enable(name: str) -> dict[str, Any]:

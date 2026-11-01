@@ -96,6 +96,31 @@ Renders:
 {{- if and (eq $component "engine") $ws.configMap.name $ws.persistence.enabled -}}
 {{- fail (printf "%s.configMap.name and %s.persistence.enabled are mutually exclusive" $wsKey $wsKey) -}}
 {{- end -}}
+{{- /* Import-path directories on the engine's writable workspace: the
+       plugin dir and every PYTHONPATH entry under it. Code there runs inside
+       the engine with its database and signing credentials, and the engine's
+       agents can write the workspace, so each one is mounted again read-only
+       over the read-write workspace mount, and an init container creates it
+       first as the engine's user (kubelet would create a missing subPath as
+       root). Installs go through an install Job that mounts the claim itself. */ -}}
+{{- $wsRoot := clean ($ws.mountPath | default "/") -}}
+{{- $importDirs := list -}}
+{{- if and (eq $component "engine") (not $ws.readOnly) (not $ws.configMap.name) -}}
+{{- $candidates := list -}}
+{{- with index $componentEnv "ROBOTHOR_PLUGIN_DIR" -}}{{- $candidates = append $candidates (toString .) -}}{{- end -}}
+{{- with index $componentEnv "PYTHONPATH" -}}{{- $candidates = concat $candidates (splitList ":" (toString .)) -}}{{- end -}}
+{{- range $c := $candidates -}}
+{{- if $c -}}
+{{- $p := clean $c -}}
+{{- if eq $p $wsRoot -}}
+{{- fail (printf "%s: the engine import path entry %q is the writable workspace %s, which the engine's agents can write; put plugins in a directory under it (for example %s/.plugins)" $fullName $c $wsRoot $wsRoot) -}}
+{{- else if hasPrefix (printf "%s/" $wsRoot) $p -}}
+{{- $importDirs = append $importDirs $p -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- $importDirs = $importDirs | uniq | sortAlpha -}}
+{{- end -}}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -157,10 +182,12 @@ spec:
       affinity:
         {{- $aff | nindent 8 }}
       {{- end }}
+      {{- if or $root.Values.migrations.enabled $importDirs }}
+      initContainers:
+      {{- end }}
       {{- if $root.Values.migrations.enabled }}
       # Block on the migration Job for this release. Pattern doc:
       # https://github.com/Ironsail-llc/aws-infrastucture/blob/main/docs/helm-db-migrations.md
-      initContainers:
         - name: wait-for-migrations
           image: "{{ $root.Values.kubectl.image.repository }}:{{ $root.Values.kubectl.image.tag }}"
           imagePullPolicy: {{ $root.Values.kubectl.image.pullPolicy }}
@@ -213,6 +240,22 @@ spec:
           resources:
             {{- toYaml $root.Values.global.initContainerResources | nindent 12 }}
       {{- end }}
+      {{- if $importDirs }}
+        # Creates each read-only import-path directory before the engine
+        # starts, owned by the engine's user rather than by kubelet's root.
+        - name: plugin-dirs
+          image: {{ include "genus-os.image" (dict "root" $root "component" $component "values" $cv) }}
+          imagePullPolicy: {{ include "genus-os.imagePullPolicy" (dict "root" $root "component" $component "values" $cv) }}
+          securityContext:
+            {{- toYaml $root.Values.global.securityContext | nindent 12 }}
+          command:
+            {{- toYaml (concat (list "mkdir" "-p" "--") $importDirs) | nindent 12 }}
+          volumeMounts:
+            - name: workspace
+              mountPath: {{ $ws.mountPath | quote }}
+          resources:
+            {{- toYaml $root.Values.global.initContainerResources | nindent 12 }}
+      {{- end }}
       containers:
         - name: {{ $component }}
           image: {{ include "genus-os.image" (dict "root" $root "component" $component "values" $cv) }}
@@ -260,6 +303,12 @@ spec:
             - name: workspace
               mountPath: {{ $ws.mountPath | quote }}
               readOnly: {{ or $ws.readOnly (ne $ws.configMap.name "") }}
+            {{- range $dir := $importDirs }}
+            - name: workspace
+              mountPath: {{ $dir | quote }}
+              subPath: {{ trimPrefix (printf "%s/" $wsRoot) $dir | quote }}
+              readOnly: true
+            {{- end }}
             {{- end }}
             {{- with $cv.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}
