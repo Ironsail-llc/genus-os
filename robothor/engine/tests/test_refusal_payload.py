@@ -585,3 +585,78 @@ class TestADeferredToolIsNotAnAllowlistRefusal:
         )
         assert verdict.output == {"guard": "tools_allowed"}
         assert verdict.message == "Tool 'write_file' is not available to this agent."
+
+
+class TestASubAgentDoesNotInheritItsParentsDeferredGrant:
+    """``spawn_agent`` awaits the child's run inline in the parent's task, so
+    the child starts with the parent's context, deferred allow-set included. A
+    child that is not deferred must not be told a tool it was never granted is
+    "granted but deferred", and the parent's set must be intact once the child
+    has finished."""
+
+    @staticmethod
+    def _registry(defer: bool, grant: set[str]):
+        return SimpleNamespace(
+            should_defer=lambda config: defer,
+            deferred_whitelist=lambda config: frozenset(grant),
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_non_deferred_child_of_a_deferred_parent_gets_the_allowlist_refusal(
+        self, flag_on
+    ) -> None:
+        from robothor.engine.tools.dispatch import (
+            clear_deferred_allowed,
+            get_deferred_allowed,
+            set_deferred_allowed,
+        )
+        from robothor.engine.toolset_prep import publish_toolset, withdraw_toolset
+
+        parent = frozenset({"exec", "read_file", "tool_call", "tool_search"})
+        parent_token = set_deferred_allowed(parent)
+        try:
+            child = _config(tools_allowed=["read_file"])
+            tokens = publish_toolset(self._registry(False, set()), child, ["read_file"])
+            try:
+                verdict = await _admit(
+                    tool="exec", agent_config=child, allowed_tool_set=frozenset({"read_file"})
+                )
+                assert verdict.gate == "allowlist"
+                assert verdict.output["gate_name"] == "tools_allowed"
+                assert "tool_call" not in verdict.unlock
+                assert get_deferred_allowed() is None
+            finally:
+                withdraw_toolset(tokens)
+            assert get_deferred_allowed() == parent
+        finally:
+            clear_deferred_allowed(parent_token)
+
+    @pytest.mark.asyncio
+    async def test_a_deferred_child_reads_its_own_grant_not_its_parents(self, flag_on) -> None:
+        from robothor.engine.tools.dispatch import (
+            clear_deferred_allowed,
+            get_deferred_allowed,
+            set_deferred_allowed,
+        )
+        from robothor.engine.toolset_prep import publish_toolset, withdraw_toolset
+
+        parent = frozenset({"exec", "read_file", "tool_call"})
+        parent_token = set_deferred_allowed(parent)
+        try:
+            child = _config(tools_allowed=["read_file", "write_file"])
+            registry = self._registry(True, {"read_file", "write_file", "tool_call"})
+            tokens = publish_toolset(registry, child, ["read_file", "write_file"])
+            try:
+                exec_verdict = await _admit(
+                    tool="exec", agent_config=child, allowed_tool_set=frozenset({"read_file"})
+                )
+                assert exec_verdict.gate == "allowlist"
+                write = await _admit(
+                    tool="write_file", agent_config=child, allowed_tool_set=frozenset({"read_file"})
+                )
+                assert write.output["gate_name"] == "deferred"
+            finally:
+                withdraw_toolset(tokens)
+            assert get_deferred_allowed() == parent
+        finally:
+            clear_deferred_allowed(parent_token)
