@@ -4,6 +4,7 @@ import { useState } from "react";
 import { MetricGrid } from "@/components/business/metric-grid";
 import { TaskBoard } from "@/components/business/task-board";
 import type { Task } from "@/hooks/use-tasks";
+import { ListSkeleton } from "@/components/business/list-skeleton";
 
 interface TasksViewProps {
   visible: boolean;
@@ -48,9 +49,7 @@ export function TasksView({
       <div className="min-w-0 p-4 space-y-4">
         <MetricGrid metrics={metrics} />
         {isLoading && tasks.length === 0 ? (
-          <div className="flex items-center justify-center py-12 text-muted-foreground text-sm">
-            Loading tasks...
-          </div>
+          <ListSkeleton testId="tasks-loading" label="Loading tasks" />
         ) : (
           <TaskBoard tasks={tasks} onApprove={onApprove} onReject={onReject} onAnswer={onAnswer} />
         )}

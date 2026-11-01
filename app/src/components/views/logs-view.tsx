@@ -11,6 +11,7 @@ import { NativeSelect } from "@/components/ui/native-select";
 import { isOperatorRole } from "@/components/layout/nav-config";
 import { useBridgePoll } from "@/lib/bridge/use-bridge-poll";
 import { isLogSince } from "@/lib/observe/since";
+import { ListSkeleton } from "@/components/business/list-skeleton";
 
 /**
  * Observe › Logs — journald, for an operator who is not on the box.
@@ -399,13 +400,7 @@ export function LogsView({ visible = true, role, roleLoading = false }: LogsView
           requires the platform tenant and a human session. Ask an owner or admin on this instance.
         </p>
       ) : catalogLoading ? (
-        <div
-          className="flex items-center gap-2 p-6 text-xs text-muted-foreground"
-          data-testid="logs-loading"
-        >
-          <Loader2 aria-hidden className="size-4 animate-spin" />
-          Reading the units this instance runs…
-        </div>
+        <ListSkeleton testId="logs-loading" label="Loading the units this instance runs" />
       ) : bannerError && units.length === 0 ? (
         <p
           data-testid="logs-error"

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Brain, Loader2, RefreshCw, Search } from "lucide-react";
+import { Brain, RefreshCw, Search } from "lucide-react";
 
 import { EmptyState } from "@/components/business/empty-state";
 import { PageHeader } from "@/components/business/page-header";
@@ -11,6 +11,7 @@ import { isOperatorRole } from "@/components/layout/nav-config";
 import { readBridgeReply } from "@/lib/bridge/read-reply";
 import { useRowActions } from "@/lib/bridge/row-actions";
 import { BRIDGE_UNREACHABLE } from "@/lib/bridge/use-bridge-poll";
+import { ListSkeleton } from "@/components/business/list-skeleton";
 
 /**
  * Observe › Memory — what this tenant believes, and the one way to stop
@@ -492,13 +493,7 @@ export function MemoryView({ visible = true, role, roleLoading = false }: Memory
     }
     if (loading && facts.length === 0) {
       return (
-        <div
-          className="flex items-center gap-2 p-6 text-xs text-muted-foreground"
-          data-testid="memory-loading"
-        >
-          <Loader2 aria-hidden className="size-4 animate-spin" />
-          Reading what this instance believes…
-        </div>
+        <ListSkeleton testId="memory-loading" label="Loading what this instance believes" className="p-4" />
       );
     }
     if (facts.length === 0 && !error) {

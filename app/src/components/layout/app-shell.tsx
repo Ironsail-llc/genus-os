@@ -8,6 +8,7 @@ import { Sidebar } from "./sidebar";
 import { MobileTabBar } from "./mobile-tab-bar";
 import { isComingSoonView, viewGroupLabel, viewTitles, type ViewId } from "./nav-config";
 import { ChatPanel } from "@/components/chat-panel";
+import { SurfaceBoundary, withSurfaceBoundary } from "@/components/surface-boundary";
 import { MfaSetupBanner } from "@/components/mfa-setup-banner";
 import { ErrorBoundary } from "@/components/error-boundary";
 import { isChunkLoadError } from "@/lib/chunk-load-error";
@@ -100,65 +101,110 @@ function ViewBoundary({ visible, children }: { visible: boolean; children: React
 // Each view is its own chunk, fetched the first time the operator opens it:
 // the first load of the Helm carries the shell and the chat, not sixteen
 // screens. The shell is client-only, so none of them renders on the server.
-const DashboardView = dynamic(
-  () => import("@/components/views/dashboard-view").then((m) => m.DashboardView),
-  { ssr: false, loading: ViewLoading },
+const DashboardView = withSurfaceBoundary(
+  "Dashboard",
+  dynamic(
+    () => import("@/components/views/dashboard-view").then((m) => m.DashboardView),
+    { ssr: false, loading: ViewLoading },
+  ),
 );
-const SalesView = dynamic(
-  () => import("@/components/views/sales-view").then((m) => m.SalesView),
-  { ssr: false, loading: ViewLoading },
+const SalesView = withSurfaceBoundary(
+  "Sales",
+  dynamic(
+    () => import("@/components/views/sales-view").then((m) => m.SalesView),
+    { ssr: false, loading: ViewLoading },
+  ),
 );
-const InboxView = dynamic(
-  () => import("@/components/views/inbox-view").then((m) => m.InboxView),
-  { ssr: false, loading: ViewLoading },
+const InboxView = withSurfaceBoundary(
+  "Inbox",
+  dynamic(
+    () => import("@/components/views/inbox-view").then((m) => m.InboxView),
+    { ssr: false, loading: ViewLoading },
+  ),
 );
-const GoalsView = dynamic(
-  () => import("@/components/views/goals-view").then((m) => m.GoalsView),
-  { ssr: false, loading: ViewLoading },
+const GoalsView = withSurfaceBoundary(
+  "Goals",
+  dynamic(
+    () => import("@/components/views/goals-view").then((m) => m.GoalsView),
+    { ssr: false, loading: ViewLoading },
+  ),
 );
-const TasksView = dynamic(
-  () => import("@/components/views/tasks-view").then((m) => m.TasksView),
-  { ssr: false, loading: ViewLoading },
+const TasksView = withSurfaceBoundary(
+  "Tasks",
+  dynamic(
+    () => import("@/components/views/tasks-view").then((m) => m.TasksView),
+    { ssr: false, loading: ViewLoading },
+  ),
 );
-const AgentsView = dynamic(
-  () => import("@/components/views/agents-view").then((m) => m.AgentsView),
-  { ssr: false, loading: ViewLoading },
+const AgentsView = withSurfaceBoundary(
+  "Agents",
+  dynamic(
+    () => import("@/components/views/agents-view").then((m) => m.AgentsView),
+    { ssr: false, loading: ViewLoading },
+  ),
 );
-const MarketplaceView = dynamic(
-  () => import("@/components/views/marketplace-view").then((m) => m.MarketplaceView),
-  { ssr: false, loading: ViewLoading },
+const MarketplaceView = withSurfaceBoundary(
+  "Marketplace",
+  dynamic(
+    () => import("@/components/views/marketplace-view").then((m) => m.MarketplaceView),
+    { ssr: false, loading: ViewLoading },
+  ),
 );
-const FleetView = dynamic(
-  () => import("@/components/views/fleet-view").then((m) => m.FleetView),
-  { ssr: false, loading: ViewLoading },
+const FleetView = withSurfaceBoundary(
+  "Fleet",
+  dynamic(
+    () => import("@/components/views/fleet-view").then((m) => m.FleetView),
+    { ssr: false, loading: ViewLoading },
+  ),
 );
-const RunsView = dynamic(
-  () => import("@/components/views/runs-view").then((m) => m.RunsView),
-  { ssr: false, loading: ViewLoading },
+const RunsView = withSurfaceBoundary(
+  "Runs",
+  dynamic(
+    () => import("@/components/views/runs-view").then((m) => m.RunsView),
+    { ssr: false, loading: ViewLoading },
+  ),
 );
-const AutomationsView = dynamic(
-  () => import("@/components/views/automations-view").then((m) => m.AutomationsView),
-  { ssr: false, loading: ViewLoading },
+const AutomationsView = withSurfaceBoundary(
+  "Automations",
+  dynamic(
+    () => import("@/components/views/automations-view").then((m) => m.AutomationsView),
+    { ssr: false, loading: ViewLoading },
+  ),
 );
-const MemoryView = dynamic(
-  () => import("@/components/views/memory-view").then((m) => m.MemoryView),
-  { ssr: false, loading: ViewLoading },
+const MemoryView = withSurfaceBoundary(
+  "Memory",
+  dynamic(
+    () => import("@/components/views/memory-view").then((m) => m.MemoryView),
+    { ssr: false, loading: ViewLoading },
+  ),
 );
-const AuditView = dynamic(
-  () => import("@/components/views/audit-view").then((m) => m.AuditView),
-  { ssr: false, loading: ViewLoading },
+const AuditView = withSurfaceBoundary(
+  "Audit",
+  dynamic(
+    () => import("@/components/views/audit-view").then((m) => m.AuditView),
+    { ssr: false, loading: ViewLoading },
+  ),
 );
-const LogsView = dynamic(
-  () => import("@/components/views/logs-view").then((m) => m.LogsView),
-  { ssr: false, loading: ViewLoading },
+const LogsView = withSurfaceBoundary(
+  "Logs",
+  dynamic(
+    () => import("@/components/views/logs-view").then((m) => m.LogsView),
+    { ssr: false, loading: ViewLoading },
+  ),
 );
-const HealthView = dynamic(
-  () => import("@/components/views/health-view").then((m) => m.HealthView),
-  { ssr: false, loading: ViewLoading },
+const HealthView = withSurfaceBoundary(
+  "Health",
+  dynamic(
+    () => import("@/components/views/health-view").then((m) => m.HealthView),
+    { ssr: false, loading: ViewLoading },
+  ),
 );
-const SettingsView = dynamic(
-  () => import("@/components/views/settings-view").then((m) => m.SettingsView),
-  { ssr: false, loading: ViewLoading },
+const SettingsView = withSurfaceBoundary(
+  "Settings",
+  dynamic(
+    () => import("@/components/views/settings-view").then((m) => m.SettingsView),
+    { ssr: false, loading: ViewLoading },
+  ),
 );
 const ComingSoonView = dynamic(
   () => import("@/components/views/coming-soon-view").then((m) => m.ComingSoonView),
@@ -526,12 +572,14 @@ export function AppShell() {
                         : "h-full w-[400px]"
                   }`}
                 >
-                  <ChatPanel
-                    variant={isChatView && !showCanvasRail ? "page" : "dock"}
-                    ownerName={ownerName}
-                    docked={!isChatView}
-                    onCollapse={collapseDockFromPanel}
-                  />
+                  <SurfaceBoundary name="Chat">
+                    <ChatPanel
+                      variant={isChatView && !showCanvasRail ? "page" : "dock"}
+                      ownerName={ownerName}
+                      docked={!isChatView}
+                      onCollapse={collapseDockFromPanel}
+                    />
+                  </SurfaceBoundary>
                 </div>
               </div>
             )}
@@ -559,14 +607,16 @@ export function AppShell() {
       {mobileInChat && (
         <div className="flex-1 min-h-0 pb-14" data-testid="chat-container">
           <div className="h-full">
-            <ChatPanel
-              mobile
-              variant="page"
-              ownerName={ownerName}
-              // No canvas on the mobile chat home: a quick action's view
-              // renders in the Dashboard view, so go there.
-              onViewOpened={() => navigate("dashboard")}
-            />
+            <SurfaceBoundary name="Chat">
+              <ChatPanel
+                mobile
+                variant="page"
+                ownerName={ownerName}
+                // No canvas on the mobile chat home: a quick action's view
+                // renders in the Dashboard view, so go there.
+                onViewOpened={() => navigate("dashboard")}
+              />
+            </SurfaceBoundary>
           </div>
         </div>
       )}

@@ -5,6 +5,7 @@ import { MetricGrid } from "@/components/business/metric-grid";
 import { AgentStatus } from "@/components/business/agent-status";
 import { AgentManifests } from "@/components/views/agents/agent-manifests";
 import type { AgentInfo, AgentSummary } from "@/hooks/use-agents";
+import { ListSkeleton } from "@/components/business/list-skeleton";
 
 type SortMode = "score" | "health" | "name";
 
@@ -101,9 +102,7 @@ export function AgentsView({
           ))}
         </div>
         {isLoading && agents.length === 0 ? (
-          <div className="flex items-center justify-center py-12 text-muted-foreground text-sm">
-            Loading agents...
-          </div>
+          <ListSkeleton testId="agents-loading" label="Loading agents" />
         ) : (
           <AgentStatus agents={sortedAgents} summary={summary} />
         )}

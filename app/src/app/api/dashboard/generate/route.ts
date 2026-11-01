@@ -86,7 +86,6 @@ async function handleTriagedDashboard(messages: ConversationMessage[], agentData
   const assistantTrivial = !lastAssistant || isTrivialResponse(lastAssistant.content);
 
   if (userTrivial && assistantTrivial) {
-    console.log("[dashboard] Skipped: both sides trivial");
     return new Response(null, { status: 204 });
   }
 
@@ -97,7 +96,6 @@ async function handleTriagedDashboard(messages: ConversationMessage[], agentData
     triageDashboard(messages),
     fetchDataForNeeds(["health", "conversations"]).catch(() => ({})),
   ]);
-  console.log("[dashboard] Triage:", JSON.stringify({ shouldUpdate: triage.shouldUpdate, dataNeeds: triage.dataNeeds, summary: triage.summary }));
 
   if (!triage.shouldUpdate) {
     return new Response(null, { status: 204 });
@@ -107,10 +105,8 @@ async function handleTriagedDashboard(messages: ConversationMessage[], agentData
   const unsatisfiedNeeds = triage.dataNeeds.filter(
     (need) => !isNeedSatisfied(need, agentData) && !isNeedSatisfied(need, speculativeData)
   );
-  console.log("[dashboard] Fetching:", unsatisfiedNeeds, "| Speculative:", Object.keys(speculativeData), "| Agent provided:", agentData ? Object.keys(agentData) : "none");
   const fetchedData = await fetchDataForNeeds(unsatisfiedNeeds);
   const enrichedData = { ...speculativeData, ...fetchedData, ...agentData };
-  console.log("[dashboard] Data keys:", Object.keys(enrichedData));
 
   // Phase 3: Generate dashboard HTML (buffered, not streamed)
   const systemPrompt = getDashboardSystemPrompt();
