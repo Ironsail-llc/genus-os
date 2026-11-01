@@ -14,7 +14,9 @@ the auth path that already succeeded in ``resolve_identity``.
 from __future__ import annotations
 
 import logging
+import threading
 import time
+from collections import OrderedDict
 
 from psycopg2.extras import RealDictCursor
 
@@ -28,6 +30,19 @@ _CACHE_TTL_SECONDS = 60
 _RELATIONSHIP_LIMIT = 5
 
 _cache: dict[tuple[str, str], tuple[EnrichedIdentity | None, float]] = {}
+
+#: Chat sessions whose enrichment is held for the session's lifetime (see
+#: ``enrich_identity_for_session``). Bounded so an instance with many distinct
+#: callers cannot grow it without limit; the oldest session is evicted first.
+_SESSION_CACHE_MAX = 512
+#: How long a held session entry lives. The enrichment carries the caller's
+#: interaction history (``History: N prior interactions, last <ts>``), so an
+#: entry with no lifetime froze that line until the engine restarted.
+_SESSION_TTL_SECONDS = 900
+_session_cache: OrderedDict[
+    tuple[str, str, str, str], tuple[IdentityContext, EnrichedIdentity, float]
+] = OrderedDict()
+_session_lock = threading.Lock()
 
 
 def enrich_identity(ctx: IdentityContext) -> EnrichedIdentity | None:
@@ -61,9 +76,42 @@ def enrich_identity(ctx: IdentityContext) -> EnrichedIdentity | None:
     return result
 
 
+def enrich_identity_for_session(agent_id: str, ctx: IdentityContext) -> EnrichedIdentity | None:
+    """``enrich_identity``, held across one chat session's turns.
+
+    A session is one agent talking to one caller: (agent, tenant, channel,
+    identifier). The first turn pays the CRM and memory-graph lookups; later
+    turns reuse the result for up to ``_SESSION_TTL_SECONDS`` (15 minutes,
+    against the 60 s of ``enrich_identity``), and sooner when the
+    ``IdentityContext`` for that caller changes (a different person, role or
+    verification state). The lifetime is what keeps the interaction-history
+    line moving. A failed or empty enrichment is not held, so the next turn
+    tries again.
+    """
+    key = (agent_id, ctx.tenant_id, ctx.channel, ctx.identifier)
+    with _session_lock:
+        held = _session_cache.get(key)
+        if held is not None and held[0] == ctx and time.monotonic() < held[2]:
+            _session_cache.move_to_end(key)
+            return held[1]
+
+    result = enrich_identity(ctx)
+    with _session_lock:
+        if result is None:
+            _session_cache.pop(key, None)
+        else:
+            _session_cache[key] = (ctx, result, time.monotonic() + _SESSION_TTL_SECONDS)
+            _session_cache.move_to_end(key)
+            while len(_session_cache) > _SESSION_CACHE_MAX:
+                _session_cache.popitem(last=False)
+    return result
+
+
 def clear_cache() -> None:
-    """Clear the enrichment cache."""
+    """Clear the enrichment cache, including every held chat session."""
     _cache.clear()
+    with _session_lock:
+        _session_cache.clear()
 
 
 def _build_enrichment(person_id: str, tenant_id: str) -> EnrichedIdentity:
