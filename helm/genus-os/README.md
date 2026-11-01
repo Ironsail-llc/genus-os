@@ -689,6 +689,12 @@ which this component does not need. A webhook-only secret class is a planned
 follow-up; until then, treat the hooks pods as holding engine-provider
 credentials.
 
+The hooks pods belong to the root tenant: an event they publish carries no
+tenant, and every engine treats an untagged event as the root tenant's, so a
+tenant cell's engine ignores it. Route a child tenant's webhooks to that
+cell's engine Service (`<release>-engine-<id>`, port 18800), whose own
+receiver tags each event with the cell's tenant, not to the hooks Service.
+
 With `networkPolicy.enabled`, the hooks pods admit the ingress controller
 (`networkPolicy.traefikNamespace` / `traefikPodSelector`) and the Helm smoke
 pod on `hooks.port`, whether or not `hooks.ingress` is on, since the public
