@@ -521,6 +521,9 @@ class TestWorkThatOutlivesItsRun:
         assert seen == [Lane.BACKGROUND, None]
 
 
+# Each test gives a fresh interpreter up to 120 s to import the engine; pytest
+# must allow at least that, or a busy machine fails the test (test_suite_hygiene).
+@pytest.mark.timeout(150)
 class TestImportsStayLight:
     def test_lanes_and_workflow_import_without_a_database_driver(self):
         """The CI manifest validator imports the workflow engine with no psycopg2;
