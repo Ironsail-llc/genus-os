@@ -809,6 +809,19 @@ uv pip install --no-deps --target "$ROBOTHOR_PLUGIN_DIR" ./example_agent-1.0.0-p
 genus plugin sync
 ```
 
+**The plugin directory is read-only to the engine.** Everything in
+`ROBOTHOR_PLUGIN_DIR` is on the engine's import path, so a file written there
+runs inside the engine with its database and signing credentials. The Helm
+chart mounts the directory read-only into every engine whose plugin directory
+(or any `PYTHONPATH` entry) is on its writable workspace, and installs run in
+an install Job that mounts the workspace volume itself. The engine's own
+install and remove routes answer **409** *the plugin directory is read-only in
+this engine; install with the install Job* there. Whatever the mount, an
+agent's `write_file` and `exec` refuse to write the plugin directory, the
+lockfile, or the files beside it (`plugins.lock.grants.json`,
+`plugins.lock.tenant`). Enable, disable and sync write only the lockfile,
+which stays writable.
+
 Sync applies the loader's own gate and nothing stricter: a plugin the loader
 would refuse to import gets nothing written. `genus plugin sync` re-records the
 lockfile rows first, so at that point a row's manifest digest always matches
@@ -1110,8 +1123,8 @@ tenant's engine**, and the gate depends on whose decision the act is:
 | `POST /api/plugins/{name}/enable` | `POST /api/admin/plugins/{name}/enable` | tenant admin | flip the row; 404 if unrecorded; **409** if the root tenant forced it; does **not** reload |
 | `POST /api/plugins/{name}/disable` | `POST /api/admin/plugins/{name}/disable` | tenant admin | as above |
 | `POST /api/plugins/reload` | `POST /api/admin/plugins/reload` | tenant admin | runs the SIGHUP body; returns `{generation, loaded, failures}` |
-| `POST /api/plugins/install` | `POST /api/admin/plugins/install` | root | `{name, version?, index?, accept_review?, dry_run?, tenant_id?}` → the install plan and its verdict; **422** for a blocked or unreviewed wheel, an unverifiable index, or a `name` that is not a distribution name |
-| `POST /api/plugins/{name}/remove` | `POST /api/admin/plugins/{name}/remove` | root | `{force?, tenant_id?}` → `{name, removed, row_dropped, reload_hint, note}` |
+| `POST /api/plugins/install` | `POST /api/admin/plugins/install` | root | `{name, version?, index?, accept_review?, dry_run?, tenant_id?}` → the install plan and its verdict; **422** for a blocked or unreviewed wheel, an unverifiable index, or a `name` that is not a distribution name; **409** when the engine cannot write `ROBOTHOR_PLUGIN_DIR` (a dry run still plans) |
+| `POST /api/plugins/{name}/remove` | `POST /api/admin/plugins/{name}/remove` | root | `{force?, tenant_id?}` → `{name, removed, row_dropped, reload_hint, note}`; **409** when the engine cannot write `ROBOTHOR_PLUGIN_DIR` |
 | `PUT /api/plugins/{name}/tenants/{tenant_id}` | `POST /api/admin/plugins/reload` on that tenant | root | `{state: "on" \| "off" \| null}` → write or clear the grant, then reload that tenant's engine; see [Per tenant](#per-tenant) |
 
 `tenant_id` is the bridge's routing field and is never forwarded to the engine.

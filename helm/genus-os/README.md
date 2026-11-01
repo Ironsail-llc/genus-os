@@ -409,17 +409,26 @@ its restarts and is never visible to another cell. That default wins over
 own `env` overrides either variable, for example to add a second directory to
 `PYTHONPATH`. A cell on an `emptyDir`, a ConfigMap bundle or a `readOnly`
 workspace gets neither variable: an install there would be lost on restart, or
-could not be written at all. The root engine renders exactly as before, so a
-deployment that sets these variables in `engine.env` keeps doing so.
+could not be written at all. The root engine gets neither variable from the
+chart; a deployment that sets them in `engine.env` keeps them.
 
-The plugin directory is on the workspace, which the cell's agents can write
-to, and `PYTHONPATH` comes before site-packages. A file an agent writes there
-(a `sitecustomize.py`, or a package shadowing a real dependency) runs inside
-the engine process on its next restart, with every secret the cell reads.
-Give the cell's agents a `write_path_allowlist` in their manifests that leaves
-out `.plugins/`, with `write_path_restrict` in their `guardrails` list, which
-the allowlist needs before it is enforced. To turn
-the plugin directory off for a cell, set both variables to empty in its
+**The plugin directory is read-only to the engine.** Code on the engine's
+import path runs inside the engine with every secret it reads, and the
+engine's agents can write its workspace. So for every engine, the root's and
+each cell's, whose `ROBOTHOR_PLUGIN_DIR` or `PYTHONPATH` entry lies under its
+writable workspace, the chart adds a second mount of the workspace volume with
+that directory as its `subPath` and `readOnly: true`, layered over the
+read-write workspace mount, and an init container (`plugin-dirs`, the engine
+image, the engine's user) creates the directory first so it is owned by the
+app user rather than by kubelet. An import-path entry that is the workspace
+itself fails the render. Nothing in the engine writes there: installs go
+through an install Job that mounts the workspace claim read-write directly,
+the engine's install and remove routes answer 409 saying so, and enable,
+disable and sync write only the lockfile under `.robothor/`, which stays
+writable. An agent's `write_file` and `exec` also refuse the plugin directory
+and the lockfile files.
+
+To turn the plugin directory off for a cell, set both variables to empty in its
 `env`, which installs into the image's own environment as on a default root
 engine:
 
