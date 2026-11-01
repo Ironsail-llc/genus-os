@@ -71,6 +71,40 @@ so (`in_toolset: true`, and a hint not to wrap them in `tool_call`). It used to
 answer `tool_search is only available on deferred runs`, which taught the agent
 nothing and did not stop it asking again.
 
+### What the human's role adds (capability tier)
+
+An agent that declares no `tools_allowed` is offered every tool except the
+opt-in families (`OPT_IN_TOOLS`: `claude_code_*`, `web_render`, the Jira and
+GitHub review writes, `pr_review_*`, `run_workflow`, `sales_*`) unless its
+manifest names them in `tools_opt_in`. That rule ignores who is asking, so the
+instance's owner — who holds a `*` allow in RBAC — could be told a coding tool
+is "not available to this agent".
+
+With `ROBOTHOR_ROLE_CAPABILITIES_ENABLED=1` the run is stamped with a capability
+tier from the human's role (`robothor/engine/capability_tier.py`):
+
+| Role | Tier | What it adds |
+|---|---|---|
+| `owner` | `unrestricted` | the opt-in families |
+| `admin` | `elevated` | the opt-in families |
+| `member`, `user`, `service`, any other role | `standard` | nothing |
+| `viewer`, `auditor`, `guest` | `restricted` | nothing |
+
+* **Only on a verified interactive run.** Cron, hook, event, workflow and
+  sub-agent runs stay `standard`, and so does an identity the channel could not
+  verify (an unregistered Telegram sender in the operator's chat is handed role
+  `owner` with `Verified: NO`).
+* **It only widens what the run is offered.** RBAC still decides each call, and
+  plan mode, approval, the secret-path, destructive-command and injection
+  guardrails apply to every tier. `tools_denied` still wins, and an explicit
+  `tools_allowed` list is not widened.
+* **`ROBOTHOR_ROLE_CAPABILITIES_MODE`.** `observe` (the default once enabled)
+  records the tier on the run (`agent_runs.runtime_context->'capability_tier'`)
+  and writes one `agent_guardrail_events` row, `guardrail_name = 'role_capability'`,
+  action `observed`, naming the tools it would unlock; nothing else changes.
+  `enforce` offers them and writes the row with action `allowed`. Handlers read
+  the effective tier from `ToolContext.capability_tier` (`""` below enforce).
+
 ### What this means for agent authors
 
 * **Name tools by their registered names.** Never a CLI when a tool exists.

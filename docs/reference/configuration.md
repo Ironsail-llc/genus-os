@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-519 settings in 18 groups.
+521 settings in 18 groups.
 
 ## autonomy
 
@@ -477,6 +477,8 @@ Guardrails and feature gates. Ones marked governed are inventoried in `infra/fla
 | `ROBOTHOR_RIP_5_ENABLED` | bool | `false` | `robothor-engine` | no | legacy | **governed.** Rip 5: the destructive LLM skill-consolidation curator pass. The non-destructive lifecycle runs either way. |
 | `ROBOTHOR_RIP_7_ENABLED` | bool | `false` | `robothor-engine` | no | legacy | Rip 7: the drift detector over memory_facts. |
 | `ROBOTHOR_RIP_7_MODE` | str | `observe` | `robothor-engine` | no | legacy | **governed.** Rip 7 ladder position: observe logs a drifting write, alert also notifies, enforce snapshots and refuses it. |
+| `ROBOTHOR_ROLE_CAPABILITIES_ENABLED` | bool | `false` | `robothor-engine` | no | legacy | Switch for the role capability tier: an owner or admin on a verified interactive run is offered the opt-in tool families their role permits. |
+| `ROBOTHOR_ROLE_CAPABILITIES_MODE` | str | `observe` | `robothor-engine` | no | legacy | **governed.** Role-capability ladder position: observe records the tier and the tools it would unlock, enforce offers them. |
 | `ROBOTHOR_ROUTER_V2` | bool | `false` | `robothor-engine` | no | legacy | Stop message length alone buying a separate planner LLM call on a Telegram, webchat or plugin-channel turn: a long message plans only in plan mode, when the manifest asks, or when it lists three or more steps. |
 | `ROBOTHOR_RUN_VERIFICATION_ENABLED` | bool | `false` | `robothor-engine` | no | legacy | Switch for verifying a finished run's claims against its tool trace. |
 | `ROBOTHOR_RUN_VERIFICATION_MODE` | str | `observe` | `robothor-engine` | no | legacy | **governed.** Run-verification ladder position: observe records the verdict, enforce marks the run failed when its claims are unsupported. |

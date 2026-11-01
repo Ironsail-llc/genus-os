@@ -36,6 +36,7 @@ import litellm
 from robothor.db.connection import current_tenant_scope
 from robothor.engine import budget_stops
 from robothor.engine.cancel_outcome import _cancel_outcome, terminal_run
+from robothor.engine.capability_tier import record_tier_event, stamp_capability_tier
 from robothor.engine.chat_backstop import protect_if_human_chat
 from robothor.engine.checkpoint import save_iteration
 from robothor.engine.config import (
@@ -111,6 +112,7 @@ from robothor.engine.run_identity import attach_tenant_access, resolve_run_ident
 from robothor.engine.run_lifecycle import RunLifecycleMixin, spawn_post_stall_autodream
 from robothor.engine.run_llm_calls import LLMCallMixin  # noqa: E402
 from robothor.engine.run_pacing import DeadlinePacer, checkin_note, mode_for_run  # noqa: E402
+from robothor.engine.run_person_link import link_run_person
 from robothor.engine.run_replan import maybe_replan  # noqa: E402
 from robothor.engine.runtime.current import runtime_entrypoint
 from robothor.engine.runtime.deadlines import enclosing_deadline_reason
@@ -691,31 +693,11 @@ class AgentRunner(
             if effective_identity is None and spawn_context.identity:
                 effective_identity = spawn_context.identity
 
-        # Contact 360 linkage — stamp person_id from the effective identity
-        # first (covers WEBCHAT, whose trigger_detail carries no chat_id for
-        # resolve_run_person_id to key off). Fall back to the existing
-        # trigger_detail-based resolver when identity has no person_id.
-        if not session.run.person_id and effective_identity and effective_identity.person_id:
-            session.run.person_id = effective_identity.person_id
+        # Capability tier from the final (post-spawn) user_role; None while off.
+        _tier = stamp_capability_tier(session.run, trigger_type, effective_identity)
 
-        # Contact 360 linkage — resolve from trigger_detail for top-level runs
-        # whose trigger_type is telegram/chat. Best-effort; a miss is fine.
-        if not session.run.person_id and trigger_type in (
-            TriggerType.TELEGRAM,
-            TriggerType.WEBCHAT,
-        ):
-            try:
-                from robothor.engine.run_person_link import resolve_run_person_id_off_loop
-
-                session.run.person_id = await resolve_run_person_id_off_loop(
-                    trigger_type=trigger_type,
-                    trigger_detail=trigger_detail,
-                    tenant_id=resolved_tenant,
-                )
-            except Exception as e:  # noqa: BLE001
-                logger.debug(
-                    "person_id resolution failed for %s: %s", _sanitize(agent_id), _sanitize(e)
-                )
+        # Contact 360 linkage (robothor/engine/run_person_link.py).
+        await link_run_person(session.run, effective_identity, trigger_type, trigger_detail)
 
         # Stash the effective identity on the session so _run_loop can carry
         # it onto a fresh SpawnContext for any children this run spawns.
@@ -995,6 +977,7 @@ class AgentRunner(
             deep_plan=deep_plan,
             tenant_id=resolved_tenant,
             actor_id=effective_user_id,
+            capability=_tier,
         )
         tool_schemas = _prepared.tool_schemas
         tool_names = _prepared.tool_names
@@ -1115,6 +1098,11 @@ class AgentRunner(
                         )
                 except Exception as e:
                     logger.warning("Failed to record run start: %s", _sanitize(e))
+
+                if _tier and _tier.widens:  # role_capability evidence; needs the run row
+                    await asyncio.to_thread(
+                        record_tier_event, session.run.id, _tier, _prepared.tier_unlocked
+                    )
 
                 # Auto-create CRM task if configured (skip for sub-agent runs)
                 if should_create_auto_task(agent_config, spawn_context):
@@ -1342,6 +1330,7 @@ class AgentRunner(
                     agent_config,
                     tool_names,
                     {str(s.get("function", {}).get("name", "")) for s in tool_schemas or []},
+                    _tier,
                 )
 
                 from robothor.engine.request_runtime import observe_request

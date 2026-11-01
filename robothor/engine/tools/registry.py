@@ -8,6 +8,7 @@ import math
 import re
 from typing import TYPE_CHECKING, Any, NamedTuple, TypedDict
 
+from robothor.engine.capability_tier import WIDENING_TIERS
 from robothor.engine.runtime.deadlines import RuntimeDeadlineError
 from robothor.engine.spawn_cancel import tool_deadline
 from robothor.engine.tools.constants import (
@@ -848,6 +849,7 @@ class ToolRegistry:
         *,
         autonomy: bool = False,
         recent: frozenset[str] = frozenset(),
+        tier: str = "",
     ) -> list[dict[str, Any]]:
         """Return filtered tool schemas for an agent based on allow/deny lists.
 
@@ -867,10 +869,13 @@ class ToolRegistry:
         that out once, in toolset_prep. Left always-on it cost roughly 1,100
         schema tokens per turn to every agent on every instance, including the
         overwhelming majority that can never reach a grant.
+
+        ``tier`` is the run's EFFECTIVE capability tier (``capability_tier``);
+        see :meth:`get_tool_names`.
         """
         self._refresh_plugin_schemas_if_stale()
-        names = self._get_filtered_names(config)
-        if self.should_defer(config):
+        names = self._get_filtered_names(config, tier)
+        if self.should_defer(config, tier=tier):
             seen: set[str] = set()
             advertised: list[str] = []
             for n in [*names, *sorted(TOOLSEARCH_TOOLS)]:
@@ -881,7 +886,7 @@ class ToolRegistry:
             names = advertised
         return [with_autonomy(wire_schema(self._schemas[n]), autonomy) for n in names]
 
-    def should_defer(self, config: AgentConfig) -> bool:
+    def should_defer(self, config: AgentConfig, *, tier: str = "") -> bool:
         """True iff this agent's toolset should be deferred (Rip 16 / G4).
 
         Deferral kicks in only for broad-access agents — those whose advertised
@@ -895,9 +900,9 @@ class ToolRegistry:
 
         if not deferred_tools_enabled():
             return False
-        return len(self._get_filtered_names(config)) > deferred_tools_threshold()
+        return len(self._get_filtered_names(config, tier)) > deferred_tools_threshold()
 
-    def deferred_whitelist(self, config: AgentConfig) -> frozenset[str]:
+    def deferred_whitelist(self, config: AgentConfig, *, tier: str = "") -> frozenset[str]:
         """The deferred-run allow-set the runner publishes via set_deferred_allowed.
 
         The agent's full allowed set plus the meta-tools. tool_describe/tool_call
@@ -905,7 +910,7 @@ class ToolRegistry:
         direct CORE call or a tool_call to any allowed tool passes, while a
         tool_call to a denied tool is refused before registry.execute.
         """
-        return frozenset(self._get_filtered_names(config)) | TOOLSEARCH_TOOLS
+        return frozenset(self._get_filtered_names(config, tier)) | TOOLSEARCH_TOOLS
 
     def unsearchable_names(self) -> list[str]:
         """Registered tools ``tool_search`` can never return for any query.
@@ -1075,11 +1080,18 @@ class ToolRegistry:
         full_names = set(self.get_tool_names(config))
         return sorted(full_names & self._readonly_names())
 
-    def get_tool_names(self, config: AgentConfig) -> list[str]:
-        """Return filtered tool names for an agent."""
-        return self._get_filtered_names(config)
+    def get_tool_names(self, config: AgentConfig, *, tier: str = "") -> list[str]:
+        """Return filtered tool names for an agent.
 
-    def _get_filtered_names(self, config: AgentConfig) -> list[str]:
+        ``tier`` is the run's effective capability tier
+        (robothor/engine/capability_tier.py), ``""`` unless
+        ``ROBOTHOR_ROLE_CAPABILITIES_MODE=enforce``. A widening tier (an owner or
+        admin on a verified interactive run) adds the opt-in families to an
+        agent that declares no ``tools_allowed``; ``tools_denied`` still wins.
+        """
+        return self._get_filtered_names(config, tier)
+
+    def _get_filtered_names(self, config: AgentConfig, tier: str = "") -> list[str]:
         if config.tools_allowed:
             names = [n for n in config.tools_allowed if n in self._schemas]
             unresolved = [n for n in config.tools_allowed if n not in self._schemas]
@@ -1105,6 +1117,11 @@ class ToolRegistry:
                 for n in (getattr(config, "tools_opt_in", None) or [])
                 if n in OPT_IN_TOOLS and n in self._schemas and n not in names
             )
+            # ...or the human driving this run holds a role that may use them.
+            if tier in WIDENING_TIERS:
+                names.extend(
+                    n for n in sorted(OPT_IN_TOOLS) if n in self._schemas and n not in names
+                )
 
         if config.id == "main":
             from robothor.goals.tools import TOOL_NAMES

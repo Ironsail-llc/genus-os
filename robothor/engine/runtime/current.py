@@ -213,7 +213,7 @@ def run_identity(run: Any) -> dict[str, Any]:
 
     context = active_context.get()
     goal = binding.get()
-    return {
+    identity: dict[str, Any] = {
         **asdict(StateEnvelope()),
         "tenant_id": run.tenant_id,
         "principal_id": run.user_id or "service:" + run.agent_id,
@@ -226,6 +226,13 @@ def run_identity(run: Any) -> dict[str, Any]:
         "budget_id": context.budget_id if context else (goal.attempt if goal else None),
         "deadline": context.deadline.isoformat() if context and context.deadline else None,
     }
+    if getattr(run, "capability_tier", ""):
+        identity["capability_tier"] = {
+            "tier": run.capability_tier,
+            "mode": run.capability_tier_mode,
+            "reason": run.capability_tier_reason,
+        }
+    return identity
 
 
 def runtime_entrypoint(
