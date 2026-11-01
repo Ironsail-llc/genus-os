@@ -31,6 +31,8 @@ import time
 from datetime import UTC, datetime
 from typing import Any, Literal
 
+from robothor.sanitize import sanitize_log
+
 logger = logging.getLogger(__name__)
 
 Mode = Literal["observe", "enforce"]
@@ -199,7 +201,13 @@ def record(
     except Exception:  # noqa: BLE001
         logger.debug("budget_stop step could not be recorded", exc_info=True)
         return None
-    logger.warning("budget_stop [%s] %s run=%s: %s", mode, stop, session.run_id, reason)
+    logger.warning(
+        "budget_stop [%s] %s run=%s: %s",
+        sanitize_log(mode),
+        sanitize_log(stop),
+        sanitize_log(session.run_id),
+        sanitize_log(reason),
+    )
     publish(session.run_id, session.run.agent_id, session.run.tenant_id or "", detail)
     return step
 

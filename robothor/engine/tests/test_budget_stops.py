@@ -414,6 +414,35 @@ class TestTelemetryNeverBlocksTheLoop:
         assert len(_budget_steps(session.run.steps)) == 1
 
 
+class TestTheLogLineCannotBeForged:
+    def test_hostile_fields_are_escaped_in_the_warning(self, published, caplog):
+        import logging
+
+        from robothor.engine import budget_stops
+
+        hostile = "forged\r\nentry\x00\t\x7f\x85"
+        session = AgentSession("log-forge")
+        with caplog.at_level(logging.WARNING, logger="robothor.engine.budget_stops"):
+            budget_stops.record(
+                session,
+                stop=hostile,
+                reason=hostile,
+                setting="safety_cap",
+                limit=1,
+                observed=1,
+                mode="enforce",
+            )
+
+        message = caplog.records[-1].getMessage()
+        assert "\r" not in message
+        assert "\n" not in message
+        assert all(ord(c) >= 0x20 and not 0x7F <= ord(c) < 0xA0 for c in message)
+        assert "forged\\r\\nentry\\x00\\x09\\x7f\\x85" in message
+        # The step itself keeps the raw values; only the log line is escaped.
+        step = _budget_steps(session.run.steps)[0]
+        assert step.tool_input["reason"] == hostile
+
+
 # ── The step type is allowed by the database ────────────────────────────────
 
 
