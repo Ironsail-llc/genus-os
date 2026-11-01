@@ -53,6 +53,13 @@ The three meta-tools:
 against the allow-set the runner published before it dispatches anything, so a
 denied tool is refused there, not at the registry.
 
+**`arguments` is an object of the wrapped tool's parameters.** A JSON string
+that parses to an object is accepted as that object, since models often send
+one. A wrapper with no string `name`, `arguments` that are neither, or a
+`tool_call` wrapping another `tool_call` is refused as a bad call (not a tool
+crash) with an error that says what was wrong; `tool_describe(name)` gives the
+schema to send.
+
 **The agent is told.** On a deferred run the engine's context turn carries one
 sentence:
 
