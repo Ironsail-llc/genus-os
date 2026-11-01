@@ -77,6 +77,13 @@ async def _exec(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     refused = exec_reads_secret(command)
     if refused:
         return {"error": refused}
+    # Nor may it write what the engine imports: the plugin directory and the
+    # plugin lockfile (robothor/engine/plugin_paths.py).
+    from robothor.engine.plugin_paths import exec_writes_managed
+
+    refused = exec_writes_managed(command, cwd=getattr(ctx, "workspace", "") or None)
+    if refused:
+        return {"error": refused}
 
     # The tool's own ceiling, then the RUN's: a command may not outlive the run
     # that owns it, and it must leave time for the write the run is graded on.
@@ -520,9 +527,15 @@ async def _write_file(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from pathlib import Path
 
     def _run() -> dict[str, Any]:
+        from robothor.engine.plugin_paths import REFUSAL, is_managed_path
+
         path = Path(args.get("path", "")).expanduser()
         if not path.is_absolute() and ctx.workspace:
             path = Path(ctx.workspace) / path
+        # What the engine imports is installed by the install Job, never by an
+        # agent: code there runs inside the engine (robothor/engine/plugin_paths.py).
+        if is_managed_path(path):
+            return {"error": REFUSAL}
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(args.get("content", ""))
