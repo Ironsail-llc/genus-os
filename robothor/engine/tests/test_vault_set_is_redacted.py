@@ -443,3 +443,14 @@ def test_a_workflow_step_stores_a_wrapped_vault_set_redacted():
     )
     assert stored is not None
     assert PLAIN_HEX_VALUE not in stored
+
+
+@pytest.mark.parametrize("padded", [" vault_set", "vault_set ", "\tvault_set\n"])
+def test_a_padded_wrapped_tool_name_is_redacted_as_the_tool_it_reaches(padded):
+    """``tool_call`` strips the name before it dispatches, so a padded name
+    still runs ``vault_set``; the redactor has to read it the same way."""
+    from robothor.secrets.redaction import PLACEHOLDER, redact_tool_arguments
+
+    wrapped = {"name": padded, "arguments": _wrapped_vault_set()["arguments"]}
+    cleaned = redact_tool_arguments("tool_call", wrapped)
+    assert cleaned["arguments"]["value"] == PLACEHOLDER
