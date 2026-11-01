@@ -383,9 +383,10 @@ the owner or admin driving a run may do, as described below the table.
 
 What the flag widens, and for whom. "Driving" means a person is on the other
 end: an interactive trigger (chat, messaging, IDE, manual), not a cron, hook,
-event, workflow, federation or sub-agent run, and not a service credential. A
-manifest's `role: owner` on a cron agent is a service role and earns nothing
-here.
+event, workflow, federation or sub-agent run, not a service credential, and not
+a run the engine resumes on its own after a verified repair (`repair-resume:`),
+even though that run is recorded as manual with the owner's role. A manifest's
+`role: owner` on a cron agent is a service role and earns nothing here.
 
 - **The exec allowlist.** An owner or admin driving the run whose command the
   allowlist would block is allowed, and the call is recorded as `observed`
