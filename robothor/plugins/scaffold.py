@@ -252,7 +252,7 @@ on:
 
 jobs:
   release:
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
@@ -281,6 +281,8 @@ jobs:
             echo "::error::could not check for an existing release: $out"
             exit 1
           fi
+      - name: Tests pass
+        run: python -m pip install ".[test]" && python -m pytest -q
       - name: Wheel builds
         run: |
           python -m pip install build
