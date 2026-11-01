@@ -126,6 +126,11 @@ Per-agent exceptions go in `user_permissions` keyed on the run's `user_id`
 (`service:<agent-id>` for system triggers). A `user_permissions` row beats the
 role outright, in both directions.
 
+The engine reuses the rules it reads for up to 5 seconds per tenant and role
+(and per tenant and user for `user_permissions`). A row written by hand with
+`psql` therefore takes effect within 5 seconds, without a restart;
+`seed_default_permissions` clears the cache at once.
+
 ## Related
 
 - [`GUARDRAIL_FLIPS.md`](GUARDRAIL_FLIPS.md) — the flip record every promotion writes

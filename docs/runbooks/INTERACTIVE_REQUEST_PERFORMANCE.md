@@ -66,6 +66,21 @@ covered by this timer. Benchmark runs use background priority. Benchmark records
 include duration, model calls, input tokens, overlapping tool wall time,
 compaction cost, verified completion, and post-completion tool calls.
 
+## Permission and stop reads per iteration
+
+The permission gate and the durable stop are read once per loop iteration, not
+once per tool call. Permission rule rows are reused for up to 5 seconds per
+tenant and role (and per tenant and user). A write made in the engine process
+clears them at once; a row changed by hand with `psql` applies within 5 seconds.
+A failed read is never reused, so the gate still fails closed.
+
+Each provider attempt reads the durable stop afresh, and the tool calls of that
+iteration reuse its verdict. A stop issued in this engine (dashboard, API, chat
+stop) is honoured at the very next tool call. A stop committed by another
+process is honoured at the next provider attempt, or at the first tool call made
+10 seconds or more after the iteration's read. The recheck right before a
+journaled side effect always reads afresh.
+
 ## Reproducible checks
 
 The offline attendee merge/verification microbenchmark never touches Google:

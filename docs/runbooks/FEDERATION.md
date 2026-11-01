@@ -64,6 +64,8 @@ psql -c "INSERT INTO user_permissions (tenant_id, user_id, tool_pattern, access)
 A `user_permissions` row beats the role outright, in both directions. That is
 the intended per-connection control path — and it means `federation_child`
 being seeded `'*' -> deny` is a strong default, **not** a hard ceiling.
+The engine caches permission rows for up to 5 seconds, so an insert or delete
+here takes effect within 5 seconds of the commit.
 
 ## Prerequisites
 

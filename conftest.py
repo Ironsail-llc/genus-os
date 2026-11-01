@@ -250,3 +250,22 @@ def _reset_validation_warning_log():
     reset_validation_warning_log()
     yield
     reset_validation_warning_log()
+
+
+@pytest.fixture(autouse=True)
+def _fresh_permission_and_stop_caches():
+    """Never let one test's permission rules or stop verdict answer the next.
+
+    ``check_tool_permission`` reuses rule rows for a few seconds and a tool call
+    reuses its iteration's durable-stop verdict -- right in a daemon, where the
+    rows and the stop are facts about the database, and wrong in a suite, where
+    every test fakes a different database under the same tenant and run ids.
+    """
+    from robothor.engine import permissions
+    from robothor.engine.runtime import controls
+
+    permissions.invalidate_permission_cache()
+    controls.invalidate_stop_cache()
+    yield
+    permissions.invalidate_permission_cache()
+    controls.invalidate_stop_cache()
