@@ -674,6 +674,10 @@ def _redact_wrapped_arguments(tool_name: str, value: Any, depth: int) -> Any:
             parsed = json.loads(value)
         except (TypeError, ValueError):
             return redact(value)
+        if isinstance(parsed, str):
+            # A JSON string of a JSON string: one more encoding is one more
+            # level, and what it wraps is still a call's arguments.
+            return json.dumps(_redact_wrapped_arguments(tool_name, parsed, depth + 1))
         if not isinstance(parsed, dict):
             return redact(value)
         if depth > _MAX_ARGUMENT_DEPTH:

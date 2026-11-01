@@ -21,6 +21,7 @@ describes is the drift defect this codebase has shipped three times.
 from __future__ import annotations
 
 import json
+from typing import Any
 
 import pytest
 
@@ -472,3 +473,20 @@ def test_a_json_string_wrapper_past_the_depth_cap_is_the_placeholder():
     cleaned = redact_tool_arguments("tool_call", wrapped)
     assert PLAIN_HEX_VALUE not in json.dumps(cleaned)
     assert PLACEHOLDER in json.dumps(cleaned)
+
+
+@pytest.mark.parametrize("encodings", [2, 3])
+def test_a_wrapper_whose_arguments_are_a_json_string_of_a_json_string_is_redacted(encodings):
+    """A model that stringifies ``arguments`` and then stringifies the wrapper
+    again sends a JSON string of a JSON string; the credential inside is still
+    a credential, and the dispatcher's name lookup is what decides whether the
+    call runs, not how many times the text was encoded."""
+    from robothor.secrets.redaction import redact_tool_arguments
+
+    inner = {"key": "providers/weather/api_key", "value": PLAIN_HEX_VALUE}
+    encoded: Any = inner
+    for _ in range(encodings):
+        encoded = json.dumps(encoded)
+    wrapped = {"name": "vault_set", "arguments": encoded}
+    cleaned = redact_tool_arguments("tool_call", wrapped)
+    assert PLAIN_HEX_VALUE not in json.dumps(cleaned)
