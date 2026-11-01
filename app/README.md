@@ -77,9 +77,11 @@ back to, it is a coroutine blocked in the engine that will time out and deny.
 
 ## Navigation
 
-The Helm is a single client shell: every view is mounted in
-`components/layout/app-shell.tsx` and shown by a `visible` prop — there is no
-App Router route per view.
+The Helm is a single client shell, `components/layout/app-shell.tsx`, with no
+App Router route per view. Each view is its own `next/dynamic` chunk: it is
+downloaded and mounted the first time it is shown, then kept mounted and shown
+or hidden by a `visible` prop, so its state survives switching away. A view
+never opened costs nothing. Settings loads only the active sub-page's chunk.
 
 - **The URL is the state.** `hooks/use-view-route.ts` keeps the active view in
   the query string (`?v=<view>`, plus `&s=<page>` inside Settings), so a reload

@@ -30,10 +30,10 @@ import { useBridgePoll } from "@/lib/bridge/use-bridge-poll";
  * those three have ever been joined. Below: workflows, unchanged, and then the
  * operator's external n8n as the bridge's poller last saw it.
  *
- * It polls every 60 s **while visible**. `AppShell` mounts every view and hides
- * them with `display: none`, so an ungated effect here would put an
- * operator-gated manifest-directory scan on every Helm page load whatever the
- * operator was actually looking at.
+ * It polls every 60 s **while visible**. `AppShell` keeps every opened view
+ * mounted and hides it with `display: none`, so an ungated effect here would
+ * keep an operator-gated manifest-directory scan going whatever the operator
+ * was actually looking at.
  *
  * Role gating is UX only: the bridge calls `require_operator` on the listing
  * and on every act below it.

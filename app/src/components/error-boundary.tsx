@@ -17,22 +17,29 @@ import { Component, type ReactNode } from "react";
  */
 interface ErrorBoundaryProps {
   children: ReactNode;
-  /** What to show instead. Rendered in place of the subtree that failed. */
-  fallback: ReactNode;
+  /**
+   * What to show instead. Rendered in place of the subtree that failed; a
+   * function is handed the error, so the fallback can tell a chunk that did not
+   * download from a component that threw.
+   */
+  fallback: ReactNode | ((error: unknown) => ReactNode);
 }
 
 interface ErrorBoundaryState {
   failed: boolean;
+  error?: unknown;
 }
 
 export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
   state: ErrorBoundaryState = { failed: false };
 
-  static getDerivedStateFromError(): ErrorBoundaryState {
-    return { failed: true };
+  static getDerivedStateFromError(error: unknown): ErrorBoundaryState {
+    return { failed: true, error };
   }
 
   render() {
-    return this.state.failed ? this.props.fallback : this.props.children;
+    if (!this.state.failed) return this.props.children;
+    const { fallback } = this.props;
+    return typeof fallback === "function" ? fallback(this.state.error) : fallback;
   }
 }

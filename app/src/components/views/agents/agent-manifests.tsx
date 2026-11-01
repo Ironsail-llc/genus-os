@@ -81,9 +81,9 @@ export interface AgentManifestsProps {
   /**
    * Whether the Agents view is the one on screen.
    *
-   * `AppShell` mounts every view and hides them with `display: none`, so an
-   * effect with no gate here fires two operator-gated bridge calls — one of
-   * which scans the manifest directory — on every Helm page load, whatever the
+   * `AppShell` keeps every opened view mounted and hides it with
+   * `display: none`, so an effect with no gate here fires two operator-gated
+   * bridge calls — one of which scans the manifest directory — whatever the
    * operator was actually looking at. `fleet-view` and `marketplace-view` both
    * gate on this; this one now does too.
    */
