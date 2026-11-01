@@ -169,6 +169,11 @@ NO_PERSON_TRIGGERS: frozenset[str] = frozenset(
     {"cron", "hook", "event", "workflow", "sub_agent", "federation", "channel_event"}
 )
 
+#: ``trigger_detail`` prefixes of runs the engine starts on its own under an
+#: interactive trigger: ``repair_recovery.resume`` continues an owner's task as
+#: MANUAL with ``user_role="owner"`` once a repair verifies, with nobody driving.
+NO_PERSON_DETAIL_PREFIXES: tuple[str, ...] = ("repair-resume:",)
+
 #: Stands in for a probe that was not needed: no container is wanted.
 _NOT_PROBED = RuntimeStatus(binary="", available=False, reason="not probed")
 
@@ -504,13 +509,18 @@ def proxy_may_run_on_host(proxy: Any) -> bool:
 
 
 def person_drives(run: Any) -> bool:
-    """A person is on the other end of this run: an interactive trigger and no
-    service credential. Fails closed when the run says nothing about it."""
+    """A person is on the other end of this run: an interactive trigger, no
+    service credential, and not a run the engine resumed on its own
+    (``NO_PERSON_DETAIL_PREFIXES``). Fails closed when the run says nothing."""
     trigger = getattr(run, "trigger_type", "") or ""
     trigger = str(getattr(trigger, "value", trigger))
     user_id = str(getattr(run, "user_id", "") or "")
+    detail = str(getattr(run, "trigger_detail", "") or "")
     return (
-        bool(trigger) and trigger not in NO_PERSON_TRIGGERS and not user_id.startswith("service:")
+        bool(trigger)
+        and trigger not in NO_PERSON_TRIGGERS
+        and not user_id.startswith("service:")
+        and not detail.startswith(NO_PERSON_DETAIL_PREFIXES)
     )
 
 
