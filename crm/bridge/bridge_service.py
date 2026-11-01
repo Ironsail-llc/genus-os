@@ -153,6 +153,9 @@ async def lifespan(app: FastAPI):
             with suppress(asyncio.CancelledError):
                 await task
         await http_client.aclose()
+        # Forgotten, not just closed: a call after shutdown then takes the
+        # one-off client and reports a dead engine as a 502, not a 500.
+        http_client = None
 
 
 # ─── App Assembly ────────────────────────────────────────────────────────

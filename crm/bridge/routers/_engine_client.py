@@ -39,6 +39,20 @@ SERVICE_ID = "genus-bridge"
 
 DEFAULT_TIMEOUT_SECONDS = 30.0
 
+#: Methods the engine treats as safe to repeat. A pooled connection the engine
+#: closed while it sat idle fails the next request with ``RemoteProtocolError``,
+#: and that request is retried once on a fresh connection -- but only for
+#: these: a POST may already have been acted on before the connection dropped.
+_IDEMPOTENT_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "PUT", "DELETE"})
+
+
+def _worth_one_retry(method: str, error: httpx.HTTPError) -> bool:
+    """A refused connect sent nothing; a dropped idle connection is safe to
+    replay only for an idempotent method."""
+    if isinstance(error, httpx.ConnectError):
+        return True
+    return isinstance(error, httpx.RemoteProtocolError) and method.upper() in _IDEMPOTENT_METHODS
+
 
 #: The shape every engine path must have. The sibling of the scheme check in
 #: ``robothor.engine_control.engine_base_url``, and newly load-bearing: paths used to be literals in this repo, and now the
@@ -87,9 +101,15 @@ def _shared_client() -> httpx.AsyncClient | None:
     or a test that uses this module without the app has no lifespan client to
     share. ``bridge_service`` registers itself under that name even when run as
     ``__main__``, so this finds the instance the lifespan populated.
+
+    A closed client counts as none: one that outlived its lifespan would
+    raise ``RuntimeError`` rather than an ``httpx`` error, and the route would
+    answer a 500 instead of the 502 a dead engine gets.
     """
     service = sys.modules.get("bridge_service")
     client: httpx.AsyncClient | None = getattr(service, "http_client", None)
+    if client is None or client.is_closed:
+        return None
     return client
 
 
@@ -124,9 +144,16 @@ async def engine_request(
         if shared is not None:
             # One pool for every engine call: a new client per call was a new
             # connection (and handshake) per proxied request.
-            response = await shared.request(
-                method, url, json=json, headers=headers, timeout=timeout
-            )
+            try:
+                response = await shared.request(
+                    method, url, json=json, headers=headers, timeout=timeout
+                )
+            except httpx.HTTPError as first:
+                if not _worth_one_retry(method, first):
+                    raise
+                response = await shared.request(
+                    method, url, json=json, headers=headers, timeout=timeout
+                )
         else:
             async with httpx.AsyncClient(timeout=timeout) as client:
                 response = await client.request(method, url, json=json, headers=headers)

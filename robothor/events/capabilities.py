@@ -82,7 +82,10 @@ def _get_manifest() -> dict[str, Any]:
     """Get cached manifest, loading if needed."""
     if _manifest is None:
         load_capabilities()
-    return _manifest or {}
+    # ``is not None``, not ``or``: a manifest that failed to load is the stored
+    # empty dict, and handing back a fresh ``{}`` per call would defeat every
+    # cache keyed on which manifest object is loaded.
+    return _manifest if _manifest is not None else {}
 
 
 def _get_agent(agent_id: str) -> dict[str, Any] | None:

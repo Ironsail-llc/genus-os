@@ -22,6 +22,8 @@ async def test_bridge_owns_and_cancels_recovery_task(monkeypatch):
     with pytest.raises(RuntimeError, match="fixture shutdown"):
         async with bridge_service.lifespan(bridge_service.app):
             await asyncio.wait_for(started.wait(), 1)
+            client = bridge_service.http_client
             raise RuntimeError("fixture shutdown")
     assert stopped.is_set()
-    assert bridge_service.http_client.is_closed
+    assert client is not None and client.is_closed
+    assert bridge_service.http_client is None
