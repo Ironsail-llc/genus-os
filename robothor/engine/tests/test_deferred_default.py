@@ -302,6 +302,50 @@ class TestRecentTools:
             assert asyncio.get_running_loop().time() - started < 0.4
 
     @pytest.mark.asyncio
+    async def test_a_hostile_agent_id_cannot_forge_a_log_record(
+        self, default_env, monkeypatch, caplog
+    ) -> None:
+        import logging
+
+        from robothor.engine import recent_tools
+
+        hostile = "forged\r\nentry\x00\t\x7f\x85"
+
+        def _assert_escaped(message: str) -> None:
+            assert "\r" not in message
+            assert "\n" not in message
+            assert all(ord(c) >= 0x20 and not 0x7F <= ord(c) < 0xA0 for c in message)
+            assert "forged\\r\\nentry\\x00\\x09\\x7f\\x85" in message
+
+        def boom(*_a):
+            raise RuntimeError("database down")
+
+        recent_tools.clear_cache()
+        with (
+            caplog.at_level(logging.INFO, logger="robothor.engine.recent_tools"),
+            patch("robothor.engine.recent_tools.fetch_recent_tool_names", boom),
+        ):
+            assert await recent_tools.recent_tool_names(hostile, "default") == frozenset()
+        _assert_escaped(caplog.records[-1].getMessage())
+
+        def slow(*_a):
+            import time
+
+            time.sleep(0.2)
+            return ["exec"]
+
+        recent_tools.clear_cache()
+        caplog.clear()
+        monkeypatch.setattr(recent_tools, "_LOOKUP_TIMEOUT_S", 0.05)
+        with (
+            caplog.at_level(logging.INFO, logger="robothor.engine.recent_tools"),
+            patch("robothor.engine.recent_tools.fetch_recent_tool_names", slow),
+        ):
+            assert await recent_tools.recent_tool_names(hostile, "default") == frozenset()
+        _assert_escaped(caplog.records[-1].getMessage())
+        recent_tools.clear_cache()
+
+    @pytest.mark.asyncio
     async def test_zero_runs_means_core_only_and_no_query(self, default_env, monkeypatch) -> None:
         from robothor.engine import recent_tools
 

@@ -24,6 +24,7 @@ import time
 
 from robothor.db.connection import get_connection
 from robothor.engine.tools.constants import TOOLSEARCH_TOOLS
+from robothor.sanitize import sanitize_log
 
 logger = logging.getLogger(__name__)
 
@@ -107,13 +108,15 @@ async def recent_tool_names(agent_id: str, tenant_id: str) -> frozenset[str]:
     except TimeoutError:
         logger.info(
             "Recent-tools lookup for %s timed out after %.1fs; using the static core",
-            agent_id,
+            sanitize_log(agent_id),
             _LOOKUP_TIMEOUT_S,
         )
         _cache[key] = (now + _FAILURE_TTL_S, frozenset())
         return frozenset()
     except Exception as e:  # noqa: BLE001 - a prompt-size hint must not fail a run
-        logger.warning("Recent-tools lookup for %s skipped: %s", agent_id, type(e).__name__)
+        logger.warning(
+            "Recent-tools lookup for %s skipped: %s", sanitize_log(agent_id), type(e).__name__
+        )
         _cache[key] = (now + _FAILURE_TTL_S, frozenset())
         return frozenset()
     found = frozenset(names)
