@@ -1,6 +1,6 @@
 {{/*
 Shared workload template for the Python services (engine, bridge,
-orchestrator). Pass:
+orchestrator, hooks). Pass:
   .root      — top-level dot
   .component — string key into .root.Values (e.g. "engine")
 
@@ -43,7 +43,10 @@ Renders:
 {{- $gwArgs := dict "root" $root "gw" ($cv.googleWorkspace | default dict) "secretName" (.googleSecretName | default (printf "%s-engine-google" (include "genus-os.fullname" $root))) "checkVault" (not .googleSecretName) -}}
 {{- /* The vault's readers: the bridge stores credentials, the engines read them. */ -}}
 {{- $vaultReader := has $component (list "engine" "bridge") -}}
-{{- $port := $cv.service.port | int -}}
+{{- $isHooks := eq $component "hooks" -}}
+{{- $port := (ternary $cv.port ($cv.service | default dict).port $isHooks) | int -}}
+{{- /* hooks serves webhooks only: no workspace, no migrations to wait for. */ -}}
+{{- $waitForMigrations := and $root.Values.migrations.enabled (not $isHooks) -}}
 {{- $serviceEnv := dict -}}
 {{- if eq $component "engine" -}}
 {{- $_ := set $serviceEnv "ROBOTHOR_ENGINE_HOST" "0.0.0.0" -}}
@@ -91,6 +94,11 @@ Renders:
 {{- $_ := set $serviceEnv "GENUS_TENANT_SWITCH_ALLOW_INERT_RLS" (toString $tenancy.allowInertRls) -}}
 {{- end -}}
 {{- end -}}
+{{- end -}}
+{{- if $isHooks -}}
+{{- $_ := set $serviceEnv "ROBOTHOR_HOOKS_HOST" "0.0.0.0" -}}
+{{- $_ := set $serviceEnv "ROBOTHOR_HOOKS_PORT" (toString $port) -}}
+{{- $_ := set $serviceEnv "ROBOTHOR_WEBHOOKS_CONFIG" (printf "%s/webhooks.yaml" (include "genus-os.hooksWebhooksDir" $root)) -}}
 {{- end -}}
 {{- $componentEnv := mergeOverwrite $serviceEnv ($cv.env | default dict) (.pinnedEnv | default dict) -}}
 {{- if and (eq $component "engine") $ws.configMap.name $ws.persistence.enabled -}}
@@ -152,6 +160,9 @@ spec:
       annotations:
         checksum/config: {{ $root.Values.global.imageTag | sha256sum }}
         {{- with $root.Values.global.podAnnotations }}{{- toYaml . | nindent 8 }}{{- end }}
+        {{- if $isHooks }}
+        checksum/webhooks: {{ include "genus-os.hooksWebhooksYaml" $root | sha256sum }}
+        {{- end }}
         {{- with $cv.podAnnotations }}{{- toYaml . | nindent 8 }}{{- end }}
     spec:
       serviceAccountName: {{ include "genus-os.serviceAccountName" (dict "root" $root "component" $component) }}
@@ -182,10 +193,10 @@ spec:
       affinity:
         {{- $aff | nindent 8 }}
       {{- end }}
-      {{- if or $root.Values.migrations.enabled $importDirs }}
+      {{- if or $waitForMigrations $importDirs }}
       initContainers:
       {{- end }}
-      {{- if $root.Values.migrations.enabled }}
+      {{- if $waitForMigrations }}
       # Block on the migration Job for this release. Pattern doc:
       # https://github.com/Ironsail-llc/aws-infrastucture/blob/main/docs/helm-db-migrations.md
         - name: wait-for-migrations
@@ -316,6 +327,11 @@ spec:
               readOnly: true
             {{- end }}
             {{- end }}
+            {{- if $isHooks }}
+            - name: webhooks
+              mountPath: {{ include "genus-os.hooksWebhooksDir" $root }}
+              readOnly: true
+            {{- end }}
             {{- with $cv.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -349,6 +365,11 @@ spec:
           emptyDir: {}
           {{- end }}
         {{- end }}
+        {{- if $isHooks }}
+        - name: webhooks
+          configMap:
+            name: {{ $fullName }}-webhooks
+        {{- end }}
         {{- with $cv.extraVolumes }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -363,7 +384,7 @@ spec:
         {{- if $vaultReader }}
         {{- with include "genus-os.vaultKeyVolume" $root | trim }}{{ . | nindent 8 }}{{- end }}
         {{- end }}
-        {{- if $root.Values.migrations.enabled }}
+        {{- if $waitForMigrations }}
         - name: migration-api-token
           projected:
             defaultMode: 0400
@@ -389,7 +410,7 @@ metadata:
   name: {{ $fullName }}
   labels:
     {{- include "genus-os.labels" (dict "root" $root "component" $component "tenant" $tenant) | nindent 4 }}
-  {{- with $cv.service.annotations }}
+  {{- with ($cv.service | default dict).annotations }}
   annotations:
     {{- toYaml . | nindent 4 }}
   {{- end }}

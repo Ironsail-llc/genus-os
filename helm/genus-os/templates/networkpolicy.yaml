@@ -221,6 +221,29 @@ spec:
     {{- end }}
 {{- end }}
 
+{{- /* Hooks publishes to the event stream: the in-chart cache only. */}}
+{{- if and .Values.networkPolicy.egress.enabled .Values.hooks.enabled (eq (include "genus-os.cacheEnabled" .) "true") }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "genus-os.fullname" . }}-hooks-internal-egress
+  labels:
+    {{- include "genus-os.labels" (dict "root" . "component" "hooks") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "genus-os.selectorLabels" (dict "root" . "component" "hooks") | nindent 6 }}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: valkey
+              app.kubernetes.io/instance: {{ .Release.Name }}
+      ports: [{protocol: TCP, port: {{ .Values.redis.port }}}]
+{{- end }}
+
 {{- if and .Values.networkPolicy.egress.enabled .Values.migrations.enabled .Values.postgres.enabled }}
 ---
 apiVersion: networking.k8s.io/v1
@@ -244,9 +267,10 @@ spec:
 {{- end }}
 
 {{- /* Backend ingress mirrors the callers above and the Helm smoke pod. */}}
-{{- range $component := list "engine" "bridge" "orchestrator" "dashboard" }}
+{{- range $component := list "engine" "bridge" "orchestrator" "dashboard" "hooks" }}
 {{- $cv := index $root.Values $component }}
 {{- if $cv.enabled }}
+{{- $svcPort := include "genus-os.servicePort" (dict "root" $root "component" $component) }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -291,7 +315,7 @@ spec:
         {{- end }}
         {{- end }}
       ports:
-        - {protocol: TCP, port: {{ $cv.service.port }}}
+        - {protocol: TCP, port: {{ $svcPort }}}
 {{- end }}
 {{- end }}
 
@@ -337,7 +361,7 @@ spec:
   policyTypes: [Ingress]
   ingress:
     - from:
-        {{- range $component := list "engine" "bridge" "orchestrator" "dashboard" }}
+        {{- range $component := list "engine" "bridge" "orchestrator" "dashboard" "hooks" }}
         {{- if (index $root.Values $component).enabled }}
         - podSelector:
             matchLabels:
@@ -383,14 +407,14 @@ spec:
       {{- include "genus-os.selectorLabels" (dict "root" . "component" "helm-test") | nindent 6 }}
   policyTypes: [Egress]
   egress:
-    {{- range $component := list "engine" "bridge" "orchestrator" "dashboard" }}
+    {{- range $component := list "engine" "bridge" "orchestrator" "dashboard" "hooks" }}
     {{- $cv := index $root.Values $component }}
     {{- if $cv.enabled }}
     - to:
         - podSelector:
             matchLabels:
               {{- include "genus-os.selectorLabels" (dict "root" $root "component" $component) | nindent 14 }}
-      ports: [{protocol: TCP, port: {{ $cv.service.port }}}]
+      ports: [{protocol: TCP, port: {{ include "genus-os.servicePort" (dict "root" $root "component" $component) }}}]
     {{- end }}
     {{- end }}
 {{- end }}
@@ -402,7 +426,7 @@ spec:
 {{- if not $destination.components }}{{ fail (printf "networkPolicy.egress.destinations.%s.components is required" $destinationName) }}{{ end }}
 {{- if not $destination.ports }}{{ fail (printf "networkPolicy.egress.destinations.%s.ports is required" $destinationName) }}{{ end }}
 {{- range $component := $destination.components }}
-{{- if not (has $component (list "engine" "bridge" "orchestrator" "dashboard" "migrations" "helm-test")) }}{{ fail (printf "networkPolicy egress destination %s contains unknown component %s" $destinationName $component) }}{{ end }}
+{{- if not (has $component (list "engine" "bridge" "orchestrator" "hooks" "dashboard" "migrations" "helm-test")) }}{{ fail (printf "networkPolicy egress destination %s contains unknown component %s" $destinationName $component) }}{{ end }}
 {{- if and (eq $component "dashboard") (ne $destinationName "identity") }}{{ fail (printf "dashboard external egress is restricted to the identity destination; remove it from %s" $destinationName) }}{{ end }}
 {{- if and (eq $destinationName "identity") (ne $component "dashboard") }}{{ fail (printf "identity destination is dashboard-only; remove component %s" $component) }}{{ end }}
 {{- end }}
@@ -444,10 +468,12 @@ spec:
 {{- end }}
 {{- end }}
 
-{{- /* Traefik ingress is component and port scoped. */}}
-{{- range $component := list "engine" "bridge" "orchestrator" "dashboard" }}
+{{- /* Traefik ingress is component and port scoped. Hooks exists to take
+       external webhook traffic, so it admits the ingress controller whenever
+       it is enabled: its public route may be defined outside this chart. */}}
+{{- range $component := list "engine" "bridge" "orchestrator" "dashboard" "hooks" }}
 {{- $cv := index $root.Values $component }}
-{{- if and $cv.enabled $cv.ingress.enabled }}
+{{- if and $cv.enabled (or $cv.ingress.enabled (eq $component "hooks")) }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -469,7 +495,7 @@ spec:
             matchLabels:
               {{- toYaml $root.Values.networkPolicy.traefikPodSelector | nindent 14 }}
       ports:
-        - {protocol: TCP, port: {{ $cv.service.port }}}
+        - {protocol: TCP, port: {{ include "genus-os.servicePort" (dict "root" $root "component" $component) }}}
 {{- end }}
 {{- end }}
 {{- end }}

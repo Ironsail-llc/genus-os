@@ -667,3 +667,91 @@ def test_oversized_timestamp_is_401_not_500(mock_publish, mock_rate, platform_cl
         },
     )
     assert resp.status_code == 401
+
+
+# ── ROBOTHOR_WEBHOOKS_CONFIG override ──────────────────────────────
+
+
+def _routes_served(router) -> set[str]:
+    return {f"{sorted(r.methods)[0]} {r.path}" for r in router.routes}
+
+
+@pytest.fixture()
+def _workspace_with_broken_config(tmp_path: Path, monkeypatch) -> Path:
+    """A workspace whose own webhooks.yaml raises if anything reads it.
+
+    The base file is strict, so a router built from it would fail loudly:
+    building one without an error proves the workspace file was not read.
+    """
+    workspace = tmp_path / "workspace"
+    (workspace / "docs").mkdir(parents=True)
+    (workspace / "docs" / "webhooks.yaml").write_text("channels: [this is: not, valid\n")
+    monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(workspace))
+    return workspace
+
+
+def _one_channel(name: str) -> str:
+    return textwrap.dedent(f"""\
+        channels:
+          {name}:
+            stream: {name}
+            secret_env: TEST_OVERRIDE_SECRET_{name.upper()}
+        """)
+
+
+def _status_for(router, channel: str) -> int:
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    app = FastAPI()
+    app.include_router(router)
+    return TestClient(app).post(f"/api/webhooks/{channel}", content=b"{}").status_code
+
+
+def test_webhooks_config_file_override_replaces_the_workspace_file(
+    _workspace_with_broken_config: Path, tmp_path: Path, monkeypatch
+):
+    override = tmp_path / "mounted" / "webhooks.yaml"
+    override.parent.mkdir()
+    override.write_text(_one_channel("alpha"))
+    monkeypatch.setenv("ROBOTHOR_WEBHOOKS_CONFIG", str(override))
+
+    router = get_webhook_router()
+
+    # Served: no secret is set, so it answers 503 rather than 404 Unknown channel.
+    assert _status_for(router, "alpha") == 503
+    assert _status_for(router, "github") == 404
+
+
+def test_webhooks_config_directory_override_reads_its_base_file_and_drop_ins(
+    _workspace_with_broken_config: Path, tmp_path: Path, monkeypatch
+):
+    mounted = tmp_path / "mounted"
+    (mounted / "webhooks.d").mkdir(parents=True)
+    (mounted / "webhooks.yaml").write_text(_one_channel("alpha"))
+    (mounted / "webhooks.d" / "plugin.yaml").write_text(_one_channel("beta"))
+    monkeypatch.setenv("ROBOTHOR_WEBHOOKS_CONFIG", str(mounted))
+
+    router = get_webhook_router()
+
+    assert _status_for(router, "alpha") == 503
+    assert _status_for(router, "beta") == 503
+
+
+def test_webhooks_config_unset_still_reads_the_workspace_file(tmp_path: Path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    (workspace / "docs").mkdir(parents=True)
+    (workspace / "docs" / "webhooks.yaml").write_text(_one_channel("gamma"))
+    monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(workspace))
+    monkeypatch.delenv("ROBOTHOR_WEBHOOKS_CONFIG", raising=False)
+
+    router = get_webhook_router()
+
+    assert _status_for(router, "gamma") == 503
+    assert _routes_served(router) == {"POST /api/webhooks/{channel}", "GET /api/webhooks"}
+
+
+def test_router_can_leave_out_the_channel_listing():
+    router = get_webhook_router(WebhookConfig(), include_listing=False)
+
+    assert _routes_served(router) == {"POST /api/webhooks/{channel}"}

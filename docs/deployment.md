@@ -857,6 +857,35 @@ real tenants, so it belongs in your deployment's values, not in the chart. See
 [Tenant cells](https://github.com/Ironsail-llc/genus-os/blob/main/helm/genus-os/README.md#tenant-cells) in the chart README for
 what an entry renders and how to seed its workspace.
 
+### Webhook receiver (hooks)
+
+The engine runs as one `Recreate` replica, so webhook deliveries to
+`POST /api/webhooks/{channel}` fail while it restarts. The chart's optional
+`hooks` component serves that path from its own pods (two replicas, a
+surge-only rolling update, a disruption budget): each delivery is verified and
+published to the event stream, and the engine consumes it from there.
+
+```yaml
+hooks:
+  enabled: true
+  channels:
+    example:
+      stream: example
+      secret_env: EXAMPLE_WEBHOOK_SECRET
+      signature_scheme: hmac_hex
+```
+
+`hooks.channels` takes the same keys as `docs/webhooks.yaml` (see
+[Webhook ingress](event-bus.md#webhook-ingress)) and is mounted into the pods
+as their `webhooks.yaml`. Each `secret_env` is read from the `engine-providers`
+Secret. Route the public webhook path to the `<release>-hooks` Service once its
+pods are ready; the engine keeps serving the same path until then. With egress
+policies on, the hooks pods are in the default `redis` and `https` destination
+classes: a `google_oidc` channel fetches Google's signing certificates over
+HTTPS on every push, so an environment layer that overrides those lists must
+keep `hooks` in them. The chart's README ("Hooks") lists every value and the
+network-policy wiring.
+
 ## Production Checklist
 
 - [ ] Set a strong `ROBOTHOR_DB_PASSWORD`
