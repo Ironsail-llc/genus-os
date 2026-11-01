@@ -311,6 +311,16 @@ A Genus OS plugin. Docs: `docs/PLUGINS.md` in the Genus OS repository.
 | `src/{pkg}/workflows/` | Workflow files; list each under `workflows:` in the manifest |
 | `tests/` | Contract tests; run with `pytest` |
 | `.github/workflows/ci.yml` | Tests, builds the wheel, prints its sha256 |
+| `.github/workflows/release.yml` | On a `vX.Y.Z` tag: releases the wheel with its `SHA256SUMS` |
+| `programmatic.json` | The listing a plugin index reads; `id` and `version` match the wheel |
+
+## Releasing
+
+Bump `version` in `pyproject.toml` and `programmatic.json` together, then push
+a `vX.Y.Z` tag. The release workflow refuses a tag that names another version
+or one already released, builds the wheel reproducibly, checks it carries
+`genus-plugin.yaml`, and publishes it with `SHA256SUMS`. A released version is
+never rebuilt: tag a new one.
 
 ## Rules
 
