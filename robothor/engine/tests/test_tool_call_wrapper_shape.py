@@ -114,3 +114,43 @@ def test_read_only_classification_sees_through_a_json_string() -> None:
         {"name": "pr_review_intake", "arguments": json.dumps({"count_only": True})},
         read_only=(),
     )
+
+
+def test_run_verification_reads_the_arguments_of_a_json_string_wrapper() -> None:
+    """A deferred call sent as a JSON string now runs, so the verifier that
+    checks what the tool was asked to do has to read the same arguments the
+    tool ran with, not an empty object."""
+    from robothor.engine.run_verification import resolve_tool_input
+
+    step = SimpleNamespace(
+        tool_name="tool_call",
+        tool_input={"name": "write_file", "arguments": json.dumps({"path": "notes.md"})},
+    )
+    assert resolve_tool_input(step) == {"path": "notes.md"}
+
+
+def test_calendar_receipts_read_the_arguments_of_a_json_string_wrapper() -> None:
+    """The receipt that tells the person what changed reads the wrapped
+    arguments however the model encoded them."""
+    from unittest.mock import MagicMock
+
+    from robothor.engine.chat_receipts import CALENDAR_ADD_ATTENDEES_TOOL, calendar_receipts
+
+    operation = "11111111-1111-1111-1111-111111111111"
+    cur = MagicMock()
+    cur.fetchall.side_effect = [
+        [
+            {
+                "tool_name": "tool_call",
+                "tool_input": {
+                    "name": CALENDAR_ADD_ATTENDEES_TOOL,
+                    "arguments": json.dumps({"event_id": "meeting", "operation_id": operation}),
+                },
+                "tool_output": {"operation_id": operation},
+            }
+        ],
+        [{"id": operation, "status": "completed", "result": {"verification": "verified"}}],
+    ]
+    auth = SimpleNamespace(tenant_id="fixture", user_id="owner")
+    receipts = calendar_receipts(cur, {"id": "run", "agent_id": "main"}, auth)
+    assert [r["operation_id"] for r in receipts] == [operation]
