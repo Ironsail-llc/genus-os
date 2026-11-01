@@ -1198,6 +1198,20 @@ or guarantee a response within the agent deadline. They apply to the session's
 main streaming/non-streaming calls; independently invoked auxiliary model calls
 keep their own routing.
 
+With `ROBOTHOR_COMPACTION_V2` on, context compaction summarises with the
+agent's own chain. To have it try the chain's small/fast model first, name that
+member as `model.compaction`; a value that is not the primary or one of the
+fallbacks is ignored, so compaction never dials a model the chain does not
+already authorise.
+
+```yaml
+model:
+  primary: openrouter/example/large-model
+  fallbacks:
+    - openrouter/example/small-model
+  compaction: openrouter/example/small-model
+```
+
 A 3-unit pipeline: **classifier** → **analyst** → **responder**, connected via CRM tasks and event hooks.
 
 ### Unit 1: Email Classifier
