@@ -386,24 +386,13 @@ class RunLifecycleMixin:
             logger.warning("Plan context formatting failed (non-fatal): %s", _sanitize(exc))
             return ""
 
-    def _apply_routing(self, agent_config: AgentConfig, message: str, tool_count: int) -> Any:
+    def _apply_routing(
+        self, agent_config: AgentConfig, message: str, tool_count: int, chat_turn: bool = False
+    ) -> Any:
         """Apply difficulty-aware routing. Returns RouteConfig or None."""
-        try:
-            from robothor.engine.router import get_route_config
-            from robothor.engine.runtime.automatic_planning import context_for
+        from robothor.engine.router import route_for
 
-            return get_route_config(
-                message,
-                tool_count,
-                manual_override=agent_config.difficulty_class,
-                # A large available catalogue does not mean an ordinary chat
-                # request needs an auxiliary planning call. Keep configured
-                # planning and long/delegated/resumed work on their old policy.
-                catalogue_implies_complexity=context_for(agent_config) is None,
-            )
-        except Exception as e:
-            logger.debug("Routing failed: %s", _sanitize(e))
-            return None
+        return route_for(agent_config, message, tool_count, chat_turn=chat_turn)
 
     def _should_plan(self, agent_config: AgentConfig, route: Any) -> bool:
         """Determine if planning phase should run."""

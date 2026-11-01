@@ -2066,6 +2066,13 @@ class FlagSettings(SettingsGroup):
         "write the agent_reviews rows the achievement score is built on.",
         governed=True,
     )
+    router_v2: bool = declare(
+        False,
+        "ROBOTHOR_ROUTER_V2",
+        "Stop message length alone buying a separate planner LLM call on a "
+        "Telegram, webchat or plugin-channel turn: a long message plans only in "
+        "plan mode, when the manifest asks, or when it lists three or more steps.",
+    )
     disable_all_rips: bool = declare(
         False,
         "ROBOTHOR_DISABLE_ALL_RIPS",
