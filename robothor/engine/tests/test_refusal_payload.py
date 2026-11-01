@@ -531,3 +531,57 @@ class TestDeniedByPatternNamesThePattern:
             tool="exec", agent_config=config, allowed_tool_set=frozenset({"read_file"})
         )
         assert "removes 'exec' from tools_denied" in verdict.unlock
+
+
+async def _admit_deferred(names: set[str], **kw: Any):
+    """Admit one call on a deferred run: ``names`` is what ``tool_call`` reaches."""
+    from robothor.engine.tools.dispatch import clear_deferred_allowed, set_deferred_allowed
+
+    token = set_deferred_allowed(frozenset(names))
+    try:
+        return await _admit(**kw)
+    finally:
+        clear_deferred_allowed(token)
+
+
+class TestADeferredToolIsNotAnAllowlistRefusal:
+    """A granted tool left out of this turn's schemas because the toolset is
+    deferred is reachable through ``tool_call``. Its direct call is refused, but
+    the unlock is to call it that way, not a manifest change: telling the agent
+    (and through rule 22 the person) that an operator must grant a tool the
+    agent already has is the false unlock this change exists to remove."""
+
+    @pytest.mark.asyncio
+    async def test_a_granted_deferred_tool_is_told_to_use_tool_call(self, flag_on) -> None:
+        verdict = await _admit_deferred(
+            {"read_file", "write_file", "tool_call"},
+            tool="write_file",
+            allowed_tool_set=frozenset({"read_file"}),
+        )
+        assert verdict.allowed is False
+        assert verdict.gate == "policy"
+        assert verdict.output["gate_name"] == "deferred"
+        assert "tool_call" in verdict.unlock
+        assert "'write_file'" in verdict.unlock
+        assert "tools_allowed" not in verdict.unlock
+        assert "operator" not in verdict.unlock
+
+    @pytest.mark.asyncio
+    async def test_a_tool_outside_the_grant_is_still_an_allowlist_refusal(self, flag_on) -> None:
+        verdict = await _admit_deferred(
+            {"read_file", "tool_call"}, tool="write_file", allowed_tool_set=frozenset({"read_file"})
+        )
+        assert verdict.gate == "allowlist"
+        assert verdict.output["gate_name"] == "tools_allowed"
+        assert "tools_allowed" in verdict.unlock
+        assert "tool_call" not in verdict.unlock
+
+    @pytest.mark.asyncio
+    async def test_off_the_payload_is_unchanged_for_a_deferred_tool(self, flag_off) -> None:
+        verdict = await _admit_deferred(
+            {"read_file", "write_file", "tool_call"},
+            tool="write_file",
+            allowed_tool_set=frozenset({"read_file"}),
+        )
+        assert verdict.output == {"guard": "tools_allowed"}
+        assert verdict.message == "Tool 'write_file' is not available to this agent."
