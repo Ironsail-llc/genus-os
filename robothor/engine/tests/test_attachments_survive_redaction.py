@@ -39,7 +39,9 @@ def written(monkeypatch):
 
     class _Cursor:
         def execute(self, _sql, params=None):
-            if params and len(params) == 2 and isinstance(params[1], str):
+            # The message insert, picked by its SQL: it also carries the user
+            # row's time now, so its parameter count is not the test.
+            if "INSERT INTO chat_messages" in _sql and params and isinstance(params[1], str):
                 with contextlib.suppress(TypeError, ValueError):
                     payloads.append(json.loads(params[1]))
 

@@ -1884,6 +1884,16 @@ class FlagSettings(SettingsGroup):
         restart_required=False,
         since="unreleased",
     )
+    chat_history_pages: bool = declare(
+        False,
+        "ROBOTHOR_CHAT_HISTORY_PAGES",
+        "Serve chat history from the message store instead of the in-memory "
+        "tail: each message carries its stored time and id, and the endpoint "
+        "pages back past the last 50 (offset, or a before=<id> cursor) with a "
+        "hasMore flag. Off, history is the in-memory tail with no times, as "
+        "before. A first page the store cannot answer falls back to memory.",
+        since="1.123.0",
+    )
     curator_apply: bool = declare(
         False,
         "ROBOTHOR_CURATOR_APPLY",

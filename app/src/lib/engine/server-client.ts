@@ -149,10 +149,14 @@ class EngineClient {
   /** Get conversation history for a session. */
   async chatHistory(
     limit = 50,
-    sessionKey = ""
-  ): Promise<{ sessionKey: string; messages: ChatMessage[]; recoveryScope?: string }> {
+    sessionKey = "",
+    page: { before?: number; offset?: number } = {}
+  ): Promise<{ sessionKey: string; messages: ChatMessage[]; recoveryScope?: string; hasMore?: boolean }> {
+    const paging =
+      (page.before !== undefined ? `&before=${page.before}` : "") +
+      (page.offset !== undefined ? `&offset=${page.offset}` : "");
     const res = await fetch(
-      `${ENGINE_URL}/chat/history?limit=${limit}${keyedQuery(sessionKey)}`,
+      `${ENGINE_URL}/chat/history?limit=${limit}${paging}${keyedQuery(sessionKey)}`,
       { headers: await engineHeaders(), signal: AbortSignal.timeout(30_000) },
     );
     if (!res.ok) {

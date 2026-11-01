@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-509 settings in 18 groups.
+510 settings in 18 groups.
 
 ## autonomy
 
@@ -428,6 +428,7 @@ Guardrails and feature gates. Ones marked governed are inventoried in `infra/fla
 | `ROBOTHOR_CACHE_LAYOUT_V2` | bool | `false` | `robothor-engine` | no | legacy | Prompt-cache layout v2: move the per-run time line out of the system prompt into an engine turn before the latest user message, so the system prompt, tools and earlier conversation stay a byte-stable prefix that providers cache; adds tool and conversation breakpoints on Anthropic direct and sends no cache markers to OpenAI or Gemini. |
 | `ROBOTHOR_CALENDAR_MEET_ARTIFACTS` | bool | `true` | `robothor-engine` | no | legacy | Turn Google Meet transcription and smart notes on for meetings the assistant organizes, so it can read them afterwards. Best-effort: needs the meetings.space.settings OAuth scope, and a failure is a note on the booking, never a failed booking. |
 | `ROBOTHOR_CALENDAR_SEND_UPDATES` | str | `all` | `robothor-engine` | no | legacy | **governed.** Who Google emails when an agent creates or deletes an event with attendees: all, externalOnly, or none. The default sends the invitation — an event nobody was told about is not a meeting, which is how an operator came to be an attendee of a trip he never saw. |
+| `ROBOTHOR_CHAT_HISTORY_PAGES` | bool | `false` | `robothor-engine` | no | 1.123.0 | Serve chat history from the message store instead of the in-memory tail: each message carries its stored time and id, and the endpoint pages back past the last 50 (offset, or a before=<id> cursor) with a hasMore flag. Off, history is the in-memory tail with no times, as before. A first page the store cannot answer falls back to memory. |
 | `ROBOTHOR_COMPACTION_V2` | bool | `false` | no | no | unreleased | Hardened context compaction: summarise with the agent's own model chain (manifest `model.compaction` first, the fleet chain when a caller has none), reclaim tool arguments, old tool results and media without a model call first, update the previous summary instead of rebuilding it, wait ROBOTHOR_COMPACTION_MIN_GAP_ITERATIONS between compactions, and keep the messages (the run's compaction step marked degraded) when every model fails to summarise. |
 | `ROBOTHOR_COMPLETION_CONTRACTS_ENABLED` | bool | `false` | `robothor-engine` | no | legacy | Switch for evidence-based completion contracts: a run claiming success must show the tool trace that produced it. |
 | `ROBOTHOR_COMPLETION_CONTRACTS_MODE` | str | `observe` | `robothor-engine` | no | legacy | **governed.** Completion-contract ladder position: observe records unevidenced claims, enforce fails the run that makes one. |

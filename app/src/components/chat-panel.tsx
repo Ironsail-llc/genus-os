@@ -17,6 +17,10 @@ import { type ChatRecoveryRequest } from "@/components/chat-recovery";
 import { ChatMarkdown } from "@/components/chat/chat-markdown";
 import { MessageBubble } from "@/components/chat/message-bubble";
 import { useMessageWindow } from "@/components/chat/use-message-window";
+import { useHistoryPager } from "@/components/chat/use-history-pager";
+import { useTurnActions } from "@/components/chat/use-turn-actions";
+import { usePrependAnchor } from "@/components/chat/use-prepend-anchor";
+import { historyToMessages } from "@/lib/chat/history-messages";
 import { usePinnedScroll } from "@/components/chat/use-pinned-scroll";
 import { useStableCallback } from "@/components/chat/use-stable-callback";
 import { readChatStream, type ChatStreamData } from "@/lib/chat/read-chat-stream";
@@ -24,7 +28,7 @@ import { ChatAskCard, type ApprovalKind } from "@/components/chat-ask-card";
 import { ChatLanding } from "@/components/chat/chat-landing";
 import { ToolsPopover } from "@/components/chat/tools-popover";
 import { AttachButton, NOT_IN_PLAN_OR_DEEP, NOT_WHILE_RUNNING, PendingAttachments, useChatAttachments } from "@/components/chat/chat-attachments";
-import { attachmentKind, historyAttachments, stripAttachmentNote, type AttachmentSummary } from "@/lib/chat/attachments";
+import { attachmentKind, type AttachmentSummary } from "@/lib/chat/attachments";
 import { repeatsQuickAction } from "@/components/business/quick-action-labels";
 import {
   isKeyableAgentId,
@@ -41,7 +45,10 @@ interface ChatMessage {
   id: string;
   role: "user" | "assistant";
   content: string;
-  timestamp: Date;
+  /** Absent for a history row whose time the engine did not send. */
+  timestamp?: Date;
+  /** The stored row id, for history pages. */
+  serverId?: number;
   recovery?: ChatRecoveryRequest;
   /** Where a message sent while the agent was working went (live follow-ups). */
   note?: string;
@@ -275,14 +282,23 @@ export function ChatPanel({
   const currentAgentName = chattable.find((row) => row.id === agent)?.name ?? aiName;
 
   // Follow the bottom while the reader is there (throttled during streaming);
-  // sending a message brings them back to it.
-  const sentCount = useMemo(() => messages.filter((m) => m.role === "user").length, [messages]);
-  const { containerRef: scrollRef, onScroll: onListScroll } = usePinnedScroll<HTMLDivElement>(
+  // sending a message brings them back to it. Keyed on the NEWEST user
+  // message, not a count: an older page from "Load earlier" adds user turns
+  // above the reader and must not throw them to the bottom.
+  const lastSentId = useMemo(() => messages.findLast((m) => m.role === "user")?.id ?? "", [messages]);
+  const { containerRef: scrollRef, onScroll: onPinnedScroll } = usePinnedScroll<HTMLDivElement>(
     [messages, throttledStreamingText, activePlan, isDeepReasoning],
-    sentCount,
+    lastSentId,
   );
   const { visible: visibleMessages, hiddenCount, showEarlier } = useMessageWindow(messages);
+  const rememberScroll = usePrependAnchor(scrollRef, visibleMessages[0]?.id, visibleMessages.at(-1)?.id);
+  const onListScroll = useCallback(() => {
+    onPinnedScroll();
+    rememberScroll();
+  }, [onPinnedScroll, rememberScroll]);
   const onBubbleRecovered = useStableCallback(recoverMessage);
+  const historyPager = useHistoryPager(agentQuery, messages, setMessages);
+  const settleHistoryPages = historyPager.settle;
 
   /** An `approval_required` event: the agent asked something and is waiting.
    *
@@ -457,34 +473,7 @@ export function ChatPanel({
         const scope = typeof data.recoveryScope === "string" ? data.recoveryScope : undefined;
         recoveryScopes.current[agent] = scope ?? "";
         {
-          const loaded: ChatMessage[] = (Array.isArray(data.messages) ? data.messages : [])
-            .filter(
-              (m: { role: string }) =>
-                m.role === "user" || m.role === "assistant"
-            )
-            .map(
-              (
-                m: { role: "user" | "assistant"; content: string | Array<{ type: string; text?: string }> },
-                i: number
-              ) => {
-                const files = m.role === "user" ? historyAttachments(m) : [];
-                const text = stripResidualMarkers(
-                  typeof m.content === "string"
-                    ? m.content
-                    : m.content
-                        .filter((b) => b.type === "text")
-                        .map((b) => b.text || "")
-                        .join("")
-                );
-                return {
-                  id: `hist-${i}`,
-                  role: m.role,
-                  content: files.length ? stripAttachmentNote(text) : text,
-                  timestamp: new Date(),
-                  ...(files.length ? { attachments: files } : {}),
-                };
-              }
-            );
+          const loaded: ChatMessage[] = historyToMessages(data.messages);
           const restored: ChatMessage[] = scope ? pendingRequests(scope)
             .filter((requestId) => requestId !== requestIdRef.current)
             .map((requestId) => ({
@@ -492,6 +481,7 @@ export function ChatPanel({
               timestamp: new Date(), recovery: { requestId, agent, scope },
             })) : [];
           setMessages([...loaded, ...restored]);
+          settleHistoryPages(data.hasMore === true);
           setHistorySettledFor(agentQuery);
         }
       })
@@ -503,7 +493,7 @@ export function ChatPanel({
     return () => {
       cancelled = true;
     };
-  }, [agentQuery, agent]);
+  }, [agentQuery, agent, settleHistoryPages]);
 
   // Recover pending plan on page refresh
   //
@@ -766,18 +756,20 @@ export function ChatPanel({
     noteMessages(ids, STOPPED_NOTE);
   }, [noteMessages]);
 
-  const sendMessage = useCallback(async (queued?: QueuedFollowup[] | unknown) => {
+  // `resend` is Regenerate's text: sent as a new turn, the composer left alone.
+  const sendMessage = useCallback(async (queued?: QueuedFollowup[] | unknown, resend?: string) => {
     const flushing = Array.isArray(queued) ? (queued as QueuedFollowup[]) : null;
     if (!flushing && (deepMode || planMode)) {
       // Deep mode routes through plan mode (deep always plans first).
       // Standalone plan mode also uses sendPlanMessage.
-      return sendPlanMessage();
+      return sendPlanMessage(resend);
     }
 
-    const text = flushing ? [...flushing].sort((a, b) => a.seq - b.seq).map((q) => q.text).join("\n\n") : input.trim();
-    if (!flushing && text && isStreaming) return sendFollowup(text);
-    // Files go with a fresh turn only, never with a flushed follow-up.
-    const files = flushing ? [] : attachments.files.map(({ name, mime, size, data }) => ({ name, mime, size, data }));
+    const text = flushing ? [...flushing].sort((a, b) => a.seq - b.seq).map((q) => q.text).join("\n\n") : (resend ?? input).trim();
+    if (!flushing && !resend && text && isStreaming) return sendFollowup(text);
+    // Files go with a fresh turn only: never with a flushed follow-up, and not
+    // with a Regenerate (the panel keeps only their summary, not their bytes).
+    const files = flushing || resend !== undefined ? [] : attachments.files.map(({ name, mime, size, data }) => ({ name, mime, size, data }));
     if ((!text && !files.length) || isStreaming) return;
 
     setActiveAsks([]);
@@ -794,8 +786,10 @@ export function ChatPanel({
       noteMessages(flushing.map((q) => q.id), undefined);
     } else {
       setMessages((prev) => [...prev, userMsg]);
-      setInput("");
-      attachments.clear();
+      if (resend === undefined) {
+        setInput("");
+        attachments.clear();
+      }
     }
     setIsStreaming(true);
     setStreamingText("");
@@ -1198,6 +1192,18 @@ export function ChatPanel({
     sendPlanMessage(feedback);
   }, [activePlan, planFeedback, sendPlanMessage]);
 
+  const busy = isStreaming || isPlanExecuting || isPlanning || isDeepReasoning;
+  const { regenerate, edit: editMessage } = useTurnActions({
+    messages,
+    setMessages,
+    busy,
+    resend: (text) => void sendMessage(undefined, text),
+    compose: (text) => {
+      setInput(text);
+      setTimeout(() => inputRef.current?.focus(), 0);
+    },
+  });
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -1375,8 +1381,31 @@ export function ChatPanel({
               </button>
             </div>
           )}
+          {hiddenCount === 0 && historyPager.hasMore && (
+            <div className="flex justify-center">
+              <button
+                type="button"
+                onClick={async () => {
+                  // Past the render window the page would land behind "Show earlier".
+                  if ((await historyPager.loadEarlier()) > 0) showEarlier();
+                }}
+                disabled={historyPager.loading}
+                className="text-xs text-muted-foreground hover:text-foreground disabled:opacity-50"
+                data-testid="load-earlier"
+              >
+                {historyPager.loading ? "Loading earlier messages…" : "Load earlier messages"}
+              </button>
+            </div>
+          )}
           {visibleMessages.map((msg) => (
-            <MessageBubble key={msg.id} msg={msg} onRecovered={onBubbleRecovered} />
+            <MessageBubble
+              key={msg.id}
+              msg={msg}
+              onRecovered={onBubbleRecovered}
+              busy={busy}
+              onRegenerate={regenerate}
+              onEdit={editMessage}
+            />
           ))}
 
           {/* The agent's own question — `approval_required` over the run's stream */}
