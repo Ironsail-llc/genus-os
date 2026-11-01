@@ -301,15 +301,27 @@ def _resolve(fut: asyncio.Future[None]) -> None:
         fut.set_result(None)
 
 
-def _env_int(name: str, default: int) -> int:
-    raw = os.environ.get(name, "").strip()
-    if not raw:
-        return default
+def _configured_limits() -> tuple[int, int, int]:
+    """(interactive, background, yield_ms) from the declared settings.
+
+    Read through ``get_settings()`` so config.yaml and the environment both
+    apply. Imported here, not at module level: the settings model needs
+    pydantic, which the manifest validator's import of this module lacks. A
+    value the model rejects falls back to the defaults rather than stopping
+    every run from taking a slot.
+    """
     try:
-        return int(raw)
-    except ValueError:
-        logger.warning("Invalid %s=%r, using %s", name, raw, default)
-        return default
+        from robothor.settings import get_settings
+
+        engine = get_settings().engine
+        return (
+            int(engine.max_concurrent_interactive),
+            int(engine.max_concurrent_background),
+            int(engine.lane_background_yield_ms),
+        )
+    except Exception:  # noqa: BLE001 - a bad value is the default, not a crash
+        logger.warning("Invalid execution lane settings, using the defaults", exc_info=True)
+        return DEFAULT_INTERACTIVE_LIMIT, DEFAULT_BACKGROUND_LIMIT, DEFAULT_BACKGROUND_YIELD_MS
 
 
 _LANES: ExecutionLanes | None = None
@@ -317,18 +329,15 @@ _LANES_LOCK = threading.Lock()
 
 
 def get_lanes() -> ExecutionLanes:
-    """The process-wide lanes, sized from the environment on first use."""
+    """The process-wide lanes, sized from the settings on first use."""
     global _LANES
     with _LANES_LOCK:
         if _LANES is None:
+            interactive, background, yield_ms = _configured_limits()
             _LANES = ExecutionLanes(
-                interactive_limit=_env_int(
-                    "ROBOTHOR_MAX_CONCURRENT_INTERACTIVE", DEFAULT_INTERACTIVE_LIMIT
-                ),
-                background_limit=_env_int(
-                    "ROBOTHOR_MAX_CONCURRENT_BACKGROUND", DEFAULT_BACKGROUND_LIMIT
-                ),
-                yield_ms=_env_int("ROBOTHOR_LANE_BACKGROUND_YIELD_MS", DEFAULT_BACKGROUND_YIELD_MS),
+                interactive_limit=interactive,
+                background_limit=background,
+                yield_ms=yield_ms,
             )
         return _LANES
 

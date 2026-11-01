@@ -478,7 +478,8 @@ def classify_reap_reason(
 
 
 def _cleanup_stale_workflow_runs(tenant_id: str | None = None) -> int:
-    """Mark workflow_runs stuck 'running' for >2h as 'timeout'.
+    """Mark workflow_runs stuck 'running' for >2h, or queued 'pending' for >2h
+    by an engine that has since died, as 'timeout'.
 
     Engine shutdown mid-run used to leave workflow_runs rows 'running'
     forever: retention excludes 'running' rows, so orphans were immortal
@@ -494,12 +495,19 @@ def _cleanup_stale_workflow_runs(tenant_id: str | None = None) -> int:
 
         with get_connection() as conn:
             cur = conn.cursor()
+            # A run queued for its lane slot is 'pending' with no start time;
+            # an engine that died while it waited leaves that row behind too.
             cur.execute(
                 "UPDATE workflow_runs SET status='timeout', "
                 "completed_at=NOW(), "
                 "duration_ms=EXTRACT(EPOCH FROM (NOW()-started_at))*1000, "
-                "error_message='Reaped: engine restarted mid-run' "
-                "WHERE tenant_id=%s AND status='running' AND started_at < NOW() - INTERVAL '2 hours'",
+                "error_message=CASE WHEN started_at IS NULL "
+                "THEN 'Reaped: engine restarted while queued' "
+                "ELSE 'Reaped: engine restarted mid-run' END "
+                "WHERE tenant_id=%s AND ("
+                "(status='running' AND started_at < NOW() - INTERVAL '2 hours') "
+                "OR (status='pending' AND started_at IS NULL "
+                "AND created_at < NOW() - INTERVAL '2 hours'))",
                 (tenant_id,),
             )
             reaped = cur.rowcount or 0

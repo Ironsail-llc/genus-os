@@ -704,8 +704,9 @@ already running. On a device with two or more
 local inference slots, one is kept for interactive requests, and a waiting
 interactive request is served first.
 
-A run waiting for its lane has not started: no run row, timeout or budget is
-touched while it waits. The scheduler and the workflow engine take the slot
+A run waiting for its lane has not started: no timeout or budget is touched
+while it waits, and a queued workflow's run row is `pending`, with no start
+time, until it takes its slot, so it never reads as a stuck run. The scheduler and the workflow engine take the slot
 before starting their own clocks (a cron run's safety timeout, a workflow's
 `timeout_seconds`), so a run queued behind a burst is never timed out, or
 counted toward its circuit breaker, for waiting. A whole workflow holds one
