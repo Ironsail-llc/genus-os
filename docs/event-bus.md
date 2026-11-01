@@ -210,6 +210,39 @@ events), so its steps
 can template it, and its trigger takes the same `requeue_if_busy` option. See
 [Agent Builder](AGENT_BUILDER.md#triggered-by-an-event).
 
+### Running the webhook receiver separately
+
+The engine runs as a single writer, so while it restarts its webhook route
+answers nothing. The handler itself keeps no state of its own (the delivery
+ids and rate-limit counters live in Redis), so it can also run as its own
+process, with as many replicas as you like, and keep accepting deliveries
+while the engine is down:
+
+```bash
+python -m robothor.engine.hooks_server
+```
+
+It serves exactly three routes: `POST /api/webhooks/{channel}` (the same
+handler, the same checks, the same stream and dedupe keys as the engine),
+`GET /live` (200 while the process serves) and `GET /ready` (200 when Redis
+answers a ping, 503 otherwise). There is no engine authentication in front of
+it, because each delivery is authenticated by its channel's own scheme, and the
+`GET /api/webhooks` channel listing the engine serves behind its auth is left
+out. Events wait in their streams until the engine is back and reads them.
+Each delivery logs one line (`webhook delivery channel=... outcome=accepted|duplicate|refused
+status=... reason=...`), never the payload.
+
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `ROBOTHOR_WEBHOOKS_CONFIG` | _(unset)_ | Where the channels are read from: a YAML file (its sibling `<stem>.d/` drop-ins are merged after it), or a directory holding `webhooks.yaml` and `webhooks.d/`. Unset, `$ROBOTHOR_WORKSPACE/docs/webhooks.yaml`. The engine honours it too. |
+| `ROBOTHOR_HOOKS_HOST` | `0.0.0.0` | Address the receiver binds to. |
+| `ROBOTHOR_HOOKS_PORT` | `18801` | Port the receiver listens on. |
+
+The receiver needs the same Redis settings as the engine and each channel's
+`secret_env` variable. Point the public webhook path at the receiver instead of
+the engine; the engine's own route keeps working, so either can take a delivery
+during the switch.
+
 ## Gmail push
 
 A Google instance can ingest the assistant's Gmail on push instead of from a

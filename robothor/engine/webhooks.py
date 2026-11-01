@@ -559,6 +559,11 @@ async def _get_async_redis() -> Any:
             return None
 
 
+async def redis_available() -> bool:
+    """Whether the ingress can reach Redis (the connection answers a ping)."""
+    return await _get_async_redis() is not None
+
+
 async def _check_rate_limit(channel: WebhookChannel) -> bool:
     """Check rate limit using Redis INCR + EXPIRE pattern.
 
@@ -686,26 +691,106 @@ async def _authenticate_google_oidc(ch: WebhookChannel, request: Request) -> JSO
     return None
 
 
-def get_webhook_router(config: WebhookConfig | None = None) -> APIRouter:
+def webhook_config_path() -> Path:
+    """The base webhooks file the router reads when it is given no config.
+
+    ``ROBOTHOR_WEBHOOKS_CONFIG`` wins when set: a file is read as the base
+    file, a directory as ``<dir>/webhooks.yaml``, and either way the sibling
+    ``webhooks.d/`` drop-ins are merged after it. Unset, it is the workspace's
+    ``docs/webhooks.yaml``.
+    """
+    from robothor.settings import get_settings
+
+    override = get_settings().engine.webhooks_config.strip()
+    if override:
+        path = Path(override).expanduser()
+        return path / "webhooks.yaml" if path.is_dir() else path
+    return (
+        Path(os.environ.get("ROBOTHOR_WORKSPACE", str(Path.home() / "robothor")))
+        / "docs"
+        / "webhooks.yaml"
+    )
+
+
+def _delivery_outcome(response: JSONResponse) -> tuple[str, str]:
+    """``(outcome, reason)`` for a handler response: accepted, duplicate or refused."""
+    try:
+        body = json.loads(bytes(response.body))
+    except (ValueError, TypeError):
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    if response.status_code == 200 and body.get("status") in ("accepted", "duplicate"):
+        return str(body["status"]), ""
+    return "refused", str(body.get("error", ""))
+
+
+def _log_delivery(
+    delivery_log: logging.Logger, config: WebhookConfig, channel: str, response: JSONResponse
+) -> None:
+    """One line per delivery: channel, outcome, status and reason -- never the payload.
+
+    The channel is the CONFIGURED name when the path matched one, else
+    ``unknown``: the raw path segment is sender-controlled and never logged.
+    The reason can echo it (``Unknown channel: ...``), so it is sanitised.
+    """
+    configured = config.channels.get(channel)
+    outcome, reason = _delivery_outcome(response)
+    delivery_log.info(
+        "webhook delivery channel=%s outcome=%s status=%d reason=%s",
+        configured.name if configured is not None else "unknown",
+        outcome,
+        response.status_code,
+        _log_safe(reason),
+    )
+
+
+_LOG_UNSAFE = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+_LOG_FIELD_MAX = 120
+
+
+def _log_safe(value: str) -> str:
+    """A sender-derived value fit for one log line: control characters (CR,
+    LF, ESC and the rest) become ``?`` and the result is capped in length."""
+    cleaned = _LOG_UNSAFE.sub("?", value)
+    if len(cleaned) > _LOG_FIELD_MAX:
+        cleaned = cleaned[:_LOG_FIELD_MAX] + "..."
+    return cleaned or "-"
+
+
+def get_webhook_router(
+    config: WebhookConfig | None = None,
+    *,
+    include_listing: bool = True,
+    delivery_log: logging.Logger | None = None,
+) -> APIRouter:
     """Create a FastAPI APIRouter for webhook ingress.
 
     Args:
-        config: Webhook configuration. If None, loads from default path.
+        config: Webhook configuration. If None, loads from
+            :func:`webhook_config_path`.
+        include_listing: serve ``GET /api/webhooks`` (channel names and
+            stats). A receiver with no authentication in front of it leaves
+            it out.
+        delivery_log: when given, one line per delivery is written to it --
+            channel, outcome (accepted, duplicate or refused), status and the
+            refusal reason. Never the payload or its headers.
     """
     if config is None:
-        default_path = (
-            Path(os.environ.get("ROBOTHOR_WORKSPACE", str(Path.home() / "robothor")))
-            / "docs"
-            / "webhooks.yaml"
-        )
         # Lenient: one bad drop-in must not take the engine's HTTP app down.
-        config = _load_webhook_config(default_path, strict=False)
+        config = _load_webhook_config(webhook_config_path(), strict=False)
 
     router = APIRouter(tags=["webhooks"])
 
     @router.post("/api/webhooks/{channel}")
     async def receive_webhook(channel: str, request: Request) -> JSONResponse:
         """Receive a webhook POST and publish to Redis."""
+        response = await _receive(channel, request)
+        if delivery_log is not None:
+            _log_delivery(delivery_log, config, channel, response)
+        return response
+
+    async def _receive(channel: str, request: Request) -> JSONResponse:
         # Look up channel
         ch = config.channels.get(channel)
         if ch is None:
@@ -858,6 +943,14 @@ def get_webhook_router(config: WebhookConfig | None = None) -> APIRouter:
             status_code=200,
         )
 
+    if include_listing:
+        _add_channel_listing(router, config)
+    return router
+
+
+def _add_channel_listing(router: APIRouter, config: WebhookConfig) -> None:
+    """``GET /api/webhooks``: channel names, streams and stats."""
+
     @router.get("/api/webhooks")
     async def list_channels() -> JSONResponse:
         """List configured webhook channels and their stats."""
@@ -875,5 +968,3 @@ def get_webhook_router(config: WebhookConfig | None = None) -> APIRouter:
                 }
             )
         return JSONResponse({"channels": result})
-
-    return router

@@ -19,6 +19,7 @@ Everything generated is generic: the plugin's own name and nothing else.
 
 from __future__ import annotations
 
+import json
 import keyword
 import shutil
 from pathlib import Path
@@ -48,8 +49,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "{name}"
-version = "0.1.0"
-description = "A Genus OS plugin"
+version = "{version}"
+description = "{description}"
 readme = "README.md"
 requires-python = ">=3.11"
 # Genus installs plugins with --no-deps: vendor what you need, or ask for a
@@ -239,6 +240,64 @@ jobs:
           path: dist/*.whl
 """
 
+_RELEASE = """\
+name: release
+
+# A vX.Y.Z tag releases the wheel and its SHA256SUMS. The tag, pyproject.toml
+# and programmatic.json must name the same version, and a released version is
+# never rebuilt: bump the version and tag again instead.
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+      - name: Tag, pyproject.toml and programmatic.json name the same version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          project=$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
+          listing=$(python -c 'import json; print(json.load(open("programmatic.json"))["version"])')
+          if [ "$tag" != "$project" ] || [ "$tag" != "$listing" ]; then
+            echo "::error::tag $GITHUB_REF_NAME, pyproject.toml $project and programmatic.json $listing must name the same version"
+            exit 1
+          fi
+      - name: No release exists for this tag yet
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if out=$(gh release view "$GITHUB_REF_NAME" 2>&1); then
+            echo "::error::release already exists; released wheels are immutable, tag a new version"
+            exit 1
+          fi
+          if ! printf '%s' "$out" | grep -q "release not found"; then
+            echo "::error::could not check for an existing release: $out"
+            exit 1
+          fi
+      - name: Tests pass
+        run: python -m pip install ".[test]" && python -m pytest -q
+      - name: Wheel builds
+        run: |
+          python -m pip install build
+          SOURCE_DATE_EPOCH=$(git log -1 --format=%ct) python -m build --wheel
+      - name: The wheel carries its plugin manifest
+        run: unzip -l dist/*.whl | grep -q 'genus-plugin.yaml'
+      - name: Checksums
+        run: cd dist && sha256sum -- *.whl > SHA256SUMS && cat SHA256SUMS
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        with:
+          files: |
+            dist/*.whl
+            dist/SHA256SUMS
+"""
+
 _CLAUDE = """\
 # {name}
 
@@ -254,6 +313,16 @@ A Genus OS plugin. Docs: `docs/PLUGINS.md` in the Genus OS repository.
 | `src/{pkg}/workflows/` | Workflow files; list each under `workflows:` in the manifest |
 | `tests/` | Contract tests; run with `pytest` |
 | `.github/workflows/ci.yml` | Tests, builds the wheel, prints its sha256 |
+| `.github/workflows/release.yml` | On a `vX.Y.Z` tag: releases the wheel with its `SHA256SUMS` |
+| `programmatic.json` | The listing a plugin index reads; `id` and `version` match the wheel |
+
+## Releasing
+
+Bump `version` in `pyproject.toml` and `programmatic.json` together, then push
+a `vX.Y.Z` tag. The release workflow refuses a tag that names another version
+or one already released, runs the tests, builds the wheel with fixed timestamps
+(`SOURCE_DATE_EPOCH`), checks it carries `genus-plugin.yaml`, and publishes it
+with `SHA256SUMS`. A released version is never rebuilt: tag a new one.
 
 ## Rules
 
@@ -312,22 +381,44 @@ dist/
 """
 
 
+_VERSION = "0.1.0"
+_DESCRIPTION = "A Genus OS plugin"
+
+
+def _programmatic(name: str, title: str) -> str:
+    """The listing a plugin index reads: the same id and version as the wheel."""
+    listing = {
+        "name": title,
+        "id": name,
+        "version": _VERSION,
+        "format": "genus-plugin/v1",
+        "description": _DESCRIPTION,
+        "tags": ["genus-plugin"],
+    }
+    return json.dumps(listing, indent=2) + "\n"
+
+
 def _files(name: str) -> dict[str, str]:
     pkg = package_name(name)
     tool = tool_name(name)
+    title = name.replace("-", " ").title()
     values = {
         "name": name,
         "pkg": pkg,
         "tool": tool,
         "upper": tool.upper(),
-        "title": name.replace("-", " ").title(),
+        "title": title,
+        "version": _VERSION,
+        "description": _DESCRIPTION,
     }
     return {
         "pyproject.toml": _PYPROJECT.format(**values),
+        "programmatic.json": _programmatic(name, title),
         "README.md": _README.format(**values),
         "CLAUDE.md": _CLAUDE.format(**values),
         ".gitignore": _GITIGNORE,
         ".github/workflows/ci.yml": _WORKFLOW,
+        ".github/workflows/release.yml": _RELEASE,
         f"src/{pkg}/__init__.py": _INIT.format(**values),
         f"src/{pkg}/genus-plugin.yaml": _MANIFEST.format(**values),
         f"src/{pkg}/agents/{name}/manifest.template.yaml": _AGENT_MANIFEST.format(**values),
