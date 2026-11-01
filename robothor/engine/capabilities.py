@@ -19,7 +19,7 @@ are checked when the tool is called; the doctor, which may do I/O, fills them.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from robothor.engine.tools.constants import MAIL_REPLY_TOOL, MAIL_SEND_TOOL
 
@@ -33,11 +33,13 @@ __all__ = [
     "Facts",
     "assess",
     "capability_block",
-    "env_facts",
+    "coding_workspace",
+    "credential_intake_mode",
     "facts_for",
     "github_token_unlock",
     "manifest_unlock",
     "render",
+    "settings_facts",
     "vault_set_admitted",
 ]
 
@@ -57,14 +59,19 @@ class Facts:
     can_spawn_agents: bool = False
     host_exec_socket: str = ""
     coding_repo_roots: str = ""
-    #: ``ROBOTHOR_CODING_WORKSPACE``: an implicit repo root, so it alone admits
-    #: a coding job.
-    coding_workspace: str = ""
+    #: ``ROBOTHOR_CODING_WORKSPACE`` as the coding settings read it: an implicit
+    #: repo root, so it alone admits a coding job. ``None``: this build's coding
+    #: jobs have no workspace (see :func:`coding_workspace`).
+    coding_workspace: str | None = None
     #: ``v2.credentials`` in the manifest (``operator`` admits vault_set).
     credential_tier: str = ""
-    #: ``ROBOTHOR_CREDENTIAL_INTAKE`` (off | observe | enforce): at ``enforce``,
-    #: vault_set is admitted in an owner's or admin's own chat with main.
-    credential_intake: str = "off"
+    #: The vault handler's credential-intake mode (off | observe | enforce): at
+    #: ``enforce``, vault_set is admitted in an owner's or admin's own chat with
+    #: the default chat agent. ``None``: this build has no credential intake
+    #: (see :func:`credential_intake_mode`).
+    credential_intake: str | None = None
+    #: ``ROBOTHOR_DEFAULT_CHAT_AGENT``: the agent credential intake serves.
+    default_chat_agent: str = "main"
     #: ``None``: not checked here; the tool reports it when called.
     github_token: bool | None = None
     claude_cli: bool | None = None
@@ -146,18 +153,19 @@ def vault_set_admitted(facts: Facts) -> bool:
     """Whether ``vault_set`` gets past the credential gate for this agent.
 
     Mirrors the vault handler: the manifest's operator tier always admits it;
-    otherwise credential intake at ``enforce`` admits it in an owner's or
-    admin's own chat with main (the per-person half is checked when called).
+    otherwise credential intake, where this build has it, admits it at
+    ``enforce`` in an owner's or admin's own chat with the default chat agent
+    (the per-person half is checked when called).
     """
     if facts.credential_tier == "operator":
         return True
-    return facts.credential_intake == "enforce" and facts.agent_id == "main"
+    return facts.credential_intake == "enforce" and facts.agent_id == facts.default_chat_agent
 
 
 def _credential_gate(facts: Facts) -> tuple[str, str, str]:
     path = f"docs/agents/{facts.agent_id}.yaml"
     tier = f"adds `credentials: operator` under `v2:` in {path}"
-    if facts.agent_id == "main":
+    if facts.credential_intake is not None and facts.agent_id == facts.default_chat_agent:
         return (
             "flag",
             "ROBOTHOR_CREDENTIAL_INTAKE",
@@ -182,13 +190,12 @@ def _runtime_gate(spec: _Spec, facts: Facts) -> tuple[str, str, str] | None:
         return ("runtime", "GITHUB_TOKEN", github_token_unlock(vault_set_admitted(facts)))
     if spec.key == "coding_jobs":
         if not facts.coding_repo_roots and not facts.coding_workspace:
-            return (
-                "runtime",
-                "ROBOTHOR_CODING_REPO_ROOTS",
-                "an operator sets ROBOTHOR_CODING_WORKSPACE (where coding jobs clone "
-                "repositories) or ROBOTHOR_CODING_REPO_ROOTS (the directories they may work "
-                "under)",
-            )
+            roots = "ROBOTHOR_CODING_REPO_ROOTS (the directories they may work under)"
+            if facts.coding_workspace is not None:
+                roots = (
+                    "ROBOTHOR_CODING_WORKSPACE (where coding jobs clone repositories) or " + roots
+                )
+            return ("runtime", "ROBOTHOR_CODING_REPO_ROOTS", f"an operator sets {roots}")
         if facts.claude_cli is False:
             return (
                 "runtime",
@@ -256,31 +263,44 @@ def facts_for(config: AgentConfig) -> Facts:
     """The session-stable facts: the manifest and the engine's settings only."""
     from robothor.settings import get_settings
 
-    settings = get_settings()
-    workspace, intake = env_facts()
-    return replace(
-        _manifest_facts(config),
-        host_exec_socket=settings.engine.host_exec_socket or "",
-        coding_repo_roots=settings.coding.repo_roots or "",
-        coding_workspace=workspace,
-        credential_intake=intake,
-    )
+    return replace(_manifest_facts(config), **settings_facts(get_settings()))
 
 
-def env_facts() -> tuple[str, str]:
-    """Facts read from the environment BY NAME.
+def settings_facts(settings: Any) -> dict[str, Any]:
+    """The :class:`Facts` fields read from the engine's settings and build."""
+    return {
+        "host_exec_socket": settings.engine.host_exec_socket or "",
+        "coding_repo_roots": settings.coding.repo_roots or "",
+        "coding_workspace": coding_workspace(settings),
+        "credential_intake": credential_intake_mode(),
+        "default_chat_agent": settings.engine.default_chat_agent or "main",
+    }
 
-    ``ROBOTHOR_CREDENTIAL_INTAKE`` and ``ROBOTHOR_CODING_WORKSPACE`` are declared
-    by separate pull requests (credential intake, the coding workspace) that may
-    land before or after this one, so neither is a typed setting here yet.
-    Once both are, read them from ``get_settings()`` instead. Returns
-    ``(coding workspace, credential intake mode)``.
+
+def credential_intake_mode() -> str | None:
+    """The credential-intake mode the vault handler reads, or ``None`` without one.
+
+    Probed, not read from the environment by name: the vault handler admits
+    intake only through ``feature_flags.credential_intake_mode``, so a build
+    without that function has no credential intake whatever
+    ``ROBOTHOR_CREDENTIAL_INTAKE`` says, and naming it as an unlock would send
+    an operator to a setting that does nothing.
     """
-    import os
+    from robothor.engine import feature_flags
 
-    workspace = os.environ.get("ROBOTHOR_CODING_WORKSPACE", "").strip()
-    intake = os.environ.get("ROBOTHOR_CREDENTIAL_INTAKE", "").strip().lower() or "off"
-    return workspace, intake
+    probe = getattr(feature_flags, "credential_intake_mode", None)
+    return str(probe()) if callable(probe) else None
+
+
+def coding_workspace(settings: Any) -> str | None:
+    """``ROBOTHOR_CODING_WORKSPACE`` as the coding jobs read it, or ``None`` without one.
+
+    Probed on the settings model: coding jobs take the workspace as a repo root
+    only where the coding settings declare a ``workspace`` field. Where they do
+    not, the environment variable is read by nothing.
+    """
+    value = getattr(settings.coding, "workspace", None)
+    return None if value is None else str(value).strip()
 
 
 def render(capabilities: list[Capability], facts: Facts, *, relay_refusals: bool = False) -> str:
