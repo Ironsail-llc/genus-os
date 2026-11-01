@@ -44,14 +44,20 @@ RELEASE_GRACE_S = 0.05
 
 
 def apply_output_policies(run: AgentRun, session: Any, workspace: Any) -> None:
-    """Run the post-run policies that can change the shown result, once per run."""
+    """Run the post-run policies that can change the shown result, once per run.
+
+    A raising policy counts as run: a retry after the answer went out could
+    change the status the person was already shown.
+    """
     if session is not None and getattr(session, _APPLIED, False):
         return
     from robothor.engine.deliverable_verdict import record_deliverable_verdicts
 
-    record_deliverable_verdicts(run, session, workspace)
-    if session is not None:
-        setattr(session, _APPLIED, True)
+    try:
+        record_deliverable_verdicts(run, session, workspace)
+    finally:
+        if session is not None:
+            setattr(session, _APPLIED, True)
 
 
 async def release_then_finalize(
