@@ -2,8 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { bridgeAuthHeaders } from "@/lib/bridge-auth";
 import { isDeniedBridgePath } from "@/lib/bridge-proxy-policy";
+import { forgetChatAgentListings } from "@/lib/chat/agent-guard";
 import { getServiceUrl } from "@/lib/services/registry";
 const BRIDGE_URL = getServiceUrl("bridge") || "http://localhost:9100";
+
+function changesChatAgents(pathname: string): boolean {
+  return /\/api\/(agent-manifests|agents)(\/|$)/.test(pathname);
+}
 
 async function proxy(
   req: NextRequest,
@@ -45,6 +50,10 @@ async function proxy(
         : undefined,
       signal: AbortSignal.timeout(30000),
     });
+
+    // The chat's agent guard caches who may address which agent; a change to
+    // a manifest or an agent made here must not wait out that cache.
+    if (req.method !== "GET" && changesChatAgents(target.pathname)) forgetChatAgentListings();
 
     // The two headers that make a revalidation work, carried back as the
     // bridge sent them; anything untagged stays `no-store`.
