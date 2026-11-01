@@ -816,11 +816,17 @@ chart mounts the directory read-only into every engine whose plugin directory
 (or any `PYTHONPATH` entry) is on its writable workspace, and installs run in
 an install Job that mounts the workspace volume itself. The engine's own
 install and remove routes answer **409** *the plugin directory is read-only in
-this engine; install with the install Job* there. Whatever the mount, an
-agent's `write_file` and `exec` refuse to write the plugin directory, the
-lockfile, or the files beside it (`plugins.lock.grants.json`,
-`plugins.lock.tenant`). Enable, disable and sync write only the lockfile,
-which stays writable.
+this engine; install with the install Job* there (only on a read-only mount: a
+plugin directory that does not exist yet is created by the install as before).
+The chart README's *Installing plugins with the install Job* has the Job.
+
+The mount is the control. As a second, weaker wall, an agent's `write_file`
+and `exec` refuse to write the plugin directory, the lockfile, or the files
+beside it (`plugins.lock.grants.json`, `plugins.lock.tenant`), and `exec`
+refuses `genus plugin install|remove|sync|enable|disable` outright. A check on
+shell text can be talked around, so a deployment without the read-only mount
+should not rely on it. Enable, disable and sync write only the lockfile, which
+stays writable.
 
 Sync applies the loader's own gate and nothing stricter: a plugin the loader
 would refuse to import gets nothing written. `genus plugin sync` re-records the
