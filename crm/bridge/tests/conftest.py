@@ -213,11 +213,29 @@ def test_prefix():
     return f"__test_{uuid.uuid4().hex[:8]}__"
 
 
+def _mock_lifespan_client() -> AsyncMock:
+    """A stand-in for the lifespan's shared ``httpx.AsyncClient``.
+
+    ``engine_request`` sends through the lifespan client when there is one, so
+    this mock is now on the engine path as well as the health checks'. Its
+    ``request`` refuses exactly as the autouse sink above refuses an unpatched
+    engine call -- a ``ConnectError`` -- so a route's "engine unreachable"
+    branch is still the one exercised, rather than a bare AsyncMock coming back
+    as a status code. Tests that want an engine answer patch ``engine_request``
+    (as they always have) or set ``request`` themselves.
+    """
+    mock = AsyncMock(spec=httpx.AsyncClient)
+    mock.request.side_effect = httpx.ConnectError(
+        f"refused by the bridge test suite: {UNROUTABLE_HOST}"
+    )
+    return mock
+
+
 @pytest_asyncio.fixture
 async def test_client():
     """Async HTTP client wrapping the Bridge FastAPI app via ASGITransport."""
     # Create a mock http_client for the bridge service lifespan
-    mock_http = AsyncMock(spec=httpx.AsyncClient)
+    mock_http = _mock_lifespan_client()
     bridge_service.http_client = mock_http
 
     transport = ASGITransport(app=app)
@@ -230,7 +248,7 @@ async def test_client():
 @pytest.fixture
 def mock_http_client():
     """Direct access to the mocked httpx.AsyncClient used by bridge_service."""
-    mock = AsyncMock(spec=httpx.AsyncClient)
+    mock = _mock_lifespan_client()
     bridge_service.http_client = mock
     yield mock
     bridge_service.http_client = None
@@ -359,7 +377,7 @@ def controls_client_as_service(_controls_auth_key, monkeypatch):
 
     The capability manifest's endpoint whitelist is patched permissive here
     on purpose: no agent's ``bridge_endpoints`` entry names ``/api/controls``
-    today, so leaving the manifest as-is would make ``RBACMiddleware`` reject
+    today, so leaving the manifest as-is would make the RBAC step of ``BridgeMiddleware`` reject
     the request before it ever reaches the router — a green test for the
     wrong reason. Patching it open proves the 403 in
     ``test_patch_rejects_a_service_token`` comes from the router's own

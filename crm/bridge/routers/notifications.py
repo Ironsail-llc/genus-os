@@ -74,7 +74,7 @@ def _refuse_foreign_inbox(request: Request, agent_id: str) -> JSONResponse | Non
     for a human session (which is what the webchat channel addresses a delivery
     to) and the agent id for a service token.
 
-    A missing ``auth`` is not a hole here: ``AuthMiddleware`` answers 401 before
+    A missing ``auth`` is not a hole here: ``BridgeMiddleware`` answers 401 before
     any route is reached whenever authentication is enforced, so ``None`` means
     the bridge is in loopback-only insecure development mode, where no route is
     gated at all. Deciding otherwise would 403 every request in that mode

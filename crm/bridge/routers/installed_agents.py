@@ -146,6 +146,22 @@ def list_installed_agents() -> dict[str, object]:
     return {"agents": agents, "count": len(agents)}
 
 
+def _invalidate_agent_caches() -> None:
+    """Forget the bridge's cached view of the fleet after an install, update
+    or remove: the manifest listing and the known-agent set RBAC checks.
+
+    Called whether or not the act succeeded -- a half-finished install can
+    still have written a manifest -- and before the reconcile, so the next
+    listing the dashboard asks for already sees the result.
+    """
+    import middleware
+
+    from routers import agent_manifests
+
+    agent_manifests.invalidate_manifest_listing()
+    middleware.invalidate_known_agents()
+
+
 @router.post("/install")
 async def install_agent(req: InstallRequest, request: Request) -> dict[str, object]:
     """Install an agent from the Programmatic Resources hub.
@@ -161,7 +177,10 @@ async def install_agent(req: InstallRequest, request: Request) -> dict[str, obje
     marketplace "installed" an agent that never ran.
     """
     require_operator(request)
-    result = await asyncio.to_thread(_install_from_hub, req, request)
+    try:
+        result = await asyncio.to_thread(_install_from_hub, req, request)
+    finally:
+        _invalidate_agent_caches()
     result["reconcile"] = await reconcile_engine_schedules()
     return result
 
@@ -210,7 +229,10 @@ async def update_agent(agent_id: str, request: Request) -> dict[str, object]:
     engine is holding the trigger it parsed at boot until it is told otherwise.
     """
     require_operator(request)
-    result = await asyncio.to_thread(_update_from_hub, agent_id, request)
+    try:
+        result = await asyncio.to_thread(_update_from_hub, agent_id, request)
+    finally:
+        _invalidate_agent_caches()
     result["reconcile"] = await reconcile_engine_schedules()
     return result
 
@@ -260,7 +282,10 @@ async def remove_agent(agent_id: str, request: Request) -> dict[str, object]:
     engine firing a job for an agent whose config no longer exists.
     """
     require_operator(request)
-    result = await asyncio.to_thread(_remove_installed, agent_id, request)
+    try:
+        result = await asyncio.to_thread(_remove_installed, agent_id, request)
+    finally:
+        _invalidate_agent_caches()
     result["reconcile"] = await reconcile_engine_schedules()
     return result
 

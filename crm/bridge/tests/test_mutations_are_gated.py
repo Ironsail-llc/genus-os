@@ -32,10 +32,10 @@ MUTATION_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
 # Provider ingress has its own authentication rather than a human session.
 # Exact method/path pairs are intentional: a prefix would exempt neighboring
-# routes that AuthMiddleware's is_instantly_webhook() matcher does not exempt.
+# routes that BridgeMiddleware's is_instantly_webhook() matcher does not exempt.
 EXACT_JUSTIFIED_WITHOUT_OPERATOR_GATE = {
     ("POST", "/api/integrations/instantly/{tenant_id}/webhook"): (
-        "AuthMiddleware delegates this exact POST to ingestion.webhook(), which "
+        "BridgeMiddleware delegates this exact POST to ingestion.webhook(), which "
         "compares the Authorization bearer header with the selected tenant's vault "
         "secret before reading the body. Workspace identity and owned campaign "
         "checks precede effects. robothor/sales/tests/test_ingestion.py covers "
@@ -68,7 +68,7 @@ def test_provider_ingress_justification_does_not_cover_neighbors_or_other_method
 # without such a clause the route must be gated instead of listed here.
 JUSTIFIED_WITHOUT_OPERATOR_GATE: dict[str, str] = {
     "/api/autonomy": (
-        "Personal resources and grants, not appliance credentials: AuthMiddleware "
+        "Personal resources and grants, not appliance credentials: BridgeMiddleware "
         "requires bridge:write and every route calls require_personal_owner, "
         "which refuses service/read-only principals and binds tenant plus CRM "
         "person from verified identity. Payment posture changes additionally "
@@ -83,35 +83,35 @@ JUSTIFIED_WITHOUT_OPERATOR_GATE: dict[str, str] = {
     ),
     "/api/goals": (
         "Tenant-owned goals: goal_operator dependency rejects service tokens and "
-        "non-owner/admin roles; TenantMiddleware pins the verified tenant. "
+        "non-owner/admin roles; BridgeMiddleware pins the verified tenant. "
         "Platform-only require_operator would exclude other tenants' own operators. "
         "Dependency enforcement is exercised in robothor/goals/tests/test_api.py."
     ),
     "/api/auth": (
-        "Public session bootstrap/rotation — AuthMiddleware._PUBLIC_PATHS lists "
+        "Public session bootstrap/rotation — BridgeMiddleware._PUBLIC_PATHS lists "
         "/api/auth/sso|refresh|logout and _authorization_denial() returns None for "
         "/api/auth/*; requiring an operator session to *create* a session is circular."
     ),
     "/api/people": (
         "Tenant CRM data written by member sessions and agent tokens — "
-        "_authorization_denial() requires the bridge:write scope and TenantMiddleware "
+        "_authorization_denial() requires the bridge:write scope and BridgeMiddleware "
         "pins every row to the verified token's tenant."
     ),
     "/api/companies": (
         "Tenant CRM data written by member sessions and agent tokens — bridge:write "
-        "scope + TenantMiddleware tenant pinning, same as /api/people."
+        "scope + BridgeMiddleware tenant pinning, same as /api/people."
     ),
     "/api/conversations": (
         "Tenant CRM data written by member sessions and agent tokens — bridge:write "
-        "scope + TenantMiddleware tenant pinning, same as /api/people."
+        "scope + BridgeMiddleware tenant pinning, same as /api/people."
     ),
     "/api/notes": (
         "Tenant CRM data written by member sessions and agent tokens — bridge:write "
-        "scope + TenantMiddleware tenant pinning, same as /api/people."
+        "scope + BridgeMiddleware tenant pinning, same as /api/people."
     ),
     "/api/notifications": (
         "Tenant CRM data written by member sessions and agent tokens — bridge:write "
-        "scope + TenantMiddleware tenant pinning, same as /api/people. The inbox "
+        "scope + BridgeMiddleware tenant pinning, same as /api/people. The inbox "
         "READ is additionally caller-scoped in the handler (owner/admin any id, "
         "everybody else their own actor_id) because the webchat channel puts "
         "member-private chat deliveries in there; see "
@@ -119,7 +119,7 @@ JUSTIFIED_WITHOUT_OPERATOR_GATE: dict[str, str] = {
     ),
     "/api/routines": (
         "Tenant-scoped scheduled work (every DAL call takes tenant_id) — bridge:write "
-        "scope + TenantMiddleware tenant pinning, same as /api/people."
+        "scope + BridgeMiddleware tenant pinning, same as /api/people."
     ),
     "/api/tasks": (
         "Tenant CRM data under bridge:write; the authority-bearing actions "
@@ -132,7 +132,7 @@ JUSTIFIED_WITHOUT_OPERATOR_GATE: dict[str, str] = {
     "/api/memory/search": (
         "A read (a POST only because the query goes in the body) that "
         "_memory_admin_scope() does NOT cover — it falls back to plain bridge:write, "
-        "and is tenant-pinned by TenantMiddleware like any other tenant-data read."
+        "and is tenant-pinned by BridgeMiddleware like any other tenant-data read."
     ),
     "/api/memory": (
         "Scope-gated by _memory_admin_scope() in _authorization_denial() — memory:write "

@@ -1,21 +1,23 @@
-"""Bridge middleware — RBAC, correlation IDs, tenant isolation, error formatting."""
+"""Bridge middleware — correlation IDs, authentication, tenant isolation, RBAC, in one ASGI layer."""
 
 from __future__ import annotations
 
 import logging
 import os
+import threading
+import time
 import uuid
 from typing import TYPE_CHECKING
 
+from fastapi import Request
 from fastapi.responses import JSONResponse
-from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.datastructures import MutableHeaders
 
 from robothor.audit.logger import log_event
 
 if TYPE_CHECKING:
-    from fastapi import Request
-    from starlette.middleware.base import RequestResponseEndpoint
     from starlette.responses import Response
+    from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
     from robothor.auth.deps import AuthContext
 from robothor.events.capabilities import check_endpoint_access, load_capabilities
@@ -45,99 +47,90 @@ def _log_unauthorized(request: Request, reason: str) -> None:
     )
 
 
-class TenantMiddleware(BaseHTTPMiddleware):
-    """Derive the tenant from verified claims (or explicit loopback dev mode)."""
+#: How long the known-agent set is trusted before it is rebuilt. Short on
+#: purpose: it exists to stop a rebuild on EVERY request, not to hide a change.
+KNOWN_AGENTS_TTL_SECONDS = 5.0
 
-    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
-        from robothor.constants import DEFAULT_TENANT
-
-        auth = getattr(request.state, "auth", None)
-        requested_tenant = request.headers.get("x-tenant-id")
-        if auth is not None:
-            tenant_id = auth.tenant_id
-            if requested_tenant and requested_tenant != tenant_id:
-                log_event(
-                    "auth.denied",
-                    "tenant header does not match verified token",
-                    actor=auth.actor_id,
-                    details={"method": request.method, "path": request.url.path},
-                    status="denied",
-                )
-                return JSONResponse(status_code=403, content={"error": "tenant not authorized"})
-        elif _legacy_headers_allowed():
-            tenant_id = requested_tenant or DEFAULT_TENANT
-        else:
-            # Only public endpoints can reach this branch in secure mode.
-            tenant_id = DEFAULT_TENANT
-
-        request.state.tenant_id = tenant_id
-        response = await call_next(request)
-        if auth is not None or _legacy_headers_allowed():
-            response.headers["X-Tenant-Id"] = tenant_id
-        return response
+_known_agents_lock = threading.Lock()
+#: ``(capabilities manifest the set was built from, built at, the set)``.
+_known_agents: tuple[object, float, frozenset[str]] | None = None
 
 
-class RBACMiddleware(BaseHTTPMiddleware):
-    """Check capabilities for a verified service-agent identity.
+def _known_agent_ids() -> frozenset[str]:
+    """``set(list_agents())``, rebuilt at most once per TTL.
 
-    The legacy header is consulted only in explicit insecure development mode.
-    A signed service identity must name a configured agent; unknown agents are
-    denied even when an old capability manifest's default policy is ``allow``.
+    Keyed on the capabilities manifest object as well as the clock, so a
+    ``load_capabilities()`` or ``reset()`` is seen on the very next request
+    rather than up to a TTL later.
     """
+    global _known_agents
+    from robothor.events import capabilities
 
-    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
-        from robothor.events.capabilities import list_agents
-
-        auth = getattr(request.state, "auth", None)
-        requested_agent = request.headers.get("x-agent-id")
-        agent_id: str | None = None
-
-        if auth is not None:
-            request.state.actor_id = auth.actor_id
-            agent_id = auth.agent_id if auth.is_service else None
-            if requested_agent and requested_agent != agent_id:
-                return _deny(
-                    request,
-                    "agent header does not match verified token",
-                    actor=auth.actor_id,
-                    public_error="agent identity not authorized",
-                )
-            if auth.is_service and agent_id not in set(list_agents()):
-                return _deny(
-                    request,
-                    "verified token names an unknown agent",
-                    actor=auth.actor_id,
-                    public_error="agent not authorized",
-                )
-        elif _legacy_headers_allowed():
-            agent_id = requested_agent
-            request.state.actor_id = requested_agent
-
-        request.state.agent_id = agent_id
-        if agent_id:
-            method = request.method
-            path = request.url.path
-            if not check_endpoint_access(agent_id, method, path):
-                return _deny(
-                    request,
-                    f"Agent '{agent_id}' denied {method} {path}",
-                    actor=agent_id,
-                    public_error=f"Agent '{agent_id}' not authorized for {method} {path}",
-                )
-        return await call_next(request)
+    source = capabilities._get_manifest()
+    now = time.monotonic()
+    with _known_agents_lock:
+        cached = _known_agents
+        if (
+            cached is not None
+            and cached[0] is source
+            and now - cached[1] < KNOWN_AGENTS_TTL_SECONDS
+        ):
+            return cached[2]
+    agents = frozenset(capabilities.list_agents())
+    with _known_agents_lock:
+        _known_agents = (source, now, agents)
+    return agents
 
 
-class AuthMiddleware(BaseHTTPMiddleware):
-    """Verify a bridge-issued session/service token and set request.state.auth.
+def invalidate_known_agents() -> None:
+    """Forget the known-agent set; agent install, update and remove call this."""
+    global _known_agents
+    with _known_agents_lock:
+        _known_agents = None
 
-    Replaces trusted ``X-Agent-Id``/``X-Tenant-Id`` derivation with a verified,
-    audience-bound identity. Authentication is on by default. Legacy behavior
-    exists only under ``GENUS_INSECURE_DEV_MODE=true`` on a loopback bind.
 
-    - valid token  → ``request.state.auth = AuthContext`` (tenant comes from the token).
-    - missing token on a private route → 401.
-    - valid token without route scope/role → 403.
-    - only probe and token bootstrap/rotation routes are public.
+def _with_header(send: Send, name: str, value: str) -> Send:
+    """``send`` with one response header set (replacing any the app set),
+    exactly as ``response.headers[name] = value`` did in a BaseHTTPMiddleware."""
+
+    async def _send(message: Message) -> None:
+        if message["type"] == "http.response.start":
+            MutableHeaders(scope=message)[name] = value
+        await send(message)
+
+    return _send
+
+
+class BridgeMiddleware:
+    """Correlation id, authentication, tenant binding and RBAC: one ASGI layer.
+
+    These were four ``BaseHTTPMiddleware`` classes, and each one wrapped every
+    request -- and every streamed body -- in a task and a memory stream of its
+    own. This is the same four steps in the same order, as plain ASGI:
+
+    1. **Correlation.** ``X-Correlation-Id`` is taken from the request or
+       generated, put on ``request.state.correlation_id``, and set on EVERY
+       response, the 401s and 403s below included.
+    2. **Authentication.** ``request.state.auth`` is the verified bridge token
+       or ``None``. The Instantly webhook POST and ``/api/setup/`` skip token
+       verification (steps 3 and 4 still run). A supplied invalid token is a
+       401 on any route; no token on a private route is a 401 when auth is
+       enforced; a verified identity without the route's scope or role is a
+       403.
+    3. **Tenant.** A verified token's tenant is the tenant; an ``X-Tenant-Id``
+       that disagrees is a 403. In loopback dev mode the header is trusted.
+       ``request.state.tenant_id`` is set, and ``X-Tenant-Id`` goes on the
+       response (RBAC's 403 included) whenever there is a verified identity or
+       dev mode is on -- never on a step-2 or step-3 refusal.
+    4. **RBAC.** ``request.state.actor_id`` and ``agent_id`` are set; an
+       ``X-Agent-Id`` that disagrees with the token, a service token naming an
+       agent the capabilities manifest does not know, or an agent outside its
+       ``bridge_endpoints`` is a 403.
+
+    Every refusal is the same ``{"error": ...}`` JSON body and the same audit
+    event it was before. Non-HTTP scopes (lifespan, websocket) pass straight
+    through, as they did past ``BaseHTTPMiddleware``. Exceptions from the app
+    propagate unchanged to the server-error layer outside this one.
     """
 
     _PUBLIC_PATHS = frozenset(
@@ -175,7 +168,51 @@ class AuthMiddleware(BaseHTTPMiddleware):
     #: and one asserting an operator's own SESSION token is refused here.
     _SETUP_PREFIX = "/api/setup/"
 
-    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        request = Request(scope, receive)
+
+        # 1. Correlation — outermost, so every answer below carries it.
+        correlation_id = request.headers.get("x-correlation-id") or uuid.uuid4().hex
+        request.state.correlation_id = correlation_id
+        send = _with_header(send, "X-Correlation-Id", correlation_id)
+
+        # 2. Authentication.
+        refusal = self._authenticate(request)
+        if refusal is not None:
+            await refusal(scope, receive, send)
+            return
+
+        # 3. Tenant.
+        tenant_id, refusal = self._bind_tenant(request)
+        if refusal is not None:
+            await refusal(scope, receive, send)
+            return
+        if request.state.auth is not None or _legacy_headers_allowed():
+            send = _with_header(send, "X-Tenant-Id", tenant_id)
+
+        # 4. RBAC — inside the tenant step, so its 403 carries X-Tenant-Id.
+        refusal = self._authorize_agent(request)
+        if refusal is not None:
+            await refusal(scope, receive, send)
+            return
+
+        await self.app(scope, receive, send)
+
+    def _authenticate(self, request: Request) -> Response | None:
+        """Verify a bridge-issued session/service token into ``request.state.auth``.
+
+        - valid token  → ``request.state.auth = AuthContext`` (tenant comes from the token).
+        - missing token on a private route → 401.
+        - valid token without route scope/role → 403.
+        - only probe and token bootstrap/rotation routes are public.
+        """
         from robothor.auth.deps import token_from_request, verify_token
         from robothor.auth.tokens import TokenError
         from robothor.sales.ingestion import is_instantly_webhook
@@ -184,9 +221,9 @@ class AuthMiddleware(BaseHTTPMiddleware):
         # This exact POST authenticates its custom provider header in the route.
         # Do not exempt neighboring resources or other HTTP methods from JWTs.
         if is_instantly_webhook(request.method, request.url.path):
-            return await call_next(request)
+            return None
         if request.url.path.startswith(self._SETUP_PREFIX):
-            return await call_next(request)
+            return None
 
         token = token_from_request(request)
         if token:
@@ -224,8 +261,83 @@ class AuthMiddleware(BaseHTTPMiddleware):
             denial = _authorization_denial(auth, request.method, path)
             if denial:
                 return _deny(request, denial, actor=auth.actor_id, public_error=denial)
+        return None
 
-        return await call_next(request)
+    @staticmethod
+    def _bind_tenant(request: Request) -> tuple[str, Response | None]:
+        """Derive the tenant from verified claims (or explicit loopback dev mode)."""
+        from robothor.constants import DEFAULT_TENANT
+
+        auth = request.state.auth
+        requested_tenant = request.headers.get("x-tenant-id")
+        if auth is not None:
+            tenant_id = auth.tenant_id
+            if requested_tenant and requested_tenant != tenant_id:
+                log_event(
+                    "auth.denied",
+                    "tenant header does not match verified token",
+                    actor=auth.actor_id,
+                    details={"method": request.method, "path": request.url.path},
+                    status="denied",
+                )
+                return tenant_id, JSONResponse(
+                    status_code=403, content={"error": "tenant not authorized"}
+                )
+        elif _legacy_headers_allowed():
+            tenant_id = requested_tenant or DEFAULT_TENANT
+        else:
+            # Only public endpoints can reach this branch in secure mode.
+            tenant_id = DEFAULT_TENANT
+
+        request.state.tenant_id = tenant_id
+        return tenant_id, None
+
+    @staticmethod
+    def _authorize_agent(request: Request) -> Response | None:
+        """Check capabilities for a verified service-agent identity.
+
+        The legacy header is consulted only in explicit insecure development
+        mode. A signed service identity must name a configured agent; unknown
+        agents are denied even when an old capability manifest's default
+        policy is ``allow``.
+        """
+        auth = request.state.auth
+        requested_agent = request.headers.get("x-agent-id")
+        agent_id: str | None = None
+
+        if auth is not None:
+            request.state.actor_id = auth.actor_id
+            agent_id = auth.agent_id if auth.is_service else None
+            if requested_agent and requested_agent != agent_id:
+                return _deny(
+                    request,
+                    "agent header does not match verified token",
+                    actor=auth.actor_id,
+                    public_error="agent identity not authorized",
+                )
+            if auth.is_service and agent_id not in _known_agent_ids():
+                return _deny(
+                    request,
+                    "verified token names an unknown agent",
+                    actor=auth.actor_id,
+                    public_error="agent not authorized",
+                )
+        elif _legacy_headers_allowed():
+            agent_id = requested_agent
+            request.state.actor_id = requested_agent
+
+        request.state.agent_id = agent_id
+        if agent_id:
+            method = request.method
+            path = request.url.path
+            if not check_endpoint_access(agent_id, method, path):
+                return _deny(
+                    request,
+                    f"Agent '{agent_id}' denied {method} {path}",
+                    actor=agent_id,
+                    public_error=f"Agent '{agent_id}' not authorized for {method} {path}",
+                )
+        return None
 
 
 def _auth_enforced() -> bool:
@@ -388,14 +500,3 @@ def _deny(
         status="denied",
     )
     return JSONResponse(status_code=403, content={"error": public_error})
-
-
-class CorrelationMiddleware(BaseHTTPMiddleware):
-    """Attach a unique X-Correlation-Id to every request/response."""
-
-    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
-        correlation_id = request.headers.get("x-correlation-id") or uuid.uuid4().hex
-        request.state.correlation_id = correlation_id
-        response = await call_next(request)
-        response.headers["X-Correlation-Id"] = correlation_id
-        return response

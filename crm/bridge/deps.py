@@ -9,7 +9,7 @@ def get_tenant_id(request: Request) -> str:
     """Tenant for the request.
 
     Prefers the VERIFIED tenant from a bridge-issued token (``request.state.auth``,
-    set by AuthMiddleware) over the unverified ``X-Tenant-Id`` header (kept as the
+    set by BridgeMiddleware) over the unverified ``X-Tenant-Id`` header (kept as the
     legacy/service fallback). Falls back to DEFAULT_TENANT.
     """
     from robothor.constants import DEFAULT_TENANT
