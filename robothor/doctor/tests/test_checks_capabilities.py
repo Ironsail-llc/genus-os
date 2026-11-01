@@ -148,8 +148,23 @@ def test_the_cli_accepts_agent_and_hands_it_to_the_context() -> None:
 
 
 @pytest.mark.asyncio
-async def test_vault_set_without_a_tier_is_gated(instance: Path, monkeypatch) -> None:
-    monkeypatch.delenv("ROBOTHOR_CREDENTIAL_INTAKE", raising=False)
+async def test_vault_set_without_a_tier_is_gated_on_the_tier(instance: Path, monkeypatch) -> None:
+    from robothor.engine import feature_flags
+
+    monkeypatch.setenv("ROBOTHOR_CREDENTIAL_INTAKE", "enforce")
+    monkeypatch.delattr(feature_flags, "credential_intake_mode", raising=False)
+    _write_agent(instance, "main", {"tools_allowed": ["vault_set"]})
+    row = _by_sub(await _rows("main"))["main:vault_set"]
+    assert row.status == "fail"
+    assert "credentials: operator" in row.detail
+    assert "ROBOTHOR_CREDENTIAL_INTAKE" not in row.detail
+
+
+@pytest.mark.asyncio
+async def test_vault_set_names_intake_where_the_build_has_it(instance: Path, monkeypatch) -> None:
+    from robothor.engine import feature_flags
+
+    monkeypatch.setattr(feature_flags, "credential_intake_mode", lambda: "off", raising=False)
     _write_agent(instance, "main", {"tools_allowed": ["vault_set"]})
     row = _by_sub(await _rows("main"))["main:vault_set"]
     assert row.status == "fail"
@@ -165,9 +180,22 @@ async def test_vault_set_with_the_operator_tier_passes(instance: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_the_coding_workspace_satisfies_coding_jobs(instance: Path, monkeypatch) -> None:
+async def test_the_coding_workspace_counts_only_where_the_build_reads_it(
+    instance: Path, monkeypatch
+) -> None:
+    from robothor.engine import capabilities
+
     monkeypatch.setenv("ROBOTHOR_CODING_WORKSPACE", str(instance / "coding"))
     _write_agent(instance, "main", {"tools_opt_in": ["claude_code_start"]})
-    with patch("robothor.engine.coding.runner.resolve_claude_binary", return_value="claude"):
-        rows = _by_sub(await _check().run(DoctorContext(offline=True, agent="main")))
-    assert rows["main:coding_jobs"].status == "pass"
+
+    async def coding_row():
+        with patch("robothor.engine.coding.runner.resolve_claude_binary", return_value="claude"):
+            rows = _by_sub(await _check().run(DoctorContext(offline=True, agent="main")))
+        return rows["main:coding_jobs"]
+
+    monkeypatch.setattr(capabilities, "coding_workspace", lambda settings: None)
+    row = await coding_row()
+    assert row.status == "fail"
+    assert "ROBOTHOR_CODING_WORKSPACE" not in row.detail
+    monkeypatch.setattr(capabilities, "coding_workspace", lambda settings: str(instance / "coding"))
+    assert (await coding_row()).status == "pass"
