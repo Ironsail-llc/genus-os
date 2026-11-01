@@ -158,7 +158,7 @@ class ToolRpcServer:
                 socket_module.SOL_SOCKET, socket_module.SO_PEERCRED, struct.calcsize(_UCRED)
             )
             peer_pid, peer_uid, _gid = struct.unpack(_UCRED, raw)
-        except (OSError, struct.error):
+        except (AttributeError, OSError, struct.error):  # no SO_PEERCRED off Linux: refuse
             return "the peer could not be identified"
         if peer_uid != os.getuid():
             return "the peer runs as another user"

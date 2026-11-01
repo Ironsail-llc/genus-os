@@ -23,6 +23,7 @@ import pytest
 from robothor.engine.tool_proxy import clear_tool_proxy, set_tool_proxy
 from robothor.engine.tools.dispatch import ToolContext
 from robothor.engine.tools.handlers.code_exec import _execute_code
+from tests.platform_capabilities import needs_linux_prctl, needs_peer_credentials, needs_proc
 
 
 class _StubProxy:
@@ -131,6 +132,7 @@ class TestWhoMayCallIt:
 
 @pytest.mark.asyncio
 class TestTheEnvironmentProbe:
+    @needs_proc
     async def test_a_credential_in_the_engines_environment_is_not_in_the_childs(
         self, workspace, monkeypatch
     ):
@@ -156,6 +158,7 @@ class TestTheEnvironmentProbe:
         )
         assert "ABSENT" in result["stdout"]
 
+    @needs_proc
     async def test_the_engines_own_environ_is_not_readable_from_the_snippet(
         self, workspace, monkeypatch
     ):
@@ -246,6 +249,7 @@ class TestTheImportGuard:
 
 @pytest.mark.asyncio
 class TestTheToolProxyFromInsideTheSnippet:
+    @needs_peer_credentials
     async def test_a_tool_call_round_trips(self, workspace):
         result, proxy = await _run(
             """
@@ -258,6 +262,7 @@ class TestTheToolProxyFromInsideTheSnippet:
         assert "'echo': 'read_file'" in result["stdout"]
         assert result["tool_call_count"] == 1
 
+    @needs_peer_credentials
     async def test_the_computed_form_works_too(self, workspace):
         _, proxy = await _run(
             """
@@ -284,6 +289,7 @@ class TestTheToolProxyFromInsideTheSnippet:
         assert "REFUSED" in result["stdout"]
         assert proxy.seen == []
 
+    @needs_peer_credentials
     async def test_the_call_cap_ends_the_loop_loudly(self, workspace):
         result, proxy = await _run(
             """
@@ -342,6 +348,7 @@ class TestTheBounds:
         await asyncio.sleep(4)
         assert not marker.exists(), "a backgrounded child outlived the snippet that started it"
 
+    @needs_linux_prctl
     async def test_a_child_in_its_own_session_does_not_survive_either(self, workspace):
         """`start_new_session=True` takes a child OUT of the process group, so
         `killpg` alone never reached it. Measured on the first cut: 15 of 15
@@ -365,6 +372,7 @@ class TestTheBounds:
             _reap(pid)
         assert survivors == [], f"{len(survivors)} of {len(pids)} setsid children survived"
 
+    @needs_linux_prctl
     async def test_a_double_forked_daemon_does_not_survive_either(self, workspace):
         """The classic daemonisation: fork, setsid, fork again, so the
         grandchild is orphaned and reparented away from the snippet."""
@@ -392,6 +400,7 @@ class TestTheBounds:
             _reap(pid)
         assert survivors == [], f"{len(survivors)} of {len(pids)} daemons survived"
 
+    @needs_linux_prctl
     async def test_a_detached_child_does_not_survive_a_timeout_either(self, workspace):
         """The snippet never reaches its own cleanup here, so this is the
         engine's census doing the work rather than the boot script's reaper."""
@@ -513,6 +522,7 @@ class TestTheBounds:
         assert spilled.is_file()
         assert len(spilled.read_text()) > 40_000
 
+    @needs_peer_credentials
     async def test_a_proxied_call_still_running_does_not_hold_the_tool_open(self, workspace):
         """`Server.wait_closed()` waits for every live handler, and a handler
         sits inside `await proxy.call(...)` until that tool returns. Measured on

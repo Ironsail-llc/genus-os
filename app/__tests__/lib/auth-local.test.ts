@@ -1,6 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { JWT } from "next-auth/jwt";
 
+// Legitimately slow first test: tests re-import @/lib/auth after
+// vi.resetModules(), re-transforming next-auth (about 0.7 s idle). Vitest's default 5 s is spent by that cold import alone on a
+// loaded runner, so the test timed out before asserting anything. The
+// assertions are unchanged.
+vi.setConfig({ testTimeout: 30_000 });
+
+
 const loginResult = {
   access_token: "bridge-access-token",
   refresh_token: "bridge-refresh-token",

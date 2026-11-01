@@ -16,6 +16,7 @@ from robothor.engine.daemon import (
     _resolve_last_run,
     _sd_notify,
 )
+from tests.platform_capabilities import needs_abstract_sockets
 
 
 @pytest.fixture(autouse=True)
@@ -34,9 +35,14 @@ class TestSdNotify:
         monkeypatch.delenv("NOTIFY_SOCKET", raising=False)
         _sd_notify("READY=1")  # Should not raise
 
-    def test_sends_to_real_socket(self, monkeypatch, tmp_path):
+    def test_sends_to_real_socket(self, monkeypatch):
         """_sd_notify sends data to a real Unix datagram socket."""
-        sock_path = str(tmp_path / "notify.sock")
+        import shutil
+        import tempfile
+
+        # Not tmp_path: on macOS it is longer than the 104-byte sun_path limit.
+        short = tempfile.mkdtemp(prefix="sdn-")
+        sock_path = f"{short}/notify.sock"
         server = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
         server.bind(sock_path)
         try:
@@ -46,12 +52,14 @@ class TestSdNotify:
             assert data == b"WATCHDOG=1"
         finally:
             server.close()
+            shutil.rmtree(short, ignore_errors=True)
 
     def test_handles_bad_socket_path(self, monkeypatch):
         """_sd_notify handles unreachable socket without raising."""
         monkeypatch.setenv("NOTIFY_SOCKET", "/nonexistent/path/notify.sock")
         _sd_notify("READY=1")  # Should not raise
 
+    @needs_abstract_sockets
     def test_handles_abstract_socket(self, monkeypatch):
         """_sd_notify correctly handles abstract socket addresses (@ prefix)."""
         # Create an abstract socket

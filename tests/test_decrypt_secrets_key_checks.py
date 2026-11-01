@@ -19,6 +19,14 @@ import re
 import subprocess
 from pathlib import Path
 
+import pytest
+
+from tests.platform_capabilities import needs_bash44
+
+# A subprocess here may take up to 60 s by its own bound; pytest.ini's 30 s
+# would stop the test first whenever the machine is busy (tests/test_suite_hygiene.py).
+pytestmark = pytest.mark.timeout(120)
+
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "decrypt-secrets.sh"
 
 
@@ -130,6 +138,7 @@ def _run_decrypt(tmp_path: Path, payload: dict[str, str]):
     return result, root / "run" / "robothor" / "secrets.env"
 
 
+@needs_bash44
 def test_a_store_without_telegram_credentials_boots(tmp_path: Path):
     result, output = _run_decrypt(
         tmp_path, {"OPENROUTER_API_KEY": "k", "OPENROUTER_API_KEY_2": "s"}
@@ -165,6 +174,7 @@ def test_a_store_without_the_provider_credential_still_boots(tmp_path: Path):
     )
 
 
+@needs_bash44
 def test_a_missing_provider_key_is_still_named(tmp_path: Path):
     """Not required, still reported. An operator whose key is in neither store
     needs the name, and this is the only boot-time place that can say it."""
@@ -176,6 +186,7 @@ def test_a_missing_provider_key_is_still_named(tmp_path: Path):
     )
 
 
+@needs_bash44
 def test_a_missing_spare_warns_but_still_boots(tmp_path: Path):
     """2026-08-27: the pool ran with one key for two days and no boot said so."""
     result, _ = _run_decrypt(tmp_path, {"OPENROUTER_API_KEY": "k"})
@@ -183,6 +194,7 @@ def test_a_missing_spare_warns_but_still_boots(tmp_path: Path):
     assert "OPENROUTER_API_KEY_2" in result.stderr
 
 
+@needs_bash44
 def test_missing_pager_credentials_warn_by_name_but_still_boot(tmp_path: Path):
     """Telegram is optional, but a boot that will never page must say so."""
     result, out = _run_decrypt(tmp_path, {"OPENROUTER_API_KEY": "k1", "OPENROUTER_API_KEY_2": "k2"})
@@ -192,6 +204,7 @@ def test_missing_pager_credentials_warn_by_name_but_still_boot(tmp_path: Path):
     assert "k1" not in result.stdout + result.stderr
 
 
+@needs_bash44
 def test_decrypt_replaces_a_planted_symlink_at_the_output(tmp_path: Path):
     victim = tmp_path / "victim.txt"
     victim.write_text("do not touch\n")

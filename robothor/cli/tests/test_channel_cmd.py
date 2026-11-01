@@ -26,6 +26,7 @@ import pytest
 
 from robothor.cli.channel import cmd_channel
 from robothor.secrets.fingerprint import FINGERPRINT_PREFIX
+from tests.platform_capabilities import needs_proc
 
 #: Visibly fake, and distinctive enough that searching output for it means
 #: something. Any real token here would be a credential in the repository.
@@ -372,6 +373,7 @@ class TestATokenOnACommandLineCannotBeTakenBack:
     environment, neither of which appears in a command line.
     """
 
+    @needs_proc
     def test_a_python_level_scrub_cannot_clear_proc_cmdline(self):
         """The premise, proved rather than asserted.
 

@@ -2,6 +2,13 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import { ChatPanel } from "../chat-panel";
 
+// Legitimately slow first test: the first ChatPanel render
+// imports the chat module graph. Vitest's default 5 s is spent by that cold import alone on a
+// loaded runner, so the test timed out before asserting anything. The
+// assertions are unchanged.
+vi.setConfig({ testTimeout: 30_000 });
+
+
 // Mock hooks
 vi.mock("@/hooks/use-visual-state", () => ({
   useVisualState: () => ({

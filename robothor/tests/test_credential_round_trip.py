@@ -43,6 +43,7 @@ def stores(monkeypatch):
     """A vault double and a stale environment, both entirely fake."""
     from robothor import secrets as secrets_module
     from robothor import vault
+    from robothor.engine import key_pool
 
     rows: dict[str, str] = {}
     monkeypatch.setattr(vault, "get", lambda key, **kw: rows.get(key))
@@ -53,9 +54,15 @@ def stores(monkeypatch):
     )
     monkeypatch.setattr(vault, "set", lambda key, value, **kw: rows.__setitem__(key, value))
     monkeypatch.setattr(vault, "list", lambda **kw: sorted(rows))
+    # Both caches of what the vault said: the accessor's, and the key pool's
+    # process-wide provider snapshot. Leaving the second one behind handed the
+    # fake vault's provider key to whichever test ran next in the same process
+    # (the memory key-pool tests read it in place of their own environment).
     secrets_module.reset_vault_availability()
+    key_pool.reset_vault_availability()
     yield rows
     secrets_module.reset_vault_availability()
+    key_pool.reset_vault_availability()
 
 
 @pytest.mark.parametrize(("env_name", "vault_key"), SPELLINGS)

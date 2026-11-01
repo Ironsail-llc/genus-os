@@ -423,9 +423,46 @@ class TestPhotos:
         assert caption.strip() in text
 
 
+async def drain_albums(bot, *, timeout: float = 10.0) -> None:
+    """Wait for every album flush in flight to finish, however long it takes.
+
+    A fixed sleep guessed how long the timer plus the route would take and was
+    wrong on a busy machine; awaiting the flush tasks themselves is exact. The
+    bound is generous because it only ever decides a failure.
+    """
+    async with asyncio.timeout(timeout):
+        while True:
+            pending = {
+                task for tasks in bot._album_tasks.values() for task in tasks if not task.done()
+            }
+            if not pending:
+                return
+            await asyncio.gather(*pending, return_exceptions=True)
+
+
+@pytest.fixture(params=[0.0, 0.5], ids=["idle", "loaded"])
+def route_delay(request, bot) -> float:
+    """Delay every album flush's route, as a loaded machine does.
+
+    The album tests waited a fixed ``asyncio.sleep`` for the timer-driven
+    flush; on a busy runner the flush is still routing when the sleep ends and
+    the test sees no turn at all. Delaying the route reproduces that on any
+    machine.
+    """
+    if request.param:
+        real = bot._route_attachment_turn
+
+        async def slow_route(*args, **kwargs):
+            await asyncio.sleep(request.param)
+            return await real(*args, **kwargs)
+
+        bot._route_attachment_turn = slow_route
+    return request.param
+
+
 class TestAlbums:
     @pytest.mark.asyncio
-    async def test_three_photos_arrive_as_one_turn(self, bot, monkeypatch) -> None:
+    async def test_three_photos_arrive_as_one_turn(self, bot, monkeypatch, route_delay) -> None:
         monkeypatch.setattr(
             "robothor.engine.tools.handlers.images.describe_image_bytes",
             AsyncMock(return_value="a photo"),
@@ -442,7 +479,7 @@ class TestAlbums:
                     media_group_id="MG1",
                 )
             )
-        await asyncio.sleep(0.25)
+        await drain_albums(bot)
         text, rows = enqueued(bot)
         assert len(rows) == 3
         assert text.startswith("three shots")
@@ -450,7 +487,7 @@ class TestAlbums:
             assert row["path"] in text
 
     @pytest.mark.asyncio
-    async def test_an_album_of_ten_keeps_all_ten(self, bot, monkeypatch) -> None:
+    async def test_an_album_of_ten_keeps_all_ten(self, bot, monkeypatch, route_delay) -> None:
         monkeypatch.setattr(
             "robothor.engine.tools.handlers.images.describe_image_bytes",
             AsyncMock(return_value="a photo"),
@@ -461,7 +498,7 @@ class TestAlbums:
         )
         for index in range(10):
             await bot.handle_file(message(photo=photo(uid=f"AgACten{index}"), media_group_id="MG2"))
-        await asyncio.sleep(0.3)
+        await drain_albums(bot)
         _, rows = enqueued(bot)
         assert len(rows) == 10
 
@@ -565,7 +602,9 @@ class TestALateAlbumMember:
         assert not routed, "a cancelled flush must not deliver into a closed session"
 
     @pytest.mark.asyncio
-    async def test_a_finished_flush_removes_only_itself(self, bot, monkeypatch) -> None:
+    async def test_a_finished_flush_removes_only_itself(
+        self, bot, monkeypatch, route_delay
+    ) -> None:
         """The bookkeeping must not leak: once every task under a key is done,
         the key goes too."""
         import robothor.engine.telegram_attachments as ta
@@ -577,7 +616,7 @@ class TestALateAlbumMember:
         )
         arm_download(bot, b"\xff\xd8\xff")
         await bot.handle_file(message(photo=photo(uid="T01"), media_group_id="GT"))
-        await asyncio.sleep(0.3)
+        await drain_albums(bot)
         assert ("100200300", "GT") not in bot._album_tasks
 
     @pytest.mark.asyncio
