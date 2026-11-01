@@ -204,7 +204,11 @@ def _only_reads(word: str | None, args: list[str]) -> bool:
     return True
 
 
-def exec_writes_managed(command: str, *, cwd: str | None = None) -> str | None:
+#: How deep ``sh -c '…'`` scripts are opened. Past it the command is refused.
+_MAX_NESTING = 4
+
+
+def exec_writes_managed(command: str, *, cwd: str | None = None, _depth: int = 0) -> str | None:
     """The refusal for a shell command that may write a managed path, else None.
 
     A command is refused when any word in it names the plugin directory (or
@@ -230,6 +234,13 @@ def exec_writes_managed(command: str, *, cwd: str | None = None) -> str | None:
 
     if any(_runs_a_plugin_write(seg) for seg in segments):
         return REFUSAL
+    # A word holding whitespace may be a whole script (`sh -c '…'`, `bash -lc
+    # "…"`), which shlex hands over as one token: judge it as a command too.
+    for tok in (t for seg in segments for t in seg if any(ch.isspace() for ch in t)):
+        if _depth >= _MAX_NESTING:
+            return REFUSAL
+        if exec_writes_managed(tok, cwd=shell_cwd, _depth=_depth + 1):
+            return REFUSAL
     named = any(
         _names_managed(tok, bases, dirs, files, shell_cwd) for seg in segments for tok in seg
     )
