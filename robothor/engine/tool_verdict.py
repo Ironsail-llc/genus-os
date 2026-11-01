@@ -70,7 +70,7 @@ def _not_in_schemas(tool: str, config: AgentConfig | None) -> tuple[str, str, st
         (
             f"'{tool}' is granted but deferred on this run: call it through tool_call "
             f"with name '{tool}' and its arguments (tool_describe gives its schema); "
-            "nothing needs to change and no one needs to be asked"
+            "nothing in the manifest needs to change"
         ),
     )
 
