@@ -303,3 +303,48 @@ def test_no_engine_can_write_its_own_import_path() -> None:
         assert init["plugin-dirs"]["image"] == engine["image"], name
         assert init["plugin-dirs"]["securityContext"] == engine["securityContext"], name
         assert set(init["plugin-dirs"]["command"][3:]) == on_workspace, name
+
+
+def _plugin_dirs_command(workspace_mount: str) -> list[str]:
+    docs = _render(*TWO_TENANTS, "--set", f"workspace.mountPath={workspace_mount}")
+    cell = next(
+        d
+        for d in docs
+        if d["kind"] == "Deployment" and d["metadata"]["name"].endswith("acme-child-a")
+    )
+    init = next(
+        c for c in cell["spec"]["template"]["spec"]["initContainers"] if c["name"] == "plugin-dirs"
+    )
+    return init["command"]
+
+
+def test_the_plugin_dir_init_step_creates_a_missing_directory(tmp_path: Path) -> None:
+    command = _plugin_dirs_command(str(tmp_path))
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / ".plugins").is_dir()
+    assert not (tmp_path / ".plugins").is_symlink()
+
+
+@pytest.mark.parametrize("target", [".", "other"])
+def test_the_plugin_dir_init_step_refuses_a_symlinked_directory(
+    tmp_path: Path, target: str
+) -> None:
+    """A pre-upgrade agent could have replaced ``.plugins`` with a link to the
+    writable workspace; a read-only mount of that link would be a read-only
+    view of a directory still writable through the workspace mount."""
+    (tmp_path / "other").mkdir()
+    (tmp_path / ".plugins").symlink_to(target)
+    command = _plugin_dirs_command(str(tmp_path))
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    assert result.returncode != 0
+    assert "symlink" in result.stderr
+
+
+def test_the_plugin_dir_init_step_refuses_a_symlinked_workspace_component(tmp_path: Path) -> None:
+    real = tmp_path / "real"
+    real.mkdir()
+    (tmp_path / "ws").symlink_to(real)
+    command = _plugin_dirs_command(str(tmp_path / "ws"))
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    assert result.returncode != 0
