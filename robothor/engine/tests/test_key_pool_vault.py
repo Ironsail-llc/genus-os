@@ -43,6 +43,9 @@ def _clean_pools(monkeypatch):
     yield
     key_pool.reset_shared_pools()
     key_pool._env_displaced.clear()
+    # The vault snapshot is cached process-wide; a case's stub vault must not
+    # answer for the next module's provider lookups.
+    key_pool.reset_vault_availability()
 
 
 def _vault(mapping: dict[str, str]):

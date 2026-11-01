@@ -245,6 +245,9 @@ def harness(monkeypatch: pytest.MonkeyPatch, fleet: Path) -> Iterator[_Harness]:
     # main() installs its elector process-wide (leader.set_elector); restore the
     # real one after the test, or a later test asks the fake whether it leads.
     m("robothor.engine.leader._elector", None)
+    # Likewise the scheduler handle main() publishes for SIGHUP and the admin
+    # reconcile route.
+    m(daemon, "_ACTIVE_SCHEDULER", None)
     m("robothor.engine.hook_registry.register_plugin_hooks", lambda _r: None)
     m("robothor.engine.buddy_hooks.register_buddy_hooks", lambda _r: None)
     m("robothor.engine.tools.set_runner", lambda *_a: None)
