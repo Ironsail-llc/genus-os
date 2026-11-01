@@ -2023,3 +2023,72 @@ describe("Settings › Plugins — a lockfile with unreadable rows", () => {
     expect(screen.queryByTestId("plugins-lockfile-rows-damaged")).toBeNull();
   });
 });
+
+/**
+ * Trust, per installed plugin: one badge on each row and a drawer behind it.
+ * Read from the row's `trust` when the engine sends one and from the older
+ * fields when it does not, so an older bridge still gets a badge. The page's
+ * own rule above still holds: a row nothing scanned never reads "unscanned",
+ * "verdict" or "safe" — the badge says Unsigned and the drawer stays closed.
+ */
+describe("Settings › Plugins — trust", () => {
+  const TRUSTED = {
+    ...FROM_REGISTRY,
+    verdict: "safe",
+    trust: {
+      signature: { verified: true, key_id: "genus-2026", index_url: INDEX },
+      wheel: { sha256: "e".repeat(64), pinned: true },
+      manifest: { sha256: "f".repeat(64), matches: true },
+      scan: { verdict: "safe", reasons: [], members_accounted: 12 },
+      lockfile: { recorded: true, drifted: false },
+      contract_version: 1,
+    },
+  };
+
+  it("puts a badge on every row, worst state first", async () => {
+    mockBridge({ listings: [{ ...LISTING, plugins: [LOADED, DRIFTED, TRUSTED] }] });
+    render(<PluginsPage visible />);
+
+    await screen.findByTestId("plugin-genus-weather");
+    expect(screen.getByTestId("plugin-trust-genus-weather")).toHaveAttribute(
+      "data-level",
+      "verified"
+    );
+    expect(screen.getByTestId("plugin-trust-genus-hostinfo")).toHaveAttribute(
+      "data-level",
+      "unsigned"
+    );
+    expect(screen.getByTestId("plugin-trust-genus-widgets")).toHaveAttribute(
+      "data-level",
+      "drifted"
+    );
+  });
+
+  it("derives the badge from an older engine's fields when there is no trust object", async () => {
+    mockBridge({ listings: [{ ...LISTING, plugins: [FROM_REGISTRY] }] });
+    render(<PluginsPage visible />);
+
+    const badge = await screen.findByTestId("plugin-trust-genus-weather");
+    expect(badge).toHaveAttribute("data-level", "review");
+  });
+
+  it("opens the drawer with the key id and the pinned wheel hash", async () => {
+    mockBridge({ listings: [{ ...LISTING, plugins: [TRUSTED] }] });
+    render(<PluginsPage visible />);
+
+    fireEvent.click(await screen.findByTestId("plugin-trust-genus-weather"));
+    expect(screen.getByTestId("trust-signature").textContent).toContain("genus-2026");
+    expect(screen.getByTestId("trust-wheel").textContent).toContain("e".repeat(64));
+  });
+
+  it("still never says unscanned, verdict or safe on a page of rows nothing scanned", async () => {
+    mockBridge({});
+    render(<PluginsPage visible />);
+
+    const page = await screen.findByTestId("settings-page-plugins");
+    await screen.findByTestId("plugin-trust-genus-hostinfo");
+    expect(page.textContent).not.toContain("unscanned");
+    expect(page.textContent).not.toMatch(/\bverdict\b/i);
+    expect(page.textContent).not.toMatch(/\bsafe\b/i);
+  });
+});
