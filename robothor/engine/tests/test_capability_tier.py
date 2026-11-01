@@ -168,7 +168,11 @@ class TestTheRegistry:
         names = set(registry.get_tool_names(_default_agent(), tier="elevated"))
         assert "web_render" in names
 
-    def test_build_for_agent_advertises_what_get_tool_names_lists(self, registry):
+    def test_build_for_agent_advertises_what_get_tool_names_lists(self, registry, monkeypatch):
+        # Deferred loading is on by default; this pins the advertised set of a
+        # run that is not deferred. A deferred run reaches the same tools
+        # through its whitelist (test_a_deferred_run_can_tool_call_...).
+        monkeypatch.setenv("ROBOTHOR_RIP_16_ENABLED", "0")
         schemas = registry.build_for_agent(_default_agent(), tier="unrestricted")
         advertised = {s["function"]["name"] for s in schemas}
         assert "claude_code_start" in advertised
@@ -220,14 +224,25 @@ class TestPrepareToolset:
         assert "claude_code_start" not in prepared.tool_names
         assert "claude_code_start" in prepared.tier_unlocked
 
-    async def test_enforce_advertises_what_it_unlocks(self, registry):
+    async def test_enforce_advertises_what_it_unlocks(self, registry, monkeypatch):
         from robothor.engine.capability_tier import resolve_tier
+
+        monkeypatch.setenv("ROBOTHOR_RIP_16_ENABLED", "0")  # not deferred: see above
 
         decision = resolve_tier("owner", interactive=True, identity_verified=True, mode="enforce")
         prepared = await self._prepare(registry, decision)
 
         advertised = {s["function"]["name"] for s in prepared.tool_schemas}
         assert "claude_code_start" in advertised
+        assert "claude_code_start" in prepared.tier_unlocked
+
+    async def test_enforce_on_a_deferred_run_makes_what_it_unlocks_reachable(self, registry):
+        from robothor.engine.capability_tier import resolve_tier
+
+        decision = resolve_tier("owner", interactive=True, identity_verified=True, mode="enforce")
+        prepared = await self._prepare(registry, decision)
+
+        assert "claude_code_start" in prepared.tool_names
         assert "claude_code_start" in prepared.tier_unlocked
 
     async def test_no_decision_is_todays_toolset(self, registry):
