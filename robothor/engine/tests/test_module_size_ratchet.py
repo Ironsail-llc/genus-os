@@ -71,7 +71,9 @@ CAPS = {
     # four had already drifted -- `ask_user` was in this one alone). That is
     # what paid for teaching the resolver about self-timed tools, instead of
     # raising this number for it.
-    "robothor/engine/runner.py": 2219,
+    # 2219 -> 2214: spawn inheritance, tier stamping, person linkage and tenant
+    # access left execute for run_attribution.py, absorbing the fold's growth.
+    "robothor/engine/runner.py": 2214,
     # 3850 -> 3150 after the plan-mode cluster left (phase 3), then again after
     # phase 3b (_setup_handlers closures -> methods), and 3150 -> 2000 as the
     # handler and attachment clusters left for telegram_handlers.py and
@@ -85,7 +87,10 @@ CAPS = {
     # instead of a parser. It came back to the cap when the private-input cut
     # was added to it, and trimming that explanation to fit is the trade this
     # file has refused before.
-    "robothor/engine/telegram.py": 1980,
+    # 1980 -> 1978: the post-reply bookkeeping (save the exchange, then map the
+    # platform message ids to the saved rows) left for telegram_delivery.py,
+    # which is what paid for the turn's later additions rather than raising this.
+    "robothor/engine/telegram.py": 1978,
     # 1300 -> 1293: the `ask:` callback body and the `handle_text` ask
     # interception moved to channels/telegram_ask.py, beside the binding rules
     # they apply. The ratchet only ever goes down, so the new actual is the new
@@ -113,7 +118,9 @@ CAPS = {
     # named shape over a strictly smaller set of facts than the task gave it —
     # and the whole ladder for it lives in observation_ledger.py. Nine lines is
     # the comment, the import and the call; there is nothing here to extract.
-    "robothor/engine/run_finalizer.py": 1001,
+    # 1001 -> 933: the todo escalation (lifting unfinished items back onto the
+    # CRM parent task) left for todo_escalation.py; it never touched the runner.
+    "robothor/engine/run_finalizer.py": 933,
     # The deliverable-contract cluster, capped at the size it was split to.
     # Hostile review 2026-09-16 (I6): `deliverable_contract.py` had reached
     # 1,354 lines and none of the three new modules was listed here, so "the
@@ -810,7 +817,8 @@ CAPS = {
     # seam (nothing there touches the filesystem, the engine or a request, which
     # is what lets it take its inputs as parameters instead of importing the
     # router's resolvers back).
-    "crm/bridge/routers/agent_manifests.py": 1060,
+    # 1107 -> 1056: the listing's scan cache moved to _manifest_listing.py.
+    "crm/bridge/routers/agent_manifests.py": 1056,
     # 250 -> 260: `introduced` now carries the record of getting this wrong
     # twice in opposite directions — keyed too loosely it missed an added
     # fault, keyed too tightly it refused a partial repair — plus the per-fault

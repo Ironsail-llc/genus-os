@@ -50,6 +50,7 @@ from robothor.engine.delivery import set_telegram_sender
 from robothor.engine.early_done import EarlyRelease
 from robothor.engine.models import TriggerType
 from robothor.engine.task_registry import get_task_registry
+from robothor.engine.telegram_delivery import persist_and_map
 from robothor.engine.telegram_format import (
     SentMessages,
     TelegramChunk,
@@ -667,76 +668,20 @@ class TelegramBot(
                 # reply-to lookups resolve against real rows). One background
                 # task keeps the response path snappy but the writes ordered.
                 if run.output_text:
-
-                    async def _persist_and_map(
-                        session_key: str = session_key,
-                        user_text: str = self._live_turn_text(inbox, user_text),
-                        output_text: str | None = run.output_text,
-                        model: Any = model,
-                        tenant_id: str = _tenant,
-                        user_extras: dict[str, Any] | None = user_extras,
-                        user_message_id: str | None = user_message_id,
-                        chat_id: str = chat_id,
-                        assistant_platform_ids: list[str] = assistant_platform_ids,
-                        author_run_id: str | None = run.id,
-                    ) -> None:
-                        from robothor.engine.channel_bus import (
-                            record_inbound,
-                            record_outbound,
-                        )
-
-                        inserted = await save_exchange_async(
-                            session_key,
-                            user_text,
-                            output_text or "",
-                            channel="telegram",
-                            model_override=model,
-                            tenant_id=tenant_id,
-                            user_extras=user_extras,
-                        )
-                        if not inserted or len(inserted) < 2:
-                            return
-                        user_chat_message_id, assistant_chat_message_id = inserted
-
-                        loop = asyncio.get_running_loop()
-
-                        if user_message_id:
-                            try:
-                                await loop.run_in_executor(
-                                    None,
-                                    lambda: record_inbound(
-                                        tenant_id=tenant_id,
-                                        channel="telegram",
-                                        chat_id=chat_id,
-                                        platform_message_id=user_message_id,
-                                        session_key=session_key,
-                                        chat_message_id=user_chat_message_id,
-                                        author_agent_id="user",
-                                    ),
-                                )
-                            except Exception as e:
-                                logger.debug("tg-map-inbound failed for %s: %s", chat_id, e)
-
-                        if assistant_platform_ids:
-                            try:
-                                await loop.run_in_executor(
-                                    None,
-                                    lambda: record_outbound(
-                                        tenant_id=tenant_id,
-                                        channel="telegram",
-                                        chat_id=chat_id,
-                                        platform_message_ids=assistant_platform_ids,
-                                        session_key=session_key,
-                                        chat_message_id=assistant_chat_message_id,
-                                        author_agent_id="main",
-                                        author_run_id=author_run_id,
-                                    ),
-                                )
-                            except Exception as e:
-                                logger.debug("tg-map-outbound failed for %s: %s", chat_id, e)
-
                     get_task_registry().spawn(
-                        _persist_and_map(),
+                        persist_and_map(
+                            save_exchange_async,
+                            session_key=session_key,
+                            user_text=self._live_turn_text(inbox, user_text),
+                            output_text=run.output_text,
+                            model=model,
+                            tenant_id=_tenant,
+                            user_extras=user_extras,
+                            user_message_id=user_message_id,
+                            chat_id=chat_id,
+                            assistant_platform_ids=assistant_platform_ids,
+                            author_run_id=run.id,
+                        ),
                         name=f"tg-persist-and-map:{chat_id}",
                     )
 

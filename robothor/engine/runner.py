@@ -36,7 +36,7 @@ import litellm
 from robothor.db.connection import current_tenant_scope
 from robothor.engine import budget_stops
 from robothor.engine.cancel_outcome import _cancel_outcome, terminal_run
-from robothor.engine.capability_tier import record_tier_event, stamp_capability_tier
+from robothor.engine.capability_tier import record_tier_event
 from robothor.engine.chat_backstop import protect_if_human_chat
 from robothor.engine.checkpoint import save_iteration
 from robothor.engine.config import (
@@ -87,6 +87,7 @@ from robothor.engine.prompts import (
     EXECUTION_MODE_PREAMBLE,
     with_surface_note,
 )
+from robothor.engine.run_attribution import attribute_run
 from robothor.engine.run_budget import (  # noqa: E402
     DEADLINE_WARNING_FRACTION as DEADLINE_WARNING_FRACTION,
 )
@@ -108,11 +109,10 @@ from robothor.engine.run_deadline import (
 )
 from robothor.engine.run_finalizer import RunFinalizationMixin
 from robothor.engine.run_identity import _is_service_caller as _is_service_caller
-from robothor.engine.run_identity import attach_tenant_access, resolve_run_identity_off_loop
+from robothor.engine.run_identity import resolve_run_identity_off_loop
 from robothor.engine.run_lifecycle import RunLifecycleMixin, spawn_post_stall_autodream
 from robothor.engine.run_llm_calls import LLMCallMixin  # noqa: E402
 from robothor.engine.run_pacing import DeadlinePacer, checkin_note, mode_for_run  # noqa: E402
-from robothor.engine.run_person_link import link_run_person
 from robothor.engine.run_replan import maybe_replan  # noqa: E402
 from robothor.engine.runtime.current import runtime_entrypoint
 from robothor.engine.runtime.deadlines import enclosing_deadline_reason
@@ -672,38 +672,16 @@ class AgentRunner(
         # robothor/engine/tools/handlers/benchmark.py. See run_context.py.
         mark_benchmark_run(session, agent_config, agent_id)
 
-        # Sub-agent: link to parent run + inherit user identity. An empty
-        # parent_run_id means the parent's own row was never recorded
-        # (tracking_disabled) — insert NULL rather than a dangling FK that
-        # would sink this child's entire row.
-        if spawn_context:
-            session.run.parent_run_id = spawn_context.parent_run_id or None
-            session.run.nesting_depth = spawn_context.nesting_depth
-            if not session.run.user_id and spawn_context.user_id:
-                session.run.user_id = spawn_context.user_id
-                session.run.user_role = spawn_context.user_role
-            # Contact 360 linkage — inherit parent's person.
-            if spawn_context.person_id:
-                session.run.person_id = spawn_context.person_id
-            # Identity — inherit parent's for person_id/user_id attribution
-            # only. A child's own trigger_type is SUB_AGENT, which never
-            # qualifies for the CURRENT USER prompt block (see the warmup /
-            # mini-preamble gating further below), so this never leaks a
-            # prompt section into a worker's context — attribution only.
-            if effective_identity is None and spawn_context.identity:
-                effective_identity = spawn_context.identity
-
-        # Capability tier from the final (post-spawn) user_role; None while off.
-        _tier = stamp_capability_tier(session.run, trigger_type, effective_identity)
-
-        # Contact 360 linkage (robothor/engine/run_person_link.py).
-        await link_run_person(session.run, effective_identity, trigger_type, trigger_detail)
-
-        # Stash the effective identity on the session so _run_loop can carry
-        # it onto a fresh SpawnContext for any children this run spawns.
-        session.identity = effective_identity
-
-        await attach_tenant_access(session.run, resolved_tenant)
+        # Spawn inheritance, capability tier, Contact 360 linkage, session
+        # identity and tenant access, in that order (run_attribution.py).
+        effective_identity, _tier = await attribute_run(
+            session,
+            spawn_context,
+            effective_identity,
+            trigger_type,
+            trigger_detail,
+            resolved_tenant,
+        )
 
         # Build system prompt + warmup in parallel where possible.
         # Both involve sync I/O so we run them concurrently in the executor.

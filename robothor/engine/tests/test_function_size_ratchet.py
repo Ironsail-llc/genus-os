@@ -49,7 +49,8 @@ KNOWN_LARGE: dict[str, int] = {
     # them gained a `shadow_bundled` argument (writing a skill over a name the
     # platform ships is now asked for explicitly), and the cluster it travelled
     # out with paid 17 lines back 169 times over.
-    "tools/schemas.py::get_engine_schemas": 3248,
+    # 3251 -> 3220: the two team-scratchpad schemas left for `_TEAM_SCRATCHPAD_SCHEMAS`.
+    "tools/schemas.py::get_engine_schemas": 3220,
     # -29: every subsystem router mount extracted to _mount_subsystem_routers,
     # which is what made room for the /api/admin registration rather than
     # raising this number for it.
@@ -66,7 +67,9 @@ KNOWN_LARGE: dict[str, int] = {
     # run_lifecycle.spawn_post_stall_autodream ("recovery helper spawns" is
     # that module's own contract), which is what paid for classifying a
     # workflow-budget kill and letting it propagate.
-    "runner.py::execute": 986,  # +7: task_id propagated onto the run at INSERT time
+    # 986 -> 970: spawn inheritance, tier stamping, person linkage and tenant
+    # access moved to run_attribution.attribute_run.
+    "runner.py::execute": 970,
     # 775 -> 773 with the step-efficiency work: the guard's note drain, the
     # pace-note call site and the refusal branch cost less than the inlined
     # deadline and check-in blocks returned when they left for run_pacing.py.
@@ -108,8 +111,11 @@ KNOWN_LARGE: dict[str, int] = {
     # the manifest scan and the webchat session read) left for
     # _recover_scan_and_restore, which is what paid for the startup clock and
     # the dependency-graph comment rather than raising this number for them.
-    "daemon.py::main": 348,
-    "telegram.py::_run_interactive": 384,
+    # 371 -> 331: the channel-bus main hooks and the startup announcement left for helpers.
+    "daemon.py::main": 331,
+    # 384 -> 338: the post-reply persist-and-map closure left for
+    # telegram_delivery.persist_and_map, rather than raising this number.
+    "telegram.py::_run_interactive": 338,
     # 343 -> 325: the benchmark break-out moved to _benchmark_spend, which is
     # what paid for un-scoping it from the production tenant (the graded
     # children now run as benchmark-sandbox) rather than raising this number.
@@ -158,8 +164,8 @@ KNOWN_LARGE: dict[str, int] = {
     # retired pool) moved to _streaming_skip_reason, which is what paid for it
     # recording its attempts — so `duration_ms` means the provider attempt on
     # BOTH paths instead of one thing streamed and another not (review I5).
-    "llm_client.py::_call_llm_streaming": 230,
-    "telegram.py::run_agent": 257,
+    # 235 -> 229: the in-place stream retry's announce and pause left for _before_stream_retry.
+    "llm_client.py::_call_llm_streaming": 229,
     "tools/handlers/experiment.py::_experiment_commit": 256,
     "telegram.py::_handle_goal_command": 242,
     "managed_agents/runner.py::run_on_managed_agents": 241,

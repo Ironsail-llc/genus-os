@@ -1167,6 +1167,62 @@ def _install_shutdown_signals() -> asyncio.Event:
     return req.event
 
 
+def _register_channel_bus_main_hooks(hook_registry: Any) -> None:
+    """Channel-bus main busy-state hooks, extracted from ``main``.
+
+    AGENT_START/AGENT_END on the main agent flip a flag in the WakeDebouncer
+    so wakes deferred during a concurrent interactive turn can re-fire cleanly
+    when main goes idle.
+    """
+
+    async def _channel_bus_on_main_start(ctx: Any) -> Any:
+        from robothor.engine.channel_bus import get_debouncer
+        from robothor.engine.hook_registry import HookResult
+
+        if ctx.agent_id == "main":
+            deb = get_debouncer()
+            if deb:
+                deb.mark_main_started()
+        return HookResult()
+
+    async def _channel_bus_on_main_end(ctx: Any) -> Any:
+        from robothor.engine.channel_bus import get_debouncer
+        from robothor.engine.hook_registry import HookResult
+
+        if ctx.agent_id == "main":
+            deb = get_debouncer()
+            if deb:
+                await deb.mark_main_finished()
+        return HookResult()
+
+    hook_registry.register_python_handler("channel_bus.main_started", _channel_bus_on_main_start)
+    hook_registry.register_python_handler("channel_bus.main_finished", _channel_bus_on_main_end)
+
+
+async def _announce_startup(config: Any, scan: Any) -> None:
+    """Tell the operator's chat the engine is online, best-effort.
+
+    Extracted from ``main`` for the same reason as ``_announce_shutdown``: a
+    cosmetic leaf with no ordering relationship to the steps around it.
+    """
+    try:
+        from robothor.engine.config import manifest_to_agent_config
+
+        scheduled = sum(1 for m in scan.manifests if manifest_to_agent_config(m).cron_expr)
+        from robothor.engine.delivery import get_telegram_sender
+
+        sender = get_telegram_sender()
+        if sender and config.default_chat_id:
+            await sender(
+                config.default_chat_id,
+                f"*Engine Online*\n\n"
+                f"{scheduled} scheduled agents loaded.\n"
+                f"Port {config.port} | Tenant {config.tenant_id}",
+            )
+    except Exception as e:  # noqa: BLE001 - a startup announcement is cosmetic
+        logger.debug("Startup announcement failed: %s", e)
+
+
 async def _announce_shutdown(config: Any) -> None:
     """Tell the operator's chat the engine is going down, best-effort.
 
@@ -1585,31 +1641,7 @@ async def main() -> int:
 
     hook_registry.register_python_handler("channel_bus.surface", _channel_bus_surface)
 
-    # Channel-bus main busy-state hooks: AGENT_START/AGENT_END on the main
-    # agent flip a flag in the WakeDebouncer so wakes deferred during a
-    # concurrent interactive turn can re-fire cleanly when main goes idle.
-    async def _channel_bus_on_main_start(ctx: Any) -> Any:
-        from robothor.engine.channel_bus import get_debouncer
-        from robothor.engine.hook_registry import HookResult
-
-        if ctx.agent_id == "main":
-            deb = get_debouncer()
-            if deb:
-                deb.mark_main_started()
-        return HookResult()
-
-    async def _channel_bus_on_main_end(ctx: Any) -> Any:
-        from robothor.engine.channel_bus import get_debouncer
-        from robothor.engine.hook_registry import HookResult
-
-        if ctx.agent_id == "main":
-            deb = get_debouncer()
-            if deb:
-                await deb.mark_main_finished()
-        return HookResult()
-
-    hook_registry.register_python_handler("channel_bus.main_started", _channel_bus_on_main_start)
-    hook_registry.register_python_handler("channel_bus.main_finished", _channel_bus_on_main_end)
+    _register_channel_bus_main_hooks(hook_registry)
 
     # Plugin-contributed lifecycle handlers, AFTER the engine's own so that an
     # installed package cannot claim a channel_bus.* name. Registering these
@@ -1731,23 +1763,7 @@ async def main() -> int:
     clock.finish()
     _sd_notify("READY=1")
 
-    # Startup announcement (best-effort)
-    try:
-        from robothor.engine.config import manifest_to_agent_config
-
-        scheduled = sum(1 for m in scan.manifests if manifest_to_agent_config(m).cron_expr)
-        from robothor.engine.delivery import get_telegram_sender
-
-        sender = get_telegram_sender()
-        if sender and config.default_chat_id:
-            await sender(
-                config.default_chat_id,
-                f"*Engine Online*\n\n"
-                f"{scheduled} scheduled agents loaded.\n"
-                f"Port {config.port} | Tenant {config.tenant_id}",
-            )
-    except Exception as e:  # noqa: BLE001 - a startup announcement is cosmetic
-        logger.debug("Startup announcement failed: %s", e)
+    await _announce_startup(config, scan)
 
     # Alert delivery self-test (env-gated, best-effort) — see docstring.
     await _maybe_run_alert_selftest()

@@ -2757,6 +2757,17 @@ class LLMClient:
 
     # ─── Streaming call ──────────────────────────────────────────────
 
+    async def _before_stream_retry(self, model: str, e: BaseException) -> None:
+        """Announce, tick the watchdog and pause before the one in-place
+        stream retry a channel-streaming scope gets. Not blamed: a recovered
+        blip must not count toward the breaker, exactly as in _call_llm's
+        retry. Extracted from ``_call_llm_streaming`` to hold its size."""
+        await _announce_stream_retry(model, e)
+        if self._active_watchdog:
+            self._active_watchdog.touch(f"stream_retry:{model}")
+        if STREAM_RETRY_DELAY_SECONDS > 0:
+            await asyncio.sleep(STREAM_RETRY_DELAY_SECONDS)
+
     async def _call_llm_streaming(
         self,
         messages: list[dict[str, Any]],
@@ -2970,14 +2981,8 @@ class LLMClient:
                         last_error = e
                         break
                     if stream_retries_left > 0 and _is_transient_stream_error(e):
-                        # Not blamed: a recovered blip must not count toward
-                        # the breaker, exactly as in _call_llm's retry.
                         stream_retries_left -= 1
-                        await _announce_stream_retry(model, e)
-                        if self._active_watchdog:
-                            self._active_watchdog.touch(f"stream_retry:{model}")
-                        if STREAM_RETRY_DELAY_SECONDS > 0:
-                            await asyncio.sleep(STREAM_RETRY_DELAY_SECONDS)
+                        await self._before_stream_retry(model, e)
                         continue
                     if _advance_without_blaming_the_model(e, model):
                         last_error = e

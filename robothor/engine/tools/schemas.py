@@ -1789,6 +1789,41 @@ _N8N_SCHEMAS: dict[str, dict[str, Any]] = {
 }
 
 
+_TEAM_SCRATCHPAD_SCHEMAS: dict[str, dict[str, Any]] = {
+    "team_scratchpad_read": {
+        "type": "function",
+        "function": {
+            "name": "team_scratchpad_read",
+            "description": "Read a team's shared scratchpad (omit key to read all).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "team_id": {"type": "string", "description": "Team id"},
+                    "key": {"type": "string", "description": "Specific key (optional)"},
+                },
+                "required": ["team_id"],
+            },
+        },
+    },
+    "team_scratchpad_write": {
+        "type": "function",
+        "function": {
+            "name": "team_scratchpad_write",
+            "description": "Write a key/value to a team's shared scratchpad.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "team_id": {"type": "string", "description": "Team id"},
+                    "key": {"type": "string", "description": "Scratchpad key"},
+                    "value": {"type": "string", "description": "Value to store"},
+                },
+                "required": ["team_id", "key"],
+            },
+        },
+    },
+}
+
+
 def get_engine_schemas() -> dict[str, dict[str, Any]]:
     """Return all engine-specific tool schemas keyed by tool name."""
     schemas: dict[str, dict[str, Any]] = {}
@@ -5004,38 +5039,7 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
 
     schemas.update(_HUMAN_IN_THE_LOOP_SCHEMAS)
 
-    schemas["team_scratchpad_read"] = {
-        "type": "function",
-        "function": {
-            "name": "team_scratchpad_read",
-            "description": "Read a team's shared scratchpad (omit key to read all).",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "team_id": {"type": "string", "description": "Team id"},
-                    "key": {"type": "string", "description": "Specific key (optional)"},
-                },
-                "required": ["team_id"],
-            },
-        },
-    }
-
-    schemas["team_scratchpad_write"] = {
-        "type": "function",
-        "function": {
-            "name": "team_scratchpad_write",
-            "description": "Write a key/value to a team's shared scratchpad.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "team_id": {"type": "string", "description": "Team id"},
-                    "key": {"type": "string", "description": "Scratchpad key"},
-                    "value": {"type": "string", "description": "Value to store"},
-                },
-                "required": ["team_id", "key"],
-            },
-        },
-    }
+    schemas.update(_TEAM_SCRATCHPAD_SCHEMAS)
 
     from robothor.goals.tools import schemas as pursuit_schemas
 
