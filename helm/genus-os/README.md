@@ -327,9 +327,12 @@ With `networkPolicy.enabled`, the hooks pods admit the ingress controller
 (`networkPolicy.traefikNamespace` / `traefikPodSelector`) and the Helm smoke
 pod on `hooks.port`, whether or not `hooks.ingress` is on, since the public
 route to them may be defined outside this chart. They may reach the in-chart
-cache. With an external cache, add `hooks` to
-`networkPolicy.egress.destinations.redis.components` in the environment layer,
-or the pods cannot publish.
+cache, and the chart's default `redis` and `https` egress destinations list
+`hooks` next to the engine: an external cache is reachable once its CIDR is
+set, and a `google_oidc` channel can fetch Google's signing certificates (every
+such push is refused with 401 without that route). If an environment layer
+overrides either `components` list, keep `hooks` in it, and repeat any
+`HTTP(S)_PROXY` from `engine.env` in `hooks.env`.
 
 Point the public webhook route at the `<release>-hooks` Service only once the
 hooks pods report ready; until then the engine keeps serving the same path.

@@ -909,8 +909,10 @@ networkPolicy:
         components: [engine, bridge, orchestrator, migrations]
         cidrs: []
         ports: [{protocol: TCP, port: 5432}]
+      # Hooks publishes every accepted delivery to the event stream, so an
+      # external cache must admit it too (the in-chart cache already does).
       redis:
-        components: [engine, bridge, orchestrator]
+        components: [engine, bridge, orchestrator, hooks]
         cidrs: []
         ports: [{protocol: TCP, port: 6379}]
       # The bridge embeds a memory fact an operator edits. The chart only
@@ -938,7 +940,11 @@ networkPolicy:
       # configure HTTP(S)_PROXY in only the backend component env blocks that
       # need it. Direct API CIDRs may also be listed, but unrestricted ranges
       # are rejected.
+      # Hooks is listed because a google_oidc channel verifies each push by
+      # fetching Google's signing certificates over HTTPS; without this route
+      # every such delivery is refused with 401. A proxy set in engine.env must
+      # be repeated in hooks.env.
       https:
-        components: [engine, bridge, orchestrator]
+        components: [engine, bridge, orchestrator, hooks]
         cidrs: []
         ports: [{protocol: TCP, port: 443}]

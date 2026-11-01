@@ -836,8 +836,12 @@ hooks:
 [Webhook ingress](event-bus.md#webhook-ingress)) and is mounted into the pods
 as their `webhooks.yaml`. Each `secret_env` is read from the `engine-providers`
 Secret. Route the public webhook path to the `<release>-hooks` Service once its
-pods are ready; the engine keeps serving the same path until then. The chart's
-README ("Hooks") lists every value and the network-policy wiring.
+pods are ready; the engine keeps serving the same path until then. With egress
+policies on, the hooks pods are in the default `redis` and `https` destination
+classes: a `google_oidc` channel fetches Google's signing certificates over
+HTTPS on every push, so an environment layer that overrides those lists must
+keep `hooks` in them. The chart's README ("Hooks") lists every value and the
+network-policy wiring.
 
 ## Production Checklist
 
