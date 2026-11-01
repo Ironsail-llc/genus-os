@@ -650,7 +650,8 @@ def _redact_call(tool_name: str, arguments: dict[Any, Any], depth: int) -> dict[
     as the EFFECTIVE tool's, not the wrapper's. Everything else nested is
     followed too: a credential one level down is still a credential.
     """
-    named = SECRET_TOOL_ARGUMENTS.get(tool_name, frozenset())
+    # Stripped as the dispatcher strips it: ``tool_call`` runs `` vault_set``.
+    named = SECRET_TOOL_ARGUMENTS.get(tool_name.strip(), frozenset())
     inner = arguments.get("name")
     inner_name = inner if isinstance(inner, str) and "arguments" in arguments else None
     cleaned: dict[str, Any] = {}
