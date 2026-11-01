@@ -349,3 +349,26 @@ def test_the_plugin_dir_init_step_refuses_a_symlinked_workspace_component(tmp_pa
     command = _plugin_dirs_command(str(tmp_path / "ws"))
     result = subprocess.run(command, capture_output=True, text=True, check=False)
     assert result.returncode != 0
+
+
+def test_the_plugin_dir_init_step_refuses_a_symlink_inside_the_directory(tmp_path: Path) -> None:
+    """A real ``.plugins`` holding ``somepkg -> ../scratch/somepkg`` would let
+    Python import code that is still writable through the workspace mount;
+    wheels never ship symlinks, so a legitimate install never trips this."""
+    (tmp_path / "scratch" / "somepkg").mkdir(parents=True)
+    (tmp_path / ".plugins").mkdir()
+    (tmp_path / ".plugins" / "somepkg").symlink_to("../scratch/somepkg")
+    command = _plugin_dirs_command(str(tmp_path))
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    assert result.returncode != 0
+    assert "contains a symlink" in result.stderr
+
+
+def test_the_plugin_dir_init_step_accepts_an_ordinary_installed_tree(tmp_path: Path) -> None:
+    pkg = tmp_path / ".plugins" / "acme_plugin"
+    pkg.mkdir(parents=True)
+    (pkg / "__init__.py").write_text("")
+    (tmp_path / ".plugins" / "acme_plugin-1.0.dist-info").mkdir()
+    command = _plugin_dirs_command(str(tmp_path))
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr
