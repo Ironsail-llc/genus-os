@@ -494,7 +494,11 @@ spec:
 ```
 
 Add `--index <url>` or `--accept-review` to the install as the plan requires
-(run it once with `--dry-run` to read the plan). When the Job has finished,
+(run it once with `--dry-run` to read the plan). An engine that reads its
+indexes or pinned index keys from settings (`ROBOTHOR_PLUGIN_INDEXES`,
+`ROBOTHOR_PLUGIN_INDEX_KEYS`, in `engine.env` or the entry's `env`) needs the
+same values in the Job's `env`, and the volume holding those keys mounted at
+the same path. When the Job has finished,
 reload the engine from Settings › Plugins (**Reload**) or restart its
 Deployment. Removing a plugin is the same Job running `genus plugin remove
 <name>`. When upgrading to this chart, list what each engine's `.plugins`
