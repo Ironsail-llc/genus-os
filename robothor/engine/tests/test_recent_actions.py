@@ -135,3 +135,56 @@ class TestRecordRun:
         run = _run(steps=[_step(tool_name="create_task", tool_input={"title": "x"})])
         # Must not raise.
         record_run(run)
+
+
+class TestConcurrentRuns:
+    """`_finish_run` records each run from its own worker thread, so two `main`
+    runs finishing together (a heartbeat and a chat turn) write at once."""
+
+    def test_runs_recorded_at_once_all_survive(self, tmp_path, monkeypatch):
+        import threading
+        import time
+
+        from robothor.engine import recent_actions
+
+        monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(tmp_path))
+        real_read = recent_actions._read_existing_lines
+
+        def slow_read(path):
+            lines = real_read(path)
+            time.sleep(0.05)  # widen the read-to-write window
+            return lines
+
+        monkeypatch.setattr(recent_actions, "_read_existing_lines", slow_read)
+        runs = [
+            _run(steps=[_step(tool_name="create_task", tool_input={"title": f"task-{i}"})])
+            for i in range(5)
+        ]
+        threads = [threading.Thread(target=record_run, args=(run,)) for run in runs]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        content = (tmp_path / "brain/memory/main-recent-actions.md").read_text()
+        missing = [i for i in range(5) if f"task-{i}" not in content]
+        assert not missing, f"concurrent writes lost entries {missing}"
+
+    def test_a_write_that_fails_part_way_keeps_the_previous_log(self, tmp_path, monkeypatch):
+        from pathlib import Path
+
+        monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(tmp_path))
+        record_run(_run(steps=[_step(tool_name="create_task", tool_input={"title": "kept"})]))
+
+        real_write = Path.write_text
+
+        def torn_write(self, data, *args, **kwargs):
+            real_write(self, data[:10], *args, **kwargs)
+            raise OSError("disk full")
+
+        monkeypatch.setattr(Path, "write_text", torn_write)
+        record_run(_run(steps=[_step(tool_name="create_task", tool_input={"title": "new"})]))
+        monkeypatch.undo()
+
+        content = (tmp_path / "brain/memory/main-recent-actions.md").read_text()
+        assert "kept" in content, "a torn write left a truncated log behind"

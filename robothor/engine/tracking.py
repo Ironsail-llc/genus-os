@@ -823,8 +823,19 @@ def log_guardrail_event(
     has repeatedly shipped a control that does nothing. The row is re-written
     as ``warned`` — the guardrail NAME is what the evidence queries key on, and
     it is unchanged — and the operator is told once which migration to run.
+
+    The INSERT is queued to the engine's event writer (``event_writer.py``) so
+    it never runs on the event loop; rows keep their order, and with no running
+    loop the row is written before this returns.
     """
+    from robothor.engine.event_writer import get_event_writer
+
     row = (run_id, step_number, guardrail_name, action, tool_name, reason, mode)
+    get_event_writer().submit(_write_guardrail_event, row, action)
+
+
+def _write_guardrail_event(row: tuple[Any, ...], action: str) -> None:
+    """INSERT one guardrail row, degrading an action the CHECK refuses."""
     try:
         _insert_guardrail_event(row)
         return
