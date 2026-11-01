@@ -159,13 +159,18 @@ def vault_set_admitted(facts: Facts) -> bool:
     """
     if facts.credential_tier == "operator":
         return True
-    return facts.credential_intake == "enforce" and facts.agent_id == facts.default_chat_agent
+    return _intake_serves(facts) and facts.credential_intake == "enforce"
+
+
+def _intake_serves(facts: Facts) -> bool:
+    """This build has credential intake, and this agent is the one it serves."""
+    return facts.credential_intake is not None and facts.agent_id == facts.default_chat_agent
 
 
 def _credential_gate(facts: Facts) -> tuple[str, str, str]:
     path = f"docs/agents/{facts.agent_id}.yaml"
     tier = f"adds `credentials: operator` under `v2:` in {path}"
-    if facts.credential_intake is not None and facts.agent_id == facts.default_chat_agent:
+    if _intake_serves(facts):
         return (
             "flag",
             "ROBOTHOR_CREDENTIAL_INTAKE",
