@@ -113,6 +113,18 @@ def _shared_client() -> httpx.AsyncClient | None:
     return client
 
 
+async def _send_pooled(
+    client: httpx.AsyncClient, method: str, url: str, **kwargs: Any
+) -> httpx.Response:
+    """One request on the shared pool, retried once where that is safe."""
+    try:
+        return await client.request(method, url, **kwargs)
+    except httpx.HTTPError as error:
+        if not _worth_one_retry(method, error):
+            raise
+    return await client.request(method, url, **kwargs)
+
+
 def _engine_token() -> str:
     # ``require_existing_key=False``: the guard is for a CLI or a doctor on a
     # box whose vault may be unreadable, where minting would generate and
@@ -144,16 +156,9 @@ async def engine_request(
         if shared is not None:
             # One pool for every engine call: a new client per call was a new
             # connection (and handshake) per proxied request.
-            try:
-                response = await shared.request(
-                    method, url, json=json, headers=headers, timeout=timeout
-                )
-            except httpx.HTTPError as first:
-                if not _worth_one_retry(method, first):
-                    raise
-                response = await shared.request(
-                    method, url, json=json, headers=headers, timeout=timeout
-                )
+            response = await _send_pooled(
+                shared, method, url, json=json, headers=headers, timeout=timeout
+            )
         else:
             async with httpx.AsyncClient(timeout=timeout) as client:
                 response = await client.request(method, url, json=json, headers=headers)
