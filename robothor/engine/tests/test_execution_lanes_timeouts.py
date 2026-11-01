@@ -10,6 +10,8 @@ timeout would count toward its circuit breaker. So both take the slot first.
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -157,6 +159,134 @@ class TestTheWorkflowClockStartsAfterTheSlot:
         run = await asyncio.wait_for(task, timeout=1.0)
         assert run.status.value == "completed"
         assert clock_entries[0] == {"active": 1, "waiting": 0}
+
+
+class _RecordingConn:
+    """A connection that records each statement, whitespace-normalised."""
+
+    def __init__(self, log: list[tuple[str, Any]]) -> None:
+        self._log = log
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def cursor(self):
+        log = self._log
+
+        class _Cur:
+            rowcount = 1
+
+            def execute(self, sql, params=None):
+                log.append((" ".join(sql.split()), params))
+
+            def fetchone(self):
+                return None
+
+            def fetchall(self):
+                return []
+
+        return _Cur()
+
+    def commit(self):
+        return None
+
+
+def _run_writes(log: list[tuple[str, Any]]) -> list[tuple[str, Any]]:
+    return [(sql, p) for sql, p in log if "workflow_runs " in sql or "workflow_runs(" in sql]
+
+
+class TestAQueuedWorkflowIsNotYetRunning:
+    """A workflow waiting for its lane slot is recorded as pending, with no start
+    time, so the stuck-run alert, the reaper and duration_ms never read time
+    queued as time running."""
+
+    async def test_the_row_is_pending_until_the_slot_is_taken(
+        self, lanes_on, pool, tmp_path, monkeypatch
+    ):
+        from robothor.engine.config import EngineConfig
+        from robothor.engine.models import WorkflowDef, WorkflowStepDef, WorkflowStepType
+        from robothor.engine.workflow import WorkflowEngine
+
+        log: list[tuple[str, Any]] = []
+        monkeypatch.setattr(
+            "robothor.db.connection.get_connection", lambda *a, **k: _RecordingConn(log)
+        )
+        engine = WorkflowEngine(
+            EngineConfig(workspace=tmp_path, manifest_dir=tmp_path / "agents"), runner=MagicMock()
+        )
+        step = WorkflowStepDef(id="t", type=WorkflowStepType.TRANSFORM, transform_expr="value")
+        engine._workflows["test-wf"] = WorkflowDef(
+            id="test-wf", name="Test WF", steps=[step], timeout_seconds=5
+        )
+        engine._persist_step = MagicMock()
+
+        await pool.acquire(Lane.BACKGROUND)  # the lane is full
+        task = asyncio.create_task(engine.execute("test-wf"))
+        await asyncio.sleep(0.2)
+
+        writes = _run_writes(log)
+        assert len(writes) == 1, writes
+        sql, params = writes[0]
+        assert sql.startswith("INSERT INTO workflow_runs")
+        assert "pending" in params
+        assert "running" not in params
+        assert not any(isinstance(p, datetime) for p in params), "started_at set while queued"
+
+        released_at = datetime.now(UTC)
+        pool.release(Lane.BACKGROUND)
+        run = await asyncio.wait_for(task, timeout=2.0)
+
+        assert run.status.value == "completed"
+        assert run.started_at is not None and run.started_at >= released_at
+        assert run.duration_ms is not None and run.duration_ms < 200, "queue time counted"
+        marked = [
+            p
+            for sql, p in _run_writes(log)[1:]
+            if sql.startswith("UPDATE workflow_runs") and "running" in (p or ())
+        ]
+        assert marked, "the row never moved to running once the slot was taken"
+        assert any(isinstance(v, datetime) and v >= released_at for v in marked[0])
+
+    async def test_flag_off_starts_running_as_before(self, pool, tmp_path, monkeypatch):
+        monkeypatch.delenv("ROBOTHOR_EXECUTION_LANES", raising=False)
+        from robothor.engine.config import EngineConfig
+        from robothor.engine.models import WorkflowDef, WorkflowStepDef, WorkflowStepType
+        from robothor.engine.workflow import WorkflowEngine
+
+        log: list[tuple[str, Any]] = []
+        monkeypatch.setattr(
+            "robothor.db.connection.get_connection", lambda *a, **k: _RecordingConn(log)
+        )
+        engine = WorkflowEngine(
+            EngineConfig(workspace=tmp_path, manifest_dir=tmp_path / "agents"), runner=MagicMock()
+        )
+        step = WorkflowStepDef(id="t", type=WorkflowStepType.TRANSFORM, transform_expr="value")
+        engine._workflows["test-wf"] = WorkflowDef(
+            id="test-wf", name="Test WF", steps=[step], timeout_seconds=5
+        )
+        engine._persist_step = MagicMock()
+
+        run = await asyncio.wait_for(engine.execute("test-wf"), timeout=2.0)
+        assert run.status.value == "completed"
+        assert run.started_at is not None
+
+
+class TestAPendingRowIsReapedAfterACrash:
+    def test_the_reaper_also_closes_pending_rows_left_by_a_dead_engine(self, monkeypatch):
+        """An engine killed while a workflow was queued leaves a pending row."""
+        from robothor.engine import daemon
+
+        log: list[tuple[str, Any]] = []
+        monkeypatch.setattr(
+            "robothor.db.connection.get_connection", lambda *a, **k: _RecordingConn(log)
+        )
+        daemon._cleanup_stale_workflow_runs("test-tenant")
+        updates = [sql for sql, _ in log if sql.startswith("UPDATE workflow_runs")]
+        assert updates
+        assert any("'pending'" in sql and "created_at" in sql for sql in updates), updates
 
 
 class TestZeroMeansUncappedOnlyForInteractive:

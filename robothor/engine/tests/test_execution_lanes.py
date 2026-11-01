@@ -322,6 +322,37 @@ class TestOccupancyIsVisible:
         assert snap["interactive"]["limit"] == 4
         assert snap["background"]["limit"] == 1
 
+    def test_limits_come_from_config_yaml(self, lanes_on, monkeypatch, tmp_path):
+        """The three lane settings are declared settings, so config.yaml sets them."""
+        for name in (
+            "ROBOTHOR_MAX_CONCURRENT_INTERACTIVE",
+            "ROBOTHOR_MAX_CONCURRENT_BACKGROUND",
+            "ROBOTHOR_LANE_BACKGROUND_YIELD_MS",
+        ):
+            monkeypatch.delenv(name, raising=False)
+        (tmp_path / ".robothor").mkdir()
+        (tmp_path / ".robothor" / "config.yaml").write_text(
+            "settings:\n"
+            "  engine:\n"
+            "    max_concurrent_interactive: 5\n"
+            "    max_concurrent_background: 3\n"
+            "    lane_background_yield_ms: 0\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(tmp_path))
+        pool = lanes.get_lanes()
+        snap = pool.snapshot()
+        assert snap["interactive"]["limit"] == 5
+        assert snap["background"]["limit"] == 3
+        assert pool._yield_s == 0
+
+    def test_an_invalid_value_falls_back_to_the_defaults(self, lanes_on, monkeypatch):
+        """A bad value must not stop every run from taking a slot."""
+        monkeypatch.setenv("ROBOTHOR_MAX_CONCURRENT_BACKGROUND", "many")
+        snap = lanes.get_lanes().snapshot()
+        assert snap["background"]["limit"] == lanes.DEFAULT_BACKGROUND_LIMIT
+        assert snap["interactive"]["limit"] == lanes.DEFAULT_INTERACTIVE_LIMIT
+
     def test_default_limits(self, lanes_on, monkeypatch):
         monkeypatch.delenv("ROBOTHOR_MAX_CONCURRENT_INTERACTIVE", raising=False)
         monkeypatch.delenv("ROBOTHOR_MAX_CONCURRENT_BACKGROUND", raising=False)
