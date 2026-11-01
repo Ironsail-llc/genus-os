@@ -13,6 +13,7 @@ import { useEffect, useState } from "react";
 const lazy = vi.hoisted(() => ({
   loaded: [] as string[],
   mounts: {} as Record<string, number>,
+  failing: null as string | null,
 }));
 
 vi.mock("@/hooks/use-visual-state", () => ({
@@ -79,6 +80,31 @@ function stub(name: string) {
 }
 
 /**
+ * A view module's stand-in, or, for the view a test names in `lazy.failing`,
+ * one whose chunk did not download. The export throws on access, as the
+ * dynamic import's `.then` reads it: the shell sees the loader reject with the
+ * chunk error itself. (An error thrown by the factory reaches it wrapped in
+ * vitest's own message.)
+ *
+ * The choice is made here, when the module is imported, and not by a second
+ * `vi.doMock` of the same path in the test: vitest resolves the mocks queued
+ * before an import in parallel and registers each as its path resolves, so of
+ * two queued for one path either can win.
+ */
+function viewModule(exportName: string, name: string) {
+  if (lazy.failing === name) {
+    const error = new Error(`Failed to load chunk /_next/static/chunks/${name}.js`);
+    error.name = "ChunkLoadError";
+    return {
+      get [exportName]() {
+        throw error;
+      },
+    };
+  }
+  return { [exportName]: stub(name) };
+}
+
+/**
  * Registered with `doMock` in `beforeEach`, after `resetModules`, so every test
  * starts with fresh factories: a factory registered once with `vi.mock` would
  * stay cached across tests and record its import only in the first.
@@ -116,9 +142,10 @@ describe("AppShell — views load on first visit", () => {
     vi.resetModules();
     lazy.loaded = [];
     lazy.mounts = {};
+    lazy.failing = null;
     reload.page.mockClear();
     for (const [path, exportName, name] of VIEW_MODULES) {
-      vi.doMock(path, () => ({ [exportName]: stub(name) }));
+      vi.doMock(path, () => viewModule(exportName, name));
     }
     window.localStorage.clear();
   });
@@ -183,18 +210,7 @@ describe("AppShell — views load on first visit", () => {
    */
   it("keeps the Helm up when a view's chunk fails to load, and offers a reload", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
-    vi.doMock("@/components/views/goals-view", () => {
-      // The export throws on access, as the dynamic import's `.then` reads it:
-      // the shell sees the loader reject with the chunk error itself. (An error
-      // thrown by the factory reaches it wrapped in vitest's own message.)
-      const error = new Error("Failed to load chunk /_next/static/chunks/goals.js");
-      error.name = "ChunkLoadError";
-      return {
-        get GoalsView() {
-          throw error;
-        },
-      };
-    });
+    lazy.failing = "goals";
     await renderShellAt("?v=goals");
 
     const panel = await screen.findByTestId("view-load-failed", {}, CHUNK_WAIT);

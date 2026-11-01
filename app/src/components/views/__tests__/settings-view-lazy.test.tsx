@@ -6,7 +6,7 @@ import { render, screen, fireEvent } from "@testing-library/react";
  * stand-in whose factory records the import, so the record is exactly the set
  * of page modules Settings asked for.
  */
-const lazy = vi.hoisted(() => ({ loaded: [] as string[] }));
+const lazy = vi.hoisted(() => ({ loaded: [] as string[], failing: null as string | null }));
 const reload = vi.hoisted(() => ({ page: vi.fn() }));
 vi.mock("@/lib/reload-page", () => ({ reloadPage: () => reload.page() }));
 
@@ -15,6 +15,31 @@ function stub(name: string) {
   return function StubPage() {
     return <div data-testid={`stub-${name}-page`} />;
   };
+}
+
+/**
+ * A page module's stand-in, or, for the page a test names in `lazy.failing`,
+ * one whose chunk did not download. The export throws on access, as the
+ * dynamic import's `.then` reads it: the loader rejects with the chunk error
+ * itself. (An error thrown by the factory reaches it wrapped in vitest's own
+ * message.)
+ *
+ * The choice is made here, when the module is imported, and not by a second
+ * `vi.doMock` of the same path in the test: vitest resolves the mocks queued
+ * before an import in parallel and registers each as its path resolves, so of
+ * two queued for one path either can win, and the page sometimes loaded fine.
+ */
+function pageModule(exportName: string, name: string) {
+  if (lazy.failing === name) {
+    const error = new Error(`Failed to load chunk /_next/static/chunks/${name}.js`);
+    error.name = "ChunkLoadError";
+    return {
+      get [exportName]() {
+        throw error;
+      },
+    };
+  }
+  return { [exportName]: stub(name) };
 }
 
 /** Fresh factories per test (see app-shell-lazy.test.tsx for why `doMock`). */
@@ -53,9 +78,10 @@ describe("SettingsView — sub-pages load on demand", () => {
   beforeEach(() => {
     vi.resetModules();
     lazy.loaded = [];
+    lazy.failing = null;
     reload.page.mockClear();
     for (const [path, exportName, name] of PAGE_MODULES) {
-      vi.doMock(path, () => ({ [exportName]: stub(name) }));
+      vi.doMock(path, () => pageModule(exportName, name));
     }
   });
 
@@ -73,18 +99,7 @@ describe("SettingsView — sub-pages load on demand", () => {
 
   it("says a page that failed to download needs a reload, not another page", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
-    vi.doMock("@/components/views/settings/plugins-page", () => {
-      // The export throws on access, as the dynamic import's `.then` reads it:
-      // the shell sees the loader reject with the chunk error itself. (An error
-      // thrown by the factory reaches it wrapped in vitest's own message.)
-      const error = new Error("Failed to load chunk /_next/static/chunks/plugins.js");
-      error.name = "ChunkLoadError";
-      return {
-        get PluginsPage() {
-          throw error;
-        },
-      };
-    });
+    lazy.failing = "plugins";
     await renderSettings("plugins");
 
     const panel = await screen.findByTestId("settings-page-load-failed", {}, CHUNK_WAIT);
