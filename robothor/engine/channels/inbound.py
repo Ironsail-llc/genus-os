@@ -36,13 +36,14 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from robothor.constants import DEFAULT_TENANT
+from robothor.engine.channel_streaming import channel_stream_scope, channel_streaming_enabled
 from robothor.engine.channels import access
 from robothor.engine.chat import get_shared_session
 from robothor.engine.chat_history import append_turn
 from robothor.engine.models import RunStatus, TriggerType
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from collections.abc import AsyncIterator, Callable
+    from collections.abc import AsyncIterator, Awaitable, Callable
 
     from robothor.identity import IdentityContext
 
@@ -194,6 +195,7 @@ async def handle_message(
     mode: str | None = None,
     record_turn: bool = True,
     history_limit: int | None = None,
+    stream: Callable[[str], Awaitable[None]] | None = None,
 ) -> InboundResult:
     """Gate one inbound message and, if it is allowed, run it.
 
@@ -225,6 +227,13 @@ async def handle_message(
             failed, timed-out or empty run records nothing.
         history_limit: hand the run only the last N turns (user + assistant
             pairs) of the session's history. ``None`` hands it all of it.
+        stream: optional. With ``ROBOTHOR_CHANNEL_STREAMING`` on, called with the
+            run's CUMULATIVE text as the model writes it (the runner's
+            ``on_content``), including interim text from a tool turn. It may
+            restart shorter — a new model call, or a stream retried after a
+            transient failure — so render it by replacing, never appending. The
+            reply in the result is still the complete answer. Flag off, or
+            ``None``, the run is today's.
 
     Messages sharing a ``session_key`` run one after another; different
     conversations run concurrently, up to the fleet-wide
@@ -269,18 +278,23 @@ async def handle_message(
         if history_limit is not None:
             history = _last_turns(history, history_limit)
         try:
+            run_kwargs: dict[str, Any] = {
+                "agent_id": agent_id,
+                "message": text,
+                "trigger_type": trigger_type,
+                "trigger_detail": detail,
+                "tenant_id": resolved_tenant,
+                "user_id": run_as(identity, channel, native_id),
+                "user_role": (identity.role if identity else "") or "user",
+                "identity": identity,
+                "conversation_history": history or None,
+            }
             async with _fleet_slots():
-                run = await runner.execute(
-                    agent_id=agent_id,
-                    message=text,
-                    trigger_type=trigger_type,
-                    trigger_detail=detail,
-                    tenant_id=resolved_tenant,
-                    user_id=run_as(identity, channel, native_id),
-                    user_role=(identity.role if identity else "") or "user",
-                    identity=identity,
-                    conversation_history=history or None,
-                )
+                if stream is not None and channel_streaming_enabled():
+                    with channel_stream_scope():
+                        run = await runner.execute(**run_kwargs, on_content=stream)
+                else:
+                    run = await runner.execute(**run_kwargs)
         except Exception:
             # Logged with a traceback here, where it reaches the journal; the
             # SENDER gets FAILED_REPLY, which names nothing.
