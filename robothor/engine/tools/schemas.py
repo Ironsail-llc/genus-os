@@ -258,6 +258,16 @@ BROWSER_AUTONOMY_DESCRIPTION = (
     "Return setup_path to the user; it expires in 15 minutes and requires their linked personal account."
 )
 
+#: ``mcp_list_tools``'s ``refresh`` parameter, declared only under
+#: ``ROBOTHOR_CONFIG_CACHE``: without the cache there is nothing to refresh, and
+#: the flags-off schema stays as it was.
+_MCP_LIST_TOOLS_REFRESH_PARAM: dict[str, Any] = {
+    "type": "boolean",
+    "description": (
+        "Ask the server again instead of returning the tool list cached for its current session."
+    ),
+}
+
 # Long descriptions live out here: get_engine_schemas is already one of the
 # engine's largest functions and the size ratchet only lets it shrink.
 _WEB_SEARCH_DESCRIPTION = (
@@ -3803,13 +3813,9 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
     from robothor.engine.feature_flags import config_cache_enabled
 
     if config_cache_enabled():
-        schemas["mcp_list_tools"]["function"]["parameters"]["properties"]["refresh"] = {
-            "type": "boolean",
-            "description": (
-                "Ask the server again instead of returning the tool "
-                "list cached for its current session."
-            ),
-        }
+        schemas["mcp_list_tools"]["function"]["parameters"]["properties"]["refresh"] = dict(
+            _MCP_LIST_TOOLS_REFRESH_PARAM
+        )
     schemas["mcp_call_tool"] = {
         "type": "function",
         "function": {
