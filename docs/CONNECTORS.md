@@ -179,6 +179,23 @@ Then add the `example_*` tool names to the agent's `tools_allowed` in
 can see them; the allowlist controls *whether* they're exposed). Tools are
 discovered from the bridge's `tools/list` at registration — no per-tool code.
 
+With `ROBOTHOR_CONFIG_CACHE` on (default off, see the
+[configuration reference](reference/configuration.md)), the engine keeps each
+adapter's `tools/list` for up to ten minutes while its session lives, instead
+of asking on every run. A dropped stdio session, a changed adapter file (which
+also restarts the session on the new command or URL), a plugin reload
+(`genus plugin sync`) or `mcp_list_tools` with `refresh: true` fetches it
+sooner. An HTTP session never drops, so for a remote server the ten-minute age
+limit is what picks up tools it added or removed. A `tools/list` that fails or
+times out is never cached. A stdio server whose request was abandoned after it
+was written (a timed-out list or call) is restarted before its next request,
+because its unread answer would be misread; a request already queued on that
+server fails with "pipe out of step" instead of reading it. One that only waited behind
+another run's call is left alone, and so is an HTTP server.
+Adapters also connect concurrently (four at a time, each under its own
+five-second timeout), an HTTP server keeps one client for all its requests, and
+the engine opens every adapter's session in the background when it starts.
+
 ## Verify
 
 ```bash

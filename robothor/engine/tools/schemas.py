@@ -3795,6 +3795,13 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
                         "type": "string",
                         "description": "Name of the MCP server",
                     },
+                    "refresh": {
+                        "type": "boolean",
+                        "description": (
+                            "Ask the server again instead of returning the tool "
+                            "list cached for its current session."
+                        ),
+                    },
                 },
                 "required": ["server_name"],
             },

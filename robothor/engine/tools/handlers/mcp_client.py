@@ -40,8 +40,7 @@ async def _mcp_list_tools(args: dict[str, Any], ctx: ToolContext) -> dict[str, A
 
     pool = get_mcp_client_pool()
     try:
-        session = await pool.get_session(server_name)
-        tools = await session.list_tools()
+        tools = await pool.list_tools_cached(server_name, refresh=bool(args.get("refresh")))
         return {"server": server_name, "tools": tools}
     except ValueError as e:
         return {"error": str(e)}
