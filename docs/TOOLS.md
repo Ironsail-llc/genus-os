@@ -1029,9 +1029,11 @@ resolving to a real spill file, so quoting the path in a comment buys nothing.
 With `ROBOTHOR_SANDBOX_PLAYGROUND` on, every `exec` result carries
 `executed_on`: `sandbox` (the run's container), `host` (the engine) or
 `host_service` (the owner's host-execution service). When the agent wanted a
-container and the engine has none, an owner or admin's command runs on the
-engine host and the result adds an `execution_note` saying so; repeat it to the
-person rather than claiming the command was isolated. Anyone else gets
+container and the engine has none, the command of an owner or admin driving
+the run runs on the engine host and the result adds an `execution_note` saying
+so; repeat it to the person rather than claiming the command was isolated.
+`execute_code` results carry `executed_on` too: an owner's snippet beside a live
+container runs on the host, and its note says so. Anyone else gets
 `error_type: exec_unavailable`, an `error` naming the missing runtime and their
 role, and an `unlock` saying who can run it or what the operator would install.
 `execute_code` is refused the same way, and the desktop and browser tools are

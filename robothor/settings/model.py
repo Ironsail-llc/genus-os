@@ -1128,8 +1128,10 @@ class EngineSettings(SettingsGroup):
         False,
         "ROBOTHOR_SANDBOX_PLAYGROUND",
         "When a container is wanted but cannot start, run exec on the engine host "
-        "for an owner or admin (with a note) and refuse it for anyone else with the "
-        "gate and unlock named, instead of failing the run.",
+        "for an owner or admin driving the run (with a note) and refuse it for anyone "
+        "else with the gate and unlock named, instead of failing the run. Also lets "
+        "that owner or admin past the exec allowlist and run execute_code on the "
+        "host beside a live container, each recorded.",
         since="unreleased",
     )
     sandbox_start_retries: int = declare(
