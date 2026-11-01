@@ -19,6 +19,7 @@ two answers. This module keeps what is specific to PROXYING: the path check
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import sys
@@ -104,11 +105,17 @@ def _shared_client() -> httpx.AsyncClient | None:
 
     A closed client counts as none: one that outlived its lifespan would
     raise ``RuntimeError`` rather than an ``httpx`` error, and the route would
-    answer a 500 instead of the 502 a dead engine gets.
+    answer a 500 instead of the 502 a dead engine gets. So does a caller on a
+    different event loop than the one the client was opened on (a ``def``
+    route driving this with ``asyncio.run`` in a worker thread): an httpx
+    client's pooled connections belong to one loop, and that caller gets a
+    one-off client instead.
     """
     service = sys.modules.get("bridge_service")
     client: httpx.AsyncClient | None = getattr(service, "http_client", None)
     if client is None or client.is_closed:
+        return None
+    if getattr(service, "http_client_loop", None) is not asyncio.get_running_loop():
         return None
     return client
 

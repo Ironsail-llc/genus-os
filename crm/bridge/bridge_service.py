@@ -84,6 +84,9 @@ _bridge_config: dict = {
 }
 
 http_client: httpx.AsyncClient | None = None
+#: The event loop ``http_client`` was opened on. An httpx client belongs to
+#: one loop, so ``engine_request`` shares it only with callers on that loop.
+http_client_loop: asyncio.AbstractEventLoop | None = None
 
 
 async def _routine_trigger_loop():
@@ -128,7 +131,7 @@ async def _routine_trigger_loop():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global http_client
+    global http_client, http_client_loop
     from robothor.auth.runtime import validate_auth_configuration
 
     validate_auth_configuration(bind_host=os.environ.get("ROBOTHOR_BRIDGE_HOST", "127.0.0.1"))
@@ -137,6 +140,7 @@ async def lifespan(app: FastAPI):
     # not use the SSO exchange), so this is a loud log line rather than a raise.
     sso_secret_present()
     http_client = httpx.AsyncClient(timeout=30.0)
+    http_client_loop = asyncio.get_running_loop()
     from robothor.autonomy.handoff_worker import purge_expired_observations, recover_checks
 
     trigger_task = asyncio.create_task(_routine_trigger_loop())
@@ -158,6 +162,7 @@ async def lifespan(app: FastAPI):
         # Forgotten, not just closed: a call after shutdown then takes the
         # one-off client and reports a dead engine as a 502, not a 500.
         http_client = None
+        http_client_loop = None
 
 
 # ─── App Assembly ────────────────────────────────────────────────────────
