@@ -50,7 +50,10 @@ KNOWN_LARGE: dict[str, int] = {
     # platform ships is now asked for explicitly), and the cluster it travelled
     # out with paid 17 lines back 169 times over.
     # 3251 -> 3220: the two team-scratchpad schemas left for `_TEAM_SCRATCHPAD_SCHEMAS`.
-    "tools/schemas.py::get_engine_schemas": 3220,
+    # 3220 -> 3208: `mcp_list_tools`'s parameters left for
+    # `_mcp_list_tools_properties`, which is what paid for its flag-gated
+    # `refresh` argument.
+    "tools/schemas.py::get_engine_schemas": 3208,
     # -29: every subsystem router mount extracted to _mount_subsystem_routers,
     # which is what made room for the /api/admin registration rather than
     # raising this number for it.
@@ -112,7 +115,8 @@ KNOWN_LARGE: dict[str, int] = {
     # _recover_scan_and_restore, which is what paid for the startup clock and
     # the dependency-graph comment rather than raising this number for them.
     # 371 -> 331: the channel-bus main hooks and the startup announcement left for helpers.
-    "daemon.py::main": 331,
+    # 331 -> 326: the MCP pre-warm left for `_spawn_mcp_prewarm`.
+    "daemon.py::main": 326,
     # 384 -> 338: the post-reply persist-and-map closure left for
     # telegram_delivery.persist_and_map, rather than raising this number.
     "telegram.py::_run_interactive": 338,
