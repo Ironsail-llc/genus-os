@@ -247,14 +247,20 @@ MUTATION_GATES = (
     "require_tenant_operator(",
 )
 
-#: Appliance-wide mutation surfaces: guardrail flags, settings, plugins, the
-#: marketplace install state (which writes the bridge host's own workspace) and
-#: the fleet-default model file. These must carry the ROOT gate — a tenant
-#: admin gate would let a child tenant's admin change every tenant's appliance.
+#: Appliance-wide mutation surfaces: guardrail flags, settings, what plugins
+#: are installed and the root's per-child plugin grants, the marketplace
+#: install state (which writes the bridge host's own workspace) and the
+#: fleet-default model file. These must carry the ROOT gate — a tenant admin
+#: gate would let a child tenant's admin change every tenant's appliance.
+#: Plugin enable, disable and reload are NOT here: each tenant's engine runs
+#: its own set, so those are the acting tenant's administration.
 ROOT_ONLY_PREFIXES = (
     "/api/controls",
     "/api/settings",
-    "/api/plugins",
+    "/api/plugins/install",
+    "/api/plugins/sync",
+    "/api/plugins/{name}/remove",
+    "/api/plugins/{name}/tenants",
     "/api/installed-agents",
     "/api/providers/defaults",
 )
@@ -390,7 +396,9 @@ def test_appliance_wide_mutations_carry_the_root_gate() -> None:
         for route in _mutation_routes()
         if any(_matches(route.path, prefix) for prefix in ROOT_ONLY_PREFIXES)
     ]
-    assert len(routes) >= 12, f"root-only enumeration collapsed: {len(routes)}"
+    # 11, not 12: plugin enable/disable/reload became tenant administration
+    # and the root's per-child grant route joined the root set.
+    assert len(routes) >= 11, f"root-only enumeration collapsed: {len(routes)}"
     wrong = [
         _describe(route)
         for route in routes

@@ -35,7 +35,7 @@ import {
   cfAccessEnabled,
   verifyCfAccessJwt,
 } from "@/lib/cf-access";
-import { getServiceUrl } from "@/lib/services/registry";
+import { getServiceUrl, rootTenant } from "@/lib/services/registry";
 
 const OIDC_ISSUER = process.env.AUTH_OIDC_ISSUER;
 const BRIDGE_URL = () => getServiceUrl("bridge") || "http://localhost:9100";
@@ -503,6 +503,7 @@ export async function bridgeSessionCallback({
     delete session.role;
     delete session.tenantId;
     delete session.homeTenantId;
+    delete session.rootTenantId;
     delete session.tenantNotice;
     delete session.mfaSetupRequired;
     delete session.bridgeRefresh;
@@ -524,6 +525,10 @@ export async function bridgeSessionCallback({
   // Non-secret: the switcher and the "Acting as" banner compare the two.
   session.homeTenantId =
     typeof token.homeTenantId === "string" ? token.homeTenantId : undefined;
+  // Non-secret, and a deployment fact rather than a claim: which tenant is the
+  // root. With the two above it tells a root operator at home apart, which is
+  // who the root-only plugin grant control is for. The bridge still decides.
+  session.rootTenantId = rootTenant();
   if (token.tenantNotice === TENANT_REVERTED_NOTICE) session.tenantNotice = TENANT_REVERTED_NOTICE;
   else delete session.tenantNotice;
   // Not a credential — a policy flag. /api/auth/me stays authoritative; this

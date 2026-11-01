@@ -1487,9 +1487,9 @@ Usage: `genus import [platform] [--source SOURCE] [--tenant TENANT]`
 
 ## `genus tenant`
 
-Create, list, and inspect tenants; claim SSO domains; move accounts.
+Create, list, and inspect tenants; claim SSO domains; move accounts and workloads.
 
-Usage: `genus tenant {create,list,status,set-domains,move-account}`
+Usage: `genus tenant {create,list,status,set-domains,move-account,move-workload}`
 
 ### `genus tenant create`
 
@@ -1547,6 +1547,21 @@ Usage: `genus tenant move-account [--email EMAIL] [--to TO] [--from FROM_TENANT]
 | `--from` | `FROM_TENANT` | — | Source tenant ID, when the address has an account in more than one tenant |
 | `--role` | `admin` \| `member` \| `viewer` | — | Role in the target tenant (default: keep it; an owner moving into a child tenant needs --role admin) |
 | `--detach-person` | — | off | Leave the account's CRM contact and its history in the source tenant and give the account a new contact in the target (required when that contact has history) |
+| `--dry-run` | — | off | Show what would move; change nothing |
+| `--json` | — | off | Print the report as JSON |
+
+### `genus tenant move-workload`
+
+Move the history of named agents and workflows to another tenant.
+
+Usage: `genus tenant move-workload [--from FROM_TENANT] [--to TO] [--agent AGENT] [--workflow WORKFLOW] [--dry-run] [--json]`
+
+| Flag | Takes | Default | Description |
+| --- | --- | --- | --- |
+| `--from` | `FROM_TENANT` | — | Tenant the workload ran in |
+| `--to` | `TO` | — | Target tenant ID: a descendant or sibling under the same root |
+| `--agent` | `AGENT` | `[]` | Agent ID to move (repeatable) |
+| `--workflow` | `WORKFLOW` | `[]` | Workflow ID to move (repeatable) |
 | `--dry-run` | — | off | Show what would move; change nothing |
 | `--json` | — | off | Print the report as JSON |
 

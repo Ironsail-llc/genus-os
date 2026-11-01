@@ -1229,6 +1229,16 @@ def _refuse_move(
         )
 
 
+def _refuse_foreign_shell(cur: Any, source: str, target: str) -> None:
+    """Refuse unless this shell's engine tenant is the root of both tenants."""
+    from robothor.tenancy.root_shell import root_shell_refusal, tenant_ancestry
+
+    roots = {chain[-1] for chain in (tenant_ancestry(cur, t) for t in (source, target)) if chain}
+    refusal = root_shell_refusal("move-account", roots)
+    if refusal:
+        raise AccountMoveError(refusal)
+
+
 def _detach_person(cur: Any, old_person: str, to_tenant: str, user_id: str) -> str:
     """Give an already-moved account a fresh CRM contact in its new tenant.
 
@@ -1302,6 +1312,7 @@ def move_account(
             if not account:
                 raise AccountMoveError(f"no account with id {user_id!r}")
             _refuse_move(cur, account, user_id, to_tenant, role)
+            _refuse_foreign_shell(cur, account["tenant_id"], to_tenant)
             source = account["tenant_id"]
             old_person = str(account["person_id"]) if account.get("person_id") else None
             detach = bool(old_person) and detach_person
