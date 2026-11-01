@@ -28,6 +28,16 @@ if TYPE_CHECKING:
 
 
 @pytest.fixture(autouse=True)
+def isolated_published_runs(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A fresh once-per-run telemetry guard per test, so fixed run ids don't leak."""
+    from collections import OrderedDict
+
+    from robothor.engine import run_finalizer
+
+    monkeypatch.setattr(run_finalizer, "_PUBLISHED_RUN_IDS", OrderedDict(), raising=False)
+
+
+@pytest.fixture(autouse=True)
 def isolated_model_breaker(monkeypatch: pytest.MonkeyPatch):
     """Swap the global model breaker for a fresh, alert-less one per test.
 
