@@ -89,6 +89,11 @@ def remote(tmp_path, monkeypatch, coding_env):
     monkeypatch.setenv("ROBOTHOR_CODING_WORKSPACE", str(tmp_path / "coding"))
     monkeypatch.setenv("ROBOTHOR_CODING_REMOTES", url)
     monkeypatch.setenv("ROBOTHOR_CODING_PR_ENABLED", "true")
+    # The fake runner commits with this process's git, in a fresh clone with no
+    # user config: a CI runner has no global identity to fall back on.
+    for role in ("AUTHOR", "COMMITTER"):
+        monkeypatch.setenv(f"GIT_{role}_NAME", "Alice Example")
+        monkeypatch.setenv(f"GIT_{role}_EMAIL", "agent@example.com")
     from robothor.engine.coding import repos
 
     monkeypatch.setattr(repos, "github_token", lambda tenant_id: TOKEN)
