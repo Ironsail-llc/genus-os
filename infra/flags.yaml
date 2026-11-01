@@ -962,3 +962,17 @@ flags:
       robothor_lane_waiting gauges show background waiting during a burst of
       scheduled runs while interactive time to first delta stays flat, and no
       background run is starved (waiting returns to 0 after the burst).
+
+  - name: ROBOTHOR_AMBIENT
+    owner: ops
+    mode: "off"
+    soak: >
+      NEW. Ambient follow-ups (docs/AMBIENT.md): an agent whose manifest has an
+      `ambient:` block finds threads where a person wrote and nobody answered,
+      and proposes a nudge, a digest or a reply on the operator's behalf, each
+      held to the tier the manifest gives it (auto / approve / never). Off in
+      every environment until staging sets observe; observe records each
+      proposal as an ambient_proposal run step and a digest file and sends
+      nothing. Promote a deployment to enforce only after the operator has read
+      a week of observe digests and the tiers in the opted-in manifests say
+      what they want sent alone.

@@ -89,6 +89,7 @@ exclude_docs: |
   !/PR_REVIEWER.md
   !/DEVOPS_REPORT.md
   !/AUTONOMOUS_EXECUTION.md
+  !/AMBIENT.md
   !/SALES_INTELLIGENCE.md
   !/PLUGINS.md
   !/OPERATIONS.md
@@ -152,6 +153,7 @@ nav:
       - PR reviewer: PR_REVIEWER.md
       - Dev team report: DEVOPS_REPORT.md
       - Personal autonomy: AUTONOMOUS_EXECUTION.md
+      - Ambient follow-ups: AMBIENT.md
       - Sales intelligence: SALES_INTELLIGENCE.md
       - Plugins: PLUGINS.md
       - Operations ledger: OPERATIONS.md

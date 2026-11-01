@@ -68,6 +68,7 @@ ISSUE_CODES = frozenset(
         "unknown_difficulty_class",
         "unknown_sandbox_mode",
         "lifecycle_hook_invalid",
+        "invalid_ambient",
         # The backstop for `validate`'s "never raises" promise. See
         # `_membership` and the guard in `validate`.
         "validator_error",
@@ -723,8 +724,44 @@ def _check_range(
         )
 
 
+def _check_ambient(issues: list[ManifestIssue], data: dict[str, Any]) -> None:
+    """The ``ambient:`` block's values: durations, times and watch sources.
+
+    Errors, not warnings. Each of these would otherwise be silent in a worse
+    way than a typo: a duration that does not parse never finds a stalled
+    thread, a digest time that never fires never runs, and a watch source the
+    agent cannot read is the agent looking at something it was not given.
+    The tier values and unknown keys are checked structurally, from the schema.
+    """
+    block = data.get("ambient")
+    if not isinstance(block, dict):
+        return
+    from robothor.engine.ambient import digest_at_error, parse_duration, watch_source_error
+
+    def fail(path: str, message: str) -> None:
+        issues.append(ManifestIssue(path, "invalid_ambient", message, "error"))
+
+    stalled = block.get("stalled_after")
+    if stalled in (None, ""):
+        fail("ambient.stalled_after", "ambient.stalled_after is required (e.g. 4h)")
+    elif isinstance(stalled, str) and parse_duration(stalled) is None:
+        fail("ambient.stalled_after", f"ambient.stalled_after={stalled!r} is not a duration")
+    digest_at = block.get("digest_at")
+    if digest_at in (None, ""):
+        fail("ambient.digest_at", "ambient.digest_at is required (cron or HH:MM times)")
+    elif isinstance(digest_at, str) and (reason := digest_at_error(digest_at)):
+        fail("ambient.digest_at", f"ambient.digest_at: {reason}")
+    streams = data.get("streams")
+    readable = streams.get("read") if isinstance(streams, dict) else None
+    watch = block.get("watch")
+    for index, source in enumerate(watch if isinstance(watch, list) else []):
+        if isinstance(source, str) and (reason := watch_source_error(source, readable or [])):
+            fail(f"ambient.watch[{index}]", reason)
+
+
 def _check_semantics(issues: list[ManifestIssue], data: dict[str, Any]) -> None:
     _check_misplaced_keys(issues, data)
+    _check_ambient(issues, data)
 
     # Model blocks — top-level, heartbeat, and worker all carry one, and the
     # 2026-08-23 incident's broken entry was in the HEARTBEAT block.

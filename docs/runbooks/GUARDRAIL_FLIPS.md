@@ -249,6 +249,7 @@ fails if one is re-dated without a reason.
 | `ROBOTHOR_PLUGIN_MANIFEST_MODE` | observe, permanent | `promotion: n/a-on-this-instance` — zero plugins installed, so enforce is a no-op here |
 | `ROBOTHOR_DNC_MODE` | enforce | shipped enforcing — **no ladder**, see below. Pinned in the drop-in 2026-09-17; it had only ever had a code default |
 | `ROBOTHOR_PER_USER_SESSIONS` | enforce | isolation control, three rungs, no `planned_promotion`. Pinned in the drop-in 2026-09-17 — until then the only live setter was the env file (`SHADOW-LAYER:envfile`). `docs/runbooks/IDENTITY_ROLLOUT.md` |
+| `ROBOTHOR_AMBIENT` | off | new. Three rungs, no `alert`. Ships off; move to observe from Controls, read a week of digests (`ambient_proposal` steps, `.robothor/ambient/<agent>/`) before enforce. Per-agent opt-in on top. `docs/AMBIENT.md` |
 
 ### `ROBOTHOR_DNC_MODE` — the one flag with no ladder
 

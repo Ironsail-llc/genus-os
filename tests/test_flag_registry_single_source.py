@@ -79,6 +79,9 @@ HISTORICAL_GOVERNED_FLAGS: frozenset[str] = frozenset(
         "ROBOTHOR_TRUNCATION_LEDGER_MODE",
         "ROBOTHOR_ACT_OBSERVE_MODE",
         "ROBOTHOR_VERDICT_COMMITMENT_MODE",
+        # Ambient follow-ups ship at `off` and move to `observe` then
+        # `enforce` from Controls, for the same reason as the three above.
+        "ROBOTHOR_AMBIENT",
     }
 )
 

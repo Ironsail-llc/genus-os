@@ -95,9 +95,12 @@ _BOOL_VALUES: tuple[str, ...] = ("true", "false")
 #: operator set a rung, see it stored, and get a different one.
 #: ``ROBOTHOR_STEP_EFFICIENCY_MODE`` joins them as a pacing aid: it blocks no
 #: operator-visible action, so an "alert" rung would page on nothing.
+#: ``ROBOTHOR_AMBIENT`` is the same shape: ``observe`` already records every
+#: message it would have sent, so there is nothing for an "alert" rung to add.
 _THREE_RUNG_MODE_FLAGS: frozenset[str] = frozenset(
     {
         "ROBOTHOR_ACT_OBSERVE_MODE",
+        "ROBOTHOR_AMBIENT",
         "ROBOTHOR_HONESTY_SUITE_MODE",
         "ROBOTHOR_PER_USER_SESSIONS",
         "ROBOTHOR_STEP_EFFICIENCY_MODE",

@@ -569,3 +569,35 @@ def test_the_payload_carries_no_filesystem_path(controls_client_as_operator, fak
     body = controls_client_as_operator.get("/api/automations").text
     assert "/home/" not in body
     assert "docs/agents" not in body
+
+
+AMBIENT_YAML = """id: inbox-watcher
+name: Inbox Watcher
+version: 1.0.0
+schedule:
+  timezone: UTC
+ambient:
+  watch: [inbox]
+  stalled_after: 4h
+  digest_at: "0 9,15 * * *"
+"""
+
+
+def test_an_ambient_block_is_its_own_card_while_the_flag_is_on(env_workspace, monkeypatch):
+    """The scheduler writes ``<id>:ambient`` rows; without a card each one read as a broken manifest."""
+    monkeypatch.setenv("ROBOTHOR_AMBIENT", "observe")
+    (_manifest_dir(env_workspace) / "inbox-watcher.yaml").write_text(AMBIENT_YAML, encoding="utf-8")
+    rows = {row["id"]: row for row in automations._manifests()}
+    job = rows["inbox-watcher:ambient"]
+    assert job["kind"] == "ambient"
+    assert job["agent_id"] == "inbox-watcher"
+    assert job["cron"] == "0 9,15 * * *"
+    assert job["editable"] is False
+    assert automations._split_job_id("inbox-watcher:ambient") == ("inbox-watcher", "ambient")
+    assert automations._safe_job_id("inbox-watcher:ambient") == "inbox-watcher:ambient"
+
+
+def test_no_ambient_card_while_the_flag_is_off(env_workspace, monkeypatch):
+    monkeypatch.delenv("ROBOTHOR_AMBIENT", raising=False)
+    (_manifest_dir(env_workspace) / "inbox-watcher.yaml").write_text(AMBIENT_YAML, encoding="utf-8")
+    assert "inbox-watcher:ambient" not in {row["id"] for row in automations._manifests()}
