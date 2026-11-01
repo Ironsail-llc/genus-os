@@ -55,10 +55,10 @@ def preflight(code: str, proxy: Any) -> dict[str, Any] | None:
                 "does not grant it. Ask the operator to add `exec` to tools_allowed."
             )
         }
-    return _refuse_if_sandboxed()
+    return _refuse_if_sandboxed(proxy)
 
 
-def _refuse_if_sandboxed() -> dict[str, Any] | None:
+def _refuse_if_sandboxed(proxy: Any = None) -> dict[str, Any] | None:
     """A containerised agent is refused, and told why.
 
     An agent declaring `sandbox: docker` runs its commands inside a container
@@ -69,10 +69,11 @@ def _refuse_if_sandboxed() -> dict[str, Any] | None:
     it, which is the failure this codebase keeps recording.
     """
     from robothor.engine.sandbox import SandboxMode, get_current_sandbox
+    from robothor.engine.sandbox_policy import proxy_may_run_on_host, proxy_plan_refusal
 
     sandbox = get_current_sandbox()
-    if sandbox is None or sandbox.mode == SandboxMode.LOCAL:
-        return None
+    if sandbox is None or sandbox.mode == SandboxMode.LOCAL or proxy_may_run_on_host(proxy):
+        return proxy_plan_refusal(proxy)  # a refused plan with no container
     return {
         "error": (
             "execute_code is not available to a container-sandboxed agent: the "

@@ -98,6 +98,13 @@ async def _exec(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             result["timeout_note"] = clamp_note
         return result
 
+    # Sandbox playground (flag off: both are no-ops): a refused plan never
+    # starts a subprocess, and every result says where it ran.
+    from robothor.engine.sandbox_policy import exec_refusal, stamp_location
+
+    if refusal := exec_refusal(run_id):
+        return refusal
+
     # An agent configured `sandbox: docker` must actually have its shell
     # commands run in the container. This used to go straight to subprocess.run
     # on the host, so the sandbox setting was decoration: only browser/desktop
@@ -136,7 +143,7 @@ async def _exec(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 f"{', '.join(sandboxed_grants)} were not available to the "
                 "command."
             )
-        return _with_note(result)
+        return await stamp_location(_with_note(result), "sandbox", run_id)
 
     # The child's environment is built from an allowlist rather than inherited.
     # Without this, `subprocess.run` with no `env=` handed every shell command
@@ -181,15 +188,8 @@ async def _exec(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 
     if host_execution.socket_path() and host_execution.eligible(ctx):
         result = await host_execution.execute(ctx, command, timeout, child_env.env)
-        return _with_grant_note(
-            _with_note(
-                shape_exec_result(
-                    result,
-                    workspace=ctx.workspace,
-                    run_id=run_id,
-                )
-            )
-        )
+        result = shape_exec_result(result, workspace=ctx.workspace, run_id=run_id)
+        return await stamp_location(_with_grant_note(_with_note(result)), "host_service", run_id)
 
     def _run() -> dict[str, Any]:
         try:
@@ -230,7 +230,8 @@ async def _exec(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         except Exception as e:
             return {"error": f"Command failed: {e}"}
 
-    return _with_grant_note(_with_note(await asyncio.to_thread(_run)))
+    result = _with_grant_note(_with_note(await asyncio.to_thread(_run)))
+    return await stamp_location(result, "host", run_id)
 
 
 _SEARCH_SKIP_DIRS = frozenset(

@@ -122,7 +122,11 @@ from robothor.engine.runtime.setup import (
     principal,
     restored_context,
 )
-from robothor.engine.sandbox_policy import agent_holds_exec, resolve_sandbox_decision
+from robothor.engine.sandbox_policy import (
+    agent_holds_exec,
+    playground_decision,
+    resolve_sandbox_decision,
+)
 from robothor.engine.sanitize import sanitize_log as _sanitize
 from robothor.engine.session import ENGINE_CONTEXT_ROLE, AgentSession
 from robothor.engine.stall_watchdog import (
@@ -1258,6 +1262,9 @@ class AgentRunner(
                             "guardrail event could not be recorded: %s",
                             _sanitize(_audit_exc),
                         )
+                _sb_decision, _sb_degrade = await playground_decision(
+                    agent_config, sandbox_default_mode(), _sb_decision, agent_id, session.run
+                )
                 sandbox = None
                 if _sb_decision == "docker":
                     from robothor.engine.sandbox import Sandbox, SandboxMode, set_current_sandbox
@@ -1294,7 +1301,8 @@ class AgentRunner(
                         # manifest `sandbox: docker`, container failed to start,
                         # run continued on the host, nothing surfaced.
                         _sb_explicit = agent_config.sandbox == "docker"
-                        if _sb_explicit or sandbox_default_mode() == "enforce":
+                        _sb_required = _sb_explicit or sandbox_default_mode() == "enforce"
+                        if not await _sb_degrade(str(e)) and _sb_required:
                             _sb_reason = f"sandbox required but could not be started: {e}"
                             try:
                                 from robothor.engine.tracking import log_guardrail_event

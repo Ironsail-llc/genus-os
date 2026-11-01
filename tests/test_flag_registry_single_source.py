@@ -110,6 +110,10 @@ MANIFEST_ONLY_FLAGS: dict[str, str] = {
         "lane slots without the executor split; an environment setting and a "
         "restart is the only honest switch"
     ),
+    "ROBOTHOR_SANDBOX_PLAYGROUND": (
+        "a deploy-time bool read from the environment, not a ladder; governing "
+        "it needs an evidence source and Controls values first"
+    ),
 }
 
 

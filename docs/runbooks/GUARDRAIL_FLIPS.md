@@ -367,3 +367,44 @@ uncontained.
 
 An explicit `sandbox: docker` always wins, in every mode. Agents without `exec`
 are never in scope, with or without the override.
+
+### Sandbox playground — `ROBOTHOR_SANDBOX_PLAYGROUND`
+
+A bool, default off. It changes what happens when a container is wanted
+(manifest `sandbox: docker`, or `ROBOTHOR_SANDBOX_DEFAULT_MODE=enforce`) and
+cannot be had, because the engine has no runtime or the container fails to
+start. It does not change which agents are contained.
+
+| Who is running | Flag off (today) | Flag on |
+|---|---|---|
+| Owner or admin, root run | run fails at step 0: "Blocked by sandbox_default: sandbox required but could not be started" | run continues; `exec` runs on the engine host, result has `executed_on: host` and an `execution_note` |
+| Member, automated run, sub-agent, benchmark | run fails at step 0 | run continues; each `exec` and `execute_code` is refused with `error_type: exec_unavailable`, the gate and an `unlock`, and the desktop and browser tools are blocked by the `sandbox_playground` guardrail. An agent that holds those tools with no guardrails at all (`guardrails_opt_out` and none configured) fails at step 0 as before, because nothing could refuse them per call |
+| Anyone, runtime present | container | container (`executed_on: sandbox`) |
+
+With the flag on, the exec allowlist is skipped inside a container, and an
+owner or admin on the host whose command it would block is allowed and
+recorded as `observed` ("exec_allowlist bypassed by role=owner"). An owner or
+admin on a root run may also use `execute_code` while sandboxed; the snippet
+runs on the engine host. A root run is one nothing spawned: a sub-agent never
+counts as one, even when its parent's run row was not recorded.
+
+Before turning it on:
+
+1. `genus doctor` and read `sandbox.runtime` (is there a runtime) and
+   `sandbox.policy` (per exec-holding agent, where an owner and a member would
+   run).
+2. Set `ROBOTHOR_SANDBOX_PLAYGROUND=1` in the engine's environment and restart.
+3. Read the evidence:
+
+   ```sql
+   SELECT guardrail_name, action, reason, created_at
+   FROM agent_guardrail_events
+   WHERE guardrail_name IN ('sandbox_playground', 'exec_location')
+   ORDER BY created_at DESC LIMIT 50;
+   ```
+
+   One `sandbox_playground` row (action `observed`) per run whose plan degraded
+   or refused; one `exec_location` row (action `allowed`) per `exec`.
+
+Rollback: unset the variable and restart. Runs that wanted a container fail
+closed again, as before.

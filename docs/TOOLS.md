@@ -1040,6 +1040,22 @@ resolving to a real spill file, so quoting the path in a comment buys nothing.
 `execute_code` has the same contract with a bigger window: see
 [its section](#execute_code-calling-tools-from-inside-python) and `stdout_file`.
 
+### `exec` — where a command ran
+
+With `ROBOTHOR_SANDBOX_PLAYGROUND` on, every `exec` result carries
+`executed_on`: `sandbox` (the run's container), `host` (the engine) or
+`host_service` (the owner's host-execution service). When the agent wanted a
+container and the engine has none, an owner or admin's command runs on the
+engine host and the result adds an `execution_note` saying so; repeat it to the
+person rather than claiming the command was isolated. Anyone else gets
+`error_type: exec_unavailable`, an `error` naming the missing runtime and their
+role, and an `unlock` saying who can run it or what the operator would install.
+`execute_code` is refused the same way, and the desktop and browser tools are
+blocked by the `sandbox_playground` guardrail. Nothing ran, so do not retry it:
+pass the unlock on. With the flag off none of
+these keys appear. The rollout is in
+[Guardrail flips](runbooks/GUARDRAIL_FLIPS.md#sandbox-playground-robothor_sandbox_playground).
+
 ### Calling an API from code: `genus_tools`, not `curl`
 
 Both work. They differ in what survives the call.
@@ -1522,6 +1538,13 @@ with this instance's account, "Make changes to events". On a Microsoft 365
 instance (`ROBOTHOR_WORKSPACE_PROVIDER=microsoft365`) it passes with a note
 instead: the owner's Exchange calendar is checked by
 `workspace.m365_connection` (see [Microsoft 365](workspace/microsoft365.md)).
+
+**`sandbox.runtime`** and **`sandbox.policy`** (`genus doctor --category
+sandbox`) — whether a container runtime answers on this engine, and for each
+agent holding `exec`, where its commands would run for an owner and for a member
+(`sandbox`, `host`, `host (degraded)`, `refuse`, or `run fails` with the
+playground off). Neither fails on its own: an instance with no podman is not
+broken unless an agent asks for a container.
 
 **`tools.exec_allowlist_bypasses_denied_tool`** — an `exec_allowlist` regex
 that admits a Google CLI (`gog gmail send`, `gws calendar events insert`) for
