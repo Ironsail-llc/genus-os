@@ -100,7 +100,8 @@ declaring `v2.credentials: operator`. Only a top-level conversation a person
 started counts; a member, a sub-agent and a scheduled run are refused, and the
 refusal names the gate. Once stored, the exact value is redacted from history,
 stored chat messages, the run's task text and logs, shape or no shape, and the
-live tool stream never carries a `vault_set` argument. Payment cards stay out
+live tool stream never carries a `vault_set` argument, including a call made
+through `tool_call` on a deferred run. Payment cards stay out
 of chat: the agent offers the secure enrollment link instead. The rules and
 the rollout ladder are in [Configuration](../configuration.md).
 

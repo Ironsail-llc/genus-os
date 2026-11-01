@@ -621,6 +621,11 @@ def redact_tool_arguments(tool_name: str, arguments: Any) -> Any:
     wrote stays readable for the same reason — an operator has to be able to see
     which row changed.
 
+    Redacts the EFFECTIVE tool's arguments, not the wrapper's: on a deferred run
+    the model reaches ``vault_set`` as ``tool_call {name: vault_set, arguments:
+    {…}}``, and every site that calls this sees the name ``tool_call``. See
+    :func:`_redact_call`.
+
     Never mutates its input: the handler has already run by the time this is
     called, but a redactor that edited in place would be one refactor away from
     redacting a credential before the vault got it.
