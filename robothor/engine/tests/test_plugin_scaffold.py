@@ -41,6 +41,8 @@ def test_the_layout(tmp_path) -> None:
         "README.md",
         ".gitignore",
         ".github/workflows/ci.yml",
+        ".github/workflows/release.yml",
+        "programmatic.json",
         f"src/{PKG}/__init__.py",
         f"src/{PKG}/genus-plugin.yaml",
         f"src/{PKG}/agents/{NAME}/manifest.template.yaml",
@@ -85,6 +87,41 @@ def test_the_ci_workflow_tests_builds_and_hashes(tmp_path) -> None:
     assert "pytest" in steps
     assert "build" in steps
     assert "sha256sum" in steps
+
+
+def test_the_programmatic_json_names_the_plugin_and_its_version(tmp_path) -> None:
+    import json
+    import tomllib
+
+    root = scaffold.scaffold(NAME, tmp_path / NAME)
+    text = (root / "programmatic.json").read_text()
+    assert text.endswith("\n")
+    listing = json.loads(text)
+    version = tomllib.loads((root / "pyproject.toml").read_text())["project"]["version"]
+    assert listing["format"] == "genus-plugin/v1"
+    assert listing["id"] == NAME
+    assert listing["version"] == version
+    assert listing["name"] == "Example Agent"
+    assert listing["description"]
+    assert listing["tags"] == ["genus-plugin"]
+
+
+def test_the_release_workflow_releases_the_wheel_and_its_checksums_on_a_tag(tmp_path) -> None:
+    root = scaffold.scaffold(NAME, tmp_path / NAME)
+    workflow = yaml.safe_load((root / ".github" / "workflows" / "release.yml").read_text())
+    # PyYAML reads the bare key `on` as the boolean True.
+    trigger = workflow.get("on", workflow.get(True))
+    assert trigger["push"]["tags"] == ["v*"]
+    job = workflow["jobs"]["release"]
+    assert job["runs-on"] == "ubuntu-26.04"
+    assert job["permissions"] == {"contents": "write"}
+    steps = " ".join(
+        f"{s.get('run', '')} {s.get('with', {}).get('files', '')}" for s in job["steps"]
+    )
+    assert "SHA256SUMS" in steps
+    assert "dist/*.whl" in steps
+    assert "genus-plugin.yaml" in steps
+    assert "GITHUB_REF_NAME" in steps
 
 
 @pytest.mark.parametrize(
