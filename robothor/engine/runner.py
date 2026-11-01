@@ -61,6 +61,7 @@ from robothor.engine.feature_flags import early_done_enabled
 from robothor.engine.finalization_budget import FinalizationBudget  # noqa: E402
 from robothor.engine.injection_screen import screen_run_prompt
 from robothor.engine.journal_resume import maybe_prepend_journal_resume
+from robothor.engine.lanes import lane_gated
 from robothor.engine.last_resort import all_models_failed
 from robothor.engine.live_inbox import keep_going_after_answer
 
@@ -526,6 +527,7 @@ class AgentRunner(
         session.start("", message, [])
         return None, session.fail(loaded_reason or reason)
 
+    @lane_gated
     @runtime_entrypoint
     async def execute(
         self,

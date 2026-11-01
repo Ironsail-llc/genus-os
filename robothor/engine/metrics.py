@@ -127,6 +127,34 @@ TOOL_CALL_DURATION = Histogram(
     buckets=[0.1, 0.5, 1, 2, 5, 10, 30, 60],
 )
 
+# ── Execution lanes ────────────────────────────────────────────────────
+
+LANE_ACTIVE = Gauge(
+    "robothor_lane_active",
+    "Runs holding a slot in each execution lane",
+    ["lane"],
+)
+
+LANE_WAITING = Gauge(
+    "robothor_lane_waiting",
+    "Runs waiting for a slot in each execution lane",
+    ["lane"],
+)
+
+for _lane in ("interactive", "background"):
+    LANE_ACTIVE.labels(lane=_lane).set(0)
+    LANE_WAITING.labels(lane=_lane).set(0)
+
+
+def set_lane_occupancy(lane: str, active: int, waiting: int) -> None:
+    """Record one lane's occupancy. Never raises."""
+    try:
+        LANE_ACTIVE.labels(lane=lane).set(active)
+        LANE_WAITING.labels(lane=lane).set(waiting)
+    except Exception:  # pragma: no cover - metrics are never load-bearing
+        logger.debug("Could not record lane occupancy", exc_info=True)
+
+
 # ── Database Pool ───────────────────────────────────────────────────────
 
 DB_POOL_CONNECTIONS = Gauge(

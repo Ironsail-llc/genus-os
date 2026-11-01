@@ -54,6 +54,7 @@ if TYPE_CHECKING:
     from robothor.engine.runner import AgentRunner
 
 from robothor.engine import workflow_budget  # noqa: E402
+from robothor.engine.lanes import Lane, run_slot  # noqa: E402
 from robothor.engine.sanitize import sanitize_log as _sanitize  # noqa: E402
 
 logger = logging.getLogger(__name__)
@@ -657,9 +658,11 @@ class WorkflowEngine:
 
         try:
             try:
-                with workflow_budget.workflow_deadline(workflow_id, wf.timeout_seconds):
-                    async with asyncio.timeout(wf.timeout_seconds):
-                        await self._execute_steps(run, wf)
+                # The lane slot before the clock: queue time is not run time.
+                async with run_slot(Lane.BACKGROUND):
+                    with workflow_budget.workflow_deadline(workflow_id, wf.timeout_seconds):
+                        async with asyncio.timeout(wf.timeout_seconds):
+                            await self._execute_steps(run, wf)
             except TimeoutError:
                 run.status = RunStatus.TIMEOUT
                 run.error_message = self._timeout_message(run, wf)
@@ -1513,9 +1516,10 @@ class WorkflowEngine:
         try:
             # A resumed run gets a fresh budget (the approval wait is not work),
             # and the same deadline its steps' LLM chains must respect.
-            with workflow_budget.workflow_deadline(run.workflow_id, wf.timeout_seconds):
-                async with asyncio.timeout(wf.timeout_seconds):
-                    await self._execute_steps(run, wf, start_step_id=resume_step_id)
+            async with run_slot(Lane.BACKGROUND):
+                with workflow_budget.workflow_deadline(run.workflow_id, wf.timeout_seconds):
+                    async with asyncio.timeout(wf.timeout_seconds):
+                        await self._execute_steps(run, wf, start_step_id=resume_step_id)
         except TimeoutError:
             run.status = RunStatus.TIMEOUT
             run.error_message = f"{self._timeout_message(run, wf)} (resumed)"

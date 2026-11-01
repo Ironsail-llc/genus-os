@@ -126,6 +126,17 @@ def validate_engine_auth_configuration() -> None:
     )
 
 
+def _execution_lanes_block() -> dict[str, Any]:
+    """Lane occupancy for /health. Never raises."""
+    try:
+        from robothor.engine.lanes import get_lanes
+
+        return get_lanes().snapshot()
+    except Exception:
+        logger.warning("Execution lanes snapshot failed", exc_info=True)
+        return {"enabled": False, "available": False}
+
+
 def _execution_mode_block() -> dict[str, Any]:
     """Which economics are in force, and why we believe the numbers.
 
@@ -1059,6 +1070,7 @@ def create_health_app(
                 "execution_mode": _execution_mode_block(),
                 # Milliseconds this process took to reach READY=1; null before.
                 "startup_ms": startup_ms(),
+                "execution_lanes": _execution_lanes_block(),
             }
         except Exception:
             logger.exception("Health check failed")
