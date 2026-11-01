@@ -192,10 +192,11 @@ def publish_toolset(
     given ``advertised``, the schema names the model was shown, which
     ``tool_search`` uses to say which hits are already directly callable):
 
-    * the DEFERRED allow-set, set only when the toolset is deferred, is what
-      ``tool_call`` checks — it is a security boundary, and setting it on a run
-      that is not deferred would hand ``tool_call`` reach it is not meant to
-      have;
+    * the DEFERRED allow-set is what ``tool_call`` checks — it is a security
+      boundary. It holds the grant only when the toolset is deferred, and is
+      set to ``None`` on a run that is not: a sub-agent runs inline in its
+      parent's task, and leaving the parent's set in place would hand the
+      child's ``tool_call`` (and its refusals' unlocks) the parent's reach;
     * the agent's TOOLSET, set on every run, gates nothing. It exists so
       ``tool_search`` can answer a non-deferred run with the agent's own tools
       instead of "only available on deferred runs", which it returned 18 times
@@ -213,10 +214,8 @@ def publish_toolset(
     tier = capability.effective if capability is not None else ""
     tier_kw = {"tier": tier} if tier else {}
     deferred = registry.should_defer(agent_config, **tier_kw)
-    defer_token = (
-        set_deferred_allowed(registry.deferred_whitelist(agent_config, **tier_kw))
-        if deferred
-        else None
+    defer_token = set_deferred_allowed(
+        registry.deferred_whitelist(agent_config, **tier_kw) if deferred else None
     )
     advertised_token = (
         set_advertised_toolset(frozenset(advertised))

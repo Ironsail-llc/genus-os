@@ -1528,6 +1528,11 @@ for a way round it. A `refused: true` without a `gate` is a redirection, not a
 block: change the call as its `reason` says. Never say you cannot do something
 no tool refused: if a tool you have can do it, do it.
 
+A direct call to a tool the agent is granted but that a deferred turn left out
+of its schemas is refused with gate `policy`, name `deferred`, and the unlock
+to call it through `tool_call`; only a tool outside the grant gets the
+`allowlist` refusal naming `tools_allowed`.
+
 The repeat guard's `refused: true` (an identical call run too many times) has
 no `gate` on purpose: it asks for a different call, not a person.
 

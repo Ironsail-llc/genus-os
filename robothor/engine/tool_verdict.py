@@ -52,6 +52,29 @@ class ToolVerdict:
     unlock: str = ""
 
 
+def _not_in_schemas(tool: str, config: AgentConfig | None) -> tuple[str, str, str]:
+    """A call to a tool outside this turn's schemas: deferred, or not granted.
+
+    The run's deferred allow-set is the set ``tool_call`` admits, so a tool in
+    it is granted and only needs calling that way; anything else is a manifest
+    change.
+    """
+    from robothor.engine.capabilities import manifest_unlock
+    from robothor.engine.tools.dispatch import get_deferred_allowed
+
+    if tool not in (get_deferred_allowed() or ()):
+        return "allowlist", "tools_allowed", manifest_unlock(config, tool)
+    return (
+        "policy",
+        "deferred",
+        (
+            f"'{tool}' is granted but deferred on this run: call it through tool_call "
+            f"with name '{tool}' and its arguments (tool_describe gives its schema); "
+            "nothing needs to change and no one needs to be asked"
+        ),
+    )
+
+
 def _gate_for(verdict: ToolVerdict, tool: str, config: AgentConfig | None) -> tuple[str, str, str]:
     """``(gate, gate_name, unlock)`` for an admission refusal, or empty strings."""
     out = verdict.output
@@ -66,9 +89,7 @@ def _gate_for(verdict: ToolVerdict, tool: str, config: AgentConfig | None) -> tu
             ),
         )
     if guard == "tools_allowed":
-        from robothor.engine.capabilities import manifest_unlock
-
-        return "allowlist", "tools_allowed", manifest_unlock(config, tool)
+        return _not_in_schemas(tool, config)
     if guard == "run_wrapup":
         return (
             "policy",
