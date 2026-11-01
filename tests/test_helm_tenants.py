@@ -257,3 +257,49 @@ def test_tenants_without_the_shared_key_are_refused() -> None:
     )
     assert result.returncode != 0
     assert "vaultKey.enabled" in result.stderr
+
+
+def test_no_engine_can_write_its_own_import_path() -> None:
+    """Code on an engine's import path runs inside the engine.
+
+    The engine's agents write its workspace (``write_file``, ``exec``), so a
+    plugin directory or ``PYTHONPATH`` entry on that workspace has to be
+    mounted again read-only, for the root engine and for every cell, and
+    created by an init container running as the engine's own user first.
+    """
+    docs = _render(
+        *TWO_TENANTS,
+        "--set",
+        "engine.env.ROBOTHOR_PLUGIN_DIR=/workspace/.plugins",
+        "--set",
+        "engine.env.PYTHONPATH=/workspace/.plugins",
+    )
+    engines = [
+        d
+        for d in docs
+        if d["kind"] == "Deployment"
+        and d["spec"]["template"]["metadata"]["labels"].get("app.kubernetes.io/component")
+        == "engine"
+    ]
+    assert len(engines) == 3
+    for doc in engines:
+        name = doc["metadata"]["name"]
+        pod = doc["spec"]["template"]["spec"]
+        engine = pod["containers"][0]
+        env = _env(doc)
+        workspace = env["ROBOTHOR_WORKSPACE"].rstrip("/")
+        import_dirs = {env["ROBOTHOR_PLUGIN_DIR"], *env["PYTHONPATH"].split(":")}
+        on_workspace = {d.rstrip("/") for d in import_dirs if d.startswith(workspace + "/")}
+        assert on_workspace, name
+        mounts = {m["mountPath"]: m for m in engine["volumeMounts"]}
+        for path in on_workspace:
+            mount = mounts.get(path)
+            assert mount is not None, (name, path)
+            assert mount["name"] == "workspace", (name, path)
+            assert mount["readOnly"] is True, (name, path)
+            assert mount["subPath"] == path[len(workspace) + 1 :], (name, path)
+        init = {c["name"]: c for c in pod.get("initContainers", [])}
+        assert "plugin-dirs" in init, name
+        assert init["plugin-dirs"]["image"] == engine["image"], name
+        assert init["plugin-dirs"]["securityContext"] == engine["securityContext"], name
+        assert set(init["plugin-dirs"]["command"][3:]) == on_workspace, name
