@@ -51,6 +51,8 @@ RUN_CONTEXT: dict[str, Any] = {
     "task_author_override": "scout",
     "is_benchmark": True,
     "identity": MEMBER,
+    # In the fold, the role capability tier is a ToolContext field too.
+    "capability_tier": "unrestricted",
 }
 
 
