@@ -265,9 +265,9 @@ _RATE_LIMIT_WAIT_SECONDS = 5
 _MAX_RATE_LIMIT_WAIT_SECONDS = 30
 
 
-def _run_lock_key(wf: WorkflowDef) -> str:
-    """The one lock key a workflow's runs take and release."""
-    return f"workflow:{wf.id}"
+def _run_lock_key(wf: WorkflowDef) -> str | None:
+    """The one lock key a workflow's runs take and release; None when they overlap."""
+    return None if wf.concurrent else f"workflow:{wf.id}"
 
 
 def _retry_delay(attempt: int) -> int:
@@ -317,9 +317,16 @@ def parse_workflow(data: dict[str, Any]) -> WorkflowDef:
             cron=t.get("cron", ""),
             timezone=t.get("timezone", "America/New_York"),
             requeue_if_busy=bool(t.get("requeue_if_busy", False)),
+            concurrent=bool(t.get("concurrent", False)),
         )
         for t in data.get("triggers", [])
     ]
+    # A concurrent workflow is never busy, so a busy requeue could never fire.
+    if any(t.concurrent for t in triggers) and any(t.requeue_if_busy for t in triggers):
+        raise ValueError(
+            f"workflow {data.get('id')!r}: a concurrent trigger cannot be combined with "
+            "requeue_if_busy (concurrent runs are never busy)"
+        )
 
     def _parse_step(s: dict[str, Any], *, inside_parallel: bool = False) -> WorkflowStepDef:
         step_type = WorkflowStepType(s.get("type", "noop"))
@@ -402,6 +409,19 @@ def parse_workflow(data: dict[str, Any]) -> WorkflowDef:
             if sid in seen_ids:
                 raise ValueError(f"duplicate step id {sid!r} in workflow {data.get('id')!r}")
             seen_ids.add(sid)
+
+    # An agent step serialises on the agent's own lock and is skipped, not
+    # failed, when that lock is held: two overlapping runs would drop one
+    # event's agent step while its run reads completed.
+    if any(t.concurrent for t in triggers):
+        for step in steps:
+            for candidate in (step, *step.parallel_steps):
+                if candidate.type == WorkflowStepType.AGENT:
+                    raise ValueError(
+                        f"workflow {data.get('id')!r}: a concurrent workflow cannot have "
+                        f"agent steps (step {candidate.id!r}); overlapping runs would skip it "
+                        "while the agent is busy"
+                    )
 
     rate_limit = data.get("rate_limit_per_minute", 0)
     if "rate_limit_per_minute" in data and (
@@ -627,7 +647,7 @@ class WorkflowEngine:
         )
         if refused is not None:
             return refused
-        dedup_key = _run_lock_key(wf)
+        dedup_key = _run_lock_key(wf)  # None: a concurrent run holds no lock
 
         # Initialize run
         run = WorkflowRun(
@@ -730,7 +750,8 @@ class WorkflowEngine:
 
             return run
         finally:
-            await release(dedup_key)
+            if dedup_key is not None:
+                await release(dedup_key)
 
     def _resolve_identity(
         self,
@@ -792,13 +813,15 @@ class WorkflowEngine:
 
         Returns None with the lock held, or an unrecorded ``skipped`` run with
         the lock free: the workflow is already running, or (for a caller that
-        requeues) the tool-call rate limit would block its first step.
+        requeues) the tool-call rate limit would block its first step. A
+        concurrent workflow takes no lock and is never already running.
         """
         from robothor.engine.dedup import release, try_acquire
 
-        # Prevent concurrent runs of the same workflow
+        # Prevent concurrent runs of the same workflow, unless its trigger
+        # allows them.
         dedup_key = _run_lock_key(wf)
-        if not await try_acquire(dedup_key):
+        if dedup_key is not None and not await try_acquire(dedup_key):
             logger.info(
                 "Workflow %s already running, skipping duplicate",
                 _sanitize(wf.id),
@@ -820,7 +843,8 @@ class WorkflowEngine:
         # is checked first, so a busy workflow keeps its trigger's own busy
         # handling (requeue_if_busy) whatever the window holds.
         if requeue_on_rate_limit and self._first_step_rate_limited(wf):
-            await release(dedup_key)
+            if dedup_key is not None:
+                await release(dedup_key)
             logger.info(
                 "Workflow %s deferred: tool-call rate limit reached at first step %s (%s)",
                 _sanitize(wf.id),
