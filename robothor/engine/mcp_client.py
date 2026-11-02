@@ -34,18 +34,12 @@ _KNOWN_PROTOCOLS = (PROTOCOL_LEGACY, PROTOCOL_STATELESS)
 #: Per-adapter budget for each of connect and ``tools/list`` during
 #: registration. Each adapter gets its own, so a slow one costs its own tools.
 ADAPTER_CONNECT_TIMEOUT_S = 5.0
-#: How many adapters connect at once under ``ROBOTHOR_CONFIG_CACHE``.
+#: How many adapters connect at once during registration.
 ADAPTER_CONNECT_CONCURRENCY = 4
 #: Longest a cached ``tools/list`` is served. An HTTP session never "drops",
 #: so without an age limit a remote server that changed its tools would keep
 #: its old list until the engine restarted.
 TOOL_LIST_TTL_S = 600.0
-
-
-def _config_cache_enabled() -> bool:
-    from robothor.engine.feature_flags import config_cache_enabled
-
-    return config_cache_enabled()
 
 
 @dataclass(frozen=True)
@@ -158,7 +152,7 @@ class McpClientSession:
             # unread; sending now would read that answer as ours and hide the
             # fault. Refuse, leaving the flag set so the pool restarts the
             # session (McpClientPool._get_session_locked).
-            if self._desynced and _config_cache_enabled():
+            if self._desynced:
                 raise RuntimeError(f"MCP server '{self.config.name}': pipe out of step")
             self._request_id += 1
             request = {
@@ -277,7 +271,7 @@ class McpHttpSession:
         self._initialized = False
         self._request_id: int = 0
         self._epoch = 0
-        # One client per endpoint under ROBOTHOR_CONFIG_CACHE, so requests
+        # One client per endpoint, so requests
         # share its connection pool instead of paying a TCP and TLS handshake
         # each. Closed by stop().
         self._client: Any = None
@@ -300,13 +294,9 @@ class McpHttpSession:
         elif self._session_id:
             headers["Mcp-Session-Id"] = self._session_id
 
-        if _config_cache_enabled():
-            if self._client is None or self._client.is_closed:
-                self._client = httpx.AsyncClient(timeout=float(self.config.timeout_seconds))
-            r = await self._client.post(self.config.url, headers=headers, json=message)
-        else:
-            async with httpx.AsyncClient(timeout=float(self.config.timeout_seconds)) as client:
-                r = await client.post(self.config.url, headers=headers, json=message)
+        if self._client is None or self._client.is_closed:
+            self._client = httpx.AsyncClient(timeout=float(self.config.timeout_seconds))
+        r = await self._client.post(self.config.url, headers=headers, json=message)
 
         if not self.config.stateless and (sid := r.headers.get("Mcp-Session-Id")):
             self._session_id = sid
@@ -478,18 +468,10 @@ class McpClientPool:
 
     async def _get_session_locked(self, server_name: str) -> McpClientSession | McpHttpSession:
         existing = self._sessions.get(server_name)
-        if (
-            existing is not None
-            and existing.config != self._configs.get(server_name)
-            and _config_cache_enabled()
-        ):
+        if existing is not None and existing.config != self._configs.get(server_name):
             logger.info("MCP server '%s': config changed, restarting its session", server_name)
             self._retire(server_name, existing)
-        elif (
-            isinstance(existing, McpClientSession)
-            and existing.out_of_step()
-            and _config_cache_enabled()
-        ):
+        elif isinstance(existing, McpClientSession) and existing.out_of_step():
             logger.info(
                 "MCP server '%s': a request was abandoned mid-flight, restarting", server_name
             )
@@ -521,15 +503,13 @@ class McpClientPool:
     ) -> list[dict[str, Any]]:
         """The server's ``tools/list``, cached for the life of its session.
 
-        Under ``ROBOTHOR_CONFIG_CACHE`` a list is served again only while the
-        session object, its epoch (a stop or an HTTP session reset bumps it),
-        the server's registered config and the plugin generation are all the
-        ones it was fetched under; ``refresh=True`` always refetches. With the
-        flag off every call is a live ``tools/list``, as before.
+        A list is served again only while the session object, its epoch (a
+        stop or an HTTP session reset bumps it), the server's registered
+        config and the plugin generation are all the ones it was fetched
+        under, and for at most ``TOOL_LIST_TTL_S``; ``refresh=True`` always
+        refetches.
         """
         session = await self.get_session(server_name)
-        if not _config_cache_enabled():
-            return await session.list_tools()
 
         from robothor.plugins import generation
 

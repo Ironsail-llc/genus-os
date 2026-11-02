@@ -1893,21 +1893,6 @@ class FlagSettings(SettingsGroup):
         "needs the meetings.space.settings OAuth scope, and a failure is a "
         "note on the booking, never a failed booking.",
     )
-    config_cache: bool = declare(
-        False,
-        "ROBOTHOR_CONFIG_CACHE",
-        "Reuse an agent's merged and validated manifest, its adapter configs "
-        "and the digest of a pinned adapter binary between runs while the "
-        "files they came from are unchanged, and keep each MCP adapter's tool "
-        "list for up to ten minutes while its session lives (a dropped session, "
-        "a changed adapter config, a plugin reload, a failed fetch or an "
-        "explicit refresh refetches it). Adapters connect concurrently, an HTTP "
-        "MCP server keeps one client, and adapter sessions are pre-warmed at "
-        "engine start. A plugin sync, a plugin reload or a defaults reload "
-        "drops them.",
-        restart_required=False,
-        since="unreleased",
-    )
     chat_history_pages: bool = declare(
         False,
         "ROBOTHOR_CHAT_HISTORY_PAGES",

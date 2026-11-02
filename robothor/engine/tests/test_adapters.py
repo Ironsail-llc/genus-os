@@ -306,11 +306,9 @@ class TestRegistryAdapterTools:
             },
         ]
 
-        mock_session = AsyncMock()
-        mock_session.list_tools.return_value = mock_tools
-
         mock_pool = MagicMock()
-        mock_pool.get_session = AsyncMock(return_value=mock_session)
+        mock_pool.get_session = AsyncMock(return_value=AsyncMock())
+        mock_pool.list_tools_cached = AsyncMock(return_value=mock_tools)
 
         with patch("robothor.api.mcp.get_tool_definitions", return_value=[]):
             registry = ToolRegistry()
@@ -498,6 +496,9 @@ class TestRegistryAllowlistEnforcement:
         class FakePool:
             async def get_session(self, name):
                 return FakeSession()
+
+            async def list_tools_cached(self, name, *, refresh=False):
+                return await FakeSession().list_tools()
 
         monkeypatch.setattr("robothor.engine.mcp_client.get_mcp_client_pool", lambda: FakePool())
         registry = ToolRegistry()

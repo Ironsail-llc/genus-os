@@ -1936,15 +1936,7 @@ def _spawn_mcp_prewarm() -> None:
 
 
 async def _prewarm_mcp_adapters() -> None:
-    """Open adapter sessions and cache their tool lists. Never fatal.
-
-    Only under ``ROBOTHOR_CONFIG_CACHE``: with it off nothing caches the list,
-    so warming would buy the first run nothing.
-    """
-    from robothor.engine.feature_flags import config_cache_enabled
-
-    if not config_cache_enabled():
-        return
+    """Open adapter sessions and cache their tool lists. Never fatal."""
     try:
         from robothor.engine.adapters import load_adapters
         from robothor.engine.mcp_client import prewarm_adapter_sessions
@@ -1961,15 +1953,7 @@ async def _prewarm_mcp_adapters() -> None:
 
 
 async def _shutdown_mcp_pool() -> None:
-    """Stop MCP sessions and close their clients. Never fatal.
-
-    Only under ``ROBOTHOR_CONFIG_CACHE``, which is what keeps an HTTP client
-    open between requests; off, exit leaves the pool as it always has.
-    """
-    from robothor.engine.feature_flags import config_cache_enabled
-
-    if not config_cache_enabled():
-        return
+    """Stop MCP sessions and close their clients. Never fatal."""
     try:
         from robothor.engine.mcp_client import get_mcp_client_pool
 

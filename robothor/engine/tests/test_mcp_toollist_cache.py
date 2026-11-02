@@ -1,6 +1,6 @@
 """MCP tool-list cache, parallel adapter connect and the shared HTTP client.
 
-Behind ``ROBOTHOR_CONFIG_CACHE`` (default off). With it on:
+The only code path; no switch turns any of it off:
 
 * a run whose adapter session is still up re-uses the tool list the previous
   run fetched — zero ``tools/list`` calls — until that session drops, the
@@ -10,9 +10,6 @@ Behind ``ROBOTHOR_CONFIG_CACHE`` (default off). With it on:
 * an HTTP MCP session keeps one ``httpx.AsyncClient`` instead of opening one
   per JSON-RPC request;
 * the daemon pre-warms adapter sessions at start.
-
-With it off every one of those is today's behaviour, and the tests below pin
-that too.
 
 Fakes sit at the transport seam: a stdio session subclass that never spawns a
 process, and a fake ``httpx.AsyncClient``.
@@ -95,16 +92,6 @@ def _clear_backoff() -> Any:
     ToolRegistry._adapter_failures.clear()
 
 
-@pytest.fixture
-def cache_on(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("ROBOTHOR_CONFIG_CACHE", "1")
-
-
-@pytest.fixture
-def cache_off(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("ROBOTHOR_CONFIG_CACHE", raising=False)
-
-
 def _adapter(name: str) -> AdapterConfig:
     return AdapterConfig(name=name, transport="stdio", command=["example-mcp-server"])
 
@@ -124,38 +111,13 @@ async def _register(adapters: list[AdapterConfig]) -> Any:
     return registry
 
 
-# ── the flag ─────────────────────────────────────────────────────────────
-
-
-class TestFlag:
-    def test_default_off(self, cache_off: None) -> None:
-        from robothor.engine.feature_flags import config_cache_enabled
-
-        assert config_cache_enabled() is False
-
-    def test_on(self, cache_on: None) -> None:
-        from robothor.engine.feature_flags import config_cache_enabled
-
-        assert config_cache_enabled() is True
-
-    def test_declared_in_settings(self) -> None:
-        from robothor.settings.model import FlagSettings
-
-        envs = {
-            f.json_schema_extra.get("env")
-            for f in FlagSettings.model_fields.values()
-            if isinstance(f.json_schema_extra, dict)
-        }  # type: ignore[union-attr]
-        assert "ROBOTHOR_CONFIG_CACHE" in envs
-
-
 # ── tool-list cache ──────────────────────────────────────────────────────
 
 
 class TestToolListCache:
     @pytest.mark.asyncio
     async def test_second_run_makes_zero_list_tools_calls(
-        self, monkeypatch: pytest.MonkeyPatch, pool: Any, cache_on: None
+        self, monkeypatch: pytest.MonkeyPatch, pool: Any
     ) -> None:
         counters = _install_fake_stdio(monkeypatch)
         adapter = _adapter("alpha")
@@ -170,7 +132,7 @@ class TestToolListCache:
 
     @pytest.mark.asyncio
     async def test_session_drop_invalidates(
-        self, monkeypatch: pytest.MonkeyPatch, pool: Any, cache_on: None
+        self, monkeypatch: pytest.MonkeyPatch, pool: Any
     ) -> None:
         counters = _install_fake_stdio(monkeypatch)
         adapter = _adapter("alpha")
@@ -186,7 +148,7 @@ class TestToolListCache:
 
     @pytest.mark.asyncio
     async def test_plugin_reload_invalidates(
-        self, monkeypatch: pytest.MonkeyPatch, pool: Any, cache_on: None
+        self, monkeypatch: pytest.MonkeyPatch, pool: Any
     ) -> None:
         from robothor.plugins import loader
 
@@ -201,7 +163,7 @@ class TestToolListCache:
 
     @pytest.mark.asyncio
     async def test_changed_adapter_config_invalidates(
-        self, monkeypatch: pytest.MonkeyPatch, pool: Any, cache_on: None
+        self, monkeypatch: pytest.MonkeyPatch, pool: Any
     ) -> None:
         counters = _install_fake_stdio(monkeypatch)
 
@@ -215,7 +177,7 @@ class TestToolListCache:
 
     @pytest.mark.asyncio
     async def test_explicit_refresh_refetches(
-        self, monkeypatch: pytest.MonkeyPatch, pool: Any, cache_on: None
+        self, monkeypatch: pytest.MonkeyPatch, pool: Any
     ) -> None:
         counters = _install_fake_stdio(monkeypatch)
         mcp_client.register_adapter(_adapter("alpha"))
@@ -229,7 +191,7 @@ class TestToolListCache:
 
     @pytest.mark.asyncio
     async def test_mcp_list_tools_tool_honours_refresh(
-        self, monkeypatch: pytest.MonkeyPatch, pool: Any, cache_on: None
+        self, monkeypatch: pytest.MonkeyPatch, pool: Any
     ) -> None:
         from robothor.engine.tools.handlers.mcp_client import HANDLERS
 
@@ -244,46 +206,12 @@ class TestToolListCache:
         assert counters.list_calls == {"alpha": 2}
         assert r1["tools"] == r2["tools"] == r3["tools"]
 
-    def test_mcp_list_tools_schema_declares_refresh(self, cache_on: None) -> None:
+    def test_mcp_list_tools_schema_declares_refresh(self) -> None:
         from robothor.engine.tools.schemas import get_engine_schemas
 
         props = get_engine_schemas()["mcp_list_tools"]["function"]["parameters"]["properties"]
         assert props["refresh"]["type"] == "boolean"
         assert "server_name" in props
-
-    def test_flag_off_mcp_list_tools_schema_is_unchanged(self, cache_off: None) -> None:
-        """With the flag off the prompt carries exactly the schema it had before."""
-        from robothor.engine.tools.schemas import get_engine_schemas
-
-        assert get_engine_schemas()["mcp_list_tools"] == {
-            "type": "function",
-            "function": {
-                "name": "mcp_list_tools",
-                "description": "List tools available on a specific external MCP server.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "server_name": {
-                            "type": "string",
-                            "description": "Name of the MCP server",
-                        },
-                    },
-                    "required": ["server_name"],
-                },
-            },
-        }
-
-    @pytest.mark.asyncio
-    async def test_flag_off_lists_live_every_run(
-        self, monkeypatch: pytest.MonkeyPatch, pool: Any, cache_off: None
-    ) -> None:
-        counters = _install_fake_stdio(monkeypatch)
-        adapter = _adapter("alpha")
-
-        await _register([adapter])
-        await _register([adapter])
-
-        assert counters.list_calls == {"alpha": 2}
 
 
 # ── parallel connect ─────────────────────────────────────────────────────
@@ -292,7 +220,7 @@ class TestToolListCache:
 class TestParallelConnect:
     @pytest.mark.asyncio
     async def test_three_slow_adapters_cost_one_latency(
-        self, monkeypatch: pytest.MonkeyPatch, pool: Any, cache_on: None
+        self, monkeypatch: pytest.MonkeyPatch, pool: Any
     ) -> None:
         counters = _install_fake_stdio(monkeypatch)
         latency = 0.4
@@ -312,7 +240,7 @@ class TestParallelConnect:
 
     @pytest.mark.asyncio
     async def test_hung_adapter_does_not_delay_the_others(
-        self, monkeypatch: pytest.MonkeyPatch, pool: Any, cache_on: None
+        self, monkeypatch: pytest.MonkeyPatch, pool: Any
     ) -> None:
         counters = _install_fake_stdio(monkeypatch)
         monkeypatch.setattr(mcp_client, "ADAPTER_CONNECT_TIMEOUT_S", 0.3)
@@ -334,7 +262,7 @@ class TestParallelConnect:
 
     @pytest.mark.asyncio
     async def test_duplicate_tool_name_resolves_in_adapter_order(
-        self, monkeypatch: pytest.MonkeyPatch, pool: Any, cache_on: None
+        self, monkeypatch: pytest.MonkeyPatch, pool: Any
     ) -> None:
         """Concurrency must not make the winner of a name clash random."""
         counters = _install_fake_stdio(monkeypatch)
@@ -354,7 +282,7 @@ class TestParallelConnect:
 
     @pytest.mark.asyncio
     async def test_integrity_refusal_still_blocks_connection(
-        self, monkeypatch: pytest.MonkeyPatch, pool: Any, cache_on: None
+        self, monkeypatch: pytest.MonkeyPatch, pool: Any
     ) -> None:
         counters = _install_fake_stdio(monkeypatch)
         pinned = AdapterConfig(
@@ -431,9 +359,7 @@ def _http_session() -> mcp_client.McpHttpSession:
 
 class TestSharedHttpClient:
     @pytest.mark.asyncio
-    async def test_client_reused_across_requests(
-        self, monkeypatch: pytest.MonkeyPatch, cache_on: None
-    ) -> None:
+    async def test_client_reused_across_requests(self, monkeypatch: pytest.MonkeyPatch) -> None:
         counters = _install_fake_httpx(monkeypatch)
         session = _http_session()
 
@@ -449,7 +375,7 @@ class TestSharedHttpClient:
 
     @pytest.mark.asyncio
     async def test_pool_shutdown_closes_client(
-        self, monkeypatch: pytest.MonkeyPatch, pool: Any, cache_on: None
+        self, monkeypatch: pytest.MonkeyPatch, pool: Any
     ) -> None:
         counters = _install_fake_httpx(monkeypatch)
         pool.register(mcp_client.McpServerConfig(name="web", url="https://mcp.example.com/_mcp"))
@@ -460,17 +386,6 @@ class TestSharedHttpClient:
         assert counters.constructed == 1
         assert counters.closed == 1
 
-    @pytest.mark.asyncio
-    async def test_flag_off_client_per_request(
-        self, monkeypatch: pytest.MonkeyPatch, cache_off: None
-    ) -> None:
-        counters = _install_fake_httpx(monkeypatch)
-        session = _http_session()
-
-        await session.list_tools()
-
-        assert counters.constructed == counters.posts
-
 
 # ── pre-warm at daemon start ─────────────────────────────────────────────
 
@@ -478,7 +393,7 @@ class TestSharedHttpClient:
 class TestPrewarm:
     @pytest.mark.asyncio
     async def test_prewarm_then_first_run_lists_nothing(
-        self, monkeypatch: pytest.MonkeyPatch, pool: Any, cache_on: None
+        self, monkeypatch: pytest.MonkeyPatch, pool: Any
     ) -> None:
         counters = _install_fake_stdio(monkeypatch)
         adapters = [_adapter("alpha"), _adapter("bravo")]
@@ -492,7 +407,7 @@ class TestPrewarm:
 
     @pytest.mark.asyncio
     async def test_prewarm_skips_unverified_binary(
-        self, monkeypatch: pytest.MonkeyPatch, pool: Any, cache_on: None
+        self, monkeypatch: pytest.MonkeyPatch, pool: Any
     ) -> None:
         counters = _install_fake_stdio(monkeypatch)
         pinned = AdapterConfig(
@@ -507,8 +422,8 @@ class TestPrewarm:
         assert "pinned" not in counters.starts
 
     @pytest.mark.asyncio
-    async def test_daemon_prewarm_is_flag_gated(
-        self, monkeypatch: pytest.MonkeyPatch, pool: Any, cache_off: None
+    async def test_daemon_prewarm_lists_each_adapter(
+        self, monkeypatch: pytest.MonkeyPatch, pool: Any
     ) -> None:
         from robothor.engine import daemon
 
@@ -518,15 +433,11 @@ class TestPrewarm:
         )
 
         await daemon._prewarm_mcp_adapters()
-        assert counters.starts == {}
-
-        monkeypatch.setenv("ROBOTHOR_CONFIG_CACHE", "1")
-        await daemon._prewarm_mcp_adapters()
         assert counters.list_calls == {"alpha": 1}
 
     @pytest.mark.asyncio
     async def test_daemon_shutdown_stops_pool(
-        self, monkeypatch: pytest.MonkeyPatch, pool: Any, cache_on: None
+        self, monkeypatch: pytest.MonkeyPatch, pool: Any
     ) -> None:
         from robothor.engine import daemon
 
@@ -544,7 +455,7 @@ class TestPrewarm:
 class TestAFailedFetchIsNeverCached:
     @pytest.mark.asyncio
     async def test_a_list_cancelled_mid_flight_does_not_poison_the_next_run(
-        self, monkeypatch: pytest.MonkeyPatch, pool: Any, cache_on: None
+        self, monkeypatch: pytest.MonkeyPatch, pool: Any
     ) -> None:
         """A cancel mid-request leaves an unread response on a stdio pipe.
 
@@ -584,7 +495,7 @@ class TestAFailedFetchIsNeverCached:
 
     @pytest.mark.asyncio
     async def test_a_failed_list_is_not_cached(
-        self, monkeypatch: pytest.MonkeyPatch, pool: Any, cache_on: None
+        self, monkeypatch: pytest.MonkeyPatch, pool: Any
     ) -> None:
         counters = _install_fake_stdio(monkeypatch)
         real_list = mcp_client.McpClientSession.list_tools
@@ -610,7 +521,7 @@ class TestAFailedFetchIsNeverCached:
 class TestEntriesExpire:
     @pytest.mark.asyncio
     async def test_an_entry_older_than_the_ttl_is_refetched(
-        self, monkeypatch: pytest.MonkeyPatch, pool: Any, cache_on: None
+        self, monkeypatch: pytest.MonkeyPatch, pool: Any
     ) -> None:
         """An HTTP session never drops, so age is the only thing that can retire its list."""
         counters = _install_fake_stdio(monkeypatch)
@@ -632,7 +543,7 @@ class TestEntriesExpire:
 class TestAChangedConfigRestartsTheSession:
     @pytest.mark.asyncio
     async def test_the_refetch_comes_from_a_session_built_on_the_new_config(
-        self, monkeypatch: pytest.MonkeyPatch, pool: Any, cache_on: None
+        self, monkeypatch: pytest.MonkeyPatch, pool: Any
     ) -> None:
         counters = _install_fake_stdio(monkeypatch)
 
@@ -646,24 +557,11 @@ class TestAChangedConfigRestartsTheSession:
         assert counters.starts == {"alpha": 2}
         assert pool._sessions["alpha"].config.command == ["example-mcp-server", "--v2"]
 
-    @pytest.mark.asyncio
-    async def test_flag_off_keeps_the_existing_session(
-        self, monkeypatch: pytest.MonkeyPatch, pool: Any, cache_off: None
-    ) -> None:
-        counters = _install_fake_stdio(monkeypatch)
-
-        await _register([_adapter("alpha")])
-        await _register(
-            [AdapterConfig(name="alpha", transport="stdio", command=["example-mcp-server", "-x"])]
-        )
-
-        assert counters.starts == {"alpha": 1}
-
 
 class TestShutdownOrdering:
     @pytest.mark.asyncio
     async def test_a_session_added_during_shutdown_does_not_break_it(
-        self, monkeypatch: pytest.MonkeyPatch, pool: Any, cache_on: None
+        self, monkeypatch: pytest.MonkeyPatch, pool: Any
     ) -> None:
         _install_fake_stdio(monkeypatch)
         for n in ("alpha", "bravo"):
@@ -786,7 +684,7 @@ def _install_pipe_stdio(
 class TestRetireOnlyADesyncedPipe:
     @pytest.mark.asyncio
     async def test_a_list_timing_out_behind_a_long_call_does_not_kill_it(
-        self, monkeypatch: pytest.MonkeyPatch, pool: Any, cache_on: None
+        self, monkeypatch: pytest.MonkeyPatch, pool: Any
     ) -> None:
         procs = _install_pipe_stdio(monkeypatch, {"tools/call": 0.5})
         monkeypatch.setattr(mcp_client, "ADAPTER_CONNECT_TIMEOUT_S", 0.1)
@@ -810,7 +708,7 @@ class TestRetireOnlyADesyncedPipe:
 
     @pytest.mark.asyncio
     async def test_a_cancelled_call_does_not_poison_the_next_list(
-        self, monkeypatch: pytest.MonkeyPatch, pool: Any, cache_on: None
+        self, monkeypatch: pytest.MonkeyPatch, pool: Any
     ) -> None:
         procs = _install_pipe_stdio(monkeypatch, {"tools/call": 0.1})
         mcp_client.register_adapter(_adapter("pipe"))
@@ -831,7 +729,7 @@ class TestRetireOnlyADesyncedPipe:
 
     @pytest.mark.asyncio
     async def test_a_request_queued_behind_an_abandoned_one_does_not_hide_it(
-        self, monkeypatch: pytest.MonkeyPatch, pool: Any, cache_on: None
+        self, monkeypatch: pytest.MonkeyPatch, pool: Any
     ) -> None:
         """A caller already waiting on the lock must not read the abandoned answer.
 
@@ -860,26 +758,8 @@ class TestRetireOnlyADesyncedPipe:
         assert procs[0].terminated is True
 
     @pytest.mark.asyncio
-    async def test_flag_off_a_queued_request_is_sent_as_before(
-        self, monkeypatch: pytest.MonkeyPatch, pool: Any, cache_off: None
-    ) -> None:
-        _install_pipe_stdio(monkeypatch, {"tools/call": 0.1})
-        mcp_client.register_adapter(_adapter("pipe"))
-        session = await pool.get_session("pipe")
-
-        first = asyncio.create_task(session.call_tool("pipe_tool", {}))
-        await asyncio.sleep(0.03)
-        queued = asyncio.create_task(session.call_tool("pipe_tool", {}))
-        await asyncio.sleep(0.01)
-        first.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await first
-
-        assert await queued == {"content": [{"type": "text", "text": '{"ok": true}'}]}
-
-    @pytest.mark.asyncio
     async def test_a_cancelled_list_still_retires_its_pipe(
-        self, monkeypatch: pytest.MonkeyPatch, pool: Any, cache_on: None
+        self, monkeypatch: pytest.MonkeyPatch, pool: Any
     ) -> None:
         procs = _install_pipe_stdio(monkeypatch, {"tools/list": 0.3})
         monkeypatch.setattr(mcp_client, "ADAPTER_CONNECT_TIMEOUT_S", 0.1)
@@ -897,7 +777,7 @@ class TestRetireOnlyADesyncedPipe:
 class TestAFailedHttpListKeepsItsClient:
     @pytest.mark.asyncio
     async def test_the_shared_client_survives_and_nothing_is_cached(
-        self, monkeypatch: pytest.MonkeyPatch, pool: Any, cache_on: None
+        self, monkeypatch: pytest.MonkeyPatch, pool: Any
     ) -> None:
         counters = _install_fake_httpx(monkeypatch)
         real_post = httpx.AsyncClient.post
@@ -920,3 +800,64 @@ class TestAFailedHttpListKeepsItsClient:
         assert pool._sessions["web"] is session
         assert counters.constructed == 1
         assert counters.closed == 0
+
+
+# ── one code path: no switch decides whether the cache runs ──────────────
+
+_FLAG_ENV = "ROBOTHOR_" + "CONFIG_CACHE"
+
+
+class TestNoFeatureFlag:
+    def test_no_module_mentions_the_flag(self) -> None:
+        from pathlib import Path
+
+        import robothor
+
+        root = Path(robothor.__file__).parent
+        this = Path(__file__).resolve()
+        offenders = [
+            str(p.relative_to(root))
+            for p in root.rglob("*.py")
+            if p.resolve() != this and _FLAG_ENV in p.read_text(encoding="utf-8")
+        ]
+        assert offenders == []
+
+    def test_registry_and_mcp_client_read_no_flag(self) -> None:
+        import inspect
+
+        from robothor.engine import feature_flags
+        from robothor.engine.tools import registry, schemas
+
+        assert not hasattr(feature_flags, "config_cache_enabled")
+        for module in (registry, mcp_client, schemas):
+            assert "config_cache_enabled" not in inspect.getsource(module), module.__name__
+
+    def test_not_declared_in_settings(self) -> None:
+        from robothor.settings.model import FlagSettings
+
+        envs = {
+            f.json_schema_extra.get("env")
+            for f in FlagSettings.model_fields.values()
+            if isinstance(f.json_schema_extra, dict)
+        }  # type: ignore[union-attr]
+        assert _FLAG_ENV not in envs
+
+    @pytest.mark.asyncio
+    async def test_cache_runs_with_the_old_env_var_set_to_zero(
+        self, monkeypatch: pytest.MonkeyPatch, pool: Any
+    ) -> None:
+        monkeypatch.setenv(_FLAG_ENV, "0")
+        counters = _install_fake_stdio(monkeypatch)
+        adapters = [_adapter("alpha"), _adapter("bravo")]
+
+        await _register(adapters)
+        await _register(adapters)
+
+        assert counters.list_calls == {"alpha": 1, "bravo": 1}
+
+    def test_mcp_list_tools_always_declares_refresh(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from robothor.engine.tools.schemas import get_engine_schemas
+
+        monkeypatch.setenv(_FLAG_ENV, "0")
+        props = get_engine_schemas()["mcp_list_tools"]["function"]["parameters"]["properties"]
+        assert props["refresh"]["type"] == "boolean"

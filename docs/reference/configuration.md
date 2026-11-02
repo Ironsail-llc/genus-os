@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-517 settings in 18 groups.
+516 settings in 18 groups.
 
 ## autonomy
 
@@ -439,7 +439,6 @@ Guardrails and feature gates. Ones marked governed are inventoried in `infra/fla
 | `ROBOTHOR_CHAT_HISTORY_PAGES` | bool | `false` | `robothor-engine` | no | 1.123.0 | Serve chat history from the message store instead of the in-memory tail: each message carries its stored time and id, and the endpoint pages back past the last 50 (offset, or a before=<id> cursor) with a hasMore flag. Off, history is the in-memory tail with no times, as before. A first page the store cannot answer falls back to memory. |
 | `ROBOTHOR_COMPLETION_CONTRACTS_ENABLED` | bool | `false` | `robothor-engine` | no | legacy | Switch for evidence-based completion contracts: a run claiming success must show the tool trace that produced it. |
 | `ROBOTHOR_COMPLETION_CONTRACTS_MODE` | str | `observe` | `robothor-engine` | no | legacy | **governed.** Completion-contract ladder position: observe records unevidenced claims, enforce fails the run that makes one. |
-| `ROBOTHOR_CONFIG_CACHE` | bool | `false` | no | no | unreleased | Reuse an agent's merged and validated manifest, its adapter configs and the digest of a pinned adapter binary between runs while the files they came from are unchanged, and keep each MCP adapter's tool list for up to ten minutes while its session lives (a dropped session, a changed adapter config, a plugin reload, a failed fetch or an explicit refresh refetches it). Adapters connect concurrently, an HTTP MCP server keeps one client, and adapter sessions are pre-warmed at engine start. A plugin sync, a plugin reload or a defaults reload drops them. |
 | `ROBOTHOR_CONFIG_STRICT_MODE` | str | `observe` | `robothor-engine` | no | 1.66 | What an unknown key in the settings: block of config.yaml does. 'off' ignores it, 'observe' (default for existing installs) logs one warning naming the key and carries on, 'enforce' refuses to start. Inventoried in infra/flags.yaml but deliberately NOT governed: it is read while settings are being resolved, which happens before and without a database. |
 | `ROBOTHOR_CREDENTIAL_INTAKE` | str | `off` | `robothor-engine` | no | unreleased | **governed.** Let the default chat agent use the vault tools when an owner or admin hands it a credential in a top-level human chat run. off keeps the manifest-tier rule only, observe logs what enforce would allow, enforce allows it. Unknown values read as off. |
 | `ROBOTHOR_CURATOR_APPLY` | bool | `false` | `robothor-engine` | no | legacy | Let the memory curator write its proposed edits. Off, it only proposes — the prompt-trust boundary for accreted content. |
