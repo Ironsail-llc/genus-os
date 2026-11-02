@@ -122,7 +122,11 @@ def sends_cache_markers(model: str, supports_cache_control: bool) -> bool:
 
 
 def has_explicit_breakpoints(model: str) -> bool:
-    """Anthropic direct: tool and conversation breakpoints, not only the system one."""
+    """Anthropic direct: tool and conversation breakpoints, not only the system one.
+
+    Only a route that already gets the system breakpoint (the catalog's
+    ``supports_cache_control``) gets these; the caller checks both.
+    """
     return model.startswith("anthropic/")
 
 

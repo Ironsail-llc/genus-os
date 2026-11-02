@@ -2155,7 +2155,7 @@ class LLMClient:
             # the list or stripped as engine context.
             messages = [*messages, {"role": "user", "content": nudge}]
 
-        if cache_layout.has_explicit_breakpoints(model):
+        if cache_system and cache_layout.has_explicit_breakpoints(model):
             messages, tools = cache_layout.add_anthropic_breakpoints(messages, tools)
 
         kwargs: dict[str, Any] = {
