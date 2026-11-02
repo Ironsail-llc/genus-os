@@ -1,6 +1,6 @@
 """A confined tool sent through ``tool_call`` is refused like the direct call.
 
-Under the sandbox playground, a run whose execution plan is refused (no
+A run whose execution plan is refused (no
 container runtime, and nobody with an owner or admin role driving the run) has
 the tools a container confines -- ``browser`` and ``desktop_*`` -- refused per
 call by ``GuardrailEngine.check_pre_execution``, or they would reach the engine
@@ -67,7 +67,6 @@ class _Admitter(ToolAdmissionMixin):
 
 @pytest.fixture(autouse=True)
 def _playground(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("ROBOTHOR_SANDBOX_PLAYGROUND", "1")
     monkeypatch.setattr("robothor.engine.sandbox.runtime_status", lambda **_k: ABSENT)
     monkeypatch.setattr(sp, "_record", lambda *_a, **_k: None)
     monkeypatch.setattr(tool_admission, "_log_guardrail_event", lambda **_k: None)

@@ -24,11 +24,6 @@ WRAPPED = "claude_code_status"
 GRANTED = frozenset({"read_file", "list_tasks"})
 
 
-@pytest.fixture(autouse=True)
-def _payload_v2(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("ROBOTHOR_REFUSAL_PAYLOAD_V2", "1")
-
-
 @pytest.fixture
 def deferred_run() -> Any:
     token = set_deferred_allowed(GRANTED)

@@ -14,17 +14,10 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
-import pytest
-
 from robothor.engine.models import AgentConfig, TriggerType
 
 DENIED = "web_render"
 ARGS = {"url": "https://example.com"}
-
-
-@pytest.fixture(autouse=True)
-def _payload_v2(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("ROBOTHOR_REFUSAL_PAYLOAD_V2", "1")
 
 
 def _classify(_role: str, _tenant: str, tool_name: str, _mode: str) -> tuple[str, str]:
