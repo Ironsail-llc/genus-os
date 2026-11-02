@@ -571,3 +571,153 @@ class TestTheRunner:
         assert run.capability_tier == "standard"
         runner.registry.execute.assert_not_awaited()
         assert events == []
+
+
+# ── The tier is the only code path ───────────────────────────────────────
+
+_RETIRED_SWITCHES = ("ROBOTHOR_ROLE_CAPABILITIES_ENABLED", "ROBOTHOR_ROLE_CAPABILITIES_MODE")
+
+
+def _retired_switches_set_low(monkeypatch) -> None:
+    """The retired switches set to their old off/observe values change nothing."""
+    monkeypatch.setenv("ROBOTHOR_ROLE_CAPABILITIES_ENABLED", "0")
+    monkeypatch.setenv("ROBOTHOR_ROLE_CAPABILITIES_MODE", "observe")
+
+
+class TestNoSwitch:
+    def test_feature_flags_has_no_reader(self):
+        from robothor.engine import feature_flags
+
+        assert not hasattr(feature_flags, "role_capabilities_mode")
+        assert not hasattr(feature_flags, "role_capabilities_enabled")
+
+    def test_feature_flags_source_names_neither_switch(self):
+        import inspect
+
+        from robothor.engine import feature_flags
+
+        source = inspect.getsource(feature_flags)
+        for name in _RETIRED_SWITCHES:
+            assert name not in source
+
+    def test_settings_declare_neither_switch(self):
+        import inspect
+
+        from robothor.settings import model
+
+        source = inspect.getsource(model)
+        for name in _RETIRED_SWITCHES:
+            assert name not in source
+
+
+_STOCK_ROLES = ("owner", "admin", "member", "user", "service", "viewer")
+
+
+def _stamped(role: str, *, trigger=TriggerType.WEBCHAT, verified: bool = True):
+    from robothor.engine.capability_tier import stamp_capability_tier
+
+    run = AgentRun(agent_id="probe", user_role=role)
+    identity = _owner_identity(verified=verified, role=role)
+    decision = stamp_capability_tier(run, trigger, identity)
+    return run, decision
+
+
+_PARITY_AGENTS = {
+    "default": {},
+    "allow-list": {"tools_allowed": ["read_file", "web_fetch", "search_memory"]},
+    "opt-in": {"tools_opt_in": ["web_render"]},
+    "denied": {"tools_denied": ["claude_code_*", "web_*"]},
+}
+
+
+class TestStockRoleParity:
+    """No stock role loses a tool it is offered on main, where no tier exists.
+
+    main's toolset is ``get_tool_names(config)`` with no tier; RBAC
+    (``role_permissions``) is evaluated at dispatch and never reads the tier.
+    """
+
+    @pytest.mark.parametrize("agent", sorted(_PARITY_AGENTS))
+    @pytest.mark.parametrize("role", _STOCK_ROLES)
+    @pytest.mark.parametrize("trigger", [TriggerType.WEBCHAT, TriggerType.CRON])
+    def test_every_tool_offered_on_main_is_still_offered(
+        self, registry, monkeypatch, role, agent, trigger
+    ):
+        _retired_switches_set_low(monkeypatch)
+        config = _default_agent(**_PARITY_AGENTS[agent])
+        _, decision = _stamped(role, trigger=trigger)
+        assert decision is not None
+
+        on_main = set(registry.get_tool_names(config))
+        with_tier = set(registry.get_tool_names(config, tier=decision.tier))
+        assert on_main <= with_tier
+
+    @pytest.mark.parametrize("role", _STOCK_ROLES)
+    def test_every_tool_callable_on_main_is_still_callable_deferred(
+        self, registry, monkeypatch, role
+    ):
+        _retired_switches_set_low(monkeypatch)
+        monkeypatch.setenv("ROBOTHOR_RIP_16_ENABLED", "1")
+        config = _default_agent()
+        _, decision = _stamped(role)
+        assert decision is not None
+        assert registry.deferred_whitelist(config) <= registry.deferred_whitelist(
+            config, tier=decision.tier
+        )
+
+    @pytest.mark.parametrize("role", ["member", "user", "service", "viewer"])
+    def test_a_non_widening_stock_role_is_offered_exactly_mains_toolset(
+        self, registry, monkeypatch, role
+    ):
+        _retired_switches_set_low(monkeypatch)
+        for spec in _PARITY_AGENTS.values():
+            config = _default_agent(**spec)
+            _, decision = _stamped(role)
+            assert decision is not None
+            assert registry.get_tool_names(config, tier=decision.tier) == (
+                registry.get_tool_names(config)
+            )
+
+    def test_the_owner_keeps_everything_and_gains_the_opt_ins(self, registry, monkeypatch):
+        _retired_switches_set_low(monkeypatch)
+        config = _default_agent()
+        _, decision = _stamped("owner")
+        assert decision is not None and decision.tier == "unrestricted"
+
+        on_main = set(registry.get_tool_names(config))
+        with_tier = set(registry.get_tool_names(config, tier=decision.tier))
+        assert on_main <= with_tier
+        assert "claude_code_start" in with_tier - on_main
+
+
+@pytest.mark.asyncio
+class TestTheRunnerWithTheRetiredSwitchesSet:
+    async def test_a_member_run_is_tier_shaped(
+        self, runner, default_agent, mock_litellm_response, monkeypatch
+    ):
+        _retired_switches_set_low(monkeypatch)
+        run, events = await _run_one_tool_call(
+            runner,
+            default_agent,
+            mock_litellm_response,
+            tool="read_file",
+            role="member",
+            identity=_owner_identity(role="member"),
+        )
+
+        assert run.capability_tier == "standard"
+        assert runner.registry.tier_seen == ["standard"]
+        assert events == []
+
+    async def test_an_owner_run_is_offered_and_admits_the_opt_in_tool(
+        self, runner, default_agent, mock_litellm_response, monkeypatch
+    ):
+        _retired_switches_set_low(monkeypatch)
+        run, events = await _run_one_tool_call(
+            runner, default_agent, mock_litellm_response, identity=_owner_identity()
+        )
+
+        assert run.capability_tier == "unrestricted"
+        assert runner.registry.build_for_agent.call_args.kwargs["tier"] == "unrestricted"
+        runner.registry.execute.assert_awaited_once()
+        assert [e["action"] for e in events] == ["allowed"]
