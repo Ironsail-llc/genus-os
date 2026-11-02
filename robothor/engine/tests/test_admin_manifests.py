@@ -383,3 +383,70 @@ class TestTheTriggerRouteStillWorks:
         result = asyncio.run(manual_trigger.trigger_agent(None, None, "demo-agent", None))
 
         assert result == {"error": "Runner not available"}
+
+
+class TestAWorkspaceThatCannotBeWrittenIsARefusal:
+    """A full or read-only workspace is the operator's to fix, and it should
+    read as one: a 422 naming the rule, not a plain-text 500 the bridge can
+    only report as "the engine did not answer"."""
+
+    @pytest.fixture
+    def unwritable(self, monkeypatch):
+        import os
+
+        def _full(*_args, **_kwargs):
+            raise OSError(28, "No space left on device")
+
+        monkeypatch.setattr(os, "fsync", _full)
+
+    def test_a_create_on_a_full_workspace_is_a_422(self, client, workspace, unwritable):
+        response = client.post("/api/admin/agent-manifests", json=_create_body())
+
+        assert response.status_code == 422, response.text
+        assert "not writable" in response.json()["detail"]
+        assert str(workspace) not in response.text
+
+    def test_a_patch_on_a_full_workspace_is_a_422(self, client, seeded, unwritable):
+        before = seeded.read_text()
+
+        response = client.patch("/api/admin/agent-manifests/demo-agent", json={"name": "X"})
+
+        assert response.status_code == 422, response.text
+        assert "not writable" in response.json()["detail"]
+        assert seeded.read_text() == before
+
+    def test_a_retire_on_an_unwritable_workspace_is_a_422(self, client, seeded, monkeypatch):
+        from pathlib import Path
+
+        def _refuse(*_args, **_kwargs):
+            raise PermissionError(13, "Permission denied")
+
+        monkeypatch.setattr(Path, "replace", _refuse)
+
+        response = client.request(
+            "DELETE", "/api/admin/agent-manifests/demo-agent", json={"confirm": "demo-agent"}
+        )
+
+        assert response.status_code == 422, response.text
+        assert seeded.is_file()
+
+
+class TestTheTriggerLogIsNotForgeable:
+    def test_a_newline_in_the_id_cannot_split_the_log_record(self, caplog):
+        import asyncio
+        import logging
+
+        from robothor.engine import manual_trigger
+        from robothor.engine.manifest_schema import ManifestSchemaError
+
+        with (
+            patch(
+                "robothor.engine.config.load_agent_config",
+                side_effect=ManifestSchemaError("a\nforged", []),
+            ),
+            caplog.at_level(logging.ERROR, logger="robothor.engine.manual_trigger"),
+        ):
+            asyncio.run(manual_trigger.trigger_agent(MagicMock(), None, "a\nforged", None))
+
+        assert caplog.records, "the schema refusal was not logged"
+        assert all("\n" not in record.getMessage() for record in caplog.records)

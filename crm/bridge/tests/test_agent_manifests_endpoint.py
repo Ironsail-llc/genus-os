@@ -1907,3 +1907,87 @@ class TestAnEngineThatCannotAnswerIsAReadableError:
 
         assert response.status_code == 422
         assert response.json()["detail"] == verdict
+
+
+class TestAWriteWhoseAnswerWasLostIsStillAudited:
+    """A create or edit can take effect in the engine while its answer never
+    reaches the bridge (a timeout, a reset). The operator sees a 502, and the
+    audit trail must still name them: before the store moved, the audit event
+    followed the local write and this gap did not exist. Recorded as
+    ``status="error"``, because the bridge cannot know whether it landed."""
+
+    @pytest.fixture
+    def lost(self):
+        async def _lost(method, path, *, json=None, timeout=30):
+            return 502, {"error": "engine unavailable"}
+
+        with patch("routers.agent_manifests.engine_request", new=_lost):
+            yield
+
+    @pytest.mark.parametrize(
+        ("method", "path", "body", "event"),
+        [
+            ("post", "/api/agent-manifests", "create", "helm.agent_manifest.create"),
+            (
+                "patch",
+                "/api/agent-manifests/demo-agent",
+                {"name": "X"},
+                "helm.agent_manifest.update",
+            ),
+            ("post", "/api/agent-manifests/demo-agent/enable", None, "helm.agent_manifest.update"),
+            ("post", "/api/agent-manifests/demo-agent/disable", None, "helm.agent_manifest.update"),
+            (
+                "delete",
+                "/api/agent-manifests/demo-agent",
+                {"confirm": "demo-agent"},
+                "helm.agent_manifest.retire",
+            ),
+        ],
+    )
+    def test_a_502_on_a_write_is_audited_as_an_error(
+        self, client, workspace, lost, method, path, body, event
+    ):
+        with patch("routers.agent_manifests.audited") as audit:
+            response = _call(client, method, path, body)
+
+        assert response.status_code == 502, response.text
+        assert audit.call_count == 1, audit.call_args_list
+        assert audit.call_args.args[1] == event
+        assert audit.call_args.kwargs["status"] == "error"
+
+    def test_a_refusal_the_engine_decided_is_not_audited(self, client, workspace):
+        """The counter-case: a 422 is a write that did NOT happen, as before."""
+        engine = _CannedEngine(
+            {("PATCH", "/api/admin/agent-manifests/demo-agent"): (422, {"detail": "nope"})}
+        )
+
+        with (
+            patch("routers.agent_manifests.engine_request", new=engine),
+            patch("routers.agent_manifests.audited") as audit,
+        ):
+            response = client.patch("/api/agent-manifests/demo-agent", json={"name": "X"})
+
+        assert response.status_code == 422
+        audit.assert_not_called()
+
+    def test_the_502_does_not_claim_the_engine_was_silent(self, client, workspace, lost):
+        """An engine that answered with an unhandled error also lands here, so
+        the message must not send an operator looking for a network fault."""
+        response = client.get("/api/agent-manifests")
+
+        assert "or answered with an error" in response.json()["detail"]
+
+    def test_writes_get_a_longer_budget_than_a_read(self, client, seeded):
+        """One create now covers the scan, the registry build, the write and the
+        reconcile, which used to be two calls with 30s each."""
+        seen: dict[str, float] = {}
+
+        async def _timed(method, path, *, json=None, timeout=30):
+            seen[method] = timeout
+            return 200, {"id": "demo-agent", "manifest": {}, "agents": []}
+
+        with patch("routers.agent_manifests.engine_request", new=_timed):
+            client.get("/api/agent-manifests")
+            client.patch("/api/agent-manifests/demo-agent", json={"name": "X"})
+
+        assert seen["PATCH"] > seen["GET"]
