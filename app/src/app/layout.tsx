@@ -6,7 +6,6 @@ import { marketplaceUrl } from "@/lib/marketplace-url";
 import { ThemeProvider } from "@/components/theme-provider";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { WebVitals } from "@/components/web-vitals";
-import { webVitalsEnabled } from "@/lib/web-vitals";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -49,7 +48,7 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
-        {webVitalsEnabled() && <WebVitals />}
+        <WebVitals />
         <ThemeProvider>
           <SessionProvider>
             <RuntimeConfigProvider aiName={aiName} marketplaceUrl={marketplace}>

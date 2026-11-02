@@ -271,9 +271,8 @@ page load sends about five). The client is the address
 `GENUS_DASHBOARD_TRUSTED_PROXIES` lets the dashboard verify; without that
 setting every client shares one window.
 
-`GENUS_DASHBOARD_WEB_VITALS=false` turns it off at both ends: the page mounts
-no reporter and the route stores and logs nothing
-([configuration reference](reference/configuration.md)).
+Reporting is always on: every page mounts the reporter, and there is no
+setting that turns it off.
 
 Two CI gates sit beside it, both in `app/`:
 
