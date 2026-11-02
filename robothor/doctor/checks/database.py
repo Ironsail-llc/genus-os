@@ -439,7 +439,7 @@ CHECKS: tuple[Check, ...] = (
         id="db.session_settings",
         title="Session settings persist across transactions (no transaction-mode pooler)",
         category="database",
-        severity="recommended",
+        severity="required",
         run=_session_settings,
     ),
 )

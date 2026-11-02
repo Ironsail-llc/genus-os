@@ -435,7 +435,9 @@ transaction-mode pooler (PgBouncer's `pool_mode = transaction`, for example)
 hands each transaction to whichever server connection is free, so the tenant
 binding can belong to another tenant and the scan mode can be missing.
 `genus doctor --only db.session_settings` sets a throwaway session setting and
-reads it back across several transactions; it fails when they do not agree.
+reads it back across several transactions; it fails, and `genus doctor` exits
+non-zero, when they do not agree, because a tenant binding that may belong to
+another tenant is a broken data boundary.
 
 **Never hand a SQL file to `psql` to create the schema.** The only thing that
 creates tables is the migrator — `genus init` runs it, the compose stack runs it
