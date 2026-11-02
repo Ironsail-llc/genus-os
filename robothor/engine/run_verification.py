@@ -37,15 +37,14 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+# Reuse, don't re-derive: the completion-claim phrasings and the negation
+# window are already tuned in completion_contract, and the two controls must
+# not disagree about what "the task is complete" means.
 from robothor.engine.completion_contract import (
     _COMPLETION_CLAIM_PATTERNS,
     _NEGATION_RE,
     _NEGATION_WINDOW,
 )
-
-# Reuse, don't re-derive: the completion-claim phrasings and the negation
-# window are already tuned in completion_contract, and the two controls must
-# not disagree about what "the task is complete" means.
 from robothor.engine.wrapped_call import wrapped_arguments
 
 __all__ = [
