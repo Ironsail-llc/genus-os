@@ -29,10 +29,7 @@ from robothor.identity import IdentityContext
 
 @pytest.fixture(autouse=True)
 def _clean_flags(monkeypatch):
-    for var in (
-        "ROBOTHOR_DISABLE_ALL_RIPS",
-        "ROBOTHOR_RIP_16_ENABLED",
-    ):
+    for var in ("ROBOTHOR_DISABLE_ALL_RIPS", "ROBOTHOR_DEFERRED_TOOLS_THRESHOLD"):
         monkeypatch.delenv(var, raising=False)
 
 
@@ -112,7 +109,11 @@ class TestTheRegistry:
         names = set(registry.get_tool_names(_default_agent(), tier="elevated"))
         assert "web_render" in names
 
-    def test_build_for_agent_advertises_what_get_tool_names_lists(self, registry):
+    def test_build_for_agent_advertises_what_get_tool_names_lists(self, registry, monkeypatch):
+        # Deferral is the only path for a broad agent, so this pins a run under
+        # the threshold, which advertises its whole set; a deferred run reaches
+        # the same tools through its whitelist (the case below).
+        monkeypatch.setenv("ROBOTHOR_DEFERRED_TOOLS_THRESHOLD", "100000")
         schemas = registry.build_for_agent(_default_agent(), tier="unrestricted")
         advertised = {s["function"]["name"] for s in schemas}
         assert "claude_code_start" in advertised
@@ -130,7 +131,6 @@ class TestTheRegistry:
         )
 
     def test_a_deferred_run_can_tool_call_what_the_tier_unlocked(self, registry, monkeypatch):
-        monkeypatch.setenv("ROBOTHOR_RIP_16_ENABLED", "1")
         config = _default_agent()
         assert "claude_code_status" in registry.deferred_whitelist(config, tier="unrestricted")
         assert "claude_code_status" not in registry.deferred_whitelist(config)
@@ -155,14 +155,30 @@ class TestPrepareToolset:
                 capability=decision,
             )
 
-    async def test_a_widening_tier_advertises_what_it_unlocks(self, registry):
+    async def test_a_widening_tier_advertises_what_it_unlocks(self, registry, monkeypatch):
         from robothor.engine.capability_tier import resolve_tier
+
+        monkeypatch.setenv("ROBOTHOR_DEFERRED_TOOLS_THRESHOLD", "100000")  # not deferred
 
         decision = resolve_tier("owner", interactive=True, identity_verified=True)
         prepared = await self._prepare(registry, decision)
 
         advertised = {s["function"]["name"] for s in prepared.tool_schemas}
         assert "claude_code_start" in advertised
+        assert "claude_code_start" in prepared.tier_unlocked
+
+    async def test_a_widening_tier_on_a_deferred_run_makes_what_it_unlocks_reachable(
+        self, registry
+    ):
+        from robothor.engine.capability_tier import resolve_tier
+
+        decision = resolve_tier("owner", interactive=True, identity_verified=True)
+        prepared = await self._prepare(registry, decision)
+
+        advertised = {s["function"]["name"] for s in prepared.tool_schemas}
+        assert "tool_search" in advertised  # the run was deferred
+        assert "claude_code_start" not in advertised
+        assert "claude_code_start" in prepared.reachable_names
         assert "claude_code_start" in prepared.tier_unlocked
 
     async def test_no_decision_is_todays_toolset(self, registry):
@@ -541,7 +557,6 @@ class TestStockRoleParity:
         self, registry, monkeypatch, role
     ):
         _retired_switches_set_low(monkeypatch)
-        monkeypatch.setenv("ROBOTHOR_RIP_16_ENABLED", "1")
         config = _default_agent()
         _, decision = _stamped(role)
         assert decision is not None
