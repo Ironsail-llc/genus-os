@@ -227,16 +227,24 @@ class TestAChangeOnDiskIsSeenByTheNextListing:
 
         assert reads["files"] == 3
 
-    def test_the_fleet_defaults(self, store, fleet):
+    def test_the_fleet_defaults(self, store, fleet, reads):
+        """``_defaults.yaml`` is merged into every manifest at load, so a
+        change to it alone re-reads the fleet."""
         store.listing()
+        _reset(reads)
         (fleet / "_defaults.yaml").write_text(
             yaml.safe_dump({"model": {"temperature": 0.2}}, sort_keys=False)
         )
         later = time.time() + 5
         os.utime(fleet / "_defaults.yaml", (later, later))
+        os.utime(fleet, ns=(fleet.stat().st_atime_ns, fleet.stat().st_mtime_ns))
 
-        manifest = store.listing().manifests[0]
-        assert manifest["model"]["temperature"] == 0.2
+        store.listing()
+
+        # Every agent again (the loader also opens ``_defaults.yaml`` itself
+        # under the glob before skipping it).
+        assert reads["files"] >= 3
+        assert reads["defaults"] == 1
 
     def test_the_environment_the_manifests_expand_from(self, store, fleet, monkeypatch):
         monkeypatch.setenv("DEMO_AGENT_BLURB", "first blurb")
@@ -267,7 +275,7 @@ class TestAChangeOnDiskIsSeenByTheNextListing:
     def test_a_missing_directory_is_never_cached(self, store, tmp_path, monkeypatch):
         monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(tmp_path / "nowhere"))
         monkeypatch.delenv("ROBOTHOR_MANIFEST_DIR", raising=False)
-        assert store.listing().manifests == []
+        assert list(store.listing().manifests) == []
         manifests = tmp_path / "nowhere" / "docs" / "agents"
         manifests.mkdir(parents=True)
         (manifests / "demo-agent.yaml").write_text(yaml.safe_dump(AGENT, sort_keys=False))
@@ -283,20 +291,25 @@ class TestTheStoresOwnWritesInvalidate:
         path = fleet / "demo-agent-2.yaml"
         before = _stat(path)
         document = yaml.safe_load(path.read_text())
-        store.replace_manifest(path, {**document, "name": "Renamed By The Store"})
+        # Same length as "Demo Agent 2", so name, size and (pinned) mtimes all
+        # match the scan before it: only the explicit invalidation can tell.
+        store.replace_manifest(path, {**document, "name": "Demo Agent X"})
         _pin_mtimes(path, before)
+        assert path.stat().st_size == before["file"].st_size
 
         names = {m["id"]: m["name"] for m in store.listing().manifests}
-        assert names["demo-agent-2"] == "Renamed By The Store"
+        assert names["demo-agent-2"] == "Demo Agent X"
 
     def test_write_atomically_even_when_it_fails(self, store, fleet, reads):
         store.listing()
         _reset(reads)
+        before_dir = fleet.stat()
         with (
             patch("robothor.engine.manifest_store.os.fsync", side_effect=OSError("disk")),
             pytest.raises(OSError),
         ):
             store.write_atomically(fleet / "demo-agent-2.yaml", "id: demo-agent-2\n")
+        os.utime(fleet, ns=(before_dir.st_atime_ns, before_dir.st_mtime_ns))
 
         store.listing()
         assert reads["files"] == 3

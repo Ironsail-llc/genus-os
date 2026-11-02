@@ -55,6 +55,8 @@ async def reconcile_schedules(scheduler: Any) -> dict[str, Any]:
     """Re-derive the live job set, and report what happened. Never raises."""
     from robothor.engine.admin_scheduler import resolve_scheduler
 
+    store.invalidate_listing()
+
     live = resolve_scheduler(scheduler)
     if live is None:
         return {"applied": False, "error": "scheduler not running"}
@@ -144,7 +146,7 @@ async def list_fleet() -> dict[str, Any]:
     can see which one to fix — not in a 500 that takes the other nineteen agents
     off the page with it.
     """
-    scan = await asyncio.to_thread(store.scan)
+    scan = await asyncio.to_thread(store.listing)
     main_agent_id = store.main_agent_id()
     agents: list[dict[str, Any]] = []
     undescribable: list[dict[str, str]] = []
@@ -303,6 +305,9 @@ async def run(agent_id: str, runner: Any, auth: Any) -> dict[str, Any]:
     from robothor.engine import manual_trigger
 
     agent_id, _ = await asyncio.to_thread(store.require_manifest, agent_id)
+    # A run is the operator saying "this agent, as it is on disk now": the next
+    # listing reads the same files the trigger just loaded.
+    store.invalidate_listing()
     triggered = await manual_trigger.trigger_agent(runner, store.manifest_dir(), agent_id, auth)
     return {"id": agent_id, "triggered": triggered}
 
