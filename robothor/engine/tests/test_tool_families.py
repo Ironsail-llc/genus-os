@@ -253,6 +253,8 @@ def test_post_condition_checkers_are_unchanged() -> None:
         "robothor.goals.evidence",
         "robothor.doctor.checks.tools",
         "robothor.engine.tools.verification",
+        "robothor.engine.manifest_listing",
+        "robothor.engine.manifest_store",
     ],
 )
 def test_module_imports_first_without_a_cycle(module: str) -> None:

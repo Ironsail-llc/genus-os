@@ -203,9 +203,9 @@ def _invalidate_fleet_listing() -> None:
     """A plugin that ships agents writes or retires their manifests on sync,
     install and remove; the fleet listing's cached scan is dropped whether or
     not the operation finished, since a half-done one can still have written."""
-    from robothor.engine import manifest_store
+    from robothor.engine import manifest_listing
 
-    manifest_store.invalidate_listing()
+    manifest_listing.invalidate_listing()
 
 
 def sync_lockfile(force: bool = False) -> dict[str, Any]:

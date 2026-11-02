@@ -31,6 +31,7 @@ import yaml
 from fastapi import FastAPI
 from starlette.testclient import TestClient
 
+from robothor.engine import manifest_listing as cache
 from robothor.engine.schedule_reconcile import ReconcileResult
 
 AGENT = {
@@ -91,9 +92,9 @@ def _reset(counter: dict[str, int]) -> None:
 def store():
     from robothor.engine import manifest_store
 
-    manifest_store.invalidate_listing()
+    cache.invalidate_listing()
     yield manifest_store
-    manifest_store.invalidate_listing()
+    cache.invalidate_listing()
 
 
 def _identity_middleware(app: FastAPI) -> None:
@@ -154,12 +155,12 @@ def _names(client) -> dict[str, str]:
 
 class TestASecondListingReadsNoManifestFile:
     def test_through_the_store(self, store, fleet, reads):
-        first = store.listing()
+        first = cache.listing()
         assert len(first.manifests) == 3
         assert reads["files"] == 3
 
         _reset(reads)
-        second = store.listing()
+        second = cache.listing()
 
         assert second is first
         assert reads == {"files": 0, "defaults": 0}
@@ -196,7 +197,7 @@ class TestASecondListingReadsNoManifestFile:
 
 class TestAChangeOnDiskIsSeenByTheNextListing:
     def test_a_file_edited_in_place(self, store, fleet):
-        store.listing()
+        cache.listing()
         path = fleet / "demo-agent-1.yaml"
         document = yaml.safe_load(path.read_text())
         document["name"] = "Renamed Outside The Engine"
@@ -204,33 +205,33 @@ class TestAChangeOnDiskIsSeenByTheNextListing:
         later = time.time() + 5
         os.utime(path, (later, later))
 
-        names = {m["id"]: m["name"] for m in store.listing().manifests}
+        names = {m["id"]: m["name"] for m in cache.listing().manifests}
         assert names["demo-agent-1"] == "Renamed Outside The Engine"
 
     def test_a_file_added_or_removed(self, store, fleet):
-        assert len(store.listing().manifests) == 3
+        assert len(cache.listing().manifests) == 3
         (fleet / "demo-agent-0.yaml").unlink()
-        assert len(store.listing().manifests) == 2
+        assert len(cache.listing().manifests) == 2
         document = {**AGENT, "id": "demo-agent-9", "name": "Demo Agent 9"}
         (fleet / "demo-agent-9.yaml").write_text(yaml.safe_dump(document, sort_keys=False))
-        assert len(store.listing().manifests) == 3
+        assert len(cache.listing().manifests) == 3
 
     def test_a_directory_mtime_change_alone(self, store, fleet, reads):
         """An entry that does not match ``*.yaml`` (a rename in flight, a
         retired move) still moves the directory, and that is enough."""
-        store.listing()
+        cache.listing()
         _reset(reads)
         later = time.time() + 5
         os.utime(fleet, (later, later))
 
-        store.listing()
+        cache.listing()
 
         assert reads["files"] == 3
 
     def test_the_fleet_defaults(self, store, fleet, reads):
         """``_defaults.yaml`` is merged into every manifest at load, so a
         change to it alone re-reads the fleet."""
-        store.listing()
+        cache.listing()
         _reset(reads)
         (fleet / "_defaults.yaml").write_text(
             yaml.safe_dump({"model": {"temperature": 0.2}}, sort_keys=False)
@@ -239,7 +240,7 @@ class TestAChangeOnDiskIsSeenByTheNextListing:
         os.utime(fleet / "_defaults.yaml", (later, later))
         os.utime(fleet, ns=(fleet.stat().st_atime_ns, fleet.stat().st_mtime_ns))
 
-        store.listing()
+        cache.listing()
 
         # Every agent again (the loader also opens ``_defaults.yaml`` itself
         # under the glob before skipping it).
@@ -254,7 +255,7 @@ class TestAChangeOnDiskIsSeenByTheNextListing:
         path.write_text(yaml.safe_dump(document, sort_keys=False))
 
         def _blurb() -> str:
-            rows = {m["id"]: m for m in store.listing().manifests}
+            rows = {m["id"]: m for m in cache.listing().manifests}
             return rows["demo-agent-0"]["description"]
 
         assert _blurb() == "first blurb"
@@ -264,22 +265,22 @@ class TestAChangeOnDiskIsSeenByTheNextListing:
     def test_the_schema_mode(self, store, fleet, reads, monkeypatch):
         from robothor.engine import manifest_schema
 
-        store.listing()
+        cache.listing()
         _reset(reads)
         monkeypatch.setattr(manifest_schema, "schema_mode", lambda: "a-different-mode")
 
-        store.listing()
+        cache.listing()
 
         assert reads["files"] == 3
 
     def test_a_missing_directory_is_never_cached(self, store, tmp_path, monkeypatch):
         monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(tmp_path / "nowhere"))
         monkeypatch.delenv("ROBOTHOR_MANIFEST_DIR", raising=False)
-        assert list(store.listing().manifests) == []
+        assert list(cache.listing().manifests) == []
         manifests = tmp_path / "nowhere" / "docs" / "agents"
         manifests.mkdir(parents=True)
         (manifests / "demo-agent.yaml").write_text(yaml.safe_dump(AGENT, sort_keys=False))
-        assert [m["id"] for m in store.listing().manifests] == ["demo-agent"]
+        assert [m["id"] for m in cache.listing().manifests] == ["demo-agent"]
 
 
 # ─── Every write drops it, whatever the clock says ───────────────────
@@ -287,7 +288,7 @@ class TestAChangeOnDiskIsSeenByTheNextListing:
 
 class TestTheStoresOwnWritesInvalidate:
     def test_replace_manifest(self, store, fleet):
-        store.listing()
+        cache.listing()
         path = fleet / "demo-agent-2.yaml"
         before = _stat(path)
         document = yaml.safe_load(path.read_text())
@@ -297,11 +298,11 @@ class TestTheStoresOwnWritesInvalidate:
         _pin_mtimes(path, before)
         assert path.stat().st_size == before["file"].st_size
 
-        names = {m["id"]: m["name"] for m in store.listing().manifests}
+        names = {m["id"]: m["name"] for m in cache.listing().manifests}
         assert names["demo-agent-2"] == "Demo Agent X"
 
     def test_write_atomically_even_when_it_fails(self, store, fleet, reads):
-        store.listing()
+        cache.listing()
         _reset(reads)
         before_dir = fleet.stat()
         with (
@@ -311,17 +312,17 @@ class TestTheStoresOwnWritesInvalidate:
             store.write_atomically(fleet / "demo-agent-2.yaml", "id: demo-agent-2\n")
         os.utime(fleet, ns=(before_dir.st_atime_ns, before_dir.st_mtime_ns))
 
-        store.listing()
+        cache.listing()
         assert reads["files"] == 3
 
     def test_retire(self, store, fleet):
-        store.listing()
+        cache.listing()
         path = fleet / "demo-agent-0.yaml"
         before_dir = fleet.stat()
         store.retire("demo-agent-0", path)
         os.utime(fleet, ns=(before_dir.st_atime_ns, before_dir.st_mtime_ns))
 
-        assert {m["id"] for m in store.listing().manifests} == {"demo-agent-1", "demo-agent-2"}
+        assert {m["id"] for m in cache.listing().manifests} == {"demo-agent-1", "demo-agent-2"}
 
     def test_an_invalidation_during_a_scan_is_not_hidden_by_the_cache(
         self, store, fleet, monkeypatch
@@ -338,12 +339,12 @@ class TestTheStoresOwnWritesInvalidate:
             calls["n"] += 1
             result = real_scan(directory)
             if calls["n"] == 1:
-                store.invalidate_listing()
+                cache.invalidate_listing()
             return result
 
         monkeypatch.setattr(config, "load_manifest_dir", _scan_racing_a_write)
-        store.listing()
-        store.listing()
+        cache.listing()
+        cache.listing()
 
         assert calls["n"] == 2
 
@@ -421,7 +422,7 @@ class TestThePluginPathsInvalidate:
     one's cache through the file signature (``TestAChangeOnDiskIsSeen…``)."""
 
     def _listed_then_reset(self, store, reads) -> None:
-        store.listing()
+        cache.listing()
         _reset(reads)
 
     def test_sync(self, store, fleet, reads):
@@ -431,7 +432,7 @@ class TestThePluginPathsInvalidate:
         result = MagicMock(ok=True, recorded=[], added=[], updated=[], removed=[])
         with patch("robothor.plugins.lockfile.sync", return_value=result):
             admin_plugins.sync_lockfile()
-        store.listing()
+        cache.listing()
 
         assert reads["files"] == 3
 
@@ -445,7 +446,7 @@ class TestThePluginPathsInvalidate:
             pytest.raises(admin_plugins.LockfileRefusedError),
         ):
             admin_plugins.sync_lockfile()
-        store.listing()
+        cache.listing()
 
         assert reads["files"] == 3
 
@@ -457,7 +458,7 @@ class TestThePluginPathsInvalidate:
         outcome.as_json.return_value = {"installed": True}
         with patch("robothor.plugins.installer.install", return_value=outcome):
             admin_plugins.install_plugin("example-plugin")
-        store.listing()
+        cache.listing()
 
         assert reads["files"] == 3
 
@@ -470,7 +471,7 @@ class TestThePluginPathsInvalidate:
             pytest.raises(RuntimeError),
         ):
             admin_plugins.install_plugin("example-plugin")
-        store.listing()
+        cache.listing()
 
         assert reads["files"] == 3
 
@@ -480,6 +481,6 @@ class TestThePluginPathsInvalidate:
         self._listed_then_reset(store, reads)
         with patch("robothor.plugins.installer.remove", return_value={"removed": True}):
             admin_plugins.remove_plugin("example-plugin")
-        store.listing()
+        cache.listing()
 
         assert reads["files"] == 3

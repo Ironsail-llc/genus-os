@@ -810,6 +810,9 @@ CAPS = {
     # with the verdict, the reconcile and the trigger (admin_manifests).
     "robothor/engine/manifest_store.py": 700,
     "robothor/engine/admin_manifests.py": 380,
+    # The fleet listing's cached scan, out of manifest_store so the store stays
+    # under its cap: it only knows whether the manifest files changed.
+    "robothor/engine/manifest_listing.py": 93,
     # 250 -> 260: `introduced` now carries the record of getting this wrong
     # twice in opposite directions — keyed too loosely it missed an added
     # fault, keyed too tightly it refused a partial repair — plus the per-fault

@@ -85,12 +85,12 @@ def register(app: FastAPI, scheduler: Any = None) -> None:
         job (its function, its arguments, its next fire time) is either
         uninteresting or instance data.
         """
-        from robothor.engine import manifest_store
+        from robothor.engine import manifest_listing
 
         # Every bridge-side install writes its manifests and then calls this:
         # it is the engine's word that the fleet changed, so the listing's
         # cached scan goes first, scheduler or not.
-        manifest_store.invalidate_listing()
+        manifest_listing.invalidate_listing()
         live = resolve_scheduler(scheduler)
         if live is None:
             return JSONResponse({"error": "scheduler not running"}, status_code=503)
