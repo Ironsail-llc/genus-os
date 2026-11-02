@@ -75,6 +75,30 @@ def _not_in_schemas(tool: str, config: AgentConfig | None) -> tuple[str, str, st
     )
 
 
+def wrapped_allowlist_refusal(name: str, agent_id: str, **legacy: Any) -> dict[str, Any]:
+    """``tool_call``'s refusal of a wrapped tool outside the run's deferred allow-set.
+
+    The gate and unlock a direct call of ``name`` gets at admission, from the
+    calling agent's manifest when it can be read (``legacy`` keeps the
+    handler's own keys, ``did_you_mean``).
+    """
+    from robothor.engine.refusal import refusal
+
+    gate, gate_name, unlock = _not_in_schemas(name, _calling_config(agent_id))
+    message = f"tool '{name}' is not in your allow-list"
+    return refusal(message, gate=gate, name=gate_name, unlock=unlock, **legacy)
+
+
+def _calling_config(agent_id: str) -> AgentConfig | None:
+    """The calling agent's merged manifest, or None (the unlock is then generic)."""
+    try:
+        from robothor.engine.config import EngineConfig, load_agent_config
+
+        return load_agent_config(agent_id, EngineConfig.from_env().manifest_dir)
+    except Exception:  # noqa: BLE001 - an unreadable manifest only costs the specific unlock
+        return None
+
+
 def _gate_for(verdict: ToolVerdict, tool: str, config: AgentConfig | None) -> tuple[str, str, str]:
     """``(gate, gate_name, unlock)`` for an admission refusal, or empty strings."""
     out = verdict.output

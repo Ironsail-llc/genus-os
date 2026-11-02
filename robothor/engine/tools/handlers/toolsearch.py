@@ -263,10 +263,9 @@ async def _tool_call(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         # agent's tools_denied / allow-list is enforced HERE for indirect calls.
         # The suggestion is computed from the SAME set the check just refused,
         # so it can never name a tool the agent may not call.
-        return {
-            "error": f"tool '{name}' is not in your allow-list",
-            "did_you_mean": _closest(name, allowed),
-        }
+        from robothor.engine.tool_verdict import wrapped_allowlist_refusal
+
+        return wrapped_allowlist_refusal(name, ctx.agent_id, did_you_mean=_closest(name, allowed))
 
     # The out-of-allow-list check above (against the _deferred_allowed set) is
     # what prevents escalation; we never reach registry.execute for a denied
