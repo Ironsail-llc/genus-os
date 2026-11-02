@@ -86,7 +86,7 @@ class ToolAdmissionMixin:
     async def _admit_tool_call(self, **kw: Any) -> ToolVerdict:
         """Every gate in order (``_run_gates``); a refusal carries its gate and unlock."""
         verdict = await self._run_gates(**kw)
-        return with_gate(verdict, kw["tool_name"], kw.get("agent_config"))
+        return with_gate(verdict, kw["tool_name"], kw.get("agent_config"), kw.get("tool_args"))
 
     async def _run_gates(
         self,

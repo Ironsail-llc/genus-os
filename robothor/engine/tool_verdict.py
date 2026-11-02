@@ -15,6 +15,7 @@ from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 
 from robothor.engine.refusal import refusal_fields
+from robothor.engine.wrapped_call import inner_call
 
 if TYPE_CHECKING:
     from robothor.engine.models import AgentConfig
@@ -132,10 +133,17 @@ def _gate_for(verdict: ToolVerdict, tool: str, config: AgentConfig | None) -> tu
     return "", "", ""
 
 
-def with_gate(verdict: ToolVerdict, tool: str, config: AgentConfig | None) -> ToolVerdict:
-    """``verdict`` with its gate and unlock filled, and the refusal keys in ``output``."""
+def with_gate(
+    verdict: ToolVerdict, tool: str, config: AgentConfig | None, tool_args: Any = None
+) -> ToolVerdict:
+    """``verdict`` with its gate and unlock filled, and the refusal keys in ``output``.
+
+    The unlock names the call the gates judged: for ``tool_call``, the tool it
+    wraps (``wrapped_call.inner_call``), as a direct call of it would read.
+    """
     if verdict.allowed:
         return verdict
+    tool, _ = inner_call(tool, tool_args)
     gate, name, unlock = _gate_for(verdict, tool, config)
     if not gate:
         return verdict
