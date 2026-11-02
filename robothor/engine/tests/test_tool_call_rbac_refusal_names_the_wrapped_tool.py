@@ -33,10 +33,17 @@ def _classify(_role: str, _tenant: str, tool_name: str, _mode: str) -> tuple[str
     return ("allow", "")
 
 
-async def _admit(tool_name: str, tool_args: dict[str, Any]) -> Any:
+async def _admit(
+    tool_name: str,
+    tool_args: dict[str, Any],
+    *,
+    trigger: TriggerType = TriggerType.CRON,
+    allowed: frozenset[str] = frozenset(),
+    config: AgentConfig | None = None,
+) -> Any:
     from robothor.engine.tool_admission import ToolAdmissionMixin
 
-    run = SimpleNamespace(id="run-1", steps=[], trigger_type=TriggerType.CRON, tenant_id="t-1")
+    run = SimpleNamespace(id="run-1", steps=[], trigger_type=trigger, tenant_id="t-1")
     with (
         patch("robothor.engine.feature_flags.rbac_enforcement_mode", return_value="enforce"),
         patch("robothor.engine.permissions.classify_system_tool_access", side_effect=_classify),
@@ -47,12 +54,12 @@ async def _admit(tool_name: str, tool_args: dict[str, Any]) -> Any:
             tool_name=tool_name,
             tool_args=tool_args,
             session=SimpleNamespace(run=run),
-            agent_config=AgentConfig(id="example-agent", name="Example"),
+            agent_config=config or AgentConfig(id="example-agent", name="Example"),
             guardrail_engine=None,
             hook_registry=None,
             readonly_mode=False,
             readonly_tool_set=frozenset(),
-            allowed_tool_set=frozenset(),
+            allowed_tool_set=allowed,
         )
 
 
@@ -82,3 +89,30 @@ async def test_the_wrapped_refusal_reads_as_the_direct_one() -> None:
         direct.unlock,
         direct.message,
     )
+
+
+# ── A gate whose subject is the wrapper keeps the wrapper's name ─────────
+
+
+async def test_the_tools_allowed_unlock_through_tool_call_names_the_wrapper() -> None:
+    """A non-deferred agent that already lists the wrapped tool is refused the
+    WRAPPER (``tool_call`` is not in its toolset). Telling the operator to add
+    the wrapped tool, which is already there, sends them nowhere."""
+    config = AgentConfig(id="example-agent", name="Example", tools_allowed=["list_tasks"])
+    verdict = await _admit(
+        "tool_call",
+        {"name": "list_tasks", "arguments": {"limit": 1}},
+        trigger=TriggerType.TELEGRAM,
+        allowed=frozenset({"list_tasks"}),
+        config=config,
+    )
+
+    assert verdict.allowed is False
+    assert verdict.output.get("guard") == "tools_allowed"
+    assert "'tool_call'" in verdict.unlock
+    assert "'list_tasks'" not in verdict.unlock
+
+
+async def test_the_rbac_unlock_still_names_the_wrapped_tool() -> None:
+    verdict = await _admit("tool_call", {"name": DENIED, "arguments": dict(ARGS)})
+    assert f"'{DENIED}'" in verdict.unlock
