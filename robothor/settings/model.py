@@ -899,18 +899,17 @@ class EngineSettings(SettingsGroup):
     max_concurrent_interactive: int = declare(
         0,
         "ROBOTHOR_MAX_CONCURRENT_INTERACTIVE",
-        "With ROBOTHOR_EXECUTION_LANES on: how many interactive runs (Telegram, "
-        "webchat, Slack, plugin channels, IDE, CLI) may execute at once. 0, the "
-        "default, is uncapped: interactive turns are never queued, as without "
-        "lanes. A cap queues a turn with no deadline while others hold the slots, "
-        "including runs waiting on ask_user. Read at the first run.",
+        "How many interactive runs (Telegram, webchat, Slack, plugin channels, "
+        "IDE, CLI) may execute at once. 0, the default, is uncapped: interactive "
+        "turns are never queued. A cap queues a turn with no deadline while others "
+        "hold the slots, including runs waiting on ask_user. Read at the first run.",
         since="unreleased",
     )
     max_concurrent_background: int = declare(
         2,
         "ROBOTHOR_MAX_CONCURRENT_BACKGROUND",
-        "With ROBOTHOR_EXECUTION_LANES on: how many background runs (cron, hooks, "
-        "workflows, everything without a person waiting) may execute at once. "
+        "How many background runs (cron, hooks, workflows, everything without a "
+        "person waiting) may execute at once. "
         "Never below 1: 0 is read as 1, not as uncapped. A cron run or workflow "
         "takes its slot before its own timeout starts, so time queued is not "
         "counted against it. Read at the first run.",
@@ -919,9 +918,8 @@ class EngineSettings(SettingsGroup):
     lane_background_yield_ms: int = declare(
         200,
         "ROBOTHOR_LANE_BACKGROUND_YIELD_MS",
-        "With ROBOTHOR_EXECUTION_LANES on: how long a background run asking for a "
-        "slot holds back while an interactive run is waiting for one. 0 disables "
-        "the yield.",
+        "How long a background run asking for a slot holds back while an "
+        "interactive run is waiting for one. 0 disables the yield.",
         since="unreleased",
     )
     max_iterations: int = declare(
@@ -2273,17 +2271,6 @@ class FlagSettings(SettingsGroup):
         "concurrently once an agent's previous warmup had a section slower "
         "than 30 ms (on a fast database they stay sequential, where threads "
         "would cost more than they save). The text is the same.",
-        since="unreleased",
-    )
-    execution_lanes: bool = declare(
-        False,
-        "ROBOTHOR_EXECUTION_LANES",
-        "Run interactive turns and background work in separate lanes, each with "
-        "its own concurrency limit and thread executor, and keep a local "
-        "inference slot for interactive requests, so a burst of scheduled runs "
-        "cannot delay a reply. Lane occupancy is on /health and /metrics. The "
-        "thread executor split is installed at engine start, so a change needs a "
-        "restart to take full effect.",
         since="unreleased",
     )
     capability_block: bool = declare(

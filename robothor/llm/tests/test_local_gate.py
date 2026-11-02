@@ -44,7 +44,8 @@ class TestItBoundsConcurrency:
 
         async def worker():
             nonlocal peak, live
-            async with gate.slot(lane=lg.Lane.BACKGROUND):
+            # Interactive: background work leaves one of two slots for a person.
+            async with gate.slot(lane=lg.Lane.INTERACTIVE):
                 async with lock:
                     live += 1
                     peak = max(peak, live)

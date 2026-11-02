@@ -114,12 +114,6 @@ MANIFEST_ONLY_FLAGS: dict[str, str] = {
         "read by robothor/engine/manifest_schema.py straight from os.environ; "
         "route it through feature_flags first, then govern it"
     ),
-    "ROBOTHOR_EXECUTION_LANES": (
-        "the lane thread executor is installed once at engine start "
-        "(robothor/engine/daemon.py), so a store flip at runtime would apply the "
-        "lane slots without the executor split; an environment setting and a "
-        "restart is the only honest switch"
-    ),
     "ROBOTHOR_SANDBOX_PLAYGROUND": (
         "a deploy-time bool read from the environment, not a ladder; governing "
         "it needs an evidence source and Controls values first"
