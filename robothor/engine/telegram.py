@@ -139,7 +139,7 @@ class TelegramBot(
 ):
     """Aiogram v3 Telegram bot for Genus OS."""
 
-    #: Seconds between progress-message edits (Telegram allows ~1/s per chat).
+    #: Seconds between progress edits in a private chat (groups: GROUP_MIN_INTERVAL).
     _progress_edit_interval: float = 1.0
 
     def __init__(self, config: EngineConfig, runner: AgentRunner) -> None:

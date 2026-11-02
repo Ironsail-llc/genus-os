@@ -7,11 +7,14 @@ run ends, :func:`deliver_reply` sends the formatted answer as a new message
 (Telegram notifies on a send, never on an edit) and then deletes the progress
 message, so the chat is left with the answer alone.
 
-Telegram allows about one ``editMessageText`` per second per chat and answers
-anything faster with a 429 carrying ``retry_after``. A model streams far faster
-than that, so this keeps only the LATEST state and a single background worker
-edits on a throttle: never sooner than ``min_interval`` after the previous
-edit, never sooner than a 429 said. The stream itself never waits on Telegram.
+Telegram allows about one ``editMessageText`` per second in a private chat, less
+in a group, and answers anything faster with a 429 carrying ``retry_after``. A
+model streams far faster than that, so this keeps only the LATEST state and a
+single background worker edits on a throttle: never sooner than
+``min_interval`` after the previous edit (``GROUP_MIN_INTERVAL`` in a group),
+never sooner than a 429 said, and each 429 doubles the spacing for the rest of
+the turn, up to ``MAX_INTERVAL``. Neither the stream nor the answer ever waits
+on it: :func:`deliver_reply` stops the worker and sends.
 """
 
 from __future__ import annotations
@@ -34,6 +37,14 @@ __all__ = ["TelegramProgress", "deliver_reply"]
 #: Telegram's message length limit, and the room left for the tool line.
 _MESSAGE_LIMIT = 4096
 _TEXT_BUDGET = 3900
+
+#: Seconds between edits in a group or supergroup (negative chat id). Telegram
+#: allows a group about 20 messages a minute, and edits are reported to count.
+GROUP_MIN_INTERVAL = 3.0
+
+#: Ceiling for the interval a 429 doubles, so a burst of flood control cannot
+#: freeze the progress message for minutes.
+MAX_INTERVAL = 12.0
 
 #: How often an edit may refresh only the elapsed seconds of a running tool.
 _DEFAULT_TICK = 3.0
@@ -59,6 +70,8 @@ class TelegramProgress:
         self.bot = bot
         self.chat_id = chat_id
         self.message_id = message_id
+        if str(chat_id).startswith("-"):
+            min_interval = max(min_interval, GROUP_MIN_INTERVAL)
         self._min_interval = min_interval
         self._tick = max(tick_interval, min_interval)
         self._label_for = label_for
@@ -153,7 +166,11 @@ class TelegramProgress:
             try:
                 await self._edit(rendered, None)
             except TelegramRetryAfter as e:
+                # Back off adaptively: honour retry_after now, and space every
+                # later edit of this turn twice as far apart.
                 self._next_allowed = time.monotonic() + float(e.retry_after)
+                self._min_interval = min(self._min_interval * 2, MAX_INTERVAL)
+                self._tick = max(self._tick, self._min_interval)
                 continue
             except Exception as e:  # noqa: BLE001 - a lost interim edit is not a lost answer
                 logger.debug("Telegram progress edit failed: %s", type(e).__name__)

@@ -11,8 +11,10 @@ is working, then pictures and files in both directions.
 
 The bot shows "Thinking..." straight away, and that message becomes a progress
 message: the answer is written into it as the model produces it, at most one
-edit a second (Telegram's limit for a chat; a "retry after" from Telegram
-pushes the next edit back), with a line such as "Searching the web · 4s" while
+edit a second in a private chat and one every three seconds in a group
+(Telegram's flood limits are stricter there). A "retry after" from Telegram
+pushes the next edit back and doubles the spacing for the rest of the turn; it
+never delays the answer. A line such as "Searching the web · 4s" shows while
 a tool runs. When the answer is complete it arrives as a new message, so your
 phone notifies you even if you looked away during a long run (Telegram never
 notifies on an edit), and the progress message is then deleted: the chat is
