@@ -1,19 +1,19 @@
 # Performance
 
-How long a chat turn takes, where that time goes, how to measure it, and the
-switches that make it shorter. Read this before turning a performance setting on
-or off, and keep the numbers from before and after.
+How long a chat turn takes, where that time goes, how to measure it, and what
+the engine does to keep it short. Read this before tuning a busy instance, and
+keep the benchmark numbers from before and after any change.
 
-A setting does nothing on a release that does not carry it: the
-[settings reference](reference/configuration.md) for your release lists the ones
-it has.
+Everything described here is the engine's only code path: there is nothing to
+switch on. What you can change is the handful of tunables under
+[Tuning](#tuning).
 
-## What the settings bought, measured
+## What the engine's turn path buys, measured
 
-On the local stack with the mock model, 20 turns after one warmup, every setting
-below off and then every one on:
+On the local stack with the mock model, 20 turns after one warmup, on the turn
+path that came before this work and on the turn path as it ships:
 
-| | Off | On |
+| | Before | Now |
 |---|---|---|
 | Webchat DB statements per turn (p50) | 80 | 55 |
 | Webchat `done` (p50) | about 40 ms | 28 to 32 ms |
@@ -101,17 +101,18 @@ is not a baseline: record a CI baseline from at least three dispatched runs with
 median p50 and p95 of each metric. Commit a baseline in its own change so the
 number has a history.
 
-### The before/after loop for a setting
+### The before/after loop for a change
 
-1. Stack up on the mock model, setting off. Run one half at a time, for example
-   `--half inprocess --out before.json`.
-2. Turn the setting on (restart the engine if its row below says so).
+1. Stack up on the mock model, on the code before your change. Run one half at a
+   time, for example `--half inprocess --out before.json`.
+2. Apply the change (or the tunable) and restart the engine.
 3. Run the same half again with `--out after.json`.
 4. Compare: `python -m bench.turn --compare after.json --baseline before.json`.
-   Put both p50/p95 tables in the pull request or the rollout note.
+   Put both p50/p95 tables in the pull request.
 
 With `--half both`, name each half's files on both sides
 (`--compare after-inprocess.json --baseline before-inprocess.json`).
+
 
 ## Engine telemetry
 
@@ -172,222 +173,170 @@ streamed token after send (1500 ms), or when a tab holds more than one live
 event-stream connection. `PERF_CHAT_PAINT_BUDGET_MS` and
 `PERF_FIRST_DELTA_BUDGET_MS` override the budgets for a measuring run.
 
-## Performance settings
+## What the engine does on every turn
 
-Every setting here is off by default unless its row says otherwise, so the
-default keeps the behaviour a release had before it. Turn one on in a staging or
-test instance first, measure, then promote. The rollback for every one is the
-same: set it back to off (`0` or `false`) and, where the restart column says so,
-restart the service. None of them migrates data, so turning one off leaves
-nothing behind.
+Each part below says what the engine does, what it costs or saves, and how to
+see it working. A setting named here is a tunable from [Tuning](#tuning).
 
-| Setting | Area | Default | Restart |
-|---|---|---|---|
-| `ROBOTHOR_CONFIG_CACHE` | Manifest, adapter and MCP tool-list caches | off | no (read on every call); the MCP pre-warm happens at engine start |
-| `ROBOTHOR_DB_FAST_CHECKOUT` | Database checkout | off | engine and bridge |
-| `ROBOTHOR_WARMUP_PARALLEL` | Warmup preamble | off | engine |
-| `ROBOTHOR_EARLY_DONE` | Answer before finalization | off | engine |
-| `ROBOTHOR_CACHE_LAYOUT_V2` | Provider prompt cache | off | engine |
-| `ROBOTHOR_ROUTER_V2` | Planner call on long chat turns | off | engine |
-| `ROBOTHOR_COMPACTION_V2` | Context compaction | off | no |
-| `ROBOTHOR_RIP_16_ENABLED` | Deferred tool loading | **on** | engine |
-| `ROBOTHOR_CHANNEL_STREAMING` | Streaming to Telegram and plugin channels | off | no |
-| `ROBOTHOR_EXECUTION_LANES` | Interactive and background lanes | off | engine (the thread split is installed at start) |
-| `ROBOTHOR_STEER_EVERYWHERE` | Steer and stop a live run from every chat surface | off | no |
-| `ROBOTHOR_AMBIENT` | Ambient follow-ups (`off`, `observe`, `enforce`) | off | engine; governed, so it is set from the Controls page |
-| `ROBOTHOR_CHAT_HISTORY_PAGES` | Paged chat history with stored ids and times | off | engine |
+### Configuration caches
 
-Deferred tool loading is the one that is on by default; its rollback is to set it
-to `0`. Each setting's full description is in the
-[settings reference](reference/configuration.md).
-
-### `ROBOTHOR_CONFIG_CACHE`
-
-- **Changes:** a run reuses the agent's merged and validated manifest, its parsed
-  adapter configs and the sha256 of each pinned adapter binary, instead of
+- **Behaviour:** a run reuses the agent's merged and validated manifest, its
+  parsed adapter configs and the sha256 of each pinned adapter binary, instead of
   reading, merging, validating and hashing them before every run. An entry is
   used only while every file it came from is unchanged (inode, size, mtime,
   ctime), the `ROBOTHOR_*` environment and the `${VAR}` values it names are
   unchanged, and no plugin sync, plugin reload or defaults reload has run since.
   Schema validation in `observe` and `enforce` still counts and refuses on every
-  load. With it on, an edited adapter YAML reaches runs within one
-  extension-watcher poll (10 s); `POST /api/extensions/reload` applies it at once.
-  The same setting keeps each MCP adapter's `tools/list` while its session lives
-  (up to ten minutes; a dropped session, a changed adapter file, a plugin reload
-  or `mcp_list_tools` with `refresh: true` refetches), connects adapters four at a
-  time instead of one after another, keeps one HTTP client per HTTP MCP server, and
-  opens every adapter's session in the background when the engine starts
-  ([Connectors](CONNECTORS.md)).
-- **Default:** off.
+  load. An edited adapter YAML reaches runs within one extension-watcher poll
+  (10 s); `POST /api/extensions/reload` applies it at once. Each MCP adapter's
+  `tools/list` is kept while its session lives (up to ten minutes; a dropped
+  session, a changed adapter file, a plugin reload or `mcp_list_tools` with
+  `refresh: true` refetches), adapters connect four at a time, each HTTP MCP
+  server has one HTTP client, and every adapter's session opens in the background
+  when the engine starts ([Connectors](CONNECTORS.md)).
 - **Measure:** the benchmark's `setup_ms` and `setup_total_ms`. A warm manifest
-  load goes from about 1 ms to about 0.15 ms on a small manifest. With three slow
-  MCP adapters, registering their tools went from 3.6 s to 1.2 s on the first run
-  and from 0.6 s to nothing on the next. The saving grows with the number of
-  adapters and pinned binaries.
-- **Rollback:** off. Every load parses again from the next run.
+  load takes about 0.15 ms on a small manifest, against about 1 ms uncached. With
+  three slow MCP adapters, registering their tools takes 1.2 s on the first run
+  (3.6 s one after another) and nothing on the next. The saving grows with the
+  number of adapters and pinned binaries.
 
-### `ROBOTHOR_DB_FAST_CHECKOUT`
+### Database checkout
 
-- **Changes:** a database checkout no longer starts a thread; the tenant binding
+- **Behaviour:** a database checkout does not start a thread; the tenant binding
   (`app.tenant_id`) and the vector-scan setting are sent only when they differ
   from what the pooled connection already carries (a connection reused for another
   tenant is always re-bound); the hottest pure reads run without a transaction. A
   repeat single-statement read costs 1 round trip instead of 5, a write 3.
-- **Default:** off.
-- **Not valid behind a transaction-mode connection pooler.** The memo needs
-  session-preserving connections: direct PostgreSQL or session pooling. It also
-  drops the fixed 10-second cap per checkout: a checkout that has to open a
-  connection is bounded by `ROBOTHOR_DB_CONNECT_TIMEOUT` instead, which must stay
-  above 0 with this on. `docs/runbooks/TENANT_RLS.md` has the detail.
+- **Needs session-preserving connections:** direct PostgreSQL or session pooling,
+  not a transaction-mode connection pooler. A checkout that has to open a
+  connection is bounded by `ROBOTHOR_DB_CONNECT_TIMEOUT`, which must stay above 0.
+  `docs/runbooks/TENANT_RLS.md` has the detail.
 - **Measure:** the benchmark's `db_statements` per turn, and `setup_ms`.
-- **Rollback:** off, and restart the engine and the bridge.
 
-### `ROBOTHOR_WARMUP_PARALLEL`
+### Warmup preamble
 
-- **Changes:** the interactive warmup preamble's sections (identity, memory
+- **Behaviour:** the interactive warmup preamble's sections (identity, memory
   blocks, entity context, context hooks, host state, open tasks, fleet surfaces,
-  agent goal) are built concurrently on a small bounded pool and joined in the
-  same order, so the text is identical and the first turn waits for the slowest
-  section instead of the sum. Memory blocks are read in one statement, entity
-  candidates in one query, and identity enrichment is held per chat session for
-  up to 15 minutes (a change of who the caller resolves to recomputes it; a CRM
-  edit to that person can lag by up to 15 minutes).
-- **Default:** off.
+  agent goal) are built concurrently on a small bounded pool and joined in a fixed
+  order, so the text is the same every time and the first turn waits for the
+  slowest section instead of the sum. Memory blocks are read in one statement,
+  entity candidates in one query, and identity enrichment is held per chat session
+  for up to 15 minutes (a change of who the caller resolves to recomputes it; a
+  CRM edit to that person can lag by up to 15 minutes).
 - **Measure:** `setup_ms`, `db_statements` and the run's `warmup_preamble_build`
-  step. Scheduled runs record a `warmup_section:<name>` step per section either
-  way; an interactive turn records them only with the flag on. With it on, the
-  preamble should take about as long as its slowest section.
-- **Rollback:** off, and restart the engine.
+  step, with one `warmup_section:<name>` step per section. The preamble should
+  take about as long as its slowest section.
 
-### `ROBOTHOR_EARLY_DONE`
+### Answer before finalization
 
-- **Changes:** the webchat `done` event and the Telegram reply go out as soon as
+- **Behaviour:** the webchat `done` event and the Telegram reply go out as soon as
   the answer's text is settled. Telemetry, post-run bookkeeping, the run-row write
   and the history save finish in the background under the engine's task
   registry, so `genus run` and engine shutdown still wait for them. A post-run
   policy that can change what the person sees (the deliverable contract in
   `enforce`) still runs first. A background failure is logged and noted on the
   run; the answer already sent stands ([Web chat](channels/webchat.md)).
-- **Default:** off.
-- **Measure:** `finalize_tail_ms` and `done_ms`. The tail should fall to a few
-  milliseconds; the saving is whatever finalization took.
-- **Rollback:** off, and restart the engine.
+- **Measure:** `finalize_tail_ms` and `done_ms`. The tail is a few milliseconds.
 
-### `ROBOTHOR_CACHE_LAYOUT_V2`
+### Provider prompt cache
 
-- **Changes:** keeps the request prefix byte-stable from turn to turn so
-  providers can serve it from their prompt cache. The `Current time:` line moves
-  out of the system prompt into an `[engine]` turn just before the latest user
-  message (the person's own text is not edited). Anthropic direct gets
+- **Behaviour:** the request prefix stays byte-stable from turn to turn so
+  providers can serve it from their prompt cache. The `Current time:` line is an
+  `[engine]` turn just before the latest user message rather than part of the
+  system prompt (the person's own text is not edited). Anthropic direct gets
   breakpoints on the last tool and on the last user or tool message before the
   final two turns; OpenAI and Gemini get no cache markers and cache the stable
   prefix themselves. `docs/MODELS.md` has the per-route table.
-- **Default:** off.
 - **Measure:** the cache hit ratio (`gen_ai.usage.cache_hit_ratio` on the
   `run_summary` span, `cache_hit_ratio` on the telemetry stream) and the run's
-  `cache_read_tokens`, before and after; the mock model has no cache, so this one
-  is measured against a real provider on a test instance. Cost per turn and TTFT
-  follow it.
-- **Rollback:** off, and restart the engine. The next request is laid out as
-  before; the provider's cache simply misses until it refills.
+  `cache_read_tokens`. The mock model has no cache, so this is measured against a
+  real provider on a test instance. Cost per turn and TTFT follow it.
 
-### `ROBOTHOR_ROUTER_V2`
+### Planning on chat turns
 
-- **Changes:** on a Telegram, webchat or plugin-channel turn, message length alone
-  (over 500 characters) no longer buys a separate planner model call before the
-  tool loop. Such a turn plans only in plan mode, when its manifest asks for
-  planning, or when the message lists three or more steps. Model selection and
-  fallback chains are unchanged; scheduled, workflow, hook and sub-agent runs are
-  unchanged ([Configuration](configuration.md)).
-- **Default:** off.
-- **Measure:** model calls per long chat turn (one fewer: the `llm_call` span
-  count under `agent_run`), and `first_llm_ms` / TTFT on a long prose message.
-- **Rollback:** off, and restart the engine.
+- **Behaviour:** on a Telegram, webchat or plugin-channel turn, message length
+  alone does not buy a separate planner model call before the tool loop. Such a
+  turn plans only in plan mode, when its manifest asks for planning, or when the
+  message lists three or more steps. Model selection and fallback chains are as
+  configured; scheduled, workflow, hook and sub-agent runs plan as before
+  ([Configuration](configuration.md)).
+- **Measure:** model calls per long chat turn (the `llm_call` span count under
+  `agent_run`), and `first_llm_ms` / TTFT on a long prose message.
 
-### `ROBOTHOR_COMPACTION_V2`
+### Context compaction
 
-- **Changes:** context compaction summarises with the agent's own model chain
+- **Behaviour:** context compaction summarises with the agent's own model chain
   (manifest `model.compaction` first, the fleet chain when a caller has none),
   runs an LLM-free pre-pass first (duplicate tool results, old media, oversized
   old tool results and tool-call arguments), updates the previous summary instead
-  of rebuilding it, waits `ROBOTHOR_COMPACTION_MIN_GAP_ITERATIONS` (default 3)
-  between compactions, and keeps the messages, marking the run's `compaction` step
-  `degraded: true`, when no model can summarise. The hard context ceiling is still
+  of rebuilding it, and waits `ROBOTHOR_COMPACTION_MIN_GAP_ITERATIONS` iterations
+  between compactions. When no model can summarise, it keeps the messages and
+  marks the run's `compaction` step `degraded: true`. The hard context ceiling is
   enforced on every iteration.
-- **Default:** off.
 - **Measure:** model calls and wall time spent in compaction on long runs (the
   `compaction` step), prompt tokens after compaction, and how often a run's
   compaction step is degraded.
-- **Rollback:** off. Read on every compaction, so no restart.
 
-### `ROBOTHOR_RIP_16_ENABLED` (deferred tools)
+### Deferred tools
 
-- **Changes:** an agent allowed more tools than
-  `ROBOTHOR_DEFERRED_TOOLS_THRESHOLD` (default 40) is shown its core tools (the
-  platform's fixed set plus, at most 16, the tools it called in its last
-  `ROBOTHOR_DEFERRED_TOOLS_RECENT_RUNS` runs, default 10) and `tool_search`,
-  `tool_describe` and `tool_call`; it finds the rest of its allowed tools by
-  search, plugin tools included. Curated agents under the threshold keep their
-  full set. The `tools.deferred_tools_reachable` check in `genus doctor` reports
-  a granted tool an agent could not reach.
-- **Default:** **on**.
+- **Behaviour:** an agent allowed more tools than
+  `ROBOTHOR_DEFERRED_TOOLS_THRESHOLD` is shown its core tools (the platform's
+  fixed set plus, at most 16, the tools it called in its last
+  `ROBOTHOR_DEFERRED_TOOLS_RECENT_RUNS` runs) and `tool_search`, `tool_describe`
+  and `tool_call`; it finds the rest of its allowed tools by search, plugin tools
+  included. An agent at or under the threshold is sent its full set. The
+  `tools.deferred_tools_reachable` check in `genus doctor` reports a granted tool
+  an agent could not reach.
 - **Measure:** the benchmark's `prompt_tokens` and `tool_schemas` on the first
-  model call. Measured on the local stack with the mock model, the main agent's
-  first call went from 216 schemas and 38,480 prompt tokens to 30 schemas and
-  10,589 tokens (72% fewer), before any plugin tools, which add to the "off"
+  model call. On the local stack with the mock model, the main agent's first call
+  carries 30 schemas and 10,589 prompt tokens instead of 216 schemas and 38,480
+  tokens (72% fewer), before any plugin tools, which would add to the larger
   figure only. A turn that needs a deferred tool costs one extra tool-search
   round trip.
-- **Rollback:** `ROBOTHOR_RIP_16_ENABLED=0`, and restart the engine: every allowed
-  schema is sent on every request again.
 
-### `ROBOTHOR_CHANNEL_STREAMING`
+### Streaming to Telegram and plugin channels
 
-- **Changes:** Telegram's "Thinking..." message becomes a progress message: the
+- **Behaviour:** Telegram's "Thinking..." message is a progress message: the
   answer is edited into it as the model writes it, at most one edit a second (a
   Telegram "retry after" pushes the next edit back), with a line such as
   "Searching the web · 4s" while a tool runs, and it becomes the formatted answer
   at the end (an answer too long for one message, or holding a table, goes out as
   the usual messages instead). A transient stream failure (connection reset, 5xx,
-  529) is retried once on the same model instead of falling to the next model.
-  Plugin channels opt in by passing a `stream` callback to the inbound pipeline.
-  The dashboard chat already streams and is unchanged.
-- **Default:** off.
+  529) is retried once on the same model before falling to the next model.
+  A plugin channel streams by passing a `stream` callback to the inbound
+  pipeline. The dashboard chat streams as it always has.
 - **Measure:** time to the first visible text in Telegram. With a fake run
-  streaming over 3 s, the first answer text appeared after 0.15 s instead of at
+  streaming over 3 s, the first answer text appears after 0.15 s instead of at
   the end (3.25 s), with one message edited in place instead of two sends and a
   delete. Also watch the model-fallback count on stream errors.
-- **Rollback:** off; Telegram sends the answer as one new message after the run.
 
-### `ROBOTHOR_EXECUTION_LANES`
+### Execution lanes
 
-- **Changes:** interactive turns (Telegram, the chat panel, Slack, plugin
+- **Behaviour:** interactive turns (Telegram, the chat panel, Slack, plugin
   channels, the IDE, the CLI) and background work (cron, hooks, workflows,
   autodream, the curator, ingest, embeddings, post-turn saves) run in separate
   lanes, each with its own thread workers, so blocking background work cannot
   delay a turn's own blocking calls. Background runs are capped by
-  `ROBOTHOR_MAX_CONCURRENT_BACKGROUND` (default 2). Interactive runs are uncapped
-  by default, as they are without lanes (`ROBOTHOR_MAX_CONCURRENT_INTERACTIVE`,
-  default 0); a cap there queues a turn with no deadline while other turns hold
-  the slots, including turns waiting on an `ask_user` answer. When the
-  interactive lane is capped and a turn is waiting, a background run asking for a
-  slot holds back for up to `ROBOTHOR_LANE_BACKGROUND_YIELD_MS` (default 200). With two or
-  more local inference slots, one is kept for interactive requests. A run waiting
-  for its lane has not started: no run row, timeout or budget is touched.
-- **Default:** off.
+  `ROBOTHOR_MAX_CONCURRENT_BACKGROUND`. Interactive runs are uncapped by default
+  (`ROBOTHOR_MAX_CONCURRENT_INTERACTIVE` is 0); a cap there queues a turn with no
+  deadline while other turns hold the slots, including turns waiting on an
+  `ask_user` answer. When the interactive lane is capped and a turn is waiting, a
+  background run asking for a slot holds back for up to
+  `ROBOTHOR_LANE_BACKGROUND_YIELD_MS`. With two or more local inference slots, one
+  is kept for interactive requests. A run waiting for its lane has not started: no
+  run row, timeout or budget is touched.
 - **Measure:** `GET /health` → `execution_lanes` (`active`, `waiting`, `limit` per
   lane) and the `/metrics` gauges `robothor_lane_active{lane}` and
   `robothor_lane_waiting{lane}`. During a burst of scheduled runs, interactive
-  `waiting` should stay at 0 and the benchmark's `done_ms` should not move;
-  background `waiting` that never returns to 0 means its limit is too low.
-- **Rollback:** off, and restart the engine (the thread split is installed at
-  start).
+  `waiting` stays at 0 and the benchmark's `done_ms` does not move; background
+  `waiting` that never returns to 0 means its limit is too low.
 
-### `ROBOTHOR_STEER_EVERYWHERE`
+### Steer and stop from every chat surface
 
-- **Changes:** steer and stop reach a live run from every chat surface, not only
-  Telegram. In the dashboard chat, while a reply streams, the composer steers the
-  running task (*Steer the running task...*) and Stop halts it; Slack gains
-  `/steer <text>` and `/stop`, and the Teams channel accepts them typed. A steer
+- **Behaviour:** steer and stop reach a live run from every chat surface. In the
+  dashboard chat, while a reply streams, the composer steers the running task
+  (*Steer the running task...*) and Stop halts it; Slack has `/steer <text>` and
+  `/stop`, and the Teams channel accepts them typed, as Telegram does. A steer
   joins the run at its next step as an operator steering update; a stop ends it
   there as cancelled. Both reach only the run of that conversation, in the
   caller's tenant, and pass the same access decision as a message. Slack and
@@ -395,63 +344,53 @@ to `0`. Each setting's full description is in the
   time, never arguments or results), edited in place at most once a second
   ([Web chat](channels/webchat.md), [Slack](channels/slack.md),
   [Teams](channels/teams.md)).
-- **Default:** off.
 - **Measure:** a steer sent mid-run is taken in at the next iteration (one
   model call later, not after the run), and a stop ends the run with status
   `cancelled` within one iteration. In Slack and Teams, one progress message per
   run, edited rather than re-posted.
-- **Rollback:** off; the new chat routes answer 404, Slack registers only
-  `/status` and `/clear`, and `/steer` in Teams is an ordinary message again.
 
-### `ROBOTHOR_AMBIENT`
+### Ambient follow-ups
 
-- **Changes:** an agent whose manifest has an `ambient:` block watches the
+- **Behaviour:** an agent whose manifest has an `ambient:` block watches the
   sources it already reads (the CRM conversation inbox, or a Redis stream it
   reads), finds threads where a person wrote and nobody answered within
   `stalled_after`, and on its `digest_at` schedule proposes a nudge to the
   operator, a digest, or a reply in the thread. Each kind has a tier in the
   manifest: `auto` (sent alone), `approve` (through the existing approval gate)
-  or `never` (not even proposed). `observe` records every proposal as an
-  `ambient_proposal` run step and in a digest file and sends nothing; `enforce`
-  sends per tier. A reply in the thread is proposed and recorded but not sent yet
-  (its outcome is `unsupported` under `enforce`).
-- **Default:** off, and off for any agent without an `ambient:` block.
-- **Measure:** it adds scheduled work, not turn time: with it on, check that the
-  interactive `done_ms` does not move and, with lanes on, the background lane's
-  `waiting`; read a week of `ambient_proposal` steps in `observe` before
-  `enforce`.
-- **Rollback:** `off` from the Controls page (no ambient job is scheduled), or
-  remove the agent's `ambient:` block.
+  or `never` (not even proposed). **A kind with no tier set is `approve`**, so
+  nothing ambient is sent without a person's approval unless the manifest says
+  `auto`. Every proposal is recorded as an `ambient_proposal` run step and in a
+  digest file. A reply in the thread is proposed and recorded but not sent (its
+  outcome is `unsupported`). An agent without an `ambient:` block does none of
+  this.
+- **Measure:** it adds scheduled work, not turn time: check that the interactive
+  `done_ms` does not move and that the background lane's `waiting` returns to 0.
+- **To stop it for one agent:** remove its `ambient:` block, or set each kind to
+  `never`.
 
-### `ROBOTHOR_CHAT_HISTORY_PAGES`
+### Paged chat history
 
-- **Changes:** the engine's chat history is read from the message store instead
-  of the in-memory tail: each message carries its stored id and time, and the
-  dashboard chat can page back past the last 50 messages ("Load earlier", by a
-  `before=<id>` cursor) with one statement per page, off the event loop.
-- **Default:** off.
+- **Behaviour:** the engine's chat history is read from the message store: each
+  message carries its stored id and time, and the dashboard chat pages back past
+  the last 50 messages ("Load earlier", by a `before=<id>` cursor) with one
+  statement per page, off the event loop.
 - **Measure:** one statement per history page, and the chat's first paint with a
   long conversation (the dashboard perf spec's chat paint).
-- **Rollback:** off; history is the in-memory tail again, with no times and no
-  "Load earlier".
 
 ## Operating under load: lanes, budgets that report, compaction
 
 Three things decide whether a busy instance stays responsive and finishes its
 work.
 
-- **Lanes.** Without `ROBOTHOR_EXECUTION_LANES`, a burst of scheduled and hook runs
-  shares one event loop and one thread pool with the person waiting for an answer,
-  so the burst delays the answer. With it, the two lanes are rationed separately
-  (see the setting above), and `/health` shows which lane is queueing.
+- **Lanes.** A burst of scheduled and hook runs is rationed in the background
+  lane, apart from the person waiting for an answer (see
+  [Execution lanes](#execution-lanes)), and `/health` shows which lane is
+  queueing.
 - **Budgets that report.** The fleet hourly cost cap and the runaway-token hard
-  cap observe by default: a run that crosses one is recorded and alerted and goes
-  on. They stop runs only when you set the limit explicitly in the environment,
-  or set `ROBOTHOR_HOURLY_COST_CAP_MODE` / `ROBOTHOR_RUNAWAY_HARD_CAP_MODE` to
-  `enforce`. Every budget or stop
-  that refuses, ends or would have ended a run is recorded as a run step of type
-  `budget_stop` (its stop, reason, setting, limit, observed value and mode) and an
-  `agent.budget_stop` event, and
+  cap report and never stop a run: a run that crosses one is recorded and
+  alerted and goes on. Every budget or stop that refuses, ends or would have
+  ended a run is recorded as a run step of type `budget_stop` (its stop, reason,
+  setting, limit and observed value) and an `agent.budget_stop` event, and
   `genus doctor --only budget_stops.recent` counts the last day's. The inventory
   of every budget, cap and stop, with its setting and what you see, is
   `BUDGETS_AND_STOPS.md` under `docs/` in the repository. When a run under load
@@ -459,9 +398,35 @@ work.
 - **Compaction.** A long run's context is compacted when it passes the proactive
   threshold. Ineffective, repeated compaction is a known way for a run to slow
   down ([Interactive request performance](runbooks/INTERACTIVE_REQUEST_PERFORMANCE.md)
-  has the incident). `ROBOTHOR_COMPACTION_V2` (above) adds the LLM-free pre-pass,
-  the anti-thrash gap and freeze-on-failure; the compaction section of
-  `docs/SYSTEM_ARCHITECTURE.md` describes the path in full.
+  has the incident); the LLM-free pre-pass, the gap between compactions and
+  keeping the messages on failure ([Context compaction](#context-compaction))
+  are what prevent it. The compaction section of `docs/SYSTEM_ARCHITECTURE.md`
+  describes the path in full.
+
+## Tuning
+
+These are the settings that shape the behaviour above. Set them in the engine's
+environment and restart the engine so every part picks the change up. The
+[settings reference](reference/configuration.md) has the full entry for each.
+
+| Setting | Meaning | Default |
+|---|---|---|
+| `ROBOTHOR_DEFERRED_TOOLS_THRESHOLD` | An agent allowed more tools than this gets core tools plus tool search instead of every schema. | `40` |
+| `ROBOTHOR_DEFERRED_TOOLS_RECENT_RUNS` | How many of the agent's last runs count when picking its recently used core tools. | `10` |
+| `ROBOTHOR_MAX_CONCURRENT_INTERACTIVE` | Interactive runs at once; `0` is uncapped. A cap queues turns with no deadline. | `0` |
+| `ROBOTHOR_MAX_CONCURRENT_BACKGROUND` | Background runs at once. | `2` |
+| `ROBOTHOR_LANE_BACKGROUND_YIELD_MS` | How long a background run holds back for a waiting turn when the interactive lane is capped. | `200` |
+| `ROBOTHOR_COMPACTION_MIN_GAP_ITERATIONS` | Iterations between two compactions of one run. | `3` |
+| `ROBOTHOR_HOURLY_COST_CAP_USD` | Fleet spend per rolling hour above which runs are reported and alerted. | `5.0` |
+| `ROBOTHOR_RUNAWAY_ALERT_TOKENS` | Tokens in one run at which it is reported as a possible runaway. | `500000` |
+| `ROBOTHOR_RUNAWAY_HARD_CAP_TOKENS` | Tokens in one run at which a `budget_stop` step is recorded; the run goes on. | `5000000` |
+| `ROBOTHOR_DB_CONNECT_TIMEOUT` | Seconds a checkout waits to open a connection; must stay above 0. | `5` |
+
+## Rolling back
+
+None of this migrates data. If a release's turn path misbehaves, `git revert`
+the change on `main` and redeploy the resulting release; there is no setting to
+turn it off. Keep the benchmark result from before and after either way.
 
 ## Where else to look
 
