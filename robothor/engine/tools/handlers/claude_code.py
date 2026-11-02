@@ -319,7 +319,6 @@ async def _publish(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         return _benchmark_refusal("claude_code_publish")
     from robothor.engine.coding import publish, repos
     from robothor.engine.coding.jobs import get_manager
-    from robothor.settings import get_settings
 
     job_id = str(args.get("job_id") or "")
 
@@ -333,8 +332,6 @@ async def _publish(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             "claude_code_publish needs the owner or admin role; this caller's role is "
             f"{ctx.user_role or 'no role'}"
         )
-    if not get_settings().coding.pr_enabled:
-        return await deny("pull requests are off until ROBOTHOR_CODING_PR_ENABLED=true")
     title = str(args.get("title") or "").strip()
     if not title:
         return await deny("title is required")

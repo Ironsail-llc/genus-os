@@ -159,11 +159,21 @@ def _covers(entries: list[str], target: Path) -> bool:
     return any(target == Path(e) or Path(e) in target.parents for e in entries)
 
 
-def test_no_job_can_read_another_jobs_home_on_the_coding_workspace(tmp_path, monkeypatch):
-    """Job homes moved off the denied ~/.config: each job is still denied every other's."""
+@pytest.mark.parametrize("retired_switch", [None, "0"])
+def test_no_job_can_read_another_jobs_home_on_the_coding_workspace(
+    tmp_path, monkeypatch, retired_switch
+):
+    """Job homes moved off the denied ~/.config: each job is still denied every other's.
+
+    No publishing switch exists; absent or set to "0", the deny list is the same.
+    """
     from robothor.engine.coding.env import job_config_dir
     from robothor.settings import reset_settings
 
+    if retired_switch is None:
+        monkeypatch.delenv("ROBOTHOR_CODING_PR_ENABLED", raising=False)
+    else:
+        monkeypatch.setenv("ROBOTHOR_CODING_PR_ENABLED", retired_switch)
     monkeypatch.setenv("ROBOTHOR_CODING_WORKSPACE", str(tmp_path / "coding"))
     reset_settings()
     home_a, home_b = job_config_dir("job-a"), job_config_dir("job-b")

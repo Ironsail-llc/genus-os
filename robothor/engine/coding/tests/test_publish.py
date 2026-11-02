@@ -88,7 +88,6 @@ def remote(tmp_path, monkeypatch, coding_env):
     url = _bare_remote(tmp_path)
     monkeypatch.setenv("ROBOTHOR_CODING_WORKSPACE", str(tmp_path / "coding"))
     monkeypatch.setenv("ROBOTHOR_CODING_REMOTES", url)
-    monkeypatch.setenv("ROBOTHOR_CODING_PR_ENABLED", "true")
     # The fake runner commits with this process's git, in a fresh clone with no
     # user config: a CI runner has no global identity to fall back on.
     for role in ("AUTHOR", "COMMITTER"):
@@ -292,18 +291,6 @@ async def test_publish_pushes_the_branch_and_opens_one_draft_pr(manager, remote,
     assert [e["status"] for e in audit if e["action"] == "claude_code_publish"] == ["ok"]
 
 
-async def test_publish_is_refused_while_prs_are_disabled(manager, remote, github, monkeypatch):
-    job = await _done_job(remote)
-    monkeypatch.setenv("ROBOTHOR_CODING_PR_ENABLED", "false")
-    from robothor.settings import reset_settings
-
-    reset_settings()
-    out = await _call("claude_code_publish", {"job_id": job["job_id"], "title": "t"})
-    assert "ROBOTHOR_CODING_PR_ENABLED" in out["error"]
-    assert github.requests == []
-    assert job["branch"] not in _remote_branches(remote)
-
-
 @pytest.mark.parametrize("role", ["member", "user", "service", ""])
 async def test_publish_is_refused_below_owner_and_audited(manager, remote, github, audit, role):
     job = await _done_job(remote)
@@ -443,7 +430,6 @@ async def test_every_publish_refusal_is_audited_with_its_reason(
     manager, remote, github, audit, monkeypatch, git_repo
 ):
     from robothor.engine.coding import repos
-    from robothor.settings import reset_settings
 
     async def publish(args: dict[str, Any]) -> dict[str, Any]:
         before = len(_denials(audit))
@@ -458,12 +444,6 @@ async def test_every_publish_refusal_is_audited_with_its_reason(
     assert "not found" in (await publish({"job_id": "nope", "title": "t"}))["details"]["reason"]
 
     job = await _done_job(remote)
-    monkeypatch.setenv("ROBOTHOR_CODING_PR_ENABLED", "false")
-    reset_settings()
-    off = await publish({"job_id": job["job_id"], "title": "t"})
-    assert "ROBOTHOR_CODING_PR_ENABLED" in off["details"]["reason"]
-    monkeypatch.setenv("ROBOTHOR_CODING_PR_ENABLED", "true")
-    reset_settings()
 
     monkeypatch.setattr(repos, "github_token", lambda tenant_id: "")
     assert (
@@ -587,4 +567,129 @@ async def test_publish_checks_every_push_url_against_the_allowlist(
     assert "ROBOTHOR_CODING_REMOTES" in out["error"]
     assert job["branch"] not in _remote_branches(other)
     assert job["branch"] not in _remote_branches(remote)
+    assert github.requests == []
+
+
+# ── no switch: publishing is bounded, not gated ───────────────────────
+
+# A retired boolean once gated publishing. Whether it is absent or set to "0",
+# publish works, and every bound on it holds.
+STALE_SWITCH = "ROBOTHOR_CODING_PR_ENABLED"
+
+
+@pytest.fixture(params=["absent", "0"])
+def stale_switch(request, monkeypatch):
+    from robothor.settings import reset_settings
+
+    if request.param == "absent":
+        monkeypatch.delenv(STALE_SWITCH, raising=False)
+    else:
+        monkeypatch.setenv(STALE_SWITCH, request.param)
+    reset_settings()
+    return request.param
+
+
+def test_there_is_no_setting_that_switches_publishing_off():
+    from robothor.settings.model import CodingSettings
+
+    assert "pr_enabled" not in CodingSettings.model_fields
+    root = Path(__file__).resolve().parents[4]
+    assert STALE_SWITCH not in (root / "docs/reference/configuration.md").read_text()
+
+
+async def test_publish_opens_a_draft_pr_with_no_switch_set(
+    manager, remote, github, audit, stale_switch
+):
+    job = await _done_job(remote)
+    out = await _call("claude_code_publish", {"job_id": job["job_id"], "title": "t"})
+    assert out.get("pr_url") == PR_URL, out
+    assert _remote_branches(remote).get(job["branch"]) == job["commit_sha"]
+    assert [e["status"] for e in audit if e["action"] == "claude_code_publish"] == ["ok"]
+
+
+async def test_no_refusal_names_the_retired_switch(manager, remote, github, audit, stale_switch):
+    job = await _done_job(remote)
+    out = await _call("claude_code_publish", {"job_id": job["job_id"], "title": "t"})
+    assert STALE_SWITCH not in json.dumps(out) + json.dumps(audit)
+
+
+async def test_a_push_outside_the_allowlist_is_refused_with_no_switch_set(
+    manager, remote, github, audit, tmp_path, stale_switch
+):
+    from robothor.engine.coding.tests.test_repos import _bare_remote as make_bare
+
+    job = await _done_job(remote)
+    clone = tmp_path / "coding" / "example" / "demo"
+    other_root = tmp_path / "elsewhere"
+    other_root.mkdir()
+    other = make_bare(other_root, owner="other")
+    git(clone, "config", "remote.origin.pushurl", other)
+
+    out = await _call("claude_code_publish", {"job_id": job["job_id"], "title": "t"})
+
+    assert "ROBOTHOR_CODING_REMOTES" in out.get("error", ""), out
+    assert job["branch"] not in _remote_branches(other)
+    assert job["branch"] not in _remote_branches(remote)
+    assert github.requests == []
+    assert [e["status"] for e in audit if e["action"] == "claude_code_publish"] == ["denied"]
+
+
+async def test_an_empty_allowlist_refuses_every_publish_with_no_switch_set(
+    manager, remote, github, audit, monkeypatch, stale_switch
+):
+    """Without ROBOTHOR_CODING_REMOTES there is nowhere to push: the only off state."""
+    from robothor.settings import reset_settings
+
+    job = await _done_job(remote)
+    monkeypatch.setenv("ROBOTHOR_CODING_REMOTES", "")
+    reset_settings()
+    out = await _call("claude_code_publish", {"job_id": job["job_id"], "title": "t"})
+    assert "ROBOTHOR_CODING_REMOTES" in out.get("error", ""), out
+    assert job["branch"] not in _remote_branches(remote)
+    assert github.requests == []
+
+
+async def test_an_unverified_sha_is_refused_with_no_switch_set(
+    manager, remote, github, audit, tmp_path, stale_switch
+):
+    job = await _done_job(remote)
+    clone = tmp_path / "coding" / "example" / "demo"
+    moved = _move_branch(clone, job["branch"])
+
+    out = await _call("claude_code_publish", {"job_id": job["job_id"], "title": "t"})
+
+    assert "moved" in out.get("error", ""), out
+    assert moved not in _remote_branches(remote).values()
+    assert job["branch"] not in _remote_branches(remote)
+    assert github.requests == []
+
+
+async def test_an_unverified_job_is_refused_with_no_switch_set(remote, github, stale_switch):
+    mgr = _manager(_nothing, _nothing)
+    try:
+        prepared = await _call("claude_code_repo_prepare", {"repo": remote})
+        started = await _call(
+            "claude_code_start",
+            {
+                "task": "t",
+                "repo_path": prepared["repo_path"],
+                "acceptance": {"verify_command": VERIFY},
+                "max_rounds": 1,
+            },
+        )
+        await mgr.wait(started["job_id"], "test-tenant", timeout_s=20)
+        out = await _call("claude_code_publish", {"job_id": started["job_id"], "title": "t"})
+    finally:
+        jobs_mod.use_manager(None)
+    assert "done" in out.get("error", ""), out
+    assert github.requests == []
+
+
+@pytest.mark.parametrize("role", ["member", "user", "service", ""])
+async def test_rbac_holds_with_no_switch_set(manager, remote, github, stale_switch, role):
+    job = await _done_job(remote)
+    out = await _call(
+        "claude_code_publish", {"job_id": job["job_id"], "title": "t"}, _ctx(user_role=role)
+    )
+    assert (role or "no role") in out.get("error", ""), out
     assert github.requests == []
