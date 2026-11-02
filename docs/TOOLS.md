@@ -58,7 +58,9 @@ hooks, the guardrail engine (human approval included), its event log, the
 system-run RBAC check and the post-execution guardrails all see `name` with its
 `arguments`, exactly as they would see a direct call of that tool; a refusal
 comes back as the result of the `tool_call`, and a hook that rewrites the
-arguments rewrites the wrapped call's.
+arguments rewrites the wrapped call's. Recording the step does the same: the
+result of an external-data tool keeps its `<untrusted_content>` boundary and a
+credential argument is redacted, however the tool was reached.
 
 **`arguments` is an object of the wrapped tool's parameters.** A JSON string
 that parses to an object is accepted as that object, since models often send
