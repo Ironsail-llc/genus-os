@@ -91,10 +91,9 @@ escape hatch), so:
   Telegram bot writes into too. A briefing reaches the operator in the
   conversation they already have rather than a second one beside it.
 
-The turn is appended to the in-memory session as well as the database, because
-`GET /chat/history` reads RAM (and the database only at boot) unless
-`ROBOTHOR_CHAT_HISTORY_PAGES` is on — without that, a delivery would be
-invisible in the Helm until the next engine restart.
+The turn is appended to the in-memory session as well as the database:
+`GET /chat/history` reads the database, but falls back to RAM when the database
+cannot answer, and the agent's next turn takes its context from RAM.
 
 ## Asking a question
 
@@ -353,17 +352,15 @@ runs the highlighted command.
 
 ### Times and older messages
 
-`ROBOTHOR_CHAT_HISTORY_PAGES` (off by default) serves `GET /chat/history` from
-`chat_messages` instead of the in-memory tail, which keeps only the last 40
-rows and no times. Each message then carries `id` and `timestamp` (when the
+`GET /chat/history` is served from `chat_messages`, not the in-memory tail,
+which keeps only the last 40 rows and no times. Each message carries `id` and
+`timestamp` (when the
 row was stored; a web chat prompt keeps the time it arrived, other channels'
 prompts the time their reply finished), the response carries `hasMore`, and the Helm shows each
 message's time and a **Load earlier messages** button. Pages go back by
 `before=<id>`, or by `offset`; `limit` is the page size (50 from the Helm).
 A first page the database cannot answer falls back to the in-memory tail. A turn that ended with no reply
 text is kept in memory but never stored, so a stored page leaves it out.
-With the setting off the endpoint answers exactly as before, and the Helm
-shows no times on history and no button.
 
 ## `genus channel verify webchat` exits 2
 

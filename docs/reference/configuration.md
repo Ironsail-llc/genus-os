@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-511 settings in 18 groups.
+510 settings in 18 groups.
 
 ## autonomy
 
@@ -432,7 +432,6 @@ Guardrails and feature gates. Ones marked governed are inventoried in `infra/fla
 | `ROBOTHOR_CALENDAR_MEET_ARTIFACTS` | bool | `true` | `robothor-engine` | no | legacy | Turn Google Meet transcription and smart notes on for meetings the assistant organizes, so it can read them afterwards. Best-effort: needs the meetings.space.settings OAuth scope, and a failure is a note on the booking, never a failed booking. |
 | `ROBOTHOR_CALENDAR_SEND_UPDATES` | str | `all` | `robothor-engine` | no | legacy | **governed.** Who Google emails when an agent creates or deletes an event with attendees: all, externalOnly, or none. The default sends the invitation — an event nobody was told about is not a meeting, which is how an operator came to be an attendee of a trip he never saw. |
 | `ROBOTHOR_CAPABILITY_BLOCK_ENABLED` | bool | `false` | `robothor-engine` | no | unreleased | Add a 'What you can do here' block to every agent's system prompt: the capabilities its granted tools and this instance's settings give it, and for each one it lacks, the gate and what unlocks it. Session-stable, so the prompt prefix stays cacheable. |
-| `ROBOTHOR_CHAT_HISTORY_PAGES` | bool | `false` | `robothor-engine` | no | 1.123.0 | Serve chat history from the message store instead of the in-memory tail: each message carries its stored time and id, and the endpoint pages back past the last 50 (offset, or a before=<id> cursor) with a hasMore flag. Off, history is the in-memory tail with no times, as before. A first page the store cannot answer falls back to memory. |
 | `ROBOTHOR_COMPLETION_CONTRACTS_ENABLED` | bool | `false` | `robothor-engine` | no | legacy | Switch for evidence-based completion contracts: a run claiming success must show the tool trace that produced it. |
 | `ROBOTHOR_COMPLETION_CONTRACTS_MODE` | str | `observe` | `robothor-engine` | no | legacy | **governed.** Completion-contract ladder position: observe records unevidenced claims, enforce fails the run that makes one. |
 | `ROBOTHOR_CONFIG_STRICT_MODE` | str | `observe` | `robothor-engine` | no | 1.66 | What an unknown key in the settings: block of config.yaml does. 'off' ignores it, 'observe' (default for existing installs) logs one warning naming the key and carries on, 'enforce' refuses to start. Inventoried in infra/flags.yaml but deliberately NOT governed: it is read while settings are being resolved, which happens before and without a database. |
