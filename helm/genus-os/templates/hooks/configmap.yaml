@@ -1,0 +1,16 @@
+{{- if .Values.hooks.enabled }}
+{{- /*
+The hooks component's channel definitions, mounted at
+/etc/robothor/webhooks and read through ROBOTHOR_WEBHOOKS_CONFIG. Holds
+channel shape only: each channel names its signing secret by `secret_env`.
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "genus-os.componentName" (dict "root" . "component" "hooks") }}-webhooks
+  labels:
+    {{- include "genus-os.labels" (dict "root" . "component" "hooks") | nindent 4 }}
+data:
+  webhooks.yaml: |
+    {{- include "genus-os.hooksWebhooksYaml" . | nindent 4 }}
+{{- end }}
