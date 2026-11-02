@@ -125,14 +125,22 @@ def _fresh_settings():
     The alias warnings are reset with it, for the same reason: they are
     once-per-process by design, so a test asserting that a deprecated name
     warns must not depend on whether an earlier test used it first.
+
+    ``robothor.config.get_config()`` is the same kind of cache and is dropped
+    too. Several suites strip every ``ROBOTHOR_`` variable for a test; a config
+    built in that window holds the default (production) database name, and a
+    later test's pool then refuses to open under the database guard.
     """
+    from robothor.config import reset_config
     from robothor.settings import reset_settings
     from robothor.settings.aliases import reset_alias_warnings
 
     reset_settings()
+    reset_config()
     reset_alias_warnings()
     yield
     reset_settings()
+    reset_config()
     reset_alias_warnings()
 
 
