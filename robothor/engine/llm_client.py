@@ -42,6 +42,7 @@ from typing import TYPE_CHECKING, Any
 
 import litellm
 
+from robothor.engine.channel_streaming import in_channel_stream_scope
 from robothor.engine.codex_provider import CodexProviderError, is_codex_model
 from robothor.engine.codex_provider import acompletion as codex_acompletion
 from robothor.engine.context import estimate_tokens
@@ -1153,8 +1154,8 @@ def _is_transient_stream_error(e: BaseException) -> bool:
     return getattr(e, "status_code", None) in _TRANSIENT_STREAM_STATUSES
 
 
-async def _announce_stream_retry(model: str, e: BaseException) -> None:
-    """Tell the run's client the partial text it was shown is being discarded."""
+async def _before_stream_retry(model: str, e: BaseException, watchdog: Any) -> None:
+    """Tell the run's client its partial text is discarded, then pause briefly."""
     from robothor.engine.run_status import emit_status
 
     logger.warning(
@@ -1167,6 +1168,10 @@ async def _announce_stream_retry(model: str, e: BaseException) -> None:
         await emit_status(
             run_id, {"event": "stream_retry", "model": model, "reason": type(e).__name__}
         )
+    if watchdog:
+        watchdog.touch(f"stream_retry:{model}")
+    if STREAM_RETRY_DELAY_SECONDS > 0:
+        await asyncio.sleep(STREAM_RETRY_DELAY_SECONDS)
 
 
 #: Retries for a model that emitted tool-call JSON nobody can parse. ONE: a
@@ -2739,17 +2744,6 @@ class LLMClient:
 
     # ─── Streaming call ──────────────────────────────────────────────
 
-    async def _before_stream_retry(self, model: str, e: BaseException) -> None:
-        """Announce, tick the watchdog and pause before the one in-place
-        stream retry a channel-streaming scope gets. Not blamed: a recovered
-        blip must not count toward the breaker, exactly as in _call_llm's
-        retry. Extracted from ``_call_llm_streaming`` to hold its size."""
-        await _announce_stream_retry(model, e)
-        if self._active_watchdog:
-            self._active_watchdog.touch(f"stream_retry:{model}")
-        if STREAM_RETRY_DELAY_SECONDS > 0:
-            await asyncio.sleep(STREAM_RETRY_DELAY_SECONDS)
-
     async def _call_llm_streaming(
         self,
         messages: list[dict[str, Any]],
@@ -2787,8 +2781,6 @@ class LLMClient:
             if on_stream_event:
                 with contextlib.suppress(Exception):
                     await on_stream_event(event)
-
-        from robothor.engine.channel_streaming import in_channel_stream_scope
 
         channel_stream = in_channel_stream_scope()
 
@@ -2964,7 +2956,7 @@ class LLMClient:
                         break
                     if stream_retries_left > 0 and _is_transient_stream_error(e):
                         stream_retries_left -= 1
-                        await self._before_stream_retry(model, e)
+                        await _before_stream_retry(model, e, self._active_watchdog)
                         continue
                     if _advance_without_blaming_the_model(e, model):
                         last_error = e

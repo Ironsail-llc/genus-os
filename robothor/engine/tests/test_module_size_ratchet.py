@@ -89,9 +89,10 @@ CAPS = {
     # was added to it, and trimming that explanation to fit is the trade this
     # file has refused before.
     # 1980 -> 1978: the post-reply bookkeeping (save the exchange, then map the
-    # platform message ids to the saved rows) left for telegram_delivery.py,
-    # which is what paid for the turn's later additions rather than raising this.
-    "robothor/engine/telegram.py": 1978,
+    # platform message ids to the saved rows) left for telegram_delivery.py.
+    # 1978 -> 1924: streaming is the only reply path; the old status edits
+    # went, and delivering the reply moved to telegram_progress.deliver_reply.
+    "robothor/engine/telegram.py": 1924,
     # 1300 -> 1293: the `ask:` callback body and the `handle_text` ask
     # interception moved to channels/telegram_ask.py, beside the binding rules
     # they apply. The ratchet only ever goes down, so the new actual is the new

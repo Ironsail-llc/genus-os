@@ -146,14 +146,3 @@ def run_measurements(run: Any) -> dict[str, Any]:
             else None
         ),
     }
-
-
-async def show_progress(bot: Any, chat_id: str, message_id: int | None, text: str) -> None:
-    if message_id is None:
-        return
-    try:
-        await bot.edit_message_text(
-            chat_id=int(chat_id), message_id=message_id, text=text, parse_mode=None
-        )
-    except Exception as exc:
-        logging.getLogger(__name__).debug("Progress edit failed: %s", type(exc).__name__)

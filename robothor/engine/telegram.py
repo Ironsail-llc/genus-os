@@ -36,7 +36,7 @@ from aiogram.types import (
     Message,
 )
 
-from robothor.engine.channel_streaming import channel_stream_scope, channel_streaming_enabled
+from robothor.engine.channel_streaming import channel_stream_scope
 from robothor.engine.chat import (
     get_main_session_key,
     get_shared_session,
@@ -58,7 +58,7 @@ from robothor.engine.telegram_format import (
     rich_payload,
     telegram_chunks,
 )
-from robothor.engine.telegram_progress import TelegramProgress
+from robothor.engine.telegram_progress import TelegramProgress, deliver_reply
 from robothor.sanitize import sanitize_preview
 
 if TYPE_CHECKING:
@@ -75,7 +75,6 @@ from robothor.engine.telegram_live import TelegramLiveFollowupMixin  # noqa: E40
 from robothor.engine.telegram_plan_mode import (  # noqa: E402
     TYPING_INTERVAL,
     PlanModeMixin,
-    edit_status_text,
 )
 
 logger = logging.getLogger(__name__)
@@ -108,7 +107,7 @@ _RESTART_TRIGGERS: dict[str, Path] = {
     "robothor-app.service": Path("/run/robothor/restart-requests/robothor-app"),
 }
 
-#: Runner events the progress message consumes in progress mode.
+#: Runner events the progress message consumes.
 _PROGRESS_EVENTS = frozenset({"progress", "tool_start", "tool_end", "stream_retry"})
 
 # Friendly tool names for streaming indicators
@@ -145,7 +144,7 @@ class TelegramBot(
 ):
     """Aiogram v3 Telegram bot for Genus OS."""
 
-    #: Seconds between progress-message edits (Telegram allows ~1/s per chat).
+    #: Seconds between progress edits in a private chat (groups: GROUP_MIN_INTERVAL).
     _progress_edit_interval: float = 1.0
 
     def __init__(self, config: EngineConfig, runner: AgentRunner) -> None:
@@ -484,19 +483,13 @@ class TelegramBot(
         except Exception:
             stream_msg_id = None
 
-        # ── Status-only updates (no content streaming) ──
-        # Telegram rate-limits editMessageText to ~20/min.  Instead of streaming
-        # content token-by-token, we show brief tool-status edits on the
-        # "Thinking..." message and deliver the final output as a new message.
-        tool_status_interval = 10.0  # max one status edit per 10 seconds
-        last_status_time: float = 0.0
         checklist_msg_id: int | None = None
 
-        # ── Progress mode (ROBOTHOR_CHANNEL_STREAMING) ──
+        # ── Progress message ──
         # The "Thinking..." message becomes the progress message: the answer
         # streams into it on a throttle and it is finalised in place.
         progress: TelegramProgress | None = None
-        if stream_msg_id is not None and channel_streaming_enabled():
+        if stream_msg_id is not None:
             progress = TelegramProgress(
                 self.bot,
                 chat_id,
@@ -506,25 +499,12 @@ class TelegramBot(
             )
 
         async def on_tool(event: dict[str, Any]) -> None:
-            nonlocal last_status_time, checklist_msg_id
-            if progress is not None and event.get("event") in _PROGRESS_EVENTS:
-                await progress.on_event(event)
+            nonlocal checklist_msg_id
+            if event.get("event") in _PROGRESS_EVENTS:
+                if progress is not None:
+                    await progress.on_event(event)
                 return
-            if event.get("event") == "progress":
-                from robothor.engine.performance import show_progress
-
-                await show_progress(self.bot, chat_id, stream_msg_id, event["text"])
-                return
-            if event.get("event") == "tool_start":
-                now = time.monotonic()
-                if (now - last_status_time) < tool_status_interval:
-                    return
-                label = _friendly_tool_name(event.get("tool", ""))
-                if await edit_status_text(
-                    self.bot, chat_id, stream_msg_id, f"\U0001f527 {label}..."
-                ):
-                    last_status_time = now
-            elif event.get("event") == "todo_updated":
+            if event.get("event") == "todo_updated":
                 todos = event.get("todos", [])
                 try:
                     if todos:
@@ -595,39 +575,34 @@ class TelegramBot(
                 _identity = self._build_identity(_user, chat_id, _tenant)
 
                 async def deliver_answer(run: Any) -> list[Any]:
-                    # The returned Message objects let the channel bus map
-                    # platform_message_ids to the persisted row below.
+                    nonlocal stream_msg_id
+                    # The Message objects the reply went out as: the channel bus maps
+                    # their platform_message_ids to the persisted row below.
                     self._seal_live_inbox(chat_id, inbox)  # nothing joins a finished run
-                    sent = await self._finalise_progress_and_send(
-                        chat_id, stream_msg_id, progress, run
-                    )
+                    sent = await deliver_reply(progress, run, chat_id, self.send_message)
+                    stream_msg_id = None if sent else stream_msg_id  # gone: no "Stopped."
                     await self._record_interactive_delivery(run, sent)
                     return sent
 
                 early = EarlyRelease(deliver_answer)
-                execute_kwargs: dict[str, Any] = {
-                    "agent_id": self.config.default_chat_agent,
-                    "message": user_text,
-                    "trigger_type": TriggerType.TELEGRAM,
-                    "trigger_detail": _detail,
-                    "on_tool": on_tool,
-                    "on_status": on_tool,
-                    "model_override": model,
-                    "conversation_history": history or None,
-                    "tenant_id": _tenant,
-                    "user_id": str((_user or {}).get("user_id") or f"telegram:{chat_id}"),
-                    "user_role": str((_user or {}).get("role") or "user"),
-                    "identity": _identity,
-                    "live_inbox": inbox,
-                    "on_complete": early.callback(),
-                }
-                if progress is None:
-                    run = await self.runner.execute(**execute_kwargs)
-                else:
-                    with channel_stream_scope():
-                        run = await self.runner.execute(
-                            **execute_kwargs, on_content=progress.on_content
-                        )
+                with channel_stream_scope():
+                    run = await self.runner.execute(
+                        agent_id=self.config.default_chat_agent,
+                        message=user_text,
+                        trigger_type=TriggerType.TELEGRAM,
+                        trigger_detail=_detail,
+                        on_tool=on_tool,
+                        on_status=on_tool,
+                        on_content=progress.on_content if progress is not None else None,
+                        model_override=model,
+                        conversation_history=history or None,
+                        tenant_id=_tenant,
+                        user_id=str((_user or {}).get("user_id") or f"telegram:{chat_id}"),
+                        user_role=str((_user or {}).get("role") or "user"),
+                        identity=_identity,
+                        live_inbox=inbox,
+                        on_complete=early.callback(),
+                    )
                 run_for_delivery = run
                 self._seal_live_inbox(chat_id, inbox)  # later messages are a new turn
 
@@ -747,36 +722,6 @@ class TelegramBot(
 
         task = asyncio.create_task(run_agent())
         self._active_tasks[chat_id] = task
-
-    async def _finalise_progress_and_send(
-        self,
-        chat_id: str,
-        stream_msg_id: int | None,
-        progress: TelegramProgress | None,
-        run: Any,
-    ) -> list[Any]:
-        """Deliver a finished run's answer; the one place a turn's reply goes out.
-
-        Progress mode (``progress`` set) finalises the progress message in
-        place when the answer fits one edit. Otherwise the status message is
-        deleted and the answer (or the error, or "no output") is sent as new
-        messages. Returns the delivered Message objects, so the caller can
-        record delivery and map platform message ids.
-        """
-        if progress is not None and run.output_text:
-            finalised = await progress.finalise(run.output_text)
-            if finalised is not None:
-                return finalised
-        if progress is not None:
-            await progress.aclose()
-        if stream_msg_id is not None:
-            with contextlib.suppress(Exception):
-                await self.bot.delete_message(chat_id=int(chat_id), message_id=stream_msg_id)
-        if run.output_text:
-            return await self.send_message(chat_id, run.output_text)
-        if run.error_message:
-            return await self.send_message(chat_id, f"Error: {run.error_message}")
-        return await self.send_message(chat_id, "Done. No output produced.")
 
     def _build_background_config(self) -> Any:
         """Build agent config with continuous-mode overrides for background plan execution."""

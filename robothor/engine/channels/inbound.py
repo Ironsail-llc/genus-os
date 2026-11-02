@@ -37,7 +37,7 @@ from typing import TYPE_CHECKING, Any
 
 from robothor.constants import DEFAULT_TENANT
 from robothor.engine import live_control
-from robothor.engine.channel_streaming import channel_stream_scope, channel_streaming_enabled
+from robothor.engine.channel_streaming import channel_stream_scope
 from robothor.engine.channels import access
 from robothor.engine.chat import get_shared_session
 from robothor.engine.chat_history import append_turn
@@ -230,13 +230,12 @@ async def handle_message(
             failed, timed-out or empty run records nothing.
         history_limit: hand the run only the last N turns (user + assistant
             pairs) of the session's history. ``None`` hands it all of it.
-        stream: optional. With ``ROBOTHOR_CHANNEL_STREAMING`` on, called with the
-            run's CUMULATIVE text as the model writes it (the runner's
-            ``on_content``), including interim text from a tool turn. It may
-            restart shorter — a new model call, or a stream retried after a
-            transient failure — so render it by replacing, never appending. The
-            reply in the result is still the complete answer. Flag off, or
-            ``None``, the run is today's.
+        stream: optional. Called with the run's CUMULATIVE text as the model
+            writes it (the runner's ``on_content``), including interim text
+            from a tool turn. It may restart shorter — a new model call, or a
+            stream retried after a transient failure — so render it by
+            replacing, never appending. The reply in the result is still the
+            complete answer. ``None`` runs without streaming.
         on_progress: optional. Called with the run's tool and status events
             (``tool_start``, ``tool_end``, ``iteration_start`` and the rest), the
             runner's ``on_tool`` and ``on_status``; feed them to
@@ -307,7 +306,7 @@ async def handle_message(
             }
             async with _fleet_slots():
                 with live_control.conversation_scope(session_key, steered):
-                    if stream is not None and channel_streaming_enabled():
+                    if stream is not None:
                         with channel_stream_scope():
                             run = await runner.execute(**run_kwargs, on_content=stream)
                     else:
