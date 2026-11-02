@@ -1,24 +1,11 @@
 /**
- * Dashboard web vitals: the operator's switch and the shape a reported metric
- * must have before it is stored or logged.
+ * Dashboard web vitals: the shape a reported metric must have before it is
+ * stored or logged, and the bounds on the public sink.
  *
- * Shared by the root layout (which mounts the reporter only when vitals are on)
- * and POST /api/vitals (which validates every beacon). Nothing here identifies
+ * Used by POST /api/vitals, which validates every beacon. Nothing here identifies
  * a tenant or a person: a metric is its name, value, rating, the page's path
  * without its query string, and the dashboard view.
  */
-
-const OFF = new Set(["0", "false", "off", "no"]);
-
-/** On unless the operator set GENUS_DASHBOARD_WEB_VITALS to a false value. */
-export function webVitalsEnabled(
-  env: Record<string, string | undefined> = {
-    GENUS_DASHBOARD_WEB_VITALS: process.env.GENUS_DASHBOARD_WEB_VITALS,
-  }
-): boolean {
-  const raw = (env.GENUS_DASHBOARD_WEB_VITALS ?? "").trim().toLowerCase();
-  return !OFF.has(raw);
-}
 
 /**
  * The sink is public (the sign-in page reports too), so it is bounded: this

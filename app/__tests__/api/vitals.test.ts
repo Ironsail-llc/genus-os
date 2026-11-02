@@ -102,15 +102,18 @@ describe("POST /api/vitals", () => {
     expect(webVitalLines(logSpy)).toHaveLength(0);
   });
 
-  it("does nothing when the operator switched vitals off", async () => {
-    process.env.GENUS_DASHBOARD_WEB_VITALS = "false";
+  it.each(["false", "0", "off", "no"])(
+    "records the metric whatever GENUS_DASHBOARD_WEB_VITALS holds (%s): there is no off switch",
+    async (value) => {
+      process.env.GENUS_DASHBOARD_WEB_VITALS = value;
 
-    const res = await POST(post(LCP));
+      const res = await POST(post(LCP));
 
-    expect(res.status).toBe(204);
-    expect(mockWriteVital).not.toHaveBeenCalled();
-    expect(webVitalLines(logSpy)).toHaveLength(0);
-  });
+      expect(res.status).toBe(204);
+      expect(mockWriteVital).toHaveBeenCalledTimes(1);
+      expect(webVitalLines(logSpy)).toHaveLength(1);
+    }
+  );
 
   it("still logs and answers 204 when Redis is down", async () => {
     mockWriteVital.mockRejectedValue(new Error("ECONNREFUSED"));

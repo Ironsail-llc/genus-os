@@ -7,8 +7,6 @@
  * capped Redis stream `robothor:events:vitals`. The log line is written first:
  * a Redis outage costs the stream entry, never the measurement or the page.
  *
- * GENUS_DASHBOARD_WEB_VITALS=false turns the sink off (204, nothing written).
- *
  * Public, so a signed-out page (sign-in) reports its vitals too: the proxy
  * lets this one path through, and the route bounds what that exposes -- a
  * per-client rate limit (429), a body cap (413) and the strict schema below.
@@ -25,7 +23,6 @@ import {
   VITALS_MAX_BODY_BYTES,
   VITALS_RATE_LIMIT,
   VITALS_RATE_WINDOW_MS,
-  webVitalsEnabled,
 } from "@/lib/web-vitals";
 
 export const runtime = "nodejs";
@@ -37,8 +34,6 @@ const TOO_LARGE = () => Response.json({ error: "Body too large" }, { status: 413
 const limiter = new ActionRateLimiter(VITALS_RATE_LIMIT, VITALS_RATE_WINDOW_MS);
 
 export async function POST(req: Request) {
-  if (!webVitalsEnabled()) return NO_CONTENT();
-
   // The verified client address, or one shared key when none can be verified.
   const client = clientIpFromRequest(req) ?? "unattributed";
   if (!limiter.allow(client)) {
