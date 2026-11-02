@@ -486,12 +486,17 @@ class TestRunnerUsesTheTurnHelper:
         assert args == ("main", IDENTITY)
 
 
-def _hook_thread_recorder() -> list[str]:
-    """Replace the context hook with one that records the thread it ran on."""
+def _hook_thread_recorder(db: FakeDB | None = None) -> list[str]:
+    """Replace the context hook with one that records the thread it ran on.
+
+    Given ``db``, the hook also runs a statement there, as the fixture's does.
+    """
     names: list[str] = []
 
     def _hook() -> str:
         names.append(threading.current_thread().name)
+        if db is not None:
+            db.charge("SELECT hook")
         return "Date: 2026-01-02"
 
     _CONTEXT_HOOKS[:] = [_hook]
@@ -524,17 +529,27 @@ class TestFanOutOnlyWhenItPays:
         assert db.count("RETURNING") == 0  # no per-block write-to-read
         assert db.count("agent_memory_blocks") == 2  # one read, one deferred touch
 
-    def test_slow_db_fans_out_from_the_second_warmup_and_is_faster(self, db: FakeDB) -> None:
-        threads = _hook_thread_recorder()
+    def test_slow_db_fans_out_from_the_second_warmup(self, db: FakeDB) -> None:
+        """Structural, not wall-clock: the first warmup knows nothing and runs
+        in place; having seen slow sections, the second fans them all out."""
+        threads = _hook_thread_recorder(db)
         caller = threading.current_thread().name
-        _build(fan_out=False)  # imports
-        _, sequential_s = _build(fan_out=False)
-        assert threads[-1] == caller  # nothing known yet: run in place
+        _build(fan_out=False)  # nothing known yet
+        assert threads[-1] == caller  # in place, on the calling thread
+        assert db.max_in_flight == 1
+
+        sections = 8
+        db.gate = threading.Barrier(sections, timeout=10)
+        db.max_in_flight = 0
         timings: dict[str, float] = {}
-        _, fanned_s = _build(timings=timings)
-        assert threads[-1] != caller  # the last warmup had a slow section
-        assert fanned_s < sequential_s
-        assert fanned_s < 1.5 * max(timings.values())
+        _, fanned_s = _build(timings=timings)  # learned: the last one was slow
+        assert threads[-1] != caller  # on the section pool
+        assert not db.gate.broken  # every section was in flight at once
+        assert db.max_in_flight >= sections
+        print(
+            f"\nfanned out in {fanned_s * 1000:.0f}ms, "
+            f"slowest section {max(timings.values()) * 1000:.0f}ms"
+        )
 
     def test_the_fanned_out_hooks_still_see_the_warmup_kind(self, db: FakeDB) -> None:
         seen: list[str | None] = []
