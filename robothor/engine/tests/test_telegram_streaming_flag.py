@@ -171,3 +171,36 @@ async def test_flag_on_streams_into_the_thinking_message(bot, channel_streaming)
     assert edits[-1][1]["text"] == telegram_chunks(ANSWER)[0].html
     assert not [c for c in calls if c[0] == "delete_message"]
     assert run.delivery_status == "delivered"
+
+
+@pytest.mark.asyncio
+async def test_a_turn_streams_even_with_the_old_flag_set_off(bot, monkeypatch):
+    """No switch: ``ROBOTHOR_CHANNEL_STREAMING=0`` in the env changes nothing."""
+    from robothor.settings import reset_settings
+
+    monkeypatch.setenv("ROBOTHOR_CHANNEL_STREAMING", "0")
+    reset_settings()
+    bot._progress_edit_interval = 0.05
+    run = _run()
+
+    async def streaming(**kwargs: Any) -> AgentRun:
+        text = ""
+        for i in range(6):
+            text += f"tide{i} "
+            await kwargs["on_content"](text)
+            await asyncio.sleep(0.03)
+        return run
+
+    execute = AsyncMock(side_effect=streaming)
+    try:
+        await _turn(bot, execute)
+    finally:
+        monkeypatch.delenv("ROBOTHOR_CHANNEL_STREAMING")
+        reset_settings()
+
+    assert "on_content" in execute.await_args.kwargs
+    edits = [c[1] for c in bot.bot.calls if c[0] == "edit_message_text"]
+    interim = [e["text"] for e in edits[:-1]]
+    assert any(t.startswith("tide0") for t in interim), interim
+    assert edits[-1]["message_id"] == 42
+    assert edits[-1]["text"] == telegram_chunks(ANSWER)[0].html

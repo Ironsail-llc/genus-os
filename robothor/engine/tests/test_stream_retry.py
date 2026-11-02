@@ -258,3 +258,28 @@ async def test_tool_turn_text_suppressed_as_today_otherwise(breaker, channel_str
         await _call(acompletion, ["openrouter/a"], on_content)
 
     assert seen == ["Let me check."]
+
+
+@pytest.mark.asyncio
+async def test_the_retry_happens_even_with_the_old_flag_set_off(
+    breaker, no_retry_pause, status_events, monkeypatch
+):
+    """No switch: inside the scope the in-place retry runs whatever the env says."""
+    from robothor.settings import reset_settings
+
+    monkeypatch.setenv("ROBOTHOR_CHANNEL_STREAMING", "0")
+    reset_settings()
+    acompletion = AsyncMock(
+        side_effect=[
+            _Stream([_chunk("p")], fail_with=_ProviderError(503)),
+            _Stream([_chunk("From a.")]),
+        ]
+    )
+    try:
+        with channel_stream_scope():
+            await _call(acompletion, ["openrouter/a", "openrouter/b"])
+    finally:
+        monkeypatch.delenv("ROBOTHOR_CHANNEL_STREAMING")
+        reset_settings()
+
+    assert _models_called(acompletion) == ["openrouter/a", "openrouter/a"]

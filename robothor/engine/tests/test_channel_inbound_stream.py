@@ -78,3 +78,21 @@ async def test_no_stream_keeps_the_call_unchanged_with_the_flag_on(monkeypatch, 
 
     assert "on_content" not in runner.calls[0]
     assert runner.scoped == [False]
+
+
+@pytest.mark.asyncio
+async def test_a_stream_is_used_even_with_the_old_flag_set_off(monkeypatch):
+    """No switch: ``ROBOTHOR_CHANNEL_STREAMING=0`` in the env changes nothing."""
+    from robothor.settings import reset_settings
+
+    monkeypatch.setenv("ROBOTHOR_CHANNEL_STREAMING", "0")
+    reset_settings()
+    runner = _ScopeRecordingRunner()
+    try:
+        await _handle(monkeypatch, _allow(), runner, stream=_stream)
+    finally:
+        monkeypatch.delenv("ROBOTHOR_CHANNEL_STREAMING")
+        reset_settings()
+
+    assert runner.calls[0]["on_content"] is _stream
+    assert runner.scoped == [True]
