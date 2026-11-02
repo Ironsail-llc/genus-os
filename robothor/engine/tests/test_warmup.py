@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from unittest.mock import patch
 
 import pytest
@@ -18,6 +19,7 @@ from robothor.engine.warmup import (
 from robothor.identity import EnrichedIdentity, IdentityContext
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Iterator
     from pathlib import Path
 
 
@@ -40,6 +42,32 @@ def warm_config() -> AgentConfig:
 # Patch targets — functions are imported lazily inside warmup.py
 TRACKING_PATCH = "robothor.engine.tracking.get_schedule"
 BLOCK_PATCH = "robothor.memory.blocks.read_block"
+
+
+@contextmanager
+def _blocks(value: Any = None, side_effect: Callable[..., Any] | None = None) -> Iterator[None]:
+    """Serve memory blocks to the warmup: ``side_effect(name, tenant_id)`` or ``value``.
+
+    The preamble reads every block in one ``read_blocks`` statement (absent
+    names are left out) and defers ``touch_blocks``; the observe-mode counter
+    still reads one ``read_block`` at a time.
+    """
+    per_block = side_effect or (lambda name, tenant_id="default": value)
+
+    def _read_blocks(names: list[str], tenant_id: str = "default") -> dict[str, Any]:
+        out = {}
+        for name in names:
+            found = per_block(name, tenant_id)
+            if found:
+                out[name] = found
+        return out
+
+    with (
+        patch(BLOCK_PATCH, side_effect=per_block),
+        patch("robothor.memory.blocks.read_blocks", side_effect=_read_blocks),
+        patch("robothor.memory.blocks.touch_blocks"),
+    ):
+        yield
 
 
 class TestBuildWarmthPreamble:
@@ -95,7 +123,7 @@ class TestBuildWarmthPreamble:
         )
         with (
             patch(TRACKING_PATCH, return_value=None),
-            patch(BLOCK_PATCH, return_value={"content": "Key finding: system is healthy."}),
+            _blocks({"content": "Key finding: system is healthy."}),
         ):
             result, _ = build_warmth_preamble(config, tmp_path)
         assert "MEMORY BLOCKS" in result
@@ -113,7 +141,7 @@ class TestBuildWarmthPreamble:
         try:
             with (
                 patch(TRACKING_PATCH, return_value=None),
-                patch(BLOCK_PATCH, return_value={"content": ""}),
+                _blocks({"content": ""}),
             ):
                 result, _ = build_warmth_preamble(config, tmp_path)
             assert result == ""
@@ -193,7 +221,7 @@ class TestBuildWarmthPreamble:
 
         with (
             patch(TRACKING_PATCH, return_value=None),
-            patch(BLOCK_PATCH, return_value={"content": "x" * 5000}),
+            _blocks({"content": "x" * 5000}),
         ):
             result, _ = build_warmth_preamble(config, tmp_path)
         assert len(result) <= MAX_WARMTH_CHARS + 50  # allow for truncation marker
@@ -247,7 +275,7 @@ class TestBuildWarmthPreamble:
 
         with (
             patch(TRACKING_PATCH, side_effect=schedule_side_effect),
-            patch(BLOCK_PATCH, return_value={"content": "block content here"}),
+            _blocks({"content": "block content here"}),
         ):
             result, _ = build_warmth_preamble(config, tmp_path)
 
@@ -281,7 +309,7 @@ class TestBuildInteractivePreamble:
         saved = _CONTEXT_HOOKS.copy()
         _CONTEXT_HOOKS.clear()
         try:
-            with patch(BLOCK_PATCH, return_value=None):
+            with _blocks(None):
                 result = build_interactive_preamble(
                     "main",
                     user_message="hello",
@@ -300,7 +328,7 @@ class TestBuildInteractivePreamble:
         saved = _CONTEXT_HOOKS.copy()
         _CONTEXT_HOOKS.clear()
         try:
-            with patch(BLOCK_PATCH, return_value=None):
+            with _blocks(None):
                 result = build_interactive_preamble(
                     "main",
                     user_message="hello",
@@ -341,7 +369,12 @@ class TestBuildInteractivePreamble:
             mock_cursor = mock_conn.return_value.__enter__.return_value.cursor.return_value
             mock_cursor.return_value = mock_cursor
             mock_cursor.fetchall.return_value = [
-                {"fact_text": "Alice works at Acme", "category": "person", "importance_score": 0.8},
+                {
+                    "fact_text": "Alice works at Acme",
+                    "category": "person",
+                    "importance_score": 0.8,
+                    "candidate_ordinal": 1,
+                },
             ]
 
             result = _build_entity_context(
@@ -366,8 +399,10 @@ class TestBuildInteractivePreamble:
         )
         try:
             with (
-                patch(BLOCK_PATCH, return_value=None),
-                patch("robothor.engine.warmup.enrich_identity", return_value=None) as mock_enrich,
+                _blocks(None),
+                patch(
+                    "robothor.identity.enrichment.enrich_identity", return_value=None
+                ) as mock_enrich,
             ):
                 result = build_interactive_preamble(
                     "main",
@@ -400,8 +435,8 @@ class TestBuildInteractivePreamble:
         enriched = EnrichedIdentity(company="Acme", job_title="Ops Lead")
         try:
             with (
-                patch(BLOCK_PATCH, return_value=None),
-                patch("robothor.engine.warmup.enrich_identity", return_value=enriched),
+                _blocks(None),
+                patch("robothor.identity.enrichment.enrich_identity", return_value=enriched),
             ):
                 result = build_interactive_preamble(
                     "main",
@@ -420,7 +455,7 @@ class TestBuildInteractivePreamble:
         saved = _CONTEXT_HOOKS.copy()
         _CONTEXT_HOOKS.clear()
         try:
-            with patch(BLOCK_PATCH, return_value=None):
+            with _blocks(None):
                 result = build_interactive_preamble(
                     "main",
                     user_message="hello",
@@ -449,8 +484,8 @@ class TestBuildInteractivePreamble:
         _CONTEXT_HOOKS.clear()
         try:
             with (
-                patch(BLOCK_PATCH, return_value=None),
-                patch("robothor.engine.warmup.enrich_identity", return_value=None),
+                _blocks(None),
+                patch("robothor.identity.enrichment.enrich_identity", return_value=None),
                 patch(
                     "robothor.engine.warmup._build_entity_context", return_value=""
                 ) as mock_entity_ctx,
@@ -500,7 +535,7 @@ class TestInteractivePanoramicSections:
         _CONTEXT_HOOKS.clear()
         try:
             with (
-                patch(BLOCK_PATCH, return_value=None),
+                _blocks(None),
                 patch("robothor.crm.dal.list_tasks", return_value=mock_tasks),
                 patch("robothor.engine.warmup._recent_fleet_surfaces", return_value=""),
             ):
@@ -527,7 +562,7 @@ class TestInteractivePanoramicSections:
         _CONTEXT_HOOKS.clear()
         try:
             with (
-                patch(BLOCK_PATCH, return_value=None),
+                _blocks(None),
                 patch("robothor.crm.dal.list_tasks") as mock_list,
             ):
                 result = build_interactive_preamble(
@@ -550,7 +585,7 @@ class TestInteractivePanoramicSections:
         _CONTEXT_HOOKS.clear()
         try:
             with (
-                patch(BLOCK_PATCH, return_value=None),
+                _blocks(None),
                 patch("robothor.crm.dal.list_tasks", return_value=[]),
                 patch(
                     "robothor.engine.warmup._recent_fleet_surfaces",
@@ -581,7 +616,7 @@ class TestInteractivePanoramicSections:
         _CONTEXT_HOOKS.clear()
         try:
             with (
-                patch(BLOCK_PATCH, return_value=None),
+                _blocks(None),
                 patch("robothor.crm.dal.list_tasks", return_value=[]),
                 patch("robothor.engine.warmup._recent_fleet_surfaces", return_value=""),
             ):
@@ -643,8 +678,8 @@ class TestWarmupDataScoping:
         try:
             with (
                 self._mode_env("enforce"),
-                patch(BLOCK_PATCH, side_effect=self._block_side_effect),
-                patch("robothor.engine.warmup.enrich_identity", return_value=None),
+                _blocks(side_effect=self._block_side_effect),
+                patch("robothor.identity.enrichment.enrich_identity", return_value=None),
             ):
                 result = build_interactive_preamble(
                     "main",
@@ -670,8 +705,8 @@ class TestWarmupDataScoping:
         try:
             with (
                 self._mode_env("enforce"),
-                patch(BLOCK_PATCH, side_effect=self._block_side_effect),
-                patch("robothor.engine.warmup.enrich_identity", return_value=None),
+                _blocks(side_effect=self._block_side_effect),
+                patch("robothor.identity.enrichment.enrich_identity", return_value=None),
             ):
                 result = build_interactive_preamble(
                     "main",
@@ -693,8 +728,8 @@ class TestWarmupDataScoping:
         try:
             with (
                 self._mode_env("off"),
-                patch(BLOCK_PATCH, side_effect=self._block_side_effect),
-                patch("robothor.engine.warmup.enrich_identity", return_value=None),
+                _blocks(side_effect=self._block_side_effect),
+                patch("robothor.identity.enrichment.enrich_identity", return_value=None),
             ):
                 result = build_interactive_preamble(
                     "main",
@@ -716,7 +751,7 @@ class TestWarmupDataScoping:
         try:
             with (
                 self._mode_env("enforce"),
-                patch(BLOCK_PATCH, side_effect=self._block_side_effect),
+                _blocks(side_effect=self._block_side_effect),
             ):
                 result = build_interactive_preamble(
                     "main",
@@ -738,8 +773,8 @@ class TestWarmupDataScoping:
         try:
             with (
                 self._mode_env("observe"),
-                patch(BLOCK_PATCH, side_effect=self._block_side_effect),
-                patch("robothor.engine.warmup.enrich_identity", return_value=None),
+                _blocks(side_effect=self._block_side_effect),
+                patch("robothor.identity.enrichment.enrich_identity", return_value=None),
             ):
                 result = build_interactive_preamble(
                     "main",
@@ -804,9 +839,9 @@ class TestWarmupDataScoping:
             mock_cursor = mock_conn.return_value.__enter__.return_value.cursor.return_value
             mock_cursor.fetchall.return_value = [
                 {"fact_text": "own fact", "category": "x", "importance_score": 0.9,
-                 "person_id": "person-1"},
+                 "person_id": "person-1", "candidate_ordinal": 1},
                 {"fact_text": "someone else's fact", "category": "x", "importance_score": 0.9,
-                 "person_id": "person-9"},
+                 "person_id": "person-9", "candidate_ordinal": 1},
             ]  # fmt: skip
 
             result = _build_entity_context(
@@ -831,8 +866,8 @@ class TestWarmupDataScoping:
         try:
             with (
                 self._mode_env("enforce"),
-                patch(BLOCK_PATCH, return_value=None),
-                patch("robothor.engine.warmup.enrich_identity", return_value=None),
+                _blocks(None),
+                patch("robothor.identity.enrichment.enrich_identity", return_value=None),
                 patch(
                     "robothor.engine.warmup._build_entity_context", return_value=""
                 ) as mock_entity_ctx,
@@ -870,8 +905,8 @@ class TestWarmupDataScoping:
         try:
             with (
                 self._mode_env("enforce"),
-                patch(BLOCK_PATCH, return_value=None),
-                patch("robothor.engine.warmup.enrich_identity", return_value=None),
+                _blocks(None),
+                patch("robothor.identity.enrichment.enrich_identity", return_value=None),
                 patch("robothor.crm.dal.list_tasks", return_value=[]) as mock_list,
                 patch("robothor.engine.warmup._recent_fleet_surfaces", return_value=""),
             ):
@@ -896,8 +931,8 @@ class TestWarmupDataScoping:
         try:
             with (
                 self._mode_env("off"),
-                patch(BLOCK_PATCH, return_value=None),
-                patch("robothor.engine.warmup.enrich_identity", return_value=None),
+                _blocks(None),
+                patch("robothor.identity.enrichment.enrich_identity", return_value=None),
                 patch("robothor.crm.dal.list_tasks", return_value=[]) as mock_list,
                 patch("robothor.engine.warmup._recent_fleet_surfaces", return_value=""),
             ):
@@ -930,8 +965,8 @@ class TestWarmupDataScoping:
         try:
             with (
                 self._mode_env("observe"),
-                patch(BLOCK_PATCH, return_value=None),
-                patch("robothor.engine.warmup.enrich_identity", return_value=None),
+                _blocks(None),
+                patch("robothor.identity.enrichment.enrich_identity", return_value=None),
                 patch("robothor.crm.dal.list_tasks", return_value=mock_tasks),
                 patch("robothor.engine.warmup._recent_fleet_surfaces", return_value=""),
             ):
@@ -958,8 +993,8 @@ class TestWarmupDataScoping:
         try:
             with (
                 self._mode_env("enforce"),
-                patch(BLOCK_PATCH, return_value=None),
-                patch("robothor.engine.warmup.enrich_identity", return_value=None),
+                _blocks(None),
+                patch("robothor.identity.enrichment.enrich_identity", return_value=None),
                 patch("robothor.crm.dal.list_tasks", return_value=[]),
                 patch("robothor.db.get_connection") as mock_conn,
             ):
@@ -986,8 +1021,8 @@ class TestWarmupDataScoping:
         try:
             with (
                 self._mode_env("enforce"),
-                patch(BLOCK_PATCH, return_value=None),
-                patch("robothor.engine.warmup.enrich_identity", return_value=None),
+                _blocks(None),
+                patch("robothor.identity.enrichment.enrich_identity", return_value=None),
                 patch("robothor.crm.dal.list_tasks", return_value=[]),
                 patch("robothor.db.get_connection") as mock_conn,
             ):
@@ -1014,8 +1049,8 @@ class TestWarmupDataScoping:
         try:
             with (
                 self._mode_env("off"),
-                patch(BLOCK_PATCH, return_value=None),
-                patch("robothor.engine.warmup.enrich_identity", return_value=None),
+                _blocks(None),
+                patch("robothor.identity.enrichment.enrich_identity", return_value=None),
                 patch("robothor.crm.dal.list_tasks", return_value=[]),
                 patch("robothor.db.get_connection") as mock_conn,
             ):
@@ -1046,8 +1081,8 @@ class TestWarmupDataScoping:
         try:
             with (
                 self._mode_env("observe"),
-                patch(BLOCK_PATCH, return_value=None),
-                patch("robothor.engine.warmup.enrich_identity", return_value=None),
+                _blocks(None),
+                patch("robothor.identity.enrichment.enrich_identity", return_value=None),
                 patch("robothor.crm.dal.list_tasks", return_value=[]),
                 patch("robothor.db.get_connection") as mock_conn,
             ):

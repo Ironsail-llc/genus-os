@@ -26,7 +26,10 @@ from robothor.engine import warmup
 
 
 def _entity_sql() -> str:
-    return inspect.getsource(warmup._build_entity_context)
+    # The statement lives in the batched fetch; one query covers every candidate.
+    return inspect.getsource(warmup._build_entity_context) + inspect.getsource(
+        warmup._fetch_entity_facts_batched
+    )
 
 
 def test_the_predicate_is_an_indexable_array_overlap():
@@ -44,7 +47,7 @@ def test_the_unindexable_unnest_predicate_is_gone():
 def test_matching_is_still_case_insensitive():
     """Dropping lower() would silently lose 37% of matches on this data."""
     sql = _entity_sql()
-    assert "lower(%s)" in sql or "lower(%(entity)s)" in sql, (
+    assert "ARRAY[lower(c.name)]" in sql, (
         "the probe value is no longer lowercased — matching became case-sensitive"
     )
 

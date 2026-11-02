@@ -271,8 +271,7 @@ down or restarting the decision still stands and the old window applies. When a
 revoke looks like it did not take, check the engine log for a refused reload
 before assuming the row is wrong.
 
-With `ROBOTHOR_WARMUP_PARALLEL` on, the CRM and memory-graph enrichment behind
-the `CURRENT USER` block (`identity.enrichment`) is held per chat session (one
+The CRM and memory-graph enrichment behind the `CURRENT USER` block (`identity.enrichment`) is held per chat session (one
 agent and one caller) for up to 15 minutes rather than 60 s. A decision that
 changes who the caller resolves to — a different person, role or verification
 state — produces a different identity and recomputes it on the next turn; a

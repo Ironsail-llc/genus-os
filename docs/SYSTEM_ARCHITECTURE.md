@@ -1229,12 +1229,12 @@ hooks run from the cron builder alone, and the operator was in *chat* when the
 stale fact was asserted, so a section only on the cron path would have missed
 the channel the incident happened on.
 
-**Interactive sections can run in parallel.** With `ROBOTHOR_WARMUP_PARALLEL`
-on (default off), `build_interactive_preamble` runs its sections — identity,
+**Interactive sections can run in parallel.** `build_interactive_preamble` runs
+its sections — identity,
 memory blocks, entity context, context hooks, host state, open tasks, fleet
 surfaces, agent goal — on a small bounded thread pool and joins them in that
 order, so the text is identical and the turn waits for the slowest section, not
-the sum. It fans out only when the agent's previous flagged warmup had a section
+the sum. It fans out only when the agent's previous warmup had a section
 slower than 30 ms (`FAN_OUT_MIN_SECTION_SECONDS`): on a fast database the thread
 hand-offs cost more than the queries they overlap, so the sections stay in
 place and only the statement savings below apply. Memory blocks are read in one `SELECT`
