@@ -1,11 +1,10 @@
-"""Router v2: a long chat message no longer buys a separate planner LLM call.
+"""A long chat message does not buy a separate planner LLM call.
 
-Today any message over 500 characters is classified ``complex`` and the
-complex preset requests planning, so every long Telegram/webchat/plugin-channel
-turn pays for an auxiliary planner call before the tool loop starts. Behind
-``ROBOTHOR_ROUTER_V2`` that length heuristic stops forcing the planner for
-interactive triggers; planning is still requested by plan mode, by the agent's
-manifest, or by a cheap LLM-free signal that the message lists several steps.
+Any message over 500 characters is classified ``complex`` and the complex
+preset requests planning. For a Telegram, webchat or plugin-channel turn that
+length heuristic does not force the planner; planning is still requested by
+plan mode, by the agent's manifest, or by a cheap LLM-free signal that the
+message lists several steps. Scheduled and workflow runs keep the length rule.
 
 The LLM is a fake: every ``litellm.acompletion`` call is recorded, and a call
 carrying ``response_format=json_object`` is the planner's (the tool loop never
@@ -115,34 +114,21 @@ async def _turn(runner, agent, message: str, **kwargs: Any) -> tuple[Any, FakeLL
 @pytest.mark.usefixtures("_mock_run_persistence")
 class TestLongChatTurn:
     @pytest.mark.asyncio
-    async def test_flag_on_long_prose_makes_no_planner_call(self, runner, chat_agent, monkeypatch):
-        monkeypatch.setenv("ROBOTHOR_ROUTER_V2", "1")
+    async def test_long_prose_makes_no_planner_call(self, runner, chat_agent):
         run, fake = await _turn(runner, chat_agent, LONG_PROSE)
         assert run.status == RunStatus.COMPLETED
         assert fake.planner_calls == 0
         assert len(fake.calls) == 1
 
     @pytest.mark.asyncio
-    async def test_flag_off_reproduces_todays_planner_call(self, runner, chat_agent, monkeypatch):
-        monkeypatch.delenv("ROBOTHOR_ROUTER_V2", raising=False)
-        run, fake = await _turn(runner, chat_agent, LONG_PROSE)
-        assert run.status == RunStatus.COMPLETED
-        assert fake.planner_calls == 1
-        assert len(fake.calls) == 2
-
-    @pytest.mark.asyncio
-    async def test_flag_on_plan_mode_still_plans(self, runner, chat_agent, monkeypatch):
-        monkeypatch.setenv("ROBOTHOR_ROUTER_V2", "1")
+    async def test_plan_mode_still_plans(self, runner, chat_agent):
         _run, fake = await _turn(runner, chat_agent, LONG_PROSE, readonly_mode=True)
         assert fake.planner_calls == 1
 
     @pytest.mark.asyncio
-    async def test_flag_on_manifest_planning_plans_and_applies_deadline_once(
-        self, runner, chat_agent, monkeypatch
-    ):
+    async def test_manifest_planning_plans_and_applies_deadline_once(self, runner, chat_agent):
         from robothor.engine.runtime import classified_deadline
 
-        monkeypatch.setenv("ROBOTHOR_ROUTER_V2", "1")
         chat_agent.planning_enabled = True
         applied: list[bool] = []
         real_apply = classified_deadline.apply
@@ -161,26 +147,21 @@ class TestLongChatTurn:
         assert persist.call_count <= 1
 
     @pytest.mark.asyncio
-    async def test_flag_on_explicit_steps_still_plan(self, runner, chat_agent, monkeypatch):
-        monkeypatch.setenv("ROBOTHOR_ROUTER_V2", "1")
+    async def test_explicit_steps_still_plan(self, runner, chat_agent):
         message = _numbered(3) + "\n" + LONG_PROSE
         _run, fake = await _turn(runner, chat_agent, message)
         assert fake.planner_calls == 1
 
 
 def _route(cfg, message: str, trigger: TriggerType, readonly_mode: bool = False):
-    from robothor.engine.router import chat_turn_v2
+    from robothor.engine.router import is_chat_turn
     from robothor.engine.run_lifecycle import RunLifecycleMixin
 
-    chat_turn = chat_turn_v2(trigger, readonly_mode, "", None)
+    chat_turn = is_chat_turn(trigger, readonly_mode, "", None)
     return RunLifecycleMixin._apply_routing(None, cfg, message, 0, chat_turn=chat_turn)
 
 
 class TestRouteSignal:
-    @pytest.fixture(autouse=True)
-    def _on(self, monkeypatch):
-        monkeypatch.setenv("ROBOTHOR_ROUTER_V2", "1")
-
     @pytest.mark.parametrize(
         "trigger", [TriggerType.TELEGRAM, TriggerType.WEBCHAT, TriggerType.CHANNEL]
     )
@@ -230,7 +211,26 @@ class TestRouteSignal:
         route = _route(chat_agent, LONG_PROSE, TriggerType.WEBCHAT, readonly_mode=True)
         assert route.planning is True
 
-    def test_flag_off_is_unchanged(self, chat_agent, monkeypatch):
-        monkeypatch.delenv("ROBOTHOR_ROUTER_V2", raising=False)
-        route = _route(chat_agent, LONG_PROSE, TriggerType.WEBCHAT)
-        assert route.planning is True
+
+class TestNoRouterFlag:
+    """The chat-turn routing is the only code path: no switch turns it off."""
+
+    def test_feature_flags_has_no_router_reader(self):
+        from robothor.engine import feature_flags
+
+        assert not [name for name in dir(feature_flags) if "router" in name.lower()]
+
+    def test_feature_flags_source_does_not_name_the_variable(self):
+        import inspect
+
+        from robothor.engine import feature_flags
+
+        assert "ROBOTHOR_ROUTER_V2" not in inspect.getsource(feature_flags)
+
+    @pytest.mark.asyncio
+    @pytest.mark.usefixtures("_mock_run_persistence")
+    async def test_env_var_set_off_still_skips_the_planner(self, runner, chat_agent, monkeypatch):
+        monkeypatch.setenv("ROBOTHOR_ROUTER_V2", "0")
+        run, fake = await _turn(runner, chat_agent, LONG_PROSE)
+        assert run.status == RunStatus.COMPLETED
+        assert fake.planner_calls == 0
