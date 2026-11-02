@@ -1430,7 +1430,7 @@ async def main() -> int:
     # daemon running this same code inherits none of them — which is exactly
     # what happened here for four days, silently.
     _harden_and_state_posture()
-    install_lane_executor(asyncio.get_running_loop())  # ROBOTHOR_EXECUTION_LANES
+    install_lane_executor(asyncio.get_running_loop())
 
     # A tenant env conflict silently discards every default-tenant write in this
     # process (RLS refuses the row, the caller gets None). Say so at boot rather

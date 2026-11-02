@@ -133,7 +133,7 @@ def _execution_lanes_block() -> dict[str, Any]:
         return get_lanes().snapshot()
     except Exception:
         logger.warning("Execution lanes snapshot failed", exc_info=True)
-        return {"enabled": False, "available": False}
+        return {"available": False}
 
 
 def _execution_mode_block() -> dict[str, Any]:

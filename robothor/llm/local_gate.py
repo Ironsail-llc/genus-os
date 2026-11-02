@@ -94,16 +94,6 @@ class Lane(StrEnum):
     BACKGROUND = "background"  # cron, sweeps, memory maintenance; yields first
 
 
-def _lanes_on() -> bool:
-    """``ROBOTHOR_EXECUTION_LANES``. Off when unreadable: today's first-come gate."""
-    try:
-        from robothor.engine.lanes import lanes_enabled
-
-        return lanes_enabled()
-    except Exception:  # noqa: BLE001 - a gate must not fail on a flag read
-        return False
-
-
 def _turn_is_interactive() -> bool:
     """Is this request made from inside a person's turn (an interactive lane)?"""
     try:
@@ -142,7 +132,7 @@ class LocalInferenceGate:
         self._slots = max(1, int(slots))
         self._active = 0
         self._paced = False
-        # Interactive requests waiting for a slot (execution lanes only).
+        # Interactive requests waiting for a slot.
         self._interactive_waiting = 0
 
     # ── capacity ────────────────────────────────────────────────────────
@@ -168,13 +158,13 @@ class LocalInferenceGate:
             self._slots = new
             self._cv.notify_all()
 
-    def _try_take(self, priority: bool | None = None) -> bool:
-        """Take a slot. ``priority`` is None with execution lanes off (first come,
-        first served); otherwise True for an interactive request, which alone may
-        use the slot held back when there are two or more, and goes first."""
+    def _try_take(self, priority: bool) -> bool:
+        """Take a slot. ``priority`` is True for an interactive request, which
+        alone may use the slot held back when there are two or more, and goes
+        first."""
         with self._cv:
             limit = self._slots
-            if priority is False:
+            if not priority:
                 if self._interactive_waiting > 0:
                     return False
                 if self._slots >= 2:
@@ -218,17 +208,15 @@ class LocalInferenceGate:
         return False
 
     # ── acquisition ─────────────────────────────────────────────────────
-    def _priority(self, lane: Lane) -> bool | None:
-        """None with execution lanes off; else whether this request is interactive.
+    def _priority(self, lane: Lane) -> bool:
+        """Whether this request is interactive.
 
         Pacing still reads ``lane`` as passed: a NORMAL request made inside a
         person's turn may use the reserved slot, but it is not exempt from heat.
         """
-        if not _lanes_on():
-            return None
         return lane is Lane.INTERACTIVE or _turn_is_interactive()
 
-    def _count_interactive_waiter(self, priority: bool | None, delta: int) -> None:
+    def _count_interactive_waiter(self, priority: bool, delta: int) -> None:
         """Track interactive requests in the queue, which background work defers to."""
         if priority:
             with self._cv:

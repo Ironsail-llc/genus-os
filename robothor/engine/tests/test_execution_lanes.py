@@ -6,15 +6,13 @@ with a person's chat turn, and hook runs share one fleet-wide semaphore. A burst
 of scheduled runs therefore delays a reply: the turn's blocking calls queue for
 a worker behind blocking background work.
 
-Behind ``ROBOTHOR_EXECUTION_LANES`` each lane gets its own concurrency limit and
-its own thread executor. With the flag off nothing changes.
+So each lane gets its own concurrency limit and its own thread executor.
 """
 
 from __future__ import annotations
 
 import asyncio
 import time
-from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
 import pytest
@@ -22,19 +20,6 @@ import pytest
 from robothor.engine import lanes
 from robothor.engine.lanes import ExecutionLanes, Lane
 from robothor.engine.models import TriggerType
-
-
-@pytest.fixture
-def lanes_on(monkeypatch):
-    monkeypatch.setenv("ROBOTHOR_EXECUTION_LANES", "1")
-    monkeypatch.delenv("ROBOTHOR_DISABLE_ALL_RIPS", raising=False)
-    yield
-
-
-@pytest.fixture
-def lanes_off(monkeypatch):
-    monkeypatch.delenv("ROBOTHOR_EXECUTION_LANES", raising=False)
-    yield
 
 
 @pytest.fixture(autouse=True)
@@ -81,7 +66,7 @@ class TestTriggersMapToLanes:
 
 
 class TestInteractiveIsNotQueuedBehindBackground:
-    async def test_interactive_slot_within_100ms_while_background_is_saturated(self, lanes_on):
+    async def test_interactive_slot_within_100ms_while_background_is_saturated(self):
         pool = ExecutionLanes(interactive_limit=3, background_limit=2, yield_ms=200)
         release = asyncio.Event()
         holders = []
@@ -99,9 +84,7 @@ class TestInteractiveIsNotQueuedBehindBackground:
         release.set()
         await asyncio.gather(*holders)
 
-    async def test_an_interactive_run_starts_within_100ms_through_the_run_gate(
-        self, lanes_on, monkeypatch
-    ):
+    async def test_an_interactive_run_starts_within_100ms_through_the_run_gate(self, monkeypatch):
         pool = ExecutionLanes(interactive_limit=3, background_limit=2, yield_ms=200)
         monkeypatch.setattr(lanes, "_LANES", pool)
         release = asyncio.Event()
@@ -137,7 +120,7 @@ class TestInteractiveIsNotQueuedBehindBackground:
 
 
 class TestBackgroundLaneIsBounded:
-    async def test_a_third_background_run_waits_for_a_free_slot(self, lanes_on):
+    async def test_a_third_background_run_waits_for_a_free_slot(self):
         pool = ExecutionLanes(interactive_limit=3, background_limit=2, yield_ms=200)
         release = asyncio.Event()
         holders = []
@@ -158,7 +141,7 @@ class TestBackgroundLaneIsBounded:
         await asyncio.gather(*holders, third, return_exceptions=True)
         assert pool.snapshot()["background"]["active"] == 0
 
-    async def test_a_nested_run_takes_no_second_slot(self, lanes_on, monkeypatch):
+    async def test_a_nested_run_takes_no_second_slot(self, monkeypatch):
         """A run that starts a sub-agent must not wait on its own lane."""
         pool = ExecutionLanes(interactive_limit=1, background_limit=1, yield_ms=200)
         monkeypatch.setattr(lanes, "_LANES", pool)
@@ -177,7 +160,7 @@ class TestBackgroundLaneIsBounded:
         )
         assert seen == [1, 1]
 
-    async def test_a_slot_is_released_when_the_run_raises(self, lanes_on):
+    async def test_a_slot_is_released_when_the_run_raises(self):
         pool = ExecutionLanes(interactive_limit=1, background_limit=1, yield_ms=200)
         with pytest.raises(RuntimeError):
             async with pool.slot(Lane.BACKGROUND):
@@ -186,7 +169,7 @@ class TestBackgroundLaneIsBounded:
 
 
 class TestBackgroundYieldsToAWaitingInteractiveTurn:
-    async def test_background_waits_at_most_the_yield_window(self, lanes_on):
+    async def test_background_waits_at_most_the_yield_window(self):
         pool = ExecutionLanes(interactive_limit=1, background_limit=2, yield_ms=100)
         release = asyncio.Event()
         started = asyncio.Event()
@@ -207,7 +190,7 @@ class TestBackgroundYieldsToAWaitingInteractiveTurn:
         release.set()
         await asyncio.gather(holder, waiter)
 
-    async def test_background_does_not_wait_when_nobody_is_waiting(self, lanes_on):
+    async def test_background_does_not_wait_when_nobody_is_waiting(self):
         pool = ExecutionLanes(interactive_limit=1, background_limit=2, yield_ms=500)
         t0 = time.perf_counter()
         async with pool.slot(Lane.BACKGROUND):
@@ -216,9 +199,7 @@ class TestBackgroundYieldsToAWaitingInteractiveTurn:
 
 
 class TestSeparateExecutors:
-    async def test_saturated_background_executor_does_not_delay_interactive_to_thread(
-        self, lanes_on
-    ):
+    async def test_saturated_background_executor_does_not_delay_interactive_to_thread(self):
         loop = asyncio.get_running_loop()
         executor = lanes.LaneExecutor(interactive_workers=2, background_workers=2)
         loop.set_default_executor(executor)
@@ -238,7 +219,7 @@ class TestSeparateExecutors:
         finally:
             executor.shutdown(wait=True)
 
-    async def test_untagged_work_runs_on_the_background_executor(self, lanes_on):
+    async def test_untagged_work_runs_on_the_background_executor(self):
         loop = asyncio.get_running_loop()
         executor = lanes.LaneExecutor(interactive_workers=1, background_workers=1)
         loop.set_default_executor(executor)
@@ -253,48 +234,9 @@ class TestSeparateExecutors:
         finally:
             executor.shutdown(wait=True)
 
-    async def test_install_sets_the_lane_executor_when_on(self, lanes_on):
-        loop = asyncio.new_event_loop()
-        try:
-            assert lanes.install_lane_executor(loop) is True
-            assert isinstance(loop._default_executor, lanes.LaneExecutor)
-        finally:
-            loop.close()
 
-
-class TestFlagOffIsToday:
-    def test_the_flag_defaults_off(self, lanes_off):
-        assert lanes.lanes_enabled() is False
-
-    async def test_no_lane_slot_is_taken(self, lanes_off, monkeypatch):
-        pool = ExecutionLanes(interactive_limit=1, background_limit=1, yield_ms=200)
-        monkeypatch.setattr(lanes, "_LANES", pool)
-        seen: list[int] = []
-
-        class FakeRunner:
-            @lanes.lane_gated
-            async def execute(self, agent_id, message, trigger_type=TriggerType.MANUAL):
-                snap = pool.snapshot()
-                seen.append(snap["background"]["active"] + snap["interactive"]["active"])
-                return agent_id
-
-        runner = FakeRunner()
-        await asyncio.gather(
-            *[runner.execute(f"a{i}", "m", trigger_type=TriggerType.CRON) for i in range(3)]
-        )
-        assert seen == [0, 0, 0]
-
-    def test_install_leaves_the_default_executor_alone(self, lanes_off):
-        loop = asyncio.new_event_loop()
-        try:
-            before = ThreadPoolExecutor(max_workers=1)
-            loop.set_default_executor(before)
-            assert lanes.install_lane_executor(loop) is False
-            assert loop._default_executor is before
-        finally:
-            loop.close()
-
-    async def test_hook_runs_keep_the_single_fleet_semaphore(self, lanes_off):
+class TestHookRunsKeepTheFleetLimit:
+    async def test_hook_runs_keep_the_single_fleet_semaphore(self):
         from robothor.engine.hooks import EventHooks
 
         config = SimpleNamespace(max_concurrent_agents=2)
@@ -309,20 +251,19 @@ class TestFlagOffIsToday:
 
 
 class TestOccupancyIsVisible:
-    def test_snapshot_reports_each_lane(self, lanes_on):
+    def test_snapshot_reports_each_lane(self):
         snap = ExecutionLanes(interactive_limit=3, background_limit=2, yield_ms=200).snapshot()
-        assert snap["enabled"] is True
         assert snap["interactive"] == {"active": 0, "waiting": 0, "limit": 3}
         assert snap["background"] == {"active": 0, "waiting": 0, "limit": 2}
 
-    def test_limits_come_from_the_environment(self, lanes_on, monkeypatch):
+    def test_limits_come_from_the_environment(self, monkeypatch):
         monkeypatch.setenv("ROBOTHOR_MAX_CONCURRENT_INTERACTIVE", "4")
         monkeypatch.setenv("ROBOTHOR_MAX_CONCURRENT_BACKGROUND", "1")
         snap = lanes.get_lanes().snapshot()
         assert snap["interactive"]["limit"] == 4
         assert snap["background"]["limit"] == 1
 
-    def test_limits_come_from_config_yaml(self, lanes_on, monkeypatch, tmp_path):
+    def test_limits_come_from_config_yaml(self, monkeypatch, tmp_path):
         """The three lane settings are declared settings, so config.yaml sets them."""
         for name in (
             "ROBOTHOR_MAX_CONCURRENT_INTERACTIVE",
@@ -346,14 +287,14 @@ class TestOccupancyIsVisible:
         assert snap["background"]["limit"] == 3
         assert pool._yield_s == 0
 
-    def test_an_invalid_value_falls_back_to_the_defaults(self, lanes_on, monkeypatch):
+    def test_an_invalid_value_falls_back_to_the_defaults(self, monkeypatch):
         """A bad value must not stop every run from taking a slot."""
         monkeypatch.setenv("ROBOTHOR_MAX_CONCURRENT_BACKGROUND", "many")
         snap = lanes.get_lanes().snapshot()
         assert snap["background"]["limit"] == lanes.DEFAULT_BACKGROUND_LIMIT
         assert snap["interactive"]["limit"] == lanes.DEFAULT_INTERACTIVE_LIMIT
 
-    def test_default_limits(self, lanes_on, monkeypatch):
+    def test_default_limits(self, monkeypatch):
         monkeypatch.delenv("ROBOTHOR_MAX_CONCURRENT_INTERACTIVE", raising=False)
         monkeypatch.delenv("ROBOTHOR_MAX_CONCURRENT_BACKGROUND", raising=False)
         snap = lanes.get_lanes().snapshot()
@@ -362,7 +303,7 @@ class TestOccupancyIsVisible:
         assert snap["interactive"]["limit"] == 0
         assert snap["background"]["limit"] == 2
 
-    async def test_prometheus_gauges_track_occupancy(self, lanes_on):
+    async def test_prometheus_gauges_track_occupancy(self):
         from prometheus_client import REGISTRY
 
         pool = ExecutionLanes(interactive_limit=3, background_limit=2, yield_ms=200)
@@ -371,17 +312,16 @@ class TestOccupancyIsVisible:
         assert REGISTRY.get_sample_value("robothor_lane_active", {"lane": "background"}) == 0
         assert REGISTRY.get_sample_value("robothor_lane_waiting", {"lane": "interactive"}) == 0
 
-    def test_health_has_the_execution_lanes_block(self, lanes_on):
+    def test_health_has_the_execution_lanes_block(self):
         from robothor.engine.tests.test_health_execution_mode import _health
 
         block = _health()["execution_lanes"]
-        assert block["enabled"] is True
-        assert set(block) >= {"enabled", "interactive", "background"}
+        assert set(block) >= {"interactive", "background"}
         assert block["background"]["limit"] >= 1
 
 
 class TestCancelledWaiters:
-    async def test_a_cancelled_waiter_never_frees_a_slot_twice(self, lanes_on):
+    async def test_a_cancelled_waiter_never_frees_a_slot_twice(self):
         pool = ExecutionLanes(interactive_limit=1, background_limit=2, yield_ms=0)
         await pool.acquire(Lane.BACKGROUND)
         await pool.acquire(Lane.BACKGROUND)
@@ -394,7 +334,7 @@ class TestCancelledWaiters:
         # One run still holds its slot.
         assert pool.snapshot()["background"] == {"active": 1, "waiting": 0, "limit": 2}
 
-    async def test_a_waiter_cancelled_after_the_handover_passes_the_slot_on(self, lanes_on):
+    async def test_a_waiter_cancelled_after_the_handover_passes_the_slot_on(self):
         pool = ExecutionLanes(interactive_limit=1, background_limit=1, yield_ms=0)
         await pool.acquire(Lane.BACKGROUND)
         first = asyncio.create_task(pool.acquire(Lane.BACKGROUND))
@@ -411,7 +351,7 @@ class TestCancelledWaiters:
 
 
 class TestInteractiveIsUncappedByDefault:
-    async def test_ten_concurrent_interactive_runs_all_start_at_once(self, lanes_on, monkeypatch):
+    async def test_ten_concurrent_interactive_runs_all_start_at_once(self, monkeypatch):
         monkeypatch.delenv("ROBOTHOR_MAX_CONCURRENT_INTERACTIVE", raising=False)
         pool = lanes.get_lanes()
         release = asyncio.Event()
@@ -426,7 +366,7 @@ class TestInteractiveIsUncappedByDefault:
         release.set()
         await asyncio.gather(*holders)
 
-    async def test_an_explicit_interactive_cap_still_bounds(self, lanes_on):
+    async def test_an_explicit_interactive_cap_still_bounds(self):
         pool = ExecutionLanes(interactive_limit=1, background_limit=1, yield_ms=0)
         release = asyncio.Event()
         first = asyncio.Event()
@@ -443,9 +383,7 @@ class TestInteractiveIsUncappedByDefault:
 class TestWorkThatOutlivesItsRun:
     """A task created inside a run must not ride on the run's slot after it ends."""
 
-    async def test_a_run_started_after_the_parent_released_takes_its_own_slot(
-        self, lanes_on, monkeypatch
-    ):
+    async def test_a_run_started_after_the_parent_released_takes_its_own_slot(self, monkeypatch):
         pool = ExecutionLanes(interactive_limit=0, background_limit=2, yield_ms=0)
         monkeypatch.setattr(lanes, "_LANES", pool)
         parent_done = asyncio.Event()
@@ -471,7 +409,7 @@ class TestWorkThatOutlivesItsRun:
         await asyncio.wait_for(forks[0], timeout=1.0)
         assert seen == {"background_active": 1, "lane": Lane.BACKGROUND}
 
-    async def test_work_left_running_after_an_interactive_run_is_background(self, lanes_on):
+    async def test_work_left_running_after_an_interactive_run_is_background(self):
         """Its thread calls and local inference must not count as a person's turn."""
         pool = ExecutionLanes(interactive_limit=0, background_limit=2, yield_ms=0)
         parent_done = asyncio.Event()
@@ -498,9 +436,7 @@ class TestWorkThatOutlivesItsRun:
         await tasks[0]
         assert seen == [Lane.BACKGROUND, False]
 
-    async def test_the_background_review_fork_is_detached_from_the_turn(
-        self, lanes_on, monkeypatch
-    ):
+    async def test_the_background_review_fork_is_detached_from_the_turn(self, monkeypatch):
         from robothor.engine import background_review
 
         seen: list[object] = []

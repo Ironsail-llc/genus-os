@@ -244,10 +244,10 @@ gone.
 
 ## Execution lanes
 
-With `ROBOTHOR_EXECUTION_LANES` on ([Configuration](configuration.md)), the
-engine reports how full each lane is. `GET /health` carries an
-`execution_lanes` block with `enabled` and, for `interactive` and `background`,
-`active`, `waiting` and `limit`. `/metrics` has the gauges
+The engine reports how full each execution lane is
+([Configuration](configuration.md)). `GET /health` carries an
+`execution_lanes` block with, for `interactive` and `background`, `active`,
+`waiting` and `limit`. `/metrics` has the gauges
 `robothor_lane_active{lane}` and `robothor_lane_waiting{lane}`. During a burst
 of scheduled runs, background `waiting` rising while interactive `waiting`
 stays at 0 is the lanes doing their job; background `waiting` that never

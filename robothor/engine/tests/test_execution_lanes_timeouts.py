@@ -21,12 +21,6 @@ from robothor.engine.lanes import ExecutionLanes, Lane
 
 
 @pytest.fixture
-def lanes_on(monkeypatch):
-    monkeypatch.setenv("ROBOTHOR_EXECUTION_LANES", "1")
-    monkeypatch.delenv("ROBOTHOR_DISABLE_ALL_RIPS", raising=False)
-
-
-@pytest.fixture
 def pool(monkeypatch):
     pool = ExecutionLanes(interactive_limit=0, background_limit=1, yield_ms=0)
     monkeypatch.setattr(lanes, "_LANES", pool)
@@ -70,7 +64,7 @@ def _scheduler(monkeypatch, execute):
 
 class TestTheSchedulerClockStartsAfterTheSlot:
     async def test_a_queued_cron_run_does_not_start_its_safety_clock(
-        self, lanes_on, pool, clock_entries, monkeypatch
+        self, pool, clock_entries, monkeypatch
     ):
         ran = asyncio.Event()
 
@@ -93,7 +87,7 @@ class TestTheSchedulerClockStartsAfterTheSlot:
         s._record_timeout.assert_not_called()
         assert pool.snapshot()["background"]["active"] == 0
 
-    async def test_the_run_inside_takes_no_second_slot(self, lanes_on, pool, monkeypatch):
+    async def test_the_run_inside_takes_no_second_slot(self, pool, monkeypatch):
         seen: list[int] = []
 
         class FakeRunner:
@@ -115,21 +109,6 @@ class TestTheSchedulerClockStartsAfterTheSlot:
         )
         assert seen == [1]
 
-    async def test_flag_off_takes_no_slot(self, pool, clock_entries, monkeypatch):
-        monkeypatch.delenv("ROBOTHOR_EXECUTION_LANES", raising=False)
-
-        async def execute(*args, **kwargs):
-            return None
-
-        s = _scheduler(monkeypatch, execute)
-        await pool.acquire(Lane.BACKGROUND)
-        await asyncio.wait_for(
-            s._run_scheduled("example-agent", "example-agent", MagicMock(timeout_seconds=1), "c"),
-            timeout=1.0,
-        )
-        assert clock_entries == [{"active": 1, "waiting": 0}]
-        pool.release(Lane.BACKGROUND)
-
 
 def _one_step_workflow_engine(tmp_path, *, timeout_seconds: int):
     """A workflow engine holding one single-step workflow, `test-wf`."""
@@ -149,7 +128,7 @@ def _one_step_workflow_engine(tmp_path, *, timeout_seconds: int):
 
 class TestTheWorkflowClockStartsAfterTheSlot:
     async def test_a_queued_workflow_does_not_start_its_timeout(
-        self, lanes_on, pool, clock_entries, tmp_path
+        self, pool, clock_entries, tmp_path
     ):
         engine = _one_step_workflow_engine(tmp_path, timeout_seconds=1)
         engine._persist_run_start = MagicMock()
@@ -209,9 +188,7 @@ class TestAQueuedWorkflowIsNotYetRunning:
     time, so the stuck-run alert, the reaper and duration_ms never read time
     queued as time running."""
 
-    async def test_the_row_is_pending_until_the_slot_is_taken(
-        self, lanes_on, pool, tmp_path, monkeypatch
-    ):
+    async def test_the_row_is_pending_until_the_slot_is_taken(self, pool, tmp_path, monkeypatch):
         log: list[tuple[str, Any]] = []
         monkeypatch.setattr(
             "robothor.db.connection.get_connection", lambda *a, **k: _RecordingConn(log)
@@ -246,19 +223,6 @@ class TestAQueuedWorkflowIsNotYetRunning:
         assert marked, "the row never moved to running once the slot was taken"
         assert any(isinstance(v, datetime) and v >= released_at for v in marked[0])
 
-    async def test_flag_off_starts_running_as_before(self, pool, tmp_path, monkeypatch):
-        monkeypatch.delenv("ROBOTHOR_EXECUTION_LANES", raising=False)
-        log: list[tuple[str, Any]] = []
-        monkeypatch.setattr(
-            "robothor.db.connection.get_connection", lambda *a, **k: _RecordingConn(log)
-        )
-        engine = _one_step_workflow_engine(tmp_path, timeout_seconds=5)
-        engine._persist_step = MagicMock()
-
-        run = await asyncio.wait_for(engine.execute("test-wf"), timeout=2.0)
-        assert run.status.value == "completed"
-        assert run.started_at is not None
-
 
 class TestAPendingRowIsReapedAfterACrash:
     def test_the_reaper_also_closes_pending_rows_left_by_a_dead_engine(self, monkeypatch):
@@ -276,7 +240,7 @@ class TestAPendingRowIsReapedAfterACrash:
 
 
 class TestZeroMeansUncappedOnlyForInteractive:
-    def test_a_background_limit_of_zero_still_bounds_to_one(self, lanes_on, monkeypatch):
+    def test_a_background_limit_of_zero_still_bounds_to_one(self, monkeypatch):
         monkeypatch.setenv("ROBOTHOR_MAX_CONCURRENT_BACKGROUND", "0")
         monkeypatch.setattr(lanes, "_LANES", None)
         assert lanes.get_lanes().snapshot()["background"]["limit"] == 1

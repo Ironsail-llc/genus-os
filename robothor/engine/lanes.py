@@ -7,7 +7,7 @@ a reply twice over: its blocking calls hold the pool's workers when the turn's
 own ``asyncio.to_thread`` calls need one, and its local inference holds the
 GPU slots.
 
-Behind ``ROBOTHOR_EXECUTION_LANES`` (default off) work runs in one of two lanes:
+Work runs in one of two lanes:
 
 * ``interactive``: runs a person is waiting on (the trigger set
   ``agent_priority`` already treats as interactive: Telegram, webchat, Slack,
@@ -23,9 +23,8 @@ run asking for a slot while an interactive turn waits for one yields for up to
 ``ROBOTHOR_LANE_BACKGROUND_YIELD_MS``. The local inference gate reads the lane
 too (``robothor/llm/local_gate.py``).
 
-With the flag off: no slot is taken, the default executor is untouched and the
-gate behaves as before. Nothing here changes run semantics, retries, timeouts
-or budgets; it only decides who waits for a slot, and for how long.
+Nothing here changes run semantics, retries, timeouts or budgets; it only
+decides who waits for a slot, and for how long.
 """
 
 from __future__ import annotations
@@ -45,8 +44,7 @@ from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar
 
 # Only stdlib-backed imports at module level: workflow.py imports this module,
 # and the manifest validator imports workflow.py with nothing but PyYAML
-# installed. ``feature_flags`` (database driver) and ``metrics``
-# (prometheus_client) are imported on first use; the daemon's
+# installed. ``metrics`` (prometheus_client) is imported on first use; the daemon's
 # ``install_lane_executor`` makes that first use happen at start, not in a run.
 from robothor.engine.agent_priority import _INTERACTIVE_TRIGGERS
 
@@ -86,16 +84,6 @@ class _Holder:
 _HOLDING: contextvars.ContextVar[_Holder | None] = contextvars.ContextVar(
     "lane_slot_held", default=None
 )
-
-
-def lanes_enabled() -> bool:
-    """The rollout flag. An unreadable flag means off: today's behaviour."""
-    try:
-        from robothor.engine.feature_flags import execution_lanes_enabled
-
-        return execution_lanes_enabled()
-    except Exception:  # noqa: BLE001 - a flag read must not break a run
-        return False
 
 
 def current_lane() -> Lane | None:
@@ -290,7 +278,7 @@ class ExecutionLanes:
 
     def snapshot(self) -> dict[str, Any]:
         with self._lock:
-            out: dict[str, Any] = {"enabled": lanes_enabled()}
+            out: dict[str, Any] = {}
             for lane, st in self._states.items():
                 out[lane.value] = {"active": st.active, "waiting": st.waiting, "limit": st.limit}
             return out
@@ -354,10 +342,10 @@ async def run_slot(lane: Lane) -> AsyncIterator[None]:
     A caller that wraps a run in its own clock (the scheduler's safety timeout,
     a workflow's timeout) takes the slot here, before starting that clock, so
     time spent queued is never counted against it. A ``runner.execute`` inside
-    then finds the slot held and takes no second one. A no-op with the flag
-    off, or when the current run already holds a slot.
+    then finds the slot held and takes no second one. A no-op when the current
+    run already holds a slot.
     """
-    if _holds_a_slot() or not lanes_enabled():
+    if _holds_a_slot():
         yield
         return
     async with get_lanes().slot(lane):
@@ -389,7 +377,7 @@ def lane_gated(
 
     @functools.wraps(fn)
     async def gated(*args: _P.args, **kwargs: _P.kwargs) -> _R:
-        if _holds_a_slot() or not lanes_enabled():
+        if _holds_a_slot():
             return await fn(*args, **kwargs)
         try:
             bound = parameters.bind_partial(*args, **kwargs).arguments
@@ -437,13 +425,10 @@ class LaneExecutor(ThreadPoolExecutor):
         super().shutdown(wait=wait, cancel_futures=cancel_futures)
 
 
-def install_lane_executor(loop: asyncio.AbstractEventLoop) -> bool:
-    """Give ``loop`` the lane-split default executor. A no-op with the flag off."""
-    if not lanes_enabled():
-        return False
+def install_lane_executor(loop: asyncio.AbstractEventLoop) -> None:
+    """Give ``loop`` the lane-split default executor."""
     loop.set_default_executor(LaneExecutor())
     lanes = get_lanes()
     for lane in Lane:  # also loads the metrics module now, not inside a run
         _publish(lane, 0, 0)
-    logger.info("Execution lanes on: %s", lanes.snapshot())
-    return True
+    logger.info("Execution lanes: %s", lanes.snapshot())
