@@ -34,7 +34,7 @@ phases, in this order:
 | Name | What it covers | Where you read it |
 |---|---|---|
 | **SETUP** | From the run starting to the agent being ready to call a model: manifest load, warmup preamble (identity, memory blocks, entity context, open tasks), system prompt. | The runner's `SETUP <n>ms agent=... trigger=...` log line (`robothor/engine/runner.py`). |
-| **Setup plus toolset** | SETUP and building the tool list the model is offered. | The run's `tools_built` step. Each warmup section is its own `warmup_section:<name>` step. |
+| **Setup plus toolset** | SETUP and building the tool list the model is offered. | The run's `tools_built` step; each warmup section's time is a `warmup_section:<name>` step. |
 | **TTFT** (time to first token) | Message sent to the first streamed text (`delta`) the person sees. A turn that does not stream (Telegram today) has no first token; its equivalent is the first model call returning. | The webchat SSE stream; the `llm_call` span. |
 | **done** | Message sent to the `done` event (webchat) or the reply being sent (Telegram). This is the time the person waits. | The `done` event's `duration_ms`; the `agent_run` span. |
 | **Finalize tail** | The gap between the last text and `done`: telemetry, post-run bookkeeping, the run-row write, history save. It is pure waiting for the person. | `done` minus the last `delta`. |
@@ -216,9 +216,10 @@ see it working. A setting named here is a tunable from [Tuning](#tuning).
 
 - **Behaviour:** the interactive warmup preamble's sections (identity, memory
   blocks, entity context, context hooks, host state, open tasks, fleet surfaces,
-  agent goal) are built concurrently on a small bounded pool and joined in a fixed
-  order, so the text is the same every time and the first turn waits for the
-  slowest section instead of the sum. Memory blocks are read in one statement,
+  agent goal) are built concurrently on a small bounded pool, once the agent's
+  previous warmup had a section slower than 30 ms (until then they are built one
+  after another), and joined in a fixed order, so the text is the same every time
+  and a turn waits for the slowest section instead of the sum. Memory blocks are read in one statement,
   entity candidates in one query, and identity enrichment is held per chat session
   for up to 15 minutes (a change of who the caller resolves to recomputes it; a
   CRM edit to that person can lag by up to 15 minutes).
