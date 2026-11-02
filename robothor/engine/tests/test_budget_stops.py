@@ -699,3 +699,41 @@ class TestThereIsNoEnforceRung:
         self, _enforce_asked_for, published, monkeypatch
     ):
         _a_run_past_the_runaway_cap_continues(monkeypatch)
+
+
+# ── The event lands on a stream the bus knows ───────────────────────────────
+
+
+class TestTheEventLandsOnARegisteredStream:
+    def test_no_unknown_stream_warning_and_the_event_is_written(self, caplog):
+        """A stop that warns about its own stream on every publish buries the
+        warnings that matter, and says the stream is nobody's."""
+        import logging
+
+        from robothor.engine import budget_stops
+        from robothor.events import bus
+
+        client = MagicMock()
+        client.xadd.return_value = "1-0"
+        bus.set_redis_client(client)
+        try:
+            session = AgentSession("stream-agent")
+            with caplog.at_level(logging.WARNING, logger="robothor.events.bus"):
+                budget_stops.record(
+                    session,
+                    stop="runaway_token_cap",
+                    reason="runaway_token_cap_hit (2000/1000)",
+                    setting="ROBOTHOR_RUNAWAY_HARD_CAP_TOKENS",
+                    limit=1000,
+                    observed=2000,
+                    mode="observe",
+                )
+        finally:
+            bus.reset_client()
+
+        bus_warnings = [r.getMessage() for r in caplog.records if r.name == "robothor.events.bus"]
+        assert bus_warnings == []
+        assert client.xadd.call_count == 1
+        key, envelope = client.xadd.call_args.args[:2]
+        assert key == "robothor:events:telemetry"
+        assert envelope["type"] == "agent.budget_stop"
