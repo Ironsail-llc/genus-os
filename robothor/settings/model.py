@@ -3271,15 +3271,6 @@ class CodingSettings(SettingsGroup):
         restart_required=False,
         since="unreleased",
     )
-    pr_enabled: bool = declare(
-        False,
-        "ROBOTHOR_CODING_PR_ENABLED",
-        "Lets claude_code_publish push a verified coding job's branch to its allowlisted "
-        "remote and open a draft pull request (GITHUB_TOKEN from the vault). Off refuses "
-        "every claude_code_publish. Nothing merges a pull request.",
-        restart_required=False,
-        since="unreleased",
-    )
     sandbox: str = declare(
         "required",
         "ROBOTHOR_CODING_SANDBOX",

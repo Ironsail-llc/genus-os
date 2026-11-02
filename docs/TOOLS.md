@@ -236,10 +236,12 @@ host. Use `claude_code_publish` instead of the `git`/`gh` tools for a coding job
 branch: it publishes only verified work, only to an allowlisted remote, and
 needs no `gh` binary.
 
-- **Off by default.** `ROBOTHOR_CODING_WORKSPACE` empty refuses every prepare;
-  `ROBOTHOR_CODING_REMOTES` empty refuses every remote, and a remote outside it
-  is refused before git runs; `ROBOTHOR_CODING_PR_ENABLED` (default false)
-  refuses every publish. Each refusal names the setting to change.
+- **Inert until configured.** `ROBOTHOR_CODING_WORKSPACE` empty refuses every
+  prepare; `ROBOTHOR_CODING_REMOTES` empty refuses every remote, so there is
+  nothing to clone or push to, and a remote outside it is refused before git
+  runs. There is no separate publish switch: publishing is bounded by that
+  allowlist (every fetch and push URL), the verified commit, the owner or admin
+  role and the vault's `GITHUB_TOKEN`. Each refusal names what to change.
 - **The token.** `GITHUB_TOKEN` comes from the vault (a fine-grained token with
   contents and pull-request write is enough; nothing here merges). It reaches
   git only as an `http.https://<host>/.extraheader` passed through

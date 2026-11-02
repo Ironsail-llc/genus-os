@@ -114,8 +114,9 @@ merged and not pushed: say so, and say what the next step is (review, PR).
 To open the pull request, call `claude_code_publish(job_id, title, body, ticket?)`:
 it pushes the job's branch and opens a **draft** PR, and returns `pr_url`. Put
 the evidence above in `body`, and give the operator the `pr_url`. It never
-merges; the operator does. If it refuses, say which gate (the role, or
-`ROBOTHOR_CODING_PR_ENABLED`, or a missing `GITHUB_TOKEN`) and what unlocks it.
+merges; the operator does. If it refuses, say which gate (the role, a
+remote outside `ROBOTHOR_CODING_REMOTES`, a branch that moved since verify, or a
+missing `GITHUB_TOKEN`) and what unlocks it.
 
 If the job is not `done`, say that plainly — "the job failed after 3 rounds:
 <reason>" — and never describe the change as made.

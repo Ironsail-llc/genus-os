@@ -29,7 +29,7 @@ tools_opt_in:
   - claude_code_followup
   - claude_code_cancel
   # Clone an allowlisted remote (ROBOTHOR_CODING_REMOTES) and, for the owner,
-  # push a verified job and open a draft PR (ROBOTHOR_CODING_PR_ENABLED).
+  # push a verified job to that remote and open a draft PR.
   - claude_code_repo_prepare
   - claude_code_publish
   - pr_review_intake
