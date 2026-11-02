@@ -445,3 +445,53 @@ async def test_pre_flight_compaction_uses_the_run_compaction_model():
 
     assert fake.calls
     assert fake.calls[0]["model"] == CHAIN[1]
+
+
+# ── No switch: the hardened path is the only compaction ───────────────
+
+
+def test_feature_flags_has_no_compaction_reader():
+    import inspect
+
+    from robothor.engine import feature_flags
+
+    assert [n for n in dir(feature_flags) if "compaction" in n.lower()] == []
+    assert "ROBOTHOR_COMPACTION_V2" not in inspect.getsource(feature_flags)
+
+
+def test_the_settings_model_declares_no_compaction_switch():
+    import inspect
+
+    from robothor.settings import model
+
+    assert "ROBOTHOR_COMPACTION_V2" not in inspect.getsource(model)
+
+
+async def test_the_old_switch_off_still_uses_the_fleet_chain(monkeypatch):
+    from robothor.settings import reset_settings
+
+    monkeypatch.setenv("ROBOTHOR_COMPACTION_V2", "0")
+    reset_settings()
+    fake = FakeCompletion()
+    fleet = ["openai/example-fleet"]
+    with (
+        patch("robothor.engine.compaction.pooled_acompletion", new=fake),
+        patch("robothor.engine.config.fleet_model_chain", return_value=fleet),
+    ):
+        await compact(_prose_fixture(), models=None, threshold=1, drain_to=1000)
+
+    assert fake.calls
+    assert {c["model"] for c in fake.calls} == set(fleet)
+
+
+async def test_the_old_switch_off_still_freezes_on_failure(monkeypatch):
+    from robothor.settings import reset_settings
+
+    monkeypatch.setenv("ROBOTHOR_COMPACTION_V2", "0")
+    reset_settings()
+    messages = _prose_fixture()
+    with patch("robothor.engine.compaction.pooled_acompletion", new=FakeCompletion(fail=True)):
+        result = await compact(messages, models=CHAIN, threshold=1, drain_to=1000)
+
+    assert result.messages == messages
+    assert result.degraded is True
