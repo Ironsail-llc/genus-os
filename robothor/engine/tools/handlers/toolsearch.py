@@ -284,6 +284,7 @@ async def _tool_call(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         accessible_tenant_ids=ctx.accessible_tenant_ids,
         task_author_override=ctx.task_author_override,
         is_benchmark=ctx.is_benchmark,
+        identity=ctx.identity,
         timeout=0,
     )
 

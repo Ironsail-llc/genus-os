@@ -157,18 +157,40 @@ def _is_top_level_human_chat(session: Any) -> bool:
     )
 
 
+def _is_registered_person(identity: Any) -> bool:
+    """A channel-verified identity with a registered person behind it.
+
+    Telegram hands an UNREGISTERED sender in the operator's default chat the
+    ``owner`` role with ``verified=False``; the legacy sender parse marks an
+    identity verified from an id and a role alone. Neither is a person the
+    instance knows, so neither may hand over a credential.
+    """
+    if identity is None or getattr(identity, "verified", False) is not True:
+        return False
+    return bool(
+        getattr(identity, "user_account_id", None) or getattr(identity, "tenant_user_id", None)
+    )
+
+
 def _intake_gate(ctx: ToolContext) -> str | None:
     """The first credential-intake gate this call fails, or None if it passes.
 
     ``chat_agent`` — this is not the default chat agent, so only the manifest
     tier opens it; ``role`` — the human is not an owner or admin;
-    ``human_chat`` — the run is not a top-level run a person started (a
-    sub-agent, a cron, hook or workflow run, or no live run at all). Read from
-    the run, never from message text.
+    ``unverified_sender`` — the channel did not verify the sender as a
+    registered person (see :func:`_is_registered_person`); ``human_chat`` —
+    the run is not a top-level run a person started (a sub-agent, a cron, hook
+    or workflow run, or no live run at all). Read from the run and the
+    channel-resolved identity, never from message text.
     """
     if (getattr(ctx, "agent_id", "") or "") != _default_chat_agent():
         return "chat_agent"
     if (getattr(ctx, "user_role", "") or "") not in INTAKE_ROLES:
+        return "role"
+    identity = getattr(ctx, "identity", None)
+    if not _is_registered_person(identity):
+        return "unverified_sender"
+    if (getattr(identity, "role", "") or "") not in INTAKE_ROLES:
         return "role"
     if not _is_top_level_human_chat(_live_session(ctx)):
         return "human_chat"
@@ -187,6 +209,20 @@ def _gated_refusal(ctx: ToolContext, tool: str, gate: str) -> dict[str, Any]:
             "An owner or admin sends the credential to the agent in chat, or an "
             "operator stores it with `genus vault set <key>`."
         )
+    elif gate == "unverified_sender":
+        error = (
+            f"{tool} is refused: the sender is not a registered person this channel "
+            "verified, whatever role the conversation carries."
+        )
+        unlock = (
+            "An operator registers the sender with `genus user add --name <name> "
+            "--role owner --telegram-id <id>` (or the matching channel identifier), "
+            "and they send the credential again."
+        )
+    elif gate in ("not_handed_over", "not_requested"):
+        from robothor.engine.tools.handlers.vault_intake import request_refusal
+
+        error, unlock = request_refusal(tool, gate)
     elif gate == "chat_agent":
         error = (
             f"{tool} is refused: a credential handed over in chat is kept by the "
@@ -207,7 +243,9 @@ def _gated_refusal(ctx: ToolContext, tool: str, gate: str) -> dict[str, Any]:
     return {"error": error, "denied_by": "credential_tier", "gate": gate, "unlock": unlock}
 
 
-def _operator_denial(ctx: ToolContext, tool: str) -> dict[str, Any] | None:
+def _operator_denial(
+    ctx: ToolContext, tool: str, args: dict[str, Any] | None = None
+) -> dict[str, Any] | None:
     """``None`` when this caller may use the vault tools, else the refusal.
 
     Fails closed on every uncertainty: no agent id, no manifest, an unreadable
@@ -232,17 +270,28 @@ def _operator_denial(ctx: ToolContext, tool: str) -> dict[str, Any] | None:
         tier = ""
     if tier == OPERATOR_TIER:
         return None
-    gate = _intake_gate(ctx)
+    gate = _intake_gate(ctx) or _request_gate(ctx, tool, args or {})
     return None if gate is None else _gated_refusal(ctx, tool, gate)
 
 
-async def _denial(ctx: ToolContext, tool: str) -> dict[str, Any] | None:
+def _request_gate(ctx: ToolContext, tool: str, args: dict[str, Any]) -> str | None:
+    """What the person's own message this turn asked for, against ``tool``."""
+    from robothor.engine.tools.handlers.vault_intake import request_gate
+
+    session = _live_session(ctx)
+    message = str(getattr(session, "originating_message", "") or "")
+    return request_gate(tool, args, message)
+
+
+async def _denial(
+    ctx: ToolContext, tool: str, args: dict[str, Any] | None = None
+) -> dict[str, Any] | None:
     """:func:`_operator_denial`, off the event loop.
 
     It reads the agent's manifest from disk, which would stall every other run
     on the loop thread.
     """
-    return await asyncio.to_thread(_operator_denial, ctx, tool)
+    return await asyncio.to_thread(_operator_denial, ctx, tool, args)
 
 
 def _resolve_env_name(key: str) -> str:
@@ -261,7 +310,7 @@ async def _vault_get(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     or a ``secrets:`` grant in its manifest — not the credential in its context
     window.
     """
-    denial = await _denial(ctx, "vault_get")
+    denial = await _denial(ctx, "vault_get", args)
     if denial:
         return denial
 
@@ -337,7 +386,7 @@ async def _vault_set(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     conversation. That is asserted in ``test_vault_set_is_redacted.py`` rather
     than assumed here.
     """
-    denial = await _denial(ctx, "vault_set")
+    denial = await _denial(ctx, "vault_set", args)
     if denial:
         return denial
 
@@ -421,7 +470,7 @@ async def _forget_the_value_everywhere(value: str, stored_fingerprint: str, sess
     ``chat_messages`` are written AFTER the run, through ``redact``, which now
     knows the value.
     """
-    from robothor.secrets.redaction import redact, register_known_value
+    from robothor.secrets.redaction import redact, redact_known_value, register_known_value
 
     if not register_known_value(value, fingerprint=stored_fingerprint):
         return
@@ -431,7 +480,11 @@ async def _forget_the_value_everywhere(value: str, stored_fingerprint: str, sess
     cleaned = redact(original) if original else original
     originating = getattr(session, "originating_message", None)
     if originating:
-        session.originating_message = redact(originating)
+        # Only THIS value: a second key in the same message is still the
+        # person's hand-over, and the intake gate looks for it here.
+        session.originating_message = redact_known_value(
+            originating, value.strip(), f"<redacted:{stored_fingerprint}>"
+        )
     if cleaned == original:
         return
     session.run.task_text = cleaned
@@ -453,7 +506,7 @@ async def _vault_test(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     The kind is inferred from the KEY, never passed in, so this cannot be used
     to run a vendor probe against an arbitrary value the caller supplies.
     """
-    denial = await _denial(ctx, "vault_test")
+    denial = await _denial(ctx, "vault_test", args)
     if denial:
         return denial
 
@@ -533,7 +586,7 @@ def _safe_hint(hint: str | None, value: str) -> str | None:
 
 @_handler("vault_list")
 async def _vault_list(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
-    denial = await _denial(ctx, "vault_list")
+    denial = await _denial(ctx, "vault_list", args)
     if denial:
         return denial
 
@@ -549,7 +602,7 @@ async def _vault_list(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 
 @_handler("vault_delete")
 async def _vault_delete(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
-    denial = await _denial(ctx, "vault_delete")
+    denial = await _denial(ctx, "vault_delete", args)
     if denial:
         return denial
 

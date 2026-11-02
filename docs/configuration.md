@@ -371,11 +371,23 @@ one. The default chat agent (`ROBOTHOR_DEFAULT_CHAT_AGENT`) may use the vault
 tools without the tier when all three hold: the person in the conversation is
 an `owner` or `admin`, the run is a top-level run a person started by typing in
 chat (webchat, Telegram, Slack, a plugin channel or the IDE), and the run has no
-parent. The CLI and API triggers do not count: the same trigger type carries
-unattended resumes that run as `owner`. A member or viewer, a sub-agent, and a
-cron, hook or workflow run of the same agent are refused, and the refusal carries `gate` (`role`, `chat_agent` or `human_chat`)
-and `unlock`, the sentence the agent can give the person. There is no switch
-for it.
+parent. The person must be one the channel verified as registered: a signed-in
+webchat account, or a sender registered with `genus user add`. An unregistered
+Telegram sender in the operator's default chat is given the `owner` role but
+not verified, and is refused. The CLI and API triggers do not count: the same
+trigger type carries unattended resumes that run as `owner`. A member or
+viewer, a sub-agent, and a cron, hook or workflow run of the same agent are
+refused.
+
+Intake is also held to what the person asked for in their own message this
+turn, never to what a tool returned: `vault_set` stores only a value that
+appears verbatim in that message, `vault_delete` removes only a key it names,
+and `vault_list` lists only when it asks for a list. An instruction injected
+into an email or a web page the agent read cannot satisfy that. Every refusal
+carries `gate` (`chat_agent`, `role`, `unverified_sender`, `human_chat`,
+`not_handed_over` or `not_requested`) and `unlock`, the sentence the agent can
+give the person. There is no switch for any of it; see
+[Tools](TOOLS.md#credentials-vault_get-vault_set-vault_test-vault_list-vault_delete).
 
 A value stored with `vault_set` is then redacted by value, as
 `<redacted:b2:xxxxxxxx>`, from every later redaction pass (history, stored chat

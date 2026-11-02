@@ -1344,6 +1344,29 @@ read; the plugins the loader reports are still listed. The tool is read-only.
 what it does, whatever provides it. [Plugins](PLUGINS.md#seeing-what-a-plugin-shipped)
 covers the same data on the dashboard and the admin API.
 
+### Credentials: `vault_get`, `vault_set`, `vault_test`, `vault_list`, `vault_delete`
+
+An agent whose own manifest declares `v2.credentials: operator` holds these
+tools outright. The default chat agent holds them only for credential intake,
+which is narrower on purpose, because by the time the agent calls one it may
+have read an email, a web page or some other tool output:
+
+- **Who:** an `owner` or `admin` the channel verified as a registered person
+  (a signed-in webchat account, or a sender `genus user add` registered). A
+  sender Telegram fills in as the owner without a registration is refused
+  with `gate: unverified_sender`.
+- **Where:** a top-level run that person started by typing in chat.
+- **What, this turn:** `vault_set` only stores a value that appears verbatim
+  in the person's own message this turn. A value that only came from a tool
+  result is refused with `gate: not_handed_over`. `vault_delete` only removes
+  a key that message names (the vault key, a name a reader uses such as
+  `OPENWEATHER_API_KEY`, or the vendor), and `vault_list` only lists when that
+  message asks for a list; otherwise `gate: not_requested`. `vault_get` and
+  `vault_test` never return a value and are not narrowed.
+
+Every refusal carries `gate` and `unlock`, the sentence the agent can pass on.
+See [Configuration](configuration.md) for the rest of the rule.
+
 ### Everything else
 
 The full registry is large and changes with the release; `tool_search` over the

@@ -95,13 +95,18 @@ then, for anything you would not want an agent to be able to echo, use
 
 An owner or admin can paste a key to the default chat agent and it stores it
 with `vault_set`, proves it with `vault_test` and answers with the fingerprint,
-without the agent's manifest declaring `v2.credentials: operator`. Only a top-level conversation a person
-started counts; a member, a sub-agent and a scheduled run are refused, and the
-refusal names the gate. Once stored, the exact value is redacted from history,
+without the agent's manifest declaring `v2.credentials: operator`. Only a
+top-level conversation a person started counts, and only a person the channel
+verified as registered (an unregistered Telegram sender the bot treats as the
+owner is refused); a member, a sub-agent and a scheduled run are refused, and
+the refusal names the gate. The agent stores only a value that is in the
+person's own message that turn, and deletes or lists only when that message
+asks, so an instruction injected into something the agent read cannot write or
+remove a credential. Once stored, the exact value is redacted from history,
 stored chat messages, the run's task text and logs, shape or no shape, and the
 live tool stream never carries a `vault_set` argument, including a call made
-through `tool_call` on a deferred run. Payment cards stay out
-of chat: the agent offers the secure enrollment link instead. The rules are in
+through `tool_call` on a deferred run. Payment cards stay out of chat: the
+agent offers the secure enrollment link instead. The rules are in
 [Configuration](../configuration.md).
 
 The Helm's Settings › Secrets page can remove a vault row (**Remove**, then
