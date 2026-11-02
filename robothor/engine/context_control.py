@@ -18,7 +18,7 @@ class ContextControl:
     stalled_tokens: int = 0
     measurements: list[dict[str, Any]] = field(default_factory=list)
     # Agent-loop iteration the budget last ran at, and the one the last
-    # compaction ran at (ROBOTHOR_COMPACTION_V2 anti-thrash backoff).
+    # compaction ran at (the anti-thrash backoff).
     iteration: int = 0
     last_compaction_iteration: int | None = None
     #: The agent's manifest ``model.compaction``, for paths that have no agent

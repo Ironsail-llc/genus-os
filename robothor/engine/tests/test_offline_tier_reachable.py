@@ -61,13 +61,11 @@ async def test_fact_extraction_walks_to_the_local_tier():
 
 
 @pytest.mark.asyncio
-async def test_segment_summary_walks_to_the_local_tier():
-    """Otherwise the segment becomes a bare '[Segment: N messages]' placeholder."""
+async def test_the_summary_walks_to_the_local_tier():
+    """Otherwise the summary fails and the compaction freezes for nothing."""
     side_effect, calls = _fail_then_succeed("a real summary")
     with patch("litellm.acompletion", AsyncMock(side_effect=side_effect)):
-        summary = await compaction.summarize_segment(
-            [{"role": "user", "content": "hello there"}], model=CHAIN
-        )
+        summary = await compaction.update_summary("", "user: hello there", CHAIN)
 
     assert calls == CHAIN
     assert summary == "a real summary"
@@ -76,12 +74,14 @@ async def test_segment_summary_walks_to_the_local_tier():
 @pytest.mark.asyncio
 async def test_a_single_model_string_still_works():
     """The existing callers pass one model; they must keep working."""
-    side_effect, calls = _fail_then_succeed("summary")
+    side_effect, calls = _fail_then_succeed(
+        '{"facts":[{"text":"a fact","category":"context","priority":3}]}'
+    )
     with patch("litellm.acompletion", AsyncMock(side_effect=side_effect)):
-        out = await compaction.summarize_segment(
+        out = await compaction.extract_facts(
             [{"role": "user", "content": "hi there"}], model="ollama_chat/qwen3.8:27b"
         )
-    assert out == "summary"
+    assert [f.text for f in out] == ["a fact"]
     assert calls == ["ollama_chat/qwen3.8:27b"]
 
 
@@ -96,7 +96,7 @@ async def test_compact_hands_the_whole_chain_down_not_just_the_primary():
 
     with (
         patch.object(compaction, "extract_facts", fake_extract),
-        patch.object(compaction, "summarize_segment", AsyncMock(return_value="s")),
+        patch.object(compaction, "update_summary", AsyncMock(return_value="s")),
     ):
         await compaction.compact(
             [{"role": "user", "content": "x " * 200} for _ in range(40)],
@@ -211,9 +211,7 @@ async def test_an_empty_answer_is_a_failure_and_the_walk_continues():
         return _resp("" if kw["model"] != "ollama_chat/qwen3.8:27b" else "a real summary")
 
     with patch("litellm.acompletion", AsyncMock(side_effect=side_effect)):
-        out = await compaction.summarize_segment(
-            [{"role": "user", "content": "hello there"}], model=CHAIN
-        )
+        out = await compaction.update_summary("", "user: hello there", CHAIN)
 
     assert calls == CHAIN, "an empty answer ended the walk"
     assert out == "a real summary"
@@ -261,7 +259,7 @@ async def test_compaction_skips_models_the_client_already_knows_are_dead():
 
     with (
         patch.object(compaction, "extract_facts", fake_extract),
-        patch.object(compaction, "summarize_segment", AsyncMock(return_value="s")),
+        patch.object(compaction, "update_summary", AsyncMock(return_value="s")),
     ):
         await compaction.compact(
             [{"role": "user", "content": "x " * 200} for _ in range(40)],

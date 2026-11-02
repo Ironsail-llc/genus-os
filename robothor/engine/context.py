@@ -51,7 +51,7 @@ def register_post_compress_hook(fn: Callable[..., Any]) -> None:
 # Flat char-equivalent cost of an image block (≈1500 tokens after the /4),
 # matching typical vision token accounting. Used so multimodal content is
 # sized realistically — and so stripping an image to a text placeholder
-# (compaction G7 / Rip 18) produces a *visible* token reduction.
+# (the compaction pre-pass) produces a *visible* token reduction.
 _IMAGE_CHARS_EQUIV = 6000
 
 
@@ -238,15 +238,14 @@ async def maybe_compress(
 
     Returns potentially compressed message list. Original list is not modified.
 
-    Delegates to the graduated 4-pass compaction system:
-    1. Tool result thinning (heuristic summaries)
-    2. Structured fact extraction (LLM → retained context)
-    3. Segmented LLM summary (chunked, not lossy single-pass)
-    4. Progressive pruning (drop oldest summaries, keep facts)
+    Delegates to ``compaction.compact``: an LLM-free pre-pass, then one
+    iterative summary on the agent's chain plus retained facts, freezing the
+    messages when no model can summarise. A run does not compact again within
+    ``ROBOTHOR_COMPACTION_MIN_GAP_ITERATIONS`` unless far past the trigger.
 
     Args:
         messages: The conversation messages to potentially compress.
-        models: Optional list of models (first is used for summarization).
+        models: The agent's model chain (the fleet chain when empty).
         threshold: Token threshold for compression. Defaults to COMPRESS_THRESHOLD (80K).
     """
     from robothor.engine.compaction import compact
@@ -267,19 +266,15 @@ async def maybe_compress(
     state = control.get()
     if state is not None and state.skip(messages, model, compress_at, est):
         return messages
-    from robothor.engine.feature_flags import compaction_v2_enabled
-
-    v2 = compaction_v2_enabled()
     # The gap damps small growth only: a context far past the trigger is
     # summarised anyway, or the ceiling would drop what a summary could keep.
     if (
-        v2
-        and state is not None
+        state is not None
         and est < compress_at * BACKOFF_YIELD_RATIO
         and state.backing_off(_min_gap_iterations())
     ):
         logger.info(
-            "Compaction v2: backing off at iteration %d (last compaction at %s)",
+            "Compaction: backing off at iteration %d (last compaction at %s)",
             state.iteration,
             state.last_compaction_iteration,
         )
@@ -307,7 +302,7 @@ async def maybe_compress(
         except Exception as e:
             logger.debug("Pre-compress hook failed: %s", e)
 
-    # Delegate to graduated compaction
+    # Delegate to compaction
     result = await compact(
         messages,
         models=models,
@@ -326,7 +321,7 @@ async def maybe_compress(
     # Off the loop for the same reason as the two estimates above, and more so:
     # this one prices every drop candidate. Measured at 2024ms on a real
     # 121-message history, which is 2s of stalled Telegram, /health and cron.
-    # Freeze on failure (v2): a summary that could not be written must not be
+    # Freeze on failure: a summary that could not be written must not be
     # followed by a drain that drops the middle it was meant to replace. The
     # provider ceiling is still enforced by the caller.
     if not result.degraded:
@@ -344,12 +339,11 @@ async def maybe_compress(
                 "tokens_after": after,
                 "target_tokens": target,
                 "target_reached": after <= target,
-                **({"degraded": result.degraded} if v2 else {}),
+                "degraded": result.degraded,
             }
         )
-        if v2:
-            state.last_compaction_iteration = state.iteration
-            state.degraded = state.degraded or result.degraded
+        state.last_compaction_iteration = state.iteration
+        state.degraded = state.degraded or result.degraded
     logger.info(
         "Compaction complete: %d → %d messages, ~%d → ~%d tokens, "
         "%d facts extracted, %d passes used",

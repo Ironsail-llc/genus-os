@@ -1,20 +1,20 @@
-"""Compaction v2 (``ROBOTHOR_COMPACTION_V2``): the hardened compaction path.
+"""Compaction: the hardened path, the only one there is.
 
-Five behaviours, each one a way the v1 path loses a long run's work:
+Five behaviours, each one a way the compaction it replaced lost a long run's work:
 
 * it summarised with one hard-coded external model whenever a caller passed no
   chain, so a deployment whose fleet runs on other routes dialled a model it may
-  not be authorised for. v2 uses the agent's own chain, the fleet chain when
+  not be authorised for. It uses the agent's own chain, the fleet chain when
   there is none, and a chain member the manifest names for compaction first;
 * the cheapest tokens to reclaim (tool-call argument JSON, historical media,
-  duplicated and oversized old tool results) were left for the LLM passes. v2
+  duplicated and oversized old tool results) were left for the LLM passes. It
   reclaims them first, with no model call at all;
-* the summary was rebuilt from scratch, segment by segment, every time. v2
+* the summary was rebuilt from scratch, segment by segment, every time. It
   feeds the previous summary plus the new slice to one call;
 * a context that grew by one tool result compacted again on the next
-  iteration. v2 waits ``ROBOTHOR_COMPACTION_MIN_GAP_ITERATIONS`` iterations;
+  iteration. It waits ``ROBOTHOR_COMPACTION_MIN_GAP_ITERATIONS`` iterations;
 * a failed summary became a placeholder and the drain then dropped the middle of
-  the conversation. v2 keeps the messages and records the compaction degraded.
+  the conversation. It keeps the messages and records the compaction degraded.
 
 The completion every test fakes is ``compaction.pooled_acompletion`` — the name
 the module imports, so the real dispatch is never reached.
@@ -38,11 +38,9 @@ CHAIN = ["openai/example-primary", "vertex_ai/example-small"]
 
 
 @pytest.fixture(autouse=True)
-def _v2_on(monkeypatch):
+def _gap_of_three(monkeypatch):
     from robothor.settings import reset_settings
 
-    monkeypatch.setenv("ROBOTHOR_COMPACTION_V2", "1")
-    monkeypatch.delenv("ROBOTHOR_RIP_18_ENABLED", raising=False)
     monkeypatch.setenv("ROBOTHOR_COMPACTION_MIN_GAP_ITERATIONS", "3")
     reset_settings()
     yield
@@ -257,11 +255,6 @@ async def test_a_materially_larger_context_is_not_held_by_the_backoff():
     assert await _iterate([1, 2, 3], sizes) == [1, 2]
 
 
-async def test_without_v2_every_iteration_may_compact(monkeypatch):
-    monkeypatch.delenv("ROBOTHOR_COMPACTION_V2", raising=False)
-    assert await _iterate([1, 2, 3, 4]) == [1, 2, 3, 4]
-
-
 # ── AC4: the model comes from the agent's chain ───────────────────────
 
 
@@ -445,3 +438,53 @@ async def test_pre_flight_compaction_uses_the_run_compaction_model():
 
     assert fake.calls
     assert fake.calls[0]["model"] == CHAIN[1]
+
+
+# ── No switch: the hardened path is the only compaction ───────────────
+
+
+def test_feature_flags_has_no_compaction_reader():
+    import inspect
+
+    from robothor.engine import feature_flags
+
+    assert [n for n in dir(feature_flags) if "compaction" in n.lower()] == []
+    assert "ROBOTHOR_COMPACTION_V2" not in inspect.getsource(feature_flags)
+
+
+def test_the_settings_model_declares_no_compaction_switch():
+    import inspect
+
+    from robothor.settings import model
+
+    assert "ROBOTHOR_COMPACTION_V2" not in inspect.getsource(model)
+
+
+async def test_the_retired_switch_set_off_still_uses_the_fleet_chain(monkeypatch):
+    from robothor.settings import reset_settings
+
+    monkeypatch.setenv("ROBOTHOR_COMPACTION_V2", "0")
+    reset_settings()
+    fake = FakeCompletion()
+    fleet = ["openai/example-fleet"]
+    with (
+        patch("robothor.engine.compaction.pooled_acompletion", new=fake),
+        patch("robothor.engine.config.fleet_model_chain", return_value=fleet),
+    ):
+        await compact(_prose_fixture(), models=None, threshold=1, drain_to=1000)
+
+    assert fake.calls
+    assert {c["model"] for c in fake.calls} == set(fleet)
+
+
+async def test_the_retired_switch_set_off_still_freezes_on_failure(monkeypatch):
+    from robothor.settings import reset_settings
+
+    monkeypatch.setenv("ROBOTHOR_COMPACTION_V2", "0")
+    reset_settings()
+    messages = _prose_fixture()
+    with patch("robothor.engine.compaction.pooled_acompletion", new=FakeCompletion(fail=True)):
+        result = await compact(messages, models=CHAIN, threshold=1, drain_to=1000)
+
+    assert result.messages == messages
+    assert result.degraded is True

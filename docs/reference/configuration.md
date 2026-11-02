@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-521 settings in 18 groups.
+520 settings in 18 groups.
 
 ## autonomy
 
@@ -237,7 +237,7 @@ Cloud model routing, budgets and the failure controls around them.
 | Variable | Type | Default | Restart | Secret | Since | Description |
 | --- | --- | --- | --- | --- | --- | --- |
 | `OPENROUTER_API_BASE` | str | _(empty)_ | no | no | unreleased | OpenAI-compatible endpoint every `openrouter/*` model is dialled at, instead of https://openrouter.ai/api/v1. Point it at a corporate gateway, a recording proxy, or the acceptance gate's mock server. Declared here so the knob is documented and inventoried, but litellm reads the ENVIRONMENT VARIABLE itself -- setting this key in config.yaml alone changes nothing. |
-| `ROBOTHOR_COMPACTION_MIN_GAP_ITERATIONS` | int | `3` | no | no | unreleased | With ROBOTHOR_COMPACTION_V2 on, the fewest agent-loop iterations between two compactions of one run. A context that grows by one tool result must not be summarised again on the next iteration; the hard context ceiling is still enforced every iteration. |
+| `ROBOTHOR_COMPACTION_MIN_GAP_ITERATIONS` | int | `3` | no | no | unreleased | The fewest agent-loop iterations between two compactions of one run. A context that grows by one tool result must not be summarised again on the next iteration; the hard context ceiling is still enforced every iteration. |
 | `ROBOTHOR_COMPACTION_PROTECT_FIRST_N` | int | `3` | no | no | unreleased | How many messages at the head of a conversation compaction may never summarise away. The statement of the task lives there, and a run that loses it invents the shape of its own output. |
 | `ROBOTHOR_COMPACTION_TRIGGER_TOKENS` | int | `80000` | no | no | legacy | Absolute prompt-token budget above which a run compacts its context. |
 | `ROBOTHOR_DEFERRED_TOOLS_RECENT_RUNS` | int | `10` | no | no | unreleased | How many of an agent's latest runs seed the tools it is always shown when its schemas are deferred: the tools it called in them join the core set. 0 keeps the core to the platform's fixed list. |
@@ -437,7 +437,6 @@ Guardrails and feature gates. Ones marked governed are inventoried in `infra/fla
 | `ROBOTHOR_CALENDAR_SEND_UPDATES` | str | `all` | `robothor-engine` | no | legacy | **governed.** Who Google emails when an agent creates or deletes an event with attendees: all, externalOnly, or none. The default sends the invitation — an event nobody was told about is not a meeting, which is how an operator came to be an attendee of a trip he never saw. |
 | `ROBOTHOR_CAPABILITY_BLOCK_ENABLED` | bool | `false` | `robothor-engine` | no | unreleased | Add a 'What you can do here' block to every agent's system prompt: the capabilities its granted tools and this instance's settings give it, and for each one it lacks, the gate and what unlocks it. Session-stable, so the prompt prefix stays cacheable. |
 | `ROBOTHOR_CHAT_HISTORY_PAGES` | bool | `false` | `robothor-engine` | no | 1.123.0 | Serve chat history from the message store instead of the in-memory tail: each message carries its stored time and id, and the endpoint pages back past the last 50 (offset, or a before=<id> cursor) with a hasMore flag. Off, history is the in-memory tail with no times, as before. A first page the store cannot answer falls back to memory. |
-| `ROBOTHOR_COMPACTION_V2` | bool | `false` | no | no | unreleased | Hardened context compaction: summarise with the agent's own model chain (manifest `model.compaction` first, the fleet chain when a caller has none), reclaim tool arguments, old tool results and media without a model call first, update the previous summary instead of rebuilding it, wait ROBOTHOR_COMPACTION_MIN_GAP_ITERATIONS between compactions, and keep the messages (the run's compaction step marked degraded) when every model fails to summarise. |
 | `ROBOTHOR_COMPLETION_CONTRACTS_ENABLED` | bool | `false` | `robothor-engine` | no | legacy | Switch for evidence-based completion contracts: a run claiming success must show the tool trace that produced it. |
 | `ROBOTHOR_COMPLETION_CONTRACTS_MODE` | str | `observe` | `robothor-engine` | no | legacy | **governed.** Completion-contract ladder position: observe records unevidenced claims, enforce fails the run that makes one. |
 | `ROBOTHOR_CONFIG_CACHE` | bool | `false` | no | no | unreleased | Reuse an agent's merged and validated manifest, its adapter configs and the digest of a pinned adapter binary between runs while the files they came from are unchanged, and keep each MCP adapter's tool list for up to ten minutes while its session lives (a dropped session, a changed adapter config, a plugin reload, a failed fetch or an explicit refresh refetches it). Adapters connect concurrently, an HTTP MCP server keeps one client, and adapter sessions are pre-warmed at engine start. A plugin sync, a plugin reload or a defaults reload drops them. |
