@@ -53,6 +53,13 @@ The three meta-tools:
 against the allow-set the runner published before it dispatches anything, so a
 denied tool is refused there, not at the registry.
 
+**Every gate judges the wrapped call.** The PRE_TOOL_USE and POST_TOOL_USE
+hooks, the guardrail engine (human approval included), its event log, the
+system-run RBAC check and the post-execution guardrails all see `name` with its
+`arguments`, exactly as they would see a direct call of that tool; a refusal
+comes back as the result of the `tool_call`, and a hook that rewrites the
+arguments rewrites the wrapped call's.
+
 **`arguments` is an object of the wrapped tool's parameters.** A JSON string
 that parses to an object is accepted as that object, since models often send
 one. A wrapper with no string `name`, `arguments` that are neither, or a

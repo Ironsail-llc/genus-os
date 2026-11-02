@@ -28,12 +28,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 
 from robothor.constants import GUARDRAIL_BLOCKED_ERROR_TYPE
 from robothor.engine.run_deadline import wrapup_refusal
 from robothor.engine.sanitize import sanitize_log as _sanitize
+from robothor.engine.wrapped_call import inner_call
 
 if TYPE_CHECKING:
     from robothor.engine.models import AgentConfig
@@ -161,6 +162,11 @@ class ToolAdmissionMixin:
                 tool_args=tool_args,
             )
 
+        # Every gate below judges the call that runs — for ``tool_call``, the
+        # wrapped one (wrapped_call.py) — but the verdict stays the wrapper's.
+        call_name, call_args = inner_call(tool_name, tool_args)
+        wrapped = call_name != tool_name
+
         # ── [HOOKS] Pre-tool-use lifecycle hook ──
         if hook_registry:
             from robothor.engine.hook_registry import HookAction, HookContext, HookEvent
@@ -170,8 +176,8 @@ class ToolAdmissionMixin:
                     event=HookEvent.PRE_TOOL_USE,
                     agent_id=agent_config.id,
                     run_id=session.run.id,
-                    tool_name=tool_name,
-                    tool_args=tool_args,
+                    tool_name=call_name,
+                    tool_args=call_args,
                 )
                 pre_hr = await hook_registry.dispatch(HookEvent.PRE_TOOL_USE, pre_tool_ctx)
                 if pre_hr.action == HookAction.BLOCK:
@@ -183,27 +189,28 @@ class ToolAdmissionMixin:
                         tool_args=tool_args,
                     )
                 if pre_hr.action == HookAction.MODIFY and pre_hr.modified_args:
-                    tool_args = pre_hr.modified_args
+                    call_args = pre_hr.modified_args
+                    tool_args = {**tool_args, "arguments": call_args} if wrapped else call_args
             except Exception as e:
                 # A hook that raises is a broken hook, not a denial. Failing
                 # closed here would let one bad third-party hook halt every
                 # tool call on the box.
                 logger.warning(
-                    "PRE_TOOL_USE hook error for %s: %s", _sanitize(tool_name), _sanitize(e)
+                    "PRE_TOOL_USE hook error for %s: %s", _sanitize(call_name), _sanitize(e)
                 )
 
         # ── [GUARDRAILS] Pre-execution check ──
         if guardrail_engine:
             verdict = await self._check_guardrails(
                 tc=tc,
-                tool_name=tool_name,
-                tool_args=tool_args,
+                tool_name=call_name,
+                tool_args=call_args,
                 session=session,
                 agent_config=agent_config,
                 guardrail_engine=guardrail_engine,
             )
             if verdict is not None:
-                return verdict
+                return replace(verdict, tool_args=tool_args)
 
         # ── [RBAC] System-run permission gate ──
         # Only genuinely autonomous, no-interactive-user runs are governed by
@@ -221,7 +228,7 @@ class ToolAdmissionMixin:
                 classify_system_tool_access,
                 agent_config.service_role,
                 session.run.tenant_id,
-                tool_name,
+                call_name,
                 rbac_mode,
             )
             if rbac_action != "allow":
@@ -229,7 +236,7 @@ class ToolAdmissionMixin:
                     run_id=session.run.id,
                     guardrail_name="rbac",
                     action="blocked" if rbac_action == "block" else "observed",
-                    tool_name=tool_name,
+                    tool_name=call_name,
                     reason=rbac_reason,
                     mode=rbac_mode,
                     step_number=len(session.run.steps),

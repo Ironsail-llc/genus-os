@@ -210,7 +210,10 @@ CAPS = {
     # for the merged tree, so this is the MEASURED count of the rebase result
     # rather than 405 minus the extraction, which would bank one side's saving
     # as the other's headroom.
-    "robothor/engine/tool_admission.py": 362,
+    # 362 -> 369: the gates judge a tool_call as the call it wraps. The
+    # unwrapping is in wrapped_call.py; what lands here is the one call site,
+    # computed once ahead of the hook so every name-keyed gate shares it.
+    "robothor/engine/tool_admission.py": 369,
     # Capped at the size it was extracted at, like schedule_reconcile.py: a new
     # module with no cap is how the next branch's "just one more case" lands
     # somewhere the ratchet is not looking. One branch, one dependency, and it
@@ -221,7 +224,9 @@ CAPS = {
     # module that would otherwise absorb every per-turn concern the runner
     # used to, one branch at a time — which is exactly how runner.py became
     # the 4,660-line god-object this file's header blames.
-    "robothor/engine/tool_turn.py": 549,  # +21: the snippet approval budget, read beside the call cap
+    # +21: the snippet approval budget, read beside the call cap. 549 -> 556:
+    # the result checks judge a tool_call as the call it wraps (`_Call.inner`).
+    "robothor/engine/tool_turn.py": 556,
     # The code-sandbox cluster, each piece capped at the size it was written
     # to. They are deliberately four small modules rather than one: the
     # POLICY (which calls may share a batch) is a table of names with no
