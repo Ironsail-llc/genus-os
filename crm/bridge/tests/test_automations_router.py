@@ -583,9 +583,13 @@ ambient:
 """
 
 
-def test_an_ambient_block_is_its_own_card_while_the_flag_is_on(env_workspace, monkeypatch):
-    """The scheduler writes ``<id>:ambient`` rows; without a card each one read as a broken manifest."""
-    monkeypatch.setenv("ROBOTHOR_AMBIENT", "observe")
+def test_an_ambient_block_is_its_own_card(env_workspace, monkeypatch):
+    """The scheduler writes ``<id>:ambient`` rows; without a card each one read as a broken manifest.
+
+    There is no instance switch in front of it: an old ``ROBOTHOR_AMBIENT=off``
+    left in an environment changes nothing.
+    """
+    monkeypatch.setenv("ROBOTHOR_AMBIENT", "off")
     (_manifest_dir(env_workspace) / "inbox-watcher.yaml").write_text(AMBIENT_YAML, encoding="utf-8")
     rows = {row["id"]: row for row in automations._manifests()}
     job = rows["inbox-watcher:ambient"]
@@ -595,9 +599,3 @@ def test_an_ambient_block_is_its_own_card_while_the_flag_is_on(env_workspace, mo
     assert job["editable"] is False
     assert automations._split_job_id("inbox-watcher:ambient") == ("inbox-watcher", "ambient")
     assert automations._safe_job_id("inbox-watcher:ambient") == "inbox-watcher:ambient"
-
-
-def test_no_ambient_card_while_the_flag_is_off(env_workspace, monkeypatch):
-    monkeypatch.delenv("ROBOTHOR_AMBIENT", raising=False)
-    (_manifest_dir(env_workspace) / "inbox-watcher.yaml").write_text(AMBIENT_YAML, encoding="utf-8")
-    assert "inbox-watcher:ambient" not in {row["id"] for row in automations._manifests()}
