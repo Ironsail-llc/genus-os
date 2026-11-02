@@ -20,9 +20,12 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import contextlib
 import json
 import os
+import select
 import socket
+import time
 from pathlib import Path
 
 import pytest
@@ -77,30 +80,57 @@ async def _serve(proxy, tmp_path, *, session: int | None = None):
 _TRANSPORT_CLOSED = {"ok": False, "transport": "closed"}
 
 
-def _request(server, payload: dict) -> dict:
+def _request(server, payload: dict, *, server_speaks_first: bool = False) -> dict:
     """One raw request over the socket, as the sandboxed client makes it.
 
-    A refused connection reaches the client as a broken pipe or a reset just
-    as often as it does as an empty reply — the server can close before this
-    thread has finished writing — so all three of those shapes return
-    `_TRANSPORT_CLOSED`, deterministically, and a test that needs the SERVER
-    to have spoken checks for its absence.
+    A refusal is sent without reading the request, then the server closes, so
+    this thread's write can fail with a broken pipe or a reset while the
+    refusal already sits in its receive buffer. A failed write is therefore
+    not the end: what the server sent is still read, and only a connection
+    that delivered NOTHING returns `_TRANSPORT_CLOSED`, which a test that
+    needs the SERVER to have spoken checks for. A server that neither answers
+    nor closes still fails, on the socket timeout.
+
+    ``server_speaks_first`` holds the write until the server has answered and
+    hung up — the ordering a refusal can race into — so a test can pin it.
     """
-    try:
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
-            sock.connect(str(server.socket_path))
+    chunks = b""
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+        sock.connect(str(server.socket_path))
+        if server_speaks_first:
+            _wait_for_the_server_to_hang_up(sock)
+        with contextlib.suppress(BrokenPipeError, ConnectionResetError):
             sock.sendall(json.dumps(payload).encode() + b"\n")
-            chunks = b""
+        with contextlib.suppress(ConnectionResetError):
             while not chunks.endswith(b"\n"):
                 piece = sock.recv(65536)
                 if not piece:
                     break
                 chunks += piece
-    except (BrokenPipeError, ConnectionResetError):
-        return dict(_TRANSPORT_CLOSED)
     if not chunks.strip():
         return dict(_TRANSPORT_CLOSED)
     return json.loads(chunks.decode())
+
+
+def _wait_for_the_server_to_hang_up(sock: socket.socket) -> None:
+    """Block until the server has answered AND closed, before this side writes.
+
+    The worst ordering for a refusal, made deterministic: the server refuses
+    without reading, so a client that writes after the close gets a broken
+    pipe while the refusal sits unread in its receive buffer. ``POLLHUP`` is
+    the kernel saying the peer is gone (Linux and macOS both set it on an
+    AF_UNIX stream); a server that never closes times out here instead.
+    """
+    poller = select.poll()
+    poller.register(sock, select.POLLIN)
+    deadline = time.monotonic() + (sock.gettimeout() or 10)
+    while time.monotonic() < deadline:
+        # The refusal is readable a moment before the close lands, so POLLIN
+        # alone returns early; wait on, briefly, until POLLHUP joins it.
+        if any(events & select.POLLHUP for _fd, events in poller.poll(100)):
+            return
+        time.sleep(0.005)
+    raise TimeoutError("the server did not hang up")
 
 
 def _spoke(reply: dict) -> bool:
@@ -155,9 +185,12 @@ class TestTheTransport:
         server = ToolRpcServer(directory=socket_dir, proxy=_FakeProxy(), max_calls=5)
         assert len(os.fsencode(server.socket_path)) < _SUN_PATH_MAX, server.socket_path
 
+    @pytest.mark.parametrize(
+        "server_speaks_first", [False, True], ids=["request-first", "refusal-first"]
+    )
     @pytest.mark.asyncio
     async def test_a_kernel_without_peer_credentials_refuses_rather_than_hangs(
-        self, socket_dir, monkeypatch
+        self, socket_dir, monkeypatch, server_speaks_first
     ):
         """``SO_PEERCRED`` is Linux's. Where the kernel has no such option the
         peer cannot be identified, and that has to be the same answer as any
@@ -175,6 +208,7 @@ class TestTheTransport:
                 _request,
                 server,
                 {"token": server.token, "op": "call", "name": "read_file", "args": {}},
+                server_speaks_first=server_speaks_first,
             )
         finally:
             socket.setdefaulttimeout(previous)
