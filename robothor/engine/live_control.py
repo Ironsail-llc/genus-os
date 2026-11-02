@@ -173,6 +173,16 @@ def _label(tool: Any) -> str:
     return str(tool or "").replace("_", " ").strip() or "tool"
 
 
+def _tool_of(event: dict[str, Any]) -> Any:
+    """The tool that runs: for ``tool_call``, the one it wraps (``wrapped_call``)."""
+    from robothor.engine.wrapped_call import inner_call
+
+    tool = event.get("tool")
+    if not isinstance(tool, str):
+        return tool
+    return inner_call(tool, event.get("args"))[0]
+
+
 def _seconds(value: float) -> str:
     return f"{int(value)}s"
 
@@ -187,11 +197,11 @@ def format_progress_line(event: dict[str, Any], *, elapsed_s: float) -> str | No
     kind = event.get("event")
     elapsed = _seconds(elapsed_s)
     if kind == "tool_start":
-        line = f"Running {_label(event.get('tool'))} · {elapsed}"
+        line = f"Running {_label(_tool_of(event))} · {elapsed}"
     elif kind == "tool_end":
         took = f"{float(event.get('duration_ms') or 0) / 1000:.1f}s"
         verb = "failed" if event.get("error") else "done"
-        line = f"{_label(event.get('tool'))} {verb} in {took} · {elapsed}"
+        line = f"{_label(_tool_of(event))} {verb} in {took} · {elapsed}"
     elif kind == "iteration_start":
         line = f"Step {event.get('iteration', '?')} · {elapsed}"
     else:
@@ -233,6 +243,7 @@ class ProgressMessage:
         self._writing = False
         self._closed = False
         self._tool_seen = False
+        self._tools: dict[Any, Any] = {}  # call id -> the tool its start named
 
     async def on_event(self, event: dict[str, Any]) -> None:
         """A runner ``on_tool``/``on_status`` event. Never raises, never waits."""
@@ -244,12 +255,24 @@ class ProgressMessage:
             self._tool_seen = True
         if not self._tool_seen:
             return
+        event = self._named(event)
         line = format_progress_line(event, elapsed_s=time.monotonic() - self._started)
         if line is None:
             return
         self._latest = line
         if self._worker is None or self._worker.done():
             self._worker = asyncio.create_task(self._run(), name="channel-progress")
+
+    def _named(self, event: dict[str, Any]) -> dict[str, Any]:
+        """A ``tool_end`` names the tool its ``tool_start`` did: it carries no args."""
+        call_id = event.get("call_id")
+        if call_id is None:
+            return event
+        if event.get("event") == "tool_start":
+            self._tools[call_id] = _tool_of(event)
+        elif event.get("event") == "tool_end" and call_id in self._tools:
+            return {**event, "tool": self._tools.pop(call_id)}
+        return event
 
     async def close(self, final: str | None = None) -> None:
         """Stop the worker and write the final state once. Idempotent."""

@@ -289,6 +289,28 @@ class TestProgressMessage:
         assert fake.edits and fake.edits[-1][1].startswith("Step 2")
 
     @pytest.mark.asyncio
+    async def test_a_wrapped_tools_end_names_the_tool_its_start_did(self):
+        """``tool_end`` carries no arguments: it is named by its call id."""
+        fake = _FakeChannel()
+        progress = live_control.ProgressMessage(fake.post, fake.edit, min_interval=0.01)
+        await progress.on_event(
+            {
+                "event": "tool_start",
+                "tool": "tool_call",
+                "args": {"name": "web_search", "arguments": {}},
+                "call_id": "call-1",
+            }
+        )
+        await asyncio.sleep(0.05)
+        await progress.on_event(
+            {"event": "tool_end", "tool": "tool_call", "call_id": "call-1", "duration_ms": 900}
+        )
+        await asyncio.sleep(0.05)
+        await progress.close()
+        assert fake.posts[0].startswith("Running web search")
+        assert fake.edits[-1][1].startswith("web search done in 0.9s")
+
+    @pytest.mark.asyncio
     async def test_no_event_means_nothing_is_ever_posted(self):
         fake = _FakeChannel()
         progress = live_control.ProgressMessage(fake.post, fake.edit, min_interval=1.0)

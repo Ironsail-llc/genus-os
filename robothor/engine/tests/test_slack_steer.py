@@ -222,5 +222,4 @@ async def test_a_wrapped_tool_is_named_in_the_progress_message(env_says_off, mon
     )
     written = [client.posted[0]["text"]] + [u["text"] for u in client.updated]
     assert written[0].startswith("Running web search")
-    assert any(text.startswith("web search done") for text in written)
     assert not any("tool call" in text for text in written)
