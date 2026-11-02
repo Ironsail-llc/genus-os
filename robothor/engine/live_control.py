@@ -203,7 +203,7 @@ def format_progress_line(event: dict[str, Any], *, elapsed_s: float) -> str | No
 
 
 class ProgressMessage:
-    """One progress message per run: posted on the first line, then edited.
+    """One progress message per run: posted at the first tool call, then edited.
 
     ``post(text)`` returns a handle for the message (``None`` when it did not
     land); ``edit(handle, text)`` replaces its text. Only the LATEST line is
@@ -232,10 +232,17 @@ class ProgressMessage:
         self._worker: asyncio.Task[None] | None = None
         self._writing = False
         self._closed = False
+        self._tool_seen = False
 
     async def on_event(self, event: dict[str, Any]) -> None:
         """A runner ``on_tool``/``on_status`` event. Never raises, never waits."""
         if self._closed:
+            return
+        # Nothing is shown until the run calls a tool: a reply that needs none
+        # is one message, with no progress line beside it.
+        if event.get("event") in ("tool_start", "tool_end"):
+            self._tool_seen = True
+        if not self._tool_seen:
             return
         line = format_progress_line(event, elapsed_s=time.monotonic() - self._started)
         if line is None:

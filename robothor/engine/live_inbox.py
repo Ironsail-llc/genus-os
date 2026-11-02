@@ -214,15 +214,18 @@ async def extend_for_late_followups(session: Any, answer: str | None) -> bool:
     """The loop's final-answer guard: True means ``continue`` instead of ``return``.
 
     The answer the model just wrote is already in ``session.messages``, so the
-    model sees what it said. The channel gets it as an interim message: it was
-    a real answer to what the operator had asked at the time.
+    model sees what it said. A channel with an interim callback gets it as an
+    interim message: it was a real answer to what was asked at the time. Only
+    an answer that was delivered is superseded; on a channel with no interim
+    (Slack, Teams) it stays the result until a newer answer replaces it, so a
+    run stopped before writing one still sends it.
     """
     if not absorb_late_followups(session):
         return False
-    # Already sent as an interim; never report it again as the run's result.
     superseded = next(m for m in reversed(session.messages) if m.get("role") == "assistant")
-    superseded[SUPERSEDED_KEY] = True
-    await deliver_interim(session, _text_of(answer))
+    if await deliver_interim(session, _text_of(answer)):
+        # Already sent as an interim; never report it again as the run's result.
+        superseded[SUPERSEDED_KEY] = True
     return True
 
 
@@ -234,16 +237,21 @@ def _text_of(content: Any) -> str:
     return str(content or "")
 
 
-async def deliver_interim(session: Any, text: str) -> None:
-    """Hand the superseded answer to the channel; it must never fail the run."""
+async def deliver_interim(session: Any, text: str) -> bool:
+    """Hand the superseded answer to the channel. True when it was delivered.
+
+    It must never fail the run.
+    """
     inbox = getattr(session, "live_inbox", None)
     callback = inbox.on_interim if inbox is not None else None
     if callback is None or not text.strip():
-        return
+        return False
     try:
         await callback(text)
     except Exception as e:  # noqa: BLE001 - delivery is best-effort
         logger.warning("interim delivery failed for run %s: %s", session.run_id, e)
+        return False
+    return True
 
 
 async def keep_going_after_answer(

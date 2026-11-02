@@ -41,6 +41,10 @@ def steer_session(run_id: str, text: str) -> bool:
     if session is None:
         logger.debug("steer_session: no active session for run_id=%s", sanitize_log(run_id))
         return False
+    from robothor.engine.chat_backstop import protect_if_human_chat
+
+    # Masked before it is stored anywhere: a person's steer is text they typed.
+    text = protect_if_human_chat(text, getattr(session.run, "trigger_type", None))
     session.steer(text)
     _record_intervention(session, "steer", text)
     return True
