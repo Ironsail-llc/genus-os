@@ -321,6 +321,12 @@ class AgentSession:
         """
         if not text:
             return
+        from robothor.engine.chat_backstop import protect_if_human_chat
+
+        # The backstop a follow-up gets: a person's steer is text they just
+        # typed, and from here it reaches the model, the task context and the
+        # steer step.
+        text = protect_if_human_chat(text, self.run.trigger_type)
         # If a prior steer is still pending, concatenate so we don't
         # lose the operator's earlier guidance.
         if self._pending_steer:

@@ -1,7 +1,7 @@
 """Teams: ``/steer`` and ``/stop`` typed to the bot, and a progress activity.
 
-Behind ``ROBOTHOR_STEER_EVERYWHERE``. Off, ``/steer`` is an ordinary sentence
-the agent runs, as it always was.
+Always on: ``/steer`` and ``/stop`` reach the conversation's live run, and
+every run posts one progress activity, updated in place.
 """
 
 from __future__ import annotations
@@ -29,10 +29,9 @@ SESSION = f"agent:main:teams:{CONVERSATION}"
 
 
 @pytest.fixture
-def flag(monkeypatch):
-    state = {"on": True}
-    monkeypatch.setattr(live_control, "steer_everywhere_enabled", lambda: state["on"])
-    return state
+def env_says_off(monkeypatch):
+    """The old switch's name set to off changes nothing: steer is the only path."""
+    monkeypatch.setenv("ROBOTHOR_" + "STEER_EVERYWHERE", "0")
 
 
 @pytest.fixture(autouse=True)
@@ -112,7 +111,7 @@ async def _say(channel: _Channel, text: str) -> None:
 
 
 @pytest.mark.asyncio
-async def test_steer_reaches_the_conversations_run_and_starts_no_turn(flag, controls, runs):
+async def test_steer_reaches_the_conversations_run_and_starts_no_turn(env_says_off, controls, runs):
     channel = _Channel()
     await _say(channel, "/steer use the EU region")
     assert controls["steer"] == [(SESSION, "use the EU region")]
@@ -121,7 +120,7 @@ async def test_steer_reaches_the_conversations_run_and_starts_no_turn(flag, cont
 
 
 @pytest.mark.asyncio
-async def test_stop_interrupts_the_conversations_run(flag, controls, runs):
+async def test_stop_interrupts_the_conversations_run(env_says_off, controls, runs):
     channel = _Channel()
     await _say(channel, "/stop")
     assert controls["interrupt"] == [SESSION]
@@ -130,7 +129,7 @@ async def test_stop_interrupts_the_conversations_run(flag, controls, runs):
 
 
 @pytest.mark.asyncio
-async def test_a_control_that_fails_is_still_answered(flag, runs, monkeypatch):
+async def test_a_control_that_fails_is_still_answered(env_says_off, runs, monkeypatch):
     def _boom(*_a, **_kw):
         raise ValueError("run not found in tenant")
 
@@ -147,7 +146,7 @@ async def test_a_control_that_fails_is_still_answered(flag, runs, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_a_refused_sender_steers_nothing(flag, controls, runs, gate):
+async def test_a_refused_sender_steers_nothing(env_says_off, controls, runs, gate):
     gate["decision"] = AccessDecision(allowed=False, refusal="")
     channel = _Channel()
     await _say(channel, "/steer x")
@@ -155,18 +154,7 @@ async def test_a_refused_sender_steers_nothing(flag, controls, runs, gate):
 
 
 @pytest.mark.asyncio
-async def test_flag_off_steer_is_an_ordinary_message(flag, controls, runs):
-    flag["on"] = False
-    channel = _Channel()
-    await _say(channel, "/steer use the EU region")
-    assert controls["steer"] == []
-    assert len(runs) == 1 and runs[0]["text"] == "/steer use the EU region"
-    assert "on_progress" not in runs[0]
-    assert channel.progress_posts == []
-
-
-@pytest.mark.asyncio
-async def test_flag_on_a_run_posts_one_progress_activity_and_updates_it(flag, runs):
+async def test_a_run_posts_one_progress_activity_and_updates_it(env_says_off, runs):
     channel = _Channel()
     await _say(channel, "search it")
     assert len(channel.progress_posts) == 1

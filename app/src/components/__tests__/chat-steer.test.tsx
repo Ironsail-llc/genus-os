@@ -30,8 +30,11 @@ function heldStream(head: Event[], tail: Event[]) {
 
 type Call = { url: string; method: string; body: Record<string, unknown> };
 
-/** The engine as the browser sees it, with steer mode on or off. */
-function engine(running: ReadableStream, steerEnabled: boolean) {
+/**
+ * The engine as the browser sees it. A mode probe, if anything still asked
+ * one, would say off: steer must not depend on it.
+ */
+function engine(running: ReadableStream) {
   const calls: Call[] = [];
   const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
     const u = String(url);
@@ -39,7 +42,7 @@ function engine(running: ReadableStream, steerEnabled: boolean) {
     const body = init?.body ? JSON.parse(String(init.body)) : {};
     calls.push({ url: u, method, body });
     if (u === "/api/chat/steer" && method === "GET") {
-      return new Response(JSON.stringify({ enabled: steerEnabled }), { headers: { "content-type": "application/json" } });
+      return new Response(JSON.stringify({ enabled: false }), { headers: { "content-type": "application/json" } });
     }
     if (u === "/api/chat/steer" || u === "/api/chat/interrupt") {
       return new Response(JSON.stringify({ ok: true, found: true }), { headers: { "content-type": "application/json" } });
@@ -78,7 +81,7 @@ describe("steering a running task from the Helm", () => {
 
   it("turns the composer into a steer input while a reply streams, and sends to the run", async () => {
     const running = heldStream([{ event: "delta", data: { text: "Working" } }], [{ event: "done", data: { text: "Done." } }]);
-    const calls = engine(running.body, true);
+    const calls = engine(running.body);
     render(<ChatPanel />);
     await type("Draft the report.");
     await waitFor(() => expect(screen.getByTestId("abort-button")).toBeTruthy());
@@ -102,7 +105,7 @@ describe("steering a running task from the Helm", () => {
 
   it("stops the run at its next step with Stop", async () => {
     const running = heldStream([{ event: "delta", data: { text: "Working" } }], [{ event: "done", data: { text: "", status: "cancelled" } }]);
-    const calls = engine(running.body, true);
+    const calls = engine(running.body);
     render(<ChatPanel />);
     await type("Draft the report.");
     await waitFor(() => expect(screen.getByTestId("chat-input").getAttribute("placeholder")).toBe("Steer the running task..."));
@@ -114,21 +117,20 @@ describe("steering a running task from the Helm", () => {
     await act(async () => { running.release(); });
   });
 
-  it("with steer mode off, sends follow-ups and stops exactly as before", async () => {
+  it("steers with no mode probe: the composer and Stop always reach the run", async () => {
     const running = heldStream([{ event: "delta", data: { text: "Working" } }], [{ event: "done", data: { text: "Done." } }]);
-    const calls = engine(running.body, false);
+    const calls = engine(running.body);
     render(<ChatPanel />);
+    expect(calls.filter((c) => c.url === "/api/chat/steer" && c.method === "GET")).toHaveLength(0);
     await type("Draft the report.");
     await waitFor(() => expect(screen.getByTestId("abort-button")).toBeTruthy());
-    expect((screen.getByTestId("chat-input") as HTMLTextAreaElement).placeholder).toBe("Add to the running task...");
+    expect((screen.getByTestId("chat-input") as HTMLTextAreaElement).placeholder).toBe("Steer the running task...");
 
     await type("Use the EU region.");
-    await waitFor(() => expect(screen.getByText("Added to the running task")).toBeTruthy());
-    expect(posts(calls, "/api/chat/steer")).toHaveLength(0);
-
+    await waitFor(() => expect(posts(calls, "/api/chat/steer")).toHaveLength(1));
     await act(async () => { fireEvent.click(screen.getByTestId("abort-button")); });
-    await waitFor(() => expect(posts(calls, "/api/chat/abort")).toHaveLength(1));
-    expect(posts(calls, "/api/chat/interrupt")).toHaveLength(0);
+    await waitFor(() => expect(posts(calls, "/api/chat/interrupt")).toHaveLength(1));
+    expect(calls.filter((c) => c.url === "/api/chat/steer" && c.method === "GET")).toHaveLength(0);
     await act(async () => { running.release(); });
   });
 });

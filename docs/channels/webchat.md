@@ -138,7 +138,9 @@ late answer still reaches a later turn.
 The composer stays open while a reply streams. What you type then goes to the
 task that is already running instead of starting a second one, the same as on
 Telegram (see [the Telegram channel](telegram.md#adding-context-while-the-agent-is-working)
-for when the agent picks it up).
+for when the agent picks it up). While the turn's run is live, what you type
+steers it ([below](#steering-the-running-task)); the follow-up described here
+is what happens when no live run can take it.
 
 Under your message the Helm shows where it went:
 
@@ -158,10 +160,9 @@ starts a run itself; without the flag the endpoint behaves as it always has. The
 running turn's own stream adds two events: `interim` (a superseded answer) and
 `pending_followups` (messages the turn never took, to send as the next turn).
 
-### Steering instead (`ROBOTHOR_STEER_EVERYWHERE`)
+### Steering the running task
 
-With `ROBOTHOR_STEER_EVERYWHERE=true` the composer becomes a steer input while a
-reply streams: its placeholder reads *Steer the running task...*, and what you
+While a reply streams the composer is a steer input: its placeholder reads *Steer the running task...*, and what you
 send is handed to the run as an operator steering update, read before its next
 model call. The note under it reads *Steering the run*. A steer is guidance for
 the run in flight: it is not a turn of its own, but once the run has read it,
@@ -186,11 +187,12 @@ turns, and each tab's steer and Stop name their own turn by its request id.
 For API clients: `POST /chat/steer` with `{"text": "...", "request_id": "..."}`
 and `POST /chat/interrupt` with `{"request_id": "..."}` name the turn by the
 `request_id` it was sent to `/chat/send` with, and resolve the session key
-exactly like `/chat/send`. Only the user who sent that turn can reach it, and a
-turn sent without a `request_id` cannot be steered. Both answer
-`{"ok": …, "found": …}`; `found` is false when that turn has no live run, and a
-missing `request_id` is a 400. `GET /chat/steer` answers `{"enabled": …}`. With the setting off the
-two POST routes answer 404.
+exactly like `/chat/send`. The `request_id` must be a UUID. Only the user who
+sent that turn can reach it, and a turn sent without a `request_id` cannot be
+steered. Both answer `{"ok": …, "found": …}`; `found` is false when that turn
+has no live run, and a missing `request_id` is a 400. A steer that contains a
+payment card number is masked before the run, its steps or its log see it, as a
+follow-up is.
 
 ## Attaching files
 

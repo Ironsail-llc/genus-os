@@ -511,7 +511,7 @@ async def _handle(
         return
 
     session_key = f"agent:main:teams:{conversation_id}"
-    if live_control.steer_everywhere_enabled() and _is_run_command(text):
+    if _is_run_command(text):
         reply = await _run_command(
             channel,
             text,
@@ -593,8 +593,8 @@ async def _run_command(
 
 
 def _progress(channel: Any, conversation_id: str) -> Any:
-    """The run's progress activity, with the flag on and a channel that can post one."""
-    if not live_control.steer_everywhere_enabled() or not hasattr(channel, "post_progress"):
+    """The run's progress activity, when the channel can post one."""
+    if not hasattr(channel, "post_progress"):
         return None
 
     async def post(text: str) -> Any:

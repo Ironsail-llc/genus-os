@@ -19,9 +19,8 @@ channel needs around it:
   tool's arguments or results. :class:`ProgressMessage` posts that line once
   and edits it in place, throttled, through two callables a channel supplies.
 
-Channels expose all of this only with ``ROBOTHOR_STEER_EVERYWHERE`` on
-(:func:`steer_everywhere_enabled`). Marking a run is unconditional and changes
-nothing a user can see.
+Every chat surface exposes all of this: the Helm, Slack, Teams and any plugin
+channel built on ``channels.inbound``.
 """
 
 from __future__ import annotations
@@ -48,7 +47,6 @@ __all__ = [
     "format_progress_line",
     "interrupt_conversation",
     "steer_conversation",
-    "steer_everywhere_enabled",
 ]
 
 #: The longest progress line any channel is handed.
@@ -71,17 +69,6 @@ PROGRESS_DONE = "Done."
 _pending_key: ContextVar[tuple[str, list[str]] | None] = ContextVar(
     "live_conversation_key", default=None
 )
-
-
-def steer_everywhere_enabled() -> bool:
-    """``ROBOTHOR_STEER_EVERYWHERE``, read through settings. False on any error."""
-    try:
-        from robothor.settings import get_settings
-
-        return bool(get_settings().channels.steer_everywhere)
-    except Exception:  # noqa: BLE001 - a settings error must not break a channel
-        logger.debug("steer_everywhere setting unreadable; treating as off", exc_info=True)
-        return False
 
 
 # ── which run is the conversation's ──────────────────────────────────────
@@ -216,7 +203,7 @@ def format_progress_line(event: dict[str, Any], *, elapsed_s: float) -> str | No
 
 
 class ProgressMessage:
-    """One progress message per run: posted on the first line, then edited.
+    """One progress message per run: posted at the first tool call, then edited.
 
     ``post(text)`` returns a handle for the message (``None`` when it did not
     land); ``edit(handle, text)`` replaces its text. Only the LATEST line is
@@ -245,10 +232,17 @@ class ProgressMessage:
         self._worker: asyncio.Task[None] | None = None
         self._writing = False
         self._closed = False
+        self._tool_seen = False
 
     async def on_event(self, event: dict[str, Any]) -> None:
         """A runner ``on_tool``/``on_status`` event. Never raises, never waits."""
         if self._closed:
+            return
+        # Nothing is shown until the run calls a tool: a reply that needs none
+        # is one message, with no progress line beside it.
+        if event.get("event") in ("tool_start", "tool_end"):
+            self._tool_seen = True
+        if not self._tool_seen:
             return
         line = format_progress_line(event, elapsed_s=time.monotonic() - self._started)
         if line is None:

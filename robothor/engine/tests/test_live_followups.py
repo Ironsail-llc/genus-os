@@ -160,7 +160,10 @@ async def test_a_superseded_answer_is_never_the_final_answer() -> None:
     as the result would answer the follow-up with the answer it superseded."""
     from robothor.engine.live_inbox import extend_for_late_followups
 
-    box = LiveInbox()
+    async def on_interim(text: str) -> None:
+        return None
+
+    box = LiveInbox(on_interim=on_interim)
     s = _session_with(box)
     s.messages.append({"role": "assistant", "content": "the forecast"})
     box.push("and the tides?")
