@@ -386,7 +386,7 @@ async def establish_execution_plan(
 def record_exec_location(
     run_id: str, where: str, *, degraded: bool = False, beside: bool = False, tool: str = "exec"
 ) -> None:
-    """One ``exec_location`` row per exec. Blocking: call it off the loop.
+    """One ``exec_location`` row for an exec a decision moved. Blocking: off the loop.
 
     ``beside`` is an owner's snippet that ran on the host while the run's
     container was live: the one widening past a working container.
@@ -462,7 +462,12 @@ def exec_refusal(run_id: str, *, tool: str = "exec") -> dict[str, Any] | None:
 async def stamp_location(
     result: dict[str, Any], where: str, run_id: str, *, tool: str = "exec"
 ) -> dict[str, Any]:
-    """Say where one ``exec`` (or snippet) ran, and record it once."""
+    """Say where one ``exec`` (or snippet) ran; record it when a decision moved it.
+
+    Only a host fallback (``degraded``) or a snippet beside a live container
+    (``beside``) writes a row. An exec where nothing was decided writes none:
+    a row per command would load the table and swamp its dashboard.
+    """
     if not isinstance(result, dict):
         return result
     import asyncio
@@ -474,9 +479,10 @@ async def stamp_location(
         degraded, beside = plan.degraded, plan.where == "sandbox"
         if note := plan.host_note if degraded else plan.beside_note(tool) if beside else "":
             result["execution_note"] = note
-    await asyncio.to_thread(
-        record_exec_location, run_id, where, degraded=degraded, beside=beside, tool=tool
-    )
+    if degraded or beside:
+        await asyncio.to_thread(
+            record_exec_location, run_id, where, degraded=degraded, beside=beside, tool=tool
+        )
     return result
 
 

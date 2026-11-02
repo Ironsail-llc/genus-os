@@ -421,9 +421,11 @@ To see where commands go and what happened:
    ```
 
    One `sandbox_playground` row (action `observed`) per run whose plan degraded
-   or refused; one `exec_location` row (action `allowed`) per `exec` and per
-   `execute_code`; one `exec_allowlist` row (action `observed`) per allowlist
-   bypass.
+   or refused; one `exec_location` row (action `allowed`) per `exec` or
+   `execute_code` that ran on the host because no container could be had, or
+   beside a live container (an exec where nothing was decided writes none;
+   its result still carries `executed_on`); one `exec_allowlist` row (action
+   `observed`) per allowlist bypass.
 
 Installing a runtime (rootless podman, or a backend selected with
 `ROBOTHOR_SANDBOX_BACKEND`) puts every run that wants a container back in one.
