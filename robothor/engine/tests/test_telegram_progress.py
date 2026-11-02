@@ -180,3 +180,58 @@ async def test_no_edit_after_close():
     await asyncio.sleep(INTERVAL * 2)
 
     assert len(bot.edits) == count
+
+
+def _gaps(bot: FakeBot) -> list[float]:
+    return [b[0] - a[0] for a, b in zip(bot.edits, bot.edits[1:], strict=False)]
+
+
+@pytest.mark.asyncio
+async def test_a_group_chat_edits_at_the_group_safe_interval(monkeypatch):
+    """Groups have stricter flood limits than a private chat: their edits are spaced wider."""
+    from robothor.engine import telegram_progress
+
+    monkeypatch.setattr(telegram_progress, "GROUP_MIN_INTERVAL", INTERVAL * 3, raising=False)
+    bot = FakeBot()
+    progress = TelegramProgress(bot, "-100123", MESSAGE_ID, min_interval=INTERVAL)
+
+    await _stream(progress, deltas=24, every=0.06)
+    await progress.aclose()
+
+    assert len(bot.edits) >= 2
+    assert all(g >= INTERVAL * 3 * 0.95 for g in _gaps(bot)), _gaps(bot)
+
+
+@pytest.mark.asyncio
+async def test_a_429_widens_the_interval_from_then_on():
+    """Adaptive: after flood control answers once, later edits are spaced at least twice as far."""
+    bot = FakeBot(retry_after_on={1}, retry_after=0)
+    progress = _progress(bot)
+
+    await _stream(progress, deltas=30, every=0.06)
+    await progress.aclose()
+
+    assert len(bot.edits) >= 2
+    assert all(g >= INTERVAL * 2 * 0.95 for g in _gaps(bot)), _gaps(bot)
+
+
+@pytest.mark.asyncio
+async def test_a_long_retry_after_never_holds_the_answer_back():
+    """The total wait is bounded: delivery stops the progress worker, it does not wait it out."""
+    from robothor.engine.telegram_progress import deliver_reply
+
+    bot = FakeBot(retry_after_on={1}, retry_after=30)
+    progress = _progress(bot)
+    await progress.on_content("partial")
+    await asyncio.sleep(0.05)  # the first edit hits the 429; the worker now owes 30 s
+
+    async def send(_chat_id: str, text: str) -> list[Any]:
+        return [await bot.send_message(text=text)]
+
+    run = SimpleNamespace(output_text="The answer.", error_message=None)
+    started = time.monotonic()
+    sent = await asyncio.wait_for(deliver_reply(progress, run, "12345", send), 2)
+
+    assert time.monotonic() - started < 1.0
+    assert bot.sent == ["The answer."]
+    assert len(sent) == 1
