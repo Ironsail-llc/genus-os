@@ -425,6 +425,18 @@ sudo -u postgres psql -d robothor_memory -c "GRANT ALL ON ALL TABLES IN SCHEMA p
 sudo -u postgres psql -d robothor_memory -c "GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO robothor"
 ```
 
+#### Connection poolers
+
+The engine and bridge keep their own connection pool and need a session that
+outlives a transaction: each pooled connection is bound to its tenant and given
+pgvector's scan mode once, and later transactions on it rely on both. Connect
+them to PostgreSQL directly, or through a pooler in **session** mode. A
+transaction-mode pooler (PgBouncer's `pool_mode = transaction`, for example)
+hands each transaction to whichever server connection is free, so the tenant
+binding can belong to another tenant and the scan mode can be missing.
+`genus doctor --only db.session_settings` sets a throwaway session setting and
+reads it back across several transactions; it fails when they do not agree.
+
 **Never hand a SQL file to `psql` to create the schema.** The only thing that
 creates tables is the migrator — `genus init` runs it, the compose stack runs it
 as a one-shot service, and you can run it yourself:
