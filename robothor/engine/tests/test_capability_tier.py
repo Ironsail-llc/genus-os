@@ -603,3 +603,47 @@ class TestTheRunnerWithTheRetiredSwitchesSet:
         assert runner.registry.build_for_agent.call_args.kwargs["tier"] == "unrestricted"
         runner.registry.execute.assert_awaited_once()
         assert [e["action"] for e in events] == ["allowed"]
+
+
+@pytest.mark.asyncio
+class TestTheAuditRowIsHonest:
+    async def test_a_widening_tier_that_unlocks_nothing_writes_no_row(
+        self, runner, default_agent, mock_litellm_response
+    ):
+        """An agent with ``tools_allowed``, or whose opt-ins are already named,
+        is offered the same set at every tier; an ``allowed`` row naming no
+        tool would claim a grant that never happened."""
+
+        def _same_at_every_tier(config, tier=""):
+            return ["read_file", "claude_code_start"]
+
+        def _schemas(config, autonomy=False, tier=""):
+            names = _same_at_every_tier(config, tier)
+            return [{"type": "function", "function": {"name": n}} for n in names]
+
+        runner.registry.get_tool_names.side_effect = _same_at_every_tier
+        runner.registry.build_for_agent.side_effect = _schemas
+
+        run, events = await _run_one_tool_call(
+            runner, default_agent, mock_litellm_response, identity=_owner_identity()
+        )
+
+        assert run.capability_tier == "unrestricted"
+        assert events == []
+
+    async def test_plan_mode_unlocks_nothing_and_writes_no_row(self, registry):
+        from robothor.engine import toolset_prep
+        from robothor.engine.capability_tier import resolve_tier
+
+        decision = resolve_tier("owner", interactive=True, identity_verified=True)
+        with patch.object(toolset_prep, "_autonomy_active", AsyncMock(return_value=False)):
+            prepared = await toolset_prep.prepare_toolset(
+                registry,
+                _default_agent(),
+                agent_id="probe",
+                system_prompt="",
+                readonly_mode=True,
+                deep_plan=False,
+                capability=decision,
+            )
+        assert prepared.tier_unlocked == ()
