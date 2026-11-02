@@ -19,9 +19,8 @@ channel needs around it:
   tool's arguments or results. :class:`ProgressMessage` posts that line once
   and edits it in place, throttled, through two callables a channel supplies.
 
-Channels expose all of this only with ``ROBOTHOR_STEER_EVERYWHERE`` on
-(:func:`steer_everywhere_enabled`). Marking a run is unconditional and changes
-nothing a user can see.
+Every chat surface exposes all of this: the Helm, Slack, Teams and any plugin
+channel built on ``channels.inbound``.
 """
 
 from __future__ import annotations
@@ -48,7 +47,6 @@ __all__ = [
     "format_progress_line",
     "interrupt_conversation",
     "steer_conversation",
-    "steer_everywhere_enabled",
 ]
 
 #: The longest progress line any channel is handed.
@@ -71,17 +69,6 @@ PROGRESS_DONE = "Done."
 _pending_key: ContextVar[tuple[str, list[str]] | None] = ContextVar(
     "live_conversation_key", default=None
 )
-
-
-def steer_everywhere_enabled() -> bool:
-    """``ROBOTHOR_STEER_EVERYWHERE``, read through settings. False on any error."""
-    try:
-        from robothor.settings import get_settings
-
-        return bool(get_settings().channels.steer_everywhere)
-    except Exception:  # noqa: BLE001 - a settings error must not break a channel
-        logger.debug("steer_everywhere setting unreadable; treating as off", exc_info=True)
-        return False
 
 
 # ── which run is the conversation's ──────────────────────────────────────

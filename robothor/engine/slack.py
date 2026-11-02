@@ -72,9 +72,7 @@ class SlackBot:
         return "Session cleared."
 
     def _register_run_commands(self, app: Any) -> None:
-        """``/steer`` and ``/stop``, only with ``ROBOTHOR_STEER_EVERYWHERE`` on."""
-        if not live_control.steer_everywhere_enabled():
-            return
+        """``/steer`` and ``/stop`` for the channel's live run."""
 
         @app.command("/steer")  # type: ignore[untyped-decorator]
         async def handle_steer(ack: Any, respond: Any, command: dict[str, Any]) -> None:
@@ -135,9 +133,9 @@ class SlackBot:
         return await live_control.stop_reply(_session_key(channel), tenant_id=tenant_id)
 
     def _progress(self, channel: str) -> live_control.ProgressMessage | None:
-        """The run's progress message in ``channel``, with the flag on and a client."""
+        """The run's progress message in ``channel``, when the bot has a client."""
         client = getattr(self._app, "client", None) if self._app else None
-        if client is None or not live_control.steer_everywhere_enabled():
+        if client is None:
             return None
 
         async def post(text: str) -> Any:

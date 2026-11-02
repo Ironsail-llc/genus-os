@@ -1,7 +1,7 @@
-"""Steer and stop one webchat turn's live run (``ROBOTHOR_STEER_EVERYWHERE``).
+"""Steer and stop one webchat turn's live run.
 
 ``POST /chat/steer`` and ``POST /chat/interrupt`` reach the run of the turn the
-body names by ``request_id``; ``GET /chat/steer`` says whether the switch is on.
+body names by ``request_id``.
 Mounted beside the chat router (``health.py``) under the same ``/chat`` prefix
 and the same authentication. ``chat_control.start(..., steerable=True)`` marks the
 run a ``/chat/send`` turn starts. See ``live_control.py`` for how a turn's run
@@ -46,12 +46,6 @@ def webchat_run_key(auth: Any, session_key: str, request_id: Any) -> str:
     return f"webchat:{request_key(auth, session_key, request_id)}"
 
 
-@router.get("/steer")
-async def chat_steer_mode() -> JSONResponse:
-    """Whether steer and interrupt are on (``ROBOTHOR_STEER_EVERYWHERE``)."""
-    return JSONResponse({"enabled": live_control.steer_everywhere_enabled()})
-
-
 @router.post("/steer")
 async def chat_steer(request: Request) -> JSONResponse:
     """Steer one turn's live run: the text joins it at the next iteration boundary.
@@ -61,8 +55,6 @@ async def chat_steer(request: Request) -> JSONResponse:
     caller can steer only a turn they sent. ``found`` is false when that turn
     has no live run.
     """
-    if not live_control.steer_everywhere_enabled():
-        return JSONResponse({"error": "not found"}, status_code=404)
     from robothor.engine import chat
 
     auth = chat._auth_context(request)
@@ -90,8 +82,6 @@ async def chat_interrupt(request: Request) -> JSONResponse:
     CANCELLED) and the durable runtime stop, which may end the run's task
     sooner. The turn is named by ``request_id``, as for :func:`chat_steer`.
     """
-    if not live_control.steer_everywhere_enabled():
-        return JSONResponse({"error": "not found"}, status_code=404)
     from robothor.engine import chat
 
     auth = chat._auth_context(request)

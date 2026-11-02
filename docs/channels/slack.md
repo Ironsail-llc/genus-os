@@ -102,8 +102,8 @@ refreshes is not a diagnostic.
 
 ## Steer, stop and progress
 
-With `ROBOTHOR_STEER_EVERYWHERE=true` the bot registers two more slash
-commands, and each message run shows its progress:
+Beside `/status` and `/clear` the bot registers two slash commands for the
+running task, and each message run shows its progress:
 
 | Command | What it does |
 |---------|--------------|
@@ -119,11 +119,8 @@ the app's **Slash Commands** in the Slack app settings, the same way as `/clear`
 While a run works, the bot posts one message and edits it in place, at most once
 a second: one line for the step or tool in progress with the elapsed time
 (`Running web search · 4s`). Arguments and results never appear in it. When the
-run ends the line reads `Done.` and the answer arrives as its own message, as
-before. The edit uses `chat.update`, which needs no scope beyond `chat:write`.
-
-With the setting off, Slack registers only `/status` and `/clear` and shows
-nothing until the answer.
+run ends the line reads `Done.` and the answer arrives as its own message.
+The edit uses `chat.update`, which needs no scope beyond `chat:write`.
 
 ## Targets
 
