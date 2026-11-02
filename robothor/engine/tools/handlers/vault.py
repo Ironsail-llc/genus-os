@@ -111,7 +111,7 @@ def credential_tier(agent_id: str) -> str:
     return str(v2.get(CREDENTIAL_TIER_KEY, "") or "").strip().lower()
 
 
-#: This handler takes a credential from a person in chat; capability copy reads it.
+#: This handler takes a credential from a person in chat: public marker for capability copy.
 CREDENTIAL_INTAKE = True
 
 #: The human roles that may hand the chat agent a credential. The same pair
@@ -208,6 +208,13 @@ def _gated_refusal(ctx: ToolContext, tool: str, gate: str) -> dict[str, Any]:
         unlock = (
             "An owner or admin sends the credential to the agent in chat, or an "
             "operator stores it with `genus vault set <key>`."
+        )
+    elif gate == "unverified_sender" and getattr(ctx, "identity", None) is None:
+        error = f"{tool} is refused: this run has no verified sender behind it."
+        unlock = (
+            "This channel does not carry a verified identity for the run. The owner "
+            "or an admin hands the credential over in webchat or a registered "
+            "Telegram chat, or an operator stores it with `genus vault set <key>`."
         )
     elif gate == "unverified_sender":
         error = (

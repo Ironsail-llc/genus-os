@@ -7,10 +7,17 @@ a ``vault_set`` or a ``vault_delete`` in the same run. So the vault tools that
 change or enumerate the vault are admitted only for what the person's OWN
 message this turn (``session.originating_message``) asked for:
 
-* ``vault_set`` — the value being stored appears verbatim in that message;
-* ``vault_delete`` — that message names the key: the vault key itself, a name
-  a reader resolves it by (``OPENWEATHER_API_KEY``), or its vendor segment;
+* ``vault_set`` — the value appears in that message as a whole token (bounded
+  by whitespace, quotes, brackets or sentence punctuation, or after ``=`` or
+  ``:``), is credential-sized (at least 16 characters, or at least 8 when it
+  contains a character that is not a letter or digit), is not made of letters
+  alone, and the same message names the key;
+* ``vault_delete`` — that message asks for a removal (delete, remove, revoke,
+  forget, drop, clear, rotate out) and names the key;
 * ``vault_list`` — that message asks which credentials are stored.
+
+"Names the key" means the vault key itself, a name a reader resolves it by
+(``OPENWEATHER_API_KEY``), or its vendor segment (``openweather``).
 
 ``vault_get`` and ``vault_test`` never return a value and are not narrowed.
 Tool output never reaches ``originating_message``, so nothing a tool returned
@@ -21,6 +28,19 @@ from __future__ import annotations
 
 import re
 from typing import Any
+
+#: A credential handed over: at least this long, or MIN_SYMBOL_VALUE_CHARS
+#: when it carries a character that is not a letter or digit.
+MIN_VALUE_CHARS = 16
+MIN_SYMBOL_VALUE_CHARS = 8
+
+#: What may sit around a pasted value without being part of it.
+_WRAPPING = "\"'`()[]{}<>,;.!?"
+_ASSIGNMENT = ("=", ":")
+
+_REMOVAL = re.compile(
+    r"\b(delete|remove|revoke|forget|drop|clear|rotate[\s-]+out)\b", re.IGNORECASE
+)
 
 _LIST_VERB = re.compile(r"\b(list|show|which|what|enumerate)\b", re.IGNORECASE)
 _LIST_NOUN = re.compile(
@@ -50,6 +70,35 @@ def _names_the_key(message: str, key: str) -> bool:
     return False
 
 
+def _is_credential_sized(value: str) -> bool:
+    if value.isalpha():
+        return False
+    if len(value) >= MIN_VALUE_CHARS:
+        return True
+    return len(value) >= MIN_SYMBOL_VALUE_CHARS and not value.isalnum()
+
+
+def _is_a_whole_token(message: str, value: str) -> bool:
+    """``value`` is one whitespace-separated token of ``message``, give or take
+    the quotes and punctuation around it, or the right side of ``NAME=value``."""
+    for raw in message.split():
+        for token in (raw, raw.strip(_WRAPPING)):
+            if token == value:
+                return True
+            for mark in _ASSIGNMENT:
+                if token.endswith(mark + value):
+                    return True
+    return False
+
+
+def _handed_over(message: str, key: str, value: str) -> bool:
+    return (
+        _is_credential_sized(value)
+        and _is_a_whole_token(message, value)
+        and _names_the_key(message, key)
+    )
+
+
 def _asks_for_a_list(message: str) -> bool:
     return bool(_LIST_VERB.search(message) and _LIST_NOUN.search(message))
 
@@ -59,9 +108,12 @@ def request_gate(tool: str, args: dict[str, Any], message: str) -> str | None:
     message = message or ""
     if tool == "vault_set":
         value = str(args.get("value") or "").strip()
-        return None if value and value in message else "not_handed_over"
+        key = str(args.get("key") or "")
+        return None if _handed_over(message, key, value) else "not_handed_over"
     if tool == "vault_delete":
-        return None if _names_the_key(message, str(args.get("key") or "")) else "not_requested"
+        key = str(args.get("key") or "")
+        asked = bool(_REMOVAL.search(message)) and _names_the_key(message, key)
+        return None if asked else "not_requested"
     if tool == "vault_list":
         return None if _asks_for_a_list(message) else "not_requested"
     return None
@@ -71,10 +123,11 @@ def request_refusal(tool: str, gate: str) -> tuple[str, str]:
     """The error and unlock for a turn-level refusal."""
     if gate == "not_handed_over":
         return (
-            f"{tool} is refused: the value is not in the person's own message this "
-            "turn, so it did not come from them (it may have come from a tool result).",
-            "The owner or an admin pastes the credential to the agent in chat, or an "
-            "operator stores it with `genus vault set <key>`.",
+            f"{tool} is refused: the person's own message this turn does not hand "
+            "over this value for this key (it may have come from a tool result).",
+            "The owner or an admin pastes the whole credential in chat and says what it "
+            "is for (the vendor or the key name), or an operator stores it with "
+            "`genus vault set <key>`.",
         )
     return (
         f"{tool} is refused: the person's own message this turn did not ask for it.",
