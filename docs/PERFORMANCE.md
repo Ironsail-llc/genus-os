@@ -427,6 +427,16 @@ None of this migrates data. If a release's turn path misbehaves, `git revert`
 the change on `main` and redeploy the resulting release; there is no setting to
 turn it off. Keep the benchmark result from before and after either way.
 
+### Feature flags
+
+New behaviour ships on, as the engine's only code path. It does not go behind a
+feature flag, a kill switch or an observe/enforce rung, and there is no staged
+flip to plan. Its safety is a property of the behaviour itself, proved by tests:
+approval tiers, allowlists, RBAC, redaction, caps that report. What stays
+configurable is a tunable with a default, as in [Tuning](#tuning). The
+guardrail modes that already exist (`infra/flags.yaml` and
+`docs/runbooks/GUARDRAIL_FLIPS.md`) are unchanged by this rule.
+
 ## Where else to look
 
 - [Observability](OBSERVABILITY.md): enabling export, the failure-mode
