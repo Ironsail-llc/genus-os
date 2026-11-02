@@ -144,6 +144,23 @@ def _fresh_settings():
     reset_alias_warnings()
 
 
+@pytest.fixture(autouse=True)
+def _fresh_identity_enrichment():
+    """Drop the identity-enrichment caches around every test.
+
+    The interactive warmup holds a caller's enrichment for the whole chat
+    session (``enrichment.enrich_identity_for_session``). That is right for
+    a session and wrong across tests: a later test that patches
+    ``enrich_identity`` for the same caller is served the earlier test's
+    held result and never reaches its patch.
+    """
+    from robothor.identity import enrichment
+
+    enrichment.clear_cache()
+    yield
+    enrichment.clear_cache()
+
+
 #: The two variables that turn any Python sender reading ``os.environ`` into a
 #: live line to the operator's phone.
 LIVE_TELEGRAM_ENV = ("ROBOTHOR_TELEGRAM_BOT_TOKEN", "ROBOTHOR_TELEGRAM_CHAT_ID")
