@@ -366,19 +366,16 @@ Everything else is refused, including any sub-agent one of them spawns — a
 spawned child runs under its own agent id, so its own manifest is what is
 checked.
 
-**Credential intake in chat** (`ROBOTHOR_CREDENTIAL_INTAKE`, default `off`) is
-the second way through, and the only other one. On `enforce`, the default chat
-agent (`ROBOTHOR_DEFAULT_CHAT_AGENT`) may use the vault tools without the tier
-when all three hold: the person in the conversation is an `owner` or `admin`,
-the run is a top-level run a person started by typing in chat (webchat,
-Telegram, Slack, a plugin channel or the IDE), and the run has no parent. The
-CLI and API triggers do not count: the same trigger type carries unattended
-resumes that run as `owner`. A member or
-viewer, a sub-agent, and a cron, hook or workflow run of the same agent are
-refused, and the refusal carries `gate` (`role`, `chat_agent` or `human_chat`)
-and `unlock`, the sentence the agent can give the person. `observe` refuses
-exactly as `off` and logs `credential intake would allow` for each call
-`enforce` would let through.
+**Credential intake in chat** is the second way through, and the only other
+one. The default chat agent (`ROBOTHOR_DEFAULT_CHAT_AGENT`) may use the vault
+tools without the tier when all three hold: the person in the conversation is
+an `owner` or `admin`, the run is a top-level run a person started by typing in
+chat (webchat, Telegram, Slack, a plugin channel or the IDE), and the run has no
+parent. The CLI and API triggers do not count: the same trigger type carries
+unattended resumes that run as `owner`. A member or viewer, a sub-agent, and a
+cron, hook or workflow run of the same agent are refused, and the refusal carries `gate` (`role`, `chat_agent` or `human_chat`)
+and `unlock`, the sentence the agent can give the person. There is no switch
+for it.
 
 A value stored with `vault_set` is then redacted by value, as
 `<redacted:b2:xxxxxxxx>`, from every later redaction pass (history, stored chat

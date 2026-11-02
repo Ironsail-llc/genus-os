@@ -29,11 +29,10 @@ its own manifest is what is read. There is deliberately no
 with what it was handed, and the transcript redactor keeps the argument out of
 the stored step.
 
-The one other way through is credential intake (``ROBOTHOR_CREDENTIAL_INTAKE``):
-on ``enforce``, an owner or admin typing to the default chat agent in a
-top-level human chat run. That is decided from the run itself — the caller's
-``user_role``, the agent id and the live session's trigger and parent — never
-from what the message says. A refusal under intake names the gate that held
+The one other way through is credential intake: an owner or admin typing to
+the default chat agent in a top-level human chat run. That is decided from the
+run itself — the caller's ``user_role``, the agent id and the live session's
+trigger and parent — never from what the message says. A refusal under intake names the gate that held
 and what opens it, so the agent can tell the person instead of guessing.
 
 Once ``vault_set`` holds a value, the redactor knows it: every later
@@ -207,7 +206,8 @@ def _operator_denial(ctx: ToolContext, tool: str) -> dict[str, Any] | None:
     """``None`` when this caller may use the vault tools, else the refusal.
 
     Fails closed on every uncertainty: no agent id, no manifest, an unreadable
-    manifest directory, a tier that is not ``operator``. The alternative —
+    manifest directory, a tier that is not ``operator`` with a caller that does
+    not pass every credential-intake gate. The alternative —
     allowing when we cannot tell — is how a sub-agent ends up holding the
     instance's credentials. A spawned sub-agent runs under its OWN agent id, so
     its own manifest is what is read here; that is the sub-agent refusal, and
@@ -227,41 +227,15 @@ def _operator_denial(ctx: ToolContext, tool: str) -> dict[str, Any] | None:
         tier = ""
     if tier == OPERATOR_TIER:
         return None
-
-    from robothor.engine.feature_flags import credential_intake_mode
-
-    mode = credential_intake_mode()
-    if mode != "off":
-        gate = _intake_gate(ctx)
-        if mode == "enforce":
-            return None if gate is None else _gated_refusal(ctx, tool, gate)
-        if gate is None:
-            logger.info(
-                "credential intake would allow %s for agent %s (role=%s, run=%s); "
-                "refused because ROBOTHOR_CREDENTIAL_INTAKE=observe",
-                tool,
-                agent_id,
-                getattr(ctx, "user_role", "") or "",
-                getattr(ctx, "run_id", "") or "",
-            )
-    return {
-        "error": (
-            f"{tool} needs the operator credential tier and this agent does not have "
-            f"it (its manifest declares {tier or '(none)'!r}). An operator grants it "
-            f"by adding `{CREDENTIAL_TIER_KEY}: {OPERATOR_TIER}` under `v2:` in that "
-            "agent's manifest. Credentials are otherwise handled by the operator's "
-            "own agent: ask it to store, test or rotate this one, or use a tool that "
-            "holds the credential for you."
-        ),
-        "denied_by": "credential_tier",
-    }
+    gate = _intake_gate(ctx)
+    return None if gate is None else _gated_refusal(ctx, tool, gate)
 
 
 async def _denial(ctx: ToolContext, tool: str) -> dict[str, Any] | None:
     """:func:`_operator_denial`, off the event loop.
 
-    It reads the agent's manifest from disk and the governed intake flag from
-    the database; either would stall every other run on the loop thread.
+    It reads the agent's manifest from disk, which would stall every other run
+    on the loop thread.
     """
     return await asyncio.to_thread(_operator_denial, ctx, tool)
 

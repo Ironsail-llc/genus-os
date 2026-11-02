@@ -526,7 +526,6 @@ def engine_flag_readers() -> dict[str, tuple[object, str]]:
         "ROBOTHOR_INJECTION_SCAN_MODE": (ff.injection_scan_mode, "ROBOTHOR_INJECTION_SCAN_ENABLED"),
         "ROBOTHOR_JUDGE_ENABLED": (ff.goal_judge_enabled, ""),
         "ROBOTHOR_PER_USER_SESSIONS": (ff.per_user_sessions_mode, ""),
-        "ROBOTHOR_CREDENTIAL_INTAKE": (ff.credential_intake_mode, ""),
         "ROBOTHOR_RBAC_MODE": (ff.rbac_enforcement_mode, "ROBOTHOR_RBAC_ENABLED"),
         "ROBOTHOR_RIP_13_MODE": (ff.symbolic_memory_mode, "ROBOTHOR_RIP_13_ENABLED"),
         "ROBOTHOR_RIP_1_ENABLED": (lambda: ff.is_rip_enabled(1), ""),

@@ -98,7 +98,6 @@ _BOOL_VALUES: tuple[str, ...] = ("true", "false")
 _THREE_RUNG_MODE_FLAGS: frozenset[str] = frozenset(
     {
         "ROBOTHOR_ACT_OBSERVE_MODE",
-        "ROBOTHOR_CREDENTIAL_INTAKE",
         "ROBOTHOR_HONESTY_SUITE_MODE",
         "ROBOTHOR_PER_USER_SESSIONS",
         "ROBOTHOR_STEP_EFFICIENCY_MODE",

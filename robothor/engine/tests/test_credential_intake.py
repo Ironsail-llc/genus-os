@@ -62,6 +62,7 @@ def intake(monkeypatch, request):
     monkeypatch.setattr(vault, "get", lambda key, **kw: rows.get(key))
     monkeypatch.setattr(vault, "set", fake_set)
     monkeypatch.setattr(vault, "list", lambda **kw: sorted(rows))
+    monkeypatch.setattr(vault, "delete", lambda key, **kw: rows.pop(key, None) is not None)
 
     async def _no_reload() -> None:
         return None

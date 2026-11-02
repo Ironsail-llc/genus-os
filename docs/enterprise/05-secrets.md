@@ -91,19 +91,18 @@ Both of those change with the release described at the end of this page. Until
 then, for anything you would not want an agent to be able to echo, use
 `genus vault set` on the box.
 
-### Handing the default chat agent a credential (`ROBOTHOR_CREDENTIAL_INTAKE`)
+### Handing the default chat agent a credential
 
-With `ROBOTHOR_CREDENTIAL_INTAKE=enforce`, an owner or admin can paste a key to
-the default chat agent and it stores it with `vault_set`, proves it with
-`vault_test` and answers with the fingerprint, without the agent's manifest
-declaring `v2.credentials: operator`. Only a top-level conversation a person
+An owner or admin can paste a key to the default chat agent and it stores it
+with `vault_set`, proves it with `vault_test` and answers with the fingerprint,
+without the agent's manifest declaring `v2.credentials: operator`. Only a top-level conversation a person
 started counts; a member, a sub-agent and a scheduled run are refused, and the
 refusal names the gate. Once stored, the exact value is redacted from history,
 stored chat messages, the run's task text and logs, shape or no shape, and the
 live tool stream never carries a `vault_set` argument, including a call made
 through `tool_call` on a deferred run. Payment cards stay out
-of chat: the agent offers the secure enrollment link instead. The rules and
-the rollout ladder are in [Configuration](../configuration.md).
+of chat: the agent offers the secure enrollment link instead. The rules are in
+[Configuration](../configuration.md).
 
 The Helm's Settings › Secrets page can remove a vault row (**Remove**, then
 **Remove from vault**); a copy in the environment, if there is one, is then
