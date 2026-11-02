@@ -133,17 +133,25 @@ def _gate_for(verdict: ToolVerdict, tool: str, config: AgentConfig | None) -> tu
     return "", "", ""
 
 
+#: Admission gates that run before the wrapped call is resolved: their subject
+#: is the call as sent, so a ``tool_call`` refusal names ``tool_call``.
+_WRAPPER_GATES: frozenset[str] = frozenset({"plan_mode", "tools_allowed", "run_wrapup"})
+
+
 def with_gate(
     verdict: ToolVerdict, tool: str, config: AgentConfig | None, tool_args: Any = None
 ) -> ToolVerdict:
     """``verdict`` with its gate and unlock filled, and the refusal keys in ``output``.
 
-    The unlock names the call the gates judged: for ``tool_call``, the tool it
-    wraps (``wrapped_call.inner_call``), as a direct call of it would read.
+    The unlock names the call the refusing gate judged. Plan mode, the toolset
+    check and wrap-up judge the wrapper itself, so they keep its name; every
+    later gate judges the call a ``tool_call`` wraps (``wrapped_call.inner_call``)
+    and names that tool, as a direct call of it would read.
     """
     if verdict.allowed:
         return verdict
-    tool, _ = inner_call(tool, tool_args)
+    if verdict.output.get("guard") not in _WRAPPER_GATES:
+        tool, _ = inner_call(tool, tool_args)
     gate, name, unlock = _gate_for(verdict, tool, config)
     if not gate:
         return verdict
