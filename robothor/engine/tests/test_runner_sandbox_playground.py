@@ -1,10 +1,9 @@
-"""A run whose container cannot start is not killed when the playground is on.
+"""A run whose container cannot start is not killed.
 
 Today an agent with `sandbox: docker` whose container cannot start is failed at
 step 0 with "Blocked by sandbox_default: sandbox required but could not be
-started" -- the owner included. With ROBOTHOR_SANDBOX_PLAYGROUND on, the run
-continues, its execution plan says where `exec` will go, and the decision is
-recorded. With the flag off nothing changes.
+started" -- the owner included. Now the run continues, its execution plan says
+where `exec` will go, and the decision is recorded.
 """
 
 from __future__ import annotations
@@ -87,21 +86,7 @@ PRESENT = RuntimeStatus(binary="podman", available=True, reason="")
 
 
 @pytest.mark.asyncio
-async def test_flag_off_still_fails_the_run_as_today(engine_config, mock_db, monkeypatch):
-    monkeypatch.delenv("ROBOTHOR_SANDBOX_PLAYGROUND", raising=False)
-    run, events, _ = await _execute(
-        engine_config, runtime=ABSENT, start_error="no podman", role="owner"
-    )
-    assert run.status.value == "failed"
-    assert "Blocked by sandbox_default: sandbox required but could not be started" in (
-        run.error_message or ""
-    )
-    assert _named(events, "sandbox_playground") == []
-
-
-@pytest.mark.asyncio
-async def test_no_runtime_owner_run_continues_on_the_host(engine_config, mock_db, monkeypatch):
-    monkeypatch.setenv("ROBOTHOR_SANDBOX_PLAYGROUND", "1")
+async def test_no_runtime_owner_run_continues_on_the_host(engine_config, mock_db):
     run, events, started = await _execute(
         engine_config, runtime=ABSENT, start_error=None, role="owner"
     )
@@ -115,10 +100,7 @@ async def test_no_runtime_owner_run_continues_on_the_host(engine_config, mock_db
 
 
 @pytest.mark.asyncio
-async def test_no_runtime_member_run_continues_and_exec_will_refuse(
-    engine_config, mock_db, monkeypatch
-):
-    monkeypatch.setenv("ROBOTHOR_SANDBOX_PLAYGROUND", "1")
+async def test_no_runtime_member_run_continues_and_exec_will_refuse(engine_config, mock_db):
     run, events, _ = await _execute(engine_config, runtime=ABSENT, start_error=None, role="member")
     assert run.status.value == "completed", run.error_message
     plan = sp.exec_plan_for(run.id)
@@ -127,8 +109,7 @@ async def test_no_runtime_member_run_continues_and_exec_will_refuse(
 
 
 @pytest.mark.asyncio
-async def test_a_start_failure_degrades_through_the_plan(engine_config, mock_db, monkeypatch):
-    monkeypatch.setenv("ROBOTHOR_SANDBOX_PLAYGROUND", "1")
+async def test_a_start_failure_degrades_through_the_plan(engine_config, mock_db):
     run, events, started = await _execute(
         engine_config, runtime=PRESENT, start_error="uid_map write failed", role="owner"
     )

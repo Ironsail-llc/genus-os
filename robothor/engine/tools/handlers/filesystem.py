@@ -98,8 +98,8 @@ async def _exec(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             result["timeout_note"] = clamp_note
         return result
 
-    # Sandbox playground (flag off: both are no-ops): a refused plan never
-    # starts a subprocess, and every result says where it ran.
+    # A refused execution plan never starts a subprocess, and every result
+    # says where it ran.
     from robothor.engine.sandbox_policy import exec_refusal, stamp_location
 
     if refusal := exec_refusal(run_id):

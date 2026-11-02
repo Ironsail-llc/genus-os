@@ -143,12 +143,12 @@ def opted_out_of_containment(manifests: Iterable[dict[str, Any]]) -> list[str]:
     return out
 
 
-# ── The sandbox as a playground (ROBOTHOR_SANDBOX_PLAYGROUND) ─────────────
+# ── The sandbox as a playground ───────────────────────────────────────────
 #
 # The legacy decision above still says WHEN a container is wanted. What it
 # never said is what happens when one is wanted and the engine has no runtime
-# to start it: the run was failed at step 0, the owner included. Under the
-# playground the run continues and this plan says where each `exec` goes. An
+# to start it: the run was failed at step 0, the owner included. Now the run
+# continues and this plan says where each `exec` goes. An
 # agent the legacy ladder leaves on the host stays there, because a
 # `--network none` container round an agent that never asked for one would
 # block work that runs today.
@@ -315,7 +315,7 @@ def set_exec_plan(run_id: str, plan: ExecPlan) -> None:
 
 
 def exec_plan_for(run_id: str) -> ExecPlan | None:
-    """The plan for this run, or None (flag off, or no plan made).
+    """The plan for this run, or None (no plan made).
 
     The live session's run carries it for the run's whole lifetime; the bounded
     table covers callers with no registered session. A busy instance starts more
@@ -386,7 +386,7 @@ async def establish_execution_plan(
 def record_exec_location(
     run_id: str, where: str, *, degraded: bool = False, beside: bool = False, tool: str = "exec"
 ) -> None:
-    """One ``exec_location`` row per exec. Blocking: call it off the loop.
+    """One ``exec_location`` row for an exec a decision moved. Blocking: off the loop.
 
     ``beside`` is an owner's snippet that ran on the host while the run's
     container was live: the one widening past a working container.
@@ -420,12 +420,6 @@ def _record(run_id: str, name: str, action: str, reason: str, *, tool: str = "ex
 # ── Call sites, kept to one line each where the ratchets are tight ────────
 
 
-def _playground_on() -> bool:
-    from robothor.engine.feature_flags import sandbox_playground_enabled
-
-    return sandbox_playground_enabled()
-
-
 async def _not_handled(_error: str) -> bool:
     return False
 
@@ -433,15 +427,13 @@ async def _not_handled(_error: str) -> bool:
 async def playground_decision(
     config: Any, mode: str, decision: str, agent_id: str, run: Any
 ) -> tuple[str, Callable[[str], Awaitable[bool]]]:
-    """The runner's sandbox step under the playground: ``(decision, degrade)``.
+    """The runner's sandbox step: ``(decision, degrade)``.
 
-    Flag off: the decision is returned untouched and ``degrade`` handles
-    nothing, so the start-failure path fails closed exactly as before. Flag on:
-    with no runtime there is nothing to start (decision ``host``), and
-    ``degrade(error)`` turns a start failure into a plan instead of a failed run.
+    With no runtime there is nothing to start (decision ``host``), and
+    ``degrade(error)`` turns a start failure into a plan instead of a failed
+    run. An agent whose confined tools nothing could refuse per call keeps the
+    decision untouched and a ``degrade`` that handles nothing: it fails closed.
     """
-    if not _playground_on():
-        return decision, _not_handled
     plan = await establish_execution_plan(config, mode, agent_id=agent_id, run=run)
     if plan.where == "refuse" and _confined_tools_ungated(config):
         return decision, _not_handled
@@ -457,8 +449,6 @@ async def playground_decision(
 
 def exec_refusal(run_id: str, *, tool: str = "exec") -> dict[str, Any] | None:
     """The result for a run whose plan refuses, or None to go ahead."""
-    if not _playground_on():
-        return None
     plan = exec_plan_for(run_id)
     if plan is None or plan.where != "refuse":
         return None
@@ -472,8 +462,13 @@ def exec_refusal(run_id: str, *, tool: str = "exec") -> dict[str, Any] | None:
 async def stamp_location(
     result: dict[str, Any], where: str, run_id: str, *, tool: str = "exec"
 ) -> dict[str, Any]:
-    """Say where one ``exec`` (or snippet) ran, and record it once. Flag off: untouched."""
-    if not isinstance(result, dict) or not _playground_on():
+    """Say where one ``exec`` (or snippet) ran; record it when a decision moved it.
+
+    Only a host fallback (``degraded``) or a snippet beside a live container
+    (``beside``) writes a row. An exec where nothing was decided writes none:
+    a row per command would load the table and swamp its dashboard.
+    """
+    if not isinstance(result, dict):
         return result
     import asyncio
 
@@ -484,16 +479,15 @@ async def stamp_location(
         degraded, beside = plan.degraded, plan.where == "sandbox"
         if note := plan.host_note if degraded else plan.beside_note(tool) if beside else "":
             result["execution_note"] = note
-    await asyncio.to_thread(
-        record_exec_location, run_id, where, degraded=degraded, beside=beside, tool=tool
-    )
+    if degraded or beside:
+        await asyncio.to_thread(
+            record_exec_location, run_id, where, degraded=degraded, beside=beside, tool=tool
+        )
     return result
 
 
 def guardrail_context(session: Any) -> dict[str, Any]:
-    """Extra ``check_pre_execution`` kwargs under the playground; {} when off."""
-    if not _playground_on():
-        return {}
+    """Extra ``check_pre_execution`` kwargs: the acting role, and a refused plan."""
     run = getattr(session, "run", None)
     context: dict[str, Any] = {"user_role": acting_host_role(run)}
     plan = exec_plan_for(str(getattr(run, "id", "") or ""))
@@ -503,9 +497,9 @@ def guardrail_context(session: Any) -> dict[str, Any]:
 
 
 def proxy_may_run_on_host(proxy: Any) -> bool:
-    """execute_code under the playground: an owner or admin driving the run may
-    run a snippet where the proxy is, the engine host. Nobody else, never off."""
-    return _playground_on() and bool(acting_host_role(_proxy_run(proxy)))
+    """An owner or admin driving the run may run a snippet where the proxy is,
+    the engine host. Nobody else."""
+    return bool(acting_host_role(_proxy_run(proxy)))
 
 
 def person_drives(run: Any) -> bool:

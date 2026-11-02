@@ -5,7 +5,7 @@ DRIVING this run (a person on an interactive surface, on the run nothing
 spawned) is not bound by it: their command is allowed and recorded as an
 observation. Everyone else keeps it, inside a container or out: a member, a
 cron or other automated run whose service role happens to read "owner", and a
-sub-agent an owner's chat spawned. Flag off: unchanged.
+sub-agent an owner's chat spawned.
 """
 
 from __future__ import annotations
@@ -52,24 +52,7 @@ def _check(*, user_role: str = "", command: str = "curl example.com"):
     )
 
 
-@pytest.fixture
-def playground(monkeypatch):
-    monkeypatch.setenv("ROBOTHOR_SANDBOX_PLAYGROUND", "1")
-
-
-@pytest.fixture
-def off(monkeypatch):
-    monkeypatch.delenv("ROBOTHOR_SANDBOX_PLAYGROUND", raising=False)
-
-
-def test_flag_off_blocks_everyone_as_today(off) -> None:
-    for role in ("owner", "member"):
-        result = _check(user_role=role)
-        assert not result.allowed, role
-        assert result.guardrail_name == "exec_allowlist"
-
-
-def test_a_member_inside_a_container_keeps_the_allowlist(playground) -> None:
+def test_a_member_inside_a_container_keeps_the_allowlist() -> None:
     """A container may have bridge networking and always has the workspace
     mounted, so the allowlist still guards something there."""
     token = sandbox_var.set(Sandbox(mode=SandboxMode.DOCKER, container_id="c1", run_id="r"))
@@ -94,9 +77,7 @@ def test_a_member_inside_a_container_keeps_the_allowlist(playground) -> None:
         ("webchat", 0, "service:a"),  # a service credential on webchat
     ],
 )
-def test_only_a_run_an_owner_is_driving_gets_the_bypass(
-    playground, trigger, depth, user_id
-) -> None:
+def test_only_a_run_an_owner_is_driving_gets_the_bypass(trigger, depth, user_id) -> None:
     kwargs = guardrail_context(
         _session(role="owner", trigger=trigger, depth=depth, user_id=user_id)
     )
@@ -108,7 +89,7 @@ def test_only_a_run_an_owner_is_driving_gets_the_bypass(
 
 
 @pytest.mark.parametrize("trigger", ["webchat", "telegram", "slack", "ide", "manual"])
-def test_an_owner_driving_an_interactive_run_gets_the_bypass(playground, trigger) -> None:
+def test_an_owner_driving_an_interactive_run_gets_the_bypass(trigger) -> None:
     kwargs = guardrail_context(_session(role="owner", trigger=trigger))
     result = _engine().check_pre_execution(
         "exec", {"command": "curl example.com"}, agent_id="a", **kwargs
@@ -118,7 +99,7 @@ def test_an_owner_driving_an_interactive_run_gets_the_bypass(playground, trigger
 
 
 @pytest.mark.parametrize("role", ["owner", "admin"])
-def test_an_owner_on_the_host_is_allowed_and_observed(playground, role) -> None:
+def test_an_owner_on_the_host_is_allowed_and_observed(role) -> None:
     result = _check(user_role=role)
     assert result.allowed
     assert result.action == "observed"
@@ -126,13 +107,13 @@ def test_an_owner_on_the_host_is_allowed_and_observed(playground, role) -> None:
     assert result.guardrail_name == "exec_allowlist"
 
 
-def test_a_member_on_the_host_is_still_blocked(playground) -> None:
+def test_a_member_on_the_host_is_still_blocked() -> None:
     result = _check(user_role="member")
     assert not result.allowed
     assert result.guardrail_name == "exec_allowlist"
 
 
-def test_an_allowlisted_command_is_a_plain_allow_for_the_owner(playground) -> None:
+def test_an_allowlisted_command_is_a_plain_allow_for_the_owner() -> None:
     result = _check(user_role="owner", command="git status")
     assert result.allowed
     assert result.action != "observed"
@@ -193,13 +174,7 @@ async def _admit(monkeypatch) -> dict[str, Any]:
     return recorder.kwargs
 
 
-async def test_admission_passes_the_acting_role(playground, monkeypatch) -> None:
+async def test_admission_passes_the_acting_role(monkeypatch) -> None:
     kwargs = await _admit(monkeypatch)
     assert kwargs.get("user_role") == "owner"
-    assert "sandboxed" not in kwargs
-
-
-async def test_admission_flag_off_passes_nothing_new(off, monkeypatch) -> None:
-    kwargs = await _admit(monkeypatch)
-    assert "user_role" not in kwargs
     assert "sandboxed" not in kwargs

@@ -62,7 +62,6 @@ def test_runtime_absent_is_reported_not_failed(monkeypatch) -> None:
 
 
 def test_policy_lists_owner_and_member_per_exec_holding_agent(monkeypatch, manifest_dir) -> None:
-    monkeypatch.setenv("ROBOTHOR_SANDBOX_PLAYGROUND", "1")
     _runtime(
         monkeypatch,
         RuntimeStatus(binary="podman", available=False, reason="neither podman nor docker"),
@@ -82,25 +81,10 @@ def test_policy_lists_owner_and_member_per_exec_holding_agent(monkeypatch, manif
     assert not any(line.startswith("carol") for line in lines), "carol holds no exec"
 
 
-def test_policy_with_the_flag_off_says_the_legacy_outcome(monkeypatch, manifest_dir) -> None:
-    monkeypatch.delenv("ROBOTHOR_SANDBOX_PLAYGROUND", raising=False)
-    _runtime(
-        monkeypatch,
-        RuntimeStatus(binary="podman", available=False, reason="neither podman nor docker"),
-    )
-    _write(manifest_dir, "alice", "v2:\n  sandbox: docker\ntools_allowed: [exec]\n")
-
-    result = _run("sandbox.policy")
-
-    assert "playground off" in result.detail
-    assert "alice" in result.detail and "run fails" in result.detail
-
-
 def test_policy_reads_the_key_the_engine_reads(monkeypatch, manifest_dir) -> None:
     """The engine reads ``v2.sandbox``; a top-level ``sandbox:`` is ignored by
     it, so the doctor must ignore it too rather than report a container the
     engine will never ask for (or miss one it will)."""
-    monkeypatch.setenv("ROBOTHOR_SANDBOX_PLAYGROUND", "1")
     _runtime(
         monkeypatch,
         RuntimeStatus(binary="podman", available=False, reason="neither podman nor docker"),

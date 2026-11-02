@@ -82,7 +82,6 @@ async def _resume_kwargs(tmp_path, monkeypatch) -> dict[str, Any]:
 
 @pytest.fixture
 async def resumed_run(tmp_path, monkeypatch) -> Any:
-    monkeypatch.setenv("ROBOTHOR_SANDBOX_PLAYGROUND", "1")
     kwargs = await _resume_kwargs(tmp_path, monkeypatch)
     return SimpleNamespace(
         id="repair-resumed-run",

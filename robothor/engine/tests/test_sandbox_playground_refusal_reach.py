@@ -63,7 +63,6 @@ class _Proxy:
 
 @pytest.fixture(autouse=True)
 def _playground(monkeypatch):
-    monkeypatch.setenv("ROBOTHOR_SANDBOX_PLAYGROUND", "1")
     monkeypatch.setattr("robothor.engine.sandbox.runtime_status", lambda **_k: ABSENT)
     monkeypatch.setattr(sp, "_record", lambda *_a, **_k: None)
 
@@ -91,13 +90,6 @@ async def test_execute_code_is_refused_for_a_refused_plan_with_no_container() ->
 async def test_execute_code_still_runs_for_an_owner_with_no_container() -> None:
     run = _Run("run-owner-ec", "owner")
     assert (await _establish(run)).where == "host"
-    assert preflight("print(1)", _Proxy(run)) is None
-
-
-async def test_execute_code_flag_off_is_unchanged(monkeypatch) -> None:
-    run = _Run("run-off-ec", "member")
-    await _establish(run)
-    monkeypatch.delenv("ROBOTHOR_SANDBOX_PLAYGROUND", raising=False)
     assert preflight("print(1)", _Proxy(run)) is None
 
 

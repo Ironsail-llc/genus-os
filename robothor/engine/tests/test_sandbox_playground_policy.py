@@ -43,15 +43,6 @@ def _plan(cfg=None, *, role="owner", runtime=ABSENT, mode="off", root=True, benc
     )
 
 
-def test_the_flag_is_off_by_default(monkeypatch) -> None:
-    from robothor.engine.feature_flags import sandbox_playground_enabled
-
-    monkeypatch.delenv("ROBOTHOR_SANDBOX_PLAYGROUND", raising=False)
-    assert sandbox_playground_enabled() is False
-    monkeypatch.setenv("ROBOTHOR_SANDBOX_PLAYGROUND", "1")
-    assert sandbox_playground_enabled() is True
-
-
 @pytest.mark.parametrize("role", ["owner", "admin", "member", ""])
 def test_a_present_runtime_contains_everyone_who_asked_for_it(role) -> None:
     plan = _plan(role=role, runtime=PRESENT)
