@@ -203,6 +203,16 @@ describe("ChatPanel polish", () => {
     expect(screen.queryByRole("button", { name: /load earlier/i })).toBeNull();
   });
 
+  it("offers Load earlier whenever the engine says there is more, with no setting to turn it on", async () => {
+    for (const key of Object.keys(process.env)) {
+      if (/HISTORY/i.test(key)) vi.stubEnv(key, "");
+    }
+    serve({ messages: [{ role: "user", content: "latest", id: 60, timestamp: T(9) }], hasMore: true });
+    render(<ChatPanel />);
+    expect(await screen.findByRole("button", { name: /load earlier/i })).toBeTruthy();
+    vi.unstubAllEnvs();
+  });
+
   it("offers no Load earlier when the history says there is nothing more", async () => {
     serve({ messages: [{ role: "user", content: "hi", id: 1 }], hasMore: false });
     render(<ChatPanel />);

@@ -3,14 +3,15 @@
 The in-memory session history is trimmed to ``MAX_HISTORY`` rows and carries
 no time, so the dashboard stamped every loaded message "now" and could never
 scroll back further than about twenty turns. ``chat_messages`` keeps every
-row with its ``created_at``. Behind ``ROBOTHOR_CHAT_HISTORY_PAGES`` the history
-endpoint reads its page from there; off, it answers exactly as before.
+row with its ``created_at``, and the history endpoint reads its page from
+there. That is the only path: there is no setting that turns it off.
 """
 
 from __future__ import annotations
 
 import json
 import threading
+from pathlib import Path
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -151,23 +152,7 @@ async def _one_turn(client, mock_runner, key: str) -> None:
 
 class TestHistoryEndpoint:
     @pytest.mark.asyncio
-    async def test_flag_off_answers_exactly_as_before(self, client, mock_runner, monkeypatch):
-        monkeypatch.delenv("ROBOTHOR_CHAT_HISTORY_PAGES", raising=False)
-        await _one_turn(client, mock_runner, "off:key")
-        store = MagicMock()
-        with patch.object(chat_store, "load_history_page", store, create=True):
-            res = await client.get("/chat/history?session_key=off:key&offset=10&before=5")
-
-        body = res.json()
-        assert set(body) == {"sessionKey", "messages", "recoveryScope"}
-        assert [m["content"] for m in body["messages"]] == ["hello", "in memory"]
-        store.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_flag_on_reads_the_page_from_the_store_off_the_loop(
-        self, client, mock_runner, monkeypatch
-    ):
-        monkeypatch.setenv("ROBOTHOR_CHAT_HISTORY_PAGES", "1")
+    async def test_the_page_is_read_from_the_store_off_the_loop(self, client, mock_runner):
         loop_thread = threading.current_thread()
         seen: dict = {}
 
@@ -197,10 +182,9 @@ class TestHistoryEndpoint:
         assert seen["thread"] is not loop_thread
 
     @pytest.mark.asyncio
-    async def test_flag_on_first_page_falls_back_to_memory_when_the_store_has_nothing(
-        self, client, mock_runner, monkeypatch
+    async def test_a_first_page_falls_back_to_memory_when_the_store_has_nothing(
+        self, client, mock_runner
     ):
-        monkeypatch.setenv("ROBOTHOR_CHAT_HISTORY_PAGES", "1")
         await _one_turn(client, mock_runner, "fallback:key")
         with patch.object(chat_store, "load_history_page", lambda *a, **k: None, create=True):
             res = await client.get("/chat/history?session_key=fallback:key")
@@ -210,10 +194,9 @@ class TestHistoryEndpoint:
         assert body["hasMore"] is False
 
     @pytest.mark.asyncio
-    async def test_flag_on_first_page_falls_back_to_memory_when_the_store_fails(
-        self, client, mock_runner, monkeypatch
+    async def test_a_first_page_falls_back_to_memory_when_the_store_fails(
+        self, client, mock_runner
     ):
-        monkeypatch.setenv("ROBOTHOR_CHAT_HISTORY_PAGES", "1")
         await _one_turn(client, mock_runner, "broken:key")
 
         def broken(*a, **k):
@@ -227,16 +210,79 @@ class TestHistoryEndpoint:
         assert res.json()["hasMore"] is False
 
     @pytest.mark.asyncio
-    async def test_an_older_page_never_repeats_the_in_memory_tail(
-        self, client, mock_runner, monkeypatch
-    ):
-        monkeypatch.setenv("ROBOTHOR_CHAT_HISTORY_PAGES", "1")
+    async def test_an_older_page_never_repeats_the_in_memory_tail(self, client, mock_runner):
         await _one_turn(client, mock_runner, "older:key")
         with patch.object(chat_store, "load_history_page", lambda *a, **k: None, create=True):
             res = await client.get("/chat/history?session_key=older:key&before=3")
 
         assert res.json()["messages"] == []
         assert res.json()["hasMore"] is False
+
+    @pytest.mark.asyncio
+    async def test_a_zero_in_the_environment_changes_nothing(
+        self, client, mock_runner, monkeypatch
+    ):
+        """The old switch's name, set to off, is just an unknown variable: the
+        endpoint still pages from the store and returns each row's time."""
+        monkeypatch.setenv(_RETIRED_FLAG, "0")
+        stored = {
+            "messages": [
+                {"role": "user", "content": "stored", "id": 9, "timestamp": T0.isoformat()}
+            ],
+            "hasMore": True,
+        }
+        seen: dict = {}
+
+        def fake_page(session_key, **kwargs):
+            seen.update(kwargs)
+            return stored
+
+        with patch.object(chat_store, "load_history_page", fake_page):
+            res = await client.get("/chat/history?session_key=zero:key&before=40")
+
+        body = res.json()
+        assert body["messages"][0]["timestamp"] == T0.isoformat()
+        assert body["hasMore"] is True
+        assert seen["before"] == 40
+
+
+# Spelled in two halves so this file is not itself a mention of it.
+_RETIRED_FLAG = "ROBOTHOR_" + "CHAT_HISTORY_PAGES"
+_REPO = Path(__file__).resolve().parents[3]
+
+
+class TestThereIsNoSwitch:
+    """Stored history pages are the only behaviour: no setting decides it."""
+
+    def test_settings_declare_no_history_pages_flag(self):
+        from robothor.settings import get_settings
+
+        assert not hasattr(get_settings().flags, "chat_history_pages")
+
+    def test_no_engine_reader_for_the_flag(self):
+        from robothor.engine import chat_history_page
+
+        assert not hasattr(chat_history_page, "_pages_enabled")
+
+    def test_nothing_in_the_repo_mentions_the_flag(self):
+        roots = ["robothor", "crm", "app/src", "app/__tests__", "app/e2e", "docs", "changelog.d"]
+        suffixes = {".py", ".ts", ".tsx", ".md", ".yaml", ".yml", ".json"}
+        mentions = [
+            str(path.relative_to(_REPO))
+            for root in roots
+            for path in (_REPO / root).rglob("*")
+            if path.is_file()
+            and path.suffix in suffixes
+            and "node_modules" not in path.parts
+            and _RETIRED_FLAG in path.read_text(encoding="utf-8", errors="ignore")
+        ]
+        mentions += [
+            name
+            for name in ("SERVICES.md", ".env.example")
+            if (_REPO / name).is_file()
+            and _RETIRED_FLAG in (_REPO / name).read_text(encoding="utf-8")
+        ]
+        assert mentions == []
 
 
 class TestTheUserTurnKeepsItsOwnTime:
