@@ -111,6 +111,9 @@ def credential_tier(agent_id: str) -> str:
     return str(v2.get(CREDENTIAL_TIER_KEY, "") or "").strip().lower()
 
 
+#: This handler takes a credential from a person in chat; capability copy reads it.
+CREDENTIAL_INTAKE = True
+
 #: The human roles that may hand the chat agent a credential. The same pair
 #: every operator surface admits (``crm/bridge/routers/_operator.py``).
 INTAKE_ROLES = frozenset({"owner", "admin"})
