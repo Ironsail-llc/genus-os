@@ -224,8 +224,13 @@ def _install_fake_http(monkeypatch: pytest.MonkeyPatch, server: _FakeHttpServer)
             return json.dumps(self._body)
 
     class _FakeAsyncClient:
+        is_closed = False
+
         def __init__(self, *args: Any, **kwargs: Any) -> None:
             pass
+
+        async def aclose(self) -> None:
+            self.is_closed = True
 
         async def __aenter__(self) -> _FakeAsyncClient:
             return self

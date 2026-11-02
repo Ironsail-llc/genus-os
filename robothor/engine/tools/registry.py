@@ -692,17 +692,14 @@ class ToolRegistry:
         - Failed adapters cached with exponential backoff (5min initial, 30min max)
         - Failures logged once at WARNING, then suppressed until retry window
 
-        Under ``ROBOTHOR_CONFIG_CACHE`` adapters connect concurrently (bounded,
-        each with its own timeout) and a live session's tool list is reused;
-        schemas are still applied in adapter order, so a name clash resolves
-        the same way it does sequentially.
+        Adapters connect concurrently (bounded, each with its own timeout) and
+        a live session's tool list is reused; schemas are applied in adapter
+        order, so a name clash resolves the same way it would sequentially.
         """
-        import asyncio
         import time
 
         from robothor.engine import mcp_client
         from robothor.engine.adapters import verify_adapter_integrity
-        from robothor.engine.feature_flags import config_cache_enabled
 
         pool = mcp_client.get_mcp_client_pool()
         admitted: list[Any] = []
@@ -719,21 +716,7 @@ class ToolRegistry:
                 continue
             if self._in_backoff(adapter.name, time.monotonic()):
                 continue
-            if config_cache_enabled():
-                admitted.append(adapter)
-                continue
-
-            now = time.monotonic()
-            try:
-                session = await asyncio.wait_for(
-                    pool.get_session(adapter.name), timeout=mcp_client.ADAPTER_CONNECT_TIMEOUT_S
-                )
-                mcp_tools = await asyncio.wait_for(
-                    session.list_tools(), timeout=mcp_client.ADAPTER_CONNECT_TIMEOUT_S
-                )
-                self._apply_adapter_tools(adapter, mcp_tools)
-            except Exception as e:
-                self._record_adapter_failure(adapter.name, now, e)
+            admitted.append(adapter)
 
         if not admitted:
             return
