@@ -22,6 +22,7 @@ from robothor.engine import chat
 from robothor.engine.llm_client import LLMClient
 from robothor.engine.runtime.contracts import ExecutionContext
 from robothor.engine.runtime.current import active_context
+from robothor.engine.task_registry import get_task_registry
 from robothor.engine.tests import test_runtime_controls
 from robothor.engine.tests.runtime_fixtures import seed_unfinished_work
 from robothor.engine.tests.test_runner import runner  # noqa: F401
@@ -324,6 +325,9 @@ async def test_unfinished_goal_review_and_pause_through_normal_chat(
             finally:
                 active_context.reset(token)
             assert response.status_code == 200
+            # The answer goes out before finalization, which (with the
+            # measuring _finish_run above) runs as a task-registry task.
+            await get_task_registry().drain(timeout=30.0)
             events = [
                 json.loads(line[6:])
                 for line in response.text.splitlines()
