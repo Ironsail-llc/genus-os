@@ -920,3 +920,64 @@ class TestAFailedHttpListKeepsItsClient:
         assert pool._sessions["web"] is session
         assert counters.constructed == 1
         assert counters.closed == 0
+
+
+# ── one code path: no switch decides whether the cache runs ──────────────
+
+_FLAG_ENV = "ROBOTHOR_" + "CONFIG_CACHE"
+
+
+class TestNoFeatureFlag:
+    def test_no_module_mentions_the_flag(self) -> None:
+        from pathlib import Path
+
+        import robothor
+
+        root = Path(robothor.__file__).parent
+        this = Path(__file__).resolve()
+        offenders = [
+            str(p.relative_to(root))
+            for p in root.rglob("*.py")
+            if p.resolve() != this and _FLAG_ENV in p.read_text(encoding="utf-8")
+        ]
+        assert offenders == []
+
+    def test_registry_and_mcp_client_read_no_flag(self) -> None:
+        import inspect
+
+        from robothor.engine import feature_flags
+        from robothor.engine.tools import registry, schemas
+
+        assert not hasattr(feature_flags, "config_cache_enabled")
+        for module in (registry, mcp_client, schemas):
+            assert "config_cache_enabled" not in inspect.getsource(module), module.__name__
+
+    def test_not_declared_in_settings(self) -> None:
+        from robothor.settings.model import FlagSettings
+
+        envs = {
+            f.json_schema_extra.get("env")
+            for f in FlagSettings.model_fields.values()
+            if isinstance(f.json_schema_extra, dict)
+        }  # type: ignore[union-attr]
+        assert _FLAG_ENV not in envs
+
+    @pytest.mark.asyncio
+    async def test_cache_runs_with_the_old_env_var_set_to_zero(
+        self, monkeypatch: pytest.MonkeyPatch, pool: Any
+    ) -> None:
+        monkeypatch.setenv(_FLAG_ENV, "0")
+        counters = _install_fake_stdio(monkeypatch)
+        adapters = [_adapter("alpha"), _adapter("bravo")]
+
+        await _register(adapters)
+        await _register(adapters)
+
+        assert counters.list_calls == {"alpha": 1, "bravo": 1}
+
+    def test_mcp_list_tools_always_declares_refresh(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from robothor.engine.tools.schemas import get_engine_schemas
+
+        monkeypatch.setenv(_FLAG_ENV, "0")
+        props = get_engine_schemas()["mcp_list_tools"]["function"]["parameters"]["properties"]
+        assert props["refresh"]["type"] == "boolean"
