@@ -814,6 +814,35 @@ claim. The engine runs one replica with the `Recreate` strategy, so a
 replicas with rolling updates, so give them a `ReadWriteMany` claim or a
 per-pod volume such as `emptyDir`.
 
+### Webhook receiver (hooks)
+
+The engine runs as one `Recreate` replica, so webhook deliveries to
+`POST /api/webhooks/{channel}` fail while it restarts. The chart's optional
+`hooks` component serves that path from its own pods (two replicas, a
+surge-only rolling update, a disruption budget): each delivery is verified and
+published to the event stream, and the engine consumes it from there.
+
+```yaml
+hooks:
+  enabled: true
+  channels:
+    example:
+      stream: example
+      secret_env: EXAMPLE_WEBHOOK_SECRET
+      signature_scheme: hmac_hex
+```
+
+`hooks.channels` takes the same keys as `docs/webhooks.yaml` (see
+[Webhook ingress](event-bus.md#webhook-ingress)) and is mounted into the pods
+as their `webhooks.yaml`. Each `secret_env` is read from the `engine-providers`
+Secret. Route the public webhook path to the `<release>-hooks` Service once its
+pods are ready; the engine keeps serving the same path until then. With egress
+policies on, the hooks pods are in the default `redis` and `https` destination
+classes: a `google_oidc` channel fetches Google's signing certificates over
+HTTPS on every push, so an environment layer that overrides those lists must
+keep `hooks` in them. The chart's README ("Hooks") lists every value and the
+network-policy wiring.
+
 ## Production Checklist
 
 - [ ] Set a strong `ROBOTHOR_DB_PASSWORD`
@@ -835,6 +864,11 @@ per-pod volume such as `emptyDir`.
 - [ ] Set `ROBOTHOR_CAPABILITIES_MANIFEST` if the deployment keeps its
       `agent_capabilities.json` outside the workspace
 - [ ] Set up monitoring (health endpoints return JSON)
+- [ ] If a reverse proxy, ingress or tunnel sits in front of the dashboard, let it
+      admit request bodies of about 22 MB on `POST /api/chat/send`: a chat message
+      can carry three 5 MB files, base64-encoded (see
+      [Attaching files](channels/webchat.md#attaching-files)). A smaller limit
+      refuses those messages before they reach the dashboard
 - [ ] Back up PostgreSQL daily (`pg_dump robothor_memory`)
 
 ## Diagnostics (`genus doctor`)
@@ -1004,6 +1038,13 @@ vector is never cleared, because nothing backfills a missing one. The
 embedding gets one attempt within 8 seconds, so an unreachable provider costs
 the save at most that long rather than outlasting the dashboard's 30-second
 request timeout.
+
+**An operator-confirmed fact is the operator's word, and no automatic path
+retires it.** When a later extraction contradicts or updates it, the new
+extraction is stored already superseded by the confirmed fact, so the
+pipeline's reading stays on record while the operator's stays active; the
+nightly quality prune, consolidation, dechurn and resolution capture all skip
+it. Only an operator's forget (or another edit) changes it.
 
 The bridge needs `ROBOTHOR_OLLAMA_URL` and `ROBOTHOR_EMBEDDING_MODEL` to reach
 the embedding provider; without them it tries `127.0.0.1:11434`. On the Helm
