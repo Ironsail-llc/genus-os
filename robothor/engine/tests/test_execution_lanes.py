@@ -562,3 +562,55 @@ class TestImportsStayLight:
             [sys.executable, "-c", code], capture_output=True, text=True, timeout=120
         )
         assert result.returncode == 0, result.stderr[-2000:]
+
+
+class TestLanesAreTheOnlyScheduler:
+    """There is no switch: separate lanes are the one code path."""
+
+    def test_feature_flags_has_no_lanes_reader(self):
+        import inspect
+
+        from robothor.engine import feature_flags
+
+        assert not hasattr(feature_flags, "execution_lanes_enabled")
+        assert "ROBOTHOR_EXECUTION_LANES" not in inspect.getsource(feature_flags)
+
+    def test_the_lanes_module_has_no_switch(self):
+        assert not hasattr(lanes, "lanes_enabled")
+
+    def test_settings_declare_no_lanes_switch(self):
+        from robothor.settings.registry import field_index
+
+        assert "ROBOTHOR_EXECUTION_LANES" not in field_index()
+
+    async def test_a_zero_in_the_environment_still_runs_each_run_in_its_lane(self, monkeypatch):
+        monkeypatch.setenv("ROBOTHOR_EXECUTION_LANES", "0")
+        pool = ExecutionLanes(interactive_limit=0, background_limit=2, yield_ms=0)
+        monkeypatch.setattr(lanes, "_LANES", pool)
+        seen: dict[str, tuple[Lane | None, int, int]] = {}
+
+        class FakeRunner:
+            @lanes.lane_gated
+            async def execute(self, agent_id, message, trigger_type=TriggerType.MANUAL):
+                snap = pool.snapshot()
+                seen[agent_id] = (
+                    lanes.current_lane(),
+                    snap["interactive"]["active"],
+                    snap["background"]["active"],
+                )
+                return agent_id
+
+        runner = FakeRunner()
+        await runner.execute("bg", "sweep", trigger_type=TriggerType.CRON)
+        await runner.execute("fg", "hello", trigger_type=TriggerType.WEBCHAT)
+        assert seen["bg"] == (Lane.BACKGROUND, 0, 1)
+        assert seen["fg"] == (Lane.INTERACTIVE, 1, 0)
+
+    def test_install_always_sets_the_lane_executor(self, monkeypatch):
+        monkeypatch.setenv("ROBOTHOR_EXECUTION_LANES", "0")
+        loop = asyncio.new_event_loop()
+        try:
+            lanes.install_lane_executor(loop)
+            assert isinstance(loop._default_executor, lanes.LaneExecutor)
+        finally:
+            loop.close()

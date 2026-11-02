@@ -98,3 +98,12 @@ class TestInteractiveGoesFirst:
 
     def test_the_snapshot_reports_interactive_waiters(self, lanes_on):
         assert "interactive_waiting" in lg.LocalInferenceGate(slots=2).snapshot()
+
+
+async def test_the_reserved_slot_holds_whatever_the_old_switch_says(monkeypatch):
+    monkeypatch.setenv("ROBOTHOR_EXECUTION_LANES", "0")
+    gate = lg.LocalInferenceGate(slots=2)
+    async with gate.slot(lane=lg.Lane.BACKGROUND):
+        with pytest.raises(lg.LocalCapacityBusyError):
+            async with gate.slot(lane=lg.Lane.BACKGROUND, timeout=0.1):
+                pass
