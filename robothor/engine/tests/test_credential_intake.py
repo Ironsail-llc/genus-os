@@ -169,6 +169,17 @@ def test_the_retired_switch_is_not_a_declared_setting():
     assert STALE_SWITCH not in declared
 
 
+def test_the_marker_comment_claims_no_reader_that_does_not_exist():
+    import inspect
+
+    from robothor.engine.tools.handlers import vault as vault_tools
+
+    source = inspect.getsource(vault_tools)
+    line = next(ln for ln in source.splitlines() if ln.startswith("CREDENTIAL_INTAKE"))
+    comment = source.splitlines()[source.splitlines().index(line) - 1]
+    assert "public marker for capability copy" in comment, comment
+
+
 def test_the_handler_says_it_takes_a_credential_in_chat():
     """Capability copy reads a public marker, and the gate it names stays put."""
     from robothor.engine.tools.handlers import vault as vault_tools
@@ -336,6 +347,7 @@ async def test_a_run_with_no_resolved_identity_is_refused(intake):
     session = intake["live"]()
     result = await HANDLERS["vault_set"](_store_args(), _ctx(session, identity=None))
     assert result.get("gate") == "unverified_sender"
+    assert "does not carry a verified identity" in result["unlock"]
     assert intake["writes"] == []
 
 
@@ -384,7 +396,7 @@ async def test_a_value_the_person_did_not_type_is_refused(intake):
 
 @pytest.mark.asyncio
 async def test_a_value_in_the_persons_message_is_stored(intake):
-    session = intake["live"](task_text=f"store this: {SHAPELESS_KEY}")
+    session = intake["live"](task_text=f"store this openweather key: {SHAPELESS_KEY}")
     result = await HANDLERS["vault_set"](_store_args(), _ctx(session))
     assert result.get("success") is True, result.get("error")
 
@@ -392,13 +404,76 @@ async def test_a_value_in_the_persons_message_is_stored(intake):
 @pytest.mark.asyncio
 async def test_two_keys_in_one_message_are_both_stored(intake):
     other = "ghp_FAKE0000_second_key_in_the_message_0000"
-    session = intake["live"](task_text=f"weather {SHAPELESS_KEY} and github {other}")
+    session = intake["live"](task_text=f"openweather {SHAPELESS_KEY} and github {other}")
     first = await HANDLERS["vault_set"](_store_args(), _ctx(session))
     second = await HANDLERS["vault_set"](
         {"key": "providers/github/api_key", "value": other}, _ctx(session)
     )
     assert first.get("success") is True, first.get("error")
     assert second.get("success") is True, second.get("error")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "value",
+    ["e", "c0ffee42", "abcdefghijklmnopqrstuvwxyz"],
+    ids=["one-char", "eight-alnum", "letters-only"],
+)
+async def test_an_injected_short_or_wordlike_value_is_refused(intake, value):
+    """``vault_set(providers/<vendor>/api_key, "e")`` must not pass just because
+    the letter e is somewhere in what the person typed."""
+    session = intake["live"](task_text=f"please store my openweather key {value} now, thanks")
+    result = await HANDLERS["vault_set"]({"key": KEY, "value": value}, _ctx(session))
+    assert result.get("gate") == "not_handed_over", result
+    assert intake["writes"] == []
+
+
+@pytest.mark.asyncio
+async def test_a_value_inside_a_longer_token_is_refused(intake):
+    session = intake["live"](task_text=f"my openweather key is X{SHAPELESS_KEY}Y")
+    result = await HANDLERS["vault_set"](_store_args(), _ctx(session))
+    assert result.get("gate") == "not_handed_over", result
+    assert intake["writes"] == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "message",
+    [
+        f"here is my openweather key: {SHAPELESS_KEY}.",
+        f"OPENWEATHER_API_KEY={SHAPELESS_KEY}",
+        f"store `{SHAPELESS_KEY}` as the openweather key",
+    ],
+)
+async def test_a_pasted_key_with_the_vendor_named_is_admitted(intake, message):
+    session = intake["live"](task_text=message)
+    result = await HANDLERS["vault_set"](_store_args(), _ctx(session))
+    assert result.get("success") is True, result.get("error")
+
+
+@pytest.mark.asyncio
+async def test_a_pasted_key_with_nothing_naming_where_it_goes_is_refused(intake):
+    session = intake["live"](task_text=f"here you go: {SHAPELESS_KEY}")
+    result = await HANDLERS["vault_set"](_store_args(), _ctx(session))
+    assert result.get("gate") == "not_handed_over", result
+    assert intake["writes"] == []
+
+
+@pytest.mark.asyncio
+async def test_a_shorter_key_with_a_symbol_is_admitted(intake):
+    value = "ab-12_cd"  # 8 characters, one of them not alphanumeric
+    session = intake["live"](task_text=f"the openweather key is {value}")
+    result = await HANDLERS["vault_set"]({"key": KEY, "value": value}, _ctx(session))
+    assert result.get("success") is True, result.get("error")
+
+
+@pytest.mark.asyncio
+async def test_naming_the_vendor_without_asking_to_remove_is_not_a_delete(intake):
+    session = intake["live"](task_text="what's new on my github PR?")
+    intake["rows"]["providers/github/api_key"] = "ghp_FAKE0000_still_here_0000"
+    result = await HANDLERS["vault_delete"]({"key": "providers/github/api_key"}, _ctx(session))
+    assert result.get("gate") == "not_requested", result
+    assert intake["rows"]["providers/github/api_key"] == "ghp_FAKE0000_still_here_0000"
 
 
 @pytest.mark.asyncio
@@ -465,7 +540,7 @@ async def test_the_live_runs_task_text_loses_the_value(intake):
     """``agent_runs.task_text`` is written at run START, before the agent has
     stored anything, so a shapeless key in the owner's message is already in
     the row by the time ``vault_set`` runs. The handler takes it back out."""
-    message = f"here is my weather key {SHAPELESS_KEY} please store it"
+    message = f"here is my openweather key {SHAPELESS_KEY} please store it"
     session = intake["live"](task_text=message)
     await HANDLERS["vault_set"](_store_args(), _ctx(session))
 
