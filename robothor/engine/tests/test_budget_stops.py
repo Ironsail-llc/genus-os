@@ -8,9 +8,8 @@ early, and nothing that says which limit did it. Two properties are pinned:
   structured ``budget_stop`` step on that run -- the stop's name, the reason,
   the setting, the limit, the observed value and whether it was enforced -- and
   ONE ``agent.budget_stop`` event on the telemetry stream;
-* a spend budget whose limit the operator never set observes rather than
-  stops. Setting the limit explicitly, or setting its ``*_MODE`` to
-  ``enforce``, keeps today's behaviour.
+* a spend budget observes rather than stops. Its limit is a threshold for the
+  record and the alert; there is no setting that turns it into a stop.
 
 The durable operator stop is a control, not a budget: it still stops the run,
 and it is recorded the same way.
@@ -52,12 +51,7 @@ def published(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, str, dict[str,
 
 @pytest.fixture
 def _no_cap_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    for name in (
-        "ROBOTHOR_HOURLY_COST_CAP_USD",
-        "ROBOTHOR_HOURLY_COST_CAP_MODE",
-        "ROBOTHOR_RUNAWAY_HARD_CAP_TOKENS",
-        "ROBOTHOR_RUNAWAY_HARD_CAP_MODE",
-    ):
+    for name in ("ROBOTHOR_HOURLY_COST_CAP_USD", "ROBOTHOR_RUNAWAY_HARD_CAP_TOKENS"):
         monkeypatch.delenv(name, raising=False)
 
 
@@ -75,17 +69,12 @@ def _restore_pool():
     init_fleet_pool(max_concurrent=3, hourly_cost_cap_usd=5.0)
 
 
-def _over_the_hourly_cap(mode: str) -> Any:
+def _over_the_hourly_cap() -> Any:
     """A real pool whose rolling hour has spent $6 against the $5 default cap."""
     from robothor.engine.config import EngineConfig
 
     cfg = EngineConfig.from_env()
-    assert cfg.hourly_cost_cap_mode == mode, cfg.hourly_cost_cap_mode
-    pool = init_fleet_pool(
-        max_concurrent=3,
-        hourly_cost_cap_usd=cfg.hourly_cost_cap_usd,
-        cost_cap_mode=cfg.hourly_cost_cap_mode,
-    )
+    pool = init_fleet_pool(max_concurrent=3, hourly_cost_cap_usd=cfg.hourly_cost_cap_usd)
     pool.register_run("earlier", "some-agent")
     pool.complete_run("earlier", cost_usd=6.0)
     return pool
@@ -106,50 +95,28 @@ def _cron_agent(**kw: Any) -> AgentConfig:
     )
 
 
-# ── The default: the hourly cap observes unless the operator set it ──────────
+# ── The hourly cap is a threshold for the report ───────────────────────────
 
 
-class TestTheHourlyCapDefault:
-    def test_unset_cap_observes(self, _no_cap_env):
+class TestTheHourlyCap:
+    def test_the_default_cap_is_five_dollars(self, _no_cap_env):
         from robothor.engine.config import EngineConfig
 
-        cfg = EngineConfig.from_env()
-        assert cfg.hourly_cost_cap_usd == 5.0
-        assert cfg.hourly_cost_cap_mode == "observe"
+        assert EngineConfig.from_env().hourly_cost_cap_usd == 5.0
 
-    def test_an_explicit_cap_enforces(self, _no_cap_env, monkeypatch):
-        from robothor.engine.config import EngineConfig
-
-        monkeypatch.setenv("ROBOTHOR_HOURLY_COST_CAP_USD", "5")
-        assert EngineConfig.from_env().hourly_cost_cap_mode == "enforce"
-
-    def test_the_mode_enforces_without_an_explicit_cap(self, _no_cap_env, monkeypatch):
-        from robothor.engine.config import EngineConfig
-
-        monkeypatch.setenv("ROBOTHOR_HOURLY_COST_CAP_MODE", "enforce")
-        assert EngineConfig.from_env().hourly_cost_cap_mode == "enforce"
-
-    def test_the_mode_observes_even_with_an_explicit_cap(self, _no_cap_env, monkeypatch):
-        """The operator's way out of a cap the deployment sets for them."""
-        from robothor.engine.config import EngineConfig
-
-        monkeypatch.setenv("ROBOTHOR_HOURLY_COST_CAP_USD", "5")
-        monkeypatch.setenv("ROBOTHOR_HOURLY_COST_CAP_MODE", "observe")
-        assert EngineConfig.from_env().hourly_cost_cap_mode == "observe"
-
-    def test_an_observing_pool_admits_past_the_cap(self):
+    def test_the_pool_admits_past_the_cap(self):
         from robothor.engine.pool import FleetPool
 
-        pool = FleetPool(max_concurrent=3, hourly_cost_cap_usd=5.0, cost_cap_mode="observe")
+        pool = FleetPool(max_concurrent=3, hourly_cost_cap_usd=5.0)
         pool.register_run("r1", "a1")
         pool.complete_run("r1", cost_usd=6.0)
         assert pool.can_start("a2")[0] is True
 
-    def test_concurrency_is_still_enforced_by_an_observing_pool(self):
+    def test_concurrency_is_still_enforced(self):
         """Capacity is not spend: the slot cap is untouched."""
         from robothor.engine.pool import FleetPool, Priority
 
-        pool = FleetPool(max_concurrent=1, hourly_cost_cap_usd=5.0, cost_cap_mode="observe")
+        pool = FleetPool(max_concurrent=1, hourly_cost_cap_usd=5.0)
         pool.register_run("r1", "a1")
         assert pool.can_start("a2", priority=Priority.BACKGROUND)[0] is False
 
@@ -217,7 +184,7 @@ class TestCrossingTheCapByDefault:
         import robothor.engine.admission as adm
 
         monkeypatch.setattr(adm, "_record_deferral", lambda *a, **k: None)
-        _over_the_hourly_cap("observe")
+        _over_the_hourly_cap()
 
         assert adm.admit("crm-dedup", _cron_agent(), None) is True
 
@@ -432,7 +399,7 @@ class TestTheObservedHourlyCapAlerts:
             return True
 
         monkeypatch.setattr("robothor.engine.alerts.alert", _alert)
-        _over_the_hourly_cap("observe")
+        _over_the_hourly_cap()
 
         assert adm.admit("crm-dedup", _cron_agent(), None) is True
         assert adm.admit("crm-dedup", _cron_agent(), None) is True
@@ -443,7 +410,7 @@ class TestTheObservedHourlyCapAlerts:
         assert "hourly_cost_cap" in alerts[0][1]
 
 
-# ── The modes are settings: config.yaml works as well as the environment ───
+# ── The cap is a setting: config.yaml works as well as the environment ─────
 
 
 @pytest.fixture
@@ -465,35 +432,13 @@ def _config_yaml(tmp_path, monkeypatch, _no_cap_env):
     reset_settings()
 
 
-class TestTheModesAreReadAsSettings:
-    def test_hourly_mode_set_in_config_yaml_enforces(self, _config_yaml):
-        """`genus config set ... enforce` writes config.yaml: it must take effect."""
-        from robothor.engine.config import EngineConfig
-
-        _config_yaml("    hourly_cost_cap_mode: enforce\n")
-        assert EngineConfig.from_env().hourly_cost_cap_mode == "enforce"
-
-    def test_an_hourly_cap_set_in_config_yaml_counts_as_explicit(self, _config_yaml):
+class TestTheHourlyCapIsASetting:
+    def test_an_hourly_cap_set_in_config_yaml_is_the_threshold(self, _config_yaml):
+        """`genus config set` writes config.yaml: the threshold it sets applies."""
         from robothor.engine.config import EngineConfig
 
         _config_yaml("    hourly_cost_cap_usd: 3.0\n")
-        cfg = EngineConfig.from_env()
-        assert cfg.hourly_cost_cap_usd == 3.0
-        assert cfg.hourly_cost_cap_mode == "enforce"
-
-    def test_runaway_mode_set_in_config_yaml_enforces(self, _config_yaml):
-        from robothor.engine import budget_stops
-
-        _config_yaml("    runaway_hard_cap_mode: enforce\n")
-        assert budget_stops.runaway_hard_cap_mode() == "enforce"
-
-    def test_nothing_set_anywhere_observes(self, _config_yaml):
-        from robothor.engine import budget_stops
-        from robothor.engine.config import EngineConfig
-
-        _config_yaml("    last_resort_model: ''\n")
-        assert EngineConfig.from_env().hourly_cost_cap_mode == "observe"
-        assert budget_stops.runaway_hard_cap_mode() == "observe"
+        assert EngineConfig.from_env().hourly_cost_cap_usd == 3.0
 
 
 # ── The runaway pages say whether the run was stopped ───────────────────────
@@ -719,7 +664,7 @@ def _a_run_past_the_runaway_cap_continues(monkeypatch) -> None:
     ]
     assert alerts == [2_000]
     assert session.run.budget_exhausted is not True
-    assert session.errors == []
+    assert [s for s in session.run.steps if s.step_type == StepType.ERROR] == []
 
 
 @pytest.fixture

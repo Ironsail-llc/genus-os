@@ -264,12 +264,12 @@ def _int_env_with_fallback(name: str, default: int) -> int:
 # session.run.input_tokens + session.run.output_tokens across the run.
 #   - Crossing ALERT fires a (batched — see RUNAWAY_SOFT_ALERT_WINDOW_SECONDS
 #     below) Telegram warning so the operator can decide whether to intervene.
-#   - Reaching HARD_CAP records a budget_stop step and pages; it stops the loop
-#     (budget_exhausted=True) only when set explicitly or _MODE=enforce.
+#   - Reaching HARD_CAP records a budget_stop step (mode observe) and pages
+#     critical, once per run. Neither threshold stops the loop.
 # These are fleet-wide, env-tunable but NOT per-agent-manifest-configurable,
-# so a misconfigured manifest can never disable the protection. A main run at
+# so a misconfigured manifest can never silence the report. A main run at
 # Apr 22 16:07 consumed 3.2M input tokens before hitting the 86400s circuit
-# breaker; this guard would have stopped it at 5M.
+# breaker; this guard would have paged at 5M.
 RUNAWAY_TOKEN_ALERT = _int_env_with_fallback("ROBOTHOR_RUNAWAY_ALERT_TOKENS", 500_000)
 RUNAWAY_TOKEN_HARD_CAP = _int_env_with_fallback("ROBOTHOR_RUNAWAY_HARD_CAP_TOKENS", 5_000_000)
 
@@ -284,8 +284,8 @@ if RUNAWAY_TOKEN_ALERT >= RUNAWAY_TOKEN_HARD_CAP:
     )
 
 # Soft-alert batching: post-recovery catch-up runs routinely cross the soft
-# threshold several times in quick succession (legitimate backlog burn,
-# contained by the hard cap) — paging once per run turned 6 runs in 90
+# threshold several times in quick succession (legitimate backlog burn)
+# — paging once per run turned 6 runs in 90
 # minutes into 6 pages for ~$0.35 of working-as-designed spend (2026-08-19).
 # At most one page fires per quiet-period boundary: the first soft-runaway
 # event after a quiet window pages immediately (with context); everything
@@ -359,8 +359,8 @@ def _send_soft_runaway_alert(
         # Known trade-off: events that accrue in a window with NO subsequent
         # soft event stay pending until the next crossing, however far away
         # that is. Each crossing is still logger.warning'd per-run at the
-        # call site, and the hard cap contains the runs themselves — only
-        # the page is deferred, never the protection.
+        # call site, and the hard cap pages on its own — only the soft page
+        # is deferred, never the hard one.
         pending = [
             *_soft_runaway_pending,
             {"agent": agent_id, "run_id": run_id, "tokens": tokens, "ts": now},
@@ -383,8 +383,8 @@ def _send_soft_runaway_alert(
         return
 
     # Quiet period: first soft-runaway event in a while. Page immediately,
-    # with enough context to read severity at a glance — contained-by-guard
-    # and approximate cost up front, so this doesn't read as an emergency.
+    # with enough context to read severity at a glance — containment and
+    # approximate cost up front.
     _soft_runaway_window_started_at = now
     cost_note = f"~${cost_usd:.2f} (negligible)" if cost_usd else "negligible"
     body = (

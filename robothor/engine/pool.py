@@ -60,7 +60,8 @@ class FleetPool:
 
     Provides two control surfaces:
     - **Concurrency**: limits how many agent runs can execute simultaneously
-    - **Hourly cost cap**: limits total fleet spend per rolling hour
+    - **Hourly cost cap**: reports when fleet spend per rolling hour reaches it
+      (``cost_cap_crossed``); it never refuses a run
 
     Thread-safe — the engine scheduler and async runners may call from
     different threads.
@@ -71,14 +72,11 @@ class FleetPool:
         max_concurrent: int = 3,
         hourly_cost_cap_usd: float = 5.0,
         reserved_slots: int = 0,
-        cost_cap_mode: str = "enforce",
     ) -> None:
         self._max_concurrent = max_concurrent
+        # A threshold for the report: admission records a crossing on the run
+        # (`budget_stops.observe_hourly_cap`) and admits it.
         self._hourly_cost_cap_usd = hourly_cost_cap_usd
-        # `observe` admits past the cap; the crossing is recorded by the caller
-        # (`budget_stops`). The engine resolves the mode from its config, where
-        # an unset cap observes; constructing a pool directly keeps `enforce`.
-        self.cost_cap_mode = cost_cap_mode
         # Slots BACKGROUND work may not occupy. A cap alone still lets nightly
         # sweeps fill every slot and leave an operator's message third in line;
         # holding one back makes that structurally impossible. Default 0 keeps
@@ -136,12 +134,6 @@ class FleetPool:
                 return False, (
                     f"Fleet at capacity: {len(self._active)}/{self._max_concurrent} concurrent runs"
                 )
-
-            # Hourly cost check
-            crossed = self._cost_cap_crossed()
-            if crossed is not None and self.cost_cap_mode == "enforce":
-                current, cap = crossed
-                return False, f"Hourly cost cap reached: ${current:.2f}/${cap:.2f}"
 
             return True, ""
 
@@ -212,7 +204,6 @@ class FleetPool:
                 "max_concurrent": self._max_concurrent,
                 "hourly_cost_usd": round(self._hourly_cost_total(), 4),
                 "hourly_cost_cap_usd": self._hourly_cost_cap_usd,
-                "hourly_cost_cap_mode": self.cost_cap_mode,
                 "active_agents": [
                     {"run_id": r.run_id, "agent_id": r.agent_id, "cost_usd": r.cost_usd}
                     for r in self._active.values()
@@ -245,7 +236,6 @@ def init_fleet_pool(
     max_concurrent: int = 3,
     hourly_cost_cap_usd: float = 5.0,
     reserved_slots: int = 0,
-    cost_cap_mode: str = "enforce",
 ) -> FleetPool:
     """Initialize the fleet pool singleton."""
     global _fleet_pool
@@ -253,6 +243,5 @@ def init_fleet_pool(
         max_concurrent=max_concurrent,
         hourly_cost_cap_usd=hourly_cost_cap_usd,
         reserved_slots=reserved_slots,
-        cost_cap_mode=cost_cap_mode,
     )
     return _fleet_pool

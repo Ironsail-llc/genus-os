@@ -27,7 +27,6 @@ from robothor.engine.models import (
 
 logger = logging.getLogger(__name__)
 
-from robothor.engine.budget_stops import hourly_cost_cap_mode  # noqa: E402
 from robothor.engine.manifest_schema import ManifestSchemaError  # noqa: E402
 from robothor.engine.sanitize import sanitize_log as _sanitize  # noqa: E402
 from robothor.engine.service_roles import resolve_service_role  # noqa: E402
@@ -114,9 +113,7 @@ class EngineConfig:
     # Sub-agent spawning
     max_concurrent_spawns: int = 10  # fleet-wide default (per-agent overridable)
     max_spawn_batch: int = 10  # max agents per spawn_agents() call
-    hourly_cost_cap_usd: float = 5.0  # fleet-wide hourly cost cap (0 = unlimited)
-    # observe unless the cap or ROBOTHOR_HOURLY_COST_CAP_MODE is set (budget_stops.py)
-    hourly_cost_cap_mode: str = "observe"
+    hourly_cost_cap_usd: float = 5.0  # fleet-wide hourly cost cap, reported (0 = none)
 
     # LLM
     max_iterations: int = 20
@@ -175,7 +172,6 @@ class EngineConfig:
             max_concurrent_spawns=int(os.environ.get("ROBOTHOR_MAX_CONCURRENT_SPAWNS", "10")),
             max_spawn_batch=int(os.environ.get("ROBOTHOR_MAX_SPAWN_BATCH", "10")),
             hourly_cost_cap_usd=_hourly_cost_cap_usd(),
-            hourly_cost_cap_mode=hourly_cost_cap_mode(),
         )
 
 
