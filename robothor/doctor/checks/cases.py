@@ -4,8 +4,9 @@ A case is a CRM task (``docs/CRM_DATA_FABRIC.md``, "Cases"). An overdue task
 an agent owns is that agent's to finish, and its own heartbeat sees it. What
 nobody sees is an overdue task with no assigned agent, or one flagged
 ``requires_human`` whose question nobody has answered (answering clears the
-flag). This check counts both kinds and names the oldest of each, so the
-operator has a place to start. Not repairable by ``--fix``: someone has to
+flag). This check counts both kinds and names the oldest of each, with its
+tenant, so the operator has a place to start. A task snoozed until a future
+``follow_up_at`` is not overdue, the same rule ``list_tasks`` applies. Not repairable by ``--fix``: someone has to
 pick the case up.
 """
 
@@ -21,12 +22,14 @@ if TYPE_CHECKING:
 _QUERY = """
 SELECT requires_human IS TRUE AS needs_person,
        count(*),
-       (array_agg(id::text ORDER BY due_at ASC))[1]
+       (array_agg(id::text ORDER BY due_at ASC))[1],
+       (array_agg(tenant_id ORDER BY due_at ASC))[1]
   FROM crm_tasks
  WHERE deleted_at IS NULL
    AND status IS DISTINCT FROM 'DONE'
    AND due_at < NOW()
    AND (assigned_to_agent IS NULL OR requires_human IS TRUE)
+   AND (follow_up_at IS NULL OR follow_up_at <= NOW())
  GROUP BY 1
 """
 
@@ -48,10 +51,10 @@ async def _cases_overdue(ctx: DoctorContext) -> Result:
         return ok("no overdue cases without an owner")
     parts: list[str] = []
     total = 0
-    for needs_person, count, oldest in sorted(rows, key=lambda row: bool(row[0])):
+    for needs_person, count, oldest, tenant in sorted(rows, key=lambda row: bool(row[0])):
         total += int(count)
         kind = "needs a person" if needs_person else "unowned"
-        parts.append(f"{int(count)} {kind} (oldest {oldest})")
+        parts.append(f"{int(count)} {kind} (oldest {oldest} in tenant {tenant})")
     noun = "case" if total == 1 else "cases"
     return fail(
         f"{total} overdue {noun}: {', '.join(parts)} — assign an owner, or answer the question"
