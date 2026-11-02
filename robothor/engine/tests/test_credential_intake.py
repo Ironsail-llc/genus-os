@@ -165,7 +165,7 @@ async def test_an_owner_or_admin_can_store_a_credential_in_chat(intake, role, tr
 
 
 @pytest.mark.asyncio
-async def test_intake_opens_the_other_vault_tools_too(intake, monkeypatch):
+async def test_intake_opens_the_other_vault_tools_too(intake):
     session = intake["live"]()
     intake["rows"][KEY] = SHAPELESS_KEY
     got = await HANDLERS["vault_get"]({"key": KEY}, _ctx(session))
@@ -174,7 +174,7 @@ async def test_intake_opens_the_other_vault_tools_too(intake, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_the_stored_row_records_who_stored_it_and_how(intake, monkeypatch):
+async def test_the_stored_row_records_who_stored_it_and_how(intake):
     session = intake["live"](trigger=TriggerType.TELEGRAM)
     await HANDLERS["vault_set"](_store_args(), _ctx(session))
     (write,) = intake["writes"]
@@ -200,7 +200,7 @@ async def test_the_default_chat_agent_is_read_from_the_setting(intake, monkeypat
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("role", ["member", "viewer", "user", "service", ""])
-async def test_intake_refuses_a_caller_who_is_not_an_owner_or_admin(intake, monkeypatch, role):
+async def test_intake_refuses_a_caller_who_is_not_an_owner_or_admin(intake, role):
     session = intake["live"]()
     result = await HANDLERS["vault_set"](_store_args(), _ctx(session, role=role))
     assert result["denied_by"] == "credential_tier"
@@ -210,7 +210,7 @@ async def test_intake_refuses_a_caller_who_is_not_an_owner_or_admin(intake, monk
 
 
 @pytest.mark.asyncio
-async def test_intake_refuses_an_agent_that_is_not_the_default_chat_agent(intake, monkeypatch):
+async def test_intake_refuses_an_agent_that_is_not_the_default_chat_agent(intake):
     session = intake["live"](agent_id="researcher")
     result = await HANDLERS["vault_set"](_store_args(), _ctx(session, agent_id="researcher"))
     assert result["denied_by"] == "credential_tier"
@@ -219,7 +219,7 @@ async def test_intake_refuses_an_agent_that_is_not_the_default_chat_agent(intake
 
 
 @pytest.mark.asyncio
-async def test_intake_refuses_a_sub_agent_of_the_chat_agent(intake, monkeypatch):
+async def test_intake_refuses_a_sub_agent_of_the_chat_agent(intake):
     """A child of main runs as main's id only if someone spawns main itself;
     either way a run with a parent is not the owner typing."""
     session = intake["live"](trigger=TriggerType.SUB_AGENT, parent_run_id="parent-run")
@@ -230,7 +230,7 @@ async def test_intake_refuses_a_sub_agent_of_the_chat_agent(intake, monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_intake_refuses_a_parented_run_even_on_a_chat_trigger(intake, monkeypatch):
+async def test_intake_refuses_a_parented_run_even_on_a_chat_trigger(intake):
     session = intake["live"](trigger=TriggerType.WEBCHAT, parent_run_id="parent-run")
     result = await HANDLERS["vault_set"](_store_args(), _ctx(session))
     assert result["gate"] == "human_chat"
@@ -242,7 +242,7 @@ async def test_intake_refuses_a_parented_run_even_on_a_chat_trigger(intake, monk
     "trigger",
     [TriggerType.CRON, TriggerType.HOOK, TriggerType.WORKFLOW, TriggerType.CHANNEL_EVENT],
 )
-async def test_intake_refuses_an_unattended_run_of_the_chat_agent(intake, monkeypatch, trigger):
+async def test_intake_refuses_an_unattended_run_of_the_chat_agent(intake, trigger):
     session = intake["live"](trigger=trigger)
     result = await HANDLERS["vault_set"](_store_args(), _ctx(session))
     assert result["gate"] == "human_chat"
@@ -250,7 +250,7 @@ async def test_intake_refuses_an_unattended_run_of_the_chat_agent(intake, monkey
 
 
 @pytest.mark.asyncio
-async def test_intake_refuses_a_manual_trigger(intake, monkeypatch):
+async def test_intake_refuses_a_manual_trigger(intake):
     """``MANUAL`` is the CLI, but also the API trigger and resume endpoints and
     the unattended repair-resume of the chat agent, which runs as ``owner``.
     None of those is a person handing over a credential in chat."""
@@ -261,7 +261,7 @@ async def test_intake_refuses_a_manual_trigger(intake, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_intake_refuses_a_call_with_no_live_run(intake, monkeypatch):
+async def test_intake_refuses_a_call_with_no_live_run(intake):
     """No session to read the trigger from is not evidence of a person."""
     result = await HANDLERS["vault_set"](_store_args(), _ctx(None))
     assert result["gate"] == "human_chat"
@@ -269,7 +269,7 @@ async def test_intake_refuses_a_call_with_no_live_run(intake, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_the_refusal_names_the_unlock(intake, monkeypatch):
+async def test_the_refusal_names_the_unlock(intake):
     session = intake["live"]()
     result = await HANDLERS["vault_set"](_store_args(), _ctx(session, role="member"))
     assert result["unlock"], "a gated refusal must say what would open it"
@@ -291,7 +291,7 @@ async def test_the_operator_tier_needs_no_human_in_the_loop(intake, monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_the_live_runs_task_text_loses_the_value(intake, monkeypatch):
+async def test_the_live_runs_task_text_loses_the_value(intake):
     """``agent_runs.task_text`` is written at run START, before the agent has
     stored anything, so a shapeless key in the owner's message is already in
     the row by the time ``vault_set`` runs. The handler takes it back out."""
@@ -311,7 +311,7 @@ async def test_the_live_runs_task_text_loses_the_value(intake, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_after_a_store_every_later_redaction_takes_the_value(intake, monkeypatch):
+async def test_after_a_store_every_later_redaction_takes_the_value(intake):
     """ChatHistory, ``chat_messages`` and the logs all go through ``redact``;
     the owner's turn is appended to them AFTER the run, when the value is
     known."""
