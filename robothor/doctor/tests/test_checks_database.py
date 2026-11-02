@@ -434,7 +434,8 @@ def test_session_settings_skip_when_the_database_is_unreachable(monkeypatch) -> 
     assert "hunter2" not in result.detail
 
 
-def test_session_settings_is_a_recommended_database_check() -> None:
+def test_session_settings_is_a_required_database_check() -> None:
+    """A tenant binding that can belong to another tenant is a data boundary."""
     check = _check("db.session_settings")
     assert check.category == "database"
-    assert check.severity == "recommended"
+    assert check.severity == "required"
