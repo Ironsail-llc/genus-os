@@ -486,7 +486,9 @@ READONLY_TOOLS: frozenset[str] = frozenset(
 # ── Deferred / searchable tool loading (Rip 16 / G4) ──────────────────────
 # The meta-tools that drive tools-as-code. Excluded from the normal advertised
 # set; injected only when an agent's toolset is deferred (see registry).
-TOOLSEARCH_TOOLS = frozenset({"tool_search", "tool_describe", "tool_call"})
+# Declared in ``robothor.engine.wrapped_call``, which dispatch imports while
+# this package initialises, so it cannot import from here.
+from robothor.engine.wrapped_call import TOOLSEARCH_TOOLS as TOOLSEARCH_TOOLS  # noqa: E402
 
 # Workflow control tools that start work. `list_workflows` and `workflow_runs`
 # are reads and are not in this family.

@@ -15,13 +15,15 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, Any
 
-from robothor.engine.tools.constants import TOOLSEARCH_TOOLS
-
+# No engine import at module level: ``robothor.engine.tools`` imports dispatch,
+# which imports this module, so a module-level import of the tools package from
+# here is a cycle for whichever of the two is imported first.
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
 __all__ = [
     "PERMISSION_TRANSPARENT_TOOLS",
+    "TOOLSEARCH_TOOLS",
     "WRAPPER_TOOL",
     "MalformedToolCallError",
     "explicit_arguments",
@@ -32,6 +34,10 @@ __all__ = [
 ]
 
 WRAPPER_TOOL = "tool_call"
+
+#: The meta-tools that drive deferred loading. Defined here, the module with no
+#: engine imports, and re-exported by ``robothor.engine.tools.constants``.
+TOOLSEARCH_TOOLS: frozenset[str] = frozenset({"tool_search", "tool_describe", WRAPPER_TOOL})
 
 #: The meta-tools a deferred run reaches its tools through. They carry no
 #: permission of their own: ``tool_search`` and ``tool_describe`` only read the
