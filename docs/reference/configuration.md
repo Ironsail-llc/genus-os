@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-509 settings in 18 groups.
+507 settings in 18 groups.
 
 ## autonomy
 
@@ -430,7 +430,6 @@ Guardrails and feature gates. Ones marked governed are inventoried in `infra/fla
 | `ROBOTHOR_BENCHMARK_SANDBOX_MODE` | str | `observe` | `robothor-engine` | no | legacy | **governed.** Benchmark-sandbox ladder position: observe seeds fixtures and records read-backs without grading them, enforce folds them into the score. |
 | `ROBOTHOR_CALENDAR_MEET_ARTIFACTS` | bool | `true` | `robothor-engine` | no | legacy | Turn Google Meet transcription and smart notes on for meetings the assistant organizes, so it can read them afterwards. Best-effort: needs the meetings.space.settings OAuth scope, and a failure is a note on the booking, never a failed booking. |
 | `ROBOTHOR_CALENDAR_SEND_UPDATES` | str | `all` | `robothor-engine` | no | legacy | **governed.** Who Google emails when an agent creates or deletes an event with attendees: all, externalOnly, or none. The default sends the invitation — an event nobody was told about is not a meeting, which is how an operator came to be an attendee of a trip he never saw. |
-| `ROBOTHOR_CAPABILITY_BLOCK_ENABLED` | bool | `false` | `robothor-engine` | no | unreleased | Add a 'What you can do here' block to every agent's system prompt: the capabilities its granted tools and this instance's settings give it, and for each one it lacks, the gate and what unlocks it. Session-stable, so the prompt prefix stays cacheable. |
 | `ROBOTHOR_COMPLETION_CONTRACTS_ENABLED` | bool | `false` | `robothor-engine` | no | legacy | Switch for evidence-based completion contracts: a run claiming success must show the tool trace that produced it. |
 | `ROBOTHOR_COMPLETION_CONTRACTS_MODE` | str | `observe` | `robothor-engine` | no | legacy | **governed.** Completion-contract ladder position: observe records unevidenced claims, enforce fails the run that makes one. |
 | `ROBOTHOR_CONFIG_STRICT_MODE` | str | `observe` | `robothor-engine` | no | 1.66 | What an unknown key in the settings: block of config.yaml does. 'off' ignores it, 'observe' (default for existing installs) logs one warning naming the key and carries on, 'enforce' refuses to start. Inventoried in infra/flags.yaml but deliberately NOT governed: it is read while settings are being resolved, which happens before and without a database. |
@@ -459,7 +458,6 @@ Guardrails and feature gates. Ones marked governed are inventoried in `infra/fla
 | `ROBOTHOR_PLUGIN_MANIFEST_MODE` | str | `observe` | `robothor-engine` | no | legacy | Plugin-manifest ladder position: observe logs violations, enforce refuses to load the plugin. |
 | `ROBOTHOR_RBAC_ENABLED` | bool | `false` | `robothor-engine` | no | legacy | Switch for role-based access control over system, cron and hook runs. Off, every run may call every tool its manifest allows. |
 | `ROBOTHOR_RBAC_MODE` | str | `observe` | `robothor-engine` | no | legacy | **governed.** RBAC ladder position: observe records the denials it would have made, alert also notifies, enforce denies. |
-| `ROBOTHOR_REFUSAL_PAYLOAD_V2` | bool | `false` | `robothor-engine` | no | unreleased | A refused tool call tells the model which gate refused it (role, flag, allowlist, runtime or policy) and what unlocks it, alongside the unchanged error text, and the behavioural rules tell it to relay both to the person rather than say it cannot. |
 | `ROBOTHOR_RIP_13_ENABLED` | bool | `false` | `robothor-engine` | no | legacy | Rip 13: symbolic compaction of tool logs into a symbol graph. |
 | `ROBOTHOR_RIP_13_MODE` | str | `observe` | `robothor-engine` | no | legacy | **governed.** Rip 13 ladder position: observe logs the tokens compaction would have saved, enforce injects the compact graph instead of raw tool output. Two rungs only -- there is nothing to alert about. |
 | `ROBOTHOR_RIP_1_ENABLED` | bool | `false` | `robothor-engine` | no | legacy | **governed.** Rip 1: per-agent memory scoping, so an agent reads the blocks it owns rather than the whole workspace. |

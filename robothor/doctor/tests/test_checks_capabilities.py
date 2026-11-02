@@ -149,10 +149,10 @@ def test_the_cli_accepts_agent_and_hands_it_to_the_context() -> None:
 
 @pytest.mark.asyncio
 async def test_vault_set_without_a_tier_is_gated_on_the_tier(instance: Path, monkeypatch) -> None:
-    from robothor.engine import feature_flags
+    from robothor.engine.tools.handlers import vault
 
     monkeypatch.setenv("ROBOTHOR_CREDENTIAL_INTAKE", "enforce")
-    monkeypatch.delattr(feature_flags, "credential_intake_mode", raising=False)
+    monkeypatch.delattr(vault, "_intake_gate", raising=False)
     _write_agent(instance, "main", {"tools_allowed": ["vault_set"]})
     row = _by_sub(await _rows("main"))["main:vault_set"]
     assert row.status == "fail"
@@ -161,14 +161,16 @@ async def test_vault_set_without_a_tier_is_gated_on_the_tier(instance: Path, mon
 
 
 @pytest.mark.asyncio
-async def test_vault_set_names_intake_where_the_build_has_it(instance: Path, monkeypatch) -> None:
-    from robothor.engine import feature_flags
+async def test_vault_set_passes_for_the_chat_agent_where_the_build_has_intake(
+    instance: Path, monkeypatch
+) -> None:
+    from robothor.engine.tools.handlers import vault
 
-    monkeypatch.setattr(feature_flags, "credential_intake_mode", lambda: "off", raising=False)
+    monkeypatch.setattr(vault, "_intake_gate", lambda ctx: None, raising=False)
     _write_agent(instance, "main", {"tools_allowed": ["vault_set"]})
     row = _by_sub(await _rows("main"))["main:vault_set"]
-    assert row.status == "fail"
-    assert "ROBOTHOR_CREDENTIAL_INTAKE" in row.detail
+    assert row.status == "pass"
+    assert "owner or admin" in row.detail
 
 
 @pytest.mark.asyncio

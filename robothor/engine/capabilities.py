@@ -3,7 +3,7 @@
 One pure function, :func:`assess`, answers for both readers:
 
 * the agent itself, through the "What you can do here" block in its system
-  prompt (:func:`capability_block`, behind ``ROBOTHOR_CAPABILITY_BLOCK_ENABLED``);
+  prompt (:func:`capability_block`);
 * the operator, through ``genus doctor --category capabilities --agent ID``.
 
 Two answers from two pieces of code would disagree sooner or later, and an agent
@@ -34,7 +34,7 @@ __all__ = [
     "assess",
     "capability_block",
     "coding_workspace",
-    "credential_intake_mode",
+    "credential_intake",
     "facts_for",
     "github_token_unlock",
     "manifest_unlock",
@@ -65,11 +65,9 @@ class Facts:
     coding_workspace: str | None = None
     #: ``v2.credentials`` in the manifest (``operator`` admits vault_set).
     credential_tier: str = ""
-    #: The vault handler's credential-intake mode (off | observe | enforce): at
-    #: ``enforce``, vault_set is admitted in an owner's or admin's own chat with
-    #: the default chat agent. ``None``: this build has no credential intake
-    #: (see :func:`credential_intake_mode`).
-    credential_intake: str | None = None
+    #: This build has credential intake: vault_set is admitted in an owner's or
+    #: admin's own chat with the default chat agent (see :func:`credential_intake`).
+    credential_intake: bool = False
     #: ``ROBOTHOR_DEFAULT_CHAT_AGENT``: the agent credential intake serves.
     default_chat_agent: str = "main"
     #: ``None``: not checked here; the tool reports it when called.
@@ -153,31 +151,25 @@ def vault_set_admitted(facts: Facts) -> bool:
     """Whether ``vault_set`` gets past the credential gate for this agent.
 
     Mirrors the vault handler: the manifest's operator tier always admits it;
-    otherwise credential intake, where this build has it, admits it at
-    ``enforce`` in an owner's or admin's own chat with the default chat agent
-    (the per-person half is checked when called).
+    otherwise credential intake, where this build has it, admits it in an
+    owner's or admin's own chat with the default chat agent (the per-person half
+    is checked when called).
     """
-    if facts.credential_tier == "operator":
-        return True
-    return _intake_serves(facts) and facts.credential_intake == "enforce"
+    return facts.credential_tier == "operator" or _intake_serves(facts)
 
 
 def _intake_serves(facts: Facts) -> bool:
     """This build has credential intake, and this agent is the one it serves."""
-    return facts.credential_intake is not None and facts.agent_id == facts.default_chat_agent
+    return facts.credential_intake and facts.agent_id == facts.default_chat_agent
 
 
 def _credential_gate(facts: Facts) -> tuple[str, str, str]:
     path = f"docs/agents/{facts.agent_id}.yaml"
-    tier = f"adds `credentials: operator` under `v2:` in {path}"
-    if _intake_serves(facts):
-        return (
-            "flag",
-            "ROBOTHOR_CREDENTIAL_INTAKE",
-            f"an operator sets ROBOTHOR_CREDENTIAL_INTAKE=enforce (then an owner or admin "
-            f"can hand a credential over in chat), or {tier}",
-        )
-    return "allowlist", "credential_tier", f"an operator {tier}"
+    return (
+        "allowlist",
+        "credential_tier",
+        f"an operator adds `credentials: operator` under `v2:` in {path}",
+    )
 
 
 def _runtime_gate(spec: _Spec, facts: Facts) -> tuple[str, str, str] | None:
@@ -277,24 +269,21 @@ def settings_facts(settings: Any) -> dict[str, Any]:
         "host_exec_socket": settings.engine.host_exec_socket or "",
         "coding_repo_roots": settings.coding.repo_roots or "",
         "coding_workspace": coding_workspace(settings),
-        "credential_intake": credential_intake_mode(),
+        "credential_intake": credential_intake(),
         "default_chat_agent": settings.engine.default_chat_agent or "main",
     }
 
 
-def credential_intake_mode() -> str | None:
-    """The credential-intake mode the vault handler reads, or ``None`` without one.
+def credential_intake() -> bool:
+    """Whether this build's vault handler has credential intake.
 
-    Probed, not read from the environment by name: the vault handler admits
-    intake only through ``feature_flags.credential_intake_mode``, so a build
-    without that function has no credential intake whatever
-    ``ROBOTHOR_CREDENTIAL_INTAKE`` says, and naming it as an unlock would send
-    an operator to a setting that does nothing.
+    Probed on the handler (its intake gate), not read from the environment:
+    where the handler has intake it is on, and where it does not, no setting
+    admits it.
     """
-    from robothor.engine import feature_flags
+    from robothor.engine.tools.handlers import vault
 
-    probe = getattr(feature_flags, "credential_intake_mode", None)
-    return str(probe()) if callable(probe) else None
+    return callable(getattr(vault, "_intake_gate", None))
 
 
 def coding_workspace(settings: Any) -> str | None:
@@ -308,12 +297,8 @@ def coding_workspace(settings: Any) -> str | None:
     return None if value is None else str(value).strip()
 
 
-def render(capabilities: list[Capability], facts: Facts, *, relay_refusals: bool = False) -> str:
-    """The prompt block. Deterministic for the same input.
-
-    ``relay_refusals`` adds the sentence telling the model to relay a refusal's
-    gate and unlock; pass it only when ``ROBOTHOR_REFUSAL_PAYLOAD_V2`` is on.
-    """
+def render(capabilities: list[Capability], facts: Facts) -> str:
+    """The prompt block. Deterministic for the same input."""
     lines = [
         HEADER,
         "",
@@ -341,27 +326,17 @@ def render(capabilities: list[Capability], facts: Facts, *, relay_refusals: bool
         "to, and an owner or admin may use everything available above. Scheduled, hook, "
         f"workflow and sub-agent runs act as service role '{facts.service_role}'.",
         "",
-        "Never say you cannot do something listed as available: do it.",
+        "Never say you cannot do something listed as available: do it. When a tool is "
+        "refused, its result names the gate and the unlock; tell the person both and "
+        "offer the next step, rather than saying you cannot or looking for a way round.",
     ]
-    if relay_refusals:
-        # Only when the payload carries them: told to relay a gate the result
-        # does not have, a model invents one (the reason rule 22 is gated too).
-        lines[-1] += (
-            " When a tool is refused, its result names the gate and the unlock; tell the "
-            "person both and offer the next step, rather than saying you cannot or "
-            "looking for a way round."
-        )
     return "\n".join(lines)
 
 
 def capability_block(config: AgentConfig) -> str:
-    """The block for ``config``'s system prompt, or ``""`` with the flag off."""
-    from robothor.engine.feature_flags import capability_block_enabled, refusal_payload_v2_enabled
-
-    if not capability_block_enabled():
-        return ""
+    """The block for ``config``'s system prompt."""
     from robothor.engine.tools.registry import get_registry
 
     facts = facts_for(config)
     granted = get_registry().get_tool_names(config)
-    return render(assess(granted, facts), facts, relay_refusals=refusal_payload_v2_enabled())
+    return render(assess(granted, facts), facts)
