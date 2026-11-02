@@ -51,7 +51,11 @@ async def trigger_agent(
         # Broken, not absent, and the caller must be able to tell: the fix
         # for one is editing a manifest, for the other creating an agent.
         # An unguarded raise here was a 500 with a traceback.
-        logger.error("Trigger refused: %s manifest failed the schema: %s", agent_id, e.summary())
+        logger.error(
+            "Trigger refused: %s manifest failed the schema: %s",
+            sanitize_log(agent_id),
+            sanitize_log(e.summary()),
+        )
         return {"error": f"Agent manifest refused by the schema (SchemaError): {agent_id}"}
     if not agent_config:
         return {"error": f"Agent not found: {agent_id}"}

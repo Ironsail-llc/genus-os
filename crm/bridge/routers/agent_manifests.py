@@ -48,6 +48,7 @@ from robothor.engine.manifest_store import (
     ManifestError,
     PatchRequest,
     ValidateRequest,
+    kebab,
     safe_id,
 )
 from routers._audit import audited
@@ -83,7 +84,15 @@ router = APIRouter(
 _ENGINE = "/api/admin/agent-manifests"
 
 #: What the browser is told when the engine did not decide the answer itself.
-ENGINE_UNAVAILABLE = "the engine did not answer, so the agent fleet could not be reached"
+#: Worded for both cases it covers — silence and an unhandled error — so an
+#: operator with a full disk is not sent looking for a network fault.
+ENGINE_UNAVAILABLE = (
+    "the engine did not answer, or answered with an error, so the request could not be completed"
+)
+
+#: One write now covers the scan, the registry build, the write and the
+#: reconcile, which used to be two calls with the client's default each.
+WRITE_TIMEOUT_SECONDS = 90.0
 
 
 def _safe_id(agent_id: object) -> str:
@@ -106,9 +115,18 @@ def _engine_path(agent_id: str, action: str = "") -> str:
     return f"{_ENGINE}/{quote(agent_id, safe='')}{suffix}"
 
 
-async def _forward(method: str, path: str, body: dict[str, Any] | None = None) -> Any:
+async def _forward(
+    method: str,
+    path: str,
+    body: dict[str, Any] | None = None,
+    *,
+    timeout: float | None = None,
+) -> Any:
     """One engine call, answered as the browser expects it. See the module header."""
-    status, payload = await engine_request(method, path, json=body)
+    if timeout is None:
+        status, payload = await engine_request(method, path, json=body)
+    else:
+        status, payload = await engine_request(method, path, json=body, timeout=timeout)
     if status < 400:
         return payload
     detail = payload.get("detail") if isinstance(payload, dict) else None
@@ -116,6 +134,32 @@ async def _forward(method: str, path: str, body: dict[str, Any] | None = None) -
         raise HTTPException(status_code=status, detail=detail)
     logger.warning("Agent-manifest engine call answered %d", status)
     raise HTTPException(status_code=502, detail=ENGINE_UNAVAILABLE)
+
+
+async def _forward_write(
+    request: Request,
+    event: str,
+    agent_id: str,
+    method: str,
+    path: str,
+    body: dict[str, Any] | None = None,
+    **details: Any,
+) -> dict[str, Any]:
+    """A write, audited even when its answer is lost.
+
+    The engine may have completed a write whose answer never reached this
+    process (a timeout, a reset). The operator sees a 502, and the audit trail
+    must still name them — as ``status="error"``, because this side cannot know
+    whether it landed. A refusal the engine DECIDED is a write that did not
+    happen, and is not audited, as before.
+    """
+    try:
+        result: dict[str, Any] = await _forward(method, path, body, timeout=WRITE_TIMEOUT_SECONDS)
+    except HTTPException as error:
+        if error.status_code == 502:
+            audited(request, event, action=agent_id, agent_id=agent_id, status="error", **details)
+        raise
+    return result
 
 
 # ─── Engine reconcile ────────────────────────────────────────────────
@@ -171,9 +215,12 @@ async def validate_manifest(body: ValidateRequest, request: Request) -> dict[str
 async def create_manifest(body: CreateRequest, request: Request) -> dict[str, Any]:
     """Scaffold an agent, validate it, write it, and make it fire — in the engine."""
     require_operator(request)
-    result: dict[str, Any] = await _forward("POST", _ENGINE, body.model_dump())
+    # The id the engine will derive, for an audit event whose answer is lost.
+    intended = body.id if body.id is not None else kebab(body.name)
+    event = "helm.agent_manifest.create"
+    result = await _forward_write(request, event, intended, "POST", _ENGINE, body.model_dump())
     agent_id = str(result.get("id") or "")
-    audited(request, "helm.agent_manifest.create", action=agent_id, agent_id=agent_id)
+    audited(request, event, action=agent_id, agent_id=agent_id)
     return result
 
 
@@ -182,8 +229,9 @@ async def patch_manifest(agent_id: str, body: PatchRequest, request: Request) ->
     """Edit the paths the form owns, and nothing else."""
     require_operator(request)
     agent_id = _safe_id(agent_id)
-    result = await _forward("PATCH", _engine_path(agent_id), body.model_dump())
-    return _audited_edit(request, agent_id, body.owned_paths(), result)
+    changes = body.owned_paths()
+    result = await _forward_edit(request, agent_id, changes, "PATCH", "", body.model_dump())
+    return _audited_edit(request, agent_id, changes, result)
 
 
 @router.post("/api/agent-manifests/{agent_id}/enable")
@@ -191,8 +239,9 @@ async def enable_manifest(agent_id: str, request: Request) -> dict[str, Any]:
     """Put the agent back on its schedule. Never a no-op."""
     require_operator(request)
     agent_id = _safe_id(agent_id)
-    result = await _forward("POST", _engine_path(agent_id, "enable"))
-    return _audited_edit(request, agent_id, {"schedule.enabled": True}, result)
+    changes = {"schedule.enabled": True}
+    result = await _forward_edit(request, agent_id, changes, "POST", "enable")
+    return _audited_edit(request, agent_id, changes, result)
 
 
 @router.post("/api/agent-manifests/{agent_id}/disable")
@@ -200,8 +249,28 @@ async def disable_manifest(agent_id: str, request: Request) -> dict[str, Any]:
     """Silence the agent without retiring it — cron, heartbeat and worker."""
     require_operator(request)
     agent_id = _safe_id(agent_id)
-    result = await _forward("POST", _engine_path(agent_id, "disable"))
-    return _audited_edit(request, agent_id, {"schedule.enabled": False}, result)
+    changes = {"schedule.enabled": False}
+    result = await _forward_edit(request, agent_id, changes, "POST", "disable")
+    return _audited_edit(request, agent_id, changes, result)
+
+
+async def _forward_edit(
+    request: Request,
+    agent_id: str,
+    changes: dict[str, Any],
+    method: str,
+    action: str,
+    body: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return await _forward_write(
+        request,
+        "helm.agent_manifest.update",
+        agent_id,
+        method,
+        _engine_path(agent_id, action),
+        body,
+        fields=sorted(changes),
+    )
 
 
 def _audited_edit(
@@ -225,8 +294,10 @@ async def retire_manifest(agent_id: str, body: DeleteRequest, request: Request) 
     """Move the manifest to ``retired/``; the confirmation is the id, typed."""
     require_operator(request)
     agent_id = _safe_id(agent_id)
-    result: dict[str, Any] = await _forward("DELETE", _engine_path(agent_id), body.model_dump())
-    audited(request, "helm.agent_manifest.retire", action=agent_id, agent_id=agent_id)
+    event = "helm.agent_manifest.retire"
+    path = _engine_path(agent_id)
+    result = await _forward_write(request, event, agent_id, "DELETE", path, body.model_dump())
+    audited(request, event, action=agent_id, agent_id=agent_id)
     return result
 
 

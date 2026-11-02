@@ -802,11 +802,13 @@ CAPS = {
     # 1,049 -> 257: the store, the verdict, the reconcile and the trigger moved
     # into the engine, which is the process that mounts the workspace. What is
     # left is the operator gate, the audit trail and the forwarding.
-    "crm/bridge/routers/agent_manifests.py": 270,
+    # 257 -> 328 in review: a write whose answer is lost is still audited, and
+    # writes get their own engine budget.
+    "crm/bridge/routers/agent_manifests.py": 340,
     # The engine half of the agent builder, bounded from the day it lands: the
     # file operations (manifest_store) and the routes that orchestrate them
     # with the verdict, the reconcile and the trigger (admin_manifests).
-    "robothor/engine/manifest_store.py": 680,
+    "robothor/engine/manifest_store.py": 700,
     "robothor/engine/admin_manifests.py": 380,
     # 250 -> 260: `introduced` now carries the record of getting this wrong
     # twice in opposite directions — keyed too loosely it missed an added

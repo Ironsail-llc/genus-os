@@ -165,6 +165,16 @@ def main_agent_id() -> str:
     return config.default_chat_agent
 
 
+#: A full disk or a read-only volume is the operator's to fix, and it should
+#: read as one. The error's own text carries the path, so it never comes out.
+_UNWRITABLE = "the agent workspace is not writable"
+
+
+def _unwritable(error: OSError) -> ManifestError:
+    logger.warning("Agent workspace write failed: %s", type(error).__name__)
+    return ManifestError(422, _UNWRITABLE)
+
+
 def _refused(error: TemplateSecurityError) -> ManifestError:
     """A containment refusal, as a 422 the operator can read.
 
@@ -191,7 +201,7 @@ def manifest_root() -> Path:
         raise _refused(error) from error
     except OSError as error:
         logger.warning("Manifest directory unusable: %s", type(error).__name__)
-        raise ManifestError(422, "the agent manifest directory is not writable") from error
+        raise ManifestError(422, _UNWRITABLE) from error
 
 
 def safe_id(agent_id: object) -> str:
@@ -333,7 +343,18 @@ def retire(agent_id: str, path: Path) -> None:
         target = contained_path(root, f"{RETIRED_DIR}/{agent_id}.yaml", label="retired manifest")
     except TemplateSecurityError as error:
         raise _refused(error) from error
-    path.replace(target)
+    try:
+        path.replace(target)
+    except OSError as error:
+        raise _unwritable(error) from error
+
+
+def replace_manifest(path: Path, document: dict[str, Any]) -> None:
+    """Rewrite an existing manifest atomically, or refuse with a 422."""
+    try:
+        write_atomically(path, dump(document))
+    except OSError as error:
+        raise _unwritable(error) from error
 
 
 # ─── Reading ─────────────────────────────────────────────────────────
@@ -650,12 +671,14 @@ def write_pair(
     whose instructions do not exist", which is the half that makes a run fail.
     """
     instruction_file = instruction_path(instruction_relative)
-    if not instruction_file.exists():
-        write_atomically(instruction_file, instructions)
     try:
+        if not instruction_file.exists():
+            write_atomically(instruction_file, instructions)
         write_atomically(manifest_path(agent_id), dump(document), exclusive=True)
     except FileExistsError as error:
         # The 409 before the scaffold is a courtesy; this is the decision. Two
         # concurrent creates of the same id both pass `.exists()`, and without
         # O_EXCL the second would silently destroy the first.
         raise ManifestError(409, "an agent with that id already exists") from error
+    except OSError as error:
+        raise _unwritable(error) from error

@@ -264,7 +264,7 @@ async def apply_patch(
     )
     _refuse(verdict)
     await asyncio.to_thread(store.snapshot, agent_id)
-    await asyncio.to_thread(store.write_atomically, path, store.dump(document))
+    await asyncio.to_thread(store.replace_manifest, path, document)
     return {
         "id": agent_id,
         "manifest": document,
