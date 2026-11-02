@@ -1074,7 +1074,7 @@ class AgentRunner(
                 except Exception as e:
                     logger.warning("Failed to record run start: %s", _sanitize(e))
 
-                if _tier.widens:  # role_capability evidence; needs the run row
+                if _prepared.tier_unlocked:  # role_capability evidence; needs the run row
                     await asyncio.to_thread(
                         record_tier_event, session.run.id, _tier, _prepared.tier_unlocked
                     )

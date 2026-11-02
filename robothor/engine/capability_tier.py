@@ -17,8 +17,8 @@ The tier is that value. Rules:
   ``service_role``; a fabricated identity (an unregistered Telegram sender in
   the operator's chat is handed role ``owner`` with ``verified=False``) proves
   nothing about who is typing.
-* Every run is stamped with its tier, and a widened run writes one
-  ``role_capability`` guardrail row naming the opt-in tools it unlocked.
+* Every run is stamped with its tier, and a run the tier added at least one
+  tool to writes one ``role_capability`` guardrail row naming them.
 """
 
 from __future__ import annotations
@@ -110,9 +110,16 @@ def current_run_tier() -> str:
 
 
 def record_tier_event(run_id: str, decision: TierDecision, unlocked: tuple[str, ...]) -> None:
-    """One ``agent_guardrail_events`` row for a widened run. Blocking: call off the loop."""
-    tools = ", ".join(unlocked) if unlocked else "none"
-    reason = f"role {decision.role} -> tier {decision.tier}; unlocked opt-in tools: {tools}"
+    """One ``agent_guardrail_events`` row for a run the tier added tools to.
+
+    Written only when ``unlocked`` names at least one tool: an ``allowed`` row
+    is a grant, and a run offered nothing new was granted nothing. Blocking:
+    call off the loop.
+    """
+    reason = (
+        f"role {decision.role} -> tier {decision.tier}; "
+        f"unlocked opt-in tools: {', '.join(unlocked)}"
+    )
     try:
         from robothor.engine.tracking import log_guardrail_event
 

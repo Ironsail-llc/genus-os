@@ -86,9 +86,14 @@ Every run is stamped with a capability tier from the human's role
   exactly the toolset they had before the tier existed; `owner` and `admin`
   keep it and gain the opt-in families.
 * **It is recorded.** The tier lands on the run
-  (`agent_runs.runtime_context->'capability_tier'`), and a widened run writes
-  one `agent_guardrail_events` row, `guardrail_name = 'role_capability'`,
-  action `allowed`, naming the tools it unlocked. Handlers read the tier from
+  (`agent_runs.runtime_context->'capability_tier'`), and a run the tier added
+  at least one tool to writes one `agent_guardrail_events` row,
+  `guardrail_name = 'role_capability'`, action `allowed`, naming them. An
+  agent with `tools_allowed`, a plan-mode run, or one whose opt-ins are
+  already named gains nothing and writes no row.
+* **To withhold a tool from the owner**, name it (or its family glob) in the
+  agent's `tools_denied`; that wins over every tier. It is configuration in
+  the manifest, not a switch on the feature. Handlers read the tier from
   `ToolContext.capability_tier`.
 
 ### What this means for agent authors
